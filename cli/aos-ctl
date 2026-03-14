@@ -2,13 +2,16 @@
 """aos-ctl — Host-side management tool for Agent OS instances.
 
 Usage:
-    aos-ctl build              Build the rootfs
-    aos-ctl run [--name NAME]  Start a container instance
-    aos-ctl list               List running instances
-    aos-ctl stop <id>          Stop an instance
-    aos-ctl shell <id>         Attach a shell to an instance
-    aos-ctl exec <id> <cmd>    Run a command inside an instance
-    aos-ctl status             Show system status
+    aos-ctl build                          Build the rootfs
+    aos-ctl run [--name N] [--port P] [--workspace DIR]
+                                           Start a container instance
+    aos-ctl list                           List running instances
+    aos-ctl stop <id>                      Stop an instance
+    aos-ctl shell <id>                     Attach a shell to an instance
+    aos-ctl exec <id> <aos-command...>     Run an aos command inside an instance
+    aos-ctl logs <id>                      Show container logs
+    aos-ctl image                          Show image info
+    aos-ctl status                         Show system status
 """
 
 import json
@@ -22,12 +25,14 @@ CONTAINER_PREFIX = "aos-"
 
 
 def respond(data):
+    if "ok" not in data:
+        data["ok"] = "error" not in data
     json.dump(data, sys.stdout, indent=2)
     print()
 
 
 def error(msg):
-    respond({"error": msg})
+    respond({"ok": False, "error": msg})
     sys.exit(1)
 
 
@@ -60,10 +65,18 @@ def cmd_build(_args):
 def cmd_run(args):
     """Start a new Agent OS container."""
     name = None
+    port = None
+    workspace = None
     i = 0
     while i < len(args):
         if args[i] == "--name" and i + 1 < len(args):
             name = args[i + 1]
+            i += 2
+        elif args[i] == "--port" and i + 1 < len(args):
+            port = args[i + 1]
+            i += 2
+        elif args[i] == "--workspace" and i + 1 < len(args):
+            workspace = args[i + 1]
             i += 2
         else:
             i += 1
@@ -74,18 +87,31 @@ def cmd_run(args):
     else:
         name = CONTAINER_PREFIX + name
 
-    result = docker(
+    docker_args = [
         "run", "-d",
         "--name", name,
         "--hostname", "agent-os",
-        IMAGE_NAME,
-        "sleep", "infinity",
-    )
+    ]
+
+    if port is not None:
+        docker_args += ["-p", f"{port}:{port}"]
+
+    if workspace is not None:
+        docker_args += ["-v", f"{workspace}:/workspace"]
+
+    docker_args += [IMAGE_NAME, "sleep", "infinity"]
+
+    result = docker(*docker_args)
     if result.returncode != 0:
         error(f"failed to start: {result.stderr.strip()}")
 
     container_id = result.stdout.strip()[:12]
-    respond({"id": container_id, "name": name, "status": "running"})
+    info = {"id": container_id, "name": name, "status": "running"}
+    if port is not None:
+        info["port"] = port
+    if workspace is not None:
+        info["workspace"] = workspace
+    respond(info)
 
 
 def cmd_list(_args):
@@ -127,18 +153,69 @@ def cmd_shell(args):
 
 
 def cmd_exec(args):
-    """Run a command inside an instance."""
+    """Run an aos command inside an instance."""
     if len(args) < 2:
-        error("usage: aos-ctl exec <id|name> <command> [args...]")
+        error("usage: aos-ctl exec <id|name> <aos-command...>")
     target = args[0]
-    command = args[1:]
-    result = docker("exec", target, *command)
+    aos_args = args[1:]
+    result = docker("exec", target, "aos", *aos_args)
+    # Pass through the JSON output from aos directly
+    if result.stdout.strip():
+        try:
+            data = json.loads(result.stdout)
+            if "ok" not in data:
+                data["ok"] = "error" not in data
+            json.dump(data, sys.stdout, indent=2)
+            print()
+        except json.JSONDecodeError:
+            respond({
+                "ok": result.returncode == 0,
+                "instance": target,
+                "output": result.stdout,
+            })
+    else:
+        respond({
+            "ok": result.returncode == 0,
+            "instance": target,
+            "command": aos_args,
+            "exit_code": result.returncode,
+            "stderr": result.stderr,
+        })
+    if result.returncode != 0:
+        sys.exit(result.returncode)
+
+
+def cmd_logs(args):
+    """Show container logs."""
+    if not args:
+        error("usage: aos-ctl logs <id|name>")
+    target = args[0]
+    result = docker("logs", target)
+    if result.returncode != 0:
+        error(f"failed to get logs: {result.stderr.strip()}")
     respond({
         "instance": target,
-        "command": command,
-        "exit_code": result.returncode,
         "stdout": result.stdout,
         "stderr": result.stderr,
+    })
+
+
+def cmd_image(_args):
+    """Show image info (size, created date)."""
+    result = docker(
+        "images", IMAGE_NAME,
+        "--format", '{{.Size}}\t{{.CreatedAt}}\t{{.ID}}\t{{.Tag}}',
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        error(f"image '{IMAGE_NAME}' not found")
+    line = result.stdout.strip().splitlines()[0]
+    parts = line.split("\t")
+    respond({
+        "image": IMAGE_NAME,
+        "size": parts[0] if len(parts) > 0 else "",
+        "created": parts[1] if len(parts) > 1 else "",
+        "id": parts[2] if len(parts) > 2 else "",
+        "tag": parts[3] if len(parts) > 3 else "",
     })
 
 
@@ -167,6 +244,8 @@ COMMANDS = {
     "stop":   cmd_stop,
     "shell":  cmd_shell,
     "exec":   cmd_exec,
+    "logs":   cmd_logs,
+    "image":  cmd_image,
     "status": cmd_status,
 }
 

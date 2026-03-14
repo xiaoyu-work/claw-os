@@ -28,11 +28,16 @@ rm -rf "$ROOTFS/var/lib/apt/lists"/*
 echo ":: applying overlay"
 cp -a "$SCRIPT_DIR/overlay/." "$ROOTFS/"
 
-# 4. Create runtime directories
-mkdir -p "$ROOTFS/workspace"
-mkdir -p "$ROOTFS/var/lib/aos/sessions"
+# 4. Install apps
+echo ":: installing apps"
+mkdir -p "$ROOTFS/usr/lib/aos/apps"
+cp -a "$PROJECT_DIR/apps/." "$ROOTFS/usr/lib/aos/apps/"
 
-# 5. Source AOS profile on login
+# 5. Create runtime directories
+mkdir -p "$ROOTFS/workspace"
+mkdir -p "$ROOTFS/var/lib/aos"
+
+# 6. Source AOS profile on login
 if ! grep -q 'aos/profile.sh' "$ROOTFS/etc/bash.bashrc" 2>/dev/null; then
     echo '[ -f /etc/aos/profile.sh ] && . /etc/aos/profile.sh' >> "$ROOTFS/etc/bash.bashrc"
 fi
