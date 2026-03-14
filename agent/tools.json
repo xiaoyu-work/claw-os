@@ -1,0 +1,155 @@
+[
+  {
+    "name": "fs_ls",
+    "description": "List files in a directory. Returns file names and whether each is a directory.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "path": {"type": "string", "description": "Directory path to list. Defaults to current directory."}
+      }
+    }
+  },
+  {
+    "name": "fs_read",
+    "description": "Read the contents of a text file.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "path": {"type": "string", "description": "File path to read"}
+      },
+      "required": ["path"]
+    }
+  },
+  {
+    "name": "fs_write",
+    "description": "Write content to a file. Creates parent directories if needed.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "path": {"type": "string", "description": "File path to write to"},
+        "content": {"type": "string", "description": "Content to write"}
+      },
+      "required": ["path", "content"]
+    }
+  },
+  {
+    "name": "fs_search",
+    "description": "Search for files by name or content using ripgrep.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "query": {"type": "string", "description": "Search query (searches file names and content)"},
+        "path": {"type": "string", "description": "Directory to search in. Defaults to /workspace."}
+      },
+      "required": ["query"]
+    }
+  },
+  {
+    "name": "exec_run",
+    "description": "Run a shell command and return stdout, stderr, and exit code.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "command": {"type": "string", "description": "Shell command to run (supports pipes, redirects, etc.)"}
+      },
+      "required": ["command"]
+    }
+  },
+  {
+    "name": "exec_script",
+    "description": "Run a script in Python, Bash, or Node.js.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "code": {"type": "string", "description": "The script code to execute"},
+        "lang": {"type": "string", "enum": ["python", "bash", "node"], "description": "Language. Defaults to python."}
+      },
+      "required": ["code"]
+    }
+  },
+  {
+    "name": "kv_get",
+    "description": "Get a value from the agent's key-value memory store.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "key": {"type": "string", "description": "Key to look up (supports namespaces like 'user:name')"}
+      },
+      "required": ["key"]
+    }
+  },
+  {
+    "name": "kv_set",
+    "description": "Store a key-value pair in the agent's memory.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "key": {"type": "string", "description": "Key (supports namespaces like 'user:name')"},
+        "value": {"type": "string", "description": "Value to store"}
+      },
+      "required": ["key", "value"]
+    }
+  },
+  {
+    "name": "web_read",
+    "description": "Read a web page and return clean structured text (not raw HTML).",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "url": {"type": "string", "description": "URL to read"}
+      },
+      "required": ["url"]
+    }
+  },
+  {
+    "name": "net_fetch",
+    "description": "Make an HTTP API request (GET, POST, PUT, DELETE).",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "url": {"type": "string", "description": "Request URL"},
+        "method": {"type": "string", "enum": ["GET", "POST", "PUT", "DELETE"], "description": "HTTP method. Defaults to GET."},
+        "data": {"type": "string", "description": "Request body (JSON string) for POST/PUT"}
+      },
+      "required": ["url"]
+    }
+  },
+  {
+    "name": "doc_read",
+    "description": "Read any document (PDF, DOCX, XLSX, CSV, etc.) and return structured text.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "path": {"type": "string", "description": "Path to the document"}
+      },
+      "required": ["path"]
+    }
+  },
+  {
+    "name": "pkg_need",
+    "description": "Ensure system packages are installed. Say what you need, the system handles it.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "packages": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "List of package names to ensure are installed"
+        }
+      },
+      "required": ["packages"]
+    }
+  },
+  {
+    "name": "notify_send",
+    "description": "Send a notification to the user.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "message": {"type": "string", "description": "Notification message"},
+        "urgent": {"type": "boolean", "description": "Whether the notification is urgent. Defaults to false."}
+      },
+      "required": ["message"]
+    }
+  }
+]
