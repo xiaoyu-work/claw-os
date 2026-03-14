@@ -1,0 +1,19 @@
+{
+  "name": "fs",
+  "version": "0.1.0",
+  "description": "Agent-native file system with metadata and search",
+  "commands": {
+    "ls": "List directory contents",
+    "read": "Read file content",
+    "write": "Write content to file",
+    "rm": "Remove file or directory",
+    "mkdir": "Create directory",
+    "stat": "Get file metadata",
+    "search": "Search files by name or content",
+    "tag": "Add tags to a file",
+    "recent": "List recently accessed files"
+  },
+  "dependencies": {
+    "system": ["coreutils", "ripgrep"]
+  }
+}

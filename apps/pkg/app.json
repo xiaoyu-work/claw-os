@@ -1,0 +1,11 @@
+{
+  "name": "pkg",
+  "version": "0.1.0",
+  "description": "Declarative capability management — say what you need, not how to install it",
+  "commands": {
+    "need": "Ensure packages are installed",
+    "has": "Check if a capability is available",
+    "list": "List installed packages"
+  },
+  "dependencies": {}
+}

@@ -1,0 +1,10 @@
+{
+  "name": "notify",
+  "version": "0.1.0",
+  "description": "Send notifications to the user",
+  "commands": {
+    "send": "Send a notification message",
+    "list": "List recent notifications"
+  },
+  "dependencies": {}
+}

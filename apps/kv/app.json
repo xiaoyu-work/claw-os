@@ -1,0 +1,13 @@
+{
+  "name": "kv",
+  "version": "0.1.0",
+  "description": "Key-value store for agent memory and state",
+  "commands": {
+    "get": "Get a value by key",
+    "set": "Set a key-value pair",
+    "del": "Delete a key",
+    "list": "List keys matching a pattern",
+    "dump": "Export all key-value pairs"
+  },
+  "dependencies": {}
+}

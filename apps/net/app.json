@@ -1,0 +1,12 @@
+{
+  "name": "net",
+  "version": "0.1.0",
+  "description": "HTTP client for API calls",
+  "commands": {
+    "fetch": "Make HTTP request (GET/POST/PUT/DELETE)",
+    "download": "Download file from URL"
+  },
+  "dependencies": {
+    "system": ["curl", "ca-certificates"]
+  }
+}
