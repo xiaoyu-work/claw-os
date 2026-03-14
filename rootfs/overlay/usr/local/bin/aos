@@ -1,0 +1,228 @@
+#!/usr/bin/env python3
+"""aos — Agent OS CLI.
+
+Machine-readable interface for AI agents to interact with the system.
+All output is JSON. All errors set a non-zero exit code.
+"""
+
+import json
+import os
+import platform
+import shutil
+import subprocess
+import sys
+import urllib.request
+import urllib.error
+
+VERSION = "0.2.0"
+
+
+def respond(data):
+    json.dump(data, sys.stdout)
+    print()
+
+
+def error(msg, code=1):
+    respond({"error": msg})
+    sys.exit(code)
+
+
+def require_args(args, n, usage_msg):
+    if len(args) < n:
+        error(f"missing argument: {usage_msg}")
+
+
+# --- fs commands -----------------------------------------------------------
+
+def cmd_fs_ls(args):
+    target = args[0] if args else "."
+    try:
+        entries = sorted(os.listdir(target))
+    except OSError as e:
+        error(str(e))
+    respond({"path": os.path.abspath(target), "files": entries})
+
+
+def cmd_fs_pwd(_args):
+    respond({"cwd": os.getcwd()})
+
+
+def cmd_fs_read(args):
+    require_args(args, 1, "fs read <path>")
+    path = args[0]
+    try:
+        with open(path, "r") as f:
+            content = f.read()
+    except OSError as e:
+        error(str(e))
+    respond({"path": os.path.abspath(path), "content": content})
+
+
+def cmd_fs_write(args):
+    require_args(args, 1, "fs write <path>")
+    path = args[0]
+    content = sys.stdin.read()
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w") as f:
+            f.write(content)
+    except OSError as e:
+        error(str(e))
+    respond({"path": os.path.abspath(path), "bytes": len(content)})
+
+
+def cmd_fs_stat(args):
+    require_args(args, 1, "fs stat <path>")
+    path = args[0]
+    try:
+        st = os.stat(path)
+    except OSError as e:
+        error(str(e))
+    respond({
+        "path": os.path.abspath(path),
+        "size": st.st_size,
+        "mode": oct(st.st_mode),
+        "uid": st.st_uid,
+        "gid": st.st_gid,
+        "is_dir": os.path.isdir(path),
+        "is_file": os.path.isfile(path),
+    })
+
+
+def cmd_fs_rm(args):
+    require_args(args, 1, "fs rm <path>")
+    path = args[0]
+    try:
+        if os.path.isdir(path):
+            shutil.rmtree(path)
+        else:
+            os.remove(path)
+    except OSError as e:
+        error(str(e))
+    respond({"removed": os.path.abspath(path)})
+
+
+def cmd_fs_mkdir(args):
+    require_args(args, 1, "fs mkdir <path>")
+    path = args[0]
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError as e:
+        error(str(e))
+    respond({"created": os.path.abspath(path)})
+
+
+# --- exec commands ---------------------------------------------------------
+
+def cmd_exec_run(args):
+    if not args:
+        error("missing argument: exec run <command> [args...]")
+    try:
+        result = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+    except FileNotFoundError:
+        error(f"command not found: {args[0]}")
+    except subprocess.TimeoutExpired:
+        error(f"timeout after 300s: {' '.join(args)}")
+    respond({
+        "command": args,
+        "exit_code": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+    })
+
+
+def cmd_exec_which(args):
+    require_args(args, 1, "exec which <name>")
+    path = shutil.which(args[0])
+    if path is None:
+        error(f"not found: {args[0]}")
+    respond({"command": args[0], "path": path})
+
+
+# --- net commands ----------------------------------------------------------
+
+def cmd_net_fetch(args):
+    require_args(args, 1, "net fetch <url>")
+    url = args[0]
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": f"aos/{VERSION}"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+            respond({
+                "url": url,
+                "status": resp.status,
+                "body": body,
+            })
+    except urllib.error.HTTPError as e:
+        respond({"url": url, "status": e.code, "error": str(e)})
+        sys.exit(1)
+    except Exception as e:
+        error(f"fetch failed: {e}")
+
+
+# --- sys commands ----------------------------------------------------------
+
+def cmd_sys_info(_args):
+    respond({
+        "name": "agent-os",
+        "version": VERSION,
+        "platform": platform.platform(),
+        "arch": platform.machine(),
+        "python": platform.python_version(),
+        "hostname": platform.node(),
+        "pid": os.getpid(),
+        "uid": os.getuid(),
+    })
+
+
+def cmd_sys_env(_args):
+    respond({"env": dict(os.environ)})
+
+
+# --- command registry ------------------------------------------------------
+
+COMMANDS = {
+    ("fs", "ls"):    cmd_fs_ls,
+    ("fs", "pwd"):   cmd_fs_pwd,
+    ("fs", "read"):  cmd_fs_read,
+    ("fs", "write"): cmd_fs_write,
+    ("fs", "stat"):  cmd_fs_stat,
+    ("fs", "rm"):    cmd_fs_rm,
+    ("fs", "mkdir"): cmd_fs_mkdir,
+    ("exec", "run"): cmd_exec_run,
+    ("exec", "which"): cmd_exec_which,
+    ("net", "fetch"): cmd_net_fetch,
+    ("sys", "info"):  cmd_sys_info,
+    ("sys", "env"):   cmd_sys_env,
+}
+
+COMMAND_LIST = sorted(f"{g} {c}" for g, c in COMMANDS)
+
+
+def usage():
+    respond({"name": "aos", "version": VERSION, "commands": COMMAND_LIST})
+
+
+def main():
+    args = sys.argv[1:]
+
+    if len(args) < 2:
+        usage()
+        return
+
+    key = (args[0], args[1])
+    handler = COMMANDS.get(key)
+
+    if handler is None:
+        error(f"unknown command: {args[0]} {args[1]}")
+
+    handler(args[2:])
+
+
+if __name__ == "__main__":
+    main()

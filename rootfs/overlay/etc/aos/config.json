@@ -1,0 +1,12 @@
+{
+  "version": "0.2.0",
+  "workspace": "/workspace",
+  "exec": {
+    "timeout": 300,
+    "shell": "/bin/bash"
+  },
+  "net": {
+    "timeout": 30,
+    "allow_outbound": true
+  }
+}
