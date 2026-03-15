@@ -150,27 +150,7 @@ def handle_health(_body):
     return {"status": "ok"}, 200
 
 
-def handle_sys_info(_body):
-    return {
-        "name": "agent-os",
-        "version": VERSION,
-        "platform": platform.platform(),
-        "arch": platform.machine(),
-        "python": platform.python_version(),
-        "hostname": platform.node(),
-        "pid": os.getpid(),
-        "uid": os.getuid(),
-    }, 200
-
-
-def handle_sys_env(_body):
-    return {"env": dict(os.environ)}, 200
-
-
-BUILTIN_ROUTES = {
-    ("sys", "info"): handle_sys_info,
-    ("sys", "env"):  handle_sys_env,
-}
+BUILTIN_ROUTES = {}
 
 
 # ---------------------------------------------------------------------------

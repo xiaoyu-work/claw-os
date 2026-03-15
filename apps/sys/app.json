@@ -1,0 +1,12 @@
+{
+  "name": "sys",
+  "version": "0.1.0",
+  "description": "System information — hardware, OS, environment, resources",
+  "commands": {
+    "info": "Show system information (OS, arch, hostname, Python version)",
+    "env": "Show environment variables",
+    "resources": "Show disk, memory, and CPU usage",
+    "uptime": "Show system uptime"
+  },
+  "dependencies": {}
+}
