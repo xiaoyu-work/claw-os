@@ -9,9 +9,9 @@ them via the aos CLI, and feeds the results back.  The loop continues
 until the LLM responds without any commands.
 
 Usage:
-    python3 agent/bridge.py
-    python3 agent/bridge.py --container <id>
-    python3 agent/bridge.py --model claude-sonnet-4-6
+    python3 clients/bridge/bridge.py
+    python3 clients/bridge/bridge.py --container <id>
+    python3 clients/bridge/bridge.py --model claude-sonnet-4-6
 
 Requires: ANTHROPIC_API_KEY environment variable.
 """
@@ -86,7 +86,7 @@ class Executor:
             return f"error: {e}"
 
     def _aos_path(self):
-        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         return os.path.join(base, "rootfs", "overlay", "usr", "local", "bin", "aos")
 
 
@@ -133,7 +133,7 @@ def run_agent(model="claude-sonnet-4-6", container_id=None, system_prompt=None):
     if container_id:
         executor = Executor(container_id=container_id)
     else:
-        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         executor = Executor(
             apps_dir=os.path.join(base, "apps"),
             data_dir=os.environ.get("AOS_DATA_DIR", "/tmp/aos-data"),
