@@ -1,65 +1,45 @@
-"""Agent OS Bridge — connects an LLM to Agent OS.
+#!/usr/bin/env python3
+"""Agent OS Bridge — text-based interface between LLM and Agent OS.
 
-This is the missing piece: it translates LLM tool calls into aos commands,
-either locally or inside a Docker container.
+No tool schemas.  No prompt pollution.  The agent discovers capabilities
+progressively by running ``aos`` commands.
+
+The bridge scans LLM output for lines starting with ``$ ``, executes
+them via the aos CLI, and feeds the results back.  The loop continues
+until the LLM responds without any commands.
 
 Usage:
-    # Run locally (for development)
     python3 agent/bridge.py
-
-    # Run against a container
     python3 agent/bridge.py --container <id>
-
-    # With a specific model
     python3 agent/bridge.py --model claude-sonnet-4-6
 
 Requires: ANTHROPIC_API_KEY environment variable.
 """
 
-import json
 import os
+import shlex
 import subprocess
 import sys
 
+
 # ---------------------------------------------------------------------------
-# Tool → aos command mapping
+# System prompt — intentionally minimal.  Everything else is discovered
+# by the agent at runtime via ``$ aos``.
 # ---------------------------------------------------------------------------
 
-def tool_to_aos(tool_name, tool_input):
-    """Convert a tool call into an aos CLI command (argv list)."""
-    mapping = {
-        "fs_ls":       lambda i: ["fs", "ls"] + ([i["path"]] if i.get("path") else []),
-        "fs_read":     lambda i: ["fs", "read", i["path"]],
-        "fs_write":    lambda i: ["fs", "write", "--content", i["content"], i["path"]],
-        "fs_search":   lambda i: ["fs", "search", i["query"]] + ([i["path"]] if i.get("path") else []),
-        "exec_run":    lambda i: ["exec", "run", "--shell", i["command"]],
-        "exec_script": lambda i: ["exec", "script", "--lang", i.get("lang", "python"), i["code"]],
-        "kv_get":      lambda i: ["kv", "get", i["key"]],
-        "kv_set":      lambda i: ["kv", "set", i["key"], i["value"]],
-        "web_read":    lambda i: ["web", "read", i["url"]],
-        "net_fetch":   lambda i: _build_net_fetch(i),
-        "doc_read":    lambda i: ["doc", "read", i["path"]],
-        "pkg_need":    lambda i: ["pkg", "need"] + i["packages"],
-        "notify_send": lambda i: ["notify", "send"] + (["--urgent"] if i.get("urgent") else []) + [i["message"]],
-    }
-    builder = mapping.get(tool_name)
-    if builder is None:
-        return None
-    return builder(tool_input)
+SYSTEM_PROMPT = """\
+You are an AI agent running on Agent OS.
 
+To interact with the system, write a command on a line starting with $:
 
-def _build_net_fetch(i):
-    args = ["net", "fetch"]
-    if i.get("method"):
-        args += ["--method", i["method"]]
-    if i.get("data"):
-        args += ["--data", i["data"]]
-    args.append(i["url"])
-    return args
+$ aos
+
+Run the command above to see what you can do.\
+"""
 
 
 # ---------------------------------------------------------------------------
-# Executor — runs aos commands locally or in a container
+# Executor — runs aos commands locally or inside a Docker container
 # ---------------------------------------------------------------------------
 
 class Executor:
@@ -68,12 +48,22 @@ class Executor:
         self.apps_dir = apps_dir
         self.data_dir = data_dir
 
-    def run_aos(self, aos_args):
-        """Execute an aos command and return parsed JSON result."""
+    def run(self, command_line):
+        """Execute an aos command string and return output text."""
+        try:
+            parts = shlex.split(command_line)
+        except ValueError as e:
+            return f"error: invalid command syntax: {e}"
+
+        # Strip leading "aos" — user writes "$ aos fs ls" but we call
+        # the binary directly.
+        if parts and parts[0] == "aos":
+            parts = parts[1:]
+
         if self.container_id:
-            cmd = ["docker", "exec", self.container_id, "aos"] + aos_args
+            cmd = ["docker", "exec", self.container_id, "aos"] + parts
         else:
-            cmd = [sys.executable, self._aos_path()] + aos_args
+            cmd = [sys.executable, self._aos_path()] + parts
 
         env = os.environ.copy()
         if self.apps_dir:
@@ -81,16 +71,19 @@ class Executor:
         if self.data_dir:
             env["AOS_DATA_DIR"] = self.data_dir
 
-        result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=300)
-        stdout = result.stdout.strip()
-        if stdout:
-            try:
-                return json.loads(stdout)
-            except json.JSONDecodeError:
-                return {"output": stdout}
-        if result.stderr:
-            return {"error": result.stderr.strip()}
-        return {"error": f"aos exited with code {result.returncode}"}
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, env=env, timeout=300,
+            )
+            output = result.stdout.strip()
+            if result.stderr.strip():
+                err = result.stderr.strip()
+                output = f"{output}\n{err}" if output else err
+            return output or "(no output)"
+        except subprocess.TimeoutExpired:
+            return "error: command timed out (300s)"
+        except Exception as e:
+            return f"error: {e}"
 
     def _aos_path(self):
         base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -98,17 +91,37 @@ class Executor:
 
 
 # ---------------------------------------------------------------------------
-# Agent loop — LLM ↔ Agent OS conversation
+# Command extraction — pull ``$ aos …`` lines from LLM text
 # ---------------------------------------------------------------------------
 
-def load_tools():
-    tools_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools.json")
-    with open(tools_path) as f:
-        return json.load(f)
+def extract_commands(text):
+    """Return command strings found in the LLM's output.
 
+    Only lines that begin with ``$ `` are treated as commands.
+    The ``$ `` prefix is stripped before returning.
+    """
+    commands = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("$ "):
+            commands.append(stripped[2:])
+    return commands
+
+
+def format_results(results):
+    """Format [(command, output), …] pairs into text for the LLM."""
+    parts = []
+    for cmd, output in results:
+        parts.append(f"$ {cmd}\n{output}")
+    return "\n\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Agent loop — pure text conversation
+# ---------------------------------------------------------------------------
 
 def run_agent(model="claude-sonnet-4-6", container_id=None, system_prompt=None):
-    """Main agent loop: user talks to LLM, LLM uses Agent OS tools."""
+    """Main agent loop: text-based conversation with command extraction."""
     try:
         import anthropic
     except ImportError:
@@ -116,9 +129,7 @@ def run_agent(model="claude-sonnet-4-6", container_id=None, system_prompt=None):
         sys.exit(1)
 
     client = anthropic.Anthropic()
-    tools = load_tools()
 
-    # Determine executor
     if container_id:
         executor = Executor(container_id=container_id)
     else:
@@ -129,14 +140,7 @@ def run_agent(model="claude-sonnet-4-6", container_id=None, system_prompt=None):
         )
 
     if system_prompt is None:
-        system_prompt = (
-            "You are an AI agent running on Agent OS. "
-            "You have access to a full operating system through the provided tools. "
-            "You can read/write files, execute code, browse the web, manage packages, "
-            "and remember things using the key-value store. "
-            "Your workspace is at /workspace. "
-            "Always use the tools to interact with the system — do not guess or make up results."
-        )
+        system_prompt = SYSTEM_PROMPT
 
     messages = []
     print("Agent OS — Type your request (Ctrl+C to exit)\n")
@@ -152,47 +156,38 @@ def run_agent(model="claude-sonnet-4-6", container_id=None, system_prompt=None):
 
         messages.append({"role": "user", "content": user_input})
 
-        # Agent loop: keep going until LLM stops calling tools
+        # Keep looping until the LLM stops issuing commands.
         while True:
             response = client.messages.create(
                 model=model,
                 max_tokens=4096,
                 system=system_prompt,
-                tools=tools,
                 messages=messages,
             )
 
-            # Collect assistant response
-            assistant_content = response.content
-            messages.append({"role": "assistant", "content": assistant_content})
+            assistant_text = "".join(
+                block.text for block in response.content
+                if hasattr(block, "text")
+            )
+            messages.append({"role": "assistant", "content": assistant_text})
 
-            # Check if there are tool calls
-            tool_uses = [b for b in assistant_content if b.type == "tool_use"]
-            if not tool_uses:
-                # No tool calls — print text response and break to next user input
-                for block in assistant_content:
-                    if hasattr(block, "text"):
-                        print(f"\nagent> {block.text}\n")
+            commands = extract_commands(assistant_text)
+            if not commands:
+                # No commands — print the final response and wait for
+                # the next human message.
+                print(f"\nagent> {assistant_text}\n")
                 break
 
-            # Execute all tool calls
-            tool_results = []
-            for tool_use in tool_uses:
-                aos_args = tool_to_aos(tool_use.name, tool_use.input)
-                if aos_args is None:
-                    result = {"error": f"unknown tool: {tool_use.name}"}
-                else:
-                    print(f"  [aos {' '.join(aos_args[:3])}{'...' if len(aos_args) > 3 else ''}]")
-                    result = executor.run_aos(aos_args)
+            # Execute every command and collect results.
+            results = []
+            for cmd in commands:
+                print(f"  [$ {cmd}]")
+                output = executor.run(cmd)
+                results.append((cmd, output))
 
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tool_use.id,
-                    "content": json.dumps(result),
-                })
-
-            messages.append({"role": "user", "content": tool_results})
-            # Loop back to let LLM process tool results
+            # Feed the results back as a follow-up user message so the
+            # LLM can inspect them and decide what to do next.
+            messages.append({"role": "user", "content": format_results(results)})
 
 
 # ---------------------------------------------------------------------------
@@ -203,7 +198,7 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description="Agent OS Bridge")
     parser.add_argument("--container", help="Docker container ID to run commands in")
-    parser.add_argument("--model", default="claude-sonnet-4-6", help="Claude model to use")
+    parser.add_argument("--model", default="claude-sonnet-4-6", help="Model to use")
     parser.add_argument("--system", help="Custom system prompt")
     args = parser.parse_args()
 

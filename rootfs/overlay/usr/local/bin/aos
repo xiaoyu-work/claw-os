@@ -82,7 +82,12 @@ def show_apps():
             "description": manifest.get("description", ""),
             "commands": list(manifest.get("commands", {}).keys()),
         })
-    respond({"name": "aos", "version": VERSION, "apps": app_list})
+    respond({
+        "name": "aos",
+        "version": VERSION,
+        "apps": app_list,
+        "hint": "Run: aos <app>",
+    })
 
 
 def show_app_help(app_name, apps):
@@ -93,6 +98,7 @@ def show_app_help(app_name, apps):
         "version": manifest.get("version", ""),
         "description": manifest.get("description", ""),
         "commands": manifest.get("commands", {}),
+        "hint": f"Run: aos {app_name} <command> [args]",
     })
 
 
