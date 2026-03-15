@@ -2,7 +2,6 @@
 
 import json
 import re
-import shutil
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -149,43 +148,6 @@ def _cmd_read(args):
     }
 
 
-def _cmd_search(args):
-    """Web search — not yet configured."""
-    return {
-        "error": "not configured",
-        "hint": "set search API key via: aos kv set web:search_engine google|ddg",
-    }
-
-
-def _cmd_screenshot(args):
-    """Capture a screenshot of a URL."""
-    if not args:
-        return {"error": "usage: aos web screenshot <url>"}
-
-    # Check if chromium / playwright is available
-    if shutil.which("chromium") or shutil.which("chromium-browser"):
-        return {
-            "url": args[0],
-            "status": "placeholder",
-            "hint": "chromium found but screenshot capture not yet implemented",
-        }
-
-    try:
-        import playwright  # noqa: F401
-        return {
-            "url": args[0],
-            "status": "placeholder",
-            "hint": "playwright found but screenshot capture not yet implemented",
-        }
-    except ImportError:
-        pass
-
-    return {
-        "error": "chromium not installed",
-        "hint": "install with: aos pkg need chromium",
-    }
-
-
 def _cmd_submit(args):
     """POST form data to a URL."""
     if not args:
@@ -231,8 +193,6 @@ def _cmd_submit(args):
 
 _COMMANDS = {
     "read": _cmd_read,
-    "search": _cmd_search,
-    "screenshot": _cmd_screenshot,
     "submit": _cmd_submit,
 }
 

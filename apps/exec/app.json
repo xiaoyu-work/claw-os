@@ -1,11 +1,14 @@
 {
   "name": "exec",
-  "version": "0.1.0",
-  "description": "Sandboxed code and command execution",
+  "version": "0.2.0",
+  "description": "Command execution and process management",
   "commands": {
     "run": "Run a shell command",
     "script": "Run a script file or inline code in any language",
-    "which": "Check if a command exists"
+    "which": "Check if a command exists",
+    "start": "Start a command in the background",
+    "stop": "Stop a background process by PID",
+    "ps": "List running background processes"
   },
   "dependencies": {
     "system": ["bash", "python3"]

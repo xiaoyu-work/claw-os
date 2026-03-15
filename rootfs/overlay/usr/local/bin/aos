@@ -14,10 +14,13 @@ import importlib.util
 import json
 import os
 import sys
+import time
+from datetime import datetime, timezone
 
 VERSION = "0.3.0"
 APPS_DIR = os.environ.get("AOS_APPS_DIR", "/usr/lib/aos/apps")
 DATA_DIR = os.environ.get("AOS_DATA_DIR", "/var/lib/aos")
+AUDIT_LOG = os.path.join(DATA_DIR, "logs", "audit.jsonl")
 
 
 def respond(data):
@@ -57,17 +60,61 @@ def load_app_module(app_name):
     return mod
 
 
+def audit(entry):
+    """Append an audit entry to the system log."""
+    try:
+        os.makedirs(os.path.dirname(AUDIT_LOG), exist_ok=True)
+        with open(AUDIT_LOG, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError:
+        pass  # never let logging break the command
+
+
 def run_app_command(app_name, command, args):
-    """Load app and call its run(command, args) function."""
+    """Load app, call its run(command, args), and audit-log the operation."""
     mod = load_app_module(app_name)
     if not hasattr(mod, "run"):
         error(f"app '{app_name}' missing run() function")
+
+    t0 = time.time()
+    status = "ok"
+    error_msg = None
+
     try:
         result = mod.run(command, args)
     except SystemExit:
         raise
     except Exception as e:
+        status = "error"
+        error_msg = str(e)
+        duration_ms = int((time.time() - t0) * 1000)
+        audit({
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "app": app_name,
+            "command": command,
+            "args": args,
+            "duration_ms": duration_ms,
+            "status": status,
+            "error": error_msg,
+        })
         error(f"{app_name} {command}: {e}")
+
+    duration_ms = int((time.time() - t0) * 1000)
+
+    if isinstance(result, dict) and "error" in result:
+        status = "error"
+        error_msg = result["error"]
+
+    audit({
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "app": app_name,
+        "command": command,
+        "args": args,
+        "duration_ms": duration_ms,
+        "status": status,
+        **({"error": error_msg} if error_msg else {}),
+    })
+
     if result is not None:
         respond(result)
 

@@ -1,0 +1,12 @@
+{
+  "name": "log",
+  "version": "0.2.0",
+  "description": "System audit log — every command is recorded automatically",
+  "commands": {
+    "read": "Read recent log entries (filter by --app, --status)",
+    "tail": "Show last N log entries",
+    "search": "Search logs by keyword (filter by --app)",
+    "write": "Write a manual log entry"
+  },
+  "dependencies": {}
+}

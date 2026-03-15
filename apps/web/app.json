@@ -1,15 +1,10 @@
 {
   "name": "web",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Agent-native web browser — returns structured content, not HTML",
   "commands": {
     "read": "Fetch URL and return clean text content",
-    "search": "Web search, return structured results",
-    "screenshot": "Capture screenshot of a URL",
     "submit": "Submit form data to a URL"
   },
-  "dependencies": {
-    "system": ["chromium"],
-    "python": ["playwright"]
-  }
+  "dependencies": {}
 }

@@ -1,0 +1,13 @@
+{
+  "name": "db",
+  "version": "0.1.0",
+  "description": "SQLite database — create, query, and manage databases",
+  "commands": {
+    "query": "Run a SELECT query on a database",
+    "exec": "Execute SQL statements (CREATE, INSERT, UPDATE, DELETE)",
+    "tables": "List tables in a database",
+    "schema": "Show schema of a table",
+    "databases": "List available databases"
+  },
+  "dependencies": {}
+}

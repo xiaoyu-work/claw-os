@@ -53,7 +53,7 @@ def _cmd_send(args):
             message_parts.append(arg)
 
     if not message_parts:
-        raise ValueError("send requires a message")
+        return {"error": "send requires a message"}
 
     message = " ".join(message_parts)
     notification_id = uuid.uuid4().hex[:8]
@@ -91,10 +91,10 @@ def _cmd_list(args):
             try:
                 limit = int(args[i + 1])
             except ValueError:
-                raise ValueError(f"invalid limit: {args[i + 1]}")
+                return {"error": f"invalid limit: {args[i + 1]}"}
             i += 2
         else:
-            raise ValueError(f"unknown argument: {args[i]}")
+            return {"error": f"unknown argument: {args[i]}"}
 
     def do_list():
         return _load_notifications()
@@ -117,5 +117,5 @@ def run(command, args):
     }
     handler = commands.get(command)
     if handler is None:
-        raise ValueError(f"unknown command: {command}")
+        return {"error": f"unknown command: {command}"}
     return handler(args)
