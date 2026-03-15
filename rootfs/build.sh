@@ -33,11 +33,21 @@ echo ":: installing apps"
 mkdir -p "$ROOTFS/usr/lib/aos/apps"
 cp -a "$PROJECT_DIR/apps/." "$ROOTFS/usr/lib/aos/apps/"
 
-# 5. Create runtime directories
+# 5. Install Jina Reader (browser engine)
+echo ":: installing Jina Reader"
+chroot "$ROOTFS" bash -c '
+    cd /opt && git clone --depth 1 https://github.com/jina-ai/reader.git jina-reader
+    cd /opt/jina-reader
+    export PUPPETEER_CACHE_DIR=/opt/jina-reader/.cache
+    npm install --production 2>&1 | tail -5
+    npm cache clean --force
+'
+
+# 6. Create runtime directories
 mkdir -p "$ROOTFS/workspace"
 mkdir -p "$ROOTFS/var/lib/aos"
 
-# 6. Source AOS profile on login
+# 7. Source AOS profile on login
 if ! grep -q 'aos/profile.sh' "$ROOTFS/etc/bash.bashrc" 2>/dev/null; then
     echo '[ -f /etc/aos/profile.sh ] && . /etc/aos/profile.sh' >> "$ROOTFS/etc/bash.bashrc"
 fi

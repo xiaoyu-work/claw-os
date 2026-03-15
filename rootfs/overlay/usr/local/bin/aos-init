@@ -1,0 +1,29 @@
+#!/bin/bash
+# aos-init — Agent OS container entrypoint
+# Starts background services, then hands off to the requested command.
+
+set -e
+
+# Source AOS profile
+[ -f /etc/aos/profile.sh ] && . /etc/aos/profile.sh
+
+# Start Jina Reader if installed
+if [ -d /opt/jina-reader ]; then
+    export PUPPETEER_CACHE_DIR=/opt/jina-reader/.cache
+    cd /opt/jina-reader
+    npx tsx src/index.ts > /var/log/aos/reader.log 2>&1 &
+    READER_PID=$!
+    
+    # Wait for Reader to be ready (max 15 seconds)
+    for i in $(seq 1 30); do
+        if curl -s -o /dev/null http://localhost:3000 2>/dev/null; then
+            break
+        fi
+        sleep 0.5
+    done
+    
+    cd /workspace
+fi
+
+# Execute the requested command (default: bash --login)
+exec "${@:-/bin/bash --login}"

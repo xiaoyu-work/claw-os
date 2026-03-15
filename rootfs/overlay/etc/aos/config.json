@@ -1,5 +1,5 @@
 {
-  "version": "0.2.0",
+  "version": "0.3.0",
   "workspace": "/workspace",
   "exec": {
     "timeout": 300,
@@ -8,6 +8,11 @@
   "net": {
     "timeout": 30,
     "allow_outbound": true
+  },
+  "web": {
+    "reader_url": "http://localhost:3000",
+    "timeout": 30,
+    "max_content_length": 50000
   },
   "api": {
     "port": 8080,
