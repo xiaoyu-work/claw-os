@@ -120,8 +120,8 @@ fn cmd_start(_args: &[String]) -> Result<Value, String> {
     let log_err = log_file.try_clone()
         .map_err(|e| format!("failed to clone log file: {e}"))?;
 
-    let child = Command::new("npx")
-        .args(["tsx", "src/index.ts"])
+    let child = Command::new("node")
+        .args(["./build/stand-alone/crawl.js"])
         .current_dir(READER_DIR)
         .env("PUPPETEER_CACHE_DIR", format!("{READER_DIR}/.cache"))
         .stdin(Stdio::null())
