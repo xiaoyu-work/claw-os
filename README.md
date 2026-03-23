@@ -70,7 +70,7 @@ cos checkpoint create "clean state"    # snapshot the workspace
 cos checkpoint diff                    # see what changed
 ```
 
-> Image not published yet? See [CONTRIBUTING.md](CONTRIBUTING.md) to build from source.
+See [CONTRIBUTING.md](CONTRIBUTING.md) to build from source.
 
 ## Pre-installed
 
