@@ -72,13 +72,6 @@ cos checkpoint diff                    # see what changed
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) to build from source.
 
-## Pre-installed
-
-- **Node.js 24** + pnpm + TypeScript
-- **Python 3** + pip + pymupdf, python-docx, openpyxl
-- **Chromium** (built-in browser engine, no Selenium needed)
-- **ripgrep**, **git**, **curl**, **sqlite3**, **jq**
-
 ## License
 
 MIT
