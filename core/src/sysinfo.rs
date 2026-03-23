@@ -39,7 +39,7 @@ fn cmd_env(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_resources() -> Result<Value, String> {
-    let result = json!({});
+    let mut result = json!({});
 
     // Disk usage for workspace
     #[cfg(unix)]
