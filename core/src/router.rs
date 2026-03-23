@@ -251,7 +251,7 @@ fn recovery_hint(error: &str) -> Option<serde_json::Value> {
     if err_lower.contains("no space left") || err_lower.contains("enospc") {
         return Some(json!({
             "hint": "Disk full. Free space before retrying.",
-            "try": ["cos sys resources", "cos exec run 'du -sh /workspace/* | sort -rh | head'"],
+            "try": ["cos sys resources", "cos exec run 'du -sh /den/* | sort -rh | head'"],
         }));
     }
     if err_lower.contains("connection refused") || err_lower.contains("econnrefused") {
@@ -335,7 +335,7 @@ mod tests {
 
     #[test]
     fn recovery_hint_permission_denied() {
-        let hint = recovery_hint("Permission denied on /workspace/file.txt").unwrap();
+        let hint = recovery_hint("Permission denied on /den/file.txt").unwrap();
         assert_eq!(hint["hint"], "Permission denied. Check file permissions.");
         let try_cmds = hint["try"].as_array().unwrap();
         assert!(try_cmds.iter().any(|v| v.as_str().unwrap().contains("chmod")));
@@ -349,7 +349,7 @@ mod tests {
 
     #[test]
     fn recovery_hint_file_not_found() {
-        let hint = recovery_hint("No such file or directory: /workspace/missing").unwrap();
+        let hint = recovery_hint("No such file or directory: /den/missing").unwrap();
         assert_eq!(hint["hint"], "File or command not found. Verify the path exists.");
         let try_cmds = hint["try"].as_array().unwrap();
         assert!(try_cmds.iter().any(|v| v.as_str().unwrap().contains("cos fs ls")));

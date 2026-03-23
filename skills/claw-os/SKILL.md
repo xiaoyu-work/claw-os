@@ -88,8 +88,8 @@ Control what a process can do. Tier 0 is highest privilege, tier 3 is read-only:
 
 ```bash
 cos proc spawn --tier 3 --session reader-1 -- analyze.py
-cos proc spawn --tier 1 --scope /workspace/project --session builder-1 -- build.py
-cos proc spawn --tier 2 --scope /workspace/output --parent lead --session writer-1 -- report.py
+cos proc spawn --tier 1 --scope /den/project --session builder-1 -- build.py
+cos proc spawn --tier 2 --scope /den/output --parent lead --session writer-1 -- report.py
 ```
 
 Child processes cannot escalate beyond parent's tier or widen parent's scope.
@@ -145,8 +145,8 @@ cos service register --name my-service --command "node server.js" --health-url h
 Block until a file, directory, or process changes:
 
 ```bash
-cos watch file /workspace/output.txt --timeout 30
-cos watch dir /workspace/results --timeout 60
+cos watch file /den/output.txt --timeout 30
+cos watch dir /den/results --timeout 60
 cos watch proc build-1 --timeout 300
 ```
 
@@ -163,13 +163,13 @@ cos web submit https://example.com/form --data '{"q": "search term"}'
 ## File System
 
 ```bash
-cos fs ls /workspace
-cos fs read /workspace/file.txt
-cos fs write /workspace/output.txt    # reads content from stdin
-cos fs stat /workspace/file.txt
-cos fs search "pattern" /workspace
-cos fs rm /workspace/tmp
-cos fs mkdir /workspace/new-dir
+cos fs ls /den
+cos fs read /den/file.txt
+cos fs write /den/output.txt    # reads content from stdin
+cos fs stat /den/file.txt
+cos fs search "pattern" /den
+cos fs rm /den/tmp
+cos fs mkdir /den/new-dir
 ```
 
 ## Documents
@@ -198,7 +198,7 @@ cos db databases
 ```bash
 cos net fetch https://api.example.com/data
 cos net fetch https://api.example.com/data --method POST --data '{"key": "value"}'
-cos net download https://example.com/file.zip --output /workspace/file.zip
+cos net download https://example.com/file.zip --output /den/file.zip
 ```
 
 ## Key-Value Store

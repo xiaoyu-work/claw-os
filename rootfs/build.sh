@@ -79,7 +79,7 @@ else
 fi
 
 # 8. Create runtime directories
-mkdir -p "$ROOTFS/workspace"
+mkdir -p "$ROOTFS/den"
 mkdir -p "$ROOTFS/var/lib/cos"
 
 # 9. Source COS profile on login

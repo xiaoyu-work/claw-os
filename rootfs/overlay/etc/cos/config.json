@@ -1,6 +1,6 @@
 {
   "version": "0.1.0",
-  "workspace": "/workspace",
+  "den": "/den",
   "exec": {
     "timeout": 300,
     "shell": "/bin/bash"
