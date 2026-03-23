@@ -16,6 +16,9 @@ jobs:
       - name: Clone Jina Reader
         run: git clone --depth 1 https://github.com/jina-ai/reader.git /tmp/jina-reader
 
+      - name: Install system dependencies for native modules
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev build-essential
+
       - name: Install dependencies
         run: cd /tmp/jina-reader && npm install
 
