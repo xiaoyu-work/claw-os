@@ -9,7 +9,7 @@ import time
 
 
 WORKSPACE = "/workspace"
-META_FILENAME = ".aos-meta.json"
+META_FILENAME = ".cos-meta.json"
 
 
 def _abs(path):
@@ -18,7 +18,7 @@ def _abs(path):
 
 
 def _load_meta(directory):
-    """Load the .aos-meta.json sidecar from a directory."""
+    """Load the .cos-meta.json sidecar from a directory."""
     meta_path = os.path.join(directory, META_FILENAME)
     if os.path.isfile(meta_path):
         with open(meta_path) as f:
@@ -27,7 +27,7 @@ def _load_meta(directory):
 
 
 def _save_meta(directory, meta):
-    """Save the .aos-meta.json sidecar to a directory."""
+    """Save the .cos-meta.json sidecar to a directory."""
     meta_path = os.path.join(directory, META_FILENAME)
     with open(meta_path, "w") as f:
         json.dump(meta, f, indent=2)

@@ -3,7 +3,7 @@
 import os
 import sqlite3
 
-DATA_DIR = os.environ.get("AOS_DATA_DIR", "/var/lib/aos")
+DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 DB_DIR = os.path.join(DATA_DIR, "db")
 
 
@@ -125,7 +125,7 @@ COMMANDS = {
 
 
 def run(command, args):
-    """Entry point called by aos."""
+    """Entry point called by cos."""
     handler = COMMANDS.get(command)
     if handler is None:
         return {"error": f"unknown command: {command}"}

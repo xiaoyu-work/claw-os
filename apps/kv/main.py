@@ -8,7 +8,7 @@ import fnmatch
 import json
 import os
 
-DATA_DIR = os.environ.get("AOS_DATA_DIR", "/var/lib/aos")
+DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 STORE_PATH = os.path.join(DATA_DIR, "kv.json")
 
 

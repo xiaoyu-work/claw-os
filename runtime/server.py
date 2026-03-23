@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Agent OS HTTP API server.
+"""Claw OS HTTP API server.
 
-Exposes the aos app system as a JSON HTTP API so that AI agents
-can interact with Agent OS over HTTP instead of forking processes.
+Exposes the cos app system as a JSON HTTP API so that AI agents
+can interact with Claw OS over HTTP instead of forking processes.
 
 Routes are discovered dynamically from installed apps — no hardcoded
-handlers.  Every app command available via ``aos <app> <cmd>`` is also
+handlers.  Every app command available via ``cos <app> <cmd>`` is also
 available via ``POST /api/v1/<app>/<cmd>``.
 
 Usage:
@@ -23,11 +23,11 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 VERSION = "0.3.0"
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 8080
-APPS_DIR = os.environ.get("AOS_APPS_DIR", "/usr/lib/aos/apps")
+APPS_DIR = os.environ.get("COS_APPS_DIR", "/usr/lib/cos/apps")
 
 
 # ---------------------------------------------------------------------------
-# App discovery (mirrors the logic in the aos CLI router)
+# App discovery (mirrors the logic in the cos CLI router)
 # ---------------------------------------------------------------------------
 
 def discover_apps(apps_dir):
@@ -51,7 +51,7 @@ def load_app_module(apps_dir, app_name):
     main_path = os.path.join(apps_dir, app_name, "main.py")
     if not os.path.isfile(main_path):
         return None
-    spec = importlib.util.spec_from_file_location(f"aos_app_{app_name}", main_path)
+    spec = importlib.util.spec_from_file_location(f"cos_app_{app_name}", main_path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -157,11 +157,11 @@ BUILTIN_ROUTES = {}
 # HTTP request handler
 # ---------------------------------------------------------------------------
 
-class AosRequestHandler(BaseHTTPRequestHandler):
-    """Routes HTTP requests to aos apps or built-in handlers."""
+class CosRequestHandler(BaseHTTPRequestHandler):
+    """Routes HTTP requests to cos apps or built-in handlers."""
 
     def log_message(self, fmt, *args):
-        sys.stderr.write(f"[aos-api] {self.address_string()} {fmt % args}\n")
+        sys.stderr.write(f"[cos-api] {self.address_string()} {fmt % args}\n")
 
     # -- GET ----------------------------------------------------------------
 
@@ -248,20 +248,20 @@ class AosRequestHandler(BaseHTTPRequestHandler):
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Agent OS HTTP API server")
+    parser = argparse.ArgumentParser(description="Claw OS HTTP API server")
     parser.add_argument("--host", default=DEFAULT_HOST, help="bind address")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="listen port")
     parser.add_argument("--apps-dir", default=APPS_DIR, help="apps directory")
     args = parser.parse_args()
 
-    server = HTTPServer((args.host, args.port), AosRequestHandler)
+    server = HTTPServer((args.host, args.port), CosRequestHandler)
     server.apps_dir = args.apps_dir
-    sys.stderr.write(f"[aos-api] v{VERSION} listening on {args.host}:{args.port}\n")
-    sys.stderr.write(f"[aos-api] apps dir: {args.apps_dir}\n")
+    sys.stderr.write(f"[cos-api] v{VERSION} listening on {args.host}:{args.port}\n")
+    sys.stderr.write(f"[cos-api] apps dir: {args.apps_dir}\n")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        sys.stderr.write("\n[aos-api] shutting down\n")
+        sys.stderr.write("\n[cos-api] shutting down\n")
         server.server_close()
 
 

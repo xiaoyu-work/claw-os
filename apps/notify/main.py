@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timezone
 
 
-DATA_DIR = os.environ.get("AOS_DATA_DIR", "/var/lib/aos")
+DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 NOTIFICATIONS_FILE = os.path.join(DATA_DIR, "notifications.json")
 
 
@@ -110,7 +110,7 @@ def _cmd_list(args):
 
 
 def run(command, args):
-    """Entry point called by aos."""
+    """Entry point called by cos."""
     commands = {
         "send": _cmd_send,
         "list": _cmd_list,

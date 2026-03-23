@@ -1,4 +1,4 @@
-"""aos web — Full browser with JavaScript rendering, powered by Jina Reader."""
+"""cos web — Full browser with JavaScript rendering, powered by Jina Reader."""
 
 import json
 import os
@@ -8,9 +8,9 @@ import urllib.parse
 import urllib.request
 
 TIMEOUT = 30
-USER_AGENT = "aos/1.0.0"
+USER_AGENT = "cos/1.0.0"
 READER_URL = os.environ.get("JINA_READER_URL", "http://localhost:3000")
-DATA_DIR = os.environ.get("AOS_DATA_DIR", "/var/lib/aos")
+DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 DEFAULT_MAX_LENGTH = 50000
 
 # Cached Reader availability (None = not checked yet)
@@ -156,7 +156,7 @@ def _sanitize_filename(url):
 def _cmd_read(args):
     """Fetch a URL and return clean Markdown content."""
     if not args:
-        return {"error": "usage: aos web read <url> [--selector CSS] "
+        return {"error": "usage: cos web read <url> [--selector CSS] "
                 "[--remove CSS] [--wait CSS] [--max-length N]"}
 
     positional, flags = _parse_args(args, {
@@ -167,7 +167,7 @@ def _cmd_read(args):
     })
 
     if not positional:
-        return {"error": "usage: aos web read <url>"}
+        return {"error": "usage: cos web read <url>"}
 
     url = positional[0]
     if not url.startswith(("http://", "https://")):
@@ -273,7 +273,7 @@ def _read_via_urllib(url, max_length):
 def _cmd_screenshot(args):
     """Capture a screenshot of a URL via Jina Reader."""
     if not args:
-        return {"error": "usage: aos web screenshot <url> [--wait CSS] "
+        return {"error": "usage: cos web screenshot <url> [--wait CSS] "
                 "[--full-page]"}
 
     positional, flags = _parse_args(args, {
@@ -282,7 +282,7 @@ def _cmd_screenshot(args):
     })
 
     if not positional:
-        return {"error": "usage: aos web screenshot <url>"}
+        return {"error": "usage: cos web screenshot <url>"}
 
     url = positional[0]
     if not url.startswith(("http://", "https://")):
@@ -335,7 +335,7 @@ def _cmd_screenshot(args):
 def _cmd_submit(args):
     """POST form data to a URL (uses urllib directly, not Jina Reader)."""
     if not args:
-        return {"error": "usage: aos web submit <url> [--data JSON]"}
+        return {"error": "usage: cos web submit <url> [--data JSON]"}
 
     url = args[0]
     if not url.startswith(("http://", "https://")):
@@ -385,7 +385,7 @@ _COMMANDS = {
 
 
 def run(command, args):
-    """Main entry point called by the aos router."""
+    """Main entry point called by the cos router."""
     handler = _COMMANDS.get(command)
     if handler is None:
         return {"error": f"unknown command: {command}"}

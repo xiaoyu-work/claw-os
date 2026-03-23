@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Agent OS Bridge — text-based interface between LLM and Agent OS.
+"""Claw OS Bridge — text-based interface between LLM and Claw OS.
 
 No tool schemas.  No prompt pollution.  The agent discovers capabilities
-progressively by running ``aos`` commands.
+progressively by running ``cos`` commands.
 
 The bridge scans LLM output for lines starting with ``$ ``, executes
-them via the aos CLI, and feeds the results back.  The loop continues
+them via the cos CLI, and feeds the results back.  The loop continues
 until the LLM responds without any commands.
 
 Usage:
@@ -24,22 +24,22 @@ import sys
 
 # ---------------------------------------------------------------------------
 # System prompt — intentionally minimal.  Everything else is discovered
-# by the agent at runtime via ``$ aos``.
+# by the agent at runtime via ``$ cos``.
 # ---------------------------------------------------------------------------
 
 SYSTEM_PROMPT = """\
-You are an AI agent running on Agent OS.
+You are an AI agent running on Claw OS.
 
 To interact with the system, write a command on a line starting with $:
 
-$ aos
+$ cos
 
 Run the command above to see what you can do.\
 """
 
 
 # ---------------------------------------------------------------------------
-# Executor — runs aos commands locally or inside a Docker container
+# Executor — runs cos commands locally or inside a Docker container
 # ---------------------------------------------------------------------------
 
 class Executor:
@@ -49,27 +49,27 @@ class Executor:
         self.data_dir = data_dir
 
     def run(self, command_line):
-        """Execute an aos command string and return output text."""
+        """Execute a cos command string and return output text."""
         try:
             parts = shlex.split(command_line)
         except ValueError as e:
             return f"error: invalid command syntax: {e}"
 
-        # Strip leading "aos" — user writes "$ aos fs ls" but we call
+        # Strip leading "cos" — user writes "$ cos fs ls" but we call
         # the binary directly.
-        if parts and parts[0] == "aos":
+        if parts and parts[0] == "cos":
             parts = parts[1:]
 
         if self.container_id:
-            cmd = ["docker", "exec", self.container_id, "aos"] + parts
+            cmd = ["docker", "exec", self.container_id, "cos"] + parts
         else:
-            cmd = [sys.executable, self._aos_path()] + parts
+            cmd = [sys.executable, self._cos_path()] + parts
 
         env = os.environ.copy()
         if self.apps_dir:
-            env["AOS_APPS_DIR"] = self.apps_dir
+            env["COS_APPS_DIR"] = self.apps_dir
         if self.data_dir:
-            env["AOS_DATA_DIR"] = self.data_dir
+            env["COS_DATA_DIR"] = self.data_dir
 
         try:
             result = subprocess.run(
@@ -85,13 +85,13 @@ class Executor:
         except Exception as e:
             return f"error: {e}"
 
-    def _aos_path(self):
+    def _cos_path(self):
         base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        return os.path.join(base, "rootfs", "overlay", "usr", "local", "bin", "aos")
+        return os.path.join(base, "rootfs", "overlay", "usr", "local", "bin", "cos")
 
 
 # ---------------------------------------------------------------------------
-# Command extraction — pull ``$ aos …`` lines from LLM text
+# Command extraction — pull ``$ cos …`` lines from LLM text
 # ---------------------------------------------------------------------------
 
 def extract_commands(text):
@@ -136,14 +136,14 @@ def run_agent(model="claude-sonnet-4-6", container_id=None, system_prompt=None):
         base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         executor = Executor(
             apps_dir=os.path.join(base, "apps"),
-            data_dir=os.environ.get("AOS_DATA_DIR", "/tmp/aos-data"),
+            data_dir=os.environ.get("COS_DATA_DIR", "/tmp/cos-data"),
         )
 
     if system_prompt is None:
         system_prompt = SYSTEM_PROMPT
 
     messages = []
-    print("Agent OS — Type your request (Ctrl+C to exit)\n")
+    print("Claw OS — Type your request (Ctrl+C to exit)\n")
 
     while True:
         try:
@@ -196,7 +196,7 @@ def run_agent(model="claude-sonnet-4-6", container_id=None, system_prompt=None):
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Agent OS Bridge")
+    parser = argparse.ArgumentParser(description="Claw OS Bridge")
     parser.add_argument("--container", help="Docker container ID to run commands in")
     parser.add_argument("--model", default="claude-sonnet-4-6", help="Model to use")
     parser.add_argument("--system", help="Custom system prompt")

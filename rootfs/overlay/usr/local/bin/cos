@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""aos — Agent OS command router.
+"""cos — Claw OS command router.
 
 Discovers installed apps and routes commands to them.
 All output is JSON. All errors set a non-zero exit code.
 
 Usage:
-    aos                          List installed apps
-    aos <app> <command> [args]   Run an app command
-    aos <app>                    Show app help
+    cos                          List installed apps
+    cos <app> <command> [args]   Run an app command
+    cos <app>                    Show app help
 """
 
 import importlib.util
@@ -18,8 +18,8 @@ import time
 from datetime import datetime, timezone
 
 VERSION = "0.3.0"
-APPS_DIR = os.environ.get("AOS_APPS_DIR", "/usr/lib/aos/apps")
-DATA_DIR = os.environ.get("AOS_DATA_DIR", "/var/lib/aos")
+APPS_DIR = os.environ.get("COS_APPS_DIR", "/usr/lib/cos/apps")
+DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 AUDIT_LOG = os.path.join(DATA_DIR, "logs", "audit.jsonl")
 
 
@@ -54,7 +54,7 @@ def load_app_module(app_name):
     main_path = os.path.join(APPS_DIR, app_name, "main.py")
     if not os.path.isfile(main_path):
         error(f"app '{app_name}' has no main.py")
-    spec = importlib.util.spec_from_file_location(f"aos_app_{app_name}", main_path)
+    spec = importlib.util.spec_from_file_location(f"cos_app_{app_name}", main_path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -130,10 +130,10 @@ def show_apps():
             "commands": list(manifest.get("commands", {}).keys()),
         })
     respond({
-        "name": "aos",
+        "name": "cos",
         "version": VERSION,
         "apps": app_list,
-        "hint": "Run: aos <app>",
+        "hint": "Run: cos <app>",
     })
 
 
@@ -145,7 +145,7 @@ def show_app_help(app_name, apps):
         "version": manifest.get("version", ""),
         "description": manifest.get("description", ""),
         "commands": manifest.get("commands", {}),
-        "hint": f"Run: aos {app_name} <command> [args]",
+        "hint": f"Run: cos {app_name} <command> [args]",
     })
 
 

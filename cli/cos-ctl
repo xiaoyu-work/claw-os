@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""aos-ctl — Host-side management tool for Agent OS instances.
+"""cos-ctl — Host-side management tool for Claw OS instances.
 
 Usage:
-    aos-ctl build                          Build the rootfs
-    aos-ctl run [--name N] [--port P] [--workspace DIR]
+    cos-ctl build                          Build the rootfs
+    cos-ctl run [--name N] [--port P] [--workspace DIR]
                                            Start a container instance
-    aos-ctl list                           List running instances
-    aos-ctl stop <id>                      Stop an instance
-    aos-ctl shell <id>                     Attach a shell to an instance
-    aos-ctl exec <id> <aos-command...>     Run an aos command inside an instance
-    aos-ctl logs <id>                      Show container logs
-    aos-ctl image                          Show image info
-    aos-ctl status                         Show system status
+    cos-ctl list                           List running instances
+    cos-ctl stop <id>                      Stop an instance
+    cos-ctl shell <id>                     Attach a shell to an instance
+    cos-ctl exec <id> <cos-command...>     Run a cos command inside an instance
+    cos-ctl logs <id>                      Show container logs
+    cos-ctl image                          Show image info
+    cos-ctl status                         Show system status
 """
 
 import json
@@ -20,8 +20,8 @@ import subprocess
 import sys
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-IMAGE_NAME = "agent-os"
-CONTAINER_PREFIX = "aos-"
+IMAGE_NAME = "claw-os"
+CONTAINER_PREFIX = "cos-"
 
 
 def respond(data):
@@ -47,7 +47,7 @@ def docker(*args, capture=True):
 
 def cmd_build(_args):
     """Build the rootfs and Docker image."""
-    rootfs = os.path.join(PROJECT_DIR, "build", "agent-os-rootfs")
+    rootfs = os.path.join(PROJECT_DIR, "build", "claw-os-rootfs")
     if not os.path.isdir(rootfs):
         error(f"rootfs not found at {rootfs} — run: sudo ./rootfs/build.sh")
 
@@ -63,7 +63,7 @@ def cmd_build(_args):
 
 
 def cmd_run(args):
-    """Start a new Agent OS container."""
+    """Start a new Claw OS container."""
     name = None
     port = None
     workspace = None
@@ -90,7 +90,7 @@ def cmd_run(args):
     docker_args = [
         "run", "-d",
         "--name", name,
-        "--hostname", "agent-os",
+        "--hostname", "claw-os",
     ]
 
     if port is not None:
@@ -115,7 +115,7 @@ def cmd_run(args):
 
 
 def cmd_list(_args):
-    """List running Agent OS containers."""
+    """List running Claw OS containers."""
     result = docker(
         "ps", "--filter", f"ancestor={IMAGE_NAME}",
         "--format", '{{.ID}}\t{{.Names}}\t{{.Status}}',
@@ -134,9 +134,9 @@ def cmd_list(_args):
 
 
 def cmd_stop(args):
-    """Stop an Agent OS container."""
+    """Stop an Claw OS container."""
     if not args:
-        error("usage: aos-ctl stop <id|name>")
+        error("usage: cos-ctl stop <id|name>")
     target = args[0]
     result = docker("stop", target)
     if result.returncode != 0:
@@ -148,18 +148,18 @@ def cmd_stop(args):
 def cmd_shell(args):
     """Attach a shell to a running instance."""
     if not args:
-        error("usage: aos-ctl shell <id|name>")
+        error("usage: cos-ctl shell <id|name>")
     docker("exec", "-it", args[0], "/bin/bash", "--login", capture=False)
 
 
 def cmd_exec(args):
-    """Run an aos command inside an instance."""
+    """Run a cos command inside an instance."""
     if len(args) < 2:
-        error("usage: aos-ctl exec <id|name> <aos-command...>")
+        error("usage: cos-ctl exec <id|name> <cos-command...>")
     target = args[0]
-    aos_args = args[1:]
-    result = docker("exec", target, "aos", *aos_args)
-    # Pass through the JSON output from aos directly
+    cos_args = args[1:]
+    result = docker("exec", target, "cos", *cos_args)
+    # Pass through the JSON output from cos directly
     if result.stdout.strip():
         try:
             data = json.loads(result.stdout)
@@ -177,7 +177,7 @@ def cmd_exec(args):
         respond({
             "ok": result.returncode == 0,
             "instance": target,
-            "command": aos_args,
+            "command": cos_args,
             "exit_code": result.returncode,
             "stderr": result.stderr,
         })
@@ -188,7 +188,7 @@ def cmd_exec(args):
 def cmd_logs(args):
     """Show container logs."""
     if not args:
-        error("usage: aos-ctl logs <id|name>")
+        error("usage: cos-ctl logs <id|name>")
     target = args[0]
     result = docker("logs", target)
     if result.returncode != 0:
@@ -220,7 +220,7 @@ def cmd_image(_args):
 
 
 def cmd_status(_args):
-    """Show Agent OS system status."""
+    """Show Claw OS system status."""
     # Check if image exists
     result = docker("images", IMAGE_NAME, "--format", "{{.Size}}")
     image_exists = bool(result.stdout.strip())
@@ -229,7 +229,7 @@ def cmd_status(_args):
     result = docker("ps", "-q", "--filter", f"ancestor={IMAGE_NAME}")
     running = len(result.stdout.strip().splitlines()) if result.stdout.strip() else 0
 
-    rootfs = os.path.join(PROJECT_DIR, "build", "agent-os-rootfs")
+    rootfs = os.path.join(PROJECT_DIR, "build", "claw-os-rootfs")
     respond({
         "image": IMAGE_NAME if image_exists else None,
         "rootfs_exists": os.path.isdir(rootfs),
@@ -255,7 +255,7 @@ def main():
 
     if not args or args[0] in ("-h", "--help"):
         respond({
-            "name": "aos-ctl",
+            "name": "cos-ctl",
             "commands": sorted(COMMANDS.keys()),
         })
         return

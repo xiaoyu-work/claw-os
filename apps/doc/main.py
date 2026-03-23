@@ -1,4 +1,4 @@
-"""doc — Universal document reader for Agent OS.
+"""doc — Universal document reader for Claw OS.
 
 Throw any file at it, get structured text back.
 """
@@ -43,7 +43,7 @@ def _read_pdf(path):
     try:
         import fitz  # pymupdf
     except ImportError:
-        return None, {"error": "pymupdf is not installed", "hint": "aos pkg need python3-pymupdf"}
+        return None, {"error": "pymupdf is not installed", "hint": "cos pkg need python3-pymupdf"}
     doc = fitz.open(path)
     pages = []
     for page in doc:
@@ -56,7 +56,7 @@ def _read_docx(path):
     try:
         import docx
     except ImportError:
-        return None, {"error": "python-docx is not installed", "hint": "aos pkg need python3-docx"}
+        return None, {"error": "python-docx is not installed", "hint": "cos pkg need python3-docx"}
     doc = docx.Document(path)
     paragraphs = [p.text for p in doc.paragraphs]
     return "\n".join(paragraphs), None
@@ -66,7 +66,7 @@ def _read_xlsx(path):
     try:
         import openpyxl
     except ImportError:
-        return None, {"error": "openpyxl is not installed", "hint": "aos pkg need python3-openpyxl"}
+        return None, {"error": "openpyxl is not installed", "hint": "cos pkg need python3-openpyxl"}
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     sheets = {}
     for name in wb.sheetnames:
@@ -95,7 +95,7 @@ def _line_count(text):
 
 def cmd_read(args):
     if not args:
-        return {"error": "usage: aos doc read <path>"}
+        return {"error": "usage: cos doc read <path>"}
     path = args[0]
     if not os.path.isfile(path):
         return {"error": f"file not found: {path}"}
@@ -150,7 +150,7 @@ def cmd_read(args):
 
 def cmd_info(args):
     if not args:
-        return {"error": "usage: aos doc info <path>"}
+        return {"error": "usage: cos doc info <path>"}
     path = args[0]
     if not os.path.exists(path):
         return {"error": f"file not found: {path}"}
@@ -195,7 +195,7 @@ def cmd_info(args):
 
 def cmd_convert(args):
     if not args:
-        return {"error": "usage: aos doc convert <path> --to <format>"}
+        return {"error": "usage: cos doc convert <path> --to <format>"}
 
     path = args[0]
     if not os.path.isfile(path):
@@ -208,7 +208,7 @@ def cmd_convert(args):
             target_fmt = args[i + 1].lstrip(".")
             break
     if not target_fmt:
-        return {"error": "usage: aos doc convert <path> --to <format>"}
+        return {"error": "usage: cos doc convert <path> --to <format>"}
 
     ext = _ext(path)
     base = os.path.splitext(path)[0]
@@ -253,7 +253,7 @@ def cmd_convert(args):
 # ---------------------------------------------------------------------------
 
 def run(command, args):
-    """Called by aos router."""
+    """Called by cos router."""
     commands = {
         "read": cmd_read,
         "info": cmd_info,
