@@ -56,8 +56,16 @@ OpenClaw on Linux needs ~10,000 lines of TypeScript just to manage infrastructur
 ## Quick Start
 
 ```bash
-docker pull clawos/claw-os:latest
-docker run -it --name claw -v ./workspace:/workspace clawos/claw-os
+git clone https://github.com/xiaoyu-work/claw-os.git
+cd claw-os
+
+# Build the image (requires Linux + root for rootfs bootstrap)
+sudo ./rootfs/build.sh
+./cli/cos-ctl build
+
+# Start an instance
+./cli/cos-ctl run --name dev --workspace ./workspace
+./cli/cos-ctl shell dev
 ```
 
 You're in. Try:
