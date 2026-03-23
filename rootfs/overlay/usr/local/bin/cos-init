@@ -7,22 +7,9 @@ set -e
 # Source COS profile
 [ -f /etc/cos/profile.sh ] && . /etc/cos/profile.sh
 
-# Start Jina Reader if installed
+# Start browser service (Jina Reader) via cos binary
 if [ -d /opt/jina-reader ]; then
-    export PUPPETEER_CACHE_DIR=/opt/jina-reader/.cache
-    cd /opt/jina-reader
-    npx tsx src/index.ts > /var/log/cos/reader.log 2>&1 &
-    READER_PID=$!
-    
-    # Wait for Reader to be ready (max 15 seconds)
-    for i in $(seq 1 30); do
-        if curl -s -o /dev/null http://localhost:3000 2>/dev/null; then
-            break
-        fi
-        sleep 0.5
-    done
-    
-    cd /workspace
+    cos browser start >/dev/null 2>&1 || true
 fi
 
 # Execute the requested command (default: bash --login)
