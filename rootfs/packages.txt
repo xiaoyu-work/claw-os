@@ -9,12 +9,6 @@ ca-certificates
 sqlite3
 jq
 
-# Python packages for cos apps (doc reader, etc.)
-python3-pymupdf
-python3-docx
-python3-openpyxl
-python3-yaml
-
 # Chromium browser (used by cos-browser-engine via Puppeteer)
 chromium
 

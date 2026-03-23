@@ -55,7 +55,12 @@ chroot "$ROOTFS" apt-get install -y --no-install-recommends $PACKAGES
 chroot "$ROOTFS" apt-get clean
 rm -rf "$ROOTFS/var/lib/apt/lists"/*
 
-# 4. Apply overlay (config files, cos-init, etc.)
+# 4. Install Python packages for cos apps (not available via apt)
+echo ":: installing Python packages"
+chroot "$ROOTFS" pip3 install --break-system-packages --no-cache-dir \
+    pymupdf python-docx openpyxl pyyaml
+
+# 5. Apply overlay (config files, cos-init, etc.)
 echo ":: applying overlay"
 cp -a "$SCRIPT_DIR/overlay/." "$ROOTFS/"
 
@@ -78,11 +83,11 @@ else
     echo "   WARNING: vendor/browser-engine not found, skipping"
 fi
 
-# 8. Create runtime directories
+# 9. Create runtime directories
 mkdir -p "$ROOTFS/den"
 mkdir -p "$ROOTFS/var/lib/cos"
 
-# 9. Source COS profile on login
+# 10. Source COS profile on login
 if ! grep -q 'cos/profile.sh' "$ROOTFS/etc/bash.bashrc" 2>/dev/null; then
     echo '[ -f /etc/cos/profile.sh ] && . /etc/cos/profile.sh' >> "$ROOTFS/etc/bash.bashrc"
 fi
