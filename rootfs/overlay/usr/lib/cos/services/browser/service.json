@@ -1,0 +1,18 @@
+{
+  "name": "browser",
+  "description": "Browser engine — URL to Markdown with full JS rendering",
+  "command": "node index.js",
+  "workdir": "/opt/cos-browser-engine",
+  "env": {
+    "PORT": "3000",
+    "PUPPETEER_SKIP_DOWNLOAD": "true"
+  },
+  "health": {
+    "url": "http://localhost:3000/health",
+    "interval_secs": 10,
+    "timeout_secs": 5,
+    "start_grace_secs": 15
+  },
+  "restart": "on-failure",
+  "depends_on": []
+}
