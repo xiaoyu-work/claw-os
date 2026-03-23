@@ -44,11 +44,11 @@ fn cmd_env(args: &[String]) -> Result<Value, String> {
 fn cmd_resources() -> Result<Value, String> {
     let mut result = json!({});
 
-    // Disk usage for workspace
+    // Disk usage for den
     #[cfg(unix)]
     {
         use std::ffi::CString;
-        let workspace = env::var("WORKSPACE").unwrap_or_else(|_| "/workspace".into());
+        let workspace = env::var("DEN").unwrap_or_else(|_| "/den".into());
         let c_path = CString::new(workspace.as_bytes()).unwrap();
         unsafe {
             let mut stat: libc::statvfs = std::mem::zeroed();

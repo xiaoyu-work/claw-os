@@ -27,7 +27,7 @@ cos proc spawn --session build-1 -- npm run build
 cos proc output build-1 --tail 20
 cos web read https://example.com
 cos doc read paper.pdf
-cos fs ls /workspace
+cos fs ls /den
 cos db query mydb "SELECT * FROM users"
 cos kv set project:status "building"
 cos net fetch https://api.example.com/data
@@ -75,14 +75,14 @@ OpenClaw on Linux needs ~10,000 lines of TypeScript just to manage infrastructur
 
 ```bash
 docker pull ghcr.io/xiaoyu-work/claw-os:latest
-docker run -it --name claw -v ./workspace:/workspace ghcr.io/xiaoyu-work/claw-os
+docker run -it --name claw -v ./workspace:/den ghcr.io/xiaoyu-work/claw-os
 ```
 
 You're in. Try:
 
 ```bash
 cos sys info
-cos fs ls /workspace
+cos fs ls /den
 cos web read https://example.com
 ```
 

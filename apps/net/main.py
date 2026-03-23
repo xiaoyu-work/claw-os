@@ -87,7 +87,7 @@ def cmd_download(args):
     output_path = opts.output
     if output_path is None:
         filename = os.path.basename(urllib.parse.urlparse(opts.url).path) or "download"
-        output_path = os.path.join("/workspace", filename)
+        output_path = os.path.join("/den", filename)
 
     headers = {"User-Agent": USER_AGENT}
     req = urllib.request.Request(opts.url, headers=headers)

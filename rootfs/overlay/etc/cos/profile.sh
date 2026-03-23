@@ -1,7 +1,7 @@
 #!/bin/bash
 # Claw OS shell profile — sourced on agent login.
 export COS_VERSION="0.1.0"
-export WORKSPACE="/workspace"
+export DEN="/den"
 export PATH="/usr/local/bin:$PATH"
 
 # Agent-native: suppress all interactive prompts.
@@ -17,4 +17,4 @@ export PYTHONDONTWRITEBYTECODE=1
 export NEEDRESTART_MODE=a
 export APT_LISTCHANGES_FRONTEND=none
 
-cd "$WORKSPACE" 2>/dev/null || true
+cd "$DEN" 2>/dev/null || true

@@ -83,7 +83,7 @@ fn min_tier_for(op: OpType) -> u8 {
 ///
 /// Edge cases:
 ///   - scope `"/"` allows everything
-///   - scope `"/workspace/project"` allows `"/workspace/project/sub/file.txt"`
+///   - scope `"/den/project"` allows `"/den/project/sub/file.txt"`
 pub fn path_in_scope(scope: &str, path: &str) -> bool {
     let norm_scope = normalize_path(scope);
     let norm_path = normalize_path(path);
@@ -320,9 +320,9 @@ mod tests {
 
     #[test]
     fn scope_basic() {
-        assert!(path_in_scope("/workspace", "/workspace/file.txt"));
-        assert!(path_in_scope("/workspace", "/workspace/sub/deep/file.txt"));
-        assert!(!path_in_scope("/workspace/project", "/workspace/other/file.txt"));
+        assert!(path_in_scope("/den", "/den/file.txt"));
+        assert!(path_in_scope("/den", "/den/sub/deep/file.txt"));
+        assert!(!path_in_scope("/den/project", "/den/other/file.txt"));
         assert!(path_in_scope("/", "/anything"));
     }
 
@@ -330,14 +330,14 @@ mod tests {
     fn scope_no_escape() {
         // ../ should not escape scope
         assert!(!path_in_scope(
-            "/workspace/project",
-            "/workspace/project/../secrets/key"
+            "/den/project",
+            "/den/project/../secrets/key"
         ));
     }
 
     #[test]
     fn scope_exact_match() {
-        assert!(path_in_scope("/workspace/project", "/workspace/project"));
+        assert!(path_in_scope("/den/project", "/den/project"));
     }
 
     // -- min_tier_for --

@@ -97,7 +97,7 @@ def cmd_run(args):
         docker_args += ["-p", f"{port}:{port}"]
 
     if workspace is not None:
-        docker_args += ["-v", f"{workspace}:/workspace"]
+        docker_args += ["-v", f"{workspace}:/den"]
 
     docker_args += [IMAGE_NAME, "sleep", "infinity"]
 
