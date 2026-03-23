@@ -20,6 +20,13 @@ use std::process::{Command, Stdio};
 
 const SANDBOX_DIR: &str = "/var/lib/cos/sandboxes";
 
+struct ResourceLimits {
+    mem_limit: Option<String>,   // e.g. "512M"
+    cpu_percent: Option<u32>,    // e.g. 50
+    pids_max: Option<u32>,       // e.g. 100
+    timeout_secs: Option<u32>,   // e.g. 300
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SandboxConfig {
     pub id: String,
@@ -71,11 +78,17 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 
 /// Execute a command in an isolated sandbox.
 ///
-/// Usage: cos sandbox exec [--no-network] [--ro] [--workspace DIR] -- <command> [args...]
+/// Usage: cos sandbox exec [--no-network] [--ro] [--workspace DIR]
+///                         [--mem LIMIT] [--cpu PERCENT] [--pids MAX]
+///                         [--timeout SECS] -- <command> [args...]
 fn cmd_exec(args: &[String]) -> Result<Value, String> {
     let mut network = true;
     let mut read_only = false;
     let mut workspace = "/workspace".to_string();
+    let mut mem_limit: Option<String> = None;    // e.g. "512M", "1G"
+    let mut cpu_percent: Option<u32> = None;      // e.g. 50 = 50%
+    let mut pids_max: Option<u32> = None;         // e.g. 100
+    let mut timeout_secs: Option<u32> = None;     // e.g. 300
     let mut cmd_start = None;
 
     let mut i = 0;
@@ -93,12 +106,27 @@ fn cmd_exec(args: &[String]) -> Result<Value, String> {
                 workspace = args[i + 1].clone();
                 i += 2;
             }
+            "--mem" if i + 1 < args.len() => {
+                mem_limit = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--cpu" if i + 1 < args.len() => {
+                cpu_percent = args[i + 1].parse().ok();
+                i += 2;
+            }
+            "--pids" if i + 1 < args.len() => {
+                pids_max = args[i + 1].parse().ok();
+                i += 2;
+            }
+            "--timeout" if i + 1 < args.len() => {
+                timeout_secs = args[i + 1].parse().ok();
+                i += 2;
+            }
             "--" => {
                 cmd_start = Some(i + 1);
                 break;
             }
             _ => {
-                // First non-flag arg starts the command
                 cmd_start = Some(i);
                 break;
             }
@@ -111,28 +139,44 @@ fn cmd_exec(args: &[String]) -> Result<Value, String> {
     }
 
     let command_args = &args[cmd_idx..];
+    let limits = ResourceLimits {
+        mem_limit,
+        cpu_percent,
+        pids_max,
+        timeout_secs,
+    };
 
     #[cfg(target_os = "linux")]
     {
-        return exec_linux(command_args, network, read_only, &workspace);
+        return exec_linux(command_args, network, read_only, &workspace, &limits);
     }
 
     #[cfg(not(target_os = "linux"))]
     {
-        // Fallback: just run the command with basic isolation (no namespaces)
-        exec_fallback(command_args)
+        exec_fallback(command_args, &limits)
     }
 }
 
-/// Linux: use unshare(1) for namespace isolation.
+/// Linux: use unshare(1) for namespace isolation + systemd-run for cgroup limits.
 #[cfg(target_os = "linux")]
 fn exec_linux(
     command_args: &[String],
     network: bool,
-    read_only: bool,
-    workspace: &str,
+    _read_only: bool,
+    _workspace: &str,
+    limits: &ResourceLimits,
 ) -> Result<Value, String> {
-    // Build unshare command with appropriate namespace flags
+    let has_limits = limits.mem_limit.is_some()
+        || limits.cpu_percent.is_some()
+        || limits.pids_max.is_some()
+        || limits.timeout_secs.is_some();
+
+    // If resource limits are set, use systemd-run which handles cgroup v2
+    if has_limits {
+        return exec_linux_with_cgroup(command_args, network, limits);
+    }
+
+    // Otherwise, use plain unshare for lightweight namespace isolation
     let mut unshare_args = vec![
         "--pid".to_string(),
         "--fork".to_string(),
@@ -144,7 +188,6 @@ fn exec_linux(
         unshare_args.push("--net".to_string());
     }
 
-    // Add the actual command
     unshare_args.push("--".to_string());
     unshare_args.extend_from_slice(command_args);
 
@@ -173,13 +216,127 @@ fn exec_linux(
         "stderr": stderr,
         "isolated": true,
         "network": network,
-        "read_only": read_only,
     }))
 }
 
-/// Fallback for non-Linux: basic subprocess execution.
+/// Linux: use systemd-run for cgroup v2 resource limits + namespace isolation.
+///
+/// systemd-run creates a transient scope with cgroup limits.
+/// Combined with unshare flags for PID/mount/net namespace isolation.
+#[cfg(target_os = "linux")]
+fn exec_linux_with_cgroup(
+    command_args: &[String],
+    network: bool,
+    limits: &ResourceLimits,
+) -> Result<Value, String> {
+    let scope_name = format!("cos-sandbox-{}", short_id());
+
+    let mut sr_args = vec![
+        "--scope".to_string(),
+        format!("--unit={scope_name}"),
+        "--quiet".to_string(),
+    ];
+
+    // Memory limit (cgroup v2: MemoryMax)
+    if let Some(ref mem) = limits.mem_limit {
+        sr_args.push(format!("-p MemoryMax={mem}"));
+        sr_args.push(format!("-p MemorySwapMax=0")); // no swap
+    }
+
+    // CPU limit (cgroup v2: CPUQuota)
+    if let Some(cpu) = limits.cpu_percent {
+        sr_args.push(format!("-p CPUQuota={cpu}%"));
+    }
+
+    // PID limit (cgroup v2: TasksMax)
+    if let Some(pids) = limits.pids_max {
+        sr_args.push(format!("-p TasksMax={pids}"));
+    }
+
+    // Timeout via RuntimeMaxSec
+    if let Some(secs) = limits.timeout_secs {
+        sr_args.push(format!("-p RuntimeMaxSec={secs}"));
+    }
+
+    // Wrap the actual command in unshare for namespace isolation
+    sr_args.push("--".to_string());
+    sr_args.push("unshare".to_string());
+    sr_args.push("--pid".to_string());
+    sr_args.push("--fork".to_string());
+    sr_args.push("--mount-proc".to_string());
+    sr_args.push("--mount".to_string());
+    if !network {
+        sr_args.push("--net".to_string());
+    }
+    sr_args.push("--".to_string());
+    sr_args.extend_from_slice(command_args);
+
+    let mut child = Command::new("systemd-run")
+        .args(&sr_args)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("failed to spawn sandbox (systemd-run): {e}"))?;
+
+    let status = child.wait().map_err(|e| format!("sandbox wait failed: {e}"))?;
+
+    let mut stdout = String::new();
+    if let Some(mut out) = child.stdout.take() {
+        let _ = out.read_to_string(&mut stdout);
+    }
+    let mut stderr = String::new();
+    if let Some(mut err) = child.stderr.take() {
+        let _ = err.read_to_string(&mut stderr);
+    }
+
+    // Check if killed by cgroup (exit code 137 = OOM, etc.)
+    let exit_code = status.code().unwrap_or(-1);
+    let mut killed_by = None;
+    if exit_code == 137 {
+        killed_by = Some("OOM (memory limit exceeded)");
+    } else if exit_code == 124 || stderr.contains("RuntimeMaxSec") {
+        killed_by = Some("timeout (RuntimeMaxSec exceeded)");
+    }
+
+    let mut result = json!({
+        "exit_code": exit_code,
+        "stdout": stdout,
+        "stderr": stderr,
+        "isolated": true,
+        "network": network,
+        "cgroup": true,
+        "scope": scope_name,
+    });
+
+    if let Some(mem) = &limits.mem_limit {
+        result["limits"] = json!({
+            "memory": mem,
+            "cpu_percent": limits.cpu_percent,
+            "pids_max": limits.pids_max,
+            "timeout_secs": limits.timeout_secs,
+        });
+    }
+
+    if let Some(reason) = killed_by {
+        result["killed_by"] = json!(reason);
+    }
+
+    Ok(result)
+}
+
+fn short_id() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let t = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("{:x}", t & 0xFFFFFFFF)
+}
+
+/// Fallbackfor non-Linux: basic subprocess execution with timeout.
 #[cfg(not(target_os = "linux"))]
-fn exec_fallback(command_args: &[String]) -> Result<Value, String> {
+fn exec_fallback(command_args: &[String], limits: &ResourceLimits) -> Result<Value, String> {
     if command_args.is_empty() {
         return Err("no command specified".into());
     }
@@ -191,6 +348,28 @@ fn exec_fallback(command_args: &[String]) -> Result<Value, String> {
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("failed to spawn: {e}"))?;
+
+    // Simple timeout: poll in a loop
+    if let Some(secs) = limits.timeout_secs {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs as u64);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_status)) => break,
+                Ok(None) => {
+                    if std::time::Instant::now() > deadline {
+                        let _ = child.kill();
+                        return Ok(json!({
+                            "exit_code": -1,
+                            "killed_by": "timeout",
+                            "isolated": false,
+                        }));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                Err(e) => return Err(format!("wait failed: {e}")),
+            }
+        }
+    }
 
     let status = child.wait().map_err(|e| format!("wait failed: {e}"))?;
 
@@ -208,7 +387,7 @@ fn exec_fallback(command_args: &[String]) -> Result<Value, String> {
         "stdout": stdout,
         "stderr": stderr,
         "isolated": false,
-        "note": "namespace isolation requires Linux",
+        "note": "namespace/cgroup isolation requires Linux",
     }))
 }
 
@@ -237,7 +416,7 @@ fn cmd_create(args: &[String]) -> Result<Value, String> {
         }
     }
 
-    let id = format!("sb-{}", &uuid_short());
+    let id = format!("sb-{}", &short_id());
     let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
     let config = SandboxConfig {
@@ -296,13 +475,4 @@ fn cmd_list(_args: &[String]) -> Result<Value, String> {
         "sandboxes": reg.sandboxes,
         "count": reg.sandboxes.len(),
     }))
-}
-
-fn uuid_short() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let t = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    format!("{:x}", t & 0xFFFFFFFF)
 }
