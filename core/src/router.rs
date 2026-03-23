@@ -8,8 +8,10 @@ use crate::apps;
 use crate::audit;
 use crate::bridge;
 use crate::browser;
+use crate::ipc;
 use crate::proc;
 use crate::sandbox;
+use crate::service;
 use crate::sysinfo;
 
 const VERSION: &str = "0.3.0";
@@ -43,7 +45,9 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
             "sys" => return dispatch_builtin(args, "sys", sysinfo::run),
             "sandbox" => return dispatch_builtin(args, "sandbox", sandbox::run),
             "proc" => return dispatch_builtin(args, "proc", proc::run),
+            "ipc" => return dispatch_builtin(args, "ipc", ipc::run),
             "browser" => return dispatch_builtin(args, "browser", browser::run),
+            "service" => return dispatch_builtin(args, "service", service::run),
             _ => {}
         }
         let names: Vec<&String> = discovered.keys().collect();
@@ -159,10 +163,14 @@ fn builtin_apps() -> Vec<(&'static str, &'static str, Vec<&'static str>)> {
          vec!["info", "env", "resources", "uptime"]),
         ("sandbox", "Lightweight process isolation using Linux namespaces",
          vec!["exec", "create", "destroy", "list"]),
-        ("proc", "Agent-aware process session manager with output buffering",
-         vec!["spawn", "status", "output", "kill", "list"]),
+        ("proc", "Agent-aware process session manager with groups, hierarchy, and IPC",
+         vec!["spawn", "status", "output", "kill", "list", "wait", "signal"]),
+        ("ipc", "Inter-process message passing between agent sessions",
+         vec!["send", "recv", "list", "clear"]),
         ("browser", "Browser service manager — Jina Reader lifecycle control",
          vec!["start", "stop", "restart", "status", "health"]),
+        ("service", "Generic service manager — discover, start, stop, health-check services",
+         vec!["start", "stop", "restart", "status", "health", "list", "logs", "register"]),
     ]
 }
 
