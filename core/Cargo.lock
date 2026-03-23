@@ -64,6 +64,7 @@ name = "cos"
 version = "0.3.0"
 dependencies = [
  "chrono",
+ "libc",
  "serde",
  "serde_json",
 ]

@@ -450,7 +450,7 @@ fn cmd_destroy(args: &[String]) -> Result<Value, String> {
 
     // Kill the init process if running
     if let Some(sb) = reg.sandboxes.iter().find(|s| &s.id == id) {
-        if let Some(_pid) = sb.pid {
+        if let Some(pid) = sb.pid {
             #[cfg(unix)]
             unsafe {
                 libc::kill(pid as i32, libc::SIGTERM);
