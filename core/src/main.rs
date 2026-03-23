@@ -3,6 +3,7 @@ mod audit;
 mod bridge;
 mod browser;
 mod ipc;
+mod policy;
 mod proc;
 mod router;
 mod sandbox;

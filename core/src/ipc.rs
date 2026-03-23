@@ -9,6 +9,8 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
 
+use crate::policy::{self, OpType};
+
 fn ipc_dir() -> PathBuf {
     PathBuf::from(
         std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()),
@@ -74,6 +76,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_send(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Write).map_err(|v| v.to_string())?;
     let mut from: Option<String> = None;
     let mut positional: Vec<String> = Vec::new();
 
@@ -125,6 +128,7 @@ fn cmd_send(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_recv(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Read).map_err(|v| v.to_string())?;
     let session_id = args.first().ok_or("usage: cos ipc recv <session-id> [--timeout N] [--peek]")?;
     let mut timeout_secs: u64 = 0;
     let mut peek = false;
@@ -178,6 +182,7 @@ fn cmd_recv(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_list(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Read).map_err(|v| v.to_string())?;
     let session_id = args.first().ok_or("usage: cos ipc list <session-id>")?;
     let dir = session_queue_dir(session_id);
     let messages = sorted_messages(&dir);
@@ -205,6 +210,7 @@ fn cmd_list(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_clear(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Delete).map_err(|v| v.to_string())?;
     let session_id = args.first().ok_or("usage: cos ipc clear <session-id>")?;
     let dir = session_queue_dir(session_id);
     let messages = sorted_messages(&dir);
@@ -246,6 +252,7 @@ fn is_pid_alive(pid: u32) -> bool {
 }
 
 fn cmd_lock(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Write).map_err(|v| v.to_string())?;
     let mut holder: Option<String> = None;
     let mut timeout_secs: u64 = 0;
     let mut positional: Vec<String> = Vec::new();
@@ -339,6 +346,7 @@ fn cmd_lock(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_unlock(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Write).map_err(|v| v.to_string())?;
     let mut holder: Option<String> = None;
     let mut positional: Vec<String> = Vec::new();
 
@@ -397,6 +405,7 @@ fn cmd_unlock(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_locks(_args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Read).map_err(|v| v.to_string())?;
     let dir = locks_dir();
     if !dir.exists() {
         return Ok(json!({ "count": 0, "locks": [] }));
@@ -437,6 +446,7 @@ fn barriers_dir() -> PathBuf {
 }
 
 fn cmd_barrier(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Write).map_err(|v| v.to_string())?;
     let mut expect: Option<u64> = None;
     let mut session: Option<String> = None;
     let mut timeout_secs: u64 = 0;

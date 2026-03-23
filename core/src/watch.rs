@@ -11,10 +11,13 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
+use crate::policy::{self, OpType};
+
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 const POLL_INTERVAL_MS: u64 = 500;
 
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Read).map_err(|v| v.to_string())?;
     match command {
         "file" => cmd_watch_file(args),
         "dir" => cmd_watch_dir(args),

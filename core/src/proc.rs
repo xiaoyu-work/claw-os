@@ -11,6 +11,8 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::policy::{self, OpType};
+
 const MAX_OUTPUT_BYTES: usize = 2_000_000;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -31,6 +33,10 @@ pub struct SessionInfo {
     pub exit_code: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -99,10 +105,13 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_spawn(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Exec).map_err(|v| v.to_string())?;
     let mut session_id = None;
     let mut group = None;
     let mut parent = None;
     let mut workdir = None;
+    let mut tier: Option<u8> = None;
+    let mut scope: Option<String> = None;
     let mut isolated_workspace = false;
     let mut cmd_start = 0;
 
@@ -129,6 +138,14 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
                 isolated_workspace = true;
                 i += 2;
             }
+            "--tier" if i + 1 < args.len() => {
+                tier = Some(args[i + 1].parse::<u8>().map_err(|_| "tier must be 0-3".to_string())?);
+                i += 2;
+            }
+            "--scope" if i + 1 < args.len() => {
+                scope = Some(args[i + 1].clone());
+                i += 2;
+            }
             "--" => { cmd_start = i + 1; break; }
             _ => { cmd_start = i; break; }
         }
@@ -139,6 +156,47 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     }
 
     let command_args = &args[cmd_start..];
+
+    // Validate tier value (0-3 only)
+    if let Some(t) = tier {
+        if t > 3 {
+            return Err("tier must be 0-3 (0=ROOT, 1=OPERATE, 2=CREATE, 3=OBSERVE)".into());
+        }
+    }
+
+    // Enforce inheritance rules when parent is set
+    if let Some(ref parent_sid) = parent {
+        let reg = load_registry();
+        if let Some(parent_info) = reg.sessions.iter().find(|s| &s.session_id == parent_sid) {
+            // Tier inheritance: child tier must be >= parent tier (more restricted)
+            if let (Some(parent_tier), Some(child_tier)) = (parent_info.tier, tier) {
+                if child_tier < parent_tier {
+                    return Err(format!(
+                        "cannot escalate tier: parent '{}' has tier {} but child requested tier {}. Child tier must be >= parent tier.",
+                        parent_sid, parent_tier, child_tier
+                    ));
+                }
+            }
+            // If parent has tier but child doesn't specify, inherit parent's tier
+            if parent_info.tier.is_some() && tier.is_none() {
+                tier = parent_info.tier;
+            }
+
+            // Scope inheritance: child scope must be within parent scope
+            if let (Some(ref parent_scope), Some(ref child_scope)) = (&parent_info.scope, &scope) {
+                if !child_scope.starts_with(parent_scope.as_str()) {
+                    return Err(format!(
+                        "cannot widen scope: parent '{}' is scoped to '{}' but child requested scope '{}'",
+                        parent_sid, parent_scope, child_scope
+                    ));
+                }
+            }
+            // If parent has scope but child doesn't specify, inherit parent's scope
+            if parent_info.scope.is_some() && scope.is_none() {
+                scope = parent_info.scope.clone();
+            }
+        }
+    }
 
     // Guardrails: check for rapid respawn and destructive commands
     let reg_check = load_registry();
@@ -190,6 +248,9 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         cmd.current_dir(wd);
     }
 
+    // Inject session ID so child process can be identified by policy module
+    cmd.env("COS_SESSION", &sid);
+
     #[cfg(unix)]
     unsafe {
         use std::os::unix::process::CommandExt;
@@ -217,6 +278,8 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         workdir: workdir.clone(),
         exit_code: None,
         ended_at: None,
+        tier,
+        scope: scope.clone(),
     };
 
     let mut reg = load_registry();
@@ -235,6 +298,8 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     if let Some(g) = group { result["group"] = json!(g); }
     if let Some(p) = parent { result["parent"] = json!(p); }
     if let Some(w) = workdir { result["workdir"] = json!(w); }
+    if let Some(t) = tier { result["tier"] = json!(t); }
+    if let Some(ref s) = scope { result["scope"] = json!(s); }
     let mut warnings = Vec::new();
     if let Some(w) = rapid_warning { warnings.push(w); }
     if let Some(w) = destructive_warning { warnings.push(w); }
@@ -244,6 +309,7 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_status(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Read).map_err(|v| v.to_string())?;
     let sid = args.first().ok_or("usage: cos proc status <session-id>")?;
     let mut reg = load_registry();
     let idx = reg.sessions.iter()
@@ -271,11 +337,14 @@ fn cmd_status(args: &[String]) -> Result<Value, String> {
     if let Some(ref ended) = info.ended_at {
         result["ended_at"] = json!(ended);
     }
+    if let Some(t) = info.tier { result["tier"] = json!(t); }
+    if let Some(ref s) = info.scope { result["scope"] = json!(s); }
 
     Ok(result)
 }
 
 fn cmd_output(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Read).map_err(|v| v.to_string())?;
     let sid = args.first().ok_or("usage: cos proc output <session-id>")?;
     let mut tail_lines: Option<usize> = None;
     let mut stream = "both".to_string();
@@ -361,6 +430,7 @@ fn cmd_output(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_kill(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Exec).map_err(|v| v.to_string())?;
     // --group mode: kill all sessions in a group
     if args.len() >= 2 && args[0] == "--group" {
         let group_name = &args[1];
@@ -402,6 +472,7 @@ fn cmd_kill(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_list(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Read).map_err(|v| v.to_string())?;
     let mut reg = load_registry();
     let mut group_filter: Option<&str> = None;
 
@@ -435,6 +506,8 @@ fn cmd_list(args: &[String]) -> Result<Value, String> {
             if let Some(ref g) = s.group { v["group"] = json!(g); }
             if let Some(ref p) = s.parent { v["parent"] = json!(p); }
             if let Some(ref w) = s.workdir { v["workdir"] = json!(w); }
+            if let Some(t) = s.tier { v["tier"] = json!(t); }
+            if let Some(ref sc) = s.scope { v["scope"] = json!(sc); }
             v
         })
         .collect();
@@ -463,6 +536,7 @@ fn kill_process(pid: u32) {
 }
 
 fn cmd_wait(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Read).map_err(|v| v.to_string())?;
     let mut timeout: Option<u64> = None;
     let mut group_name: Option<&str> = None;
     let mut session_id: Option<&str> = None;
@@ -575,6 +649,7 @@ fn cmd_wait(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_signal(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Exec).map_err(|v| v.to_string())?;
     if args.len() < 2 {
         return Err("usage: cos proc signal <session-id> <signal-name>".into());
     }
@@ -629,6 +704,7 @@ fn cmd_signal(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_result(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Read).map_err(|v| v.to_string())?;
     let sid = args.first().ok_or("usage: cos proc result <session-id>")?;
     let mut reg = load_registry();
     let idx = reg.sessions.iter()

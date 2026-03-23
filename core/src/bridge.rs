@@ -2,6 +2,30 @@ use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+use crate::policy::{self, OpType};
+
+/// Infer the policy OpType from a Python app command name.
+fn infer_op_type(command: &str) -> OpType {
+    match command {
+        "read" | "ls" | "stat" | "search" | "recent" | "query" | "tables"
+        | "schema" | "databases" | "get" | "list" | "info" | "tail"
+        | "has" | "which" => OpType::Read,
+
+        "write" | "mkdir" | "tag" | "set" | "exec" | "send" => OpType::Write,
+
+        "rm" | "del" | "clear" | "dump" => OpType::Delete,
+
+        "run" | "script" | "start" | "stop" | "ps" | "submit" => OpType::Exec,
+
+        "fetch" | "download" => OpType::Net,
+
+        "need" | "install" => OpType::System,
+
+        // Unknown commands default to Exec (conservative but not overly restrictive)
+        _ => OpType::Exec,
+    }
+}
+
 /// Run a Python app's main.py via subprocess.
 ///
 /// Spawns `python3 <app_dir>/main.py` with the command and args passed
@@ -15,6 +39,9 @@ pub fn run_python_app(
     data_dir: &str,
     apps_dir: &str,
 ) -> Result<Option<String>, String> {
+    let op = infer_op_type(command);
+    policy::require(op).map_err(|v| v.to_string())?;
+
     let main_py = app_dir.join("main.py");
     if !main_py.is_file() {
         return Err(format!(

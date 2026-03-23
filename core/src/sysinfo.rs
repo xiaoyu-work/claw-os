@@ -1,8 +1,11 @@
 use serde_json::{json, Value};
 use std::env;
 
+use crate::policy::{self, OpType};
+
 /// Built-in system information (replaces Python sys app for basic queries).
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Read).map_err(|v| v.to_string())?;
     match command {
         "info" => cmd_info(),
         "env" => cmd_env(args),

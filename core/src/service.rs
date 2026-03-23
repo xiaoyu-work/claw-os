@@ -14,6 +14,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+use crate::policy::{self, OpType};
+
 const MAX_LOG_BYTES: usize = 200_000;
 const DEFAULT_LOG_TAIL: usize = 20;
 
@@ -277,6 +279,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 
 /// Start a service by name.
 fn cmd_start(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::System).map_err(|v| v.to_string())?;
     let name = args.first().ok_or("usage: cos service start <name>")?;
     let def = find_service(name)?;
 
@@ -383,6 +386,7 @@ fn cmd_start(args: &[String]) -> Result<Value, String> {
 
 /// Stop a service by name.
 fn cmd_stop(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::System).map_err(|v| v.to_string())?;
     let name = args.first().ok_or("usage: cos service stop <name>")?;
 
     let pid = read_pid(name)
@@ -400,6 +404,7 @@ fn cmd_stop(args: &[String]) -> Result<Value, String> {
 
 /// Restart a service (stop then start).
 fn cmd_restart(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::System).map_err(|v| v.to_string())?;
     let _name = args.first().ok_or("usage: cos service restart <name>")?;
 
     // Stop (ignore errors — service may not be running)
@@ -410,6 +415,7 @@ fn cmd_restart(args: &[String]) -> Result<Value, String> {
 
 /// Show detailed status for a service.
 fn cmd_status(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Read).map_err(|v| v.to_string())?;
     let name = args.first().ok_or("usage: cos service status <name>")?;
     let def = find_service(name)?;
 
@@ -443,6 +449,7 @@ fn cmd_status(args: &[String]) -> Result<Value, String> {
 
 /// Health check a service, optionally auto-restarting if unhealthy.
 fn cmd_health(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Read).map_err(|v| v.to_string())?;
     let name = args.first().ok_or("usage: cos service health <name>")?;
     let def = find_service(name)?;
     let auto_restart = !args.contains(&"--no-restart".to_string());
@@ -477,6 +484,7 @@ fn cmd_health(args: &[String]) -> Result<Value, String> {
 
 /// List all discovered services with their current status.
 fn cmd_list(_args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Read).map_err(|v| v.to_string())?;
     let services = discover_services();
 
     let list: Vec<Value> = services
@@ -514,6 +522,7 @@ fn cmd_list(_args: &[String]) -> Result<Value, String> {
 
 /// Show service logs.
 fn cmd_logs(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Read).map_err(|v| v.to_string())?;
     let name = args.first().ok_or("usage: cos service logs <name> [--tail N]")?;
 
     let mut tail_n = DEFAULT_LOG_TAIL;
@@ -553,6 +562,7 @@ fn cmd_logs(args: &[String]) -> Result<Value, String> {
 
 /// Register a new service by creating a service.json in the services directory.
 fn cmd_register(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::System).map_err(|v| v.to_string())?;
     let mut name: Option<String> = None;
     let mut command: Option<String> = None;
     let mut workdir: Option<String> = None;
