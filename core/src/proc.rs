@@ -727,8 +727,10 @@ fn cmd_result(args: &[String]) -> Result<Value, String> {
     let stdout_bytes = fs::metadata(&info.stdout_path).map(|m| m.len()).unwrap_or(0);
     let stderr_bytes = fs::metadata(&info.stderr_path).map(|m| m.len()).unwrap_or(0);
 
-    // Heuristic: likely success if stderr is empty or small relative to stdout
-    let likely_success = stderr_bytes == 0 || (stdout_bytes > 0 && stderr_bytes < stdout_bytes / 10);
+    // Heuristic: likely success if stderr is empty/small AND stdout doesn't contain error indicators
+    let stdout_has_error = stdout_tail.contains("\"error\"") || stdout_tail.contains("permission denied");
+    let likely_success = !stdout_has_error
+        && (stderr_bytes == 0 || (stdout_bytes > 0 && stderr_bytes < stdout_bytes / 10));
 
     let mut result = json!({
         "session_id": info.session_id,
