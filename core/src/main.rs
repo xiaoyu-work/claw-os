@@ -2,9 +2,11 @@ mod apps;
 mod audit;
 mod bridge;
 mod browser;
+mod ipc;
 mod proc;
 mod router;
 mod sandbox;
+mod service;
 mod sysinfo;
 
 use std::env;
