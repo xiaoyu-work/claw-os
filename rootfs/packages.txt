@@ -3,12 +3,22 @@ coreutils
 git
 ripgrep
 python3
+python3-pip
 curl
 ca-certificates
+sqlite3
+jq
 
-# Browser engine (Jina Reader + Puppeteer/Chromium)
-# Note: nodejs and npm are NOT listed here — installed separately
-# from NodeSource in build.sh step 2 (Node.js 24 with npm bundled)
+# Python packages for cos apps (doc reader, etc.)
+python3-pymupdf
+python3-docx
+python3-openpyxl
+python3-yaml
+
+# Chromium browser (used by cos-browser-engine via Puppeteer)
+chromium
+
+# Chromium shared library dependencies
 libnss3
 libxss1
 libasound2
