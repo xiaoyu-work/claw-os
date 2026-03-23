@@ -7,8 +7,8 @@ set -e
 # Source COS profile
 [ -f /etc/cos/profile.sh ] && . /etc/cos/profile.sh
 
-# Start browser service (Jina Reader) via cos binary
-if [ -d /opt/jina-reader ]; then
+# Start browser engine service
+if [ -d /opt/cos-browser-engine ]; then
     cos browser start >/dev/null 2>&1 || true
 fi
 

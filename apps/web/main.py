@@ -9,7 +9,7 @@ import urllib.request
 
 TIMEOUT = 30
 USER_AGENT = "cos/1.0.0"
-READER_URL = os.environ.get("JINA_READER_URL", "http://localhost:3000")
+READER_URL = os.environ.get("COS_BROWSER_URL", "http://localhost:3000")
 DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 DEFAULT_MAX_LENGTH = 50000
 

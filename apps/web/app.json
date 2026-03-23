@@ -1,13 +1,13 @@
 {
   "name": "web",
   "version": "1.0.0",
-  "description": "Full browser with JavaScript rendering — powered by Jina Reader",
+  "description": "Full browser with JavaScript rendering — powered by cos-browser-engine",
   "commands": {
     "read": "Fetch URL and return clean Markdown content (renders JavaScript)",
     "screenshot": "Capture a screenshot of a URL",
     "submit": "Submit form data (POST) to a URL"
   },
   "dependencies": {
-    "services": ["jina-reader"]
+    "services": ["browser"]
   }
 }

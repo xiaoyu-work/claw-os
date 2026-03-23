@@ -14,12 +14,12 @@ use std::process::{Command, Stdio};
 
 use crate::policy::{self, OpType};
 
-const READER_DIR: &str = "/opt/jina-reader";
+const READER_DIR: &str = "/opt/cos-browser-engine";
 const DEFAULT_READER_URL: &str = "http://localhost:3000";
 const HEALTH_TIMEOUT_SECS: u64 = 5;
 
 fn reader_url() -> String {
-    std::env::var("JINA_READER_URL").unwrap_or_else(|_| DEFAULT_READER_URL.into())
+    std::env::var("COS_BROWSER_URL").unwrap_or_else(|_| DEFAULT_READER_URL.into())
 }
 
 fn pid_path() -> PathBuf {
@@ -106,7 +106,7 @@ fn cmd_start(_args: &[String]) -> Result<Value, String> {
 
     // Check if Reader is installed
     if !PathBuf::from(READER_DIR).is_dir() {
-        return Err("Jina Reader not installed at /opt/jina-reader".into());
+        return Err("Browser engine not installed at /opt/cos-browser-engine".into());
     }
 
     // Start Reader
@@ -121,9 +121,10 @@ fn cmd_start(_args: &[String]) -> Result<Value, String> {
         .map_err(|e| format!("failed to clone log file: {e}"))?;
 
     let child = Command::new("node")
-        .args(["./build/stand-alone/crawl.js"])
+        .args(["index.js"])
         .current_dir(READER_DIR)
         .env("PUPPETEER_CACHE_DIR", format!("{READER_DIR}/.cache"))
+        .env("PORT", "3000")
         .stdin(Stdio::null())
         .stdout(log_file)
         .stderr(log_err)
