@@ -1,6 +1,6 @@
 ---
 name: claw-os
-description: "Native Claw OS system commands. Use when: you need sandboxed execution, process management, browser rendering, file operations, database queries, or system information. You are running on Claw OS — use cos commands instead of raw shell commands for better structured output."
+description: "Native Claw OS system commands. Use when: you need sandboxed execution, process management, inter-process communication, service management, file operations, database queries, or system information. You are running on Claw OS — use cos commands instead of raw shell commands for better structured output."
 metadata: { "openclaw": { "emoji": "🦀", "requires": { "bins": ["cos"] } } }
 ---
 
@@ -31,6 +31,123 @@ cos proc output build-1 --tail 50
 cos proc output build-1 --stream stderr
 cos proc kill build-1
 cos proc list
+```
+
+### Process Groups and Hierarchy
+
+Organize related processes into groups. Child processes inherit parent context:
+
+```bash
+cos proc spawn --group research --session search-1 -- search.py "topic A"
+cos proc spawn --group research --session search-2 -- search.py "topic B"
+cos proc spawn --parent lead --session sub-1 -- worker.py
+cos proc list --group research
+cos proc kill --group research
+```
+
+### Wait, Signal, and Result
+
+Wait for processes to finish, send signals, and get one-call result summaries:
+
+```bash
+cos proc wait build-1 --timeout 300
+cos proc wait --group research
+cos proc signal build-1 TERM
+cos proc result build-1
+```
+
+`cos proc result` returns a comprehensive summary: status, duration, output tails, output sizes, and a `likely_success` heuristic — everything an agent needs in one call.
+
+### Output Streaming
+
+Read output incrementally without re-reading old content:
+
+```bash
+cos proc output build-1 --follow
+cos proc output build-1 --since-offset 4096
+```
+
+### Isolated Workspaces
+
+Give each process its own private workspace directory:
+
+```bash
+cos proc spawn --workspace isolated --session task-1 -- agent.py
+```
+
+## Permission Tiers
+
+Control what a process can do. Tier 0 is highest privilege, tier 3 is read-only:
+
+| Tier | Name    | Allowed Operations                    |
+|------|---------|---------------------------------------|
+| 0    | ROOT    | Read, Write, Delete, Exec, Net, System |
+| 1    | OPERATE | Read, Write, Delete, Exec             |
+| 2    | CREATE  | Read, Write                           |
+| 3    | OBSERVE | Read                                  |
+
+```bash
+cos proc spawn --tier 3 --session reader-1 -- analyze.py
+cos proc spawn --tier 1 --scope /workspace/project --session builder-1 -- build.py
+cos proc spawn --tier 2 --scope /workspace/output --parent lead --session writer-1 -- report.py
+```
+
+Child processes cannot escalate beyond parent's tier or widen parent's scope.
+
+## Inter-Process Communication
+
+Message passing, locks, and barriers for agent coordination:
+
+```bash
+cos ipc send target-session "build complete" --from build-1
+cos ipc recv my-session
+cos ipc recv my-session --timeout 30
+cos ipc recv my-session --peek
+cos ipc list my-session
+cos ipc clear my-session
+```
+
+### Locks
+
+Mutual exclusion for shared resources. Stale locks from dead processes are auto-reclaimed:
+
+```bash
+cos ipc lock database-write --holder agent-1
+cos ipc unlock database-write --holder agent-1
+cos ipc locks
+```
+
+### Barriers
+
+Wait until N agents reach a synchronization point:
+
+```bash
+cos ipc barrier merge-ready --expect 3 --session search-1 --timeout 60
+```
+
+## Service Management
+
+Manage long-running services via declarative JSON definitions:
+
+```bash
+cos service list
+cos service start browser
+cos service stop browser
+cos service restart browser
+cos service status browser
+cos service health browser
+cos service logs browser --tail 50
+cos service register --name my-service --command "node server.js" --health-url http://localhost:8080
+```
+
+## File Watching
+
+Block until a file, directory, or process changes:
+
+```bash
+cos watch file /workspace/output.txt --timeout 30
+cos watch dir /workspace/results --timeout 60
+cos watch proc build-1 --timeout 300
 ```
 
 ## Browser (Web Reading)
