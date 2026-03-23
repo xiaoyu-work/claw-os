@@ -12,9 +12,11 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 # 0. Locate pre-built cos binary (built by CI or manually before running this script)
-COS_BIN="$PROJECT_DIR/core/target/release/cos"
+COS_BIN="$PROJECT_DIR/core/target/x86_64-unknown-linux-musl/release/cos"
 if [ ! -f "$COS_BIN" ]; then
-    # Try cross-compilation target path
+    COS_BIN="$PROJECT_DIR/core/target/release/cos"
+fi
+if [ ! -f "$COS_BIN" ]; then
     COS_BIN="$PROJECT_DIR/core/target/x86_64-unknown-linux-gnu/release/cos"
 fi
 if [ ! -f "$COS_BIN" ]; then
