@@ -68,21 +68,21 @@ echo ":: installing apps"
 mkdir -p "$ROOTFS/usr/lib/cos/apps"
 cp -a "$PROJECT_DIR/apps/." "$ROOTFS/usr/lib/cos/apps/"
 
-# 7. Install Jina Reader (browser engine) — from vendored pre-built artifacts
-echo ":: installing Jina Reader"
-READER_VENDOR="$SCRIPT_DIR/vendor/jina-reader"
-if [ -d "$READER_VENDOR/build" ]; then
-    mkdir -p "$ROOTFS/opt/jina-reader"
-    cp -a "$READER_VENDOR/build" "$ROOTFS/opt/jina-reader/"
-    cp -a "$READER_VENDOR/node_modules" "$ROOTFS/opt/jina-reader/"
-    cp "$READER_VENDOR/package.json" "$ROOTFS/opt/jina-reader/"
-    if [ -d "$READER_VENDOR/licensed" ]; then
-        cp -a "$READER_VENDOR/licensed" "$ROOTFS/opt/jina-reader/"
-    fi
+# 7. Install browser engine (OS-level web-to-markdown service)
+echo ":: installing browser engine"
+BROWSER_VENDOR="$SCRIPT_DIR/vendor/browser-engine"
+if [ -d "$BROWSER_VENDOR" ]; then
+    mkdir -p "$ROOTFS/opt/cos-browser-engine"
+    cp "$BROWSER_VENDOR/index.js" "$ROOTFS/opt/cos-browser-engine/"
+    cp "$BROWSER_VENDOR/package.json" "$ROOTFS/opt/cos-browser-engine/"
+    chroot "$ROOTFS" bash -c '
+        cd /opt/cos-browser-engine
+        npm install --production
+        npm cache clean --force
+    '
     echo "   installed from vendor"
 else
-    echo "   WARNING: vendor/jina-reader not found, skipping"
-    echo "   Run the 'Vendor Jina Reader' GitHub Action to generate it"
+    echo "   WARNING: vendor/browser-engine not found, skipping"
 fi
 
 # 8. Create runtime directories

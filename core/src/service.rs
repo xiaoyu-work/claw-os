@@ -676,9 +676,9 @@ mod tests {
     fn test_deserialize_service_def_full() {
         let json = r#"{
             "name": "browser",
-            "description": "Jina Reader",
-            "command": "npx tsx src/index.ts",
-            "workdir": "/opt/jina-reader",
+            "description": "Browser engine",
+            "command": "node index.js",
+            "workdir": "/opt/cos-browser-engine",
             "env": {"KEY": "val"},
             "health": {
                 "url": "http://localhost:3000",
@@ -691,9 +691,9 @@ mod tests {
         }"#;
         let def: ServiceDef = serde_json::from_str(json).unwrap();
         assert_eq!(def.name, "browser");
-        assert_eq!(def.description, "Jina Reader");
-        assert_eq!(def.command, "npx tsx src/index.ts");
-        assert_eq!(def.workdir.as_deref(), Some("/opt/jina-reader"));
+        assert_eq!(def.description, "Browser engine");
+        assert_eq!(def.command, "node index.js");
+        assert_eq!(def.workdir.as_deref(), Some("/opt/cos-browser-engine"));
         assert_eq!(def.env.get("KEY").unwrap(), "val");
         let h = def.health.unwrap();
         assert_eq!(h.url.as_deref(), Some("http://localhost:3000"));

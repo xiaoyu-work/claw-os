@@ -1,0 +1,16 @@
+{
+  "name": "cos-browser-engine",
+  "version": "0.1.0",
+  "description": "Claw OS browser engine — URL to Markdown with JS rendering",
+  "private": true,
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@mozilla/readability": "^0.6.0",
+    "linkedom": "^0.18.4",
+    "puppeteer": "^23.3.0",
+    "turndown": "^7.1.3",
+    "turndown-plugin-gfm": "^1.0.2"
+  }
+}
