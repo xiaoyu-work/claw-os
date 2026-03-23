@@ -2,6 +2,7 @@ mod apps;
 mod audit;
 mod bridge;
 mod browser;
+mod checkpoint;
 mod ipc;
 mod policy;
 mod proc;
