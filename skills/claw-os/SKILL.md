@@ -1,12 +1,27 @@
 ---
 name: claw-os
-description: "Native Claw OS system commands. Use when: you need sandboxed execution, process management, inter-process communication, service management, file operations, database queries, or system information. You are running on Claw OS — use cos commands instead of raw shell commands for better structured output."
+description: "Native Claw OS system commands. Use when: you need sandboxed execution, process management, inter-process communication, checkpoints, service management, file operations, database queries, or system information. You are running on Claw OS — use cos commands instead of raw shell commands for better structured output."
 metadata: { "openclaw": { "emoji": "🦀", "requires": { "bins": ["cos"] } } }
 ---
 
 # Claw OS
 
 You are running on Claw OS. All `cos` commands return JSON.
+
+## Checkpoints (Undo / Rollback)
+
+The workspace is mounted with OverlayFS. Every file change is captured automatically — regardless of how it's made. You can snapshot, diff, and rollback at any time:
+
+```bash
+cos checkpoint create "before refactoring"
+cos checkpoint diff
+cos checkpoint rollback
+cos checkpoint rollback 001
+cos checkpoint list
+cos checkpoint status
+```
+
+`cos checkpoint diff` shows all files created, modified, or deleted since the last checkpoint — without scanning or comparing files manually. `cos checkpoint rollback` reverts the entire workspace instantly.
 
 ## Sandboxed Execution
 

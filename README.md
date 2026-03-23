@@ -6,93 +6,77 @@ Linux, macOS, and Windows were designed for humans — they return pixels, termi
 
 OpenClaw runs on your devices, in your channels, with your rules. Claw OS is where it lives.
 
-## Agent-Native by Design
+## What Makes It an OS, Not a Tool
 
-The entire system is rebuilt around what agents actually need:
+Claw OS provides primitives that traditional operating systems don't:
 
-- **Structured I/O** — Every command returns JSON, not text that needs parsing
-- **Managed execution** — Processes are tracked by session ID with output buffering, not raw PIDs
-- **Built-in sandboxing** — Namespace isolation + resource limits in one command, no Docker-in-Docker
-- **Pre-digested content** — PDFs, web pages, documents come back as clean text, not raw bytes
-- **Automatic audit trail** — Every operation logged with timestamp, duration, and status
-- **Browser as a service** — JavaScript-rendered web pages returned as Markdown, managed by the OS
-
-## Built-in Apps
-
-Claw OS ships with 15 apps purpose-built for agent workflows:
-
-```
-cos sandbox exec --mem 512M --timeout 300 --no-network -- python3 untrusted.py
-cos proc spawn --session build-1 -- npm run build
-cos proc output build-1 --tail 20
-cos web read https://example.com
-cos doc read paper.pdf
-cos fs ls /den
-cos db query mydb "SELECT * FROM users"
-cos kv set project:status "building"
-cos net fetch https://api.example.com/data
-```
+| Capability | Linux | Claw OS |
+|---|---|---|
+| **Structured I/O** | Text stdout | JSON from every command |
+| **Checkpoint / Rollback** | None | OverlayFS — snapshot, diff, undo any file changes |
+| **Permission Model** | uid/rwx (for humans) | Tier + Scope (for agents: 4 levels, path-scoped) |
+| **Process Coordination** | Raw pipes, signals | IPC messages, locks with dead-process auto-reclaim, barriers |
+| **Process Hierarchy** | PIDs, process groups | Session IDs, named groups, parent-child with context inheritance |
+| **Error Recovery** | "Permission denied" | Structured JSON with recovery commands to try |
+| **Guardrails** | None | Rapid respawn detection, destructive command warnings |
+| **Service Management** | systemd (complex) | Declarative JSON service definitions |
+| **Browser** | Not included | Built-in Chromium engine, URL → Markdown in one call |
+| **Audit** | Optional, complex | Every operation logged automatically |
 
 ## Architecture
 
 ```
-cos (Rust binary)
-├── sandbox    Namespace isolation + cgroup v2 resource limits
-├── proc       Process sessions with output buffering
-├── browser    Jina Reader lifecycle management
-├── sysinfo    Native system information
-├── router     App discovery + command dispatch
-├── bridge     Python app subprocess integration
-└── audit      Automatic operation logging
+cos (Rust binary, ~3000 LOC)
+├── checkpoint  OverlayFS snapshot, diff, rollback
+├── policy      Tier + Scope permission system (6 OpTypes, 4 tiers)
+├── proc        Process sessions with groups, hierarchy, wait, signal, result
+├── ipc         Messages, locks (stale auto-reclaim), barriers
+├── sandbox     Linux namespace isolation + cgroup v2 resource limits
+├── service     Generic service manager (declarative JSON definitions)
+├── watch       File/directory/process change detection
+├── browser     Built-in browser engine lifecycle
+├── router      App discovery + dispatch + error recovery hints
+├── bridge      Python app subprocess integration
+├── audit       Automatic operation logging
+└── sysinfo     System information
 
-11 Python apps
-├── fs         File operations with metadata
-├── exec       Command execution
-├── web        Browser with JS rendering (Jina Reader)
-├── db         SQLite databases
-├── doc        PDF, DOCX, XLSX, CSV reader
-├── net        HTTP client
-├── kv         Key-value store
-├── log        Audit log search
-├── notify     Notifications
-├── pkg        Package management
-└── sys        System information
+10 Python apps
+├── fs          File operations with metadata and search
+├── exec        Command execution with language detection
+├── web         URL → Markdown (powered by built-in browser engine)
+├── db          SQLite databases
+├── doc         PDF, DOCX, XLSX, CSV reader
+├── net         HTTP client
+├── kv          Key-value store
+├── log         Audit log search
+├── notify      Notifications
+└── pkg         Package management
 ```
-
-## Why Not Just Linux?
-
-OpenClaw on Linux needs ~10,000 lines of TypeScript just to manage infrastructure:
-
-| | Linux | Claw OS |
-|---|---|---|
-| **Sandboxing** | Docker-in-Docker (~6000 LOC) | `cos sandbox exec` |
-| **Process tracking** | Manual registry (~900 LOC) | `cos proc spawn` |
-| **Browser** | Selenium + Chrome lifecycle (~3000 LOC) | `cos web read` |
-| **Binary files** | Install parsers, detect formats | `cos doc read` |
-| **Audit** | Implement your own logging | Built-in |
 
 ## Quick Start
 
 ```bash
 docker pull ghcr.io/xiaoyu-work/claw-os:latest
-docker run -it --name claw -v ./workspace:/den ghcr.io/xiaoyu-work/claw-os
+docker run -it --name claw -v ./workspace:/workspace ghcr.io/xiaoyu-work/claw-os
 ```
 
 You're in. Try:
 
 ```bash
-cos sys info
-cos fs ls /den
-cos web read https://example.com
+cos                                    # see all available apps
+cos sys info                           # system information
+cos web read https://example.com       # fetch a web page as Markdown
+cos checkpoint create "clean state"    # snapshot the workspace
+cos checkpoint diff                    # see what changed
 ```
 
 > Image not published yet? See [CONTRIBUTING.md](CONTRIBUTING.md) to build from source.
 
 ## Pre-installed
 
-- **Node.js 24** + pnpm
-- **Python 3** + pip
-- **Chromium** (via Jina Reader)
+- **Node.js 24** + pnpm + TypeScript
+- **Python 3** + pip + pymupdf, python-docx, openpyxl
+- **Chromium** (built-in browser engine, no Selenium needed)
 - **ripgrep**, **git**, **curl**, **sqlite3**, **jq**
 
 ## License
