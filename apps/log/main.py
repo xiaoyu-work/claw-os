@@ -1,6 +1,6 @@
-"""log — System audit log: every aos command is recorded automatically.
+"""log — System audit log: every cos command is recorded automatically.
 
-The aos CLI writes an audit entry for every command execution.
+The cos CLI writes an audit entry for every command execution.
 This app lets you read, tail, and search that log.
 You can also write manual entries.
 """
@@ -9,7 +9,7 @@ import json
 import os
 from datetime import datetime, timezone
 
-DATA_DIR = os.environ.get("AOS_DATA_DIR", "/var/lib/aos")
+DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 LOG_DIR = os.path.join(DATA_DIR, "logs")
 LOG_FILE = os.path.join(LOG_DIR, "audit.jsonl")
 
@@ -156,7 +156,7 @@ def _cmd_search(args):
 
 
 def run(command, args):
-    """Entry point called by aos."""
+    """Entry point called by cos."""
     commands = {
         "write": _cmd_write,
         "read": _cmd_read,

@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-ROOTFS="$PROJECT_DIR/build/agent-os-rootfs"
+ROOTFS="$PROJECT_DIR/build/claw-os-rootfs"
 SUITE="bookworm"
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -30,8 +30,8 @@ cp -a "$SCRIPT_DIR/overlay/." "$ROOTFS/"
 
 # 4. Install apps
 echo ":: installing apps"
-mkdir -p "$ROOTFS/usr/lib/aos/apps"
-cp -a "$PROJECT_DIR/apps/." "$ROOTFS/usr/lib/aos/apps/"
+mkdir -p "$ROOTFS/usr/lib/cos/apps"
+cp -a "$PROJECT_DIR/apps/." "$ROOTFS/usr/lib/cos/apps/"
 
 # 5. Install Jina Reader (browser engine)
 echo ":: installing Jina Reader"
@@ -45,11 +45,11 @@ chroot "$ROOTFS" bash -c '
 
 # 6. Create runtime directories
 mkdir -p "$ROOTFS/workspace"
-mkdir -p "$ROOTFS/var/lib/aos"
+mkdir -p "$ROOTFS/var/lib/cos"
 
-# 7. Source AOS profile on login
-if ! grep -q 'aos/profile.sh' "$ROOTFS/etc/bash.bashrc" 2>/dev/null; then
-    echo '[ -f /etc/aos/profile.sh ] && . /etc/aos/profile.sh' >> "$ROOTFS/etc/bash.bashrc"
+# 7. Source COS profile on login
+if ! grep -q 'cos/profile.sh' "$ROOTFS/etc/bash.bashrc" 2>/dev/null; then
+    echo '[ -f /etc/cos/profile.sh ] && . /etc/cos/profile.sh' >> "$ROOTFS/etc/bash.bashrc"
 fi
 
 echo ":: done — rootfs at $ROOTFS"

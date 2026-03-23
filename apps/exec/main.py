@@ -9,7 +9,7 @@ import subprocess
 from datetime import datetime, timezone
 
 DEFAULT_TIMEOUT = 300
-DATA_DIR = os.environ.get("AOS_DATA_DIR", "/var/lib/aos")
+DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 PROC_DIR = os.path.join(DATA_DIR, "proc")
 REGISTRY_FILE = os.path.join(PROC_DIR, "registry.json")
 
@@ -285,7 +285,7 @@ def cmd_ps(args):
 
 
 def run(command, args):
-    """Entry point called by aos."""
+    """Entry point called by cos."""
     if command == "run":
         return cmd_run(args)
     elif command == "script":

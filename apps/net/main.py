@@ -8,12 +8,12 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-USER_AGENT = "aos/0.3.0"
+USER_AGENT = "cos/0.3.0"
 DEFAULT_TIMEOUT = 30
 
 
 def _build_fetch_parser():
-    p = argparse.ArgumentParser(prog="aos net fetch", add_help=False)
+    p = argparse.ArgumentParser(prog="cos net fetch", add_help=False)
     p.add_argument("url")
     p.add_argument("--method", default="GET", choices=["GET", "POST", "PUT", "DELETE"])
     p.add_argument("--data", default=None)
@@ -23,7 +23,7 @@ def _build_fetch_parser():
 
 
 def _build_download_parser():
-    p = argparse.ArgumentParser(prog="aos net download", add_help=False)
+    p = argparse.ArgumentParser(prog="cos net download", add_help=False)
     p.add_argument("url")
     p.add_argument("--output", default=None)
     return p
@@ -108,7 +108,7 @@ def cmd_download(args):
 
 
 def run(command, args):
-    """Entry point called by aos."""
+    """Entry point called by cos."""
     if command == "fetch":
         return cmd_fetch(args)
     elif command == "download":

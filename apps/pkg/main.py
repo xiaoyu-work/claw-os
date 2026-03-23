@@ -1,4 +1,4 @@
-"""pkg — Declarative capability management for Agent OS.
+"""pkg — Declarative capability management for Claw OS.
 
 Say what you need, not how to install it.
 """
@@ -121,7 +121,7 @@ def cmd_list(args):
 
 
 def run(command, args):
-    """Entry point called by the aos router."""
+    """Entry point called by the cos router."""
     commands = {
         "need": cmd_need,
         "has": cmd_has,

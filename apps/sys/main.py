@@ -8,8 +8,8 @@ import shutil
 def cmd_info(args):
     """Show system information."""
     info = {
-        "name": "agent-os",
-        "version": os.environ.get("AOS_VERSION", "unknown"),
+        "name": "claw-os",
+        "version": os.environ.get("COS_VERSION", "unknown"),
         "platform": platform.platform(),
         "arch": platform.machine(),
         "python": platform.python_version(),
@@ -118,7 +118,7 @@ COMMANDS = {
 
 
 def run(command, args):
-    """Entry point called by aos."""
+    """Entry point called by cos."""
     handler = COMMANDS.get(command)
     if handler is None:
         return {"error": f"unknown command: {command}"}
