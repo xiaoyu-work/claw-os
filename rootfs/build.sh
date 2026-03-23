@@ -42,6 +42,7 @@ chroot "$ROOTFS" bash -c "
     apt-get install -y --no-install-recommends nodejs
     corepack enable
     corepack prepare pnpm@latest --activate
+    npm install -g typescript tsx
     apt-get clean
     rm -rf /var/lib/apt/lists/*
 "
@@ -67,21 +68,22 @@ echo ":: installing apps"
 mkdir -p "$ROOTFS/usr/lib/cos/apps"
 cp -a "$PROJECT_DIR/apps/." "$ROOTFS/usr/lib/cos/apps/"
 
-# 7. Install Jina Reader (browser engine)
+# 7. Install Jina Reader (browser engine) — from vendored pre-built artifacts
 echo ":: installing Jina Reader"
-chroot "$ROOTFS" bash -c '
-    apt-get update -qq
-    apt-get install -y --no-install-recommends make g++ python3
-    cd /opt && git clone --depth 1 https://github.com/jina-ai/reader.git jina-reader
-    cd /opt/jina-reader
-    export PUPPETEER_CACHE_DIR=/opt/jina-reader/.cache
-    npm install --production
-    npm cache clean --force
-    apt-get purge -y make g++
-    apt-get autoremove -y
-    apt-get clean
-    rm -rf /var/lib/apt/lists/*
-'
+READER_VENDOR="$SCRIPT_DIR/vendor/jina-reader"
+if [ -d "$READER_VENDOR/build" ]; then
+    mkdir -p "$ROOTFS/opt/jina-reader"
+    cp -a "$READER_VENDOR/build" "$ROOTFS/opt/jina-reader/"
+    cp -a "$READER_VENDOR/node_modules" "$ROOTFS/opt/jina-reader/"
+    cp "$READER_VENDOR/package.json" "$ROOTFS/opt/jina-reader/"
+    if [ -d "$READER_VENDOR/licensed" ]; then
+        cp -a "$READER_VENDOR/licensed" "$ROOTFS/opt/jina-reader/"
+    fi
+    echo "   installed from vendor"
+else
+    echo "   WARNING: vendor/jina-reader not found, skipping"
+    echo "   Run the 'Vendor Jina Reader' GitHub Action to generate it"
+fi
 
 # 8. Create runtime directories
 mkdir -p "$ROOTFS/workspace"
