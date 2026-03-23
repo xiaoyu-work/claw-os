@@ -73,12 +73,19 @@ echo ":: installing apps"
 mkdir -p "$ROOTFS/usr/lib/cos/apps"
 cp -a "$PROJECT_DIR/apps/." "$ROOTFS/usr/lib/cos/apps/"
 
-# 7. Install browser engine (OS built-in — vendored with all dependencies)
+# 7. Install browser engine (OS built-in)
 echo ":: installing browser engine"
 BROWSER_VENDOR="$SCRIPT_DIR/vendor/browser-engine"
 if [ -d "$BROWSER_VENDOR" ]; then
-    cp -a "$BROWSER_VENDOR" "$ROOTFS/opt/cos-browser-engine"
-    echo "   installed from vendor"
+    mkdir -p "$ROOTFS/opt/cos-browser-engine"
+    cp "$BROWSER_VENDOR/index.js" "$ROOTFS/opt/cos-browser-engine/"
+    cp "$BROWSER_VENDOR/package.json" "$ROOTFS/opt/cos-browser-engine/"
+    chroot "$ROOTFS" bash -c '
+        cd /opt/cos-browser-engine
+        PUPPETEER_SKIP_DOWNLOAD=true npm install --production
+        npm cache clean --force
+    '
+    echo "   installed"
 else
     echo "   WARNING: vendor/browser-engine not found, skipping"
 fi
