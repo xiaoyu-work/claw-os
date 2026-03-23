@@ -8,6 +8,7 @@ mod router;
 mod sandbox;
 mod service;
 mod sysinfo;
+mod watch;
 
 use std::env;
 use std::process;
