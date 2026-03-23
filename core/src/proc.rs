@@ -175,7 +175,16 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     cmd.args(&command_args[1..])
         .stdin(Stdio::null())
         .stdout(stdout_file)
-        .stderr(stderr_file);
+        .stderr(stderr_file)
+        // Agent-native: suppress all interactive prompts
+        .env("DEBIAN_FRONTEND", "noninteractive")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("CI", "true")
+        .env("PAGER", "cat")
+        .env("GIT_PAGER", "cat")
+        .env("PIP_NO_INPUT", "1")
+        .env("NPM_CONFIG_YES", "true")
+        .env("PYTHONDONTWRITEBYTECODE", "1");
 
     if let Some(ref wd) = workdir {
         cmd.current_dir(wd);

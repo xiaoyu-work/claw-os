@@ -53,6 +53,15 @@ if result is not None:
         .stdin(Stdio::inherit())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        // Agent-native: suppress all interactive prompts
+        .env("DEBIAN_FRONTEND", "noninteractive")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("CI", "true")
+        .env("PAGER", "cat")
+        .env("GIT_PAGER", "cat")
+        .env("PIP_NO_INPUT", "1")
+        .env("NPM_CONFIG_YES", "true")
+        .env("PYTHONDONTWRITEBYTECODE", "1")
         .spawn()
         .map_err(|e| format!("failed to spawn python3: {e}"))?;
 

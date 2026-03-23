@@ -13,6 +13,7 @@ use crate::proc;
 use crate::sandbox;
 use crate::service;
 use crate::sysinfo;
+use crate::watch;
 
 const VERSION: &str = "0.3.0";
 
@@ -48,6 +49,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
             "ipc" => return dispatch_builtin(args, "ipc", ipc::run),
             "browser" => return dispatch_builtin(args, "browser", browser::run),
             "service" => return dispatch_builtin(args, "service", service::run),
+            "watch" => return dispatch_builtin(args, "watch", watch::run),
             _ => {}
         }
         let names: Vec<&String> = discovered.keys().collect();
@@ -85,23 +87,28 @@ fn show_apps() -> Result<Option<String>, String> {
         app_list.push(json!({
             "name": name,
             "description": app.manifest.description,
-            "commands": app.manifest.commands.keys().collect::<Vec<_>>(),
+            "commands": app.manifest.commands,
         }));
     }
     // Always include built-in apps
     for (name, desc, cmds) in builtin_apps() {
+        let cmd_map: serde_json::Map<String, Value> = cmds.iter()
+            .map(|(k, v)| (k.to_string(), json!(v)))
+            .collect();
         app_list.push(json!({
             "name": name,
             "description": desc,
-            "commands": cmds,
+            "commands": cmd_map,
         }));
     }
 
     let output = json!({
         "name": "cos",
         "version": VERSION,
+        "description": "Claw OS — agent-native operating system. All commands return structured JSON.",
         "apps": app_list,
-        "hint": "Run: cos <app>",
+        "total_apps": app_list.len(),
+        "hint": "Run: cos <app> for app details, cos <app> <command> [args] to execute.",
     });
     Ok(Some(output.to_string()))
 }
@@ -165,20 +172,62 @@ fn run_app_command(
     }
 }
 
-fn builtin_apps() -> Vec<(&'static str, &'static str, Vec<&'static str>)> {
+fn builtin_apps() -> Vec<(&'static str, &'static str, Vec<(&'static str, &'static str)>)> {
     vec![
-        ("sys", "System information — hardware, OS, environment, resources",
-         vec!["info", "env", "resources", "uptime"]),
-        ("sandbox", "Lightweight process isolation using Linux namespaces",
-         vec!["exec", "create", "destroy", "list"]),
-        ("proc", "Agent-aware process session manager with groups, hierarchy, and IPC",
-         vec!["spawn", "status", "output", "kill", "list", "wait", "signal"]),
-        ("ipc", "Inter-process message passing between agent sessions",
-         vec!["send", "recv", "list", "clear"]),
-        ("browser", "Browser service manager — Jina Reader lifecycle control",
-         vec!["start", "stop", "restart", "status", "health"]),
-        ("service", "Generic service manager — discover, start, stop, health-check services",
-         vec!["start", "stop", "restart", "status", "health", "list", "logs", "register"]),
+        ("sys", "System information — hardware, OS, environment, resources", vec![
+            ("info", "Get OS, architecture, hostname, and version info"),
+            ("env", "List environment variables, optionally filter by pattern"),
+            ("resources", "Show disk, memory, and CPU usage"),
+            ("uptime", "Show system uptime"),
+        ]),
+        ("sandbox", "Lightweight process isolation using Linux namespaces + cgroup v2", vec![
+            ("exec", "Run a command in an isolated namespace with optional resource limits (--mem, --cpu, --pids, --timeout)"),
+            ("create", "Create a persistent sandbox configuration"),
+            ("destroy", "Remove a sandbox by ID"),
+            ("list", "List all active sandboxes"),
+        ]),
+        ("proc", "Process session manager — spawn, track, and control processes", vec![
+            ("spawn", "Start a process in a tracked session (--session ID, --group NAME, --workspace isolated)"),
+            ("status", "Check if a session's process is still running"),
+            ("output", "Read buffered stdout/stderr (--tail N, --follow, --since-offset BYTES)"),
+            ("kill", "Terminate a session's process or an entire --group"),
+            ("list", "List all sessions, optionally filter by --group"),
+            ("wait", "Block until a process exits, return exit status and output"),
+            ("signal", "Send a Unix signal (TERM, KILL, HUP, USR1, USR2, STOP, CONT)"),
+            ("result", "Get full exit report with heuristic success detection"),
+        ]),
+        ("ipc", "Inter-process communication — messages, locks, barriers", vec![
+            ("send", "Queue a message to a target session"),
+            ("recv", "Dequeue oldest message from a session (--timeout N, --peek)"),
+            ("list", "Show all queued messages for a session"),
+            ("clear", "Delete all messages for a session"),
+            ("lock", "Acquire a named mutex lock (--holder, --timeout)"),
+            ("unlock", "Release a named mutex lock"),
+            ("locks", "List all active locks"),
+            ("barrier", "Wait until N sessions reach a synchronization point (--expect N, --session ID)"),
+        ]),
+        ("browser", "Browser-as-a-service — Jina Reader lifecycle control", vec![
+            ("start", "Start the Jina Reader browser service"),
+            ("stop", "Stop the browser service"),
+            ("restart", "Restart the browser service"),
+            ("status", "Check if browser service is running and healthy"),
+            ("health", "Run health check, auto-restart on failure"),
+        ]),
+        ("service", "Generic service manager — discover, start, stop, health-check any service", vec![
+            ("start", "Start a registered service by name"),
+            ("stop", "Stop a running service"),
+            ("restart", "Restart a service (stop then start)"),
+            ("status", "Check service running/healthy state with log tail"),
+            ("health", "Run health check, optionally auto-restart (--no-restart to skip)"),
+            ("list", "List all discovered services with status"),
+            ("logs", "View service log output (--tail N)"),
+            ("register", "Register a new service (--name, --command, --workdir, --health-url)"),
+        ]),
+        ("watch", "Event watcher — block until file, directory, or process changes", vec![
+            ("file", "Watch a file for creation, modification, or deletion (--timeout N)"),
+            ("dir", "Watch a directory for any file changes (--timeout N)"),
+            ("proc", "Watch a process session for exit (--timeout N)"),
+        ]),
     ]
 }
 
@@ -242,13 +291,13 @@ fn dispatch_builtin(
         let apps = builtin_apps();
         let app = apps.iter().find(|(n, _, _)| *n == app_name).unwrap();
         let cmds: serde_json::Map<String, Value> = app.2.iter()
-            .map(|c| (c.to_string(), json!(c)))
+            .map(|(k, v)| (k.to_string(), json!(v)))
             .collect();
         let output = json!({
             "app": app_name,
             "description": app.1,
             "commands": cmds,
-            "hint": format!("Run: cos {app_name} <command>"),
+            "hint": format!("Run: cos {app_name} <command> [args]"),
         });
         return Ok(Some(output.to_string()));
     }
