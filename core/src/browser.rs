@@ -12,6 +12,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+use crate::policy::{self, OpType};
+
 const READER_DIR: &str = "/opt/jina-reader";
 const DEFAULT_READER_URL: &str = "http://localhost:3000";
 const HEALTH_TIMEOUT_SECS: u64 = 5;
@@ -90,6 +92,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 
 /// Start the Jina Reader service.
 fn cmd_start(_args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::System).map_err(|v| v.to_string())?;
     // Check if already running
     if let Some(pid) = read_pid() {
         if is_process_alive(pid) {
@@ -154,6 +157,7 @@ fn cmd_start(_args: &[String]) -> Result<Value, String> {
 
 /// Stop the Reader service.
 fn cmd_stop(_args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::System).map_err(|v| v.to_string())?;
     let pid = read_pid().ok_or("Reader is not running (no PID file)")?;
 
     #[cfg(unix)]
@@ -177,6 +181,7 @@ fn cmd_stop(_args: &[String]) -> Result<Value, String> {
 
 /// Restart the Reader service.
 fn cmd_restart(_args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::System).map_err(|v| v.to_string())?;
     let _ = cmd_stop(&[]);
     std::thread::sleep(std::time::Duration::from_secs(1));
     cmd_start(&[])
@@ -184,6 +189,7 @@ fn cmd_restart(_args: &[String]) -> Result<Value, String> {
 
 /// Show Reader status.
 fn cmd_status(_args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Read).map_err(|v| v.to_string())?;
     let pid = read_pid();
     let alive = pid.map(|p| is_process_alive(p)).unwrap_or(false);
     let healthy = if alive { is_reader_healthy() } else { false };
@@ -220,6 +226,7 @@ fn cmd_status(_args: &[String]) -> Result<Value, String> {
 
 /// Health check — returns ok if Reader is responding, auto-restarts if not.
 fn cmd_health(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Read).map_err(|v| v.to_string())?;
     let auto_restart = !args.contains(&"--no-restart".to_string());
 
     if is_reader_healthy() {
