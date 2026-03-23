@@ -9,10 +9,8 @@
 /// into a proper service manager that can be queried and controlled.
 use serde_json::{json, Value};
 use std::fs;
-use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 const READER_DIR: &str = "/opt/jina-reader";
 const DEFAULT_READER_URL: &str = "http://localhost:3000";
