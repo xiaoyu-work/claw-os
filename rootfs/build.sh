@@ -68,11 +68,17 @@ cp -a "$PROJECT_DIR/apps/." "$ROOTFS/usr/lib/cos/apps/"
 # 7. Install Jina Reader (browser engine)
 echo ":: installing Jina Reader"
 chroot "$ROOTFS" bash -c '
+    apt-get update -qq
+    apt-get install -y --no-install-recommends make g++ python3
     cd /opt && git clone --depth 1 https://github.com/jina-ai/reader.git jina-reader
     cd /opt/jina-reader
     export PUPPETEER_CACHE_DIR=/opt/jina-reader/.cache
-    npm install --production 2>&1 | tail -5
+    npm install --production
     npm cache clean --force
+    apt-get purge -y make g++
+    apt-get autoremove -y
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
 '
 
 # 8. Create runtime directories
