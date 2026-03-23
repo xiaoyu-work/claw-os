@@ -8,7 +8,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-USER_AGENT = "cos/0.3.0"
+USER_AGENT = "cos/0.1.0"
 DEFAULT_TIMEOUT = 30
 
 
