@@ -130,7 +130,7 @@ fn run_app_command(
 
     let result = bridge::run_python_app(&app.dir, command, args, &data, &apps);
 
-    match &result {
+    match result {
         Ok(output) => {
             let mut status = "ok";
             let err_string;
@@ -148,13 +148,21 @@ fn run_app_command(
             }
 
             audit::log_entry(&audit, app_name, command, args, start, status, error_msg);
+            Ok(output)
         }
         Err(e) => {
-            audit::log_entry(&audit, app_name, command, args, start, "error", Some(e));
+            audit::log_entry(&audit, app_name, command, args, start, "error", Some(&e));
+            // Enrich error with recovery hints for agents
+            if let Some(recovery) = recovery_hint(&e) {
+                Ok(Some(json!({
+                    "error": e,
+                    "recovery": recovery,
+                }).to_string()))
+            } else {
+                Err(e)
+            }
         }
     }
-
-    result
 }
 
 fn builtin_apps() -> Vec<(&'static str, &'static str, Vec<&'static str>)> {
@@ -172,6 +180,57 @@ fn builtin_apps() -> Vec<(&'static str, &'static str, Vec<&'static str>)> {
         ("service", "Generic service manager — discover, start, stop, health-check services",
          vec!["start", "stop", "restart", "status", "health", "list", "logs", "register"]),
     ]
+}
+
+/// Suggest recovery actions for common errors.
+/// Agent-native: humans debug by intuition, agents need explicit guidance.
+fn recovery_hint(error: &str) -> Option<serde_json::Value> {
+    let err_lower = error.to_lowercase();
+
+    if err_lower.contains("permission denied") || err_lower.contains("eperm") {
+        return Some(json!({
+            "hint": "Permission denied. Check file permissions.",
+            "try": ["cos exec run 'ls -la <path>'", "cos exec run 'chmod +rw <path>'"],
+        }));
+    }
+    if err_lower.contains("no such file") || err_lower.contains("enoent") || err_lower.contains("not found") {
+        return Some(json!({
+            "hint": "File or command not found. Verify the path exists.",
+            "try": ["cos fs ls <parent-directory>", "cos exec which <command>"],
+        }));
+    }
+    if err_lower.contains("no space left") || err_lower.contains("enospc") {
+        return Some(json!({
+            "hint": "Disk full. Free space before retrying.",
+            "try": ["cos sys resources", "cos exec run 'du -sh /workspace/* | sort -rh | head'"],
+        }));
+    }
+    if err_lower.contains("connection refused") || err_lower.contains("econnrefused") {
+        return Some(json!({
+            "hint": "Connection refused. The target service may not be running.",
+            "try": ["cos service list", "cos service start <service-name>"],
+        }));
+    }
+    if err_lower.contains("timed out") || err_lower.contains("timeout") {
+        return Some(json!({
+            "hint": "Operation timed out. Consider increasing timeout or checking if the service is responsive.",
+            "try": ["cos proc list", "cos sys resources"],
+        }));
+    }
+    if err_lower.contains("already running") || err_lower.contains("address already in use") || err_lower.contains("eaddrinuse") {
+        return Some(json!({
+            "hint": "Port/resource already in use. Another process may be occupying it.",
+            "try": ["cos proc list", "cos exec run 'lsof -i :<port>'"],
+        }));
+    }
+    if err_lower.contains("out of memory") || err_lower.contains("enomem") || err_lower.contains("oom") {
+        return Some(json!({
+            "hint": "Out of memory. Reduce workload or increase memory limits.",
+            "try": ["cos sys resources", "cos proc list"],
+        }));
+    }
+
+    None
 }
 
 fn dispatch_builtin(
@@ -208,7 +267,168 @@ fn dispatch_builtin(
         }
         Err(e) => {
             audit::log_entry(&audit_p, app_name, command, &cmd_args, start, "error", Some(e));
-            Err(e.clone())
+            // Enrich error with recovery hints for agents
+            if let Some(recovery) = recovery_hint(e) {
+                Ok(Some(json!({
+                    "error": e.to_string(),
+                    "recovery": recovery,
+                }).to_string()))
+            } else {
+                Err(e.clone())
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recovery_hint_permission_denied() {
+        let hint = recovery_hint("Permission denied on /workspace/file.txt").unwrap();
+        assert_eq!(hint["hint"], "Permission denied. Check file permissions.");
+        let try_cmds = hint["try"].as_array().unwrap();
+        assert!(try_cmds.iter().any(|v| v.as_str().unwrap().contains("chmod")));
+    }
+
+    #[test]
+    fn recovery_hint_eperm_variant() {
+        let hint = recovery_hint("EPERM: operation not permitted").unwrap();
+        assert_eq!(hint["hint"], "Permission denied. Check file permissions.");
+    }
+
+    #[test]
+    fn recovery_hint_file_not_found() {
+        let hint = recovery_hint("No such file or directory: /workspace/missing").unwrap();
+        assert_eq!(hint["hint"], "File or command not found. Verify the path exists.");
+        let try_cmds = hint["try"].as_array().unwrap();
+        assert!(try_cmds.iter().any(|v| v.as_str().unwrap().contains("cos fs ls")));
+    }
+
+    #[test]
+    fn recovery_hint_enoent_variant() {
+        let hint = recovery_hint("ENOENT: cannot open /tmp/data").unwrap();
+        assert!(hint["hint"].as_str().unwrap().contains("not found"));
+    }
+
+    #[test]
+    fn recovery_hint_not_found_variant() {
+        let hint = recovery_hint("command not found: foobar").unwrap();
+        assert!(hint["hint"].as_str().unwrap().contains("not found"));
+    }
+
+    #[test]
+    fn recovery_hint_disk_full() {
+        let hint = recovery_hint("No space left on device").unwrap();
+        assert_eq!(hint["hint"], "Disk full. Free space before retrying.");
+        let try_cmds = hint["try"].as_array().unwrap();
+        assert!(try_cmds.iter().any(|v| v.as_str().unwrap().contains("cos sys resources")));
+    }
+
+    #[test]
+    fn recovery_hint_enospc_variant() {
+        let hint = recovery_hint("ENOSPC: write failed").unwrap();
+        assert!(hint["hint"].as_str().unwrap().contains("Disk full"));
+    }
+
+    #[test]
+    fn recovery_hint_connection_refused() {
+        let hint = recovery_hint("Connection refused to localhost:8080").unwrap();
+        assert!(hint["hint"].as_str().unwrap().contains("Connection refused"));
+        let try_cmds = hint["try"].as_array().unwrap();
+        assert!(try_cmds.iter().any(|v| v.as_str().unwrap().contains("cos service")));
+    }
+
+    #[test]
+    fn recovery_hint_econnrefused_variant() {
+        let hint = recovery_hint("ECONNREFUSED: connect failed").unwrap();
+        assert!(hint["hint"].as_str().unwrap().contains("Connection refused"));
+    }
+
+    #[test]
+    fn recovery_hint_timeout() {
+        let hint = recovery_hint("Operation timed out after 30s").unwrap();
+        assert!(hint["hint"].as_str().unwrap().contains("timed out"));
+    }
+
+    #[test]
+    fn recovery_hint_timeout_variant() {
+        let hint = recovery_hint("request timeout").unwrap();
+        assert!(hint["hint"].as_str().unwrap().contains("timed out"));
+    }
+
+    #[test]
+    fn recovery_hint_address_in_use() {
+        let hint = recovery_hint("address already in use: 0.0.0.0:3000").unwrap();
+        assert!(hint["hint"].as_str().unwrap().contains("already in use"));
+    }
+
+    #[test]
+    fn recovery_hint_eaddrinuse_variant() {
+        let hint = recovery_hint("EADDRINUSE: bind failed").unwrap();
+        assert!(hint["hint"].as_str().unwrap().contains("already in use"));
+    }
+
+    #[test]
+    fn recovery_hint_out_of_memory() {
+        let hint = recovery_hint("Out of memory: cannot allocate").unwrap();
+        assert!(hint["hint"].as_str().unwrap().contains("Out of memory"));
+    }
+
+    #[test]
+    fn recovery_hint_enomem_variant() {
+        let hint = recovery_hint("ENOMEM: mmap failed").unwrap();
+        assert!(hint["hint"].as_str().unwrap().contains("Out of memory"));
+    }
+
+    #[test]
+    fn recovery_hint_oom_variant() {
+        let hint = recovery_hint("process killed by OOM killer").unwrap();
+        assert!(hint["hint"].as_str().unwrap().contains("Out of memory"));
+    }
+
+    #[test]
+    fn recovery_hint_unknown_error_returns_none() {
+        assert!(recovery_hint("something completely unexpected happened").is_none());
+    }
+
+    #[test]
+    fn recovery_hint_empty_string_returns_none() {
+        assert!(recovery_hint("").is_none());
+    }
+
+    #[test]
+    fn recovery_hint_case_insensitive() {
+        // Should match regardless of case
+        assert!(recovery_hint("PERMISSION DENIED").is_some());
+        assert!(recovery_hint("permission denied").is_some());
+        assert!(recovery_hint("Permission Denied").is_some());
+    }
+
+    #[test]
+    fn recovery_hint_returns_valid_json_structure() {
+        // Every hint should have both "hint" (string) and "try" (array of strings)
+        let test_errors = [
+            "permission denied",
+            "no such file",
+            "no space left",
+            "connection refused",
+            "timed out",
+            "address already in use",
+            "out of memory",
+        ];
+        for error in &test_errors {
+            let hint = recovery_hint(error).unwrap_or_else(|| panic!("Expected hint for '{}'", error));
+            assert!(hint["hint"].is_string(), "Missing 'hint' string for '{}'", error);
+            assert!(hint["try"].is_array(), "Missing 'try' array for '{}'", error);
+            let try_arr = hint["try"].as_array().unwrap();
+            assert!(!try_arr.is_empty(), "Empty 'try' array for '{}'", error);
+            for cmd in try_arr {
+                assert!(cmd.is_string(), "Non-string in 'try' array for '{}'", error);
+                assert!(cmd.as_str().unwrap().starts_with("cos "),
+                    "Recovery command should start with 'cos': {}", cmd);
+            }
         }
     }
 }
