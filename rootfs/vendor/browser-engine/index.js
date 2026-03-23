@@ -29,6 +29,8 @@ async function getBrowser() {
   if (browser && browser.connected) return browser;
   browser = await puppeteer.launch({
     headless: true,
+    // Use system-installed Chromium (no Puppeteer download needed)
+    executablePath: process.env.CHROMIUM_PATH || "/usr/bin/chromium",
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",

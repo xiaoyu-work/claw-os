@@ -123,13 +123,13 @@ fn cmd_start(_args: &[String]) -> Result<Value, String> {
     let child = Command::new("node")
         .args(["index.js"])
         .current_dir(READER_DIR)
-        .env("PUPPETEER_CACHE_DIR", format!("{READER_DIR}/.cache"))
         .env("PORT", "3000")
+        .env("PUPPETEER_SKIP_DOWNLOAD", "true")
         .stdin(Stdio::null())
         .stdout(log_file)
         .stderr(log_err)
         .spawn()
-        .map_err(|e| format!("failed to start Reader: {e}"))?;
+        .map_err(|e| format!("failed to start browser engine: {e}"))?;
 
     let pid = child.id();
     write_pid(pid);
