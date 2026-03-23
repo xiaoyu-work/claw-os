@@ -1,0 +1,22 @@
+{
+  "name": "openclaw-plugin-claw-os",
+  "version": "0.1.0",
+  "description": "Claw OS integration plugin for OpenClaw — replaces built-in tools with OS-level capabilities",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "^0.32.0"
+  },
+  "peerDependencies": {
+    "openclaw": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "openclaw": "*"
+  }
+}
