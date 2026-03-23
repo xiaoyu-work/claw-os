@@ -8,6 +8,7 @@ use crate::apps;
 use crate::audit;
 use crate::bridge;
 use crate::browser;
+use crate::checkpoint;
 use crate::ipc;
 use crate::proc;
 use crate::sandbox;
@@ -50,6 +51,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
             "browser" => return dispatch_builtin(args, "browser", browser::run),
             "service" => return dispatch_builtin(args, "service", service::run),
             "watch" => return dispatch_builtin(args, "watch", watch::run),
+            "checkpoint" => return dispatch_builtin(args, "checkpoint", checkpoint::run),
             _ => {}
         }
         let names: Vec<&String> = discovered.keys().collect();
@@ -227,6 +229,13 @@ fn builtin_apps() -> Vec<(&'static str, &'static str, Vec<(&'static str, &'stati
             ("file", "Watch a file for creation, modification, or deletion (--timeout N)"),
             ("dir", "Watch a directory for any file changes (--timeout N)"),
             ("proc", "Watch a process session for exit (--timeout N)"),
+        ]),
+        ("checkpoint", "OverlayFS checkpoint system — snapshot, diff, and rollback workspace state", vec![
+            ("create", "Freeze current changes into a named checkpoint and start fresh"),
+            ("diff", "Show created, modified, and deleted files in the current upper layer"),
+            ("rollback", "Restore a checkpoint or reset to base (wipe current changes)"),
+            ("list", "List all saved checkpoints with metadata"),
+            ("status", "Show overlay mount state, pending changes, and disk usage"),
         ]),
     ]
 }
