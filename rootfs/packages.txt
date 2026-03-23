@@ -7,8 +7,8 @@ curl
 ca-certificates
 
 # Browser engine (Jina Reader + Puppeteer/Chromium)
-nodejs
-npm
+# Note: nodejs and npm are NOT listed here — installed separately
+# from NodeSource in build.sh step 2 (Node.js 24 with npm bundled)
 libnss3
 libxss1
 libasound2
