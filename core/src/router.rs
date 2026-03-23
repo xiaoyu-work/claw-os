@@ -2,11 +2,13 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::apps;
 use crate::audit;
 use crate::bridge;
+use crate::proc;
+use crate::sandbox;
 use crate::sysinfo;
 
 const VERSION: &str = "0.3.0";
@@ -36,8 +38,11 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
     // Check if it's a known app
     if !discovered.contains_key(app_name.as_str()) {
         // Check built-in apps
-        if app_name == "sys" {
-            return dispatch_builtin_sys(args);
+        match app_name.as_str() {
+            "sys" => return dispatch_builtin(args, "sys", sysinfo::run),
+            "sandbox" => return dispatch_builtin(args, "sandbox", sandbox::run),
+            "proc" => return dispatch_builtin(args, "proc", proc::run),
+            _ => {}
         }
         let names: Vec<&String> = discovered.keys().collect();
         return Err(format!(
@@ -77,12 +82,14 @@ fn show_apps() -> Result<Option<String>, String> {
             "commands": app.manifest.commands.keys().collect::<Vec<_>>(),
         }));
     }
-    // Always include built-in sys
-    app_list.push(json!({
-        "name": "sys",
-        "description": "System information — hardware, OS, environment, resources",
-        "commands": ["info", "env", "resources", "uptime"],
-    }));
+    // Always include built-in apps
+    for (name, desc, cmds) in builtin_apps() {
+        app_list.push(json!({
+            "name": name,
+            "description": desc,
+            "commands": cmds,
+        }));
+    }
 
     let output = json!({
         "name": "cos",
@@ -144,37 +151,51 @@ fn run_app_command(
     result
 }
 
-fn dispatch_builtin_sys(args: &[String]) -> Result<Option<String>, String> {
+fn builtin_apps() -> Vec<(&'static str, &'static str, Vec<&'static str>)> {
+    vec![
+        ("sys", "System information — hardware, OS, environment, resources",
+         vec!["info", "env", "resources", "uptime"]),
+        ("sandbox", "Lightweight process isolation using Linux namespaces",
+         vec!["exec", "create", "destroy", "list"]),
+        ("proc", "Agent-aware process session manager with output buffering",
+         vec!["spawn", "status", "output", "kill", "list"]),
+    ]
+}
+
+fn dispatch_builtin(
+    args: &[String],
+    app_name: &str,
+    handler: fn(&str, &[String]) -> Result<Value, String>,
+) -> Result<Option<String>, String> {
     if args.len() == 1 {
+        let apps = builtin_apps();
+        let app = apps.iter().find(|(n, _, _)| *n == app_name).unwrap();
+        let cmds: serde_json::Map<String, Value> = app.2.iter()
+            .map(|c| (c.to_string(), json!(c)))
+            .collect();
         let output = json!({
-            "app": "sys",
-            "version": "0.1.0",
-            "description": "System information — hardware, OS, environment, resources",
-            "commands": {
-                "info": "Show system information",
-                "env": "Show environment variables",
-                "resources": "Show disk, memory, and CPU usage",
-                "uptime": "Show system uptime"
-            },
-            "hint": "Run: cos sys <command>",
+            "app": app_name,
+            "description": app.1,
+            "commands": cmds,
+            "hint": format!("Run: cos {app_name} <command>"),
         });
         return Ok(Some(output.to_string()));
     }
 
     let command = &args[1];
     let cmd_args: Vec<String> = args[2..].to_vec();
-    let start = Instant::now();
-    let audit = audit_path();
+    let start = std::time::Instant::now();
+    let audit_p = audit_path();
 
-    let result = sysinfo::run(command, &cmd_args);
+    let result = handler(command, &cmd_args);
 
     match &result {
         Ok(v) => {
-            audit::log_entry(&audit, "sys", command, &cmd_args, start, "ok", None);
+            audit::log_entry(&audit_p, app_name, command, &cmd_args, start, "ok", None);
             Ok(Some(v.to_string()))
         }
         Err(e) => {
-            audit::log_entry(&audit, "sys", command, &cmd_args, start, "error", Some(e));
+            audit::log_entry(&audit_p, app_name, command, &cmd_args, start, "error", Some(e));
             Err(e.clone())
         }
     }
