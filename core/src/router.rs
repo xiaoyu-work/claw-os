@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 use crate::apps;
 use crate::audit;
 use crate::bridge;
+use crate::browser;
 use crate::proc;
 use crate::sandbox;
 use crate::sysinfo;
@@ -42,6 +43,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
             "sys" => return dispatch_builtin(args, "sys", sysinfo::run),
             "sandbox" => return dispatch_builtin(args, "sandbox", sandbox::run),
             "proc" => return dispatch_builtin(args, "proc", proc::run),
+            "browser" => return dispatch_builtin(args, "browser", browser::run),
             _ => {}
         }
         let names: Vec<&String> = discovered.keys().collect();
@@ -159,6 +161,8 @@ fn builtin_apps() -> Vec<(&'static str, &'static str, Vec<&'static str>)> {
          vec!["exec", "create", "destroy", "list"]),
         ("proc", "Agent-aware process session manager with output buffering",
          vec!["spawn", "status", "output", "kill", "list"]),
+        ("browser", "Browser service manager — Jina Reader lifecycle control",
+         vec!["start", "stop", "restart", "status", "health"]),
     ]
 }
 
