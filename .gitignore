@@ -1,5 +1,5 @@
 build/
 __pycache__/
 .claude/
-
+.pytest_cache/
 core/target/

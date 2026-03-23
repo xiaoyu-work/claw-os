@@ -63,7 +63,7 @@ class Executor:
         if self.container_id:
             cmd = ["docker", "exec", self.container_id, "cos"] + parts
         else:
-            cmd = [sys.executable, self._cos_path()] + parts
+            cmd = [self._cos_path()] + parts
 
         env = os.environ.copy()
         if self.apps_dir:
@@ -86,8 +86,14 @@ class Executor:
             return f"error: {e}"
 
     def _cos_path(self):
+        """Resolve the cos binary. Prefer system-installed, fall back to local build."""
+        import shutil
+        system_cos = shutil.which("cos")
+        if system_cos:
+            return system_cos
+        # Development: use locally built Rust binary
         base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        return os.path.join(base, "rootfs", "overlay", "usr", "local", "bin", "cos")
+        return os.path.join(base, "core", "target", "release", "cos")
 
 
 # ---------------------------------------------------------------------------
