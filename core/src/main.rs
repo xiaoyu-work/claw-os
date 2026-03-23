@@ -1,6 +1,7 @@
 mod apps;
 mod audit;
 mod bridge;
+mod browser;
 mod proc;
 mod router;
 mod sandbox;
