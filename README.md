@@ -6,7 +6,7 @@ Linux, macOS, and Windows were designed for humans — they return pixels, termi
 
 OpenClaw runs on your devices, in your channels, with your rules. Claw OS is where it lives.
 
-## What Makes It an OS, Not a Tool
+## Beyond Linux
 
 Claw OS provides primitives that traditional operating systems don't:
 
