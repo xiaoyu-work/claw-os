@@ -11,17 +11,16 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-# 0. Build Rust cos binary (cross-compile for Linux x86_64)
-echo ":: building cos binary"
-cd "$PROJECT_DIR/core"
-cargo build --release --target x86_64-unknown-linux-gnu
-COS_BIN="$PROJECT_DIR/core/target/x86_64-unknown-linux-gnu/release/cos"
+# 0. Locate pre-built cos binary (built by CI or manually before running this script)
+COS_BIN="$PROJECT_DIR/core/target/release/cos"
 if [ ! -f "$COS_BIN" ]; then
-    echo "error: cos binary not found at $COS_BIN" >&2
-    echo "hint: install cross-compilation target: rustup target add x86_64-unknown-linux-gnu" >&2
+    # Try cross-compilation target path
+    COS_BIN="$PROJECT_DIR/core/target/x86_64-unknown-linux-gnu/release/cos"
+fi
+if [ ! -f "$COS_BIN" ]; then
+    echo "error: cos binary not found. Build it first: cd core && cargo build --release" >&2
     exit 1
 fi
-cd "$PROJECT_DIR"
 
 # 1. Bootstrap minimal Debian rootfs
 echo ":: debootstrap $SUITE -> $ROOTFS"
