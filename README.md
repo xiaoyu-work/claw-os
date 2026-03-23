@@ -2,7 +2,24 @@
 
 The operating system for [OpenClaw](https://github.com/openclaw/openclaw).
 
-OpenClaw runs on your devices, in your channels, with your rules. Claw OS is where it lives — a purpose-built runtime that gives OpenClaw native access to sandboxed execution, process management, browser rendering, and structured I/O, without the thousands of lines of infrastructure code it needs on a generic OS.
+Linux, macOS, and Windows were designed for humans — they return pixels, terminal text, and GUI windows. Claw OS was designed for agents — every system call returns structured data, every process is tracked by session, and every operation is automatically audited.
+
+OpenClaw runs on your devices, in your channels, with your rules. Claw OS is where it lives.
+
+## Agent-Native by Design
+
+The entire system is rebuilt around what agents actually need:
+
+- **Structured I/O** — Every command returns JSON, not text that needs parsing
+- **Managed execution** — Processes are tracked by session ID with output buffering, not raw PIDs
+- **Built-in sandboxing** — Namespace isolation + resource limits in one command, no Docker-in-Docker
+- **Pre-digested content** — PDFs, web pages, documents come back as clean text, not raw bytes
+- **Automatic audit trail** — Every operation logged with timestamp, duration, and status
+- **Browser as a service** — JavaScript-rendered web pages returned as Markdown, managed by the OS
+
+## Built-in Apps
+
+Claw OS ships with 15 apps purpose-built for agent workflows:
 
 ```
 cos sandbox exec --mem 512M --timeout 300 --no-network -- python3 untrusted.py
@@ -11,9 +28,10 @@ cos proc output build-1 --tail 20
 cos web read https://example.com
 cos doc read paper.pdf
 cos fs ls /workspace
+cos db query mydb "SELECT * FROM users"
+cos kv set project:status "building"
+cos net fetch https://api.example.com/data
 ```
-
-Every command returns JSON. Every operation is audited. Every process is tracked.
 
 ## Architecture
 
