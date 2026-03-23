@@ -27,6 +27,10 @@ pub struct SessionInfo {
     pub parent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workdir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -89,6 +93,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "list" => cmd_list(args),
         "wait" => cmd_wait(args),
         "signal" => cmd_signal(args),
+        "result" => cmd_result(args),
         _ => Err(format!("unknown proc command: {command}")),
     }
 }
@@ -134,6 +139,13 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     }
 
     let command_args = &args[cmd_start..];
+
+    // Guardrails: check for rapid respawn and destructive commands
+    let reg_check = load_registry();
+    let rapid_warning = check_rapid_respawn(&reg_check, command_args);
+    let destructive_warning = check_destructive(command_args);
+    drop(reg_check);
+
     let sid = session_id.unwrap_or_else(|| format!("proc-{}", short_id()));
     let dir = proc_dir();
     let _ = fs::create_dir_all(&dir);
@@ -194,6 +206,8 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         group: group.clone(),
         parent: parent.clone(),
         workdir: workdir.clone(),
+        exit_code: None,
+        ended_at: None,
     };
 
     let mut reg = load_registry();
@@ -212,24 +226,44 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     if let Some(g) = group { result["group"] = json!(g); }
     if let Some(p) = parent { result["parent"] = json!(p); }
     if let Some(w) = workdir { result["workdir"] = json!(w); }
+    let mut warnings = Vec::new();
+    if let Some(w) = rapid_warning { warnings.push(w); }
+    if let Some(w) = destructive_warning { warnings.push(w); }
+    if !warnings.is_empty() { result["warnings"] = json!(warnings); }
 
     Ok(result)
 }
 
 fn cmd_status(args: &[String]) -> Result<Value, String> {
     let sid = args.first().ok_or("usage: cos proc status <session-id>")?;
-    let reg = load_registry();
-    let info = reg.sessions.iter()
-        .find(|s| &s.session_id == sid)
+    let mut reg = load_registry();
+    let idx = reg.sessions.iter()
+        .position(|s| &s.session_id == sid)
         .ok_or_else(|| format!("session not found: {sid}"))?;
 
-    Ok(json!({
+    let alive = is_alive(reg.sessions[idx].pid);
+    let status = if alive { "running" } else { "exited" };
+
+    // Auto-capture ended_at when process is first detected as dead
+    if !alive && reg.sessions[idx].ended_at.is_none() {
+        let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        reg.sessions[idx].ended_at = Some(now);
+        save_registry(&reg);
+    }
+
+    let info = &reg.sessions[idx];
+    let mut result = json!({
         "session_id": info.session_id,
         "pid": info.pid,
-        "status": if is_alive(info.pid) { "running" } else { "exited" },
+        "status": status,
         "command": info.command,
         "started_at": info.started_at,
-    }))
+    });
+    if let Some(ref ended) = info.ended_at {
+        result["ended_at"] = json!(ended);
+    }
+
+    Ok(result)
 }
 
 fn cmd_output(args: &[String]) -> Result<Value, String> {
@@ -473,12 +507,35 @@ fn cmd_wait(args: &[String]) -> Result<Value, String> {
     loop {
         let all_dead = targets.iter().all(|(_, pid)| !is_alive(*pid));
         if all_dead {
+            // Auto-capture ended_at for all exited sessions
+            let mut reg = load_registry();
+            let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+            for (sid, _) in &targets {
+                if let Some(info) = reg.sessions.iter_mut().find(|s| &s.session_id == sid) {
+                    if info.ended_at.is_none() {
+                        info.ended_at = Some(now.clone());
+                    }
+                }
+            }
+            save_registry(&reg);
+
+            // Build results with output tails for each exited session
+            let reg = load_registry();
             let results: Vec<Value> = targets.iter()
-                .map(|(sid, pid)| json!({
-                    "session_id": sid,
-                    "pid": pid,
-                    "status": "exited",
-                }))
+                .map(|(sid, pid)| {
+                    let mut v = json!({
+                        "session_id": sid,
+                        "pid": pid,
+                        "status": "exited",
+                    });
+                    if let Some(info) = reg.sessions.iter().find(|s| &s.session_id == sid) {
+                        let stdout_tail = read_capped(&info.stdout_path, Some(10));
+                        let stderr_tail = read_capped(&info.stderr_path, Some(10));
+                        if !stdout_tail.is_empty() { v["stdout_tail"] = json!(stdout_tail); }
+                        if !stderr_tail.is_empty() { v["stderr_tail"] = json!(stderr_tail); }
+                    }
+                    v
+                })
                 .collect();
             return Ok(json!({
                 "status": "exited",
@@ -560,6 +617,110 @@ fn cmd_signal(args: &[String]) -> Result<Value, String> {
         "signal": signal_name,
         "status": "sent",
     }))
+}
+
+fn cmd_result(args: &[String]) -> Result<Value, String> {
+    let sid = args.first().ok_or("usage: cos proc result <session-id>")?;
+    let mut reg = load_registry();
+    let idx = reg.sessions.iter()
+        .position(|s| &s.session_id == sid)
+        .ok_or_else(|| format!("session not found: {sid}"))?;
+
+    let alive = is_alive(reg.sessions[idx].pid);
+    let status = if alive { "running" } else { "exited" };
+
+    // Auto-capture ended_at if process is dead and not yet recorded
+    if !alive && reg.sessions[idx].ended_at.is_none() {
+        let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        reg.sessions[idx].ended_at = Some(now);
+        save_registry(&reg);
+    }
+
+    let info = &reg.sessions[idx];
+    let stdout_tail = read_capped(&info.stdout_path, Some(20));
+    let stderr_tail = read_capped(&info.stderr_path, Some(20));
+    let stdout_bytes = fs::metadata(&info.stdout_path).map(|m| m.len()).unwrap_or(0);
+    let stderr_bytes = fs::metadata(&info.stderr_path).map(|m| m.len()).unwrap_or(0);
+
+    // Heuristic: likely success if stderr is empty or small relative to stdout
+    let likely_success = stderr_bytes == 0 || (stdout_bytes > 0 && stderr_bytes < stdout_bytes / 10);
+
+    let mut result = json!({
+        "session_id": info.session_id,
+        "status": status,
+        "started_at": info.started_at,
+        "stdout_bytes": stdout_bytes,
+        "stderr_bytes": stderr_bytes,
+        "likely_success": likely_success,
+    });
+
+    if let Some(ref ended) = info.ended_at {
+        result["ended_at"] = json!(ended);
+        // Calculate duration
+        if let Ok(start) = chrono::DateTime::parse_from_rfc3339(
+            &info.started_at.replace('Z', "+00:00"),
+        ) {
+            if let Ok(end) = chrono::DateTime::parse_from_rfc3339(
+                &ended.replace('Z', "+00:00"),
+            ) {
+                let duration = end.signed_duration_since(start);
+                result["duration_secs"] = json!(duration.num_seconds());
+            }
+        }
+    }
+
+    if !stdout_tail.is_empty() { result["stdout_tail"] = json!(stdout_tail); }
+    if !stderr_tail.is_empty() { result["stderr_tail"] = json!(stderr_tail); }
+
+    Ok(result)
+}
+
+fn check_rapid_respawn(reg: &Registry, command_args: &[String]) -> Option<Value> {
+    let now = chrono::Utc::now();
+    let cutoff = now - chrono::Duration::seconds(60);
+    let recent_same = reg.sessions.iter()
+        .filter(|s| s.command == command_args)
+        .filter(|s| {
+            chrono::DateTime::parse_from_rfc3339(
+                &s.started_at.replace('Z', "+00:00"),
+            )
+            .map(|dt| dt > cutoff)
+            .unwrap_or(false)
+        })
+        .count();
+    if recent_same >= 5 {
+        Some(json!({
+            "warning": "rapid_respawn",
+            "message": format!(
+                "This command has been spawned {} times in the last 60 seconds. Possible infinite loop.",
+                recent_same
+            ),
+            "count": recent_same,
+        }))
+    } else {
+        None
+    }
+}
+
+fn check_destructive(command_args: &[String]) -> Option<Value> {
+    let cmd_str = command_args.join(" ");
+    let patterns = [
+        ("rm -rf /", "deleting root filesystem"),
+        ("rm -rf /*", "deleting root filesystem contents"),
+        ("mkfs", "formatting disk"),
+        ("dd if=", "raw disk write"),
+        ("> /dev/sd", "writing to disk device"),
+    ];
+    for (pattern, reason) in patterns {
+        if cmd_str.contains(pattern) {
+            return Some(json!({
+                "warning": "destructive_command",
+                "message": format!("Potentially destructive operation detected: {reason}"),
+                "pattern": pattern,
+            }));
+        }
+    }
+    None
 }
 
 fn read_from_offset(path: &str, offset: u64) -> (String, u64) {
