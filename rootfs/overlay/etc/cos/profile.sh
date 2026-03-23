@@ -1,6 +1,6 @@
 #!/bin/bash
 # Claw OS shell profile — sourced on agent login.
-export COS_VERSION="0.3.0"
+export COS_VERSION="0.1.0"
 export WORKSPACE="/workspace"
 export PATH="/usr/local/bin:$PATH"
 

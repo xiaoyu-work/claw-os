@@ -2,7 +2,7 @@ FROM scratch
 
 COPY build/claw-os-rootfs /
 
-ENV COS_VERSION=0.3.0
+ENV COS_VERSION=0.1.0
 ENV NODE_MAJOR=24
 ENV WORKSPACE=/workspace
 ENV JINA_READER_URL=http://localhost:3000
