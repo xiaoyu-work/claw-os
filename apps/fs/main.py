@@ -10,6 +10,7 @@ import time
 
 WORKSPACE = "/workspace"
 META_FILENAME = ".cos-meta.json"
+MAX_READ_BYTES = 1_000_000  # 1 MB output limit for file reads
 
 
 def _abs(path):
@@ -54,12 +55,55 @@ def cmd_ls(args):
 def cmd_read(args):
     if not args:
         raise Exception("read requires a path argument")
-    path = _abs(args[0])
+
+    # Parse positional and optional args
+    path = None
+    offset = 0
+    limit = MAX_READ_BYTES
+    rest = list(args)
+
+    # First positional arg is the path
+    positional = []
+    i = 0
+    while i < len(rest):
+        if rest[i] == "--offset" and i + 1 < len(rest):
+            offset = int(rest[i + 1])
+            i += 2
+        elif rest[i] == "--limit" and i + 1 < len(rest):
+            limit = int(rest[i + 1])
+            i += 2
+        else:
+            positional.append(rest[i])
+            i += 1
+
+    if not positional:
+        raise Exception("read requires a path argument")
+    path = _abs(positional[0])
+
     if not os.path.isfile(path):
         return {"error": f"file not found: {path}"}
-    with open(path) as f:
-        content = f.read()
-    return {"path": path, "content": content}
+
+    total_size = os.path.getsize(path)
+    # Cap the read limit to MAX_READ_BYTES
+    effective_limit = min(limit, MAX_READ_BYTES)
+
+    with open(path, "rb") as f:
+        if offset > 0:
+            f.seek(offset)
+        raw = f.read(effective_limit + 1)  # read one extra to detect truncation
+
+    truncated = len(raw) > effective_limit
+    if truncated:
+        raw = raw[:effective_limit]
+
+    content = raw.decode("utf-8", errors="replace")
+    result = {"path": path, "content": content}
+    if offset > 0:
+        result["offset"] = offset
+    if truncated:
+        result["truncated"] = True
+        result["total_size"] = total_size
+    return result
 
 
 def cmd_write(args):

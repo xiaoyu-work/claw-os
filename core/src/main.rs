@@ -3,6 +3,7 @@ mod audit;
 mod bridge;
 mod browser;
 mod checkpoint;
+mod config;
 mod ipc;
 mod policy;
 mod proc;

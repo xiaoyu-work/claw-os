@@ -49,7 +49,8 @@ fn cmd_resources() -> Result<Value, String> {
     {
         use std::ffi::CString;
         let workspace = env::var("DEN").unwrap_or_else(|_| "/den".into());
-        let c_path = CString::new(workspace.as_bytes()).unwrap();
+        let c_path = CString::new(workspace.as_bytes())
+            .map_err(|e| format!("invalid workspace path for CString: {e}"))?;
         unsafe {
             let mut stat: libc::statvfs = std::mem::zeroed();
             if libc::statvfs(c_path.as_ptr(), &mut stat) == 0 {

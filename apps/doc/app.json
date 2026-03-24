@@ -1,6 +1,6 @@
 {
   "name": "doc",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Universal document reader — any format in, structured text out",
   "commands": {
     "read": "Read document content (PDF, DOCX, XLSX, images, etc.)",

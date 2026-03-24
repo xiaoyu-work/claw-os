@@ -1,6 +1,6 @@
 {
   "name": "web",
-  "version": "1.0.0",
+  "version": "0.3.0",
   "description": "Full browser with JavaScript rendering — powered by cos-browser-engine",
   "commands": {
     "read": "Fetch URL and return clean Markdown content (renders JavaScript)",

@@ -50,7 +50,7 @@ fn sorted_messages(dir: &PathBuf) -> Vec<(String, PathBuf)> {
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().to_string();
             if name.ends_with(".json") {
-                let id = name.strip_suffix(".json").unwrap().to_string();
+                let id = name.strip_suffix(".json").expect("already checked ends_with .json").to_string();
                 Some((id, e.path()))
             } else {
                 None

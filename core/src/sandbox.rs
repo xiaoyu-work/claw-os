@@ -114,15 +114,21 @@ fn cmd_exec(args: &[String]) -> Result<Value, String> {
                 i += 2;
             }
             "--cpu" if i + 1 < args.len() => {
-                cpu_percent = args[i + 1].parse().ok();
+                cpu_percent = Some(args[i + 1].parse::<u32>().map_err(|_| {
+                    format!("invalid cpu value: {}", args[i + 1])
+                })?);
                 i += 2;
             }
             "--pids" if i + 1 < args.len() => {
-                pids_max = args[i + 1].parse().ok();
+                pids_max = Some(args[i + 1].parse::<u32>().map_err(|_| {
+                    format!("invalid pids value: {}", args[i + 1])
+                })?);
                 i += 2;
             }
             "--timeout" if i + 1 < args.len() => {
-                timeout_secs = args[i + 1].parse().ok();
+                timeout_secs = Some(args[i + 1].parse::<u32>().map_err(|_| {
+                    format!("invalid timeout value: {}", args[i + 1])
+                })?);
                 i += 2;
             }
             "--" => {
@@ -156,7 +162,7 @@ fn cmd_exec(args: &[String]) -> Result<Value, String> {
 
     #[cfg(not(target_os = "linux"))]
     {
-        exec_fallback(command_args, &limits)
+        exec_fallback(command_args, &workspace, &limits)
     }
 }
 
@@ -165,8 +171,8 @@ fn cmd_exec(args: &[String]) -> Result<Value, String> {
 fn exec_linux(
     command_args: &[String],
     network: bool,
-    _read_only: bool,
-    _workspace: &str,
+    read_only: bool,
+    workspace: &str,
     limits: &ResourceLimits,
 ) -> Result<Value, String> {
     let has_limits = limits.mem_limit.is_some()
@@ -176,7 +182,7 @@ fn exec_linux(
 
     // If resource limits are set, use systemd-run which handles cgroup v2
     if has_limits {
-        return exec_linux_with_cgroup(command_args, network, limits);
+        return exec_linux_with_cgroup(command_args, network, read_only, workspace, limits);
     }
 
     // Otherwise, use plain unshare for lightweight namespace isolation
@@ -196,6 +202,7 @@ fn exec_linux(
 
     let mut child = Command::new("unshare")
         .args(&unshare_args)
+        .current_dir(workspace)
         .stdin(Stdio::inherit())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -219,6 +226,8 @@ fn exec_linux(
         "stderr": stderr,
         "isolated": true,
         "network": network,
+        "read_only": read_only,
+        "workspace": workspace,
     }))
 }
 
@@ -230,6 +239,8 @@ fn exec_linux(
 fn exec_linux_with_cgroup(
     command_args: &[String],
     network: bool,
+    read_only: bool,
+    workspace: &str,
     limits: &ResourceLimits,
 ) -> Result<Value, String> {
     let scope_name = format!("cos-sandbox-{}", short_id());
@@ -261,6 +272,15 @@ fn exec_linux_with_cgroup(
         sr_args.push(format!("-p RuntimeMaxSec={secs}"));
     }
 
+    // Read-only filesystem via systemd property
+    if read_only {
+        sr_args.push("-p".to_string());
+        sr_args.push("ReadOnlyPaths=/".to_string());
+    }
+
+    // Set working directory to workspace
+    sr_args.push(format!("-p WorkingDirectory={workspace}"));
+
     // Wrap the actual command in unshare for namespace isolation
     sr_args.push("--".to_string());
     sr_args.push("unshare".to_string());
@@ -276,6 +296,7 @@ fn exec_linux_with_cgroup(
 
     let mut child = Command::new("systemd-run")
         .args(&sr_args)
+        .current_dir(workspace)
         .stdin(Stdio::inherit())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -308,6 +329,8 @@ fn exec_linux_with_cgroup(
         "stderr": stderr,
         "isolated": true,
         "network": network,
+        "read_only": read_only,
+        "workspace": workspace,
         "cgroup": true,
         "scope": scope_name,
     });
@@ -337,15 +360,16 @@ fn short_id() -> String {
     format!("{:x}", t & 0xFFFFFFFF)
 }
 
-/// Fallbackfor non-Linux: basic subprocess execution with timeout.
+/// Fallback for non-Linux: basic subprocess execution with timeout.
 #[cfg(not(target_os = "linux"))]
-fn exec_fallback(command_args: &[String], limits: &ResourceLimits) -> Result<Value, String> {
+fn exec_fallback(command_args: &[String], workspace: &str, limits: &ResourceLimits) -> Result<Value, String> {
     if command_args.is_empty() {
         return Err("no command specified".into());
     }
 
     let mut child = Command::new(&command_args[0])
         .args(&command_args[1..])
+        .current_dir(workspace)
         .stdin(Stdio::inherit())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

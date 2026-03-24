@@ -16,7 +16,7 @@ use crate::service;
 use crate::sysinfo;
 use crate::watch;
 
-const VERSION: &str = "0.1.0";
+const VERSION: &str = "0.3.0";
 
 fn apps_dir() -> PathBuf {
     PathBuf::from(env::var("COS_APPS_DIR").unwrap_or_else(|_| "/usr/lib/cos/apps".into()))
@@ -298,7 +298,7 @@ fn dispatch_builtin(
 ) -> Result<Option<String>, String> {
     if args.len() == 1 {
         let apps = builtin_apps();
-        let app = apps.iter().find(|(n, _, _)| *n == app_name).unwrap();
+       let app = apps.iter().find(|(n, _, _)| *n == app_name).unwrap();
         let cmds: serde_json::Map<String, Value> = app.2.iter()
             .map(|(k, v)| (k.to_string(), json!(v)))
             .collect();

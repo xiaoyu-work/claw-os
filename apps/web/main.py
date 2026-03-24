@@ -7,11 +7,11 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-TIMEOUT = 30
-USER_AGENT = "cos/1.0.0"
-READER_URL = os.environ.get("COS_BROWSER_URL", "http://localhost:3000")
+TIMEOUT = int(os.environ.get("COS_WEB_TIMEOUT", "30"))
+USER_AGENT = "cos/0.3.0"
+READER_URL = os.environ.get("COS_WEB_READER_URL", os.environ.get("COS_BROWSER_URL", "http://localhost:3000"))
 DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
-DEFAULT_MAX_LENGTH = 50000
+DEFAULT_MAX_LENGTH = int(os.environ.get("COS_WEB_MAX_CONTENT_LENGTH", "50000"))
 
 # Cached Reader availability (None = not checked yet)
 _reader_available = None
