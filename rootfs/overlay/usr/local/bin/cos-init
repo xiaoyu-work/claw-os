@@ -7,21 +7,21 @@ set -e
 # Source COS profile
 [ -f /etc/cos/profile.sh ] && . /etc/cos/profile.sh
 
-# Set up OverlayFS on /workspace for checkpoint support
+# Set up OverlayFS on /den for checkpoint support
 # This makes all file changes trackable and reversible.
 OVERLAY_DIR="/var/lib/cos/overlay"
 if [ "$(uname)" = "Linux" ] && command -v mount >/dev/null 2>&1; then
     mkdir -p "$OVERLAY_DIR/base" "$OVERLAY_DIR/upper" "$OVERLAY_DIR/work"
 
-    # First boot: move existing /workspace content into base layer
-    if [ -z "$(ls -A "$OVERLAY_DIR/base" 2>/dev/null)" ] && [ -d /workspace ]; then
-        cp -a /workspace/. "$OVERLAY_DIR/base/" 2>/dev/null || true
+    # First boot: move existing /den content into base layer
+    if [ -z "$(ls -A "$OVERLAY_DIR/base" 2>/dev/null)" ] && [ -d /den ]; then
+        cp -a /den/. "$OVERLAY_DIR/base/" 2>/dev/null || true
     fi
 
-    # Mount overlay: agent sees /workspace, writes go to upper
+    # Mount overlay: agent sees /den, writes go to upper
     mount -t overlay overlay \
         -o "lowerdir=$OVERLAY_DIR/base,upperdir=$OVERLAY_DIR/upper,workdir=$OVERLAY_DIR/work" \
-        /workspace 2>/dev/null || true
+        /den 2>/dev/null || true
 fi
 
 # Start browser engine service

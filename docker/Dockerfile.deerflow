@@ -1,0 +1,19 @@
+FROM ghcr.io/xiaoyu-work/claw-os:latest
+
+# Install uv (Python package manager) and pnpm
+RUN pip3 install --break-system-packages uv \
+    && npm install -g pnpm
+
+# Install DeerFlow
+RUN git clone --depth 1 https://github.com/bytedance/deer-flow.git /opt/deer-flow \
+    && cd /opt/deer-flow/backend && uv sync \
+    && cd /opt/deer-flow/frontend && pnpm install && pnpm build
+
+# Copy Claw OS skill into DeerFlow's custom skills
+COPY skills/claw-os /opt/deer-flow/skills/custom/claw-os
+
+# DeerFlow config template (user mounts their own config.yaml)
+WORKDIR /opt/deer-flow
+
+ENTRYPOINT ["/usr/local/bin/cos-init"]
+CMD ["make", "start"]
