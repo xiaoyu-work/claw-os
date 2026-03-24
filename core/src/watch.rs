@@ -329,10 +329,8 @@ fn watch_service_health_fail(args: &[String], timeout: u64) -> Result<Value, Str
 
     loop {
         // Check service health via the service module
-        let health_result = crate::service::run(
-            "health",
-            &[service_name.to_string(), "--no-restart".into()],
-        );
+        let health_result =
+            crate::service::run("health", &[service_name.to_string(), "--no-restart".into()]);
 
         match health_result {
             Ok(v) => {
@@ -369,16 +367,19 @@ fn watch_service_health_fail(args: &[String], timeout: u64) -> Result<Value, Str
 }
 
 fn watch_checkpoint_created(args: &[String], timeout: u64) -> Result<Value, String> {
-    let overlay_dir = PathBuf::from(
-        std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()),
-    )
-    .join("overlay")
-    .join("checkpoints");
+    let overlay_dir =
+        PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
+            .join("overlay")
+            .join("checkpoints");
 
     // Snapshot current checkpoint count
     let initial_count = if overlay_dir.exists() {
         fs::read_dir(&overlay_dir)
-            .map(|e| e.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).count())
+            .map(|e| {
+                e.filter_map(|e| e.ok())
+                    .filter(|e| e.path().is_dir())
+                    .count()
+            })
             .unwrap_or(0)
     } else {
         0
@@ -390,7 +391,11 @@ fn watch_checkpoint_created(args: &[String], timeout: u64) -> Result<Value, Stri
     loop {
         let current_count = if overlay_dir.exists() {
             fs::read_dir(&overlay_dir)
-                .map(|e| e.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).count())
+                .map(|e| {
+                e.filter_map(|e| e.ok())
+                    .filter(|e| e.path().is_dir())
+                    .count()
+            })
                 .unwrap_or(0)
         } else {
             0
@@ -485,7 +490,11 @@ mod tests {
         let fp = file_path.clone();
         thread::spawn(move || {
             thread::sleep(Duration::from_millis(800));
-            let mut f = fs::OpenOptions::new().write(true).append(true).open(&fp).unwrap();
+            let mut f = fs::OpenOptions::new()
+                .write(true)
+                .append(true)
+                .open(&fp)
+                .unwrap();
             f.write_all(b" appended data").unwrap();
         });
 
@@ -552,6 +561,9 @@ mod tests {
 
     #[test]
     fn parse_timeout_custom() {
-        assert_eq!(parse_timeout(&["somefile".into(), "--timeout".into(), "10".into()]), 10);
+        assert_eq!(
+            parse_timeout(&["somefile".into(), "--timeout".into(), "10".into()]),
+            10
+        );
     }
 }
