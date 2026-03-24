@@ -136,3 +136,23 @@ jobs:
           push: true
           tags: ${{ steps.meta-deerflow.outputs.tags }}
           labels: ${{ steps.meta-deerflow.outputs.labels }}
+
+      # Build IronClaw variant (OS + IronClaw pre-installed)
+      - name: Extract metadata (IronClaw)
+        id: meta-ironclaw
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=ironclaw,enable={{is_default_branch}}
+            type=raw,value=ironclaw-{{sha}},enable={{is_default_branch}}
+
+      - name: Build and push (IronClaw)
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.ironclaw
+          push: true
+          tags: ${{ steps.meta-ironclaw.outputs.tags }}
+          labels: ${{ steps.meta-ironclaw.outputs.labels }}
