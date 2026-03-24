@@ -73,11 +73,15 @@ echo ":: installing apps"
 mkdir -p "$ROOTFS/usr/lib/cos/apps"
 cp -a "$PROJECT_DIR/apps/." "$ROOTFS/usr/lib/cos/apps/"
 
-# 6b. Install plugins
-echo ":: installing plugins"
+# 6b. Install plugins and skills
+echo ":: installing plugins and skills"
 mkdir -p "$ROOTFS/usr/lib/cos/plugins"
+mkdir -p "$ROOTFS/usr/lib/cos/skills"
 if [ -d "$PROJECT_DIR/plugins" ]; then
     cp -a "$PROJECT_DIR/plugins/." "$ROOTFS/usr/lib/cos/plugins/"
+fi
+if [ -d "$PROJECT_DIR/skills" ]; then
+    cp -a "$PROJECT_DIR/skills/." "$ROOTFS/usr/lib/cos/skills/"
 fi
 
 # 7. Install browser engine (OS built-in)
