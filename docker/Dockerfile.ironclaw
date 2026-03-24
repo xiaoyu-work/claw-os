@@ -1,0 +1,40 @@
+FROM ghcr.io/xiaoyu-work/claw-os:latest AS runtime
+
+# Install Rust build dependencies
+RUN apt-get update -qq \
+    && apt-get install -y --no-install-recommends \
+       build-essential pkg-config libssl-dev libpq-dev \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Build IronClaw from source
+FROM rust:1.92-slim-bookworm AS builder
+RUN apt-get update -qq \
+    && apt-get install -y --no-install-recommends \
+       pkg-config libssl-dev libpq-dev git \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 https://github.com/nearai/ironclaw.git /build/ironclaw \
+    && cd /build/ironclaw \
+    && cargo build --release
+
+# Final image: Claw OS + IronClaw binary
+FROM runtime
+
+# Copy built binary
+COPY --from=builder /build/ironclaw/target/release/ironclaw /usr/local/bin/ironclaw
+
+# Install PostgreSQL (IronClaw's database)
+RUN apt-get update -qq \
+    && apt-get install -y --no-install-recommends postgresql postgresql-client \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Copy Claw OS skill into IronClaw's skills directory
+RUN mkdir -p /root/.ironclaw/skills
+COPY skills/claw-os /root/.ironclaw/skills/claw-os
+
+ENV RUST_LOG=ironclaw=info
+
+EXPOSE 3000
+
+ENTRYPOINT ["/usr/local/bin/cos-init"]
+CMD ["ironclaw"]
