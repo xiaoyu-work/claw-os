@@ -9,7 +9,10 @@ use crate::audit;
 use crate::bridge;
 use crate::browser;
 use crate::checkpoint;
+use crate::credential;
 use crate::ipc;
+use crate::netfilter;
+use crate::policy;
 use crate::proc;
 use crate::sandbox;
 use crate::service;
@@ -52,6 +55,9 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
             "service" => return dispatch_builtin(args, "service", service::run),
             "watch" => return dispatch_builtin(args, "watch", watch::run),
             "checkpoint" => return dispatch_builtin(args, "checkpoint", checkpoint::run),
+            "credential" => return dispatch_builtin(args, "credential", credential::run),
+            "netfilter" => return dispatch_builtin(args, "netfilter", netfilter::run),
+            "policy" => return dispatch_builtin(args, "policy", policy::run),
             _ => {}
         }
         let names: Vec<&String> = discovered.keys().collect();
@@ -176,20 +182,24 @@ fn run_app_command(
 
 fn builtin_apps() -> Vec<(&'static str, &'static str, Vec<(&'static str, &'static str)>)> {
     vec![
-        ("sys", "System information — hardware, OS, environment, resources", vec![
+        ("sys", "System information — hardware, OS, environment, resources, structured /proc", vec![
             ("info", "Get OS, architecture, hostname, and version info"),
             ("env", "List environment variables, optionally filter by pattern"),
             ("resources", "Show disk, memory, and CPU usage"),
             ("uptime", "Show system uptime"),
+            ("proc", "List all processes with PID, name, state, CPU, memory (structured /proc/*/stat)"),
+            ("mounts", "List all mount points with filesystem type and options (structured /proc/mounts)"),
+            ("net", "Show network interfaces and TCP connections (structured /proc/net/*)"),
+            ("cgroup", "Show cgroup v2 limits and usage — memory, CPU, PIDs (/sys/fs/cgroup/)"),
         ]),
-        ("sandbox", "Lightweight process isolation using Linux namespaces + cgroup v2", vec![
-            ("exec", "Run a command in an isolated namespace with optional resource limits (--mem, --cpu, --pids, --timeout)"),
+        ("sandbox", "Lightweight process isolation using Linux namespaces + cgroup v2 + seccomp", vec![
+            ("exec", "Run a command in an isolated namespace (--mem, --cpu, --pids, --timeout, --seccomp-profile minimal|network|full)"),
             ("create", "Create a persistent sandbox configuration"),
             ("destroy", "Remove a sandbox by ID"),
             ("list", "List all active sandboxes"),
         ]),
-        ("proc", "Process session manager — spawn, track, and control processes", vec![
-            ("spawn", "Start a process in a tracked session (--session ID, --group NAME, --workspace isolated)"),
+        ("proc", "Process session manager — spawn, track, control, and monitor processes", vec![
+            ("spawn", "Start a process (--session ID, --group NAME, --priority low|normal|high|realtime, --tier N, --scope PATH)"),
             ("status", "Check if a session's process is still running"),
             ("output", "Read buffered stdout/stderr (--tail N, --follow, --since-offset BYTES)"),
             ("kill", "Terminate a session's process or an entire --group"),
@@ -197,6 +207,8 @@ fn builtin_apps() -> Vec<(&'static str, &'static str, Vec<(&'static str, &'stati
             ("wait", "Block until a process exits, return exit status and output"),
             ("signal", "Send a Unix signal (TERM, KILL, HUP, USR1, USR2, STOP, CONT)"),
             ("result", "Get full exit report with heuristic success detection"),
+            ("stats", "Get resource usage stats — CPU time, memory, I/O bytes, threads (from /proc/<pid>/)"),
+            ("renice", "Change process priority (--priority low|normal|high|realtime)"),
         ]),
         ("ipc", "Inter-process communication — messages, locks, barriers", vec![
             ("send", "Queue a message to a target session"),
@@ -225,17 +237,41 @@ fn builtin_apps() -> Vec<(&'static str, &'static str, Vec<(&'static str, &'stati
             ("logs", "View service log output (--tail N)"),
             ("register", "Register a new service (--name, --command, --workdir, --health-url)"),
         ]),
-        ("watch", "Event watcher — block until file, directory, or process changes", vec![
+        ("watch", "Event watcher — block until file, directory, process, or OS event changes", vec![
             ("file", "Watch a file for creation, modification, or deletion (--timeout N)"),
             ("dir", "Watch a directory for any file changes (--timeout N)"),
             ("proc", "Watch a process session for exit (--timeout N)"),
+            ("on", "Subscribe to OS events: proc.exit, fs.change, service.health-fail, checkpoint.created, quota.exceeded"),
         ]),
-        ("checkpoint", "OverlayFS checkpoint system — snapshot, diff, and rollback workspace state", vec![
+        ("checkpoint", "OverlayFS checkpoint system — snapshot, diff, rollback, quota, namespaces", vec![
             ("create", "Freeze current changes into a named checkpoint and start fresh"),
             ("diff", "Show created, modified, and deleted files in the current upper layer"),
             ("rollback", "Restore a checkpoint or reset to base (wipe current changes)"),
             ("list", "List all saved checkpoints with metadata"),
             ("status", "Show overlay mount state, pending changes, and disk usage"),
+            ("quota-set", "Set filesystem quota for the upper layer (e.g. 2G, 512M)"),
+            ("quota-status", "Show current quota usage, limit, and whether exceeded"),
+            ("namespaces", "Manage isolated overlay namespaces (--create, --destroy, --status <name>)"),
+        ]),
+        ("credential", "Encrypted credential store — secure secret storage with tier-based access", vec![
+            ("store", "Store a credential (cos credential store <name> <value> [--tier N])"),
+            ("load", "Load a credential value (tier check enforced)"),
+            ("revoke", "Delete a stored credential"),
+            ("list", "List all credentials (names and metadata only, never values)"),
+        ]),
+        ("netfilter", "Outbound network firewall — domain-based allow/deny rules", vec![
+            ("add", "Add a rule (--allow <domain> or --deny <domain> [--port N])"),
+            ("remove", "Remove rules for a domain"),
+            ("list", "List all rules and default policy"),
+            ("check", "Check if a domain is allowed under current rules"),
+            ("reset", "Remove all rules and reset to allow-all"),
+            ("default", "Set default policy (allow-all or deny-all)"),
+        ]),
+        ("policy", "Permission system — tier/scope checks, temporary elevation", vec![
+            ("elevate", "Temporarily elevate session tier (--to N --duration SECS --reason TEXT)"),
+            ("drop", "Drop an active elevation"),
+            ("status", "Show current session tier, elevation, and allowed operations"),
+            ("check", "Check if a specific operation (read/write/exec/net/system) is allowed"),
         ]),
     ]
 }

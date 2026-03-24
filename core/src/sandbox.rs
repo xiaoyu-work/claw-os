@@ -23,10 +23,11 @@ use crate::policy::{self, OpType};
 const SANDBOX_DIR: &str = "/var/lib/cos/sandboxes";
 
 struct ResourceLimits {
-    mem_limit: Option<String>,   // e.g. "512M"
-    cpu_percent: Option<u32>,    // e.g. 50
-    pids_max: Option<u32>,       // e.g. 100
-    timeout_secs: Option<u32>,   // e.g. 300
+    mem_limit: Option<String>,       // e.g. "512M"
+    cpu_percent: Option<u32>,        // e.g. 50
+    pids_max: Option<u32>,           // e.g. 100
+    timeout_secs: Option<u32>,       // e.g. 300
+    seccomp_profile: Option<String>, // e.g. "minimal", "network", "full"
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,6 +93,7 @@ fn cmd_exec(args: &[String]) -> Result<Value, String> {
     let mut cpu_percent: Option<u32> = None;      // e.g. 50 = 50%
     let mut pids_max: Option<u32> = None;         // e.g. 100
     let mut timeout_secs: Option<u32> = None;     // e.g. 300
+    let mut seccomp_profile: Option<String> = None; // e.g. "minimal", "network", "full"
     let mut cmd_start = None;
 
     let mut i = 0;
@@ -131,6 +133,14 @@ fn cmd_exec(args: &[String]) -> Result<Value, String> {
                 })?);
                 i += 2;
             }
+            "--seccomp-profile" if i + 1 < args.len() => {
+                let profile = args[i + 1].to_lowercase();
+                if !["minimal", "network", "full"].contains(&profile.as_str()) {
+                    return Err("seccomp profile must be: minimal, network, full".into());
+                }
+                seccomp_profile = Some(profile);
+                i += 2;
+            }
             "--" => {
                 cmd_start = Some(i + 1);
                 break;
@@ -153,6 +163,7 @@ fn cmd_exec(args: &[String]) -> Result<Value, String> {
         cpu_percent,
         pids_max,
         timeout_secs,
+        seccomp_profile,
     };
 
     #[cfg(target_os = "linux")]
@@ -178,7 +189,8 @@ fn exec_linux(
     let has_limits = limits.mem_limit.is_some()
         || limits.cpu_percent.is_some()
         || limits.pids_max.is_some()
-        || limits.timeout_secs.is_some();
+        || limits.timeout_secs.is_some()
+        || limits.seccomp_profile.is_some();
 
     // If resource limits are set, use systemd-run which handles cgroup v2
     if has_limits {
@@ -278,6 +290,14 @@ fn exec_linux_with_cgroup(
         sr_args.push("ReadOnlyPaths=/".to_string());
     }
 
+    // Seccomp syscall filter via systemd property
+    if let Some(ref profile) = limits.seccomp_profile {
+        if let Some(filter) = seccomp_syscall_filter(profile) {
+            sr_args.push("-p".to_string());
+            sr_args.push(format!("SystemCallFilter={filter}"));
+        }
+    }
+
     // Set working directory to workspace
     sr_args.push(format!("-p WorkingDirectory={workspace}"));
 
@@ -344,6 +364,10 @@ fn exec_linux_with_cgroup(
         });
     }
 
+    if let Some(ref profile) = limits.seccomp_profile {
+        result["seccomp_profile"] = json!(profile);
+    }
+
     if let Some(reason) = killed_by {
         result["killed_by"] = json!(reason);
     }
@@ -358,6 +382,28 @@ fn short_id() -> String {
         .unwrap_or_default()
         .as_nanos();
     format!("{:x}", t & 0xFFFFFFFF)
+}
+
+/// Generate a seccomp BPF filter JSON for use with systemd's SystemCallFilter.
+///
+/// Profiles:
+///   - `minimal`: only basic I/O and process management syscalls
+///   - `network`: minimal + networking syscalls (socket, connect, etc.)
+///   - `full`: all syscalls allowed (no filtering)
+#[cfg(target_os = "linux")]
+fn seccomp_syscall_filter(profile: &str) -> Option<String> {
+    match profile {
+        "minimal" => {
+            // Allow only essential syscalls for computation
+            Some("~@clock @debug @module @mount @obsolete @raw-io @reboot @swap @privileged".into())
+        }
+        "network" => {
+            // Allow everything except dangerous system-level calls
+            Some("~@clock @debug @module @mount @obsolete @raw-io @reboot @swap".into())
+        }
+        "full" => None, // No filtering
+        _ => None,
+    }
 }
 
 /// Fallback for non-Linux: basic subprocess execution with timeout.

@@ -274,13 +274,15 @@ fn cmd_default(args: &[String]) -> Result<Value, String> {
 mod tests {
     use super::*;
 
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static NF_COUNTER: AtomicU32 = AtomicU32::new(0);
+
     fn setup() {
+        let n = NF_COUNTER.fetch_add(1, Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!(
-            "cos-netfilter-test-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            "cos-netfilter-test-{}-{}",
+            std::process::id(),
+            n
         ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();

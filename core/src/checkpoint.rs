@@ -1285,4 +1285,98 @@ mod tests {
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("unknown checkpoint command"));
     }
+
+    // -- parse_size --
+
+    #[test]
+    fn parse_size_gigabytes() {
+        assert_eq!(parse_size("2G").unwrap(), 2 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn parse_size_megabytes() {
+        assert_eq!(parse_size("512M").unwrap(), 512 * 1024 * 1024);
+    }
+
+    #[test]
+    fn parse_size_kilobytes() {
+        assert_eq!(parse_size("100K").unwrap(), 100 * 1024);
+    }
+
+    #[test]
+    fn parse_size_bytes() {
+        assert_eq!(parse_size("1024").unwrap(), 1024);
+    }
+
+    #[test]
+    fn parse_size_invalid() {
+        assert!(parse_size("abc").is_err());
+    }
+
+    // -- format_bytes --
+
+    #[test]
+    fn format_bytes_gb() {
+        let s = format_bytes(2 * 1024 * 1024 * 1024);
+        assert!(s.contains("G"));
+    }
+
+    #[test]
+    fn format_bytes_mb() {
+        let s = format_bytes(100 * 1024 * 1024);
+        assert!(s.contains("M"));
+    }
+
+    // -- quota --
+
+    #[test]
+    fn quota_set_and_status() {
+        let dir = std::env::temp_dir().join("cos-cp-quota-test");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("COS_DATA_DIR", &dir);
+        std::env::remove_var("COS_SESSION");
+
+        let r = cmd_quota_set(&vec!["1G".into()]).unwrap();
+        assert_eq!(r["quota_set"], true);
+
+        let r = cmd_quota_status(&vec![]).unwrap();
+        assert_eq!(r["quota_enabled"], true);
+        assert_eq!(r["exceeded"], false);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // -- namespaces --
+
+    #[test]
+    fn namespace_create_list_destroy() {
+        let dir = std::env::temp_dir().join("cos-cp-ns-test");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("COS_DATA_DIR", &dir);
+        std::env::remove_var("COS_SESSION");
+
+        let r = create_namespace("test-ns").unwrap();
+        assert_eq!(r["created"], "test-ns");
+
+        let r = list_namespaces().unwrap();
+        assert_eq!(r["count"], 1);
+
+        let r = namespace_status("test-ns").unwrap();
+        assert_eq!(r["namespace"], "test-ns");
+        assert_eq!(r["pending_changes"], 0);
+
+        let r = destroy_namespace("test-ns").unwrap();
+        assert_eq!(r["destroyed"], "test-ns");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn namespace_invalid_name() {
+        std::env::remove_var("COS_SESSION");
+        let r = create_namespace("bad/name");
+        assert!(r.is_err());
+    }
 }
