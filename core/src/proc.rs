@@ -37,6 +37,8 @@ pub struct SessionInfo {
     pub tier: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -100,6 +102,8 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "wait" => cmd_wait(args),
         "signal" => cmd_signal(args),
         "result" => cmd_result(args),
+        "stats" => cmd_stats(args),
+        "renice" => cmd_renice(args),
         _ => Err(format!("unknown proc command: {command}")),
     }
 }
@@ -112,6 +116,7 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     let mut workdir = None;
     let mut tier: Option<u8> = None;
     let mut scope: Option<String> = None;
+    let mut priority: Option<String> = None;
     let mut isolated_workspace = false;
     let mut cmd_start = 0;
 
@@ -144,6 +149,14 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
             }
             "--scope" if i + 1 < args.len() => {
                 scope = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--priority" if i + 1 < args.len() => {
+                let p = args[i + 1].to_lowercase();
+                if !["low", "normal", "high", "realtime"].contains(&p.as_str()) {
+                    return Err("priority must be: low, normal, high, realtime".into());
+                }
+                priority = Some(p);
                 i += 2;
             }
             "--" => { cmd_start = i + 1; break; }
@@ -229,8 +242,28 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     let stderr_file = fs::File::create(&stderr_path)
         .map_err(|e| format!("failed to create stderr file: {e}"))?;
 
-    let mut cmd = Command::new(&command_args[0]);
-    cmd.args(&command_args[1..])
+    // Apply process priority via nice (Unix only)
+    #[cfg(unix)]
+    let (actual_cmd, actual_args) = if let Some(ref prio) = priority {
+        let nice_val = match prio.as_str() {
+            "low" => "10",
+            "normal" => "0",
+            "high" => "-5",
+            "realtime" => "-10",
+            _ => "0",
+        };
+        let mut nice_args = vec!["-n".to_string(), nice_val.to_string()];
+        nice_args.extend_from_slice(command_args);
+        ("nice".to_string(), nice_args)
+    } else {
+        (command_args[0].clone(), command_args[1..].to_vec())
+    };
+
+    #[cfg(not(unix))]
+    let (actual_cmd, actual_args) = (command_args[0].clone(), command_args[1..].to_vec());
+
+    let mut cmd = Command::new(&actual_cmd);
+    cmd.args(&actual_args)
         .stdin(Stdio::null())
         .stdout(stdout_file)
         .stderr(stderr_file)
@@ -280,6 +313,7 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         ended_at: None,
         tier,
         scope: scope.clone(),
+        priority: priority.clone(),
     };
 
     let mut reg = load_registry();
@@ -300,6 +334,7 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     if let Some(w) = workdir { result["workdir"] = json!(w); }
     if let Some(t) = tier { result["tier"] = json!(t); }
     if let Some(ref s) = scope { result["scope"] = json!(s); }
+    if let Some(ref pr) = priority { result["priority"] = json!(pr); }
     let mut warnings = Vec::new();
     if let Some(w) = rapid_warning { warnings.push(w); }
     if let Some(w) = destructive_warning { warnings.push(w); }
