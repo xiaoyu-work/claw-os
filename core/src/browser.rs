@@ -23,11 +23,9 @@ fn reader_url() -> String {
 }
 
 fn pid_path() -> PathBuf {
-    PathBuf::from(
-        std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()),
-    )
-    .join("browser")
-    .join("reader.pid")
+    PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
+        .join("browser")
+        .join("reader.pid")
 }
 
 fn log_path() -> PathBuf {
@@ -66,9 +64,13 @@ fn is_reader_healthy() -> bool {
     // Use curl for simplicity (available in the rootfs)
     Command::new("curl")
         .args([
-            "-s", "-o", "/dev/null",
-            "-w", "%{http_code}",
-            "--connect-timeout", &HEALTH_TIMEOUT_SECS.to_string(),
+            "-s",
+            "-o",
+            "/dev/null",
+            "-w",
+            "%{http_code}",
+            "--connect-timeout",
+            &HEALTH_TIMEOUT_SECS.to_string(),
             &reader_url(),
         ])
         .output()
@@ -115,9 +117,9 @@ fn cmd_start(_args: &[String]) -> Result<Value, String> {
         let _ = fs::create_dir_all(parent);
     }
 
-    let log_file = fs::File::create(&log)
-        .map_err(|e| format!("failed to create log file: {e}"))?;
-    let log_err = log_file.try_clone()
+    let log_file = fs::File::create(&log).map_err(|e| format!("failed to create log file: {e}"))?;
+    let log_err = log_file
+        .try_clone()
         .map_err(|e| format!("failed to clone log file: {e}"))?;
 
     let child = Command::new("node")

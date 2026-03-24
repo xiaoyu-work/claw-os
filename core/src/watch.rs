@@ -392,10 +392,10 @@ fn watch_checkpoint_created(args: &[String], timeout: u64) -> Result<Value, Stri
         let current_count = if overlay_dir.exists() {
             fs::read_dir(&overlay_dir)
                 .map(|e| {
-                e.filter_map(|e| e.ok())
-                    .filter(|e| e.path().is_dir())
-                    .count()
-            })
+                    e.filter_map(|e| e.ok())
+                        .filter(|e| e.path().is_dir())
+                        .count()
+                })
                 .unwrap_or(0)
         } else {
             0

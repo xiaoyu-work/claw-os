@@ -54,7 +54,13 @@ pub fn discover(apps_dir: &Path) -> BTreeMap<String, App> {
             Err(_) => continue,
         };
         let name = manifest.name.clone();
-        apps.insert(name, App { manifest, dir: path });
+        apps.insert(
+            name,
+            App {
+                manifest,
+                dir: path,
+            },
+        );
     }
 
     apps

@@ -78,10 +78,8 @@ fn services_dir() -> PathBuf {
 }
 
 fn runtime_dir() -> PathBuf {
-    PathBuf::from(
-        std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()),
-    )
-    .join("services")
+    PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
+        .join("services")
 }
 
 fn service_runtime_dir(name: &str) -> PathBuf {
@@ -200,13 +198,10 @@ fn discover_services() -> BTreeMap<String, ServiceDef> {
 
 fn find_service(name: &str) -> Result<ServiceDef, String> {
     let services = discover_services();
-    services
-        .get(name)
-        .cloned()
-        .ok_or_else(|| {
-            let available: Vec<&String> = services.keys().collect();
-            format!("service not found: {name}. available: {available:?}")
-        })
+    services.get(name).cloned().ok_or_else(|| {
+        let available: Vec<&String> = services.keys().collect();
+        format!("service not found: {name}. available: {available:?}")
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -302,8 +297,7 @@ fn cmd_start(args: &[String]) -> Result<Value, String> {
 
     // Prepare log file
     let log = log_path(name);
-    let log_file = fs::File::create(&log)
-        .map_err(|e| format!("failed to create log file: {e}"))?;
+    let log_file = fs::File::create(&log).map_err(|e| format!("failed to create log file: {e}"))?;
     let log_err = log_file
         .try_clone()
         .map_err(|e| format!("failed to clone log file: {e}"))?;
@@ -389,8 +383,8 @@ fn cmd_stop(args: &[String]) -> Result<Value, String> {
     policy::require(OpType::System).map_err(|v| v.to_string())?;
     let name = args.first().ok_or("usage: cos service stop <name>")?;
 
-    let pid = read_pid(name)
-        .ok_or_else(|| format!("service {name} is not running (no PID file)"))?;
+    let pid =
+        read_pid(name).ok_or_else(|| format!("service {name} is not running (no PID file)"))?;
 
     kill_pid(pid);
     clear_pid(name);
@@ -523,7 +517,9 @@ fn cmd_list(_args: &[String]) -> Result<Value, String> {
 /// Show service logs.
 fn cmd_logs(args: &[String]) -> Result<Value, String> {
     policy::require(OpType::Read).map_err(|v| v.to_string())?;
-    let name = args.first().ok_or("usage: cos service logs <name> [--tail N]")?;
+    let name = args
+        .first()
+        .ok_or("usage: cos service logs <name> [--tail N]")?;
 
     let mut tail_n = DEFAULT_LOG_TAIL;
     let mut i = 1;
@@ -633,8 +629,7 @@ fn cmd_register(args: &[String]) -> Result<Value, String> {
     let data = serde_json::to_string_pretty(&def)
         .map_err(|e| format!("failed to serialize service definition: {e}"))?;
 
-    fs::write(&manifest_path, &data)
-        .map_err(|e| format!("failed to write service.json: {e}"))?;
+    fs::write(&manifest_path, &data).map_err(|e| format!("failed to write service.json: {e}"))?;
 
     Ok(json!({
         "registered": name,

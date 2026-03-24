@@ -61,9 +61,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
             _ => {}
         }
         let names: Vec<&String> = discovered.keys().collect();
-        return Err(format!(
-            "unknown app: {app_name}. installed: {names:?}"
-        ));
+        return Err(format!("unknown app: {app_name}. installed: {names:?}"));
     }
 
     // One arg: show app help
@@ -100,7 +98,8 @@ fn show_apps() -> Result<Option<String>, String> {
     }
     // Always include built-in apps
     for (name, desc, cmds) in builtin_apps() {
-        let cmd_map: serde_json::Map<String, Value> = cmds.iter()
+        let cmd_map: serde_json::Map<String, Value> = cmds
+            .iter()
             .map(|(k, v)| (k.to_string(), json!(v)))
             .collect();
         app_list.push(json!({
@@ -169,10 +168,13 @@ fn run_app_command(
             audit::log_entry(&audit, app_name, command, args, start, "error", Some(&e));
             // Enrich error with recovery hints for agents
             if let Some(recovery) = recovery_hint(&e) {
-                Ok(Some(json!({
-                    "error": e,
-                    "recovery": recovery,
-                }).to_string()))
+                Ok(Some(
+                    json!({
+                        "error": e,
+                        "recovery": recovery,
+                    })
+                    .to_string(),
+                ))
             } else {
                 Err(e)
             }
@@ -180,7 +182,11 @@ fn run_app_command(
     }
 }
 
-fn builtin_apps() -> Vec<(&'static str, &'static str, Vec<(&'static str, &'static str)>)> {
+fn builtin_apps() -> Vec<(
+    &'static str,
+    &'static str,
+    Vec<(&'static str, &'static str)>,
+)> {
     vec![
         ("sys", "System information — hardware, OS, environment, resources, structured /proc", vec![
             ("info", "Get OS, architecture, hostname, and version info"),
@@ -259,13 +265,14 @@ fn builtin_apps() -> Vec<(&'static str, &'static str, Vec<(&'static str, &'stati
             ("revoke", "Delete a stored credential"),
             ("list", "List all credentials (names and metadata only, never values)"),
         ]),
-        ("netfilter", "Outbound network firewall — domain-based allow/deny rules", vec![
-            ("add", "Add a rule (--allow <domain> or --deny <domain> [--port N])"),
+        ("netfilter", "Outbound network firewall — domain, method, path, and binary-level rules", vec![
+            ("add", "Add a rule (--allow|--deny <domain> [--port N] [--method GET,POST] [--path /api/**] [--binary /usr/bin/git] [--tls])"),
             ("remove", "Remove rules for a domain"),
             ("list", "List all rules and default policy"),
-            ("check", "Check if a domain is allowed under current rules"),
+            ("check", "Check if a request is allowed (--method M --path P --binary B)"),
             ("reset", "Remove all rules and reset to allow-all"),
             ("default", "Set default policy (allow-all or deny-all)"),
+            ("export", "Export full ruleset as JSON for proxy consumption"),
         ]),
         ("policy", "Permission system — tier/scope checks, temporary elevation", vec![
             ("elevate", "Temporarily elevate session tier (--to N --duration SECS --reason TEXT)"),
@@ -287,7 +294,10 @@ fn recovery_hint(error: &str) -> Option<serde_json::Value> {
             "try": ["cos exec run 'ls -la <path>'", "cos exec run 'chmod +rw <path>'"],
         }));
     }
-    if err_lower.contains("no such file") || err_lower.contains("enoent") || err_lower.contains("not found") {
+    if err_lower.contains("no such file")
+        || err_lower.contains("enoent")
+        || err_lower.contains("not found")
+    {
         return Some(json!({
             "hint": "File or command not found. Verify the path exists.",
             "try": ["cos fs ls <parent-directory>", "cos exec which <command>"],
@@ -311,13 +321,19 @@ fn recovery_hint(error: &str) -> Option<serde_json::Value> {
             "try": ["cos proc list", "cos sys resources"],
         }));
     }
-    if err_lower.contains("already running") || err_lower.contains("address already in use") || err_lower.contains("eaddrinuse") {
+    if err_lower.contains("already running")
+        || err_lower.contains("address already in use")
+        || err_lower.contains("eaddrinuse")
+    {
         return Some(json!({
             "hint": "Port/resource already in use. Another process may be occupying it.",
             "try": ["cos proc list", "cos exec run 'lsof -i :<port>'"],
         }));
     }
-    if err_lower.contains("out of memory") || err_lower.contains("enomem") || err_lower.contains("oom") {
+    if err_lower.contains("out of memory")
+        || err_lower.contains("enomem")
+        || err_lower.contains("oom")
+    {
         return Some(json!({
             "hint": "Out of memory. Reduce workload or increase memory limits.",
             "try": ["cos sys resources", "cos proc list"],
@@ -334,8 +350,10 @@ fn dispatch_builtin(
 ) -> Result<Option<String>, String> {
     if args.len() == 1 {
         let apps = builtin_apps();
-       let app = apps.iter().find(|(n, _, _)| *n == app_name).unwrap();
-        let cmds: serde_json::Map<String, Value> = app.2.iter()
+        let app = apps.iter().find(|(n, _, _)| *n == app_name).unwrap();
+        let cmds: serde_json::Map<String, Value> = app
+            .2
+            .iter()
             .map(|(k, v)| (k.to_string(), json!(v)))
             .collect();
         let output = json!({
@@ -360,13 +378,24 @@ fn dispatch_builtin(
             Ok(Some(v.to_string()))
         }
         Err(e) => {
-            audit::log_entry(&audit_p, app_name, command, &cmd_args, start, "error", Some(e));
+            audit::log_entry(
+                &audit_p,
+                app_name,
+                command,
+                &cmd_args,
+                start,
+                "error",
+                Some(e),
+            );
             // Enrich error with recovery hints for agents
             if let Some(recovery) = recovery_hint(e) {
-                Ok(Some(json!({
-                    "error": e.to_string(),
-                    "recovery": recovery,
-                }).to_string()))
+                Ok(Some(
+                    json!({
+                        "error": e.to_string(),
+                        "recovery": recovery,
+                    })
+                    .to_string(),
+                ))
             } else {
                 Err(e.clone())
             }
@@ -383,7 +412,9 @@ mod tests {
         let hint = recovery_hint("Permission denied on /den/file.txt").unwrap();
         assert_eq!(hint["hint"], "Permission denied. Check file permissions.");
         let try_cmds = hint["try"].as_array().unwrap();
-        assert!(try_cmds.iter().any(|v| v.as_str().unwrap().contains("chmod")));
+        assert!(try_cmds
+            .iter()
+            .any(|v| v.as_str().unwrap().contains("chmod")));
     }
 
     #[test]
@@ -395,9 +426,14 @@ mod tests {
     #[test]
     fn recovery_hint_file_not_found() {
         let hint = recovery_hint("No such file or directory: /den/missing").unwrap();
-        assert_eq!(hint["hint"], "File or command not found. Verify the path exists.");
+        assert_eq!(
+            hint["hint"],
+            "File or command not found. Verify the path exists."
+        );
         let try_cmds = hint["try"].as_array().unwrap();
-        assert!(try_cmds.iter().any(|v| v.as_str().unwrap().contains("cos fs ls")));
+        assert!(try_cmds
+            .iter()
+            .any(|v| v.as_str().unwrap().contains("cos fs ls")));
     }
 
     #[test]
@@ -417,7 +453,9 @@ mod tests {
         let hint = recovery_hint("No space left on device").unwrap();
         assert_eq!(hint["hint"], "Disk full. Free space before retrying.");
         let try_cmds = hint["try"].as_array().unwrap();
-        assert!(try_cmds.iter().any(|v| v.as_str().unwrap().contains("cos sys resources")));
+        assert!(try_cmds
+            .iter()
+            .any(|v| v.as_str().unwrap().contains("cos sys resources")));
     }
 
     #[test]
@@ -429,15 +467,23 @@ mod tests {
     #[test]
     fn recovery_hint_connection_refused() {
         let hint = recovery_hint("Connection refused to localhost:8080").unwrap();
-        assert!(hint["hint"].as_str().unwrap().contains("Connection refused"));
+        assert!(hint["hint"]
+            .as_str()
+            .unwrap()
+            .contains("Connection refused"));
         let try_cmds = hint["try"].as_array().unwrap();
-        assert!(try_cmds.iter().any(|v| v.as_str().unwrap().contains("cos service")));
+        assert!(try_cmds
+            .iter()
+            .any(|v| v.as_str().unwrap().contains("cos service")));
     }
 
     #[test]
     fn recovery_hint_econnrefused_variant() {
         let hint = recovery_hint("ECONNREFUSED: connect failed").unwrap();
-        assert!(hint["hint"].as_str().unwrap().contains("Connection refused"));
+        assert!(hint["hint"]
+            .as_str()
+            .unwrap()
+            .contains("Connection refused"));
     }
 
     #[test]
@@ -513,15 +559,27 @@ mod tests {
             "out of memory",
         ];
         for error in &test_errors {
-            let hint = recovery_hint(error).unwrap_or_else(|| panic!("Expected hint for '{}'", error));
-            assert!(hint["hint"].is_string(), "Missing 'hint' string for '{}'", error);
-            assert!(hint["try"].is_array(), "Missing 'try' array for '{}'", error);
+            let hint =
+                recovery_hint(error).unwrap_or_else(|| panic!("Expected hint for '{}'", error));
+            assert!(
+                hint["hint"].is_string(),
+                "Missing 'hint' string for '{}'",
+                error
+            );
+            assert!(
+                hint["try"].is_array(),
+                "Missing 'try' array for '{}'",
+                error
+            );
             let try_arr = hint["try"].as_array().unwrap();
             assert!(!try_arr.is_empty(), "Empty 'try' array for '{}'", error);
             for cmd in try_arr {
                 assert!(cmd.is_string(), "Non-string in 'try' array for '{}'", error);
-                assert!(cmd.as_str().unwrap().starts_with("cos "),
-                    "Recovery command should start with 'cos': {}", cmd);
+                assert!(
+                    cmd.as_str().unwrap().starts_with("cos "),
+                    "Recovery command should start with 'cos': {}",
+                    cmd
+                );
             }
         }
     }

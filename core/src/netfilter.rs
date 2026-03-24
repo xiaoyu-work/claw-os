@@ -21,10 +21,8 @@ use std::path::PathBuf;
 use crate::policy::{self, OpType};
 
 fn netfilter_dir() -> PathBuf {
-    PathBuf::from(
-        std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()),
-    )
-    .join("netfilter")
+    PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
+        .join("netfilter")
 }
 
 fn rules_path() -> PathBuf {
@@ -37,7 +35,23 @@ pub struct NetRule {
     pub action: String, // "allow" or "deny"
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
+    /// HTTP methods allowed (e.g., ["GET", "POST"]). Empty = all methods.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub methods: Vec<String>,
+    /// URL path pattern (e.g., "/api/**", "/bot*/**"). Empty = all paths.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Binary allowed to access this endpoint (e.g., "/usr/bin/git"). Empty = any binary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binary: Option<String>,
+    /// Require TLS for this rule.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub tls_required: bool,
     pub created_at: String,
+}
+
+fn is_false(v: &bool) -> bool {
+    !v
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -76,13 +90,14 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "check" => cmd_check(args),
         "reset" => cmd_reset(args),
         "default" => cmd_default(args),
+        "export" => cmd_export(args),
         _ => Err(format!("unknown netfilter command: {command}")),
     }
 }
 
 /// Add a firewall rule.
 ///
-/// Usage: cos netfilter add --allow <domain> [--port N]
+/// Usage: cos netfilter add --allow <domain> [--port N] [--method GET,POST] [--path "/api/**"] [--binary /usr/bin/git] [--tls]
 ///        cos netfilter add --deny <domain>
 fn cmd_add(args: &[String]) -> Result<Value, String> {
     policy::require(OpType::System).map_err(|v| v.to_string())?;
@@ -90,6 +105,10 @@ fn cmd_add(args: &[String]) -> Result<Value, String> {
     let mut domain: Option<String> = None;
     let mut action: Option<String> = None;
     let mut port: Option<u16> = None;
+    let mut methods: Vec<String> = Vec::new();
+    let mut path: Option<String> = None;
+    let mut binary: Option<String> = None;
+    let mut tls_required = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -112,11 +131,30 @@ fn cmd_add(args: &[String]) -> Result<Value, String> {
                 );
                 i += 2;
             }
+            "--method" if i + 1 < args.len() => {
+                methods = args[i + 1]
+                    .split(',')
+                    .map(|m| m.trim().to_uppercase())
+                    .collect();
+                i += 2;
+            }
+            "--path" if i + 1 < args.len() => {
+                path = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--binary" if i + 1 < args.len() => {
+                binary = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--tls" => {
+                tls_required = true;
+                i += 1;
+            }
             _ => i += 1,
         }
     }
 
-    let domain = domain.ok_or("usage: cos netfilter add --allow|--deny <domain> [--port N]")?;
+    let domain = domain.ok_or("usage: cos netfilter add --allow|--deny <domain> [--port N] [--method GET,POST] [--path \"/api/**\"] [--binary /usr/bin/git] [--tls]")?;
     let action = action.ok_or("usage: cos netfilter add --allow|--deny <domain>")?;
 
     let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
@@ -124,22 +162,43 @@ fn cmd_add(args: &[String]) -> Result<Value, String> {
         domain: domain.clone(),
         action: action.clone(),
         port,
-        created_at: now.clone(),
+        methods: methods.clone(),
+        path: path.clone(),
+        binary: binary.clone(),
+        tls_required,
+        created_at: now,
     };
 
     let mut cfg = load_config();
 
-    // Remove any existing rule for this domain+port combo
-    cfg.rules.retain(|r| !(r.domain == domain && r.port == port));
+    // Remove any existing rule for this exact domain+port+path+binary combo
+    cfg.rules.retain(|r| {
+        !(r.domain == domain && r.port == port && r.path == path && r.binary == binary)
+    });
     cfg.rules.push(rule);
     save_config(&cfg);
 
-    Ok(json!({
+    let mut result = json!({
         "added": true,
         "domain": domain,
         "action": action,
-        "port": port,
-    }))
+    });
+    if let Some(p) = port {
+        result["port"] = json!(p);
+    }
+    if !methods.is_empty() {
+        result["methods"] = json!(methods);
+    }
+    if let Some(ref p) = path {
+        result["path"] = json!(p);
+    }
+    if let Some(ref b) = binary {
+        result["binary"] = json!(b);
+    }
+    if tls_required {
+        result["tls_required"] = json!(true);
+    }
+    Ok(result)
 }
 
 /// Remove a rule by domain.
@@ -178,6 +237,18 @@ fn cmd_list(_args: &[String]) -> Result<Value, String> {
             if let Some(port) = r.port {
                 v["port"] = json!(port);
             }
+            if !r.methods.is_empty() {
+                v["methods"] = json!(r.methods);
+            }
+            if let Some(ref path) = r.path {
+                v["path"] = json!(path);
+            }
+            if let Some(ref binary) = r.binary {
+                v["binary"] = json!(binary);
+            }
+            if r.tls_required {
+                v["tls_required"] = json!(true);
+            }
             v
         })
         .collect();
@@ -191,32 +262,143 @@ fn cmd_list(_args: &[String]) -> Result<Value, String> {
 
 /// Check if a domain is allowed under current rules.
 ///
-/// Usage: cos netfilter check <domain>
+/// Usage: cos netfilter check <domain> [--method GET] [--path /api/v1] [--binary /usr/bin/curl]
 pub fn cmd_check(args: &[String]) -> Result<Value, String> {
     policy::require(OpType::Read).map_err(|v| v.to_string())?;
 
-    let domain = args.first().ok_or("usage: cos netfilter check <domain>")?;
-    let allowed = is_domain_allowed(domain);
+    let domain = args
+        .first()
+        .ok_or("usage: cos netfilter check <domain> [--method M] [--path P] [--binary B]")?;
 
-    Ok(json!({
-        "domain": domain,
-        "allowed": allowed,
-    }))
-}
+    let mut method: Option<String> = None;
+    let mut path: Option<String> = None;
+    let mut binary: Option<String> = None;
 
-/// Check if a domain is allowed (used by sandbox and other modules).
-pub fn is_domain_allowed(domain: &str) -> bool {
-    let cfg = load_config();
-
-    // Check explicit rules (most specific first)
-    for rule in &cfg.rules {
-        if domain_matches(&rule.domain, domain) {
-            return rule.action == "allow";
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--method" if i + 1 < args.len() => {
+                method = Some(args[i + 1].to_uppercase());
+                i += 2;
+            }
+            "--path" if i + 1 < args.len() => {
+                path = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--binary" if i + 1 < args.len() => {
+                binary = Some(args[i + 1].clone());
+                i += 2;
+            }
+            _ => i += 1,
         }
     }
 
+    let result = evaluate(
+        domain,
+        method.as_deref(),
+        path.as_deref(),
+        binary.as_deref(),
+    );
+
+    Ok(json!({
+        "domain": domain,
+        "allowed": result.allowed,
+        "matched_rule": result.matched_rule,
+        "reason": result.reason,
+    }))
+}
+
+/// Result of a network policy evaluation.
+pub struct EvalResult {
+    pub allowed: bool,
+    pub matched_rule: Option<String>,
+    pub reason: String,
+}
+
+/// Evaluate a request against netfilter rules (used by proxy integrations).
+///
+/// Checks domain, method, path, and binary against all rules.
+/// Returns detailed result for audit/logging.
+pub fn evaluate(
+    domain: &str,
+    method: Option<&str>,
+    path: Option<&str>,
+    binary: Option<&str>,
+) -> EvalResult {
+    let cfg = load_config();
+
+    for rule in &cfg.rules {
+        if !domain_matches(&rule.domain, domain) {
+            continue;
+        }
+
+        // Check method filter
+        if !rule.methods.is_empty() {
+            if let Some(m) = method {
+                if !rule.methods.iter().any(|rm| rm == m) {
+                    continue;
+                }
+            }
+        }
+
+        // Check path filter
+        if let Some(ref rule_path) = rule.path {
+            if let Some(req_path) = path {
+                if !path_matches(rule_path, req_path) {
+                    continue;
+                }
+            }
+        }
+
+        // Check binary filter
+        if let Some(ref rule_bin) = rule.binary {
+            if let Some(req_bin) = binary {
+                if rule_bin != req_bin {
+                    continue;
+                }
+            }
+        }
+
+        let allowed = rule.action == "allow";
+        return EvalResult {
+            allowed,
+            matched_rule: Some(rule.domain.clone()),
+            reason: format!("matched rule: {} {}", rule.action, rule.domain),
+        };
+    }
+
     // Fall back to default policy
-    cfg.default_policy != "deny-all"
+    let allowed = cfg.default_policy != "deny-all";
+    EvalResult {
+        allowed,
+        matched_rule: None,
+        reason: format!("default policy: {}", cfg.default_policy),
+    }
+}
+
+/// Check if a domain is allowed (simple check, backward compatible).
+pub fn is_domain_allowed(domain: &str) -> bool {
+    evaluate(domain, None, None, None).allowed
+}
+
+/// Simple path matching with glob-like wildcards.
+/// Supports: /exact, /prefix/*, /prefix/**
+fn path_matches(pattern: &str, path: &str) -> bool {
+    if pattern == "/**" || pattern == "*" {
+        return true;
+    }
+    if let Some(prefix) = pattern.strip_suffix("/**") {
+        return path == prefix || path.starts_with(&format!("{prefix}/"));
+    }
+    if let Some(prefix) = pattern.strip_suffix("/*") {
+        if !path.starts_with(&format!("{prefix}/")) {
+            return false;
+        }
+        // Single level: no more slashes after prefix
+        let rest = &path[prefix.len() + 1..];
+        return !rest.contains('/');
+    }
+    path == pattern
 }
 
 /// Simple domain matching: supports exact match and wildcard prefix (*.example.com).
@@ -270,6 +452,19 @@ fn cmd_default(args: &[String]) -> Result<Value, String> {
     }))
 }
 
+/// Export rules as a proxy-consumable JSON document.
+///
+/// Usage: cos netfilter export
+///
+/// Returns the full config including all HTTP-level fields,
+/// suitable for consumption by an external proxy (mitmproxy, squid, nginx, etc.).
+fn cmd_export(_args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+
+    let cfg = load_config();
+    serde_json::to_value(&cfg).map_err(|e| format!("failed to serialize config: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,11 +474,8 @@ mod tests {
 
     fn setup() {
         let n = NF_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!(
-            "cos-netfilter-test-{}-{}",
-            std::process::id(),
-            n
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("cos-netfilter-test-{}-{}", std::process::id(), n));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         std::env::set_var("COS_DATA_DIR", &dir);
@@ -368,5 +560,141 @@ mod tests {
 
         let r = run("bogus", &vec![]);
         assert!(r.is_err());
+    }
+
+    // --- HTTP-level policy tests ---
+
+    #[test]
+    fn path_match_exact() {
+        assert!(path_matches("/api/v1", "/api/v1"));
+        assert!(!path_matches("/api/v1", "/api/v2"));
+    }
+
+    #[test]
+    fn path_match_single_wildcard() {
+        assert!(path_matches("/api/*", "/api/users"));
+        assert!(!path_matches("/api/*", "/api/users/123"));
+    }
+
+    #[test]
+    fn path_match_double_wildcard() {
+        assert!(path_matches("/api/**", "/api/users"));
+        assert!(path_matches("/api/**", "/api/users/123/posts"));
+        assert!(path_matches("/**", "/anything/at/all"));
+    }
+
+    #[test]
+    fn evaluate_with_method_filter() {
+        setup();
+        cmd_default(&vec!["deny-all".into()]).unwrap();
+        cmd_add(&vec![
+            "--allow".into(),
+            "api.example.com".into(),
+            "--method".into(),
+            "GET,POST".into(),
+        ])
+        .unwrap();
+
+        let r = evaluate("api.example.com", Some("GET"), None, None);
+        assert!(r.allowed);
+
+        let r = evaluate("api.example.com", Some("DELETE"), None, None);
+        assert!(!r.allowed);
+    }
+
+    #[test]
+    fn evaluate_with_path_filter() {
+        setup();
+        cmd_default(&vec!["deny-all".into()]).unwrap();
+        cmd_add(&vec![
+            "--allow".into(),
+            "api.telegram.org".into(),
+            "--path".into(),
+            "/bot/**".into(),
+        ])
+        .unwrap();
+
+        let r = evaluate("api.telegram.org", None, Some("/bot/sendMessage"), None);
+        assert!(r.allowed);
+
+        let r = evaluate("api.telegram.org", None, Some("/admin/delete"), None);
+        assert!(!r.allowed);
+    }
+
+    #[test]
+    fn evaluate_with_binary_filter() {
+        setup();
+        cmd_default(&vec!["deny-all".into()]).unwrap();
+        cmd_add(&vec![
+            "--allow".into(),
+            "github.com".into(),
+            "--binary".into(),
+            "/usr/bin/git".into(),
+        ])
+        .unwrap();
+
+        let r = evaluate("github.com", None, None, Some("/usr/bin/git"));
+        assert!(r.allowed);
+
+        let r = evaluate("github.com", None, None, Some("/usr/bin/curl"));
+        assert!(!r.allowed);
+    }
+
+    #[test]
+    fn evaluate_combined_filters() {
+        setup();
+        cmd_default(&vec!["deny-all".into()]).unwrap();
+        cmd_add(&vec![
+            "--allow".into(),
+            "api.openai.com".into(),
+            "--method".into(),
+            "POST".into(),
+            "--path".into(),
+            "/v1/chat/**".into(),
+        ])
+        .unwrap();
+
+        // POST to /v1/chat/completions — allowed
+        let r = evaluate(
+            "api.openai.com",
+            Some("POST"),
+            Some("/v1/chat/completions"),
+            None,
+        );
+        assert!(r.allowed);
+
+        // GET to /v1/chat/completions — denied (wrong method)
+        let r = evaluate(
+            "api.openai.com",
+            Some("GET"),
+            Some("/v1/chat/completions"),
+            None,
+        );
+        assert!(!r.allowed);
+
+        // POST to /v1/models — denied (wrong path)
+        let r = evaluate("api.openai.com", Some("POST"), Some("/v1/models"), None);
+        assert!(!r.allowed);
+    }
+
+    #[test]
+    fn export_returns_full_config() {
+        setup();
+        cmd_add(&vec![
+            "--allow".into(),
+            "example.com".into(),
+            "--method".into(),
+            "GET".into(),
+            "--path".into(),
+            "/api/**".into(),
+            "--tls".into(),
+        ])
+        .unwrap();
+
+        let r = cmd_export(&vec![]).unwrap();
+        assert_eq!(r["rules"][0]["domain"], "example.com");
+        assert_eq!(r["rules"][0]["methods"][0], "GET");
+        assert_eq!(r["rules"][0]["path"], "/api/**");
+        assert_eq!(r["rules"][0]["tls_required"], true);
     }
 }

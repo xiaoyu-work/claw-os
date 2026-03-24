@@ -40,16 +40,12 @@ use crate::policy::{self, OpType};
 // ---------------------------------------------------------------------------
 
 fn overlay_dir() -> PathBuf {
-    PathBuf::from(
-        std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()),
-    )
-    .join("overlay")
+    PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
+        .join("overlay")
 }
 
 fn workspace_dir() -> PathBuf {
-    PathBuf::from(
-        std::env::var("WORKSPACE").unwrap_or_else(|_| "/workspace".into()),
-    )
+    PathBuf::from(std::env::var("WORKSPACE").unwrap_or_else(|_| "/workspace".into()))
 }
 
 // ---------------------------------------------------------------------------
@@ -80,8 +76,7 @@ fn mount_overlay() -> Result<(), String> {
     let merged = workspace_dir();
 
     for d in [&lower, &upper, &work] {
-        fs::create_dir_all(d)
-            .map_err(|e| format!("failed to create {}: {e}", d.display()))?;
+        fs::create_dir_all(d).map_err(|e| format!("failed to create {}: {e}", d.display()))?;
     }
     fs::create_dir_all(&merged)
         .map_err(|e| format!("failed to create {}: {e}", merged.display()))?;
@@ -139,10 +134,7 @@ fn umount_overlay() -> Result<(), String> {
 /// Scan checkpoints/ for the highest numeric prefix and return the next one,
 /// zero-padded to 3 digits.
 fn next_checkpoint_id(checkpoints_dir: &Path) -> String {
-    let max = existing_ids(checkpoints_dir)
-        .into_iter()
-        .max()
-        .unwrap_or(0);
+    let max = existing_ids(checkpoints_dir).into_iter().max().unwrap_or(0);
     format!("{:03}", max + 1)
 }
 
@@ -229,7 +221,13 @@ fn walk_upper(
         let path = entry.path();
         let relative = path
             .strip_prefix(upper_root)
-            .map_err(|e| format!("path {} is not under upper_root {}: {e}", path.display(), upper_root.display()))?
+            .map_err(|e| {
+                format!(
+                    "path {} is not under upper_root {}: {e}",
+                    path.display(),
+                    upper_root.display()
+                )
+            })?
             .to_string_lossy()
             .to_string();
 
@@ -362,8 +360,7 @@ fn cmd_create(args: &[String]) -> Result<Value, String> {
     let _ = umount_overlay();
 
     // 2. Move current upper → checkpoint layer.
-    fs::create_dir_all(&cp_dir)
-        .map_err(|e| format!("failed to create checkpoint dir: {e}"))?;
+    fs::create_dir_all(&cp_dir).map_err(|e| format!("failed to create checkpoint dir: {e}"))?;
     fs::rename(&upper, &cp_layer)
         .map_err(|e| format!("failed to move upper to checkpoint: {e}"))?;
 
@@ -378,17 +375,14 @@ fn cmd_create(args: &[String]) -> Result<Value, String> {
     let meta_path = cp_dir.join("meta.json");
     let meta_json = serde_json::to_string_pretty(&meta)
         .map_err(|e| format!("failed to serialize meta: {e}"))?;
-    fs::write(&meta_path, &meta_json)
-        .map_err(|e| format!("failed to write meta.json: {e}"))?;
+    fs::write(&meta_path, &meta_json).map_err(|e| format!("failed to write meta.json: {e}"))?;
 
     // 4. Create fresh empty upper + work dir.
-    fs::create_dir_all(&upper)
-        .map_err(|e| format!("failed to create fresh upper: {e}"))?;
+    fs::create_dir_all(&upper).map_err(|e| format!("failed to create fresh upper: {e}"))?;
     // Recreate work dir — overlayfs requires a clean workdir after remount.
     let work = overlay.join("work");
     let _ = fs::remove_dir_all(&work);
-    fs::create_dir_all(&work)
-        .map_err(|e| format!("failed to create work dir: {e}"))?;
+    fs::create_dir_all(&work).map_err(|e| format!("failed to create work dir: {e}"))?;
 
     // 5. Remount overlay (best-effort).
     let mount_err = mount_overlay().err();
@@ -433,7 +427,14 @@ fn cmd_diff(_args: &[String]) -> Result<Value, String> {
     let mut modified = Vec::new();
     let mut deleted = Vec::new();
 
-    walk_upper(&upper, &upper, &base_layer, &mut created, &mut modified, &mut deleted)?;
+    walk_upper(
+        &upper,
+        &upper,
+        &base_layer,
+        &mut created,
+        &mut modified,
+        &mut deleted,
+    )?;
 
     created.sort();
     modified.sort();
@@ -466,8 +467,7 @@ fn cmd_rollback(args: &[String]) -> Result<Value, String> {
 
     // 2. Wipe current upper.
     if upper.exists() {
-        fs::remove_dir_all(&upper)
-            .map_err(|e| format!("failed to remove upper: {e}"))?;
+        fs::remove_dir_all(&upper).map_err(|e| format!("failed to remove upper: {e}"))?;
     }
 
     // 3. Determine what to restore.
@@ -488,16 +488,14 @@ fn cmd_rollback(args: &[String]) -> Result<Value, String> {
         rolled_back_to = target_id.clone();
     } else {
         // No id → reset to base (empty upper).
-        fs::create_dir_all(&upper)
-            .map_err(|e| format!("failed to create empty upper: {e}"))?;
+        fs::create_dir_all(&upper).map_err(|e| format!("failed to create empty upper: {e}"))?;
         rolled_back_to = "base".to_string();
     }
 
     // 4. Recreate work dir.
     let work = overlay.join("work");
     let _ = fs::remove_dir_all(&work);
-    fs::create_dir_all(&work)
-        .map_err(|e| format!("failed to create work dir: {e}"))?;
+    fs::create_dir_all(&work).map_err(|e| format!("failed to create work dir: {e}"))?;
 
     // 5. Remount overlay (best-effort).
     let mount_err = mount_overlay().err();
@@ -516,8 +514,8 @@ fn cmd_rollback(args: &[String]) -> Result<Value, String> {
 
 /// Locate a checkpoint directory by its numeric id prefix (e.g. "001").
 fn find_checkpoint_dir(checkpoints_dir: &Path, id: &str) -> Result<PathBuf, String> {
-    let entries = fs::read_dir(checkpoints_dir)
-        .map_err(|e| format!("cannot read checkpoints dir: {e}"))?;
+    let entries =
+        fs::read_dir(checkpoints_dir).map_err(|e| format!("cannot read checkpoints dir: {e}"))?;
 
     let prefix = format!("{id}-");
     for entry in entries.flatten() {
@@ -544,8 +542,9 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
         if src_path.is_dir() {
             copy_dir_recursive(&src_path, &dst_path)?;
         } else {
-            fs::copy(&src_path, &dst_path)
-                .map_err(|e| format!("copy {} → {}: {e}", src_path.display(), dst_path.display()))?;
+            fs::copy(&src_path, &dst_path).map_err(|e| {
+                format!("copy {} → {}: {e}", src_path.display(), dst_path.display())
+            })?;
         }
     }
     Ok(())
@@ -818,10 +817,8 @@ pub fn check_quota(additional_bytes: u64) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 fn namespace_base_dir() -> PathBuf {
-    PathBuf::from(
-        std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()),
-    )
-    .join("overlay-namespaces")
+    PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
+        .join("overlay-namespaces")
 }
 
 /// List all overlay namespaces.
@@ -869,7 +866,11 @@ fn list_namespaces() -> Result<Value, String> {
         };
         let cp_count = if cps.exists() {
             fs::read_dir(&cps)
-                .map(|e| e.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).count())
+                .map(|e| {
+                    e.filter_map(|e| e.ok())
+                        .filter(|e| e.path().is_dir())
+                        .count()
+                })
                 .unwrap_or(0)
         } else {
             0
@@ -961,7 +962,11 @@ fn namespace_status(name: &str) -> Result<Value, String> {
     let cp_bytes = if cps.exists() { dir_size(&cps) } else { 0 };
     let cp_count = if cps.exists() {
         fs::read_dir(&cps)
-            .map(|e| e.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).count())
+            .map(|e| {
+                e.filter_map(|e| e.ok())
+                    .filter(|e| e.path().is_dir())
+                    .count()
+            })
             .unwrap_or(0)
     } else {
         0
@@ -1102,7 +1107,15 @@ mod tests {
         let mut modified = Vec::new();
         let mut deleted = Vec::new();
 
-        walk_upper(&upper, &upper, &base_layer, &mut created, &mut modified, &mut deleted).unwrap();
+        walk_upper(
+            &upper,
+            &upper,
+            &base_layer,
+            &mut created,
+            &mut modified,
+            &mut deleted,
+        )
+        .unwrap();
 
         assert_eq!(created, vec!["new.txt"]);
         assert!(modified.is_empty());
@@ -1129,7 +1142,15 @@ mod tests {
         let mut modified = Vec::new();
         let mut deleted = Vec::new();
 
-        walk_upper(&upper, &upper, &base_layer, &mut created, &mut modified, &mut deleted).unwrap();
+        walk_upper(
+            &upper,
+            &upper,
+            &base_layer,
+            &mut created,
+            &mut modified,
+            &mut deleted,
+        )
+        .unwrap();
 
         assert!(created.is_empty());
         assert_eq!(modified, vec!["existing.txt"]);
@@ -1155,7 +1176,15 @@ mod tests {
         let mut modified = Vec::new();
         let mut deleted = Vec::new();
 
-        walk_upper(&upper, &upper, &base_layer, &mut created, &mut modified, &mut deleted).unwrap();
+        walk_upper(
+            &upper,
+            &upper,
+            &base_layer,
+            &mut created,
+            &mut modified,
+            &mut deleted,
+        )
+        .unwrap();
 
         // Path separator may vary; just check the file name is present.
         assert_eq!(created.len(), 1);
@@ -1170,12 +1199,18 @@ mod tests {
 
     #[test]
     fn sanitize_basic() {
-        assert_eq!(sanitize_description("before refactoring"), "before-refactoring");
+        assert_eq!(
+            sanitize_description("before refactoring"),
+            "before-refactoring"
+        );
     }
 
     #[test]
     fn sanitize_special_chars() {
-        assert_eq!(sanitize_description("fix: tests & lints!"), "fix-tests-lints");
+        assert_eq!(
+            sanitize_description("fix: tests & lints!"),
+            "fix-tests-lints"
+        );
     }
 
     #[test]
@@ -1242,7 +1277,10 @@ mod tests {
         copy_dir_recursive(&src, &dst).unwrap();
 
         assert_eq!(fs::read_to_string(dst.join("a.txt")).unwrap(), "aaa");
-        assert_eq!(fs::read_to_string(dst.join("sub").join("b.txt")).unwrap(), "bbb");
+        assert_eq!(
+            fs::read_to_string(dst.join("sub").join("b.txt")).unwrap(),
+            "bbb"
+        );
 
         let _ = fs::remove_dir_all(&root);
     }

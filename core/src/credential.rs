@@ -25,10 +25,8 @@ use std::path::PathBuf;
 use crate::policy::{self, OpType};
 
 fn credentials_dir() -> PathBuf {
-    PathBuf::from(
-        std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()),
-    )
-    .join("credentials")
+    PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
+        .join("credentials")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -244,8 +242,8 @@ fn cmd_load(args: &[String]) -> Result<Value, String> {
     let obfuscated =
         from_b64(&cred.value_b64).map_err(|e| format!("failed to decode credential: {e}"))?;
     let value_bytes = deobfuscate(&obfuscated);
-    let value =
-        String::from_utf8(value_bytes).map_err(|e| format!("credential is not valid UTF-8: {e}"))?;
+    let value = String::from_utf8(value_bytes)
+        .map_err(|e| format!("credential is not valid UTF-8: {e}"))?;
 
     Ok(json!({
         "name": name,
@@ -330,11 +328,7 @@ mod tests {
 
     fn setup_test_dir() -> PathBuf {
         let n = CRED_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!(
-            "cos-cred-test-{}-{}",
-            std::process::id(),
-            n
-        ));
+        let dir = std::env::temp_dir().join(format!("cos-cred-test-{}-{}", std::process::id(), n));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         std::env::set_var("COS_DATA_DIR", &dir);

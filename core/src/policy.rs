@@ -44,7 +44,10 @@ pub enum OpType {
 fn tier_allows(tier: u8, op: OpType) -> bool {
     match tier {
         0 => true,
-        1 => matches!(op, OpType::Read | OpType::Write | OpType::Delete | OpType::Exec),
+        1 => matches!(
+            op,
+            OpType::Read | OpType::Write | OpType::Delete | OpType::Exec
+        ),
         2 => matches!(op, OpType::Read | OpType::Write),
         3 => matches!(op, OpType::Read),
         _ => false, // invalid tier = deny all
@@ -143,11 +146,9 @@ struct Registry {
 }
 
 fn proc_registry_path() -> PathBuf {
-    PathBuf::from(
-        std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()),
-    )
-    .join("proc")
-    .join("registry.json")
+    PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
+        .join("proc")
+        .join("registry.json")
 }
 
 fn load_proc_registry(path: &PathBuf) -> Registry {
@@ -178,7 +179,11 @@ pub fn require(op: OpType) -> Result<(), Value> {
 
     let registry = load_proc_registry(&proc_registry_path());
 
-    let session = match registry.sessions.iter().find(|s| s.session_id == session_id) {
+    let session = match registry
+        .sessions
+        .iter()
+        .find(|s| s.session_id == session_id)
+    {
         Some(s) => s,
         None => return Ok(()), // Session not in registry = unrestricted
     };
@@ -225,7 +230,11 @@ pub fn require_scope(path: &str) -> Result<(), Value> {
 
     let registry = load_proc_registry(&proc_registry_path());
 
-    let session = match registry.sessions.iter().find(|s| s.session_id == session_id) {
+    let session = match registry
+        .sessions
+        .iter()
+        .find(|s| s.session_id == session_id)
+    {
         Some(s) => s,
         None => return Ok(()),
     };
@@ -278,11 +287,9 @@ struct ElevationGrant {
 }
 
 fn elevation_dir() -> PathBuf {
-    PathBuf::from(
-        std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()),
-    )
-    .join("policy")
-    .join("elevations")
+    PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
+        .join("policy")
+        .join("elevations")
 }
 
 fn elevation_path(session_id: &str) -> PathBuf {
@@ -298,10 +305,8 @@ pub fn active_elevation() -> Option<u8> {
     let grant: ElevationGrant = serde_json::from_str(&data).ok()?;
 
     // Check expiry
-    let expires = chrono::DateTime::parse_from_rfc3339(
-        &grant.expires_at.replace('Z', "+00:00"),
-    )
-    .ok()?;
+    let expires =
+        chrono::DateTime::parse_from_rfc3339(&grant.expires_at.replace('Z', "+00:00")).ok()?;
     let now = chrono::Utc::now();
     if now > expires {
         // Expired — clean up
@@ -352,11 +357,10 @@ fn cmd_elevate(args: &[String]) -> Result<serde_json::Value, String> {
                 i += 2;
             }
             "--duration" if i + 1 < args.len() => {
-                duration_secs = Some(
-                    args[i + 1]
-                        .parse::<u64>()
-                        .map_err(|_| "duration must be a positive integer (seconds)".to_string())?,
-                );
+                duration_secs =
+                    Some(args[i + 1].parse::<u64>().map_err(|_| {
+                        "duration must be a positive integer (seconds)".to_string()
+                    })?);
                 i += 2;
             }
             "--reason" if i + 1 < args.len() => {
@@ -430,8 +434,7 @@ fn cmd_drop(args: &[String]) -> Result<serde_json::Value, String> {
     let sid = if args.len() >= 2 && args[0] == "--session" {
         args[1].clone()
     } else {
-        std::env::var("COS_SESSION")
-            .map_err(|_| "no session context".to_string())?
+        std::env::var("COS_SESSION").map_err(|_| "no session context".to_string())?
     };
 
     let path = elevation_path(&sid);
@@ -522,9 +525,11 @@ fn cmd_check(args: &[String]) -> Result<serde_json::Value, String> {
         "exec" => OpType::Exec,
         "net" => OpType::Net,
         "system" => OpType::System,
-        _ => return Err(format!(
-            "unknown operation: {op_str}. valid: read, write, delete, exec, net, system"
-        )),
+        _ => {
+            return Err(format!(
+                "unknown operation: {op_str}. valid: read, write, delete, exec, net, system"
+            ))
+        }
     };
 
     match require(op) {
