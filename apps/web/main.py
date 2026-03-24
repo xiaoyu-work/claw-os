@@ -8,7 +8,7 @@ import urllib.parse
 import urllib.request
 
 TIMEOUT = int(os.environ.get("COS_WEB_TIMEOUT", "30"))
-USER_AGENT = "cos/0.3.0"
+USER_AGENT = "cos/" + os.environ.get("COS_VERSION", "0.1.0")
 READER_URL = os.environ.get("COS_WEB_READER_URL", os.environ.get("COS_BROWSER_URL", "http://localhost:3000"))
 DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 DEFAULT_MAX_LENGTH = int(os.environ.get("COS_WEB_MAX_CONTENT_LENGTH", "50000"))

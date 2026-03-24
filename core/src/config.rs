@@ -52,7 +52,7 @@ pub struct WebConfig {
     pub max_content_length: usize,
 }
 
-fn default_version() -> String { "0.3.0".into() }
+fn default_version() -> String { env!("CARGO_PKG_VERSION").into() }
 fn default_den() -> String { "/den".into() }
 fn default_exec_timeout() -> u64 { 300 }
 fn default_shell() -> String { "/bin/bash".into() }
@@ -138,7 +138,7 @@ mod tests {
     #[test]
     fn default_config_has_sensible_values() {
         let cfg = CosConfig::default();
-        assert_eq!(cfg.version, "0.3.0");
+        assert_eq!(cfg.version, env!("CARGO_PKG_VERSION"));
         assert_eq!(cfg.den, "/den");
         assert_eq!(cfg.exec.timeout, 300);
         assert_eq!(cfg.exec.shell, "/bin/bash");
@@ -162,7 +162,7 @@ mod tests {
     #[test]
     fn parse_full_config() {
         let json = r#"{
-            "version": "0.3.0",
+            "version": "0.1.0",
             "den": "/den",
             "exec": {"timeout": 600, "shell": "/bin/zsh"},
             "net": {"timeout": 10, "allow_outbound": false},
@@ -191,7 +191,7 @@ mod tests {
     fn malformed_json_returns_defaults() {
         let json = "not valid json {{{";
         let cfg: CosConfig = serde_json::from_str(json).unwrap_or_default();
-        assert_eq!(cfg.version, "0.3.0");
+        assert_eq!(cfg.version, env!("CARGO_PKG_VERSION"));
         assert_eq!(cfg.exec.timeout, 300);
     }
 }

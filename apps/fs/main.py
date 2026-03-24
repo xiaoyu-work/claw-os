@@ -60,6 +60,8 @@ def cmd_read(args):
     path = None
     offset = 0
     limit = MAX_READ_BYTES
+    start_line = None
+    end_line = None
     rest = list(args)
 
     # First positional arg is the path
@@ -72,6 +74,12 @@ def cmd_read(args):
         elif rest[i] == "--limit" and i + 1 < len(rest):
             limit = int(rest[i + 1])
             i += 2
+        elif rest[i] == "--start" and i + 1 < len(rest):
+            start_line = int(rest[i + 1])
+            i += 2
+        elif rest[i] == "--end" and i + 1 < len(rest):
+            end_line = int(rest[i + 1])
+            i += 2
         else:
             positional.append(rest[i])
             i += 1
@@ -83,14 +91,43 @@ def cmd_read(args):
     if not os.path.isfile(path):
         return {"error": f"file not found: {path}"}
 
+    # Line range mode: --start N [--end M]
+    if start_line is not None:
+        with open(path, "r", errors="replace") as f:
+            lines = f.readlines()
+        total_lines = len(lines)
+        # 1-indexed, inclusive
+        s = max(0, start_line - 1)
+        e = end_line if end_line is not None else total_lines
+        selected = lines[s:e]
+        content = "".join(selected)
+        if len(content) > MAX_READ_BYTES:
+            content = content[:MAX_READ_BYTES]
+            return {
+                "path": path,
+                "content": content,
+                "start_line": start_line,
+                "end_line": e,
+                "total_lines": total_lines,
+                "truncated": True,
+            }
+        return {
+            "path": path,
+            "content": content,
+            "start_line": start_line,
+            "end_line": e,
+            "total_lines": total_lines,
+            "lines_returned": len(selected),
+        }
+
+    # Byte offset mode (original behavior)
     total_size = os.path.getsize(path)
-    # Cap the read limit to MAX_READ_BYTES
     effective_limit = min(limit, MAX_READ_BYTES)
 
     with open(path, "rb") as f:
         if offset > 0:
             f.seek(offset)
-        raw = f.read(effective_limit + 1)  # read one extra to detect truncation
+        raw = f.read(effective_limit + 1)
 
     truncated = len(raw) > effective_limit
     if truncated:

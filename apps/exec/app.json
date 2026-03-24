@@ -1,6 +1,6 @@
 {
   "name": "exec",
-  "version": "0.3.0",
+  "version": "0.1.0",
   "description": "Command execution and process management",
   "commands": {
     "run": "Run a shell command",
