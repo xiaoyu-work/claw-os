@@ -8,7 +8,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-USER_AGENT = "cos/0.3.0"
+USER_AGENT = "cos/" + os.environ.get("COS_VERSION", "0.1.0")
 DEFAULT_TIMEOUT = int(os.environ.get("COS_NET_TIMEOUT", "30"))
 MAX_RESPONSE_BYTES = 5_000_000  # 5 MB response body limit
 

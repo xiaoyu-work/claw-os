@@ -1,6 +1,6 @@
 {
   "name": "net",
-  "version": "0.3.0",
+  "version": "0.1.0",
   "description": "HTTP client for API calls",
   "commands": {
     "fetch": "Make HTTP request (GET/POST/PUT/DELETE)",

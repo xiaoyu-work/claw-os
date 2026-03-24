@@ -1,6 +1,6 @@
 {
   "name": "db",
-  "version": "0.3.0",
+  "version": "0.1.0",
   "description": "SQLite database — create, query, and manage databases",
   "commands": {
     "query": "Run a SELECT query on a database",

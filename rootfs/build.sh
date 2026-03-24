@@ -6,6 +6,9 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 ROOTFS="$PROJECT_DIR/build/claw-os-rootfs"
 SUITE="bookworm"
 
+# Read version from Cargo.toml (single source of truth)
+COS_VERSION=$(grep '^version' "$PROJECT_DIR/core/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+
 if [ "$(id -u)" -ne 0 ]; then
     echo "error: must run as root" >&2
     exit 1
@@ -63,6 +66,11 @@ chroot "$ROOTFS" pip3 install --break-system-packages --no-cache-dir \
 # 5. Apply overlay (config files, cos-init, etc.)
 echo ":: applying overlay"
 cp -a "$SCRIPT_DIR/overlay/." "$ROOTFS/"
+
+# 5a. Inject version from Cargo.toml into runtime files
+echo ":: setting version to $COS_VERSION"
+sed -i "s/\"version\": \".*\"/\"version\": \"$COS_VERSION\"/" "$ROOTFS/etc/cos/config.json"
+sed -i "s/COS_VERSION=\".*\"/COS_VERSION=\"$COS_VERSION\"/" "$ROOTFS/etc/cos/profile.sh"
 
 # 5. Install Rust cos binary
 echo ":: installing cos binary"
