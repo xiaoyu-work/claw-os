@@ -6,7 +6,7 @@
 /// Permission checks read the COS_SESSION env var, look up the session's
 /// tier and scope from the proc registry, and enforce access control.
 /// When COS_SESSION is not set, all operations are allowed (backward compatible).
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
@@ -259,6 +259,285 @@ pub fn current_tier() -> Option<u8> {
         .iter()
         .find(|s| s.session_id == sid)
         .and_then(|s| s.tier)
+}
+
+// ---------------------------------------------------------------------------
+// Temporary privilege elevation
+// ---------------------------------------------------------------------------
+
+/// Elevation grant stored on disk.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ElevationGrant {
+    session_id: String,
+    original_tier: u8,
+    elevated_tier: u8,
+    scope: Option<String>,
+    reason: String,
+    granted_at: String,
+    expires_at: String,
+}
+
+fn elevation_dir() -> PathBuf {
+    PathBuf::from(
+        std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()),
+    )
+    .join("policy")
+    .join("elevations")
+}
+
+fn elevation_path(session_id: &str) -> PathBuf {
+    elevation_dir().join(format!("{session_id}.json"))
+}
+
+/// Check for an active elevation for the current session.
+/// Returns the elevated tier if one exists and hasn't expired.
+pub fn active_elevation() -> Option<u8> {
+    let sid = std::env::var("COS_SESSION").ok()?;
+    let path = elevation_path(&sid);
+    let data = fs::read_to_string(&path).ok()?;
+    let grant: ElevationGrant = serde_json::from_str(&data).ok()?;
+
+    // Check expiry
+    let expires = chrono::DateTime::parse_from_rfc3339(
+        &grant.expires_at.replace('Z', "+00:00"),
+    )
+    .ok()?;
+    let now = chrono::Utc::now();
+    if now > expires {
+        // Expired — clean up
+        let _ = fs::remove_file(&path);
+        return None;
+    }
+
+    Some(grant.elevated_tier)
+}
+
+/// Run a policy subcommand.
+pub fn run(command: &str, args: &[String]) -> Result<serde_json::Value, String> {
+    match command {
+        "elevate" => cmd_elevate(args),
+        "drop" => cmd_drop(args),
+        "status" => cmd_status(args),
+        "check" => cmd_check(args),
+        _ => Err(format!("unknown policy command: {command}")),
+    }
+}
+
+/// Temporarily elevate the current session's privilege tier.
+///
+/// Usage: cos policy elevate --to <tier> [--scope <path>] --duration <seconds> --reason <text>
+fn cmd_elevate(args: &[String]) -> Result<serde_json::Value, String> {
+    // Elevation itself requires System privilege (tier 0) or explicit grant
+    require(OpType::System).map_err(|v| v.to_string())?;
+
+    let mut target_tier: Option<u8> = None;
+    let mut scope: Option<String> = None;
+    let mut duration_secs: Option<u64> = None;
+    let mut reason: Option<String> = None;
+    let mut session_id: Option<String> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--to" if i + 1 < args.len() => {
+                target_tier = Some(
+                    args[i + 1]
+                        .parse::<u8>()
+                        .map_err(|_| "tier must be 0-3".to_string())?,
+                );
+                i += 2;
+            }
+            "--scope" if i + 1 < args.len() => {
+                scope = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--duration" if i + 1 < args.len() => {
+                duration_secs = Some(
+                    args[i + 1]
+                        .parse::<u64>()
+                        .map_err(|_| "duration must be a positive integer (seconds)".to_string())?,
+                );
+                i += 2;
+            }
+            "--reason" if i + 1 < args.len() => {
+                reason = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--session" if i + 1 < args.len() => {
+                session_id = Some(args[i + 1].clone());
+                i += 2;
+            }
+            _ => i += 1,
+        }
+    }
+
+    let target = target_tier.ok_or("--to <tier> is required")?;
+    let duration = duration_secs.ok_or("--duration <seconds> is required")?;
+    let reason = reason.ok_or("--reason <text> is required")?;
+
+    if target > 3 {
+        return Err("tier must be 0-3".into());
+    }
+
+    // Maximum elevation duration: 1 hour
+    if duration > 3600 {
+        return Err("maximum elevation duration is 3600 seconds (1 hour)".into());
+    }
+
+    let sid = session_id
+        .or_else(|| std::env::var("COS_SESSION").ok())
+        .ok_or("no session context (set COS_SESSION or use --session)")?;
+
+    // Get current tier
+    let current = current_tier().unwrap_or(0);
+
+    let now = chrono::Utc::now();
+    let expires = now + chrono::Duration::seconds(duration as i64);
+
+    let grant = ElevationGrant {
+        session_id: sid.clone(),
+        original_tier: current,
+        elevated_tier: target,
+        scope: scope.clone(),
+        reason: reason.clone(),
+        granted_at: now.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        expires_at: expires.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+    };
+
+    let dir = elevation_dir();
+    fs::create_dir_all(&dir).map_err(|e| format!("failed to create elevation dir: {e}"))?;
+    let data = serde_json::to_string_pretty(&grant)
+        .map_err(|e| format!("failed to serialize grant: {e}"))?;
+    fs::write(elevation_path(&sid), data)
+        .map_err(|e| format!("failed to write elevation grant: {e}"))?;
+
+    Ok(json!({
+        "elevated": true,
+        "session": sid,
+        "from_tier": current,
+        "to_tier": target,
+        "scope": scope,
+        "duration_secs": duration,
+        "expires_at": grant.expires_at,
+        "reason": reason,
+    }))
+}
+
+/// Drop an active elevation.
+///
+/// Usage: cos policy drop [--session <id>]
+fn cmd_drop(args: &[String]) -> Result<serde_json::Value, String> {
+    let sid = if args.len() >= 2 && args[0] == "--session" {
+        args[1].clone()
+    } else {
+        std::env::var("COS_SESSION")
+            .map_err(|_| "no session context".to_string())?
+    };
+
+    let path = elevation_path(&sid);
+    if !path.exists() {
+        return Ok(json!({
+            "dropped": false,
+            "session": sid,
+            "reason": "no active elevation",
+        }));
+    }
+
+    fs::remove_file(&path).map_err(|e| format!("failed to drop elevation: {e}"))?;
+
+    Ok(json!({
+        "dropped": true,
+        "session": sid,
+    }))
+}
+
+/// Show current policy status for a session.
+///
+/// Usage: cos policy status
+fn cmd_status(_args: &[String]) -> Result<serde_json::Value, String> {
+    require(OpType::Read).map_err(|v| v.to_string())?;
+
+    let sid = std::env::var("COS_SESSION").unwrap_or_else(|_| "(none)".into());
+    let tier = current_tier();
+    let elevation = active_elevation();
+
+    let effective_tier = elevation.or(tier).unwrap_or(0);
+
+    let mut result = json!({
+        "session": sid,
+        "base_tier": tier,
+        "effective_tier": effective_tier,
+        "tier_name": tier_name(effective_tier),
+    });
+
+    if let Some(elev) = elevation {
+        let path = elevation_path(&sid);
+        if let Ok(data) = fs::read_to_string(&path) {
+            if let Ok(grant) = serde_json::from_str::<ElevationGrant>(&data) {
+                result["elevation"] = json!({
+                    "active": true,
+                    "elevated_tier": elev,
+                    "expires_at": grant.expires_at,
+                    "reason": grant.reason,
+                    "scope": grant.scope,
+                });
+            }
+        }
+    }
+
+    let allowed_ops: Vec<&str> = [
+        OpType::Read,
+        OpType::Write,
+        OpType::Delete,
+        OpType::Exec,
+        OpType::Net,
+        OpType::System,
+    ]
+    .iter()
+    .filter(|op| tier_allows(effective_tier, **op))
+    .map(|op| match op {
+        OpType::Read => "Read",
+        OpType::Write => "Write",
+        OpType::Delete => "Delete",
+        OpType::Exec => "Exec",
+        OpType::Net => "Net",
+        OpType::System => "System",
+    })
+    .collect();
+
+    result["allowed_operations"] = json!(allowed_ops);
+
+    Ok(result)
+}
+
+/// Check if a specific operation would be allowed.
+///
+/// Usage: cos policy check <operation>
+fn cmd_check(args: &[String]) -> Result<serde_json::Value, String> {
+    let op_str = args.first().ok_or("usage: cos policy check <operation>")?;
+    let op = match op_str.to_lowercase().as_str() {
+        "read" => OpType::Read,
+        "write" => OpType::Write,
+        "delete" => OpType::Delete,
+        "exec" => OpType::Exec,
+        "net" => OpType::Net,
+        "system" => OpType::System,
+        _ => return Err(format!(
+            "unknown operation: {op_str}. valid: read, write, delete, exec, net, system"
+        )),
+    };
+
+    match require(op) {
+        Ok(()) => Ok(json!({
+            "operation": op_str,
+            "allowed": true,
+        })),
+        Err(details) => Ok(json!({
+            "operation": op_str,
+            "allowed": false,
+            "details": details,
+        })),
+    }
 }
 
 // ---------------------------------------------------------------------------

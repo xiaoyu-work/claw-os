@@ -11,6 +11,10 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "env" => cmd_env(args),
         "resources" => cmd_resources(),
         "uptime" => cmd_uptime(),
+        "proc" => cmd_proc(),
+        "mounts" => cmd_mounts(),
+        "net" => cmd_net(),
+        "cgroup" => cmd_cgroup(),
         _ => Err(format!("unknown command: {command}")),
     }
 }
@@ -111,6 +115,253 @@ fn cmd_uptime() -> Result<Value, String> {
         }
     }
     Err("could not read uptime".into())
+}
+
+/// Structured process listing — agent-readable equivalent of /proc/*/stat.
+///
+/// Returns all running processes with PID, name, state, CPU, and memory.
+fn cmd_proc() -> Result<Value, String> {
+    #[cfg(target_os = "linux")]
+    {
+        let mut processes: Vec<Value> = Vec::new();
+        if let Ok(entries) = std::fs::read_dir("/proc") {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                // Only numeric directories are PIDs
+                let pid: u32 = match name.parse() {
+                    Ok(p) => p,
+                    Err(_) => continue,
+                };
+
+                let stat_path = format!("/proc/{pid}/stat");
+                let stat = match std::fs::read_to_string(&stat_path) {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+
+                let fields: Vec<&str> = stat.split_whitespace().collect();
+                if fields.len() < 24 {
+                    continue;
+                }
+
+                // comm is in parens, state is after
+                let comm = fields[1].trim_matches(|c| c == '(' || c == ')');
+                let state = fields[2];
+                let utime = fields[13].parse::<u64>().unwrap_or(0);
+                let stime = fields[14].parse::<u64>().unwrap_or(0);
+                let vsize = fields[22].parse::<u64>().unwrap_or(0);
+                let rss_pages = fields[23].parse::<i64>().unwrap_or(0);
+
+                let state_name = match state {
+                    "R" => "running",
+                    "S" => "sleeping",
+                    "D" => "disk_wait",
+                    "Z" => "zombie",
+                    "T" => "stopped",
+                    "t" => "tracing_stop",
+                    "X" | "x" => "dead",
+                    _ => state,
+                };
+
+                processes.push(json!({
+                    "pid": pid,
+                    "name": comm,
+                    "state": state_name,
+                    "cpu_ticks": utime + stime,
+                    "cpu_ms": (utime + stime) * 10,
+                    "virtual_bytes": vsize,
+                    "rss_bytes": (rss_pages as u64) * 4096,
+                }));
+            }
+        }
+
+        processes.sort_by(|a, b| {
+            let pa = a["pid"].as_u64().unwrap_or(0);
+            let pb = b["pid"].as_u64().unwrap_or(0);
+            pa.cmp(&pb)
+        });
+
+        let count = processes.len();
+        return Ok(json!({
+            "processes": processes,
+            "count": count,
+        }));
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        Err("sys proc requires Linux /proc filesystem".into())
+    }
+}
+
+/// Structured mount listing — agent-readable equivalent of /proc/mounts.
+fn cmd_mounts() -> Result<Value, String> {
+    #[cfg(target_os = "linux")]
+    {
+        let mut mounts: Vec<Value> = Vec::new();
+        if let Ok(content) = std::fs::read_to_string("/proc/mounts") {
+            for line in content.lines() {
+                let fields: Vec<&str> = line.split_whitespace().collect();
+                if fields.len() >= 4 {
+                    mounts.push(json!({
+                        "device": fields[0],
+                        "mount_point": fields[1],
+                        "filesystem": fields[2],
+                        "options": fields[3],
+                    }));
+                }
+            }
+        }
+
+        let count = mounts.len();
+        return Ok(json!({
+            "mounts": mounts,
+            "count": count,
+        }));
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        Err("sys mounts requires Linux /proc filesystem".into())
+    }
+}
+
+/// Structured network info — agent-readable equivalent of /proc/net/*.
+///
+/// Returns network interfaces and active TCP connections.
+fn cmd_net() -> Result<Value, String> {
+    #[cfg(target_os = "linux")]
+    {
+        let mut result = json!({});
+
+        // Network interfaces from /proc/net/dev
+        if let Ok(content) = std::fs::read_to_string("/proc/net/dev") {
+            let mut interfaces: Vec<Value> = Vec::new();
+            for line in content.lines().skip(2) {
+                let parts: Vec<&str> = line.split(':').collect();
+                if parts.len() != 2 {
+                    continue;
+                }
+                let iface = parts[0].trim();
+                let stats: Vec<u64> = parts[1]
+                    .split_whitespace()
+                    .filter_map(|s| s.parse().ok())
+                    .collect();
+                if stats.len() >= 10 {
+                    interfaces.push(json!({
+                        "name": iface,
+                        "rx_bytes": stats[0],
+                        "rx_packets": stats[1],
+                        "rx_errors": stats[2],
+                        "tx_bytes": stats[8],
+                        "tx_packets": stats[9],
+                        "tx_errors": stats[10],
+                    }));
+                }
+            }
+            result["interfaces"] = json!(interfaces);
+        }
+
+        // TCP connections from /proc/net/tcp
+        if let Ok(content) = std::fs::read_to_string("/proc/net/tcp") {
+            let mut connections: Vec<Value> = Vec::new();
+            for line in content.lines().skip(1) {
+                let fields: Vec<&str> = line.split_whitespace().collect();
+                if fields.len() < 4 {
+                    continue;
+                }
+                let state_hex = fields[3];
+                let state = match state_hex {
+                    "01" => "ESTABLISHED",
+                    "02" => "SYN_SENT",
+                    "06" => "TIME_WAIT",
+                    "0A" => "LISTEN",
+                    _ => state_hex,
+                };
+                connections.push(json!({
+                    "local": fields[1],
+                    "remote": fields[2],
+                    "state": state,
+                }));
+            }
+            result["tcp_connections"] = json!(connections);
+            result["tcp_count"] = json!(connections.len());
+        }
+
+        return Ok(result);
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        Err("sys net requires Linux /proc filesystem".into())
+    }
+}
+
+/// Structured cgroup info — agent-readable equivalent of /sys/fs/cgroup/.
+///
+/// Returns memory, CPU, and PID limits/usage for the current cgroup.
+fn cmd_cgroup() -> Result<Value, String> {
+    #[cfg(target_os = "linux")]
+    {
+        // Find the cgroup for PID 1 (init) or self
+        let cgroup_base = "/sys/fs/cgroup";
+
+        let mut result = json!({});
+
+        // Memory
+        let mem_max = read_cgroup_val(&format!("{cgroup_base}/memory.max"));
+        let mem_current = read_cgroup_val(&format!("{cgroup_base}/memory.current"));
+        if mem_current.is_some() {
+            result["memory"] = json!({
+                "current_bytes": mem_current,
+                "max_bytes": mem_max,
+                "current_mb": mem_current.map(|v| v / (1024 * 1024)),
+                "max_mb": mem_max.map(|v| v / (1024 * 1024)),
+            });
+        }
+
+        // CPU
+        let cpu_stat_path = format!("{cgroup_base}/cpu.stat");
+        if let Ok(content) = std::fs::read_to_string(&cpu_stat_path) {
+            let mut cpu = json!({});
+            for line in content.lines() {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() == 2 {
+                    if let Ok(val) = parts[1].parse::<u64>() {
+                        cpu[parts[0]] = json!(val);
+                    }
+                }
+            }
+            result["cpu"] = cpu;
+        }
+
+        // PIDs
+        let pids_max = read_cgroup_val(&format!("{cgroup_base}/pids.max"));
+        let pids_current = read_cgroup_val(&format!("{cgroup_base}/pids.current"));
+        if pids_current.is_some() {
+            result["pids"] = json!({
+                "current": pids_current,
+                "max": pids_max,
+            });
+        }
+
+        return Ok(result);
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        Err("sys cgroup requires Linux cgroup v2 filesystem".into())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn read_cgroup_val(path: &str) -> Option<u64> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let trimmed = content.trim();
+    if trimmed == "max" {
+        return None; // "max" means unlimited
+    }
+    trimmed.parse().ok()
 }
 
 #[cfg(target_os = "linux")]

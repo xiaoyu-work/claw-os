@@ -325,13 +325,15 @@ fn cmd_list(_args: &[String]) -> Result<Value, String> {
 mod tests {
     use super::*;
 
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static CRED_COUNTER: AtomicU32 = AtomicU32::new(0);
+
     fn setup_test_dir() -> PathBuf {
+        let n = CRED_COUNTER.fetch_add(1, Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!(
-            "cos-cred-test-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            "cos-cred-test-{}-{}",
+            std::process::id(),
+            n
         ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();

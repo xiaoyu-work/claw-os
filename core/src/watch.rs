@@ -22,6 +22,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "file" => cmd_watch_file(args),
         "dir" => cmd_watch_dir(args),
         "proc" => cmd_watch_proc(args),
+        "on" => cmd_watch_on(args),
         _ => Err(format!("unknown watch command: {command}")),
     }
 }
@@ -237,6 +238,208 @@ fn parse_timeout(args: &[String]) -> u64 {
         }
     }
     DEFAULT_TIMEOUT_SECS
+}
+
+/// Unified OS event watcher — subscribe to any OS-level event.
+///
+/// Usage: cos watch on <event-type> [--timeout N] [event-specific args]
+///
+/// Event types:
+///   proc.exit --session <id>         — wait for a process to exit
+///   fs.change --path <dir>           — wait for file changes in a directory
+///   service.health-fail --name <svc> — wait for a service health check to fail
+///   checkpoint.created               — wait for a new checkpoint to be created
+///   quota.exceeded                   — wait for quota to be exceeded
+fn cmd_watch_on(args: &[String]) -> Result<Value, String> {
+    if args.is_empty() {
+        return Err(
+            "usage: cos watch on <event-type> [--timeout N] [...]\n\
+             event types: proc.exit, fs.change, service.health-fail, checkpoint.created, quota.exceeded"
+                .into(),
+        );
+    }
+
+    let event_type = &args[0];
+    let rest: Vec<String> = args[1..].to_vec();
+    let timeout = parse_timeout(&rest);
+
+    match event_type.as_str() {
+        "proc.exit" => watch_proc_exit(&rest, timeout),
+        "fs.change" => watch_fs_change(&rest, timeout),
+        "service.health-fail" => watch_service_health_fail(&rest, timeout),
+        "checkpoint.created" => watch_checkpoint_created(&rest, timeout),
+        "quota.exceeded" => watch_quota_exceeded(timeout),
+        _ => Err(format!(
+            "unknown event type: {event_type}. \
+             supported: proc.exit, fs.change, service.health-fail, checkpoint.created, quota.exceeded"
+        )),
+    }
+}
+
+fn parse_flag<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+    for i in 0..args.len() {
+        if args[i] == flag {
+            if let Some(val) = args.get(i + 1) {
+                return Some(val.as_str());
+            }
+        }
+    }
+    None
+}
+
+fn watch_proc_exit(args: &[String], timeout: u64) -> Result<Value, String> {
+    let session_id =
+        parse_flag(args, "--session").ok_or("--session <id> required for proc.exit")?;
+
+    // Delegate to proc wait
+    let wait_args = vec![
+        session_id.to_string(),
+        "--timeout".into(),
+        timeout.to_string(),
+    ];
+    let result = crate::proc::run("wait", &wait_args)?;
+
+    let status = result["status"].as_str().unwrap_or("unknown");
+    Ok(json!({
+        "event": "proc.exit",
+        "triggered": status == "exited",
+        "details": result,
+    }))
+}
+
+fn watch_fs_change(args: &[String], timeout: u64) -> Result<Value, String> {
+    let path = parse_flag(args, "--path").ok_or("--path <dir> required for fs.change")?;
+
+    let watch_args = vec![path.to_string(), "--timeout".into(), timeout.to_string()];
+    let result = cmd_watch_dir(&watch_args)?;
+
+    let status = result["status"].as_str().unwrap_or("unknown");
+    Ok(json!({
+        "event": "fs.change",
+        "triggered": status == "changed",
+        "details": result,
+    }))
+}
+
+fn watch_service_health_fail(args: &[String], timeout: u64) -> Result<Value, String> {
+    let service_name =
+        parse_flag(args, "--name").ok_or("--name <service> required for service.health-fail")?;
+
+    let deadline = Instant::now() + Duration::from_secs(timeout);
+
+    loop {
+        // Check service health via the service module
+        let health_result = crate::service::run(
+            "health",
+            &[service_name.to_string(), "--no-restart".into()],
+        );
+
+        match health_result {
+            Ok(v) => {
+                if v["healthy"] == false {
+                    return Ok(json!({
+                        "event": "service.health-fail",
+                        "triggered": true,
+                        "service": service_name,
+                        "details": v,
+                    }));
+                }
+            }
+            Err(e) => {
+                return Ok(json!({
+                    "event": "service.health-fail",
+                    "triggered": true,
+                    "service": service_name,
+                    "error": e,
+                }));
+            }
+        }
+
+        if Instant::now() >= deadline {
+            return Ok(json!({
+                "event": "service.health-fail",
+                "triggered": false,
+                "service": service_name,
+                "status": "timeout",
+            }));
+        }
+
+        thread::sleep(Duration::from_secs(2));
+    }
+}
+
+fn watch_checkpoint_created(args: &[String], timeout: u64) -> Result<Value, String> {
+    let overlay_dir = PathBuf::from(
+        std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()),
+    )
+    .join("overlay")
+    .join("checkpoints");
+
+    // Snapshot current checkpoint count
+    let initial_count = if overlay_dir.exists() {
+        fs::read_dir(&overlay_dir)
+            .map(|e| e.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).count())
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
+    let _ = parse_flag(args, "--timeout"); // consumed by caller
+    let deadline = Instant::now() + Duration::from_secs(timeout);
+
+    loop {
+        let current_count = if overlay_dir.exists() {
+            fs::read_dir(&overlay_dir)
+                .map(|e| e.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).count())
+                .unwrap_or(0)
+        } else {
+            0
+        };
+
+        if current_count > initial_count {
+            return Ok(json!({
+                "event": "checkpoint.created",
+                "triggered": true,
+                "previous_count": initial_count,
+                "current_count": current_count,
+            }));
+        }
+
+        if Instant::now() >= deadline {
+            return Ok(json!({
+                "event": "checkpoint.created",
+                "triggered": false,
+                "status": "timeout",
+                "checkpoint_count": current_count,
+            }));
+        }
+
+        thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
+    }
+}
+
+fn watch_quota_exceeded(timeout: u64) -> Result<Value, String> {
+    let deadline = Instant::now() + Duration::from_secs(timeout);
+
+    loop {
+        if let Err(e) = crate::checkpoint::check_quota(0) {
+            return Ok(json!({
+                "event": "quota.exceeded",
+                "triggered": true,
+                "message": e,
+            }));
+        }
+
+        if Instant::now() >= deadline {
+            return Ok(json!({
+                "event": "quota.exceeded",
+                "triggered": false,
+                "status": "timeout",
+            }));
+        }
+
+        thread::sleep(Duration::from_secs(1));
+    }
 }
 
 #[cfg(test)]

@@ -945,16 +945,16 @@ fn cmd_renice(args: &[String]) -> Result<Value, String> {
         return Err(format!("session {sid} is not running"));
     }
 
-    let nice_val: i32 = match prio.as_str() {
-        "low" => 10,
-        "normal" => 0,
-        "high" => -5,
-        "realtime" => -10,
-        _ => 0,
-    };
-
     #[cfg(unix)]
     {
+        let nice_val: i32 = match prio.as_str() {
+            "low" => 10,
+            "normal" => 0,
+            "high" => -5,
+            "realtime" => -10,
+            _ => 0,
+        };
+
         let output = Command::new("renice")
             .args(["-n", &nice_val.to_string(), "-p", &pid.to_string()])
             .output()
@@ -964,22 +964,22 @@ fn cmd_renice(args: &[String]) -> Result<Value, String> {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(format!("renice failed: {stderr}"));
         }
+
+        info.priority = Some(prio.clone());
+        save_registry(&reg);
+
+        Ok(json!({
+            "session_id": sid,
+            "pid": pid,
+            "priority": prio,
+            "nice_value": nice_val,
+        }))
     }
 
     #[cfg(not(unix))]
     {
-        return Err("renice requires Unix".into());
+        Err("renice requires Unix".into())
     }
-
-    info.priority = Some(prio.clone());
-    save_registry(&reg);
-
-    Ok(json!({
-        "session_id": sid,
-        "pid": pid,
-        "priority": prio,
-        "nice_value": nice_val,
-    }))
 }
 
 fn check_rapid_respawn(reg: &Registry, command_args: &[String]) -> Option<Value> {
