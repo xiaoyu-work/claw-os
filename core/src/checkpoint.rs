@@ -317,6 +317,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "rollback" => cmd_rollback(args),
         "list" => cmd_list(args),
         "status" => cmd_status(args),
+        "quota-set" => cmd_quota_set(args),
+        "quota-status" => cmd_quota_status(args),
+        "namespaces" => cmd_namespaces(args),
         _ => Err(format!("unknown checkpoint command: {command}")),
     }
 }

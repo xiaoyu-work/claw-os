@@ -797,6 +797,191 @@ fn cmd_result(args: &[String]) -> Result<Value, String> {
     Ok(result)
 }
 
+/// Get resource usage stats for a process session.
+///
+/// Reads from /proc/<pid>/stat and /proc/<pid>/status on Linux.
+/// Usage: cos proc stats <session-id>
+fn cmd_stats(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    let sid = args.first().ok_or("usage: cos proc stats <session-id>")?;
+
+    let reg = load_registry();
+    let info = reg
+        .sessions
+        .iter()
+        .find(|s| &s.session_id == sid)
+        .ok_or_else(|| format!("session not found: {sid}"))?;
+
+    let pid = info.pid;
+    let alive = is_alive(pid);
+
+    let mut result = json!({
+        "session_id": sid,
+        "pid": pid,
+        "alive": alive,
+    });
+
+    // Read stdout/stderr sizes as I/O proxy
+    let stdout_bytes = fs::metadata(&info.stdout_path).map(|m| m.len()).unwrap_or(0);
+    let stderr_bytes = fs::metadata(&info.stderr_path).map(|m| m.len()).unwrap_or(0);
+    result["io"] = json!({
+        "stdout_bytes": stdout_bytes,
+        "stderr_bytes": stderr_bytes,
+    });
+
+    #[cfg(target_os = "linux")]
+    if alive {
+        // Read /proc/<pid>/stat for CPU time
+        let stat_path = format!("/proc/{pid}/stat");
+        if let Ok(stat_content) = fs::read_to_string(&stat_path) {
+            let fields: Vec<&str> = stat_content.split_whitespace().collect();
+            // Fields: pid, comm, state, ... utime(14), stime(15), ... vsize(23), rss(24)
+            if fields.len() > 24 {
+                let utime = fields[13].parse::<u64>().unwrap_or(0);
+                let stime = fields[14].parse::<u64>().unwrap_or(0);
+                let vsize = fields[22].parse::<u64>().unwrap_or(0);
+                let rss_pages = fields[23].parse::<i64>().unwrap_or(0);
+                let page_size: u64 = 4096;
+
+                result["cpu"] = json!({
+                    "user_ticks": utime,
+                    "system_ticks": stime,
+                    "total_ticks": utime + stime,
+                    "user_ms": utime * 10, // assuming 100 Hz
+                    "system_ms": stime * 10,
+                    "total_ms": (utime + stime) * 10,
+                });
+                result["memory"] = json!({
+                    "virtual_bytes": vsize,
+                    "virtual_mb": vsize / (1024 * 1024),
+                    "rss_bytes": (rss_pages as u64) * page_size,
+                    "rss_mb": ((rss_pages as u64) * page_size) / (1024 * 1024),
+                });
+            }
+        }
+
+        // Read /proc/<pid>/io for I/O stats
+        let io_path = format!("/proc/{pid}/io");
+        if let Ok(io_content) = fs::read_to_string(&io_path) {
+            let mut read_bytes: u64 = 0;
+            let mut write_bytes: u64 = 0;
+            for line in io_content.lines() {
+                if let Some(val) = line.strip_prefix("read_bytes: ") {
+                    read_bytes = val.trim().parse().unwrap_or(0);
+                } else if let Some(val) = line.strip_prefix("write_bytes: ") {
+                    write_bytes = val.trim().parse().unwrap_or(0);
+                }
+            }
+            result["io"]["read_bytes"] = json!(read_bytes);
+            result["io"]["write_bytes"] = json!(write_bytes);
+            result["io"]["read_mb"] = json!(read_bytes / (1024 * 1024));
+            result["io"]["write_mb"] = json!(write_bytes / (1024 * 1024));
+        }
+
+        // Read /proc/<pid>/status for thread count
+        let status_path = format!("/proc/{pid}/status");
+        if let Ok(status_content) = fs::read_to_string(&status_path) {
+            for line in status_content.lines() {
+                if let Some(val) = line.strip_prefix("Threads:") {
+                    if let Ok(threads) = val.trim().parse::<u32>() {
+                        result["threads"] = json!(threads);
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        if alive {
+            result["note"] = json!("detailed resource stats require Linux /proc filesystem");
+        }
+    }
+
+    Ok(result)
+}
+
+/// Change the priority of a running process session.
+///
+/// Usage: cos proc renice <session-id> --priority low|normal|high|realtime
+fn cmd_renice(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Exec).map_err(|v| v.to_string())?;
+
+    let mut session_id: Option<&str> = None;
+    let mut priority: Option<String> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--priority" if i + 1 < args.len() => {
+                let p = args[i + 1].to_lowercase();
+                if !["low", "normal", "high", "realtime"].contains(&p.as_str()) {
+                    return Err("priority must be: low, normal, high, realtime".into());
+                }
+                priority = Some(p);
+                i += 2;
+            }
+            _ => {
+                if session_id.is_none() {
+                    session_id = Some(&args[i]);
+                }
+                i += 1;
+            }
+        }
+    }
+
+    let sid = session_id.ok_or("usage: cos proc renice <session-id> --priority <level>")?;
+    let prio = priority.ok_or("--priority is required")?;
+
+    let mut reg = load_registry();
+    let info = reg
+        .sessions
+        .iter_mut()
+        .find(|s| s.session_id == sid)
+        .ok_or_else(|| format!("session not found: {sid}"))?;
+
+    let pid = info.pid;
+    if !is_alive(pid) {
+        return Err(format!("session {sid} is not running"));
+    }
+
+    let nice_val: i32 = match prio.as_str() {
+        "low" => 10,
+        "normal" => 0,
+        "high" => -5,
+        "realtime" => -10,
+        _ => 0,
+    };
+
+    #[cfg(unix)]
+    {
+        let output = Command::new("renice")
+            .args(["-n", &nice_val.to_string(), "-p", &pid.to_string()])
+            .output()
+            .map_err(|e| format!("failed to renice: {e}"))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("renice failed: {stderr}"));
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        return Err("renice requires Unix".into());
+    }
+
+    info.priority = Some(prio.clone());
+    save_registry(&reg);
+
+    Ok(json!({
+        "session_id": sid,
+        "pid": pid,
+        "priority": prio,
+        "nice_value": nice_val,
+    }))
+}
+
 fn check_rapid_respawn(reg: &Registry, command_args: &[String]) -> Option<Value> {
     let now = chrono::Utc::now();
     let cutoff = now - chrono::Duration::seconds(60);

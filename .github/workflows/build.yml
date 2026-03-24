@@ -116,3 +116,23 @@ jobs:
           push: true
           tags: ${{ steps.meta-openclaw.outputs.tags }}
           labels: ${{ steps.meta-openclaw.outputs.labels }}
+
+      # Build DeerFlow variant (OS + DeerFlow pre-installed)
+      - name: Extract metadata (DeerFlow)
+        id: meta-deerflow
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=deerflow,enable={{is_default_branch}}
+            type=raw,value=deerflow-{{sha}},enable={{is_default_branch}}
+
+      - name: Build and push (DeerFlow)
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.deerflow
+          push: true
+          tags: ${{ steps.meta-deerflow.outputs.tags }}
+          labels: ${{ steps.meta-deerflow.outputs.labels }}
