@@ -229,7 +229,7 @@ fn walk_upper(
         let path = entry.path();
         let relative = path
             .strip_prefix(upper_root)
-            .unwrap()
+            .map_err(|e| format!("path {} is not under upper_root {}: {e}", path.display(), upper_root.display()))?
             .to_string_lossy()
             .to_string();
 

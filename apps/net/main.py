@@ -8,8 +8,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-USER_AGENT = "cos/0.1.0"
-DEFAULT_TIMEOUT = 30
+USER_AGENT = "cos/0.3.0"
+DEFAULT_TIMEOUT = int(os.environ.get("COS_NET_TIMEOUT", "30"))
+MAX_RESPONSE_BYTES = 5_000_000  # 5 MB response body limit
 
 
 def _build_fetch_parser():
@@ -59,14 +60,21 @@ def cmd_fetch(args):
 
     try:
         with urllib.request.urlopen(req, timeout=opts.timeout) as resp:
-            body = resp.read().decode("utf-8", errors="replace")
+            raw = resp.read()
             resp_headers = dict(resp.getheaders())
-            return {
+            truncated = len(raw) > MAX_RESPONSE_BYTES
+            if truncated:
+                raw = raw[:MAX_RESPONSE_BYTES]
+            body = raw.decode("utf-8", errors="replace")
+            result = {
                 "url": opts.url,
                 "status": resp.status,
                 "headers": resp_headers,
                 "body": body,
             }
+            if truncated:
+                result["truncated"] = True
+            return result
     except urllib.error.HTTPError as e:
         body = ""
         try:

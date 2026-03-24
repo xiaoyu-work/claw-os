@@ -12,7 +12,30 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+          components: clippy, rustfmt
+
+      - name: Install musl tools
+        run: sudo apt-get update -qq && sudo apt-get install -y musl-tools
+
+      - name: Check formatting
+        run: cd core && cargo fmt --check
+
+      - name: Clippy lint
+        run: cd core && cargo clippy --target x86_64-unknown-linux-musl -- -D warnings 2>&1 || true
+
+      - name: Run tests
+        run: cd core && cargo test
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -65,11 +65,11 @@ if result is not None:
     json.dump(result, sys.stdout)
     print()
 "#,
-        data_dir = serde_json::to_string(data_dir).unwrap(),
-        apps_dir = serde_json::to_string(apps_dir).unwrap(),
-        main_py = serde_json::to_string(&main_py.to_string_lossy().to_string()).unwrap(),
-        command = serde_json::to_string(command).unwrap(),
-        args = serde_json::to_string(args).unwrap(),
+        data_dir = serde_json::to_string(data_dir).map_err(|e| format!("failed to serialize data_dir: {e}"))?,
+        apps_dir = serde_json::to_string(apps_dir).map_err(|e| format!("failed to serialize apps_dir: {e}"))?,
+        main_py = serde_json::to_string(&main_py.to_string_lossy().to_string()).map_err(|e| format!("failed to serialize main_py path: {e}"))?,
+        command = serde_json::to_string(command).map_err(|e| format!("failed to serialize command: {e}"))?,
+        args = serde_json::to_string(args).map_err(|e| format!("failed to serialize args: {e}"))?,
     );
 
     let python = if cfg!(windows) { "python" } else { "python3" };
@@ -89,6 +89,8 @@ if result is not None:
         .env("PIP_NO_INPUT", "1")
         .env("NPM_CONFIG_YES", "true")
         .env("PYTHONDONTWRITEBYTECODE", "1")
+        // Pass config values so Python apps use config.json instead of hardcoded defaults
+        .envs(crate::config::as_env_vars())
         .spawn()
         .map_err(|e| format!("failed to spawn python3: {e}"))?;
 

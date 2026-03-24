@@ -8,7 +8,8 @@ import signal
 import subprocess
 from datetime import datetime, timezone
 
-DEFAULT_TIMEOUT = 300
+DEFAULT_TIMEOUT = int(os.environ.get("COS_EXEC_TIMEOUT", "300"))
+MAX_OUTPUT_BYTES = 1_000_000  # 1 MB output limit for stdout/stderr
 DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 PROC_DIR = os.path.join(DATA_DIR, "proc")
 REGISTRY_FILE = os.path.join(PROC_DIR, "registry.json")
@@ -69,12 +70,24 @@ def cmd_run(args):
             text=True,
             timeout=timeout,
         )
-        return {
+        stdout = result.stdout
+        stderr = result.stderr
+        truncated = False
+        if len(stdout) > MAX_OUTPUT_BYTES:
+            stdout = stdout[:MAX_OUTPUT_BYTES]
+            truncated = True
+        if len(stderr) > MAX_OUTPUT_BYTES:
+            stderr = stderr[:MAX_OUTPUT_BYTES]
+            truncated = True
+        resp = {
             "command": command,
             "exit_code": result.returncode,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
+            "stdout": stdout,
+            "stderr": stderr,
         }
+        if truncated:
+            resp["truncated"] = True
+        return resp
     except subprocess.TimeoutExpired:
         return {"error": f"command timed out after {timeout}s"}
     except FileNotFoundError:
@@ -138,12 +151,24 @@ def cmd_script(args):
             text=True,
             timeout=timeout,
         )
-        return {
+        stdout = result.stdout
+        stderr = result.stderr
+        truncated = False
+        if len(stdout) > MAX_OUTPUT_BYTES:
+            stdout = stdout[:MAX_OUTPUT_BYTES]
+            truncated = True
+        if len(stderr) > MAX_OUTPUT_BYTES:
+            stderr = stderr[:MAX_OUTPUT_BYTES]
+            truncated = True
+        resp = {
             "lang": lang,
             "exit_code": result.returncode,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
+            "stdout": stdout,
+            "stderr": stderr,
         }
+        if truncated:
+            resp["truncated"] = True
+        return resp
     except subprocess.TimeoutExpired:
         return {"error": f"script timed out after {timeout}s"}
     except FileNotFoundError:

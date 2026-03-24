@@ -5,6 +5,7 @@ import sqlite3
 
 DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 DB_DIR = os.path.join(DATA_DIR, "db")
+MAX_ROWS = 1000  # Maximum rows returned from a single query
 
 
 def _db_path(name):
@@ -25,12 +26,20 @@ def cmd_query(args):
             cur = conn.execute(sql)
             columns = [desc[0] for desc in cur.description] if cur.description else []
             rows = cur.fetchall()
-            return {
+            total_rows = len(rows)
+            truncated = total_rows > MAX_ROWS
+            if truncated:
+                rows = rows[:MAX_ROWS]
+            result = {
                 "database": name,
                 "columns": columns,
                 "rows": [list(r) for r in rows],
                 "count": len(rows),
             }
+            if truncated:
+                result["truncated"] = True
+                result["total_rows"] = total_rows
+            return result
     except sqlite3.Error as e:
         return {"error": str(e)}
 

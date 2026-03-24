@@ -1,6 +1,6 @@
 {
   "name": "kv",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Key-value store for agent memory and state",
   "commands": {
     "get": "Get a value by key",

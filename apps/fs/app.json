@@ -1,6 +1,6 @@
 {
   "name": "fs",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Agent-native file system with metadata and search",
   "commands": {
     "ls": "List directory contents",
