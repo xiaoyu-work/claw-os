@@ -33,11 +33,11 @@ struct ResourceLimits {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SandboxConfig {
     pub id: String,
-    pub mode: String,         // "rw" | "ro"
-    pub workspace: String,    // path mounted into sandbox
-    pub network: bool,        // allow network access
+    pub mode: String,      // "rw" | "ro"
+    pub workspace: String, // path mounted into sandbox
+    pub network: bool,     // allow network access
     pub created_at: String,
-    pub pid: Option<u32>,     // init process PID (if persistent)
+    pub pid: Option<u32>, // init process PID (if persistent)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,10 +89,10 @@ fn cmd_exec(args: &[String]) -> Result<Value, String> {
     let mut network = true;
     let mut read_only = false;
     let mut workspace = "/den".to_string();
-    let mut mem_limit: Option<String> = None;    // e.g. "512M", "1G"
-    let mut cpu_percent: Option<u32> = None;      // e.g. 50 = 50%
-    let mut pids_max: Option<u32> = None;         // e.g. 100
-    let mut timeout_secs: Option<u32> = None;     // e.g. 300
+    let mut mem_limit: Option<String> = None; // e.g. "512M", "1G"
+    let mut cpu_percent: Option<u32> = None; // e.g. 50 = 50%
+    let mut pids_max: Option<u32> = None; // e.g. 100
+    let mut timeout_secs: Option<u32> = None; // e.g. 300
     let mut seccomp_profile: Option<String> = None; // e.g. "minimal", "network", "full"
     let mut cmd_start = None;
 
@@ -116,21 +116,27 @@ fn cmd_exec(args: &[String]) -> Result<Value, String> {
                 i += 2;
             }
             "--cpu" if i + 1 < args.len() => {
-                cpu_percent = Some(args[i + 1].parse::<u32>().map_err(|_| {
-                    format!("invalid cpu value: {}", args[i + 1])
-                })?);
+                cpu_percent = Some(
+                    args[i + 1]
+                        .parse::<u32>()
+                        .map_err(|_| format!("invalid cpu value: {}", args[i + 1]))?,
+                );
                 i += 2;
             }
             "--pids" if i + 1 < args.len() => {
-                pids_max = Some(args[i + 1].parse::<u32>().map_err(|_| {
-                    format!("invalid pids value: {}", args[i + 1])
-                })?);
+                pids_max = Some(
+                    args[i + 1]
+                        .parse::<u32>()
+                        .map_err(|_| format!("invalid pids value: {}", args[i + 1]))?,
+                );
                 i += 2;
             }
             "--timeout" if i + 1 < args.len() => {
-                timeout_secs = Some(args[i + 1].parse::<u32>().map_err(|_| {
-                    format!("invalid timeout value: {}", args[i + 1])
-                })?);
+                timeout_secs = Some(
+                    args[i + 1]
+                        .parse::<u32>()
+                        .map_err(|_| format!("invalid timeout value: {}", args[i + 1]))?,
+                );
                 i += 2;
             }
             "--seccomp-profile" if i + 1 < args.len() => {
@@ -221,7 +227,9 @@ fn exec_linux(
         .spawn()
         .map_err(|e| format!("failed to spawn sandbox: {e}"))?;
 
-    let status = child.wait().map_err(|e| format!("sandbox wait failed: {e}"))?;
+    let status = child
+        .wait()
+        .map_err(|e| format!("sandbox wait failed: {e}"))?;
 
     let mut stdout = String::new();
     if let Some(mut out) = child.stdout.take() {
@@ -323,7 +331,9 @@ fn exec_linux_with_cgroup(
         .spawn()
         .map_err(|e| format!("failed to spawn sandbox (systemd-run): {e}"))?;
 
-    let status = child.wait().map_err(|e| format!("sandbox wait failed: {e}"))?;
+    let status = child
+        .wait()
+        .map_err(|e| format!("sandbox wait failed: {e}"))?;
 
     let mut stdout = String::new();
     if let Some(mut out) = child.stdout.take() {
@@ -408,7 +418,11 @@ fn seccomp_syscall_filter(profile: &str) -> Option<String> {
 
 /// Fallback for non-Linux: basic subprocess execution with timeout.
 #[cfg(not(target_os = "linux"))]
-fn exec_fallback(command_args: &[String], workspace: &str, limits: &ResourceLimits) -> Result<Value, String> {
+fn exec_fallback(
+    command_args: &[String],
+    workspace: &str,
+    limits: &ResourceLimits,
+) -> Result<Value, String> {
     if command_args.is_empty() {
         return Err("no command specified".into());
     }

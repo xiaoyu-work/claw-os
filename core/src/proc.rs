@@ -47,10 +47,8 @@ struct Registry {
 }
 
 fn proc_dir() -> PathBuf {
-    PathBuf::from(
-        std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()),
-    )
-    .join("proc")
+    PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
+        .join("proc")
 }
 
 fn registry_path() -> PathBuf {
@@ -144,7 +142,11 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
                 i += 2;
             }
             "--tier" if i + 1 < args.len() => {
-                tier = Some(args[i + 1].parse::<u8>().map_err(|_| "tier must be 0-3".to_string())?);
+                tier = Some(
+                    args[i + 1]
+                        .parse::<u8>()
+                        .map_err(|_| "tier must be 0-3".to_string())?,
+                );
                 i += 2;
             }
             "--scope" if i + 1 < args.len() => {
@@ -159,8 +161,14 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
                 priority = Some(p);
                 i += 2;
             }
-            "--" => { cmd_start = i + 1; break; }
-            _ => { cmd_start = i; break; }
+            "--" => {
+                cmd_start = i + 1;
+                break;
+            }
+            _ => {
+                cmd_start = i;
+                break;
+            }
         }
     }
 
@@ -223,12 +231,11 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
 
     // Handle isolated workspace
     if isolated_workspace {
-        let ws_dir = PathBuf::from(
-            std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()),
-        )
-        .join("sessions")
-        .join(&sid)
-        .join("workspace");
+        let ws_dir =
+            PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
+                .join("sessions")
+                .join(&sid)
+                .join("workspace");
         fs::create_dir_all(&ws_dir)
             .map_err(|e| format!("failed to create isolated workspace: {e}"))?;
         workdir = Some(ws_dir.to_string_lossy().to_string());
@@ -237,10 +244,10 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     let stdout_path = dir.join(format!("{sid}.stdout"));
     let stderr_path = dir.join(format!("{sid}.stderr"));
 
-    let stdout_file = fs::File::create(&stdout_path)
-        .map_err(|e| format!("failed to create stdout file: {e}"))?;
-    let stderr_file = fs::File::create(&stderr_path)
-        .map_err(|e| format!("failed to create stderr file: {e}"))?;
+    let stdout_file =
+        fs::File::create(&stdout_path).map_err(|e| format!("failed to create stdout file: {e}"))?;
+    let stderr_file =
+        fs::File::create(&stderr_path).map_err(|e| format!("failed to create stderr file: {e}"))?;
 
     // Apply process priority via nice (Unix only)
     #[cfg(unix)]
@@ -293,8 +300,7 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         });
     }
 
-    let child = cmd.spawn()
-        .map_err(|e| format!("failed to spawn: {e}"))?;
+    let child = cmd.spawn().map_err(|e| format!("failed to spawn: {e}"))?;
 
     let pid = child.id();
     let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
@@ -329,16 +335,34 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         "command": command_args,
         "started_at": now,
     });
-    if let Some(g) = group { result["group"] = json!(g); }
-    if let Some(p) = parent { result["parent"] = json!(p); }
-    if let Some(w) = workdir { result["workdir"] = json!(w); }
-    if let Some(t) = tier { result["tier"] = json!(t); }
-    if let Some(ref s) = scope { result["scope"] = json!(s); }
-    if let Some(ref pr) = priority { result["priority"] = json!(pr); }
+    if let Some(g) = group {
+        result["group"] = json!(g);
+    }
+    if let Some(p) = parent {
+        result["parent"] = json!(p);
+    }
+    if let Some(w) = workdir {
+        result["workdir"] = json!(w);
+    }
+    if let Some(t) = tier {
+        result["tier"] = json!(t);
+    }
+    if let Some(ref s) = scope {
+        result["scope"] = json!(s);
+    }
+    if let Some(ref pr) = priority {
+        result["priority"] = json!(pr);
+    }
     let mut warnings = Vec::new();
-    if let Some(w) = rapid_warning { warnings.push(w); }
-    if let Some(w) = destructive_warning { warnings.push(w); }
-    if !warnings.is_empty() { result["warnings"] = json!(warnings); }
+    if let Some(w) = rapid_warning {
+        warnings.push(w);
+    }
+    if let Some(w) = destructive_warning {
+        warnings.push(w);
+    }
+    if !warnings.is_empty() {
+        result["warnings"] = json!(warnings);
+    }
 
     Ok(result)
 }
@@ -347,7 +371,9 @@ fn cmd_status(args: &[String]) -> Result<Value, String> {
     policy::require(OpType::Read).map_err(|v| v.to_string())?;
     let sid = args.first().ok_or("usage: cos proc status <session-id>")?;
     let mut reg = load_registry();
-    let idx = reg.sessions.iter()
+    let idx = reg
+        .sessions
+        .iter()
         .position(|s| &s.session_id == sid)
         .ok_or_else(|| format!("session not found: {sid}"))?;
 
@@ -372,8 +398,12 @@ fn cmd_status(args: &[String]) -> Result<Value, String> {
     if let Some(ref ended) = info.ended_at {
         result["ended_at"] = json!(ended);
     }
-    if let Some(t) = info.tier { result["tier"] = json!(t); }
-    if let Some(ref s) = info.scope { result["scope"] = json!(s); }
+    if let Some(t) = info.tier {
+        result["tier"] = json!(t);
+    }
+    if let Some(ref s) = info.scope {
+        result["scope"] = json!(s);
+    }
 
     Ok(result)
 }
@@ -389,16 +419,30 @@ fn cmd_output(args: &[String]) -> Result<Value, String> {
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
-            "--tail" if i + 1 < args.len() => { tail_lines = args[i + 1].parse().ok(); i += 2; }
-            "--stream" if i + 1 < args.len() => { stream = args[i + 1].clone(); i += 2; }
-            "--follow" => { follow = true; i += 1; }
-            "--since-offset" if i + 1 < args.len() => { since_offset = args[i + 1].parse().ok(); i += 2; }
+            "--tail" if i + 1 < args.len() => {
+                tail_lines = args[i + 1].parse().ok();
+                i += 2;
+            }
+            "--stream" if i + 1 < args.len() => {
+                stream = args[i + 1].clone();
+                i += 2;
+            }
+            "--follow" => {
+                follow = true;
+                i += 1;
+            }
+            "--since-offset" if i + 1 < args.len() => {
+                since_offset = args[i + 1].parse().ok();
+                i += 2;
+            }
             _ => i += 1,
         }
     }
 
     let reg = load_registry();
-    let info = reg.sessions.iter()
+    let info = reg
+        .sessions
+        .iter()
         .find(|s| &s.session_id == sid)
         .ok_or_else(|| format!("session not found: {sid}"))?;
 
@@ -470,7 +514,9 @@ fn cmd_kill(args: &[String]) -> Result<Value, String> {
     if args.len() >= 2 && args[0] == "--group" {
         let group_name = &args[1];
         let reg = load_registry();
-        let group_sessions: Vec<&SessionInfo> = reg.sessions.iter()
+        let group_sessions: Vec<&SessionInfo> = reg
+            .sessions
+            .iter()
             .filter(|s| s.group.as_deref() == Some(group_name.as_str()))
             .collect();
         if group_sessions.is_empty() {
@@ -493,7 +539,9 @@ fn cmd_kill(args: &[String]) -> Result<Value, String> {
 
     let sid = args.first().ok_or("usage: cos proc kill <session-id>")?;
     let reg = load_registry();
-    let info = reg.sessions.iter()
+    let info = reg
+        .sessions
+        .iter()
         .find(|s| &s.session_id == sid)
         .ok_or_else(|| format!("session not found: {sid}"))?;
 
@@ -522,7 +570,9 @@ fn cmd_list(args: &[String]) -> Result<Value, String> {
         }
     }
 
-    let infos: Vec<Value> = reg.sessions.iter()
+    let infos: Vec<Value> = reg
+        .sessions
+        .iter()
         .filter(|s| {
             if let Some(g) = group_filter {
                 s.group.as_deref() == Some(g)
@@ -538,11 +588,21 @@ fn cmd_list(args: &[String]) -> Result<Value, String> {
                 "status": if is_alive(s.pid) { "running" } else { "exited" },
                 "started_at": s.started_at,
             });
-            if let Some(ref g) = s.group { v["group"] = json!(g); }
-            if let Some(ref p) = s.parent { v["parent"] = json!(p); }
-            if let Some(ref w) = s.workdir { v["workdir"] = json!(w); }
-            if let Some(t) = s.tier { v["tier"] = json!(t); }
-            if let Some(ref sc) = s.scope { v["scope"] = json!(sc); }
+            if let Some(ref g) = s.group {
+                v["group"] = json!(g);
+            }
+            if let Some(ref p) = s.parent {
+                v["parent"] = json!(p);
+            }
+            if let Some(ref w) = s.workdir {
+                v["workdir"] = json!(w);
+            }
+            if let Some(t) = s.tier {
+                v["tier"] = json!(t);
+            }
+            if let Some(ref sc) = s.scope {
+                v["scope"] = json!(sc);
+            }
             v
         })
         .collect();
@@ -600,12 +660,15 @@ fn cmd_wait(args: &[String]) -> Result<Value, String> {
 
     // Collect PIDs and session IDs to wait on
     let targets: Vec<(String, u32)> = if let Some(g) = group_name {
-        reg.sessions.iter()
+        reg.sessions
+            .iter()
             .filter(|s| s.group.as_deref() == Some(g))
             .map(|s| (s.session_id.clone(), s.pid))
             .collect()
     } else if let Some(sid) = session_id {
-        let info = reg.sessions.iter()
+        let info = reg
+            .sessions
+            .iter()
             .find(|s| s.session_id == sid)
             .ok_or_else(|| format!("session not found: {sid}"))?;
         vec![(info.session_id.clone(), info.pid)]
@@ -639,7 +702,8 @@ fn cmd_wait(args: &[String]) -> Result<Value, String> {
 
             // Build results with output tails for each exited session
             let reg = load_registry();
-            let results: Vec<Value> = targets.iter()
+            let results: Vec<Value> = targets
+                .iter()
                 .map(|(sid, pid)| {
                     let mut v = json!({
                         "session_id": sid,
@@ -649,8 +713,12 @@ fn cmd_wait(args: &[String]) -> Result<Value, String> {
                     if let Some(info) = reg.sessions.iter().find(|s| &s.session_id == sid) {
                         let stdout_tail = read_capped(&info.stdout_path, Some(10));
                         let stderr_tail = read_capped(&info.stderr_path, Some(10));
-                        if !stdout_tail.is_empty() { v["stdout_tail"] = json!(stdout_tail); }
-                        if !stderr_tail.is_empty() { v["stderr_tail"] = json!(stderr_tail); }
+                        if !stdout_tail.is_empty() {
+                            v["stdout_tail"] = json!(stdout_tail);
+                        }
+                        if !stderr_tail.is_empty() {
+                            v["stderr_tail"] = json!(stderr_tail);
+                        }
                     }
                     v
                 })
@@ -664,12 +732,15 @@ fn cmd_wait(args: &[String]) -> Result<Value, String> {
         if let Some(td) = timeout_dur {
             let elapsed = start.elapsed().unwrap_or_default();
             if elapsed >= td {
-                let results: Vec<Value> = targets.iter()
-                    .map(|(sid, pid)| json!({
-                        "session_id": sid,
-                        "pid": pid,
-                        "status": if is_alive(*pid) { "running" } else { "exited" },
-                    }))
+                let results: Vec<Value> = targets
+                    .iter()
+                    .map(|(sid, pid)| {
+                        json!({
+                            "session_id": sid,
+                            "pid": pid,
+                            "status": if is_alive(*pid) { "running" } else { "exited" },
+                        })
+                    })
                     .collect();
                 return Ok(json!({
                     "status": "timeout",
@@ -692,7 +763,9 @@ fn cmd_signal(args: &[String]) -> Result<Value, String> {
     let signal_name = args[1].to_uppercase();
 
     let reg = load_registry();
-    let info = reg.sessions.iter()
+    let info = reg
+        .sessions
+        .iter()
         .find(|s| &s.session_id == sid)
         .ok_or_else(|| format!("session not found: {sid}"))?;
 
@@ -742,7 +815,9 @@ fn cmd_result(args: &[String]) -> Result<Value, String> {
     policy::require(OpType::Read).map_err(|v| v.to_string())?;
     let sid = args.first().ok_or("usage: cos proc result <session-id>")?;
     let mut reg = load_registry();
-    let idx = reg.sessions.iter()
+    let idx = reg
+        .sessions
+        .iter()
         .position(|s| &s.session_id == sid)
         .ok_or_else(|| format!("session not found: {sid}"))?;
 
@@ -759,11 +834,16 @@ fn cmd_result(args: &[String]) -> Result<Value, String> {
     let info = &reg.sessions[idx];
     let stdout_tail = read_capped(&info.stdout_path, Some(20));
     let stderr_tail = read_capped(&info.stderr_path, Some(20));
-    let stdout_bytes = fs::metadata(&info.stdout_path).map(|m| m.len()).unwrap_or(0);
-    let stderr_bytes = fs::metadata(&info.stderr_path).map(|m| m.len()).unwrap_or(0);
+    let stdout_bytes = fs::metadata(&info.stdout_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let stderr_bytes = fs::metadata(&info.stderr_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
 
     // Heuristic: likely success if stderr is empty/small AND stdout doesn't contain error indicators
-    let stdout_has_error = stdout_tail.contains("\"error\"") || stdout_tail.contains("permission denied");
+    let stdout_has_error =
+        stdout_tail.contains("\"error\"") || stdout_tail.contains("permission denied");
     let likely_success = !stdout_has_error
         && (stderr_bytes == 0 || (stdout_bytes > 0 && stderr_bytes < stdout_bytes / 10));
 
@@ -779,20 +859,22 @@ fn cmd_result(args: &[String]) -> Result<Value, String> {
     if let Some(ref ended) = info.ended_at {
         result["ended_at"] = json!(ended);
         // Calculate duration
-        if let Ok(start) = chrono::DateTime::parse_from_rfc3339(
-            &info.started_at.replace('Z', "+00:00"),
-        ) {
-            if let Ok(end) = chrono::DateTime::parse_from_rfc3339(
-                &ended.replace('Z', "+00:00"),
-            ) {
+        if let Ok(start) =
+            chrono::DateTime::parse_from_rfc3339(&info.started_at.replace('Z', "+00:00"))
+        {
+            if let Ok(end) = chrono::DateTime::parse_from_rfc3339(&ended.replace('Z', "+00:00")) {
                 let duration = end.signed_duration_since(start);
                 result["duration_secs"] = json!(duration.num_seconds());
             }
         }
     }
 
-    if !stdout_tail.is_empty() { result["stdout_tail"] = json!(stdout_tail); }
-    if !stderr_tail.is_empty() { result["stderr_tail"] = json!(stderr_tail); }
+    if !stdout_tail.is_empty() {
+        result["stdout_tail"] = json!(stdout_tail);
+    }
+    if !stderr_tail.is_empty() {
+        result["stderr_tail"] = json!(stderr_tail);
+    }
 
     Ok(result)
 }
@@ -822,8 +904,12 @@ fn cmd_stats(args: &[String]) -> Result<Value, String> {
     });
 
     // Read stdout/stderr sizes as I/O proxy
-    let stdout_bytes = fs::metadata(&info.stdout_path).map(|m| m.len()).unwrap_or(0);
-    let stderr_bytes = fs::metadata(&info.stderr_path).map(|m| m.len()).unwrap_or(0);
+    let stdout_bytes = fs::metadata(&info.stdout_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let stderr_bytes = fs::metadata(&info.stderr_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
     result["io"] = json!({
         "stdout_bytes": stdout_bytes,
         "stderr_bytes": stderr_bytes,
@@ -985,14 +1071,14 @@ fn cmd_renice(args: &[String]) -> Result<Value, String> {
 fn check_rapid_respawn(reg: &Registry, command_args: &[String]) -> Option<Value> {
     let now = chrono::Utc::now();
     let cutoff = now - chrono::Duration::seconds(60);
-    let recent_same = reg.sessions.iter()
+    let recent_same = reg
+        .sessions
+        .iter()
         .filter(|s| s.command == command_args)
         .filter(|s| {
-            chrono::DateTime::parse_from_rfc3339(
-                &s.started_at.replace('Z', "+00:00"),
-            )
-            .map(|dt| dt > cutoff)
-            .unwrap_or(false)
+            chrono::DateTime::parse_from_rfc3339(&s.started_at.replace('Z', "+00:00"))
+                .map(|dt| dt > cutoff)
+                .unwrap_or(false)
         })
         .count();
     if recent_same >= 5 {
@@ -1063,7 +1149,10 @@ fn read_capped(path: &str, tail_lines: Option<usize>) -> String {
 
     let content = if content.len() > MAX_OUTPUT_BYTES {
         let truncated = &content[content.len() - MAX_OUTPUT_BYTES..];
-        format!("[truncated, showing last {}KB]\n{truncated}", MAX_OUTPUT_BYTES / 1024)
+        format!(
+            "[truncated, showing last {}KB]\n{truncated}",
+            MAX_OUTPUT_BYTES / 1024
+        )
     } else {
         content
     };

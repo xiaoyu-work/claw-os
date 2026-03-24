@@ -52,24 +52,46 @@ pub struct WebConfig {
     pub max_content_length: usize,
 }
 
-fn default_version() -> String { env!("CARGO_PKG_VERSION").into() }
-fn default_den() -> String { "/den".into() }
-fn default_exec_timeout() -> u64 { 300 }
-fn default_shell() -> String { "/bin/bash".into() }
-fn default_net_timeout() -> u64 { 30 }
-fn default_true() -> bool { true }
-fn default_reader_url() -> String { "http://localhost:3000".into() }
-fn default_max_content_length() -> usize { 50000 }
+fn default_version() -> String {
+    env!("CARGO_PKG_VERSION").into()
+}
+fn default_den() -> String {
+    "/den".into()
+}
+fn default_exec_timeout() -> u64 {
+    300
+}
+fn default_shell() -> String {
+    "/bin/bash".into()
+}
+fn default_net_timeout() -> u64 {
+    30
+}
+fn default_true() -> bool {
+    true
+}
+fn default_reader_url() -> String {
+    "http://localhost:3000".into()
+}
+fn default_max_content_length() -> usize {
+    50000
+}
 
 impl Default for ExecConfig {
     fn default() -> Self {
-        Self { timeout: default_exec_timeout(), shell: default_shell() }
+        Self {
+            timeout: default_exec_timeout(),
+            shell: default_shell(),
+        }
     }
 }
 
 impl Default for NetConfig {
     fn default() -> Self {
-        Self { timeout: default_net_timeout(), allow_outbound: true }
+        Self {
+            timeout: default_net_timeout(),
+            allow_outbound: true,
+        }
     }
 }
 
@@ -97,8 +119,7 @@ impl Default for CosConfig {
 
 /// Load config from disk, or return defaults if file is missing/invalid.
 fn load_from_disk() -> CosConfig {
-    let path = std::env::var("COS_CONFIG_PATH")
-        .unwrap_or_else(|_| DEFAULT_CONFIG_PATH.into());
+    let path = std::env::var("COS_CONFIG_PATH").unwrap_or_else(|_| DEFAULT_CONFIG_PATH.into());
 
     let path = Path::new(&path);
     if !path.is_file() {
@@ -123,10 +144,16 @@ pub fn as_env_vars() -> Vec<(String, String)> {
         ("COS_EXEC_TIMEOUT".into(), cfg.exec.timeout.to_string()),
         ("COS_EXEC_SHELL".into(), cfg.exec.shell.clone()),
         ("COS_NET_TIMEOUT".into(), cfg.net.timeout.to_string()),
-        ("COS_NET_ALLOW_OUTBOUND".into(), cfg.net.allow_outbound.to_string()),
+        (
+            "COS_NET_ALLOW_OUTBOUND".into(),
+            cfg.net.allow_outbound.to_string(),
+        ),
         ("COS_WEB_READER_URL".into(), cfg.web.reader_url.clone()),
         ("COS_WEB_TIMEOUT".into(), cfg.web.timeout.to_string()),
-        ("COS_WEB_MAX_CONTENT_LENGTH".into(), cfg.web.max_content_length.to_string()),
+        (
+            "COS_WEB_MAX_CONTENT_LENGTH".into(),
+            cfg.web.max_content_length.to_string(),
+        ),
         ("COS_DEN".into(), cfg.den.clone()),
     ]
 }

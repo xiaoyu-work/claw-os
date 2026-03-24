@@ -12,10 +12,8 @@ use std::path::PathBuf;
 use crate::policy::{self, OpType};
 
 fn ipc_dir() -> PathBuf {
-    PathBuf::from(
-        std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()),
-    )
-    .join("ipc")
+    PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
+        .join("ipc")
 }
 
 fn session_queue_dir(session_id: &str) -> PathBuf {
@@ -50,7 +48,10 @@ fn sorted_messages(dir: &PathBuf) -> Vec<(String, PathBuf)> {
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().to_string();
             if name.ends_with(".json") {
-                let id = name.strip_suffix(".json").expect("already checked ends_with .json").to_string();
+                let id = name
+                    .strip_suffix(".json")
+                    .expect("already checked ends_with .json")
+                    .to_string();
                 Some((id, e.path()))
             } else {
                 None
@@ -104,8 +105,7 @@ fn cmd_send(args: &[String]) -> Result<Value, String> {
     let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
     let dir = session_queue_dir(target);
-    fs::create_dir_all(&dir)
-        .map_err(|e| format!("failed to create queue dir: {e}"))?;
+    fs::create_dir_all(&dir).map_err(|e| format!("failed to create queue dir: {e}"))?;
 
     let message_id = next_message_id(&dir);
     let msg = json!({
@@ -117,8 +117,7 @@ fn cmd_send(args: &[String]) -> Result<Value, String> {
     let path = dir.join(format!("{message_id}.json"));
     let data = serde_json::to_string_pretty(&msg)
         .map_err(|e| format!("failed to serialize message: {e}"))?;
-    fs::write(&path, data)
-        .map_err(|e| format!("failed to write message: {e}"))?;
+    fs::write(&path, data).map_err(|e| format!("failed to write message: {e}"))?;
 
     Ok(json!({
         "sent": true,
@@ -129,7 +128,9 @@ fn cmd_send(args: &[String]) -> Result<Value, String> {
 
 fn cmd_recv(args: &[String]) -> Result<Value, String> {
     policy::require(OpType::Read).map_err(|v| v.to_string())?;
-    let session_id = args.first().ok_or("usage: cos ipc recv <session-id> [--timeout N] [--peek]")?;
+    let session_id = args
+        .first()
+        .ok_or("usage: cos ipc recv <session-id> [--timeout N] [--peek]")?;
     let mut timeout_secs: u64 = 0;
     let mut peek = false;
 
@@ -137,7 +138,8 @@ fn cmd_recv(args: &[String]) -> Result<Value, String> {
     while i < args.len() {
         match args[i].as_str() {
             "--timeout" if i + 1 < args.len() => {
-                timeout_secs = args[i + 1].parse::<u64>()
+                timeout_secs = args[i + 1]
+                    .parse::<u64>()
                     .map_err(|_| "timeout must be a non-negative integer".to_string())?;
                 i += 2;
             }
@@ -156,10 +158,10 @@ fn cmd_recv(args: &[String]) -> Result<Value, String> {
         let messages = sorted_messages(&dir);
 
         if let Some((id, path)) = messages.first() {
-            let data = fs::read_to_string(path)
-                .map_err(|e| format!("failed to read message: {e}"))?;
-            let msg: Value = serde_json::from_str(&data)
-                .map_err(|e| format!("failed to parse message: {e}"))?;
+            let data =
+                fs::read_to_string(path).map_err(|e| format!("failed to read message: {e}"))?;
+            let msg: Value =
+                serde_json::from_str(&data).map_err(|e| format!("failed to parse message: {e}"))?;
 
             if !peek {
                 let _ = fs::remove_file(path);
@@ -380,10 +382,10 @@ fn cmd_unlock(args: &[String]) -> Result<Value, String> {
 
     // If holder is specified, verify it matches before unlocking.
     if let Some(ref required_holder) = holder {
-        let data = fs::read_to_string(&lock_path)
-            .map_err(|e| format!("failed to read lock file: {e}"))?;
-        let existing: Value = serde_json::from_str(&data)
-            .map_err(|e| format!("failed to parse lock file: {e}"))?;
+        let data =
+            fs::read_to_string(&lock_path).map_err(|e| format!("failed to read lock file: {e}"))?;
+        let existing: Value =
+            serde_json::from_str(&data).map_err(|e| format!("failed to parse lock file: {e}"))?;
         let current_holder = existing["holder"].as_str().unwrap_or("");
         if current_holder != required_holder.as_str() {
             return Ok(json!({
@@ -480,13 +482,11 @@ fn cmd_barrier(args: &[String]) -> Result<Value, String> {
         }
     }
 
-    let name = positional.first().ok_or(
-        "usage: cos ipc barrier <name> --expect <N> --session <session-id> [--timeout T]",
-    )?;
-    let expect =
-        expect.ok_or("--expect <N> is required for barrier")?;
-    let session =
-        session.ok_or("--session <session-id> is required for barrier")?;
+    let name = positional
+        .first()
+        .ok_or("usage: cos ipc barrier <name> --expect <N> --session <session-id> [--timeout T]")?;
+    let expect = expect.ok_or("--expect <N> is required for barrier")?;
+    let session = session.ok_or("--session <session-id> is required for barrier")?;
 
     let dir = barriers_dir().join(name);
     fs::create_dir_all(&dir).map_err(|e| format!("failed to create barrier dir: {e}"))?;
@@ -494,8 +494,7 @@ fn cmd_barrier(args: &[String]) -> Result<Value, String> {
     // 1. Write this session's ready file.
     let ready_path = dir.join(format!("{session}.ready"));
     let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    fs::write(&ready_path, &timestamp)
-        .map_err(|e| format!("failed to write ready file: {e}"))?;
+    fs::write(&ready_path, &timestamp).map_err(|e| format!("failed to write ready file: {e}"))?;
 
     // 2. Poll until enough .ready files exist.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
@@ -548,7 +547,10 @@ fn list_ready_sessions(dir: &PathBuf) -> Vec<String> {
 mod tests {
     use super::*;
     use std::env;
-    use std::sync::{atomic::{AtomicU32, Ordering}, Once};
+    use std::sync::{
+        atomic::{AtomicU32, Ordering},
+        Once,
+    };
 
     static TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
     static INIT: Once = Once::new();
@@ -936,11 +938,7 @@ mod tests {
     #[test]
     fn barrier_missing_expect_returns_error() {
         let name = unique_resource("barrier-noexpect");
-        let r = cmd_barrier(&vec![
-            name,
-            "--session".to_string(),
-            "s1".to_string(),
-        ]);
+        let r = cmd_barrier(&vec![name, "--session".to_string(), "s1".to_string()]);
         assert!(r.is_err());
         assert!(r.unwrap_err().contains("--expect"));
     }
@@ -948,11 +946,7 @@ mod tests {
     #[test]
     fn barrier_missing_session_returns_error() {
         let name = unique_resource("barrier-nosess");
-        let r = cmd_barrier(&vec![
-            name,
-            "--expect".to_string(),
-            "2".to_string(),
-        ]);
+        let r = cmd_barrier(&vec![name, "--expect".to_string(), "2".to_string()]);
         assert!(r.is_err());
         assert!(r.unwrap_err().contains("--session"));
     }

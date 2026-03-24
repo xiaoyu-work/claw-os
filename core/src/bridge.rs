@@ -7,9 +7,8 @@ use crate::policy::{self, OpType};
 /// Infer the policy OpType from a Python app command name.
 fn infer_op_type(command: &str) -> OpType {
     match command {
-        "read" | "ls" | "stat" | "search" | "recent" | "query" | "tables"
-        | "schema" | "databases" | "get" | "list" | "info" | "tail"
-        | "has" | "which" => OpType::Read,
+        "read" | "ls" | "stat" | "search" | "recent" | "query" | "tables" | "schema"
+        | "databases" | "get" | "list" | "info" | "tail" | "has" | "which" => OpType::Read,
 
         "write" | "mkdir" | "tag" | "set" | "exec" | "send" => OpType::Write,
 
@@ -44,10 +43,7 @@ pub fn run_python_app(
 
     let main_py = app_dir.join("main.py");
     if !main_py.is_file() {
-        return Err(format!(
-            "app has no main.py at {}",
-            main_py.display()
-        ));
+        return Err(format!("app has no main.py at {}", main_py.display()));
     }
 
     // Build a small Python wrapper that imports main.py and calls run().
@@ -65,10 +61,14 @@ if result is not None:
     json.dump(result, sys.stdout)
     print()
 "#,
-        data_dir = serde_json::to_string(data_dir).map_err(|e| format!("failed to serialize data_dir: {e}"))?,
-        apps_dir = serde_json::to_string(apps_dir).map_err(|e| format!("failed to serialize apps_dir: {e}"))?,
-        main_py = serde_json::to_string(&main_py.to_string_lossy().to_string()).map_err(|e| format!("failed to serialize main_py path: {e}"))?,
-        command = serde_json::to_string(command).map_err(|e| format!("failed to serialize command: {e}"))?,
+        data_dir = serde_json::to_string(data_dir)
+            .map_err(|e| format!("failed to serialize data_dir: {e}"))?,
+        apps_dir = serde_json::to_string(apps_dir)
+            .map_err(|e| format!("failed to serialize apps_dir: {e}"))?,
+        main_py = serde_json::to_string(&main_py.to_string_lossy().to_string())
+            .map_err(|e| format!("failed to serialize main_py path: {e}"))?,
+        command = serde_json::to_string(command)
+            .map_err(|e| format!("failed to serialize command: {e}"))?,
         args = serde_json::to_string(args).map_err(|e| format!("failed to serialize args: {e}"))?,
     );
 
@@ -94,7 +94,9 @@ if result is not None:
         .spawn()
         .map_err(|e| format!("failed to spawn python3: {e}"))?;
 
-    let status = child.wait().map_err(|e| format!("python3 wait failed: {e}"))?;
+    let status = child
+        .wait()
+        .map_err(|e| format!("python3 wait failed: {e}"))?;
 
     let mut stdout = String::new();
     if let Some(mut out) = child.stdout.take() {
