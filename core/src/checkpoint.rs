@@ -675,6 +675,314 @@ fn is_overlay_mounted() -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Quota management
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct QuotaConfig {
+    limit_bytes: u64,
+}
+
+fn quota_path() -> PathBuf {
+    overlay_dir().join("quota.json")
+}
+
+fn load_quota() -> Option<QuotaConfig> {
+    let path = quota_path();
+    let data = fs::read_to_string(&path).ok()?;
+    serde_json::from_str(&data).ok()
+}
+
+fn save_quota(cfg: &QuotaConfig) {
+    let dir = overlay_dir();
+    let _ = fs::create_dir_all(&dir);
+    if let Ok(data) = serde_json::to_string_pretty(cfg) {
+        let _ = fs::write(quota_path(), data);
+    }
+}
+
+/// Parse a human-readable size string like "2G", "512M", "100K" into bytes.
+fn parse_size(s: &str) -> Result<u64, String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err("empty size string".into());
+    }
+    let (num_str, multiplier) = if s.ends_with('G') || s.ends_with('g') {
+        (&s[..s.len() - 1], 1024u64 * 1024 * 1024)
+    } else if s.ends_with('M') || s.ends_with('m') {
+        (&s[..s.len() - 1], 1024u64 * 1024)
+    } else if s.ends_with('K') || s.ends_with('k') {
+        (&s[..s.len() - 1], 1024u64)
+    } else {
+        (s, 1u64)
+    };
+    let num: f64 = num_str.parse().map_err(|_| format!("invalid size: {s}"))?;
+    Ok((num * multiplier as f64) as u64)
+}
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 * 1024 {
+        format!("{:.1}G", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    } else if bytes >= 1024 * 1024 {
+        format!("{:.1}M", bytes as f64 / (1024.0 * 1024.0))
+    } else if bytes >= 1024 {
+        format!("{:.1}K", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes}B")
+    }
+}
+
+/// Set the filesystem quota for the upper layer.
+///
+/// Usage: cos checkpoint quota-set <size>  (e.g. "2G", "512M")
+fn cmd_quota_set(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::System).map_err(|v| v.to_string())?;
+
+    let size_str = args
+        .first()
+        .ok_or("usage: cos checkpoint quota-set <size> (e.g. 2G, 512M)")?;
+    let limit_bytes = parse_size(size_str)?;
+
+    let cfg = QuotaConfig { limit_bytes };
+    save_quota(&cfg);
+
+    Ok(json!({
+        "quota_set": true,
+        "limit_bytes": limit_bytes,
+        "limit_human": format_bytes(limit_bytes),
+    }))
+}
+
+/// Show current quota status.
+///
+/// Usage: cos checkpoint quota-status
+fn cmd_quota_status(_args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+
+    let upper = overlay_dir().join("upper");
+    let used = if upper.exists() { dir_size(&upper) } else { 0 };
+
+    if let Some(quota) = load_quota() {
+        let available = quota.limit_bytes.saturating_sub(used);
+        let pct_used = if quota.limit_bytes > 0 {
+            (used as f64 / quota.limit_bytes as f64 * 100.0) as u32
+        } else {
+            0
+        };
+        Ok(json!({
+            "quota_enabled": true,
+            "limit_bytes": quota.limit_bytes,
+            "limit_human": format_bytes(quota.limit_bytes),
+            "used_bytes": used,
+            "used_human": format_bytes(used),
+            "available_bytes": available,
+            "available_human": format_bytes(available),
+            "percent_used": pct_used,
+            "exceeded": used > quota.limit_bytes,
+        }))
+    } else {
+        Ok(json!({
+            "quota_enabled": false,
+            "used_bytes": used,
+            "used_human": format_bytes(used),
+            "hint": "Set a quota with: cos checkpoint quota-set <size>",
+        }))
+    }
+}
+
+/// Check if writing `additional_bytes` would exceed the quota.
+/// Returns Ok(()) if within quota or no quota set, Err if exceeded.
+pub fn check_quota(additional_bytes: u64) -> Result<(), String> {
+    let quota = match load_quota() {
+        Some(q) => q,
+        None => return Ok(()), // No quota = unlimited
+    };
+
+    let upper = overlay_dir().join("upper");
+    let used = if upper.exists() { dir_size(&upper) } else { 0 };
+
+    if used + additional_bytes > quota.limit_bytes {
+        Err(format!(
+            "quota exceeded: used {} + new {} > limit {}",
+            format_bytes(used),
+            format_bytes(additional_bytes),
+            format_bytes(quota.limit_bytes),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Multi-namespace overlay management
+// ---------------------------------------------------------------------------
+
+fn namespace_base_dir() -> PathBuf {
+    PathBuf::from(
+        std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()),
+    )
+    .join("overlay-namespaces")
+}
+
+/// List all overlay namespaces.
+///
+/// Usage: cos checkpoint namespaces [--create <name>] [--destroy <name>] [--status <name>]
+fn cmd_namespaces(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+
+    if args.is_empty() {
+        return list_namespaces();
+    }
+
+    match args[0].as_str() {
+        "--create" if args.len() >= 2 => create_namespace(&args[1]),
+        "--destroy" if args.len() >= 2 => destroy_namespace(&args[1]),
+        "--status" if args.len() >= 2 => namespace_status(&args[1]),
+        _ => list_namespaces(),
+    }
+}
+
+fn list_namespaces() -> Result<Value, String> {
+    let base = namespace_base_dir();
+    if !base.exists() {
+        return Ok(json!({
+            "namespaces": [],
+            "count": 0,
+            "hint": "Create a namespace: cos checkpoint namespaces --create <name>",
+        }));
+    }
+
+    let mut namespaces: Vec<Value> = Vec::new();
+    let entries = fs::read_dir(&base).map_err(|e| format!("failed to read namespaces: {e}"))?;
+
+    for entry in entries.flatten() {
+        if !entry.path().is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        let upper = entry.path().join("upper");
+        let cps = entry.path().join("checkpoints");
+        let pending = if upper.exists() {
+            count_files_in_upper(&upper)
+        } else {
+            0
+        };
+        let cp_count = if cps.exists() {
+            fs::read_dir(&cps)
+                .map(|e| e.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).count())
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let used = if upper.exists() { dir_size(&upper) } else { 0 };
+
+        namespaces.push(json!({
+            "name": name,
+            "pending_changes": pending,
+            "checkpoints": cp_count,
+            "used_bytes": used,
+            "used_human": format_bytes(used),
+        }));
+    }
+
+    namespaces.sort_by(|a, b| {
+        let na = a["name"].as_str().unwrap_or("");
+        let nb = b["name"].as_str().unwrap_or("");
+        na.cmp(nb)
+    });
+
+    let count = namespaces.len();
+    Ok(json!({
+        "namespaces": namespaces,
+        "count": count,
+    }))
+}
+
+fn create_namespace(name: &str) -> Result<Value, String> {
+    policy::require(OpType::System).map_err(|v| v.to_string())?;
+
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err("namespace name must be alphanumeric (hyphens/underscores allowed)".into());
+    }
+
+    let ns_dir = namespace_base_dir().join(name);
+    if ns_dir.exists() {
+        return Err(format!("namespace already exists: {name}"));
+    }
+
+    fs::create_dir_all(ns_dir.join("base"))
+        .map_err(|e| format!("failed to create namespace: {e}"))?;
+    fs::create_dir_all(ns_dir.join("upper"))
+        .map_err(|e| format!("failed to create namespace: {e}"))?;
+    fs::create_dir_all(ns_dir.join("work"))
+        .map_err(|e| format!("failed to create namespace: {e}"))?;
+    fs::create_dir_all(ns_dir.join("checkpoints"))
+        .map_err(|e| format!("failed to create namespace: {e}"))?;
+
+    Ok(json!({
+        "created": name,
+        "path": ns_dir.to_string_lossy(),
+    }))
+}
+
+fn destroy_namespace(name: &str) -> Result<Value, String> {
+    policy::require(OpType::System).map_err(|v| v.to_string())?;
+
+    let ns_dir = namespace_base_dir().join(name);
+    if !ns_dir.exists() {
+        return Err(format!("namespace not found: {name}"));
+    }
+
+    fs::remove_dir_all(&ns_dir).map_err(|e| format!("failed to destroy namespace: {e}"))?;
+
+    Ok(json!({
+        "destroyed": name,
+    }))
+}
+
+fn namespace_status(name: &str) -> Result<Value, String> {
+    let ns_dir = namespace_base_dir().join(name);
+    if !ns_dir.exists() {
+        return Err(format!("namespace not found: {name}"));
+    }
+
+    let upper = ns_dir.join("upper");
+    let cps = ns_dir.join("checkpoints");
+
+    let pending = if upper.exists() {
+        count_files_in_upper(&upper)
+    } else {
+        0
+    };
+    let upper_bytes = if upper.exists() { dir_size(&upper) } else { 0 };
+    let cp_bytes = if cps.exists() { dir_size(&cps) } else { 0 };
+    let cp_count = if cps.exists() {
+        fs::read_dir(&cps)
+            .map(|e| e.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).count())
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
+    Ok(json!({
+        "namespace": name,
+        "pending_changes": pending,
+        "checkpoint_count": cp_count,
+        "disk_usage": {
+            "upper_bytes": upper_bytes,
+            "upper_human": format_bytes(upper_bytes),
+            "checkpoints_bytes": cp_bytes,
+            "checkpoints_human": format_bytes(cp_bytes),
+            "total_bytes": upper_bytes + cp_bytes,
+            "total_human": format_bytes(upper_bytes + cp_bytes),
+        },
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
