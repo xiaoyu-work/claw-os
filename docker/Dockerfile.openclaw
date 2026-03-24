@@ -1,8 +1,9 @@
 FROM ghcr.io/xiaoyu-work/claw-os:latest
 
-# Pre-install OpenClaw + Claw OS plugin
+# Pre-install OpenClaw with Claw OS plugin and skills
 RUN npm install -g openclaw@latest \
-    && openclaw plugin install /usr/lib/cos/plugins/openclaw
+    && openclaw plugin install /usr/lib/cos/plugins/openclaw \
+    && openclaw skill install /usr/lib/cos/skills/claw-os
 
 ENTRYPOINT ["/usr/local/bin/cos-init"]
 CMD ["openclaw", "gateway"]
