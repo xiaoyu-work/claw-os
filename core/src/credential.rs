@@ -38,29 +38,23 @@ mod sha256 {
     /// SHA-256 round constants (first 32 bits of the fractional parts of the
     /// cube roots of the first 64 primes).
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
-        0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
-        0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
-        0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
-        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
-        0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
-        0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
-        0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
-        0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     /// Initial hash values (first 32 bits of the fractional parts of the
     /// square roots of the first 8 primes).
     const H0: [u32; 8] = [
-        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-        0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+        0x5be0cd19,
     ];
 
     /// Compute the SHA-256 digest of `data`.
@@ -88,12 +82,8 @@ mod sha256 {
                 ]);
             }
             for t in 16..64 {
-                let s0 = w[t - 15].rotate_right(7)
-                    ^ w[t - 15].rotate_right(18)
-                    ^ (w[t - 15] >> 3);
-                let s1 = w[t - 2].rotate_right(17)
-                    ^ w[t - 2].rotate_right(19)
-                    ^ (w[t - 2] >> 10);
+                let s0 = w[t - 15].rotate_right(7) ^ w[t - 15].rotate_right(18) ^ (w[t - 15] >> 3);
+                let s1 = w[t - 2].rotate_right(17) ^ w[t - 2].rotate_right(19) ^ (w[t - 2] >> 10);
                 w[t] = w[t - 16]
                     .wrapping_add(s0)
                     .wrapping_add(w[t - 7])
@@ -228,8 +218,12 @@ mod aes_gcm {
 
     fn sub_word(w: u32) -> u32 {
         let b = w.to_be_bytes();
-        u32::from_be_bytes([SBOX[b[0] as usize], SBOX[b[1] as usize],
-                            SBOX[b[2] as usize], SBOX[b[3] as usize]])
+        u32::from_be_bytes([
+            SBOX[b[0] as usize],
+            SBOX[b[1] as usize],
+            SBOX[b[2] as usize],
+            SBOX[b[3] as usize],
+        ])
     }
 
     fn rot_word(w: u32) -> u32 {
@@ -251,18 +245,31 @@ mod aes_gcm {
     fn shift_rows(s: &mut [u8; 16]) {
         // Row 1: shift left 1
         let t = s[1];
-        s[1] = s[5]; s[5] = s[9]; s[9] = s[13]; s[13] = t;
+        s[1] = s[5];
+        s[5] = s[9];
+        s[9] = s[13];
+        s[13] = t;
         // Row 2: shift left 2
         let (t0, t1) = (s[2], s[6]);
-        s[2] = s[10]; s[6] = s[14]; s[10] = t0; s[14] = t1;
+        s[2] = s[10];
+        s[6] = s[14];
+        s[10] = t0;
+        s[14] = t1;
         // Row 3: shift left 3 (= shift right 1)
         let t = s[15];
-        s[15] = s[11]; s[11] = s[7]; s[7] = s[3]; s[3] = t;
+        s[15] = s[11];
+        s[11] = s[7];
+        s[7] = s[3];
+        s[3] = t;
     }
 
     /// Multiply by 2 in GF(2^8) with irreducible polynomial x^8+x^4+x^3+x+1.
     fn xtime(x: u8) -> u8 {
-        if x & 0x80 != 0 { (x << 1) ^ 0x1b } else { x << 1 }
+        if x & 0x80 != 0 {
+            (x << 1) ^ 0x1b
+        } else {
+            x << 1
+        }
     }
 
     fn mix_columns(s: &mut [u8; 16]) {
@@ -270,7 +277,7 @@ mod aes_gcm {
             let i = 4 * col;
             let (a0, a1, a2, a3) = (s[i], s[i + 1], s[i + 2], s[i + 3]);
             let t = a0 ^ a1 ^ a2 ^ a3;
-            s[i]     = a0 ^ xtime(a0 ^ a1) ^ t;
+            s[i] = a0 ^ xtime(a0 ^ a1) ^ t;
             s[i + 1] = a1 ^ xtime(a1 ^ a2) ^ t;
             s[i + 2] = a2 ^ xtime(a2 ^ a3) ^ t;
             s[i + 3] = a3 ^ xtime(a3 ^ a0) ^ t;
@@ -286,7 +293,9 @@ mod aes_gcm {
         let mut v = *y;
         for i in 0..128 {
             if (x[i / 8] >> (7 - (i % 8))) & 1 == 1 {
-                for k in 0..16 { z[k] ^= v[k]; }
+                for k in 0..16 {
+                    z[k] ^= v[k];
+                }
             }
             let lsb = v[15] & 1;
             // Right-shift V by 1 bit
@@ -309,7 +318,9 @@ mod aes_gcm {
         for chunk in aad.chunks(16) {
             let mut block = [0u8; 16];
             block[..chunk.len()].copy_from_slice(chunk);
-            for k in 0..16 { y[k] ^= block[k]; }
+            for k in 0..16 {
+                y[k] ^= block[k];
+            }
             y = ghash_mul(&y, h);
         }
 
@@ -317,7 +328,9 @@ mod aes_gcm {
         for chunk in ct.chunks(16) {
             let mut block = [0u8; 16];
             block[..chunk.len()].copy_from_slice(chunk);
-            for k in 0..16 { y[k] ^= block[k]; }
+            for k in 0..16 {
+                y[k] ^= block[k];
+            }
             y = ghash_mul(&y, h);
         }
 
@@ -327,7 +340,9 @@ mod aes_gcm {
         let mut len_block = [0u8; 16];
         len_block[..8].copy_from_slice(&aad_bits.to_be_bytes());
         len_block[8..].copy_from_slice(&ct_bits.to_be_bytes());
-        for k in 0..16 { y[k] ^= len_block[k]; }
+        for k in 0..16 {
+            y[k] ^= len_block[k];
+        }
         y = ghash_mul(&y, h);
 
         y
@@ -653,13 +668,13 @@ fn encrypt_value(plaintext: &[u8]) -> (String, String) {
 /// Decrypt a stored credential.  Handles both AES-256-GCM (has nonce) and
 /// legacy XOR (no nonce) formats transparently.
 fn decrypt_value(cred: &StoredCredential) -> Result<Vec<u8>, String> {
-    let raw = from_b64(&cred.value_b64)
-        .map_err(|e| format!("failed to decode credential value: {e}"))?;
+    let raw =
+        from_b64(&cred.value_b64).map_err(|e| format!("failed to decode credential value: {e}"))?;
 
     match &cred.nonce_b64 {
         Some(nonce_b64) => {
-            let nonce_bytes = from_b64(nonce_b64)
-                .map_err(|e| format!("failed to decode nonce: {e}"))?;
+            let nonce_bytes =
+                from_b64(nonce_b64).map_err(|e| format!("failed to decode nonce: {e}"))?;
             if nonce_bytes.len() != 12 {
                 return Err("invalid nonce length (expected 12 bytes)".into());
             }
@@ -848,14 +863,12 @@ fn cmd_load(args: &[String]) -> Result<Value, String> {
 
     // Check expiry
     if is_expired(&cred.expires_at) {
-        return Err(
-            serde_json::to_string(&json!({
-                "error": format!("credential '{}' has expired", name),
-                "expired": true,
-                "expires_at": cred.expires_at,
-            }))
-            .unwrap_or_else(|_| format!("credential '{}' has expired", name)),
-        );
+        return Err(serde_json::to_string(&json!({
+            "error": format!("credential '{}' has expired", name),
+            "expired": true,
+            "expires_at": cred.expires_at,
+        }))
+        .unwrap_or_else(|_| format!("credential '{}' has expired", name)));
     }
 
     // Decrypt (handles both AES-GCM and legacy XOR)
@@ -922,8 +935,7 @@ fn list_namespace(namespace: &str) -> Result<Value, String> {
     }
 
     let mut credentials: Vec<Value> = Vec::new();
-    let entries =
-        fs::read_dir(&dir).map_err(|e| format!("failed to read credentials dir: {e}"))?;
+    let entries = fs::read_dir(&dir).map_err(|e| format!("failed to read credentials dir: {e}"))?;
 
     for entry in entries.flatten() {
         let fname = entry.file_name().to_string_lossy().to_string();
@@ -979,8 +991,7 @@ fn list_all_namespaces() -> Result<Value, String> {
     let mut namespaces: Vec<Value> = Vec::new();
     let mut total: usize = 0;
 
-    let entries =
-        fs::read_dir(&dir).map_err(|e| format!("failed to read credentials dir: {e}"))?;
+    let entries = fs::read_dir(&dir).map_err(|e| format!("failed to read credentials dir: {e}"))?;
 
     for entry in entries.flatten() {
         if !entry.path().is_dir() {
@@ -1115,10 +1126,7 @@ fn cmd_load_bundle(args: &[String]) -> Result<Value, String> {
         let cred_data = match fs::read_to_string(&cred_path) {
             Ok(d) => d,
             Err(e) => {
-                errors.insert(
-                    key.clone(),
-                    Value::String(format!("failed to read: {e}")),
-                );
+                errors.insert(key.clone(), Value::String(format!("failed to read: {e}")));
                 continue;
             }
         };
@@ -1126,10 +1134,7 @@ fn cmd_load_bundle(args: &[String]) -> Result<Value, String> {
         let cred: StoredCredential = match serde_json::from_str(&cred_data) {
             Ok(c) => c,
             Err(e) => {
-                errors.insert(
-                    key.clone(),
-                    Value::String(format!("failed to parse: {e}")),
-                );
+                errors.insert(key.clone(), Value::String(format!("failed to parse: {e}")));
                 continue;
             }
         };
@@ -1159,10 +1164,7 @@ fn cmd_load_bundle(args: &[String]) -> Result<Value, String> {
                     credentials.insert(key.clone(), Value::String(val));
                 }
                 Err(e) => {
-                    errors.insert(
-                        key.clone(),
-                        Value::String(format!("not valid UTF-8: {e}")),
-                    );
+                    errors.insert(key.clone(), Value::String(format!("not valid UTF-8: {e}")));
                 }
             },
             Err(e) => {
@@ -1227,11 +1229,7 @@ mod tests {
 
         // SHA-256("abc") = ba7816bf8f01cfea414140de5dae2223...
         let abc = sha256::hash(b"abc");
-        assert_eq!(
-            &abc[..4],
-            &[0xba, 0x78, 0x16, 0xbf],
-            "SHA-256 of 'abc'"
-        );
+        assert_eq!(&abc[..4], &[0xba, 0x78, 0x16, 0xbf], "SHA-256 of 'abc'");
     }
 
     // ---- AES-256-GCM ------------------------------------------------------
@@ -1385,7 +1383,13 @@ mod tests {
     fn list_all_namespaces() {
         setup();
         let name = unique_name("ns-list");
-        cmd_store(&[name.clone(), "val".into(), "--namespace".into(), "alpha".into()]).unwrap();
+        cmd_store(&[
+            name.clone(),
+            "val".into(),
+            "--namespace".into(),
+            "alpha".into(),
+        ])
+        .unwrap();
 
         let r = cmd_list(&[]).unwrap();
         let nss = r["namespaces"].as_array().unwrap();
@@ -1471,7 +1475,10 @@ mod tests {
         let r = cmd_load(&[name.clone()]);
         assert!(r.is_err());
         let err = r.unwrap_err();
-        assert!(err.contains("expired"), "error should mention expiry: {err}");
+        assert!(
+            err.contains("expired"),
+            "error should mention expiry: {err}"
+        );
     }
 
     #[test]
@@ -1497,13 +1504,7 @@ mod tests {
         setup();
         let name = unique_name("list-exp");
 
-        cmd_store(&[
-            name.clone(),
-            "v".into(),
-            "--ttl".into(),
-            "3600".into(),
-        ])
-        .unwrap();
+        cmd_store(&[name.clone(), "v".into(), "--ttl".into(), "3600".into()]).unwrap();
 
         let r = cmd_list(&["--namespace".into(), "default".into()]).unwrap();
         let creds = r["credentials"].as_array().unwrap();
@@ -1526,12 +1527,7 @@ mod tests {
         cmd_store(&[k1.clone(), "val1".into()]).unwrap();
         cmd_store(&[k2.clone(), "val2".into()]).unwrap();
 
-        let r = cmd_bundle(&[
-            bundle.clone(),
-            "--keys".into(),
-            format!("{k1},{k2}"),
-        ])
-        .unwrap();
+        let r = cmd_bundle(&[bundle.clone(), "--keys".into(), format!("{k1},{k2}")]).unwrap();
         assert_eq!(r["bundle"], bundle.as_str());
 
         let r = cmd_load_bundle(&[bundle.clone()]).unwrap();
@@ -1549,16 +1545,14 @@ mod tests {
 
         cmd_store(&[k1.clone(), "present".into()]).unwrap();
 
-        cmd_bundle(&[
-            bundle.clone(),
-            "--keys".into(),
-            format!("{k1},{missing}"),
-        ])
-        .unwrap();
+        cmd_bundle(&[bundle.clone(), "--keys".into(), format!("{k1},{missing}")]).unwrap();
 
         let r = cmd_load_bundle(&[bundle.clone()]).unwrap();
         assert_eq!(r["credentials"][&k1], "present");
-        assert!(r["errors"][&missing].is_string(), "missing key should have an error");
+        assert!(
+            r["errors"][&missing].is_string(),
+            "missing key should have an error"
+        );
     }
 
     // ---- Dispatch ---------------------------------------------------------

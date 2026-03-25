@@ -24,8 +24,8 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
 
-use chrono::Timelike;
 use crate::policy::{self, OpType};
+use chrono::Timelike;
 
 // ---------------------------------------------------------------------------
 // Data model
@@ -356,16 +356,16 @@ fn execute_job(job: &CronJob) -> CronRunResult {
     for cred_name in &job.credentials {
         // Try to load the credential value from the credential store.
         // We read the file directly to avoid circular module dependencies.
-        let cred_path = PathBuf::from(
-            std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()),
-        )
-        .join("credentials")
-        .join(format!("{cred_name}.json"));
+        let cred_path =
+            PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
+                .join("credentials")
+                .join(format!("{cred_name}.json"));
         if let Ok(data) = fs::read_to_string(&cred_path) {
             if let Ok(parsed) = serde_json::from_str::<Value>(&data) {
                 if let Some(val) = parsed.get("value_b64").and_then(|v| v.as_str()) {
                     // Inject the raw b64 token — the command can decode it.
-                    let env_key = format!("COS_CRED_{}", cred_name.to_uppercase().replace('-', "_"));
+                    let env_key =
+                        format!("COS_CRED_{}", cred_name.to_uppercase().replace('-', "_"));
                     cmd.env(env_key, val);
                 }
             }
@@ -658,7 +658,11 @@ fn cmd_add(args: &[String]) -> Result<Value, String> {
                     "queue" | "Queue" => OverlapPolicy::Queue,
                     "kill" | "Kill" => OverlapPolicy::Kill,
                     "allow" | "Allow" => OverlapPolicy::Allow,
-                    other => return Err(format!("unknown overlap policy: {other}. valid: skip, queue, kill, allow")),
+                    other => {
+                        return Err(format!(
+                            "unknown overlap policy: {other}. valid: skip, queue, kill, allow"
+                        ))
+                    }
                 };
                 i += 2;
             }
@@ -821,7 +825,9 @@ fn cmd_disable(args: &[String]) -> Result<Value, String> {
 fn cmd_logs(args: &[String]) -> Result<Value, String> {
     policy::require(OpType::Read).map_err(|v| v.to_string())?;
 
-    let id = args.first().ok_or("usage: cos cron logs <id> [--limit N]")?;
+    let id = args
+        .first()
+        .ok_or("usage: cos cron logs <id> [--limit N]")?;
 
     // Verify the job exists
     if !job_path(id).is_file() {
@@ -1012,7 +1018,9 @@ mod tests {
 
     #[test]
     fn test_cron_matches_every_minute() {
-        let t = chrono::Utc.with_ymd_and_hms(2026, 3, 25, 14, 30, 0).unwrap();
+        let t = chrono::Utc
+            .with_ymd_and_hms(2026, 3, 25, 14, 30, 0)
+            .unwrap();
         assert!(cron_matches("* * * * *", &t));
 
         let t2 = chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
@@ -1021,7 +1029,9 @@ mod tests {
 
     #[test]
     fn test_cron_matches_specific() {
-        let t = chrono::Utc.with_ymd_and_hms(2026, 3, 25, 14, 30, 0).unwrap();
+        let t = chrono::Utc
+            .with_ymd_and_hms(2026, 3, 25, 14, 30, 0)
+            .unwrap();
         assert!(cron_matches("30 14 * * *", &t));
         assert!(!cron_matches("31 14 * * *", &t));
         assert!(!cron_matches("30 15 * * *", &t));
@@ -1031,14 +1041,15 @@ mod tests {
     fn test_cron_matches_step() {
         // */5 means 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55
         for min in [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55] {
-            let t = chrono::Utc.with_ymd_and_hms(2026, 3, 25, 12, min, 0).unwrap();
-            assert!(
-                cron_matches("*/5 * * * *", &t),
-                "should match minute {min}"
-            );
+            let t = chrono::Utc
+                .with_ymd_and_hms(2026, 3, 25, 12, min, 0)
+                .unwrap();
+            assert!(cron_matches("*/5 * * * *", &t), "should match minute {min}");
         }
         for min in [1, 2, 3, 4, 6, 7, 8, 9, 11] {
-            let t = chrono::Utc.with_ymd_and_hms(2026, 3, 25, 12, min, 0).unwrap();
+            let t = chrono::Utc
+                .with_ymd_and_hms(2026, 3, 25, 12, min, 0)
+                .unwrap();
             assert!(
                 !cron_matches("*/5 * * * *", &t),
                 "should NOT match minute {min}"
@@ -1049,11 +1060,10 @@ mod tests {
     #[test]
     fn test_cron_matches_range() {
         for min in 1..=5 {
-            let t = chrono::Utc.with_ymd_and_hms(2026, 3, 25, 12, min, 0).unwrap();
-            assert!(
-                cron_matches("1-5 * * * *", &t),
-                "should match minute {min}"
-            );
+            let t = chrono::Utc
+                .with_ymd_and_hms(2026, 3, 25, 12, min, 0)
+                .unwrap();
+            assert!(cron_matches("1-5 * * * *", &t), "should match minute {min}");
         }
         let t = chrono::Utc.with_ymd_and_hms(2026, 3, 25, 12, 0, 0).unwrap();
         assert!(!cron_matches("1-5 * * * *", &t));
@@ -1064,7 +1074,9 @@ mod tests {
     #[test]
     fn test_cron_matches_list() {
         for min in [1, 15, 30] {
-            let t = chrono::Utc.with_ymd_and_hms(2026, 3, 25, 12, min, 0).unwrap();
+            let t = chrono::Utc
+                .with_ymd_and_hms(2026, 3, 25, 12, min, 0)
+                .unwrap();
             assert!(
                 cron_matches("1,15,30 * * * *", &t),
                 "should match minute {min}"
@@ -1094,7 +1106,9 @@ mod tests {
 
     #[test]
     fn test_cron_invalid_fields() {
-        let t = chrono::Utc.with_ymd_and_hms(2026, 3, 25, 14, 30, 0).unwrap();
+        let t = chrono::Utc
+            .with_ymd_and_hms(2026, 3, 25, 14, 30, 0)
+            .unwrap();
         // Too few fields
         assert!(!cron_matches("* * *", &t));
         // Too many fields
@@ -1113,16 +1127,28 @@ mod tests {
 
     #[test]
     fn test_next_run_time_every_minute() {
-        let from = chrono::Utc.with_ymd_and_hms(2026, 3, 25, 14, 30, 0).unwrap();
+        let from = chrono::Utc
+            .with_ymd_and_hms(2026, 3, 25, 14, 30, 0)
+            .unwrap();
         let next = next_run_time("* * * * *", &from).unwrap();
-        assert_eq!(next, chrono::Utc.with_ymd_and_hms(2026, 3, 25, 14, 31, 0).unwrap());
+        assert_eq!(
+            next,
+            chrono::Utc
+                .with_ymd_and_hms(2026, 3, 25, 14, 31, 0)
+                .unwrap()
+        );
     }
 
     #[test]
     fn test_next_run_time_specific() {
-        let from = chrono::Utc.with_ymd_and_hms(2026, 3, 25, 14, 30, 0).unwrap();
+        let from = chrono::Utc
+            .with_ymd_and_hms(2026, 3, 25, 14, 30, 0)
+            .unwrap();
         let next = next_run_time("0 15 * * *", &from).unwrap();
-        assert_eq!(next, chrono::Utc.with_ymd_and_hms(2026, 3, 25, 15, 0, 0).unwrap());
+        assert_eq!(
+            next,
+            chrono::Utc.with_ymd_and_hms(2026, 3, 25, 15, 0, 0).unwrap()
+        );
     }
 
     // -- overlap policy deserialization --
@@ -1191,8 +1217,7 @@ mod tests {
     fn cron_setup() -> std::sync::MutexGuard<'static, ()> {
         let guard = CRON_LOCK.lock().unwrap();
         CRON_INIT.call_once(|| {
-            let dir = std::env::temp_dir()
-                .join(format!("cos-cron-test-{}", std::process::id()));
+            let dir = std::env::temp_dir().join(format!("cos-cron-test-{}", std::process::id()));
             let _ = fs::remove_dir_all(&dir);
             let _ = fs::create_dir_all(&dir);
             std::env::set_var("COS_DATA_DIR", &dir);
