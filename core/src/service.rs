@@ -62,6 +62,10 @@ struct ServiceDef {
     restart: String,
     #[serde(default)]
     depends_on: Vec<String>,
+    /// Credential names to inject as environment variables on start.
+    /// Values are loaded from `cos credential` store at start time.
+    #[serde(default)]
+    credentials: Vec<String>,
     #[serde(default)]
     lifecycle: Option<LifecycleHooks>,
 }
@@ -468,6 +472,27 @@ fn cmd_start(args: &[String]) -> Result<Value, String> {
         cmd.env(k, v);
     }
 
+    // Inject credentials as environment variables
+    let mut injected_creds: Vec<String> = Vec::new();
+    for cred_name in &def.credentials {
+        match crate::credential::run("load", &[cred_name.clone()]) {
+            Ok(v) => {
+                if let Some(val) = v["value"].as_str() {
+                    cmd.env(cred_name, val);
+                    injected_creds.push(cred_name.clone());
+                }
+            }
+            Err(e) => {
+                steps.push(json!({
+                    "step": "credential_load",
+                    "credential": cred_name,
+                    "status": "failed",
+                    "error": e,
+                }));
+            }
+        }
+    }
+
     cmd.stdin(Stdio::null());
     cmd.stdout(log_file);
     cmd.stderr(log_err);
@@ -533,14 +558,18 @@ fn cmd_start(args: &[String]) -> Result<Value, String> {
         None => "running",
     };
 
-    Ok(json!({
+    let mut result = json!({
         "name": name,
         "status": status,
         "pid": pid,
         "healthy": healthy,
         "log": log.to_string_lossy(),
         "steps": steps,
-    }))
+    });
+    if !injected_creds.is_empty() {
+        result["credentials_injected"] = json!(injected_creds);
+    }
+    Ok(result)
 }
 
 /// Graceful stop a service by name.
@@ -887,6 +916,7 @@ fn cmd_register(args: &[String]) -> Result<Value, String> {
     let mut drain_timeout: Option<u64> = None;
     let mut stop_timeout: Option<u64> = None;
     let mut checkpoint_cmd: Option<String> = None;
+    let mut credentials: Vec<String> = Vec::new();
 
     let mut i = 0;
     while i < args.len() {
@@ -947,6 +977,13 @@ fn cmd_register(args: &[String]) -> Result<Value, String> {
                 checkpoint_cmd = Some(args[i + 1].clone());
                 i += 2;
             }
+            "--credentials" if i + 1 < args.len() => {
+                credentials = args[i + 1]
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .collect();
+                i += 2;
+            }
             _ => i += 1,
         }
     }
@@ -1001,6 +1038,7 @@ fn cmd_register(args: &[String]) -> Result<Value, String> {
         health,
         restart: default_restart(),
         depends_on: Vec::new(),
+        credentials,
         lifecycle,
     };
 
@@ -1174,6 +1212,7 @@ mod tests {
             }),
             restart: "on-failure".into(),
             depends_on: vec!["dep1".into()],
+            credentials: Vec::new(),
             lifecycle: Some(LifecycleHooks {
                 pre_start: Some("echo pre".into()),
                 post_start: None,
@@ -1341,6 +1380,7 @@ mod tests {
                 health: None,
                 restart: "on-failure".into(),
                 depends_on: vec![],
+                credentials: Vec::new(),
                 lifecycle: None,
             },
         );
@@ -1355,6 +1395,7 @@ mod tests {
                 health: None,
                 restart: "on-failure".into(),
                 depends_on: vec!["db".into()],
+                credentials: Vec::new(),
                 lifecycle: None,
             },
         );
@@ -1369,6 +1410,7 @@ mod tests {
                 health: None,
                 restart: "on-failure".into(),
                 depends_on: vec!["api".into()],
+                credentials: Vec::new(),
                 lifecycle: None,
             },
         );
@@ -1411,5 +1453,23 @@ mod tests {
         assert_eq!(lc.drain_timeout_secs, 10);
         assert_eq!(lc.stop_timeout_secs, 20);
         assert!(lc.checkpoint_cmd.is_none());
+    }
+
+    #[test]
+    fn test_service_def_with_credentials() {
+        let json = r#"{
+            "name": "my-agent",
+            "command": "python agent.py",
+            "credentials": ["OPENAI_KEY", "DB_URL"]
+        }"#;
+        let def: ServiceDef = serde_json::from_str(json).unwrap();
+        assert_eq!(def.credentials, vec!["OPENAI_KEY", "DB_URL"]);
+    }
+
+    #[test]
+    fn test_service_def_without_credentials() {
+        let json = r#"{"name": "test", "command": "echo hi"}"#;
+        let def: ServiceDef = serde_json::from_str(json).unwrap();
+        assert!(def.credentials.is_empty());
     }
 }

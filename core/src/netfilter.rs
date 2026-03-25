@@ -1,10 +1,11 @@
-/// OS-level outbound network firewall — domain-based allow/deny rules.
+/// OS-level outbound network firewall — domain-based allow/deny rules with rate limiting.
 ///
 /// Analogous to iptables/nftables, this provides declarative network access
 /// control for agent processes. Rules are persisted as JSON and enforced
 /// at the sandbox level via iptables (Linux) or advisory-only on other platforms.
 ///
 /// Storage: `$COS_DATA_DIR/netfilter/rules.json`
+///            `$COS_DATA_DIR/netfilter/rate-state.json`
 ///
 /// Commands:
 ///   add --allow <domain> [--port N]  — allow outbound to a domain
@@ -13,8 +14,13 @@
 ///   list                             — list all rules
 ///   check <domain>                   — check if a domain is allowed
 ///   reset                            — remove all rules (allow-all default)
+///   rate-limit <domain> --rpm N [--burst N] — set rate limit for a domain
+///   rate-limits                       — list all rate limits
+///   rate-limit-remove <domain>        — remove a rate limit
+///   rate-check <domain> [--dry-run]   — check/record a request against rate limits
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -54,11 +60,28 @@ fn is_false(v: &bool) -> bool {
     !v
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimit {
+    pub domain: String,
+    pub rpm: u32,
+    #[serde(default)]
+    pub burst: u32,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct RateLimitState {
+    /// domain -> list of request timestamps (ISO 8601)
+    requests: BTreeMap<String, Vec<String>>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NetFilterConfig {
     /// "allow-all" (default) or "deny-all"
     pub default_policy: String,
     pub rules: Vec<NetRule>,
+    #[serde(default)]
+    pub rate_limits: Vec<RateLimit>,
 }
 
 fn load_config() -> NetFilterConfig {
@@ -71,6 +94,7 @@ fn load_config() -> NetFilterConfig {
     NetFilterConfig {
         default_policy: "allow-all".into(),
         rules: vec![],
+        rate_limits: vec![],
     }
 }
 
@@ -91,6 +115,10 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "reset" => cmd_reset(args),
         "default" => cmd_default(args),
         "export" => cmd_export(args),
+        "rate-limit" => cmd_rate_limit(args),
+        "rate-limits" => cmd_rate_limits(args),
+        "rate-limit-remove" => cmd_rate_limit_remove(args),
+        "rate-check" => cmd_rate_check(args),
         _ => Err(format!("unknown netfilter command: {command}")),
     }
 }
@@ -300,12 +328,30 @@ pub fn cmd_check(args: &[String]) -> Result<Value, String> {
         binary.as_deref(),
     );
 
-    Ok(json!({
+    let mut out = json!({
         "domain": domain,
         "allowed": result.allowed,
         "matched_rule": result.matched_rule,
         "reason": result.reason,
-    }))
+    });
+
+    // Also check rate limits if the domain is allowed
+    if result.allowed {
+        let config = load_config();
+        if let Some(rl) = find_rate_limit(&config, domain) {
+            let state = load_rate_state();
+            let timestamps = state.requests.get(domain).cloned().unwrap_or_default();
+            let count = count_requests_in_window(&timestamps, 60);
+            let limit = rl.rpm + rl.burst;
+            if count >= limit as usize {
+                out["rate_limited"] = json!(true);
+                out["requests_in_window"] = json!(count);
+                out["limit"] = json!(limit);
+            }
+        }
+    }
+
+    Ok(out)
 }
 
 /// Result of a network policy evaluation.
@@ -413,15 +459,17 @@ fn domain_matches(pattern: &str, domain: &str) -> bool {
     domain == pattern
 }
 
-/// Reset all rules.
+/// Reset all rules and rate limits.
 fn cmd_reset(_args: &[String]) -> Result<Value, String> {
     policy::require(OpType::System).map_err(|v| v.to_string())?;
 
     let cfg = NetFilterConfig {
         default_policy: "allow-all".into(),
         rules: vec![],
+        rate_limits: vec![],
     };
     save_config(&cfg);
+    save_rate_state(&RateLimitState::default());
 
     Ok(json!({
         "reset": true,
@@ -463,6 +511,276 @@ fn cmd_export(_args: &[String]) -> Result<Value, String> {
 
     let cfg = load_config();
     serde_json::to_value(&cfg).map_err(|e| format!("failed to serialize config: {e}"))
+}
+
+// ---------------------------------------------------------------------------
+// Rate limiting
+// ---------------------------------------------------------------------------
+
+fn rate_state_path() -> PathBuf {
+    netfilter_dir().join("rate-state.json")
+}
+
+fn load_rate_state() -> RateLimitState {
+    let path = rate_state_path();
+    if let Ok(data) = fs::read_to_string(&path) {
+        if let Ok(state) = serde_json::from_str(&data) {
+            return state;
+        }
+    }
+    RateLimitState::default()
+}
+
+fn save_rate_state(state: &RateLimitState) {
+    let dir = netfilter_dir();
+    let _ = fs::create_dir_all(&dir);
+    if let Ok(data) = serde_json::to_string_pretty(state) {
+        let _ = fs::write(rate_state_path(), data);
+    }
+}
+
+/// Find the rate limit for a domain. Exact match first, then wildcard.
+fn find_rate_limit<'a>(config: &'a NetFilterConfig, domain: &str) -> Option<&'a RateLimit> {
+    // Exact match first
+    if let Some(rl) = config.rate_limits.iter().find(|rl| rl.domain == domain) {
+        return Some(rl);
+    }
+    // Wildcard match (*.example.com)
+    config
+        .rate_limits
+        .iter()
+        .find(|rl| rl.domain != domain && domain_matches(&rl.domain, domain))
+}
+
+/// Count timestamps within the last `window_secs` seconds.
+fn count_requests_in_window(timestamps: &[String], window_secs: u64) -> usize {
+    let cutoff = chrono::Utc::now() - chrono::Duration::seconds(window_secs as i64);
+    timestamps
+        .iter()
+        .filter(|ts| {
+            chrono::DateTime::parse_from_rfc3339(ts)
+                .map(|t| t >= cutoff)
+                .unwrap_or(false)
+        })
+        .count()
+}
+
+/// Return timestamps that are still within the window (pruned).
+fn prune_timestamps(timestamps: &[String], window_secs: u64) -> Vec<String> {
+    let cutoff = chrono::Utc::now() - chrono::Duration::seconds(window_secs as i64);
+    timestamps
+        .iter()
+        .filter(|ts| {
+            chrono::DateTime::parse_from_rfc3339(ts)
+                .map(|t| t >= cutoff)
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect()
+}
+
+/// Return seconds until the oldest request in the window expires.
+/// This is the "retry_after_secs" value.
+fn earliest_expiry(timestamps: &[String], window_secs: u64) -> Option<u64> {
+    let now = chrono::Utc::now();
+    let cutoff = now - chrono::Duration::seconds(window_secs as i64);
+
+    timestamps
+        .iter()
+        .filter_map(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
+        .filter(|t| *t >= cutoff)
+        .min()
+        .map(|oldest| {
+            let expires_at = oldest + chrono::Duration::seconds(window_secs as i64);
+            let diff = expires_at.signed_duration_since(now);
+            if diff.num_seconds() > 0 {
+                diff.num_seconds() as u64
+            } else {
+                0
+            }
+        })
+}
+
+/// Set a rate limit for a domain.
+///
+/// Usage: cos netfilter rate-limit <domain> --rpm N [--burst N]
+fn cmd_rate_limit(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::System).map_err(|v| v.to_string())?;
+
+    let domain = args
+        .first()
+        .ok_or("usage: cos netfilter rate-limit <domain> --rpm N [--burst N]")?;
+
+    let mut rpm: Option<u32> = None;
+    let mut burst: u32 = 0;
+
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--rpm" if i + 1 < args.len() => {
+                rpm = Some(
+                    args[i + 1]
+                        .parse::<u32>()
+                        .map_err(|_| format!("invalid rpm: {}", args[i + 1]))?,
+                );
+                i += 2;
+            }
+            "--burst" if i + 1 < args.len() => {
+                burst = args[i + 1]
+                    .parse::<u32>()
+                    .map_err(|_| format!("invalid burst: {}", args[i + 1]))?;
+                i += 2;
+            }
+            _ => i += 1,
+        }
+    }
+
+    let rpm = rpm.ok_or("usage: cos netfilter rate-limit <domain> --rpm N [--burst N]")?;
+
+    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let rl = RateLimit {
+        domain: domain.clone(),
+        rpm,
+        burst,
+        created_at: now,
+    };
+
+    let mut cfg = load_config();
+    cfg.rate_limits.retain(|r| r.domain != *domain);
+    cfg.rate_limits.push(rl);
+    save_config(&cfg);
+
+    Ok(json!({
+        "domain": domain,
+        "rpm": rpm,
+        "burst": burst,
+    }))
+}
+
+/// List all rate limits.
+///
+/// Usage: cos netfilter rate-limits
+fn cmd_rate_limits(_args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+
+    let cfg = load_config();
+    let limits: Vec<Value> = cfg
+        .rate_limits
+        .iter()
+        .map(|rl| {
+            json!({
+                "domain": rl.domain,
+                "rpm": rl.rpm,
+                "burst": rl.burst,
+                "created_at": rl.created_at,
+            })
+        })
+        .collect();
+
+    Ok(json!({
+        "rate_limits": limits,
+        "count": limits.len(),
+    }))
+}
+
+/// Remove a rate limit for a domain.
+///
+/// Usage: cos netfilter rate-limit-remove <domain>
+fn cmd_rate_limit_remove(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::System).map_err(|v| v.to_string())?;
+
+    let domain = args
+        .first()
+        .ok_or("usage: cos netfilter rate-limit-remove <domain>")?;
+
+    let mut cfg = load_config();
+    let before = cfg.rate_limits.len();
+    cfg.rate_limits.retain(|r| r.domain != *domain);
+    let removed = before - cfg.rate_limits.len();
+    save_config(&cfg);
+
+    // Also clean up state for this domain
+    let mut state = load_rate_state();
+    state.requests.remove(domain.as_str());
+    save_rate_state(&state);
+
+    Ok(json!({
+        "domain": domain,
+        "removed": removed,
+    }))
+}
+
+/// Check if a request would be allowed under rate limits (and record it).
+///
+/// Usage: cos netfilter rate-check <domain> [--dry-run]
+fn cmd_rate_check(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+
+    let domain = args
+        .first()
+        .ok_or("usage: cos netfilter rate-check <domain> [--dry-run]")?;
+
+    let dry_run = args.iter().any(|a| a == "--dry-run");
+
+    let config = load_config();
+    let rl = match find_rate_limit(&config, domain) {
+        Some(rl) => rl,
+        None => {
+            // No rate limit configured — always allowed
+            return Ok(json!({
+                "domain": domain,
+                "allowed": true,
+                "requests_in_window": 0,
+                "limit": null,
+                "burst": 0,
+                "remaining": null,
+            }));
+        }
+    };
+
+    let mut state = load_rate_state();
+    let timestamps = state
+        .requests
+        .get(domain.as_str())
+        .cloned()
+        .unwrap_or_default();
+
+    // Prune old timestamps
+    let active = prune_timestamps(&timestamps, 60);
+    let count = active.len();
+    let limit = rl.rpm + rl.burst;
+
+    if count < limit as usize {
+        // Allowed
+        let remaining = limit as usize - count - 1; // -1 for this request
+        if !dry_run {
+            let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+            let mut new_timestamps = active;
+            new_timestamps.push(now);
+            state.requests.insert(domain.clone(), new_timestamps);
+            save_rate_state(&state);
+        }
+        Ok(json!({
+            "domain": domain,
+            "allowed": true,
+            "requests_in_window": count,
+            "limit": limit,
+            "burst": rl.burst,
+            "remaining": remaining,
+        }))
+    } else {
+        // Denied
+        let retry_after = earliest_expiry(&active, 60).unwrap_or(60);
+        Ok(json!({
+            "domain": domain,
+            "allowed": false,
+            "requests_in_window": count,
+            "limit": limit,
+            "burst": rl.burst,
+            "remaining": 0,
+            "retry_after_secs": retry_after,
+        }))
+    }
 }
 
 #[cfg(test)]
@@ -702,5 +1020,157 @@ mod tests {
         assert_eq!(r["rules"][0]["methods"][0], "GET");
         assert_eq!(r["rules"][0]["path"], "/api/**");
         assert_eq!(r["rules"][0]["tls_required"], true);
+    }
+
+    // --- Rate limiting tests ---
+
+    #[test]
+    fn test_rate_limit_add_and_list() {
+        let _g = setup();
+        let r = cmd_rate_limit(&vec![
+            "api.openai.com".into(),
+            "--rpm".into(),
+            "60".into(),
+            "--burst".into(),
+            "10".into(),
+        ])
+        .unwrap();
+        assert_eq!(r["domain"], "api.openai.com");
+        assert_eq!(r["rpm"], 60);
+        assert_eq!(r["burst"], 10);
+
+        let r = cmd_rate_limits(&vec![]).unwrap();
+        assert_eq!(r["count"], 1);
+        assert_eq!(r["rate_limits"][0]["domain"], "api.openai.com");
+        assert_eq!(r["rate_limits"][0]["rpm"], 60);
+        assert_eq!(r["rate_limits"][0]["burst"], 10);
+    }
+
+    #[test]
+    fn test_rate_limit_remove() {
+        let _g = setup();
+        cmd_rate_limit(&vec!["api.openai.com".into(), "--rpm".into(), "60".into()]).unwrap();
+
+        let r = cmd_rate_limit_remove(&vec!["api.openai.com".into()]).unwrap();
+        assert_eq!(r["removed"], 1);
+
+        let r = cmd_rate_limits(&vec![]).unwrap();
+        assert_eq!(r["count"], 0);
+    }
+
+    #[test]
+    fn test_rate_check_allowed() {
+        let _g = setup();
+        cmd_rate_limit(&vec!["api.openai.com".into(), "--rpm".into(), "10".into()]).unwrap();
+
+        for i in 0..5 {
+            let r = cmd_rate_check(&vec!["api.openai.com".into()]).unwrap();
+            assert_eq!(r["allowed"], true, "request {i} should be allowed");
+            assert_eq!(r["requests_in_window"], i);
+        }
+    }
+
+    #[test]
+    fn test_rate_check_denied() {
+        let _g = setup();
+        cmd_rate_limit(&vec!["api.openai.com".into(), "--rpm".into(), "3".into()]).unwrap();
+
+        for _ in 0..3 {
+            let r = cmd_rate_check(&vec!["api.openai.com".into()]).unwrap();
+            assert_eq!(r["allowed"], true);
+        }
+
+        // 4th request should be denied
+        let r = cmd_rate_check(&vec!["api.openai.com".into()]).unwrap();
+        assert_eq!(r["allowed"], false);
+        assert_eq!(r["remaining"], 0);
+        assert!(r["retry_after_secs"].as_u64().unwrap() > 0);
+    }
+
+    #[test]
+    fn test_rate_check_dry_run() {
+        let _g = setup();
+        cmd_rate_limit(&vec!["api.openai.com".into(), "--rpm".into(), "10".into()]).unwrap();
+
+        // Dry run should not record
+        let r = cmd_rate_check(&vec!["api.openai.com".into(), "--dry-run".into()]).unwrap();
+        assert_eq!(r["allowed"], true);
+        assert_eq!(r["requests_in_window"], 0);
+
+        // Still 0 after dry run
+        let r = cmd_rate_check(&vec!["api.openai.com".into(), "--dry-run".into()]).unwrap();
+        assert_eq!(r["requests_in_window"], 0);
+
+        // Real request records it
+        let r = cmd_rate_check(&vec!["api.openai.com".into()]).unwrap();
+        assert_eq!(r["allowed"], true);
+        assert_eq!(r["requests_in_window"], 0); // was 0 before this request
+
+        // Now there's 1
+        let r = cmd_rate_check(&vec!["api.openai.com".into(), "--dry-run".into()]).unwrap();
+        assert_eq!(r["requests_in_window"], 1);
+    }
+
+    #[test]
+    fn test_rate_check_window_cleanup() {
+        let _g = setup();
+        cmd_rate_limit(&vec!["api.openai.com".into(), "--rpm".into(), "10".into()]).unwrap();
+
+        // Manually inject old timestamps that are outside the 60s window
+        let old_time = (chrono::Utc::now() - chrono::Duration::seconds(120))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let mut state = RateLimitState::default();
+        state
+            .requests
+            .insert("api.openai.com".into(), vec![old_time; 5]);
+        save_rate_state(&state);
+
+        // Old timestamps should be pruned — count should be 0
+        let r = cmd_rate_check(&vec!["api.openai.com".into(), "--dry-run".into()]).unwrap();
+        assert_eq!(r["allowed"], true);
+        assert_eq!(r["requests_in_window"], 0);
+    }
+
+    #[test]
+    fn test_find_rate_limit_wildcard() {
+        let _g = setup();
+        cmd_rate_limit(&vec!["*.openai.com".into(), "--rpm".into(), "30".into()]).unwrap();
+
+        // Wildcard should match subdomains
+        let config = load_config();
+        let rl = find_rate_limit(&config, "api.openai.com");
+        assert!(rl.is_some());
+        assert_eq!(rl.unwrap().rpm, 30);
+
+        // Should also match the base domain
+        let rl = find_rate_limit(&config, "openai.com");
+        assert!(rl.is_some());
+    }
+
+    #[test]
+    fn test_rate_limit_burst() {
+        let _g = setup();
+        cmd_rate_limit(&vec![
+            "api.openai.com".into(),
+            "--rpm".into(),
+            "2".into(),
+            "--burst".into(),
+            "1".into(),
+        ])
+        .unwrap();
+
+        // rpm=2, burst=1 → total limit = 3
+        for i in 0..3 {
+            let r = cmd_rate_check(&vec!["api.openai.com".into()]).unwrap();
+            assert_eq!(
+                r["allowed"], true,
+                "request {i} should be allowed (limit=3)"
+            );
+        }
+
+        // 4th request should be denied
+        let r = cmd_rate_check(&vec!["api.openai.com".into()]).unwrap();
+        assert_eq!(r["allowed"], false);
+        assert_eq!(r["limit"], 3);
     }
 }
