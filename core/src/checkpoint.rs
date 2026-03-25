@@ -1367,13 +1367,27 @@ mod tests {
 
     // -- quota --
 
+    // Quota and namespace tests share a single COS_DATA_DIR (set via Once)
+    // and use a Mutex to serialize because they share global state (quota.json,
+    // namespace dirs).
+    use std::sync::{Mutex, Once};
+    static CP_INIT: Once = Once::new();
+    static CP_LOCK: Mutex<()> = Mutex::new(());
+
+    fn cp_setup() -> std::sync::MutexGuard<'static, ()> {
+        let guard = CP_LOCK.lock().unwrap();
+        CP_INIT.call_once(|| {
+            let dir = std::env::temp_dir().join(format!("cos-test-shared-{}", std::process::id()));
+            let _ = fs::create_dir_all(&dir);
+            std::env::set_var("COS_DATA_DIR", &dir);
+        });
+        std::env::remove_var("COS_SESSION");
+        guard
+    }
+
     #[test]
     fn quota_set_and_status() {
-        let dir = std::env::temp_dir().join("cos-cp-quota-test");
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        std::env::set_var("COS_DATA_DIR", &dir);
-        std::env::remove_var("COS_SESSION");
+        let _g = cp_setup();
 
         let r = cmd_quota_set(&vec!["1G".into()]).unwrap();
         assert_eq!(r["quota_set"], true);
@@ -1381,34 +1395,27 @@ mod tests {
         let r = cmd_quota_status(&vec![]).unwrap();
         assert_eq!(r["quota_enabled"], true);
         assert_eq!(r["exceeded"], false);
-
-        let _ = fs::remove_dir_all(&dir);
     }
 
     // -- namespaces --
 
     #[test]
     fn namespace_create_list_destroy() {
-        let dir = std::env::temp_dir().join("cos-cp-ns-test");
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        std::env::set_var("COS_DATA_DIR", &dir);
-        std::env::remove_var("COS_SESSION");
+        let _g = cp_setup();
+        let ns_name = format!("test-ns-{}", std::process::id());
 
-        let r = create_namespace("test-ns").unwrap();
-        assert_eq!(r["created"], "test-ns");
+        let r = create_namespace(&ns_name).unwrap();
+        assert_eq!(r["created"], ns_name);
 
         let r = list_namespaces().unwrap();
-        assert_eq!(r["count"], 1);
+        assert!(r["count"].as_u64().unwrap() >= 1);
 
-        let r = namespace_status("test-ns").unwrap();
-        assert_eq!(r["namespace"], "test-ns");
+        let r = namespace_status(&ns_name).unwrap();
+        assert_eq!(r["namespace"], ns_name);
         assert_eq!(r["pending_changes"], 0);
 
-        let r = destroy_namespace("test-ns").unwrap();
-        assert_eq!(r["destroyed"], "test-ns");
-
-        let _ = fs::remove_dir_all(&dir);
+        let r = destroy_namespace(&ns_name).unwrap();
+        assert_eq!(r["destroyed"], ns_name);
     }
 
     #[test]

@@ -468,18 +468,24 @@ fn cmd_export(_args: &[String]) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, Once};
 
-    use std::sync::atomic::{AtomicU32, Ordering};
-    static NF_COUNTER: AtomicU32 = AtomicU32::new(0);
+    static INIT: Once = Once::new();
+    /// Netfilter tests must be serialized because they all write to the same
+    /// rules.json file. Each test locks this mutex, resets rules, then runs.
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
 
-    fn setup() {
-        let n = NF_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let dir =
-            std::env::temp_dir().join(format!("cos-netfilter-test-{}-{}", std::process::id(), n));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        std::env::set_var("COS_DATA_DIR", &dir);
+    /// Acquire the lock, init the shared dir once, then reset rules.
+    fn setup() -> std::sync::MutexGuard<'static, ()> {
+        let guard = TEST_LOCK.lock().unwrap();
+        INIT.call_once(|| {
+            let dir = std::env::temp_dir().join(format!("cos-test-shared-{}", std::process::id()));
+            let _ = fs::create_dir_all(&dir);
+            std::env::set_var("COS_DATA_DIR", &dir);
+        });
         std::env::remove_var("COS_SESSION");
+        let _ = cmd_reset(&vec![]);
+        guard
     }
 
     #[test]
@@ -502,7 +508,7 @@ mod tests {
 
     #[test]
     fn add_and_list_rules() {
-        setup();
+        let _g = setup();
         cmd_add(&vec!["--allow".into(), "github.com".into()]).unwrap();
         cmd_add(&vec!["--deny".into(), "evil.com".into()]).unwrap();
 
@@ -512,7 +518,7 @@ mod tests {
 
     #[test]
     fn check_domain_with_rules() {
-        setup();
+        let _g = setup();
         cmd_add(&vec!["--allow".into(), "api.openai.com".into()]).unwrap();
         cmd_add(&vec!["--deny".into(), "*.malware.com".into()]).unwrap();
 
@@ -522,7 +528,7 @@ mod tests {
 
     #[test]
     fn deny_all_default() {
-        setup();
+        let _g = setup();
         cmd_default(&vec!["deny-all".into()]).unwrap();
         cmd_add(&vec!["--allow".into(), "github.com".into()]).unwrap();
 
@@ -532,7 +538,7 @@ mod tests {
 
     #[test]
     fn remove_rule() {
-        setup();
+        let _g = setup();
         cmd_add(&vec!["--allow".into(), "temp.com".into()]).unwrap();
         cmd_remove(&vec!["temp.com".into()]).unwrap();
 
@@ -542,7 +548,7 @@ mod tests {
 
     #[test]
     fn reset_clears_all() {
-        setup();
+        let _g = setup();
         cmd_add(&vec!["--allow".into(), "a.com".into()]).unwrap();
         cmd_add(&vec!["--deny".into(), "b.com".into()]).unwrap();
         cmd_reset(&vec![]).unwrap();
@@ -554,7 +560,7 @@ mod tests {
 
     #[test]
     fn run_dispatch() {
-        setup();
+        let _g = setup();
         let r = run("add", &vec!["--allow".into(), "test.com".into()]).unwrap();
         assert_eq!(r["added"], true);
 
@@ -585,7 +591,7 @@ mod tests {
 
     #[test]
     fn evaluate_with_method_filter() {
-        setup();
+        let _g = setup();
         cmd_default(&vec!["deny-all".into()]).unwrap();
         cmd_add(&vec![
             "--allow".into(),
@@ -604,7 +610,7 @@ mod tests {
 
     #[test]
     fn evaluate_with_path_filter() {
-        setup();
+        let _g = setup();
         cmd_default(&vec!["deny-all".into()]).unwrap();
         cmd_add(&vec![
             "--allow".into(),
@@ -623,7 +629,7 @@ mod tests {
 
     #[test]
     fn evaluate_with_binary_filter() {
-        setup();
+        let _g = setup();
         cmd_default(&vec!["deny-all".into()]).unwrap();
         cmd_add(&vec![
             "--allow".into(),
@@ -642,7 +648,7 @@ mod tests {
 
     #[test]
     fn evaluate_combined_filters() {
-        setup();
+        let _g = setup();
         cmd_default(&vec!["deny-all".into()]).unwrap();
         cmd_add(&vec![
             "--allow".into(),
@@ -679,7 +685,7 @@ mod tests {
 
     #[test]
     fn export_returns_full_config() {
-        setup();
+        let _g = setup();
         cmd_add(&vec![
             "--allow".into(),
             "example.com".into(),

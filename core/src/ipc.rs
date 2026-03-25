@@ -560,9 +560,8 @@ mod tests {
     fn unique_session(prefix: &str) -> String {
         let n = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
         INIT.call_once(|| {
-            let dir = env::temp_dir().join(format!("cos-ipc-test-{}", std::process::id()));
-            let _ = fs::remove_dir_all(&dir);
-            fs::create_dir_all(&dir).expect("create test dir");
+            let dir = env::temp_dir().join(format!("cos-test-shared-{}", std::process::id()));
+            let _ = fs::create_dir_all(&dir);
             env::set_var("COS_DATA_DIR", &dir);
         });
         format!("{prefix}-{n}")
@@ -689,9 +688,8 @@ mod tests {
     fn unique_resource(prefix: &str) -> String {
         let n = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
         INIT.call_once(|| {
-            let dir = env::temp_dir().join(format!("cos-ipc-test-{}", std::process::id()));
-            let _ = fs::remove_dir_all(&dir);
-            fs::create_dir_all(&dir).expect("create test dir");
+            let dir = env::temp_dir().join(format!("cos-test-shared-{}", std::process::id()));
+            let _ = fs::create_dir_all(&dir);
             env::set_var("COS_DATA_DIR", &dir);
         });
         format!("{prefix}-{n}")
