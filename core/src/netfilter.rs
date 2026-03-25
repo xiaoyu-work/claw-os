@@ -1,8 +1,14 @@
-/// OS-level outbound network firewall — domain-based allow/deny rules with rate limiting.
+/// OS-level outbound network policy engine — domain-based allow/deny rules
+/// with rate limiting.
 ///
-/// Analogous to iptables/nftables, this provides declarative network access
-/// control for agent processes. Rules are persisted as JSON and enforced
-/// at the sandbox level via iptables (Linux) or advisory-only on other platforms.
+/// This module declares network access policy. Rules are evaluated by
+/// `check` and `rate-check` commands. Enforcement is the responsibility
+/// of the network proxy or sandbox layer — this module does not modify
+/// iptables/nftables directly.
+///
+/// For full enforcement, combine with:
+///   - `cos sandbox exec --no-network` for complete network isolation
+///   - An HTTP proxy that calls `cos netfilter check` before forwarding
 ///
 /// Storage: `$COS_DATA_DIR/netfilter/rules.json`
 ///            `$COS_DATA_DIR/netfilter/rate-state.json`
@@ -122,7 +128,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     }
 }
 
-/// Add a firewall rule.
+/// Add a network policy rule.
 ///
 /// Usage: cos netfilter add --allow <domain> [--port N] [--method GET,POST] [--path "/api/**"] [--binary /usr/bin/git] [--tls]
 ///        cos netfilter add --deny <domain>
@@ -522,19 +528,17 @@ fn rate_state_path() -> PathBuf {
 
 fn load_rate_state() -> RateLimitState {
     let path = rate_state_path();
-    if let Ok(data) = fs::read_to_string(&path) {
-        if let Ok(state) = serde_json::from_str(&data) {
-            return state;
-        }
-    }
-    RateLimitState::default()
+    crate::filelock::read_locked(&path)
+        .ok()
+        .and_then(|data| data)
+        .and_then(|data| serde_json::from_str(&data).ok())
+        .unwrap_or_default()
 }
 
 fn save_rate_state(state: &RateLimitState) {
-    let dir = netfilter_dir();
-    let _ = fs::create_dir_all(&dir);
+    let path = rate_state_path();
     if let Ok(data) = serde_json::to_string_pretty(state) {
-        let _ = fs::write(rate_state_path(), data);
+        let _ = crate::filelock::write_locked(&path, &data);
     }
 }
 

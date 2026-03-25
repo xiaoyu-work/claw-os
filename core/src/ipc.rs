@@ -38,6 +38,32 @@ fn next_message_id(dir: &PathBuf) -> String {
     format!("{:04}", max + 1)
 }
 
+/// Acquire an exclusive lock on a directory via a .lock file.
+/// Returns the locked file handle (lock released on drop).
+#[cfg(unix)]
+fn acquire_dir_lock(lock_path: &std::path::Path) -> Result<fs::File, String> {
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(lock_path)
+        .map_err(|e| format!("failed to open lock file: {e}"))?;
+    unsafe {
+        if libc::flock(std::os::unix::io::AsRawFd::as_raw_fd(&file), libc::LOCK_EX) != 0 {
+            return Err("failed to acquire directory lock".into());
+        }
+    }
+    Ok(file)
+}
+
+#[cfg(not(unix))]
+fn acquire_dir_lock(lock_path: &std::path::Path) -> Result<fs::File, String> {
+    fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(lock_path)
+        .map_err(|e| format!("failed to open lock file: {e}"))
+}
+
 /// List message files in a queue directory, sorted by name (oldest first).
 fn sorted_messages(dir: &PathBuf) -> Vec<(String, PathBuf)> {
     let mut entries: Vec<(String, PathBuf)> = fs::read_dir(dir)
@@ -107,6 +133,10 @@ fn cmd_send(args: &[String]) -> Result<Value, String> {
 
     let dir = session_queue_dir(target);
     fs::create_dir_all(&dir).map_err(|e| format!("failed to create queue dir: {e}"))?;
+
+    // Lock the queue directory to serialize message ID allocation
+    let lock_file = dir.join(".lock");
+    let _lock = acquire_dir_lock(&lock_file)?;
 
     let message_id = next_message_id(&dir);
     let msg = json!({
@@ -705,6 +735,12 @@ fn pipe_publish(args: &[String]) -> Result<Value, String> {
     let buffer_size = meta["buffer_size"].as_u64().unwrap_or(1000);
 
     let messages_dir = pipe_messages_dir(name);
+
+    // Lock the messages directory to serialize message ID allocation
+    let lock_file = messages_dir.join(".lock");
+    fs::create_dir_all(&messages_dir).map_err(|e| format!("failed to create messages dir: {e}"))?;
+    let _lock = acquire_dir_lock(&lock_file)?;
+
     let message_id = next_pipe_message_id(&messages_dir);
     let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 

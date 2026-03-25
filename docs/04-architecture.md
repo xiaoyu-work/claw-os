@@ -27,7 +27,7 @@
 │       │   ├── browser    (chromium engine)                      │
 │       │   ├── credential (AES-256-GCM, namespaces, TTL, bundles)     │
 │       │   ├── cron       (agent-native job scheduler)                │
-│       │   ├── netfilter  (outbound firewall)                         │
+│       │   ├── netfilter  (outbound network policy)                    │
 │       │   └── policy     (tiers, elevation)                     │
 │       │                                                         │
 │       └── Python Apps (via bridge subprocess)                   │
@@ -194,8 +194,8 @@ Layer 2: Sandbox Isolation (sandbox.rs)
   ↓ Is this process isolated from the host?
 Layer 3: Seccomp Profiles (sandbox.rs)
   ↓ Which syscalls can this process make?
-Layer 4: Network Firewall (netfilter.rs)
-  ↓ Which domains can this process access?
+Layer 4: Network Policy (netfilter.rs)
+  ↓ Which domains is this process allowed to access? (policy declaration)
 Layer 5: Credential Access Control (credential.rs)
   ↓ Which secrets can this session read?
 Layer 6: Audit Trail (audit.rs)
@@ -209,7 +209,7 @@ Layer 6: Audit Trail (audit.rs)
 | Agent escalates privileges | Tier inheritance prevents escalation; child tier >= parent tier |
 | Agent accesses unauthorized files | Scope enforcement limits filesystem access |
 | Agent runs dangerous syscalls | Seccomp-bpf profiles block system-level syscalls |
-| Agent exfiltrates data | Network firewall (netfilter) controls outbound access |
+| Agent exfiltrates data | Network policy (netfilter) declares allowed outbound access |
 | Agent reads other agents' secrets | Credential store enforces tier-based access |
 | Agent causes resource exhaustion | Sandbox cgroup limits (mem, CPU, PIDs, timeout) |
 | Agent makes undetectable changes | Checkpoint diff shows all modifications |
