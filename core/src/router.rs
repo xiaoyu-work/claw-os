@@ -18,6 +18,7 @@ use crate::sandbox;
 use crate::service;
 use crate::sysinfo;
 use crate::watch;
+use crate::cron;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -58,6 +59,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
             "credential" => return dispatch_builtin(args, "credential", credential::run),
             "netfilter" => return dispatch_builtin(args, "netfilter", netfilter::run),
             "policy" => return dispatch_builtin(args, "policy", policy::run),
+            "cron" => return dispatch_builtin(args, "cron", cron::run),
             _ => {}
         }
         let names: Vec<&String> = discovered.keys().collect();
@@ -225,6 +227,7 @@ fn builtin_apps() -> Vec<(
             ("unlock", "Release a named mutex lock"),
             ("locks", "List all active locks"),
             ("barrier", "Wait until N sessions reach a synchronization point (--expect N, --session ID)"),
+            ("pipe", "Streaming named pipes — create, publish, subscribe, list, destroy (structured NDJSON channels with replay and backpressure)"),
         ]),
         ("browser", "Browser-as-a-service — Jina Reader lifecycle control", vec![
             ("start", "Start the Jina Reader browser service"),
@@ -233,21 +236,24 @@ fn builtin_apps() -> Vec<(
             ("status", "Check if browser service is running and healthy"),
             ("health", "Run health check, auto-restart on failure"),
         ]),
-        ("service", "Generic service manager — discover, start, stop, health-check any service", vec![
-            ("start", "Start a registered service by name"),
-            ("stop", "Stop a running service"),
-            ("restart", "Restart a service (stop then start)"),
+        ("service", "Generic service manager — lifecycle hooks, graceful shutdown, dependency ordering", vec![
+            ("start", "Start a registered service (runs pre_start hook, waits for health, runs post_start)"),
+            ("stop", "Graceful stop: checkpoint → pre_stop → drain → SIGTERM → wait → SIGKILL → post_stop"),
+            ("stop-all", "Stop all services in reverse dependency order with graceful shutdown"),
+            ("restart", "Restart a service (graceful stop then start)"),
             ("status", "Check service running/healthy state with log tail"),
             ("health", "Run health check, optionally auto-restart (--no-restart to skip)"),
             ("list", "List all discovered services with status"),
             ("logs", "View service log output (--tail N)"),
-            ("register", "Register a new service (--name, --command, --workdir, --health-url)"),
+            ("register", "Register a new service (--name, --command, --pre-stop, --post-stop, --drain-timeout, --stop-timeout, --checkpoint-cmd)"),
         ]),
-        ("watch", "Event watcher — block until file, directory, process, or OS event changes", vec![
-            ("file", "Watch a file for creation, modification, or deletion (--timeout N)"),
-            ("dir", "Watch a directory for any file changes (--timeout N)"),
+        ("watch", "Event watcher — inotify-based file watching, multi-source aggregation, event history", vec![
+            ("file", "Watch a file for creation, modification, or deletion (inotify on Linux, polling fallback)"),
+            ("dir", "Watch a directory for any file changes (inotify on Linux, polling fallback)"),
             ("proc", "Watch a process session for exit (--timeout N)"),
-            ("on", "Subscribe to OS events: proc.exit, fs.change, service.health-fail, checkpoint.created, quota.exceeded"),
+            ("on", "Subscribe to OS events: proc.exit, fs.change, service.health-fail, checkpoint.created, quota.exceeded, ipc.message, credential.expired"),
+            ("multi", "Watch multiple sources simultaneously — files, dirs, procs, services (returns on first event)"),
+            ("history", "View past watch events (--limit N, --since TIMESTAMP, --source TYPE)"),
         ]),
         ("checkpoint", "OverlayFS checkpoint system — snapshot, diff, rollback, quota, namespaces", vec![
             ("create", "Freeze current changes into a named checkpoint and start fresh"),
@@ -279,6 +285,17 @@ fn builtin_apps() -> Vec<(
             ("drop", "Drop an active elevation"),
             ("status", "Show current session tier, elevation, and allowed operations"),
             ("check", "Check if a specific operation (read/write/exec/net/system) is allowed"),
+        ]),
+        ("cron", "Agent-native job scheduler — cron with execution context, result capture, and overlap protection", vec![
+            ("add", "Register a cron job (--schedule, --command, --tier, --scope, --credentials, --overlap, --timeout)"),
+            ("remove", "Remove a cron job by ID"),
+            ("list", "List all cron jobs with status and next run time"),
+            ("status", "Detailed status of a specific job"),
+            ("enable", "Enable a disabled job"),
+            ("disable", "Disable a job without removing it"),
+            ("logs", "View execution history for a job (--limit N)"),
+            ("run", "Manually trigger a job immediately"),
+            ("tick", "Process all due jobs (called by scheduler every minute)"),
         ]),
     ]
 }

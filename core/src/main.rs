@@ -14,6 +14,7 @@ mod sandbox;
 mod service;
 mod sysinfo;
 mod watch;
+mod cron;
 
 use std::env;
 use std::process;
