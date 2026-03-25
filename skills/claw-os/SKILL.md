@@ -55,4 +55,6 @@ cos app <name>                   # show commands for an app
 cos <name> <command> --schema    # full parameter schema (JSON)
 ```
 
+All errors include a `code` field for programmatic handling ([error codes](errors.md)).
+
 For detailed usage of any feature, read the corresponding doc linked above.
