@@ -16,13 +16,17 @@
 ///
 /// Storage: `$COS_DATA_DIR/credentials/<namespace>/<name>.json`
 ///
+///   - **Auto-refresh**: optional `--refresh-cmd CMD` on store; executed on
+///     load if credential is expired.
+///
 /// Commands:
-///   store  <name> <value> [--tier N] [--namespace NS] [--ttl SECS]
+///   store  <name> <value> [--tier N] [--namespace NS] [--ttl SECS] [--refresh-cmd CMD]
 ///   load   <name> [--namespace NS]
 ///   revoke <name> [--namespace NS]
 ///   list   [--namespace NS]         — omit NS to see all namespaces
 ///   bundle <name> --keys k1,k2,k3 [--namespace NS]
 ///   load-bundle <name> [--namespace NS]
+///   oauth-refresh <google|microsoft> [--namespace NS]
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
@@ -599,6 +603,10 @@ struct StoredCredential {
     /// ISO 8601 expiry timestamp.  `None` means the credential never expires.
     #[serde(default)]
     expires_at: Option<String>,
+    /// Command to execute when credential expires (auto-refresh).
+    /// The command should output a new value to stdout.
+    #[serde(default)]
+    refresh_cmd: Option<String>,
 }
 
 /// A bundle manifest — a named group of credential keys.
@@ -716,6 +724,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "list" => cmd_list(args),
         "bundle" => cmd_bundle(args),
         "load-bundle" => cmd_load_bundle(args),
+        "oauth-refresh" => cmd_oauth_refresh(args),
         _ => Err(format!("unknown credential command: {command}")),
     }
 }
@@ -735,6 +744,7 @@ fn cmd_store(args: &[String]) -> Result<Value, String> {
 
     let mut min_tier: u8 = 0;
     let mut ttl: Option<u64> = None;
+    let mut refresh_cmd: Option<String> = None;
     let mut positional: Vec<String> = Vec::new();
 
     let mut i = 0;
@@ -757,6 +767,10 @@ fn cmd_store(args: &[String]) -> Result<Value, String> {
                 );
                 i += 2;
             }
+            "--refresh-cmd" if i + 1 < args.len() => {
+                refresh_cmd = Some(args[i + 1].clone());
+                i += 2;
+            }
             _ => {
                 positional.push(args[i].clone());
                 i += 1;
@@ -766,7 +780,7 @@ fn cmd_store(args: &[String]) -> Result<Value, String> {
 
     if positional.len() < 2 {
         return Err(
-            "usage: cos credential store <name> <value> [--tier N] [--namespace NS] [--ttl SECS]"
+            "usage: cos credential store <name> <value> [--tier N] [--namespace NS] [--ttl SECS] [--refresh-cmd CMD]"
                 .into(),
         );
     }
@@ -806,6 +820,7 @@ fn cmd_store(args: &[String]) -> Result<Value, String> {
         stored_at: stored_at.clone(),
         stored_by: session,
         expires_at: expires_at.clone(),
+        refresh_cmd,
     };
 
     let path = dir.join(format!("{name}.json"));
@@ -863,6 +878,56 @@ fn cmd_load(args: &[String]) -> Result<Value, String> {
 
     // Check expiry
     if is_expired(&cred.expires_at) {
+        // Try auto-refresh if refresh_cmd is configured
+        if let Some(ref refresh_cmd) = cred.refresh_cmd {
+            match execute_refresh(refresh_cmd) {
+                Ok(new_value) => {
+                    // Re-store the credential with new value and new expiry
+                    let ttl = compute_original_ttl(&cred);
+                    let (new_value_b64, new_nonce_b64) = encrypt_value(new_value.trim().as_bytes());
+                    let now = chrono::Utc::now();
+                    let new_expires = ttl.map(|secs| {
+                        let exp = now + chrono::Duration::seconds(secs);
+                        exp.format("%Y-%m-%dT%H:%M:%SZ").to_string()
+                    });
+
+                    let updated_cred = StoredCredential {
+                        name: cred.name.clone(),
+                        namespace: cred.namespace.clone(),
+                        value_b64: new_value_b64,
+                        nonce_b64: Some(new_nonce_b64),
+                        min_tier: cred.min_tier,
+                        stored_at: cred.stored_at.clone(),
+                        stored_by: cred.stored_by.clone(),
+                        expires_at: new_expires.clone(),
+                        refresh_cmd: cred.refresh_cmd.clone(),
+                    };
+
+                    // Write updated credential back
+                    let data = serde_json::to_string_pretty(&updated_cred)
+                        .map_err(|e| format!("failed to serialize: {e}"))?;
+                    fs::write(&path, data)
+                        .map_err(|e| format!("failed to write refreshed credential: {e}"))?;
+
+                    return Ok(json!({
+                        "name": name,
+                        "namespace": namespace,
+                        "value": new_value.trim(),
+                        "min_tier": cred.min_tier,
+                        "refreshed": true,
+                        "expires_at": new_expires,
+                    }));
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "credential '{}' expired and auto-refresh failed: {}",
+                        name, e
+                    ));
+                }
+            }
+        }
+
+        // No refresh_cmd — return expired error (existing behavior)
         return Err(serde_json::to_string(&json!({
             "error": format!("credential '{}' has expired", name),
             "expired": true,
@@ -958,6 +1023,9 @@ fn list_namespace(namespace: &str) -> Result<Value, String> {
                 });
                 if let Some(ref exp) = cred.expires_at {
                     entry_json["expires_at"] = json!(exp);
+                }
+                if let Some(ref cmd) = cred.refresh_cmd {
+                    entry_json["refresh_cmd"] = json!(cmd);
                 }
                 credentials.push(entry_json);
             }
@@ -1185,8 +1253,275 @@ fn cmd_load_bundle(args: &[String]) -> Result<Value, String> {
 }
 
 // ===========================================================================
-// Tests
+// Auto-refresh helpers
 // ===========================================================================
+
+/// Execute a refresh command and capture its stdout as the new value.
+fn execute_refresh(cmd: &str) -> Result<String, String> {
+    use std::process::{Command, Stdio};
+
+    #[cfg(unix)]
+    let output = Command::new("sh")
+        .args(["-c", cmd])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output();
+
+    #[cfg(not(unix))]
+    let output = Command::new("cmd")
+        .args(["/c", cmd])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output();
+
+    match output {
+        Ok(out) => {
+            if out.status.success() {
+                let value = String::from_utf8(out.stdout)
+                    .map_err(|e| format!("refresh output not valid UTF-8: {e}"))?;
+                if value.trim().is_empty() {
+                    return Err("refresh command produced empty output".into());
+                }
+                Ok(value)
+            } else {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                Err(format!(
+                    "refresh command failed (exit {}): {}",
+                    out.status.code().unwrap_or(-1),
+                    stderr.trim()
+                ))
+            }
+        }
+        Err(e) => Err(format!("failed to execute refresh command: {e}")),
+    }
+}
+
+/// Compute the original TTL from stored_at and expires_at.
+fn compute_original_ttl(cred: &StoredCredential) -> Option<i64> {
+    let expires_str = cred.expires_at.as_ref()?;
+    let stored =
+        chrono::DateTime::parse_from_rfc3339(&cred.stored_at.replace('Z', "+00:00")).ok()?;
+    let expires = chrono::DateTime::parse_from_rfc3339(&expires_str.replace('Z', "+00:00")).ok()?;
+    let duration = expires.signed_duration_since(stored);
+    Some(duration.num_seconds())
+}
+
+// ===========================================================================
+// OAuth refresh
+// ===========================================================================
+
+/// Refresh an OAuth token by exchanging a refresh token for a new access token.
+///
+/// Usage: cos credential oauth-refresh <provider> [--namespace NS]
+///
+/// Supported providers: google, microsoft
+///
+/// Reads <PROVIDER>_REFRESH_TOKEN and <PROVIDER>_CLIENT_ID, <PROVIDER>_CLIENT_SECRET
+/// from the credential store, exchanges for a new access token, and stores it.
+fn cmd_oauth_refresh(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::System).map_err(|v| v.to_string())?;
+
+    let (ns_opt, rest) = parse_namespace_flag(args);
+    let namespace = ns_opt.unwrap_or_else(|| "default".into());
+
+    let provider = rest
+        .first()
+        .ok_or("usage: cos credential oauth-refresh <google|microsoft> [--namespace NS]")?;
+
+    match provider.as_str() {
+        "google" => oauth_refresh_google(&namespace),
+        "microsoft" => oauth_refresh_microsoft(&namespace),
+        _ => Err(format!(
+            "unsupported OAuth provider: {provider}. supported: google, microsoft"
+        )),
+    }
+}
+
+fn oauth_refresh_google(namespace: &str) -> Result<Value, String> {
+    // Load required credentials
+    let refresh_token = load_credential_value("GOOGLE_REFRESH_TOKEN", namespace)?;
+    let client_id = load_credential_value("GOOGLE_CLIENT_ID", namespace)?;
+    let client_secret = load_credential_value("GOOGLE_CLIENT_SECRET", namespace)?;
+
+    // POST to Google token endpoint
+    let body = format!(
+        "grant_type=refresh_token&refresh_token={}&client_id={}&client_secret={}",
+        urlencoded(&refresh_token),
+        urlencoded(&client_id),
+        urlencoded(&client_secret),
+    );
+
+    let result = http_post(
+        "https://oauth2.googleapis.com/token",
+        &body,
+        "application/x-www-form-urlencoded",
+    )?;
+
+    let token_data: serde_json::Value = serde_json::from_str(&result)
+        .map_err(|e| format!("failed to parse token response: {e}"))?;
+
+    let access_token = token_data["access_token"]
+        .as_str()
+        .ok_or("no access_token in response")?;
+
+    let expires_in = token_data["expires_in"].as_u64().unwrap_or(3600);
+
+    // Store the new access token
+    cmd_store(&[
+        "GOOGLE_ACCESS_TOKEN".into(),
+        access_token.into(),
+        "--tier".into(),
+        "0".into(),
+        "--namespace".into(),
+        namespace.into(),
+        "--ttl".into(),
+        expires_in.to_string(),
+        "--refresh-cmd".into(),
+        format!("cos credential oauth-refresh google --namespace {namespace}"),
+    ])?;
+
+    Ok(json!({
+        "provider": "google",
+        "refreshed": true,
+        "expires_in": expires_in,
+        "namespace": namespace,
+    }))
+}
+
+fn oauth_refresh_microsoft(namespace: &str) -> Result<Value, String> {
+    let refresh_token = load_credential_value("MICROSOFT_REFRESH_TOKEN", namespace)?;
+    let client_id = load_credential_value("MICROSOFT_CLIENT_ID", namespace)?;
+    let client_secret = load_credential_value("MICROSOFT_CLIENT_SECRET", namespace)?;
+    let tenant_id =
+        load_credential_value("MICROSOFT_TENANT_ID", namespace).unwrap_or_else(|_| "common".into());
+
+    let body = format!(
+        "grant_type=refresh_token&refresh_token={}&client_id={}&client_secret={}&scope=https://graph.microsoft.com/.default",
+        urlencoded(&refresh_token),
+        urlencoded(&client_id),
+        urlencoded(&client_secret),
+    );
+
+    let url = format!("https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token");
+
+    let result = http_post(&url, &body, "application/x-www-form-urlencoded")?;
+
+    let token_data: serde_json::Value = serde_json::from_str(&result)
+        .map_err(|e| format!("failed to parse token response: {e}"))?;
+
+    let access_token = token_data["access_token"]
+        .as_str()
+        .ok_or("no access_token in response")?;
+
+    let expires_in = token_data["expires_in"].as_u64().unwrap_or(3600);
+
+    // Also store new refresh token if returned (Microsoft rotates them)
+    if let Some(new_refresh) = token_data["refresh_token"].as_str() {
+        cmd_store(&[
+            "MICROSOFT_REFRESH_TOKEN".into(),
+            new_refresh.into(),
+            "--tier".into(),
+            "0".into(),
+            "--namespace".into(),
+            namespace.into(),
+        ])?;
+    }
+
+    cmd_store(&[
+        "MICROSOFT_ACCESS_TOKEN".into(),
+        access_token.into(),
+        "--tier".into(),
+        "0".into(),
+        "--namespace".into(),
+        namespace.into(),
+        "--ttl".into(),
+        expires_in.to_string(),
+        "--refresh-cmd".into(),
+        format!("cos credential oauth-refresh microsoft --namespace {namespace}"),
+    ])?;
+
+    Ok(json!({
+        "provider": "microsoft",
+        "refreshed": true,
+        "expires_in": expires_in,
+        "namespace": namespace,
+    }))
+}
+
+// ===========================================================================
+// HTTP and encoding helpers
+// ===========================================================================
+
+/// Simple URL-encoded POST using stdlib only.
+fn http_post(url: &str, body: &str, content_type: &str) -> Result<String, String> {
+    use std::process::{Command, Stdio};
+
+    // Use curl since we can't do HTTP from Rust without dependencies
+    let output = Command::new("curl")
+        .args([
+            "-s",
+            "-S",
+            "-X",
+            "POST",
+            "-H",
+            &format!("Content-Type: {content_type}"),
+            "-d",
+            body,
+            "--connect-timeout",
+            "10",
+            "--max-time",
+            "30",
+            url,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("failed to execute curl: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("HTTP POST failed: {}", stderr.trim()));
+    }
+
+    String::from_utf8(output.stdout).map_err(|e| format!("response not valid UTF-8: {e}"))
+}
+
+/// Simple percent-encoding for URL form data.
+fn urlencoded(s: &str) -> String {
+    let mut result = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                result.push(b as char);
+            }
+            _ => {
+                result.push_str(&format!("%{:02X}", b));
+            }
+        }
+    }
+    result
+}
+
+/// Load a credential value from the store (helper for oauth-refresh).
+fn load_credential_value(name: &str, namespace: &str) -> Result<String, String> {
+    let path = namespace_dir(namespace).join(format!("{name}.json"));
+    if !path.is_file() {
+        return Err(format!(
+            "credential not found: {name} (namespace: {namespace}). Store it with: cos credential store {name} <value> --namespace {namespace}"
+        ));
+    }
+    let data = fs::read_to_string(&path).map_err(|e| format!("failed to read: {e}"))?;
+    let cred: StoredCredential =
+        serde_json::from_str(&data).map_err(|e| format!("failed to parse: {e}"))?;
+
+    match decrypt_value(&cred) {
+        Ok(bytes) => String::from_utf8(bytes).map_err(|e| format!("not valid UTF-8: {e}")),
+        Err(e) => Err(e),
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1308,6 +1643,7 @@ mod tests {
             stored_at: now,
             stored_by: None,
             expires_at: None,
+            refresh_cmd: None,
         };
 
         let dir = namespace_dir(namespace);
@@ -1466,6 +1802,7 @@ mod tests {
             stored_at: "2020-01-01T00:00:00Z".into(),
             stored_by: None,
             expires_at: Some("2020-01-01T00:00:01Z".into()), // already past
+            refresh_cmd: None,
         };
         let dir = namespace_dir("default");
         let _ = fs::create_dir_all(&dir);
@@ -1582,5 +1919,113 @@ mod tests {
         run("bundle", &[b.clone(), "--keys".into(), k.clone()]).unwrap();
         let r = run("load-bundle", &[b.clone()]).unwrap();
         assert_eq!(r["credentials"][&k], "v");
+    }
+
+    // ---- Auto-refresh -----------------------------------------------------
+
+    #[test]
+    fn store_with_refresh_cmd() {
+        setup();
+        let name = unique_name("refresh-store");
+        let r = cmd_store(&[
+            name.clone(),
+            "initial-value".into(),
+            "--ttl".into(),
+            "3600".into(),
+            "--refresh-cmd".into(),
+            "echo new-value".into(),
+        ])
+        .unwrap();
+        assert_eq!(r["stored"], name);
+
+        // Verify refresh_cmd is stored
+        let path = namespace_dir("default").join(format!("{name}.json"));
+        let data = fs::read_to_string(&path).unwrap();
+        let cred: StoredCredential = serde_json::from_str(&data).unwrap();
+        assert_eq!(cred.refresh_cmd.as_deref(), Some("echo new-value"));
+    }
+
+    #[test]
+    fn load_auto_refresh_on_expiry() {
+        setup();
+        let name = unique_name("auto-refresh");
+
+        // Store with very short TTL and a refresh command
+        cmd_store(&[
+            name.clone(),
+            "old-value".into(),
+            "--ttl".into(),
+            "0".into(), // expires immediately
+            "--refresh-cmd".into(),
+            "echo refreshed-value".into(),
+        ])
+        .unwrap();
+
+        // Small sleep to ensure expiry
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        // Load should auto-refresh
+        let r = cmd_load(&[name.clone()]).unwrap();
+        assert_eq!(r["value"], "refreshed-value");
+        assert_eq!(r["refreshed"], true);
+    }
+
+    #[test]
+    fn load_expired_no_refresh_cmd_fails() {
+        setup();
+        let name = unique_name("no-refresh");
+        cmd_store(&[name.clone(), "val".into(), "--ttl".into(), "0".into()]).unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        let r = cmd_load(&[name.clone()]);
+        assert!(r.is_err());
+        assert!(r.unwrap_err().contains("expired"));
+    }
+
+    // ---- URL encoding -----------------------------------------------------
+
+    #[test]
+    fn urlencoded_special_chars() {
+        assert_eq!(urlencoded("hello world"), "hello%20world");
+        assert_eq!(urlencoded("a+b=c&d"), "a%2Bb%3Dc%26d");
+        assert_eq!(urlencoded("simple"), "simple");
+    }
+
+    // ---- TTL computation --------------------------------------------------
+
+    #[test]
+    fn compute_ttl_from_timestamps() {
+        let cred = StoredCredential {
+            name: "test".into(),
+            namespace: "default".into(),
+            value_b64: String::new(),
+            nonce_b64: None,
+            min_tier: 0,
+            stored_at: "2026-03-25T10:00:00Z".into(),
+            stored_by: None,
+            expires_at: Some("2026-03-25T11:00:00Z".into()),
+            refresh_cmd: None,
+        };
+        let ttl = compute_original_ttl(&cred);
+        assert_eq!(ttl, Some(3600));
+    }
+
+    // ---- OAuth dispatch ---------------------------------------------------
+
+    #[test]
+    fn oauth_refresh_unknown_provider() {
+        setup();
+        let r = cmd_oauth_refresh(&["unknown".into()]);
+        assert!(r.is_err());
+        assert!(r.unwrap_err().contains("unsupported"));
+    }
+
+    #[test]
+    fn oauth_refresh_missing_provider() {
+        setup();
+        let r = cmd_oauth_refresh(&[]);
+        assert!(r.is_err());
+        assert!(r.unwrap_err().contains("usage"));
     }
 }

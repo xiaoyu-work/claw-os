@@ -227,13 +227,14 @@ fn run_app_command(
             audit::log_entry(&audit, app_name, command, args, start, "error", Some(&e));
             // Enrich error with recovery hints for agents
             if let Some(recovery) = recovery_hint(&e) {
-                Ok(Some(
-                    json!({
-                        "error": e,
-                        "recovery": recovery,
-                    })
-                    .to_string(),
-                ))
+                let mut err_output = json!({
+                    "error": e,
+                    "recovery": recovery,
+                });
+                if let Some(code) = error_code_from_hint(&e) {
+                    err_output["code"] = json!(code);
+                }
+                Ok(Some(err_output.to_string()))
             } else {
                 Err(e)
             }
@@ -322,13 +323,14 @@ fn builtin_apps() -> Vec<(
             ("quota-status", "Show current quota usage, limit, and whether exceeded"),
             ("namespaces", "Manage isolated overlay namespaces (--create, --destroy, --status <name>)"),
         ]),
-        ("credential", "Encrypted credential store — secure secret storage with tier-based access, namespaces, TTL, and bundles", vec![
-            ("store", "Store a credential (--tier N, --namespace NS, --ttl SECS)"),
-            ("load", "Load a credential value (tier check + expiry enforced)"),
+        ("credential", "Encrypted credential store — secure secret storage with tier-based access, namespaces, TTL, auto-refresh, and bundles", vec![
+            ("store", "Store a credential (--tier N, --namespace NS, --ttl SECS, --refresh-cmd CMD)"),
+            ("load", "Load a credential value (tier check + expiry enforced, auto-refresh if configured)"),
             ("revoke", "Delete a stored credential"),
             ("list", "List credentials, optionally filtered by --namespace"),
             ("bundle", "Create a credential bundle (--keys key1,key2,key3)"),
             ("load-bundle", "Load all credentials in a bundle as a JSON object"),
+            ("oauth-refresh", "Refresh OAuth token (google or microsoft) using stored refresh token"),
         ]),
         ("netfilter", "Outbound network firewall — domain, method, path, and binary-level rules with rate limiting", vec![
             ("add", "Add a rule (--allow|--deny <domain> [--port N] [--method GET,POST] [--path /api/**] [--binary /usr/bin/git] [--tls])"),
@@ -421,6 +423,35 @@ fn recovery_hint(error: &str) -> Option<serde_json::Value> {
     }
 
     None
+}
+
+/// Map an error message to a standard error code by inspecting well-known
+/// substrings.  Returns `None` when the message doesn't match any pattern.
+fn error_code_from_hint(error: &str) -> Option<&'static str> {
+    let err_lower = error.to_lowercase();
+    if err_lower.contains("permission denied") || err_lower.contains("eperm") {
+        Some(crate::errors::IO_PERMISSION_DENIED)
+    } else if err_lower.contains("no such file")
+        || err_lower.contains("not found")
+        || err_lower.contains("enoent")
+    {
+        Some(crate::errors::IO_FILE_NOT_FOUND)
+    } else if err_lower.contains("no space left") || err_lower.contains("enospc") {
+        Some(crate::errors::IO_DISK_FULL)
+    } else if err_lower.contains("connection refused") || err_lower.contains("econnrefused") {
+        Some(crate::errors::IO_CONNECTION_REFUSED)
+    } else if err_lower.contains("timed out") || err_lower.contains("timeout") {
+        Some(crate::errors::LIMIT_TIMEOUT)
+    } else if err_lower.contains("already in use") || err_lower.contains("eaddrinuse") {
+        Some(crate::errors::RESOURCE_BUSY)
+    } else if err_lower.contains("out of memory")
+        || err_lower.contains("enomem")
+        || err_lower.contains("oom")
+    {
+        Some(crate::errors::LIMIT_OOM)
+    } else {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -648,6 +679,12 @@ fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandSchema>)> {
                             "Namespace (default: default)",
                         ),
                         Param::flag("--ttl", "integer", false, "Time-to-live in seconds"),
+                        Param::flag(
+                            "--refresh-cmd",
+                            "string",
+                            false,
+                            "Command to execute on expiry to refresh the value",
+                        ),
                     ],
                     example: "cos credential store OPENAI_KEY sk-abc123 --tier 0 --ttl 3600",
                 },
@@ -703,6 +740,20 @@ fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandSchema>)> {
                         Param::flag("--namespace", "string", false, "Namespace"),
                     ],
                     example: "cos credential load-bundle openai-config",
+                },
+                CommandSchema {
+                    command: "oauth-refresh",
+                    description: "Refresh OAuth token using stored refresh token",
+                    params: vec![
+                        Param::positional(
+                            "provider",
+                            "string",
+                            true,
+                            "OAuth provider (google or microsoft)",
+                        ),
+                        Param::flag("--namespace", "string", false, "Namespace"),
+                    ],
+                    example: "cos credential oauth-refresh google",
                 },
             ],
         ),
@@ -1503,5 +1554,38 @@ mod tests {
                 "No commands for: {name}"
             );
         }
+    }
+
+    #[test]
+    fn error_code_from_hint_maps_correctly() {
+        assert_eq!(
+            error_code_from_hint("Permission denied on /etc"),
+            Some(crate::errors::IO_PERMISSION_DENIED)
+        );
+        assert_eq!(
+            error_code_from_hint("No such file: /missing"),
+            Some(crate::errors::IO_FILE_NOT_FOUND)
+        );
+        assert_eq!(
+            error_code_from_hint("connection refused"),
+            Some(crate::errors::IO_CONNECTION_REFUSED)
+        );
+        assert_eq!(
+            error_code_from_hint("No space left on device"),
+            Some(crate::errors::IO_DISK_FULL)
+        );
+        assert_eq!(
+            error_code_from_hint("Operation timed out"),
+            Some(crate::errors::LIMIT_TIMEOUT)
+        );
+        assert_eq!(
+            error_code_from_hint("address already in use"),
+            Some(crate::errors::RESOURCE_BUSY)
+        );
+        assert_eq!(
+            error_code_from_hint("out of memory"),
+            Some(crate::errors::LIMIT_OOM)
+        );
+        assert_eq!(error_code_from_hint("something random"), None);
     }
 }

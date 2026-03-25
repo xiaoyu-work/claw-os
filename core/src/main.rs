@@ -6,6 +6,7 @@ mod checkpoint;
 mod config;
 mod credential;
 mod cron;
+pub mod errors;
 mod ipc;
 mod netfilter;
 mod policy;
