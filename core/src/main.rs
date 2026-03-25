@@ -15,6 +15,7 @@ mod router;
 mod sandbox;
 mod service;
 mod sysinfo;
+mod trace;
 mod watch;
 
 use std::env;

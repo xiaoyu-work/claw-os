@@ -23,6 +23,7 @@ You are running on Claw OS. All commands return structured JSON.
 | `cron` | Job scheduling with context and overlap protection ([details](cron.md)) |
 | `watch` | Event-driven file/process/service watching ([details](watch.md)) |
 | `netfilter` | Outbound firewall and rate limiting ([details](network.md)) |
+| `trace` | Execution tracing — tree-structured observability ([details](trace.md)) |
 | `policy` | Permission tiers and scope ([details](permissions.md)) |
 | `sys` | System info, resources, processes |
 | `browser` | Browser engine lifecycle |

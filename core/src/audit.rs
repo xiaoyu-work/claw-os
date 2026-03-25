@@ -62,6 +62,18 @@ pub fn log_entry(
         entry["error"] = json!(e);
     }
 
+    // Attach trace context if available
+    if let Ok(trace_id) = std::env::var("COS_TRACE_ID") {
+        if !trace_id.is_empty() {
+            entry["trace_id"] = json!(trace_id);
+        }
+    }
+    if let Ok(span_id) = std::env::var("COS_SPAN_ID") {
+        if !span_id.is_empty() {
+            entry["span_id"] = json!(span_id);
+        }
+    }
+
     if let Some(parent) = audit_path.parent() {
         let _ = fs::create_dir_all(parent);
     }
