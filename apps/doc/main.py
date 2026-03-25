@@ -286,8 +286,37 @@ def cmd_convert(args):
 # Entry point
 # ---------------------------------------------------------------------------
 
+def _schema():
+    return {
+        "read": {
+            "description": "Read a document and return structured text (supports txt, md, json, csv, yaml, pdf, docx, xlsx, pptx)",
+            "parameters": [
+                {"name": "path", "type": "string", "required": True, "description": "Path to the document file", "kind": "positional"},
+            ],
+            "example": "cos app doc read /workspace/report.pdf",
+        },
+        "info": {
+            "description": "Get document metadata (format, size, readability)",
+            "parameters": [
+                {"name": "path", "type": "string", "required": True, "description": "Path to the document file", "kind": "positional"},
+            ],
+            "example": "cos app doc info /workspace/report.pdf",
+        },
+        "convert": {
+            "description": "Convert between document formats (JSON to CSV, CSV to JSON)",
+            "parameters": [
+                {"name": "path", "type": "string", "required": True, "description": "Path to the source file", "kind": "positional"},
+                {"name": "--to", "type": "string", "required": True, "description": "Target format (e.g. csv, json)", "kind": "flag"},
+            ],
+            "example": "cos app doc convert /workspace/data.json --to csv",
+        },
+    }
+
+
 def run(command, args):
     """Called by cos router."""
+    if command == "__schema__":
+        return _schema()
     commands = {
         "read": cmd_read,
         "info": cmd_info,

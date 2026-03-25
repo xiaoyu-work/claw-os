@@ -109,8 +109,30 @@ def _cmd_list(args):
     }
 
 
+def _schema():
+    return {
+        "send": {
+            "description": "Send a notification to the user",
+            "parameters": [
+                {"name": "message", "type": "string", "required": True, "description": "Notification message text", "kind": "positional"},
+                {"name": "--urgent", "type": "boolean", "required": False, "description": "Mark notification as urgent", "kind": "flag", "default": False},
+            ],
+            "example": "cos app notify send 'Build completed successfully' --urgent",
+        },
+        "list": {
+            "description": "List recent notifications",
+            "parameters": [
+                {"name": "--limit", "type": "integer", "required": False, "description": "Maximum notifications to return", "kind": "flag", "default": 20},
+            ],
+            "example": "cos app notify list --limit 10",
+        },
+    }
+
+
 def run(command, args):
     """Entry point called by cos."""
+    if command == "__schema__":
+        return _schema()
     commands = {
         "send": _cmd_send,
         "list": _cmd_list,

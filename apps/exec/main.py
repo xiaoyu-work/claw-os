@@ -309,8 +309,60 @@ def cmd_ps(args):
     return {"processes": processes}
 
 
+def _schema():
+    return {
+        "run": {
+            "description": "Run a command with optional timeout and shell mode",
+            "parameters": [
+                {"name": "command", "type": "string", "required": True, "description": "Command and arguments to execute", "kind": "positional"},
+                {"name": "--timeout", "type": "integer", "required": False, "description": "Timeout in seconds", "kind": "flag", "default": 300},
+                {"name": "--shell", "type": "boolean", "required": False, "description": "Run via /bin/bash -c (enables shell features)", "kind": "flag", "default": False},
+            ],
+            "example": "cos app exec run ls -la --timeout 30",
+        },
+        "script": {
+            "description": "Run an inline script or script file in a specified language",
+            "parameters": [
+                {"name": "code", "type": "string", "required": False, "description": "Inline script code (if --file not used)", "kind": "positional"},
+                {"name": "--lang", "type": "string", "required": False, "description": "Language: python, bash, or node", "kind": "flag", "default": "bash"},
+                {"name": "--file", "type": "string", "required": False, "description": "Path to a script file to execute", "kind": "flag"},
+                {"name": "--timeout", "type": "integer", "required": False, "description": "Timeout in seconds", "kind": "flag", "default": 300},
+            ],
+            "example": "cos app exec script --lang python 'print(1+1)'",
+        },
+        "which": {
+            "description": "Check if a command exists on the system",
+            "parameters": [
+                {"name": "name", "type": "string", "required": True, "description": "Command name to look up", "kind": "positional"},
+            ],
+            "example": "cos app exec which python3",
+        },
+        "start": {
+            "description": "Run a command in the background",
+            "parameters": [
+                {"name": "command", "type": "string", "required": True, "description": "Command and arguments to run in background", "kind": "positional"},
+            ],
+            "example": "cos app exec start python3 server.py",
+        },
+        "stop": {
+            "description": "Stop a background process by PID",
+            "parameters": [
+                {"name": "pid", "type": "integer", "required": True, "description": "Process ID to stop", "kind": "positional"},
+            ],
+            "example": "cos app exec stop 12345",
+        },
+        "ps": {
+            "description": "List running background processes",
+            "parameters": [],
+            "example": "cos app exec ps",
+        },
+    }
+
+
 def run(command, args):
     """Entry point called by cos."""
+    if command == "__schema__":
+        return _schema()
     if command == "run":
         return cmd_run(args)
     elif command == "script":

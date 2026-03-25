@@ -331,8 +331,33 @@ def cmd_image(args):
 # Entry point
 # ---------------------------------------------------------------------------
 
+def _schema():
+    return {
+        "web": {
+            "description": "Search the web for information (Google Custom Search with Brave fallback)",
+            "parameters": [
+                {"name": "query", "type": "string", "required": True, "description": "Search query words", "kind": "positional"},
+                {"name": "--max-results", "type": "integer", "required": False, "description": "Maximum results to return (1-10)", "kind": "flag", "default": 5},
+                {"name": "--provider", "type": "string", "required": False, "description": "Search provider: google or brave", "kind": "flag"},
+            ],
+            "example": "cos app search web 'rust programming language' --max-results 5",
+        },
+        "image": {
+            "description": "Search for images (Google Custom Search with Brave fallback)",
+            "parameters": [
+                {"name": "query", "type": "string", "required": True, "description": "Image search query words", "kind": "positional"},
+                {"name": "--max-results", "type": "integer", "required": False, "description": "Maximum results to return (1-10)", "kind": "flag", "default": 5},
+                {"name": "--provider", "type": "string", "required": False, "description": "Search provider: google or brave", "kind": "flag"},
+            ],
+            "example": "cos app search image 'cute cats' --max-results 3",
+        },
+    }
+
+
 def run(command, args):
     """Called by cos router."""
+    if command == "__schema__":
+        return _schema()
     commands = {
         "web": cmd_web,
         "image": cmd_image,

@@ -155,8 +155,48 @@ def _cmd_search(args):
     return {"entries": matches[:limit], "total": len(matches)}
 
 
+def _schema():
+    return {
+        "search": {
+            "description": "Search logs by keyword across all text fields",
+            "parameters": [
+                {"name": "query", "type": "string", "required": True, "description": "Search query string", "kind": "positional"},
+                {"name": "--limit", "type": "integer", "required": False, "description": "Maximum results to return", "kind": "flag", "default": 20},
+                {"name": "--app", "type": "string", "required": False, "description": "Filter by app name", "kind": "flag"},
+            ],
+            "example": "cos app log search 'error' --limit 50 --app fs",
+        },
+        "tail": {
+            "description": "Show last N log entries",
+            "parameters": [
+                {"name": "n", "type": "integer", "required": False, "description": "Number of entries to show (default 10)", "kind": "positional", "default": 10},
+            ],
+            "example": "cos app log tail 20",
+        },
+        "read": {
+            "description": "Read recent log entries with optional filters",
+            "parameters": [
+                {"name": "--limit", "type": "integer", "required": False, "description": "Maximum entries to return", "kind": "flag", "default": 20},
+                {"name": "--app", "type": "string", "required": False, "description": "Filter by app name", "kind": "flag"},
+                {"name": "--status", "type": "string", "required": False, "description": "Filter by status (ok or error)", "kind": "flag"},
+            ],
+            "example": "cos app log read --limit 50 --app fs --status error",
+        },
+        "write": {
+            "description": "Write a manual log entry",
+            "parameters": [
+                {"name": "message", "type": "string", "required": True, "description": "Log message text", "kind": "positional"},
+                {"name": "--level", "type": "string", "required": False, "description": "Log level: debug, info, warn, error", "kind": "flag", "default": "info"},
+            ],
+            "example": "cos app log write 'Deployment completed' --level info",
+        },
+    }
+
+
 def run(command, args):
     """Entry point called by cos."""
+    if command == "__schema__":
+        return _schema()
     commands = {
         "write": _cmd_write,
         "read": _cmd_read,

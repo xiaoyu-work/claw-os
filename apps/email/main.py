@@ -546,8 +546,52 @@ def cmd_read(args):
 # Entry point
 # ---------------------------------------------------------------------------
 
+def _schema():
+    return {
+        "send": {
+            "description": "Send an email via SMTP, Gmail, or Outlook",
+            "parameters": [
+                {"name": "--to", "type": "string", "required": True, "description": "Recipient email address", "kind": "flag"},
+                {"name": "--subject", "type": "string", "required": True, "description": "Email subject line", "kind": "flag"},
+                {"name": "--body", "type": "string", "required": True, "description": "Email body text", "kind": "flag"},
+                {"name": "--cc", "type": "string", "required": False, "description": "CC recipient email address", "kind": "flag"},
+                {"name": "--provider", "type": "string", "required": False, "description": "Email provider: smtp, gmail, or outlook (auto-detected if omitted)", "kind": "flag"},
+            ],
+            "example": "cos app email send --to user@example.com --subject 'Hello' --body 'Hi there'",
+        },
+        "search": {
+            "description": "Search emails by query (requires Gmail or Outlook provider)",
+            "parameters": [
+                {"name": "--query", "type": "string", "required": True, "description": "Search query string", "kind": "flag"},
+                {"name": "--max-results", "type": "integer", "required": False, "description": "Maximum results to return", "kind": "flag", "default": 10},
+                {"name": "--provider", "type": "string", "required": False, "description": "Email provider: gmail or outlook", "kind": "flag"},
+            ],
+            "example": "cos app email search --query 'from:boss@example.com' --max-results 5",
+        },
+        "list": {
+            "description": "List recent emails (requires Gmail or Outlook provider)",
+            "parameters": [
+                {"name": "--max-results", "type": "integer", "required": False, "description": "Maximum emails to return", "kind": "flag", "default": 10},
+                {"name": "--unread", "type": "boolean", "required": False, "description": "Show only unread emails", "kind": "flag", "default": False},
+                {"name": "--provider", "type": "string", "required": False, "description": "Email provider: gmail or outlook", "kind": "flag"},
+            ],
+            "example": "cos app email list --max-results 20 --unread",
+        },
+        "read": {
+            "description": "Read a specific email by message ID (requires Gmail or Outlook provider)",
+            "parameters": [
+                {"name": "--id", "type": "string", "required": True, "description": "Message ID to read", "kind": "flag"},
+                {"name": "--provider", "type": "string", "required": False, "description": "Email provider: gmail or outlook", "kind": "flag"},
+            ],
+            "example": "cos app email read --id abc123def",
+        },
+    }
+
+
 def run(command, args):
     """Entry point called by cos."""
+    if command == "__schema__":
+        return _schema()
     if command == "send":
         return cmd_send(args)
     elif command == "search":

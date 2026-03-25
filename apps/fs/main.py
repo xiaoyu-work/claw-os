@@ -315,7 +315,84 @@ COMMANDS = {
 }
 
 
+def _schema():
+    return {
+        "ls": {
+            "description": "List directory contents",
+            "parameters": [
+                {"name": "path", "type": "string", "required": False, "description": "Directory path (defaults to current directory)", "kind": "positional"},
+            ],
+            "example": "cos app fs ls /workspace",
+        },
+        "read": {
+            "description": "Read file contents with optional byte offset or line range",
+            "parameters": [
+                {"name": "path", "type": "string", "required": True, "description": "File path to read", "kind": "positional"},
+                {"name": "--offset", "type": "integer", "required": False, "description": "Byte offset to start reading from", "kind": "flag", "default": 0},
+                {"name": "--limit", "type": "integer", "required": False, "description": "Maximum bytes to read", "kind": "flag", "default": 1000000},
+                {"name": "--start", "type": "integer", "required": False, "description": "Start line number (1-indexed, enables line range mode)", "kind": "flag"},
+                {"name": "--end", "type": "integer", "required": False, "description": "End line number (inclusive, used with --start)", "kind": "flag"},
+            ],
+            "example": "cos app fs read /workspace/file.txt --start 1 --end 50",
+        },
+        "write": {
+            "description": "Write content to a file (creates parent directories if needed)",
+            "parameters": [
+                {"name": "path", "type": "string", "required": True, "description": "File path to write to", "kind": "positional"},
+                {"name": "--content", "type": "string", "required": False, "description": "Content to write (reads from stdin if omitted)", "kind": "flag"},
+            ],
+            "example": "cos app fs write /workspace/hello.txt --content 'Hello, world!'",
+        },
+        "rm": {
+            "description": "Remove a file or directory recursively",
+            "parameters": [
+                {"name": "path", "type": "string", "required": True, "description": "Path to remove", "kind": "positional"},
+            ],
+            "example": "cos app fs rm /workspace/old-file.txt",
+        },
+        "mkdir": {
+            "description": "Create a directory (and parents if needed)",
+            "parameters": [
+                {"name": "path", "type": "string", "required": True, "description": "Directory path to create", "kind": "positional"},
+            ],
+            "example": "cos app fs mkdir /workspace/new-dir",
+        },
+        "stat": {
+            "description": "Get file or directory metadata (size, permissions, timestamps, tags)",
+            "parameters": [
+                {"name": "path", "type": "string", "required": True, "description": "Path to inspect", "kind": "positional"},
+            ],
+            "example": "cos app fs stat /workspace/file.txt",
+        },
+        "search": {
+            "description": "Search file contents (via ripgrep) and filenames",
+            "parameters": [
+                {"name": "query", "type": "string", "required": True, "description": "Search query string", "kind": "positional"},
+                {"name": "path", "type": "string", "required": False, "description": "Directory to search in (defaults to /workspace)", "kind": "positional"},
+            ],
+            "example": "cos app fs search 'TODO' /workspace/src",
+        },
+        "tag": {
+            "description": "Add metadata tags to a file or directory",
+            "parameters": [
+                {"name": "path", "type": "string", "required": True, "description": "Path to tag", "kind": "positional"},
+                {"name": "tags", "type": "string", "required": True, "description": "One or more tags to add", "kind": "positional"},
+            ],
+            "example": "cos app fs tag /workspace/notes.md important draft",
+        },
+        "recent": {
+            "description": "List recently modified files in /workspace",
+            "parameters": [
+                {"name": "n", "type": "integer", "required": False, "description": "Number of files to return (default 10)", "kind": "positional", "default": 10},
+            ],
+            "example": "cos app fs recent 20",
+        },
+    }
+
+
 def run(command, args):
+    if command == "__schema__":
+        return _schema()
     handler = COMMANDS.get(command)
     if handler is None:
         return {"error": f"unknown command: {command}"}
