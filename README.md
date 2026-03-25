@@ -55,7 +55,10 @@ cos (Rust binary, ~5800 LOC)
     ├── kv          Key-value store
     ├── log         Audit log search
     ├── notify      Notifications
-    └── pkg         Package management
+    ├── pkg         Package management
+    ├── search      Web and image search (Google, Brave)
+    ├── email       Send, search, read email (SMTP, Gmail, Outlook)
+    └── calendar    Events and scheduling (local SQLite, Google, Outlook)
 ```
 
 ## Quick Start

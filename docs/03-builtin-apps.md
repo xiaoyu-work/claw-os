@@ -1,6 +1,6 @@
 # Part 3: Built-in Apps
 
-Claw OS ships 10 Python apps that extend the Rust core with higher-level functionality. Each app is a self-contained directory under `/usr/lib/cos/apps/` with:
+Claw OS ships 13 Python apps that extend the Rust core with higher-level functionality. Each app is a self-contained directory under `/usr/lib/cos/apps/` with:
 
 - `app.json` — manifest (name, version, commands, dependencies)
 - `main.py` — entry point implementing `run(command, args) → dict`
@@ -506,6 +506,187 @@ List all installed packages.
 
 ```bash
 cos app pkg list [--filter "python*"]
+```
+
+---
+
+## search — Web & Image Search
+
+Search the web using Google Custom Search or Brave Search. Auto-fallback: if Google fails, retries with Brave.
+
+**Credentials** (store one or both):
+```bash
+cos credential store GOOGLE_SEARCH_API_KEY "AIza..." --tier 1
+cos credential store GOOGLE_SEARCH_ENGINE_ID "a1b2c3..." --tier 1
+# Or:
+cos credential store BRAVE_SEARCH_API_KEY "BSA..." --tier 1
+```
+
+### search web
+
+Search the web for information.
+
+```bash
+cos app search web "Rust async runtime" [--max-results 5] [--provider google|brave]
+```
+```json
+{
+  "query": "Rust async runtime",
+  "provider": "google",
+  "results": [
+    {"title": "Tokio", "url": "https://tokio.rs", "snippet": "An asynchronous runtime for Rust..."}
+  ],
+  "count": 5,
+  "total_results": 1250000
+}
+```
+
+### search image
+
+Search for images.
+
+```bash
+cos app search image "architecture diagram" [--max-results 5]
+```
+```json
+{
+  "query": "architecture diagram",
+  "provider": "google",
+  "results": [
+    {"title": "System architecture", "url": "https://example.com/arch.png", "thumbnail": "https://...", "width": 1920, "height": 1080, "source": "example.com"}
+  ],
+  "count": 5
+}
+```
+
+---
+
+## email — Email Management
+
+Send, search, and read email. Supports three providers:
+
+| Provider | Use Case | Credentials Needed |
+|---|---|---|
+| **SMTP** (default) | Send-only, works with any mail server | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` |
+| **Gmail** | Full features (send, search, list, read) | `GMAIL_ACCESS_TOKEN` or `GOOGLE_OAUTH_TOKEN` |
+| **Outlook** | Full features (send, search, list, read) | `MICROSOFT_ACCESS_TOKEN` or `MICROSOFT_OAUTH_TOKEN` |
+
+Provider is auto-detected from available credentials. Override with `--provider`.
+
+### email send
+
+```bash
+cos app email send --to recipient@example.com --subject "Hello" --body "Message body" [--cc other@example.com] [--provider smtp|gmail|outlook]
+```
+```json
+{"sent": true, "to": "recipient@example.com", "subject": "Hello", "provider": "gmail"}
+```
+
+### email search
+
+Search emails by query (Gmail/Outlook only).
+
+```bash
+cos app email search --query "from:boss subject:urgent" [--max-results 10] [--provider gmail|outlook]
+```
+```json
+{
+  "query": "from:boss",
+  "provider": "gmail",
+  "emails": [
+    {"id": "msg123", "from": "boss@company.com", "subject": "Urgent", "snippet": "Please review...", "date": "2026-03-25T10:00:00Z", "unread": true}
+  ],
+  "count": 3
+}
+```
+
+### email list
+
+List recent emails.
+
+```bash
+cos app email list [--max-results 10] [--unread] [--provider gmail|outlook]
+```
+
+### email read
+
+Read a specific email by ID.
+
+```bash
+cos app email read --id <message-id> [--provider gmail|outlook]
+```
+```json
+{
+  "id": "msg123",
+  "from": "boss@company.com",
+  "to": ["you@company.com"],
+  "subject": "Urgent",
+  "body": "Please review the attached document...",
+  "date": "2026-03-25T10:00:00Z",
+  "attachments": [{"name": "doc.pdf", "size": 52400}]
+}
+```
+
+---
+
+## calendar — Events & Scheduling
+
+Manage calendar events. **Local-first**: works out of the box with a SQLite database, no API keys needed. Optionally sync with Google Calendar or Outlook.
+
+| Provider | Storage | Credentials Needed |
+|---|---|---|
+| **local** (default) | SQLite at `$COS_DATA_DIR/calendar/events.db` | None |
+| **Google** | Google Calendar API v3 | `GOOGLE_CALENDAR_TOKEN` or `GOOGLE_OAUTH_TOKEN` |
+| **Outlook** | Microsoft Graph API | `MICROSOFT_ACCESS_TOKEN` or `MICROSOFT_OAUTH_TOKEN` |
+
+### calendar create
+
+```bash
+cos app calendar create --title "Team standup" --start "2026-03-25T09:00:00Z" [--end "2026-03-25T09:30:00Z"] [--description "Daily sync"] [--location "Room 3"] [--provider local|google|outlook]
+```
+```json
+{
+  "created": true,
+  "provider": "local",
+  "event": {"id": "evt-1234-abc", "title": "Team standup", "start": "2026-03-25T09:00:00Z", "end": "2026-03-25T09:30:00Z"}
+}
+```
+
+If `--end` is omitted, defaults to 1 hour after start.
+
+### calendar list
+
+```bash
+cos app calendar list --from "2026-03-25T00:00:00Z" --to "2026-03-26T00:00:00Z" [--provider local|google|outlook]
+```
+```json
+{
+  "provider": "local",
+  "events": [
+    {"id": "evt-1234-abc", "title": "Team standup", "start": "2026-03-25T09:00:00Z", "end": "2026-03-25T09:30:00Z", "description": "Daily sync"}
+  ],
+  "count": 1
+}
+```
+
+### calendar today
+
+Shortcut to list today's events.
+
+```bash
+cos app calendar today [--provider local|google|outlook]
+```
+
+### calendar update
+
+```bash
+cos app calendar update --id evt-1234-abc --title "New title" [--start "..."] [--end "..."] [--provider local|google|outlook]
+```
+
+### calendar delete
+
+```bash
+cos app calendar delete --id evt-1234-abc [--provider local|google|outlook]
 ```
 
 ---
