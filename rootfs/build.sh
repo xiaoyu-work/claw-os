@@ -61,7 +61,7 @@ rm -rf "$ROOTFS/var/lib/apt/lists"/*
 # 4. Install Python packages for cos apps (not available via apt)
 echo ":: installing Python packages"
 chroot "$ROOTFS" pip3 install --break-system-packages --no-cache-dir \
-    pymupdf python-docx openpyxl pyyaml
+    pymupdf python-docx openpyxl python-pptx pyyaml
 
 # 5. Apply overlay (config files, cos-init, etc.)
 echo ":: applying overlay"
