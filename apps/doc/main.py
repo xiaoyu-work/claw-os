@@ -79,6 +79,31 @@ def _read_xlsx(path):
     return json.dumps(sheets, indent=2, ensure_ascii=False), None
 
 
+def _read_pptx(path):
+    try:
+        from pptx import Presentation
+    except ImportError:
+        return None, {"error": "python-pptx is not installed", "hint": "pip install python-pptx"}
+    prs = Presentation(path)
+    slides = []
+    for i, slide in enumerate(prs.slides, 1):
+        texts = []
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                for para in shape.text_frame.paragraphs:
+                    text = para.text.strip()
+                    if text:
+                        texts.append(text)
+        notes = ""
+        if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
+            notes = slide.notes_slide.notes_text_frame.text.strip()
+        slide_text = f"--- Slide {i} ---\n" + "\n".join(texts)
+        if notes:
+            slide_text += f"\n\n[Notes] {notes}"
+        slides.append(slide_text)
+    return "\n\n".join(slides), None
+
+
 def _ext(path):
     return os.path.splitext(path)[1].lower()
 
@@ -114,6 +139,10 @@ def cmd_read(args):
             return err
     elif ext == ".xlsx":
         content, err = _read_xlsx(path)
+        if err:
+            return err
+    elif ext == ".pptx":
+        content, err = _read_pptx(path)
         if err:
             return err
     elif ext in (".yaml", ".yml"):
@@ -174,6 +203,11 @@ def cmd_info(args):
     elif ext == ".xlsx":
         try:
             import openpyxl  # noqa: F401
+        except ImportError:
+            readable = False
+    elif ext == ".pptx":
+        try:
+            from pptx import Presentation  # noqa: F401
         except ImportError:
             readable = False
     else:

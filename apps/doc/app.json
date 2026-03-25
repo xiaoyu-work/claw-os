@@ -3,11 +3,11 @@
   "version": "0.1.0",
   "description": "Universal document reader — any format in, structured text out",
   "commands": {
-    "read": "Read document content (PDF, DOCX, XLSX, images, etc.)",
+    "read": "Read document content (PDF, DOCX, XLSX, PPTX, CSV, etc.)",
     "info": "Get document metadata without reading full content",
     "convert": "Convert document to another format"
   },
   "dependencies": {
-    "python": ["pymupdf", "python-docx", "openpyxl"]
+    "python": ["pymupdf", "python-docx", "openpyxl", "python-pptx"]
   }
 }
