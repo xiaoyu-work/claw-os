@@ -375,7 +375,8 @@ fn cmd_create(args: &[String]) -> Result<Value, String> {
     let meta_path = cp_dir.join("meta.json");
     let meta_json = serde_json::to_string_pretty(&meta)
         .map_err(|e| format!("failed to serialize meta: {e}"))?;
-    fs::write(&meta_path, &meta_json).map_err(|e| format!("failed to write meta.json: {e}"))?;
+    crate::filelock::write_locked(&meta_path, &meta_json)
+        .map_err(|e| format!("failed to write meta.json: {e}"))?;
 
     // 4. Create fresh empty upper + work dir.
     fs::create_dir_all(&upper).map_err(|e| format!("failed to create fresh upper: {e}"))?;
@@ -576,7 +577,7 @@ fn cmd_list(_args: &[String]) -> Result<Value, String> {
 
     for entry in dirs {
         let meta_path = entry.path().join("meta.json");
-        if let Ok(data) = fs::read_to_string(&meta_path) {
+        if let Ok(Some(data)) = crate::filelock::read_locked(&meta_path) {
             if let Ok(meta) = serde_json::from_str::<CheckpointMeta>(&data) {
                 checkpoints.push(json!({
                     "id": meta.id,
@@ -688,15 +689,13 @@ fn quota_path() -> PathBuf {
 
 fn load_quota() -> Option<QuotaConfig> {
     let path = quota_path();
-    let data = fs::read_to_string(&path).ok()?;
+    let data = crate::filelock::read_locked(&path).ok()??;
     serde_json::from_str(&data).ok()
 }
 
 fn save_quota(cfg: &QuotaConfig) {
-    let dir = overlay_dir();
-    let _ = fs::create_dir_all(&dir);
     if let Ok(data) = serde_json::to_string_pretty(cfg) {
-        let _ = fs::write(quota_path(), data);
+        let _ = crate::filelock::write_locked(&quota_path(), &data);
     }
 }
 

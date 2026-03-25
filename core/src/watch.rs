@@ -11,7 +11,6 @@
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
-use std::io::Write as _;
 use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
@@ -179,9 +178,8 @@ fn log_watch_event(source: &str, event: &Value) {
         obj.insert("timestamp".into(), json!(now));
         obj.insert("source".into(), json!(source));
     }
-    if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&path) {
-        let _ = writeln!(f, "{}", serde_json::to_string(&entry).unwrap_or_default());
-    }
+    let line = serde_json::to_string(&entry).unwrap_or_default();
+    let _ = crate::filelock::append_locked(&path, &line);
 }
 
 // ---------------------------------------------------------------------------

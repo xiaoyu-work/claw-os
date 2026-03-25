@@ -227,19 +227,17 @@ fn format_time(dt: &chrono::DateTime<chrono::Utc>) -> String {
 
 fn load_job(id: &str) -> Result<CronJob, String> {
     let path = job_path(id);
-    if !path.is_file() {
-        return Err(format!("cron job not found: {id}"));
-    }
-    let data = fs::read_to_string(&path).map_err(|e| format!("failed to read job {id}: {e}"))?;
+    let data = crate::filelock::read_locked(&path)
+        .map_err(|e| format!("failed to read job {id}: {e}"))?
+        .ok_or_else(|| format!("cron job not found: {id}"))?;
     serde_json::from_str(&data).map_err(|e| format!("failed to parse job {id}: {e}"))
 }
 
 fn save_job(job: &CronJob) -> Result<(), String> {
-    let dir = jobs_dir();
-    fs::create_dir_all(&dir).map_err(|e| format!("failed to create jobs dir: {e}"))?;
     let data =
         serde_json::to_string_pretty(job).map_err(|e| format!("failed to serialize job: {e}"))?;
-    fs::write(job_path(&job.id), data).map_err(|e| format!("failed to write job: {e}"))
+    crate::filelock::write_locked(&job_path(&job.id), &data)
+        .map_err(|e| format!("failed to write job: {e}"))
 }
 
 fn list_all_jobs() -> Result<Vec<CronJob>, String> {
@@ -253,10 +251,12 @@ fn list_all_jobs() -> Result<Vec<CronJob>, String> {
         let entry = entry.map_err(|e| format!("failed to read dir entry: {e}"))?;
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) == Some("json") {
-            let data = fs::read_to_string(&path)
+            let data = crate::filelock::read_locked(&path)
                 .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
-            if let Ok(job) = serde_json::from_str::<CronJob>(&data) {
-                jobs.push(job);
+            if let Some(data) = data {
+                if let Ok(job) = serde_json::from_str::<CronJob>(&data) {
+                    jobs.push(job);
+                }
             }
         }
     }
@@ -265,13 +265,11 @@ fn list_all_jobs() -> Result<Vec<CronJob>, String> {
 }
 
 fn save_run_log(job_id: &str, result: &CronRunResult) -> Result<(), String> {
-    let dir = job_logs_dir(job_id);
-    fs::create_dir_all(&dir).map_err(|e| format!("failed to create logs dir: {e}"))?;
     let filename = result.started_at.replace(':', "-");
-    let path = dir.join(format!("{filename}.json"));
+    let path = job_logs_dir(job_id).join(format!("{filename}.json"));
     let data = serde_json::to_string_pretty(result)
         .map_err(|e| format!("failed to serialize run result: {e}"))?;
-    fs::write(path, data).map_err(|e| format!("failed to write run log: {e}"))
+    crate::filelock::write_locked(&path, &data).map_err(|e| format!("failed to write run log: {e}"))
 }
 
 fn load_run_logs(job_id: &str, limit: usize) -> Result<Vec<CronRunResult>, String> {
@@ -297,10 +295,12 @@ fn load_run_logs(job_id: &str, limit: usize) -> Result<Vec<CronRunResult>, Strin
 
     let mut results = Vec::new();
     for entry in entries {
-        let data = fs::read_to_string(entry.path())
+        let data = crate::filelock::read_locked(&entry.path())
             .map_err(|e| format!("failed to read log entry: {e}"))?;
-        if let Ok(r) = serde_json::from_str::<CronRunResult>(&data) {
-            results.push(r);
+        if let Some(data) = data {
+            if let Ok(r) = serde_json::from_str::<CronRunResult>(&data) {
+                results.push(r);
+            }
         }
     }
     Ok(results)

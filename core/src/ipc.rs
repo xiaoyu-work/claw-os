@@ -118,7 +118,7 @@ fn cmd_send(args: &[String]) -> Result<Value, String> {
     let path = dir.join(format!("{message_id}.json"));
     let data = serde_json::to_string_pretty(&msg)
         .map_err(|e| format!("failed to serialize message: {e}"))?;
-    fs::write(&path, data).map_err(|e| format!("failed to write message: {e}"))?;
+    crate::filelock::write_locked(&path, &data)?;
 
     Ok(json!({
         "sent": true,
@@ -159,8 +159,8 @@ fn cmd_recv(args: &[String]) -> Result<Value, String> {
         let messages = sorted_messages(&dir);
 
         if let Some((id, path)) = messages.first() {
-            let data =
-                fs::read_to_string(path).map_err(|e| format!("failed to read message: {e}"))?;
+            let data = crate::filelock::read_locked(path)?
+                .ok_or_else(|| format!("message file not found: {}", path.display()))?;
             let msg: Value =
                 serde_json::from_str(&data).map_err(|e| format!("failed to parse message: {e}"))?;
 
@@ -193,7 +193,7 @@ fn cmd_list(args: &[String]) -> Result<Value, String> {
     let previews: Vec<Value> = messages
         .iter()
         .filter_map(|(id, path)| {
-            let data = fs::read_to_string(path).ok()?;
+            let data = crate::filelock::read_locked(path).ok()??;
             let msg: Value = serde_json::from_str(&data).ok()?;
             Some(json!({
                 "message_id": id,
@@ -293,7 +293,7 @@ fn cmd_lock(args: &[String]) -> Result<Value, String> {
 
     loop {
         // Try to read an existing lock file.
-        if let Ok(data) = fs::read_to_string(&lock_path) {
+        if let Ok(Some(data)) = crate::filelock::read_locked(&lock_path) {
             if let Ok(existing) = serde_json::from_str::<Value>(&data) {
                 let existing_holder = existing["holder"].as_str().unwrap_or("");
                 let existing_pid = existing["pid"].as_u64().unwrap_or(0) as u32;
@@ -337,7 +337,7 @@ fn cmd_lock(args: &[String]) -> Result<Value, String> {
         });
         let data = serde_json::to_string_pretty(&lock_data)
             .map_err(|e| format!("failed to serialize lock: {e}"))?;
-        fs::write(&lock_path, data).map_err(|e| format!("failed to write lock file: {e}"))?;
+        crate::filelock::write_locked(&lock_path, &data)?;
 
         return Ok(json!({
             "locked": true,
@@ -383,8 +383,8 @@ fn cmd_unlock(args: &[String]) -> Result<Value, String> {
 
     // If holder is specified, verify it matches before unlocking.
     if let Some(ref required_holder) = holder {
-        let data =
-            fs::read_to_string(&lock_path).map_err(|e| format!("failed to read lock file: {e}"))?;
+        let data = crate::filelock::read_locked(&lock_path)?
+            .ok_or_else(|| format!("lock file not found: {}", lock_path.display()))?;
         let existing: Value =
             serde_json::from_str(&data).map_err(|e| format!("failed to parse lock file: {e}"))?;
         let current_holder = existing["holder"].as_str().unwrap_or("");
@@ -422,7 +422,7 @@ fn cmd_locks(_args: &[String]) -> Result<Value, String> {
             if !name.ends_with(".lock") {
                 return None;
             }
-            let data = fs::read_to_string(e.path()).ok()?;
+            let data = crate::filelock::read_locked(&e.path()).ok()??;
             let lock: Value = serde_json::from_str(&data).ok()?;
             Some(lock)
         })
@@ -495,7 +495,7 @@ fn cmd_barrier(args: &[String]) -> Result<Value, String> {
     // 1. Write this session's ready file.
     let ready_path = dir.join(format!("{session}.ready"));
     let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    fs::write(&ready_path, &timestamp).map_err(|e| format!("failed to write ready file: {e}"))?;
+    crate::filelock::write_locked(&ready_path, &timestamp)?;
 
     // 2. Poll until enough .ready files exist.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
@@ -655,8 +655,7 @@ fn pipe_create(args: &[String]) -> Result<Value, String> {
     });
     let data = serde_json::to_string_pretty(&meta)
         .map_err(|e| format!("failed to serialize metadata: {e}"))?;
-    fs::write(channel_dir.join("meta.json"), data)
-        .map_err(|e| format!("failed to write metadata: {e}"))?;
+    crate::filelock::write_locked(&channel_dir.join("meta.json"), &data)?;
 
     Ok(json!({
         "created": name,
@@ -699,8 +698,8 @@ fn pipe_publish(args: &[String]) -> Result<Value, String> {
     }
 
     // Read buffer_size from metadata.
-    let meta_str =
-        fs::read_to_string(&meta_path).map_err(|e| format!("failed to read metadata: {e}"))?;
+    let meta_str = crate::filelock::read_locked(&meta_path)?
+        .ok_or_else(|| format!("metadata file not found: {}", meta_path.display()))?;
     let meta: Value =
         serde_json::from_str(&meta_str).map_err(|e| format!("failed to parse metadata: {e}"))?;
     let buffer_size = meta["buffer_size"].as_u64().unwrap_or(1000);
@@ -722,7 +721,7 @@ fn pipe_publish(args: &[String]) -> Result<Value, String> {
     let path = messages_dir.join(format!("{message_id}.json"));
     let data = serde_json::to_string_pretty(&msg)
         .map_err(|e| format!("failed to serialize message: {e}"))?;
-    fs::write(&path, data).map_err(|e| format!("failed to write message: {e}"))?;
+    crate::filelock::write_locked(&path, &data)?;
 
     // Enforce backpressure: remove oldest messages if over buffer_size.
     let all_messages = sorted_pipe_messages(&messages_dir);
@@ -815,7 +814,7 @@ fn pipe_subscribe(args: &[String]) -> Result<Value, String> {
                 let capped = new_msgs.iter().take(limit as usize);
                 let mut messages: Vec<Value> = Vec::new();
                 for (id, path) in capped {
-                    if let Ok(data) = fs::read_to_string(path) {
+                    if let Ok(Some(data)) = crate::filelock::read_locked(path) {
                         if let Ok(msg) = serde_json::from_str::<Value>(&data) {
                             messages.push(json!({
                                 "id": id,
@@ -868,7 +867,7 @@ fn pipe_subscribe(args: &[String]) -> Result<Value, String> {
     let capped = filtered.iter().take(limit as usize);
     let mut messages: Vec<Value> = Vec::new();
     for (id, path) in capped {
-        if let Ok(data) = fs::read_to_string(path) {
+        if let Ok(Some(data)) = crate::filelock::read_locked(path) {
             if let Ok(msg) = serde_json::from_str::<Value>(&data) {
                 messages.push(json!({
                     "id": id,
@@ -908,7 +907,7 @@ fn pipe_list(_args: &[String]) -> Result<Value, String> {
         .filter_map(|e| e.ok())
         .filter_map(|e| {
             let meta_path = e.path().join("meta.json");
-            let data = fs::read_to_string(meta_path).ok()?;
+            let data = crate::filelock::read_locked(&meta_path).ok()??;
             let meta: Value = serde_json::from_str(&data).ok()?;
             let name = meta["name"].as_str()?.to_string();
             let created_at = meta["created_at"].as_str().unwrap_or("").to_string();

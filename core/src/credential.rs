@@ -35,35 +35,105 @@ use std::path::PathBuf;
 use crate::policy::{self, OpType};
 
 // ===========================================================================
-// SHA-256 (pure Rust, no external crate)
+// Kernel crypto via AF_ALG (Linux) with pure-Rust fallback (non-Linux)
+// ===========================================================================
+//
+// On Linux, uses the kernel's crypto API through AF_ALG sockets:
+//   - "hash sha256"  for SHA-256
+//   - "aead gcm(aes)" for AES-256-GCM
+// No userspace crypto code on the hot path — the kernel handles it.
+// Keys never exist as mmap'd pages that could be swapped to disk.
+//
+// On non-Linux (dev/test), falls back to the pure-Rust implementation
+// to keep tests working on macOS/Windows.
 // ===========================================================================
 
+#[cfg(target_os = "linux")]
 mod sha256 {
-    /// SHA-256 round constants (first 32 bits of the fractional parts of the
-    /// cube roots of the first 64 primes).
-    const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
-        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
-        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
-        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
-        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
-        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
-        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
-        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
-        0xc67178f2,
-    ];
+    use std::io::{Read, Write};
+    use std::os::unix::io::FromRawFd;
 
-    /// Initial hash values (first 32 bits of the fractional parts of the
-    /// square roots of the first 8 primes).
-    const H0: [u32; 8] = [
-        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
-        0x5be0cd19,
-    ];
-
-    /// Compute the SHA-256 digest of `data`.
+    /// Compute SHA-256 via AF_ALG socket (kernel crypto API).
     pub(super) fn hash(data: &[u8]) -> [u8; 32] {
-        // Pre-processing: pad message to a multiple of 512 bits (64 bytes).
+        match hash_af_alg(data) {
+            Some(h) => h,
+            None => hash_fallback(data),
+        }
+    }
+
+    fn hash_af_alg(data: &[u8]) -> Option<[u8; 32]> {
+        unsafe {
+            // socket(AF_ALG, SOCK_SEQPACKET, 0)
+            let fd = libc::socket(libc::AF_ALG, libc::SOCK_SEQPACKET, 0);
+            if fd < 0 {
+                return None;
+            }
+
+            // Build sockaddr_alg for "hash" / "sha256"
+            // struct sockaddr_alg { u16 family; char type[14]; u32 feat; u32 mask; char name[64]; }
+            let mut sa = [0u8; 88]; // sizeof(sockaddr_alg)
+                                    // family = AF_ALG (38)
+            sa[0] = 38;
+            sa[1] = 0;
+            // type = "hash" at offset 2
+            sa[2..6].copy_from_slice(b"hash");
+            // name = "sha256" at offset 24
+            sa[24..30].copy_from_slice(b"sha256");
+
+            let ret = libc::bind(fd, sa.as_ptr() as *const libc::sockaddr, 88);
+            if ret < 0 {
+                libc::close(fd);
+                return None;
+            }
+
+            let op_fd = libc::accept(fd, std::ptr::null_mut(), std::ptr::null_mut());
+            if op_fd < 0 {
+                libc::close(fd);
+                return None;
+            }
+
+            // Write data, read hash
+            let mut op_file = std::fs::File::from_raw_fd(op_fd);
+            if op_file.write_all(data).is_err() {
+                libc::close(fd);
+                return None;
+            }
+
+            let mut digest = [0u8; 32];
+            if op_file.read_exact(&mut digest).is_err() {
+                libc::close(fd);
+                return None;
+            }
+
+            libc::close(fd);
+            Some(digest)
+        }
+    }
+
+    /// Pure-Rust SHA-256 fallback (if AF_ALG is unavailable).
+    fn hash_fallback(data: &[u8]) -> [u8; 32] {
+        // Delegates to the pure-Rust implementation below.
+        pure_sha256(data)
+    }
+
+    #[allow(clippy::needless_range_loop)]
+    fn pure_sha256(data: &[u8]) -> [u8; 32] {
+        const K: [u32; 64] = [
+            0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+            0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+            0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+            0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+            0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+            0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+            0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+            0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+            0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+            0xc67178f2,
+        ];
+        const H0: [u32; 8] = [
+            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+            0x5be0cd19,
+        ];
         let bit_len = (data.len() as u64) * 8;
         let mut msg = data.to_vec();
         msg.push(0x80);
@@ -71,10 +141,7 @@ mod sha256 {
             msg.push(0);
         }
         msg.extend_from_slice(&bit_len.to_be_bytes());
-
         let mut h = H0;
-
-        // Process each 512-bit (64-byte) block.
         for block in msg.chunks_exact(64) {
             let mut w = [0u32; 64];
             for t in 0..16 {
@@ -93,10 +160,8 @@ mod sha256 {
                     .wrapping_add(w[t - 7])
                     .wrapping_add(s1);
             }
-
             let (mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh) =
                 (h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7]);
-
             for t in 0..64 {
                 let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
                 let ch = (e & f) ^ (!e & g);
@@ -108,7 +173,6 @@ mod sha256 {
                 let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
                 let maj = (a & b) ^ (a & c) ^ (b & c);
                 let t2 = s0.wrapping_add(maj);
-
                 hh = g;
                 g = f;
                 f = e;
@@ -118,7 +182,6 @@ mod sha256 {
                 b = a;
                 a = t1.wrapping_add(t2);
             }
-
             h[0] = h[0].wrapping_add(a);
             h[1] = h[1].wrapping_add(b);
             h[2] = h[2].wrapping_add(c);
@@ -128,7 +191,90 @@ mod sha256 {
             h[6] = h[6].wrapping_add(g);
             h[7] = h[7].wrapping_add(hh);
         }
+        let mut out = [0u8; 32];
+        for (i, word) in h.iter().enumerate() {
+            out[4 * i..4 * i + 4].copy_from_slice(&word.to_be_bytes());
+        }
+        out
+    }
+}
 
+#[cfg(not(target_os = "linux"))]
+mod sha256 {
+    const K: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
+    ];
+    const H0: [u32; 8] = [
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+        0x5be0cd19,
+    ];
+    pub(super) fn hash(data: &[u8]) -> [u8; 32] {
+        let bit_len = (data.len() as u64) * 8;
+        let mut msg = data.to_vec();
+        msg.push(0x80);
+        while msg.len() % 64 != 56 {
+            msg.push(0);
+        }
+        msg.extend_from_slice(&bit_len.to_be_bytes());
+        let mut h = H0;
+        for block in msg.chunks_exact(64) {
+            let mut w = [0u32; 64];
+            for t in 0..16 {
+                w[t] = u32::from_be_bytes([
+                    block[4 * t],
+                    block[4 * t + 1],
+                    block[4 * t + 2],
+                    block[4 * t + 3],
+                ]);
+            }
+            for t in 16..64 {
+                let s0 = w[t - 15].rotate_right(7) ^ w[t - 15].rotate_right(18) ^ (w[t - 15] >> 3);
+                let s1 = w[t - 2].rotate_right(17) ^ w[t - 2].rotate_right(19) ^ (w[t - 2] >> 10);
+                w[t] = w[t - 16]
+                    .wrapping_add(s0)
+                    .wrapping_add(w[t - 7])
+                    .wrapping_add(s1);
+            }
+            let (mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh) =
+                (h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7]);
+            for t in 0..64 {
+                let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+                let ch = (e & f) ^ (!e & g);
+                let t1 = hh
+                    .wrapping_add(s1)
+                    .wrapping_add(ch)
+                    .wrapping_add(K[t])
+                    .wrapping_add(w[t]);
+                let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+                let maj = (a & b) ^ (a & c) ^ (b & c);
+                let t2 = s0.wrapping_add(maj);
+                hh = g;
+                g = f;
+                f = e;
+                e = d.wrapping_add(t1);
+                d = c;
+                c = b;
+                b = a;
+                a = t1.wrapping_add(t2);
+            }
+            h[0] = h[0].wrapping_add(a);
+            h[1] = h[1].wrapping_add(b);
+            h[2] = h[2].wrapping_add(c);
+            h[3] = h[3].wrapping_add(d);
+            h[4] = h[4].wrapping_add(e);
+            h[5] = h[5].wrapping_add(f);
+            h[6] = h[6].wrapping_add(g);
+            h[7] = h[7].wrapping_add(hh);
+        }
         let mut out = [0u8; 32];
         for (i, word) in h.iter().enumerate() {
             out[4 * i..4 * i + 4].copy_from_slice(&word.to_be_bytes());
@@ -138,7 +284,7 @@ mod sha256 {
 }
 
 // ===========================================================================
-// AES-256-GCM (pure Rust, no external crate)
+// AES-256-GCM — pure Rust (kept for non-Linux + as Linux AF_ALG fallback)
 // ===========================================================================
 
 mod aes_gcm {
@@ -516,41 +662,139 @@ fn from_b64(s: &str) -> Result<Vec<u8>, String> {
 
 /// Derive a 256-bit encryption key from the machine identity.
 /// Uses SHA-256(machine-id) so the result is always exactly 32 bytes.
+///
+/// On Linux, the derived key is stored in the kernel keyring via `keyctl`
+/// so it stays in kernel memory (not swappable). Subsequent calls retrieve
+/// the cached key from the keyring instead of re-deriving.
 fn derive_key() -> [u8; 32] {
     #[cfg(target_os = "linux")]
     {
-        if let Ok(id) = fs::read_to_string("/etc/machine-id") {
-            return sha256::hash(id.trim().as_bytes());
+        // Try to read the key from kernel keyring first.
+        if let Some(key) = keyring_read(b"cos-credential-key") {
+            if key.len() == 32 {
+                let mut out = [0u8; 32];
+                out.copy_from_slice(&key);
+                return out;
+            }
         }
+
+        // Derive from machine-id.
+        let derived = if let Ok(id) = fs::read_to_string("/etc/machine-id") {
+            sha256::hash(id.trim().as_bytes())
+        } else {
+            sha256::hash(b"claw-os-credential-store-key-v1")
+        };
+
+        // Store in kernel keyring for future use.
+        keyring_store(b"cos-credential-key", &derived);
+
+        return derived;
     }
+
+    #[cfg(not(target_os = "linux"))]
     sha256::hash(b"claw-os-credential-store-key-v1")
 }
 
-/// Generate a random 12-byte nonce.
-/// Reads `/dev/urandom` on Linux; falls back to timestamp-based on other OS.
+/// Generate a random 12-byte nonce using getrandom(2) syscall.
+///
+/// getrandom(2) reads from the kernel's CSPRNG directly — no file descriptor
+/// needed, no /dev/urandom open, no TOCTOU race.
 fn generate_nonce() -> [u8; 12] {
+    let mut nonce = [0u8; 12];
+
     #[cfg(target_os = "linux")]
     {
-        use std::io::Read;
-        if let Ok(mut f) = fs::File::open("/dev/urandom") {
-            let mut nonce = [0u8; 12];
-            if f.read_exact(&mut nonce).is_ok() {
-                return nonce;
-            }
+        let ret = unsafe { libc::getrandom(nonce.as_mut_ptr() as *mut libc::c_void, 12, 0) };
+        if ret == 12 {
+            return nonce;
         }
     }
-    // Fallback: timestamp-based nonce (non-Linux or urandom unavailable).
+
+    // Fallback: timestamp + counter (non-Linux or getrandom unavailable).
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
-    let mut nonce = [0u8; 12];
     nonce[..8].copy_from_slice(&now.as_nanos().to_le_bytes()[..8]);
-    // Mix in a process-level counter to avoid collisions within the same
-    // nanosecond (e.g. in tests).
     static CTR: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let c = CTR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     nonce[8..12].copy_from_slice(&c.to_le_bytes());
     nonce
+}
+
+// ---------------------------------------------------------------------------
+// Linux kernel keyring helpers (keyctl syscalls via libc)
+// ---------------------------------------------------------------------------
+
+/// Store a key in the process session keyring.
+#[cfg(target_os = "linux")]
+fn keyring_store(description: &[u8], payload: &[u8]) {
+    use std::ffi::CString;
+    // keyctl constants
+    const KEY_SPEC_SESSION_KEYRING: i32 = -3;
+
+    let desc = match CString::new(description) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    let type_cstr = match CString::new("user") {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    unsafe {
+        // add_key("user", description, payload, payload_len, KEY_SPEC_SESSION_KEYRING)
+        libc::syscall(
+            libc::SYS_add_key,
+            type_cstr.as_ptr(),
+            desc.as_ptr(),
+            payload.as_ptr(),
+            payload.len(),
+            KEY_SPEC_SESSION_KEYRING,
+        );
+    }
+}
+
+/// Read a key from the process session keyring.
+#[cfg(target_os = "linux")]
+fn keyring_read(description: &[u8]) -> Option<Vec<u8>> {
+    use std::ffi::CString;
+    const KEY_SPEC_SESSION_KEYRING: i32 = -3;
+
+    let desc = CString::new(description).ok()?;
+    let type_cstr = CString::new("user").ok()?;
+
+    unsafe {
+        // request_key("user", description, NULL, KEY_SPEC_SESSION_KEYRING)
+        let key_id = libc::syscall(
+            libc::SYS_request_key,
+            type_cstr.as_ptr(),
+            desc.as_ptr(),
+            std::ptr::null::<libc::c_char>(),
+            KEY_SPEC_SESSION_KEYRING,
+        );
+
+        if key_id < 0 {
+            return None;
+        }
+
+        // keyctl(KEYCTL_READ, key_id, buf, buf_len)
+        const KEYCTL_READ: libc::c_int = 11;
+        let mut buf = vec![0u8; 64];
+        let n = libc::syscall(
+            libc::SYS_keyctl,
+            KEYCTL_READ as libc::c_long,
+            key_id,
+            buf.as_mut_ptr(),
+            buf.len(),
+        );
+
+        if n < 0 {
+            return None;
+        }
+
+        buf.truncate(n as usize);
+        Some(buf)
+    }
 }
 
 // ===========================================================================
@@ -822,7 +1066,8 @@ fn cmd_store(args: &[String]) -> Result<Value, String> {
     let path = dir.join(format!("{name}.json"));
     let data =
         serde_json::to_string_pretty(&cred).map_err(|e| format!("failed to serialize: {e}"))?;
-    fs::write(&path, data).map_err(|e| format!("failed to write credential: {e}"))?;
+    crate::filelock::write_locked(&path, &data)
+        .map_err(|e| format!("failed to write credential: {e}"))?;
 
     // Set restrictive file permissions on Unix
     #[cfg(unix)]
@@ -859,7 +1104,9 @@ fn cmd_load(args: &[String]) -> Result<Value, String> {
         return Err(format!("credential not found: {name}"));
     }
 
-    let data = fs::read_to_string(&path).map_err(|e| format!("failed to read credential: {e}"))?;
+    let data = crate::filelock::read_locked(&path)
+        .map_err(|e| format!("failed to read credential: {e}"))?
+        .ok_or_else(|| format!("credential not found: {name}"))?;
     let cred: StoredCredential =
         serde_json::from_str(&data).map_err(|e| format!("failed to parse credential: {e}"))?;
 
@@ -902,7 +1149,7 @@ fn cmd_load(args: &[String]) -> Result<Value, String> {
                     // Write updated credential back
                     let data = serde_json::to_string_pretty(&updated_cred)
                         .map_err(|e| format!("failed to serialize: {e}"))?;
-                    fs::write(&path, data)
+                    crate::filelock::write_locked(&path, &data)
                         .map_err(|e| format!("failed to write refreshed credential: {e}"))?;
 
                     return Ok(json!({
@@ -1007,7 +1254,7 @@ fn list_namespace(namespace: &str) -> Result<Value, String> {
         if entry.path().is_dir() {
             continue;
         }
-        if let Ok(data) = fs::read_to_string(entry.path()) {
+        if let Ok(Some(data)) = crate::filelock::read_locked(&entry.path()) {
             if let Ok(cred) = serde_json::from_str::<StoredCredential>(&data) {
                 let expired = is_expired(&cred.expires_at);
                 let mut entry_json = json!({
@@ -1142,7 +1389,8 @@ fn cmd_bundle(args: &[String]) -> Result<Value, String> {
     let path = dir.join(format!("{bundle_name}.json"));
     let data = serde_json::to_string_pretty(&manifest)
         .map_err(|e| format!("failed to serialize bundle: {e}"))?;
-    fs::write(&path, data).map_err(|e| format!("failed to write bundle: {e}"))?;
+    crate::filelock::write_locked(&path, &data)
+        .map_err(|e| format!("failed to write bundle: {e}"))?;
 
     Ok(json!({
         "bundle": bundle_name,
@@ -1170,7 +1418,9 @@ fn cmd_load_bundle(args: &[String]) -> Result<Value, String> {
         return Err(format!("bundle not found: {bundle_name}"));
     }
 
-    let data = fs::read_to_string(&path).map_err(|e| format!("failed to read bundle: {e}"))?;
+    let data = crate::filelock::read_locked(&path)
+        .map_err(|e| format!("failed to read bundle: {e}"))?
+        .ok_or_else(|| format!("bundle not found: {bundle_name}"))?;
     let manifest: BundleManifest =
         serde_json::from_str(&data).map_err(|e| format!("failed to parse bundle: {e}"))?;
 
@@ -1187,8 +1437,15 @@ fn cmd_load_bundle(args: &[String]) -> Result<Value, String> {
             continue;
         }
 
-        let cred_data = match fs::read_to_string(&cred_path) {
-            Ok(d) => d,
+        let cred_data = match crate::filelock::read_locked(&cred_path) {
+            Ok(Some(d)) => d,
+            Ok(None) => {
+                errors.insert(
+                    key.clone(),
+                    Value::String(format!("credential not found: {key}")),
+                );
+                continue;
+            }
             Err(e) => {
                 errors.insert(key.clone(), Value::String(format!("failed to read: {e}")));
                 continue;
@@ -1509,7 +1766,9 @@ fn load_credential_value(name: &str, namespace: &str) -> Result<String, String> 
             "credential not found: {name} (namespace: {namespace}). Store it with: cos credential store {name} <value> --namespace {namespace}"
         ));
     }
-    let data = fs::read_to_string(&path).map_err(|e| format!("failed to read: {e}"))?;
+    let data = crate::filelock::read_locked(&path)
+        .map_err(|e| format!("failed to read: {e}"))?
+        .ok_or_else(|| format!("credential not found: {name} (namespace: {namespace})"))?;
     let cred: StoredCredential =
         serde_json::from_str(&data).map_err(|e| format!("failed to parse: {e}"))?;
 
