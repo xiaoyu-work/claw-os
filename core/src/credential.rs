@@ -322,17 +322,28 @@ fn cmd_list(_args: &[String]) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        atomic::{AtomicU32, Ordering},
+        Once,
+    };
 
-    use std::sync::atomic::{AtomicU32, Ordering};
-    static CRED_COUNTER: AtomicU32 = AtomicU32::new(0);
+    static INIT: Once = Once::new();
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
 
-    fn setup_test_dir() -> PathBuf {
-        let n = CRED_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("cos-cred-test-{}-{}", std::process::id(), n));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        std::env::set_var("COS_DATA_DIR", &dir);
-        dir
+    /// All tests share one COS_DATA_DIR (set once). Each test uses unique
+    /// credential names so there is no cross-test interference.
+    fn unique_name(prefix: &str) -> String {
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        format!("{prefix}-{n}")
+    }
+
+    fn setup() {
+        INIT.call_once(|| {
+            let dir = std::env::temp_dir().join(format!("cos-test-shared-{}", std::process::id()));
+            let _ = fs::create_dir_all(&dir);
+            std::env::set_var("COS_DATA_DIR", &dir);
+        });
+        std::env::remove_var("COS_SESSION");
     }
 
     #[test]
@@ -353,49 +364,49 @@ mod tests {
 
     #[test]
     fn store_and_load() {
-        let _dir = setup_test_dir();
-        std::env::remove_var("COS_SESSION");
+        setup();
+        let name = unique_name("store-load");
 
         let r = cmd_store(&vec![
-            "test-key".into(),
+            name.clone(),
             "secret-value-123".into(),
             "--tier".into(),
             "1".into(),
         ])
         .unwrap();
-        assert_eq!(r["stored"], "test-key");
+        assert_eq!(r["stored"], name);
         assert_eq!(r["min_tier"], 1);
 
-        let r = cmd_load(&vec!["test-key".into()]).unwrap();
-        assert_eq!(r["name"], "test-key");
+        let r = cmd_load(&vec![name.clone()]).unwrap();
+        assert_eq!(r["name"], name);
         assert_eq!(r["value"], "secret-value-123");
     }
 
     #[test]
     fn revoke_removes_credential() {
-        let _dir = setup_test_dir();
-        std::env::remove_var("COS_SESSION");
+        setup();
+        let name = unique_name("revoke");
 
-        cmd_store(&vec!["temp-key".into(), "temp-value".into()]).unwrap();
-        let r = cmd_revoke(&vec!["temp-key".into()]).unwrap();
-        assert_eq!(r["revoked"], "temp-key");
+        cmd_store(&vec![name.clone(), "temp-value".into()]).unwrap();
+        let r = cmd_revoke(&vec![name.clone()]).unwrap();
+        assert_eq!(r["revoked"], name);
 
-        let r = cmd_load(&vec!["temp-key".into()]);
+        let r = cmd_load(&vec![name.clone()]);
         assert!(r.is_err());
     }
 
     #[test]
     fn list_shows_names_only() {
-        let _dir = setup_test_dir();
-        std::env::remove_var("COS_SESSION");
+        setup();
+        let a = unique_name("list-a");
+        let b = unique_name("list-b");
 
-        cmd_store(&vec!["key-a".into(), "val-a".into()]).unwrap();
-        cmd_store(&vec!["key-b".into(), "val-b".into()]).unwrap();
+        cmd_store(&vec![a.clone(), "val-a".into()]).unwrap();
+        cmd_store(&vec![b.clone(), "val-b".into()]).unwrap();
 
         let r = cmd_list(&vec![]).unwrap();
-        assert_eq!(r["count"], 2);
+        assert!(r["count"].as_u64().unwrap() >= 2);
         let creds = r["credentials"].as_array().unwrap();
-        // Should NOT contain "value" field
         for c in creds {
             assert!(c.get("value").is_none());
             assert!(c["name"].is_string());
@@ -404,9 +415,7 @@ mod tests {
 
     #[test]
     fn store_invalid_name() {
-        let _dir = setup_test_dir();
-        std::env::remove_var("COS_SESSION");
-
+        setup();
         let r = cmd_store(&vec!["bad/name".into(), "val".into()]);
         assert!(r.is_err());
         assert!(r.unwrap_err().contains("alphanumeric"));
@@ -414,21 +423,20 @@ mod tests {
 
     #[test]
     fn load_nonexistent() {
-        let _dir = setup_test_dir();
-        std::env::remove_var("COS_SESSION");
-
-        let r = cmd_load(&vec!["nonexistent".into()]);
+        setup();
+        let name = unique_name("nonexistent");
+        let r = cmd_load(&vec![name]);
         assert!(r.is_err());
         assert!(r.unwrap_err().contains("not found"));
     }
 
     #[test]
     fn run_dispatch() {
-        let _dir = setup_test_dir();
-        std::env::remove_var("COS_SESSION");
+        setup();
+        let name = unique_name("dispatch");
 
-        let r = run("store", &vec!["dispatch-key".into(), "val".into()]).unwrap();
-        assert_eq!(r["stored"], "dispatch-key");
+        let r = run("store", &vec![name.clone(), "val".into()]).unwrap();
+        assert_eq!(r["stored"], name);
 
         let r = run("list", &vec![]).unwrap();
         assert!(r["count"].as_u64().unwrap() >= 1);
