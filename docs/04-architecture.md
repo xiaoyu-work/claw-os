@@ -7,7 +7,7 @@
 │  Agent (LLM / Framework)                                        │
 │  e.g., OpenClaw, Claude Code, custom agent                      │
 └────────────────────────┬────────────────────────────────────────┘
-                         │ cos <app> <command> [args...]
+                         │ cos <primitive> <command> | cos app <name> <command>
                          ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  cos binary (Rust, static musl, ~6KB)                           │
@@ -162,7 +162,7 @@ Each tool is a TypeScript file that shells out to `cos`:
 ```typescript
 // plugins/openclaw/src/tools/exec.ts
 async function cosExec(command: string, timeout?: number) {
-  const result = await cos.run("exec", "run", ["--shell", "bash", command]);
+  const result = await cos.run("app", "exec", "run", ["--shell", "bash", command]);
   return JSON.parse(result);
 }
 ```
@@ -247,9 +247,9 @@ Every privilege elevation is:
 cos checkpoint create "before refactor"
 
 # 2. Agent performs risky changes
-cos fs write /den/src/main.py --content "..."
-cos fs rm /den/src/legacy.py
-cos exec run "python -m pytest"
+cos app fs write /den/src/main.py --content "..."
+cos app fs rm /den/src/legacy.py
+cos app exec run "python -m pytest"
 
 # 3. Check what changed
 cos checkpoint diff
@@ -462,7 +462,7 @@ Error messages in Claw OS are not strings — they are structured data with acti
   "error": "No space left on device",
   "recovery": {
     "hint": "Disk full. Free space before retrying.",
-    "try": ["cos sys resources", "cos exec run 'du -sh /den/* | sort -rh | head'"]
+    "try": ["cos sys resources", "cos app exec run 'du -sh /den/* | sort -rh | head'"]
   }
 }
 ```

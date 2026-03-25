@@ -56,7 +56,7 @@ rm: cannot remove '/etc/passwd': Permission denied
   "error": "Permission denied on /etc/passwd",
   "recovery": {
     "hint": "Permission denied. Check file permissions.",
-    "try": ["cos exec run 'ls -la /etc/passwd'", "cos exec run 'chmod +rw /etc/passwd'"]
+    "try": ["cos app exec run 'ls -la /etc/passwd'", "cos app exec run 'chmod +rw /etc/passwd'"]
   }
 }
 ```
@@ -153,8 +153,8 @@ Every `cos` command is logged to a JSONL audit trail. The agent doesn't need to 
 Sensitive values (Bearer tokens, API keys, Authorization headers) are automatically redacted before logging. The agent can later query this log:
 
 ```bash
-cos log search --app exec --status error  # find all failed command executions
-cos log tail 20                            # last 20 entries
+cos app log search --app exec --status error  # find all failed command executions
+cos app log tail 20                            # last 20 entries
 ```
 
 ---

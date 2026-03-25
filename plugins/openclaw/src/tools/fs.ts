@@ -1,8 +1,8 @@
-// cos fs — structured file system operations.
+// cos app fs — structured file system operations.
 // Replaces OpenClaw's internal fs-bridge with OS-level file management.
 
 import { Type } from "@sinclair/typebox";
-import { cos } from "../cos.js";
+import { cosApp } from "../cos.js";
 
 const schema = Type.Object(
   {
@@ -54,12 +54,12 @@ export function createCosFsTool() {
         args.push("--content", content);
       }
       if (operation === "search" && pattern) {
-        // search expects: cos fs search <pattern> <path>
-        const result = cos("fs", "search", [pattern, path]);
+        // search expects: cos app fs search <pattern> <path>
+        const result = cosApp("fs", "search", [pattern, path]);
         return { content: JSON.stringify(result, null, 2) };
       }
 
-      const result = cos("fs", operation, args);
+      const result = cosApp("fs", operation, args);
       return { content: JSON.stringify(result, null, 2) };
     },
   };

@@ -170,21 +170,21 @@ cos watch proc build-1 --timeout 300
 Fetch web pages as clean Markdown with JavaScript rendered. No Selenium needed:
 
 ```bash
-cos web read https://example.com
-cos web screenshot https://example.com
-cos web submit https://example.com/form --data '{"q": "search term"}'
+cos app web read https://example.com
+cos app web screenshot https://example.com
+cos app web submit https://example.com/form --data '{"q": "search term"}'
 ```
 
 ## File System
 
 ```bash
-cos fs ls /den
-cos fs read /den/file.txt
-cos fs write /den/output.txt    # reads content from stdin
-cos fs stat /den/file.txt
-cos fs search "pattern" /den
-cos fs rm /den/tmp
-cos fs mkdir /den/new-dir
+cos app fs ls /den
+cos app fs read /den/file.txt
+cos app fs write /den/output.txt    # reads content from stdin
+cos app fs stat /den/file.txt
+cos app fs search "pattern" /den
+cos app fs rm /den/tmp
+cos app fs mkdir /den/new-dir
 ```
 
 ## Documents
@@ -192,28 +192,28 @@ cos fs mkdir /den/new-dir
 Read PDFs, DOCX, XLSX, CSV, and other formats as structured text:
 
 ```bash
-cos doc read document.pdf
-cos doc read spreadsheet.xlsx
-cos doc info document.pdf
+cos app doc read document.pdf
+cos app doc read spreadsheet.xlsx
+cos app doc info document.pdf
 ```
 
 ## Database (SQLite)
 
 ```bash
-cos db exec mydb "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)"
-cos db exec mydb "INSERT INTO users (name) VALUES ('Alice')"
-cos db query mydb "SELECT * FROM users"
-cos db tables mydb
-cos db schema mydb users
-cos db databases
+cos app db exec mydb "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)"
+cos app db exec mydb "INSERT INTO users (name) VALUES ('Alice')"
+cos app db query mydb "SELECT * FROM users"
+cos app db tables mydb
+cos app db schema mydb users
+cos app db databases
 ```
 
 ## HTTP Client
 
 ```bash
-cos net fetch https://api.example.com/data
-cos net fetch https://api.example.com/data --method POST --data '{"key": "value"}'
-cos net download https://example.com/file.zip --output /den/file.zip
+cos app net fetch https://api.example.com/data
+cos app net fetch https://api.example.com/data --method POST --data '{"key": "value"}'
+cos app net download https://example.com/file.zip --output /den/file.zip
 ```
 
 ## Key-Value Store
@@ -221,10 +221,10 @@ cos net download https://example.com/file.zip --output /den/file.zip
 Persistent key-value storage for state and memory:
 
 ```bash
-cos kv set project:status "building"
-cos kv get project:status
-cos kv list "project:*"
-cos kv del project:status
+cos app kv set project:status "building"
+cos app kv get project:status
+cos app kv list "project:*"
+cos app kv del project:status
 ```
 
 ## System Info
@@ -249,7 +249,7 @@ cos browser restart
 ## Package Management
 
 ```bash
-cos pkg need python3-pymupdf
-cos pkg has ripgrep
-cos pkg list
+cos app pkg need python3-pymupdf
+cos app pkg has ripgrep
+cos app pkg list
 ```

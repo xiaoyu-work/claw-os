@@ -1,8 +1,8 @@
-// cos exec run — execute shell commands with structured output.
+// cos app exec run — execute shell commands with structured output.
 // Replaces OpenClaw's bash-tools with OS-managed execution.
 
 import { Type } from "@sinclair/typebox";
-import { cos } from "../cos.js";
+import { cosApp } from "../cos.js";
 
 const schema = Type.Object(
   {
@@ -32,7 +32,7 @@ export function createCosExecTool() {
       const { command, timeout } = rawParams as { command: string; timeout?: number };
       const args = ["--shell", "bash", command];
       if (timeout) args.unshift("--timeout", String(timeout));
-      const result = cos("exec", "run", args);
+      const result = cosApp("exec", "run", args);
       return { content: JSON.stringify(result, null, 2) };
     },
   };

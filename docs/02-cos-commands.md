@@ -2,11 +2,20 @@
 
 `cos` is the Claw OS supervisor — a single static Rust binary at `/usr/local/bin/cos`. All built-in commands are compiled into this binary. No external daemons required.
 
+**OS Primitives** — `cos <primitive> <command>`
+Core system operations implemented in Rust. Always available.
+
+**Apps** — `cos app <name> <command>`
+Higher-level tools implemented in Python. Extensible and replaceable.
+
 **Usage pattern:**
 ```
-cos <app> <command> [args...]
-cos                            # list all available apps
-cos <app>                      # show app help and available commands
+cos <primitive> <command> [args...]    # OS primitive
+cos app <name> <command> [args...]     # Python app
+cos                                    # list OS primitives
+cos app                                # list available apps
+cos <primitive>                        # show primitive help
+cos app <name>                         # show app help
 ```
 
 All commands return JSON to stdout. Errors return JSON with an `"error"` key and optional `"recovery"` hints.
@@ -720,7 +729,7 @@ cos browser status     # check running + healthy
 cos browser health     # health check with auto-restart
 ```
 
-The browser service powers `cos web read` (URL to Markdown conversion with full JavaScript rendering).
+The browser service powers `cos app web read` (URL to Markdown conversion with full JavaScript rendering).
 
 ---
 
@@ -872,7 +881,7 @@ Schedule recurring jobs with execution context, structured result capture, and o
 ### cron add
 
 ```bash
-cos cron add <id> --schedule "*/5 * * * *" --command "cos exec run 'python check.py'" \
+cos cron add <id> --schedule "*/5 * * * *" --command "cos app exec run 'python check.py'" \
     [--description "Health check"] [--tier 2] [--scope /den/project] \
     [--credentials OPENAI_KEY,DB_PASS] [--overlap skip|queue|kill|allow] \
     [--timeout 300]

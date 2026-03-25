@@ -1,8 +1,8 @@
-// cos web read — fetch any URL as clean Markdown with full JS rendering.
+// cos app web read — fetch any URL as clean Markdown with full JS rendering.
 // Replaces OpenClaw's Playwright-based browser tool for content extraction.
 
 import { Type } from "@sinclair/typebox";
-import { cos } from "../cos.js";
+import { cosApp } from "../cos.js";
 
 const schema = Type.Object(
   {
@@ -23,7 +23,7 @@ export function createCosWebReadTool() {
     parameters: schema,
     async execute(toolCallId: string, rawParams: Record<string, unknown>) {
       const { url } = rawParams as { url: string };
-      const result = cos("web", "read", [url]);
+      const result = cosApp("web", "read", [url]);
       return { content: JSON.stringify(result, null, 2) };
     },
   };
