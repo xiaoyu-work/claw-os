@@ -102,9 +102,19 @@ fn dispatch_app(args: &[String]) -> Result<Option<String>, String> {
         return show_app_help(app_name, &discovered[app_name.as_str()]);
     }
 
+    // cos app <name> --schema → show all command schemas for this app
+    if args.len() == 2 && args[1] == "--schema" {
+        return show_app_schema(app_name, &discovered[app_name.as_str()]);
+    }
+
     let command = &args[1];
     let cmd_args: Vec<String> = args[2..].to_vec();
     let app = &discovered[app_name.as_str()];
+
+    // If --schema is in args, return app command schema
+    if cmd_args.contains(&"--schema".to_string()) {
+        return show_app_command_schema(app_name, command, app);
+    }
 
     // Validate command exists
     if !app.manifest.commands.contains_key(command.as_str()) {
@@ -413,6 +423,742 @@ fn recovery_hint(error: &str) -> Option<serde_json::Value> {
     None
 }
 
+// ---------------------------------------------------------------------------
+// --schema support: structured parameter introspection for every command
+// ---------------------------------------------------------------------------
+
+struct CommandSchema {
+    command: &'static str,
+    description: &'static str,
+    params: Vec<ParamSchema>,
+    example: &'static str,
+}
+
+struct ParamSchema {
+    name: &'static str,
+    param_type: &'static str,
+    required: bool,
+    description: &'static str,
+    kind: &'static str, // "positional" or "flag"
+}
+
+struct Param;
+impl Param {
+    fn positional(
+        name: &'static str,
+        param_type: &'static str,
+        required: bool,
+        description: &'static str,
+    ) -> ParamSchema {
+        ParamSchema {
+            name,
+            param_type,
+            required,
+            description,
+            kind: "positional",
+        }
+    }
+    fn flag(
+        name: &'static str,
+        param_type: &'static str,
+        required: bool,
+        description: &'static str,
+    ) -> ParamSchema {
+        ParamSchema {
+            name,
+            param_type,
+            required,
+            description,
+            kind: "flag",
+        }
+    }
+}
+
+fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandSchema>)> {
+    vec![
+        (
+            "checkpoint",
+            "OverlayFS snapshot system",
+            vec![
+                CommandSchema {
+                    command: "create",
+                    description: "Freeze current changes into a named checkpoint",
+                    params: vec![Param::positional(
+                        "description",
+                        "string",
+                        true,
+                        "Checkpoint description",
+                    )],
+                    example: "cos checkpoint create \"before refactoring\"",
+                },
+                CommandSchema {
+                    command: "diff",
+                    description: "Show created, modified, and deleted files",
+                    params: vec![],
+                    example: "cos checkpoint diff",
+                },
+                CommandSchema {
+                    command: "rollback",
+                    description: "Restore a checkpoint or reset to base",
+                    params: vec![Param::positional(
+                        "checkpoint_id",
+                        "string",
+                        false,
+                        "Checkpoint ID to restore (omit for base)",
+                    )],
+                    example: "cos checkpoint rollback 002",
+                },
+                CommandSchema {
+                    command: "list",
+                    description: "List all saved checkpoints",
+                    params: vec![],
+                    example: "cos checkpoint list",
+                },
+                CommandSchema {
+                    command: "status",
+                    description: "Show overlay mount state and disk usage",
+                    params: vec![],
+                    example: "cos checkpoint status",
+                },
+                CommandSchema {
+                    command: "quota-set",
+                    description: "Set filesystem quota for the upper layer",
+                    params: vec![Param::positional(
+                        "size",
+                        "string",
+                        true,
+                        "Size limit (e.g., 2G, 512M)",
+                    )],
+                    example: "cos checkpoint quota-set 2G",
+                },
+                CommandSchema {
+                    command: "quota-status",
+                    description: "Show current quota usage",
+                    params: vec![],
+                    example: "cos checkpoint quota-status",
+                },
+            ],
+        ),
+        (
+            "proc",
+            "Process session manager",
+            vec![
+                CommandSchema {
+                    command: "spawn",
+                    description: "Start a process in a tracked session",
+                    params: vec![
+                        Param::flag("--session", "string", false, "Custom session ID"),
+                        Param::flag("--group", "string", false, "Named group for bulk ops"),
+                        Param::flag("--tier", "integer", false, "Permission tier 0-3"),
+                        Param::flag("--scope", "string", false, "Path restriction"),
+                        Param::flag(
+                            "--priority",
+                            "enum:low|normal|high|realtime",
+                            false,
+                            "Process priority",
+                        ),
+                        Param::positional(
+                            "command",
+                            "string[]",
+                            true,
+                            "Command to run (after --)",
+                        ),
+                    ],
+                    example: "cos proc spawn --session build-1 --group ci --tier 1 -- cargo build",
+                },
+                CommandSchema {
+                    command: "status",
+                    description: "Check if a session is running",
+                    params: vec![Param::positional(
+                        "session_id",
+                        "string",
+                        true,
+                        "Session ID",
+                    )],
+                    example: "cos proc status build-1",
+                },
+                CommandSchema {
+                    command: "output",
+                    description: "Read buffered stdout/stderr",
+                    params: vec![
+                        Param::positional("session_id", "string", true, "Session ID"),
+                        Param::flag("--tail", "integer", false, "Last N lines"),
+                        Param::flag("--follow", "boolean", false, "Block until exit"),
+                    ],
+                    example: "cos proc output build-1 --tail 50",
+                },
+                CommandSchema {
+                    command: "kill",
+                    description: "Terminate a session or group",
+                    params: vec![
+                        Param::positional("session_id", "string", false, "Session ID"),
+                        Param::flag("--group", "string", false, "Kill entire group"),
+                    ],
+                    example: "cos proc kill build-1",
+                },
+                CommandSchema {
+                    command: "list",
+                    description: "List all sessions",
+                    params: vec![Param::flag("--group", "string", false, "Filter by group")],
+                    example: "cos proc list",
+                },
+                CommandSchema {
+                    command: "wait",
+                    description: "Block until process exits",
+                    params: vec![
+                        Param::positional("session_id", "string", false, "Session ID"),
+                        Param::flag("--group", "string", false, "Wait for group"),
+                        Param::flag("--timeout", "integer", false, "Timeout in seconds"),
+                    ],
+                    example: "cos proc wait build-1 --timeout 300",
+                },
+                CommandSchema {
+                    command: "result",
+                    description: "Get comprehensive exit report",
+                    params: vec![Param::positional(
+                        "session_id",
+                        "string",
+                        true,
+                        "Session ID",
+                    )],
+                    example: "cos proc result build-1",
+                },
+            ],
+        ),
+        (
+            "credential",
+            "Encrypted credential store",
+            vec![
+                CommandSchema {
+                    command: "store",
+                    description: "Store an encrypted credential",
+                    params: vec![
+                        Param::positional("name", "string", true, "Credential name"),
+                        Param::positional("value", "string", true, "Secret value"),
+                        Param::flag(
+                            "--tier",
+                            "integer",
+                            false,
+                            "Min tier to read (0-3, default 0)",
+                        ),
+                        Param::flag(
+                            "--namespace",
+                            "string",
+                            false,
+                            "Namespace (default: default)",
+                        ),
+                        Param::flag("--ttl", "integer", false, "Time-to-live in seconds"),
+                    ],
+                    example: "cos credential store OPENAI_KEY sk-abc123 --tier 0 --ttl 3600",
+                },
+                CommandSchema {
+                    command: "load",
+                    description: "Load a credential (tier + expiry enforced)",
+                    params: vec![
+                        Param::positional("name", "string", true, "Credential name"),
+                        Param::flag("--namespace", "string", false, "Namespace"),
+                    ],
+                    example: "cos credential load OPENAI_KEY",
+                },
+                CommandSchema {
+                    command: "list",
+                    description: "List credentials (names only, never values)",
+                    params: vec![Param::flag(
+                        "--namespace",
+                        "string",
+                        false,
+                        "Filter by namespace",
+                    )],
+                    example: "cos credential list",
+                },
+                CommandSchema {
+                    command: "revoke",
+                    description: "Delete a credential",
+                    params: vec![
+                        Param::positional("name", "string", true, "Credential name"),
+                        Param::flag("--namespace", "string", false, "Namespace"),
+                    ],
+                    example: "cos credential revoke OPENAI_KEY",
+                },
+                CommandSchema {
+                    command: "bundle",
+                    description: "Create a credential bundle (group of keys)",
+                    params: vec![
+                        Param::positional("bundle_name", "string", true, "Bundle name"),
+                        Param::flag(
+                            "--keys",
+                            "string",
+                            true,
+                            "Comma-separated credential names",
+                        ),
+                        Param::flag("--namespace", "string", false, "Namespace"),
+                    ],
+                    example: "cos credential bundle openai-config --keys OPENAI_KEY,OPENAI_ORG",
+                },
+                CommandSchema {
+                    command: "load-bundle",
+                    description: "Load all credentials in a bundle",
+                    params: vec![
+                        Param::positional("bundle_name", "string", true, "Bundle name"),
+                        Param::flag("--namespace", "string", false, "Namespace"),
+                    ],
+                    example: "cos credential load-bundle openai-config",
+                },
+            ],
+        ),
+        (
+            "ipc",
+            "Inter-process communication",
+            vec![
+                CommandSchema {
+                    command: "send",
+                    description: "Queue a message to a session",
+                    params: vec![
+                        Param::positional("target", "string", true, "Target session ID"),
+                        Param::positional("message", "string", true, "Message body"),
+                        Param::flag("--from", "string", false, "Sender session ID"),
+                    ],
+                    example:
+                        "cos ipc send worker-1 \"task complete\" --from orchestrator",
+                },
+                CommandSchema {
+                    command: "recv",
+                    description: "Dequeue oldest message",
+                    params: vec![
+                        Param::positional("session_id", "string", true, "Your session ID"),
+                        Param::flag("--timeout", "integer", false, "Wait timeout in seconds"),
+                        Param::flag("--peek", "boolean", false, "Read without removing"),
+                    ],
+                    example: "cos ipc recv my-session --timeout 30",
+                },
+                CommandSchema {
+                    command: "pipe",
+                    description: "Streaming named pipes (create, publish, subscribe, list, destroy)",
+                    params: vec![Param::positional(
+                        "subcommand",
+                        "enum:create|publish|subscribe|list|destroy",
+                        true,
+                        "Pipe operation",
+                    )],
+                    example: "cos ipc pipe create my-events --buffer-size 500",
+                },
+                CommandSchema {
+                    command: "lock",
+                    description: "Acquire a named mutex",
+                    params: vec![
+                        Param::positional("resource", "string", true, "Resource name"),
+                        Param::flag("--holder", "string", false, "Holder session ID"),
+                        Param::flag("--timeout", "integer", false, "Wait timeout"),
+                    ],
+                    example: "cos ipc lock database --holder agent-1 --timeout 10",
+                },
+            ],
+        ),
+        (
+            "cron",
+            "Agent-native job scheduler",
+            vec![
+                CommandSchema {
+                    command: "add",
+                    description: "Register a cron job",
+                    params: vec![
+                        Param::positional("id", "string", true, "Job ID"),
+                        Param::flag("--schedule", "string", true, "Cron expression (5 fields)"),
+                        Param::flag("--command", "string", true, "Command to run"),
+                        Param::flag("--tier", "integer", false, "Execution tier"),
+                        Param::flag("--scope", "string", false, "Path restriction"),
+                        Param::flag(
+                            "--credentials",
+                            "string",
+                            false,
+                            "Comma-separated credential names",
+                        ),
+                        Param::flag(
+                            "--overlap",
+                            "enum:skip|queue|kill|allow",
+                            false,
+                            "Overlap policy (default: skip)",
+                        ),
+                        Param::flag("--timeout", "integer", false, "Kill after N seconds"),
+                    ],
+                    example: "cos cron add health-check --schedule \"*/5 * * * *\" --command \"cos service health my-api\" --overlap skip",
+                },
+                CommandSchema {
+                    command: "list",
+                    description: "List all cron jobs",
+                    params: vec![],
+                    example: "cos cron list",
+                },
+                CommandSchema {
+                    command: "run",
+                    description: "Manually trigger a job",
+                    params: vec![Param::positional("id", "string", true, "Job ID")],
+                    example: "cos cron run health-check",
+                },
+                CommandSchema {
+                    command: "tick",
+                    description: "Process all due jobs (called by scheduler)",
+                    params: vec![],
+                    example: "cos cron tick",
+                },
+            ],
+        ),
+        (
+            "service",
+            "Service lifecycle manager",
+            vec![
+                CommandSchema {
+                    command: "start",
+                    description: "Start a service (pre_start → credential injection → spawn → health → post_start)",
+                    params: vec![Param::positional("name", "string", true, "Service name")],
+                    example: "cos service start my-api",
+                },
+                CommandSchema {
+                    command: "stop",
+                    description: "Graceful stop (checkpoint → pre_stop → drain → SIGTERM → wait → SIGKILL → post_stop)",
+                    params: vec![Param::positional("name", "string", true, "Service name")],
+                    example: "cos service stop my-api",
+                },
+                CommandSchema {
+                    command: "stop-all",
+                    description: "Stop all services in reverse dependency order",
+                    params: vec![],
+                    example: "cos service stop-all",
+                },
+                CommandSchema {
+                    command: "register",
+                    description: "Register a new service",
+                    params: vec![
+                        Param::flag("--name", "string", true, "Service name"),
+                        Param::flag("--command", "string", true, "Start command"),
+                        Param::flag("--workdir", "string", false, "Working directory"),
+                        Param::flag("--health-url", "string", false, "Health check URL"),
+                        Param::flag(
+                            "--credentials",
+                            "string",
+                            false,
+                            "Credential names (comma-separated)",
+                        ),
+                        Param::flag("--pre-start", "string", false, "Pre-start hook command"),
+                        Param::flag("--pre-stop", "string", false, "Pre-stop hook command"),
+                        Param::flag("--post-stop", "string", false, "Post-stop hook command"),
+                        Param::flag("--drain-timeout", "integer", false, "Drain wait seconds"),
+                        Param::flag(
+                            "--stop-timeout",
+                            "integer",
+                            false,
+                            "SIGTERM→SIGKILL seconds",
+                        ),
+                        Param::flag(
+                            "--checkpoint-cmd",
+                            "string",
+                            false,
+                            "State checkpoint command",
+                        ),
+                    ],
+                    example: "cos service register --name my-api --command \"python app.py\" --health-url http://localhost:8000/health --credentials OPENAI_KEY,DB_URL",
+                },
+            ],
+        ),
+        (
+            "watch",
+            "Event-driven watcher",
+            vec![
+                CommandSchema {
+                    command: "file",
+                    description: "Watch a file for changes (inotify on Linux)",
+                    params: vec![
+                        Param::positional("path", "string", true, "File path"),
+                        Param::flag("--timeout", "integer", false, "Timeout in seconds"),
+                    ],
+                    example: "cos watch file /den/config.json --timeout 30",
+                },
+                CommandSchema {
+                    command: "multi",
+                    description: "Watch multiple sources simultaneously",
+                    params: vec![
+                        Param::flag("--file", "string", false, "File to watch (repeatable)"),
+                        Param::flag(
+                            "--dir",
+                            "string",
+                            false,
+                            "Directory to watch (repeatable)",
+                        ),
+                        Param::flag(
+                            "--proc",
+                            "string",
+                            false,
+                            "Process session to watch (repeatable)",
+                        ),
+                        Param::flag(
+                            "--service",
+                            "string",
+                            false,
+                            "Service to watch (repeatable)",
+                        ),
+                        Param::flag("--timeout", "integer", false, "Timeout in seconds"),
+                    ],
+                    example: "cos watch multi --file /den/main.py --proc worker-1 --service my-api --timeout 60",
+                },
+                CommandSchema {
+                    command: "history",
+                    description: "View past watch events",
+                    params: vec![
+                        Param::flag("--limit", "integer", false, "Max events (default 50)"),
+                        Param::flag("--since", "string", false, "ISO timestamp filter"),
+                        Param::flag(
+                            "--source",
+                            "enum:file|dir|proc|service",
+                            false,
+                            "Source type filter",
+                        ),
+                    ],
+                    example: "cos watch history --limit 20 --source file",
+                },
+            ],
+        ),
+        (
+            "netfilter",
+            "Network firewall with rate limiting",
+            vec![
+                CommandSchema {
+                    command: "add",
+                    description: "Add allow/deny rule",
+                    params: vec![
+                        Param::flag("--allow", "string", false, "Domain to allow"),
+                        Param::flag("--deny", "string", false, "Domain to deny"),
+                        Param::flag("--port", "integer", false, "Port number"),
+                    ],
+                    example: "cos netfilter add --allow api.openai.com --port 443",
+                },
+                CommandSchema {
+                    command: "rate-limit",
+                    description: "Set rate limit for a domain",
+                    params: vec![
+                        Param::positional("domain", "string", true, "Domain"),
+                        Param::flag("--rpm", "integer", true, "Requests per minute"),
+                        Param::flag("--burst", "integer", false, "Burst allowance"),
+                    ],
+                    example: "cos netfilter rate-limit api.openai.com --rpm 60 --burst 10",
+                },
+                CommandSchema {
+                    command: "rate-check",
+                    description: "Check/record a request against rate limits",
+                    params: vec![
+                        Param::positional("domain", "string", true, "Domain to check"),
+                        Param::flag(
+                            "--dry-run",
+                            "boolean",
+                            false,
+                            "Check without recording",
+                        ),
+                    ],
+                    example: "cos netfilter rate-check api.openai.com",
+                },
+            ],
+        ),
+        (
+            "sandbox",
+            "Process isolation",
+            vec![CommandSchema {
+                command: "exec",
+                description: "Run in isolated namespace + cgroup",
+                params: vec![
+                    Param::flag("--mem", "string", false, "Memory limit (e.g., 512M)"),
+                    Param::flag("--cpu", "integer", false, "CPU percent"),
+                    Param::flag("--pids", "integer", false, "Max processes"),
+                    Param::flag("--timeout", "integer", false, "Kill after N seconds"),
+                    Param::flag("--no-network", "boolean", false, "Disable network"),
+                    Param::flag(
+                        "--seccomp-profile",
+                        "enum:minimal|network|full",
+                        false,
+                        "Syscall filter",
+                    ),
+                    Param::positional("command", "string[]", true, "Command (after --)"),
+                ],
+                example:
+                    "cos sandbox exec --no-network --mem 256M --timeout 30 -- python untrusted.py",
+            }],
+        ),
+        (
+            "policy",
+            "Permission system",
+            vec![
+                CommandSchema {
+                    command: "status",
+                    description: "Show current tier and allowed operations",
+                    params: vec![],
+                    example: "cos policy status",
+                },
+                CommandSchema {
+                    command: "check",
+                    description: "Test if an operation is allowed",
+                    params: vec![Param::positional(
+                        "operation",
+                        "enum:read|write|delete|exec|net|system",
+                        true,
+                        "Operation to check",
+                    )],
+                    example: "cos policy check exec",
+                },
+                CommandSchema {
+                    command: "elevate",
+                    description: "Temporarily escalate privileges",
+                    params: vec![
+                        Param::flag("--to", "integer", true, "Target tier (0-3)"),
+                        Param::flag("--duration", "integer", true, "Seconds"),
+                        Param::flag("--reason", "string", true, "Reason for elevation"),
+                    ],
+                    example: "cos policy elevate --to 1 --duration 300 --reason \"deployment\"",
+                },
+            ],
+        ),
+        (
+            "sys",
+            "System information",
+            vec![
+                CommandSchema {
+                    command: "info",
+                    description: "OS, architecture, hostname, version",
+                    params: vec![],
+                    example: "cos sys info",
+                },
+                CommandSchema {
+                    command: "resources",
+                    description: "Disk, memory, CPU usage",
+                    params: vec![],
+                    example: "cos sys resources",
+                },
+                CommandSchema {
+                    command: "env",
+                    description: "Environment variables",
+                    params: vec![Param::positional(
+                        "pattern",
+                        "string",
+                        false,
+                        "Filter pattern",
+                    )],
+                    example: "cos sys env COS",
+                },
+                CommandSchema {
+                    command: "proc",
+                    description: "All processes with resource usage",
+                    params: vec![],
+                    example: "cos sys proc",
+                },
+            ],
+        ),
+    ]
+}
+
+fn show_command_schema(app_name: &str, command: &str) -> Result<Option<String>, String> {
+    let schemas = command_schemas();
+    let app = schemas.iter().find(|(n, _, _)| *n == app_name);
+    let app = app.ok_or_else(|| format!("no schema for: {app_name}"))?;
+
+    let cmd = app.2.iter().find(|c| c.command == command);
+    let cmd = cmd.ok_or_else(|| format!("no schema for: {app_name} {command}"))?;
+
+    let params: Vec<Value> = cmd
+        .params
+        .iter()
+        .map(|p| {
+            json!({
+                "name": p.name,
+                "type": p.param_type,
+                "required": p.required,
+                "description": p.description,
+                "kind": p.kind,
+            })
+        })
+        .collect();
+
+    let output = json!({
+        "command": format!("cos {app_name} {}", cmd.command),
+        "description": cmd.description,
+        "parameters": params,
+        "example": cmd.example,
+    });
+    Ok(Some(output.to_string()))
+}
+
+fn show_builtin_schema(app_name: &str) -> Result<Option<String>, String> {
+    let schemas = command_schemas();
+    let app = schemas.iter().find(|(n, _, _)| *n == app_name);
+    let app = app.ok_or_else(|| format!("no schema for: {app_name}"))?;
+
+    let commands: Vec<Value> = app
+        .2
+        .iter()
+        .map(|cmd| {
+            let params: Vec<Value> = cmd
+                .params
+                .iter()
+                .map(|p| {
+                    json!({
+                        "name": p.name,
+                        "type": p.param_type,
+                        "required": p.required,
+                        "description": p.description,
+                        "kind": p.kind,
+                    })
+                })
+                .collect();
+            json!({
+                "command": cmd.command,
+                "description": cmd.description,
+                "parameters": params,
+                "example": cmd.example,
+            })
+        })
+        .collect();
+
+    let output = json!({
+        "app": app_name,
+        "description": app.1,
+        "commands": commands,
+    });
+    Ok(Some(output.to_string()))
+}
+
+fn show_app_command_schema(
+    app_name: &str,
+    command: &str,
+    app: &apps::App,
+) -> Result<Option<String>, String> {
+    let desc = app
+        .manifest
+        .commands
+        .get(command)
+        .map(|s| s.as_str())
+        .unwrap_or("No description");
+
+    let output = json!({
+        "command": format!("cos app {app_name} {command}"),
+        "description": desc,
+        "hint": format!("Run: cos app {app_name} {command} --help for usage details"),
+    });
+    Ok(Some(output.to_string()))
+}
+
+fn show_app_schema(app_name: &str, app: &apps::App) -> Result<Option<String>, String> {
+    let commands: serde_json::Map<String, Value> = app
+        .manifest
+        .commands
+        .iter()
+        .map(|(k, v)| (k.clone(), json!(v)))
+        .collect();
+
+    let output = json!({
+        "app": app_name,
+        "description": app.manifest.description,
+        "commands": commands,
+        "hint": format!("Run: cos app {app_name} <command> --schema for command details"),
+    });
+    Ok(Some(output.to_string()))
+}
+
 fn dispatch_builtin(
     args: &[String],
     app_name: &str,
@@ -435,8 +1181,19 @@ fn dispatch_builtin(
         return Ok(Some(output.to_string()));
     }
 
+    // cos <primitive> --schema → show all command schemas for this primitive
+    if args.len() == 2 && args[1] == "--schema" {
+        return show_builtin_schema(app_name);
+    }
+
     let command = &args[1];
     let cmd_args: Vec<String> = args[2..].to_vec();
+
+    // If --schema is in args, return schema instead of executing
+    if cmd_args.contains(&"--schema".to_string()) {
+        return show_command_schema(app_name, command);
+    }
+
     let start = std::time::Instant::now();
     let audit_p = audit_path();
 
@@ -651,6 +1408,100 @@ mod tests {
                     cmd
                 );
             }
+        }
+    }
+
+    #[test]
+    fn schema_for_known_builtin() {
+        let schemas = command_schemas();
+        assert!(schemas.iter().any(|(n, _, _)| *n == "checkpoint"));
+        assert!(schemas.iter().any(|(n, _, _)| *n == "proc"));
+        assert!(schemas.iter().any(|(n, _, _)| *n == "credential"));
+        assert!(schemas.iter().any(|(n, _, _)| *n == "cron"));
+    }
+
+    #[test]
+    fn show_command_schema_returns_json() {
+        let result = show_command_schema("checkpoint", "create");
+        assert!(result.is_ok());
+        let output = result.unwrap().unwrap();
+        let v: Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(v["command"], "cos checkpoint create");
+        assert!(v["parameters"].is_array());
+        assert!(v["example"].is_string());
+    }
+
+    #[test]
+    fn show_builtin_schema_returns_all_commands() {
+        let result = show_builtin_schema("proc");
+        assert!(result.is_ok());
+        let output = result.unwrap().unwrap();
+        let v: Value = serde_json::from_str(&output).unwrap();
+        assert!(v["commands"].is_array());
+        assert!(v["commands"].as_array().unwrap().len() > 3);
+    }
+
+    #[test]
+    fn show_command_schema_unknown_returns_error() {
+        let result = show_command_schema("nonexistent", "cmd");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn show_command_schema_unknown_command_returns_error() {
+        let result = show_command_schema("checkpoint", "nonexistent");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn show_command_schema_has_param_details() {
+        let result = show_command_schema("proc", "spawn");
+        let output = result.unwrap().unwrap();
+        let v: Value = serde_json::from_str(&output).unwrap();
+        let params = v["parameters"].as_array().unwrap();
+        assert!(!params.is_empty());
+        // Each param should have name, type, required, description, kind
+        for p in params {
+            assert!(p["name"].is_string());
+            assert!(p["type"].is_string());
+            assert!(p["required"].is_boolean());
+            assert!(p["description"].is_string());
+            assert!(
+                p["kind"] == "positional" || p["kind"] == "flag",
+                "kind must be positional or flag, got: {}",
+                p["kind"]
+            );
+        }
+    }
+
+    #[test]
+    fn show_builtin_schema_all_primitives() {
+        // Every primitive that has a schema should produce valid output
+        let primitives = [
+            "checkpoint",
+            "proc",
+            "credential",
+            "ipc",
+            "cron",
+            "service",
+            "watch",
+            "netfilter",
+            "sandbox",
+            "policy",
+            "sys",
+        ];
+        for name in &primitives {
+            let result = show_builtin_schema(name);
+            assert!(result.is_ok(), "Failed for primitive: {name}");
+            let output = result.unwrap().unwrap();
+            let v: Value = serde_json::from_str(&output).unwrap();
+            assert_eq!(v["app"], *name);
+            assert!(v["description"].is_string());
+            assert!(v["commands"].is_array());
+            assert!(
+                !v["commands"].as_array().unwrap().is_empty(),
+                "No commands for: {name}"
+            );
         }
     }
 }
