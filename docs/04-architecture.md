@@ -35,7 +35,9 @@
 │           ├── exec  (commands)   ├── kv    (key-value)          │
 │           ├── web   (browser)    ├── log   (audit search)       │
 │           ├── db    (SQLite)     ├── notify (notifications)     │
-│           ├── doc   (PDF/DOCX)   └── pkg   (packages)           │
+│           ├── doc   (PDF/DOCX)   ├── pkg   (packages)           │
+│           ├── search (web search)  ├── email (SMTP/Gmail/Outlook)  │
+│           └── calendar (local/Google/Outlook)                       │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
                          │
