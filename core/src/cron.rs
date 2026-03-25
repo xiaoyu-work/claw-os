@@ -352,22 +352,19 @@ fn execute_job(job: &CronJob) -> CronRunResult {
         cmd.env("COS_SCOPE", scope);
     }
 
-    // Inject credentials as env vars
+    // Inject credentials via the credential store (decrypted, tier-checked, expiry-checked)
     for cred_name in &job.credentials {
-        // Try to load the credential value from the credential store.
-        // We read the file directly to avoid circular module dependencies.
-        let cred_path =
-            PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
-                .join("credentials")
-                .join(format!("{cred_name}.json"));
-        if let Ok(data) = fs::read_to_string(&cred_path) {
-            if let Ok(parsed) = serde_json::from_str::<Value>(&data) {
-                if let Some(val) = parsed.get("value_b64").and_then(|v| v.as_str()) {
-                    // Inject the raw b64 token — the command can decode it.
+        match crate::credential::run("load", &[cred_name.clone()]) {
+            Ok(v) => {
+                if let Some(val) = v["value"].as_str() {
                     let env_key =
                         format!("COS_CRED_{}", cred_name.to_uppercase().replace('-', "_"));
                     cmd.env(env_key, val);
                 }
+            }
+            Err(e) => {
+                // Log but don't fail the job — credential might be optional
+                eprintln!("warning: failed to load credential '{}': {}", cred_name, e);
             }
         }
     }

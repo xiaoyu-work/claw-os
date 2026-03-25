@@ -300,7 +300,7 @@ This ensures:
 3. Browser service is available for web operations
 4. The requested workload runs as PID 1 in the container
 
-### Network Firewall
+### Network Policy
 
 `cos netfilter` provides declarative outbound network control:
 

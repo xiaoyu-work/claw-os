@@ -19,9 +19,13 @@ if [ "$(uname)" = "Linux" ] && command -v mount >/dev/null 2>&1; then
     fi
 
     # Mount overlay: agent sees /den, writes go to upper
-    mount -t overlay overlay \
+    if mount -t overlay overlay \
         -o "lowerdir=$OVERLAY_DIR/base,upperdir=$OVERLAY_DIR/upper,workdir=$OVERLAY_DIR/work" \
-        /den 2>/dev/null || true
+        /den 2>/tmp/cos-overlay-error; then
+        echo '{"overlay": "mounted", "path": "/den"}'
+    else
+        echo '{"overlay": "failed", "path": "/den", "error": "'"$(cat /tmp/cos-overlay-error)"'", "warning": "checkpoints disabled — run with --privileged or --cap-add SYS_ADMIN"}'
+    fi
 fi
 
 # Start browser engine service

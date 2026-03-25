@@ -210,8 +210,24 @@ fn exec_linux(
         unshare_args.push("--net".to_string());
     }
 
-    unshare_args.push("--".to_string());
-    unshare_args.extend_from_slice(command_args);
+    // Read-only: remount root as read-only via bind mount.
+    // Uses the mount namespace (already created by --mount) to remount ro.
+    if read_only {
+        // Chain: unshare creates mount ns → remount / as ro → exec command
+        let parts_str: String = command_args
+            .iter()
+            .map(|a| shell_escape(a))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let full_cmd = format!("mount -o remount,ro,bind / && {}", parts_str);
+        unshare_args.push("--".to_string());
+        unshare_args.push("sh".to_string());
+        unshare_args.push("-c".to_string());
+        unshare_args.push(full_cmd);
+    } else {
+        unshare_args.push("--".to_string());
+        unshare_args.extend_from_slice(command_args);
+    }
 
     let mut child = Command::new("unshare")
         .args(&unshare_args)
@@ -389,6 +405,23 @@ fn short_id() -> String {
     format!("{:x}", t & 0xFFFFFFFF)
 }
 
+/// Escape a string for safe inclusion in a POSIX shell command.
+/// Wraps in single quotes, escaping embedded single quotes.
+#[cfg(target_os = "linux")]
+fn shell_escape(s: &str) -> String {
+    if s.is_empty() {
+        return "''".to_string();
+    }
+    // If the string contains no special chars, return as-is
+    if s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | ':' | '='))
+    {
+        return s.to_string();
+    }
+    // Wrap in single quotes; replace ' with '\''
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 /// Generate a seccomp BPF filter JSON for use with systemd's SystemCallFilter.
 ///
 /// Profiles:
@@ -473,7 +506,9 @@ fn exec_fallback(
     }))
 }
 
-/// Create a persistent sandbox.
+/// Create a persistent sandbox configuration (stored, not executed).
+/// Network/RO flags are stored in the config for later use by `cmd_exec`.
+/// No process is spawned here — use `cos sandbox exec` to run with this config.
 fn cmd_create(args: &[String]) -> Result<Value, String> {
     policy::require(OpType::Exec).map_err(|v| v.to_string())?;
     let mut network = true;
