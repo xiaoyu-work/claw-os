@@ -8,7 +8,9 @@ use crate::policy::{self, OpType};
 fn infer_op_type(command: &str) -> OpType {
     match command {
         "read" | "ls" | "stat" | "search" | "recent" | "query" | "tables" | "schema"
-        | "databases" | "get" | "list" | "info" | "tail" | "has" | "which" => OpType::Read,
+        | "databases" | "get" | "list" | "info" | "tail" | "has" | "which" | "__schema__" => {
+            OpType::Read
+        }
 
         "write" | "mkdir" | "tag" | "set" | "exec" | "send" => OpType::Write,
 

@@ -1178,34 +1178,100 @@ fn show_app_command_schema(
     command: &str,
     app: &apps::App,
 ) -> Result<Option<String>, String> {
-    let desc = app
-        .manifest
-        .commands
-        .get(command)
-        .map(|s| s.as_str())
-        .unwrap_or("No description");
+    // Call the Python app with __schema__ to get live schema
+    let data_dir = data_dir();
+    let apps = apps_dir().to_string_lossy().to_string();
 
-    let output = json!({
-        "command": format!("cos app {app_name} {command}"),
-        "description": desc,
-        "hint": format!("Run: cos app {app_name} {command} --help for usage details"),
-    });
-    Ok(Some(output.to_string()))
+    match bridge::run_python_app(&app.dir, "__schema__", &[], &data_dir, &apps) {
+        Ok(Some(output)) => {
+            if let Ok(schema) = serde_json::from_str::<Value>(&output) {
+                if let Some(cmd_schema) = schema.get(command) {
+                    let desc = app
+                        .manifest
+                        .commands
+                        .get(command)
+                        .map(|s| s.as_str())
+                        .unwrap_or("No description");
+                    let mut result = json!({
+                        "command": format!("cos app {app_name} {command}"),
+                        "description": desc,
+                    });
+                    if let Some(params) = cmd_schema.get("parameters") {
+                        result["parameters"] = params.clone();
+                    }
+                    if let Some(example) = cmd_schema.get("example") {
+                        result["example"] = example.clone();
+                    }
+                    return Ok(Some(result.to_string()));
+                }
+            }
+            // Schema returned but command not found in it
+            let desc = app
+                .manifest
+                .commands
+                .get(command)
+                .map(|s| s.as_str())
+                .unwrap_or("No description");
+            Ok(Some(
+                json!({
+                    "command": format!("cos app {app_name} {command}"),
+                    "description": desc,
+                })
+                .to_string(),
+            ))
+        }
+        _ => {
+            // App doesn't support __schema__ — return basic info
+            let desc = app
+                .manifest
+                .commands
+                .get(command)
+                .map(|s| s.as_str())
+                .unwrap_or("No description");
+            Ok(Some(
+                json!({
+                    "command": format!("cos app {app_name} {command}"),
+                    "description": desc,
+                })
+                .to_string(),
+            ))
+        }
+    }
 }
 
 fn show_app_schema(app_name: &str, app: &apps::App) -> Result<Option<String>, String> {
-    let commands: serde_json::Map<String, Value> = app
-        .manifest
-        .commands
-        .iter()
-        .map(|(k, v)| (k.clone(), json!(v)))
-        .collect();
+    let data_dir = data_dir();
+    let apps = apps_dir().to_string_lossy().to_string();
+
+    // Try to get live schema from the app
+    let live_schema = match bridge::run_python_app(&app.dir, "__schema__", &[], &data_dir, &apps) {
+        Ok(Some(output)) => serde_json::from_str::<Value>(&output).ok(),
+        _ => None,
+    };
+
+    let mut commands = Vec::new();
+    for (cmd_name, cmd_desc) in &app.manifest.commands {
+        let mut entry = json!({
+            "command": cmd_name,
+            "description": cmd_desc,
+        });
+        if let Some(ref schema) = live_schema {
+            if let Some(cmd_schema) = schema.get(cmd_name.as_str()) {
+                if let Some(params) = cmd_schema.get("parameters") {
+                    entry["parameters"] = params.clone();
+                }
+                if let Some(example) = cmd_schema.get("example") {
+                    entry["example"] = example.clone();
+                }
+            }
+        }
+        commands.push(entry);
+    }
 
     let output = json!({
         "app": app_name,
         "description": app.manifest.description,
         "commands": commands,
-        "hint": format!("Run: cos app {app_name} <command> --schema for command details"),
     });
     Ok(Some(output.to_string()))
 }

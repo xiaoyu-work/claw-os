@@ -115,8 +115,34 @@ def cmd_download(args):
         return {"error": str(e)}
 
 
+def _schema():
+    return {
+        "fetch": {
+            "description": "Make an HTTP request and return the response",
+            "parameters": [
+                {"name": "url", "type": "string", "required": True, "description": "URL to fetch", "kind": "positional"},
+                {"name": "--method", "type": "string", "required": False, "description": "HTTP method: GET, POST, PUT, DELETE", "kind": "flag", "default": "GET"},
+                {"name": "--data", "type": "string", "required": False, "description": "Request body data", "kind": "flag"},
+                {"name": "--header", "type": "string", "required": False, "description": "Request header in 'Key: Value' format (can be repeated)", "kind": "flag"},
+                {"name": "--timeout", "type": "integer", "required": False, "description": "Request timeout in seconds", "kind": "flag", "default": 30},
+            ],
+            "example": "cos app net fetch https://api.example.com/data --method POST --data '{\"key\": \"value\"}' --header 'Authorization: Bearer token'",
+        },
+        "download": {
+            "description": "Download a file from a URL",
+            "parameters": [
+                {"name": "url", "type": "string", "required": True, "description": "URL to download from", "kind": "positional"},
+                {"name": "--output", "type": "string", "required": False, "description": "Output file path (defaults to /den/<filename>)", "kind": "flag"},
+            ],
+            "example": "cos app net download https://example.com/file.zip --output /workspace/file.zip",
+        },
+    }
+
+
 def run(command, args):
     """Entry point called by cos."""
+    if command == "__schema__":
+        return _schema()
     if command == "fetch":
         return cmd_fetch(args)
     elif command == "download":

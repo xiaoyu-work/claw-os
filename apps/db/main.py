@@ -133,8 +133,51 @@ COMMANDS = {
 }
 
 
+def _schema():
+    return {
+        "query": {
+            "description": "Run a SELECT query on a SQLite database",
+            "parameters": [
+                {"name": "database", "type": "string", "required": True, "description": "Database name", "kind": "positional"},
+                {"name": "sql", "type": "string", "required": True, "description": "SQL SELECT statement to execute", "kind": "positional"},
+            ],
+            "example": "cos app db query mydb SELECT * FROM users LIMIT 10",
+        },
+        "exec": {
+            "description": "Execute SQL statements (CREATE, INSERT, UPDATE, DELETE)",
+            "parameters": [
+                {"name": "database", "type": "string", "required": True, "description": "Database name", "kind": "positional"},
+                {"name": "sql", "type": "string", "required": True, "description": "SQL statement to execute", "kind": "positional"},
+            ],
+            "example": "cos app db exec mydb CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
+        },
+        "tables": {
+            "description": "List tables in a database",
+            "parameters": [
+                {"name": "database", "type": "string", "required": True, "description": "Database name", "kind": "positional"},
+            ],
+            "example": "cos app db tables mydb",
+        },
+        "schema": {
+            "description": "Show the CREATE TABLE statement for a table",
+            "parameters": [
+                {"name": "database", "type": "string", "required": True, "description": "Database name", "kind": "positional"},
+                {"name": "table", "type": "string", "required": True, "description": "Table name", "kind": "positional"},
+            ],
+            "example": "cos app db schema mydb users",
+        },
+        "databases": {
+            "description": "List all databases in the data directory",
+            "parameters": [],
+            "example": "cos app db databases",
+        },
+    }
+
+
 def run(command, args):
     """Entry point called by cos."""
+    if command == "__schema__":
+        return _schema()
     handler = COMMANDS.get(command)
     if handler is None:
         return {"error": f"unknown command: {command}"}

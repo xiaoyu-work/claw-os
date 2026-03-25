@@ -628,6 +628,39 @@ def _discover_forms(html):
 # Entry point
 # ---------------------------------------------------------------------------
 
+def _schema():
+    return {
+        "read": {
+            "description": "Fetch a URL and return clean Markdown content (uses Jina Reader with urllib fallback)",
+            "parameters": [
+                {"name": "url", "type": "string", "required": True, "description": "URL to fetch", "kind": "positional"},
+                {"name": "--selector", "type": "string", "required": False, "description": "CSS selector to target specific content", "kind": "flag"},
+                {"name": "--remove", "type": "string", "required": False, "description": "CSS selector for elements to remove", "kind": "flag"},
+                {"name": "--wait", "type": "string", "required": False, "description": "CSS selector to wait for before capturing", "kind": "flag"},
+                {"name": "--max-length", "type": "integer", "required": False, "description": "Maximum content length in characters", "kind": "flag", "default": 50000},
+            ],
+            "example": "cos app web read https://example.com --selector main --max-length 10000",
+        },
+        "screenshot": {
+            "description": "Capture a screenshot of a URL via Jina Reader",
+            "parameters": [
+                {"name": "url", "type": "string", "required": True, "description": "URL to screenshot", "kind": "positional"},
+                {"name": "--wait", "type": "string", "required": False, "description": "CSS selector to wait for before capturing", "kind": "flag"},
+                {"name": "--full-page", "type": "boolean", "required": False, "description": "Capture full page screenshot", "kind": "flag"},
+            ],
+            "example": "cos app web screenshot https://example.com --wait .main-content",
+        },
+        "submit": {
+            "description": "POST form data to a URL",
+            "parameters": [
+                {"name": "url", "type": "string", "required": True, "description": "URL to submit form data to", "kind": "positional"},
+                {"name": "--data", "type": "string", "required": False, "description": "JSON object of form fields to submit", "kind": "flag"},
+            ],
+            "example": "cos app web submit https://example.com/form --data '{\"name\": \"test\"}'",
+        },
+    }
+
+
 _COMMANDS = {
     "read": _cmd_read,
     "screenshot": _cmd_screenshot,
@@ -637,6 +670,8 @@ _COMMANDS = {
 
 def run(command, args):
     """Main entry point called by the cos router."""
+    if command == "__schema__":
+        return _schema()
     handler = _COMMANDS.get(command)
     if handler is None:
         return {"error": f"unknown command: {command}"}

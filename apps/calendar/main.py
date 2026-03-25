@@ -582,8 +582,65 @@ COMMANDS = {
 }
 
 
+def _schema():
+    return {
+        "list": {
+            "description": "List events in a time range",
+            "parameters": [
+                {"name": "--from", "type": "string", "required": True, "description": "Start datetime in ISO-8601 format", "kind": "flag"},
+                {"name": "--to", "type": "string", "required": True, "description": "End datetime in ISO-8601 format", "kind": "flag"},
+                {"name": "--provider", "type": "string", "required": False, "description": "Calendar provider: local, google, or outlook (auto-detected if omitted)", "kind": "flag"},
+            ],
+            "example": "cos app calendar list --from 2025-01-01T00:00:00Z --to 2025-01-02T00:00:00Z",
+        },
+        "create": {
+            "description": "Create a new calendar event",
+            "parameters": [
+                {"name": "--title", "type": "string", "required": True, "description": "Event title", "kind": "flag"},
+                {"name": "--start", "type": "string", "required": True, "description": "Start datetime in ISO-8601 format", "kind": "flag"},
+                {"name": "--end", "type": "string", "required": False, "description": "End datetime in ISO-8601 format (defaults to start + 1 hour)", "kind": "flag"},
+                {"name": "--description", "type": "string", "required": False, "description": "Event description", "kind": "flag", "default": ""},
+                {"name": "--location", "type": "string", "required": False, "description": "Event location", "kind": "flag", "default": ""},
+                {"name": "--provider", "type": "string", "required": False, "description": "Calendar provider: local, google, or outlook", "kind": "flag"},
+            ],
+            "example": "cos app calendar create --title 'Team Meeting' --start 2025-01-15T10:00:00Z --end 2025-01-15T11:00:00Z",
+        },
+        "update": {
+            "description": "Update an existing calendar event",
+            "parameters": [
+                {"name": "--id", "type": "string", "required": True, "description": "Event ID to update", "kind": "flag"},
+                {"name": "--title", "type": "string", "required": False, "description": "New event title", "kind": "flag"},
+                {"name": "--start", "type": "string", "required": False, "description": "New start datetime", "kind": "flag"},
+                {"name": "--end", "type": "string", "required": False, "description": "New end datetime", "kind": "flag"},
+                {"name": "--description", "type": "string", "required": False, "description": "New event description", "kind": "flag"},
+                {"name": "--location", "type": "string", "required": False, "description": "New event location", "kind": "flag"},
+                {"name": "--provider", "type": "string", "required": False, "description": "Calendar provider: local, google, or outlook", "kind": "flag"},
+            ],
+            "example": "cos app calendar update --id evt-123-abc --title 'Updated Meeting'",
+        },
+        "delete": {
+            "description": "Delete a calendar event",
+            "parameters": [
+                {"name": "--id", "type": "string", "required": True, "description": "Event ID to delete", "kind": "flag"},
+                {"name": "--provider", "type": "string", "required": False, "description": "Calendar provider: local, google, or outlook", "kind": "flag"},
+            ],
+            "example": "cos app calendar delete --id evt-123-abc",
+        },
+        "today": {
+            "description": "Show today's events (midnight-to-midnight UTC)",
+            "parameters": [
+                {"name": "--provider", "type": "string", "required": False, "description": "Calendar provider: local, google, or outlook", "kind": "flag"},
+            ],
+            "example": "cos app calendar today",
+        },
+    }
+
+
 def run(command, args):
     """Entry point called by cos."""
+    if command == "__schema__":
+        return _schema()
+
     # Re-read DATA_DIR in case COS_DATA_DIR changed (e.g. in tests).
     global DATA_DIR
     DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")

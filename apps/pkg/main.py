@@ -120,8 +120,34 @@ def cmd_list(args):
         return {"packages": [], "error": "dpkg not found"}
 
 
+def _schema():
+    return {
+        "need": {
+            "description": "Ensure packages are installed, only installing what is missing",
+            "parameters": [
+                {"name": "packages", "type": "string", "required": True, "description": "One or more package names to ensure are installed", "kind": "positional"},
+            ],
+            "example": "cos app pkg need curl jq ripgrep",
+        },
+        "has": {
+            "description": "Check if a package or command is available on the system",
+            "parameters": [
+                {"name": "name", "type": "string", "required": True, "description": "Package or command name to check", "kind": "positional"},
+            ],
+            "example": "cos app pkg has python3",
+        },
+        "list": {
+            "description": "List all installed system packages via dpkg",
+            "parameters": [],
+            "example": "cos app pkg list",
+        },
+    }
+
+
 def run(command, args):
     """Entry point called by the cos router."""
+    if command == "__schema__":
+        return _schema()
     commands = {
         "need": cmd_need,
         "has": cmd_has,
