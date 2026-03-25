@@ -32,6 +32,7 @@ mod inotify_impl {
 
     /// A decoded inotify event.
     #[derive(Debug, Clone)]
+    #[allow(dead_code)]
     pub struct InotifyEvent {
         /// Watch descriptor that triggered.
         pub wd: i32,

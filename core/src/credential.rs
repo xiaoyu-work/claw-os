@@ -531,10 +531,6 @@ fn derive_key() -> [u8; 32] {
 fn generate_nonce() -> [u8; 12] {
     #[cfg(target_os = "linux")]
     {
-        if let Ok(bytes) = fs::read("/dev/urandom") {
-            // read returns the whole file; just take first 12 bytes — but
-            // that's unreliable.  Use std::io::Read instead.
-        }
         use std::io::Read;
         if let Ok(mut f) = fs::File::open("/dev/urandom") {
             let mut nonce = [0u8; 12];
