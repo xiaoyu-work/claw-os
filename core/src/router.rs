@@ -237,7 +237,7 @@ fn builtin_apps() -> Vec<(
             ("health", "Run health check, auto-restart on failure"),
         ]),
         ("service", "Generic service manager — lifecycle hooks, graceful shutdown, dependency ordering", vec![
-            ("start", "Start a registered service (runs pre_start hook, waits for health, runs post_start)"),
+            ("start", "Start a service (pre_start hook → credential injection → spawn → health check → post_start)"),
             ("stop", "Graceful stop: checkpoint → pre_stop → drain → SIGTERM → wait → SIGKILL → post_stop"),
             ("stop-all", "Stop all services in reverse dependency order with graceful shutdown"),
             ("restart", "Restart a service (graceful stop then start)"),
@@ -245,7 +245,7 @@ fn builtin_apps() -> Vec<(
             ("health", "Run health check, optionally auto-restart (--no-restart to skip)"),
             ("list", "List all discovered services with status"),
             ("logs", "View service log output (--tail N)"),
-            ("register", "Register a new service (--name, --command, --pre-stop, --post-stop, --drain-timeout, --stop-timeout, --checkpoint-cmd)"),
+            ("register", "Register a new service (--name, --command, --credentials KEY1,KEY2, --pre-stop, --post-stop, --drain-timeout, --stop-timeout, --checkpoint-cmd)"),
         ]),
         ("watch", "Event watcher — inotify-based file watching, multi-source aggregation, event history", vec![
             ("file", "Watch a file for creation, modification, or deletion (inotify on Linux, polling fallback)"),
@@ -273,7 +273,7 @@ fn builtin_apps() -> Vec<(
             ("bundle", "Create a credential bundle (--keys key1,key2,key3)"),
             ("load-bundle", "Load all credentials in a bundle as a JSON object"),
         ]),
-        ("netfilter", "Outbound network firewall — domain, method, path, and binary-level rules", vec![
+        ("netfilter", "Outbound network firewall — domain, method, path, and binary-level rules with rate limiting", vec![
             ("add", "Add a rule (--allow|--deny <domain> [--port N] [--method GET,POST] [--path /api/**] [--binary /usr/bin/git] [--tls])"),
             ("remove", "Remove rules for a domain"),
             ("list", "List all rules and default policy"),
@@ -281,6 +281,10 @@ fn builtin_apps() -> Vec<(
             ("reset", "Remove all rules and reset to allow-all"),
             ("default", "Set default policy (allow-all or deny-all)"),
             ("export", "Export full ruleset as JSON for proxy consumption"),
+            ("rate-limit", "Set rate limit for a domain (--rpm N, --burst N)"),
+            ("rate-limits", "List all rate limits"),
+            ("rate-limit-remove", "Remove a rate limit for a domain"),
+            ("rate-check", "Check if a request is within rate limits (records the request unless --dry-run)"),
         ]),
         ("policy", "Permission system — tier/scope checks, temporary elevation", vec![
             ("elevate", "Temporarily elevate session tier (--to N --duration SECS --reason TEXT)"),
