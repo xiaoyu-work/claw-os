@@ -1,0 +1,12 @@
+{
+  "name": "email",
+  "version": "0.1.0",
+  "description": "Email — send, search, and manage email via SMTP or Gmail/Outlook providers",
+  "commands": {
+    "send": "Send an email (--to, --subject, --body, --provider smtp|gmail|outlook)",
+    "search": "Search emails (--query, --max-results, --provider gmail|outlook)",
+    "list": "List recent emails (--max-results, --unread, --provider gmail|outlook)",
+    "read": "Read a specific email by ID (--id, --provider gmail|outlook)"
+  },
+  "dependencies": {}
+}

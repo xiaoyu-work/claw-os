@@ -1,0 +1,10 @@
+{
+  "name": "search",
+  "version": "0.1.0",
+  "description": "Web and image search — Google Custom Search with Brave fallback",
+  "commands": {
+    "web": "Search the web for information (returns titles, URLs, snippets)",
+    "image": "Search for images (returns titles, URLs, thumbnails)"
+  },
+  "dependencies": {}
+}

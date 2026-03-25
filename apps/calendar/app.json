@@ -1,0 +1,13 @@
+{
+  "name": "calendar",
+  "version": "0.1.0",
+  "description": "Calendar — local events with optional Google/Outlook sync",
+  "commands": {
+    "list": "List events in a time range (--from, --to, --provider local|google|outlook)",
+    "create": "Create an event (--title, --start, --end, --description, --provider)",
+    "update": "Update an event (--id, --title, --start, --end, --description, --provider)",
+    "delete": "Delete an event (--id, --provider)",
+    "today": "Show today's events (shortcut for list --from today --to tomorrow)"
+  },
+  "dependencies": {}
+}
