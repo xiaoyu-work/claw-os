@@ -72,6 +72,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "unlock" => cmd_unlock(args),
         "locks" => cmd_locks(args),
         "barrier" => cmd_barrier(args),
+        "pipe" => cmd_pipe(args),
         _ => Err(format!("unknown ipc command: {command}")),
     }
 }
@@ -543,6 +544,419 @@ fn list_ready_sessions(dir: &PathBuf) -> Vec<String> {
     sessions
 }
 
+// ---------------------------------------------------------------------------
+// Pipes — streaming named pipes (structured NDJSON channels)
+// ---------------------------------------------------------------------------
+
+fn pipes_dir() -> PathBuf {
+    ipc_dir().join("pipes")
+}
+
+fn pipe_channel_dir(name: &str) -> PathBuf {
+    pipes_dir().join(name)
+}
+
+fn pipe_messages_dir(name: &str) -> PathBuf {
+    pipe_channel_dir(name).join("messages")
+}
+
+/// Return the next 6-digit message ID for a pipe channel.
+fn next_pipe_message_id(dir: &PathBuf) -> String {
+    let max = fs::read_dir(dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            name.strip_suffix(".json")
+                .and_then(|n| n.parse::<u32>().ok())
+        })
+        .max()
+        .unwrap_or(0);
+    format!("{:06}", max + 1)
+}
+
+/// List message files in a pipe messages directory, sorted by name (oldest first).
+fn sorted_pipe_messages(dir: &PathBuf) -> Vec<(String, PathBuf)> {
+    let mut entries: Vec<(String, PathBuf)> = fs::read_dir(dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.ends_with(".json") {
+                let id = name
+                    .strip_suffix(".json")
+                    .expect("already checked ends_with .json")
+                    .to_string();
+                Some((id, e.path()))
+            } else {
+                None
+            }
+        })
+        .collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries
+}
+
+fn cmd_pipe(args: &[String]) -> Result<Value, String> {
+    let subcmd = args
+        .first()
+        .ok_or("usage: cos ipc pipe <create|publish|subscribe|list|destroy> ...")?;
+    let rest: Vec<String> = args[1..].to_vec();
+    match subcmd.as_str() {
+        "create" => pipe_create(&rest),
+        "publish" => pipe_publish(&rest),
+        "subscribe" => pipe_subscribe(&rest),
+        "list" => pipe_list(&rest),
+        "destroy" => pipe_destroy(&rest),
+        _ => Err(format!("unknown pipe command: {subcmd}")),
+    }
+}
+
+fn pipe_create(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Write).map_err(|v| v.to_string())?;
+
+    let mut buffer_size: u64 = 1000;
+    let mut positional: Vec<String> = Vec::new();
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--buffer-size" if i + 1 < args.len() => {
+                buffer_size = args[i + 1]
+                    .parse::<u64>()
+                    .map_err(|_| "buffer-size must be a positive integer".to_string())?;
+                i += 2;
+            }
+            _ => {
+                positional.push(args[i].clone());
+                i += 1;
+            }
+        }
+    }
+
+    let name = positional
+        .first()
+        .ok_or("usage: cos ipc pipe create <name> [--buffer-size N]")?;
+
+    let channel_dir = pipe_channel_dir(name);
+    let messages_dir = pipe_messages_dir(name);
+    fs::create_dir_all(&messages_dir)
+        .map_err(|e| format!("failed to create pipe directory: {e}"))?;
+
+    let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let meta = json!({
+        "name": name,
+        "created_at": timestamp,
+        "buffer_size": buffer_size,
+    });
+    let data = serde_json::to_string_pretty(&meta)
+        .map_err(|e| format!("failed to serialize metadata: {e}"))?;
+    fs::write(channel_dir.join("meta.json"), data)
+        .map_err(|e| format!("failed to write metadata: {e}"))?;
+
+    Ok(json!({
+        "created": name,
+        "buffer_size": buffer_size,
+    }))
+}
+
+fn pipe_publish(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Write).map_err(|v| v.to_string())?;
+
+    let mut from: Option<String> = None;
+    let mut positional: Vec<String> = Vec::new();
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--from" if i + 1 < args.len() => {
+                from = Some(args[i + 1].clone());
+                i += 2;
+            }
+            _ => {
+                positional.push(args[i].clone());
+                i += 1;
+            }
+        }
+    }
+
+    if positional.len() < 2 {
+        return Err(
+            "usage: cos ipc pipe publish <name> <data> [--from <session-id>]".into(),
+        );
+    }
+
+    let name = &positional[0];
+    let raw_data = &positional[1];
+    let sender = from.unwrap_or_default();
+
+    let channel_dir = pipe_channel_dir(name);
+    let meta_path = channel_dir.join("meta.json");
+    if !meta_path.exists() {
+        return Err(format!("pipe channel not found: {name}"));
+    }
+
+    // Read buffer_size from metadata.
+    let meta_str =
+        fs::read_to_string(&meta_path).map_err(|e| format!("failed to read metadata: {e}"))?;
+    let meta: Value =
+        serde_json::from_str(&meta_str).map_err(|e| format!("failed to parse metadata: {e}"))?;
+    let buffer_size = meta["buffer_size"].as_u64().unwrap_or(1000);
+
+    let messages_dir = pipe_messages_dir(name);
+    let message_id = next_pipe_message_id(&messages_dir);
+    let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+
+    // Parse data: if valid JSON, store as-is; otherwise store as string.
+    let data_value: Value = serde_json::from_str(raw_data).unwrap_or_else(|_| json!(raw_data));
+
+    let msg = json!({
+        "id": message_id,
+        "from": sender,
+        "data": data_value,
+        "timestamp": timestamp,
+    });
+
+    let path = messages_dir.join(format!("{message_id}.json"));
+    let data = serde_json::to_string_pretty(&msg)
+        .map_err(|e| format!("failed to serialize message: {e}"))?;
+    fs::write(&path, data).map_err(|e| format!("failed to write message: {e}"))?;
+
+    // Enforce backpressure: remove oldest messages if over buffer_size.
+    let all_messages = sorted_pipe_messages(&messages_dir);
+    let count = all_messages.len() as u64;
+    if count > buffer_size {
+        let excess = (count - buffer_size) as usize;
+        for (_id, path) in all_messages.iter().take(excess) {
+            let _ = fs::remove_file(path);
+        }
+    }
+
+    Ok(json!({
+        "published": true,
+        "channel": name,
+        "message_id": message_id,
+    }))
+}
+
+fn pipe_subscribe(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+
+    let mut since: Option<String> = None;
+    let mut limit: u64 = 100;
+    let mut follow = false;
+    let mut timeout_secs: u64 = 30;
+    let mut positional: Vec<String> = Vec::new();
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--since" if i + 1 < args.len() => {
+                since = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--limit" if i + 1 < args.len() => {
+                limit = args[i + 1]
+                    .parse::<u64>()
+                    .map_err(|_| "limit must be a positive integer".to_string())?;
+                i += 2;
+            }
+            "--follow" => {
+                follow = true;
+                i += 1;
+            }
+            "--timeout" if i + 1 < args.len() => {
+                timeout_secs = args[i + 1]
+                    .parse::<u64>()
+                    .map_err(|_| "timeout must be a non-negative integer".to_string())?;
+                i += 2;
+            }
+            _ => {
+                positional.push(args[i].clone());
+                i += 1;
+            }
+        }
+    }
+
+    let name = positional
+        .first()
+        .ok_or("usage: cos ipc pipe subscribe <name> [--since <id>] [--limit N] [--follow --timeout T]")?;
+
+    let channel_dir = pipe_channel_dir(name);
+    if !channel_dir.join("meta.json").exists() {
+        return Err(format!("pipe channel not found: {name}"));
+    }
+
+    let messages_dir = pipe_messages_dir(name);
+
+    if follow {
+        // Follow mode: poll for new messages after the last known ID.
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+
+        // Determine the starting point: use --since if given, otherwise latest existing ID.
+        let last_seen = since.unwrap_or_else(|| {
+            let existing = sorted_pipe_messages(&messages_dir);
+            existing
+                .last()
+                .map(|(id, _)| id.clone())
+                .unwrap_or_else(|| "000000".to_string())
+        });
+
+        loop {
+            let all = sorted_pipe_messages(&messages_dir);
+            let new_msgs: Vec<&(String, PathBuf)> =
+                all.iter().filter(|(id, _)| id.as_str() > last_seen.as_str()).collect();
+
+            if !new_msgs.is_empty() {
+                let capped = new_msgs.iter().take(limit as usize);
+                let mut messages: Vec<Value> = Vec::new();
+                for (id, path) in capped {
+                    if let Ok(data) = fs::read_to_string(path) {
+                        if let Ok(msg) = serde_json::from_str::<Value>(&data) {
+                            messages.push(json!({
+                                "id": id,
+                                "from": msg["from"],
+                                "data": msg["data"],
+                                "timestamp": msg["timestamp"],
+                            }));
+                        }
+                    }
+                }
+                let latest_id = messages
+                    .last()
+                    .and_then(|m| m["id"].as_str())
+                    .unwrap_or(&last_seen)
+                    .to_string();
+                let count = messages.len();
+                return Ok(json!({
+                    "channel": name,
+                    "messages": messages,
+                    "count": count,
+                    "latest_id": latest_id,
+                }));
+            }
+
+            if std::time::Instant::now() >= deadline {
+                return Ok(json!({
+                    "channel": name,
+                    "messages": [],
+                    "count": 0,
+                    "latest_id": last_seen,
+                    "timeout": true,
+                }));
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+    }
+
+    // Non-follow mode: return available messages immediately.
+    let all = sorted_pipe_messages(&messages_dir);
+
+    let filtered: Vec<&(String, PathBuf)> = if let Some(ref since_id) = since {
+        all.iter()
+            .filter(|(id, _)| id.as_str() > since_id.as_str())
+            .collect()
+    } else {
+        all.iter().collect()
+    };
+
+    let capped = filtered.iter().take(limit as usize);
+    let mut messages: Vec<Value> = Vec::new();
+    for (id, path) in capped {
+        if let Ok(data) = fs::read_to_string(path) {
+            if let Ok(msg) = serde_json::from_str::<Value>(&data) {
+                messages.push(json!({
+                    "id": id,
+                    "from": msg["from"],
+                    "data": msg["data"],
+                    "timestamp": msg["timestamp"],
+                }));
+            }
+        }
+    }
+
+    let latest_id = messages
+        .last()
+        .and_then(|m| m["id"].as_str())
+        .unwrap_or("000000")
+        .to_string();
+    let count = messages.len();
+
+    Ok(json!({
+        "channel": name,
+        "messages": messages,
+        "count": count,
+        "latest_id": latest_id,
+    }))
+}
+
+fn pipe_list(_args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+
+    let dir = pipes_dir();
+    if !dir.exists() {
+        return Ok(json!({ "channels": [], "count": 0 }));
+    }
+
+    let mut channels: Vec<Value> = fs::read_dir(&dir)
+        .map_err(|e| format!("failed to read pipes dir: {e}"))?
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let meta_path = e.path().join("meta.json");
+            let data = fs::read_to_string(meta_path).ok()?;
+            let meta: Value = serde_json::from_str(&data).ok()?;
+            let name = meta["name"].as_str()?.to_string();
+            let created_at = meta["created_at"].as_str().unwrap_or("").to_string();
+            let buffer_size = meta["buffer_size"].as_u64().unwrap_or(1000);
+            let messages_dir = e.path().join("messages");
+            let message_count = sorted_pipe_messages(&messages_dir).len();
+            Some(json!({
+                "name": name,
+                "message_count": message_count,
+                "created_at": created_at,
+                "buffer_size": buffer_size,
+            }))
+        })
+        .collect();
+    channels.sort_by(|a, b| {
+        let na = a["name"].as_str().unwrap_or("");
+        let nb = b["name"].as_str().unwrap_or("");
+        na.cmp(nb)
+    });
+
+    let count = channels.len();
+    Ok(json!({
+        "channels": channels,
+        "count": count,
+    }))
+}
+
+fn pipe_destroy(args: &[String]) -> Result<Value, String> {
+    policy::require(OpType::Delete).map_err(|v| v.to_string())?;
+
+    let name = args
+        .first()
+        .ok_or("usage: cos ipc pipe destroy <name>")?;
+
+    let channel_dir = pipe_channel_dir(name);
+    if !channel_dir.exists() {
+        return Err(format!("pipe channel not found: {name}"));
+    }
+
+    fs::remove_dir_all(&channel_dir)
+        .map_err(|e| format!("failed to destroy pipe channel: {e}"))?;
+
+    Ok(json!({
+        "destroyed": name,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -975,5 +1389,173 @@ mod tests {
 
         let r = run("unlock", &vec![res]).unwrap();
         assert_eq!(r["unlocked"], true);
+    }
+
+    // -----------------------------------------------------------------------
+    // Pipe tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn pipe_create_and_list() {
+        let name = unique_resource("pipe-create");
+        let r = pipe_create(&vec![name.clone()]).unwrap();
+        assert_eq!(r["created"], name.as_str());
+        assert_eq!(r["buffer_size"], 1000);
+
+        // Verify directory and meta.json exist.
+        let channel_dir = pipe_channel_dir(&name);
+        assert!(channel_dir.join("meta.json").exists());
+        assert!(channel_dir.join("messages").exists());
+
+        // Verify it appears in list.
+        let r = pipe_list(&vec![]).unwrap();
+        let channels = r["channels"].as_array().unwrap();
+        let names: Vec<&str> = channels
+            .iter()
+            .filter_map(|c| c["name"].as_str())
+            .collect();
+        assert!(names.contains(&name.as_str()));
+
+        // Clean up.
+        pipe_destroy(&vec![name]).unwrap();
+    }
+
+    #[test]
+    fn pipe_publish_and_subscribe() {
+        let name = unique_resource("pipe-pubsub");
+        pipe_create(&vec![name.clone()]).unwrap();
+
+        let r = pipe_publish(&vec![
+            name.clone(),
+            "hello".to_string(),
+            "--from".to_string(),
+            "agent-a".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(r["published"], true);
+        assert_eq!(r["channel"], name.as_str());
+        assert_eq!(r["message_id"], "000001");
+
+        pipe_publish(&vec![name.clone(), "world".to_string()]).unwrap();
+
+        let r = pipe_subscribe(&vec![name.clone()]).unwrap();
+        assert_eq!(r["channel"], name.as_str());
+        assert_eq!(r["count"], 2);
+        let msgs = r["messages"].as_array().unwrap();
+        assert_eq!(msgs[0]["data"], "hello");
+        assert_eq!(msgs[0]["from"], "agent-a");
+        assert_eq!(msgs[1]["data"], "world");
+        assert_eq!(r["latest_id"], "000002");
+
+        // Clean up.
+        pipe_destroy(&vec![name]).unwrap();
+    }
+
+    #[test]
+    fn pipe_subscribe_since() {
+        let name = unique_resource("pipe-since");
+        pipe_create(&vec![name.clone()]).unwrap();
+
+        pipe_publish(&vec![name.clone(), "msg1".to_string()]).unwrap();
+        pipe_publish(&vec![name.clone(), "msg2".to_string()]).unwrap();
+        pipe_publish(&vec![name.clone(), "msg3".to_string()]).unwrap();
+
+        // Subscribe since 000001 → should get 000002 and 000003 only.
+        let r = pipe_subscribe(&vec![
+            name.clone(),
+            "--since".to_string(),
+            "000001".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(r["count"], 2);
+        let msgs = r["messages"].as_array().unwrap();
+        assert_eq!(msgs[0]["id"], "000002");
+        assert_eq!(msgs[1]["id"], "000003");
+
+        // Clean up.
+        pipe_destroy(&vec![name]).unwrap();
+    }
+
+    #[test]
+    fn pipe_backpressure() {
+        let name = unique_resource("pipe-backpr");
+        pipe_create(&vec![
+            name.clone(),
+            "--buffer-size".to_string(),
+            "3".to_string(),
+        ])
+        .unwrap();
+
+        // Publish 5 messages.
+        for i in 1..=5 {
+            pipe_publish(&vec![name.clone(), format!("msg{i}")]).unwrap();
+        }
+
+        // Only 3 should remain (the newest 3).
+        let r = pipe_subscribe(&vec![name.clone()]).unwrap();
+        assert_eq!(r["count"], 3);
+        let msgs = r["messages"].as_array().unwrap();
+        assert_eq!(msgs[0]["data"], "msg3");
+        assert_eq!(msgs[1]["data"], "msg4");
+        assert_eq!(msgs[2]["data"], "msg5");
+
+        // Clean up.
+        pipe_destroy(&vec![name]).unwrap();
+    }
+
+    #[test]
+    fn pipe_destroy_removes_channel() {
+        let name = unique_resource("pipe-destroy");
+        pipe_create(&vec![name.clone()]).unwrap();
+        assert!(pipe_channel_dir(&name).exists());
+
+        let r = pipe_destroy(&vec![name.clone()]).unwrap();
+        assert_eq!(r["destroyed"], name.as_str());
+        assert!(!pipe_channel_dir(&name).exists());
+
+        // Destroy again should error.
+        let r = pipe_destroy(&vec![name]);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn pipe_publish_json_data() {
+        let name = unique_resource("pipe-json");
+        pipe_create(&vec![name.clone()]).unwrap();
+
+        // Publish valid JSON data — should be stored as object, not string.
+        let json_data = r#"{"key":"value","num":42}"#;
+        pipe_publish(&vec![name.clone(), json_data.to_string()]).unwrap();
+
+        let r = pipe_subscribe(&vec![name.clone()]).unwrap();
+        let msgs = r["messages"].as_array().unwrap();
+        assert!(msgs[0]["data"].is_object());
+        assert_eq!(msgs[0]["data"]["key"], "value");
+        assert_eq!(msgs[0]["data"]["num"], 42);
+
+        // Clean up.
+        pipe_destroy(&vec![name]).unwrap();
+    }
+
+    #[test]
+    fn pipe_subscribe_follow_timeout() {
+        let name = unique_resource("pipe-follow");
+        pipe_create(&vec![name.clone()]).unwrap();
+
+        // Subscribe with --follow and a very short timeout; no new messages → timeout.
+        let r = pipe_subscribe(&vec![
+            name.clone(),
+            "--follow".to_string(),
+            "--timeout".to_string(),
+            "1".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(r["channel"], name.as_str());
+        assert_eq!(r["count"], 0);
+        assert_eq!(r["timeout"], true);
+        assert!(r["messages"].as_array().unwrap().is_empty());
+
+        // Clean up.
+        pipe_destroy(&vec![name]).unwrap();
     }
 }

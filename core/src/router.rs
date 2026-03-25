@@ -265,11 +265,13 @@ fn builtin_apps() -> Vec<(
             ("quota-status", "Show current quota usage, limit, and whether exceeded"),
             ("namespaces", "Manage isolated overlay namespaces (--create, --destroy, --status <name>)"),
         ]),
-        ("credential", "Encrypted credential store — secure secret storage with tier-based access", vec![
-            ("store", "Store a credential (cos credential store <name> <value> [--tier N])"),
-            ("load", "Load a credential value (tier check enforced)"),
+        ("credential", "Encrypted credential store — secure secret storage with tier-based access, namespaces, TTL, and bundles", vec![
+            ("store", "Store a credential (--tier N, --namespace NS, --ttl SECS)"),
+            ("load", "Load a credential value (tier check + expiry enforced)"),
             ("revoke", "Delete a stored credential"),
-            ("list", "List all credentials (names and metadata only, never values)"),
+            ("list", "List credentials, optionally filtered by --namespace"),
+            ("bundle", "Create a credential bundle (--keys key1,key2,key3)"),
+            ("load-bundle", "Load all credentials in a bundle as a JSON object"),
         ]),
         ("netfilter", "Outbound network firewall — domain, method, path, and binary-level rules", vec![
             ("add", "Add a rule (--allow|--deny <domain> [--port N] [--method GET,POST] [--path /api/**] [--binary /usr/bin/git] [--tls])"),
