@@ -685,9 +685,7 @@ fn pipe_publish(args: &[String]) -> Result<Value, String> {
     }
 
     if positional.len() < 2 {
-        return Err(
-            "usage: cos ipc pipe publish <name> <data> [--from <session-id>]".into(),
-        );
+        return Err("usage: cos ipc pipe publish <name> <data> [--from <session-id>]".into());
     }
 
     let name = &positional[0];
@@ -782,9 +780,9 @@ fn pipe_subscribe(args: &[String]) -> Result<Value, String> {
         }
     }
 
-    let name = positional
-        .first()
-        .ok_or("usage: cos ipc pipe subscribe <name> [--since <id>] [--limit N] [--follow --timeout T]")?;
+    let name = positional.first().ok_or(
+        "usage: cos ipc pipe subscribe <name> [--since <id>] [--limit N] [--follow --timeout T]",
+    )?;
 
     let channel_dir = pipe_channel_dir(name);
     if !channel_dir.join("meta.json").exists() {
@@ -795,8 +793,7 @@ fn pipe_subscribe(args: &[String]) -> Result<Value, String> {
 
     if follow {
         // Follow mode: poll for new messages after the last known ID.
-        let deadline =
-            std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
 
         // Determine the starting point: use --since if given, otherwise latest existing ID.
         let last_seen = since.unwrap_or_else(|| {
@@ -809,8 +806,10 @@ fn pipe_subscribe(args: &[String]) -> Result<Value, String> {
 
         loop {
             let all = sorted_pipe_messages(&messages_dir);
-            let new_msgs: Vec<&(String, PathBuf)> =
-                all.iter().filter(|(id, _)| id.as_str() > last_seen.as_str()).collect();
+            let new_msgs: Vec<&(String, PathBuf)> = all
+                .iter()
+                .filter(|(id, _)| id.as_str() > last_seen.as_str())
+                .collect();
 
             if !new_msgs.is_empty() {
                 let capped = new_msgs.iter().take(limit as usize);
@@ -940,17 +939,14 @@ fn pipe_list(_args: &[String]) -> Result<Value, String> {
 fn pipe_destroy(args: &[String]) -> Result<Value, String> {
     policy::require(OpType::Delete).map_err(|v| v.to_string())?;
 
-    let name = args
-        .first()
-        .ok_or("usage: cos ipc pipe destroy <name>")?;
+    let name = args.first().ok_or("usage: cos ipc pipe destroy <name>")?;
 
     let channel_dir = pipe_channel_dir(name);
     if !channel_dir.exists() {
         return Err(format!("pipe channel not found: {name}"));
     }
 
-    fs::remove_dir_all(&channel_dir)
-        .map_err(|e| format!("failed to destroy pipe channel: {e}"))?;
+    fs::remove_dir_all(&channel_dir).map_err(|e| format!("failed to destroy pipe channel: {e}"))?;
 
     Ok(json!({
         "destroyed": name,
@@ -1410,10 +1406,7 @@ mod tests {
         // Verify it appears in list.
         let r = pipe_list(&vec![]).unwrap();
         let channels = r["channels"].as_array().unwrap();
-        let names: Vec<&str> = channels
-            .iter()
-            .filter_map(|c| c["name"].as_str())
-            .collect();
+        let names: Vec<&str> = channels.iter().filter_map(|c| c["name"].as_str()).collect();
         assert!(names.contains(&name.as_str()));
 
         // Clean up.

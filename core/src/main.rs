@@ -5,6 +5,7 @@ mod browser;
 mod checkpoint;
 mod config;
 mod credential;
+mod cron;
 mod ipc;
 mod netfilter;
 mod policy;
@@ -14,7 +15,6 @@ mod sandbox;
 mod service;
 mod sysinfo;
 mod watch;
-mod cron;
 
 use std::env;
 use std::process;

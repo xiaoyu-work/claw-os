@@ -141,8 +141,12 @@ mod inotify_impl {
 
     /// Standard mask for watching a directory (create, delete, modify, move).
     pub fn dir_watch_mask() -> u32 {
-        (libc::IN_CREATE | libc::IN_DELETE | libc::IN_MODIFY | libc::IN_MOVED_FROM
-            | libc::IN_MOVED_TO | libc::IN_ATTRIB) as u32
+        (libc::IN_CREATE
+            | libc::IN_DELETE
+            | libc::IN_MODIFY
+            | libc::IN_MOVED_FROM
+            | libc::IN_MOVED_TO
+            | libc::IN_ATTRIB) as u32
     }
 }
 
@@ -622,7 +626,8 @@ fn watch_multi_poll(
     let dir_initials: Vec<HashMap<String, FileStat>> =
         dir_paths.iter().map(|p| snapshot_dir(p)).collect();
 
-    let mut last_service_check = Instant::now() - Duration::from_secs(SERVICE_CHECK_INTERVAL_MS / 1000 + 1);
+    let mut last_service_check =
+        Instant::now() - Duration::from_secs(SERVICE_CHECK_INTERVAL_MS / 1000 + 1);
 
     loop {
         if Instant::now() >= deadline {
@@ -746,13 +751,11 @@ fn watch_multi_poll(
 
         // --- Check services (every SERVICE_CHECK_INTERVAL_MS) ---
         if !services.is_empty()
-            && last_service_check.elapsed()
-                >= Duration::from_millis(SERVICE_CHECK_INTERVAL_MS)
+            && last_service_check.elapsed() >= Duration::from_millis(SERVICE_CHECK_INTERVAL_MS)
         {
             last_service_check = Instant::now();
             for svc in services {
-                let health =
-                    crate::service::run("health", &[svc.clone(), "--no-restart".into()]);
+                let health = crate::service::run("health", &[svc.clone(), "--no-restart".into()]);
                 match health {
                     Ok(v) => {
                         if v["healthy"] == false {
@@ -892,12 +895,10 @@ fn parse_flag<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
 ///   credential.expired --name <name> — wait for a credential to expire
 fn cmd_watch_on(args: &[String]) -> Result<Value, String> {
     if args.is_empty() {
-        return Err(
-            "usage: cos watch on <event-type> [--timeout N] [...]\n\
+        return Err("usage: cos watch on <event-type> [--timeout N] [...]\n\
              event types: proc.exit, fs.change, service.health-fail, checkpoint.created, \
              quota.exceeded, ipc.message, credential.expired"
-                .into(),
-        );
+            .into());
     }
 
     let event_type = &args[0];
@@ -1156,7 +1157,9 @@ fn watch_credential_expired(args: &[String], timeout: u64) -> Result<Value, Stri
     let cred_name =
         parse_flag(args, "--name").ok_or("--name <name> required for credential.expired")?;
 
-    let cred_file = data_dir().join("credentials").join(format!("{cred_name}.json"));
+    let cred_file = data_dir()
+        .join("credentials")
+        .join(format!("{cred_name}.json"));
 
     // Only meaningful if the credential currently exists.
     if !cred_file.exists() {
@@ -1440,7 +1443,10 @@ mod tests {
         assert_eq!(parsed["source"], "file");
         assert_eq!(parsed["path"], "/den/test.rs");
         assert_eq!(parsed["event"], "created");
-        assert!(parsed["timestamp"].as_str().is_some(), "should have timestamp");
+        assert!(
+            parsed["timestamp"].as_str().is_some(),
+            "should have timestamp"
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

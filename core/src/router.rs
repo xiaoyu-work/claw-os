@@ -10,6 +10,7 @@ use crate::bridge;
 use crate::browser;
 use crate::checkpoint;
 use crate::credential;
+use crate::cron;
 use crate::ipc;
 use crate::netfilter;
 use crate::policy;
@@ -18,7 +19,6 @@ use crate::sandbox;
 use crate::service;
 use crate::sysinfo;
 use crate::watch;
-use crate::cron;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 

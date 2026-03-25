@@ -555,8 +555,12 @@ fn cmd_stop(args: &[String]) -> Result<Value, String> {
     let def = find_service(name).ok();
     let hooks = def.as_ref().and_then(|d| d.lifecycle.as_ref());
 
-    let drain_timeout = hooks.map(|h| h.drain_timeout_secs).unwrap_or(default_drain_timeout());
-    let stop_timeout = hooks.map(|h| h.stop_timeout_secs).unwrap_or(default_stop_timeout());
+    let drain_timeout = hooks
+        .map(|h| h.drain_timeout_secs)
+        .unwrap_or(default_drain_timeout());
+    let stop_timeout = hooks
+        .map(|h| h.stop_timeout_secs)
+        .unwrap_or(default_stop_timeout());
 
     let mut steps: Vec<Value> = Vec::new();
 
