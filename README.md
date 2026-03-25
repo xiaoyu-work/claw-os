@@ -15,26 +15,32 @@ Claw OS provides primitives that traditional operating systems don't:
 | **Structured I/O** | Text stdout | JSON from every command |
 | **Checkpoint / Rollback** | None | OverlayFS — snapshot, diff, undo any file changes |
 | **Permission Model** | uid/rwx (for humans) | Tier + Scope (for agents: 4 levels, path-scoped) |
-| **Process Coordination** | Raw pipes, signals | IPC messages, locks with dead-process auto-reclaim, barriers |
+| **Process Coordination** | Raw pipes, signals | IPC messages, locks, barriers, **streaming named pipes** |
 | **Process Hierarchy** | PIDs, process groups | Session IDs, named groups, parent-child with context inheritance |
 | **Error Recovery** | "Permission denied" | Structured JSON with recovery commands to try |
 | **Guardrails** | None | Rapid respawn detection, destructive command warnings |
-| **Service Management** | systemd (complex) | Declarative JSON service definitions |
+| **Service Management** | systemd (complex) | Lifecycle hooks, graceful drain, dependency-ordered shutdown |
 | **Browser** | Not included | Built-in Chromium engine, URL → Markdown in one call |
 | **Audit** | Optional, complex | Every operation logged automatically |
+| **Credential Management** | env vars, plaintext files | AES-256-GCM encrypted store with namespaces, TTL, and bundles |
+| **Job Scheduling** | crond (no context) | Agent-native cron with tier/scope/credential context, overlap protection |
+| **Event System** | inotify (raw events) | Multi-source aggregation (file+proc+service), event history |
 
 ## Architecture
 
 ```
-cos (Rust binary, ~3000 LOC)
+cos (Rust binary, ~5800 LOC)
 ├── checkpoint  OverlayFS snapshot, diff, rollback
 ├── policy      Tier + Scope permission system (6 OpTypes, 4 tiers)
 ├── proc        Process sessions with groups, hierarchy, wait, signal, result
-├── ipc         Messages, locks (stale auto-reclaim), barriers
+├── ipc         Messages, locks, barriers, streaming named pipes
 ├── sandbox     Linux namespace isolation + cgroup v2 resource limits
-├── service     Generic service manager (declarative JSON definitions)
-├── watch       File/directory/process change detection
+├── service     Lifecycle hooks, graceful drain, dependency-ordered shutdown
+├── watch       inotify-based file watching, multi-source aggregation, event history
+├── credential  AES-256-GCM encrypted store, namespaces, TTL, bundles
+├── cron        Agent-native job scheduler with context and overlap protection
 ├── browser     Built-in browser engine lifecycle
+├── netfilter   Domain/method/path-level outbound firewall
 ├── router      App discovery + dispatch + error recovery hints
 ├── bridge      Python app subprocess integration
 ├── audit       Automatic operation logging
