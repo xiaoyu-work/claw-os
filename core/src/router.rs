@@ -18,6 +18,7 @@ use crate::proc;
 use crate::sandbox;
 use crate::service;
 use crate::sysinfo;
+use crate::trace;
 use crate::watch;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -61,6 +62,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         "netfilter" => dispatch_builtin(args, "netfilter", netfilter::run),
         "policy" => dispatch_builtin(args, "policy", policy::run),
         "cron" => dispatch_builtin(args, "cron", cron::run),
+        "trace" => dispatch_builtin(args, "trace", trace::run),
         _ => {
             // Check if user forgot "app" prefix — helpful error
             let apps_dir = apps_dir();
@@ -361,6 +363,14 @@ fn builtin_apps() -> Vec<(
             ("logs", "View execution history for a job (--limit N)"),
             ("run", "Manually trigger a job immediately"),
             ("tick", "Process all due jobs (called by scheduler every minute)"),
+        ]),
+        ("trace", "Execution tracing — tree-structured observability for agent tasks", vec![
+            ("start", "Start a new trace (returns COS_TRACE_ID to set in environment)"),
+            ("end", "End a trace (--status completed|failed)"),
+            ("span", "Start a named span within the current trace"),
+            ("span-end", "End the current span"),
+            ("show", "Show complete trace tree with operations and timing"),
+            ("list", "List all traces (--status, --limit)"),
         ]),
     ]
 }
@@ -1097,6 +1107,84 @@ fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandSchema>)> {
                     description: "All processes with resource usage",
                     params: vec![],
                     example: "cos sys proc",
+                },
+            ],
+        ),
+        (
+            "trace",
+            "Execution tracing",
+            vec![
+                CommandSchema {
+                    command: "start",
+                    description: "Start a new trace",
+                    params: vec![Param::positional(
+                        "trace_id",
+                        "string",
+                        true,
+                        "Unique trace identifier",
+                    )],
+                    example: "cos trace start refactor-task",
+                },
+                CommandSchema {
+                    command: "end",
+                    description: "End a trace",
+                    params: vec![
+                        Param::positional("trace_id", "string", true, "Trace ID"),
+                        Param::flag(
+                            "--status",
+                            "enum:completed|failed",
+                            false,
+                            "Final status (default: completed)",
+                        ),
+                    ],
+                    example: "cos trace end refactor-task",
+                },
+                CommandSchema {
+                    command: "span",
+                    description: "Start a named span (reads COS_TRACE_ID from env)",
+                    params: vec![Param::positional(
+                        "name",
+                        "string",
+                        true,
+                        "Span name",
+                    )],
+                    example: "cos trace span analyze",
+                },
+                CommandSchema {
+                    command: "span-end",
+                    description: "End the current span (reads COS_SPAN_ID from env)",
+                    params: vec![Param::flag(
+                        "--name",
+                        "string",
+                        false,
+                        "Explicit span name to end",
+                    )],
+                    example: "cos trace span-end",
+                },
+                CommandSchema {
+                    command: "show",
+                    description: "Show complete trace tree with operations",
+                    params: vec![Param::positional(
+                        "trace_id",
+                        "string",
+                        true,
+                        "Trace ID",
+                    )],
+                    example: "cos trace show refactor-task",
+                },
+                CommandSchema {
+                    command: "list",
+                    description: "List all traces",
+                    params: vec![
+                        Param::flag(
+                            "--status",
+                            "enum:active|completed|failed",
+                            false,
+                            "Filter by status",
+                        ),
+                        Param::flag("--limit", "integer", false, "Max traces to return"),
+                    ],
+                    example: "cos trace list --status active",
                 },
             ],
         ),
