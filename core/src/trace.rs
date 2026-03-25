@@ -92,7 +92,8 @@ fn cmd_start(args: &[String]) -> Result<Value, String> {
 
     let data = serde_json::to_string_pretty(&trace)
         .map_err(|e| format!("failed to serialize trace: {e}"))?;
-    fs::write(&path, &data).map_err(|e| format!("failed to write trace file: {e}"))?;
+    crate::filelock::write_locked(&path, &data)
+        .map_err(|e| format!("failed to write trace file: {e}"))?;
 
     Ok(json!({
         "trace_id": trace_id,
@@ -118,7 +119,9 @@ fn cmd_end(args: &[String]) -> Result<Value, String> {
     let trace_id = &args[0];
 
     let path = trace_path(trace_id);
-    let data = fs::read_to_string(&path).map_err(|_| format!("trace not found: {trace_id}"))?;
+    let data = crate::filelock::read_locked(&path)
+        .map_err(|e| format!("failed to read trace: {e}"))?
+        .ok_or_else(|| format!("trace not found: {trace_id}"))?;
     let mut trace: TraceInfo =
         serde_json::from_str(&data).map_err(|e| format!("corrupt trace file: {e}"))?;
 
@@ -148,7 +151,8 @@ fn cmd_end(args: &[String]) -> Result<Value, String> {
 
     let updated = serde_json::to_string_pretty(&trace)
         .map_err(|e| format!("failed to serialize trace: {e}"))?;
-    fs::write(&path, &updated).map_err(|e| format!("failed to write trace file: {e}"))?;
+    crate::filelock::write_locked(&path, &updated)
+        .map_err(|e| format!("failed to write trace file: {e}"))?;
 
     let duration_ms = compute_duration_ms(&trace.started_at, &now);
 
@@ -179,7 +183,9 @@ fn cmd_span(args: &[String]) -> Result<Value, String> {
     }
 
     let path = trace_path(&trace_id);
-    let data = fs::read_to_string(&path).map_err(|_| format!("trace not found: {trace_id}"))?;
+    let data = crate::filelock::read_locked(&path)
+        .map_err(|e| format!("failed to read trace: {e}"))?
+        .ok_or_else(|| format!("trace not found: {trace_id}"))?;
     let mut trace: TraceInfo =
         serde_json::from_str(&data).map_err(|e| format!("corrupt trace file: {e}"))?;
 
@@ -204,7 +210,8 @@ fn cmd_span(args: &[String]) -> Result<Value, String> {
 
     let updated = serde_json::to_string_pretty(&trace)
         .map_err(|e| format!("failed to serialize trace: {e}"))?;
-    fs::write(&path, &updated).map_err(|e| format!("failed to write trace file: {e}"))?;
+    crate::filelock::write_locked(&path, &updated)
+        .map_err(|e| format!("failed to write trace file: {e}"))?;
 
     Ok(json!({
         "trace_id": trace_id,
@@ -255,7 +262,9 @@ fn cmd_span_end(args: &[String]) -> Result<Value, String> {
     };
 
     let path = trace_path(&trace_id);
-    let data = fs::read_to_string(&path).map_err(|_| format!("trace not found: {trace_id}"))?;
+    let data = crate::filelock::read_locked(&path)
+        .map_err(|e| format!("failed to read trace: {e}"))?
+        .ok_or_else(|| format!("trace not found: {trace_id}"))?;
     let mut trace: TraceInfo =
         serde_json::from_str(&data).map_err(|e| format!("corrupt trace file: {e}"))?;
 
@@ -277,7 +286,8 @@ fn cmd_span_end(args: &[String]) -> Result<Value, String> {
 
     let updated = serde_json::to_string_pretty(&trace)
         .map_err(|e| format!("failed to serialize trace: {e}"))?;
-    fs::write(&path, &updated).map_err(|e| format!("failed to write trace file: {e}"))?;
+    crate::filelock::write_locked(&path, &updated)
+        .map_err(|e| format!("failed to write trace file: {e}"))?;
 
     // Compute parent span for env hint
     let parent_span = if let Some(pos) = span_path.rfind('/') {
@@ -315,7 +325,9 @@ fn cmd_show(args: &[String]) -> Result<Value, String> {
     let trace_id = &args[0];
 
     let path = trace_path(trace_id);
-    let data = fs::read_to_string(&path).map_err(|_| format!("trace not found: {trace_id}"))?;
+    let data = crate::filelock::read_locked(&path)
+        .map_err(|e| format!("failed to read trace: {e}"))?
+        .ok_or_else(|| format!("trace not found: {trace_id}"))?;
     let trace: TraceInfo =
         serde_json::from_str(&data).map_err(|e| format!("corrupt trace file: {e}"))?;
 
@@ -511,7 +523,7 @@ fn cmd_list(args: &[String]) -> Result<Value, String> {
         entries.sort_by_key(|e| e.file_name());
 
         for entry in entries {
-            if let Ok(data) = fs::read_to_string(entry.path()) {
+            if let Ok(Some(data)) = crate::filelock::read_locked(&entry.path()) {
                 if let Ok(trace) = serde_json::from_str::<TraceInfo>(&data) {
                     // Apply status filter
                     if let Some(ref filter) = status_filter {

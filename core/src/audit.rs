@@ -1,5 +1,4 @@
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs;
 use std::path::Path;
 use std::time::Instant;
 
@@ -78,13 +77,7 @@ pub fn log_entry(
         let _ = fs::create_dir_all(parent);
     }
 
-    if let Ok(mut f) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(audit_path)
-    {
-        let _ = writeln!(f, "{}", entry);
-    }
+    let _ = crate::filelock::append_locked(audit_path, &entry.to_string());
 }
 
 #[cfg(test)]

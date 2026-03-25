@@ -128,12 +128,59 @@ fn normalize_path(path: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// /proc-based PID ancestry verification (Linux only)
+// ---------------------------------------------------------------------------
+
+/// Check whether `child_pid` is a descendant of `ancestor_pid` by walking
+/// the PPid chain in /proc/<pid>/status.
+///
+/// Returns true if:
+///   - child_pid == ancestor_pid (same process), OR
+///   - child_pid's parent (or grandparent, etc.) is ancestor_pid
+///
+/// This is the OS-level mechanism to prevent COS_SESSION spoofing:
+/// a process cannot fake its parent PID chain.
+#[cfg(target_os = "linux")]
+fn is_pid_descendant_of(child_pid: u32, ancestor_pid: u32) -> bool {
+    let mut current = child_pid;
+    // Walk at most 64 levels to prevent infinite loops from broken /proc.
+    for _ in 0..64 {
+        if current == ancestor_pid {
+            return true;
+        }
+        if current <= 1 {
+            return false; // Reached init without finding ancestor
+        }
+        match read_ppid(current) {
+            Some(ppid) => current = ppid,
+            None => return false, // Can't read /proc — be conservative
+        }
+    }
+    false
+}
+
+/// Read the parent PID from /proc/<pid>/status.
+#[cfg(target_os = "linux")]
+fn read_ppid(pid: u32) -> Option<u32> {
+    let path = format!("/proc/{pid}/status");
+    let content = fs::read_to_string(&path).ok()?;
+    for line in content.lines() {
+        if let Some(val) = line.strip_prefix("PPid:") {
+            return val.trim().parse().ok();
+        }
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
 // Proc registry (minimal duplicate to avoid circular dependency with proc.rs)
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
 struct SessionInfo {
     session_id: String,
+    #[serde(default)]
+    pid: u32,
     #[serde(default)]
     tier: Option<u8>,
     #[serde(default)]
@@ -187,6 +234,26 @@ pub fn require(op: OpType) -> Result<(), Value> {
         Some(s) => s,
         None => return Ok(()), // Session not in registry = unrestricted
     };
+
+    // Verify that the calling process is actually the session's process
+    // (or a descendant of it) by walking /proc. This prevents a process
+    // from unsetting COS_SESSION or setting it to a more-privileged
+    // session ID to bypass tier checks.
+    #[cfg(target_os = "linux")]
+    {
+        let my_pid = std::process::id();
+        let session_pid = session.pid;
+        if !is_pid_descendant_of(my_pid, session_pid) {
+            return Err(json!({
+                "error": "permission denied",
+                "reason": "caller PID is not a descendant of the session process",
+                "caller_pid": my_pid,
+                "session_pid": session_pid,
+                "session": session_id,
+                "hint": "COS_SESSION does not match the process tree. Do not set COS_SESSION manually.",
+            }));
+        }
+    }
 
     let tier = match session.tier {
         Some(t) => t,

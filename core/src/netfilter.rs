@@ -85,24 +85,23 @@ pub struct NetFilterConfig {
 }
 
 fn load_config() -> NetFilterConfig {
-    let path = rules_path();
-    if let Ok(data) = fs::read_to_string(&path) {
-        if let Ok(cfg) = serde_json::from_str(&data) {
-            return cfg;
-        }
-    }
-    NetFilterConfig {
-        default_policy: "allow-all".into(),
-        rules: vec![],
-        rate_limits: vec![],
+    match crate::filelock::read_locked(&rules_path()) {
+        Ok(Some(data)) => serde_json::from_str(&data).unwrap_or(NetFilterConfig {
+            default_policy: "allow-all".into(),
+            rules: vec![],
+            rate_limits: vec![],
+        }),
+        _ => NetFilterConfig {
+            default_policy: "allow-all".into(),
+            rules: vec![],
+            rate_limits: vec![],
+        },
     }
 }
 
 fn save_config(cfg: &NetFilterConfig) {
-    let dir = netfilter_dir();
-    let _ = fs::create_dir_all(&dir);
     if let Ok(data) = serde_json::to_string_pretty(cfg) {
-        let _ = fs::write(rules_path(), data);
+        let _ = crate::filelock::write_locked(&rules_path(), &data);
     }
 }
 

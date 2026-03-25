@@ -50,22 +50,17 @@ fn registry_path() -> PathBuf {
 }
 
 fn load_registry() -> SandboxRegistry {
-    let path = registry_path();
-    if let Ok(data) = fs::read_to_string(&path) {
-        if let Ok(reg) = serde_json::from_str(&data) {
-            return reg;
+    match crate::filelock::read_locked(&registry_path()) {
+        Ok(Some(data)) => {
+            serde_json::from_str(&data).unwrap_or(SandboxRegistry { sandboxes: vec![] })
         }
+        _ => SandboxRegistry { sandboxes: vec![] },
     }
-    SandboxRegistry { sandboxes: vec![] }
 }
 
 fn save_registry(reg: &SandboxRegistry) {
-    let path = registry_path();
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
     if let Ok(data) = serde_json::to_string_pretty(reg) {
-        let _ = fs::write(&path, data);
+        let _ = crate::filelock::write_locked(&registry_path(), &data);
     }
 }
 
