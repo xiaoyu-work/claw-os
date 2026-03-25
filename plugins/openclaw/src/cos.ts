@@ -22,3 +22,25 @@ export function cosRaw(app: string, command: string, args: string[] = []): strin
     maxBuffer: 10 * 1024 * 1024,
   }).trim();
 }
+
+/** Execute a Python app command: cos app <name> <command> [args...] */
+export function cosApp(app: string, command: string, args: string[] = []): unknown {
+  const result = execFileSync("cos", ["app", app, command, ...args], {
+    encoding: "utf-8",
+    timeout: 300_000,
+    maxBuffer: 10 * 1024 * 1024,
+  });
+  try {
+    return JSON.parse(result.trim());
+  } catch {
+    return { raw: result.trim() };
+  }
+}
+
+export function cosAppRaw(app: string, command: string, args: string[] = []): string {
+  return execFileSync("cos", ["app", app, command, ...args], {
+    encoding: "utf-8",
+    timeout: 300_000,
+    maxBuffer: 10 * 1024 * 1024,
+  }).trim();
+}

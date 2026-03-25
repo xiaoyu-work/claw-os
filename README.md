@@ -30,33 +30,32 @@ Claw OS provides primitives that traditional operating systems don't:
 
 ```
 cos (Rust binary, ~5800 LOC)
-├── checkpoint  OverlayFS snapshot, diff, rollback
-├── policy      Tier + Scope permission system (6 OpTypes, 4 tiers)
-├── proc        Process sessions with groups, hierarchy, wait, signal, result
-├── ipc         Messages, locks, barriers, streaming named pipes
-├── sandbox     Linux namespace isolation + cgroup v2 resource limits
-├── service     Lifecycle hooks, graceful drain, dependency-ordered shutdown
-├── watch       inotify-based file watching, multi-source aggregation, event history
-├── credential  AES-256-GCM encrypted store, namespaces, TTL, bundles
-├── cron        Agent-native job scheduler with context and overlap protection
-├── browser     Built-in browser engine lifecycle
-├── netfilter   Domain/method/path-level outbound firewall
-├── router      App discovery + dispatch + error recovery hints
-├── bridge      Python app subprocess integration
-├── audit       Automatic operation logging
-└── sysinfo     System information
-
-10 Python apps
-├── fs          File operations with metadata and search
-├── exec        Command execution with language detection
-├── web         URL → Markdown (powered by built-in browser engine)
-├── db          SQLite databases
-├── doc         PDF, DOCX, XLSX, CSV reader
-├── net         HTTP client
-├── kv          Key-value store
-├── log         Audit log search
-├── notify      Notifications
-└── pkg         Package management
+│
+├── OS Primitives (cos <name> <command>)
+│   ├── sys         System info, /proc, cgroup
+│   ├── proc        Process sessions, groups, hierarchy
+│   ├── checkpoint  OverlayFS snapshot, diff, rollback
+│   ├── sandbox     Namespace isolation, cgroup v2, seccomp
+│   ├── ipc         Messages, locks, barriers, streaming pipes
+│   ├── watch       inotify, multi-source aggregation, event history
+│   ├── service     Lifecycle hooks, graceful shutdown
+│   ├── credential  AES-256-GCM encrypted store, namespaces, TTL
+│   ├── cron        Agent-native job scheduler
+│   ├── netfilter   Outbound firewall with rate limiting
+│   ├── policy      Tier + Scope permissions, elevation
+│   └── browser     Browser engine lifecycle
+│
+└── Apps (cos app <name> <command>)
+    ├── fs          File operations with metadata and search
+    ├── exec        Command execution with language detection
+    ├── web         URL → Markdown (powered by browser engine)
+    ├── db          SQLite databases
+    ├── doc         PDF, DOCX, XLSX, PPTX, CSV reader
+    ├── net         HTTP client
+    ├── kv          Key-value store
+    ├── log         Audit log search
+    ├── notify      Notifications
+    └── pkg         Package management
 ```
 
 ## Quick Start
@@ -69,9 +68,10 @@ docker run -it --name claw -v ./workspace:/workspace ghcr.io/xiaoyu-work/claw-os
 You're in. Try:
 
 ```bash
-cos                                    # see all available apps
+cos                                    # see OS primitives
+cos app                                # see available apps
 cos sys info                           # system information
-cos web read https://example.com       # fetch a web page as Markdown
+cos app web read https://example.com   # fetch a web page as Markdown
 cos checkpoint create "clean state"    # snapshot the workspace
 cos checkpoint diff                    # see what changed
 ```

@@ -6,7 +6,7 @@ Claw OS ships 10 Python apps that extend the Rust core with higher-level functio
 - `main.py` — entry point implementing `run(command, args) → dict`
 - `test_main.py` — unit tests
 
-Apps are invoked via `cos <app> <command> [args...]`. The Rust bridge spawns a Python subprocess, passes the command and args, and returns the JSON result. Policy checks are enforced before the subprocess starts.
+Apps are invoked via `cos app <name> <command> [args...]`. The Rust bridge spawns a Python subprocess, passes the command and args, and returns the JSON result. Policy checks are enforced before the subprocess starts.
 
 ---
 
@@ -19,7 +19,7 @@ Full-featured file management with metadata tracking and content search.
 List directory contents with metadata.
 
 ```bash
-cos fs ls /den [--all] [--long]
+cos app fs ls /den [--all] [--long]
 ```
 ```json
 {
@@ -37,7 +37,7 @@ cos fs ls /den [--all] [--long]
 Read file contents. Supports partial reads for large files.
 
 ```bash
-cos fs read /den/main.py [--offset N] [--limit N] [--start-line N] [--end-line N]
+cos app fs read /den/main.py [--offset N] [--limit N] [--start-line N] [--end-line N]
 ```
 ```json
 {
@@ -56,7 +56,7 @@ Maximum read size: 1MB per call.
 Write content to a file.
 
 ```bash
-cos fs write /den/output.txt --content "Hello, world!"
+cos app fs write /den/output.txt --content "Hello, world!"
 ```
 ```json
 {"path": "/den/output.txt", "bytes_written": 13}
@@ -67,8 +67,8 @@ cos fs write /den/output.txt --content "Hello, world!"
 Remove a file or directory.
 
 ```bash
-cos fs rm /den/temp.txt
-cos fs rm /den/temp_dir --recursive
+cos app fs rm /den/temp.txt
+cos app fs rm /den/temp_dir --recursive
 ```
 
 ### fs mkdir
@@ -76,7 +76,7 @@ cos fs rm /den/temp_dir --recursive
 Create a directory (including parents).
 
 ```bash
-cos fs mkdir /den/src/components
+cos app fs mkdir /den/src/components
 ```
 
 ### fs stat
@@ -84,7 +84,7 @@ cos fs mkdir /den/src/components
 Get detailed file metadata.
 
 ```bash
-cos fs stat /den/main.py
+cos app fs stat /den/main.py
 ```
 ```json
 {
@@ -103,7 +103,7 @@ cos fs stat /den/main.py
 Search file contents (powered by ripgrep) and filenames.
 
 ```bash
-cos fs search "def main" --path /den/src [--type py] [--max-results 20]
+cos app fs search "def main" --path /den/src [--type py] [--max-results 20]
 ```
 ```json
 {
@@ -120,8 +120,8 @@ cos fs search "def main" --path /den/src [--type py] [--max-results 20]
 Add semantic tags to files. Tags are stored in `.cos-meta.json` sidecar files.
 
 ```bash
-cos fs tag /den/main.py --add entrypoint --add python
-cos fs tag /den/main.py --remove python
+cos app fs tag /den/main.py --add entrypoint --add python
+cos app fs tag /den/main.py --remove python
 ```
 
 ### fs recent
@@ -129,7 +129,7 @@ cos fs tag /den/main.py --remove python
 List recently modified files.
 
 ```bash
-cos fs recent /den --limit 10
+cos app fs recent /den --limit 10
 ```
 
 ---
@@ -143,7 +143,7 @@ Run shell commands and inline scripts with timeout control.
 Execute a shell command.
 
 ```bash
-cos exec run "ls -la /den" [--shell bash] [--timeout 300]
+cos app exec run "ls -la /den" [--shell bash] [--timeout 300]
 ```
 ```json
 {
@@ -161,8 +161,8 @@ Maximum output: 1MB per call.
 Run an inline script or script file with automatic language detection.
 
 ```bash
-cos exec script --lang python --content "print(2 + 2)" [--timeout 60]
-cos exec script --file /den/train.py --lang python
+cos app exec script --lang python --content "print(2 + 2)" [--timeout 60]
+cos app exec script --file /den/train.py --lang python
 ```
 
 Language detection: `.py` → python3, `.sh` → bash, `.js` → node.
@@ -172,7 +172,7 @@ Language detection: `.py` → python3, `.sh` → bash, `.js` → node.
 Check if a command exists in the PATH.
 
 ```bash
-cos exec which ripgrep
+cos app exec which ripgrep
 ```
 ```json
 {"command": "ripgrep", "found": true, "path": "/usr/bin/rg"}
@@ -183,9 +183,9 @@ cos exec which ripgrep
 Legacy background process management (prefer `cos proc spawn` for new use).
 
 ```bash
-cos exec start "python server.py"
-cos exec ps
-cos exec stop <pid>
+cos app exec start "python server.py"
+cos app exec ps
+cos app exec stop <pid>
 ```
 
 ---
@@ -199,7 +199,7 @@ Fetch web pages with full JavaScript rendering. Powered by the built-in Chromium
 Convert a URL to clean Markdown.
 
 ```bash
-cos web read "https://example.com" [--timeout 30]
+cos app web read "https://example.com" [--timeout 30]
 ```
 ```json
 {
@@ -217,7 +217,7 @@ The browser engine renders JavaScript, so SPAs and dynamically-loaded content wo
 Capture a screenshot of a web page.
 
 ```bash
-cos web screenshot "https://example.com" --output /den/screenshot.png
+cos app web screenshot "https://example.com" --output /den/screenshot.png
 ```
 
 ### web submit
@@ -225,7 +225,7 @@ cos web screenshot "https://example.com" --output /den/screenshot.png
 Submit form data to a URL.
 
 ```bash
-cos web submit "https://example.com/form" --data '{"field": "value"}'
+cos app web submit "https://example.com/form" --data '{"field": "value"}'
 ```
 
 **Dependency:** Requires the browser service to be running (`cos browser start`).
@@ -241,7 +241,7 @@ Direct SQLite database access for agents.
 Run a SELECT query.
 
 ```bash
-cos db query "SELECT * FROM users LIMIT 10" --database /den/app.db
+cos app db query "SELECT * FROM users LIMIT 10" --database /den/app.db
 ```
 ```json
 {
@@ -259,7 +259,7 @@ cos db query "SELECT * FROM users LIMIT 10" --database /den/app.db
 Run DDL/DML statements (CREATE, INSERT, UPDATE, DELETE).
 
 ```bash
-cos db exec "INSERT INTO users (name, email) VALUES ('Charlie', 'charlie@example.com')" --database /den/app.db
+cos app db exec "INSERT INTO users (name, email) VALUES ('Charlie', 'charlie@example.com')" --database /den/app.db
 ```
 
 ### db tables
@@ -267,7 +267,7 @@ cos db exec "INSERT INTO users (name, email) VALUES ('Charlie', 'charlie@example
 List all tables in a database.
 
 ```bash
-cos db tables --database /den/app.db
+cos app db tables --database /den/app.db
 ```
 
 ### db schema
@@ -275,7 +275,7 @@ cos db tables --database /den/app.db
 Show table schema.
 
 ```bash
-cos db schema users --database /den/app.db
+cos app db schema users --database /den/app.db
 ```
 
 ### db databases
@@ -283,7 +283,7 @@ cos db schema users --database /den/app.db
 List all available database files.
 
 ```bash
-cos db databases
+cos app db databases
 ```
 
 Default database location: `/var/lib/cos/databases/`.
@@ -299,9 +299,9 @@ Read PDF, DOCX, XLSX, and CSV files as structured text.
 Extract text content from a document.
 
 ```bash
-cos doc read /den/report.pdf
-cos doc read /den/data.xlsx
-cos doc read /den/document.docx
+cos app doc read /den/report.pdf
+cos app doc read /den/data.xlsx
+cos app doc read /den/document.docx
 ```
 ```json
 {
@@ -325,7 +325,7 @@ cos doc read /den/document.docx
 Get document metadata without reading full content.
 
 ```bash
-cos doc info /den/report.pdf
+cos app doc info /den/report.pdf
 ```
 ```json
 {
@@ -348,7 +348,7 @@ Make HTTP requests and download files.
 Send an HTTP request.
 
 ```bash
-cos net fetch "https://api.example.com/data" [--method POST] [--data '{"key":"val"}'] [--headers '{"Authorization":"Bearer ..."}'] [--timeout 30]
+cos app net fetch "https://api.example.com/data" [--method POST] [--data '{"key":"val"}'] [--headers '{"Authorization":"Bearer ..."}'] [--timeout 30]
 ```
 ```json
 {
@@ -364,7 +364,7 @@ cos net fetch "https://api.example.com/data" [--method POST] [--data '{"key":"va
 Download a file to disk.
 
 ```bash
-cos net download "https://example.com/file.zip" --output /den/file.zip
+cos app net download "https://example.com/file.zip" --output /den/file.zip
 ```
 ```json
 {"path": "/den/file.zip", "size": 1048576, "duration_ms": 1200}
@@ -379,8 +379,8 @@ Simple persistent key-value storage for agent state and memory.
 ### kv set / get
 
 ```bash
-cos kv set "last_checkpoint" "003"
-cos kv get "last_checkpoint"
+cos app kv set "last_checkpoint" "003"
+cos app kv get "last_checkpoint"
 ```
 ```json
 {"key": "last_checkpoint", "value": "003"}
@@ -391,7 +391,7 @@ cos kv get "last_checkpoint"
 List keys matching a pattern (supports `*` wildcard).
 
 ```bash
-cos kv list "task_*"
+cos app kv list "task_*"
 ```
 ```json
 {
@@ -405,7 +405,7 @@ cos kv list "task_*"
 Delete a key.
 
 ```bash
-cos kv del "last_checkpoint"
+cos app kv del "last_checkpoint"
 ```
 
 Storage: JSON files in `/var/lib/cos/kv/`.
@@ -421,7 +421,7 @@ Query the automatic audit trail.
 Search audit entries by field.
 
 ```bash
-cos log search "exec" [--app exec] [--status error] [--limit 50]
+cos app log search "exec" [--app exec] [--status error] [--limit 50]
 ```
 ```json
 {
@@ -437,14 +437,14 @@ cos log search "exec" [--app exec] [--status error] [--limit 50]
 Show the most recent audit entries.
 
 ```bash
-cos log tail 20
+cos app log tail 20
 ```
 
 ### log read / write
 
 ```bash
-cos log read [--limit 100]
-cos log write "custom log message"
+cos app log read [--limit 100]
+cos app log write "custom log message"
 ```
 
 Audit log location: `/var/lib/cos/logs/audit.jsonl`.
@@ -458,7 +458,7 @@ Send notifications (platform-dependent output).
 ### notify send
 
 ```bash
-cos notify send "Build complete" [--channel slack] [--priority high]
+cos app notify send "Build complete" [--channel slack] [--priority high]
 ```
 
 ### notify list
@@ -466,7 +466,7 @@ cos notify send "Build complete" [--channel slack] [--priority high]
 List recent notifications.
 
 ```bash
-cos notify list
+cos app notify list
 ```
 
 ---
@@ -480,8 +480,8 @@ Declarative package management for ensuring tool availability.
 Install a package if not already present.
 
 ```bash
-cos pkg need ripgrep
-cos pkg need nodejs
+cos app pkg need ripgrep
+cos app pkg need nodejs
 ```
 ```json
 {"package": "ripgrep", "status": "already_installed", "version": "13.0.0"}
@@ -494,7 +494,7 @@ Uses `apt` on Debian-based systems.
 Check if a package is installed.
 
 ```bash
-cos pkg has ffmpeg
+cos app pkg has ffmpeg
 ```
 ```json
 {"package": "ffmpeg", "installed": false}
@@ -505,7 +505,7 @@ cos pkg has ffmpeg
 List all installed packages.
 
 ```bash
-cos pkg list [--filter "python*"]
+cos app pkg list [--filter "python*"]
 ```
 
 ---
@@ -550,6 +550,6 @@ To create a new app:
            return {"error": f"unknown command: {command}"}
    ```
 
-4. The app is automatically discovered and available as `cos myapp hello`.
+4. The app is automatically discovered and available as `cos app myapp hello`.
 
 Policy enforcement is automatic — the Rust bridge infers the operation type from the command name and checks the session's tier before spawning the Python subprocess.

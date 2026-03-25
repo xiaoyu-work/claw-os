@@ -37,36 +37,67 @@ fn audit_path() -> PathBuf {
 /// Main dispatch: parse CLI args and route to the appropriate handler.
 pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
     if args.is_empty() {
-        return show_apps();
+        return show_overview();
     }
 
-    let app_name = &args[0];
+    let name = &args[0];
+
+    // "app" namespace → route to Python apps
+    if name == "app" {
+        return dispatch_app(&args[1..]);
+    }
+
+    // Built-in OS primitives
+    match name.as_str() {
+        "sys" => dispatch_builtin(args, "sys", sysinfo::run),
+        "sandbox" => dispatch_builtin(args, "sandbox", sandbox::run),
+        "proc" => dispatch_builtin(args, "proc", proc::run),
+        "ipc" => dispatch_builtin(args, "ipc", ipc::run),
+        "browser" => dispatch_builtin(args, "browser", browser::run),
+        "service" => dispatch_builtin(args, "service", service::run),
+        "watch" => dispatch_builtin(args, "watch", watch::run),
+        "checkpoint" => dispatch_builtin(args, "checkpoint", checkpoint::run),
+        "credential" => dispatch_builtin(args, "credential", credential::run),
+        "netfilter" => dispatch_builtin(args, "netfilter", netfilter::run),
+        "policy" => dispatch_builtin(args, "policy", policy::run),
+        "cron" => dispatch_builtin(args, "cron", cron::run),
+        _ => {
+            // Check if user forgot "app" prefix — helpful error
+            let apps_dir = apps_dir();
+            let discovered = apps::discover(&apps_dir);
+            if discovered.contains_key(name.as_str()) {
+                Err(format!(
+                    "'{name}' is an app, not an OS primitive. Use: cos app {name} <command>"
+                ))
+            } else {
+                let builtins: Vec<&str> = builtin_apps().iter().map(|(n, _, _)| *n).collect();
+                Err(format!(
+                    "unknown command: {name}. OS primitives: {builtins:?}. For apps: cos app"
+                ))
+            }
+        }
+    }
+}
+
+/// Dispatch to Python apps under the "cos app" namespace.
+fn dispatch_app(args: &[String]) -> Result<Option<String>, String> {
     let apps_dir = apps_dir();
     let discovered = apps::discover(&apps_dir);
 
+    // "cos app" with no further args → list available apps
+    if args.is_empty() {
+        return show_apps(&discovered);
+    }
+
+    let app_name = &args[0];
+
     // Check if it's a known app
     if !discovered.contains_key(app_name.as_str()) {
-        // Check built-in apps
-        match app_name.as_str() {
-            "sys" => return dispatch_builtin(args, "sys", sysinfo::run),
-            "sandbox" => return dispatch_builtin(args, "sandbox", sandbox::run),
-            "proc" => return dispatch_builtin(args, "proc", proc::run),
-            "ipc" => return dispatch_builtin(args, "ipc", ipc::run),
-            "browser" => return dispatch_builtin(args, "browser", browser::run),
-            "service" => return dispatch_builtin(args, "service", service::run),
-            "watch" => return dispatch_builtin(args, "watch", watch::run),
-            "checkpoint" => return dispatch_builtin(args, "checkpoint", checkpoint::run),
-            "credential" => return dispatch_builtin(args, "credential", credential::run),
-            "netfilter" => return dispatch_builtin(args, "netfilter", netfilter::run),
-            "policy" => return dispatch_builtin(args, "policy", policy::run),
-            "cron" => return dispatch_builtin(args, "cron", cron::run),
-            _ => {}
-        }
         let names: Vec<&String> = discovered.keys().collect();
         return Err(format!("unknown app: {app_name}. installed: {names:?}"));
     }
 
-    // One arg: show app help
+    // "cos app <name>" → show app help
     if args.len() == 1 {
         return show_app_help(app_name, &discovered[app_name.as_str()]);
     }
@@ -79,45 +110,61 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
     if !app.manifest.commands.contains_key(command.as_str()) {
         let valid: Vec<&String> = app.manifest.commands.keys().collect();
         return Err(format!(
-            "unknown command: {app_name} {command}. available: {valid:?}"
+            "unknown command: cos app {app_name} {command}. available: {valid:?}"
         ));
     }
 
     run_app_command(app_name, command, &cmd_args, app)
 }
 
-fn show_apps() -> Result<Option<String>, String> {
-    let apps_dir = apps_dir();
-    let discovered = apps::discover(&apps_dir);
-
-    let mut app_list = Vec::new();
-    for (name, app) in &discovered {
-        app_list.push(json!({
-            "name": name,
-            "description": app.manifest.description,
-            "commands": app.manifest.commands,
-        }));
-    }
-    // Always include built-in apps
+fn show_overview() -> Result<Option<String>, String> {
+    let mut primitives = Vec::new();
     for (name, desc, cmds) in builtin_apps() {
         let cmd_map: serde_json::Map<String, Value> = cmds
             .iter()
             .map(|(k, v)| (k.to_string(), json!(v)))
             .collect();
-        app_list.push(json!({
+        primitives.push(json!({
             "name": name,
             "description": desc,
             "commands": cmd_map,
         }));
     }
 
+    // Count available apps without listing them
+    let apps_dir = apps_dir();
+    let discovered = apps::discover(&apps_dir);
+    let app_count = discovered.len();
+    let total_primitives = primitives.len();
+
     let output = json!({
         "name": "cos",
         "version": VERSION,
         "description": "Claw OS — agent-native operating system. All commands return structured JSON.",
+        "primitives": primitives,
+        "total_primitives": total_primitives,
+        "apps_available": app_count,
+        "hint": "Run: cos <primitive> <command> for OS operations. Run: cos app to see available apps.",
+    });
+    Ok(Some(output.to_string()))
+}
+
+fn show_apps(
+    discovered: &std::collections::BTreeMap<String, apps::App>,
+) -> Result<Option<String>, String> {
+    let mut app_list = Vec::new();
+    for (name, app) in discovered {
+        app_list.push(json!({
+            "name": name,
+            "description": app.manifest.description,
+            "commands": app.manifest.commands,
+        }));
+    }
+
+    let output = json!({
         "apps": app_list,
-        "total_apps": app_list.len(),
-        "hint": "Run: cos <app> for app details, cos <app> <command> [args] to execute.",
+        "total": app_list.len(),
+        "hint": "Run: cos app <name> for app details, cos app <name> <command> [args] to execute.",
     });
     Ok(Some(output.to_string()))
 }
@@ -128,7 +175,7 @@ fn show_app_help(name: &str, app: &apps::App) -> Result<Option<String>, String> 
         "version": app.manifest.version,
         "description": app.manifest.description,
         "commands": app.manifest.commands,
-        "hint": format!("Run: cos {name} <command> [args]"),
+        "hint": format!("Run: cos app {name} <command> [args]"),
     });
     Ok(Some(output.to_string()))
 }
@@ -314,7 +361,7 @@ fn recovery_hint(error: &str) -> Option<serde_json::Value> {
     if err_lower.contains("permission denied") || err_lower.contains("eperm") {
         return Some(json!({
             "hint": "Permission denied. Check file permissions.",
-            "try": ["cos exec run 'ls -la <path>'", "cos exec run 'chmod +rw <path>'"],
+            "try": ["cos app exec run 'ls -la <path>'", "cos app exec run 'chmod +rw <path>'"],
         }));
     }
     if err_lower.contains("no such file")
@@ -323,13 +370,13 @@ fn recovery_hint(error: &str) -> Option<serde_json::Value> {
     {
         return Some(json!({
             "hint": "File or command not found. Verify the path exists.",
-            "try": ["cos fs ls <parent-directory>", "cos exec which <command>"],
+            "try": ["cos app fs ls <parent-directory>", "cos app exec which <command>"],
         }));
     }
     if err_lower.contains("no space left") || err_lower.contains("enospc") {
         return Some(json!({
             "hint": "Disk full. Free space before retrying.",
-            "try": ["cos sys resources", "cos exec run 'du -sh /den/* | sort -rh | head'"],
+            "try": ["cos sys resources", "cos app exec run 'du -sh /den/* | sort -rh | head'"],
         }));
     }
     if err_lower.contains("connection refused") || err_lower.contains("econnrefused") {
@@ -350,7 +397,7 @@ fn recovery_hint(error: &str) -> Option<serde_json::Value> {
     {
         return Some(json!({
             "hint": "Port/resource already in use. Another process may be occupying it.",
-            "try": ["cos proc list", "cos exec run 'lsof -i :<port>'"],
+            "try": ["cos proc list", "cos app exec run 'lsof -i :<port>'"],
         }));
     }
     if err_lower.contains("out of memory")
@@ -456,7 +503,7 @@ mod tests {
         let try_cmds = hint["try"].as_array().unwrap();
         assert!(try_cmds
             .iter()
-            .any(|v| v.as_str().unwrap().contains("cos fs ls")));
+            .any(|v| v.as_str().unwrap().contains("cos app fs ls")));
     }
 
     #[test]

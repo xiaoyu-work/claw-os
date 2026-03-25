@@ -1,8 +1,8 @@
-// cos net fetch — HTTP client with structured response.
+// cos app net fetch — HTTP client with structured response.
 // Replaces OpenClaw's undici/web-fetch with OS-level HTTP.
 
 import { Type } from "@sinclair/typebox";
-import { cos } from "../cos.js";
+import { cosApp } from "../cos.js";
 
 const schema = Type.Object(
   {
@@ -42,7 +42,7 @@ export function createCosNetTool() {
       const args: string[] = [url];
       if (method) args.push("--method", method);
       if (data) args.push("--data", data);
-      const result = cos("net", "fetch", args);
+      const result = cosApp("net", "fetch", args);
       return { content: JSON.stringify(result, null, 2) };
     },
   };
