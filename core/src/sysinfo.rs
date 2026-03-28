@@ -58,8 +58,8 @@ fn cmd_resources() -> Result<Value, String> {
         unsafe {
             let mut stat: libc::statvfs = std::mem::zeroed();
             if libc::statvfs(c_path.as_ptr(), &mut stat) == 0 {
-                let total = stat.f_blocks * stat.f_frsize as u64;
-                let free = stat.f_bavail * stat.f_frsize as u64;
+                let total = stat.f_blocks as u64 * stat.f_frsize as u64;
+                let free = stat.f_bavail as u64 * stat.f_frsize as u64;
                 let used = total - free;
                 result["disk"] = json!({
                     "path": workspace,

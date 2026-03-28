@@ -594,17 +594,20 @@ fn compute_duration_ms(start: &str, end: &str) -> Value {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
-    use std::sync::Mutex;
+    use std::sync::{Mutex, Once};
 
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     /// Mutex to serialize tests that manipulate process-global env vars.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+    static TRACE_INIT: Once = Once::new();
 
     fn unique_trace() -> String {
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("cos-trace-test-{}", std::process::id()));
-        let _ = fs::create_dir_all(&dir);
-        std::env::set_var("COS_DATA_DIR", &dir);
+        TRACE_INIT.call_once(|| {
+            let dir = std::env::temp_dir().join(format!("cos-test-shared-{}", std::process::id()));
+            let _ = fs::create_dir_all(&dir);
+            std::env::set_var("COS_DATA_DIR", &dir);
+        });
         // Clear trace env vars to prevent cross-test pollution
         std::env::remove_var("COS_TRACE_ID");
         std::env::remove_var("COS_SPAN_ID");

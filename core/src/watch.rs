@@ -1204,8 +1204,20 @@ mod tests {
     use super::*;
     use std::io::Write;
     use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::{Mutex, Once};
 
     static TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
+    static INIT: Once = Once::new();
+    /// Serialize tests that operate on the shared watch/history.jsonl file.
+    static HISTORY_LOCK: Mutex<()> = Mutex::new(());
+
+    fn setup_shared_dir() {
+        INIT.call_once(|| {
+            let dir = std::env::temp_dir().join(format!("cos-test-shared-{}", std::process::id()));
+            let _ = fs::create_dir_all(&dir);
+            std::env::set_var("COS_DATA_DIR", &dir);
+        });
+    }
 
     /// Generate a unique test directory to avoid cross-test interference.
     fn unique_test_dir(prefix: &str) -> PathBuf {
@@ -1356,29 +1368,31 @@ mod tests {
 
     #[test]
     fn test_watch_history_empty() {
-        // History with no events should return empty list.
-        let dir = unique_test_dir("hist-empty");
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        std::env::set_var("COS_DATA_DIR", dir.to_string_lossy().to_string());
+        setup_shared_dir();
+        let _lock = HISTORY_LOCK.lock().unwrap();
+
+        // Clean the watch subdir so we get a fresh history.
+        let watch_dir = PathBuf::from(std::env::var("COS_DATA_DIR").unwrap()).join("watch");
+        let _ = fs::remove_dir_all(&watch_dir);
 
         let result = cmd_watch_history(&[]);
         let val = result.unwrap();
         assert_eq!(val["count"], 0);
         assert!(val["events"].as_array().unwrap().is_empty());
-
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn test_watch_history_write_and_read() {
-        // Manually write a history entry and verify it can be read back.
-        let dir = unique_test_dir("hist-rw");
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(dir.join("watch")).unwrap();
-        std::env::set_var("COS_DATA_DIR", dir.to_string_lossy().to_string());
+        setup_shared_dir();
+        let _lock = HISTORY_LOCK.lock().unwrap();
 
-        let hist_file = dir.join("watch").join("history.jsonl");
+        // Clean the watch subdir so we get a fresh history.
+        let data_dir = PathBuf::from(std::env::var("COS_DATA_DIR").unwrap());
+        let watch_dir = data_dir.join("watch");
+        let _ = fs::remove_dir_all(&watch_dir);
+        fs::create_dir_all(&watch_dir).unwrap();
+
+        let hist_file = watch_dir.join("history.jsonl");
         // Write two entries.
         {
             let mut f = fs::OpenOptions::new()
@@ -1420,21 +1434,22 @@ mod tests {
         // Should be the last entry.
         assert_eq!(result["events"][0]["source"], "proc");
 
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn test_log_watch_event() {
-        // Verify log_watch_event appends to the history file.
-        let dir = unique_test_dir("log-event");
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        std::env::set_var("COS_DATA_DIR", dir.to_string_lossy().to_string());
+        setup_shared_dir();
+        let _lock = HISTORY_LOCK.lock().unwrap();
+
+        // Clean the watch subdir so we get a fresh history.
+        let data_dir = PathBuf::from(std::env::var("COS_DATA_DIR").unwrap());
+        let watch_dir = data_dir.join("watch");
+        let _ = fs::remove_dir_all(&watch_dir);
 
         let event = json!({"path": "/den/test.rs", "event": "created"});
         log_watch_event("file", &event);
 
-        let hist_file = dir.join("watch").join("history.jsonl");
+        let hist_file = watch_dir.join("history.jsonl");
         assert!(hist_file.exists(), "history file should be created");
 
         let content = fs::read_to_string(&hist_file).unwrap();
@@ -1446,8 +1461,6 @@ mod tests {
             parsed["timestamp"].as_str().is_some(),
             "should have timestamp"
         );
-
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
