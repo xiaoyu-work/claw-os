@@ -1214,8 +1214,7 @@ mod tests {
     fn cron_setup() -> std::sync::MutexGuard<'static, ()> {
         let guard = CRON_LOCK.lock().unwrap();
         CRON_INIT.call_once(|| {
-            let dir = std::env::temp_dir().join(format!("cos-cron-test-{}", std::process::id()));
-            let _ = fs::remove_dir_all(&dir);
+            let dir = std::env::temp_dir().join(format!("cos-test-shared-{}", std::process::id()));
             let _ = fs::create_dir_all(&dir);
             std::env::set_var("COS_DATA_DIR", &dir);
         });
