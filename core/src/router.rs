@@ -410,6 +410,7 @@ fn builtin_apps() -> Vec<(
             ("aux", "Inspect or invoke the auxiliary LLM client (cheap-model fallback for title / classify / summarise): cos agent aux [show|ask --prompt <text> [--system <text>] [--max-tokens N]]"),
             ("retry", "Inspect the LLM-call retry policy (resolved from agent config) and preview the back-off schedule it would produce: cos agent retry [show|schedule [--attempts N]]"),
             ("vision", "Preview how an image attachment would be routed (native vision call vs local OCR vs skip) given a policy: cos agent vision route --bytes N --mime <m> [--intent <general|extract-text|identify|caption>] [--provider-vision] [--vision-disabled] [--max-native-bytes N] [--ocr-available] | cos agent vision route --file <path> [...]"),
+            ("display", "Render conversation history (and standalone helpers) through the agent::display formatter — pure-functional, no ANSI: cos agent display transcript --session <id> [--limit N] [--width W] [--no-truncate] [--truncate-at N] [--indent N] | cos agent display format-bytes <n> | cos agent display format-duration <ms>"),
         ]),
         ("model", "Local model registry + inference daemon (ort for STT/TTS/embed/vision/imagegen, llama.cpp for LLM) — Phase 0.5 skeleton", vec![
             ("list", "List registered models from /var/lib/cos/models/"),

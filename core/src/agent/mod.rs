@@ -133,8 +133,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "aux" | "auxiliary" => aux_cmd(args),
         "retry" => retry_cmd(args),
         "vision" => vision_cmd(args),
+        "display" => display_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | title | summarise | classify | tools | guardrails | approval | todo | compress | aux | retry | vision"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | title | summarise | classify | tools | guardrails | approval | todo | compress | aux | retry | vision | display"
         )),
     }
 }
@@ -2886,6 +2887,203 @@ fn vision_route_cmd(args: &[String]) -> Result<Value, String> {
         },
         "decision": verdict,
         "reason": reason,
+    }))
+}
+
+/// `cos agent display <subcommand>` — render conversation
+/// history from the memory DB through [`crate::agent::display`]'s
+/// pure-functional formatter, so operators can preview what a
+/// terminal/gateway would show without firing up a real session.
+///
+/// Subcommands:
+///
+/// * `transcript --session <id> [--limit N] [--width W]
+///   [--no-truncate] [--truncate-at N] [--indent N]` — render the
+///   most-recent N messages of `<id>` (oldest first) as a
+///   single-string transcript using `display::render_message`.
+/// * `format-bytes <n>` — preview `display::format_bytes`.
+/// * `format-duration <ms>` — preview `display::format_duration`.
+fn display_cmd(args: &[String]) -> Result<Value, String> {
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("");
+    match sub {
+        "transcript" => display_transcript_cmd(&args[1..]),
+        "format-bytes" => display_format_bytes_cmd(&args[1..]),
+        "format-duration" => display_format_duration_cmd(&args[1..]),
+        "" => Err(
+            "usage: cos agent display transcript --session <id> [--limit N] [--width W] [--no-truncate] [--truncate-at N] [--indent N] | format-bytes <n> | format-duration <ms>"
+                .to_string(),
+        ),
+        other => Err(format!(
+            "unknown display subcommand: {other}. try: transcript | format-bytes | format-duration"
+        )),
+    }
+}
+
+#[derive(Debug, Default)]
+struct DisplayTranscriptArgs {
+    session: Option<String>,
+    limit: Option<usize>,
+    width: Option<usize>,
+    indent: Option<usize>,
+    no_truncate: bool,
+    truncate_at: Option<usize>,
+}
+
+fn parse_display_transcript_args(args: &[String]) -> Result<DisplayTranscriptArgs, String> {
+    let mut out = DisplayTranscriptArgs::default();
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--session" => {
+                out.session = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--session needs an id".to_string())?,
+                );
+                i += 2;
+            }
+            "--limit" => {
+                let raw = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--limit needs a number".to_string())?;
+                out.limit = Some(
+                    raw.parse::<usize>()
+                        .map_err(|_| format!("--limit not numeric: {raw}"))?,
+                );
+                i += 2;
+            }
+            "--width" => {
+                let raw = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--width needs a number".to_string())?;
+                out.width = Some(
+                    raw.parse::<usize>()
+                        .map_err(|_| format!("--width not numeric: {raw}"))?,
+                );
+                i += 2;
+            }
+            "--indent" => {
+                let raw = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--indent needs a number".to_string())?;
+                out.indent = Some(
+                    raw.parse::<usize>()
+                        .map_err(|_| format!("--indent not numeric: {raw}"))?,
+                );
+                i += 2;
+            }
+            "--no-truncate" => {
+                out.no_truncate = true;
+                i += 1;
+            }
+            "--truncate-at" => {
+                let raw = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--truncate-at needs a number".to_string())?;
+                out.truncate_at = Some(
+                    raw.parse::<usize>()
+                        .map_err(|_| format!("--truncate-at not numeric: {raw}"))?,
+                );
+                i += 2;
+            }
+            other => return Err(format!("unknown display transcript flag: {other}")),
+        }
+    }
+    Ok(out)
+}
+
+fn display_config_from(args: &DisplayTranscriptArgs) -> crate::agent::display::DisplayConfig {
+    let mut cfg = crate::agent::display::DisplayConfig::default();
+    if let Some(w) = args.width {
+        cfg.wrap_at = w;
+    }
+    if let Some(ind) = args.indent {
+        cfg.continuation_indent = ind;
+    }
+    if args.no_truncate {
+        cfg.truncate_at = None;
+    } else if let Some(cap) = args.truncate_at {
+        cfg.truncate_at = Some(cap);
+    }
+    cfg
+}
+
+fn role_from_str(raw: &str) -> crate::agent::display::Role {
+    use crate::agent::display::Role;
+    match raw {
+        "user" => Role::User,
+        "assistant" => Role::Assistant,
+        "tool" => Role::Tool,
+        _ => Role::System,
+    }
+}
+
+fn display_transcript_cmd(args: &[String]) -> Result<Value, String> {
+    let parsed = parse_display_transcript_args(args)?;
+    let session = parsed
+        .session
+        .clone()
+        .ok_or_else(|| "--session <id> is required".to_string())?;
+    let db = crate::agent::memory::sqlite_fts::MemoryDb::open_default()
+        .map_err(|e| format!("open memory db: {e}"))?;
+    display_transcript_with(&db, &session, &parsed)
+}
+
+fn display_transcript_with(
+    db: &crate::agent::memory::sqlite_fts::MemoryDb,
+    session_id: &str,
+    parsed: &DisplayTranscriptArgs,
+) -> Result<Value, String> {
+    let cfg = display_config_from(parsed);
+    let limit = parsed.limit.unwrap_or(50);
+    let rows = db
+        .recent(session_id, limit)
+        .map_err(|e| format!("read session {session_id}: {e}"))?;
+    let lines: Vec<String> = rows
+        .iter()
+        .map(|row| {
+            crate::agent::display::render_message(
+                role_from_str(&row.role),
+                &row.content,
+                &cfg,
+            )
+        })
+        .collect();
+    let transcript = lines.join("\n");
+    Ok(json!({
+        "session_id": session_id,
+        "message_count": rows.len(),
+        "limit": limit,
+        "wrap_at": cfg.wrap_at,
+        "continuation_indent": cfg.continuation_indent,
+        "truncate_at": cfg.truncate_at,
+        "transcript": transcript,
+    }))
+}
+
+fn display_format_bytes_cmd(args: &[String]) -> Result<Value, String> {
+    let raw = args
+        .first()
+        .ok_or_else(|| "usage: cos agent display format-bytes <n>".to_string())?;
+    let n: u64 = raw
+        .parse()
+        .map_err(|_| format!("format-bytes needs a positive integer, got: {raw}"))?;
+    Ok(json!({
+        "input": n,
+        "formatted": crate::agent::display::format_bytes(n),
+    }))
+}
+
+fn display_format_duration_cmd(args: &[String]) -> Result<Value, String> {
+    let raw = args
+        .first()
+        .ok_or_else(|| "usage: cos agent display format-duration <ms>".to_string())?;
+    let ms: u64 = raw
+        .parse()
+        .map_err(|_| format!("format-duration needs a positive integer (ms), got: {raw}"))?;
+    Ok(json!({
+        "input_ms": ms,
+        "formatted": crate::agent::display::format_duration(std::time::Duration::from_millis(ms)),
     }))
 }
 
@@ -7003,5 +7201,149 @@ mod tests {
         .unwrap_err();
         // On unix the path also won't exist.
         assert!(err.contains("stat") || err.contains("not"));
+    }
+
+    // ---- display_cmd ----
+
+    #[test]
+    fn display_cmd_no_args_errs() {
+        let err = display_cmd(&[]).unwrap_err();
+        assert!(err.contains("usage"));
+    }
+
+    #[test]
+    fn display_cmd_unknown_subcommand_errs() {
+        let err = display_cmd(&["bogus".into()]).unwrap_err();
+        assert!(err.contains("bogus"));
+    }
+
+    #[test]
+    fn display_format_bytes_renders_human_readable() {
+        let v = display_format_bytes_cmd(&["1536".into()]).expect("ok");
+        assert_eq!(v.get("input").and_then(|n| n.as_u64()), Some(1536));
+        assert_eq!(
+            v.get("formatted").and_then(|s| s.as_str()),
+            Some("1.5 KB")
+        );
+    }
+
+    #[test]
+    fn display_format_bytes_requires_arg() {
+        let err = display_format_bytes_cmd(&[]).unwrap_err();
+        assert!(err.contains("usage"));
+    }
+
+    #[test]
+    fn display_format_bytes_rejects_non_numeric() {
+        let err = display_format_bytes_cmd(&["abc".into()]).unwrap_err();
+        assert!(err.contains("abc"));
+    }
+
+    #[test]
+    fn display_format_duration_renders_minutes_seconds() {
+        let v = display_format_duration_cmd(&["83400".into()]).expect("ok");
+        assert_eq!(v.get("input_ms").and_then(|n| n.as_u64()), Some(83_400));
+        let s = v.get("formatted").and_then(|s| s.as_str()).unwrap();
+        // 83.4s → "1m 23.4s"
+        assert!(s.starts_with("1m"));
+    }
+
+    #[test]
+    fn display_format_duration_requires_arg() {
+        let err = display_format_duration_cmd(&[]).unwrap_err();
+        assert!(err.contains("usage"));
+    }
+
+    #[test]
+    fn display_transcript_requires_session() {
+        let err = parse_display_transcript_args(&[]).expect("parse");
+        assert!(err.session.is_none());
+        // The cmd-level call surfaces the missing-session error:
+        let err = display_transcript_cmd(&[]).unwrap_err();
+        assert!(err.contains("--session"));
+    }
+
+    #[test]
+    fn display_transcript_unknown_flag_errs() {
+        let err = parse_display_transcript_args(&["--bogus".into()]).unwrap_err();
+        assert!(err.contains("--bogus"));
+    }
+
+    #[test]
+    fn display_transcript_renders_messages_oldest_first() {
+        let db = crate::agent::memory::sqlite_fts::MemoryDb::open_in_memory()
+            .expect("open mem db");
+        db.record_message("sess-x", "user", "hello world").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        db.record_message("sess-x", "assistant", "hi back").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        db.record_message("sess-x", "tool", "result foo: 42").unwrap();
+        let parsed = DisplayTranscriptArgs {
+            session: Some("sess-x".into()),
+            limit: Some(10),
+            ..Default::default()
+        };
+        let v = display_transcript_with(&db, "sess-x", &parsed).expect("render");
+        assert_eq!(v.get("message_count").and_then(|n| n.as_u64()), Some(3));
+        let t = v.get("transcript").and_then(|s| s.as_str()).unwrap();
+        let user_pos = t.find("hello world").expect("user line");
+        let asst_pos = t.find("hi back").expect("assistant line");
+        let tool_pos = t.find("result foo").expect("tool line");
+        assert!(user_pos < asst_pos);
+        assert!(asst_pos < tool_pos);
+        assert!(t.contains("[user]"));
+        assert!(t.contains("[assistant]"));
+        assert!(t.contains("[tool]"));
+    }
+
+    #[test]
+    fn display_transcript_truncates_long_content_by_default() {
+        let db = crate::agent::memory::sqlite_fts::MemoryDb::open_in_memory()
+            .expect("open mem db");
+        let big = "X".repeat(10_000);
+        db.record_message("sess-y", "user", &big).unwrap();
+        let parsed = DisplayTranscriptArgs {
+            session: Some("sess-y".into()),
+            ..Default::default()
+        };
+        let v = display_transcript_with(&db, "sess-y", &parsed).expect("render");
+        let t = v.get("transcript").and_then(|s| s.as_str()).unwrap();
+        assert!(t.contains("chars omitted"));
+    }
+
+    #[test]
+    fn display_transcript_no_truncate_keeps_full_content() {
+        let db = crate::agent::memory::sqlite_fts::MemoryDb::open_in_memory()
+            .expect("open mem db");
+        let big = "Y".repeat(10_000);
+        db.record_message("sess-z", "user", &big).unwrap();
+        let parsed = DisplayTranscriptArgs {
+            session: Some("sess-z".into()),
+            no_truncate: true,
+            // Disable wrap so we can count Y's reliably without inserted newlines.
+            width: Some(0),
+            ..Default::default()
+        };
+        let v = display_transcript_with(&db, "sess-z", &parsed).expect("render");
+        let t = v.get("transcript").and_then(|s| s.as_str()).unwrap();
+        assert!(!t.contains("chars omitted"));
+        let y_count = t.chars().filter(|c| *c == 'Y').count();
+        assert_eq!(y_count, 10_000);
+    }
+
+    #[test]
+    fn display_transcript_empty_session_renders_empty_transcript() {
+        let db = crate::agent::memory::sqlite_fts::MemoryDb::open_in_memory()
+            .expect("open mem db");
+        let parsed = DisplayTranscriptArgs {
+            session: Some("nope".into()),
+            ..Default::default()
+        };
+        let v = display_transcript_with(&db, "nope", &parsed).expect("render");
+        assert_eq!(v.get("message_count").and_then(|n| n.as_u64()), Some(0));
+        assert_eq!(
+            v.get("transcript").and_then(|s| s.as_str()),
+            Some("")
+        );
     }
 }
