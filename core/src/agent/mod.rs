@@ -147,8 +147,64 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "file-safety" => file_safety_cmd(args),
         "osv" => osv_cmd(args),
         "semantic" => semantic_cmd(args),
+        "interrupt" => interrupt_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | provider-doctor | title | summarise | classify | tools | guardrails | approval | todo | compress | aux | retry | vision | display | shell-hooks | media | binary-ext | context | file-safety | osv | semantic"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | provider-doctor | title | summarise | classify | tools | guardrails | approval | todo | compress | aux | retry | vision | display | shell-hooks | media | binary-ext | context | file-safety | osv | semantic | interrupt"
+        )),
+    }
+}
+
+/// `cos agent interrupt <subcmd>` — signal a running agent session
+/// so its loop unwinds cleanly between turns.
+///
+///   list                 — registered (live) session ids
+///   signal <session-id>  — request interrupt; idempotent. JSON
+///                          `{"signaled": true}` if a session was
+///                          found, `{"signaled": false, "reason":
+///                          "not registered"}` otherwise.
+///
+/// Sessions auto-register the moment they enter the agent loop and
+/// auto-unregister on exit, so the live list mirrors what's actively
+/// running in this `cos` process. Note that this does NOT cross
+/// process boundaries — to interrupt sessions running under a
+/// separate `cos agent service` worker, use the IPC `service cancel`
+/// surface (different mechanism, persisted job-cancellation
+/// semantics).
+fn interrupt_cmd(args: &[String]) -> Result<Value, String> {
+    let sub = args
+        .first()
+        .map(|s| s.as_str())
+        .ok_or("usage: cos agent interrupt <list|signal> ...")?;
+    match sub {
+        "list" => {
+            let mut sessions = crate::agent::runtime::interrupt::registered_sessions();
+            sessions.sort();
+            Ok(json!({
+                "sessions": sessions,
+                "count": sessions.len(),
+            }))
+        }
+        "signal" => {
+            let sid = args
+                .get(1)
+                .map(|s| s.as_str())
+                .ok_or("usage: cos agent interrupt signal <session-id>")?;
+            let signaled = crate::agent::runtime::interrupt::signal(sid);
+            if signaled {
+                Ok(json!({
+                    "signaled": true,
+                    "session_id": sid,
+                }))
+            } else {
+                Ok(json!({
+                    "signaled": false,
+                    "session_id": sid,
+                    "reason": "not registered (session not running in this process)",
+                }))
+            }
+        }
+        other => Err(format!(
+            "unknown interrupt subcommand: {other}. try: list | signal"
         )),
     }
 }
@@ -12401,5 +12457,67 @@ mod tests {
         // to read stdin.
         let err = run("chat", &["--definitely-not-real".into()]).unwrap_err();
         assert!(err.to_lowercase().contains("unknown flag"), "got {err}");
+    }
+
+    // -----------------------------------------------------------------
+    // interrupt_cmd
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn interrupt_cmd_default_errs_with_usage() {
+        let err = interrupt_cmd(&[]).unwrap_err();
+        assert!(err.contains("interrupt"), "got {err}");
+        assert!(err.contains("list"), "got {err}");
+        assert!(err.contains("signal"), "got {err}");
+    }
+
+    #[test]
+    fn interrupt_cmd_list_returns_active_sessions() {
+        let id = format!("cli-list-{}", uuid::Uuid::new_v4().simple());
+        let _h = crate::agent::runtime::interrupt::register(&id);
+        let v = interrupt_cmd(&["list".into()]).expect("list ok");
+        let arr = v["sessions"].as_array().expect("sessions array");
+        let ids: Vec<&str> = arr.iter().filter_map(|s| s.as_str()).collect();
+        assert!(ids.contains(&id.as_str()), "list missing {id}: {arr:?}");
+        assert!(v["count"].as_u64().unwrap() >= 1);
+    }
+
+    #[test]
+    fn interrupt_cmd_signal_unknown_session_reports_not_registered() {
+        let id = format!("cli-unknown-{}", uuid::Uuid::new_v4().simple());
+        let v = interrupt_cmd(&["signal".into(), id.clone()]).expect("ok");
+        assert_eq!(v["signaled"], serde_json::Value::Bool(false));
+        assert_eq!(v["session_id"].as_str().unwrap(), id);
+        assert!(v["reason"].as_str().unwrap().contains("not registered"));
+    }
+
+    #[test]
+    fn interrupt_cmd_signal_active_session_returns_signaled_true() {
+        let id = format!("cli-signal-{}", uuid::Uuid::new_v4().simple());
+        let h = crate::agent::runtime::interrupt::register(&id);
+        let v = interrupt_cmd(&["signal".into(), id.clone()]).expect("ok");
+        assert_eq!(v["signaled"], serde_json::Value::Bool(true));
+        assert_eq!(v["session_id"].as_str().unwrap(), id);
+        // Signal really took effect.
+        assert!(h.check());
+    }
+
+    #[test]
+    fn interrupt_cmd_signal_requires_session_id() {
+        let err = interrupt_cmd(&["signal".into()]).unwrap_err();
+        assert!(err.contains("usage"), "got {err}");
+    }
+
+    #[test]
+    fn interrupt_cmd_unknown_subcommand_errs() {
+        let err = interrupt_cmd(&["frobnicate".into()]).unwrap_err();
+        assert!(err.contains("unknown"), "got {err}");
+    }
+
+    #[test]
+    fn run_interrupt_routes_to_interrupt_cmd() {
+        // Confirm the agent dispatcher reaches interrupt_cmd.
+        let err = run("interrupt", &["frobnicate".into()]).unwrap_err();
+        assert!(err.contains("unknown"), "got {err}");
     }
 }

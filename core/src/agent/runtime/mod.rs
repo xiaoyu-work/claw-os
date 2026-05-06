@@ -2,5 +2,6 @@
 
 pub mod approval;
 pub mod hooks;
+pub mod interrupt;
 pub mod loop_;
 pub mod turn;
