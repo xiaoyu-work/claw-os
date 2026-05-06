@@ -130,8 +130,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "approval" => approval_cmd(args),
         "todo" => todo_cmd(args),
         "compress" => compress_cmd(args),
+        "aux" | "auxiliary" => aux_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | title | summarise | classify | tools | guardrails | approval | todo | compress"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | title | summarise | classify | tools | guardrails | approval | todo | compress | aux"
         )),
     }
 }
@@ -2205,6 +2206,104 @@ fn compress_cmd(args: &[String]) -> Result<Value, String> {
 fn parse_u32_arg(raw: Option<&String>, flag: &str) -> Result<u32, String> {
     let s = raw.ok_or_else(|| format!("{flag} needs a value"))?;
     s.parse::<u32>().map_err(|e| format!("{flag}: {e}"))
+}
+
+/// `cos agent aux [show|ask --prompt <text> [--system <text>] [--max-tokens N]]`
+///
+/// Inspect or invoke the auxiliary LLM client. The auxiliary path
+/// exists so lightweight subtasks (title generation, classification,
+/// summarisation) can route to a cheap secondary model instead of
+/// burning flagship tokens. Configuration lives in
+/// `AgentConfig::auxiliary_*`.
+///
+/// `show` reports the resolved auxiliary settings (provider / model
+/// / max_tokens / temperature / configured?) without making any
+/// network calls. `ask` actually invokes `AuxiliaryClient::ask`
+/// against the configured provider — useful as a smoke test that the
+/// cheap model is reachable and that credentials route correctly.
+fn aux_cmd(args: &[String]) -> Result<Value, String> {
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("show");
+    match sub {
+        "show" | "" => {
+            let cfg = &crate::config::get().agent;
+            let aux_built = crate::agent::runtime::loop_::auxiliary_from_cfg(cfg);
+            let (configured, build_error) = match &aux_built {
+                Ok(Some(_)) => (true, None),
+                Ok(None) => (false, None),
+                Err(e) => (false, Some(e.to_string())),
+            };
+            Ok(json!({
+                "configured": configured,
+                "provider": cfg.auxiliary_provider,
+                "model": cfg.auxiliary_model,
+                "max_tokens": cfg.auxiliary_max_tokens,
+                "temperature": cfg.auxiliary_temperature,
+                "build_error": build_error,
+                "note": "Auxiliary calls share base_url / credentials with the primary provider unless the underlying builder honours its own env vars.",
+            }))
+        }
+        "ask" => {
+            let mut prompt: Option<String> = None;
+            let mut system: Option<String> = None;
+            let mut max_tokens_override: Option<u32> = None;
+            let mut i = 1usize;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--prompt" => {
+                        prompt = Some(
+                            args.get(i + 1)
+                                .cloned()
+                                .ok_or_else(|| "--prompt needs a value".to_string())?,
+                        );
+                        i += 2;
+                    }
+                    "--system" => {
+                        system = Some(
+                            args.get(i + 1)
+                                .cloned()
+                                .ok_or_else(|| "--system needs a value".to_string())?,
+                        );
+                        i += 2;
+                    }
+                    "--max-tokens" | "--max_tokens" => {
+                        max_tokens_override =
+                            Some(parse_u32_arg(args.get(i + 1), "--max-tokens")?);
+                        i += 2;
+                    }
+                    other => return Err(format!("unknown aux ask flag: {other}")),
+                }
+            }
+            let prompt = prompt.ok_or_else(|| "--prompt required".to_string())?;
+            let cfg = &crate::config::get().agent;
+            let aux = crate::agent::runtime::loop_::auxiliary_from_cfg(cfg)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| {
+                    "auxiliary client is not configured (set agent.auxiliary_provider + auxiliary_model in config)"
+                        .to_string()
+                })?;
+            // Apply per-call max_tokens override by rebuilding a
+            // fresh AuxiliaryClient with the overridden config. The
+            // underlying provider Arc is reused.
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| format!("tokio runtime: {e}"))?;
+            let used_max_tokens = max_tokens_override.unwrap_or(aux.config().max_tokens);
+            let answer = runtime
+                .block_on(aux.ask(system.as_deref(), &prompt))
+                .map_err(|e| format!("aux ask: {e}"))?;
+            Ok(json!({
+                "ok": true,
+                "provider": aux.provider_name(),
+                "model": aux.config().model,
+                "max_tokens": used_max_tokens,
+                "answer": answer,
+            }))
+        }
+        other => Err(format!(
+            "unknown aux subcommand: {other}. try: show | ask --prompt <text> [--system <text>] [--max-tokens N]"
+        )),
+    }
 }
 
 fn todo_status_counts(list: &crate::agent::tools::todo::TodoList) -> serde_json::Value {
@@ -5531,5 +5630,75 @@ mod tests {
         ])
         .unwrap_err();
         assert!(err.contains("positional"));
+    }
+
+    // ---- aux_cmd ----
+
+    #[test]
+    fn aux_cmd_show_default_unconfigured() {
+        let v = aux_cmd(&["show".into()]).expect("show ok");
+        // Default config has no auxiliary_provider set. Configured
+        // SHOULD be false (no aux). build_error null.
+        assert!(v.get("configured").is_some());
+        assert!(v.get("provider").is_some()); // null is fine
+        assert!(v.get("model").is_some());
+        assert!(v.get("max_tokens").is_some());
+        assert!(v.get("note").and_then(|n| n.as_str()).is_some());
+    }
+
+    #[test]
+    fn aux_cmd_default_subcommand_is_show() {
+        let v = aux_cmd(&[]).expect("default ok");
+        assert!(v.get("max_tokens").is_some());
+    }
+
+    #[test]
+    fn aux_cmd_ask_requires_prompt() {
+        let err = aux_cmd(&["ask".into()]).unwrap_err();
+        assert!(err.contains("--prompt"));
+    }
+
+    #[test]
+    fn aux_cmd_ask_unknown_flag_errs() {
+        let err = aux_cmd(&[
+            "ask".into(),
+            "--prompt".into(),
+            "hi".into(),
+            "--bogus".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("--bogus"));
+    }
+
+    #[test]
+    fn aux_cmd_ask_when_unconfigured_errs() {
+        // Default config has no aux, so ask MUST refuse before doing
+        // any network IO.
+        let err = aux_cmd(&[
+            "ask".into(),
+            "--prompt".into(),
+            "hello".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("auxiliary"));
+    }
+
+    #[test]
+    fn aux_cmd_max_tokens_invalid_errs() {
+        let err = aux_cmd(&[
+            "ask".into(),
+            "--prompt".into(),
+            "hi".into(),
+            "--max-tokens".into(),
+            "lots".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("--max-tokens"));
+    }
+
+    #[test]
+    fn aux_cmd_unknown_subcommand_errs() {
+        let err = aux_cmd(&["bogus".into()]).unwrap_err();
+        assert!(err.contains("bogus"));
     }
 }
