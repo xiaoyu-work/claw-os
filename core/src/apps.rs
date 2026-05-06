@@ -12,6 +12,22 @@ pub struct AppManifest {
     pub commands: BTreeMap<String, String>,
     #[serde(default)]
     pub dependencies: serde_json::Value,
+    /// Optional runtime selector for the polyglot bridge. Recognised
+    /// values:
+    ///   * `"python"` (default if omitted) — invoke `main.py` via the
+    ///     existing python wrapper.
+    ///   * `"node"` — spawn `node <entry>` with COS_COMMAND /
+    ///     COS_ARGS_JSON env vars; entry defaults to `main.js`.
+    ///   * `"shell"` — spawn `bash <entry>` (or `cmd /c <entry>` on
+    ///     Windows); entry defaults to `main.sh` / `main.bat`.
+    ///   * `"binary"` — spawn `<entry>` directly (compiled program in
+    ///     the app dir); entry is required.
+    #[serde(default)]
+    pub runtime: Option<String>,
+    /// Override for the entry point file. Defaults are runtime-aware
+    /// (`main.py` / `main.js` / `main.sh` / `main`); see [`Runtime`].
+    #[serde(default)]
+    pub entry: Option<String>,
 }
 
 /// Discovered app: manifest + path on disk.
