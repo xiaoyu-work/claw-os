@@ -85,6 +85,17 @@ pub struct LlmRunRecord {
     #[serde(default)]
     pub output_tokens: u32,
 
+    /// Cached prompt tokens hit (Anthropic prompt cache, etc.).
+    /// Always 0 for providers without cache support. New in p4-usage;
+    /// older log lines that lacked this field deserialise as 0.
+    #[serde(default)]
+    pub cache_read_tokens: u32,
+
+    /// Tokens written to a prompt cache. Charged at a premium rate
+    /// (Anthropic: 125 % of input). New in p4-usage.
+    #[serde(default)]
+    pub cache_write_tokens: u32,
+
     /// `"stop" | "length" | "tool_use" | "refusal" | "content_filter" | "other"`.
     pub finish_reason: String,
 
@@ -122,6 +133,8 @@ impl LlmRunRecord {
             duration_ms,
             input_tokens: usage.input_tokens,
             output_tokens: usage.output_tokens,
+            cache_read_tokens: usage.cache_read_tokens,
+            cache_write_tokens: usage.cache_write_tokens,
             finish_reason: finish_reason_str(finish_reason).to_string(),
             status: "ok".to_string(),
             error: None,
@@ -152,6 +165,8 @@ impl LlmRunRecord {
             duration_ms,
             input_tokens: 0,
             output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
             finish_reason: "error".to_string(),
             status: "error".to_string(),
             error: Some(error.to_string()),
