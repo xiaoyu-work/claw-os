@@ -92,8 +92,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "recall" => recall_cmd(args),
         "sessions" => sessions_cmd(args),
         "onboarding" => onboarding_cmd(args),
+        "notes" => notes_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes"
         )),
     }
 }
@@ -294,6 +295,79 @@ fn onboarding_cmd(args: &[String]) -> Result<Value, String> {
     }
 }
 
+/// `cos agent notes [list|read <name>|write <name> <content>|append <name> <line>|delete <name>]`
+/// — manages markdown notes the agent can read into its system prompt
+/// (MEMORY.md / USER.md by convention) or any other ad-hoc note file.
+fn notes_cmd(args: &[String]) -> Result<Value, String> {
+    let store = memory::notes::NotesStore::system_default();
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("list");
+    match sub {
+        "list" | "" => {
+            let names = store.list().map_err(|e| format!("list failed: {e}"))?;
+            Ok(json!({
+                "dir": store.dir().display().to_string(),
+                "n": names.len(),
+                "notes": names,
+            }))
+        }
+        "read" => {
+            let name = args.get(1).cloned().unwrap_or_default();
+            if name.is_empty() {
+                return Err("usage: cos agent notes read <name>".into());
+            }
+            let content = store
+                .read(&name)
+                .map_err(|e| format!("read failed: {e}"))?;
+            Ok(json!({
+                "name": name,
+                "exists": content.is_some(),
+                "content": content,
+            }))
+        }
+        "write" => {
+            let name = args.get(1).cloned().unwrap_or_default();
+            let content = args.get(2).cloned().unwrap_or_default();
+            if name.is_empty() {
+                return Err("usage: cos agent notes write <name> <content>".into());
+            }
+            store
+                .write(&name, &content)
+                .map_err(|e| format!("write failed: {e}"))?;
+            Ok(json!({
+                "name": name,
+                "bytes_written": content.len(),
+            }))
+        }
+        "append" => {
+            let name = args.get(1).cloned().unwrap_or_default();
+            let line = args.get(2).cloned().unwrap_or_default();
+            if name.is_empty() {
+                return Err("usage: cos agent notes append <name> <line>".into());
+            }
+            store
+                .append(&name, &line)
+                .map_err(|e| format!("append failed: {e}"))?;
+            Ok(json!({
+                "name": name,
+                "appended_bytes": line.len(),
+            }))
+        }
+        "delete" => {
+            let name = args.get(1).cloned().unwrap_or_default();
+            if name.is_empty() {
+                return Err("usage: cos agent notes delete <name>".into());
+            }
+            store
+                .delete(&name)
+                .map_err(|e| format!("delete failed: {e}"))?;
+            Ok(json!({ "name": name, "deleted": true }))
+        }
+        other => Err(format!(
+            "unknown notes subcommand: {other}. try: list | read <name> | write <name> <content> | append <name> <line> | delete <name>"
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -377,5 +451,26 @@ mod tests {
         assert!(err.contains("status"));
         assert!(err.contains("next"));
         assert!(err.contains("complete"));
+    }
+
+    #[test]
+    fn notes_list_returns_dir_and_names() {
+        let v = notes_cmd(&[]).expect("notes list ok");
+        assert!(v.get("dir").is_some());
+        assert!(v.get("notes").and_then(|x| x.as_array()).is_some());
+    }
+
+    #[test]
+    fn notes_read_requires_name() {
+        let err = notes_cmd(&["read".into()]).unwrap_err();
+        assert!(err.to_lowercase().contains("usage"));
+    }
+
+    #[test]
+    fn notes_unknown_subcommand_lists_options() {
+        let err = notes_cmd(&["bogus".into()]).unwrap_err();
+        assert!(err.contains("list"));
+        assert!(err.contains("read"));
+        assert!(err.contains("write"));
     }
 }
