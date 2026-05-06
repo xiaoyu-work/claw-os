@@ -3,6 +3,11 @@
 //! Optionally carries a [`Guardrails`](super::guardrails::Guardrails) that
 //! restricts which tools the model can see and call. The default
 //! is `Guardrails::permissive()` (every registered tool is permitted).
+//!
+//! Optionally carries an [`ApprovalGate`](super::super::runtime::approval::ApprovalGate)
+//! that gates per-call invocations of tools the policy classifies as
+//! dangerous. The default is an empty gate (every call short-circuits
+//! to `Approved`).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -10,11 +15,13 @@ use std::sync::Arc;
 use super::guardrails::Guardrails;
 use super::Tool;
 use crate::agent::llm;
+use crate::agent::runtime::approval::ApprovalGate;
 
 #[derive(Default)]
 pub struct ToolRegistry {
     tools: HashMap<&'static str, Arc<dyn Tool>>,
     guardrails: Guardrails,
+    approval: ApprovalGate,
 }
 
 impl ToolRegistry {
@@ -35,6 +42,16 @@ impl ToolRegistry {
     /// Borrow the active guardrails.
     pub fn guardrails(&self) -> &Guardrails {
         &self.guardrails
+    }
+
+    /// Replace the active approval gate. Call once at construction time.
+    pub fn set_approval(&mut self, approval: ApprovalGate) {
+        self.approval = approval;
+    }
+
+    /// Borrow the active approval gate.
+    pub fn approval(&self) -> &ApprovalGate {
+        &self.approval
     }
 
     /// Returns `Some(tool)` only when the tool is registered AND permitted

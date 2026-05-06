@@ -142,6 +142,15 @@ pub struct ApprovalGate {
     approver: Option<Arc<dyn Approver>>,
 }
 
+impl Default for ApprovalGate {
+    /// Empty gate — every call short-circuits to `Approved`. Safe
+    /// to use in contexts where no policy has been configured (e.g.
+    /// the default [`crate::agent::tools::registry::ToolRegistry`]).
+    fn default() -> Self {
+        Self::new(ApprovalConfig::default())
+    }
+}
+
 impl ApprovalGate {
     pub fn new(config: ApprovalConfig) -> Self {
         Self {

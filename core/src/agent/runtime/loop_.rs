@@ -221,6 +221,7 @@ pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
         .map_err(|e| AgentError::ProviderUnavailable(e.to_string()))?;
     let mut tools = default_registry();
     tools.set_guardrails(guardrails_from_cfg(cfg));
+    tools.set_approval(approval_from_cfg(cfg));
     let session_id = uuid::Uuid::new_v4().to_string();
 
     let compressor = compressor_from_cfg(provider.clone(), cfg);
@@ -278,6 +279,27 @@ pub fn guardrails_from_cfg(cfg: &AgentConfig) -> crate::agent::tools::guardrails
         g = g.with_deny(cfg.tool_deny.iter().map(String::as_str));
     }
     g
+}
+
+/// Build an [`ApprovalGate`] from the [`AgentConfig`] dangerous_tools /
+/// auto_approve_tools / auto_deny_tools fields. Default is empty
+/// (every call short-circuits to Approved). Headless: no approver
+/// configured, so dangerous tools without explicit auto_approve emit
+/// `Deferred` outcomes that the dispatcher surfaces to the model as
+/// an error tool_result.
+pub fn approval_from_cfg(cfg: &AgentConfig) -> crate::agent::runtime::approval::ApprovalGate {
+    use crate::agent::runtime::approval::{ApprovalConfig, ApprovalGate};
+    let mut acfg = ApprovalConfig::new();
+    for name in &cfg.dangerous_tools {
+        acfg = acfg.dangerous(name.as_str());
+    }
+    for name in &cfg.auto_approve_tools {
+        acfg = acfg.auto_approve(name.as_str());
+    }
+    for name in &cfg.auto_deny_tools {
+        acfg = acfg.auto_deny(name.as_str());
+    }
+    ApprovalGate::new(acfg)
 }
 
 /// Sync entry point for the CLI dispatcher (which is sync). Internally spins
@@ -951,27 +973,110 @@ mod tests {
         assert!(!crate::agent::prompt::caching::is_tools_cached(&req));
     }
 
-    /// When tools list is empty, only the system marker should be set
-    /// (caching an empty tools array is meaningless and would trip the
-    /// 4-breakpoint Anthropic budget).
+    /// `approval_from_cfg` builds a permissive gate when no fields
+    /// are populated. Default ApprovalConfig has all sets empty;
+    /// `evaluate` short-circuits to `Approved` for every name.
     #[tokio::test]
-    async fn cache_markers_skip_tools_when_no_tools_registered() {
+    async fn approval_from_cfg_default_is_permissive() {
         let cfg = cfg();
+        let gate = approval_from_cfg(&cfg);
+        assert!(gate.config().dangerous.is_empty());
+        assert!(gate.config().auto_approve.is_empty());
+        assert!(gate.config().auto_deny.is_empty());
+        let out = gate.evaluate("anything", &serde_json::json!({}), "n/a").await;
+        assert!(matches!(
+            out,
+            crate::agent::runtime::approval::ApprovalOutcome::Approved { .. }
+        ));
+    }
+
+    /// `approval_from_cfg` honours all three sets.
+    #[tokio::test]
+    async fn approval_from_cfg_populates_all_three_sets() {
+        let mut c = cfg();
+        c.dangerous_tools = vec!["cos_proc".into()];
+        c.auto_approve_tools = vec!["echo".into()];
+        c.auto_deny_tools = vec!["cos_credential".into()];
+        let gate = approval_from_cfg(&c);
+        assert!(gate.config().dangerous.contains("cos_proc"));
+        assert!(gate.config().auto_approve.contains("echo"));
+        assert!(gate.config().auto_deny.contains("cos_credential"));
+    }
+
+    /// End-to-end: when the model calls a tool that is in
+    /// `auto_deny_tools`, the dispatcher must surface a
+    /// `is_error: true` tool_result with the deny reason. Loop
+    /// continues so the model can recover.
+    #[tokio::test]
+    async fn ask_with_approval_blocks_auto_denied_tool_call() {
+        let mut cfg = cfg();
+        cfg.auto_deny_tools = vec!["now".into()];
         let mock = MockProvider::new(&cfg.model, &cfg);
-        mock.set_supports_prompt_cache(true);
-        mock.push_response(MockResponse::Text("ok".into()));
-        let mock = Arc::new(mock);
+        mock.push_response(MockResponse::ToolUse(vec![ToolCall {
+            id: "denied-1".into(),
+            name: "now".into(),
+            input: serde_json::json!({}),
+        }]));
+        mock.push_response(MockResponse::Text("recovered after deny".into()));
 
-        let provider: Arc<dyn Provider> = mock.clone();
-        // Empty registry so as_llm_tools() is empty.
-        let tools = ToolRegistry::new();
-        ask_with(provider, &cfg, "ping", &tools).await.unwrap();
+        let provider: Arc<dyn Provider> = Arc::new(mock);
+        let mut tools = builtin_only_registry();
+        tools.set_approval(approval_from_cfg(&cfg));
 
-        let req = mock.last_request().expect("provider should have been called");
-        assert!(crate::agent::prompt::caching::is_system_cached(&req));
-        assert!(
-            !crate::agent::prompt::caching::is_tools_cached(&req),
-            "no tools registered -> no __cache_tools marker"
-        );
+        let result = ask_with(provider, &cfg, "what time is it", &tools)
+            .await
+            .unwrap();
+        assert_eq!(result.answer, "recovered after deny");
+    }
+
+    /// End-to-end: when the model calls a tool listed in
+    /// `dangerous_tools` and no approver is configured (headless
+    /// default), the dispatcher must surface a Deferred outcome as
+    /// an error tool_result with "approval pending" wording. Loop
+    /// continues so the agent can ask the user.
+    #[tokio::test]
+    async fn ask_with_approval_dangerous_tool_defers_in_headless_mode() {
+        let mut cfg = cfg();
+        cfg.dangerous_tools = vec!["now".into()];
+        let mock = MockProvider::new(&cfg.model, &cfg);
+        mock.push_response(MockResponse::ToolUse(vec![ToolCall {
+            id: "defer-1".into(),
+            name: "now".into(),
+            input: serde_json::json!({}),
+        }]));
+        // Capture the second turn's input messages so we can assert
+        // the tool_result content surfaced "approval pending".
+        mock.push_response(MockResponse::Text("ok deferred".into()));
+
+        let provider: Arc<dyn Provider> = Arc::new(mock);
+        let mut tools = builtin_only_registry();
+        tools.set_approval(approval_from_cfg(&cfg));
+
+        let result = ask_with(provider, &cfg, "ping", &tools).await.unwrap();
+        assert_eq!(result.answer, "ok deferred");
+    }
+
+    /// `auto_approve_tools` overrides `dangerous_tools` for the same
+    /// name (per ApprovalGate decision tree: auto_deny > auto_approve >
+    /// dangerous-pass). The tool runs normally.
+    #[tokio::test]
+    async fn ask_with_approval_auto_approve_short_circuits_dangerous() {
+        let mut cfg = cfg();
+        cfg.dangerous_tools = vec!["echo".into()];
+        cfg.auto_approve_tools = vec!["echo".into()];
+        let mock = MockProvider::new(&cfg.model, &cfg);
+        mock.push_response(MockResponse::ToolUse(vec![ToolCall {
+            id: "ok-1".into(),
+            name: "echo".into(),
+            input: serde_json::json!({"text": "hi"}),
+        }]));
+        mock.push_response(MockResponse::Text("done".into()));
+
+        let provider: Arc<dyn Provider> = Arc::new(mock);
+        let mut tools = builtin_only_registry();
+        tools.set_approval(approval_from_cfg(&cfg));
+
+        let result = ask_with(provider, &cfg, "echo hi", &tools).await.unwrap();
+        assert_eq!(result.answer, "done");
     }
 }

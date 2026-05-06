@@ -203,6 +203,29 @@ pub struct AgentConfig {
     /// `cos_sandbox` exec by adding it here).
     #[serde(default)]
     pub tool_deny: Vec<String>,
+
+    /// Approval gate: tools that require explicit approval before each
+    /// invocation. Empty by default (gate short-circuits to Approved
+    /// for everything). When non-empty, headless mode (no approver
+    /// configured) emits a synthetic `tool_result` with
+    /// `is_error: true` and the deferral prompt — the agent sees it
+    /// and can ask the user. Names matched literally against
+    /// `ToolCall.name`.
+    #[serde(default)]
+    pub dangerous_tools: Vec<String>,
+
+    /// Approval gate: tools that always pass approval without prompting,
+    /// even if listed in `dangerous_tools`. Useful for explicit
+    /// per-context overrides (e.g. allow `cos_proc kill` in an
+    /// orchestrator context but require approval everywhere else).
+    #[serde(default)]
+    pub auto_approve_tools: Vec<String>,
+
+    /// Approval gate: tools that are always blocked. Takes precedence
+    /// over `auto_approve_tools` and `dangerous_tools`. The dispatcher
+    /// emits a synthetic `tool_result` with `is_error: true`.
+    #[serde(default)]
+    pub auto_deny_tools: Vec<String>,
 }
 
 /// Embedding service configuration. Reads from `[embed]` block.
@@ -558,6 +581,9 @@ impl Default for AgentConfig {
             redact_memory_enabled: default_redact_memory_enabled(),
             tool_allow: None,
             tool_deny: Vec::new(),
+            dangerous_tools: Vec::new(),
+            auto_approve_tools: Vec::new(),
+            auto_deny_tools: Vec::new(),
         }
     }
 }

@@ -187,6 +187,45 @@ fn extract_text(response: &ChatResponse) -> String {
 }
 
 async fn dispatch_tool(registry: &ToolRegistry, call: &ToolCall) -> ToolResult {
+    // Per-call approval gate. Skip the await entirely when the tool
+    // is not configured under any of the three sets — the default
+    // ApprovalGate has all sets empty, so this is a one-set-contains
+    // check per dispatch in the common case.
+    let cfg = registry.approval().config();
+    if cfg.auto_deny.contains(&call.name)
+        || cfg.auto_approve.contains(&call.name)
+        || cfg.dangerous.contains(&call.name)
+    {
+        let outcome = registry
+            .approval()
+            .evaluate(&call.name, &call.input, "policy: dangerous_tools")
+            .await;
+        match outcome {
+            crate::agent::runtime::approval::ApprovalOutcome::Approved { .. } => {
+                // fall through to tool dispatch
+            }
+            crate::agent::runtime::approval::ApprovalOutcome::Denied { reason } => {
+                return ToolResult::err(format!(
+                    "approval denied for `{}`: {}",
+                    call.name,
+                    reason.unwrap_or_else(|| "no reason".to_string())
+                ));
+            }
+            crate::agent::runtime::approval::ApprovalOutcome::Deferred { prompt } => {
+                // Headless / non-interactive deferral. Surfaces back
+                // to the model as an error tool_result so it can ask
+                // the user (or pick a different approach). The runtime
+                // does NOT block — that would deadlock under
+                // `ask_blocking` and there's nowhere to send a prompt.
+                return ToolResult::err(format!(
+                    "approval pending for `{}`: {}",
+                    call.name,
+                    prompt.unwrap_or_else(|| "user approval required".to_string())
+                ));
+            }
+        }
+    }
+
     match registry.get(&call.name) {
         Some(tool) => tool.exec(call.input.clone()).await,
         None => ToolResult::err(format!(
