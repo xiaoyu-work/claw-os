@@ -116,6 +116,12 @@ pub fn agent_onboarding_path() -> PathBuf {
     agent_state_dir().join("onboarding.json")
 }
 
+/// Path to the periodic-nudge store file. Lives at
+/// `data_dir/agent/nudges.json`. Created on first add.
+pub fn agent_nudges_path() -> PathBuf {
+    agent_state_dir().join("nudges.json")
+}
+
 /// Directory for agent's per-session todo lists. Lives under
 /// `data_dir/agent/todos/`. Each session writes a JSON file named
 /// `<session_id>.json`.

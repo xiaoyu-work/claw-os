@@ -389,6 +389,7 @@ fn builtin_apps() -> Vec<(
             ("onboarding", "First-run setup state machine: cos agent onboarding [status|next|complete <id> [note]|skip <id>|reset [id]]"),
             ("notes", "Manage agent markdown notes (MEMORY.md / USER.md / custom): cos agent notes [list|read <n>|write <n> <content>|append <n> <line>|delete <n>]"),
             ("skills", "Inspect on-disk skill registry: cos agent skills [list|info <id>|disabled|errors|root]"),
+            ("nudge", "Manage periodic-nudge reminders auto-injected into the system prompt: cos agent nudge [list|due|add <due_in_secs> <message> [--repeat <secs>] [--tag <tag>]|fire <id>|remove <id>|path]"),
         ]),
         ("model", "Local model registry + inference daemon (ort for STT/TTS/embed/vision/imagegen, llama.cpp for LLM) — Phase 0.5 skeleton", vec![
             ("list", "List registered models from /var/lib/cos/models/"),

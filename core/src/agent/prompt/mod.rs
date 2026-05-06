@@ -1,4 +1,4 @@
-//! System prompt assembly + MEMORY.md / USER.md injection.
+//! System prompt assembly + MEMORY.md / USER.md / due-nudge injection.
 //!
 //! Composition (in order):
 //!   1. Built-in scaffold — defines the agent's role and tool conventions.
@@ -6,7 +6,11 @@
 //!      [`crate::agent::memory::notes::NotesStore::system_default`]. Both
 //!      files are read every time so updates by the model (via
 //!      `cos_memory`) take effect on the next turn.
-//!   3. Optional explicit file from `extra_path` (overrides via
+//!   3. Auto-injected due reminders from the periodic-nudge store at
+//!      [`crate::paths::agent_nudges_path`]. Surfaces as a
+//!      `<DUE_NUDGES>` block when at least one nudge is due (epoch
+//!      seconds <= now). Empty-store / missing-file is silent.
+//!   4. Optional explicit file from `extra_path` (overrides via
 //!      `AgentConfig::system_prompt_path`).
 //!
 //! All injection is best-effort: missing or unreadable files are silently
@@ -18,6 +22,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::agent::memory::notes::NotesStore;
+use crate::agent::nudge::{now_epoch_s, NudgeStore};
 
 const SYSTEM_SCAFFOLD: &str = "You are Hermes, the kernel-resident agent of ClawOS — an agent-native operating system. You are not an installed app; you are part of the OS itself, with native access to every cos kernel primitive.
 
@@ -51,6 +56,20 @@ pub fn build_system_prompt(extra_path: Option<&Path>) -> String {
     if let Some(notes) = NotesStore::system_default().assemble_for_prompt() {
         out.push_str("\n\n---\n\n");
         out.push_str(&notes);
+    }
+
+    // Auto-injected due nudges. Reads `data_dir/agent/nudges.json`
+    // every turn so newly-fired nudges drop out of the prompt as
+    // soon as `nudge fire` updates them. NudgeStore swallows IO
+    // errors via `Vec::new`, so missing/empty/corrupt files are silent.
+    let store = NudgeStore::new(crate::paths::agent_nudges_path());
+    let due = store.due(now_epoch_s());
+    if !due.is_empty() {
+        out.push_str("\n\n---\n\n<DUE_NUDGES>\n");
+        for n in &due {
+            out.push_str(&format!("- [{}] {}\n", n.id, n.message));
+        }
+        out.push_str("</DUE_NUDGES>");
     }
 
     // Explicit override file (e.g., per-session preface).
@@ -94,5 +113,14 @@ mod tests {
     fn missing_extra_file_is_silent() {
         let p = build_system_prompt(Some(Path::new("/nonexistent/cos-prompt.md")));
         assert!(p.contains("ClawOS"));
+    }
+
+    #[test]
+    fn no_due_nudges_means_no_due_block() {
+        // Without writing any nudges to the data dir, the
+        // DUE_NUDGES block must be absent. (NudgeStore returns
+        // Vec::new() for missing or unparseable files.)
+        let p = build_system_prompt(None);
+        assert!(!p.contains("<DUE_NUDGES>"));
     }
 }

@@ -103,8 +103,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "onboarding" => onboarding_cmd(args),
         "notes" => notes_cmd(args),
         "skills" => skills_cmd(args),
+        "nudge" => nudge_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge"
         )),
     }
 }
@@ -454,6 +455,125 @@ fn skills_cmd(args: &[String]) -> Result<Value, String> {
     }
 }
 
+/// `cos agent nudge [list|due|add <due_in_secs> <message> [--repeat <secs>] [--tag <tag>]|fire <id>|remove <id>|path]`
+/// — managed periodic-nudge store. `list` shows all nudges; `due`
+/// shows only those with `due_at_epoch_s <= now`. `add` parses a
+/// relative offset in seconds (the most common case for "remind me
+/// in 30 minutes"); `fire` advances repeating nudges or deletes
+/// one-shots.
+fn nudge_cmd(args: &[String]) -> Result<Value, String> {
+    use crate::agent::nudge::{now_epoch_s, Nudge, NudgeStore};
+    let store = NudgeStore::new(crate::paths::agent_nudges_path());
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("list");
+    match sub {
+        "path" => Ok(json!({
+            "path": crate::paths::agent_nudges_path().display().to_string(),
+        })),
+        "list" | "" => {
+            let mut all = store.list();
+            all.sort_by_key(|n| n.due_at_epoch_s);
+            Ok(json!({
+                "path": crate::paths::agent_nudges_path().display().to_string(),
+                "n": all.len(),
+                "nudges": all,
+            }))
+        }
+        "due" => {
+            let now = now_epoch_s();
+            let mut due = store.due(now);
+            due.sort_by_key(|n| n.due_at_epoch_s);
+            Ok(json!({
+                "now": now,
+                "n": due.len(),
+                "nudges": due,
+            }))
+        }
+        "add" => {
+            let due_in: i64 = args
+                .get(1)
+                .ok_or_else(|| "usage: cos agent nudge add <due_in_secs> <message> [--repeat <secs>] [--tag <tag>]".to_string())?
+                .parse()
+                .map_err(|e| format!("due_in_secs must be integer: {e}"))?;
+            let message = args
+                .get(2)
+                .cloned()
+                .filter(|m| !m.is_empty())
+                .ok_or_else(|| "usage: cos agent nudge add <due_in_secs> <message> [--repeat <secs>] [--tag <tag>]".to_string())?;
+            let mut repeat_secs: Option<u64> = None;
+            let mut tag: Option<String> = None;
+            let mut i = 3;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--repeat" => {
+                        repeat_secs = Some(
+                            args.get(i + 1)
+                                .ok_or_else(|| "--repeat needs <secs>".to_string())?
+                                .parse()
+                                .map_err(|e| format!("--repeat secs invalid: {e}"))?,
+                        );
+                        i += 2;
+                    }
+                    "--tag" => {
+                        tag = Some(
+                            args.get(i + 1)
+                                .cloned()
+                                .ok_or_else(|| "--tag needs <value>".to_string())?,
+                        );
+                        i += 2;
+                    }
+                    other => return Err(format!("unknown flag: {other}")),
+                }
+            }
+            let now = now_epoch_s();
+            let due_at = if due_in >= 0 {
+                now.saturating_add(due_in as u64)
+            } else {
+                now.saturating_sub((-due_in) as u64)
+            };
+            let nudge = Nudge {
+                id: String::new(),
+                message,
+                due_at_epoch_s: due_at,
+                repeat_secs,
+                tag,
+                last_fired_epoch_s: None,
+            };
+            let id = store
+                .add(nudge)
+                .map_err(|e| format!("add failed: {e}"))?;
+            Ok(json!({
+                "id": id,
+                "due_at_epoch_s": due_at,
+            }))
+        }
+        "fire" => {
+            let id = args
+                .get(1)
+                .cloned()
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| "usage: cos agent nudge fire <id>".to_string())?;
+            let updated = store
+                .fire(&id, now_epoch_s())
+                .map_err(|e| format!("fire failed: {e}"))?;
+            Ok(json!({ "id": id, "updated": updated }))
+        }
+        "remove" => {
+            let id = args
+                .get(1)
+                .cloned()
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| "usage: cos agent nudge remove <id>".to_string())?;
+            let removed = store
+                .remove(&id)
+                .map_err(|e| format!("remove failed: {e}"))?;
+            Ok(json!({ "id": id, "removed": removed }))
+        }
+        other => Err(format!(
+            "unknown nudge subcommand: {other}. try: list | due | add <due_in_secs> <message> [--repeat <secs>] [--tag <tag>] | fire <id> | remove <id> | path"
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -593,5 +713,52 @@ mod tests {
         assert!(err.contains("list"));
         assert!(err.contains("info"));
         assert!(err.contains("disabled"));
+    }
+
+    #[test]
+    fn nudge_path_returns_string() {
+        let v = nudge_cmd(&["path".into()]).expect("nudge path ok");
+        assert!(v.get("path").and_then(|x| x.as_str()).is_some());
+    }
+
+    #[test]
+    fn nudge_list_shape_correct() {
+        let v = nudge_cmd(&[]).expect("nudge list ok");
+        assert!(v.get("path").is_some());
+        assert!(v.get("n").is_some());
+        assert!(v.get("nudges").and_then(|x| x.as_array()).is_some());
+    }
+
+    #[test]
+    fn nudge_add_requires_due_and_message() {
+        let err = nudge_cmd(&["add".into()]).unwrap_err();
+        assert!(err.to_lowercase().contains("usage"));
+        let err2 = nudge_cmd(&["add".into(), "30".into()]).unwrap_err();
+        assert!(err2.to_lowercase().contains("usage"));
+    }
+
+    #[test]
+    fn nudge_add_rejects_non_integer_due() {
+        let err = nudge_cmd(&[
+            "add".into(),
+            "not-a-number".into(),
+            "msg".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("integer"));
+    }
+
+    #[test]
+    fn nudge_fire_requires_id() {
+        let err = nudge_cmd(&["fire".into()]).unwrap_err();
+        assert!(err.to_lowercase().contains("usage"));
+    }
+
+    #[test]
+    fn nudge_unknown_subcommand_lists_options() {
+        let err = nudge_cmd(&["bogus".into()]).unwrap_err();
+        assert!(err.contains("list"));
+        assert!(err.contains("add"));
+        assert!(err.contains("fire"));
     }
 }
