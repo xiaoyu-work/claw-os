@@ -20,6 +20,7 @@
 //! `[embed]` and `[imagegen]` blocks of `config.json`).
 
 pub mod bench;
+pub mod compat;
 pub mod engines;
 pub mod import;
 pub mod ipc;
@@ -62,6 +63,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "load" | "unload" | "infer" | "bench" | "rm" => {
             Ok(json!({"status": "not_implemented", "phase": "0.5", "subcommand": command}))
         }
+        "check" => run_check(args),
         "embed" => run_embed(args),
         "image" | "imagegen" => run_imagegen(args),
         "transcribe" | "stt" => run_transcribe(args, SttMode::Transcribe),
@@ -81,8 +83,44 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
             "tts": tts_status_json(),
         })),
         other => Err(format!(
-            "unknown command: {other}. try: list | import | load | unload | infer | embed | image | transcribe | translate | speak | status | bench | rm"
+            "unknown command: {other}. try: list | import | load | unload | infer | check | embed | image | transcribe | translate | speak | status | bench | rm"
         )),
+    }
+}
+
+/// `cos model check <name>@<version>` — validate that the active engine
+/// satisfies the named model manifest's `requires_engine` clause. Phase
+/// 2.4 enforcement seam: when `cos model load` ships, it will share
+/// this check; until then operators can run it manually.
+fn run_check(args: &[String]) -> Result<Value, String> {
+    let spec = args
+        .first()
+        .ok_or_else(|| "usage: cos model check <name>@<version>".to_string())?;
+    let (name, version) = spec
+        .split_once('@')
+        .ok_or_else(|| format!("expected <name>@<version>, got \"{spec}\""))?;
+    let manifest_path = paths::models_dir()
+        .join(name)
+        .join(version)
+        .join("manifest.json");
+    if !manifest_path.is_file() {
+        return Err(format!(
+            "no manifest at {} (run `cos model import` first)",
+            manifest_path.display()
+        ));
+    }
+    let bytes = std::fs::read(&manifest_path).map_err(|e| e.to_string())?;
+    let manifest: registry::Manifest =
+        serde_json::from_slice(&bytes).map_err(|e| format!("manifest parse: {e}"))?;
+    match compat::check_engine_compat(&manifest) {
+        Ok(()) => Ok(json!({
+            "status": "ok",
+            "model": format!("{name}@{version}"),
+            "requires_engine": manifest.requires_engine,
+            "gguf_version": manifest.gguf_version,
+            "arch": manifest.arch,
+        })),
+        Err(e) => Err(e.to_string()),
     }
 }
 

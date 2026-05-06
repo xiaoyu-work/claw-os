@@ -47,6 +47,39 @@ pub struct Manifest {
     pub default_device: Option<String>,
     #[serde(default)]
     pub params: serde_json::Value,
+    /// P2.4: declarative engine compatibility. The active engine in
+    /// `<engines_dir>/engines.json` must satisfy this requirement for
+    /// the model to load. `None` means "any engine of the matching
+    /// `engine` kind" — the `Engine` enum field above is the loose
+    /// declaration, `requires_engine` is the precise one.
+    #[serde(default)]
+    pub requires_engine: Option<EngineRequirement>,
+    /// P2.4: GGUF major version (e.g. 3 for GGUFv3). Used by
+    /// [`crate::model::compat::check_engine_compat`] when the active
+    /// engine ships an authoritative `gguf_versions` list. `None` =
+    /// model author didn't declare; capability check is skipped.
+    #[serde(default)]
+    pub gguf_version: Option<u32>,
+    /// P2.4: model architecture identifier (e.g. `"llama"`, `"qwen2"`,
+    /// `"mistral"`). Used by [`crate::model::compat::check_engine_compat`]
+    /// when the active engine ships an authoritative `model_archs`
+    /// list. `None` = model author didn't declare; check skipped.
+    #[serde(default)]
+    pub arch: Option<String>,
+}
+
+/// P2.4: declarative engine compatibility clause embedded in a model
+/// manifest. See [`crate::model::compat`] for range syntax and matching
+/// rules.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EngineRequirement {
+    /// Engine name as it appears in `engine_pkg::KNOWN_ENGINES` (e.g.
+    /// `"llama-cpp"`, `"ort"`, `"ort-genai"`).
+    pub name: String,
+    /// Range expression. See [`crate::model::compat::parse_range`] for
+    /// syntax. Examples: `"*"`, `">=b3900"`, `">=b3900,<b4500"`,
+    /// `">=1.22.0,<2.0.0"`.
+    pub version: String,
 }
 
 #[derive(Debug, thiserror::Error)]

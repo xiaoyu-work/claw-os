@@ -35,6 +35,11 @@ tempfile = "3.27.0"
 # loaded at runtime via libloading. No more compile-time link.
 libloading = "0.8"
 
+# Phase 2.4 (engine compat enforcement): semver ranges for ort / ort-genai;
+# llama.cpp's `bNNNN` build numbers use a custom comparator in
+# crate::model::compat.
+semver = "1"
+
 # Phase 0.5 (model engines): added when model files arrive
 # ort = { version = "2", features = [...] }
 
