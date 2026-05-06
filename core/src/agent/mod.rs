@@ -973,8 +973,9 @@ fn sessions_cmd(args: &[String]) -> Result<Value, String> {
         "set-title" => sessions_set_title(&args[1..]),
         "count" => sessions_count(&args[1..]),
         "clear" => sessions_clear(&args[1..]),
+        "purge" => sessions_purge(&args[1..]),
         other => Err(format!(
-            "unknown sessions subcommand: {other}. try: list [N] | title <id> | set-title <id> \"<title>\" | count [<id>] | clear <id> --yes"
+            "unknown sessions subcommand: {other}. try: list [N] | title <id> | set-title <id> \"<title>\" | count [<id>] | clear <id> --yes | purge --older-than <days> [--dry-run] [--yes]"
         )),
     }
 }
@@ -1146,6 +1147,83 @@ fn sessions_clear_with(
         "session_id": id,
         "messages_cleared": n,
         "ok": true,
+    }))
+}
+
+/// `cos agent sessions purge --older-than <days> [--dry-run] [--yes]`
+/// — bulk-delete every message older than the threshold. Implements
+/// the convention from `sessions clear`: destructive operations
+/// require an explicit `--yes`, with `--dry-run` reporting the
+/// counts without mutating anything.
+fn sessions_purge(args: &[String]) -> Result<Value, String> {
+    let mut older_than_days: Option<u64> = None;
+    let mut dry_run = false;
+    let mut yes = false;
+    let mut iter = args.iter();
+    while let Some(a) = iter.next() {
+        match a.as_str() {
+            "--older-than" => {
+                let raw = iter
+                    .next()
+                    .ok_or_else(|| "--older-than needs <days>".to_string())?;
+                let days = raw.parse::<u64>().map_err(|_| {
+                    format!("--older-than must be a positive integer (got '{raw}')")
+                })?;
+                if days == 0 {
+                    return Err("--older-than must be > 0".into());
+                }
+                older_than_days = Some(days);
+            }
+            "--dry-run" => dry_run = true,
+            "--yes" => yes = true,
+            other => {
+                return Err(format!(
+                    "unknown purge arg: {other}. try: --older-than <days> | --dry-run | --yes"
+                ));
+            }
+        }
+    }
+    let days = older_than_days.ok_or_else(|| {
+        "missing --older-than <days>. usage: cos agent sessions purge --older-than <days> [--dry-run] [--yes]"
+            .to_string()
+    })?;
+    if !dry_run && !yes {
+        return Err(format!(
+            "refusing to purge messages older than {days}d without --yes (would delete rows). \
+            preview with --dry-run, then re-run with --yes to commit"
+        ));
+    }
+    let now_ms: i64 = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let cutoff_ms = now_ms.saturating_sub((days as i64).saturating_mul(86_400_000));
+    let db = memory::sqlite_fts::MemoryDb::open_default()
+        .map_err(|e| format!("memory db unavailable: {e}"))?;
+    sessions_purge_with(&db, cutoff_ms, days, dry_run)
+}
+
+fn sessions_purge_with(
+    db: &memory::sqlite_fts::MemoryDb,
+    cutoff_ts_ms: i64,
+    older_than_days: u64,
+    dry_run: bool,
+) -> Result<Value, String> {
+    let stats = if dry_run {
+        db.count_older_than_ms(cutoff_ts_ms)
+            .map_err(|e| format!("count failed: {e}"))?
+    } else {
+        db.purge_older_than_ms(cutoff_ts_ms)
+            .map_err(|e| format!("purge failed: {e}"))?
+    };
+    Ok(json!({
+        "ok": true,
+        "dry_run": dry_run,
+        "older_than_days": older_than_days,
+        "cutoff_ts_ms": cutoff_ts_ms,
+        "messages_deleted": stats.messages_deleted,
+        "sessions_emptied": stats.sessions_emptied,
+        "titles_deleted": stats.titles_deleted,
     }))
 }
 
@@ -11264,6 +11342,103 @@ mod tests {
         // Numeric first arg keeps backward-compat: cos agent sessions 5 → list 5.
         let v = sessions_cmd(&["5".into()]).expect("legacy list ok");
         assert_eq!(v.get("limit").and_then(|n| n.as_u64()), Some(5));
+    }
+
+    // ---- sessions_purge ----
+
+    #[test]
+    fn sessions_purge_requires_older_than() {
+        let err = sessions_purge(&["--yes".into()]).unwrap_err();
+        assert!(err.contains("--older-than"), "got {err}");
+    }
+
+    #[test]
+    fn sessions_purge_validates_days_is_positive_integer() {
+        let err = sessions_purge(&[
+            "--older-than".into(),
+            "0".into(),
+            "--yes".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("> 0"), "got {err}");
+        let err2 = sessions_purge(&[
+            "--older-than".into(),
+            "abc".into(),
+            "--yes".into(),
+        ])
+        .unwrap_err();
+        assert!(err2.contains("positive integer"), "got {err2}");
+    }
+
+    #[test]
+    fn sessions_purge_refuses_apply_without_yes() {
+        let err = sessions_purge(&["--older-than".into(), "1".into()]).unwrap_err();
+        assert!(err.contains("--yes"), "got {err}");
+        assert!(err.contains("--dry-run"), "got {err}");
+    }
+
+    #[test]
+    fn sessions_purge_with_dry_run_does_not_mutate() {
+        let db = fresh_session_db();
+        // Insert one ancient message with explicit ts so we can
+        // exercise the cutoff cleanly.
+        db.record_message_at("old", "user", "ancient", 100).unwrap();
+        // And one fresh row via the normal path so its ts_ms is now.
+        db.record_message("new", "user", "fresh").unwrap();
+        // Cutoff = 1000ms; "old" (100) is below, "new" (~now) is above.
+        let v = sessions_purge_with(&db, 1000, 7, true).expect("dry ok");
+        assert_eq!(v["dry_run"], json!(true));
+        assert_eq!(v["messages_deleted"], json!(1));
+        assert_eq!(v["sessions_emptied"], json!(1));
+        // Messages still on disk after dry-run.
+        let total = sessions_count_with(&db, None).unwrap();
+        assert_eq!(total["total_messages"].as_i64(), Some(2));
+    }
+
+    #[test]
+    fn sessions_purge_with_apply_drops_old_rows_and_titles() {
+        let db = fresh_session_db();
+        db.record_message_at("old", "user", "ancient", 100).unwrap();
+        db.set_title("old", "Old Convo").unwrap();
+        db.record_message("new", "user", "fresh").unwrap();
+        // Apply with cutoff=1000.
+        let v = sessions_purge_with(&db, 1000, 7, false).expect("apply ok");
+        assert_eq!(v["dry_run"], json!(false));
+        assert_eq!(v["messages_deleted"], json!(1));
+        assert_eq!(v["sessions_emptied"], json!(1));
+        assert_eq!(v["titles_deleted"], json!(1));
+        // Only "new" remains.
+        let total = sessions_count_with(&db, None).unwrap();
+        assert_eq!(total["total_messages"].as_i64(), Some(1));
+        // Title for "old" is gone.
+        let title = db.title_for("old").unwrap();
+        assert!(title.is_none());
+    }
+
+    #[test]
+    fn sessions_purge_empty_db_returns_zero_counts() {
+        let db = fresh_session_db();
+        let v = sessions_purge_with(&db, 1000, 7, false).expect("apply ok");
+        assert_eq!(v["messages_deleted"], json!(0));
+        assert_eq!(v["sessions_emptied"], json!(0));
+        assert_eq!(v["titles_deleted"], json!(0));
+    }
+
+    #[test]
+    fn sessions_purge_dispatched_via_sessions_cmd() {
+        // Smoke test that the `purge` verb is wired through
+        // sessions_cmd. We pass --dry-run --older-than 999999 to
+        // ensure no rows match (so the test doesn't depend on the
+        // shared default db being empty).
+        let v = sessions_cmd(&[
+            "purge".into(),
+            "--older-than".into(),
+            "999999".into(),
+            "--dry-run".into(),
+        ])
+        .expect("dispatch ok");
+        assert_eq!(v["dry_run"], json!(true));
+        assert_eq!(v["older_than_days"], json!(999999u64));
     }
 
     // ---- vision_cmd / vision_route_cmd ----

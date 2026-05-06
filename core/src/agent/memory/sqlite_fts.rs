@@ -50,6 +50,23 @@ pub struct SearchHit {
     pub rank: f64,
 }
 
+/// Summary returned by [`MemoryDb::purge_older_than_ms`] /
+/// [`MemoryDb::count_older_than_ms`]. The two methods share this
+/// shape so callers can switch between dry-run and apply paths
+/// without re-shaping their UI.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PurgeStats {
+    /// Number of `messages` rows deleted (or that would be deleted
+    /// for the dry-run / count counterpart).
+    pub messages_deleted: usize,
+    /// Number of session ids that lost their last remaining
+    /// message — i.e., sessions that fully disappeared.
+    pub sessions_emptied: usize,
+    /// Number of orphaned `session_titles` rows removed (titles for
+    /// sessions whose message rows are now all gone).
+    pub titles_deleted: usize,
+}
+
 const SCHEMA: &str = r#"
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
@@ -147,11 +164,25 @@ impl MemoryDb {
         role: &str,
         content: &str,
     ) -> Result<i64, MemoryError> {
-        let ts = current_ts_ms();
+        self.record_message_at(session_id, role, content, current_ts_ms())
+    }
+
+    /// Record a message with an explicit timestamp. Surfaces the
+    /// underlying clock-injection point that [`record_message`]
+    /// abstracts away — useful for tests that need to seed rows
+    /// older than the current wall-clock (e.g., purge / retention
+    /// behaviour) and for backfilling imported history.
+    pub fn record_message_at(
+        &self,
+        session_id: &str,
+        role: &str,
+        content: &str,
+        ts_ms: i64,
+    ) -> Result<i64, MemoryError> {
         let conn = self.lock_conn()?;
         conn.execute(
             "INSERT INTO messages (session_id, role, content, ts_ms) VALUES (?, ?, ?, ?)",
-            params![session_id, role, content, ts],
+            params![session_id, role, content, ts_ms],
         )?;
         Ok(conn.last_insert_rowid())
     }
@@ -269,6 +300,105 @@ impl MemoryDb {
             params![session_id],
         )?;
         Ok(n)
+    }
+
+    /// Delete every message older than `cutoff_ts_ms` (strictly less
+    /// than). Returns `(messages_deleted, sessions_fully_emptied)` so
+    /// callers can report a meaningful summary. The FTS5 mirror is
+    /// kept in sync via the `messages_ad` trigger; orphaned rows in
+    /// `session_titles` (titles for sessions whose every message was
+    /// purged) are also removed.
+    pub fn purge_older_than_ms(
+        &self,
+        cutoff_ts_ms: i64,
+    ) -> Result<PurgeStats, MemoryError> {
+        let conn = self.lock_conn()?;
+        // Count distinct sessions that will be fully emptied so we
+        // can report it before the DELETE wipes the rows.
+        let sessions_before: usize = conn
+            .query_row(
+                "SELECT COUNT(DISTINCT session_id) FROM messages",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|n| n as usize)
+            .unwrap_or(0);
+        let messages_deleted = conn.execute(
+            "DELETE FROM messages WHERE ts_ms < ?",
+            params![cutoff_ts_ms],
+        )?;
+        let sessions_after: usize = conn
+            .query_row(
+                "SELECT COUNT(DISTINCT session_id) FROM messages",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|n| n as usize)
+            .unwrap_or(0);
+        let sessions_emptied = sessions_before.saturating_sub(sessions_after);
+        // Drop titles for sessions that no longer have messages.
+        let titles_deleted = conn.execute(
+            "DELETE FROM session_titles
+             WHERE session_id NOT IN (SELECT DISTINCT session_id FROM messages)",
+            [],
+        )?;
+        Ok(PurgeStats {
+            messages_deleted,
+            sessions_emptied,
+            titles_deleted,
+        })
+    }
+
+    /// Read-only counterpart of [`purge_older_than_ms`]. Returns
+    /// what *would* be deleted without mutating any rows, so callers
+    /// can implement `--dry-run`.
+    pub fn count_older_than_ms(
+        &self,
+        cutoff_ts_ms: i64,
+    ) -> Result<PurgeStats, MemoryError> {
+        let conn = self.lock_conn()?;
+        let messages_deleted: usize = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE ts_ms < ?",
+                params![cutoff_ts_ms],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|n| n as usize)
+            .unwrap_or(0);
+        // Sessions that would be FULLY emptied = sessions whose max
+        // ts_ms is below the cutoff.
+        let sessions_emptied: usize = conn
+            .query_row(
+                "SELECT COUNT(*) FROM (
+                    SELECT session_id FROM messages
+                    GROUP BY session_id
+                    HAVING MAX(ts_ms) < ?
+                 )",
+                params![cutoff_ts_ms],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|n| n as usize)
+            .unwrap_or(0);
+        // Titles that would be dropped = titles for sessions that
+        // would be fully emptied.
+        let titles_deleted: usize = conn
+            .query_row(
+                "SELECT COUNT(*) FROM session_titles t
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM messages m
+                     WHERE m.session_id = t.session_id
+                       AND m.ts_ms >= ?
+                 )",
+                params![cutoff_ts_ms],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|n| n as usize)
+            .unwrap_or(0);
+        Ok(PurgeStats {
+            messages_deleted,
+            sessions_emptied,
+            titles_deleted,
+        })
     }
 
     /// List distinct session ids ordered by most-recent activity. Useful for
@@ -582,6 +712,79 @@ mod tests {
         // FTS must also have been cleared
         let hits = db.search("delete me please", 10).unwrap();
         assert!(hits.is_empty(), "FTS index should be cleared by trigger");
+    }
+
+    #[test]
+    fn purge_older_than_ms_drops_only_below_cutoff() {
+        let db = db();
+        db.record_message_at("a", "user", "ancient", 100).unwrap();
+        db.record_message_at("a", "user", "less ancient", 500).unwrap();
+        db.record_message_at("b", "user", "fresh", 5000).unwrap();
+        let stats = db.purge_older_than_ms(1000).unwrap();
+        assert_eq!(stats.messages_deleted, 2);
+        assert_eq!(stats.sessions_emptied, 1);
+        assert_eq!(stats.titles_deleted, 0);
+        assert_eq!(db.count_total().unwrap(), 1);
+        // FTS index must also be in sync (trigger drops mirror rows).
+        let hits = db.search("ancient", 10).unwrap();
+        assert!(hits.is_empty(), "FTS should drop purged rows");
+    }
+
+    #[test]
+    fn purge_older_than_ms_drops_orphaned_titles() {
+        let db = db();
+        db.record_message_at("old", "user", "x", 100).unwrap();
+        db.set_title("old", "Old").unwrap();
+        db.record_message_at("new", "user", "y", 5000).unwrap();
+        db.set_title("new", "New").unwrap();
+        let stats = db.purge_older_than_ms(1000).unwrap();
+        assert_eq!(stats.messages_deleted, 1);
+        assert_eq!(stats.sessions_emptied, 1);
+        assert_eq!(stats.titles_deleted, 1);
+        assert!(db.title_for("old").unwrap().is_none());
+        assert_eq!(
+            db.title_for("new").unwrap().as_deref(),
+            Some("New"),
+            "non-orphaned title must be preserved"
+        );
+    }
+
+    #[test]
+    fn count_older_than_ms_does_not_mutate() {
+        let db = db();
+        db.record_message_at("old", "user", "x", 100).unwrap();
+        db.set_title("old", "Old").unwrap();
+        db.record_message_at("new", "user", "y", 5000).unwrap();
+        let count = db.count_older_than_ms(1000).unwrap();
+        assert_eq!(count.messages_deleted, 1);
+        assert_eq!(count.sessions_emptied, 1);
+        assert_eq!(count.titles_deleted, 1);
+        // Nothing actually removed.
+        assert_eq!(db.count_total().unwrap(), 2);
+        assert_eq!(db.title_for("old").unwrap().as_deref(), Some("Old"));
+    }
+
+    #[test]
+    fn purge_older_than_ms_boundary_is_strict_less_than() {
+        let db = db();
+        db.record_message_at("s", "user", "exact", 1000).unwrap();
+        let stats = db.purge_older_than_ms(1000).unwrap();
+        assert_eq!(stats.messages_deleted, 0, "row at exact cutoff must be kept");
+        assert_eq!(db.count_total().unwrap(), 1);
+    }
+
+    #[test]
+    fn purge_older_than_ms_partial_session_keeps_session() {
+        let db = db();
+        db.record_message_at("s", "user", "first", 100).unwrap();
+        db.record_message_at("s", "user", "second", 5000).unwrap();
+        let stats = db.purge_older_than_ms(1000).unwrap();
+        assert_eq!(stats.messages_deleted, 1);
+        assert_eq!(
+            stats.sessions_emptied, 0,
+            "session still has a remaining row, must not count as emptied"
+        );
+        assert_eq!(db.count_session("s").unwrap(), 1);
     }
 
     #[test]
