@@ -400,7 +400,7 @@ fn builtin_apps() -> Vec<(
             ("install", "Install from a local archive: cos engine install <name>@<version> --from <path.zip> [--no-activate]"),
             ("activate", "Switch active version: cos engine activate <name>@<version>"),
             ("rollback", "Swap active <-> previous: cos engine rollback <name>"),
-            ("update", "Fetch latest from GitHub Releases (Phase 2.2)"),
+            ("update", "Fetch + install from GitHub Releases: cos engine update <name> [--check] [--to <tag>] [--force] [--accelerator cpu|cuda|vulkan|...] [--no-activate]"),
             ("pin", "Lock active version against auto-update: cos engine pin <name>[@<version>]"),
             ("unpin", "Remove pin: cos engine unpin <name>"),
             ("gc", "Delete old installed versions, keep last N (default 3): cos engine gc <name> [--keep N]"),

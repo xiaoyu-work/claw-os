@@ -225,7 +225,7 @@ pub fn sha256_of(path: &Path) -> io::Result<String> {
 // In-tree SHA-256 (FIPS 180-4) so we don't pull a new crate just for
 // archive verification.
 #[allow(dead_code)]
-struct Sha256Stream {
+pub(super) struct Sha256Stream {
     state: [u32; 8],
     buffer: Vec<u8>,
     total_bits: u64,
@@ -233,7 +233,7 @@ struct Sha256Stream {
 
 #[allow(dead_code)]
 impl Sha256Stream {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             state: [
                 0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c,
@@ -244,7 +244,7 @@ impl Sha256Stream {
         }
     }
 
-    fn update(&mut self, data: &[u8]) {
+    pub(super) fn update(&mut self, data: &[u8]) {
         self.total_bits = self.total_bits.wrapping_add((data.len() as u64) * 8);
         self.buffer.extend_from_slice(data);
         while self.buffer.len() >= 64 {
@@ -254,7 +254,7 @@ impl Sha256Stream {
         }
     }
 
-    fn finalize_hex(mut self) -> String {
+    pub(super) fn finalize_hex(mut self) -> String {
         let bits = self.total_bits;
         self.buffer.push(0x80);
         while self.buffer.len() % 64 != 56 {

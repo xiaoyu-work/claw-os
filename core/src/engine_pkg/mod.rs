@@ -31,9 +31,11 @@
 
 use serde_json::{json, Value};
 
+pub mod download;
 pub mod install_local;
 pub mod paths;
 pub mod registry;
+pub mod sources;
 
 /// All engine names ClawOS knows how to manage. Used for input
 /// validation and CLI help. Adding a new engine is just appending here
@@ -56,11 +58,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "unpin" => cmd_unpin(args),
         "gc" => cmd_gc(args),
         "uninstall" => cmd_uninstall(args),
-        "update" => Err(
-            "cos engine update lands in Phase 2.2 (GitHub Releases adapter). For now use \
-             `cos engine install <name>@<version> --from <local-archive>`."
-                .into(),
-        ),
+        "update" => cmd_update(args),
         other => Err(format!(
             "unknown engine command: {other}. try: list | info | install | activate | rollback | pin | unpin | gc | uninstall | update"
         )),
@@ -295,4 +293,211 @@ fn cmd_uninstall(args: &[String]) -> Result<Value, String> {
         .map_err(|e| e.to_string())?;
     index.save().map_err(|e| e.to_string())?;
     Ok(json!({"status": "uninstalled", "engine": engine, "version": version}))
+}
+
+// =====================================================================
+// `cos engine update [--check] [--to <tag>] [--force]`  (P2.2)
+// =====================================================================
+
+fn cmd_update(args: &[String]) -> Result<Value, String> {
+    let mut engine: Option<String> = None;
+    let mut check_only = false;
+    let mut to_tag: Option<String> = None;
+    let mut force = false;
+    let mut accelerator: Option<String> = None;
+    let mut activate_flag = true;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--check" => {
+                check_only = true;
+                i += 1;
+            }
+            "--to" => {
+                to_tag = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--to requires a tag".to_string())?,
+                );
+                i += 2;
+            }
+            "--force" => {
+                force = true;
+                i += 1;
+            }
+            "--accelerator" => {
+                accelerator = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--accelerator requires a value".to_string())?,
+                );
+                i += 2;
+            }
+            "--no-activate" => {
+                activate_flag = false;
+                i += 1;
+            }
+            other if other.starts_with("--") => {
+                return Err(format!("unknown flag: {other}"));
+            }
+            _ => {
+                if engine.is_none() {
+                    engine = Some(args[i].clone());
+                } else {
+                    return Err(format!("unexpected positional arg: {}", args[i]));
+                }
+                i += 1;
+            }
+        }
+    }
+    let engine = engine.ok_or_else(|| {
+        "usage: cos engine update <engine> [--check] [--to <tag>] [--force] [--accelerator cpu|cuda|vulkan|...] [--no-activate]"
+            .to_string()
+    })?;
+    if !is_known_engine(&engine) {
+        return Err(format!(
+            "unknown engine: {engine}. known: {}",
+            KNOWN_ENGINES.join(", ")
+        ));
+    }
+    let spec = sources::github::spec_for(&engine).ok_or_else(|| {
+        format!("no GitHub release source registered for engine \"{engine}\"")
+    })?;
+
+    let mut ctx = sources::asset_select::SelectionContext::current();
+    if let Some(a) = accelerator {
+        ctx.accelerator = a.to_lowercase();
+    }
+
+    let token = std::env::var("GITHUB_TOKEN").ok().or_else(|| {
+        std::env::var("GH_TOKEN").ok()
+    });
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    rt.block_on(async move {
+        let client = sources::github::GhClient::new().with_token(token);
+        let release = match &to_tag {
+            Some(tag) => client
+                .tag(&spec, tag)
+                .await
+                .map_err(|e| format!("github: {e}"))?,
+            None => client
+                .latest(&spec)
+                .await
+                .map_err(|e| format!("github: {e}"))?,
+        };
+
+        let asset = sources::asset_select::select(&engine, &ctx, &release.assets).ok_or_else(
+            || {
+                format!(
+                    "no compatible asset found in release {} for ({}, {}, {})",
+                    release.tag_name, ctx.os, ctx.arch, ctx.accelerator
+                )
+            },
+        )?;
+
+        let mut index = registry::EnginesIndex::load_or_default().map_err(|e| e.to_string())?;
+        let entry = index.entry(&engine).cloned().unwrap_or_default();
+
+        if check_only {
+            return Ok(json!({
+                "status": "available",
+                "engine": engine,
+                "tag": release.tag_name,
+                "active": entry.active,
+                "previous": entry.previous,
+                "pinned": entry.pinned,
+                "asset": asset.name,
+                "asset_size": asset.size,
+                "asset_url": asset.browser_download_url,
+                "asset_sha256": asset.sha256_hex(),
+                "context": {"os": ctx.os, "arch": ctx.arch, "accelerator": ctx.accelerator},
+            }));
+        }
+
+        if entry.pinned && !force {
+            return Err(format!(
+                "engine \"{engine}\" is pinned (active={}). pass --force to override.",
+                entry.active
+            ));
+        }
+        if entry
+            .installed
+            .iter()
+            .any(|v| v.version == release.tag_name)
+        {
+            return Err(format!(
+                "version \"{}\" already installed for \"{engine}\". use `cos engine activate {engine}@{}` if you want to switch.",
+                release.tag_name, release.tag_name
+            ));
+        }
+
+        let mut headers: Vec<(&str, &str)> =
+            vec![("Accept", "application/octet-stream")];
+        let auth_value;
+        let token_for_dl = std::env::var("GITHUB_TOKEN")
+            .ok()
+            .or_else(|| std::env::var("GH_TOKEN").ok());
+        if let Some(t) = &token_for_dl {
+            auth_value = format!("Bearer {t}");
+            headers.push(("Authorization", auth_value.as_str()));
+        }
+        let expected_sha = asset.sha256_hex();
+        let dl_label = format!("{engine}@{}", release.tag_name);
+        let dl = download::stream_to_temp(&download::DownloadOpts {
+            url: &asset.browser_download_url,
+            headers: &headers,
+            expected_sha256: expected_sha.as_deref(),
+            label: &dl_label,
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+
+        let install_result = install_local::install_from_archive(
+            &mut index,
+            &engine,
+            &release.tag_name,
+            dl.temp_file.path(),
+        )
+        .map_err(|e| e.to_string())?;
+
+        // Stamp source metadata + sha256 on the just-recorded version.
+        if let Some(entry) = index.engines.get_mut(&engine) {
+            if let Some(v) = entry
+                .installed
+                .iter_mut()
+                .find(|v| v.version == release.tag_name)
+            {
+                v.sha256 = dl.sha256_hex.clone();
+                v.source = format!("github:{}/{}", spec.owner, spec.repo);
+            }
+            entry.source = format!("github:{}/{}", spec.owner, spec.repo);
+            entry.last_checked = Some(chrono::Utc::now());
+            if entry.accelerator.is_empty() {
+                entry.accelerator = ctx.accelerator.clone();
+            }
+        }
+        if activate_flag {
+            index
+                .activate(&engine, &release.tag_name)
+                .map_err(|e| e.to_string())?;
+        }
+        index.save().map_err(|e| e.to_string())?;
+
+        Ok(json!({
+            "status": "updated",
+            "engine": engine,
+            "tag": release.tag_name,
+            "asset": asset.name,
+            "bytes": dl.bytes,
+            "sha256": dl.sha256_hex,
+            "path": install_result.install_dir.display().to_string(),
+            "files": install_result.files_extracted,
+            "activated": activate_flag,
+        }))
+    })
 }
