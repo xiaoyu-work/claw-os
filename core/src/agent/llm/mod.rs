@@ -15,6 +15,7 @@ pub mod metadata;
 pub mod rate_limit;
 pub mod registry;
 pub mod run_log;
+pub mod sigv4;
 pub mod types;
 pub mod usage;
 
