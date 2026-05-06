@@ -28,12 +28,16 @@ pub const REGISTERED: &[&str] = &[
     "deepseek",
     "openrouter",
     "ollama",
+    "anthropic",
 ];
 
 /// Construct a provider by name.
 pub fn build(name: &str, model: &str, agent_cfg: &AgentConfig) -> Result<Arc<dyn Provider>> {
     if providers::openai_compat::is_alias(name) {
         return Ok(providers::openai_compat::build_provider(name, model, agent_cfg));
+    }
+    if providers::anthropic::is_alias(name) {
+        return Ok(providers::anthropic::build_provider(model, agent_cfg));
     }
     match name {
         "mock" => Ok(Arc::new(providers::mock::MockProvider::new(model, agent_cfg))),

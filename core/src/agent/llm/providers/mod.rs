@@ -6,6 +6,7 @@
 //! deepseek) plus the `local` (llama.cpp) adapter land in later phases
 //! when a concrete one is selected.
 
+pub mod anthropic;
 pub mod llama_local;
 pub mod mock;
 pub mod openai_compat;
