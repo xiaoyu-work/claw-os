@@ -19,6 +19,7 @@ use crate::agent::llm::accumulate::StreamSink;
 use crate::agent::llm::{self, Message, Provider};
 use crate::agent::memory::sqlite_fts::{self, MemoryDb};
 use crate::agent::prompt;
+use crate::agent::runtime::honcho_recorder::HonchoRecorder;
 use crate::agent::runtime::hooks;
 use crate::agent::runtime::hooks_config;
 use crate::agent::runtime::interrupt;
@@ -135,6 +136,16 @@ async fn ask_inner(
         None
     };
 
+    // Honcho dialectic memory is opt-in (HONCHO_BASE_URL). We only
+    // build it when SQLite-FTS recording is also active so the two
+    // persistent stores stay in sync about what counts as a real
+    // session vs. an ephemeral one-shot.
+    let honcho: Option<Arc<HonchoRecorder>> = if recorder.is_some() {
+        HonchoRecorder::from_env_logged()
+    } else {
+        None
+    };
+
     if let Some((db, sid)) = recorder {
         let to_record = redactor
             .as_ref()
@@ -142,6 +153,9 @@ async fn ask_inner(
             .unwrap_or_else(|| user_prompt.to_string());
         if let Err(e) = db.record_message(sid, "user", &to_record) {
             tracing::warn!("memory: failed to record user prompt: {e}");
+        }
+        if let Some(h) = &honcho {
+            h.spawn_message(sid.to_string(), llm::Role::User, to_record);
         }
     }
 
@@ -325,6 +339,9 @@ async fn ask_inner(
                 if let Err(e) = db.record_message(sid, role, &to_record) {
                     tracing::warn!("memory: failed to record {role} message: {e}");
                 }
+                if let Some(h) = &honcho {
+                    h.spawn_message(sid.to_string(), new_msg.role, to_record);
+                }
             }
         }
 
@@ -389,6 +406,15 @@ async fn ask_inner_streaming(
         None
     };
 
+    // Honcho dialectic memory is opt-in (HONCHO_BASE_URL); only
+    // active when SQLite-FTS recording is also active. See
+    // `ask_inner` for the rationale.
+    let honcho: Option<Arc<HonchoRecorder>> = if recorder.is_some() {
+        HonchoRecorder::from_env_logged()
+    } else {
+        None
+    };
+
     if let Some((db, sid)) = recorder {
         let to_record = redactor
             .as_ref()
@@ -396,6 +422,9 @@ async fn ask_inner_streaming(
             .unwrap_or_else(|| user_prompt.to_string());
         if let Err(e) = db.record_message(sid, "user", &to_record) {
             tracing::warn!("memory: failed to record user prompt: {e}");
+        }
+        if let Some(h) = &honcho {
+            h.spawn_message(sid.to_string(), llm::Role::User, to_record);
         }
     }
 
@@ -545,6 +574,9 @@ async fn ask_inner_streaming(
                     .unwrap_or(content);
                 if let Err(e) = db.record_message(sid, role, &to_record) {
                     tracing::warn!("memory: failed to record {role} message: {e}");
+                }
+                if let Some(h) = &honcho {
+                    h.spawn_message(sid.to_string(), new_msg.role, to_record);
                 }
             }
         }
