@@ -139,8 +139,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "media" => media_cmd(args),
         "binary-ext" => binary_ext_cmd(args),
         "context" => context_cmd(args),
+        "file-safety" => file_safety_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | title | summarise | classify | tools | guardrails | approval | todo | compress | aux | retry | vision | display | shell-hooks | media | binary-ext | context"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | title | summarise | classify | tools | guardrails | approval | todo | compress | aux | retry | vision | display | shell-hooks | media | binary-ext | context | file-safety"
         )),
     }
 }
@@ -4095,6 +4096,85 @@ fn context_markers_cmd(_args: &[String]) -> Result<Value, String> {
         },
         "noise_dirs": NOISE_DIRS,
     }))
+}
+
+/// `cos agent file-safety [check <path>|batch <path>...|categories]`
+fn file_safety_cmd(args: &[String]) -> Result<Value, String> {
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("");
+    match sub {
+        "" => Err(
+            "usage: cos agent file-safety [check <path> | batch <path>... | categories]"
+                .to_string(),
+        ),
+        "check" => file_safety_check_cmd(&args[1..]),
+        "batch" => file_safety_batch_cmd(&args[1..]),
+        "categories" => Ok(json!({
+            "categories": [
+                "dangerous_extension",
+                "credential",
+                "system_directory",
+                "vcs_internal",
+            ],
+            "verdicts": ["allow", "caution", "deny"],
+        })),
+        other => Err(format!(
+            "unknown file-safety subcommand: {other}. try: check | batch | categories"
+        )),
+    }
+}
+
+fn file_safety_check_cmd(args: &[String]) -> Result<Value, String> {
+    if args.is_empty() {
+        return Err("usage: cos agent file-safety check <path>".to_string());
+    }
+    if args.len() > 1 {
+        return Err(
+            "file-safety check accepts a single path; use 'batch' for multiple".to_string(),
+        );
+    }
+    let path = &args[0];
+    let v = crate::agent::safety::file_safety::classify_str(path);
+    Ok(file_safety_to_json(path, &v))
+}
+
+fn file_safety_batch_cmd(args: &[String]) -> Result<Value, String> {
+    if args.is_empty() {
+        return Err("usage: cos agent file-safety batch <path>...".to_string());
+    }
+    let mut results: Vec<Value> = Vec::with_capacity(args.len());
+    let mut allow_count = 0u64;
+    let mut caution_count = 0u64;
+    let mut deny_count = 0u64;
+    for path in args {
+        let v = crate::agent::safety::file_safety::classify_str(path);
+        match v {
+            crate::agent::safety::file_safety::FileSafety::Allow => allow_count += 1,
+            crate::agent::safety::file_safety::FileSafety::Caution { .. } => caution_count += 1,
+            crate::agent::safety::file_safety::FileSafety::Deny { .. } => deny_count += 1,
+        }
+        results.push(file_safety_to_json(path, &v));
+    }
+    Ok(json!({
+        "count": args.len(),
+        "results": results,
+        "summary": {
+            "allow":   allow_count,
+            "caution": caution_count,
+            "deny":    deny_count,
+        },
+    }))
+}
+
+fn file_safety_to_json(
+    path: &str,
+    v: &crate::agent::safety::file_safety::FileSafety,
+) -> Value {
+    json!({
+        "path":     path,
+        "verdict":  v.label(),
+        "reason":   v.reason(),
+        "category": v.category().map(|c| c.as_str()),
+    })
 }
 
 fn todo_status_counts(list: &crate::agent::tools::todo::TodoList) -> serde_json::Value {
@@ -9285,5 +9365,127 @@ mod tests {
         assert!(names.contains(&"Cargo.toml"));
         assert!(names.contains(&"package.json"));
         assert!(names.contains(&"go.mod"));
+    }
+
+    // ---- file-safety dispatch ----
+
+    #[test]
+    fn file_safety_no_args_errs_with_usage() {
+        let err = file_safety_cmd(&[]).unwrap_err();
+        assert!(err.contains("usage"));
+        assert!(err.contains("check"));
+    }
+
+    #[test]
+    fn file_safety_unknown_subcommand_errs() {
+        let err = file_safety_cmd(&["bogus".into()]).unwrap_err();
+        assert!(err.contains("bogus"));
+    }
+
+    #[test]
+    fn file_safety_check_requires_path() {
+        let err = file_safety_cmd(&["check".into()]).unwrap_err();
+        assert!(err.contains("usage"));
+    }
+
+    #[test]
+    fn file_safety_check_rejects_multiple_paths() {
+        let err =
+            file_safety_cmd(&["check".into(), "a".into(), "b".into()]).unwrap_err();
+        assert!(err.contains("single path"));
+    }
+
+    #[test]
+    fn file_safety_check_allows_normal_file() {
+        let v = file_safety_cmd(&[
+            "check".into(),
+            "/home/user/project/main.rs".into(),
+        ])
+        .expect("ok");
+        assert_eq!(v.get("verdict").and_then(|s| s.as_str()), Some("allow"));
+        assert!(v.get("category").and_then(|c| c.as_str()).is_none());
+    }
+
+    #[test]
+    fn file_safety_check_denies_credential_dir() {
+        let v = file_safety_cmd(&[
+            "check".into(),
+            "/home/user/.ssh/id_rsa".into(),
+        ])
+        .expect("ok");
+        assert_eq!(v.get("verdict").and_then(|s| s.as_str()), Some("deny"));
+        assert_eq!(
+            v.get("category").and_then(|c| c.as_str()),
+            Some("credential")
+        );
+    }
+
+    #[test]
+    fn file_safety_check_denies_dangerous_extension() {
+        let v = file_safety_cmd(&[
+            "check".into(),
+            "/tmp/payload.exe".into(),
+        ])
+        .expect("ok");
+        assert_eq!(v.get("verdict").and_then(|s| s.as_str()), Some("deny"));
+        assert_eq!(
+            v.get("category").and_then(|c| c.as_str()),
+            Some("dangerous_extension")
+        );
+    }
+
+    #[test]
+    fn file_safety_check_caution_for_shell_script() {
+        let v = file_safety_cmd(&[
+            "check".into(),
+            "/home/user/run.sh".into(),
+        ])
+        .expect("ok");
+        assert_eq!(
+            v.get("verdict").and_then(|s| s.as_str()),
+            Some("caution")
+        );
+    }
+
+    #[test]
+    fn file_safety_batch_aggregates_summary() {
+        let v = file_safety_cmd(&[
+            "batch".into(),
+            "/home/user/main.rs".into(),
+            "/etc/passwd".into(),
+            "/home/user/run.sh".into(),
+        ])
+        .expect("ok");
+        assert_eq!(v.get("count").and_then(|n| n.as_u64()), Some(3));
+        let summary = v.get("summary").and_then(|x| x.as_object()).unwrap();
+        assert_eq!(
+            summary.get("allow").and_then(|n| n.as_u64()),
+            Some(1)
+        );
+        assert_eq!(
+            summary.get("caution").and_then(|n| n.as_u64()),
+            Some(1)
+        );
+        assert_eq!(summary.get("deny").and_then(|n| n.as_u64()), Some(1));
+    }
+
+    #[test]
+    fn file_safety_batch_requires_at_least_one_path() {
+        let err = file_safety_cmd(&["batch".into()]).unwrap_err();
+        assert!(err.contains("usage"));
+    }
+
+    #[test]
+    fn file_safety_categories_lists_known_categories() {
+        let v = file_safety_cmd(&["categories".into()]).expect("ok");
+        let cats = v.get("categories").and_then(|c| c.as_array()).unwrap();
+        let names: Vec<&str> = cats.iter().filter_map(|c| c.as_str()).collect();
+        assert!(names.contains(&"dangerous_extension"));
+        assert!(names.contains(&"credential"));
+        assert!(names.contains(&"system_directory"));
+        assert!(names.contains(&"vcs_internal"));
+        let verdicts = v.get("verdicts").and_then(|x| x.as_array()).unwrap();
+        let vs: Vec<&str> = verdicts.iter().filter_map(|v| v.as_str()).collect();
+        assert_eq!(vs, vec!["allow", "caution", "deny"]);
     }
 }

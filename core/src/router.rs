@@ -415,6 +415,7 @@ fn builtin_apps() -> Vec<(
             ("media", "Inspect the media subsystem (TTS / STT / image-gen providers + outputs directory): cos agent media [providers|outputs-dir|list-outputs [--limit N] [--ext <e>]]"),
             ("binary-ext", "Classify file extensions as binary or text (extension-only, no magic-byte sniff): cos agent binary-ext [list [--limit N] [--no-limit] | extensions | check <path-or-extension>]"),
             ("context", "Project-context helpers (subdir hints + @-references): cos agent context hints [--cwd <path>] [--depth N] [--render] | cos agent context refs --text <body> [--unique] | cos agent context markers"),
+            ("file-safety", "Classify filesystem paths for write-safety (dangerous extensions, credential dirs, system paths, VCS internals): cos agent file-safety check <path> | batch <path>... | categories"),
         ]),
         ("model", "Local model registry + inference daemon (ort for STT/TTS/embed/vision/imagegen, llama.cpp for LLM) — Phase 0.5 skeleton", vec![
             ("list", "List registered models from /var/lib/cos/models/"),
