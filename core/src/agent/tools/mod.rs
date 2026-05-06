@@ -11,6 +11,7 @@ pub mod cos_apps;
 pub mod cos_proxy;
 pub mod delegate;
 pub mod guardrails;
+pub mod mcp;
 pub mod media;
 pub mod registry;
 pub mod todo;
