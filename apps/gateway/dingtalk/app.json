@@ -1,0 +1,24 @@
+{
+  "name": "gateway-dingtalk",
+  "version": "0.1.0",
+  "description": "Outbound-only DingTalk (DingDing / 钉钉) robot gateway. send POSTs a text or markdown message to a custom robot webhook URL with optional HMAC-SHA256 sign.",
+  "language": "python",
+  "entry": "main.py",
+  "runtime": {
+    "python": ">=3.10"
+  },
+  "credentials": [
+    {
+      "name": "dingtalk_webhook_url",
+      "description": "DingTalk custom-robot webhook URL (https://oapi.dingtalk.com/robot/send?access_token=...). Override with env COS_DINGTALK_WEBHOOK_URL."
+    },
+    {
+      "name": "dingtalk_secret",
+      "description": "Optional shared secret for HMAC-SHA256 sign mode. When present, every request is signed with timestamp + secret. Override with env COS_DINGTALK_SECRET."
+    }
+  ],
+  "scopes": [
+    "credential:dingtalk_webhook_url",
+    "credential:dingtalk_secret"
+  ]
+}

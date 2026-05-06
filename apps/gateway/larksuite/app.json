@@ -1,0 +1,24 @@
+{
+  "name": "gateway-larksuite",
+  "version": "0.1.0",
+  "description": "Outbound-only Lark / Feishu (飞书) custom-bot gateway. send POSTs a text, post (rich-text), or interactive-card message to a custom-bot webhook URL with optional HMAC-SHA256 signing.",
+  "language": "python",
+  "entry": "main.py",
+  "runtime": {
+    "python": ">=3.10"
+  },
+  "credentials": [
+    {
+      "name": "lark_webhook_url",
+      "description": "Lark / Feishu custom-bot webhook URL (https://open.feishu.cn/open-apis/bot/v2/hook/<id> or https://open.larksuite.com/open-apis/bot/v2/hook/<id>). Override with env COS_LARK_WEBHOOK_URL."
+    },
+    {
+      "name": "lark_secret",
+      "description": "Optional shared secret for HMAC-SHA256 sign mode. When present every request includes timestamp + sign in the body. Override with env COS_LARK_SECRET."
+    }
+  ],
+  "scopes": [
+    "credential:lark_webhook_url",
+    "credential:lark_secret"
+  ]
+}

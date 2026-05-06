@@ -1,0 +1,375 @@
+"""DingTalk (钉钉) custom-robot gateway.
+
+Outbound-only baseline. ``send`` POSTs to a custom-robot webhook URL.
+The robot URL is provisioned per group chat in the DingTalk app
+(Group settings → Robots → Add → Custom robot).
+
+Three robot security modes are supported:
+
+  1. **Plain** -- bare URL, no extras. Robot must be configured with
+     keyword filtering or IP whitelist on the DingTalk side.
+  2. **Sign** (HMAC-SHA256) -- if ``dingtalk_secret`` is configured we
+     sign every request with the standard
+     ``timestamp + '\\n' + secret`` HMAC scheme and append
+     ``&timestamp=<ms>&sign=<urlencoded-base64>`` to the webhook URL.
+  3. **Keyword** -- supply ``--keyword`` (or set ``COS_DINGTALK_KEYWORD``)
+     to prepend a required keyword to the message body so the robot
+     accepts it. Useful when the robot is configured with keyword
+     filtering instead of sign.
+
+Body shape:
+
+  * Default: ``msgtype=text`` with ``text.content`` (plain).
+  * ``--markdown`` switches to ``msgtype=markdown`` with
+    ``markdown.title`` (defaults to first line of body) and
+    ``markdown.text``.
+  * ``--at-mobiles`` and ``--at-user-ids`` mention specific users;
+    ``--at-all`` mentions everyone.
+
+Credentials needed:
+  * ``dingtalk_webhook_url`` -- custom-robot webhook URL
+                                 (env override: COS_DINGTALK_WEBHOOK_URL)
+  * ``dingtalk_secret``       -- optional HMAC-SHA256 secret
+                                 (env override: COS_DINGTALK_SECRET)
+
+Stdlib only.
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import hmac
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+
+PLATFORM = "dingtalk"
+USER_AGENT = "ClawOSDingTalk/0.1.0"
+SOFT_LEN = 19000  # DingTalk caps message bodies around 20 KB
+DEFAULT_TITLE = "ClawOS notice"
+
+
+def _schema() -> dict:
+    return {
+        "name": f"gateway-{PLATFORM}",
+        "version": "0.1.0",
+        "description": (
+            "DingTalk (钉钉) custom-robot gateway. ``send`` POSTs a text "
+            "or markdown message to a robot webhook URL with optional "
+            "HMAC-SHA256 sign."
+        ),
+        "commands": {
+            "start": {
+                "description": "Receive inbound messages (NOT IMPLEMENTED)",
+                "parameters": [],
+                "example": "cos app gateway-dingtalk start",
+            },
+            "stop": {
+                "description": "Stop a running gateway (NOT IMPLEMENTED)",
+                "parameters": [],
+                "example": "cos app gateway-dingtalk stop",
+            },
+            "status": {
+                "description": "Show whether the webhook URL and optional secret are configured",
+                "parameters": [],
+                "example": "cos app gateway-dingtalk status",
+            },
+            "send": {
+                "description": "Send a text or markdown message to the configured robot",
+                "parameters": [
+                    {
+                        "name": "text",
+                        "type": "string",
+                        "required": True,
+                        "description": "Message body (truncated to ~19000 chars)",
+                        "kind": "positional",
+                    },
+                    {
+                        "name": "markdown",
+                        "type": "boolean",
+                        "required": False,
+                        "description": "Send as msgtype=markdown (default text)",
+                    },
+                    {
+                        "name": "title",
+                        "type": "string",
+                        "required": False,
+                        "description": "Markdown title (only used with --markdown; defaults to first line)",
+                    },
+                    {
+                        "name": "keyword",
+                        "type": "string",
+                        "required": False,
+                        "description": "Keyword to prepend (for keyword-filter robots)",
+                    },
+                    {
+                        "name": "at_mobiles",
+                        "type": "string",
+                        "required": False,
+                        "description": "Comma-separated phone numbers to @-mention",
+                    },
+                    {
+                        "name": "at_user_ids",
+                        "type": "string",
+                        "required": False,
+                        "description": "Comma-separated DingTalk user-ids to @-mention",
+                    },
+                    {
+                        "name": "at_all",
+                        "type": "boolean",
+                        "required": False,
+                        "description": "Mention everyone in the group",
+                    },
+                ],
+                "example": "cos app gateway-dingtalk send 'build green'",
+            },
+        },
+    }
+
+
+def _load_credential(name: str) -> tuple[str | None, str | None]:
+    try:
+        proc = subprocess.run(
+            ["cos", "credential", "load", name],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        return None, f"cos credential load failed: {e}"
+    if proc.returncode != 0:
+        return None, (
+            f"cos credential load returned {proc.returncode}: "
+            f"{proc.stderr.strip()}"
+        )
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError as e:
+        return None, f"credential payload not JSON: {e}"
+    val = payload.get("value") if isinstance(payload, dict) else None
+    if not isinstance(val, str) or not val.strip():
+        return None, f"credential '{name}' missing 'value'"
+    return val.strip(), None
+
+
+def _env_or_credential(env_var: str, cred_name: str) -> tuple[str | None, str | None]:
+    val = os.environ.get(env_var)
+    if val and val.strip():
+        return val.strip(), None
+    return _load_credential(cred_name)
+
+
+def _truncate(text: str, limit: int = SOFT_LEN) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "\u2026"
+
+
+def _split_csv(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        items = [str(x) for x in value]
+    else:
+        items = str(value).split(",")
+    out = []
+    for item in items:
+        s = item.strip()
+        if s:
+            out.append(s)
+    return out
+
+
+def _sign_url(base_url: str, secret: str) -> str:
+    """Append ``&timestamp=<ms>&sign=<base64>`` to ``base_url`` per
+    DingTalk's signed-robot scheme.
+    """
+    timestamp = str(int(time.time() * 1000))
+    payload = f"{timestamp}\n{secret}".encode("utf-8")
+    digest = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).digest()
+    sign = urllib.parse.quote_plus(base64.b64encode(digest))
+    sep = "&" if "?" in base_url else "?"
+    return f"{base_url}{sep}timestamp={timestamp}&sign={sign}"
+
+
+def _send(
+    text: str,
+    *,
+    markdown: bool = False,
+    title: str | None = None,
+    keyword: str | None = None,
+    at_mobiles: list[str] | None = None,
+    at_user_ids: list[str] | None = None,
+    at_all: bool = False,
+) -> dict:
+    if not text or not str(text).strip():
+        return {"ok": False, "error": "text required"}
+
+    url, err = _env_or_credential("COS_DINGTALK_WEBHOOK_URL", "dingtalk_webhook_url")
+    if not url:
+        return {"ok": False, "error": err or "dingtalk_webhook_url required"}
+
+    body_text = _truncate(str(text))
+
+    # If a keyword was supplied (or env), prepend it so the robot accepts.
+    keyword = keyword or os.environ.get("COS_DINGTALK_KEYWORD") or None
+    if keyword:
+        body_text = f"{keyword.strip()}\n{body_text}"
+
+    payload: dict
+    if markdown:
+        md_title = title or body_text.splitlines()[0][:50] or DEFAULT_TITLE
+        payload = {
+            "msgtype": "markdown",
+            "markdown": {"title": md_title, "text": body_text},
+        }
+    else:
+        payload = {
+            "msgtype": "text",
+            "text": {"content": body_text},
+        }
+
+    if at_mobiles or at_user_ids or at_all:
+        payload["at"] = {
+            "atMobiles": at_mobiles or [],
+            "atUserIds": at_user_ids or [],
+            "isAtAll": bool(at_all),
+        }
+
+    secret, _secret_err = _env_or_credential("COS_DINGTALK_SECRET", "dingtalk_secret")
+    final_url = _sign_url(url, secret) if secret else url
+
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        final_url,
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": USER_AGENT,
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                data = {"raw": raw}
+            errcode = data.get("errcode") if isinstance(data, dict) else None
+            errmsg = data.get("errmsg") if isinstance(data, dict) else None
+            ok = errcode == 0
+            return {
+                "ok": ok,
+                "platform": PLATFORM,
+                "kind": "markdown" if markdown else "text",
+                "signed": bool(secret),
+                "errcode": errcode,
+                "errmsg": errmsg,
+            }
+    except urllib.error.HTTPError as e:
+        try:
+            err_body = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            err_body = str(e)
+        return {
+            "ok": False,
+            "platform": PLATFORM,
+            "kind": "markdown" if markdown else "text",
+            "signed": bool(secret),
+            "error": f"HTTP {e.code}: {err_body}",
+        }
+    except urllib.error.URLError as e:
+        return {
+            "ok": False,
+            "platform": PLATFORM,
+            "kind": "markdown" if markdown else "text",
+            "signed": bool(secret),
+            "error": f"URL error: {e}",
+        }
+
+
+def _not_yet(command: str) -> dict:
+    return {
+        "ok": False,
+        "platform": PLATFORM,
+        "command": command,
+        "status": "not_yet_implemented",
+        "note": (
+            "Inbound DingTalk messages need a callback URL "
+            "registered on the robot side. Use ``send <text>`` for "
+            "outbound."
+        ),
+    }
+
+
+def _status() -> dict:
+    url, url_err = _env_or_credential("COS_DINGTALK_WEBHOOK_URL", "dingtalk_webhook_url")
+    secret, _ = _env_or_credential("COS_DINGTALK_SECRET", "dingtalk_secret")
+    return {
+        "ok": True,
+        "platform": PLATFORM,
+        "running": False,
+        "configured": url is not None,
+        "config_error": url_err,
+        "signed": bool(secret),
+        "note": "Outbound-only via DingTalk custom-robot webhook (Sign/Keyword/IP modes).",
+    }
+
+
+def run(command: str, args):
+    if command == "__schema__":
+        return _schema()
+    if command == "send":
+        text = ""
+        markdown = False
+        title = None
+        keyword = None
+        at_mobiles: list[str] = []
+        at_user_ids: list[str] = []
+        at_all = False
+        if isinstance(args, list):
+            if args:
+                text = str(args[0])
+        elif isinstance(args, dict):
+            text = str(args.get("text", "") or "")
+            markdown = bool(args.get("markdown", False))
+            title = args.get("title")
+            keyword = args.get("keyword")
+            at_mobiles = _split_csv(args.get("at_mobiles"))
+            at_user_ids = _split_csv(args.get("at_user_ids"))
+            at_all = bool(args.get("at_all", False))
+        else:
+            return {"ok": False, "error": "invalid args"}
+        return _send(
+            text,
+            markdown=markdown,
+            title=title,
+            keyword=keyword,
+            at_mobiles=at_mobiles,
+            at_user_ids=at_user_ids,
+            at_all=at_all,
+        )
+    if command == "status":
+        return _status()
+    if command in {"start", "stop"}:
+        return _not_yet(command)
+    return {"ok": False, "error": f"unknown command: {command}"}
+
+
+if __name__ == "__main__":
+    cmd = os.environ.get("COS_COMMAND") or (sys.argv[1] if len(sys.argv) > 1 else "")
+    raw_args = os.environ.get("COS_ARGS_JSON")
+    if raw_args:
+        parsed_args = json.loads(raw_args)
+    else:
+        parsed_args = sys.argv[2:]
+    print(json.dumps(run(cmd, parsed_args)))

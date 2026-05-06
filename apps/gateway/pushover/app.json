@@ -1,0 +1,24 @@
+{
+  "name": "gateway-pushover",
+  "version": "0.1.0",
+  "description": "Outbound-only Pushover (pushover.net) push-notification gateway. send POSTs a notification to a user/group token via api.pushover.net/1/messages.json.",
+  "language": "python",
+  "entry": "main.py",
+  "runtime": {
+    "python": ">=3.10"
+  },
+  "credentials": [
+    {
+      "name": "pushover_app_token",
+      "description": "Pushover application API token (from pushover.net → Your Applications). Format: 30-char alphanumeric. Override with env COS_PUSHOVER_APP_TOKEN."
+    },
+    {
+      "name": "pushover_user_key",
+      "description": "Default Pushover user or group key (the recipient). Format: 30-char alphanumeric. Can be overridden per-call. Override with env COS_PUSHOVER_USER_KEY."
+    }
+  ],
+  "scopes": [
+    "credential:pushover_app_token",
+    "credential:pushover_user_key"
+  ]
+}
