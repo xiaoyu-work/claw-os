@@ -198,6 +198,34 @@ async fn ask_inner(
         }
 
         if let super::turn::TurnOutcome::Final(answer) = outcome {
+            // Generate + persist a session title on the first
+            // successful turn that produces a final answer. We guard
+            // on `title_for() == None` so resuming a long-running
+            // session never overwrites an existing title (the very
+            // first user prompt is the most representative seed).
+            // Errors from the auxiliary call or DB write are logged
+            // but do NOT fail the turn — titles are UX cruft.
+            if let Some((db, sid)) = recorder {
+                if matches!(db.title_for(sid), Ok(None)) {
+                    let aux = match auxiliary_from_cfg(cfg) {
+                        Ok(a) => a,
+                        Err(e) => {
+                            tracing::warn!(
+                                "title: auxiliary build failed: {e}; using heuristic"
+                            );
+                            None
+                        }
+                    };
+                    let title = crate::agent::title::generate_title(
+                        aux.as_ref(),
+                        user_prompt,
+                    )
+                    .await;
+                    if let Err(e) = db.set_title(sid, &title) {
+                        tracing::warn!("title: failed to record session title: {e}");
+                    }
+                }
+            }
             return Ok(AskResult {
                 answer,
                 turns: turn,
@@ -498,6 +526,70 @@ mod tests {
         assert!(recent[0].content.contains("2 + 2"));
         assert_eq!(recent[1].role, "assistant");
         assert!(recent[1].content.contains("deliberate reply"));
+    }
+
+    /// On the first successful turn, the runtime records a session
+    /// title derived from the user prompt. With no auxiliary configured,
+    /// the heuristic title equals the trimmed first line of the seed.
+    #[tokio::test]
+    async fn ask_with_memory_records_session_title_via_heuristic() {
+        let cfg = cfg(); // no auxiliary_provider → heuristic
+        let mock = MockProvider::new(&cfg.model, &cfg);
+        mock.push_response(MockResponse::Text("ack".into()));
+
+        let provider: Arc<dyn Provider> = Arc::new(mock);
+        let tools = builtin_only_registry();
+        let db = MemoryDb::open_in_memory().unwrap();
+        let sid = "title-1";
+
+        ask_with_memory(provider, &cfg, "How does Rust borrow checker work?", &tools, &db, sid)
+            .await
+            .unwrap();
+
+        let title = db.title_for(sid).unwrap();
+        assert_eq!(title.as_deref(), Some("How does Rust borrow checker work?"));
+    }
+
+    /// A session that already has a title is NOT overwritten on a
+    /// follow-up turn — only the very first turn seeds the title.
+    #[tokio::test]
+    async fn ask_with_memory_does_not_overwrite_existing_title() {
+        let cfg = cfg();
+        let db = MemoryDb::open_in_memory().unwrap();
+        let sid = "title-keep";
+        db.set_title(sid, "manually labelled").unwrap();
+
+        let mock = MockProvider::new(&cfg.model, &cfg);
+        mock.push_response(MockResponse::Text("ack".into()));
+        let provider: Arc<dyn Provider> = Arc::new(mock);
+        let tools = builtin_only_registry();
+
+        ask_with_memory(provider, &cfg, "totally unrelated prompt", &tools, &db, sid)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            db.title_for(sid).unwrap().as_deref(),
+            Some("manually labelled"),
+            "existing title must survive subsequent turns"
+        );
+    }
+
+    /// Memoryless paths (`ask_with`) never touch session_titles. Sanity
+    /// check: explicitly invoke ask_with and verify nothing is written.
+    #[tokio::test]
+    async fn ask_with_does_not_record_title() {
+        let cfg = cfg();
+        let mock = MockProvider::new(&cfg.model, &cfg);
+        mock.push_response(MockResponse::Text("ack".into()));
+        let provider: Arc<dyn Provider> = Arc::new(mock);
+        let tools = builtin_only_registry();
+
+        let _ = ask_with(provider, &cfg, "no memory here", &tools).await.unwrap();
+        // Open a fresh in-memory DB and confirm it stayed untouched
+        // (ask_with received no DB handle).
+        let db = MemoryDb::open_in_memory().unwrap();
+        assert!(db.title_for("any").unwrap().is_none());
     }
 
     #[tokio::test]

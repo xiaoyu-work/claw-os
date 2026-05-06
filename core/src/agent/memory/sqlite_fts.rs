@@ -94,6 +94,12 @@ AFTER UPDATE ON messages BEGIN
     VALUES('delete', old.id, old.content);
     INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
 END;
+
+CREATE TABLE IF NOT EXISTS session_titles (
+    session_id  TEXT PRIMARY KEY,
+    title       TEXT NOT NULL,
+    ts_ms       INTEGER NOT NULL
+);
 "#;
 
 #[derive(Debug, Clone)]
@@ -270,9 +276,13 @@ impl MemoryDb {
     pub fn sessions(&self, limit: usize) -> Result<Vec<SessionSummary>, MemoryError> {
         let conn = self.lock_conn()?;
         let mut stmt = conn.prepare(
-            "SELECT session_id, MAX(ts_ms) AS last_ts, COUNT(*) AS n
-             FROM messages
-             GROUP BY session_id
+            "SELECT m.session_id,
+                    MAX(m.ts_ms) AS last_ts,
+                    COUNT(*)     AS n,
+                    t.title      AS title
+             FROM messages AS m
+             LEFT JOIN session_titles AS t ON t.session_id = m.session_id
+             GROUP BY m.session_id
              ORDER BY last_ts DESC
              LIMIT ?",
         )?;
@@ -282,10 +292,41 @@ impl MemoryDb {
                     session_id: row.get(0)?,
                     last_ts_ms: row.get(1)?,
                     message_count: row.get(2)?,
+                    title: row.get(3)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    /// Idempotently set the human-readable title for a session.
+    /// Overwrites existing titles — callers decide whether to call this
+    /// at most once per session (the runtime currently does so via
+    /// [`Self::title_for`] guard).
+    pub fn set_title(&self, session_id: &str, title: &str) -> Result<(), MemoryError> {
+        let conn = self.lock_conn()?;
+        let ts = current_ts_ms();
+        conn.execute(
+            "INSERT INTO session_titles(session_id, title, ts_ms)
+             VALUES (?, ?, ?)
+             ON CONFLICT(session_id) DO UPDATE SET title = excluded.title, ts_ms = excluded.ts_ms",
+            params![session_id, title, ts],
+        )?;
+        Ok(())
+    }
+
+    /// Look up the stored title for a session. Returns `Ok(None)` when
+    /// no title has been set yet.
+    pub fn title_for(&self, session_id: &str) -> Result<Option<String>, MemoryError> {
+        let conn = self.lock_conn()?;
+        let mut stmt =
+            conn.prepare("SELECT title FROM session_titles WHERE session_id = ? LIMIT 1")?;
+        let mut rows = stmt.query(params![session_id])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(row.get(0)?))
+        } else {
+            Ok(None)
+        }
     }
 
     fn lock_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, MemoryError> {
@@ -300,6 +341,9 @@ pub struct SessionSummary {
     pub session_id: String,
     pub last_ts_ms: i64,
     pub message_count: i64,
+    /// Human-readable title for the session, when one has been
+    /// generated and stored via [`MemoryDb::set_title`].
+    pub title: Option<String>,
 }
 
 fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<MessageRow> {
@@ -550,6 +594,49 @@ mod tests {
         assert_eq!(sessions.len(), 2);
         assert_eq!(sessions[0].session_id, "new");
         assert_eq!(sessions[1].session_id, "old");
+    }
+
+    #[test]
+    fn title_for_returns_none_when_unset() {
+        let db = db();
+        db.record_message("s", "user", "x").unwrap();
+        assert!(db.title_for("s").unwrap().is_none());
+    }
+
+    #[test]
+    fn set_title_persists_and_reads_back() {
+        let db = db();
+        db.set_title("s1", "Hello session").unwrap();
+        assert_eq!(db.title_for("s1").unwrap().as_deref(), Some("Hello session"));
+    }
+
+    #[test]
+    fn set_title_overwrites_existing() {
+        let db = db();
+        db.set_title("s1", "first").unwrap();
+        db.set_title("s1", "second").unwrap();
+        assert_eq!(db.title_for("s1").unwrap().as_deref(), Some("second"));
+    }
+
+    #[test]
+    fn sessions_returns_title_when_present() {
+        let db = db();
+        db.record_message("s1", "user", "hi").unwrap();
+        db.record_message("s2", "user", "hi").unwrap();
+        db.set_title("s2", "labelled").unwrap();
+        let summaries = db.sessions(10).unwrap();
+        let m: std::collections::HashMap<_, _> = summaries
+            .iter()
+            .map(|s| (s.session_id.clone(), s.title.clone()))
+            .collect();
+        assert_eq!(m.get("s1").cloned().flatten(), None);
+        assert_eq!(m.get("s2").cloned().flatten().as_deref(), Some("labelled"));
+    }
+
+    #[test]
+    fn title_for_unknown_session_is_none() {
+        let db = db();
+        assert!(db.title_for("never-recorded").unwrap().is_none());
     }
 
     #[test]

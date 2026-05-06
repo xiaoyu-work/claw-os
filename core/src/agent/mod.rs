@@ -213,6 +213,7 @@ fn sessions_cmd(args: &[String]) -> Result<Value, String> {
                 "session_id": s.session_id,
                 "last_ts_ms": s.last_ts_ms,
                 "message_count": s.message_count,
+                "title": s.title,
             })
         })
         .collect();
