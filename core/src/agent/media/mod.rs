@@ -15,6 +15,7 @@
 //! `noop` reference impl per surface so the runtime can wire and
 //! exercise the call paths before any real provider is configured.
 
+pub mod factory;
 pub mod imagegen;
 pub mod imagegen_fal;
 pub mod imagegen_openai;

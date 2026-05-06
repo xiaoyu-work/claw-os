@@ -3664,10 +3664,10 @@ fn media_cmd(args: &[String]) -> Result<Value, String> {
     let sub = args.first().map(|s| s.as_str()).unwrap_or("providers");
     match sub {
         "providers" | "" => {
-            let tts = crate::agent::media::tts::TtsRegistry::with_default_providers();
-            let stt = crate::agent::media::stt::SttRegistry::with_default_providers();
-            let imagegen =
-                crate::agent::media::imagegen::ImageGenRegistry::with_default_providers();
+            let cfg = crate::config::get();
+            let tts = crate::agent::media::factory::tts_registry_from_cfg(cfg);
+            let stt = crate::agent::media::factory::stt_registry_from_cfg(cfg);
+            let imagegen = crate::agent::media::factory::imagegen_registry_from_cfg(cfg);
 
             let tts_rows: Vec<_> = tts
                 .names()
@@ -9182,9 +9182,10 @@ mod tests {
     fn media_default_lists_provider_registries() {
         let v = media_cmd(&[]).expect("default ok");
         assert!(v.get("outputs_dir").is_some());
-        // The three registries are always present (with `noop` only
-        // until cloud factories land); each row carries
-        // {name, configured}.
+        // The three registries are always present (only `noop` when
+        // the active config selects `provider = "none"` for that
+        // modality, which is the kernel-default state); each row
+        // carries {name, configured}.
         for slot in ["tts", "stt", "imagegen"] {
             let block = v.get(slot).unwrap_or_else(|| panic!("missing {slot}"));
             let providers = block
