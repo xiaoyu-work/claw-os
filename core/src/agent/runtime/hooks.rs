@@ -169,6 +169,13 @@ pub struct TurnSummary {
     pub latency_ms: u64,
     pub input_tokens: u32,
     pub output_tokens: u32,
+    /// Prompt-cache hit count (Anthropic / OpenAI cached input).
+    /// Carried forward from `Usage::cache_read_tokens` so observers
+    /// can monitor cache effectiveness without re-deriving.
+    pub cache_read_tokens: u32,
+    /// Prompt-cache write count — bytes the provider just stored
+    /// for future reuse.
+    pub cache_write_tokens: u32,
     pub stop_reason: String,
     pub tool_calls_made: u32,
     pub error: Option<String>,
@@ -408,6 +415,8 @@ impl Hook for LoggingHook {
             latency_ms = summary.latency_ms,
             input_tokens = summary.input_tokens,
             output_tokens = summary.output_tokens,
+            cache_read_tokens = summary.cache_read_tokens,
+            cache_write_tokens = summary.cache_write_tokens,
             tool_calls = summary.tool_calls_made,
             "post_turn"
         );
@@ -547,6 +556,8 @@ impl Hook for AuditHook {
                 "latency_ms": summary.latency_ms,
                 "input_tokens": summary.input_tokens,
                 "output_tokens": summary.output_tokens,
+                "cache_read_tokens": summary.cache_read_tokens,
+                "cache_write_tokens": summary.cache_write_tokens,
                 "tool_calls_made": summary.tool_calls_made,
                 "error": summary.error,
             }),
@@ -657,6 +668,8 @@ mod tests {
             latency_ms: 42,
             input_tokens: 10,
             output_tokens: 5,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
             stop_reason: "Stop".into(),
             tool_calls_made: 0,
             error: None,
@@ -1055,7 +1068,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("audit.jsonl");
         let h = AuditHook::at(&p);
-        let _ = h.post_turn(&ctx(), &turn_summary_ok());
+        let mut s = turn_summary_ok();
+        s.cache_read_tokens = 7;
+        s.cache_write_tokens = 3;
+        let _ = h.post_turn(&ctx(), &s);
         let events = read_jsonl(&p);
         assert_eq!(events.len(), 1);
         let e = &events[0];
@@ -1064,6 +1080,8 @@ mod tests {
         assert_eq!(e["latency_ms"], serde_json::json!(42));
         assert_eq!(e["input_tokens"], serde_json::json!(10));
         assert_eq!(e["output_tokens"], serde_json::json!(5));
+        assert_eq!(e["cache_read_tokens"], serde_json::json!(7));
+        assert_eq!(e["cache_write_tokens"], serde_json::json!(3));
         assert_eq!(e["stop_reason"], serde_json::json!("Stop"));
     }
 

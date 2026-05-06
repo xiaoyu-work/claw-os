@@ -263,6 +263,8 @@ async fn ask_inner(
                     latency_ms,
                     input_tokens: report.usage.input_tokens,
                     output_tokens: report.usage.output_tokens,
+                    cache_read_tokens: report.usage.cache_read_tokens,
+                    cache_write_tokens: report.usage.cache_write_tokens,
                     stop_reason: match &o {
                         super::turn::TurnOutcome::Final(_) => "Final".into(),
                         super::turn::TurnOutcome::ContinueWithTools => "ContinueWithTools".into(),
@@ -292,6 +294,8 @@ async fn ask_inner(
                     latency_ms,
                     input_tokens: 0,
                     output_tokens: 0,
+                    cache_read_tokens: 0,
+                    cache_write_tokens: 0,
                     stop_reason: "Error".into(),
                     tool_calls_made: 0,
                     error: Some(e.to_string()),
@@ -486,6 +490,8 @@ async fn ask_inner_streaming(
                     latency_ms,
                     input_tokens: report.usage.input_tokens,
                     output_tokens: report.usage.output_tokens,
+                    cache_read_tokens: report.usage.cache_read_tokens,
+                    cache_write_tokens: report.usage.cache_write_tokens,
                     stop_reason: match &o {
                         super::turn::TurnOutcome::Final(_) => "Final".into(),
                         super::turn::TurnOutcome::ContinueWithTools => "ContinueWithTools".into(),
@@ -515,6 +521,8 @@ async fn ask_inner_streaming(
                     latency_ms,
                     input_tokens: 0,
                     output_tokens: 0,
+                    cache_read_tokens: 0,
+                    cache_write_tokens: 0,
                     stop_reason: "Error".into(),
                     tool_calls_made: 0,
                     error: Some(e.to_string()),
@@ -2247,8 +2255,8 @@ mod tests {
         mock.set_usage(Usage {
             input_tokens: 117,
             output_tokens: 42,
-            cache_read_tokens: 0,
-            cache_write_tokens: 0,
+            cache_read_tokens: 11,
+            cache_write_tokens: 5,
         });
         let provider: Arc<dyn Provider> = Arc::new(mock);
         let tools = builtin_only_registry();
@@ -2263,5 +2271,7 @@ mod tests {
             .expect("post_turn fired");
         assert_eq!(summary.input_tokens, 117);
         assert_eq!(summary.output_tokens, 42);
+        assert_eq!(summary.cache_read_tokens, 11);
+        assert_eq!(summary.cache_write_tokens, 5);
     }
 }
