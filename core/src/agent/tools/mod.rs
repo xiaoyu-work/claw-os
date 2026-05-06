@@ -8,6 +8,7 @@
 pub mod builtin;
 pub mod cos_proxy;
 pub mod delegate;
+pub mod guardrails;
 pub mod registry;
 pub mod todo;
 
