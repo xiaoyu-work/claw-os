@@ -165,7 +165,17 @@ impl OpenAICompatProvider {
     }
 
     fn endpoint(&self) -> String {
-        format!("{}/chat/completions", self.cfg.base_url)
+        // Split off any query string (Azure OpenAI requires
+        // ?api-version=...). Append the path, then re-attach the
+        // query.
+        let (base, query) = match self.cfg.base_url.split_once('?') {
+            Some((b, q)) => (b.trim_end_matches('/'), Some(q)),
+            None => (self.cfg.base_url.as_str(), None),
+        };
+        match query {
+            Some(q) => format!("{base}/chat/completions?{q}"),
+            None => format!("{base}/chat/completions"),
+        }
     }
 }
 
@@ -282,6 +292,21 @@ pub(crate) mod wire {
         pub parameters: &'a serde_json::Value,
     }
 
+    /// Newer OpenAI models (o-series, gpt-5+) reject `max_tokens` and
+    /// require `max_completion_tokens`. Older models (gpt-4o, gpt-4.1,
+    /// claude-via-openrouter, deepseek, ollama) still expect
+    /// `max_tokens`. Heuristic by model name prefix.
+    pub(crate) fn use_max_completion_tokens(model: &str) -> bool {
+        let m = model.to_ascii_lowercase();
+        // Strip Azure deployment suffixes / variants like "gpt-5.4-mini"
+        // → still starts with "gpt-5". Match on the family prefix.
+        m.starts_with("gpt-5")
+            || m.starts_with("gpt-6")
+            || m.starts_with("o1")
+            || m.starts_with("o3")
+            || m.starts_with("o4")
+    }
+
     /// Build the JSON body for `POST /v1/chat/completions`. Pure — no IO.
     pub(crate) fn build_request_body(
         request: &ChatRequest,
@@ -303,19 +328,33 @@ pub(crate) mod wire {
             "messages": messages,
         });
 
+        let modern = use_max_completion_tokens(model);
+
         if let Some(obj) = body.as_object_mut() {
             if !tools.is_empty() {
                 obj.insert("tools".into(), serde_json::Value::Array(tools));
                 obj.insert("tool_choice".into(), tool_choice_to_json(&request.tool_choice));
             }
             if let Some(v) = request.max_tokens {
-                obj.insert("max_tokens".into(), serde_json::json!(v));
+                let key = if modern {
+                    "max_completion_tokens"
+                } else {
+                    "max_tokens"
+                };
+                obj.insert(key.into(), serde_json::json!(v));
             }
             if let Some(v) = request.temperature {
-                obj.insert("temperature".into(), serde_json::json!(v));
+                // o-series / gpt-5 only support the default temperature
+                // (1.0). Sending any other value yields a 400. Skip the
+                // field entirely for those models.
+                if !modern {
+                    obj.insert("temperature".into(), serde_json::json!(v));
+                }
             }
             if let Some(v) = request.top_p {
-                obj.insert("top_p".into(), serde_json::json!(v));
+                if !modern {
+                    obj.insert("top_p".into(), serde_json::json!(v));
+                }
             }
             if !request.stop_sequences.is_empty() {
                 obj.insert("stop".into(), serde_json::json!(request.stop_sequences));
@@ -663,6 +702,31 @@ mod tests {
         assert!(oc.base_url.starts_with("https://api.x.ai"));
     }
 
+    #[test]
+    fn endpoint_handles_query_string_in_base_url() {
+        // Azure OpenAI requires ?api-version=...
+        let mut c = cfg();
+        c.base_url = Some(
+            "https://xiaoyu-eastus2.openai.azure.com/openai/deployments/gpt-5.4-mini?api-version=2024-12-01-preview".into(),
+        );
+        let provider = OpenAICompatProvider::from_agent_config("openai", "gpt-5.4-mini", &c);
+        assert_eq!(
+            provider.endpoint(),
+            "https://xiaoyu-eastus2.openai.azure.com/openai/deployments/gpt-5.4-mini/chat/completions?api-version=2024-12-01-preview"
+        );
+    }
+
+    #[test]
+    fn endpoint_appends_path_when_no_query_string() {
+        let mut c = cfg();
+        c.base_url = Some("https://api.openai.com/v1".into());
+        let provider = OpenAICompatProvider::from_agent_config("openai", "gpt-4o-mini", &c);
+        assert_eq!(
+            provider.endpoint(),
+            "https://api.openai.com/v1/chat/completions"
+        );
+    }
+
     // ---- credential / env resolution -------------------------------------
 
     #[test]
@@ -726,6 +790,39 @@ mod tests {
         assert_eq!(body["max_tokens"], 64);
         assert!(body.get("tools").is_none(), "no tools means no tools field");
         assert!(body.get("stream").is_none());
+    }
+
+    #[test]
+    fn modern_models_use_max_completion_tokens() {
+        for m in &["gpt-5", "gpt-5.4-mini", "gpt-6-pro", "o1-mini", "o3", "o4-preview"] {
+            assert!(
+                wire::use_max_completion_tokens(m),
+                "expected {m} to use max_completion_tokens"
+            );
+        }
+        for m in &[
+            "gpt-4o-mini",
+            "gpt-4.1",
+            "gpt-3.5-turbo",
+            "claude-3.5-sonnet",
+            "llama3.2:3b",
+            "deepseek-chat",
+        ] {
+            assert!(
+                !wire::use_max_completion_tokens(m),
+                "expected {m} to use legacy max_tokens"
+            );
+        }
+    }
+
+    #[test]
+    fn body_uses_max_completion_tokens_for_gpt5() {
+        let r = req_text("hi");
+        let body = wire::build_request_body(&r, "gpt-5.4-mini", false);
+        assert_eq!(body["max_completion_tokens"], 64);
+        assert!(body.get("max_tokens").is_none(), "legacy field must be absent");
+        // o-series / gpt-5 only support default temperature → field omitted.
+        assert!(body.get("temperature").is_none());
     }
 
     #[test]
