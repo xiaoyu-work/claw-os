@@ -406,6 +406,7 @@ fn builtin_apps() -> Vec<(
             ("guardrails", "Inspect the allow/deny tool guardrails from agent config: cos agent guardrails [show|check <tool>]"),
             ("approval", "Inspect the approval gate (auto_approve/auto_deny/dangerous) from agent config: cos agent approval [show|check <tool>]"),
             ("todo", "Manage per-session agent todo lists: cos agent todo [list <session_id>|add <session_id> <id> <title> [--note <text>]|set-status <session_id> <id> <pending|in_progress|completed|cancelled>|remove <session_id> <id>|clear <session_id> --yes|path]"),
+            ("compress", "Estimate tokens for a recorded conversation and report whether the compressor would trigger: cos agent compress [show-config|check --file <jsonl> [--system <text>] [--system-file <path>] [--trigger N] [--target N] [--keep-tail N] [--summary-max N]]"),
         ]),
         ("model", "Local model registry + inference daemon (ort for STT/TTS/embed/vision/imagegen, llama.cpp for LLM) — Phase 0.5 skeleton", vec![
             ("list", "List registered models from /var/lib/cos/models/"),

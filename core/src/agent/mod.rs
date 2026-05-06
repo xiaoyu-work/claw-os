@@ -129,8 +129,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "guardrails" => guardrails_cmd(args),
         "approval" => approval_cmd(args),
         "todo" => todo_cmd(args),
+        "compress" => compress_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | title | summarise | classify | tools | guardrails | approval | todo"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | title | summarise | classify | tools | guardrails | approval | todo | compress"
         )),
     }
 }
@@ -2025,6 +2026,185 @@ fn todo_cmd_at(
             "unknown todo subcommand: {other}. try: list | add | set-status | remove | clear --yes | path"
         )),
     }
+}
+
+/// `cos agent compress [show-config|check --file <jsonl> [...]]`
+///
+/// Inspect the context-window compressor without invoking it. Two
+/// surfaces:
+///
+/// - `show-config` — dump the default `CompressorConfig` so callers
+///   know where the trigger / target / keep-tail / summary-max budgets
+///   currently sit.
+///
+/// - `check` — load a JSONL file (one `Message` per line) plus an
+///   optional system prompt, run `estimate_total_tokens` on it, and
+///   report whether the total clears the configured trigger and how
+///   far over the target budget it would land. Useful for capacity
+///   planning ("would this conversation force a summarisation?")
+///   without spending API tokens on a real `LlmCompressor` round-trip.
+///
+/// `--trigger / --target / --keep-tail / --summary-max` override the
+/// default `CompressorConfig` budgets in-place so the same recorded
+/// conversation can be inspected against multiple budget profiles.
+fn compress_cmd(args: &[String]) -> Result<Value, String> {
+    use crate::agent::context::compressor::{
+        estimate_message_tokens, estimate_total_tokens, estimate_text_tokens,
+        CompressorConfig,
+    };
+    use crate::agent::llm::types::{Message, Role};
+
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("show-config");
+    match sub {
+        "show-config" => {
+            let cfg = CompressorConfig::default();
+            Ok(json!({
+                "target_tokens": cfg.target_tokens,
+                "trigger_tokens": cfg.trigger_tokens,
+                "keep_tail_tokens": cfg.keep_tail_tokens,
+                "summary_max_tokens": cfg.summary_max_tokens,
+            }))
+        }
+        "check" => {
+            let mut file: Option<String> = None;
+            let mut system_inline: Option<String> = None;
+            let mut system_file: Option<String> = None;
+            let mut cfg = CompressorConfig::default();
+            let mut i = 1usize;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--file" => {
+                        file = Some(
+                            args.get(i + 1)
+                                .cloned()
+                                .ok_or_else(|| "--file needs a value".to_string())?,
+                        );
+                        i += 2;
+                    }
+                    "--system" => {
+                        system_inline = Some(
+                            args.get(i + 1)
+                                .cloned()
+                                .ok_or_else(|| "--system needs a value".to_string())?,
+                        );
+                        i += 2;
+                    }
+                    "--system-file" => {
+                        system_file = Some(
+                            args.get(i + 1)
+                                .cloned()
+                                .ok_or_else(|| "--system-file needs a value".to_string())?,
+                        );
+                        i += 2;
+                    }
+                    "--trigger" => {
+                        cfg.trigger_tokens = parse_u32_arg(args.get(i + 1), "--trigger")?;
+                        i += 2;
+                    }
+                    "--target" => {
+                        cfg.target_tokens = parse_u32_arg(args.get(i + 1), "--target")?;
+                        i += 2;
+                    }
+                    "--keep-tail" | "--keep_tail" => {
+                        cfg.keep_tail_tokens = parse_u32_arg(args.get(i + 1), "--keep-tail")?;
+                        i += 2;
+                    }
+                    "--summary-max" | "--summary_max" => {
+                        cfg.summary_max_tokens =
+                            parse_u32_arg(args.get(i + 1), "--summary-max")?;
+                        i += 2;
+                    }
+                    other => {
+                        return Err(format!("unknown compress check flag: {other}"));
+                    }
+                }
+            }
+
+            let path = file.ok_or_else(|| "--file required".to_string())?;
+            let raw = std::fs::read_to_string(&path)
+                .map_err(|e| format!("read {path}: {e}"))?;
+            let mut messages: Vec<Message> = Vec::new();
+            for (line_no, line) in raw.lines().enumerate() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let msg: Message = serde_json::from_str(trimmed).map_err(|e| {
+                    format!("parse line {} of {}: {}", line_no + 1, path, e)
+                })?;
+                messages.push(msg);
+            }
+
+            let system = match (system_inline, system_file) {
+                (Some(_), Some(_)) => {
+                    return Err("--system and --system-file are mutually exclusive".into());
+                }
+                (Some(s), None) => Some(s),
+                (None, Some(p)) => Some(
+                    std::fs::read_to_string(&p)
+                        .map_err(|e| format!("read {p}: {e}"))?,
+                ),
+                (None, None) => None,
+            };
+
+            let system_tokens = system.as_deref().map(estimate_text_tokens).unwrap_or(0);
+            let mut role_counts = std::collections::BTreeMap::<&str, u64>::new();
+            let mut role_tokens = std::collections::BTreeMap::<&str, u32>::new();
+            let mut per_message: Vec<serde_json::Value> = Vec::with_capacity(messages.len());
+            for (idx, msg) in messages.iter().enumerate() {
+                let role = match msg.role {
+                    Role::System => "system",
+                    Role::User => "user",
+                    Role::Assistant => "assistant",
+                    Role::Tool => "tool",
+                };
+                let toks = estimate_message_tokens(msg);
+                *role_counts.entry(role).or_default() += 1;
+                *role_tokens.entry(role).or_default() = role_tokens
+                    .get(role)
+                    .copied()
+                    .unwrap_or(0)
+                    .saturating_add(toks);
+                per_message.push(json!({
+                    "index": idx,
+                    "role": role,
+                    "blocks": msg.content.len(),
+                    "estimated_tokens": toks,
+                }));
+            }
+            let total = estimate_total_tokens(system.as_deref(), &messages);
+            let would_trigger = total >= cfg.trigger_tokens;
+            let over_target = total.saturating_sub(cfg.target_tokens);
+
+            Ok(json!({
+                "config": {
+                    "target_tokens": cfg.target_tokens,
+                    "trigger_tokens": cfg.trigger_tokens,
+                    "keep_tail_tokens": cfg.keep_tail_tokens,
+                    "summary_max_tokens": cfg.summary_max_tokens,
+                },
+                "system_tokens": system_tokens,
+                "message_count": messages.len(),
+                "messages_tokens": total.saturating_sub(system_tokens),
+                "total_tokens": total,
+                "would_trigger": would_trigger,
+                "over_target": over_target,
+                "by_role": {
+                    "counts": role_counts,
+                    "tokens": role_tokens,
+                },
+                "messages": per_message,
+            }))
+        }
+        other => Err(format!(
+            "unknown compress subcommand: {other}. try: show-config | check --file <jsonl>"
+        )),
+    }
+}
+
+fn parse_u32_arg(raw: Option<&String>, flag: &str) -> Result<u32, String> {
+    let s = raw.ok_or_else(|| format!("{flag} needs a value"))?;
+    s.parse::<u32>().map_err(|e| format!("{flag}: {e}"))
 }
 
 fn todo_status_counts(list: &crate::agent::tools::todo::TodoList) -> serde_json::Value {
@@ -4685,6 +4865,221 @@ mod tests {
     fn todo_cmd_unknown_subcommand_errs() {
         let (_dir, store) = temp_todo_store();
         let err = todo_cmd_at(&["bogus".into()], &store).unwrap_err();
+        assert!(err.contains("bogus"));
+    }
+
+    // ---- compress_cmd ----
+
+    #[test]
+    fn compress_cmd_show_config_returns_defaults() {
+        let v = compress_cmd(&["show-config".into()]).expect("show-config ok");
+        assert!(v.get("target_tokens").and_then(|n| n.as_u64()).unwrap_or(0) > 0);
+        assert!(v.get("trigger_tokens").and_then(|n| n.as_u64()).unwrap_or(0) > 0);
+        assert!(v.get("keep_tail_tokens").and_then(|n| n.as_u64()).is_some());
+        assert!(v.get("summary_max_tokens").and_then(|n| n.as_u64()).is_some());
+    }
+
+    #[test]
+    fn compress_cmd_default_subcommand_is_show_config() {
+        let v = compress_cmd(&[]).expect("default ok");
+        assert!(v.get("target_tokens").is_some());
+    }
+
+    #[test]
+    fn compress_cmd_check_requires_file() {
+        let err = compress_cmd(&["check".into()]).unwrap_err();
+        assert!(err.contains("--file"));
+    }
+
+    #[test]
+    fn compress_cmd_check_reports_zero_for_empty_file() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let path = dir.path().join("conv.jsonl");
+        std::fs::write(&path, "").expect("write");
+        let v = compress_cmd(&[
+            "check".into(),
+            "--file".into(),
+            path.display().to_string(),
+        ])
+        .expect("check ok");
+        assert_eq!(v.get("message_count").and_then(|n| n.as_u64()), Some(0));
+        assert_eq!(v.get("total_tokens").and_then(|n| n.as_u64()), Some(0));
+        assert_eq!(v.get("would_trigger").and_then(|b| b.as_bool()), Some(false));
+    }
+
+    #[test]
+    fn compress_cmd_check_skips_blank_lines() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let path = dir.path().join("conv.jsonl");
+        let body = format!(
+            "{}\n\n{}\n",
+            serde_json::to_string(&crate::agent::llm::types::Message::user_text("hello"))
+                .unwrap(),
+            serde_json::to_string(&crate::agent::llm::types::Message::assistant_text(
+                "hi back"
+            ))
+            .unwrap(),
+        );
+        std::fs::write(&path, body).expect("write");
+        let v = compress_cmd(&[
+            "check".into(),
+            "--file".into(),
+            path.display().to_string(),
+        ])
+        .expect("check ok");
+        assert_eq!(v.get("message_count").and_then(|n| n.as_u64()), Some(2));
+    }
+
+    #[test]
+    fn compress_cmd_check_counts_by_role() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let path = dir.path().join("conv.jsonl");
+        let body = format!(
+            "{}\n{}\n{}\n",
+            serde_json::to_string(&crate::agent::llm::types::Message::user_text("u1"))
+                .unwrap(),
+            serde_json::to_string(&crate::agent::llm::types::Message::assistant_text("a1"))
+                .unwrap(),
+            serde_json::to_string(&crate::agent::llm::types::Message::user_text("u2"))
+                .unwrap(),
+        );
+        std::fs::write(&path, body).expect("write");
+        let v = compress_cmd(&[
+            "check".into(),
+            "--file".into(),
+            path.display().to_string(),
+        ])
+        .expect("check ok");
+        let by_role = v.get("by_role").expect("by_role");
+        let counts = by_role.get("counts").expect("counts");
+        assert_eq!(counts.get("user").and_then(|n| n.as_u64()), Some(2));
+        assert_eq!(counts.get("assistant").and_then(|n| n.as_u64()), Some(1));
+    }
+
+    #[test]
+    fn compress_cmd_check_includes_system_tokens_when_provided() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let path = dir.path().join("conv.jsonl");
+        std::fs::write(&path, "").expect("write");
+        let v = compress_cmd(&[
+            "check".into(),
+            "--file".into(),
+            path.display().to_string(),
+            "--system".into(),
+            "you are a helpful assistant".into(),
+        ])
+        .expect("check ok");
+        assert!(v.get("system_tokens").and_then(|n| n.as_u64()).unwrap_or(0) > 0);
+    }
+
+    #[test]
+    fn compress_cmd_check_system_file_loads_text() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let path = dir.path().join("conv.jsonl");
+        std::fs::write(&path, "").expect("write");
+        let sys_path = dir.path().join("sys.txt");
+        std::fs::write(&sys_path, "system prompt body").expect("write");
+        let v = compress_cmd(&[
+            "check".into(),
+            "--file".into(),
+            path.display().to_string(),
+            "--system-file".into(),
+            sys_path.display().to_string(),
+        ])
+        .expect("check ok");
+        assert!(v.get("system_tokens").and_then(|n| n.as_u64()).unwrap_or(0) > 0);
+    }
+
+    #[test]
+    fn compress_cmd_check_system_and_system_file_conflict() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let path = dir.path().join("conv.jsonl");
+        std::fs::write(&path, "").expect("write");
+        let sys_path = dir.path().join("sys.txt");
+        std::fs::write(&sys_path, "x").expect("write");
+        let err = compress_cmd(&[
+            "check".into(),
+            "--file".into(),
+            path.display().to_string(),
+            "--system".into(),
+            "y".into(),
+            "--system-file".into(),
+            sys_path.display().to_string(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn compress_cmd_check_would_trigger_when_total_meets_trigger() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let path = dir.path().join("conv.jsonl");
+        let big = "x".repeat(2000);
+        let body = format!(
+            "{}\n",
+            serde_json::to_string(&crate::agent::llm::types::Message::user_text(&big)).unwrap(),
+        );
+        std::fs::write(&path, body).expect("write");
+        let v = compress_cmd(&[
+            "check".into(),
+            "--file".into(),
+            path.display().to_string(),
+            "--trigger".into(),
+            "10".into(),
+        ])
+        .expect("check ok");
+        assert_eq!(v.get("would_trigger").and_then(|b| b.as_bool()), Some(true));
+    }
+
+    #[test]
+    fn compress_cmd_check_overrides_config() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let path = dir.path().join("conv.jsonl");
+        std::fs::write(&path, "").expect("write");
+        let v = compress_cmd(&[
+            "check".into(),
+            "--file".into(),
+            path.display().to_string(),
+            "--trigger".into(),
+            "12345".into(),
+            "--target".into(),
+            "8000".into(),
+            "--keep-tail".into(),
+            "1234".into(),
+            "--summary-max".into(),
+            "777".into(),
+        ])
+        .expect("check ok");
+        let cfg = v.get("config").expect("config");
+        assert_eq!(cfg.get("trigger_tokens").and_then(|n| n.as_u64()), Some(12345));
+        assert_eq!(cfg.get("target_tokens").and_then(|n| n.as_u64()), Some(8000));
+        assert_eq!(cfg.get("keep_tail_tokens").and_then(|n| n.as_u64()), Some(1234));
+        assert_eq!(cfg.get("summary_max_tokens").and_then(|n| n.as_u64()), Some(777));
+    }
+
+    #[test]
+    fn compress_cmd_check_rejects_corrupt_jsonl() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let path = dir.path().join("conv.jsonl");
+        std::fs::write(&path, "{not json}\n").expect("write");
+        let err = compress_cmd(&[
+            "check".into(),
+            "--file".into(),
+            path.display().to_string(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("parse line 1"));
+    }
+
+    #[test]
+    fn compress_cmd_check_rejects_unknown_flag() {
+        let err = compress_cmd(&["check".into(), "--bogus".into()]).unwrap_err();
+        assert!(err.contains("--bogus"));
+    }
+
+    #[test]
+    fn compress_cmd_unknown_subcommand_errs() {
+        let err = compress_cmd(&["bogus".into()]).unwrap_err();
         assert!(err.contains("bogus"));
     }
 }
