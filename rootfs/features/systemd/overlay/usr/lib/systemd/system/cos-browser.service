@@ -1,0 +1,17 @@
+[Unit]
+Description=Claw OS — cos browser engine (Obscura)
+Documentation=https://github.com/xiaoyu-work/claw-os
+After=cos-den-setup.service network-online.target
+Wants=cos-den-setup.service network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/cos-browser serve --port 9222
+Restart=on-failure
+RestartSec=5
+# cos-browser drives chromium; in containers/VMs without a user namespace
+# it commonly needs root to launch the chromium child. Override with a
+# drop-in if your target has a non-root user with the right capabilities.
+
+[Install]
+WantedBy=multi-user.target

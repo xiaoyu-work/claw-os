@@ -1,32 +1,19 @@
 #!/bin/bash
-# cos-init — Claw OS container entrypoint
-# Sets up OS-level filesystem overlay, starts services, then hands off.
+# cos-init — Claw OS Docker container PID 1 entrypoint.
+# Sources the cos profile, runs the shared /den setup helper (the same
+# one used by cos-den-setup.service on systemd targets), then execs the
+# requested command.
 
 set -e
 
 # Source COS profile
 [ -f /etc/cos/profile.sh ] && . /etc/cos/profile.sh
 
-# Set up OverlayFS on /den for checkpoint support
-# This makes all file changes trackable and reversible.
-OVERLAY_DIR="/var/lib/cos/overlay"
-if [ "$(uname)" = "Linux" ] && command -v mount >/dev/null 2>&1; then
-    mkdir -p "$OVERLAY_DIR/base" "$OVERLAY_DIR/upper" "$OVERLAY_DIR/work"
-
-    # First boot: move existing /den content into base layer
-    if [ -z "$(ls -A "$OVERLAY_DIR/base" 2>/dev/null)" ] && [ -d /den ]; then
-        cp -a /den/. "$OVERLAY_DIR/base/" 2>/dev/null || true
-    fi
-
-    # Mount overlay: agent sees /den, writes go to upper
-    if mount -t overlay overlay \
-        -o "lowerdir=$OVERLAY_DIR/base,upperdir=$OVERLAY_DIR/upper,workdir=$OVERLAY_DIR/work" \
-        /den 2>/tmp/cos-overlay-error; then
-        echo '{"overlay": "mounted", "path": "/den"}'
-    else
-        echo '{"overlay": "failed", "path": "/den", "error": "'"$(cat /tmp/cos-overlay-error)"'", "warning": "checkpoints disabled — run with --privileged or --cap-add SYS_ADMIN"}'
-    fi
-fi
+# /den OverlayFS setup. Shared with cos-den-setup.service on non-Docker
+# targets; the helper is idempotent and always exits 0 (overlay failure
+# is non-fatal — see the helper for details).
+/usr/lib/cos/init/setup-den.sh
 
 # Execute the requested command (default: bash --login)
 exec "${@:-/bin/bash --login}"
+
