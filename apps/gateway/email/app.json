@@ -1,0 +1,39 @@
+{
+  "name": "gateway-email",
+  "version": "0.1.0",
+  "description": "Outbound-only SMTP email gateway. send delivers a one-shot text email via the configured SMTP server.",
+  "language": "python",
+  "entry": "main.py",
+  "runtime": {
+    "python": ">=3.10"
+  },
+  "credentials": [
+    {
+      "name": "smtp_host",
+      "description": "SMTP server hostname, e.g. smtp.gmail.com (env override: COS_SMTP_HOST)"
+    },
+    {
+      "name": "smtp_port",
+      "description": "SMTP server port (default 587 for STARTTLS, 465 for implicit TLS, 25 for plain) (env override: COS_SMTP_PORT)"
+    },
+    {
+      "name": "smtp_user",
+      "description": "SMTP authentication username (env override: COS_SMTP_USER)"
+    },
+    {
+      "name": "smtp_password",
+      "description": "SMTP authentication password / app password (env override: COS_SMTP_PASSWORD)"
+    },
+    {
+      "name": "smtp_from",
+      "description": "Default From: address (env override: COS_SMTP_FROM); falls back to smtp_user when absent"
+    }
+  ],
+  "scopes": [
+    "credential:smtp_host",
+    "credential:smtp_port",
+    "credential:smtp_user",
+    "credential:smtp_password",
+    "credential:smtp_from"
+  ]
+}

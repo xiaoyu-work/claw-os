@@ -1,0 +1,24 @@
+{
+  "name": "gateway-signal",
+  "version": "0.1.0",
+  "description": "Outbound-only Signal gateway via signal-cli-rest-api. send POSTs a text message via the local signal-cli-rest-api server.",
+  "language": "python",
+  "entry": "main.py",
+  "runtime": {
+    "python": ">=3.10"
+  },
+  "credentials": [
+    {
+      "name": "signal_base_url",
+      "description": "signal-cli-rest-api base URL, e.g. http://localhost:8080 (env override: COS_SIGNAL_BASE_URL)"
+    },
+    {
+      "name": "signal_number",
+      "description": "Linked Signal account phone in E.164 (env override: COS_SIGNAL_NUMBER)"
+    }
+  ],
+  "scopes": [
+    "credential:signal_base_url",
+    "credential:signal_number"
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "name": "gateway-sms",
+  "version": "0.1.0",
+  "description": "Outbound-only SMS gateway via Twilio. send delivers a one-shot SMS via the Twilio Messages REST API.",
+  "language": "python",
+  "entry": "main.py",
+  "runtime": {
+    "python": ">=3.10"
+  },
+  "credentials": [
+    {
+      "name": "twilio_account_sid",
+      "description": "Twilio Account SID (env override: COS_TWILIO_ACCOUNT_SID)"
+    },
+    {
+      "name": "twilio_auth_token",
+      "description": "Twilio Auth Token (env override: COS_TWILIO_AUTH_TOKEN)"
+    },
+    {
+      "name": "twilio_from",
+      "description": "Sender phone number (E.164, e.g. +14155552671) or Messaging Service SID (MGxxxx) (env override: COS_TWILIO_FROM)"
+    }
+  ],
+  "scopes": [
+    "credential:twilio_account_sid",
+    "credential:twilio_auth_token",
+    "credential:twilio_from"
+  ]
+}
