@@ -24,6 +24,15 @@ pub const USER_FILE: &str = "USER.md";
 
 const ALL_KNOWN: &[&str] = &[MEMORY_FILE, USER_FILE];
 
+/// Per-file character budget when injecting notes into the system
+/// prompt. 32 KiB chars (≈ ~8K tokens for English) is generous for
+/// hand-written guidance but guards against a runaway paste blowing
+/// the context window. The cap applies *only* to prompt assembly —
+/// `NotesStore::read` always returns the full file, so
+/// `cos_memory read MEMORY.md` still gives the model the unedited
+/// contents on demand.
+pub const MAX_NOTE_CHARS_FOR_PROMPT: usize = 32_768;
+
 #[derive(Debug, Clone)]
 pub struct NotesStore {
     dir: PathBuf,
@@ -112,8 +121,16 @@ impl NotesStore {
 
     /// Return concatenated content of `MEMORY.md` and `USER.md` for the
     /// system prompt. Either or both may be missing — `None` is returned if
-    /// nothing useful exists.
+    /// nothing useful exists. Each file is independently capped at
+    /// [`MAX_NOTE_CHARS_FOR_PROMPT`] characters; oversized notes are
+    /// truncated with a marker so the model is told what happened.
     pub fn assemble_for_prompt(&self) -> Option<String> {
+        self.assemble_for_prompt_with_cap(MAX_NOTE_CHARS_FOR_PROMPT)
+    }
+
+    /// Same as [`assemble_for_prompt`] with an explicit per-file cap.
+    /// Exposed for tests; production callers should use the default.
+    pub fn assemble_for_prompt_with_cap(&self, cap_chars: usize) -> Option<String> {
         let mut out = String::new();
         for name in ALL_KNOWN {
             if let Ok(Some(text)) = self.read(name) {
@@ -121,13 +138,14 @@ impl NotesStore {
                 if trimmed.is_empty() {
                     continue;
                 }
+                let capped = truncate_for_prompt(trimmed, cap_chars);
                 if !out.is_empty() {
                     out.push_str("\n\n");
                 }
                 out.push_str("# ");
                 out.push_str(name);
                 out.push_str("\n\n");
-                out.push_str(trimmed);
+                out.push_str(&capped);
             }
         }
         if out.is_empty() {
@@ -137,6 +155,38 @@ impl NotesStore {
         }
     }
 }
+
+/// Cap a note to at most `cap_chars` characters. If the input is
+/// already small enough, it is returned unchanged (no allocation).
+/// Otherwise the head is kept and a single-line marker is appended.
+/// `cap_chars == 0` returns just the marker so callers always learn
+/// the original size.
+///
+/// Multibyte-safe: counts and slices by `char` boundaries, so a note
+/// full of CJK or emoji characters never panics on a partial UTF-8
+/// boundary.
+pub fn truncate_for_prompt(text: &str, cap_chars: usize) -> std::borrow::Cow<'_, str> {
+    let total_chars = text.chars().count();
+    if total_chars <= cap_chars {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    // We need room for both the kept body and the marker. Reserve
+    // a small portion of the budget for the marker so an extreme
+    // cap (e.g. 16) still produces a usable string. The marker is
+    // bounded; subtract its conservative upper-bound length.
+    let marker_reserve = MARKER_RESERVE_CHARS.min(cap_chars);
+    let body_budget = cap_chars.saturating_sub(marker_reserve);
+    let mut out = String::with_capacity(text.len().min(body_budget * 4 + 128));
+    out.extend(text.chars().take(body_budget));
+    out.push_str(&format!(
+        "\n\n[…] (truncated for prompt; kept {kept} of {total} chars)",
+        kept = body_budget,
+        total = total_chars,
+    ));
+    std::borrow::Cow::Owned(out)
+}
+
+const MARKER_RESERVE_CHARS: usize = 80;
 
 fn validate_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
@@ -259,5 +309,109 @@ mod tests {
         let s = NotesStore::at(&dir);
         assert!(s.write("MEMORY", "x").is_err());
         assert!(s.write("MEMORY.txt", "x").is_err());
+    }
+
+    #[test]
+    fn truncate_for_prompt_passes_through_short_input() {
+        let s = "hello world";
+        let out = truncate_for_prompt(s, 32);
+        assert_eq!(out, "hello world");
+        assert!(matches!(out, std::borrow::Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn truncate_for_prompt_caps_long_input() {
+        let s = "x".repeat(2_000);
+        let out = truncate_for_prompt(&s, 200);
+        let chars: usize = out.chars().count();
+        assert!(chars <= 200, "got {chars} chars, expected <= 200");
+        assert!(out.contains("[…]"), "expected truncation marker, got {out:?}");
+        assert!(out.contains("of 2000 chars"));
+    }
+
+    #[test]
+    fn truncate_for_prompt_is_multibyte_safe() {
+        // 1000 four-byte chars × 1 char-budget per "char" → must
+        // never panic on a UTF-8 boundary and the kept slice must
+        // be valid UTF-8 (the pushed prefix is built from chars()).
+        let s = "🦀".repeat(1_000);
+        let out = truncate_for_prompt(&s, 100);
+        // Marker present + start contains crab.
+        assert!(out.starts_with('🦀'));
+        assert!(out.contains("[…]"));
+    }
+
+    #[test]
+    fn truncate_for_prompt_with_zero_cap_keeps_just_marker() {
+        let s = "abc".repeat(100);
+        let out = truncate_for_prompt(&s, 0);
+        assert!(out.contains("[…]"));
+        assert!(out.contains("of 300 chars"));
+    }
+
+    #[test]
+    fn assemble_for_prompt_with_cap_truncates_oversized_note() {
+        let dir = tmpdir("assemble-cap");
+        let s = NotesStore::at(&dir);
+        let big = "y".repeat(5_000);
+        s.write("MEMORY.md", &big).unwrap();
+        let assembled = s.assemble_for_prompt_with_cap(500).unwrap();
+        assert!(assembled.contains("# MEMORY.md"));
+        assert!(assembled.contains("[…]"));
+        // The total must be small. Header + body + marker;
+        // header is ~14 chars, marker ~80 chars, body capped to
+        // (500 - 80) = 420.
+        let body_chars = assembled.chars().count();
+        assert!(
+            body_chars < 700,
+            "expected ≤ ~600 chars after capping, got {body_chars}"
+        );
+    }
+
+    #[test]
+    fn assemble_for_prompt_with_cap_passes_through_small_notes() {
+        let dir = tmpdir("assemble-cap-small");
+        let s = NotesStore::at(&dir);
+        s.write("MEMORY.md", "tiny note").unwrap();
+        let assembled = s.assemble_for_prompt_with_cap(1_024).unwrap();
+        assert!(assembled.contains("tiny note"));
+        assert!(!assembled.contains("[…]"));
+    }
+
+    #[test]
+    fn assemble_for_prompt_default_uses_max_note_chars_constant() {
+        // 100 KiB content, default cap 32 KiB → must truncate.
+        let dir = tmpdir("assemble-default-cap");
+        let s = NotesStore::at(&dir);
+        let big = "z".repeat(MAX_NOTE_CHARS_FOR_PROMPT * 4);
+        s.write("MEMORY.md", &big).unwrap();
+        let assembled = s.assemble_for_prompt().unwrap();
+        assert!(assembled.contains("[…]"));
+        let chars = assembled.chars().count();
+        // Header (~14) + body (≤ MAX_NOTE_CHARS_FOR_PROMPT) +
+        // marker (~80). Allow some slack.
+        assert!(
+            chars < MAX_NOTE_CHARS_FOR_PROMPT + 256,
+            "assembled prompt ({chars} chars) exceeded cap"
+        );
+    }
+
+    #[test]
+    fn assemble_for_prompt_per_file_cap_is_independent() {
+        let dir = tmpdir("assemble-per-file");
+        let s = NotesStore::at(&dir);
+        // Both files individually within cap; make sure MEMORY's
+        // truncation marker doesn't bleed into USER.
+        let big = "a".repeat(2_000);
+        s.write("MEMORY.md", &big).unwrap();
+        s.write("USER.md", "small content").unwrap();
+        let assembled = s.assemble_for_prompt_with_cap(500).unwrap();
+        assert!(assembled.contains("# MEMORY.md"));
+        assert!(assembled.contains("# USER.md"));
+        assert!(assembled.contains("[…]"));
+        assert!(assembled.contains("small content"));
+        // Each # heading appears exactly once.
+        assert_eq!(assembled.matches("# MEMORY.md").count(), 1);
+        assert_eq!(assembled.matches("# USER.md").count(), 1);
     }
 }
