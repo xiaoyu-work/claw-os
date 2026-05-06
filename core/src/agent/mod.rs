@@ -137,8 +137,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "display" => display_cmd(args),
         "shell-hooks" => shell_hooks_cmd(args),
         "media" => media_cmd(args),
+        "binary-ext" => binary_ext_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | title | summarise | classify | tools | guardrails | approval | todo | compress | aux | retry | vision | display | shell-hooks | media"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | title | summarise | classify | tools | guardrails | approval | todo | compress | aux | retry | vision | display | shell-hooks | media | binary-ext"
         )),
     }
 }
@@ -3495,6 +3496,106 @@ fn list_media_outputs(
         "n": files.len(),
         "files": files,
     }))
+}
+
+/// `cos agent binary-ext <list [--limit N]|check <path>|extensions>`
+///
+/// Surfaces [`crate::agent::safety::binary_ext`] so operators can:
+///   * `check <path>` — quickly classify whether a file would be
+///     treated as binary by the agent's IO helpers.
+///   * `list [--limit N]` — inspect the active classifier's
+///     extension set (sorted, optionally truncated).
+///   * `extensions` — alias of `list` with no truncation, useful
+///     when you want the raw set.
+fn binary_ext_cmd(args: &[String]) -> Result<Value, String> {
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("list");
+    match sub {
+        "list" | "" => {
+            let mut limit: Option<usize> = Some(50);
+            let mut i = 1usize;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--limit" => {
+                        let v = args
+                            .get(i + 1)
+                            .ok_or_else(|| "--limit needs <n>".to_string())?;
+                        limit = Some(
+                            v.parse()
+                                .map_err(|_| {
+                                    format!("--limit must be a positive integer, got: {v}")
+                                })?,
+                        );
+                        i += 2;
+                    }
+                    "--no-limit" => {
+                        limit = None;
+                        i += 1;
+                    }
+                    other => {
+                        return Err(format!("unknown flag for `binary-ext list`: {other}"));
+                    }
+                }
+            }
+            let c = crate::agent::safety::binary_ext::BinaryExtensions::default();
+            let total = c.len();
+            let exts: Vec<&str> = match limit {
+                Some(n) => c.iter().take(n).collect(),
+                None => c.iter().collect(),
+            };
+            Ok(json!({
+                "total": total,
+                "limit": limit,
+                "n": exts.len(),
+                "extensions": exts,
+            }))
+        }
+        "extensions" => {
+            let c = crate::agent::safety::binary_ext::BinaryExtensions::default();
+            let exts: Vec<&str> = c.iter().collect();
+            Ok(json!({
+                "total": c.len(),
+                "extensions": exts,
+            }))
+        }
+        "check" => {
+            let raw = args
+                .get(1)
+                .ok_or_else(|| "usage: cos agent binary-ext check <path-or-extension>".to_string())?;
+            let c = crate::agent::safety::binary_ext::BinaryExtensions::default();
+            // Heuristic: if it looks like a bare extension (no path
+            // separator, at most one leading `.`), treat it as such;
+            // otherwise treat as a path.
+            let looks_like_extension = !raw.contains(['/', '\\'])
+                && (raw.starts_with('.') || !raw.contains('.'))
+                && !raw.contains(' ');
+            let (mode, is_binary, ext_resolved): (&str, bool, Option<String>) =
+                if looks_like_extension {
+                    let key = raw.trim().trim_start_matches('.').to_ascii_lowercase();
+                    (
+                        "extension",
+                        c.contains_extension(raw),
+                        if key.is_empty() { None } else { Some(key) },
+                    )
+                } else {
+                    let p = std::path::Path::new(raw);
+                    let ext = p
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .map(|s| s.to_ascii_lowercase());
+                    ("path", c.is_binary_path(p), ext)
+                };
+            Ok(json!({
+                "input": raw,
+                "mode": mode,
+                "extension": ext_resolved,
+                "is_binary": is_binary,
+                "set_size": c.len(),
+            }))
+        }
+        other => Err(format!(
+            "unknown binary-ext subcommand: {other}. try: list [--limit N] [--no-limit] | extensions | check <path-or-extension>"
+        )),
+    }
 }
 
 fn todo_status_counts(list: &crate::agent::tools::todo::TodoList) -> serde_json::Value {
@@ -8201,5 +8302,102 @@ mod tests {
         let err = media_cmd(&["bogus".into()]).unwrap_err();
         assert!(err.contains("bogus"));
         assert!(err.contains("providers"));
+    }
+
+    #[test]
+    fn binary_ext_default_lists_with_capped_limit() {
+        let v = binary_ext_cmd(&[]).expect("default ok");
+        let n = v.get("n").and_then(|n| n.as_u64()).expect("n");
+        let total = v.get("total").and_then(|n| n.as_u64()).expect("total");
+        assert!(n <= 50, "default limit should cap at 50, got {n}");
+        assert!(total >= n, "total ({total}) must be >= shown ({n})");
+        assert!(v.get("extensions").is_some());
+    }
+
+    #[test]
+    fn binary_ext_no_limit_returns_all() {
+        let v = binary_ext_cmd(&["list".into(), "--no-limit".into()]).expect("no-limit ok");
+        let n = v.get("n").and_then(|n| n.as_u64()).expect("n");
+        let total = v.get("total").and_then(|n| n.as_u64()).expect("total");
+        assert_eq!(n, total);
+    }
+
+    #[test]
+    fn binary_ext_list_unknown_flag_errs() {
+        let err = binary_ext_cmd(&["list".into(), "--bogus".into()]).unwrap_err();
+        assert!(err.contains("unknown flag"));
+    }
+
+    #[test]
+    fn binary_ext_list_limit_requires_value() {
+        let err = binary_ext_cmd(&["list".into(), "--limit".into()]).unwrap_err();
+        assert!(err.contains("--limit"));
+    }
+
+    #[test]
+    fn binary_ext_list_limit_requires_int() {
+        let err = binary_ext_cmd(&["list".into(), "--limit".into(), "abc".into()]).unwrap_err();
+        assert!(err.contains("--limit"));
+    }
+
+    #[test]
+    fn binary_ext_extensions_returns_all_unbounded() {
+        let v = binary_ext_cmd(&["extensions".into()]).expect("extensions ok");
+        let total = v.get("total").and_then(|n| n.as_u64()).expect("total");
+        let len = v
+            .get("extensions")
+            .and_then(|a| a.as_array())
+            .map(|a| a.len() as u64)
+            .expect("extensions array");
+        assert_eq!(total, len);
+    }
+
+    #[test]
+    fn binary_ext_check_recognises_path_with_known_ext() {
+        let v = binary_ext_cmd(&["check".into(), "C:\\Users\\me\\image.PNG".into()])
+            .expect("check ok");
+        assert_eq!(v.get("mode").and_then(|s| s.as_str()), Some("path"));
+        assert_eq!(v.get("is_binary").and_then(|b| b.as_bool()), Some(true));
+        assert_eq!(v.get("extension").and_then(|s| s.as_str()), Some("png"));
+    }
+
+    #[test]
+    fn binary_ext_check_recognises_text_path_as_not_binary() {
+        let v = binary_ext_cmd(&["check".into(), "/etc/cos/config.json".into()])
+            .expect("check ok");
+        assert_eq!(v.get("mode").and_then(|s| s.as_str()), Some("path"));
+        assert_eq!(v.get("is_binary").and_then(|b| b.as_bool()), Some(false));
+    }
+
+    #[test]
+    fn binary_ext_check_extension_only_input_uses_extension_mode() {
+        let v = binary_ext_cmd(&["check".into(), ".gguf".into()]).expect("check ok");
+        assert_eq!(v.get("mode").and_then(|s| s.as_str()), Some("extension"));
+        assert_eq!(v.get("is_binary").and_then(|b| b.as_bool()), Some(true));
+        assert_eq!(v.get("extension").and_then(|s| s.as_str()), Some("gguf"));
+
+        let v2 = binary_ext_cmd(&["check".into(), "exe".into()]).expect("check ok2");
+        assert_eq!(v2.get("mode").and_then(|s| s.as_str()), Some("extension"));
+        assert_eq!(v2.get("is_binary").and_then(|b| b.as_bool()), Some(true));
+    }
+
+    #[test]
+    fn binary_ext_check_unknown_extension_returns_false() {
+        let v = binary_ext_cmd(&["check".into(), "logfile.unknown".into()])
+            .expect("check ok");
+        assert_eq!(v.get("is_binary").and_then(|b| b.as_bool()), Some(false));
+    }
+
+    #[test]
+    fn binary_ext_check_requires_arg() {
+        let err = binary_ext_cmd(&["check".into()]).unwrap_err();
+        assert!(err.contains("usage"));
+    }
+
+    #[test]
+    fn binary_ext_unknown_subcommand_errs() {
+        let err = binary_ext_cmd(&["bogus".into()]).unwrap_err();
+        assert!(err.contains("bogus"));
+        assert!(err.contains("list"));
     }
 }

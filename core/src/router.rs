@@ -413,6 +413,7 @@ fn builtin_apps() -> Vec<(
             ("display", "Render conversation history (and standalone helpers) through the agent::display formatter — pure-functional, no ANSI: cos agent display transcript --session <id> [--limit N] [--width W] [--no-truncate] [--truncate-at N] [--indent N] | cos agent display format-bytes <n> | cos agent display format-duration <ms>"),
             ("shell-hooks", "Capture interactive shell commands into a JSONL log so the agent can read them as ambient context: cos agent shell-hooks [init <bash|zsh|fish>|record-pre <cmd>|record-post <exit>|tail [--limit N]|clear --yes|path]"),
             ("media", "Inspect the media subsystem (TTS / STT / image-gen providers + outputs directory): cos agent media [providers|outputs-dir|list-outputs [--limit N] [--ext <e>]]"),
+            ("binary-ext", "Classify file extensions as binary or text (extension-only, no magic-byte sniff): cos agent binary-ext [list [--limit N] [--no-limit] | extensions | check <path-or-extension>]"),
         ]),
         ("model", "Local model registry + inference daemon (ort for STT/TTS/embed/vision/imagegen, llama.cpp for LLM) — Phase 0.5 skeleton", vec![
             ("list", "List registered models from /var/lib/cos/models/"),
