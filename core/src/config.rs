@@ -438,6 +438,15 @@ pub struct EmbedConfig {
     pub extra_headers: std::collections::HashMap<String, String>,
     #[serde(default = "default_agent_request_timeout")]
     pub request_timeout: u64,
+
+    /// Local model directory (used when `provider = "qwen3-local"`).
+    /// Points at an Olive-exported onnxruntime-genai bundle (with
+    /// `genai_config.json` + `model.onnx` + `model.onnx.data` + the
+    /// tokenizer files). When unset, the embedder falls back to the
+    /// canonical registry slot
+    /// `<models_dir>/qwen3-embedding-0.6b/v1/`.
+    #[serde(default)]
+    pub model_dir: Option<String>,
 }
 
 /// Image generation configuration. Reads from `[imagegen]` block.
@@ -708,6 +717,7 @@ impl Default for EmbedConfig {
             base_url: None,
             extra_headers: std::collections::HashMap::new(),
             request_timeout: default_agent_request_timeout(),
+            model_dir: None,
         }
     }
 }

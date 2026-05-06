@@ -20,17 +20,27 @@ pub enum Task {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 pub enum Engine {
     Ort,
     Llama,
+    /// onnxruntime-genai — used for decoder-only models packaged via
+    /// Olive's `genai` builder (Qwen3, Phi-3-genai, etc.). Distinct
+    /// from [`Engine::Ort`] because the loader, tokenizer, and
+    /// generator surface are different runtimes.
+    OrtGenai,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 pub enum Format {
     Onnx,
     Gguf,
+    /// Olive `genai` bundle: a directory containing `genai_config.json`
+    /// + `model.onnx` (graph) + `model.onnx.data` (external initializers)
+    /// + `tokenizer.json` + the standard HF tokenizer files. Loaded by
+    /// [`Engine::OrtGenai`].
+    OnnxGenai,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

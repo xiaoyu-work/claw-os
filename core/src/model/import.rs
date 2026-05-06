@@ -27,17 +27,19 @@ use super::registry::{Engine, Format, Manifest, Task};
 /// because the CLI just stringifies them.
 #[derive(Debug, thiserror::Error)]
 pub enum ImportError {
-    #[error("source file does not exist: {0}")]
+    #[error("source path does not exist: {0}")]
     SourceMissing(PathBuf),
     #[error("source path is not a regular file: {0}")]
     SourceNotFile(PathBuf),
+    #[error("source directory missing genai_config.json: {0}")]
+    InvalidGenaiBundle(PathBuf),
     #[error("model name '{0}' is invalid (use [A-Za-z0-9._-]+)")]
     InvalidName(String),
     #[error("version '{0}' is invalid (use [A-Za-z0-9._-]+)")]
     InvalidVersion(String),
     #[error("model {name}@{version} already registered (pass --force to overwrite)")]
     AlreadyRegistered { name: String, version: String },
-    #[error("could not detect format from extension '{0}'; pass --format <onnx|gguf>")]
+    #[error("could not detect format from extension '{0}'; pass --format <onnx|gguf|onnx-genai>")]
     UnknownFormat(String),
     #[error("io: {0}")]
     Io(#[from] io::Error),
@@ -122,10 +124,19 @@ pub fn import_model(cfg: &ImportConfig) -> Result<ImportedModel, ImportError> {
         return Err(ImportError::SourceMissing(cfg.source.clone()));
     }
     let meta = fs::metadata(&cfg.source)?;
-    if !meta.is_file() {
-        return Err(ImportError::SourceNotFile(cfg.source.clone()));
+    if meta.is_dir() {
+        import_directory(cfg)
+    } else if meta.is_file() {
+        import_single_file(cfg)
+    } else {
+        Err(ImportError::SourceNotFile(cfg.source.clone()))
     }
+}
 
+/// Single-file import path (.gguf / .onnx). The registry entry is a
+/// directory containing the source file copied/moved verbatim plus a
+/// manifest declaring the engine + format.
+fn import_single_file(cfg: &ImportConfig) -> Result<ImportedModel, ImportError> {
     let basename = cfg
         .source
         .file_name()
@@ -140,37 +151,10 @@ pub fn import_model(cfg: &ImportConfig) -> Result<ImportedModel, ImportError> {
     let (format, engine, default_task) = infer_kind(extension.as_deref(), cfg)?;
     let task = cfg.task.unwrap_or(default_task);
 
-    let target_dir = paths::model_version_dir(&cfg.name, &cfg.version);
-    if target_dir.exists() {
-        if !cfg.force {
-            return Err(ImportError::AlreadyRegistered {
-                name: cfg.name.clone(),
-                version: cfg.version.clone(),
-            });
-        }
-        fs::remove_dir_all(&target_dir)?;
-    }
-
-    // Stage in a sibling directory so any failure (disk full, perms,
-    // etc.) leaves the registry untouched.
-    let parent = target_dir
-        .parent()
-        .ok_or_else(|| io::Error::other("models_dir parent missing"))?;
-    fs::create_dir_all(parent)?;
+    let (target_dir, parent) = prepare_target_dir(cfg)?;
     let staging_token = uuid::Uuid::new_v4().to_string();
     let staging = parent.join(format!("{}.staging-{staging_token}", cfg.version));
     fs::create_dir_all(&staging)?;
-
-    // RAII guard: if anything below fails, the staging dir is cleaned
-    // up before the function returns.
-    struct StagingGuard<'a>(&'a Path);
-    impl Drop for StagingGuard<'_> {
-        fn drop(&mut self) {
-            if self.0.exists() {
-                let _ = fs::remove_dir_all(self.0);
-            }
-        }
-    }
     let guard = StagingGuard(&staging);
 
     let model_target = staging.join(&basename);
@@ -199,13 +183,9 @@ pub fn import_model(cfg: &ImportConfig) -> Result<ImportedModel, ImportError> {
         arch: None,
     };
     let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
-    let manifest_target = staging.join("manifest.json");
-    fs::write(&manifest_target, &manifest_bytes)?;
+    fs::write(staging.join("manifest.json"), &manifest_bytes)?;
 
-    // Atomic flip-into-place. On Windows this fails if the target
-    // exists, but we already removed it above when force was set.
     fs::rename(&staging, &target_dir)?;
-    // Successful — defuse the cleanup guard.
     std::mem::forget(guard);
 
     Ok(ImportedModel {
@@ -219,6 +199,188 @@ pub fn import_model(cfg: &ImportConfig) -> Result<ImportedModel, ImportError> {
         engine,
         format,
     })
+}
+
+/// Directory import path. Currently the only supported directory layout
+/// is an Olive-exported `genai` bundle (recognized by the presence of
+/// `genai_config.json`). The whole directory tree is copied into the
+/// registry and the manifest's `files` field lists every regular file
+/// in the bundle (relative paths). The reported `size` is the sum of
+/// all file sizes; the reported `sha256` is a deterministic tree hash
+/// (sha256 of `<rel_path>\0<file_sha256>\n` lines, sorted by relative
+/// path).
+fn import_directory(cfg: &ImportConfig) -> Result<ImportedModel, ImportError> {
+    if cfg.r#move {
+        // Moving an entire model directory tree is expensive to make
+        // atomic across volumes and yields no real benefit (the source
+        // is usually a one-off Olive export); we always copy.
+        return Err(ImportError::Io(io::Error::other(
+            "--move is not supported for directory imports; copy is forced",
+        )));
+    }
+    let genai_config = cfg.source.join("genai_config.json");
+    let is_genai = genai_config.is_file();
+
+    let (format, engine, default_task) = if is_genai {
+        (Format::OnnxGenai, Engine::OrtGenai, Task::Embed)
+    } else {
+        match (cfg.format, cfg.engine) {
+            (Some(f), Some(e)) => (f, e, cfg.task.unwrap_or(Task::Embed)),
+            _ => return Err(ImportError::InvalidGenaiBundle(cfg.source.clone())),
+        }
+    };
+    let task = cfg.task.unwrap_or(default_task);
+
+    let primary_basename = if is_genai {
+        // Pin `model.onnx` as the canonical primary file so manifest
+        // consumers (e.g. UI summaries) have something to point at.
+        // Fall back to `genai_config.json` if for some reason the graph
+        // isn't named the standard way.
+        if cfg.source.join("model.onnx").is_file() {
+            "model.onnx".to_string()
+        } else {
+            "genai_config.json".to_string()
+        }
+    } else {
+        cfg.source
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| cfg.name.clone())
+    };
+
+    let (target_dir, parent) = prepare_target_dir(cfg)?;
+    let staging_token = uuid::Uuid::new_v4().to_string();
+    let staging = parent.join(format!("{}.staging-{staging_token}", cfg.version));
+    fs::create_dir_all(&staging)?;
+    let guard = StagingGuard(&staging);
+
+    // Collect relative paths first (sorted, deterministic) so the tree
+    // hash is stable across runs.
+    let mut rel_files: Vec<PathBuf> = Vec::new();
+    collect_files_recursive(&cfg.source, &cfg.source, &mut rel_files)?;
+    rel_files.sort();
+
+    let mut total_size: u64 = 0;
+    let mut tree_hasher = crate::crypto::Sha256Stream::new();
+    let mut files_list: Vec<String> = Vec::with_capacity(rel_files.len());
+    for rel in &rel_files {
+        let src = cfg.source.join(rel);
+        let dst = staging.join(rel);
+        if let Some(p) = dst.parent() {
+            fs::create_dir_all(p)?;
+        }
+        fs::copy(&src, &dst)?;
+        let file_size = fs::metadata(&dst)?.len();
+        total_size = total_size.saturating_add(file_size);
+        let file_sha = super::super::engine_pkg::install_local::sha256_of(&dst)?;
+        let rel_str = rel.to_string_lossy().replace('\\', "/");
+        // Tree-hash line: <rel>\0<sha>\n. The path-content separator
+        // '\0' is illegal in any sane filesystem so accidental
+        // collisions are impossible.
+        tree_hasher.update(rel_str.as_bytes());
+        tree_hasher.update(&[0u8]);
+        tree_hasher.update(file_sha.as_bytes());
+        tree_hasher.update(&[b'\n']);
+        files_list.push(rel_str);
+    }
+    let tree_sha = tree_hasher.finalize_hex();
+
+    let requires_engine = if is_genai {
+        Some(crate::model::registry::EngineRequirement {
+            name: "ort-genai".to_string(),
+            version: ">=0.12.0,<0.13.0".to_string(),
+        })
+    } else {
+        None
+    };
+
+    let manifest = Manifest {
+        name: cfg.name.clone(),
+        version: cfg.version.clone(),
+        task,
+        engine,
+        format,
+        sha256: tree_sha.clone(),
+        size: total_size,
+        files: files_list,
+        default_device: cfg.default_device.clone(),
+        params: cfg.params.clone(),
+        requires_engine,
+        gguf_version: None,
+        arch: None,
+    };
+    let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
+    fs::write(staging.join("manifest.json"), &manifest_bytes)?;
+
+    fs::rename(&staging, &target_dir)?;
+    std::mem::forget(guard);
+
+    Ok(ImportedModel {
+        name: cfg.name.clone(),
+        version: cfg.version.clone(),
+        manifest_path: paths::manifest_path(&cfg.name, &cfg.version),
+        model_path: target_dir.join(&primary_basename),
+        sha256: tree_sha,
+        size: total_size,
+        task,
+        engine,
+        format,
+    })
+}
+
+/// Compute the registry slot for `(name, version)`, removing an
+/// existing slot only when `force` is set.
+fn prepare_target_dir(cfg: &ImportConfig) -> Result<(PathBuf, PathBuf), ImportError> {
+    let target_dir = paths::model_version_dir(&cfg.name, &cfg.version);
+    if target_dir.exists() {
+        if !cfg.force {
+            return Err(ImportError::AlreadyRegistered {
+                name: cfg.name.clone(),
+                version: cfg.version.clone(),
+            });
+        }
+        fs::remove_dir_all(&target_dir)?;
+    }
+    let parent = target_dir
+        .parent()
+        .ok_or_else(|| io::Error::other("models_dir parent missing"))?
+        .to_path_buf();
+    fs::create_dir_all(&parent)?;
+    Ok((target_dir, parent))
+}
+
+/// RAII guard: if anything below fails before `mem::forget`, the
+/// staging dir is cleaned up before the function returns.
+struct StagingGuard<'a>(&'a Path);
+impl Drop for StagingGuard<'_> {
+    fn drop(&mut self) {
+        if self.0.exists() {
+            let _ = fs::remove_dir_all(self.0);
+        }
+    }
+}
+
+fn collect_files_recursive(
+    base: &Path,
+    cur: &Path,
+    out: &mut Vec<PathBuf>,
+) -> Result<(), ImportError> {
+    for entry in fs::read_dir(cur)? {
+        let entry = entry?;
+        let p = entry.path();
+        let ft = entry.file_type()?;
+        if ft.is_dir() {
+            collect_files_recursive(base, &p, out)?;
+        } else if ft.is_file() {
+            let rel = p
+                .strip_prefix(base)
+                .map_err(|e| io::Error::other(format!("strip_prefix failed: {e}")))?;
+            out.push(rel.to_path_buf());
+        }
+        // symlinks ignored — Windows doesn't permit them by default
+        // and following them would let import escape the source dir.
+    }
+    Ok(())
 }
 
 /// Remove a registered (name, version). Returns `Ok(false)` if the
@@ -271,11 +433,13 @@ fn infer_kind(
         None => match format {
             Format::Gguf => Engine::Llama,
             Format::Onnx => Engine::Ort,
+            Format::OnnxGenai => Engine::OrtGenai,
         },
     };
     let default_task = match format {
         Format::Gguf => Task::Llm,
         Format::Onnx => Task::Embed,
+        Format::OnnxGenai => Task::Embed,
     };
     Ok((format, engine, default_task))
 }
@@ -462,16 +626,88 @@ mod tests {
     }
 
     #[test]
-    fn directory_source_is_rejected() {
+    fn directory_without_genai_config_is_rejected() {
         let root = fresh_models_root();
         let _guard = EnvGuard::set(root.path());
         let dir = root.path().join("sub");
         fs::create_dir_all(&dir).unwrap();
+        // No genai_config.json + no explicit format/engine override =>
+        // directory layout is unrecognized.
         let cfg = ImportConfig::new(&dir, "x");
         match import_model(&cfg).unwrap_err() {
-            ImportError::SourceNotFile(_) => {}
-            other => panic!("want SourceNotFile, got {other:?}"),
+            ImportError::InvalidGenaiBundle(_) => {}
+            other => panic!("want InvalidGenaiBundle, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn directory_with_genai_config_imports_as_onnx_genai() {
+        let root = fresh_models_root();
+        let _guard = EnvGuard::set(root.path());
+        let src = root.path().join("qwen3-export");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("genai_config.json"), b"{}").unwrap();
+        fs::write(src.join("model.onnx"), b"fake-onnx-graph").unwrap();
+        fs::write(src.join("tokenizer.json"), b"{}").unwrap();
+
+        let cfg = ImportConfig::new(&src, "qwen3-test");
+        let imported = import_model(&cfg).expect("import");
+        assert_eq!(imported.engine, Engine::OrtGenai);
+        assert_eq!(imported.format, Format::OnnxGenai);
+        assert_eq!(imported.task, Task::Embed);
+        assert!(imported.size > 0);
+        // Tree-hash sha is hex.
+        assert_eq!(imported.sha256.len(), 64);
+        assert!(imported.sha256.chars().all(|c| c.is_ascii_hexdigit()));
+
+        // Directory contents preserved.
+        let target_dir = paths::model_version_dir("qwen3-test", "v1");
+        assert!(target_dir.join("genai_config.json").is_file());
+        assert!(target_dir.join("model.onnx").is_file());
+        assert!(target_dir.join("tokenizer.json").is_file());
+        assert!(target_dir.join("manifest.json").is_file());
+
+        // Manifest declares ort-genai requires_engine pin.
+        let raw = fs::read_to_string(target_dir.join("manifest.json")).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(parsed["engine"], "ort-genai");
+        assert_eq!(parsed["format"], "onnx-genai");
+        assert_eq!(parsed["requires_engine"]["name"], "ort-genai");
+        assert!(parsed["files"].as_array().unwrap().len() >= 3);
+    }
+
+    #[test]
+    fn directory_tree_hash_is_deterministic() {
+        let root = fresh_models_root();
+        let _guard = EnvGuard::set(root.path());
+
+        // First import.
+        let src1 = root.path().join("a");
+        fs::create_dir_all(&src1).unwrap();
+        fs::write(src1.join("genai_config.json"), b"{}").unwrap();
+        fs::write(src1.join("model.onnx"), b"onnx-bytes").unwrap();
+        let cfg1 = ImportConfig::new(&src1, "modelA");
+        let h1 = import_model(&cfg1).unwrap().sha256;
+
+        // Identical content → identical hash.
+        let src2 = root.path().join("b");
+        fs::create_dir_all(&src2).unwrap();
+        fs::write(src2.join("genai_config.json"), b"{}").unwrap();
+        fs::write(src2.join("model.onnx"), b"onnx-bytes").unwrap();
+        let cfg2 = ImportConfig::new(&src2, "modelB");
+        let h2 = import_model(&cfg2).unwrap().sha256;
+
+        assert_eq!(h1, h2, "tree hash must be content-addressable");
+
+        // Same paths but different content → different hash.
+        let src3 = root.path().join("c");
+        fs::create_dir_all(&src3).unwrap();
+        fs::write(src3.join("genai_config.json"), b"{}").unwrap();
+        fs::write(src3.join("model.onnx"), b"onnx-bytes-DIFFERENT").unwrap();
+        let cfg3 = ImportConfig::new(&src3, "modelC");
+        let h3 = import_model(&cfg3).unwrap().sha256;
+
+        assert_ne!(h1, h3);
     }
 
     #[test]

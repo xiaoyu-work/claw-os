@@ -271,7 +271,8 @@ fn parse_engine(v: &str) -> Result<registry::Engine, String> {
     match v.to_ascii_lowercase().as_str() {
         "ort" => Ok(Engine::Ort),
         "llama" | "llama-cpp" | "llama_cpp" => Ok(Engine::Llama),
-        other => Err(format!("unknown engine: {other} (try ort|llama)")),
+        "ort-genai" | "ort_genai" | "ortgenai" => Ok(Engine::OrtGenai),
+        other => Err(format!("unknown engine: {other} (try ort|llama|ort-genai)")),
     }
 }
 
@@ -280,7 +281,8 @@ fn parse_format(v: &str) -> Result<registry::Format, String> {
     match v.to_ascii_lowercase().as_str() {
         "onnx" => Ok(Format::Onnx),
         "gguf" => Ok(Format::Gguf),
-        other => Err(format!("unknown format: {other} (try onnx|gguf)")),
+        "onnx-genai" | "onnx_genai" | "genai" => Ok(Format::OnnxGenai),
+        other => Err(format!("unknown format: {other} (try onnx|gguf|onnx-genai)")),
     }
 }
 

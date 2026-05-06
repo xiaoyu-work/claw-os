@@ -101,6 +101,12 @@ pub fn build_from(cfg: &EmbedConfig) -> Result<Option<Box<dyn Embedder>>, String
         "openai" | "azure" | "xai" | "deepseek" | "openrouter" | "ollama" => {
             Ok(Some(Box::new(OpenAICompatEmbedder::from_config(cfg))))
         }
+        // Local Qwen3-Embedding-0.6B via onnxruntime-genai. Reads the
+        // model directory from `cfg.model_dir` (or the default registry
+        // slot). The model is loaded lazily on first call.
+        "qwen3-local" | "local" => Ok(Some(Box::new(
+            super::qwen3_genai::build_from_config(cfg),
+        ))),
         other => Err(format!("unknown embed provider: {other}")),
     }
 }

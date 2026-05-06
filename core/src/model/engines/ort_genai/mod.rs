@@ -21,6 +21,7 @@ use super::EngineError;
 
 pub mod ffi;
 pub mod runtime;
+pub mod safe;
 
 /// FFI/agent-side identifier with underscore. Mirrors the
 /// `llama_cpp` / `llama-cpp` convention.
