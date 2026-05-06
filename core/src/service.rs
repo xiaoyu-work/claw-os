@@ -1093,12 +1093,12 @@ mod tests {
     fn test_deserialize_service_def_full() {
         let json = r#"{
             "name": "browser",
-            "description": "Browser engine",
-            "command": "node index.js",
-            "workdir": "/opt/cos-browser-engine",
+            "description": "cos-browser CDP server",
+            "command": "cos-browser serve --port 9222",
+            "workdir": "/var/lib/cos/browser",
             "env": {"KEY": "val"},
             "health": {
-                "url": "http://localhost:3000",
+                "url": "http://localhost:9222/json/version",
                 "interval_secs": 5,
                 "timeout_secs": 2,
                 "start_grace_secs": 30
@@ -1108,12 +1108,12 @@ mod tests {
         }"#;
         let def: ServiceDef = serde_json::from_str(json).unwrap();
         assert_eq!(def.name, "browser");
-        assert_eq!(def.description, "Browser engine");
-        assert_eq!(def.command, "node index.js");
-        assert_eq!(def.workdir.as_deref(), Some("/opt/cos-browser-engine"));
+        assert_eq!(def.description, "cos-browser CDP server");
+        assert_eq!(def.command, "cos-browser serve --port 9222");
+        assert_eq!(def.workdir.as_deref(), Some("/var/lib/cos/browser"));
         assert_eq!(def.env.get("KEY").unwrap(), "val");
         let h = def.health.unwrap();
-        assert_eq!(h.url.as_deref(), Some("http://localhost:3000"));
+        assert_eq!(h.url.as_deref(), Some("http://localhost:9222/json/version"));
         assert_eq!(h.interval_secs, 5);
         assert_eq!(h.timeout_secs, 2);
         assert_eq!(h.start_grace_secs, 30);

@@ -1,0 +1,23 @@
+[package]
+name = "obscura-js"
+version.workspace = true
+edition.workspace = true
+
+[build-dependencies]
+deno_core = "0.350"
+
+[dependencies]
+obscura-dom = { workspace = true }
+obscura-net = { workspace = true }
+deno_core = "0.350"
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+url = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+reqwest = { workspace = true }
+html5ever = { workspace = true }
+deno_error = "0.6"
+base64 = { workspace = true }

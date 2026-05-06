@@ -25,14 +25,28 @@ jobs:
       - name: Install musl tools
         run: sudo apt-get update -qq && sudo apt-get install -y musl-tools
 
-      - name: Check formatting
+      - name: Cache cargo registry & target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-
+
+      - name: Check formatting (cos)
         run: cd core && cargo fmt --check
 
-      - name: Clippy lint
+      - name: Clippy lint (cos)
         run: cd core && cargo clippy --target x86_64-unknown-linux-musl -- -D warnings 2>&1 || true
 
-      - name: Run tests
+      - name: Run cos tests
         run: cd core && cargo test
+
+      - name: Run cos-browser tests
+        run: cargo test -p cos-browser
 
   build:
     needs: test
@@ -44,16 +58,30 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # Install Rust for building the cos binary (musl for static linking)
+      # Install Rust for building cos (musl, static) and cos-browser (gnu, V8 needs glibc)
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-unknown-linux-musl
+          targets: x86_64-unknown-linux-musl,x86_64-unknown-linux-gnu
 
       - name: Install musl tools
         run: sudo apt-get update -qq && sudo apt-get install -y musl-tools
 
-      - name: Build cos binary
-        run: cd core && cargo build --release --target x86_64-unknown-linux-musl
+      - name: Cache cargo registry & target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-build-
+
+      - name: Build cos binary (musl)
+        run: cargo build --release -p cos --target x86_64-unknown-linux-musl
+
+      - name: Build cos-browser binary (gnu)
+        run: cargo build --release -p cos-browser --target x86_64-unknown-linux-gnu
 
       # Build the rootfs from scratch using debootstrap
       - name: Install debootstrap

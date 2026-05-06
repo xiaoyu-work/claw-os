@@ -1,0 +1,20 @@
+[package]
+name = "obscura-cdp"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+obscura-dom = { workspace = true }
+obscura-browser = { workspace = true }
+obscura-js = { workspace = true }
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+futures-util = "0.3"
+obscura-net = { workspace = true }

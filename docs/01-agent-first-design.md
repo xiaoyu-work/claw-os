@@ -168,15 +168,15 @@ Claw OS is built on a standard Debian Bookworm rootfs. Here's what's modified an
 The rootfs is bootstrapped via `rootfs/build.sh`:
 
 1. **debootstrap** a minimal Debian Bookworm into `/build/claw-os-rootfs`
-2. **Node.js 24** installed (for Chromium browser engine)
+2. **Node.js 24** installed (for `cos app exec node` and TypeScript plugins)
 3. **System packages** installed from `rootfs/packages.txt`:
    - Core: `bash`, `coreutils`, `git`, `ripgrep`, `python3`, `python3-pip`, `curl`, `sqlite3`, `jq`
-   - Browser: `chromium` + ~15 dependency packages (libnss3, libxss1, libasound2, etc.)
+   - Screenshot: `chromium` + X/font deps (used only by `cos app web screenshot`)
 4. **Python packages**: `pymupdf`, `python-docx`, `openpyxl`, `pyyaml`
 5. **Overlay applied**: config files, cos-init script, service definitions
 6. **`cos` binary** (Rust, musl-static) copied to `/usr/local/bin/cos`
 7. **Python apps** copied to `/usr/lib/cos/apps/`
-8. **Browser engine** (Puppeteer-based) installed in `/opt/cos-browser-engine/`
+8. **`cos-browser` binary** (Rust, glibc — vendored Obscura) installed in `/usr/local/bin/cos-browser`
 
 ### OverlayFS: The Checkpoint Foundation
 

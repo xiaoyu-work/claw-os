@@ -367,7 +367,8 @@ cos service stop onevalet
     "allow_outbound": true
   },
   "web": {
-    "reader_url": "http://localhost:3000",
+    "engine": "cos-browser",
+    "cdp_port": 9222,
     "timeout": 30,
     "max_content_length": 50000
   }
@@ -384,7 +385,9 @@ cos service stop onevalet
 | `COS_CONFIG_PATH` | `/etc/cos/config.json` | Configuration file |
 | `COS_VERSION` | (from Cargo.toml) | OS version |
 | `COS_SESSION` | (unset) | Current session ID (set by proc spawn) |
-| `COS_BROWSER_URL` | `http://localhost:3000` | Browser engine URL |
+| `COS_BROWSER_BIN` | `cos-browser` | Path to the cos-browser binary |
+| `COS_BROWSER_PORT` | `9222` | Default port for `cos browser start` (CDP server) |
+| `COS_CHROMIUM_BIN` | `chromium` | Chromium binary used only by `web screenshot` |
 | `DEN` | `/den` | Agent workspace path |
 
 ---

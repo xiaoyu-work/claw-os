@@ -1,0 +1,20 @@
+Claw OS
+Copyright (c) 2026 Claw OS Contributors
+
+This product includes software developed at Obscura
+(https://github.com/h4ckf0r0day/obscura), licensed under the Apache License,
+Version 2.0. The Obscura source has been vendored into the following crates:
+
+  crates/obscura-dom
+  crates/obscura-net
+  crates/obscura-js
+  crates/obscura-browser
+  crates/obscura-cdp
+  crates/cos-browser   (originally crates/obscura-cli upstream)
+
+A copy of the Apache License, Version 2.0 is included as LICENSE-APACHE at the
+repository root and inside each vendored crate. Modifications made by Claw OS
+contributors are tracked via the git history of this repository.
+
+The Claw OS components (everything outside crates/obscura-* and
+crates/cos-browser) remain MIT-licensed; see LICENSE.

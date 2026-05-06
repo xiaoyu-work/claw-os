@@ -10,7 +10,8 @@
     "allow_outbound": true
   },
   "web": {
-    "reader_url": "http://localhost:3000",
+    "engine": "cos-browser",
+    "cdp_port": 9222,
     "timeout": 30,
     "max_content_length": 50000
   },

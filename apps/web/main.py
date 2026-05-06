@@ -1,152 +1,191 @@
-"""cos web — Full browser with JavaScript rendering, powered by Jina Reader."""
+"""cos web — Browser via cos-browser engine (vendored from Obscura).
+
+Subprocesses the `cos-browser` binary for read / scrape / screenshot. Falls
+back to a pure-stdlib urllib path only for the simplest read case when the
+binary is unavailable.
+
+Output shapes (deliberately *not* the legacy Reader/Markdown shape):
+
+    cos app web read URL                 -> {url, title, text, links, engine}
+    cos app web read URL --html          -> {url, title, html, engine}
+    cos app web read URL --eval EXPR     -> {url, result}
+    cos app web scrape URL...            -> {results: [...], total_time_ms, ...}
+    cos app web screenshot URL --output P -> {ok, output, bytes, ...}
+    cos app web submit URL --data ...    -> {url, status, body}  (urllib POST)
+"""
 
 import json
 import os
 import re
+import shutil
+import subprocess
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 
 TIMEOUT = int(os.environ.get("COS_WEB_TIMEOUT", "30"))
-USER_AGENT = "cos/" + os.environ.get("COS_VERSION", "0.1.0")
-READER_URL = os.environ.get("COS_WEB_READER_URL", os.environ.get("COS_BROWSER_URL", "http://localhost:3000"))
-DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 DEFAULT_MAX_LENGTH = int(os.environ.get("COS_WEB_MAX_CONTENT_LENGTH", "50000"))
-
-# Cached Reader availability (None = not checked yet)
-_reader_available = None
-
-
-# ---------------------------------------------------------------------------
-# Reader availability check
-# ---------------------------------------------------------------------------
-
-def _is_reader_available():
-    """Check if Jina Reader is reachable. Result is cached for process lifetime."""
-    global _reader_available
-    if _reader_available is not None:
-        return _reader_available
-    try:
-        req = urllib.request.Request(READER_URL, method="HEAD")
-        urllib.request.urlopen(req, timeout=5)
-        _reader_available = True
-    except Exception:
-        _reader_available = False
-    return _reader_available
+COS_BROWSER_BIN = os.environ.get("COS_BROWSER_BIN", "cos-browser")
+USER_AGENT = "cos/" + os.environ.get("COS_VERSION", "0.1.0")
 
 
 # ---------------------------------------------------------------------------
-# urllib helpers (used for fallback and submit)
+# JS payload — extract {title, text, links} from rendered DOM in one pass.
+# Escape \t/\n/\s as raw backslash sequences so V8 sees JS escapes, not Python.
 # ---------------------------------------------------------------------------
 
-def _build_request(url, method="GET", data=None, headers=None):
-    """Build a urllib Request with standard headers."""
-    if not url.startswith(("http://", "https://")):
-        url = "https://" + url
-    req = urllib.request.Request(url, method=method)
-    req.add_header("User-Agent", USER_AGENT)
-    if headers:
-        for k, v in headers.items():
-            req.add_header(k, v)
-    if data is not None:
-        if isinstance(data, str):
-            req.data = data.encode("utf-8")
-        elif isinstance(data, bytes):
-            req.data = data
-    return req
+_EXTRACT_JS = r"""(function(){
+  function blockText(el){
+    if(!el) return '';
+    if(el.nodeType===3) return el.textContent||'';
+    if(el.nodeType!==1) return '';
+    var tag=(el.tagName||'').toLowerCase();
+    if(tag==='script'||tag==='style'||tag==='noscript'||tag==='template') return '';
+    var s='';
+    var cn=el.childNodes||[];
+    for(var i=0;i<cn.length;i++) s+=blockText(cn[i]);
+    var blocks=['p','div','section','article','header','footer','nav','main','aside','h1','h2','h3','h4','h5','h6','li','tr','blockquote','pre','br','hr'];
+    if(blocks.indexOf(tag)!==-1) s+='\n';
+    return s;
+  }
+  var body=document.body||document.documentElement;
+  var raw=blockText(body);
+  var text=raw.replace(/[\t ]+/g,' ').replace(/\n{3,}/g,'\n\n').replace(/^\s+|\s+$/g,'');
+  var anchors=document.querySelectorAll?document.querySelectorAll('a[href]'):[];
+  var links=[];
+  for(var i=0;i<anchors.length&&i<500;i++){
+    var a=anchors[i];
+    var href=a.getAttribute('href')||'';
+    var t=(a.textContent||'').replace(/\s+/g,' ').replace(/^ +| +$/g,'');
+    if(href) links.push({href:href,text:t});
+  }
+  return {title:document.title||'',text:text,links:links};
+})()"""
 
 
 # ---------------------------------------------------------------------------
-# Fallback HTML-to-text helpers (when Reader is not available)
+# Subprocess helpers
 # ---------------------------------------------------------------------------
 
-def _collapse_whitespace(text):
-    """Collapse runs of whitespace into single spaces and strip."""
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    lines = [line.strip() for line in text.splitlines()]
-    return "\n".join(lines).strip()
+def _has_cos_browser():
+    if os.path.isabs(COS_BROWSER_BIN):
+        return os.path.isfile(COS_BROWSER_BIN) and os.access(COS_BROWSER_BIN, os.X_OK)
+    return shutil.which(COS_BROWSER_BIN) is not None
 
 
-def _extract_title(html):
-    """Pull text from the first <title> tag."""
-    m = re.search(r"<title[^>]*>(.*?)</title>", html, re.DOTALL | re.IGNORECASE)
-    if m:
-        title = re.sub(r"<[^>]+>", "", m.group(1))
-        return _collapse_whitespace(title)
-    return ""
+def _run_cos_browser(argv, timeout_secs=None):
+    """Run `cos-browser <argv...>` and return (stdout, stderr, returncode, error).
 
-
-def _extract_links(html):
-    """Extract <a href="...">text</a> links from raw HTML."""
-    links = []
-    for m in re.finditer(r'<a\s[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
-                         html, re.DOTALL | re.IGNORECASE):
-        href = m.group(1).strip()
-        text = re.sub(r"<[^>]+>", "", m.group(2))
-        text = _collapse_whitespace(text)
-        if href and text:
-            links.append({"text": text, "href": href})
-    return links
-
-
-def _html_to_text(html):
-    """Convert HTML to clean readable text."""
-    # Remove noise sections
-    for tag in ("script", "style", "nav", "footer", "header", "noscript"):
-        html = re.sub(
-            rf"<{tag}[\s>].*?</{tag}>", " ", html,
-            flags=re.DOTALL | re.IGNORECASE,
+    On binary-not-found returns (None, None, None, "<reason>").
+    """
+    if not _has_cos_browser():
+        return None, None, None, (
+            f"cos-browser binary not found ({COS_BROWSER_BIN}). "
+            "Install Claw OS or set $COS_BROWSER_BIN."
         )
-
-    html = re.sub(r"<br\s*/?>", "\n", html, flags=re.IGNORECASE)
-    html = re.sub(
-        r"</(p|div|li|tr|h[1-6]|blockquote|section|article)>",
-        "\n", html, flags=re.IGNORECASE,
-    )
-    html = re.sub(r"<[^>]+>", " ", html)
-
-    # Decode common HTML entities
-    html = re.sub(r"&#(\d+);", lambda m: chr(int(m.group(1))), html)
-    html = re.sub(r"&#x([0-9a-fA-F]+);", lambda m: chr(int(m.group(1), 16)), html)
-    for entity, char in (("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"),
-                         ("&quot;", '"'), ("&apos;", "'"), ("&nbsp;", " ")):
-        html = html.replace(entity, char)
-
-    return _collapse_whitespace(html)
+    timeout_secs = timeout_secs if timeout_secs is not None else TIMEOUT
+    try:
+        proc = subprocess.run(
+            [COS_BROWSER_BIN] + argv,
+            capture_output=True,
+            text=True,
+            timeout=timeout_secs + 10,
+        )
+        return proc.stdout, proc.stderr, proc.returncode, None
+    except subprocess.TimeoutExpired:
+        return None, None, None, f"cos-browser exceeded {timeout_secs}s"
 
 
 # ---------------------------------------------------------------------------
-# Arg parsing helper
+# Arg parsing
 # ---------------------------------------------------------------------------
 
 def _parse_args(args, flags):
-    """Parse --flag value pairs from args list.
+    """Parse --flag value (and --bool-flag) from args. flags: {name: default}.
 
-    *flags* is a dict mapping flag names (without --) to their default values.
-    Returns (positional_args, parsed_flags_dict).
+    A default of True/False marks the flag as boolean (no value consumed).
+    Returns (positional_args, parsed_flags).
     """
     positional = []
     result = dict(flags)
     i = 0
     while i < len(args):
-        key = args[i].lstrip("-")
-        if args[i].startswith("--") and key in flags:
-            if i + 1 < len(args):
-                result[key] = args[i + 1]
-                i += 2
-            else:
+        cur = args[i]
+        if cur.startswith("--"):
+            key = cur[2:]
+            if key in flags:
+                if isinstance(flags[key], bool):
+                    result[key] = True
+                    i += 1
+                    continue
+                if i + 1 < len(args):
+                    result[key] = args[i + 1]
+                    i += 2
+                    continue
                 i += 1
-        else:
-            positional.append(args[i])
-            i += 1
+                continue
+        positional.append(cur)
+        i += 1
     return positional, result
 
 
-def _sanitize_filename(url):
-    """Create a filesystem-safe filename from a URL."""
-    name = re.sub(r"[^a-zA-Z0-9]", "_", url)
-    return name[:120]
+def _normalize_url(url):
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+    return url
+
+
+def _truncate(s, n):
+    if isinstance(s, str) and len(s) > n:
+        return s[:n] + "\n\n[truncated]"
+    return s
+
+
+# ---------------------------------------------------------------------------
+# urllib fallback (used only if cos-browser is missing)
+# ---------------------------------------------------------------------------
+
+def _urllib_fallback(url, max_length):
+    try:
+        req = urllib.request.Request(url, method="GET")
+        req.add_header("User-Agent", USER_AGENT)
+        resp = urllib.request.urlopen(req, timeout=TIMEOUT)
+        html = resp.read().decode("utf-8", errors="replace")
+        final_url = resp.url
+    except urllib.error.HTTPError as e:
+        return {"error": f"HTTP {e.code}: {e.reason}", "url": url}
+    except urllib.error.URLError as e:
+        return {"error": f"could not fetch: {e.reason}", "url": url}
+    except Exception as e:
+        return {"error": str(e), "url": url}
+
+    title = ""
+    m = re.search(r"<title[^>]*>(.*?)</title>", html, re.DOTALL | re.IGNORECASE)
+    if m:
+        title = re.sub(r"<[^>]+>", "", m.group(1)).strip()
+
+    for tag in ("script", "style", "nav", "footer", "header", "noscript"):
+        html = re.sub(rf"<{tag}[\s>].*?</{tag}>", " ", html,
+                      flags=re.DOTALL | re.IGNORECASE)
+    html = re.sub(r"<br\s*/?>", "\n", html, flags=re.IGNORECASE)
+    html = re.sub(r"</(p|div|li|tr|h[1-6]|blockquote|section|article)>",
+                  "\n", html, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", " ", html)
+    for entity, char in (("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"),
+                         ("&quot;", '"'), ("&apos;", "'"), ("&nbsp;", " ")):
+        text = text.replace(entity, char)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+
+    return {
+        "url": final_url,
+        "title": title,
+        "text": _truncate(text, max_length),
+        "links": [],
+        "engine": "urllib-fallback",
+        "warning": "cos-browser unavailable; using stdlib urllib (no JS rendering)",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -154,525 +193,343 @@ def _sanitize_filename(url):
 # ---------------------------------------------------------------------------
 
 def _cmd_read(args):
-    """Fetch a URL and return clean Markdown content."""
+    """Fetch a URL via cos-browser and return clean text + links + title."""
     if not args:
         return {"error": "usage: cos web read <url> [--selector CSS] "
-                "[--remove CSS] [--wait CSS] [--max-length N]"}
+                "[--wait CSS] [--timeout SEC] [--max-length N] [--html] [--eval JS]"}
 
     positional, flags = _parse_args(args, {
         "selector": None,
-        "remove": None,
         "wait": None,
+        "timeout": str(TIMEOUT),
         "max-length": str(DEFAULT_MAX_LENGTH),
+        "html": False,
+        "eval": None,
+        "user-agent": None,
     })
 
     if not positional:
         return {"error": "usage: cos web read <url>"}
 
-    url = positional[0]
-    if not url.startswith(("http://", "https://")):
-        url = "https://" + url
+    url = _normalize_url(positional[0])
 
-    max_length = DEFAULT_MAX_LENGTH
+    try:
+        timeout_secs = int(flags["timeout"])
+    except (TypeError, ValueError):
+        timeout_secs = TIMEOUT
     try:
         max_length = int(flags["max-length"])
-    except (ValueError, TypeError):
-        pass
+    except (TypeError, ValueError):
+        max_length = DEFAULT_MAX_LENGTH
 
-    # --- Try Jina Reader first ---
-    if _is_reader_available():
-        return _read_via_reader(url, flags, max_length)
+    # cos-browser missing? graceful degrade for plain reads only.
+    if not _has_cos_browser():
+        if flags["html"] or flags["eval"]:
+            return {"error": "cos-browser is required for --html / --eval", "url": url}
+        return _urllib_fallback(url, max_length)
 
-    # --- Fallback to urllib (with structured extraction) ---
-    return _read_via_urllib_with_extraction(url, max_length)
+    cb_args = ["fetch", url, "--quiet", "--timeout", str(timeout_secs)]
+    if flags["selector"]:
+        cb_args += ["--selector", flags["selector"]]
+    if flags["wait"]:
+        cb_args += ["--selector", flags["wait"]]  # alias
+    if flags["user-agent"]:
+        cb_args += ["--user-agent", flags["user-agent"]]
 
+    if flags["html"]:
+        cb_args += ["--dump", "html"]
+        out, err, rc, error = _run_cos_browser(cb_args, timeout_secs)
+        if error:
+            return {"error": error, "url": url}
+        if rc != 0:
+            return {"error": (err or "").strip() or f"cos-browser exit {rc}", "url": url}
+        return {
+            "url": url,
+            "title": "",
+            "html": _truncate(out or "", max_length),
+            "engine": "cos-browser",
+        }
 
-def _read_via_reader(url, flags, max_length):
-    """Fetch URL through the local Jina Reader service."""
-    reader_target = f"{READER_URL}/{url}"
-    headers = {
-        "Accept": "application/json",
-        "X-Timeout": "30000",
-    }
-    if flags.get("selector"):
-        headers["X-Target-Selector"] = flags["selector"]
-    if flags.get("remove"):
-        headers["X-Remove-Selector"] = flags["remove"]
-    if flags.get("wait"):
-        headers["X-Wait-For-Selector"] = flags["wait"]
+    if flags["eval"]:
+        cb_args += ["--eval", flags["eval"]]
+        out, err, rc, error = _run_cos_browser(cb_args, timeout_secs)
+        if error:
+            return {"error": error, "url": url}
+        if rc != 0:
+            return {"error": (err or "").strip() or f"cos-browser exit {rc}", "url": url}
+        body = (out or "").strip()
+        # Try JSON first; if not JSON, return as-is.
+        try:
+            result = json.loads(body)
+        except (ValueError, json.JSONDecodeError):
+            result = body
+        return {"url": url, "result": result, "engine": "cos-browser"}
 
-    try:
-        req = urllib.request.Request(reader_target)
-        req.add_header("User-Agent", USER_AGENT)
-        for k, v in headers.items():
-            req.add_header(k, v)
-        resp = urllib.request.urlopen(req, timeout=TIMEOUT)
-        body = resp.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as e:
-        return {"error": f"Reader HTTP {e.code}: {e.reason}", "url": url}
-    except ConnectionRefusedError:
-        # Reader went away mid-process — fall back
-        return _read_via_urllib(url, max_length)
-    except urllib.error.URLError as e:
-        if "Connection refused" in str(e.reason):
-            return _read_via_urllib(url, max_length)
-        return {"error": f"Reader error: {e.reason}", "url": url}
-    except Exception as e:
-        return {"error": str(e), "url": url}
+    # Default: extract {title, text, links} via single eval pass.
+    cb_args += ["--eval", _EXTRACT_JS]
+    out, err, rc, error = _run_cos_browser(cb_args, timeout_secs)
+    if error:
+        return {"error": error, "url": url}
+    if rc != 0:
+        return {"error": (err or "").strip() or f"cos-browser exit {rc}", "url": url}
 
+    body = (out or "").strip()
     try:
         data = json.loads(body)
-    except json.JSONDecodeError:
-        return {"error": "invalid JSON from Reader", "url": url}
-
-    content = data.get("content", "")
-    if len(content) > max_length:
-        content = content[:max_length] + "\n\n[truncated]"
+    except (ValueError, json.JSONDecodeError):
+        return {
+            "error": "cos-browser returned non-JSON output",
+            "url": url,
+            "stdout_head": body[:500],
+        }
 
     return {
-        "url": data.get("url", url),
+        "url": url,
         "title": data.get("title", ""),
-        "content": content,
-        "links": data.get("links", {}),
-        "engine": "reader",
-    }
-
-
-def _read_via_urllib(url, max_length):
-    """Fallback: fetch URL with urllib and convert HTML to text."""
-    try:
-        req = _build_request(url)
-        resp = urllib.request.urlopen(req, timeout=TIMEOUT)
-        html = resp.read().decode("utf-8", errors="replace")
-        final_url = resp.url
-    except urllib.error.HTTPError as e:
-        return {"error": f"HTTP {e.code}: {e.reason}", "url": url}
-    except urllib.error.URLError as e:
-        return {"error": f"could not fetch: {e.reason}", "url": url}
-    except Exception as e:
-        return {"error": str(e), "url": url}
-
-    title = _extract_title(html)
-    links = _extract_links(html)
-    content = _html_to_text(html)
-
-    if len(content) > max_length:
-        content = content[:max_length] + "\n\n[truncated]"
-
-    return {
-        "url": final_url,
-        "title": title,
-        "content": content,
-        "links": links,
-        "engine": "urllib",
-        "warning": "Jina Reader not running, using basic HTTP fetch "
-                   "(no JS rendering)",
+        "text": _truncate(data.get("text", ""), max_length),
+        "links": data.get("links", []),
+        "engine": "cos-browser",
     }
 
 
 def _cmd_screenshot(args):
-    """Capture a screenshot of a URL via Jina Reader."""
+    """Capture a screenshot via cos-browser (which shells out to chromium)."""
     if not args:
-        return {"error": "usage: cos web screenshot <url> [--wait CSS] "
-                "[--full-page]"}
+        return {"error": "usage: cos web screenshot <url> --output PATH "
+                "[--width W] [--height H] [--full-page] [--timeout SEC]"}
 
     positional, flags = _parse_args(args, {
-        "wait": None,
-        "full-page": None,
+        "output": None,
+        "width": "1280",
+        "height": "720",
+        "full-page": False,
+        "timeout": "60",
     })
 
     if not positional:
-        return {"error": "usage: cos web screenshot <url>"}
-
-    url = positional[0]
-    if not url.startswith(("http://", "https://")):
-        url = "https://" + url
-
-    if not _is_reader_available():
-        return {"error": "screenshot requires Jina Reader service"}
-
-    reader_target = f"{READER_URL}/{url}"
-    headers = {
-        "X-Return-Format": "screenshot",
-        "X-Timeout": "30000",
-    }
-    if flags.get("wait"):
-        headers["X-Wait-For-Selector"] = flags["wait"]
+        return {"error": "usage: cos web screenshot <url> --output PATH"}
+    url = _normalize_url(positional[0])
+    output = flags["output"]
+    if not output:
+        return {"error": "missing --output PATH"}
 
     try:
-        req = urllib.request.Request(reader_target)
-        req.add_header("User-Agent", USER_AGENT)
-        for k, v in headers.items():
-            req.add_header(k, v)
-        resp = urllib.request.urlopen(req, timeout=TIMEOUT)
-        image_data = resp.read()
-    except urllib.error.HTTPError as e:
-        return {"error": f"Reader HTTP {e.code}: {e.reason}", "url": url}
-    except urllib.error.URLError as e:
-        return {"error": f"Reader error: {e.reason}", "url": url}
-    except Exception as e:
-        return {"error": str(e), "url": url}
+        width = int(flags["width"])
+        height = int(flags["height"])
+        timeout_secs = int(flags["timeout"])
+    except (TypeError, ValueError):
+        return {"error": "width/height/timeout must be integers"}
 
-    screenshots_dir = os.path.join(DATA_DIR, "screenshots")
-    os.makedirs(screenshots_dir, exist_ok=True)
+    cb_args = [
+        "screenshot", url,
+        "--output", output,
+        "--width", str(width),
+        "--height", str(height),
+        "--timeout", str(timeout_secs),
+    ]
+    if flags["full-page"]:
+        cb_args.append("--full-page")
 
-    filename = _sanitize_filename(url) + ".png"
-    filepath = os.path.join(screenshots_dir, filename)
+    out, err, rc, error = _run_cos_browser(cb_args, timeout_secs)
+    if error:
+        return {"error": error, "url": url}
+    if rc != 0:
+        return {"error": (err or "").strip() or f"cos-browser exit {rc}", "url": url}
+
+    body = (out or "").strip()
+    try:
+        return json.loads(body)
+    except (ValueError, json.JSONDecodeError):
+        return {"ok": True, "url": url, "output": output, "raw": body}
+
+
+def _cmd_scrape(args):
+    """Scrape multiple URLs in parallel via cos-browser."""
+    if not args:
+        return {"error": "usage: cos web scrape <url> [<url>...] "
+                "[--eval JS] [--concurrency N] [--timeout SEC]"}
+
+    positional, flags = _parse_args(args, {
+        "eval": _EXTRACT_JS,
+        "concurrency": "10",
+        "timeout": "60",
+        "format": "json",
+    })
+
+    urls = [_normalize_url(u) for u in positional]
+    if not urls:
+        return {"error": "no URLs given"}
 
     try:
-        with open(filepath, "wb") as f:
-            f.write(image_data)
-    except Exception as e:
-        return {"error": f"failed to save screenshot: {e}", "url": url}
+        concurrency = int(flags["concurrency"])
+        timeout_secs = int(flags["timeout"])
+    except (TypeError, ValueError):
+        return {"error": "concurrency/timeout must be integers"}
 
-    return {
-        "url": url,
-        "path": filepath,
-        "size": len(image_data),
-    }
+    cb_args = [
+        "scrape",
+        "--concurrency", str(concurrency),
+        "--timeout", str(timeout_secs),
+        "--format", flags["format"],
+    ]
+    if flags["eval"]:
+        cb_args += ["--eval", flags["eval"]]
+    cb_args += urls
+
+    out, err, rc, error = _run_cos_browser(cb_args, timeout_secs * max(1, len(urls) // concurrency + 1))
+    if error:
+        return {"error": error}
+    if rc != 0:
+        return {"error": (err or "").strip() or f"cos-browser exit {rc}"}
+
+    body = (out or "").strip()
+    try:
+        return json.loads(body)
+    except (ValueError, json.JSONDecodeError):
+        return {"raw": body}
 
 
 def _cmd_submit(args):
-    """POST form data to a URL (uses urllib directly, not Jina Reader)."""
+    """POST form data via stdlib urllib (no JS render needed for typical forms)."""
     if not args:
-        return {"error": "usage: cos web submit <url> [--data JSON]"}
+        return {"error": "usage: cos web submit <url> --data '{...}' [--method POST]"}
 
-    url = args[0]
-    if not url.startswith(("http://", "https://")):
-        url = "https://" + url
+    positional, flags = _parse_args(args, {
+        "data": None,
+        "method": "POST",
+        "timeout": str(TIMEOUT),
+    })
+    if not positional:
+        return {"error": "usage: cos web submit <url> --data '{...}'"}
 
-    data = None
-    headers = {}
+    url = _normalize_url(positional[0])
+    raw = flags["data"] or ""
+    method = (flags["method"] or "POST").upper()
+    try:
+        timeout_secs = int(flags["timeout"])
+    except (TypeError, ValueError):
+        timeout_secs = TIMEOUT
 
-    rest = args[1:]
-    i = 0
-    while i < len(rest):
-        if rest[i] == "--data" and i + 1 < len(rest):
-            raw = rest[i + 1]
-            try:
-                parsed = json.loads(raw)
-            except json.JSONDecodeError:
-                return {"error": f"invalid JSON for --data: {raw}"}
-            data = urllib.parse.urlencode(parsed).encode("utf-8")
-            headers["Content-Type"] = "application/x-www-form-urlencoded"
-            i += 2
-        else:
-            i += 1
+    payload = None
+    content_type = None
+    if raw:
+        try:
+            obj = json.loads(raw)
+            payload = urllib.parse.urlencode(obj).encode("utf-8")
+            content_type = "application/x-www-form-urlencoded"
+        except (ValueError, json.JSONDecodeError):
+            payload = raw.encode("utf-8")
+            content_type = "application/x-www-form-urlencoded"
 
     try:
-        req = _build_request(url, method="POST", data=data, headers=headers)
-        resp = urllib.request.urlopen(req, timeout=TIMEOUT)
+        req = urllib.request.Request(url, data=payload, method=method)
+        req.add_header("User-Agent", USER_AGENT)
+        if content_type:
+            req.add_header("Content-Type", content_type)
+        resp = urllib.request.urlopen(req, timeout=timeout_secs)
         body = resp.read().decode("utf-8", errors="replace")
-        return {"url": resp.url, "status": resp.status, "body": body}
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace") if e.fp else ""
-        return {"url": url, "status": e.code, "body": body}
-    except urllib.error.URLError as e:
-        return {"error": f"could not connect: {e.reason}", "url": url}
-    except Exception as e:
-        return {"error": str(e), "url": url}
-
-
-# ---------------------------------------------------------------------------
-# Structured extractors for common sites
-# ---------------------------------------------------------------------------
-
-# URL patterns → extractor functions
-_EXTRACTORS = {}
-
-
-def _register_extractor(pattern):
-    """Decorator to register a structured extractor for a URL pattern."""
-    def decorator(fn):
-        _EXTRACTORS[pattern] = fn
-        return fn
-    return decorator
-
-
-def _find_extractor(url):
-    """Find a matching extractor for the given URL."""
-    for pattern, fn in _EXTRACTORS.items():
-        if pattern in url:
-            return fn
-    return None
-
-
-@_register_extractor("github.com")
-def _extract_github(html, url):
-    """Extract structured data from GitHub pages."""
-    data = {}
-
-    # Repository page
-    if re.search(r'github\.com/[^/]+/[^/]+/?$', url):
-        data["type"] = "github_repo"
-
-        # Stars
-        m = re.search(r'aria-label="(\d[\d,]*)\s+stars?"', html, re.IGNORECASE)
-        if m:
-            data["stars"] = int(m.group(1).replace(",", ""))
-
-        # Forks
-        m = re.search(r'aria-label="(\d[\d,]*)\s+forks?"', html, re.IGNORECASE)
-        if m:
-            data["forks"] = int(m.group(1).replace(",", ""))
-
-        # Language
-        m = re.search(r'itemprop="programmingLanguage">([^<]+)<', html)
-        if m:
-            data["language"] = m.group(1).strip()
-
-        # Description
-        m = re.search(r'<p[^>]*class="[^"]*f4[^"]*"[^>]*>([^<]+)<', html)
-        if m:
-            data["description"] = m.group(1).strip()
-
-        # Topics
-        topics = re.findall(r'data-octo-click="topic_click"[^>]*>([^<]+)<', html)
-        if topics:
-            data["topics"] = [t.strip() for t in topics]
-
-    # Issues/PR list page
-    elif "/issues" in url or "/pull" in url:
-        data["type"] = "github_issues"
-        items = []
-        for m in re.finditer(
-            r'data-hovercard-type="issue"[^>]*>([^<]+)</a>',
-            html, re.IGNORECASE
-        ):
-            items.append(m.group(1).strip())
-        data["items"] = items[:20]
-
-    return data if data else None
-
-
-@_register_extractor("stackoverflow.com")
-def _extract_stackoverflow(html, url):
-    """Extract structured data from StackOverflow."""
-    data = {"type": "stackoverflow"}
-
-    # Question title
-    m = re.search(r'<h1[^>]*itemprop="name"[^>]*>.*?<a[^>]*>([^<]+)</a>', html, re.DOTALL)
-    if m:
-        data["title"] = m.group(1).strip()
-
-    # Vote count
-    m = re.search(r'itemprop="upvoteCount"\s+content="(\d+)"', html)
-    if m:
-        data["votes"] = int(m.group(1))
-
-    # Answer count
-    m = re.search(r'data-answercount="(\d+)"', html)
-    if m:
-        data["answers"] = int(m.group(1))
-
-    # Accepted answer exists?
-    data["has_accepted"] = 'accepted-answer' in html
-
-    return data if len(data) > 1 else None
-
-
-@_register_extractor("docs.python.org")
-def _extract_python_docs(html, url):
-    """Extract structured data from Python documentation."""
-    data = {"type": "python_docs"}
-
-    # Module/function name from breadcrumb
-    m = re.search(r'<h1>([^<]+)<', html)
-    if m:
-        data["title"] = m.group(1).strip()
-
-    # Version
-    m = re.search(r'Python\s+([\d.]+)\s+documentation', html)
-    if m:
-        data["python_version"] = m.group(1)
-
-    return data if len(data) > 1 else None
-
-
-def _apply_structured_extraction(result, url):
-    """Try to add structured data to a web read result."""
-    # Only for reader/urllib results that have content
-    if "error" in result or "content" not in result:
-        return result
-
-    # For reader results, we don't have raw HTML — skip extraction
-    # For urllib results, the content is already text, but we have
-    # the original HTML in the pipeline. We add extraction there.
-    return result
-
-
-def _read_via_urllib_with_extraction(url, max_length):
-    """Fallback: fetch URL with urllib, apply structured extraction."""
-    try:
-        req = _build_request(url)
-        resp = urllib.request.urlopen(req, timeout=TIMEOUT)
-        html = resp.read().decode("utf-8", errors="replace")
-        final_url = resp.url
+        return {"url": resp.url, "status": resp.status, "body": _truncate(body, DEFAULT_MAX_LENGTH)}
     except urllib.error.HTTPError as e:
         return {"error": f"HTTP {e.code}: {e.reason}", "url": url}
     except urllib.error.URLError as e:
-        return {"error": f"could not fetch: {e.reason}", "url": url}
+        return {"error": f"could not submit: {e.reason}", "url": url}
     except Exception as e:
         return {"error": str(e), "url": url}
 
-    title = _extract_title(html)
-    links = _extract_links(html)
-    content = _html_to_text(html)
 
-    if len(content) > max_length:
-        content = content[:max_length] + "\n\n[truncated]"
+# ---------------------------------------------------------------------------
+# Schema (advertised to agents via `cos app web --schema`)
+# ---------------------------------------------------------------------------
 
-    result = {
-        "url": final_url,
-        "title": title,
-        "content": content,
-        "links": links,
-        "engine": "urllib",
-        "warning": "Jina Reader not running, using basic HTTP fetch "
-                   "(no JS rendering)",
+def _schema():
+    return {
+        "name": "web",
+        "description": "Browser via cos-browser engine (vendored Obscura). "
+                       "Returns text/links/JSON instead of Markdown — better for LLM token use. "
+                       "Use --eval for arbitrary JS extraction; CDP server "
+                       "available via `cos browser start` for Puppeteer/Playwright.",
+        "commands": {
+            "read": {
+                "summary": "Fetch URL with full JS rendering and return {url,title,text,links}.",
+                "args": [
+                    {"name": "url", "required": True},
+                    {"flag": "--selector", "value": "CSS", "doc": "wait for selector before extracting"},
+                    {"flag": "--timeout", "value": "SEC", "default": str(TIMEOUT)},
+                    {"flag": "--max-length", "value": "N", "default": str(DEFAULT_MAX_LENGTH)},
+                    {"flag": "--html", "doc": "return raw HTML instead of extracted text"},
+                    {"flag": "--eval", "value": "JS", "doc": "run JS expression and return its result"},
+                ],
+            },
+            "scrape": {
+                "summary": "Fetch many URLs in parallel.",
+                "args": [
+                    {"name": "urls", "variadic": True},
+                    {"flag": "--eval", "value": "JS", "doc": "run JS per page (default: extract title/text/links)"},
+                    {"flag": "--concurrency", "value": "N", "default": "10"},
+                    {"flag": "--timeout", "value": "SEC", "default": "60"},
+                ],
+            },
+            "screenshot": {
+                "summary": "Capture page screenshot (shells out to chromium).",
+                "args": [
+                    {"name": "url", "required": True},
+                    {"flag": "--output", "value": "PATH", "required": True},
+                    {"flag": "--width", "value": "PX", "default": "1280"},
+                    {"flag": "--height", "value": "PX", "default": "720"},
+                    {"flag": "--full-page"},
+                    {"flag": "--timeout", "value": "SEC", "default": "60"},
+                ],
+            },
+            "submit": {
+                "summary": "POST form data via urllib (no JS rendering).",
+                "args": [
+                    {"name": "url", "required": True},
+                    {"flag": "--data", "value": "JSON", "doc": "JSON object or raw body"},
+                    {"flag": "--method", "value": "POST|PUT|...", "default": "POST"},
+                ],
+            },
+        },
     }
-
-    # Try structured extraction
-    extractor = _find_extractor(final_url)
-    if extractor:
-        structured = extractor(html, final_url)
-        if structured:
-            result["structured"] = structured
-
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Forms discovery
-# ---------------------------------------------------------------------------
-
-def _discover_forms(html):
-    """Discover forms on a page and return their schema."""
-    forms = []
-    for m in re.finditer(
-        r'<form([^>]*)>(.*?)</form>',
-        html, re.DOTALL | re.IGNORECASE
-    ):
-        attrs = m.group(1)
-        body = m.group(2)
-
-        form = {}
-
-        # Action
-        am = re.search(r'action=["\']([^"\']+)["\']', attrs)
-        if am:
-            form["action"] = am.group(1)
-
-        # Method
-        mm = re.search(r'method=["\']([^"\']+)["\']', attrs, re.IGNORECASE)
-        form["method"] = mm.group(1).upper() if mm else "GET"
-
-        # ID
-        im = re.search(r'id=["\']([^"\']+)["\']', attrs)
-        if im:
-            form["id"] = im.group(1)
-
-        # Fields
-        fields = []
-        for fm in re.finditer(
-            r'<input([^>]*)>',
-            body, re.IGNORECASE
-        ):
-            field_attrs = fm.group(1)
-            field = {}
-            for fa in ["name", "type", "placeholder", "value", "id"]:
-                fam = re.search(rf'{fa}=["\']([^"\']*)["\']', field_attrs, re.IGNORECASE)
-                if fam:
-                    field[fa] = fam.group(1)
-            if field.get("name"):
-                fields.append(field)
-
-        # Textareas
-        for tm in re.finditer(
-            r'<textarea([^>]*)>',
-            body, re.IGNORECASE
-        ):
-            ta_attrs = tm.group(1)
-            field = {"type": "textarea"}
-            for fa in ["name", "placeholder", "id"]:
-                fam = re.search(rf'{fa}=["\']([^"\']*)["\']', ta_attrs, re.IGNORECASE)
-                if fam:
-                    field[fa] = fam.group(1)
-            if field.get("name"):
-                fields.append(field)
-
-        # Select
-        for sm in re.finditer(
-            r'<select([^>]*)>(.*?)</select>',
-            body, re.DOTALL | re.IGNORECASE
-        ):
-            s_attrs = sm.group(1)
-            s_body = sm.group(2)
-            field = {"type": "select"}
-            nm = re.search(r'name=["\']([^"\']+)["\']', s_attrs)
-            if nm:
-                field["name"] = nm.group(1)
-            options = re.findall(r'<option[^>]*value=["\']([^"\']*)["\'][^>]*>([^<]*)<', s_body)
-            field["options"] = [{"value": v, "label": l.strip()} for v, l in options]
-            if field.get("name"):
-                fields.append(field)
-
-        if fields:
-            form["fields"] = fields
-            forms.append(form)
-
-    return forms if forms else None
 
 
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
-def _schema():
-    return {
-        "read": {
-            "description": "Fetch a URL and return clean Markdown content (uses Jina Reader with urllib fallback)",
-            "parameters": [
-                {"name": "url", "type": "string", "required": True, "description": "URL to fetch", "kind": "positional"},
-                {"name": "--selector", "type": "string", "required": False, "description": "CSS selector to target specific content", "kind": "flag"},
-                {"name": "--remove", "type": "string", "required": False, "description": "CSS selector for elements to remove", "kind": "flag"},
-                {"name": "--wait", "type": "string", "required": False, "description": "CSS selector to wait for before capturing", "kind": "flag"},
-                {"name": "--max-length", "type": "integer", "required": False, "description": "Maximum content length in characters", "kind": "flag", "default": 50000},
-            ],
-            "example": "cos app web read https://example.com --selector main --max-length 10000",
-        },
-        "screenshot": {
-            "description": "Capture a screenshot of a URL via Jina Reader",
-            "parameters": [
-                {"name": "url", "type": "string", "required": True, "description": "URL to screenshot", "kind": "positional"},
-                {"name": "--wait", "type": "string", "required": False, "description": "CSS selector to wait for before capturing", "kind": "flag"},
-                {"name": "--full-page", "type": "boolean", "required": False, "description": "Capture full page screenshot", "kind": "flag"},
-            ],
-            "example": "cos app web screenshot https://example.com --wait .main-content",
-        },
-        "submit": {
-            "description": "POST form data to a URL",
-            "parameters": [
-                {"name": "url", "type": "string", "required": True, "description": "URL to submit form data to", "kind": "positional"},
-                {"name": "--data", "type": "string", "required": False, "description": "JSON object of form fields to submit", "kind": "flag"},
-            ],
-            "example": "cos app web submit https://example.com/form --data '{\"name\": \"test\"}'",
-        },
+def main():
+    argv = sys.argv[1:]
+
+    if not argv:
+        print(json.dumps({
+            "error": "usage: cos app web <read|scrape|screenshot|submit> [args...]",
+            "commands": list(_schema()["commands"].keys()),
+        }))
+        return
+
+    if argv[0] in ("--schema", "-h", "--help"):
+        print(json.dumps(_schema(), indent=2))
+        return
+
+    cmd, rest = argv[0], argv[1:]
+    handlers = {
+        "read": _cmd_read,
+        "scrape": _cmd_scrape,
+        "screenshot": _cmd_screenshot,
+        "submit": _cmd_submit,
     }
+    handler = handlers.get(cmd)
+    if not handler:
+        print(json.dumps({
+            "error": f"unknown command: {cmd}",
+            "commands": list(handlers.keys()),
+        }))
+        sys.exit(2)
+
+    result = handler(rest)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    if isinstance(result, dict) and "error" in result:
+        sys.exit(1)
 
 
-_COMMANDS = {
-    "read": _cmd_read,
-    "screenshot": _cmd_screenshot,
-    "submit": _cmd_submit,
-}
-
-
-def run(command, args):
-    """Main entry point called by the cos router."""
-    if command == "__schema__":
-        return _schema()
-    handler = _COMMANDS.get(command)
-    if handler is None:
-        return {"error": f"unknown command: {command}"}
-    return handler(args)
+if __name__ == "__main__":
+    main()

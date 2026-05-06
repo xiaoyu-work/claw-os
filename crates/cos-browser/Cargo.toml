@@ -1,0 +1,34 @@
+[package]
+name = "cos-browser"
+version.workspace = true
+edition.workspace = true
+license = "Apache-2.0"
+description = "Claw OS browser engine — vendored from Obscura, agent-first headless browser"
+
+[[bin]]
+name = "cos-browser"
+path = "src/main.rs"
+
+[[bin]]
+name = "cos-browser-worker"
+path = "src/worker.rs"
+
+[features]
+default = []
+stealth = ["obscura-browser/stealth", "obscura-net/stealth"]
+
+[dependencies]
+obscura-browser = { workspace = true }
+obscura-cdp = { workspace = true }
+obscura-dom = { workspace = true }
+obscura-net = { workspace = true }
+obscura-js = { workspace = true }
+tokio = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+url = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+which = "7"

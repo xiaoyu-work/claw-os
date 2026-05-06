@@ -15,15 +15,24 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 # 0. Locate pre-built cos binary (built by CI or manually before running this script)
-COS_BIN="$PROJECT_DIR/core/target/x86_64-unknown-linux-musl/release/cos"
+COS_BIN="$PROJECT_DIR/target/x86_64-unknown-linux-musl/release/cos"
+if [ ! -f "$COS_BIN" ]; then
+    COS_BIN="$PROJECT_DIR/core/target/x86_64-unknown-linux-musl/release/cos"
+fi
+if [ ! -f "$COS_BIN" ]; then
+    COS_BIN="$PROJECT_DIR/target/release/cos"
+fi
 if [ ! -f "$COS_BIN" ]; then
     COS_BIN="$PROJECT_DIR/core/target/release/cos"
+fi
+if [ ! -f "$COS_BIN" ]; then
+    COS_BIN="$PROJECT_DIR/target/x86_64-unknown-linux-gnu/release/cos"
 fi
 if [ ! -f "$COS_BIN" ]; then
     COS_BIN="$PROJECT_DIR/core/target/x86_64-unknown-linux-gnu/release/cos"
 fi
 if [ ! -f "$COS_BIN" ]; then
-    echo "error: cos binary not found. Build it first: cd core && cargo build --release" >&2
+    echo "error: cos binary not found. Build it first: cargo build --release -p cos" >&2
     exit 1
 fi
 
@@ -92,22 +101,24 @@ if [ -d "$PROJECT_DIR/skills" ]; then
     cp -a "$PROJECT_DIR/skills/." "$ROOTFS/usr/lib/cos/skills/"
 fi
 
-# 7. Install browser engine (OS built-in)
-echo ":: installing browser engine"
-BROWSER_VENDOR="$SCRIPT_DIR/vendor/browser-engine"
-if [ -d "$BROWSER_VENDOR" ]; then
-    mkdir -p "$ROOTFS/opt/cos-browser-engine"
-    cp "$BROWSER_VENDOR/index.js" "$ROOTFS/opt/cos-browser-engine/"
-    cp "$BROWSER_VENDOR/package.json" "$ROOTFS/opt/cos-browser-engine/"
-    chroot "$ROOTFS" bash -c '
-        cd /opt/cos-browser-engine
-        PUPPETEER_SKIP_DOWNLOAD=true npm install --production
-        npm cache clean --force
-    '
-    echo "   installed"
-else
-    echo "   WARNING: vendor/browser-engine not found, skipping"
+# 7. Install cos-browser engine (vendored Obscura, Rust)
+echo ":: installing cos-browser binary"
+COS_BROWSER_BIN="$PROJECT_DIR/target/x86_64-unknown-linux-gnu/release/cos-browser"
+if [ ! -f "$COS_BROWSER_BIN" ]; then
+    COS_BROWSER_BIN="$PROJECT_DIR/target/release/cos-browser"
 fi
+if [ ! -f "$COS_BROWSER_BIN" ]; then
+    echo "error: cos-browser binary not found. Build it first:" >&2
+    echo "  cargo build --release -p cos-browser" >&2
+    exit 1
+fi
+install -m 755 "$COS_BROWSER_BIN" "$ROOTFS/usr/local/bin/cos-browser"
+
+COS_BROWSER_WORKER="$(dirname "$COS_BROWSER_BIN")/cos-browser-worker"
+if [ -f "$COS_BROWSER_WORKER" ]; then
+    install -m 755 "$COS_BROWSER_WORKER" "$ROOTFS/usr/local/bin/cos-browser-worker"
+fi
+echo "   installed cos-browser to /usr/local/bin"
 
 # 9. Create runtime directories
 mkdir -p "$ROOTFS/den"

@@ -192,43 +192,70 @@ cos app exec stop <pid>
 
 ## web — Browser & HTTP
 
-Fetch web pages with full JavaScript rendering. Powered by the built-in Chromium browser engine.
+Fetch web pages with full JavaScript rendering. Powered by `cos-browser`, the built-in Rust headless browser (vendored from [Obscura](https://github.com/h4ckf0r0day/obscura), Apache-2.0). Lightweight (~30 MB RAM idle), agent-first output shapes — no Chromium needed for read/scrape.
 
 ### web read
 
-Convert a URL to clean Markdown.
+Render a URL with JavaScript and return its plain text + extracted links.
 
 ```bash
-cos app web read "https://example.com" [--timeout 30]
+cos app web read "https://example.com" [--timeout 30] [--max-length 50000]
 ```
 ```json
 {
   "url": "https://example.com",
   "title": "Example Domain",
-  "content": "# Example Domain\n\nThis domain is for use in illustrative examples...",
-  "content_length": 256
+  "text": "Example Domain\n\nThis domain is for use in illustrative examples...",
+  "links": [{"text": "More information...", "href": "https://www.iana.org/domains/example"}],
+  "engine": "cos-browser"
 }
 ```
 
-The browser engine renders JavaScript, so SPAs and dynamically-loaded content work correctly.
+Extra modes:
+
+- `--html` — return raw rendered HTML instead of text.
+- `--selector "main"` — return text scoped to a CSS selector.
+- `--wait ".content"` — wait for a selector to appear before reading.
+- `--eval "document.title"` — run JS in page context, return the result.
+
+The browser engine runs JavaScript via V8 (deno_core), so SPAs and dynamically-loaded content work correctly. There is no layout/paint engine — for pixel-accurate rendering use `web screenshot`.
+
+### web scrape
+
+Fetch many URLs in parallel.
+
+```bash
+cos app web scrape https://a.example.com https://b.example.com [--concurrency 4]
+```
 
 ### web screenshot
 
-Capture a screenshot of a web page.
+Capture a PNG of a web page. Requires `chromium` on the system (kept in the rootfs for this purpose).
 
 ```bash
-cos app web screenshot "https://example.com" --output /den/screenshot.png
+cos app web screenshot "https://example.com" --output /den/screenshot.png [--full-page] [--width 1280] [--height 800]
 ```
 
 ### web submit
 
-Submit form data to a URL.
+Submit form data to a URL via HTTP POST.
 
 ```bash
 cos app web submit "https://example.com/form" --data '{"field": "value"}'
 ```
 
-**Dependency:** Requires the browser service to be running (`cos browser start`).
+### Optional: CDP server
+
+For external Puppeteer/Playwright clients, start a Chrome DevTools Protocol server:
+
+```bash
+cos browser start [--port 9222] [--stealth] [--proxy http://...]
+# WebSocket at ws://localhost:9222 ; HTTP discovery at http://localhost:9222/json/version
+cos browser status
+cos browser stop
+```
+
+`cos app web read|scrape|screenshot` does **not** require the CDP server — it spawns `cos-browser` per call.
 
 ---
 

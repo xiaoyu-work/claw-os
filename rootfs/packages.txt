@@ -9,7 +9,7 @@ ca-certificates
 sqlite3
 jq
 
-# Chromium browser (used by cos-browser-engine via Puppeteer)
+# Chromium browser (used by `cos app web screenshot` via headless render)
 chromium
 
 # Chromium shared library dependencies

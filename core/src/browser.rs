@@ -1,12 +1,15 @@
-/// Browser service manager — manages Jina Reader lifecycle.
+/// Browser service manager — manages the cos-browser CDP server.
+///
+/// `cos-browser` is the vendored Obscura headless browser (see
+/// crates/cos-browser). The CDP server is opt-in: agents can call
+/// `cos browser start` to expose ws://localhost:9222 for external
+/// Puppeteer/Playwright clients. Plain `cos app web read` does NOT need
+/// the service running — it subprocesses cos-browser per request.
 ///
 /// Provides:
-/// - Start/stop/restart the Reader service
-/// - Health checking with auto-restart on crash
-/// - Status reporting for the agent
-///
-/// This moves Reader lifecycle from a fragile shell script (cos-init)
-/// into a proper service manager that can be queried and controlled.
+/// - start / stop / restart the CDP server
+/// - health check (probes /json/version, the standard CDP endpoint)
+/// - status with last log lines
 use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
@@ -14,22 +17,39 @@ use std::process::{Command, Stdio};
 
 use crate::policy::{self, OpType};
 
-const READER_DIR: &str = "/opt/cos-browser-engine";
-const DEFAULT_READER_URL: &str = "http://localhost:3000";
+const DEFAULT_CDP_PORT: u16 = 9222;
 const HEALTH_TIMEOUT_SECS: u64 = 5;
 
-fn reader_url() -> String {
-    std::env::var("COS_BROWSER_URL").unwrap_or_else(|_| DEFAULT_READER_URL.into())
+fn cos_browser_bin() -> String {
+    std::env::var("COS_BROWSER_BIN").unwrap_or_else(|_| "cos-browser".into())
+}
+
+fn cdp_port() -> u16 {
+    std::env::var("COS_BROWSER_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_CDP_PORT)
+}
+
+fn cdp_url() -> String {
+    format!("http://localhost:{}", cdp_port())
+}
+
+fn ws_url() -> String {
+    format!("ws://localhost:{}/devtools/browser", cdp_port())
+}
+
+fn data_dir() -> PathBuf {
+    PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
+        .join("browser")
 }
 
 fn pid_path() -> PathBuf {
-    PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
-        .join("browser")
-        .join("reader.pid")
+    data_dir().join("cos-browser.pid")
 }
 
 fn log_path() -> PathBuf {
-    PathBuf::from("/var/log/cos/reader.log")
+    PathBuf::from("/var/log/cos/cos-browser.log")
 }
 
 fn read_pid() -> Option<u32> {
@@ -55,13 +75,16 @@ fn is_process_alive(pid: u32) -> bool {
     }
     #[cfg(not(unix))]
     {
+        let _ = pid;
         false
     }
 }
 
-/// Check if Reader HTTP endpoint is responding.
-fn is_reader_healthy() -> bool {
-    // Use curl for simplicity (available in the rootfs)
+/// Probe `/json/version` — Chrome DevTools Protocol's standard discovery
+/// endpoint. cos-browser (and any CDP-compatible browser) returns a 200 with
+/// JSON describing the protocol version.
+fn is_browser_healthy() -> bool {
+    let url = format!("{}/json/version", cdp_url());
     Command::new("curl")
         .args([
             "-s",
@@ -71,13 +94,10 @@ fn is_reader_healthy() -> bool {
             "%{http_code}",
             "--connect-timeout",
             &HEALTH_TIMEOUT_SECS.to_string(),
-            &reader_url(),
+            &url,
         ])
         .output()
-        .map(|o| {
-            let code = String::from_utf8_lossy(&o.stdout);
-            code.trim().starts_with('2') || code.trim().starts_with('3')
-        })
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "200")
         .unwrap_or(false)
 }
 
@@ -92,58 +112,87 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     }
 }
 
-/// Start the Jina Reader service.
-fn cmd_start(_args: &[String]) -> Result<Value, String> {
+fn parse_start_flags(args: &[String]) -> (bool, Option<String>) {
+    let mut stealth = false;
+    let mut proxy: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--stealth" => {
+                stealth = true;
+                i += 1;
+            }
+            "--proxy" if i + 1 < args.len() => {
+                proxy = Some(args[i + 1].clone());
+                i += 2;
+            }
+            _ => i += 1,
+        }
+    }
+    (stealth, proxy)
+}
+
+/// Start the cos-browser CDP server.
+fn cmd_start(args: &[String]) -> Result<Value, String> {
     policy::require(OpType::System).map_err(|v| v.to_string())?;
-    // Check if already running
+
     if let Some(pid) = read_pid() {
         if is_process_alive(pid) {
             return Ok(json!({
                 "status": "already_running",
                 "pid": pid,
-                "url": reader_url(),
+                "url": cdp_url(),
+                "ws": ws_url(),
             }));
         }
     }
 
-    // Check if Reader is installed
-    if !PathBuf::from(READER_DIR).is_dir() {
-        return Err("Browser engine not installed at /opt/cos-browser-engine".into());
+    let bin = cos_browser_bin();
+    if which_on_path(&bin).is_none() && !PathBuf::from(&bin).is_file() {
+        return Err(format!(
+            "cos-browser binary '{bin}' not found on PATH. Install Claw OS or set $COS_BROWSER_BIN."
+        ));
     }
 
-    // Start Reader
+    let (stealth, proxy) = parse_start_flags(args);
+
     let log = log_path();
     if let Some(parent) = log.parent() {
         let _ = fs::create_dir_all(parent);
     }
+    let _ = fs::create_dir_all(data_dir());
 
-    let log_file = fs::File::create(&log).map_err(|e| format!("failed to create log file: {e}"))?;
+    let log_file = fs::File::create(&log)
+        .map_err(|e| format!("failed to create log file: {e}"))?;
     let log_err = log_file
         .try_clone()
         .map_err(|e| format!("failed to clone log file: {e}"))?;
 
-    let child = Command::new("node")
-        .args(["index.js"])
-        .current_dir(READER_DIR)
-        .env("PORT", "3000")
-        .env("PUPPETEER_SKIP_DOWNLOAD", "true")
+    let mut cmd = Command::new(&bin);
+    cmd.arg("serve").arg("--port").arg(cdp_port().to_string());
+    if stealth {
+        cmd.arg("--stealth");
+    }
+    if let Some(ref p) = proxy {
+        cmd.arg("--proxy").arg(p);
+    }
+
+    let child = cmd
         .stdin(Stdio::null())
         .stdout(log_file)
         .stderr(log_err)
         .spawn()
-        .map_err(|e| format!("failed to start browser engine: {e}"))?;
+        .map_err(|e| format!("failed to start cos-browser: {e}"))?;
 
     let pid = child.id();
     write_pid(pid);
-
-    // Detach the child process
     std::mem::forget(child);
 
-    // Wait for Reader to be ready (max 15 seconds)
+    // Poll up to 15 seconds for the CDP endpoint to come online.
     let mut ready = false;
     for _ in 0..30 {
         std::thread::sleep(std::time::Duration::from_millis(500));
-        if is_reader_healthy() {
+        if is_browser_healthy() {
             ready = true;
             break;
         }
@@ -152,16 +201,18 @@ fn cmd_start(_args: &[String]) -> Result<Value, String> {
     Ok(json!({
         "status": if ready { "running" } else { "starting" },
         "pid": pid,
-        "url": reader_url(),
+        "url": cdp_url(),
+        "ws": ws_url(),
+        "stealth": stealth,
+        "proxy": proxy,
         "ready": ready,
         "log": log.to_string_lossy(),
     }))
 }
 
-/// Stop the Reader service.
 fn cmd_stop(_args: &[String]) -> Result<Value, String> {
     policy::require(OpType::System).map_err(|v| v.to_string())?;
-    let pid = read_pid().ok_or("Reader is not running (no PID file)")?;
+    let pid = read_pid().ok_or("cos-browser is not running (no PID file)")?;
 
     #[cfg(unix)]
     unsafe {
@@ -182,35 +233,36 @@ fn cmd_stop(_args: &[String]) -> Result<Value, String> {
     }))
 }
 
-/// Restart the Reader service.
-fn cmd_restart(_args: &[String]) -> Result<Value, String> {
+fn cmd_restart(args: &[String]) -> Result<Value, String> {
     policy::require(OpType::System).map_err(|v| v.to_string())?;
     let _ = cmd_stop(&[]);
     std::thread::sleep(std::time::Duration::from_secs(1));
-    cmd_start(&[])
+    cmd_start(args)
 }
 
-/// Show Reader status.
 fn cmd_status(_args: &[String]) -> Result<Value, String> {
     policy::require(OpType::Read).map_err(|v| v.to_string())?;
     let pid = read_pid();
-    let alive = pid.map(|p| is_process_alive(p)).unwrap_or(false);
-    let healthy = if alive { is_reader_healthy() } else { false };
+    let alive = pid.map(is_process_alive).unwrap_or(false);
+    let healthy = if alive { is_browser_healthy() } else { false };
 
-    let installed = PathBuf::from(READER_DIR).is_dir();
+    let bin = cos_browser_bin();
+    let installed = which_on_path(&bin).is_some() || PathBuf::from(&bin).is_file();
 
     let mut result = json!({
+        "engine": "cos-browser",
+        "binary": bin,
         "installed": installed,
         "running": alive,
         "healthy": healthy,
-        "url": reader_url(),
+        "url": cdp_url(),
+        "ws": ws_url(),
     });
 
     if let Some(p) = pid {
         result["pid"] = json!(p);
     }
 
-    // Include last few lines of log
     let log = log_path();
     if log.is_file() {
         if let Ok(content) = fs::read_to_string(&log) {
@@ -227,23 +279,21 @@ fn cmd_status(_args: &[String]) -> Result<Value, String> {
     Ok(result)
 }
 
-/// Health check — returns ok if Reader is responding, auto-restarts if not.
 fn cmd_health(args: &[String]) -> Result<Value, String> {
     policy::require(OpType::Read).map_err(|v| v.to_string())?;
     let auto_restart = !args.contains(&"--no-restart".to_string());
 
-    if is_reader_healthy() {
+    if is_browser_healthy() {
         return Ok(json!({
             "healthy": true,
-            "url": reader_url(),
+            "url": cdp_url(),
+            "ws": ws_url(),
         }));
     }
 
-    // Not healthy
     if auto_restart {
-        // Try to restart
         let result = cmd_restart(&[])?;
-        let healthy = is_reader_healthy();
+        let healthy = is_browser_healthy();
         return Ok(json!({
             "healthy": healthy,
             "action": "restarted",
@@ -253,7 +303,32 @@ fn cmd_health(args: &[String]) -> Result<Value, String> {
 
     Ok(json!({
         "healthy": false,
-        "url": reader_url(),
+        "url": cdp_url(),
         "hint": "Run: cos browser restart",
     }))
+}
+
+/// Tiny PATH-walking implementation so we don't need a third-party crate
+/// in the cos core (which builds for musl and avoids deps that pull
+/// platform-specific code).
+fn which_on_path(name: &str) -> Option<PathBuf> {
+    if PathBuf::from(name).is_absolute() {
+        let p = PathBuf::from(name);
+        return if p.is_file() { Some(p) } else { None };
+    }
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        #[cfg(windows)]
+        {
+            let exe = dir.join(format!("{name}.exe"));
+            if exe.is_file() {
+                return Some(exe);
+            }
+        }
+    }
+    None
 }

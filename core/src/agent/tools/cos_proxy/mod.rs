@@ -244,7 +244,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
     },
     PrimitiveSpec {
         name: "cos_browser",
-        description: "Manage the local Jina Reader browser-extraction service. \
+        description: "Manage the local cos-browser (Obscura) CDP server. \
                       Lifecycle only — actual fetches go via the cos web app.",
         primitive: crate::browser::run,
         commands: &["start", "stop", "restart", "status", "health"],

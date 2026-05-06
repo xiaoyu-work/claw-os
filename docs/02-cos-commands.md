@@ -719,17 +719,17 @@ cos service register \
 
 ## browser — Browser Service
 
-Manages the built-in Chromium browser engine (Puppeteer-based).
+Manages the optional `cos-browser` CDP server (Rust headless browser, vendored from [Obscura](https://github.com/h4ckf0r0day/obscura)).
 
 ```bash
-cos browser start      # start browser service
-cos browser stop       # stop browser service
-cos browser restart    # restart
-cos browser status     # check running + healthy
-cos browser health     # health check with auto-restart
+cos browser start [--port 9222] [--stealth] [--proxy URL]   # start CDP server
+cos browser stop                                            # stop
+cos browser restart
+cos browser status                                          # running + healthy
+cos browser health                                          # health check with auto-restart
 ```
 
-The browser service powers `cos app web read` (URL to Markdown conversion with full JavaScript rendering).
+The CDP server is **opt-in** — it exposes Chrome DevTools Protocol at `ws://localhost:9222` for external Puppeteer/Playwright clients. `cos app web read|scrape|screenshot` does **not** require it; those commands invoke `cos-browser` per call.
 
 ---
 

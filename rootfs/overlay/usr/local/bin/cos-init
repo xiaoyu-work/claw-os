@@ -28,10 +28,5 @@ if [ "$(uname)" = "Linux" ] && command -v mount >/dev/null 2>&1; then
     fi
 fi
 
-# Start browser engine service
-if [ -d /opt/cos-browser-engine ]; then
-    cos browser start >/dev/null 2>&1 || true
-fi
-
 # Execute the requested command (default: bash --login)
 exec "${@:-/bin/bash --login}"

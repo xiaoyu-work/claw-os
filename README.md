@@ -43,12 +43,12 @@ cos (Rust binary, ~5800 LOC)
 │   ├── cron        Agent-native job scheduler
 │   ├── netfilter   Outbound firewall with rate limiting
 │   ├── policy      Tier + Scope permissions, elevation
-│   └── browser     Browser engine lifecycle
+│   └── browser     cos-browser (Obscura) CDP server lifecycle
 │
 └── Apps (cos app <name> <command>)
     ├── fs          File operations with metadata and search
     ├── exec        Command execution with language detection
-    ├── web         URL → Markdown (powered by browser engine)
+    ├── web         URL → text/links/JSON, screenshots (cos-browser + V8)
     ├── db          SQLite databases
     ├── doc         PDF, DOCX, XLSX, PPTX, CSV reader
     ├── net         HTTP client

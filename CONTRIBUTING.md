@@ -52,7 +52,7 @@ claw-os/
 │       ├── router.rs      Command dispatch
 │       ├── sandbox.rs     Namespace + cgroup isolation
 │       ├── proc.rs        Process session manager
-│       ├── browser.rs     Jina Reader lifecycle
+│       ├── browser.rs     cos-browser (Obscura) lifecycle
 │       ├── bridge.rs      Python app subprocess bridge
 │       ├── audit.rs       JSONL audit logging
 │       ├── sysinfo.rs     Native system info
