@@ -295,12 +295,39 @@ fn recall_cmd(args: &[String]) -> Result<Value, String> {
 /// `cos agent sessions [limit]` — recent conversation sessions
 /// ordered by most-recent activity.
 fn sessions_cmd(args: &[String]) -> Result<Value, String> {
+    // `cos agent sessions [N]` keeps working as the list shortcut
+    // when N parses as a number. Otherwise the first arg is treated
+    // as a verb: list / title / set-title / count / clear.
+    let first = args.first().map(|s| s.as_str()).unwrap_or("list");
+    if first.parse::<usize>().is_ok() {
+        return sessions_list(args);
+    }
+    match first {
+        "list" | "" => sessions_list(&args[1..]),
+        "title" => sessions_title(&args[1..]),
+        "set-title" => sessions_set_title(&args[1..]),
+        "count" => sessions_count(&args[1..]),
+        "clear" => sessions_clear(&args[1..]),
+        other => Err(format!(
+            "unknown sessions subcommand: {other}. try: list [N] | title <id> | set-title <id> \"<title>\" | count [<id>] | clear <id> --yes"
+        )),
+    }
+}
+
+fn sessions_list(args: &[String]) -> Result<Value, String> {
     let limit: usize = args
         .first()
         .and_then(|s| s.parse().ok())
         .unwrap_or(20);
     let db = memory::sqlite_fts::MemoryDb::open_default()
         .map_err(|e| format!("memory db unavailable: {e}"))?;
+    sessions_list_with(&db, limit)
+}
+
+fn sessions_list_with(
+    db: &memory::sqlite_fts::MemoryDb,
+    limit: usize,
+) -> Result<Value, String> {
     let sessions = db
         .sessions(limit)
         .map_err(|e| format!("sessions query failed: {e}"))?;
@@ -319,6 +346,141 @@ fn sessions_cmd(args: &[String]) -> Result<Value, String> {
         "limit": limit,
         "n": rendered.len(),
         "sessions": rendered,
+    }))
+}
+
+fn sessions_title(args: &[String]) -> Result<Value, String> {
+    let id = args
+        .first()
+        .cloned()
+        .filter(|s| !s.is_empty() && !s.starts_with("--"))
+        .ok_or_else(|| "usage: cos agent sessions title <session_id>".to_string())?;
+    let db = memory::sqlite_fts::MemoryDb::open_default()
+        .map_err(|e| format!("memory db unavailable: {e}"))?;
+    sessions_title_with(&db, &id)
+}
+
+fn sessions_title_with(
+    db: &memory::sqlite_fts::MemoryDb,
+    id: &str,
+) -> Result<Value, String> {
+    let title = db
+        .title_for(id)
+        .map_err(|e| format!("title lookup failed: {e}"))?;
+    Ok(json!({
+        "session_id": id,
+        "title": title,
+        "set": title.is_some(),
+    }))
+}
+
+fn sessions_set_title(args: &[String]) -> Result<Value, String> {
+    let (id, title) = parse_set_title_args(args)?;
+    let db = memory::sqlite_fts::MemoryDb::open_default()
+        .map_err(|e| format!("memory db unavailable: {e}"))?;
+    sessions_set_title_with(&db, &id, &title)
+}
+
+fn parse_set_title_args(args: &[String]) -> Result<(String, String), String> {
+    let id = args
+        .first()
+        .cloned()
+        .filter(|s| !s.is_empty() && !s.starts_with("--"))
+        .ok_or_else(|| {
+            "usage: cos agent sessions set-title <session_id> \"<title>\"".to_string()
+        })?;
+    let title_parts: Vec<String> = args
+        .iter()
+        .skip(1)
+        .take_while(|s| !s.starts_with("--"))
+        .cloned()
+        .collect();
+    if title_parts.is_empty() {
+        return Err("usage: cos agent sessions set-title <session_id> \"<title>\"".into());
+    }
+    let title = title_parts.join(" ").trim().to_string();
+    if title.is_empty() {
+        return Err("title cannot be empty".into());
+    }
+    Ok((id, title))
+}
+
+fn sessions_set_title_with(
+    db: &memory::sqlite_fts::MemoryDb,
+    id: &str,
+    title: &str,
+) -> Result<Value, String> {
+    db.set_title(id, title)
+        .map_err(|e| format!("set-title failed: {e}"))?;
+    Ok(json!({
+        "session_id": id,
+        "title": title,
+        "ok": true,
+    }))
+}
+
+fn sessions_count(args: &[String]) -> Result<Value, String> {
+    let id = args
+        .first()
+        .cloned()
+        .filter(|s| !s.is_empty() && !s.starts_with("--"));
+    let db = memory::sqlite_fts::MemoryDb::open_default()
+        .map_err(|e| format!("memory db unavailable: {e}"))?;
+    sessions_count_with(&db, id.as_deref())
+}
+
+fn sessions_count_with(
+    db: &memory::sqlite_fts::MemoryDb,
+    id: Option<&str>,
+) -> Result<Value, String> {
+    match id {
+        Some(sid) => {
+            let n = db
+                .count_session(sid)
+                .map_err(|e| format!("count failed: {e}"))?;
+            Ok(json!({
+                "session_id": sid,
+                "messages": n,
+            }))
+        }
+        None => {
+            let n = db
+                .count_total()
+                .map_err(|e| format!("count failed: {e}"))?;
+            Ok(json!({
+                "total_messages": n,
+            }))
+        }
+    }
+}
+
+fn sessions_clear(args: &[String]) -> Result<Value, String> {
+    let id = args
+        .first()
+        .cloned()
+        .filter(|s| !s.is_empty() && !s.starts_with("--"))
+        .ok_or_else(|| "usage: cos agent sessions clear <session_id> --yes".to_string())?;
+    if !args.iter().any(|a| a == "--yes") {
+        return Err(format!(
+            "refusing to clear session {id} without --yes (would drop all recorded messages for this session)"
+        ));
+    }
+    let db = memory::sqlite_fts::MemoryDb::open_default()
+        .map_err(|e| format!("memory db unavailable: {e}"))?;
+    sessions_clear_with(&db, &id)
+}
+
+fn sessions_clear_with(
+    db: &memory::sqlite_fts::MemoryDb,
+    id: &str,
+) -> Result<Value, String> {
+    let n = db
+        .clear_session(id)
+        .map_err(|e| format!("clear failed: {e}"))?;
+    Ok(json!({
+        "session_id": id,
+        "messages_cleared": n,
+        "ok": true,
     }))
 }
 
@@ -6248,5 +6410,201 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("--max-file-bytes"));
+    }
+
+    // ---- sessions_cmd / sessions_*_with ----
+
+    fn fresh_session_db() -> memory::sqlite_fts::MemoryDb {
+        memory::sqlite_fts::MemoryDb::open_in_memory().expect("open in-memory db")
+    }
+
+    #[test]
+    fn sessions_list_with_empty_db_returns_no_sessions() {
+        let db = fresh_session_db();
+        let v = sessions_list_with(&db, 20).expect("list ok");
+        assert_eq!(v.get("n").and_then(|n| n.as_u64()), Some(0));
+        assert_eq!(v.get("limit").and_then(|n| n.as_u64()), Some(20));
+        assert!(v
+            .get("sessions")
+            .and_then(|s| s.as_array())
+            .map(|a| a.is_empty())
+            .unwrap_or(false));
+    }
+
+    #[test]
+    fn sessions_list_with_returns_recorded_sessions_in_recency_order() {
+        let db = fresh_session_db();
+        db.record_message("s-old", "user", "hi old").unwrap();
+        // Tick to ensure a different ms.
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        db.record_message("s-new", "user", "hi new").unwrap();
+
+        let v = sessions_list_with(&db, 10).expect("list ok");
+        let arr = v
+            .get("sessions")
+            .and_then(|s| s.as_array())
+            .expect("array");
+        assert_eq!(arr.len(), 2);
+        // Most recent first.
+        assert_eq!(
+            arr[0].get("session_id").and_then(|s| s.as_str()),
+            Some("s-new")
+        );
+        assert_eq!(
+            arr[1].get("session_id").and_then(|s| s.as_str()),
+            Some("s-old")
+        );
+    }
+
+    #[test]
+    fn sessions_title_with_returns_null_when_unset() {
+        let db = fresh_session_db();
+        let v = sessions_title_with(&db, "sx").expect("title ok");
+        assert_eq!(v.get("set").and_then(|b| b.as_bool()), Some(false));
+        assert!(v.get("title").map(|t| t.is_null()).unwrap_or(false));
+    }
+
+    #[test]
+    fn sessions_set_title_with_then_title_with_round_trips() {
+        let db = fresh_session_db();
+        let v = sessions_set_title_with(&db, "sx", "My Session").expect("set ok");
+        assert_eq!(v.get("title").and_then(|s| s.as_str()), Some("My Session"));
+        let v2 = sessions_title_with(&db, "sx").expect("title ok");
+        assert_eq!(
+            v2.get("title").and_then(|s| s.as_str()),
+            Some("My Session")
+        );
+        assert_eq!(v2.get("set").and_then(|b| b.as_bool()), Some(true));
+    }
+
+    #[test]
+    fn sessions_set_title_overwrites_existing_title() {
+        let db = fresh_session_db();
+        sessions_set_title_with(&db, "sx", "first").expect("set ok");
+        sessions_set_title_with(&db, "sx", "second").expect("set ok");
+        let v = sessions_title_with(&db, "sx").expect("title ok");
+        assert_eq!(v.get("title").and_then(|s| s.as_str()), Some("second"));
+    }
+
+    #[test]
+    fn parse_set_title_args_accepts_multi_word_title() {
+        let (id, title) = parse_set_title_args(&[
+            "sid".into(),
+            "Hello".into(),
+            "World".into(),
+            "Of".into(),
+            "Tests".into(),
+        ])
+        .expect("parse ok");
+        assert_eq!(id, "sid");
+        assert_eq!(title, "Hello World Of Tests");
+    }
+
+    #[test]
+    fn parse_set_title_args_stops_at_first_flag() {
+        let (id, title) = parse_set_title_args(&[
+            "sid".into(),
+            "Hello".into(),
+            "World".into(),
+            "--unknown".into(),
+            "ignored".into(),
+        ])
+        .expect("parse ok");
+        assert_eq!(id, "sid");
+        assert_eq!(title, "Hello World");
+    }
+
+    #[test]
+    fn parse_set_title_args_requires_id() {
+        let err = parse_set_title_args(&[]).unwrap_err();
+        assert!(err.contains("usage"));
+    }
+
+    #[test]
+    fn parse_set_title_args_requires_title() {
+        let err = parse_set_title_args(&["sid".into()]).unwrap_err();
+        assert!(err.contains("usage"));
+    }
+
+    #[test]
+    fn parse_set_title_args_rejects_id_starting_with_double_dash() {
+        let err = parse_set_title_args(&["--id".into(), "title".into()]).unwrap_err();
+        assert!(err.contains("usage"));
+    }
+
+    #[test]
+    fn sessions_count_with_total_includes_all_sessions() {
+        let db = fresh_session_db();
+        db.record_message("s1", "user", "a").unwrap();
+        db.record_message("s1", "assistant", "b").unwrap();
+        db.record_message("s2", "user", "c").unwrap();
+        let v = sessions_count_with(&db, None).expect("count ok");
+        assert_eq!(
+            v.get("total_messages").and_then(|n| n.as_i64()),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn sessions_count_with_filters_by_session_id() {
+        let db = fresh_session_db();
+        db.record_message("s1", "user", "a").unwrap();
+        db.record_message("s1", "assistant", "b").unwrap();
+        db.record_message("s2", "user", "c").unwrap();
+        let v = sessions_count_with(&db, Some("s1")).expect("count ok");
+        assert_eq!(v.get("messages").and_then(|n| n.as_i64()), Some(2));
+        assert_eq!(
+            v.get("session_id").and_then(|s| s.as_str()),
+            Some("s1")
+        );
+    }
+
+    #[test]
+    fn sessions_clear_with_drops_session_messages_only() {
+        let db = fresh_session_db();
+        db.record_message("s1", "user", "a").unwrap();
+        db.record_message("s1", "assistant", "b").unwrap();
+        db.record_message("s2", "user", "c").unwrap();
+        let v = sessions_clear_with(&db, "s1").expect("clear ok");
+        assert_eq!(v.get("messages_cleared").and_then(|n| n.as_u64()), Some(2));
+        // s2 should be intact.
+        let total = sessions_count_with(&db, None).expect("count ok");
+        assert_eq!(
+            total.get("total_messages").and_then(|n| n.as_i64()),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn sessions_clear_refuses_without_yes_flag() {
+        let err = sessions_clear(&["sx".into()]).unwrap_err();
+        assert!(err.contains("--yes"));
+    }
+
+    #[test]
+    fn sessions_clear_requires_session_id() {
+        let err = sessions_clear(&[]).unwrap_err();
+        assert!(err.contains("usage"));
+        let err2 = sessions_clear(&["--yes".into()]).unwrap_err();
+        assert!(err2.contains("usage"));
+    }
+
+    #[test]
+    fn sessions_title_requires_id() {
+        let err = sessions_title(&[]).unwrap_err();
+        assert!(err.contains("usage"));
+    }
+
+    #[test]
+    fn sessions_cmd_unknown_subcommand_errs() {
+        let err = sessions_cmd(&["bogus".into()]).unwrap_err();
+        assert!(err.contains("bogus"));
+    }
+
+    #[test]
+    fn sessions_cmd_numeric_first_arg_routes_to_list() {
+        // Numeric first arg keeps backward-compat: cos agent sessions 5 → list 5.
+        let v = sessions_cmd(&["5".into()]).expect("legacy list ok");
+        assert_eq!(v.get("limit").and_then(|n| n.as_u64()), Some(5));
     }
 }

@@ -385,7 +385,7 @@ fn builtin_apps() -> Vec<(
             ("service", "Manage long-running agent service (Phase 1+)"),
             ("insights", "Aggregate LLM run-log: cos agent insights [overall|recent N|sessions] [--since <ISO>] [--until <ISO>] [--ok|--error] [--provider <n>] [--model <n>]"),
             ("recall", "FTS5 search across recorded conversations: cos agent recall \"<query>\" [limit]"),
-            ("sessions", "List recent conversation sessions: cos agent sessions [limit]"),
+            ("sessions", "Inspect / manage conversation sessions in the memory DB: cos agent sessions [list [N] | title <id> | set-title <id> \"<title>\" | count [<id>] | clear <id> --yes]"),
             ("onboarding", "First-run setup state machine: cos agent onboarding [status|next|complete <id> [note]|skip <id>|reset [id]]"),
             ("notes", "Manage agent markdown notes (MEMORY.md / USER.md / custom): cos agent notes [list|read <n>|write <n> <content>|append <n> <line>|delete <n>]"),
             ("skills", "Inspect or install skill bundles: cos agent skills [list|info <id>|disabled|errors|root|install <archive.zip> [--force]|hub <list|show|install> <owner/repo> [<id>]|usage <stats [<id>]|record <id> --duration-ms N [--ok|--error] [--by <caller>]|path|clear --yes>]"),
