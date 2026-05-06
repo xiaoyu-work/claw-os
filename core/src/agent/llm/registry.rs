@@ -17,12 +17,15 @@ use super::{LlmError, Provider, Result};
 use crate::config::AgentConfig;
 
 /// Names of every provider linked into this binary.
-pub const REGISTERED: &[&str] = &["mock"];
+pub const REGISTERED: &[&str] = &["mock", "llama_local"];
 
 /// Construct a provider by name.
 pub fn build(name: &str, model: &str, agent_cfg: &AgentConfig) -> Result<Arc<dyn Provider>> {
     match name {
         "mock" => Ok(Arc::new(providers::mock::MockProvider::new(model, agent_cfg))),
+        "llama_local" => Ok(Arc::new(providers::llama_local::LlamaLocalProvider::new(
+            model, agent_cfg,
+        ))),
         other => Err(LlmError::NotConfigured(format!(
             "unknown provider '{other}'. registered: {REGISTERED:?}"
         ))),

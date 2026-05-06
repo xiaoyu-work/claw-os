@@ -8,6 +8,13 @@ description = "Claw OS — agent-native operating system core"
 name = "cos"
 path = "src/main.rs"
 
+[features]
+default = []
+# Build and link llama.cpp (vendored at $LLAMA_CPP_PATH or ../llama.cpp by
+# default). Adds a multi-minute first-build for the C++ side. Off by default
+# so contributors don't need llama.cpp on disk to compile cos.
+llama_cpp = ["dep:cmake"]
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -26,12 +33,15 @@ rusqlite = { version = "0.39.0", features = ["bundled"] }
 
 # Phase 0.5 (model engines): added when model files arrive
 # ort = { version = "2", features = [...] }
-# llama-cpp-2 = { version = "0.1", features = [...] }
+# llama_cpp engine FFI is hand-written — see core/src/model/engines/llama_cpp/
 
 # Phase 3 / 6 (added later)
 # fastembed = "..."
 # rmcp = "..."
 # serde_yaml = "..."
+
+[build-dependencies]
+cmake = { version = "0.1", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

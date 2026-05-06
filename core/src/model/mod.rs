@@ -59,7 +59,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
             "models_dir": paths::models_dir().display().to_string(),
             "cache_dir": paths::models_cache_dir().display().to_string(),
             "socket": paths::socket_path().display().to_string(),
-            "engines_linked": Vec::<&str>::new(),
+            "engines_linked": engines::engines_linked(),
             "models_loaded": 0,
         })),
         other => Err(format!(

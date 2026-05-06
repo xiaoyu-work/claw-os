@@ -6,4 +6,5 @@
 //! deepseek) plus the `local` (llama.cpp) adapter land in later phases
 //! when a concrete one is selected.
 
+pub mod llama_local;
 pub mod mock;
