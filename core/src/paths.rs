@@ -110,6 +110,12 @@ pub fn agent_memory_db_path() -> PathBuf {
     agent_state_dir().join("memory.db")
 }
 
+/// Path to the agent's semantic-memory (vector) SQLite store.
+/// Lives at `data_dir/agent/semantic.db`. Created on first index.
+pub fn agent_semantic_db_path() -> PathBuf {
+    agent_state_dir().join("semantic.db")
+}
+
 /// Path to the persistent first-run onboarding state file. Lives at
 /// `data_dir/agent/onboarding.json`. Created on first save.
 pub fn agent_onboarding_path() -> PathBuf {

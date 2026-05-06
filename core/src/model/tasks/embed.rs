@@ -83,7 +83,9 @@ pub fn build_from(cfg: &EmbedConfig) -> Result<Option<Box<dyn Embedder>>, String
         "none" | "" => Ok(None),
         // Every OpenAI-API-shape backend (OpenAI / Azure / Ollama / vLLM /
         // TGI / LMStudio) shares one impl — switch behaviour via base_url.
-        "openai" | "xai" | "deepseek" | "openrouter" | "ollama" => {
+        // `azure` differs only in the auth header style (`api-key:` instead
+        // of `Authorization: Bearer …`).
+        "openai" | "azure" | "xai" | "deepseek" | "openrouter" | "ollama" => {
             Ok(Some(Box::new(OpenAICompatEmbedder::from_config(cfg))))
         }
         other => Err(format!("unknown embed provider: {other}")),
@@ -202,7 +204,14 @@ impl Embedder for OpenAICompatEmbedder {
             .header("Content-Type", "application/json")
             .json(&body);
         if let Some(key) = &self.api_key {
-            http = http.bearer_auth(key);
+            // Azure OpenAI authenticates with `api-key: <key>` rather than
+            // `Authorization: Bearer …`. Other OpenAI-shape providers all
+            // accept the bearer form.
+            if self.alias == "azure" {
+                http = http.header("api-key", key.as_str());
+            } else {
+                http = http.bearer_auth(key);
+            }
         }
         for (k, v) in &self.extra_headers {
             http = http.header(k.as_str(), v.as_str());
@@ -490,5 +499,67 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, EmbedError::Auth));
+    }
+
+    #[tokio::test]
+    async fn azure_alias_sends_api_key_header_not_bearer() {
+        std::env::set_var("COS_TEST_AZURE_KEY", "azure-secret-1234");
+        let body = serde_json::json!({
+            "object": "list",
+            "model": "text-embedding-3-small",
+            "data": [{"object": "embedding", "index": 0, "embedding": [0.7, 0.8]}],
+            "usage": {"prompt_tokens": 1, "total_tokens": 1}
+        })
+        .to_string();
+        let (base_url, handle) = spawn_one_shot_mock(body, "HTTP/1.1 200 OK").await;
+        let mut c = EmbedConfig::default();
+        c.provider = "azure".into();
+        c.model = "text-embedding-3-small".into();
+        c.base_url = Some(base_url);
+        c.api_key_env = Some("COS_TEST_AZURE_KEY".into());
+
+        let e = OpenAICompatEmbedder::from_config(&c);
+        let resp = e
+            .embed(EmbedRequest {
+                inputs: vec!["hello".into()],
+            })
+            .await
+            .expect("embed");
+        assert_eq!(resp.dim, 2);
+
+        let req = String::from_utf8_lossy(&handle.await.unwrap()).to_lowercase();
+        assert!(
+            req.contains("api-key: azure-secret-1234"),
+            "expected `api-key:` header for azure alias, got:\n{req}"
+        );
+        assert!(
+            !req.contains("authorization: bearer"),
+            "azure alias must NOT send bearer auth, got:\n{req}"
+        );
+
+        std::env::remove_var("COS_TEST_AZURE_KEY");
+    }
+
+    #[test]
+    fn azure_endpoint_assembly_preserves_api_version_query() {
+        let mut c = EmbedConfig::default();
+        c.provider = "azure".into();
+        c.model = "text-embedding-3-small".into();
+        c.base_url = Some(
+            "https://xiaoyu-eastus2.openai.azure.com/openai/deployments/text-embedding-3-small?api-version=2024-02-01".into(),
+        );
+        let e = OpenAICompatEmbedder::from_config(&c);
+        assert_eq!(
+            e.endpoint(),
+            "https://xiaoyu-eastus2.openai.azure.com/openai/deployments/text-embedding-3-small/embeddings?api-version=2024-02-01"
+        );
+    }
+
+    #[test]
+    fn azure_provider_is_accepted_by_factory() {
+        let mut c = EmbedConfig::default();
+        c.provider = "azure".into();
+        c.model = "text-embedding-3-small".into();
+        assert!(build_from(&c).unwrap().is_some());
     }
 }

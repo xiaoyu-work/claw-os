@@ -146,8 +146,221 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "context" => context_cmd(args),
         "file-safety" => file_safety_cmd(args),
         "osv" => osv_cmd(args),
+        "semantic" => semantic_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | provider-doctor | title | summarise | classify | tools | guardrails | approval | todo | compress | aux | retry | vision | display | shell-hooks | media | binary-ext | context | file-safety | osv"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | provider-doctor | title | summarise | classify | tools | guardrails | approval | todo | compress | aux | retry | vision | display | shell-hooks | media | binary-ext | context | file-safety | osv | semantic"
+        )),
+    }
+}
+
+/// `cos agent semantic <subcmd>` — vector-memory operations.
+///
+///   index <namespace> <key> "<text>" — embed and store
+///   search [--namespace NS] [--limit N] "<query>"
+///   list   [--namespace NS] [--limit N]
+///   count  [--namespace NS]
+///   remove <namespace> <key>
+///   clear  <namespace>
+///   status — show DB path / row count / configured embedder
+///
+/// All sub-commands respect `[embed]` from config.json.
+fn semantic_cmd(args: &[String]) -> Result<Value, String> {
+    use crate::agent::memory::semantic::SemanticStore;
+
+    let sub = args
+        .first()
+        .map(|s| s.as_str())
+        .ok_or("usage: cos agent semantic <index|search|list|count|remove|clear|status> ...")?;
+    let rest = &args[1..];
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    match sub {
+        "status" => {
+            let cfg = &crate::config::get().embed;
+            let store_res = SemanticStore::open_default();
+            let path = crate::paths::agent_semantic_db_path();
+            let (configured, count, embedder_model) = match &store_res {
+                Ok(Some(s)) => {
+                    let n = s.count(None).unwrap_or(0);
+                    let m = s.embedder().map(|e| e.model().to_string());
+                    (true, n, m)
+                }
+                Ok(None) => (false, 0, None),
+                Err(_) => (false, 0, None),
+            };
+            Ok(json!({
+                "status": if configured { "ok" } else { "disabled" },
+                "path": path.display().to_string(),
+                "row_count": count,
+                "provider": cfg.provider,
+                "model_config": cfg.model,
+                "embedder_model": embedder_model,
+                "base_url": cfg.base_url,
+            }))
+        }
+        "index" => {
+            if rest.len() < 3 {
+                return Err("usage: cos agent semantic index <namespace> <key> \"<text>\"".into());
+            }
+            let store = SemanticStore::open_default()
+                .map_err(|e| e.to_string())?
+                .ok_or("embedding disabled in [embed] config")?;
+            let id = rt
+                .block_on(store.index(&rest[0], &rest[1], &rest[2..].join(" ")))
+                .map_err(|e| e.to_string())?;
+            Ok(json!({ "id": id, "namespace": rest[0], "key": rest[1] }))
+        }
+        "search" => {
+            let mut namespace: Option<String> = None;
+            let mut limit: usize = 5;
+            let mut positional: Vec<String> = Vec::new();
+            let mut i = 0;
+            while i < rest.len() {
+                match rest[i].as_str() {
+                    "--namespace" | "--ns" => {
+                        namespace = Some(
+                            rest.get(i + 1)
+                                .cloned()
+                                .ok_or("--namespace requires a value")?,
+                        );
+                        i += 2;
+                    }
+                    "--limit" => {
+                        limit = rest
+                            .get(i + 1)
+                            .and_then(|s| s.parse().ok())
+                            .ok_or("--limit requires a positive integer")?;
+                        i += 2;
+                    }
+                    other if other.starts_with("--") => {
+                        return Err(format!("unknown flag: {other}"));
+                    }
+                    _ => {
+                        positional.push(rest[i].clone());
+                        i += 1;
+                    }
+                }
+            }
+            if positional.is_empty() {
+                return Err("usage: cos agent semantic search [--namespace NS] [--limit N] \"<query>\"".into());
+            }
+            let query = positional.join(" ");
+            let store = SemanticStore::open_default()
+                .map_err(|e| e.to_string())?
+                .ok_or("embedding disabled in [embed] config")?;
+            let hits = rt
+                .block_on(store.search(namespace.as_deref(), &query, limit))
+                .map_err(|e| e.to_string())?;
+            let arr: Vec<Value> = hits
+                .into_iter()
+                .map(|h| {
+                    json!({
+                        "id": h.id,
+                        "namespace": h.namespace,
+                        "key": h.key,
+                        "text": h.text,
+                        "model": h.model,
+                        "score": h.score,
+                        "ts_ms": h.ts_ms,
+                    })
+                })
+                .collect();
+            Ok(json!({ "query": query, "count": arr.len(), "hits": arr }))
+        }
+        "list" => {
+            let mut namespace: Option<String> = None;
+            let mut limit: usize = 50;
+            let mut i = 0;
+            while i < rest.len() {
+                match rest[i].as_str() {
+                    "--namespace" | "--ns" => {
+                        namespace = Some(
+                            rest.get(i + 1)
+                                .cloned()
+                                .ok_or("--namespace requires a value")?,
+                        );
+                        i += 2;
+                    }
+                    "--limit" => {
+                        limit = rest
+                            .get(i + 1)
+                            .and_then(|s| s.parse().ok())
+                            .ok_or("--limit requires a positive integer")?;
+                        i += 2;
+                    }
+                    other => return Err(format!("unknown flag: {other}")),
+                }
+            }
+            let store = SemanticStore::open_default()
+                .map_err(|e| e.to_string())?
+                .ok_or("embedding disabled in [embed] config")?;
+            let rows = store
+                .list(namespace.as_deref(), limit)
+                .map_err(|e| e.to_string())?;
+            let arr: Vec<Value> = rows
+                .into_iter()
+                .map(|r| {
+                    json!({
+                        "id": r.id,
+                        "namespace": r.namespace,
+                        "key": r.key,
+                        "text": r.text,
+                        "model": r.model,
+                        "dim": r.dim,
+                        "ts_ms": r.ts_ms,
+                    })
+                })
+                .collect();
+            Ok(json!({ "count": arr.len(), "rows": arr }))
+        }
+        "count" => {
+            let mut namespace: Option<String> = None;
+            let mut i = 0;
+            while i < rest.len() {
+                match rest[i].as_str() {
+                    "--namespace" | "--ns" => {
+                        namespace = Some(
+                            rest.get(i + 1)
+                                .cloned()
+                                .ok_or("--namespace requires a value")?,
+                        );
+                        i += 2;
+                    }
+                    other => return Err(format!("unknown flag: {other}")),
+                }
+            }
+            let store = SemanticStore::open_default()
+                .map_err(|e| e.to_string())?
+                .ok_or("embedding disabled in [embed] config")?;
+            let n = store.count(namespace.as_deref()).map_err(|e| e.to_string())?;
+            Ok(json!({ "count": n, "namespace": namespace }))
+        }
+        "remove" => {
+            if rest.len() < 2 {
+                return Err("usage: cos agent semantic remove <namespace> <key>".into());
+            }
+            let store = SemanticStore::open_default()
+                .map_err(|e| e.to_string())?
+                .ok_or("embedding disabled in [embed] config")?;
+            let removed = store.remove(&rest[0], &rest[1]).map_err(|e| e.to_string())?;
+            Ok(json!({ "removed": removed }))
+        }
+        "clear" => {
+            if rest.is_empty() {
+                return Err("usage: cos agent semantic clear <namespace>".into());
+            }
+            let store = SemanticStore::open_default()
+                .map_err(|e| e.to_string())?
+                .ok_or("embedding disabled in [embed] config")?;
+            let n = store.clear_namespace(&rest[0]).map_err(|e| e.to_string())?;
+            Ok(json!({ "deleted": n, "namespace": rest[0] }))
+        }
+        other => Err(format!(
+            "unknown semantic subcommand: {other}. try: index | search | list | count | remove | clear | status"
         )),
     }
 }
