@@ -286,14 +286,83 @@ impl Provider for AnthropicProvider {
         &self,
         request: ChatRequest,
     ) -> Result<BoxStream<'static, Result<StreamEvent>>> {
-        let response = self.chat(request).await?;
-        let finish = response.finish_reason;
-        let usage = response.usage.clone();
-        let events: Vec<std::result::Result<StreamEvent, LlmError>> = vec![
-            Ok(StreamEvent::Message(response)),
-            Ok(StreamEvent::Done { finish, usage }),
-        ];
-        Ok(stream::iter(events).boxed())
+        // Real SSE streaming. Build the request body with stream:true,
+        // hit /v1/messages with Accept: text/event-stream, validate
+        // the HTTP status synchronously (so 401/429/etc surface
+        // immediately), then wrap the bytes stream in our SSE
+        // parser + Anthropic event converter.
+        let body = wire::build_request_body(&request, &self.cfg.model, true);
+
+        let lease = if let Some(pool) = &self.cfg.pool {
+            match pool.acquire() {
+                Ok(l) => Some(l),
+                Err(e) => return Err(LlmError::NotConfigured(format!("pool: {e}"))),
+            }
+        } else {
+            None
+        };
+        let api_key: Option<&str> = match &lease {
+            Some(l) => Some(l.value()),
+            None => self.cfg.api_key.as_deref(),
+        };
+
+        let mut http = self
+            .client
+            .post(self.endpoint())
+            .header("Content-Type", "application/json")
+            .header("Accept", "text/event-stream")
+            .header("anthropic-version", ANTHROPIC_VERSION)
+            .json(&body);
+
+        if let Some(key) = api_key {
+            http = http.header("x-api-key", key);
+        }
+        for (k, v) in &self.cfg.extra_headers {
+            http = http.header(k.as_str(), v.as_str());
+        }
+
+        let resp = http.send().await.map_err(|e| {
+            if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
+                pool.report_failure(
+                    l,
+                    crate::agent::llm::error_classifier::classify_network_error(),
+                );
+            }
+            LlmError::Transport(e)
+        })?;
+
+        let status = resp.status();
+        let retry_after_secs = resp
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok());
+
+        if !status.is_success() {
+            let bytes = resp.bytes().await.map_err(LlmError::Transport)?;
+            let err = wire::classify_http_error(status, &bytes, retry_after_secs);
+            if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
+                let body_str = std::str::from_utf8(&bytes).unwrap_or("");
+                let cls = crate::agent::llm::error_classifier::classify(
+                    status.as_u16(),
+                    body_str,
+                );
+                pool.report_failure(l, cls);
+            }
+            return Err(err);
+        }
+
+        if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
+            // Success-on-headers — credit the lease so cooldowns
+            // clear. Subsequent body errors don't penalise (the
+            // upstream did accept the request).
+            pool.report_success(l);
+        }
+
+        let bytes_stream = resp.bytes_stream();
+        let model = self.cfg.model.clone();
+        let stream = wire::AnthropicStream::new(bytes_stream, &model);
+        Ok(stream.boxed())
     }
 }
 
@@ -302,6 +371,7 @@ impl Provider for AnthropicProvider {
 /// so we can unit-test it without spinning up an HTTP server.
 pub(crate) mod wire {
     use super::*;
+    use crate::agent::llm::sse::SseEvent;
 
     // --- Request --------------------------------------------------------
 
@@ -681,6 +751,434 @@ pub(crate) mod wire {
             }
         }
         body.chars().take(500).collect()
+    }
+
+    // --- Streaming ----------------------------------------------------------
+
+    /// Stateful adapter: takes decoded Anthropic SSE events and
+    /// emits our internal `StreamEvent` series.
+    ///
+    /// Tracks per-block accumulator state because Anthropic streams
+    /// tool-use input as `input_json_delta` fragments under one
+    /// `content_block` index — the full JSON is only known when
+    /// `content_block_stop` arrives. For text blocks we simply
+    /// pass deltas through as `StreamEvent::TextDelta`; the
+    /// cumulative text is the sum.
+    ///
+    /// Usage tracking: `message_start` carries the input/cache
+    /// counts; `message_delta` carries the **running total** of
+    /// output tokens (per Anthropic docs), so we overwrite on each
+    /// delta. `message_stop` triggers a `Done` emission with the
+    /// final usage + stop reason.
+    pub(crate) struct StreamConverter {
+        model: String,
+        usage: Usage,
+        stop_reason: Option<String>,
+        blocks: std::collections::HashMap<u32, BlockState>,
+        /// Set on `message_stop` so `chat_stream`'s adapter
+        /// terminates the stream with a final `Done` event.
+        finished: bool,
+    }
+
+    enum BlockState {
+        Text,
+        ToolUse {
+            id: String,
+            name: String,
+            json_accum: String,
+        },
+    }
+
+    impl StreamConverter {
+        pub(crate) fn new(default_model: &str) -> Self {
+            Self {
+                model: default_model.to_string(),
+                usage: Usage::default(),
+                stop_reason: None,
+                blocks: std::collections::HashMap::new(),
+                finished: false,
+            }
+        }
+
+        pub(crate) fn is_finished(&self) -> bool {
+            self.finished
+        }
+
+        /// Process one SSE event. Returns zero or more StreamEvents
+        /// to forward downstream. Each Result lets us surface
+        /// `error` SSE events as `Err(LlmError::...)` without
+        /// terminating the stream — caller decides whether to stop
+        /// on first error.
+        pub(crate) fn process(
+            &mut self,
+            ev: &SseEvent,
+        ) -> Vec<Result<StreamEvent>> {
+            // Once message_stop has fired, the stream is logically
+            // closed. Any trailing events the upstream sends (or
+            // bytes we haven't yet consumed when the wrapper signals
+            // EOF) are silently dropped instead of surfacing to the
+            // caller as parse errors.
+            if self.finished {
+                return Vec::new();
+            }
+            // `event:` field is authoritative; `data` is JSON. We
+            // also peek at the JSON's `type` to be defensive against
+            // missing event headers (some upstreams omit them).
+            let payload: serde_json::Value =
+                match serde_json::from_str(&ev.data) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return vec![Err(LlmError::Parse(format!(
+                            "anthropic sse json: {e}"
+                        )))];
+                    }
+                };
+            let kind = payload
+                .get("type")
+                .and_then(|t| t.as_str())
+                .unwrap_or(ev.event.as_str());
+            match kind {
+                "message_start" => self.on_message_start(&payload),
+                "content_block_start" => self.on_content_block_start(&payload),
+                "content_block_delta" => self.on_content_block_delta(&payload),
+                "content_block_stop" => self.on_content_block_stop(&payload),
+                "message_delta" => self.on_message_delta(&payload),
+                "message_stop" => {
+                    self.finished = true;
+                    vec![Ok(self.build_done_event())]
+                }
+                "ping" => Vec::new(),
+                "error" => vec![Err(self.parse_error_event(&payload))],
+                _ => Vec::new(),
+            }
+        }
+
+        fn on_message_start(
+            &mut self,
+            payload: &serde_json::Value,
+        ) -> Vec<Result<StreamEvent>> {
+            if let Some(msg) = payload.get("message") {
+                if let Some(m) = msg.get("model").and_then(|v| v.as_str()) {
+                    self.model = m.to_string();
+                }
+                if let Some(u) = msg.get("usage") {
+                    self.usage.input_tokens = u
+                        .get("input_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as u32;
+                    self.usage.output_tokens = u
+                        .get("output_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as u32;
+                    self.usage.cache_read_tokens = u
+                        .get("cache_read_input_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as u32;
+                    self.usage.cache_write_tokens = u
+                        .get("cache_creation_input_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as u32;
+                }
+            }
+            Vec::new()
+        }
+
+        fn on_content_block_start(
+            &mut self,
+            payload: &serde_json::Value,
+        ) -> Vec<Result<StreamEvent>> {
+            let index = payload
+                .get("index")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
+            let block = match payload.get("content_block") {
+                Some(b) => b,
+                None => return Vec::new(),
+            };
+            let block_type = block
+                .get("type")
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
+            match block_type {
+                "text" => {
+                    self.blocks.insert(index, BlockState::Text);
+                    Vec::new()
+                }
+                "tool_use" => {
+                    let id = block
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let name = block
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    self.blocks.insert(
+                        index,
+                        BlockState::ToolUse {
+                            id: id.clone(),
+                            name: name.clone(),
+                            json_accum: String::new(),
+                        },
+                    );
+                    vec![Ok(StreamEvent::ToolUseStart { id, name })]
+                }
+                _ => Vec::new(),
+            }
+        }
+
+        fn on_content_block_delta(
+            &mut self,
+            payload: &serde_json::Value,
+        ) -> Vec<Result<StreamEvent>> {
+            let index = payload
+                .get("index")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
+            let delta = match payload.get("delta") {
+                Some(d) => d,
+                None => return Vec::new(),
+            };
+            let delta_type = delta
+                .get("type")
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
+            match delta_type {
+                "text_delta" => {
+                    let text = delta
+                        .get("text")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if text.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![Ok(StreamEvent::TextDelta { text })]
+                    }
+                }
+                "input_json_delta" => {
+                    let partial = delta
+                        .get("partial_json")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let id_for_event = match self.blocks.get_mut(&index) {
+                        Some(BlockState::ToolUse {
+                            id, json_accum, ..
+                        }) => {
+                            json_accum.push_str(&partial);
+                            id.clone()
+                        }
+                        _ => String::new(),
+                    };
+                    if partial.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![Ok(StreamEvent::ToolInputDelta {
+                            id: id_for_event,
+                            partial_json: partial,
+                        })]
+                    }
+                }
+                // thinking_delta / signature_delta — Anthropic
+                // extended-thinking. Emit nothing (we don't surface
+                // thinking tokens through the public stream API today).
+                _ => Vec::new(),
+            }
+        }
+
+        fn on_content_block_stop(
+            &mut self,
+            payload: &serde_json::Value,
+        ) -> Vec<Result<StreamEvent>> {
+            let index = payload
+                .get("index")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
+            // For tool_use: parse accumulated JSON, emit final
+            // ToolUse(ToolCall). For text: nothing — text deltas
+            // already streamed; the consumer concatenates.
+            match self.blocks.remove(&index) {
+                Some(BlockState::ToolUse {
+                    id,
+                    name,
+                    json_accum,
+                }) => {
+                    let input: serde_json::Value = if json_accum.is_empty() {
+                        serde_json::json!({})
+                    } else {
+                        match serde_json::from_str(&json_accum) {
+                            Ok(v) => v,
+                            Err(_) => serde_json::Value::String(json_accum),
+                        }
+                    };
+                    vec![Ok(StreamEvent::ToolUse(ToolCall {
+                        id,
+                        name,
+                        input,
+                    }))]
+                }
+                _ => Vec::new(),
+            }
+        }
+
+        fn on_message_delta(
+            &mut self,
+            payload: &serde_json::Value,
+        ) -> Vec<Result<StreamEvent>> {
+            if let Some(d) = payload.get("delta") {
+                if let Some(reason) =
+                    d.get("stop_reason").and_then(|v| v.as_str())
+                {
+                    self.stop_reason = Some(reason.to_string());
+                }
+            }
+            // Per Anthropic docs: usage.output_tokens here is the
+            // running total. Overwrite (not accumulate).
+            if let Some(u) = payload.get("usage") {
+                if let Some(out) =
+                    u.get("output_tokens").and_then(|v| v.as_u64())
+                {
+                    self.usage.output_tokens = out as u32;
+                }
+            }
+            Vec::new()
+        }
+
+        fn parse_error_event(&self, payload: &serde_json::Value) -> LlmError {
+            let err = payload.get("error");
+            let kind = err
+                .and_then(|e| e.get("type"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
+            let msg = err
+                .and_then(|e| e.get("message"))
+                .and_then(|m| m.as_str())
+                .unwrap_or("upstream stream error")
+                .to_string();
+            match kind {
+                "rate_limit_error" => {
+                    LlmError::RateLimited { retry_after_ms: 1_000 }
+                }
+                "authentication_error" | "permission_error" => LlmError::Auth,
+                "overloaded_error" => LlmError::Provider {
+                    status: 529,
+                    message: msg,
+                },
+                _ => LlmError::Provider {
+                    status: 500,
+                    message: msg,
+                },
+            }
+        }
+
+        fn build_done_event(&self) -> StreamEvent {
+            let finish = match self.stop_reason.as_deref() {
+                Some("end_turn") => FinishReason::Stop,
+                Some("max_tokens") => FinishReason::Length,
+                Some("tool_use") => FinishReason::ToolUse,
+                Some("stop_sequence") => FinishReason::Stop,
+                Some("refusal") => FinishReason::Refusal,
+                _ => FinishReason::Stop,
+            };
+            StreamEvent::Done {
+                finish,
+                usage: self.usage.clone(),
+            }
+        }
+
+        #[cfg(test)]
+        pub(crate) fn debug_model(&self) -> &str {
+            &self.model
+        }
+
+        #[cfg(test)]
+        pub(crate) fn debug_usage(&self) -> &Usage {
+            &self.usage
+        }
+    }
+
+    /// Bridges the response `bytes_stream()` (chunks of bytes) to
+    /// our internal `Stream<Item = Result<StreamEvent, LlmError>>`.
+    /// Owns the parser + converter and a small ready-event queue.
+    ///
+    /// Generic over the byte source so unit tests can plug a
+    /// `stream::iter([Ok(bytes), ...])` instead of an HTTP body.
+    pub(crate) struct AnthropicStream {
+        bytes: BoxStream<'static, std::result::Result<bytes::Bytes, reqwest::Error>>,
+        parser: crate::agent::llm::sse::SseParser,
+        converter: StreamConverter,
+        pending: std::collections::VecDeque<Result<StreamEvent>>,
+        bytes_done: bool,
+    }
+
+    impl AnthropicStream {
+        pub(crate) fn new<S>(bytes: S, default_model: &str) -> Self
+        where
+            S: futures_util::Stream<Item = std::result::Result<bytes::Bytes, reqwest::Error>>
+                + Send
+                + 'static,
+        {
+            Self {
+                bytes: bytes.boxed(),
+                parser: crate::agent::llm::sse::SseParser::new(),
+                converter: StreamConverter::new(default_model),
+                pending: std::collections::VecDeque::new(),
+                bytes_done: false,
+            }
+        }
+
+        fn drain_parser(&mut self) {
+            while let Some(sse) = self.parser.pop_event() {
+                let events = self.converter.process(&sse);
+                self.pending.extend(events);
+            }
+        }
+    }
+
+    impl futures_util::Stream for AnthropicStream {
+        type Item = Result<StreamEvent>;
+
+        fn poll_next(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Self::Item>> {
+            use std::task::Poll;
+            loop {
+                if let Some(ev) = self.pending.pop_front() {
+                    return Poll::Ready(Some(ev));
+                }
+                if self.bytes_done {
+                    return Poll::Ready(None);
+                }
+                match std::pin::Pin::new(&mut self.bytes).poll_next(cx) {
+                    Poll::Pending => return Poll::Pending,
+                    Poll::Ready(None) => {
+                        self.parser.finish();
+                        self.drain_parser();
+                        self.bytes_done = true;
+                        continue;
+                    }
+                    Poll::Ready(Some(Ok(chunk))) => {
+                        self.parser.feed(&chunk);
+                        self.drain_parser();
+                        // If converter signalled finish, drop any
+                        // remaining buffered bytes.
+                        if self.converter.is_finished() {
+                            self.bytes_done = true;
+                        }
+                        continue;
+                    }
+                    Poll::Ready(Some(Err(e))) => {
+                        self.pending.push_back(Err(LlmError::Transport(e)));
+                        self.bytes_done = true;
+                        continue;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1343,5 +1841,558 @@ mod tests {
         std::env::remove_var("COS_TEST_ANTH_POOL_ICONFIG");
         let provider = AnthropicProvider::new(ac);
         assert!(provider.is_configured());
+    }
+
+    // ---- StreamConverter (SSE event → StreamEvent) -----------------------
+
+    mod stream_converter {
+        use super::*;
+        use crate::agent::llm::sse::SseEvent;
+        use crate::agent::llm::types::FinishReason;
+
+        fn ev(name: &str, data_json: &str) -> SseEvent {
+            SseEvent {
+                event: name.to_string(),
+                data: data_json.to_string(),
+            }
+        }
+
+        fn run<'a>(
+            conv: &mut wire::StreamConverter,
+            events: impl IntoIterator<Item = &'a SseEvent>,
+        ) -> Vec<Result<StreamEvent>> {
+            let mut out = Vec::new();
+            for e in events {
+                out.extend(conv.process(e));
+            }
+            out
+        }
+
+        #[test]
+        fn message_start_captures_model_and_input_tokens() {
+            let mut c = wire::StreamConverter::new("fallback");
+            let events = vec![ev(
+                "message_start",
+                r#"{"type":"message_start","message":{"id":"m1","model":"claude-3-5-sonnet-20241022","usage":{"input_tokens":42,"output_tokens":1,"cache_read_input_tokens":3,"cache_creation_input_tokens":5}}}"#,
+            )];
+            let out = run(&mut c, events.iter());
+            assert!(out.is_empty(), "message_start emits nothing downstream");
+            assert_eq!(c.debug_model(), "claude-3-5-sonnet-20241022");
+            let u = c.debug_usage();
+            assert_eq!(u.input_tokens, 42);
+            assert_eq!(u.output_tokens, 1);
+            assert_eq!(u.cache_read_tokens, 3);
+            assert_eq!(u.cache_write_tokens, 5);
+        }
+
+        #[test]
+        fn text_only_message_yields_text_deltas_then_done() {
+            let mut c = wire::StreamConverter::new("claude-x");
+            let events = vec![
+                ev(
+                    "message_start",
+                    r#"{"type":"message_start","message":{"model":"claude-3-5-haiku-20241022","usage":{"input_tokens":10,"output_tokens":0}}}"#,
+                ),
+                ev(
+                    "content_block_start",
+                    r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+                ),
+                ev(
+                    "content_block_delta",
+                    r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hel"}}"#,
+                ),
+                ev(
+                    "content_block_delta",
+                    r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"lo"}}"#,
+                ),
+                ev(
+                    "content_block_delta",
+                    r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"!"}}"#,
+                ),
+                ev("content_block_stop", r#"{"type":"content_block_stop","index":0}"#),
+                ev(
+                    "message_delta",
+                    r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}"#,
+                ),
+                ev("message_stop", r#"{"type":"message_stop"}"#),
+            ];
+            let out: Vec<StreamEvent> = run(&mut c, events.iter())
+                .into_iter()
+                .map(|r| r.expect("ok"))
+                .collect();
+
+            // Expect: 3 TextDelta then Done.
+            assert_eq!(out.len(), 4, "got: {out:?}");
+            match &out[0] {
+                StreamEvent::TextDelta { text } => assert_eq!(text, "Hel"),
+                e => panic!("want TextDelta, got {e:?}"),
+            }
+            match &out[1] {
+                StreamEvent::TextDelta { text } => assert_eq!(text, "lo"),
+                e => panic!("want TextDelta, got {e:?}"),
+            }
+            match &out[2] {
+                StreamEvent::TextDelta { text } => assert_eq!(text, "!"),
+                e => panic!("want TextDelta, got {e:?}"),
+            }
+            match &out[3] {
+                StreamEvent::Done { finish, usage } => {
+                    assert!(matches!(finish, FinishReason::Stop));
+                    // message_delta usage is running total → overwrite.
+                    assert_eq!(usage.output_tokens, 7);
+                    assert_eq!(usage.input_tokens, 10);
+                }
+                e => panic!("want Done, got {e:?}"),
+            }
+            assert!(c.is_finished());
+        }
+
+        #[test]
+        fn tool_use_assembles_input_json_and_emits_tool_use() {
+            let mut c = wire::StreamConverter::new("claude-x");
+            let events = vec![
+                ev(
+                    "message_start",
+                    r#"{"type":"message_start","message":{"model":"m","usage":{"input_tokens":1,"output_tokens":0}}}"#,
+                ),
+                ev(
+                    "content_block_start",
+                    r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"calc","input":{}}}"#,
+                ),
+                ev(
+                    "content_block_delta",
+                    r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"a\":"}}"#,
+                ),
+                ev(
+                    "content_block_delta",
+                    r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"42}"}}"#,
+                ),
+                ev("content_block_stop", r#"{"type":"content_block_stop","index":0}"#),
+                ev(
+                    "message_delta",
+                    r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":3}}"#,
+                ),
+                ev("message_stop", r#"{"type":"message_stop"}"#),
+            ];
+            let out: Vec<StreamEvent> = run(&mut c, events.iter())
+                .into_iter()
+                .map(|r| r.expect("ok"))
+                .collect();
+
+            // Expect: ToolUseStart, ToolInputDelta×2, ToolUse, Done.
+            assert_eq!(out.len(), 5, "got: {out:?}");
+            match &out[0] {
+                StreamEvent::ToolUseStart { id, name } => {
+                    assert_eq!(id, "toolu_1");
+                    assert_eq!(name, "calc");
+                }
+                e => panic!("want ToolUseStart, got {e:?}"),
+            }
+            match &out[1] {
+                StreamEvent::ToolInputDelta { id, partial_json } => {
+                    assert_eq!(id, "toolu_1");
+                    assert_eq!(partial_json, "{\"a\":");
+                }
+                e => panic!("want ToolInputDelta, got {e:?}"),
+            }
+            match &out[3] {
+                StreamEvent::ToolUse(call) => {
+                    assert_eq!(call.id, "toolu_1");
+                    assert_eq!(call.name, "calc");
+                    assert_eq!(call.input["a"], 42);
+                }
+                e => panic!("want ToolUse, got {e:?}"),
+            }
+            match &out[4] {
+                StreamEvent::Done { finish, .. } => {
+                    assert!(matches!(finish, FinishReason::ToolUse));
+                }
+                e => panic!("want Done, got {e:?}"),
+            }
+        }
+
+        #[test]
+        fn tool_use_with_unparseable_json_falls_back_to_string() {
+            let mut c = wire::StreamConverter::new("m");
+            let events = vec![
+                ev(
+                    "content_block_start",
+                    r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t","name":"n"}}"#,
+                ),
+                ev(
+                    "content_block_delta",
+                    r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"not-json"}}"#,
+                ),
+                ev("content_block_stop", r#"{"type":"content_block_stop","index":0}"#),
+            ];
+            let out: Vec<StreamEvent> = run(&mut c, events.iter())
+                .into_iter()
+                .map(|r| r.expect("ok"))
+                .collect();
+            // Last one should be ToolUse with input as string fallback.
+            let last = out.last().unwrap();
+            match last {
+                StreamEvent::ToolUse(call) => {
+                    assert_eq!(call.input.as_str(), Some("not-json"));
+                }
+                e => panic!("want ToolUse, got {e:?}"),
+            }
+        }
+
+        #[test]
+        fn ping_events_are_skipped() {
+            let mut c = wire::StreamConverter::new("m");
+            let out = run(&mut c, [&ev("ping", r#"{"type":"ping"}"#)]);
+            assert!(out.is_empty());
+            assert!(!c.is_finished());
+        }
+
+        #[test]
+        fn extended_thinking_deltas_are_silently_dropped() {
+            let mut c = wire::StreamConverter::new("m");
+            let events = vec![
+                ev(
+                    "content_block_start",
+                    r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#,
+                ),
+                ev(
+                    "content_block_delta",
+                    r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"i wonder..."}}"#,
+                ),
+                ev(
+                    "content_block_delta",
+                    r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"abc"}}"#,
+                ),
+                ev("content_block_stop", r#"{"type":"content_block_stop","index":0}"#),
+            ];
+            let out = run(&mut c, events.iter());
+            assert!(out.is_empty(), "thinking should not surface: {out:?}");
+        }
+
+        #[test]
+        fn malformed_json_yields_parse_error_but_does_not_terminate() {
+            let mut c = wire::StreamConverter::new("m");
+            let bad = ev("content_block_delta", "{not json");
+            let out = c.process(&bad);
+            assert_eq!(out.len(), 1);
+            assert!(matches!(out[0], Err(LlmError::Parse(_))));
+            assert!(!c.is_finished());
+        }
+
+        #[test]
+        fn rate_limit_error_event_maps_to_rate_limited() {
+            let mut c = wire::StreamConverter::new("m");
+            let e = ev(
+                "error",
+                r#"{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}"#,
+            );
+            let out = c.process(&e);
+            assert_eq!(out.len(), 1);
+            assert!(matches!(out[0], Err(LlmError::RateLimited { .. })));
+        }
+
+        #[test]
+        fn auth_error_event_maps_to_auth() {
+            let mut c = wire::StreamConverter::new("m");
+            let e = ev(
+                "error",
+                r#"{"type":"error","error":{"type":"authentication_error","message":"bad key"}}"#,
+            );
+            let out = c.process(&e);
+            assert!(matches!(out[0], Err(LlmError::Auth)));
+        }
+
+        #[test]
+        fn permission_error_event_also_maps_to_auth() {
+            let mut c = wire::StreamConverter::new("m");
+            let e = ev(
+                "error",
+                r#"{"type":"error","error":{"type":"permission_error","message":"forbidden"}}"#,
+            );
+            let out = c.process(&e);
+            assert!(matches!(out[0], Err(LlmError::Auth)));
+        }
+
+        #[test]
+        fn overloaded_error_event_maps_to_provider_529() {
+            let mut c = wire::StreamConverter::new("m");
+            let e = ev(
+                "error",
+                r#"{"type":"error","error":{"type":"overloaded_error","message":"busy"}}"#,
+            );
+            let out = c.process(&e);
+            match &out[0] {
+                Err(LlmError::Provider { status, .. }) => assert_eq!(*status, 529),
+                other => panic!("want Provider{{529}}, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn unknown_error_kind_maps_to_provider_500() {
+            let mut c = wire::StreamConverter::new("m");
+            let e = ev(
+                "error",
+                r#"{"type":"error","error":{"type":"weird_one","message":"???"}}"#,
+            );
+            let out = c.process(&e);
+            match &out[0] {
+                Err(LlmError::Provider { status, .. }) => assert_eq!(*status, 500),
+                other => panic!("want Provider{{500}}, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn stop_reason_max_tokens_maps_to_length() {
+            let mut c = wire::StreamConverter::new("m");
+            run(
+                &mut c,
+                [
+                    &ev(
+                        "message_delta",
+                        r#"{"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":1}}"#,
+                    ),
+                    &ev("message_stop", r#"{"type":"message_stop"}"#),
+                ],
+            );
+            // Build done event happens automatically; check via finish flag.
+            // We need to inspect emitted events:
+            let mut c2 = wire::StreamConverter::new("m");
+            let out = run(
+                &mut c2,
+                [
+                    &ev(
+                        "message_delta",
+                        r#"{"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":1}}"#,
+                    ),
+                    &ev("message_stop", r#"{"type":"message_stop"}"#),
+                ],
+            );
+            let done = out.last().unwrap().as_ref().unwrap();
+            match done {
+                StreamEvent::Done { finish, .. } => {
+                    assert!(matches!(finish, FinishReason::Length));
+                }
+                e => panic!("want Done, got {e:?}"),
+            }
+        }
+
+        #[test]
+        fn stop_reason_stop_sequence_maps_to_stop() {
+            let mut c = wire::StreamConverter::new("m");
+            let out = run(
+                &mut c,
+                [
+                    &ev(
+                        "message_delta",
+                        r#"{"type":"message_delta","delta":{"stop_reason":"stop_sequence"}}"#,
+                    ),
+                    &ev("message_stop", r#"{}"#),
+                ],
+            );
+            let done = out.last().unwrap().as_ref().unwrap();
+            assert!(matches!(done, StreamEvent::Done { finish: FinishReason::Stop, .. }));
+        }
+
+        #[test]
+        fn stop_reason_refusal_maps_to_refusal() {
+            let mut c = wire::StreamConverter::new("m");
+            let out = run(
+                &mut c,
+                [
+                    &ev(
+                        "message_delta",
+                        r#"{"type":"message_delta","delta":{"stop_reason":"refusal"}}"#,
+                    ),
+                    &ev("message_stop", r#"{}"#),
+                ],
+            );
+            let done = out.last().unwrap().as_ref().unwrap();
+            assert!(matches!(done, StreamEvent::Done { finish: FinishReason::Refusal, .. }));
+        }
+
+        #[test]
+        fn message_delta_overwrites_running_output_tokens() {
+            let mut c = wire::StreamConverter::new("m");
+            run(
+                &mut c,
+                [&ev(
+                    "message_start",
+                    r#"{"type":"message_start","message":{"model":"m","usage":{"input_tokens":5,"output_tokens":1}}}"#,
+                )],
+            );
+            assert_eq!(c.debug_usage().output_tokens, 1);
+            run(
+                &mut c,
+                [&ev(
+                    "message_delta",
+                    r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":12}}"#,
+                )],
+            );
+            // Running total — overwrite, not accumulate.
+            assert_eq!(c.debug_usage().output_tokens, 12);
+        }
+
+        #[test]
+        fn missing_event_header_uses_payload_type() {
+            // Some upstreams omit the SSE `event:` field; we should
+            // fall back to the JSON `type` field.
+            let mut c = wire::StreamConverter::new("m");
+            let raw = SseEvent {
+                event: String::new(),
+                data: r#"{"type":"message_stop"}"#.to_string(),
+            };
+            let out = c.process(&raw);
+            assert!(c.is_finished());
+            assert_eq!(out.len(), 1);
+            assert!(matches!(out[0].as_ref().unwrap(), StreamEvent::Done { .. }));
+        }
+
+        #[test]
+        fn unknown_kind_is_silently_ignored() {
+            let mut c = wire::StreamConverter::new("m");
+            let raw = ev("xx_future_event", r#"{"type":"xx_future_event"}"#);
+            let out = c.process(&raw);
+            assert!(out.is_empty());
+            assert!(!c.is_finished());
+        }
+    }
+
+    // ---- AnthropicStream (bytes → StreamEvent) ---------------------------
+
+    mod anthropic_stream {
+        use super::*;
+        use bytes::Bytes;
+        use futures_util::stream;
+        use futures_util::StreamExt;
+
+        // Build an HTTP-like body: each canonical SSE event is two
+        // lines (event:..\ndata:..) followed by an empty line.
+        fn sse_body(events: &[(&str, &str)]) -> String {
+            let mut s = String::new();
+            for (name, data) in events {
+                s.push_str(&format!("event: {name}\ndata: {data}\n\n"));
+            }
+            s
+        }
+
+        async fn collect(
+            chunks: Vec<Bytes>,
+        ) -> Vec<Result<StreamEvent>> {
+            let bytes_stream = stream::iter(
+                chunks.into_iter().map(Ok::<_, reqwest::Error>),
+            );
+            let mut s = wire::AnthropicStream::new(bytes_stream, "claude-x");
+            let mut out = Vec::new();
+            while let Some(ev) = s.next().await {
+                out.push(ev);
+            }
+            out
+        }
+
+        #[tokio::test]
+        async fn end_to_end_text_message_in_one_chunk() {
+            let body = sse_body(&[
+                (
+                    "message_start",
+                    r#"{"type":"message_start","message":{"model":"claude-3-5-sonnet-20241022","usage":{"input_tokens":4,"output_tokens":0}}}"#,
+                ),
+                (
+                    "content_block_start",
+                    r#"{"type":"content_block_start","index":0,"content_block":{"type":"text"}}"#,
+                ),
+                (
+                    "content_block_delta",
+                    r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"OK"}}"#,
+                ),
+                (
+                    "content_block_stop",
+                    r#"{"type":"content_block_stop","index":0}"#,
+                ),
+                (
+                    "message_delta",
+                    r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}"#,
+                ),
+                ("message_stop", r#"{"type":"message_stop"}"#),
+            ]);
+            let chunks = vec![Bytes::from(body)];
+            let out: Vec<StreamEvent> = collect(chunks)
+                .await
+                .into_iter()
+                .map(|r| r.expect("ok"))
+                .collect();
+
+            assert_eq!(out.len(), 2, "got: {out:?}");
+            assert!(matches!(out[0], StreamEvent::TextDelta { ref text } if text == "OK"));
+            assert!(matches!(out[1], StreamEvent::Done { .. }));
+        }
+
+        #[tokio::test]
+        async fn handles_byte_split_across_chunks() {
+            // Same body, but chopped at every byte. Parser must
+            // tolerate fine-grained chunking.
+            let body = sse_body(&[
+                (
+                    "content_block_delta",
+                    r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}"#,
+                ),
+                ("message_stop", r#"{"type":"message_stop"}"#),
+            ]);
+            let chunks: Vec<Bytes> = body
+                .as_bytes()
+                .iter()
+                .map(|b| Bytes::from(vec![*b]))
+                .collect();
+            let out: Vec<StreamEvent> = collect(chunks)
+                .await
+                .into_iter()
+                .map(|r| r.expect("ok"))
+                .collect();
+            // TextDelta + Done.
+            assert_eq!(out.len(), 2, "got: {out:?}");
+            assert!(matches!(out[0], StreamEvent::TextDelta { ref text } if text == "hi"));
+            assert!(matches!(out[1], StreamEvent::Done { .. }));
+        }
+
+        #[tokio::test]
+        async fn unterminated_final_event_still_processed_on_eof() {
+            // No trailing blank line — parser.finish() should flush.
+            let body = "event: message_stop\ndata: {\"type\":\"message_stop\"}".to_string();
+            let chunks = vec![Bytes::from(body)];
+            let out: Vec<StreamEvent> = collect(chunks)
+                .await
+                .into_iter()
+                .map(|r| r.expect("ok"))
+                .collect();
+            assert_eq!(out.len(), 1);
+            assert!(matches!(out[0], StreamEvent::Done { .. }));
+        }
+
+        #[tokio::test]
+        async fn ping_chunks_yield_no_events() {
+            let body = sse_body(&[("ping", r#"{"type":"ping"}"#)]);
+            let chunks = vec![Bytes::from(body)];
+            let out = collect(chunks).await;
+            assert!(out.is_empty(), "got: {out:?}");
+        }
+
+        #[tokio::test]
+        async fn stream_terminates_at_message_stop_and_drops_trailing_garbage() {
+            // After message_stop, converter sets finished=true so the
+            // wrapper stops pulling. Garbage bytes after that should
+            // not panic.
+            let body = format!(
+                "{}{}",
+                sse_body(&[("message_stop", r#"{"type":"message_stop"}"#)]),
+                "event: noise\ndata: garbage\n\n",
+            );
+            let chunks = vec![Bytes::from(body)];
+            let out: Vec<StreamEvent> = collect(chunks)
+                .await
+                .into_iter()
+                .map(|r| r.expect("ok"))
+                .collect();
+            assert_eq!(out.len(), 1);
+            assert!(matches!(out[0], StreamEvent::Done { .. }));
+        }
     }
 }

@@ -30,6 +30,7 @@ base64 = "0.22.1"
 zip = { version = "8.6.0", default-features = false, features = ["deflate", "deflate64", "bzip2", "zstd"] }
 tempfile = "3.27.0"
 regex = "1"
+bytes = "1"
 
 # Phase 0.5 (engine package management): native runtimes (llama.cpp, ort,
 # ort-genai) are installed by `cos engine update` to /var/lib/cos/engines and
