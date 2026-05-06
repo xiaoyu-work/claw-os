@@ -23,6 +23,7 @@ pub mod stt;
 pub mod stt_cloud;
 pub mod tts;
 pub mod tts_cloud;
+pub mod tts_elevenlabs;
 pub mod vision;
 pub mod voice;
 
