@@ -69,6 +69,7 @@ pub fn default_registry() -> ToolRegistry {
     let mut r = ToolRegistry::new();
     r.register(Arc::new(super::builtin::Echo));
     r.register(Arc::new(super::builtin::Now));
+    r.register(Arc::new(super::delegate::Delegate));
     super::cos_proxy::register_all(&mut r);
     // Best-effort: open the default memory DB; if it fails (read-only fs,
     // etc.) the agent still works, just without searchable history.
@@ -97,12 +98,14 @@ mod tests {
         let r = default_registry();
         assert!(r.get("echo").is_some());
         assert!(r.get("now").is_some());
+        assert!(r.get("cos_delegate").is_some());
         assert!(r.get("cos_sandbox").is_some());
         assert!(r.get("cos_sysinfo").is_some());
         assert!(r.get("cos_memory").is_some());
-        // 2 builtins + every cos_proxy tool (primitives + cos_memory),
-        // plus optionally cos_recall (registered iff default DB opens).
-        let expected_min = 2 + super::super::cos_proxy::total_count();
+        // 2 builtins + cos_delegate + every cos_proxy tool (primitives +
+        // cos_memory), plus optionally cos_recall (registered iff default
+        // DB opens).
+        let expected_min = 3 + super::super::cos_proxy::total_count();
         let expected_max = expected_min + 1;
         assert!(
             (expected_min..=expected_max).contains(&r.len()),

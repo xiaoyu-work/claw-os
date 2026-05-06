@@ -7,6 +7,7 @@
 
 pub mod builtin;
 pub mod cos_proxy;
+pub mod delegate;
 pub mod registry;
 
 use async_trait::async_trait;
