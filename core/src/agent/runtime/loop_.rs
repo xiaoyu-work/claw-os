@@ -187,6 +187,7 @@ mod tests {
             max_tokens: 1024,
             temperature: 0.0,
             system_prompt_path: None,
+            ..Default::default()
         }
     }
 

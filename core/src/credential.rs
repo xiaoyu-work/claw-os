@@ -1787,6 +1787,23 @@ fn load_credential_value(name: &str, namespace: &str) -> Result<String, String> 
     }
 }
 
+/// Public read-only accessor for credential values.
+///
+/// Use this from kernel subsystems that need a stored secret (LLM
+/// provider API keys, OAuth tokens, …) instead of going through the CLI
+/// dispatcher. Returns the plaintext value or a human-readable error.
+///
+/// Returns `Ok(None)` if the credential is not present so callers can
+/// fall back to environment variables or other lookup paths without
+/// converting a not-found into a hard error.
+pub fn try_load(name: &str, namespace: &str) -> Result<Option<String>, String> {
+    let path = namespace_dir(namespace).join(format!("{name}.json"));
+    if !path.is_file() {
+        return Ok(None);
+    }
+    load_credential_value(name, namespace).map(Some)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -8,3 +8,4 @@
 
 pub mod llama_local;
 pub mod mock;
+pub mod openai_compat;

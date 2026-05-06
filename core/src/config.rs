@@ -87,6 +87,40 @@ pub struct AgentConfig {
     /// prompt. If unset, only the built-in scaffold prompt is used.
     #[serde(default)]
     pub system_prompt_path: Option<String>,
+
+    /// Name of a credential stored via `cos credential store … --namespace
+    /// agent` that holds the API key for this provider. Looked up at
+    /// runtime — never read from the config file directly.
+    /// Example: `"openai_api_key"` then store via:
+    ///   `cos credential store openai_api_key sk-... --namespace agent`
+    #[serde(default)]
+    pub api_key_credential: Option<String>,
+
+    /// Fallback environment variable name for the API key, used when the
+    /// credential store has no entry. Example: `"OPENAI_API_KEY"`.
+    #[serde(default)]
+    pub api_key_env: Option<String>,
+
+    /// Override the provider's default base URL. Lets one provider impl
+    /// (`openai`) speak to OpenAI / xAI / DeepSeek / OpenRouter / Ollama /
+    /// self-hosted vLLM/TGI/LMStudio just by changing this URL.
+    /// Examples:
+    ///   - OpenAI:     `https://api.openai.com/v1` (default)
+    ///   - xAI:        `https://api.x.ai/v1`
+    ///   - DeepSeek:   `https://api.deepseek.com/v1`
+    ///   - OpenRouter: `https://openrouter.ai/api/v1`
+    ///   - Ollama:     `http://localhost:11434/v1`
+    #[serde(default)]
+    pub base_url: Option<String>,
+
+    /// Extra HTTP headers sent on every provider request. Some routers
+    /// (e.g. OpenRouter) want `HTTP-Referer` / `X-Title`.
+    #[serde(default)]
+    pub extra_headers: std::collections::HashMap<String, String>,
+
+    /// Per-request HTTP timeout in seconds. 0 = no timeout. Default 120s.
+    #[serde(default = "default_agent_request_timeout")]
+    pub request_timeout: u64,
 }
 
 fn default_version() -> String {
@@ -127,6 +161,9 @@ fn default_agent_max_tokens() -> u32 {
 }
 fn default_agent_temperature() -> f32 {
     0.7
+}
+fn default_agent_request_timeout() -> u64 {
+    120
 }
 
 impl Default for ExecConfig {
@@ -179,6 +216,11 @@ impl Default for AgentConfig {
             max_tokens: default_agent_max_tokens(),
             temperature: default_agent_temperature(),
             system_prompt_path: None,
+            api_key_credential: None,
+            api_key_env: None,
+            base_url: None,
+            extra_headers: std::collections::HashMap::new(),
+            request_timeout: default_agent_request_timeout(),
         }
     }
 }

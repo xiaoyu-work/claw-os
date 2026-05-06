@@ -16,11 +16,25 @@ use super::providers;
 use super::{LlmError, Provider, Result};
 use crate::config::AgentConfig;
 
-/// Names of every provider linked into this binary.
-pub const REGISTERED: &[&str] = &["mock", "llama_local"];
+/// Names of every provider linked into this binary. The OpenAI-compatible
+/// provider is registered under multiple aliases (`openai`, `xai`,
+/// `deepseek`, `openrouter`, `ollama`) — they all share one impl but get
+/// different default base URLs.
+pub const REGISTERED: &[&str] = &[
+    "mock",
+    "llama_local",
+    "openai",
+    "xai",
+    "deepseek",
+    "openrouter",
+    "ollama",
+];
 
 /// Construct a provider by name.
 pub fn build(name: &str, model: &str, agent_cfg: &AgentConfig) -> Result<Arc<dyn Provider>> {
+    if providers::openai_compat::is_alias(name) {
+        return Ok(providers::openai_compat::build_provider(name, model, agent_cfg));
+    }
     match name {
         "mock" => Ok(Arc::new(providers::mock::MockProvider::new(model, agent_cfg))),
         "llama_local" => Ok(Arc::new(providers::llama_local::LlamaLocalProvider::new(
