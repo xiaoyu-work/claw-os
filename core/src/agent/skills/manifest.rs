@@ -197,13 +197,28 @@ fn parse_yaml_subset(input: &str) -> Result<BTreeMap<String, RawValue>, Manifest
 
         let value_part = after.trim_start();
         if value_part.is_empty() {
-            // Block sequence or empty.
+            // Block sequence, nested mapping, or empty.
+            //
+            // Real-world SKILL.md files (e.g. the Hermes corpus)
+            // commonly nest a `metadata:` mapping with project-
+            // specific sub-keys under it. The kernel parser
+            // doesn't *interpret* nested structure, but it must
+            // not refuse to load such files. We capture the entire
+            // indented block verbatim as a single Scalar in
+            // `extra` so callers that don't care about the keys
+            // simply see an opaque blob and proceed.
             let mut seq: Vec<String> = Vec::new();
-            let mut had_item = false;
+            let mut had_seq_item = false;
+            let mut seq_indent: Option<usize> = None;
+            let mut nested_block = String::new();
+            let mut had_nested = false;
             let mut next = idx + 1;
             while next < lines.len() {
                 let (l, content) = lines[next];
                 if content.trim().is_empty() {
+                    if had_nested {
+                        nested_block.push('\n');
+                    }
                     next += 1;
                     continue;
                 }
@@ -211,23 +226,76 @@ fn parse_yaml_subset(input: &str) -> Result<BTreeMap<String, RawValue>, Manifest
                     break;
                 }
                 let stripped = content.trim_start();
-                if let Some(rest) = stripped.strip_prefix("- ") {
-                    seq.push(unquote_scalar(rest.trim()));
-                    had_item = true;
+                let leading = content.len() - stripped.len();
+                if had_nested {
+                    nested_block.push_str(content);
+                    nested_block.push('\n');
                     next += 1;
-                } else if stripped == "-" {
-                    seq.push(String::new());
-                    had_item = true;
-                    next += 1;
-                } else {
+                    continue;
+                }
+                if had_seq_item {
+                    let item_indent = seq_indent.unwrap_or(leading);
+                    if leading > item_indent {
+                        // continuation of the current sequence item:
+                        // capture verbatim (preserving the relative
+                        // indent inside the item).
+                        if let Some(last) = seq.last_mut() {
+                            if !last.is_empty() {
+                                last.push('\n');
+                            }
+                            last.push_str(&content[item_indent..]);
+                        }
+                        next += 1;
+                        continue;
+                    }
+                    if leading < item_indent {
+                        break;
+                    }
+                    // Same indent as the `- ` markers — must be
+                    // another sequence entry or terminate.
+                    if let Some(rest) = stripped.strip_prefix("- ") {
+                        seq.push(unquote_scalar(rest.trim()));
+                        next += 1;
+                        continue;
+                    }
+                    if stripped == "-" {
+                        seq.push(String::new());
+                        next += 1;
+                        continue;
+                    }
                     return Err(ManifestError::UnsupportedYaml {
                         line: l,
                         reason: "expected `- item` block sequence entry".to_string(),
                     });
                 }
+                if let Some(rest) = stripped.strip_prefix("- ") {
+                    seq.push(unquote_scalar(rest.trim()));
+                    had_seq_item = true;
+                    seq_indent = Some(leading);
+                    next += 1;
+                } else if stripped == "-" {
+                    seq.push(String::new());
+                    had_seq_item = true;
+                    seq_indent = Some(leading);
+                    next += 1;
+                } else {
+                    // First indented line is not `- item` — treat
+                    // the whole indented region as a verbatim nested
+                    // mapping/scalar block.
+                    nested_block.push_str(content);
+                    nested_block.push('\n');
+                    had_nested = true;
+                    next += 1;
+                }
             }
-            if had_item {
+            if had_seq_item {
                 out.insert(key, RawValue::Sequence(seq));
+            } else if had_nested {
+                // Trim the trailing newline left by the loop, but
+                // keep the structure intact so consumers can
+                // re-parse if they want.
+                let trimmed = nested_block.trim_end_matches('\n').to_string();
+                out.insert(key, RawValue::Scalar(trimmed));
             } else {
                 out.insert(key, RawValue::Scalar(String::new()));
             }
@@ -294,10 +362,13 @@ fn parse_yaml_subset(input: &str) -> Result<BTreeMap<String, RawValue>, Manifest
         }
 
         if value_part.starts_with('{') {
-            return Err(ManifestError::UnsupportedYaml {
-                line: lineno,
-                reason: "inline mappings not supported".to_string(),
-            });
+            // Inline flow mappings (`{a: 1, b: 2}`) appear in the
+            // wild but aren't structurally interpreted here. Capture
+            // them verbatim as a Scalar so the document still loads;
+            // callers that need typed access can parse `extra`.
+            out.insert(key, RawValue::Scalar(value_part.to_string()));
+            idx += 1;
+            continue;
         }
 
         out.insert(key, RawValue::Scalar(unquote_scalar(value_part)));
@@ -531,15 +602,42 @@ mod tests {
     }
 
     #[test]
-    fn nested_mapping_unsupported() {
+    fn orphan_indentation_after_scalar_errors() {
+        // When a key already has a scalar value, a following indented
+        // line has no parent — that's still malformed YAML.
         let err = parse("---\nname: foo\n  inner: x\n---\n").unwrap_err();
         assert!(matches!(err, ManifestError::UnsupportedYaml { .. }));
     }
 
     #[test]
-    fn flow_mapping_unsupported() {
-        let err = parse("---\nname: foo\nmeta: {a: 1}\n---\n").unwrap_err();
-        assert!(matches!(err, ManifestError::UnsupportedYaml { .. }));
+    fn nested_mapping_under_empty_key_is_tolerated() {
+        // Hermes-style metadata blocks: parent has empty value, then
+        // an indented sub-mapping. Captured verbatim into `extra`.
+        let s = doc(
+            "---\nname: foo\nmetadata:\n  hermes:\n    tags: [a, b]\n    related: [c]\n---\n",
+        );
+        let m = s.manifest;
+        assert_eq!(m.name, "foo");
+        let stored = m.extra.get("metadata").expect("metadata preserved");
+        match stored {
+            ManifestValue::Scalar(v) => {
+                assert!(v.contains("hermes:"));
+                assert!(v.contains("tags: [a, b]"));
+            }
+            other => panic!("expected scalar, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn flow_mapping_is_tolerated_as_scalar() {
+        // `meta: {a: 1, b: 2}` round-trips into extras as an
+        // opaque scalar — caller can re-parse if it cares.
+        let s = doc("---\nname: foo\nmeta: {a: 1, b: 2}\n---\n");
+        let stored = s.manifest.extra.get("meta").expect("meta preserved");
+        match stored {
+            ManifestValue::Scalar(v) => assert!(v.starts_with('{') && v.ends_with('}')),
+            other => panic!("expected scalar, got {other:?}"),
+        }
     }
 
     #[test]
@@ -605,6 +703,62 @@ mod tests {
     fn single_quoted_escapes_are_literal() {
         let s = doc("---\nname: x\ndescription: 'no \\n escape'\n---\n");
         assert_eq!(s.manifest.description.as_deref(), Some("no \\n escape"));
+    }
+
+    /// Walks the vendored Hermes skill corpus at `<workspace>/skills/hermes`
+    /// and parses every `SKILL.md`. Catches regressions in the frontmatter
+    /// parser against a real, heterogeneous corpus.
+    #[test]
+    fn vendored_hermes_corpus_parses() {
+        use std::fs;
+        use std::path::PathBuf;
+
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let mut corpus = PathBuf::from(manifest_dir);
+        corpus.push("..");
+        corpus.push("skills");
+        corpus.push("hermes");
+        let corpus = match corpus.canonicalize() {
+            Ok(p) => p,
+            Err(_) => return, // corpus not present in this checkout — skip
+        };
+
+        let mut failures: Vec<String> = Vec::new();
+        let mut total = 0usize;
+        let mut stack = vec![corpus.clone()];
+        while let Some(dir) = stack.pop() {
+            let entries = match fs::read_dir(&dir) {
+                Ok(it) => it,
+                Err(_) => continue,
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.file_name().and_then(|s| s.to_str()) == Some("SKILL.md") {
+                    total += 1;
+                    let body = match fs::read_to_string(&path) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            failures.push(format!("{}: read error: {e}", path.display()));
+                            continue;
+                        }
+                    };
+                    if let Err(e) = parse(&body) {
+                        failures.push(format!("{}: {e}", path.display()));
+                    }
+                }
+            }
+        }
+
+        assert!(total > 0, "no SKILL.md files found under {corpus:?}");
+        assert!(
+            failures.is_empty(),
+            "{} of {} vendored skills failed to parse:\n{}",
+            failures.len(),
+            total,
+            failures.join("\n")
+        );
     }
 
     #[test]
