@@ -30,6 +30,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 thiserror = "1"
 rusqlite = { version = "0.39.0", features = ["bundled"] }
+base64 = "0.22.1"
 
 # Phase 0.5 (model engines): added when model files arrive
 # ort = { version = "2", features = [...] }

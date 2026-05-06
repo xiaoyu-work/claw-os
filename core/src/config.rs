@@ -26,6 +26,10 @@ pub struct CosConfig {
     pub web: WebConfig,
     #[serde(default)]
     pub agent: AgentConfig,
+    #[serde(default)]
+    pub embed: EmbedConfig,
+    #[serde(default)]
+    pub imagegen: ImageGenConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,6 +127,68 @@ pub struct AgentConfig {
     pub request_timeout: u64,
 }
 
+/// Embedding service configuration. Reads from `[embed]` block.
+/// `provider="none"` (the default) means embedding is disabled.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbedConfig {
+    /// `"none"` (disabled) | `"openai"` | `"ollama"` | self-hosted alias.
+    #[serde(default = "default_embed_provider")]
+    pub provider: String,
+
+    /// Model identifier (e.g. `"text-embedding-3-small"`,
+    /// `"nomic-embed-text"`, `"bge-small-en-v1.5"`).
+    #[serde(default = "default_embed_model")]
+    pub model: String,
+
+    /// Credential store entry (namespace `agent`) holding the API key.
+    #[serde(default)]
+    pub api_key_credential: Option<String>,
+    #[serde(default)]
+    pub api_key_env: Option<String>,
+    /// Override the provider's default base URL. Lets the same provider
+    /// impl talk to OpenAI / Azure OpenAI / Ollama / self-hosted vLLM.
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub extra_headers: std::collections::HashMap<String, String>,
+    #[serde(default = "default_agent_request_timeout")]
+    pub request_timeout: u64,
+}
+
+/// Image generation configuration. Reads from `[imagegen]` block.
+/// `provider="none"` (the default) means image-gen is disabled.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageGenConfig {
+    /// `"none"` (disabled) | `"openai"` | self-hosted alias.
+    #[serde(default = "default_imagegen_provider")]
+    pub provider: String,
+
+    /// Model identifier (e.g. `"gpt-image-2"`, `"dall-e-3"`).
+    #[serde(default = "default_imagegen_model")]
+    pub model: String,
+
+    #[serde(default)]
+    pub api_key_credential: Option<String>,
+    #[serde(default)]
+    pub api_key_env: Option<String>,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub extra_headers: std::collections::HashMap<String, String>,
+    #[serde(default = "default_imagegen_timeout")]
+    pub request_timeout: u64,
+
+    /// Default image size, e.g. `"1024x1024"`. Provider-specific.
+    #[serde(default)]
+    pub default_size: Option<String>,
+    /// Default quality, e.g. `"low"`, `"medium"`, `"high"`.
+    #[serde(default)]
+    pub default_quality: Option<String>,
+    /// Default output format, e.g. `"png"`, `"jpeg"`, `"webp"`.
+    #[serde(default = "default_imagegen_format")]
+    pub default_format: String,
+}
+
 fn default_version() -> String {
     env!("CARGO_PKG_VERSION").into()
 }
@@ -165,6 +231,24 @@ fn default_agent_temperature() -> f32 {
 fn default_agent_request_timeout() -> u64 {
     120
 }
+fn default_embed_provider() -> String {
+    "none".into()
+}
+fn default_embed_model() -> String {
+    "text-embedding-3-small".into()
+}
+fn default_imagegen_provider() -> String {
+    "none".into()
+}
+fn default_imagegen_model() -> String {
+    "gpt-image-2".into()
+}
+fn default_imagegen_timeout() -> u64 {
+    300
+}
+fn default_imagegen_format() -> String {
+    "png".into()
+}
 
 impl Default for ExecConfig {
     fn default() -> Self {
@@ -203,6 +287,39 @@ impl Default for CosConfig {
             net: NetConfig::default(),
             web: WebConfig::default(),
             agent: AgentConfig::default(),
+            embed: EmbedConfig::default(),
+            imagegen: ImageGenConfig::default(),
+        }
+    }
+}
+
+impl Default for EmbedConfig {
+    fn default() -> Self {
+        Self {
+            provider: default_embed_provider(),
+            model: default_embed_model(),
+            api_key_credential: None,
+            api_key_env: None,
+            base_url: None,
+            extra_headers: std::collections::HashMap::new(),
+            request_timeout: default_agent_request_timeout(),
+        }
+    }
+}
+
+impl Default for ImageGenConfig {
+    fn default() -> Self {
+        Self {
+            provider: default_imagegen_provider(),
+            model: default_imagegen_model(),
+            api_key_credential: None,
+            api_key_env: None,
+            base_url: None,
+            extra_headers: std::collections::HashMap::new(),
+            request_timeout: default_imagegen_timeout(),
+            default_size: None,
+            default_quality: None,
+            default_format: default_imagegen_format(),
         }
     }
 }
