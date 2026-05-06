@@ -1,0 +1,16 @@
+{
+  "name": "gateway-whatsapp",
+  "version": "0.1.0",
+  "description": "WhatsApp Cloud API gateway. `send` posts a text message via Meta's Graph API. `start`/`stop` (webhook server) not yet implemented.",
+  "runtime": "python",
+  "commands": {
+    "start": "Run inbound webhook server (NOT IMPLEMENTED)",
+    "stop": "Stop a running gateway service (NOT IMPLEMENTED)",
+    "status": "Show running state",
+    "send": "Send a text message (positional: recipient_phone text)"
+  },
+  "dependencies": {
+    "credentials": ["whatsapp_access_token", "whatsapp_phone_number_id"],
+    "engines": []
+  }
+}

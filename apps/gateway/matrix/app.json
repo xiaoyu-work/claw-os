@@ -1,0 +1,16 @@
+{
+  "name": "gateway-matrix",
+  "version": "0.1.0",
+  "description": "Matrix gateway. `send` posts a text message to a room via the Client-Server REST API. `start`/`stop` (sync/long-poll) not yet implemented.",
+  "runtime": "python",
+  "commands": {
+    "start": "Connect to a Matrix homeserver and stream events (NOT IMPLEMENTED)",
+    "stop": "Stop a running gateway service (NOT IMPLEMENTED)",
+    "status": "Show running state",
+    "send": "Send a text message to a room (positional: room_id text)"
+  },
+  "dependencies": {
+    "credentials": ["matrix_access_token", "matrix_homeserver"],
+    "engines": []
+  }
+}
