@@ -117,8 +117,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "curator" => curator_cmd(args),
         "llm" => llm_cmd(args),
         "redact" => redact_cmd(args),
+        "prompt" => prompt_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt"
         )),
     }
 }
@@ -1126,6 +1127,93 @@ fn redact_cmd(args: &[String]) -> Result<Value, String> {
             "output_chars": redacted.chars().count(),
             "pattern_count": r.pattern_count(),
             "strict": strict,
+        }))
+    }
+}
+
+/// `cos agent prompt [show|build] [--extra <path>] [--raw]`
+///
+/// Inspect the system prompt the agent sends with every chat
+/// request. The prompt is composed by
+/// [`crate::agent::prompt::build_system_prompt`] and includes:
+///
+///   1. Built-in scaffold (immutable in this binary).
+///   2. `MEMORY.md` and `USER.md` from the system notes store
+///      (auto-loaded; capped per-file via
+///      [`crate::agent::memory::notes::MAX_NOTE_CHARS_FOR_PROMPT`]).
+///   3. Due nudges from the nudge store.
+///   4. Optional override file content from `--extra <path>`.
+///
+/// Useful for: debugging "why did the model behave this way?",
+/// previewing a new MEMORY.md entry before committing, computing a
+/// rough token budget for the system block, or capturing the prompt
+/// to share in a bug report.
+///
+/// `--raw` returns the prompt as a single JSON string in the
+/// `prompt` field (default). Without `--raw` the response also
+/// includes a section breakdown (char counts of scaffold vs notes
+/// vs nudges vs extra) so callers can see *why* the prompt is the
+/// size it is.
+fn prompt_cmd(args: &[String]) -> Result<Value, String> {
+    use std::path::PathBuf;
+
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("show");
+    if sub != "show" && sub != "build" && sub != "" {
+        return Err(format!(
+            "unknown prompt subcommand: {sub}. try: show [--extra <path>] [--raw] | build [--extra <path>] [--raw]"
+        ));
+    }
+    let mut extra: Option<PathBuf> = None;
+    let mut raw = false;
+    let mut i = 1usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--extra" => {
+                let p = args
+                    .get(i + 1)
+                    .cloned()
+                    .ok_or_else(|| "--extra needs a path".to_string())?;
+                extra = Some(PathBuf::from(p));
+                i += 2;
+            }
+            "--raw" => {
+                raw = true;
+                i += 1;
+            }
+            other => {
+                return Err(format!("unknown flag for `prompt`: {other}"));
+            }
+        }
+    }
+    let extra_ref = extra.as_deref();
+    let prompt = crate::agent::prompt::build_system_prompt(extra_ref);
+    if raw {
+        Ok(json!({
+            "prompt": prompt,
+            "chars": prompt.chars().count(),
+        }))
+    } else {
+        // Crude size breakdown: rebuild each piece in isolation by
+        // diffing against a scaffold-only build. This is for a
+        // quick visual inventory; the prompt itself is the
+        // authoritative artifact.
+        let scaffold_only = crate::agent::prompt::build_system_prompt(None);
+        let scaffold_chars = scaffold_only.chars().count();
+        let total_chars = prompt.chars().count();
+        let extra_chars = if let Some(p) = extra_ref {
+            std::fs::read_to_string(p)
+                .map(|s| s.trim_end().chars().count())
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        Ok(json!({
+            "prompt": prompt,
+            "chars": total_chars,
+            "scaffold_chars": scaffold_chars,
+            "extra_path": extra.as_ref().map(|p| p.display().to_string()),
+            "extra_chars": extra_chars,
+            "approx_tokens": total_chars / 4,
         }))
     }
 }
@@ -2402,6 +2490,95 @@ mod tests {
         let err = skills_usage_cmd_at(&["bogus".into()], &p).unwrap_err();
         assert!(err.contains("stats"));
         assert!(err.contains("record"));
+    }
+
+    #[test]
+    fn prompt_show_returns_prompt_string() {
+        let v = prompt_cmd(&[]).expect("prompt show ok");
+        let p = v.get("prompt").and_then(|x| x.as_str()).expect("prompt str");
+        assert!(!p.is_empty());
+        let chars = v.get("chars").and_then(|x| x.as_u64()).expect("chars");
+        assert!(chars > 0);
+    }
+
+    #[test]
+    fn prompt_show_default_includes_size_breakdown() {
+        let v = prompt_cmd(&["show".into()]).expect("show ok");
+        assert!(v.get("scaffold_chars").is_some());
+        assert!(v.get("approx_tokens").is_some());
+        assert!(v.get("extra_path").is_some()); // null when not provided
+    }
+
+    #[test]
+    fn prompt_raw_omits_size_breakdown() {
+        let v = prompt_cmd(&["show".into(), "--raw".into()]).expect("raw ok");
+        assert!(v.get("prompt").is_some());
+        assert!(v.get("scaffold_chars").is_none());
+        assert!(v.get("extra_path").is_none());
+    }
+
+    #[test]
+    fn prompt_extra_appends_file_content() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let extra = dir.path().join("preface.md");
+        std::fs::write(&extra, "ZZZUNIQUEMARKERZZZ_extra_preface_text").expect("write");
+        let baseline = prompt_cmd(&["show".into()]).expect("baseline");
+        let with_extra = prompt_cmd(&[
+            "show".into(),
+            "--extra".into(),
+            extra.to_string_lossy().to_string(),
+        ])
+        .expect("with extra");
+        let baseline_chars = baseline.get("chars").and_then(|x| x.as_u64()).unwrap();
+        let extra_chars = with_extra.get("chars").and_then(|x| x.as_u64()).unwrap();
+        assert!(extra_chars > baseline_chars, "extra should grow prompt");
+        let p = with_extra.get("prompt").and_then(|x| x.as_str()).unwrap();
+        assert!(
+            p.contains("ZZZUNIQUEMARKERZZZ_extra_preface_text"),
+            "extra content must be in prompt"
+        );
+        assert_eq!(
+            with_extra.get("extra_path").and_then(|x| x.as_str()),
+            Some(extra.to_string_lossy().as_ref())
+        );
+    }
+
+    #[test]
+    fn prompt_build_alias_works() {
+        let v = prompt_cmd(&["build".into()]).expect("build ok");
+        assert!(v.get("prompt").is_some());
+    }
+
+    #[test]
+    fn prompt_unknown_subcommand_errors() {
+        let err = prompt_cmd(&["bogus".into()]).unwrap_err();
+        assert!(err.contains("show"));
+        assert!(err.contains("build"));
+    }
+
+    #[test]
+    fn prompt_unknown_flag_errors() {
+        let err = prompt_cmd(&["show".into(), "--bogus".into()]).unwrap_err();
+        assert!(err.contains("--bogus"));
+    }
+
+    #[test]
+    fn prompt_extra_missing_path_errors() {
+        let err = prompt_cmd(&["show".into(), "--extra".into()]).unwrap_err();
+        assert!(err.contains("--extra"));
+    }
+
+    #[test]
+    fn prompt_extra_nonexistent_file_does_not_panic() {
+        // build_system_prompt silently swallows file IO errors and
+        // falls back to scaffold-only — preserve that here.
+        let v = prompt_cmd(&[
+            "show".into(),
+            "--extra".into(),
+            "Z:\\definitely\\not\\a\\real\\path".into(),
+        ])
+        .expect("ok");
+        assert!(v.get("prompt").and_then(|x| x.as_str()).is_some());
     }
 
     #[test]
