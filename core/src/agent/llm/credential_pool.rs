@@ -326,6 +326,29 @@ impl Pool {
         Self::from_entries(name, entries, strategy)
     }
 
+    /// Build a pool from an [`crate::config::AgentConfig`] block. Returns
+    /// `Ok(None)` when neither `api_key_credentials` nor `api_key_envs`
+    /// is set (the caller should fall back to its single-key path).
+    /// Returns `Ok(Some(pool))` when at least one entry resolved.
+    /// Returns `Err(PoolError::Empty)` when fields were declared but
+    /// nothing resolved (caller should treat that as "credentials
+    /// declared but missing" — a config error rather than a fallback
+    /// trigger). Cooldown picks up `pool_cooldown_secs` (0 → disabled).
+    pub fn try_from_agent_config(
+        name: impl Into<String>,
+        cfg: &crate::config::AgentConfig,
+    ) -> Result<Option<Self>, PoolError> {
+        if cfg.api_key_credentials.is_empty() && cfg.api_key_envs.is_empty() {
+            return Ok(None);
+        }
+        let creds: Vec<&str> = cfg.api_key_credentials.iter().map(|s| s.as_str()).collect();
+        let envs: Vec<&str> = cfg.api_key_envs.iter().map(|s| s.as_str()).collect();
+        let strategy = SelectionStrategy::from_str_lossy(&cfg.pool_strategy);
+        let mut pool = Self::from_sources(name, &creds, &envs, &[], strategy)?;
+        pool.set_cooldown(Duration::from_secs(cfg.pool_cooldown_secs));
+        Ok(Some(pool))
+    }
+
     pub fn name(&self) -> &str {
         &self.name
     }

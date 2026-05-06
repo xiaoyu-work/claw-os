@@ -270,6 +270,33 @@ pub struct AgentConfig {
     /// `retry_enabled` is true (semantically equivalent to off).
     #[serde(default = "default_retry_max_attempts")]
     pub retry_max_attempts: u32,
+
+    /// Multi-key credential pool — credential-store entry names. When
+    /// either this or `api_key_envs` is non-empty, the provider builds
+    /// a key-rotation pool from the resolved entries (see
+    /// [`crate::agent::llm::credential_pool`]) and supersedes the
+    /// single-key fields (`api_key_credential` / `api_key_env`). Order
+    /// is preserved — sticky strategy will start from index 0. Empty
+    /// or unresolved entries are silently dropped at construction.
+    #[serde(default)]
+    pub api_key_credentials: Vec<String>,
+
+    /// Multi-key credential pool — environment variable names. See
+    /// `api_key_credentials`.
+    #[serde(default)]
+    pub api_key_envs: Vec<String>,
+
+    /// Pool selection strategy. One of `"sticky"` (default — stay on
+    /// one key until it fails), `"round-robin"`, or `"least-errors"`.
+    /// Ignored when no pool is configured.
+    #[serde(default = "default_pool_strategy")]
+    pub pool_strategy: String,
+
+    /// Pool cooldown applied to a key after a CooldownWorthy failure
+    /// (auth/quota), in seconds. `0` disables cooldowns (failures are
+    /// still counted toward LeastErrors picking). Defaults to 60.
+    #[serde(default = "default_pool_cooldown_secs")]
+    pub pool_cooldown_secs: u64,
 }
 
 /// Embedding service configuration. Reads from `[embed]` block.
@@ -460,6 +487,12 @@ fn default_auxiliary_max_tokens() -> u32 {
 fn default_retry_max_attempts() -> u32 {
     3
 }
+fn default_pool_strategy() -> String {
+    "sticky".into()
+}
+fn default_pool_cooldown_secs() -> u64 {
+    60
+}
 fn default_embed_provider() -> String {
     "none".into()
 }
@@ -640,6 +673,10 @@ impl Default for AgentConfig {
             auxiliary_temperature: None,
             retry_enabled: false,
             retry_max_attempts: default_retry_max_attempts(),
+            api_key_credentials: Vec::new(),
+            api_key_envs: Vec::new(),
+            pool_strategy: default_pool_strategy(),
+            pool_cooldown_secs: default_pool_cooldown_secs(),
         }
     }
 }

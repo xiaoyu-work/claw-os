@@ -93,7 +93,7 @@ pub fn resolve_api_key(
     Ok(None)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct OpenAICompatConfig {
     /// Stable name reported by [`Provider::name`] — one of [`PROVIDER_ALIASES`].
     pub alias: String,
@@ -102,6 +102,26 @@ pub struct OpenAICompatConfig {
     pub model: String,
     pub extra_headers: HashMap<String, String>,
     pub request_timeout: Duration,
+    /// Optional multi-key credential pool. When `Some`, supersedes
+    /// `api_key` per request: each `chat()` call acquires a lease,
+    /// uses that as the bearer token, and reports success or failure
+    /// (classified via [`crate::agent::llm::error_classifier`]). When
+    /// `None`, the single `api_key` is used unchanged.
+    pub pool: Option<Arc<crate::agent::llm::credential_pool::Pool>>,
+}
+
+impl std::fmt::Debug for OpenAICompatConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenAICompatConfig")
+            .field("alias", &self.alias)
+            .field("base_url", &self.base_url)
+            .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
+            .field("model", &self.model)
+            .field("extra_headers", &self.extra_headers.keys().collect::<Vec<_>>())
+            .field("request_timeout", &self.request_timeout)
+            .field("pool_len", &self.pool.as_ref().map(|p| p.len()))
+            .finish()
+    }
 }
 
 impl OpenAICompatConfig {
@@ -129,6 +149,26 @@ impl OpenAICompatConfig {
             Duration::from_secs(agent.request_timeout)
         };
 
+        // Pool supersedes single-key when multi-key fields are set.
+        // Pool construction failure (declared but unresolved) is logged
+        // and ignored — fall through to single-key. This keeps a typo
+        // in `api_key_credentials` from bricking the agent at startup.
+        let pool = match crate::agent::llm::credential_pool::Pool::try_from_agent_config(
+            format!("provider:{alias}"),
+            agent,
+        ) {
+            Ok(Some(p)) => Some(Arc::new(p)),
+            Ok(None) => None,
+            Err(e) => {
+                tracing::warn!(
+                    target: "cos::agent::llm::pool",
+                    "credential pool for provider '{alias}' declared but unresolved: {e}; \
+                     falling back to single-key path"
+                );
+                None
+            }
+        };
+
         Self {
             alias: alias.to_string(),
             base_url,
@@ -136,6 +176,7 @@ impl OpenAICompatConfig {
             model: model.to_string(),
             extra_headers: agent.extra_headers.clone(),
             request_timeout,
+            pool,
         }
     }
 }
@@ -191,11 +232,31 @@ impl Provider for OpenAICompatProvider {
     }
 
     fn is_configured(&self) -> bool {
-        self.cfg.api_key.is_some() || alias_is_local_default(&self.cfg.alias)
+        self.cfg.api_key.is_some()
+            || self.cfg.pool.as_ref().is_some_and(|p| !p.is_empty())
+            || alias_is_local_default(&self.cfg.alias)
     }
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
         let body = wire::build_request_body(&request, &self.cfg.model, false);
+
+        // Acquire a key for this call. Pool path takes priority; on
+        // empty pool fall through to single-key. Lease holds the
+        // snapshotted value so concurrent cooldown bumps don't
+        // invalidate it.
+        let lease = if let Some(pool) = &self.cfg.pool {
+            match pool.acquire() {
+                Ok(l) => Some(l),
+                Err(e) => return Err(LlmError::NotConfigured(format!("pool: {e}"))),
+            }
+        } else {
+            None
+        };
+
+        let bearer: Option<&str> = match &lease {
+            Some(l) => Some(l.value()),
+            None => self.cfg.api_key.as_deref(),
+        };
 
         let mut http = self
             .client
@@ -203,25 +264,77 @@ impl Provider for OpenAICompatProvider {
             .header("Content-Type", "application/json")
             .json(&body);
 
-        if let Some(key) = &self.cfg.api_key {
+        if let Some(key) = bearer {
             http = http.bearer_auth(key);
         }
         for (k, v) in &self.cfg.extra_headers {
             http = http.header(k.as_str(), v.as_str());
         }
 
-        let resp = http.send().await?;
+        let send_result = http.send().await;
+        let resp = match send_result {
+            Ok(r) => r,
+            Err(e) => {
+                if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
+                    pool.report_failure(
+                        l,
+                        crate::agent::llm::error_classifier::classify_network_error(),
+                    );
+                }
+                return Err(LlmError::Transport(e));
+            }
+        };
         let status = resp.status();
-        let bytes = resp.bytes().await.map_err(LlmError::Transport)?;
+        let bytes = match resp.bytes().await {
+            Ok(b) => b,
+            Err(e) => {
+                if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
+                    pool.report_failure(
+                        l,
+                        crate::agent::llm::error_classifier::classify_network_error(),
+                    );
+                }
+                return Err(LlmError::Transport(e));
+            }
+        };
 
         if !status.is_success() {
-            return Err(wire::classify_http_error(status, &bytes));
+            let err = wire::classify_http_error(status, &bytes);
+            if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
+                let body_str = std::str::from_utf8(&bytes).unwrap_or("");
+                let cls = crate::agent::llm::error_classifier::classify(
+                    status.as_u16(),
+                    body_str,
+                );
+                pool.report_failure(l, cls);
+            }
+            return Err(err);
         }
 
-        let parsed: wire::Response =
-            serde_json::from_slice(&bytes).map_err(|e| LlmError::Parse(e.to_string()))?;
+        let parsed: wire::Response = match serde_json::from_slice(&bytes) {
+            Ok(p) => p,
+            Err(e) => {
+                // Body parse error after a 2xx — treat as a caller-side
+                // problem (we asked for something the upstream
+                // returned in a shape we don't understand). Don't
+                // blame the key.
+                if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
+                    pool.report_failure(
+                        l,
+                        crate::agent::llm::credential_pool::FailureClass::CallerError,
+                    );
+                }
+                return Err(LlmError::Parse(e.to_string()));
+            }
+        };
 
-        wire::response_to_chat(parsed, &self.cfg.model)
+        let result = wire::response_to_chat(parsed, &self.cfg.model);
+        if result.is_ok() {
+            if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
+                pool.report_success(l);
+            }
+        }
+        result
     }
 
     async fn chat_stream(
@@ -1152,5 +1265,137 @@ mod tests {
         let request = String::from_utf8_lossy(&handle.await.unwrap()).to_lowercase();
         assert!(request.contains("http-referer: https://cos.example"));
         assert!(request.contains("x-title: cos agent"));
+    }
+
+    // ---- credential pool wiring ------------------------------------------
+
+    #[test]
+    fn no_pool_when_neither_plural_field_set() {
+        let c = AgentConfig::default();
+        let oc = OpenAICompatConfig::from_agent_config("openai", "gpt-4o-mini", &c);
+        assert!(oc.pool.is_none());
+    }
+
+    #[test]
+    fn pool_built_from_envs() {
+        std::env::set_var("COS_TEST_POOL_KEY_A", "sk-aaa");
+        std::env::set_var("COS_TEST_POOL_KEY_B", "sk-bbb");
+        let mut c = AgentConfig::default();
+        c.api_key_envs = vec![
+            "COS_TEST_POOL_KEY_A".into(),
+            "COS_TEST_POOL_KEY_B".into(),
+        ];
+        let oc = OpenAICompatConfig::from_agent_config("openai", "gpt-4o-mini", &c);
+        std::env::remove_var("COS_TEST_POOL_KEY_A");
+        std::env::remove_var("COS_TEST_POOL_KEY_B");
+        let pool = oc.pool.expect("pool should be built");
+        assert_eq!(pool.len(), 2);
+    }
+
+    #[test]
+    fn pool_unresolved_falls_back_to_single_key_silently() {
+        let mut c = AgentConfig::default();
+        c.api_key_envs = vec!["COS_TEST_DOES_NOT_EXIST_ENV_AAAA".into()];
+        let oc = OpenAICompatConfig::from_agent_config("openai", "gpt-4o-mini", &c);
+        // Pool empty → warn-and-fall-through; single-key path stays
+        // available (empty in this case since no api_key_credential
+        // is set either).
+        assert!(oc.pool.is_none());
+        assert!(oc.api_key.is_none());
+    }
+
+    #[test]
+    fn is_configured_true_with_pool_only() {
+        std::env::set_var("COS_TEST_POOL_ICONFIG_X", "sk-x");
+        let mut c = AgentConfig::default();
+        c.api_key_envs = vec!["COS_TEST_POOL_ICONFIG_X".into()];
+        let oc = OpenAICompatConfig::from_agent_config("openai", "gpt-4o-mini", &c);
+        std::env::remove_var("COS_TEST_POOL_ICONFIG_X");
+        let provider = OpenAICompatProvider::new(oc);
+        assert!(provider.is_configured());
+    }
+
+    #[test]
+    fn pool_strategy_round_robin_parsed() {
+        std::env::set_var("COS_TEST_POOL_RR_X", "k1");
+        std::env::set_var("COS_TEST_POOL_RR_Y", "k2");
+        let mut c = AgentConfig::default();
+        c.api_key_envs = vec![
+            "COS_TEST_POOL_RR_X".into(),
+            "COS_TEST_POOL_RR_Y".into(),
+        ];
+        c.pool_strategy = "round-robin".into();
+        let oc = OpenAICompatConfig::from_agent_config("openai", "gpt-4o-mini", &c);
+        std::env::remove_var("COS_TEST_POOL_RR_X");
+        std::env::remove_var("COS_TEST_POOL_RR_Y");
+        let pool = oc.pool.expect("pool should be built");
+        assert_eq!(
+            pool.strategy(),
+            crate::agent::llm::credential_pool::SelectionStrategy::RoundRobin
+        );
+    }
+
+    #[test]
+    fn pool_cooldown_picked_up_from_config() {
+        std::env::set_var("COS_TEST_POOL_CD_X", "k1");
+        let mut c = AgentConfig::default();
+        c.api_key_envs = vec!["COS_TEST_POOL_CD_X".into()];
+        c.pool_cooldown_secs = 5;
+        let oc = OpenAICompatConfig::from_agent_config("openai", "gpt-4o-mini", &c);
+        std::env::remove_var("COS_TEST_POOL_CD_X");
+        let pool = oc.pool.expect("pool should be built");
+        assert_eq!(pool.cooldown(), std::time::Duration::from_secs(5));
+    }
+
+    #[tokio::test]
+    async fn end_to_end_uses_pool_lease_as_bearer_token() {
+        std::env::set_var("COS_TEST_POOL_LEASE_K", "sk-from-pool-aaa");
+        let response_body = r#"{"choices":[{"finish_reason":"stop",
+            "message":{"role":"assistant","content":"ok"}}]}"#;
+        let (base_url, handle) =
+            spawn_one_shot_mock("HTTP/1.1 200 OK", response_body).await;
+
+        let mut c = AgentConfig::default();
+        c.base_url = Some(base_url);
+        c.api_key_envs = vec!["COS_TEST_POOL_LEASE_K".into()];
+        c.request_timeout = 5;
+
+        let provider = OpenAICompatProvider::from_agent_config("openai", "gpt-4o-mini", &c);
+        let _ = provider.chat(req_text("hi")).await;
+        std::env::remove_var("COS_TEST_POOL_LEASE_K");
+        let request = String::from_utf8_lossy(&handle.await.unwrap()).to_lowercase();
+        assert!(
+            request.contains("authorization: bearer sk-from-pool-aaa"),
+            "expected pool key in Authorization header, got:\n{request}"
+        );
+    }
+
+    #[tokio::test]
+    async fn end_to_end_pool_records_failure_on_401() {
+        std::env::set_var("COS_TEST_POOL_FAIL_K", "sk-bad");
+        let (base_url, handle) = spawn_one_shot_mock(
+            "HTTP/1.1 401 Unauthorized",
+            r#"{"error":{"message":"invalid api key"}}"#,
+        )
+        .await;
+
+        let mut c = AgentConfig::default();
+        c.base_url = Some(base_url);
+        c.api_key_envs = vec!["COS_TEST_POOL_FAIL_K".into()];
+        c.pool_cooldown_secs = 60;
+        c.request_timeout = 5;
+
+        let provider = OpenAICompatProvider::from_agent_config("openai", "gpt-4o-mini", &c);
+        let pool_handle = provider.cfg.pool.clone().expect("pool built");
+        assert_eq!(pool_handle.len(), 1);
+
+        let err = provider.chat(req_text("hi")).await.unwrap_err();
+        std::env::remove_var("COS_TEST_POOL_FAIL_K");
+        let _ = handle.await;
+        assert!(matches!(err, LlmError::Auth), "got {err:?}");
+
+        let stats = pool_handle.stats();
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].failures, 1);
     }
 }
