@@ -1816,24 +1816,78 @@ fn default_base_url_for_provider(name: &str) -> Option<&'static str> {
     }
 }
 
-/// `cos agent title <text> | --file <path> | --stdin`
-/// — heuristic-only title generation. Strips a leading slash-command
-/// verb (so `/ask hello` becomes `hello`), takes the first non-empty
-/// line, and clamps to `MAX_TITLE_CHARS`. Pure function, no LLM call,
-/// no IO beyond the input read. The async LLM-backed variant in
-/// `agent::title::generate_title` is what `runtime::loop_` calls when
-/// an auxiliary client is configured; this CLI only surfaces the
-/// fallback so users can preview what would land if the aux call
-/// failed (or wasn't configured).
+/// `cos agent title <text> | --file <path> | --stdin [--check] [--llm]`
+/// — heuristic-only by default. Strips a leading slash-command verb
+/// (so `/ask hello` becomes `hello`), takes the first non-empty
+/// line, and clamps to `MAX_TITLE_CHARS`. Pure function, no LLM
+/// call, no IO beyond the input read.
+///
+/// `--llm` opts into the LLM-backed path used by `runtime::loop_`:
+/// resolves the auxiliary client from
+/// [`crate::agent::runtime::loop_::auxiliary_from_cfg`] and calls
+/// [`crate::agent::title::generate_title`]. Errors and empty model
+/// output fall back to the heuristic. If no auxiliary client is
+/// configured, errs with a clear message instead of silently
+/// downgrading (so the operator knows their `--llm` request didn't
+/// actually use the model).
 fn title_cmd(args: &[String]) -> Result<Value, String> {
-    let (input, _check) = read_text_input(args, "title")?;
-    let title = crate::agent::title::clamp(&crate::agent::title::heuristic(&input));
+    let mut llm_mode = false;
+    let mut filtered: Vec<String> = Vec::with_capacity(args.len());
+    for a in args {
+        if a == "--llm" {
+            llm_mode = true;
+        } else {
+            filtered.push(a.clone());
+        }
+    }
+    let (input, _check) = read_text_input(&filtered, "title")?;
+    if !llm_mode {
+        return Ok(title_heuristic_payload(&input));
+    }
+    let cfg = &crate::config::get().agent;
+    let aux = crate::agent::runtime::loop_::auxiliary_from_cfg(cfg)
+        .map_err(|e| format!("auxiliary client build failed: {e}"))?
+        .ok_or_else(|| {
+            "auxiliary client is not configured; set agent.auxiliary_provider + auxiliary_model in config or drop --llm"
+                .to_string()
+        })?;
+    title_cmd_with_aux(&input, Some(&aux))
+}
+
+/// Inner helper: render either the heuristic title or call the LLM
+/// path against a caller-supplied auxiliary client. Extracted so
+/// tests can drive the LLM path with a `MockProvider`-backed
+/// `AuxiliaryClient` without depending on global config state.
+fn title_cmd_with_aux(
+    input: &str,
+    aux: Option<&crate::agent::llm::auxiliary::AuxiliaryClient>,
+) -> Result<Value, String> {
+    let Some(aux) = aux else {
+        return Ok(title_heuristic_payload(input));
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("tokio runtime: {e}"))?;
+    let title = runtime.block_on(crate::agent::title::generate_title(Some(aux), input));
     Ok(json!({
         "title": title,
         "input_chars": input.chars().count(),
         "title_chars": title.chars().count(),
-        "method": "heuristic",
+        "method": "llm",
+        "provider": aux.provider_name(),
+        "model": aux.config().model,
     }))
+}
+
+fn title_heuristic_payload(input: &str) -> Value {
+    let title = crate::agent::title::clamp(&crate::agent::title::heuristic(input));
+    json!({
+        "title": title,
+        "input_chars": input.chars().count(),
+        "title_chars": title.chars().count(),
+        "method": "heuristic",
+    })
 }
 
 /// `cos agent summarise <text> | --file <path> | --stdin [--max N]`
@@ -5432,6 +5486,54 @@ mod tests {
     fn title_cmd_requires_some_input() {
         let err = title_cmd(&[]).unwrap_err();
         assert!(err.contains("title"));
+    }
+
+    #[test]
+    fn title_cmd_llm_without_aux_errs() {
+        // No auxiliary config in test env → CLI should err clearly.
+        let err = title_cmd(&["hello".into(), "--llm".into()]).unwrap_err();
+        assert!(err.contains("auxiliary"));
+    }
+
+    #[test]
+    fn title_cmd_llm_flag_is_consumed_not_treated_as_input() {
+        // Without --llm we still get heuristic from "hello"; confirms
+        // flag isn't joined into the input.
+        let v = title_cmd(&["hello".into()]).expect("title ok");
+        assert_eq!(v.get("title").and_then(|s| s.as_str()), Some("hello"));
+    }
+
+    #[test]
+    fn title_cmd_with_aux_none_falls_back_to_heuristic() {
+        let v = title_cmd_with_aux("/help me", None).expect("ok");
+        assert_eq!(v.get("method").and_then(|s| s.as_str()), Some("heuristic"));
+        assert_eq!(v.get("title").and_then(|s| s.as_str()), Some("me"));
+    }
+
+    #[test]
+    fn title_cmd_with_aux_uses_mock_response() {
+        use crate::agent::llm::auxiliary::{AuxiliaryClient, AuxiliaryConfig};
+        use crate::agent::llm::providers::mock::{MockProvider, MockResponse};
+        use crate::config::AgentConfig;
+        let cfg = AgentConfig::default();
+        let provider = MockProvider::new("title-mock", &cfg);
+        provider
+            .push_response(MockResponse::Text("Quick rust setup".into()));
+        let aux = AuxiliaryClient::new(
+            std::sync::Arc::new(provider),
+            AuxiliaryConfig::new("mock", "title-mock"),
+        );
+        let v = title_cmd_with_aux("How do I install rust?", Some(&aux)).expect("ok");
+        assert_eq!(v.get("method").and_then(|s| s.as_str()), Some("llm"));
+        assert_eq!(
+            v.get("title").and_then(|s| s.as_str()),
+            Some("Quick rust setup")
+        );
+        assert_eq!(v.get("provider").and_then(|s| s.as_str()), Some("mock"));
+        assert_eq!(
+            v.get("model").and_then(|s| s.as_str()),
+            Some("title-mock")
+        );
     }
 
     #[test]
