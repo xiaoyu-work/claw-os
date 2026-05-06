@@ -33,7 +33,20 @@ PROFILE=openclaw ./build.sh docker
 ./cli/cos-ctl build
 ```
 
-> Other distribution targets (`wsl`, `iso-live`, `iso-installer`, `vm`) are
+### Build a WSL2 Tarball
+
+```bash
+# Produces build/claw-os-wsl-amd64.tar.gz
+sudo ./build.sh wsl
+
+# On Windows: import + launch
+wsl --import claw-os C:\WSL\claw-os build\claw-os-wsl-amd64.tar.gz --version 2
+wsl -d claw-os
+# Or run the helper:
+.\targets\wsl\install.ps1
+```
+
+> Other distribution targets (`iso-live`, `iso-installer`, `vm`) are
 > being added in subsequent milestones — see `targets/` for the current set.
 
 ### Run Locally (Development)
