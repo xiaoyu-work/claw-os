@@ -43,6 +43,7 @@ pub async fn run_turn(
     max_tokens: u32,
     temperature: f32,
     session_id: Option<&str>,
+    retry_policy: Option<crate::agent::llm::rate_limit::RetryPolicy>,
 ) -> Result<TurnOutcome, super::loop_::AgentError> {
     let mut request = ChatRequest {
         model: model.to_string(),
@@ -73,7 +74,21 @@ pub async fn run_turn(
     }
 
     let start = Instant::now();
-    let chat_result = provider.chat(request).await;
+    let chat_result = match retry_policy {
+        Some(policy) => {
+            // Clone the request per attempt: providers may consume
+            // owned `extra` fields, and the retry helper needs a
+            // fresh future each call.
+            let provider_for_retry = provider.clone();
+            crate::agent::llm::rate_limit::retry_with_backoff(policy, move || {
+                let p = provider_for_retry.clone();
+                let req = request.clone();
+                async move { p.chat(req).await }
+            })
+            .await
+        }
+        None => provider.chat(request).await,
+    };
     let duration_ms = start.elapsed().as_millis() as u64;
 
     // Capture engine_info AFTER the call — for local engines the

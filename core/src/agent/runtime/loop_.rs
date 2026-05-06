@@ -171,6 +171,7 @@ async fn ask_inner(
             cfg.max_tokens,
             cfg.temperature,
             recorder.map(|(_, sid)| sid),
+            retry_policy_from_cfg(cfg),
         )
         .await?;
 
@@ -366,6 +367,25 @@ pub fn auxiliary_from_cfg(
         acfg = acfg.with_temperature(t);
     }
     Ok(Some(AuxiliaryClient::new(provider, acfg)))
+}
+
+/// Build a [`RetryPolicy`] from `cfg` when `retry_enabled` is set
+/// AND `retry_max_attempts >= 2`. Returns `None` otherwise so the
+/// runtime keeps zero-overhead fail-fast behaviour for the default
+/// case (no closure capture, no retry-loop control flow).
+pub fn retry_policy_from_cfg(
+    cfg: &AgentConfig,
+) -> Option<crate::agent::llm::rate_limit::RetryPolicy> {
+    use crate::agent::llm::rate_limit::RetryPolicy;
+    if !cfg.retry_enabled {
+        return None;
+    }
+    if cfg.retry_max_attempts < 2 {
+        return None;
+    }
+    let mut p = RetryPolicy::standard();
+    p.max_attempts = cfg.retry_max_attempts;
+    Some(p)
 }
 
 /// Sync entry point for the CLI dispatcher (which is sync). Internally spins
@@ -1217,6 +1237,95 @@ mod tests {
                 );
             }
             other => panic!("expected Internal, got {other:?}"),
+        }
+    }
+
+    /// `retry_policy_from_cfg` returns `None` for the default config —
+    /// existing fail-fast behaviour is preserved out-of-the-box.
+    #[test]
+    fn retry_policy_from_cfg_default_is_none() {
+        let c = cfg();
+        assert!(retry_policy_from_cfg(&c).is_none());
+    }
+
+    /// `retry_policy_from_cfg` returns `None` when `retry_enabled` is
+    /// false even if `retry_max_attempts` is set high.
+    #[test]
+    fn retry_policy_from_cfg_disabled_returns_none() {
+        let mut c = cfg();
+        c.retry_enabled = false;
+        c.retry_max_attempts = 5;
+        assert!(retry_policy_from_cfg(&c).is_none());
+    }
+
+    /// `retry_policy_from_cfg` returns `None` when retry is enabled
+    /// but `retry_max_attempts < 2` — single-attempt is a no-op.
+    /// Returning None here lets the runtime skip the retry-loop
+    /// machinery entirely.
+    #[test]
+    fn retry_policy_from_cfg_attempts_lt_2_returns_none() {
+        let mut c = cfg();
+        c.retry_enabled = true;
+        c.retry_max_attempts = 1;
+        assert!(retry_policy_from_cfg(&c).is_none());
+        c.retry_max_attempts = 0;
+        assert!(retry_policy_from_cfg(&c).is_none());
+    }
+
+    /// `retry_policy_from_cfg` honours `retry_max_attempts` and
+    /// otherwise inherits from `RetryPolicy::standard()`.
+    #[test]
+    fn retry_policy_from_cfg_uses_standard_with_attempts_override() {
+        let mut c = cfg();
+        c.retry_enabled = true;
+        c.retry_max_attempts = 7;
+        let p = retry_policy_from_cfg(&c).expect("retry enabled => Some");
+        let standard = crate::agent::llm::rate_limit::RetryPolicy::standard();
+        assert_eq!(p.max_attempts, 7);
+        assert_eq!(p.base_ms, standard.base_ms);
+        assert_eq!(p.max_ms, standard.max_ms);
+        assert_eq!(p.jitter, standard.jitter);
+    }
+
+    /// End-to-end: when retry is enabled and the provider returns a
+    /// transient `RateLimited` error followed by a success, the loop
+    /// should recover transparently without surfacing the error.
+    #[tokio::test]
+    async fn ask_with_retry_recovers_from_rate_limit() {
+        let mut c = cfg();
+        c.retry_enabled = true;
+        c.retry_max_attempts = 2;
+        let mock = MockProvider::new(&c.model, &c);
+        mock.push_response(MockResponse::Error(
+            crate::agent::llm::LlmError::RateLimited { retry_after_ms: 0 },
+        ));
+        mock.push_response(MockResponse::Text("recovered".into()));
+
+        let provider: Arc<dyn Provider> = Arc::new(mock);
+        let tools = builtin_only_registry();
+        let result = ask_with(provider, &c, "go", &tools).await.expect("ok");
+        assert_eq!(result.answer.trim(), "recovered");
+    }
+
+    /// End-to-end: when retry is disabled (default), even a transient
+    /// error should propagate immediately without triggering a retry.
+    #[tokio::test]
+    async fn ask_without_retry_propagates_transient_error() {
+        let c = cfg();
+        assert!(!c.retry_enabled);
+        let mock = MockProvider::new(&c.model, &c);
+        mock.push_response(MockResponse::Error(
+            crate::agent::llm::LlmError::RateLimited { retry_after_ms: 0 },
+        ));
+        // Don't push a fallback success — if a retry happened we'd
+        // see a follow-up call but here we expect the error to
+        // propagate directly on the first try.
+        let provider: Arc<dyn Provider> = Arc::new(mock);
+        let tools = builtin_only_registry();
+        let err = ask_with(provider, &c, "go", &tools).await.unwrap_err();
+        match err {
+            AgentError::Llm(crate::agent::llm::LlmError::RateLimited { .. }) => {}
+            other => panic!("expected RateLimited propagated, got {other:?}"),
         }
     }
 

@@ -255,6 +255,21 @@ pub struct AgentConfig {
     /// (default) lets the auxiliary provider use its own default.
     #[serde(default)]
     pub auxiliary_temperature: Option<f32>,
+
+    /// Enable transparent retry-with-exponential-backoff around every
+    /// `Provider::chat` call. Defaults to `false` — existing
+    /// behaviour is "fail fast on transient errors". When true,
+    /// `RetryPolicy::standard()` is used (modulo `retry_max_attempts`).
+    /// Honours server-supplied `Retry-After` from
+    /// [`crate::agent::llm::LlmError::RateLimited`].
+    #[serde(default)]
+    pub retry_enabled: bool,
+
+    /// Max attempts (inclusive of the first try) when `retry_enabled`.
+    /// Defaults to 3. A value of 1 disables retries even when
+    /// `retry_enabled` is true (semantically equivalent to off).
+    #[serde(default = "default_retry_max_attempts")]
+    pub retry_max_attempts: u32,
 }
 
 /// Embedding service configuration. Reads from `[embed]` block.
@@ -442,6 +457,9 @@ fn default_redact_memory_enabled() -> bool {
 fn default_auxiliary_max_tokens() -> u32 {
     1024
 }
+fn default_retry_max_attempts() -> u32 {
+    3
+}
 fn default_embed_provider() -> String {
     "none".into()
 }
@@ -620,6 +638,8 @@ impl Default for AgentConfig {
             auxiliary_model: None,
             auxiliary_max_tokens: default_auxiliary_max_tokens(),
             auxiliary_temperature: None,
+            retry_enabled: false,
+            retry_max_attempts: default_retry_max_attempts(),
         }
     }
 }

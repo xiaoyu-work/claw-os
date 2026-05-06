@@ -15,12 +15,16 @@ use crate::agent::llm::{
 use crate::config::AgentConfig;
 
 /// What the mock should return for the next call.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum MockResponse {
     /// Plain text reply, terminates the loop with `FinishReason::Stop`.
     Text(String),
     /// One or more tool calls; loop will dispatch tools and call the mock again.
     ToolUse(Vec<ToolCall>),
+    /// Force a synthetic error from `chat()`. Used by tests that
+    /// exercise retry / error-path behaviour. The error is consumed
+    /// from the script queue like any other response.
+    Error(crate::agent::llm::LlmError),
 }
 
 pub struct MockProvider {
@@ -139,6 +143,7 @@ impl Provider for MockProvider {
                     usage: Usage::default(),
                 })
             }
+            MockResponse::Error(err) => Err(err),
         }
     }
 
