@@ -25,9 +25,13 @@
 //! - **P2.1 (this module)**: storage + registry + local install + CLI.
 //!   No network. `cos engine install <name>@<ver> --from <archive>`.
 //! - **P2.2**: GitHub Releases adapter — `cos engine update [--check]`.
-//! - **P2.3**: dynamic loading (libloading) replaces the compile-time
-//!   `cfg(feature = "llama_cpp")` link.
+//! - **P2.3 (now)**: dynamic loading (libloading) replaces compile-time
+//!   linkage. The model engine layer reads [`active_engine_root`] +
+//!   [`active_library_path`] to find the on-disk runtime each process
+//!   start.
 //! - **P2.4**: per-version manifests + model compat enforcement.
+
+use std::path::PathBuf;
 
 use serde_json::{json, Value};
 
@@ -44,6 +48,66 @@ pub const KNOWN_ENGINES: &[&str] = &["llama-cpp", "ort", "ort-genai"];
 
 pub fn is_known_engine(name: &str) -> bool {
     KNOWN_ENGINES.contains(&name)
+}
+
+/// Resolve `<engines_dir>/<engine>/<active>/` for a given engine, IF an
+/// active version is recorded in the registry AND the version directory
+/// exists on disk. Returns `None` otherwise.
+///
+/// This is the entry point the model layer uses to find a runtime to
+/// load. It is intentionally cheap (one small JSON read + one stat) so
+/// it can be called from `is_configured()` style hot paths.
+pub fn active_engine_root(engine: &str) -> Option<PathBuf> {
+    if !is_known_engine(engine) {
+        return None;
+    }
+    let idx = registry::EnginesIndex::load_or_default().ok()?;
+    let entry = idx.entry(engine)?;
+    if entry.active.is_empty() {
+        return None;
+    }
+    let root = paths::engine_version_dir(engine, &entry.active);
+    if root.is_dir() {
+        Some(root)
+    } else {
+        None
+    }
+}
+
+/// Resolve the on-disk path of a specific shared library shipped by the
+/// active version of `engine`. Searches the conventional payload
+/// directories of an engine install:
+///
+///   1. `<root>/lib/<platform-filename>`  — Unix-y layout
+///   2. `<root>/bin/<platform-filename>`  — Windows zip layout (where
+///      llama.cpp ships flat alongside its sister DLLs)
+///
+/// `basename` is the platform-agnostic library stem (e.g. `"llama"` →
+/// `llama.dll` / `libllama.so` / `libllama.dylib`). Returns `None` if
+/// the active engine isn't installed or the file is missing.
+pub fn active_library_path(engine: &str, basename: &str) -> Option<PathBuf> {
+    let root = active_engine_root(engine)?;
+    let filename = platform_library_filename(basename);
+    for sub in ["lib", "bin"] {
+        let candidate = root.join(sub).join(&filename);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Compose the platform-specific shared library filename for a given
+/// stem. `"llama"` ⇒ `"llama.dll"` on Windows, `"libllama.so"` on Linux,
+/// `"libllama.dylib"` on macOS.
+pub fn platform_library_filename(basename: &str) -> String {
+    if cfg!(target_os = "windows") {
+        format!("{basename}.dll")
+    } else if cfg!(target_os = "macos") {
+        format!("lib{basename}.dylib")
+    } else {
+        format!("lib{basename}.so")
+    }
 }
 
 /// Dispatch a `cos engine <command>` invocation.
@@ -500,4 +564,154 @@ fn cmd_update(args: &[String]) -> Result<Value, String> {
             "activated": activate_flag,
         }))
     })
+}
+
+#[cfg(test)]
+mod active_helper_tests {
+    //! Tests for the P2.3 helpers `active_engine_root` and
+    //! `active_library_path`. The engine layer (model::engines::*)
+    //! is the primary consumer; we duplicate coverage here to catch
+    //! regressions in the resolution rules early.
+
+    use super::*;
+
+    fn write_index(engines_dir: &std::path::Path, engine: &str, active: &str) {
+        let json = serde_json::json!({
+            "version": 1,
+            "engines": {
+                engine: {
+                    "active": active,
+                    "previous": "",
+                    "installed": [{"version": active, "installed_at": "2026-01-01T00:00:00Z", "bytes": 0, "source": "", "sha256": ""}],
+                    "pinned": false,
+                    "channel": "release",
+                    "accelerator": "",
+                    "source": ""
+                }
+            }
+        });
+        std::fs::write(
+            engines_dir.join("engines.json"),
+            serde_json::to_vec_pretty(&json).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn platform_library_filename_matches_target_os() {
+        let f = platform_library_filename("llama");
+        if cfg!(target_os = "windows") {
+            assert_eq!(f, "llama.dll");
+        } else if cfg!(target_os = "macos") {
+            assert_eq!(f, "libllama.dylib");
+        } else {
+            assert_eq!(f, "libllama.so");
+        }
+    }
+
+    #[test]
+    fn active_engine_root_unknown_engine_returns_none() {
+        assert!(active_engine_root("not-a-real-engine").is_none());
+    }
+
+    #[test]
+    fn active_engine_root_no_index_returns_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        paths::set_engines_dir_override(Some(tmp.path().to_path_buf()));
+        assert!(active_engine_root("llama-cpp").is_none());
+        paths::set_engines_dir_override(None);
+    }
+
+    #[test]
+    fn active_engine_root_empty_active_returns_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        paths::set_engines_dir_override(Some(tmp.path().to_path_buf()));
+        // Index exists but `active` is empty string.
+        let json = serde_json::json!({
+            "version": 1,
+            "engines": {
+                "llama-cpp": {
+                    "active": "",
+                    "previous": "",
+                    "installed": [],
+                    "pinned": false,
+                    "channel": "release",
+                    "accelerator": "",
+                    "source": ""
+                }
+            }
+        });
+        std::fs::write(
+            tmp.path().join("engines.json"),
+            serde_json::to_vec_pretty(&json).unwrap(),
+        )
+        .unwrap();
+        assert!(active_engine_root("llama-cpp").is_none());
+        paths::set_engines_dir_override(None);
+    }
+
+    #[test]
+    fn active_engine_root_directory_must_exist() {
+        let tmp = tempfile::tempdir().unwrap();
+        paths::set_engines_dir_override(Some(tmp.path().to_path_buf()));
+        // Registry says active = "v0" but no directory on disk.
+        write_index(tmp.path(), "llama-cpp", "v0");
+        assert!(active_engine_root("llama-cpp").is_none());
+        paths::set_engines_dir_override(None);
+    }
+
+    #[test]
+    fn active_engine_root_returns_path_when_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        paths::set_engines_dir_override(Some(tmp.path().to_path_buf()));
+        std::fs::create_dir_all(tmp.path().join("llama-cpp/v0/lib")).unwrap();
+        write_index(tmp.path(), "llama-cpp", "v0");
+        let p = active_engine_root("llama-cpp").expect("should resolve");
+        assert!(p.ends_with("llama-cpp/v0") || p.ends_with("llama-cpp\\v0"));
+        paths::set_engines_dir_override(None);
+    }
+
+    #[test]
+    fn active_library_path_prefers_lib_over_bin() {
+        let tmp = tempfile::tempdir().unwrap();
+        paths::set_engines_dir_override(Some(tmp.path().to_path_buf()));
+        let lib_name = platform_library_filename("llama");
+        let lib_dir = tmp.path().join("llama-cpp/v0/lib");
+        let bin_dir = tmp.path().join("llama-cpp/v0/bin");
+        std::fs::create_dir_all(&lib_dir).unwrap();
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::fs::write(lib_dir.join(&lib_name), b"x").unwrap();
+        std::fs::write(bin_dir.join(&lib_name), b"y").unwrap();
+        write_index(tmp.path(), "llama-cpp", "v0");
+        let p = active_library_path("llama-cpp", "llama").expect("should resolve");
+        assert!(p.to_string_lossy().contains("lib"));
+        assert!(!p.to_string_lossy().contains("bin"));
+        paths::set_engines_dir_override(None);
+    }
+
+    #[test]
+    fn active_library_path_falls_back_to_bin() {
+        let tmp = tempfile::tempdir().unwrap();
+        paths::set_engines_dir_override(Some(tmp.path().to_path_buf()));
+        let lib_name = platform_library_filename("llama");
+        let bin_dir = tmp.path().join("llama-cpp/v0/bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::fs::write(bin_dir.join(&lib_name), b"y").unwrap();
+        // No lib/ directory at all.
+        write_index(tmp.path(), "llama-cpp", "v0");
+        let p = active_library_path("llama-cpp", "llama").expect("should resolve via bin/");
+        assert!(p.to_string_lossy().contains("bin"));
+        paths::set_engines_dir_override(None);
+    }
+
+    #[test]
+    fn active_library_path_none_when_file_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        paths::set_engines_dir_override(Some(tmp.path().to_path_buf()));
+        std::fs::create_dir_all(tmp.path().join("llama-cpp/v0/lib")).unwrap();
+        write_index(tmp.path(), "llama-cpp", "v0");
+        // Directories exist but no library file.
+        assert!(active_library_path("llama-cpp", "llama").is_none());
+        paths::set_engines_dir_override(None);
+    }
 }

@@ -1,34 +1,30 @@
 //! Hand-written FFI to a minimal, version-stable subset of `llama.h`.
 //!
-//! Compiled and linked only when the `llama_cpp` cargo feature is on
-//! (driven by `core/build.rs`). We deliberately keep the surface tiny:
+//! As of P2.3 the cos binary no longer statically links `libllama`. The
+//! engine package manager installs a prebuilt llama.cpp release into
+//! `<engines_dir>/llama-cpp/<version>/{bin,lib}/` and we resolve the
+//! shared library at runtime via `libloading`. This module therefore
+//! provides:
 //!
 //!   - opaque struct declarations (`llama_model`, `llama_context`,
 //!     `llama_sampler`, `llama_vocab`)
-//!   - global lifecycle: [`llama_backend_init`], [`llama_backend_free`],
-//!     [`llama_log_set`]
+//!   - typedefs (`llama_token`, `llama_log_callback`)
+//!   - [`LlamaSyms`] — a struct of function pointers resolved on first
+//!     load. Each field is an `unsafe extern "C" fn(...)`. Callers go
+//!     through `LlamaRuntime::syms` to invoke them; there is no static
+//!     `extern "C"` block any more.
 //!
-//! The richer surface — `llama_model_params`, `llama_context_params`,
-//! `llama_decode`, `llama_sampler_chain_*` — is intentionally NOT mirrored
-//! here because those structs contain nested enums / function-pointer
-//! members whose layout drifts between llama.cpp versions. Mirroring them
-//! by hand is a footgun. The pragmatic plan:
-//!
-//!   1. Phase 0.5  (now): scaffold + link + verify backend init/free.
-//!      Generation calls return [`InferenceFailed`] with a clear pointer
-//!      to Phase 0.5b. — done.
-//!   2. Phase 0.5b: when the user supplies the first GGUF, switch this
-//!      module to bindgen-generated bindings (gated by feature) OR pin
-//!      to a specific llama.cpp commit and add the structs by hand.
-//!
-//! Until then we still get genuine value: build.rs is exercised on every
-//! compile-with-feature, the engine's lifecycle plumbing is real, and the
-//! provider registration hook is in place so flipping on real generation
-//! is a contained change.
-//!
-//! [`InferenceFailed`]: super::EngineError::InferenceFailed
+//! Why such a tiny surface? `llama_model_params`, `llama_context_params`,
+//! `llama_decode`, `llama_sampler_chain_*` are all structs whose layout
+//! drifts between llama.cpp versions. Mirroring them by hand is a
+//! footgun, so the decode loop (Phase 0.5b) will gain those bindings via
+//! bindgen against the active engine's headers. Until then we only need
+//! global lifecycle (`init` / `free` / `log_set`) plus the opaque types
+//! so the rest of the runtime can compile.
 
 use std::os::raw::{c_char, c_void};
+
+use libloading::Library;
 
 /// Opaque — defined in `llama.h` (`struct llama_model;`).
 #[repr(C)]
@@ -63,16 +59,52 @@ pub type llama_token = i32;
 pub type llama_log_callback =
     Option<unsafe extern "C" fn(level: i32, text: *const c_char, user_data: *mut c_void)>;
 
-extern "C" {
-    /// Initialize the llama.cpp backend. Idempotent on most platforms.
-    /// Must be called before any other API. Linked from `libllama`.
-    pub fn llama_backend_init();
+/// Function-pointer table resolved from `libllama`. Each entry mirrors
+/// what used to be a static `extern "C"` declaration. New symbols are
+/// added here as the decode loop lands in Phase 0.5b.
+///
+/// `LlamaSyms` is `Send + Sync` because every field is a bare function
+/// pointer (no captured state). The owning [`super::runtime::LlamaRuntime`]
+/// keeps the [`Library`] alive for as long as any pointer is reachable.
+#[allow(non_snake_case)] // Field names mirror llama.h exactly for grep-ability.
+pub struct LlamaSyms {
+    pub llama_backend_init: unsafe extern "C" fn(),
+    pub llama_backend_free: unsafe extern "C" fn(),
+    pub llama_log_set: unsafe extern "C" fn(callback: llama_log_callback, user_data: *mut c_void),
+}
 
-    /// Tear down the llama.cpp backend. Idempotent.
-    pub fn llama_backend_free();
+/// SAFETY: `LlamaSyms` is a plain table of function pointers. There is
+/// no interior mutability and no captured `!Send`/`!Sync` state.
+unsafe impl Send for LlamaSyms {}
+unsafe impl Sync for LlamaSyms {}
 
-    /// Replace the global log callback. Pass `None` to silence.
-    pub fn llama_log_set(log_callback: llama_log_callback, user_data: *mut c_void);
+impl LlamaSyms {
+    /// Resolve every symbol against `lib`. Returns the first
+    /// libloading error if any is missing — the runtime treats this as
+    /// a hard failure rather than degrading silently, since a missing
+    /// symbol almost always means a wildly mismatched llama.cpp build.
+    ///
+    /// SAFETY: `lib` must point at a real `libllama` produced by an
+    /// upstream llama.cpp build. The C ABI signatures of the resolved
+    /// symbols must match those declared above. Both invariants are
+    /// honored by the official llama.cpp prebuilt releases that
+    /// `cos engine` consumes.
+    pub unsafe fn resolve(lib: &Library) -> Result<Self, libloading::Error> {
+        // `Symbol::into_raw` would let us drop the `Symbol` and keep the
+        // raw fn pointer; instead we transmute via the deref. As long as
+        // the `Library` outlives the function pointers (it does — the
+        // owning `LlamaRuntime` keeps it), this is sound.
+        let backend_init: libloading::Symbol<unsafe extern "C" fn()> = lib.get(b"llama_backend_init\0")?;
+        let backend_free: libloading::Symbol<unsafe extern "C" fn()> = lib.get(b"llama_backend_free\0")?;
+        let log_set: libloading::Symbol<
+            unsafe extern "C" fn(callback: llama_log_callback, user_data: *mut c_void),
+        > = lib.get(b"llama_log_set\0")?;
+        Ok(Self {
+            llama_backend_init: *backend_init,
+            llama_backend_free: *backend_free,
+            llama_log_set: *log_set,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -89,16 +121,11 @@ mod tests {
         assert_eq!(std::mem::size_of::<llama_vocab>(), 0);
     }
 
-    /// Smoke: bring the backend up and straight back down. Verifies the
-    /// CMake-driven static link in `build.rs` actually produced a working
-    /// `libllama` whose globals can be initialised.
+    /// Function pointers are pointer-sized — sanity check that
+    /// `LlamaSyms` packs as expected.
     #[test]
-    fn backend_lifecycle_round_trip() {
-        unsafe {
-            llama_backend_init();
-            // Silence any logging the backend might emit during teardown.
-            llama_log_set(None, std::ptr::null_mut());
-            llama_backend_free();
-        }
+    fn syms_struct_is_compact() {
+        let expected = std::mem::size_of::<usize>() * 3; // three fn ptrs
+        assert_eq!(std::mem::size_of::<LlamaSyms>(), expected);
     }
 }

@@ -1,10 +1,11 @@
 //! Local llama.cpp provider — speaks the agent's `Provider` trait, drives
 //! a `crate::model::engines::llama_cpp::LlamaEngine` underneath.
 //!
-//! Compiled in both feature modes so the registry / status output is
-//! consistent. When the `llama_cpp` feature is OFF the provider still
-//! exists as a stub: `is_configured()` returns false and `chat()` returns
-//! a clear `LlmError::NotConfigured` pointing at the missing feature.
+//! Compiled unconditionally. Engine availability is decided at runtime
+//! based on whether `cos engine` has installed an active llama-cpp
+//! version. When no engine is installed the provider's
+//! `is_configured()` returns false and `chat()` returns a clear
+//! `LlmError::NotConfigured` pointing at `cos engine update llama-cpp`.
 //!
 //! The model identifier the provider receives doubles as the GGUF file
 //! path. The expected formats are:
@@ -67,11 +68,10 @@ impl LlamaLocalProvider {
         }
     }
 
-    /// Validate the configured model file exists. Used by `is_configured`
-    /// and to give the user an explicit early failure before starting a
-    /// long inference call. Cheap — no FFI.
+    /// Validate both the engine runtime is installed AND the model
+    /// file exists. Cheap — no library load, no FFI calls.
     fn config_is_usable(&self) -> bool {
-        llama_engine::IS_LINKED && llama_engine::model_path_is_usable(&self.cfg.model_path)
+        llama_engine::is_installed() && llama_engine::model_path_is_usable(&self.cfg.model_path)
     }
 
     async fn ensure_engine(&self) -> Result<Arc<LlamaEngine>> {
@@ -80,17 +80,20 @@ impl LlamaLocalProvider {
             return Ok(eng.clone());
         }
 
-        if !llama_engine::IS_LINKED {
+        if !llama_engine::is_installed() {
             return Err(LlmError::NotConfigured(
-                "llama_local provider: cos was built without --features llama_cpp; \
-                 rebuild with the feature enabled to use a local GGUF model"
+                "llama_local provider: no llama-cpp engine installed. \
+                 Run `cos engine update llama-cpp` to download the latest \
+                 prebuilt release, or `cos engine install llama-cpp@<ver> \
+                 --from <archive>` for an offline install."
                     .into(),
             ));
         }
 
         let cfg = self.cfg.clone();
-        // Engine construction may do non-trivial work even at Phase 0.5
-        // (backend_init), so push to the blocking pool to be safe.
+        // Engine construction loads the dynamic library on first call,
+        // which can take a moment (few ms to a few hundred ms on
+        // Windows with CUDA bits). Push to the blocking pool.
         let engine = tokio::task::spawn_blocking(move || LlamaEngine::new(cfg))
             .await
             .map_err(|e| LlmError::Internal(format!("spawn_blocking join failed: {e}")))?
@@ -218,66 +221,120 @@ mod tests {
         assert!(!p.is_configured());
     }
 
+    /// `is_configured()` ANDs file presence with engine-installed-on-disk.
+    /// Without an installed engine, even a real model file should not
+    /// flip it on. This test pins the engines_dir to an empty temp
+    /// directory so the host's actual install (if any) doesn't leak in.
     #[test]
-    fn is_configured_handles_existing_file_per_feature() {
-        let tmp = std::env::temp_dir().join(format!(
+    fn is_configured_requires_installed_engine() {
+        let tmp_engines = tempfile::tempdir().unwrap();
+        crate::engine_pkg::paths::set_engines_dir_override(Some(
+            tmp_engines.path().to_path_buf(),
+        ));
+
+        let tmp_gguf = std::env::temp_dir().join(format!(
             "cos-llama-prov-{}-{}.gguf",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
-        std::fs::write(&tmp, b"placeholder").unwrap();
-        let spec = tmp.to_string_lossy().to_string();
+        std::fs::write(&tmp_gguf, b"placeholder").unwrap();
+        let spec = tmp_gguf.to_string_lossy().to_string();
         let p = LlamaLocalProvider::new(&spec, &AgentConfig::default());
 
-        // is_configured ANDs file presence with feature-linked. With the
-        // feature OFF, even a real file should not flip it on.
-        if llama_engine::IS_LINKED {
-            assert!(p.is_configured());
-        } else {
-            assert!(!p.is_configured());
-        }
-        let _ = std::fs::remove_file(&tmp);
+        assert!(
+            !p.is_configured(),
+            "no engine installed -> not configured even with model file"
+        );
+
+        let _ = std::fs::remove_file(&tmp_gguf);
+        crate::engine_pkg::paths::set_engines_dir_override(None);
     }
 
-    /// Without the `llama_cpp` feature, asking for a chat must surface
-    /// the "not configured" error so the user gets a clear pointer to
-    /// rebuild with the feature.
-    #[cfg(not(feature = "llama_cpp"))]
+    /// With both an engine *and* a model file installed, the provider
+    /// reports configured. This is the "happy path" Phase 0.5 status
+    /// will display once a user has run `cos engine update llama-cpp`.
+    #[test]
+    fn is_configured_true_when_engine_and_model_present() {
+        let tmp_engines = tempfile::tempdir().unwrap();
+        crate::engine_pkg::paths::set_engines_dir_override(Some(
+            tmp_engines.path().to_path_buf(),
+        ));
+
+        // Stand up a fake "installed engine".
+        let lib_dir = tmp_engines.path().join("llama-cpp/v0/lib");
+        std::fs::create_dir_all(&lib_dir).unwrap();
+        let lib_name = if cfg!(target_os = "windows") {
+            "llama.dll"
+        } else if cfg!(target_os = "macos") {
+            "libllama.dylib"
+        } else {
+            "libllama.so"
+        };
+        std::fs::write(lib_dir.join(lib_name), b"placeholder").unwrap();
+        let json = serde_json::json!({
+            "version": 1,
+            "engines": {
+                "llama-cpp": {
+                    "active": "v0",
+                    "previous": "",
+                    "installed": [{"version": "v0", "installed_at": "2026-01-01T00:00:00Z", "bytes": 0, "source": "", "sha256": ""}],
+                    "pinned": false,
+                    "channel": "release",
+                    "accelerator": "",
+                    "source": ""
+                }
+            }
+        });
+        std::fs::write(
+            tmp_engines.path().join("engines.json"),
+            serde_json::to_vec_pretty(&json).unwrap(),
+        )
+        .unwrap();
+
+        // And a fake GGUF.
+        let gguf = std::env::temp_dir().join(format!(
+            "cos-llama-prov-happy-{}-{}.gguf",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&gguf, b"placeholder").unwrap();
+        let spec = gguf.to_string_lossy().to_string();
+        let p = LlamaLocalProvider::new(&spec, &AgentConfig::default());
+
+        assert!(p.is_configured());
+
+        let _ = std::fs::remove_file(&gguf);
+        crate::engine_pkg::paths::set_engines_dir_override(None);
+    }
+
+    /// With no engine installed, `chat()` surfaces `NotConfigured` so
+    /// the user gets a clear pointer to `cos engine update`.
     #[tokio::test]
-    async fn chat_without_feature_returns_not_configured() {
+    async fn chat_without_engine_returns_not_configured() {
+        let tmp_engines = tempfile::tempdir().unwrap();
+        // The provider runs `is_installed()` from a tokio worker via
+        // `spawn_blocking`. The thread-local override lives on the
+        // current thread only, so the worker would see the host's real
+        // engines dir. Bypass by calling chat() — its initial path
+        // through `ensure_engine().await` runs on the current task
+        // until it hits `spawn_blocking`. The `is_installed()` check
+        // happens BEFORE `spawn_blocking`, so the override applies.
+        crate::engine_pkg::paths::set_engines_dir_override(Some(
+            tmp_engines.path().to_path_buf(),
+        ));
+
         let p = LlamaLocalProvider::new("/tmp/anything.gguf", &AgentConfig::default());
         let err = p.chat(req("/tmp/anything.gguf", "hi")).await.unwrap_err();
         match err {
             LlmError::NotConfigured(msg) => {
-                assert!(msg.contains("llama_cpp"), "unexpected message: {msg}");
+                assert!(
+                    msg.contains("llama-cpp") || msg.contains("cos engine"),
+                    "unexpected message: {msg}"
+                );
             }
             other => panic!("expected NotConfigured, got {other:?}"),
         }
-    }
 
-    /// With the feature on, chat reaches the engine but
-    /// `engine.generate()` returns the Phase-0.5 "pending" error.
-    #[cfg(feature = "llama_cpp")]
-    #[tokio::test]
-    async fn chat_with_feature_reaches_engine_and_reports_pending() {
-        let tmp = std::env::temp_dir().join(format!(
-            "cos-llama-prov-chat-{}-{}.gguf",
-            std::process::id(),
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::write(&tmp, b"placeholder").unwrap();
-        let spec = tmp.to_string_lossy().to_string();
-        let p = LlamaLocalProvider::new(&spec, &AgentConfig::default());
-        let err = p.chat(req(&spec, "hi")).await.unwrap_err();
-        match err {
-            LlmError::Internal(msg) => {
-                assert!(
-                    msg.contains("pending") || msg.contains("Phase"),
-                    "unexpected internal msg: {msg}"
-                );
-            }
-            other => panic!("expected Internal pending, got {other:?}"),
-        }
-        let _ = std::fs::remove_file(&tmp);
+        crate::engine_pkg::paths::set_engines_dir_override(None);
     }
 }

@@ -1,44 +1,59 @@
-//! llama.cpp inference engine.
+//! llama.cpp inference engine — runtime-loaded.
 //!
-//! Two compilation modes:
+//! As of P2.3, `libllama` is no longer compile-time linked. The cos
+//! binary always builds; an engine is *available* iff the engine
+//! package manager has installed an active version on disk:
 //!
-//! - **Without the `llama_cpp` cargo feature** — this module compiles as a
-//!   stub. `LlamaEngine::new()` returns `EngineError::NotLinked("llama_cpp")`,
-//!   `IS_LINKED = false`. The agent provider registry skips the `llama_local`
-//!   provider. Lets contributors build cos without llama.cpp on disk.
+//! ```text
+//! <engines_dir>/llama-cpp/<version>/lib/llama.dll        (Windows)
+//!                                  /libllama.so          (Linux)
+//!                                  /libllama.dylib       (macOS)
+//! ```
 //!
-//! - **With the `llama_cpp` cargo feature** — `build.rs` compiled and linked
-//!   the C++ side via CMake. This module exposes safe wrappers over the
-//!   minimal FFI in [`ffi`] (backend init/free, opaque types). `new()`
-//!   validates config and brings the backend up; concrete model load +
-//!   tokenize/decode land in Phase 0.5b once a real GGUF arrives. See the
-//!   `real` submodule and [`ffi`] for the rationale.
+//! The user controls availability with `cos engine update llama-cpp`,
+//! `cos engine activate <ver>`, etc. — see `core/src/engine_pkg/`.
 //!
-//! The provider-facing surface ([`LlamaEngine::generate`]) is identical in
-//! both modes, so [`crate::agent::llm::providers::llama_local`] can be
-//! written once and only its return values change between feature flags.
+//! Three failure modes are distinguished so `cos agent status` can give
+//! actionable hints:
+//!
+//!   - [`EngineError::NotInstalled`]: no active version, or the active
+//!     version's library file is missing.
+//!   - [`EngineError::LibraryLoadFailed`]: the file exists but the OS
+//!     loader rejected it (corrupt, ABI mismatch, missing sister DLL,
+//!     missing C runtime, ...).
+//!   - [`EngineError::InvalidModelPath`]: GGUF file argument is bad.
+//!
+//! [`is_installed`] reads only the registry + a stat — cheap enough to
+//! call from `cos agent status`. Actual loading happens lazily on the
+//! first `LlamaEngine::new()` call and is cached process-wide.
+//!
+//! Concrete inference (tokenize/decode loop) lands in Phase 0.5b once a
+//! GGUF model file is available for testing. Until then `generate()`
+//! returns the explicit "pending" error.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use super::EngineError;
 
-#[cfg(feature = "llama_cpp")]
 pub mod ffi;
-
-/// Whether the llama.cpp engine is linked into this binary. Read by
-/// `engines::engines_linked()` and the provider registry.
-#[cfg(feature = "llama_cpp")]
-pub const IS_LINKED: bool = true;
-#[cfg(not(feature = "llama_cpp"))]
-pub const IS_LINKED: bool = false;
+pub mod runtime;
 
 /// Static identifier — used by the Provider trait and `engines_linked()`.
-#[allow(dead_code)] // Surfaced via stringly typed APIs (Provider::name).
+/// Note: this is the agent-side / FFI-side stem (`llama_cpp`), not the
+/// engine package manager's kebab-case ID (`llama-cpp`). Both are kept
+/// stable so existing `cos agent status` and registry consumers don't
+/// have to change.
 pub const ENGINE_NAME: &str = "llama_cpp";
+
+/// Engine name used by `crate::engine_pkg` (kebab-case, matches GitHub
+/// repo path). Internal helper so we don't sprinkle the literal across
+/// callers.
+pub const PKG_ENGINE_NAME: &str = "llama-cpp";
 
 /// Configuration for instantiating a [`LlamaEngine`].
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Fields read only inside `cfg(feature = "llama_cpp")`.
 pub struct LlamaConfig {
     /// Path to the GGUF file. Must exist and be readable.
     pub model_path: PathBuf,
@@ -69,7 +84,7 @@ impl Default for LlamaConfig {
 
 /// Result of a single generation pass.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Fields read only inside `cfg(feature = "llama_cpp")`.
+#[allow(dead_code)] // Fields read once Phase 0.5b lands the decode loop.
 pub struct Generation {
     pub text: String,
     pub prompt_tokens: u32,
@@ -78,7 +93,7 @@ pub struct Generation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // Variants used only inside `cfg(feature = "llama_cpp")`.
+#[allow(dead_code)] // Variants surface once Phase 0.5b lands.
 pub enum StopReason {
     /// Model emitted EOS.
     Eos,
@@ -90,9 +105,21 @@ pub enum StopReason {
     Other,
 }
 
-/// Validate a config without trying to instantiate the engine. Useful for
-/// the provider's `is_configured()` check.
-#[allow(dead_code)] // Called only inside `cfg(feature = "llama_cpp")` and from tests.
+/// Cheap availability check. Returns true iff the engine package
+/// manager has an active version of `llama-cpp` whose shared library
+/// file exists on disk. **Does not load the library.**
+///
+/// Used by `engines_linked()` and the `llama_local` provider's
+/// `is_configured()`. The actual load can still fail (corrupt file,
+/// missing sister DLL, ABI mismatch) — that surfaces as
+/// `LibraryLoadFailed` from `LlamaEngine::new()`.
+pub fn is_installed() -> bool {
+    crate::engine_pkg::active_library_path(PKG_ENGINE_NAME, "llama").is_some()
+}
+
+/// Validate a config without trying to instantiate the engine. Useful
+/// for the provider's `is_configured()` check.
+#[allow(dead_code)] // Called from tests; binary path goes through `new()`.
 pub fn validate_config(cfg: &LlamaConfig) -> Result<(), EngineError> {
     if cfg.model_path.as_os_str().is_empty() {
         return Err(EngineError::InvalidModelPath(
@@ -109,110 +136,77 @@ pub fn validate_config(cfg: &LlamaConfig) -> Result<(), EngineError> {
     Ok(())
 }
 
-// ----------------------------------------------------------------------
-// Stub implementation (no `llama_cpp` feature)
-// ----------------------------------------------------------------------
+/// Single in-process llama.cpp engine. Phase 0.5 holds the lifecycle
+/// plumbing: backend init/free + config validation. Model load + decode
+/// loop land in Phase 0.5b once a real GGUF arrives.
+///
+/// Multiple `LlamaEngine` instances share the same loaded `libllama`
+/// (via [`runtime::LlamaRuntime::shared`]) and the same global backend
+/// init.
+pub struct LlamaEngine {
+    cfg: LlamaConfig,
+    /// Kept alive so the function-pointer references in `syms` stay
+    /// valid for as long as this engine exists.
+    runtime: Arc<runtime::LlamaRuntime>,
+}
 
-#[cfg(not(feature = "llama_cpp"))]
-#[derive(Debug)]
-#[allow(dead_code)] // Constructed only via `new()` which always errors when feature is off.
-pub struct LlamaEngine;
+/// `llama_backend_init` is a process-wide global initialiser. We pay
+/// the cost exactly once, the first time any `LlamaEngine` is built.
+static BACKEND_UP: AtomicBool = AtomicBool::new(false);
 
-#[cfg(not(feature = "llama_cpp"))]
-#[allow(dead_code)] // Construction always fails; methods exist for trait parity.
+fn ensure_backend(rt: &runtime::LlamaRuntime) {
+    if BACKEND_UP
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        // SAFETY: `llama_backend_init` is documented as the required
+        // first call to the API and is safe to invoke once. The
+        // function pointer was just resolved from the loaded library.
+        unsafe {
+            (rt.syms.llama_backend_init)();
+            // Silence the global log unless the user wires their own
+            // callback (none of the consumers do today).
+            (rt.syms.llama_log_set)(None, std::ptr::null_mut());
+        }
+    }
+}
+
 impl LlamaEngine {
-    pub fn new(_cfg: LlamaConfig) -> Result<Self, EngineError> {
-        Err(EngineError::NotLinked("llama_cpp"))
+    pub fn new(cfg: LlamaConfig) -> Result<Self, EngineError> {
+        validate_config(&cfg)?;
+        // Catches non-UTF-8 paths early so future load_from_file calls
+        // can't surprise us.
+        let _ = cfg.model_path.to_str().ok_or_else(|| {
+            EngineError::InvalidModelPath("non-utf8 model path".into())
+        })?;
+        let runtime = runtime::LlamaRuntime::shared()?;
+        ensure_backend(&runtime);
+        Ok(Self { cfg, runtime })
     }
 
-    /// Returns the engine config used at construction. Stub never reaches here.
     pub fn config(&self) -> &LlamaConfig {
-        unreachable!("stub LlamaEngine cannot be constructed")
+        &self.cfg
+    }
+
+    /// Path of the loaded `libllama` — surfaced by status output so
+    /// users can confirm which version is in use.
+    #[allow(dead_code)] // Status integration lands later in this phase.
+    pub fn library_path(&self) -> &Path {
+        &self.runtime.lib_path
     }
 
     pub async fn generate(&self, _prompt: &str) -> Result<Generation, EngineError> {
-        Err(EngineError::NotLinked("llama_cpp"))
+        Err(EngineError::InferenceFailed(
+            "llama_cpp.generate(): wiring complete but tokenize/decode loop pending. \
+             Will land in Phase 0.5b once a GGUF model file is available for testing."
+                .into(),
+        ))
     }
 }
 
-// ----------------------------------------------------------------------
-// Real implementation (with `llama_cpp` feature)
-// ----------------------------------------------------------------------
-
-#[cfg(feature = "llama_cpp")]
-pub use real::LlamaEngine;
-
-#[cfg(feature = "llama_cpp")]
-mod real {
-    use super::*;
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    /// Real llama.cpp engine. Phase 0.5 holds the lifecycle plumbing:
-    /// backend init/free and config validation. Model load + decode loop
-    /// land in Phase 0.5b once the first GGUF arrives and we can pin
-    /// llama_context_params / llama_model_params layouts (or generate
-    /// them with bindgen at that point).
-    ///
-    /// This intentionally does NOT load a model in `new()`. We keep the
-    /// `LlamaConfig` so the future implementation has everything it
-    /// needs, and we initialise the backend exactly once per process.
-    pub struct LlamaEngine {
-        cfg: LlamaConfig,
-    }
-
-    static BACKEND_UP: AtomicBool = AtomicBool::new(false);
-
-    fn ensure_backend() {
-        // SAFETY: llama_backend_init is idempotent. We still gate with an
-        // atomic so we don't pay the cost on every construction.
-        if BACKEND_UP
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-        {
-            unsafe {
-                ffi::llama_backend_init();
-                ffi::llama_log_set(None, std::ptr::null_mut());
-            }
-        }
-    }
-
-    impl LlamaEngine {
-        #[allow(dead_code)] // Called from tests; binary path uses real() at runtime.
-        pub fn new(cfg: LlamaConfig) -> Result<Self, EngineError> {
-            super::validate_config(&cfg)?;
-            // Validate the path encodes cleanly on this platform — catches
-            // non-UTF-8 paths early so the future load_from_file call
-            // can't surprise us.
-            let _ = cfg.model_path.to_str().ok_or_else(|| {
-                EngineError::InvalidModelPath("non-utf8 model path".into())
-            })?;
-            ensure_backend();
-            Ok(Self { cfg })
-        }
-
-        pub fn config(&self) -> &LlamaConfig {
-            &self.cfg
-        }
-
-        pub async fn generate(&self, _prompt: &str) -> Result<Generation, EngineError> {
-            // See `real` module docstring. Returning a clear error here
-            // is the deliberate Phase 0.5 boundary.
-            Err(EngineError::InferenceFailed(
-                "llama_cpp.generate(): wiring complete but tokenize/decode loop pending. \
-                 Will land in Phase 0.5b once a GGUF model file is available for testing."
-                    .into(),
-            ))
-        }
-    }
-
-    // We never call llama_backend_free() — llama.cpp's docs say it's
-    // optional, and dropping a single short-lived engine should not tear
-    // down a global the rest of the runtime may share.
-}
-
-// ----------------------------------------------------------------------
-// Helpers shared by both modes
-// ----------------------------------------------------------------------
+// We never call llama_backend_free() — llama.cpp's docs say it's
+// optional, and dropping a single short-lived engine should not tear
+// down a global the rest of the runtime may share.
 
 /// Best-effort: render a chat history into a single prompt string. The
 /// model-specific chat template is applied later by llama.cpp's
@@ -263,6 +257,7 @@ mod tests {
     #[test]
     fn engine_name_is_stable() {
         assert_eq!(ENGINE_NAME, "llama_cpp");
+        assert_eq!(PKG_ENGINE_NAME, "llama-cpp");
     }
 
     #[test]
@@ -305,15 +300,11 @@ mod tests {
         let msgs = vec![
             Message {
                 role: Role::User,
-                content: vec![ContentBlock::Text {
-                    text: "hi".into(),
-                }],
+                content: vec![ContentBlock::Text { text: "hi".into() }],
             },
             Message {
                 role: Role::Assistant,
-                content: vec![ContentBlock::Text {
-                    text: "hello".into(),
-                }],
+                content: vec![ContentBlock::Text { text: "hello".into() }],
             },
         ];
         let p = render_messages_as_prompt(Some("you are helpful"), &msgs);
@@ -323,7 +314,6 @@ mod tests {
         assert!(p.contains("hi"));
         assert!(p.contains("<|assistant|>"));
         assert!(p.contains("hello"));
-        // Always ends with <|assistant|> open tag for completion.
         assert!(p.trim_end().ends_with("<|assistant|>"));
     }
 
@@ -332,9 +322,7 @@ mod tests {
         let msgs = vec![Message {
             role: Role::User,
             content: vec![
-                ContentBlock::Text {
-                    text: "look".into(),
-                },
+                ContentBlock::Text { text: "look".into() },
                 ContentBlock::Image {
                     media_type: "image/png".into(),
                     data: "...".into(),
@@ -346,68 +334,186 @@ mod tests {
         assert!(!p.contains("image/png"));
     }
 
-    #[cfg(not(feature = "llama_cpp"))]
+    /// With no engine installed and no test override, `is_installed()`
+    /// returns false. Uses an empty temp engines dir so we don't see
+    /// whatever the host has.
     #[test]
-    fn stub_engine_construction_returns_not_linked() {
-        let cfg = LlamaConfig::default();
-        let err = LlamaEngine::new(cfg).unwrap_err();
-        assert!(
-            matches!(err, EngineError::NotLinked("llama_cpp")),
-            "expected NotLinked, got {err:?}"
-        );
+    fn is_installed_false_when_no_active_engine() {
+        let tmp = tempfile::tempdir().unwrap();
+        crate::engine_pkg::paths::set_engines_dir_override(Some(tmp.path().to_path_buf()));
+        assert!(!is_installed());
+        crate::engine_pkg::paths::set_engines_dir_override(None);
     }
 
-    #[cfg(not(feature = "llama_cpp"))]
+    /// With an active version recorded but the dll file missing,
+    /// `is_installed()` is still false — we never claim availability
+    /// based purely on JSON.
     #[test]
-    fn engines_linked_excludes_llama_when_feature_off() {
-        let linked = super::super::engines_linked();
-        assert!(
-            !linked.contains(&"llama_cpp"),
-            "feature is off but llama_cpp claims to be linked: {linked:?}"
-        );
+    fn is_installed_false_when_active_dll_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        crate::engine_pkg::paths::set_engines_dir_override(Some(tmp.path().to_path_buf()));
+
+        // Hand-craft engines.json with active=v0 but no actual file.
+        let engines_dir = tmp.path();
+        std::fs::create_dir_all(engines_dir.join("llama-cpp/v0/lib")).unwrap();
+        let json = serde_json::json!({
+            "version": 1,
+            "engines": {
+                "llama-cpp": {
+                    "active": "v0",
+                    "previous": "",
+                    "installed": [{"version": "v0", "installed_at": "2026-01-01T00:00:00Z", "bytes": 0, "source": "", "sha256": ""}],
+                    "pinned": false,
+                    "channel": "release",
+                    "accelerator": "",
+                    "source": ""
+                }
+            }
+        });
+        std::fs::write(
+            engines_dir.join("engines.json"),
+            serde_json::to_vec_pretty(&json).unwrap(),
+        )
+        .unwrap();
+
+        assert!(!is_installed(), "no dll on disk -> not installed");
+
+        crate::engine_pkg::paths::set_engines_dir_override(None);
     }
 
-    #[cfg(feature = "llama_cpp")]
+    /// With both the registry entry and the dll file present (any file
+    /// — we don't try to load), `is_installed()` returns true.
     #[test]
-    fn engines_linked_includes_llama_when_feature_on() {
-        let linked = super::super::engines_linked();
-        assert!(linked.contains(&"llama_cpp"));
+    fn is_installed_true_when_active_dll_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        crate::engine_pkg::paths::set_engines_dir_override(Some(tmp.path().to_path_buf()));
+
+        let engines_dir = tmp.path();
+        let lib_dir = engines_dir.join("llama-cpp/v0/lib");
+        std::fs::create_dir_all(&lib_dir).unwrap();
+        let lib_name = if cfg!(target_os = "windows") {
+            "llama.dll"
+        } else if cfg!(target_os = "macos") {
+            "libllama.dylib"
+        } else {
+            "libllama.so"
+        };
+        std::fs::write(lib_dir.join(lib_name), b"placeholder").unwrap();
+
+        let json = serde_json::json!({
+            "version": 1,
+            "engines": {
+                "llama-cpp": {
+                    "active": "v0",
+                    "previous": "",
+                    "installed": [{"version": "v0", "installed_at": "2026-01-01T00:00:00Z", "bytes": 0, "source": "", "sha256": ""}],
+                    "pinned": false,
+                    "channel": "release",
+                    "accelerator": "",
+                    "source": ""
+                }
+            }
+        });
+        std::fs::write(
+            engines_dir.join("engines.json"),
+            serde_json::to_vec_pretty(&json).unwrap(),
+        )
+        .unwrap();
+
+        assert!(is_installed(), "dll on disk -> installed");
+
+        crate::engine_pkg::paths::set_engines_dir_override(None);
     }
 
-    /// With the feature on, constructing on a valid (even if not a real
-    /// GGUF) path should succeed: `new()` does not load weights yet.
-    #[cfg(feature = "llama_cpp")]
+    /// Picks up the bin/-rooted layout (Windows zip ships flat under
+    /// `bin/`). The helper falls through `lib/` first, then `bin/`.
     #[test]
-    fn real_engine_construction_succeeds_with_valid_path() {
-        let tmp = std::env::temp_dir().join(format!(
-            "cos-llama-real-{}-{}.gguf",
+    fn is_installed_finds_bin_layout() {
+        let tmp = tempfile::tempdir().unwrap();
+        crate::engine_pkg::paths::set_engines_dir_override(Some(tmp.path().to_path_buf()));
+
+        let engines_dir = tmp.path();
+        let bin_dir = engines_dir.join("llama-cpp/v0/bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let lib_name = if cfg!(target_os = "windows") {
+            "llama.dll"
+        } else if cfg!(target_os = "macos") {
+            "libllama.dylib"
+        } else {
+            "libllama.so"
+        };
+        std::fs::write(bin_dir.join(lib_name), b"placeholder").unwrap();
+
+        let json = serde_json::json!({
+            "version": 1,
+            "engines": {
+                "llama-cpp": {
+                    "active": "v0",
+                    "previous": "",
+                    "installed": [{"version": "v0", "installed_at": "2026-01-01T00:00:00Z", "bytes": 0, "source": "", "sha256": ""}],
+                    "pinned": false,
+                    "channel": "release",
+                    "accelerator": "",
+                    "source": ""
+                }
+            }
+        });
+        std::fs::write(
+            engines_dir.join("engines.json"),
+            serde_json::to_vec_pretty(&json).unwrap(),
+        )
+        .unwrap();
+
+        assert!(is_installed(), "dll under bin/ should still count");
+
+        crate::engine_pkg::paths::set_engines_dir_override(None);
+    }
+
+    /// Constructing without an installed engine surfaces NotInstalled
+    /// — the cleaner of the two failure modes (vs LibraryLoadFailed,
+    /// which is for "installed but broken").
+    #[test]
+    fn engine_construction_returns_not_installed_when_uninstalled() {
+        let tmp = tempfile::tempdir().unwrap();
+        crate::engine_pkg::paths::set_engines_dir_override(Some(tmp.path().to_path_buf()));
+
+        // Provide a real GGUF placeholder so validate_config passes.
+        let gguf = std::env::temp_dir().join(format!(
+            "cos-llama-not-installed-{}-{}.gguf",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
-        std::fs::write(&tmp, b"placeholder").unwrap();
-        let mut cfg = LlamaConfig::default();
-        cfg.model_path = tmp.clone();
-        let engine = LlamaEngine::new(cfg).expect("construction should succeed");
-        assert_eq!(engine.config().model_path, tmp);
-        let _ = std::fs::remove_file(&tmp);
-    }
+        std::fs::write(&gguf, b"placeholder").unwrap();
 
-    /// Even with the feature on, generate() returns the explicit
-    /// "pending" error until Phase 0.5b lands the decode loop.
-    #[cfg(feature = "llama_cpp")]
-    #[tokio::test]
-    async fn real_engine_generate_returns_pending_error() {
-        let tmp = std::env::temp_dir().join(format!(
-            "cos-llama-gen-{}-{}.gguf",
-            std::process::id(),
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::write(&tmp, b"placeholder").unwrap();
         let mut cfg = LlamaConfig::default();
-        cfg.model_path = tmp.clone();
-        let engine = LlamaEngine::new(cfg).unwrap();
-        let err = engine.generate("hi").await.unwrap_err();
-        assert!(matches!(err, EngineError::InferenceFailed(_)));
-        let _ = std::fs::remove_file(&tmp);
+        cfg.model_path = gguf.clone();
+
+        // Skip the test if the host process happens to have already
+        // cached a real runtime in the OnceLock — this can occur if
+        // an earlier integration test loaded a real llama-cpp engine.
+        // Use the test override to ensure we get a deterministic
+        // resolution path: clear it (no override), and rely on the
+        // empty engines_dir to drive `NotInstalled`.
+        runtime::set_test_override(None);
+
+        match LlamaEngine::new(cfg) {
+            Err(EngineError::NotInstalled(_)) => {} // expected
+            // If the OnceLock already cached a real runtime we'd reach
+            // generate() pending instead — accept that too.
+            Err(EngineError::InferenceFailed(_)) => {}
+            Ok(_) => {
+                let _ = std::fs::remove_file(&gguf);
+                crate::engine_pkg::paths::set_engines_dir_override(None);
+                panic!("engine should not have constructed without an installed runtime");
+            }
+            Err(other) => {
+                let _ = std::fs::remove_file(&gguf);
+                crate::engine_pkg::paths::set_engines_dir_override(None);
+                panic!("expected NotInstalled, got {other:?}");
+            }
+        }
+
+        let _ = std::fs::remove_file(&gguf);
+        crate::engine_pkg::paths::set_engines_dir_override(None);
     }
 }

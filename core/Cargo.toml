@@ -10,10 +10,6 @@ path = "src/main.rs"
 
 [features]
 default = []
-# Build and link llama.cpp (vendored at $LLAMA_CPP_PATH or ../llama.cpp by
-# default). Adds a multi-minute first-build for the C++ side. Off by default
-# so contributors don't need llama.cpp on disk to compile cos.
-llama_cpp = ["dep:cmake"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -34,17 +30,18 @@ base64 = "0.22.1"
 zip = { version = "8.6.0", default-features = false, features = ["deflate", "deflate64", "bzip2", "zstd"] }
 tempfile = "3.27.0"
 
+# Phase 0.5 (engine package management): native runtimes (llama.cpp, ort,
+# ort-genai) are installed by `cos engine update` to /var/lib/cos/engines and
+# loaded at runtime via libloading. No more compile-time link.
+libloading = "0.8"
+
 # Phase 0.5 (model engines): added when model files arrive
 # ort = { version = "2", features = [...] }
-# llama_cpp engine FFI is hand-written — see core/src/model/engines/llama_cpp/
 
 # Phase 3 / 6 (added later)
 # fastembed = "..."
 # rmcp = "..."
 # serde_yaml = "..."
-
-[build-dependencies]
-cmake = { version = "0.1", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
