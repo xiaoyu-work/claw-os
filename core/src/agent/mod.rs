@@ -138,8 +138,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "shell-hooks" => shell_hooks_cmd(args),
         "media" => media_cmd(args),
         "binary-ext" => binary_ext_cmd(args),
+        "context" => context_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | title | summarise | classify | tools | guardrails | approval | todo | compress | aux | retry | vision | display | shell-hooks | media | binary-ext"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | title | summarise | classify | tools | guardrails | approval | todo | compress | aux | retry | vision | display | shell-hooks | media | binary-ext | context"
         )),
     }
 }
@@ -3921,6 +3922,179 @@ fn binary_ext_cmd(args: &[String]) -> Result<Value, String> {
             "unknown binary-ext subcommand: {other}. try: list [--limit N] [--no-limit] | extensions | check <path-or-extension>"
         )),
     }
+}
+
+/// `cos agent context <subcommand>` — surface for the
+/// [`crate::agent::context`] modules:
+///
+///   * `hints [--cwd <path>] [--depth N=0] [--render]` — scan for
+///     project markers (Cargo.toml, package.json, .git, …) and
+///     either return JSON list or a rendered summary block.
+///   * `refs --text <body> [--unique]` — extract `@`-references
+///     from a user message body.
+///   * `markers` — dump the static marker table for inspection.
+fn context_cmd(args: &[String]) -> Result<Value, String> {
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("");
+    match sub {
+        "hints" => context_hints_cmd(&args[1..]),
+        "refs" | "references" => context_refs_cmd(&args[1..]),
+        "markers" => context_markers_cmd(&args[1..]),
+        "" => Err(
+            "usage: cos agent context <hints|refs|markers> ... \
+             (e.g. hints [--cwd <p>] [--depth N] [--render] | refs --text <body> [--unique] | markers)"
+                .to_string(),
+        ),
+        other => Err(format!(
+            "unknown context subcommand: {other}. try: hints | refs | markers"
+        )),
+    }
+}
+
+fn context_hints_cmd(args: &[String]) -> Result<Value, String> {
+    use crate::agent::context::subdir_hints::{render_summary, scan_dir, scan_dir_recursive};
+
+    let mut cwd: Option<String> = None;
+    let mut depth: usize = 0;
+    let mut render = false;
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--cwd" => {
+                cwd = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--cwd needs a path".to_string())?,
+                );
+                i += 2;
+            }
+            "--depth" => {
+                let raw = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--depth needs a number".to_string())?;
+                depth = raw
+                    .parse::<usize>()
+                    .map_err(|e| format!("--depth parse: {e}"))?;
+                i += 2;
+            }
+            "--render" => {
+                render = true;
+                i += 1;
+            }
+            other => return Err(format!("unknown context hints flag: {other}")),
+        }
+    }
+
+    let root = match cwd {
+        Some(s) => std::path::PathBuf::from(s),
+        None => std::env::current_dir().map_err(|e| format!("get cwd: {e}"))?,
+    };
+    if !root.is_dir() {
+        return Err(format!("not a directory: {}", root.display()));
+    }
+
+    let hits = if depth == 0 {
+        scan_dir(&root)
+    } else {
+        scan_dir_recursive(&root, depth)
+    };
+
+    if render {
+        return Ok(json!({
+            "root": root.to_string_lossy(),
+            "depth": depth,
+            "count": hits.len(),
+            "summary": render_summary(&hits),
+        }));
+    }
+
+    let hits_json: Vec<Value> = hits
+        .iter()
+        .map(|h| {
+            json!({
+                "rel": h.rel,
+                "kind": format!("{:?}", h.kind),
+                "label": h.label,
+                "is_dir": h.is_dir,
+            })
+        })
+        .collect();
+
+    Ok(json!({
+        "root": root.to_string_lossy(),
+        "depth": depth,
+        "count": hits.len(),
+        "hints": hits_json,
+    }))
+}
+
+fn context_refs_cmd(args: &[String]) -> Result<Value, String> {
+    use crate::agent::context::references::{extract, extract_unique};
+
+    let mut text: Option<String> = None;
+    let mut unique = false;
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--text" => {
+                text = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--text needs a value".to_string())?,
+                );
+                i += 2;
+            }
+            "--unique" => {
+                unique = true;
+                i += 1;
+            }
+            other => return Err(format!("unknown context refs flag: {other}")),
+        }
+    }
+
+    let body = text.ok_or_else(|| "context refs: --text <body> required".to_string())?;
+    let refs = if unique { extract_unique(&body) } else { extract(&body) };
+    let refs_json: Vec<Value> = refs
+        .iter()
+        .map(|r| {
+            json!({
+                "raw": r.raw,
+                "kind": format!("{:?}", r.kind),
+                "start": r.start,
+                "end": r.end,
+            })
+        })
+        .collect();
+
+    Ok(json!({
+        "unique": unique,
+        "count": refs.len(),
+        "references": refs_json,
+    }))
+}
+
+fn context_markers_cmd(_args: &[String]) -> Result<Value, String> {
+    use crate::agent::context::subdir_hints::{HintKind, MARKERS, NOISE_DIRS};
+    let by_kind = |k: HintKind| -> Vec<&'static str> {
+        let mut v: Vec<&'static str> = MARKERS
+            .iter()
+            .filter(|m| m.kind == k)
+            .map(|m| m.name)
+            .collect();
+        v.sort();
+        v
+    };
+    Ok(json!({
+        "total": MARKERS.len(),
+        "by_kind": {
+            "Manifest":  by_kind(HintKind::Manifest),
+            "Vcs":       by_kind(HintKind::Vcs),
+            "Ci":        by_kind(HintKind::Ci),
+            "Framework": by_kind(HintKind::Framework),
+            "Editor":    by_kind(HintKind::Editor),
+            "Env":       by_kind(HintKind::Env),
+        },
+        "noise_dirs": NOISE_DIRS,
+    }))
 }
 
 fn todo_status_counts(list: &crate::agent::tools::todo::TodoList) -> serde_json::Value {
@@ -8945,5 +9119,171 @@ mod tests {
         let err = binary_ext_cmd(&["bogus".into()]).unwrap_err();
         assert!(err.contains("bogus"));
         assert!(err.contains("list"));
+    }
+
+    // ---- context_cmd dispatch ----
+
+    #[test]
+    fn context_cmd_no_args_errs_with_usage() {
+        let err = context_cmd(&[]).unwrap_err();
+        assert!(err.contains("usage"));
+    }
+
+    #[test]
+    fn context_cmd_unknown_subcommand_errs() {
+        let err = context_cmd(&["bogus".into()]).unwrap_err();
+        assert!(err.contains("bogus"));
+        assert!(err.contains("hints"));
+    }
+
+    // ---- context hints ----
+
+    #[test]
+    fn context_hints_unknown_flag_errs() {
+        let err = context_hints_cmd(&["--bogus".into(), "x".into()]).unwrap_err();
+        assert!(err.contains("--bogus"));
+    }
+
+    #[test]
+    fn context_hints_invalid_cwd_errs() {
+        let err = context_hints_cmd(&[
+            "--cwd".into(),
+            "Z:\\definitely\\not\\there".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("not a directory"));
+    }
+
+    #[test]
+    fn context_hints_finds_real_markers_in_temp_dir() {
+        let dir = std::env::temp_dir().join(format!(
+            "cos-context-hints-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Cargo.toml"), "[package]\nname=\"x\"\n").unwrap();
+        let v = context_hints_cmd(&[
+            "--cwd".into(),
+            dir.to_string_lossy().to_string(),
+        ])
+        .expect("ok");
+        assert_eq!(v.get("count").and_then(|n| n.as_u64()), Some(1));
+        let hints = v.get("hints").and_then(|h| h.as_array()).unwrap();
+        assert!(hints.iter().any(|h| h
+            .get("label")
+            .and_then(|s| s.as_str())
+            == Some("Rust crate")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn context_hints_render_returns_summary_paragraph() {
+        let dir = std::env::temp_dir().join(format!(
+            "cos-context-hints-render-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("package.json"), "{}").unwrap();
+        let v = context_hints_cmd(&[
+            "--cwd".into(),
+            dir.to_string_lossy().to_string(),
+            "--render".into(),
+        ])
+        .expect("ok");
+        let s = v.get("summary").and_then(|s| s.as_str()).unwrap_or("");
+        assert!(s.contains("Project hints"));
+        assert!(s.contains("Node.js project"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn context_hints_recursive_with_depth() {
+        let dir = std::env::temp_dir().join(format!(
+            "cos-context-hints-deep-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let nested = dir.join("apps").join("web");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("package.json"), "{}").unwrap();
+        // Depth 0 → no recursion → no hits.
+        let v0 = context_hints_cmd(&[
+            "--cwd".into(),
+            dir.to_string_lossy().to_string(),
+            "--depth".into(),
+            "0".into(),
+        ])
+        .expect("ok");
+        assert_eq!(v0.get("count").and_then(|n| n.as_u64()), Some(0));
+        // Depth 3 → recursive walk → finds the nested manifest.
+        let v3 = context_hints_cmd(&[
+            "--cwd".into(),
+            dir.to_string_lossy().to_string(),
+            "--depth".into(),
+            "3".into(),
+        ])
+        .expect("ok");
+        assert_eq!(v3.get("count").and_then(|n| n.as_u64()), Some(1));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- context refs ----
+
+    #[test]
+    fn context_refs_requires_text() {
+        let err = context_refs_cmd(&[]).unwrap_err();
+        assert!(err.contains("--text"));
+    }
+
+    #[test]
+    fn context_refs_unknown_flag_errs() {
+        let err = context_refs_cmd(&["--bogus".into(), "v".into()]).unwrap_err();
+        assert!(err.contains("--bogus"));
+    }
+
+    #[test]
+    fn context_refs_extracts_paths_and_urls() {
+        let v = context_refs_cmd(&[
+            "--text".into(),
+            "see @notes.md and @https://example.com/x".into(),
+        ])
+        .expect("ok");
+        assert_eq!(v.get("count").and_then(|n| n.as_u64()), Some(2));
+        let refs = v.get("references").and_then(|x| x.as_array()).unwrap();
+        assert_eq!(
+            refs[0].get("kind").and_then(|s| s.as_str()),
+            Some("Path")
+        );
+        assert_eq!(refs[0].get("raw").and_then(|s| s.as_str()), Some("notes.md"));
+        assert_eq!(refs[1].get("kind").and_then(|s| s.as_str()), Some("Url"));
+    }
+
+    #[test]
+    fn context_refs_unique_dedupes() {
+        let v = context_refs_cmd(&[
+            "--text".into(),
+            "@a @a @a".into(),
+            "--unique".into(),
+        ])
+        .expect("ok");
+        assert_eq!(v.get("count").and_then(|n| n.as_u64()), Some(1));
+        assert_eq!(v.get("unique").and_then(|b| b.as_bool()), Some(true));
+    }
+
+    // ---- context markers ----
+
+    #[test]
+    fn context_markers_dumps_table() {
+        let v = context_markers_cmd(&[]).expect("ok");
+        let total = v.get("total").and_then(|n| n.as_u64()).unwrap();
+        assert!(total >= 30);
+        let by_kind = v.get("by_kind").and_then(|x| x.as_object()).unwrap();
+        let manifests = by_kind
+            .get("Manifest")
+            .and_then(|x| x.as_array())
+            .unwrap();
+        let names: Vec<&str> = manifests.iter().filter_map(|s| s.as_str()).collect();
+        assert!(names.contains(&"Cargo.toml"));
+        assert!(names.contains(&"package.json"));
+        assert!(names.contains(&"go.mod"));
     }
 }

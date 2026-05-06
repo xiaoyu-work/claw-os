@@ -414,6 +414,7 @@ fn builtin_apps() -> Vec<(
             ("shell-hooks", "Capture interactive shell commands into a JSONL log so the agent can read them as ambient context: cos agent shell-hooks [init <bash|zsh|fish>|record-pre <cmd>|record-post <exit>|tail [--limit N]|clear --yes|path]"),
             ("media", "Inspect the media subsystem (TTS / STT / image-gen providers + outputs directory): cos agent media [providers|outputs-dir|list-outputs [--limit N] [--ext <e>]]"),
             ("binary-ext", "Classify file extensions as binary or text (extension-only, no magic-byte sniff): cos agent binary-ext [list [--limit N] [--no-limit] | extensions | check <path-or-extension>]"),
+            ("context", "Project-context helpers (subdir hints + @-references): cos agent context hints [--cwd <path>] [--depth N] [--render] | cos agent context refs --text <body> [--unique] | cos agent context markers"),
         ]),
         ("model", "Local model registry + inference daemon (ort for STT/TTS/embed/vision/imagegen, llama.cpp for LLM) — Phase 0.5 skeleton", vec![
             ("list", "List registered models from /var/lib/cos/models/"),
