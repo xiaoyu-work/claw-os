@@ -134,6 +134,36 @@ pub struct AgentConfig {
     /// Per-request HTTP timeout in seconds. 0 = no timeout. Default 120s.
     #[serde(default = "default_agent_request_timeout")]
     pub request_timeout: u64,
+
+    /// Enable provider-backed conversation compression. When the
+    /// estimated total token count of the running conversation exceeds
+    /// `compress_trigger_tokens`, the head of the message list is
+    /// summarised by the same provider and replaced with a single
+    /// `[CONTEXT SUMMARY]` user message; the tail is kept verbatim.
+    /// Defaults to `false` so behaviour is unchanged for existing users
+    /// — opt in once your sessions get long.
+    #[serde(default)]
+    pub compress_enabled: bool,
+
+    /// Target total context budget in tokens. Used as the upper bound
+    /// callers should size prompts to. Defaults to 80_000.
+    #[serde(default = "default_compress_target")]
+    pub compress_target_tokens: u32,
+
+    /// Estimated-token threshold that triggers compression. Defaults to
+    /// 60_000 (~75% of `compress_target_tokens`).
+    #[serde(default = "default_compress_trigger")]
+    pub compress_trigger_tokens: u32,
+
+    /// Token budget reserved for the verbatim tail of recent messages.
+    /// Defaults to 20_000.
+    #[serde(default = "default_compress_keep_tail")]
+    pub compress_keep_tail_tokens: u32,
+
+    /// Maximum tokens for the synthesised summary itself. Defaults to
+    /// 1024.
+    #[serde(default = "default_compress_summary_max")]
+    pub compress_summary_max_tokens: u32,
 }
 
 /// Embedding service configuration. Reads from `[embed]` block.
@@ -300,6 +330,18 @@ fn default_agent_temperature() -> f32 {
 fn default_agent_request_timeout() -> u64 {
     120
 }
+fn default_compress_target() -> u32 {
+    crate::agent::context::compressor::DEFAULT_TARGET_TOKENS
+}
+fn default_compress_trigger() -> u32 {
+    crate::agent::context::compressor::DEFAULT_TRIGGER_TOKENS
+}
+fn default_compress_keep_tail() -> u32 {
+    crate::agent::context::compressor::DEFAULT_KEEP_TAIL_TOKENS
+}
+fn default_compress_summary_max() -> u32 {
+    crate::agent::context::compressor::DEFAULT_SUMMARY_MAX_TOKENS
+}
 fn default_embed_provider() -> String {
     "none".into()
 }
@@ -462,6 +504,11 @@ impl Default for AgentConfig {
             base_url: None,
             extra_headers: std::collections::HashMap::new(),
             request_timeout: default_agent_request_timeout(),
+            compress_enabled: false,
+            compress_target_tokens: default_compress_target(),
+            compress_trigger_tokens: default_compress_trigger(),
+            compress_keep_tail_tokens: default_compress_keep_tail(),
+            compress_summary_max_tokens: default_compress_summary_max(),
         }
     }
 }

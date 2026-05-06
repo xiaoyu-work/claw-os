@@ -11,6 +11,9 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::agent::context::compressor::{
+    self, Compressor, CompressorConfig, LlmCompressor,
+};
 use crate::agent::llm::{self, Message, Provider};
 use crate::agent::memory::sqlite_fts::{self, MemoryDb};
 use crate::agent::prompt;
@@ -58,7 +61,7 @@ pub async fn ask_with(
     user_prompt: &str,
     tools: &ToolRegistry,
 ) -> Result<AskResult, AgentError> {
-    ask_inner(provider, cfg, user_prompt, tools, None).await
+    ask_inner(provider, cfg, user_prompt, tools, None, None).await
 }
 
 /// Same as [`ask_with`] but records every message into `db` under
@@ -72,7 +75,22 @@ pub async fn ask_with_memory(
     db: &MemoryDb,
     session_id: &str,
 ) -> Result<AskResult, AgentError> {
-    ask_inner(provider, cfg, user_prompt, tools, Some((db, session_id))).await
+    ask_inner(provider, cfg, user_prompt, tools, Some((db, session_id)), None).await
+}
+
+/// Same as [`ask_with_memory`] but additionally compresses the running
+/// message list with `compressor` before each turn. Useful for
+/// long-running conversations that would otherwise blow past the
+/// provider's context window.
+pub async fn ask_with_compressor(
+    provider: Arc<dyn Provider>,
+    cfg: &AgentConfig,
+    user_prompt: &str,
+    tools: &ToolRegistry,
+    db: Option<(&MemoryDb, &str)>,
+    compressor: Arc<dyn Compressor>,
+) -> Result<AskResult, AgentError> {
+    ask_inner(provider, cfg, user_prompt, tools, db, Some(compressor)).await
 }
 
 async fn ask_inner(
@@ -81,6 +99,7 @@ async fn ask_inner(
     user_prompt: &str,
     tools: &ToolRegistry,
     recorder: Option<(&MemoryDb, &str)>,
+    compressor: Option<Arc<dyn Compressor>>,
 ) -> Result<AskResult, AgentError> {
     if let Some((db, sid)) = recorder {
         if let Err(e) = db.record_message(sid, "user", user_prompt) {
@@ -96,6 +115,24 @@ async fn ask_inner(
     let session_id = recorder.map(|(_, sid)| sid.to_string()).unwrap_or_default();
 
     for turn in 1..=cfg.max_turns {
+        if let Some(c) = compressor.as_ref() {
+            if c.should_compress(Some(&system), &messages) {
+                let before = messages.len();
+                let est_before = compressor::estimate_total_tokens(Some(&system), &messages);
+                messages = c.compress(Some(&system), std::mem::take(&mut messages)).await;
+                let after = messages.len();
+                let est_after = compressor::estimate_total_tokens(Some(&system), &messages);
+                tracing::info!(
+                    turn,
+                    messages_before = before,
+                    messages_after = after,
+                    est_tokens_before = est_before,
+                    est_tokens_after = est_after,
+                    "context: compressed"
+                );
+            }
+        }
+
         let len_before = messages.len();
         let outcome = super::turn::run_turn(
             provider.clone(),
@@ -150,17 +187,47 @@ pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
     let tools = default_registry();
     let session_id = uuid::Uuid::new_v4().to_string();
 
+    let compressor = compressor_from_cfg(provider.clone(), cfg);
+
     match MemoryDb::open_default() {
         Ok(db) => {
-            ask_with_memory(provider, cfg, user_prompt, &tools, &db, &session_id).await
+            ask_inner(
+                provider,
+                cfg,
+                user_prompt,
+                &tools,
+                Some((&db, session_id.as_str())),
+                compressor,
+            )
+            .await
         }
         Err(e) => {
             tracing::warn!(
                 "memory: default DB unavailable ({e}); running without history recording"
             );
-            ask_with(provider, cfg, user_prompt, &tools).await
+            ask_inner(provider, cfg, user_prompt, &tools, None, compressor).await
         }
     }
+}
+
+/// Build a [`LlmCompressor`] from `cfg` when `compress_enabled` is set.
+/// Returns `None` otherwise so the runtime keeps zero-overhead behaviour
+/// for the default case.
+fn compressor_from_cfg(
+    provider: Arc<dyn Provider>,
+    cfg: &AgentConfig,
+) -> Option<Arc<dyn Compressor>> {
+    if !cfg.compress_enabled {
+        return None;
+    }
+    let compressor_cfg = CompressorConfig {
+        target_tokens: cfg.compress_target_tokens,
+        trigger_tokens: cfg.compress_trigger_tokens,
+        keep_tail_tokens: cfg.compress_keep_tail_tokens,
+        summary_max_tokens: cfg.compress_summary_max_tokens,
+    };
+    let comp = LlmCompressor::new(provider, &cfg.model).with_config(compressor_cfg);
+    Some(Arc::new(comp))
 }
 
 /// Sync entry point for the CLI dispatcher (which is sync). Internally spins
@@ -375,5 +442,128 @@ mod tests {
         let hits = db.search("purple", 5).unwrap();
         assert_eq!(hits.len(), 1, "expected 1 hit; got {hits:?}");
         assert!(hits[0].row.content.contains("purple"));
+    }
+
+    #[tokio::test]
+    async fn ask_with_compressor_runs_compress_when_triggered() {
+        use crate::agent::context::compressor::Compressor;
+
+        // A spy compressor that records calls + replaces messages
+        // with a single fixed marker so we can assert it ran.
+        struct Spy {
+            calls: std::sync::atomic::AtomicUsize,
+            trigger: std::sync::atomic::AtomicBool,
+        }
+        #[async_trait::async_trait]
+        impl Compressor for Spy {
+            fn should_compress(&self, _system: Option<&str>, _messages: &[Message]) -> bool {
+                self.trigger
+                    .swap(false, std::sync::atomic::Ordering::SeqCst)
+            }
+            async fn compress(
+                &self,
+                _system: Option<&str>,
+                mut messages: Vec<Message>,
+            ) -> Vec<Message> {
+                self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                // Replace head with a sentinel summary, keep last as-is.
+                let last = messages.pop();
+                let mut out = vec![Message::user_text("[SUMMARY] earlier omitted")];
+                if let Some(m) = last {
+                    out.push(m);
+                }
+                out
+            }
+        }
+        let spy = Arc::new(Spy {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            trigger: std::sync::atomic::AtomicBool::new(true),
+        });
+
+        let cfg = cfg();
+        let mock = MockProvider::new(&cfg.model, &cfg);
+        mock.push_response(MockResponse::Text("ok".into()));
+        let provider: Arc<dyn Provider> = Arc::new(mock);
+        let tools = builtin_only_registry();
+
+        let result = ask_with_compressor(
+            provider,
+            &cfg,
+            "hello",
+            &tools,
+            None,
+            spy.clone() as Arc<dyn Compressor>,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.answer, "ok");
+        assert_eq!(spy.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn ask_with_compressor_skipped_when_should_not() {
+        use crate::agent::context::compressor::Compressor;
+
+        struct NoTrigger {
+            calls: std::sync::atomic::AtomicUsize,
+        }
+        #[async_trait::async_trait]
+        impl Compressor for NoTrigger {
+            fn should_compress(&self, _: Option<&str>, _: &[Message]) -> bool {
+                false
+            }
+            async fn compress(
+                &self,
+                _: Option<&str>,
+                msgs: Vec<Message>,
+            ) -> Vec<Message> {
+                self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                msgs
+            }
+        }
+        let spy = Arc::new(NoTrigger {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+
+        let cfg = cfg();
+        let mock = MockProvider::new(&cfg.model, &cfg);
+        mock.push_response(MockResponse::Text("ok".into()));
+        let provider: Arc<dyn Provider> = Arc::new(mock);
+        let tools = builtin_only_registry();
+
+        let _ = ask_with_compressor(
+            provider,
+            &cfg,
+            "hi",
+            &tools,
+            None,
+            spy.clone() as Arc<dyn Compressor>,
+        )
+        .await
+        .unwrap();
+        assert_eq!(spy.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn compressor_from_cfg_returns_none_when_disabled() {
+        let mut c = cfg();
+        c.compress_enabled = false;
+        let prov: Arc<dyn Provider> = Arc::new(MockProvider::new(&c.model, &c));
+        assert!(compressor_from_cfg(prov, &c).is_none());
+    }
+
+    #[test]
+    fn compressor_from_cfg_returns_some_when_enabled() {
+        let mut c = cfg();
+        c.compress_enabled = true;
+        c.compress_target_tokens = 1234;
+        c.compress_trigger_tokens = 999;
+        c.compress_keep_tail_tokens = 200;
+        c.compress_summary_max_tokens = 64;
+        let prov: Arc<dyn Provider> = Arc::new(MockProvider::new(&c.model, &c));
+        let comp = compressor_from_cfg(prov, &c).expect("expected compressor");
+        // The trait object can't expose config, but we can prove it
+        // exists and `should_compress` is wired.
+        assert!(!comp.should_compress(None, &[]));
     }
 }
