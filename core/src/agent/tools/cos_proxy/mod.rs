@@ -17,9 +17,15 @@
 //! command/args shape. This is the "agent-native OS" promise — Hermes was a
 //! bolt-on; here the agent is a kernel resident with native access.
 //!
+//! Beyond the uniform-contract proxies, this module also hosts higher-level
+//! tools backed by agent subsystems (e.g. `cos_memory` over
+//! [`crate::agent::memory::notes`]).
+//!
 //! Phase 5 will layer approval, redaction, and per-tool guardrails on top.
 //! For now, calls are dispatched directly. The `policy` module already
 //! self-polices destructive operations at the primitive layer.
+
+pub mod memory;
 
 use std::sync::Arc;
 
@@ -272,7 +278,8 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
     },
 ];
 
-/// Register every cos primitive proxy on the supplied registry.
+/// Register every cos primitive proxy on the supplied registry. Also
+/// registers the higher-level memory tool backed by `agent::memory::notes`.
 pub fn register_all(registry: &mut ToolRegistry) {
     for spec in PRIMITIVES {
         registry.register(Arc::new(CosPrimitiveTool::new(
@@ -282,11 +289,19 @@ pub fn register_all(registry: &mut ToolRegistry) {
             spec.commands,
         )));
     }
+    registry.register(Arc::new(memory::CosMemoryTool::new()));
 }
 
-/// Number of cos primitive tools shipped. Useful for tests.
+/// Number of cos primitive tools shipped, *not* counting the higher-level
+/// tools (cos_memory etc.). Useful for tests that want to know specifically
+/// how many primitives were wired.
 pub const fn count() -> usize {
     PRIMITIVES.len()
+}
+
+/// Total number of cos_proxy tools registered (primitives + higher-level).
+pub const fn total_count() -> usize {
+    PRIMITIVES.len() + 1 // +1 for cos_memory
 }
 
 #[cfg(test)]
@@ -326,10 +341,11 @@ mod tests {
     fn register_all_adds_all_primitives() {
         let mut r = ToolRegistry::new();
         register_all(&mut r);
-        assert_eq!(r.len(), count());
+        assert_eq!(r.len(), total_count());
         assert!(r.get("cos_sandbox").is_some());
         assert!(r.get("cos_proc").is_some());
         assert!(r.get("cos_sysinfo").is_some());
+        assert!(r.get("cos_memory").is_some());
     }
 
     #[test]

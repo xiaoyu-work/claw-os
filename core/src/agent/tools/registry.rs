@@ -91,8 +91,9 @@ mod tests {
         assert!(r.get("now").is_some());
         assert!(r.get("cos_sandbox").is_some());
         assert!(r.get("cos_sysinfo").is_some());
-        // 2 builtins + every cos primitive proxy
-        assert_eq!(r.len(), 2 + super::super::cos_proxy::count());
+        assert!(r.get("cos_memory").is_some());
+        // 2 builtins + every cos_proxy tool (primitives + cos_memory)
+        assert_eq!(r.len(), 2 + super::super::cos_proxy::total_count());
     }
 
     #[test]

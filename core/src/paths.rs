@@ -74,6 +74,12 @@ pub fn agent_state_dir() -> PathBuf {
     data_dir().join("agent")
 }
 
+/// Directory for agent's persistent notes (MEMORY.md, USER.md, custom notes).
+/// Lives under `data_dir/agent/notes/`. Persists across reboots.
+pub fn agent_notes_dir() -> PathBuf {
+    agent_state_dir().join("notes")
+}
+
 pub fn model_runtime_socket() -> PathBuf {
     runtime_dir().join("model-runtime.sock")
 }

@@ -1,10 +1,21 @@
 //! System prompt assembly + MEMORY.md / USER.md injection.
 //!
-//! Phase 1 ships a minimal builder. Phase 5 expands it (skills section,
-//! capability tables, todo state, context summary).
+//! Composition (in order):
+//!   1. Built-in scaffold — defines the agent's role and tool conventions.
+//!   2. Auto-injected `MEMORY.md` and `USER.md` from
+//!      [`crate::agent::memory::notes::NotesStore::system_default`]. Both
+//!      files are read every time so updates by the model (via
+//!      `cos_memory`) take effect on the next turn.
+//!   3. Optional explicit file from `extra_path` (overrides via
+//!      `AgentConfig::system_prompt_path`).
+//!
+//! All injection is best-effort: missing or unreadable files are silently
+//! skipped. The agent must remain operable when nothing exists.
 
 use std::fs;
 use std::path::Path;
+
+use crate::agent::memory::notes::NotesStore;
 
 const SYSTEM_SCAFFOLD: &str = "You are Hermes, the kernel-resident agent of ClawOS — an agent-native operating system. You are not an installed app; you are part of the OS itself, with native access to every cos kernel primitive.
 
@@ -26,16 +37,28 @@ When you respond:
 ///
 /// Composition (in order):
 ///   1. Built-in scaffold (above)
-///   2. Optional file content from `extra_path` (e.g., MEMORY.md)
+///   2. `MEMORY.md` and `USER.md` from the system notes store (auto-loaded)
+///   3. Optional file content from `extra_path`
 ///
 /// File-load failures are non-fatal and silently fall back to the scaffold —
 /// the agent should still be operable when MEMORY.md is missing.
 pub fn build_system_prompt(extra_path: Option<&Path>) -> String {
     let mut out = String::from(SYSTEM_SCAFFOLD);
+
+    // Auto-injected notes (MEMORY.md, USER.md).
+    if let Some(notes) = NotesStore::system_default().assemble_for_prompt() {
+        out.push_str("\n\n---\n\n");
+        out.push_str(&notes);
+    }
+
+    // Explicit override file (e.g., per-session preface).
     if let Some(p) = extra_path {
         if let Ok(extra) = fs::read_to_string(p) {
-            out.push_str("\n\n---\n\n");
-            out.push_str(extra.trim_end());
+            let trimmed = extra.trim_end();
+            if !trimmed.is_empty() {
+                out.push_str("\n\n---\n\n");
+                out.push_str(trimmed);
+            }
         }
     }
     out
