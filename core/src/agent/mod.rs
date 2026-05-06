@@ -19,6 +19,7 @@
 
 pub mod context;
 pub mod llm;
+pub mod media;
 pub mod memory;
 pub mod prompt;
 pub mod runtime;
