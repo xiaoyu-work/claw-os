@@ -37,6 +37,7 @@ use serde_json::{json, Value};
 
 pub mod download;
 pub mod install_local;
+pub mod manifest;
 pub mod paths;
 pub mod registry;
 pub mod sources;
@@ -152,7 +153,39 @@ fn cmd_info(args: &[String]) -> Result<Value, String> {
         ));
     }
     let index = registry::EnginesIndex::load_or_default().map_err(|e| e.to_string())?;
-    Ok(index.info_view(name))
+    let mut info = index.info_view(name);
+    // Attach the active version's manifest (or a synthesized fallback)
+    // so operators can see ABI / GGUF compatibility claims at a glance.
+    if let Some(obj) = info.as_object_mut() {
+        let active = obj
+            .get("active")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if !active.is_empty() {
+            let manifest_value = match manifest::EngineManifest::load(name, &active) {
+                Ok(Some(m)) => json!({
+                    "found": true,
+                    "source": m.source,
+                    "manifest": m,
+                }),
+                Ok(None) => {
+                    let synth = manifest::EngineManifest::synthesize(name, &active);
+                    json!({
+                        "found": false,
+                        "source": synth.source,
+                        "manifest": synth,
+                    })
+                }
+                Err(e) => json!({
+                    "found": false,
+                    "error": e.to_string(),
+                }),
+            };
+            obj.insert("active_manifest".to_string(), manifest_value);
+        }
+    }
+    Ok(info)
 }
 
 fn cmd_install(args: &[String]) -> Result<Value, String> {
