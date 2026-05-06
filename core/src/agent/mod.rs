@@ -118,8 +118,10 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "llm" => llm_cmd(args),
         "redact" => redact_cmd(args),
         "prompt" => prompt_cmd(args),
+        "think-scrub" => think_scrub_cmd(args),
+        "tokens" => tokens_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens"
         )),
     }
 }
@@ -1216,6 +1218,133 @@ fn prompt_cmd(args: &[String]) -> Result<Value, String> {
             "approx_tokens": total_chars / 4,
         }))
     }
+}
+
+/// `cos agent think-scrub <text> [--check] [--strict]`
+/// `cos agent think-scrub --file <path> [--check]`
+/// `cos agent think-scrub --stdin [--check]`
+///
+/// Standalone interface to
+/// [`crate::agent::context::think_scrub::ThinkScrubber`]. Strips
+/// `<think>...</think>`, `<thinking>...</thinking>`, and
+/// `<reasoning>...</reasoning>` blocks (multiline) from text.
+///
+/// Useful for: post-processing a transcript before pasting it into
+/// a bug report, normalising responses from a reasoning model
+/// before computing a diff against a non-reasoning baseline,
+/// scripting "did this output contain hidden reasoning?" gates.
+///
+/// `--check` returns `{has_thinking: bool}` instead of scrubbing.
+fn think_scrub_cmd(args: &[String]) -> Result<Value, String> {
+    use crate::agent::context::think_scrub::ThinkScrubber;
+
+    let (input, check) = read_text_input(args, "think-scrub")?;
+    let scrubber = ThinkScrubber::new();
+    if check {
+        Ok(json!({
+            "has_thinking": scrubber.has_thinking(&input),
+            "input_chars": input.chars().count(),
+        }))
+    } else {
+        let scrubbed = scrubber.scrub(&input);
+        let changed = scrubbed != input;
+        Ok(json!({
+            "scrubbed": scrubbed,
+            "changed": changed,
+            "input_chars": input.chars().count(),
+            "output_chars": scrubbed.chars().count(),
+        }))
+    }
+}
+
+/// `cos agent tokens <text>`
+/// `cos agent tokens --file <path>`
+/// `cos agent tokens --stdin`
+///
+/// Crude token estimate (chars / 4) as used by
+/// [`crate::agent::context::compressor::estimate_text_tokens`].
+/// This is the same heuristic used inside the runtime to decide
+/// when to trigger context compression, so the number you see here
+/// is the same number the agent uses internally.
+///
+/// Not a tokenizer — it's deliberately model-agnostic and biased
+/// slightly high so callers don't *under*-estimate. For
+/// production-grade counts, integrate a tokenizer matching your
+/// target model.
+fn tokens_cmd(args: &[String]) -> Result<Value, String> {
+    use crate::agent::context::compressor::estimate_text_tokens;
+
+    let (input, _check) = read_text_input(args, "tokens")?;
+    let chars = input.chars().count();
+    let bytes = input.len();
+    let approx_tokens = estimate_text_tokens(&input);
+    Ok(json!({
+        "chars": chars,
+        "bytes": bytes,
+        "approx_tokens": approx_tokens,
+        "method": "chars / 4 (model-agnostic heuristic; biased slightly high)",
+    }))
+}
+
+/// Shared parser for the small family of "text-in / result-out"
+/// agent subcommands (`redact`, `think-scrub`, `tokens`). Returns
+/// `(input, check_mode)`.
+///
+/// Sources:
+///   * `--file <path>` — read file content.
+///   * `--stdin` — read all of stdin.
+///   * positional args — joined with spaces (so the shell-natural
+///     `cos agent tokens hello world` works without quoting).
+///
+/// `--check` is honoured by callers that have a "detect-only" mode;
+/// `tokens_cmd` ignores it.
+fn read_text_input(args: &[String], cmd: &str) -> Result<(String, bool), String> {
+    let mut from_stdin = false;
+    let mut from_file: Option<String> = None;
+    let mut check = false;
+    let mut positional: Vec<String> = Vec::new();
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--stdin" => {
+                from_stdin = true;
+                i += 1;
+            }
+            "--file" => {
+                from_file = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--file needs a path".to_string())?,
+                );
+                i += 2;
+            }
+            "--check" => {
+                check = true;
+                i += 1;
+            }
+            other => {
+                positional.push(other.to_string());
+                i += 1;
+            }
+        }
+    }
+    let input = if from_stdin {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin()
+            .read_to_string(&mut buf)
+            .map_err(|e| format!("read stdin: {e}"))?;
+        buf
+    } else if let Some(path) = from_file {
+        std::fs::read_to_string(&path).map_err(|e| format!("read {path}: {e}"))?
+    } else if positional.is_empty() {
+        return Err(format!(
+            "usage: cos agent {cmd} <text> | --file <path> | --stdin"
+        ));
+    } else {
+        positional.join(" ")
+    };
+    Ok((input, check))
 }
 
 /// `cos agent nudge [list|due|add <due_in_secs> <message> [--repeat <secs>] [--tag <tag>]|fire <id>|remove <id>|path]`
@@ -2579,6 +2708,129 @@ mod tests {
         ])
         .expect("ok");
         assert!(v.get("prompt").and_then(|x| x.as_str()).is_some());
+    }
+
+    #[test]
+    fn think_scrub_strips_think_block() {
+        let v = think_scrub_cmd(&[
+            "before <think>secret reasoning</think> after".into(),
+        ])
+        .expect("ok");
+        let out = v.get("scrubbed").and_then(|x| x.as_str()).unwrap();
+        assert!(!out.contains("secret reasoning"), "got {out}");
+        assert!(out.contains("before"));
+        assert!(out.contains("after"));
+        assert_eq!(v.get("changed").and_then(|x| x.as_bool()), Some(true));
+    }
+
+    #[test]
+    fn think_scrub_unchanged_for_clean_input() {
+        let v = think_scrub_cmd(&["just plain text".into()]).expect("ok");
+        assert_eq!(v.get("changed").and_then(|x| x.as_bool()), Some(false));
+    }
+
+    #[test]
+    fn think_scrub_check_returns_detection_only() {
+        let v = think_scrub_cmd(&[
+            "--check".into(),
+            "<thinking>internal</thinking> answer".into(),
+        ])
+        .expect("ok");
+        assert_eq!(v.get("has_thinking").and_then(|x| x.as_bool()), Some(true));
+        assert!(v.get("scrubbed").is_none());
+    }
+
+    #[test]
+    fn think_scrub_check_negative() {
+        let v = think_scrub_cmd(&["--check".into(), "no tags here".into()])
+            .expect("ok");
+        assert_eq!(v.get("has_thinking").and_then(|x| x.as_bool()), Some(false));
+    }
+
+    #[test]
+    fn think_scrub_handles_multiline_block() {
+        let v = think_scrub_cmd(&[
+            "<thinking>\nline one\nline two\n</thinking>\nfinal".into(),
+        ])
+        .expect("ok");
+        let out = v.get("scrubbed").and_then(|x| x.as_str()).unwrap();
+        assert!(!out.contains("line one"), "got {out}");
+        assert!(out.contains("final"));
+    }
+
+    #[test]
+    fn think_scrub_no_args_errors_with_usage() {
+        let err = think_scrub_cmd(&[]).unwrap_err();
+        assert!(err.contains("usage:"));
+    }
+
+    #[test]
+    fn think_scrub_from_file() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let p = dir.path().join("trace.txt");
+        std::fs::write(
+            &p,
+            "<reasoning>internal</reasoning>\nthe answer is 42",
+        )
+        .expect("write");
+        let v = think_scrub_cmd(&["--file".into(), p.to_string_lossy().to_string()])
+            .expect("ok");
+        let out = v.get("scrubbed").and_then(|x| x.as_str()).unwrap();
+        assert!(!out.contains("internal"), "got {out}");
+        assert!(out.contains("the answer is 42"));
+    }
+
+    #[test]
+    fn tokens_basic_input() {
+        // chars / 4 with a min of 1 — see estimate_text_tokens.
+        let v = tokens_cmd(&["hello world this is some text".into()]).expect("ok");
+        let chars = v.get("chars").and_then(|x| x.as_u64()).unwrap();
+        let tokens = v.get("approx_tokens").and_then(|x| x.as_u64()).unwrap();
+        assert_eq!(chars, "hello world this is some text".len() as u64);
+        assert!(tokens >= 1);
+        assert!(tokens <= chars, "tokens should be <= chars");
+    }
+
+    #[test]
+    fn tokens_no_args_errors_with_usage() {
+        let err = tokens_cmd(&[]).unwrap_err();
+        assert!(err.contains("usage:"));
+    }
+
+    #[test]
+    fn tokens_from_file() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let p = dir.path().join("body.txt");
+        let content = "x".repeat(400);
+        std::fs::write(&p, &content).expect("write");
+        let v = tokens_cmd(&["--file".into(), p.to_string_lossy().to_string()])
+            .expect("ok");
+        assert_eq!(v.get("chars").and_then(|x| x.as_u64()), Some(400));
+        // chars / 4 = 100
+        assert_eq!(v.get("approx_tokens").and_then(|x| x.as_u64()), Some(100));
+    }
+
+    #[test]
+    fn tokens_includes_method_label() {
+        let v = tokens_cmd(&["abc".into()]).expect("ok");
+        let m = v.get("method").and_then(|x| x.as_str()).unwrap();
+        assert!(m.contains("chars"), "got {m}");
+    }
+
+    #[test]
+    fn read_text_input_joins_positional_with_spaces() {
+        let (s, _) = read_text_input(
+            &["a".into(), "b".into(), "c".into()],
+            "tokens",
+        )
+        .expect("ok");
+        assert_eq!(s, "a b c");
+    }
+
+    #[test]
+    fn read_text_input_file_missing_path_errors() {
+        let err = read_text_input(&["--file".into()], "tokens").unwrap_err();
+        assert!(err.contains("--file"));
     }
 
     #[test]
