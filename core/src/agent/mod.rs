@@ -122,6 +122,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "think-scrub" => think_scrub_cmd(args),
         "tokens" => tokens_cmd(args),
         "providers" => providers_cmd(args),
+        "provider-doctor" => provider_doctor_cmd(args),
         "title" => title_cmd(args),
         "summarise" => summarise_cmd(args),
         "summarize" => summarise_cmd(args),
@@ -142,7 +143,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "file-safety" => file_safety_cmd(args),
         "osv" => osv_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | title | summarise | classify | tools | guardrails | approval | todo | compress | aux | retry | vision | display | shell-hooks | media | binary-ext | context | file-safety | osv"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | provider-doctor | title | summarise | classify | tools | guardrails | approval | todo | compress | aux | retry | vision | display | shell-hooks | media | binary-ext | context | file-safety | osv"
         )),
     }
 }
@@ -1790,6 +1791,302 @@ fn providers_cmd(args: &[String]) -> Result<Value, String> {
         "providers": entries,
         "count": entries.len(),
     }))
+}
+
+/// `cos agent provider-doctor [--names <a,b,c>] [--probe-network]
+/// [--timeout <secs>]`
+///
+/// Static config check + optional one-shot live ping of the active
+/// LLM provider. Wraps [`providers_cmd`]'s output (env_present /
+/// credential_present / configured per provider) and adds a `doctor`
+/// section with the probe verdict.
+///
+/// **Probe target**: only the **active** provider (configured in
+/// `[agent].provider`). Non-active probes are skipped because we
+/// don't have a known "default cheap model" for non-active providers
+/// — `Provider::supported_models()` typically echoes the configured
+/// model — and guessing one (e.g. `gpt-4o-mini`) would silently
+/// break when the user has another model configured.
+///
+/// **Skipped providers** (active but unprobeable): `mock` (pointless),
+/// `llama_local` (would force a heavy GGUF load + RAM allocation,
+/// surprising side effect for a "doctor" command).
+///
+/// **Probe shape**: minimal `chat()` request — one user message
+/// (`"Reply with the single word OK."`), `max_tokens: Some(16)`. No
+/// temperature / top_p / tools — those knobs cause false-negative
+/// rejection on some providers/models even though basic chat works.
+/// Treats any successful `chat()` round-trip as success regardless
+/// of literal content; `excerpt` is informational only.
+///
+/// **Timeouts**: `--timeout <secs>` (default 30s) wraps the future
+/// in `tokio::time::timeout`. NOTE: this is independent of the
+/// provider's own `request_timeout` (set on the underlying
+/// `reqwest::Client` from `AgentConfig.request_timeout`); the
+/// effective ceiling is `min(--timeout, AgentConfig.request_timeout)`.
+/// We surface both as `probe_timeout_secs` /
+/// `provider_request_timeout_secs` to make the asymmetry visible.
+///
+/// **Secret hygiene**: every error/excerpt string emitted goes
+/// through [`crate::agent::safety::redact::Redactor::default_set`]
+/// before serialisation. `LlmError::Transport(reqwest)` can include
+/// URLs (and users sometimes embed credentials in `base_url`);
+/// upstream provider error text can echo Authorization headers in
+/// rare cases. Always-redact > regret-later.
+///
+/// **Structured failure**: probe verdicts include `error_kind` —
+/// one of `auth | rate_limited | not_configured | invalid_request
+/// | transport | provider | parse | stream | internal | timeout`
+/// — so callers can branch on the cause programmatically rather
+/// than parsing redacted prose.
+fn provider_doctor_cmd(args: &[String]) -> Result<Value, String> {
+    let mut probe_network = false;
+    let mut timeout_secs: u64 = 30;
+    let mut filter_names: Option<Vec<String>> = None;
+
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--names" => {
+                let raw = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--names needs a comma list".to_string())?;
+                filter_names = Some(
+                    raw.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect(),
+                );
+                i += 2;
+            }
+            "--probe-network" => {
+                probe_network = true;
+                i += 1;
+            }
+            "--timeout" => {
+                let raw = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--timeout needs <secs>".to_string())?;
+                timeout_secs = raw.parse::<u64>().map_err(|_| {
+                    format!("--timeout must be a positive integer (got '{raw}')")
+                })?;
+                if timeout_secs == 0 {
+                    return Err("--timeout must be > 0".into());
+                }
+                i += 2;
+            }
+            other => {
+                return Err(format!(
+                    "unknown provider-doctor arg: {other}. try: --names <a,b,c> | --probe-network | --timeout <secs>"
+                ));
+            }
+        }
+    }
+
+    // Re-use the static check by forwarding the relevant flags.
+    // Always probe credentials in doctor mode (cheap; users running
+    // doctor want a complete view).
+    let mut static_args: Vec<String> = vec!["--probe-credentials".into()];
+    if let Some(names) = filter_names.as_ref() {
+        static_args.push("--names".into());
+        static_args.push(names.join(","));
+    }
+    let mut out = providers_cmd(&static_args)?;
+
+    let cfg = crate::config::get();
+    let active_name = cfg.agent.provider.clone();
+    let active_in_scope = filter_names
+        .as_ref()
+        .map(|f| f.iter().any(|n| n == &active_name))
+        .unwrap_or(true);
+
+    let probe_value = if !probe_network {
+        json!({
+            "attempted": false,
+            "reason": "static check only — pass --probe-network to issue a one-shot live ping",
+        })
+    } else if !active_in_scope {
+        json!({
+            "attempted": false,
+            "reason": format!(
+                "active provider '{active_name}' filtered out by --names; doctor probes only the active provider"
+            ),
+        })
+    } else if active_name == "mock" {
+        json!({
+            "attempted": false,
+            "reason": "mock provider: probe is meaningless (no upstream)",
+        })
+    } else if active_name == "llama_local" {
+        json!({
+            "attempted": false,
+            "reason": "llama_local provider: probe is skipped — would force a GGUF load + RAM allocation, surprising side effect for a doctor command. Use 'cos model load' + 'cos agent ask' to validate end-to-end.",
+        })
+    } else {
+        run_active_provider_probe(&active_name, &cfg.agent, timeout_secs)
+    };
+
+    // Surface the asymmetry between our probe wrapper timeout and
+    // the provider's own request timeout — the effective ceiling is
+    // min of the two.
+    let provider_request_timeout = cfg.agent.request_timeout;
+
+    out["doctor"] = json!({
+        "active": active_name,
+        "active_in_scope": active_in_scope,
+        "probe_network": probe_network,
+        "probe_timeout_secs": timeout_secs,
+        "provider_request_timeout_secs": provider_request_timeout,
+        "effective_timeout_secs": std::cmp::min(timeout_secs, provider_request_timeout),
+        "active_probe": probe_value,
+    });
+    Ok(out)
+}
+
+/// Run the live one-shot ping for the active provider. Builds a
+/// fresh provider instance (no shared state with concurrent
+/// commands), spins up a single-thread Tokio runtime, and reports
+/// a structured verdict. All error/excerpt strings are redacted.
+fn run_active_provider_probe(name: &str, agent_cfg: &crate::config::AgentConfig, timeout_secs: u64) -> Value {
+    use crate::agent::llm::types::{ChatRequest, ContentBlock, Message};
+    use crate::agent::safety::redact::Redactor;
+
+    let model = if agent_cfg.model.is_empty() {
+        "stub-model".to_string()
+    } else {
+        agent_cfg.model.clone()
+    };
+    let redactor = Redactor::default_set();
+
+    let provider = match llm::registry::build(name, &model, agent_cfg) {
+        Ok(p) => p,
+        Err(e) => {
+            return json!({
+                "attempted": false,
+                "reason": redactor.redact(&format!("provider build failed: {e}")),
+                "error_kind": llm_error_kind(&e),
+            });
+        }
+    };
+
+    let configured = provider.is_configured();
+    let req = ChatRequest {
+        model: model.clone(),
+        messages: vec![Message::user_text("Reply with the single word OK.")],
+        system: None,
+        tools: Vec::new(),
+        tool_choice: crate::agent::llm::types::ToolChoice::Auto,
+        max_tokens: Some(16),
+        temperature: None,
+        top_p: None,
+        stop_sequences: Vec::new(),
+        extra: serde_json::Value::Null,
+    };
+
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(r) => r,
+        Err(e) => {
+            return json!({
+                "attempted": false,
+                "reason": redactor.redact(&format!("tokio runtime: {e}")),
+                "error_kind": "internal",
+            });
+        }
+    };
+
+    let timeout = std::time::Duration::from_secs(timeout_secs);
+    let start = std::time::Instant::now();
+    let result = runtime.block_on(async move {
+        tokio::time::timeout(timeout, provider.chat(req)).await
+    });
+    let duration_ms = start.elapsed().as_millis() as u64;
+
+    match result {
+        Err(_elapsed) => json!({
+            "attempted": true,
+            "ok": false,
+            "timed_out": true,
+            "duration_ms": duration_ms,
+            "error_kind": "timeout",
+            "error_message": format!("probe timed out after {timeout_secs}s"),
+            "configured_at_build": configured,
+        }),
+        Ok(Err(e)) => {
+            let kind = llm_error_kind(&e);
+            let mut entry = json!({
+                "attempted": true,
+                "ok": false,
+                "timed_out": false,
+                "duration_ms": duration_ms,
+                "error_kind": kind,
+                "error_message": redactor.redact(&e.to_string()),
+                "configured_at_build": configured,
+            });
+            // Surface specific structured fields for the provider/rate-limited variants.
+            match &e {
+                llm::LlmError::Provider { status, .. } => {
+                    entry["status"] = json!(status);
+                }
+                llm::LlmError::RateLimited { retry_after_ms } => {
+                    entry["retry_after_ms"] = json!(retry_after_ms);
+                }
+                _ => {}
+            }
+            entry
+        }
+        Ok(Ok(resp)) => {
+            let raw_text: String = resp
+                .content
+                .iter()
+                .filter_map(|b| match b {
+                    ContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            let raw_clip: String = raw_text.chars().take(80).collect();
+            let excerpt = redactor.redact(&raw_clip);
+            json!({
+                "attempted": true,
+                "ok": true,
+                "timed_out": false,
+                "duration_ms": duration_ms,
+                "model": resp.model,
+                "input_tokens": resp.usage.input_tokens,
+                "output_tokens": resp.usage.output_tokens,
+                "finish_reason": match resp.finish_reason {
+                    crate::agent::llm::types::FinishReason::Stop => "stop",
+                    crate::agent::llm::types::FinishReason::Length => "length",
+                    crate::agent::llm::types::FinishReason::ToolUse => "tool_use",
+                    crate::agent::llm::types::FinishReason::Refusal => "refusal",
+                    crate::agent::llm::types::FinishReason::ContentFilter => "content_filter",
+                    crate::agent::llm::types::FinishReason::Other => "other",
+                },
+                "excerpt": excerpt,
+                "configured_at_build": configured,
+            })
+        }
+    }
+}
+
+/// Map an `LlmError` to a stable string tag for the doctor JSON
+/// output. The probe-network UI branches on this tag, so don't
+/// rename existing variants without considering callers.
+fn llm_error_kind(e: &llm::LlmError) -> &'static str {
+    match e {
+        llm::LlmError::NotConfigured(_) => "not_configured",
+        llm::LlmError::InvalidRequest(_) => "invalid_request",
+        llm::LlmError::Transport(_) => "transport",
+        llm::LlmError::Provider { .. } => "provider",
+        llm::LlmError::RateLimited { .. } => "rate_limited",
+        llm::LlmError::Auth => "auth",
+        llm::LlmError::Parse(_) => "parse",
+        llm::LlmError::Stream(_) => "stream",
+        llm::LlmError::Internal(_) => "internal",
+    }
 }
 
 /// Canonical env var the binary documents per provider alias.
@@ -7023,6 +7320,192 @@ mod tests {
         assert!(
             url.contains("bedrock-runtime") && url.contains("{region}"),
             "expected region-templated default_base_url, got {url}"
+        );
+    }
+
+    // ---- provider-doctor ----
+
+    #[test]
+    fn provider_doctor_static_only_includes_doctor_section() {
+        // Default invocation: no --probe-network.
+        let v = provider_doctor_cmd(&[]).expect("doctor ok");
+        // Inherits the providers_cmd shape.
+        assert!(v.get("providers").and_then(|p| p.as_array()).is_some());
+        // Doctor section present.
+        let doctor = v.get("doctor").expect("doctor section");
+        assert_eq!(
+            doctor.get("probe_network"),
+            Some(&serde_json::Value::Bool(false))
+        );
+        let probe = doctor.get("active_probe").expect("active_probe");
+        assert_eq!(
+            probe.get("attempted"),
+            Some(&serde_json::Value::Bool(false))
+        );
+        assert!(probe.get("reason").and_then(|r| r.as_str()).is_some());
+    }
+
+    #[test]
+    fn provider_doctor_default_timeout_is_30s() {
+        let v = provider_doctor_cmd(&[]).expect("doctor ok");
+        let doctor = v.get("doctor").unwrap();
+        assert_eq!(
+            doctor.get("probe_timeout_secs").and_then(|t| t.as_u64()),
+            Some(30)
+        );
+    }
+
+    #[test]
+    fn provider_doctor_custom_timeout_parses() {
+        let v = provider_doctor_cmd(&["--timeout".into(), "5".into()])
+            .expect("doctor ok");
+        let doctor = v.get("doctor").unwrap();
+        assert_eq!(
+            doctor.get("probe_timeout_secs").and_then(|t| t.as_u64()),
+            Some(5)
+        );
+    }
+
+    #[test]
+    fn provider_doctor_zero_timeout_rejected() {
+        let err =
+            provider_doctor_cmd(&["--timeout".into(), "0".into()]).unwrap_err();
+        assert!(err.contains("--timeout"));
+    }
+
+    #[test]
+    fn provider_doctor_non_numeric_timeout_rejected() {
+        let err = provider_doctor_cmd(&["--timeout".into(), "soon".into()])
+            .unwrap_err();
+        assert!(err.contains("--timeout"));
+    }
+
+    #[test]
+    fn provider_doctor_unknown_flag_rejected() {
+        let err = provider_doctor_cmd(&["--mystery".into()]).unwrap_err();
+        assert!(err.contains("--mystery"));
+        assert!(err.contains("--probe-network"));
+    }
+
+    #[test]
+    fn provider_doctor_names_filter_requires_value() {
+        let err = provider_doctor_cmd(&["--names".into()]).unwrap_err();
+        assert!(err.contains("--names"));
+    }
+
+    #[test]
+    fn provider_doctor_skips_probe_for_mock_provider() {
+        // The default test config provider is "mock" (see config.rs Default).
+        // Verify --probe-network is gracefully skipped without spinning a
+        // tokio runtime or hitting the network.
+        let v = provider_doctor_cmd(&["--probe-network".into()])
+            .expect("doctor ok");
+        let probe = v
+            .get("doctor")
+            .and_then(|d| d.get("active_probe"))
+            .expect("probe");
+        // Active default in test cfg is "mock".
+        assert_eq!(
+            v.get("doctor")
+                .and_then(|d| d.get("active"))
+                .and_then(|a| a.as_str()),
+            Some("mock")
+        );
+        assert_eq!(
+            probe.get("attempted"),
+            Some(&serde_json::Value::Bool(false))
+        );
+        let reason = probe
+            .get("reason")
+            .and_then(|r| r.as_str())
+            .unwrap_or("");
+        assert!(
+            reason.contains("mock") || reason.contains("meaningless"),
+            "expected mock-skip reason, got {reason:?}"
+        );
+    }
+
+    #[test]
+    fn provider_doctor_filter_excluding_active_marks_out_of_scope() {
+        // Active is "mock" in test config; filter to "openai" only.
+        let v = provider_doctor_cmd(&[
+            "--probe-network".into(),
+            "--names".into(),
+            "openai".into(),
+        ])
+        .expect("doctor ok");
+        let doctor = v.get("doctor").unwrap();
+        assert_eq!(
+            doctor.get("active_in_scope"),
+            Some(&serde_json::Value::Bool(false))
+        );
+        let probe = doctor.get("active_probe").unwrap();
+        assert_eq!(
+            probe.get("attempted"),
+            Some(&serde_json::Value::Bool(false))
+        );
+        let reason = probe.get("reason").and_then(|r| r.as_str()).unwrap_or("");
+        assert!(reason.contains("filtered out") || reason.contains("--names"));
+    }
+
+    #[test]
+    fn provider_doctor_surfaces_effective_timeout_min_of_two() {
+        // probe_timeout 9999 + provider request_timeout (default = some
+        // smaller value from CosConfig) → effective is the smaller one.
+        let v = provider_doctor_cmd(&["--timeout".into(), "9999".into()])
+            .expect("doctor ok");
+        let doctor = v.get("doctor").unwrap();
+        let probe_t = doctor
+            .get("probe_timeout_secs")
+            .and_then(|t| t.as_u64())
+            .unwrap();
+        let provider_t = doctor
+            .get("provider_request_timeout_secs")
+            .and_then(|t| t.as_u64())
+            .unwrap();
+        let effective = doctor
+            .get("effective_timeout_secs")
+            .and_then(|t| t.as_u64())
+            .unwrap();
+        assert_eq!(probe_t, 9999);
+        assert_eq!(effective, std::cmp::min(probe_t, provider_t));
+    }
+
+    #[test]
+    fn llm_error_kind_classification_is_complete() {
+        // Pin the tag for every LlmError variant — adding a new variant
+        // without updating the doctor classifier should fail this test.
+        assert_eq!(
+            llm_error_kind(&llm::LlmError::NotConfigured("x".into())),
+            "not_configured"
+        );
+        assert_eq!(
+            llm_error_kind(&llm::LlmError::InvalidRequest("x".into())),
+            "invalid_request"
+        );
+        assert_eq!(
+            llm_error_kind(&llm::LlmError::Provider {
+                status: 500,
+                message: "x".into(),
+            }),
+            "provider"
+        );
+        assert_eq!(
+            llm_error_kind(&llm::LlmError::RateLimited { retry_after_ms: 0 }),
+            "rate_limited"
+        );
+        assert_eq!(llm_error_kind(&llm::LlmError::Auth), "auth");
+        assert_eq!(
+            llm_error_kind(&llm::LlmError::Parse("x".into())),
+            "parse"
+        );
+        assert_eq!(
+            llm_error_kind(&llm::LlmError::Stream("x".into())),
+            "stream"
+        );
+        assert_eq!(
+            llm_error_kind(&llm::LlmError::Internal("x".into())),
+            "internal"
         );
     }
 
