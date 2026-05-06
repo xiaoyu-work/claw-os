@@ -36,22 +36,35 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
             if prompt.is_empty() {
                 return Err("usage: cos agent ask \"<prompt>\"".into());
             }
-            // Phase 0: stub. Phase 1 wires runtime::loop_::ask().
+            match runtime::loop_::ask_blocking(&prompt) {
+                Ok(result) => Ok(json!({
+                    "answer": result.answer,
+                    "turns": result.turns,
+                    "provider": result.provider,
+                    "model": result.model,
+                })),
+                Err(e) => Err(e.to_string()),
+            }
+        }
+        "chat" => Ok(json!({"status": "not_implemented", "phase": "1+"})),
+        "status" => {
+            let cfg = &crate::config::get().agent;
+            let tools = tools::registry::default_registry();
             Ok(json!({
-                "status": "not_implemented",
-                "phase": "0",
-                "message": "agent runtime arrives in Phase 1",
-                "received_prompt": prompt,
+                "status": "ok",
+                "phase": "1",
+                "provider": cfg.provider,
+                "provider_registered": llm::registry::is_registered(&cfg.provider),
+                "providers": llm::available_providers(),
+                "model": cfg.model,
+                "max_turns": cfg.max_turns,
+                "max_tokens": cfg.max_tokens,
+                "temperature": cfg.temperature,
+                "tools_registered": tools.len(),
+                "tools": tools.names(),
+                "skills_loaded": 0,
             }))
         }
-        "chat" => Ok(json!({"status": "not_implemented", "phase": "1"})),
-        "status" => Ok(json!({
-            "status": "ok",
-            "phase": "0-skeleton",
-            "providers": llm::available_providers(),
-            "tools_registered": 0,
-            "skills_loaded": 0,
-        })),
         "service" => Ok(json!({"status": "not_implemented", "phase": "1+"})),
         other => Err(format!(
             "unknown command: {other}. try: ask | chat | status | service"

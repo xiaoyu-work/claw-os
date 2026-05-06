@@ -1,5 +1,9 @@
 //! LLM provider implementations.
 //!
-//! Top-9 (Q3): anthropic, openai, gemini, openrouter, ollama, bedrock, custom,
-//! xai, deepseek. Plus `local` (llama.cpp via crate::model::tasks::llm).
-//! All land in Phases 1 and 4. Phase 0 leaves this module as a placeholder.
+//! Phase 1 ships only the `mock` provider so the runtime can be tested
+//! end-to-end without any external API. Real providers (top-9 from Q3:
+//! anthropic, openai, gemini, openrouter, ollama, bedrock, custom, xai,
+//! deepseek) plus the `local` (llama.cpp) adapter land in later phases
+//! when a concrete one is selected.
+
+pub mod mock;

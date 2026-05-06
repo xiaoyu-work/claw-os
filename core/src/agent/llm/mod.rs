@@ -8,6 +8,7 @@
 //! exposed via crate::model::tasks::llm.
 
 pub mod providers;
+pub mod registry;
 pub mod types;
 
 pub use types::{
@@ -77,8 +78,7 @@ pub trait Provider: Send + Sync {
     ) -> Result<BoxStream<'static, Result<StreamEvent>>>;
 }
 
-/// Names of providers currently linked into the binary. Phase 0 returns an
-/// empty list — populated in Phase 1+ as concrete providers land.
+/// Names of providers currently linked into the binary.
 pub fn available_providers() -> Vec<&'static str> {
-    Vec::new()
+    registry::REGISTERED.to_vec()
 }

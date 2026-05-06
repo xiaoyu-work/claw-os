@@ -24,6 +24,8 @@ pub struct CosConfig {
     pub net: NetConfig,
     #[serde(default)]
     pub web: WebConfig,
+    #[serde(default)]
+    pub agent: AgentConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,6 +54,41 @@ pub struct WebConfig {
     pub max_content_length: usize,
 }
 
+/// Agent runtime configuration. Reads from `[agent]` block of
+/// `/etc/cos/config.json`. All fields have sensible defaults so the agent
+/// can run without explicit configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentConfig {
+    /// Name of the LLM provider to use (must be registered, e.g. "mock",
+    /// "anthropic", "openai", "ollama"). Defaults to "mock" so the agent
+    /// is functional out of the box for testing.
+    #[serde(default = "default_agent_provider")]
+    pub provider: String,
+
+    /// Model identifier passed to the provider (e.g. "claude-sonnet-4.6",
+    /// "gpt-4.1", "llama3.2:3b").
+    #[serde(default = "default_agent_model")]
+    pub model: String,
+
+    /// Maximum number of agent turns (provider call → tool calls → ...) per
+    /// `cos agent ask` invocation. Stops infinite tool-use loops.
+    #[serde(default = "default_agent_max_turns")]
+    pub max_turns: u32,
+
+    /// Maximum tokens to request per provider call.
+    #[serde(default = "default_agent_max_tokens")]
+    pub max_tokens: u32,
+
+    /// Sampling temperature (0.0–2.0). Provider-specific clamping applies.
+    #[serde(default = "default_agent_temperature")]
+    pub temperature: f32,
+
+    /// Optional path to a Markdown file injected at the start of the system
+    /// prompt. If unset, only the built-in scaffold prompt is used.
+    #[serde(default)]
+    pub system_prompt_path: Option<String>,
+}
+
 fn default_version() -> String {
     env!("CARGO_PKG_VERSION").into()
 }
@@ -75,6 +112,21 @@ fn default_reader_url() -> String {
 }
 fn default_max_content_length() -> usize {
     50000
+}
+fn default_agent_provider() -> String {
+    "mock".into()
+}
+fn default_agent_model() -> String {
+    "mock-model".into()
+}
+fn default_agent_max_turns() -> u32 {
+    10
+}
+fn default_agent_max_tokens() -> u32 {
+    4096
+}
+fn default_agent_temperature() -> f32 {
+    0.7
 }
 
 impl Default for ExecConfig {
@@ -113,6 +165,20 @@ impl Default for CosConfig {
             exec: ExecConfig::default(),
             net: NetConfig::default(),
             web: WebConfig::default(),
+            agent: AgentConfig::default(),
+        }
+    }
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            provider: default_agent_provider(),
+            model: default_agent_model(),
+            max_turns: default_agent_max_turns(),
+            max_tokens: default_agent_max_tokens(),
+            temperature: default_agent_temperature(),
+            system_prompt_path: None,
         }
     }
 }
