@@ -105,6 +105,7 @@ mod tests {
     use super::*;
     use crate::agent::llm::providers::mock::{MockProvider, MockResponse};
     use crate::agent::llm::ToolCall;
+    use crate::agent::tools::registry::{builtin_only_registry, default_registry};
 
     fn cfg() -> AgentConfig {
         AgentConfig {
@@ -121,7 +122,7 @@ mod tests {
     async fn echo_path_terminates_in_one_turn() {
         let cfg = cfg();
         let provider: Arc<dyn Provider> = Arc::new(MockProvider::new(&cfg.model, &cfg));
-        let tools = default_registry();
+        let tools = builtin_only_registry();
         let result = ask_with(provider, &cfg, "hello there", &tools).await.unwrap();
         assert_eq!(result.turns, 1);
         assert!(result.answer.contains("hello there"));
@@ -140,7 +141,7 @@ mod tests {
         mock.push_response(MockResponse::Text("got it: ping".into()));
 
         let provider: Arc<dyn Provider> = Arc::new(mock);
-        let tools = default_registry();
+        let tools = builtin_only_registry();
         let result = ask_with(provider, &cfg, "use echo with 'ping'", &tools)
             .await
             .unwrap();
@@ -160,10 +161,35 @@ mod tests {
         mock.push_response(MockResponse::Text("recovered".into()));
 
         let provider: Arc<dyn Provider> = Arc::new(mock);
-        let tools = default_registry();
+        let tools = builtin_only_registry();
         let result = ask_with(provider, &cfg, "do bad thing", &tools).await.unwrap();
         // Loop should not panic; final answer arrives turn 2.
         assert_eq!(result.answer, "recovered");
+    }
+
+    #[tokio::test]
+    async fn end_to_end_agent_drives_cos_primitive() {
+        // Prove the full integration: provider returns ToolUse referencing a
+        // cos_proxy tool; the loop dispatches it; the cos primitive's real
+        // run() is called; result is fed back; provider terminates with
+        // final text. This is the smallest possible "agent uses cos kernel"
+        // proof point.
+        let cfg = cfg();
+        let mock = MockProvider::new(&cfg.model, &cfg);
+        mock.push_response(MockResponse::ToolUse(vec![ToolCall {
+            id: "ti".into(),
+            name: "cos_sysinfo".into(),
+            input: serde_json::json!({ "command": "info", "args": [] }),
+        }]));
+        mock.push_response(MockResponse::Text("got system info".into()));
+
+        let provider: Arc<dyn Provider> = Arc::new(mock);
+        let tools = default_registry();
+        let result = ask_with(provider, &cfg, "tell me about this system", &tools)
+            .await
+            .unwrap();
+        assert_eq!(result.turns, 2);
+        assert_eq!(result.answer, "got system info");
     }
 
     #[tokio::test]
@@ -180,7 +206,7 @@ mod tests {
             }]));
         }
         let provider: Arc<dyn Provider> = Arc::new(mock);
-        let tools = default_registry();
+        let tools = builtin_only_registry();
         let err = ask_with(provider, &cfg, "loop forever", &tools)
             .await
             .unwrap_err();

@@ -6,6 +6,7 @@
 //! adds the cos-primitive proxies (fs/exec/proc/net/web/etc.).
 
 pub mod builtin;
+pub mod cos_proxy;
 pub mod registry;
 
 use async_trait::async_trait;

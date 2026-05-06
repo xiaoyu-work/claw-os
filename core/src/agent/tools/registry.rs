@@ -55,9 +55,25 @@ impl ToolRegistry {
     }
 }
 
-/// Build the default registry shipped with `cos agent`. Phase 1 includes
-/// only side-effect-free tools.
+/// Build the default registry shipped with `cos agent`.
+///
+/// Includes:
+/// - Side-effect-free built-ins (`echo`, `now`).
+/// - All cos kernel primitive proxies (sandbox, proc, sysinfo, credential,
+///   cron, checkpoint, service, trace, watch, ipc, browser, netfilter,
+///   policy, model). Each proxy gives the model the exact same surface as
+///   the cos CLI for that primitive.
 pub fn default_registry() -> ToolRegistry {
+    let mut r = ToolRegistry::new();
+    r.register(Arc::new(super::builtin::Echo));
+    r.register(Arc::new(super::builtin::Now));
+    super::cos_proxy::register_all(&mut r);
+    r
+}
+
+/// Minimal registry: only side-effect-free built-ins. Used by tests that
+/// don't want to touch the real system.
+pub fn builtin_only_registry() -> ToolRegistry {
     let mut r = ToolRegistry::new();
     r.register(Arc::new(super::builtin::Echo));
     r.register(Arc::new(super::builtin::Now));
@@ -69,11 +85,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_registry_has_builtins() {
+    fn default_registry_has_builtins_and_cos_proxy() {
         let r = default_registry();
         assert!(r.get("echo").is_some());
         assert!(r.get("now").is_some());
+        assert!(r.get("cos_sandbox").is_some());
+        assert!(r.get("cos_sysinfo").is_some());
+        // 2 builtins + every cos primitive proxy
+        assert_eq!(r.len(), 2 + super::super::cos_proxy::count());
+    }
+
+    #[test]
+    fn builtin_only_registry_has_just_builtins() {
+        let r = builtin_only_registry();
         assert_eq!(r.len(), 2);
+        assert!(r.get("cos_sandbox").is_none());
     }
 
     #[test]
