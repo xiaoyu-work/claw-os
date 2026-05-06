@@ -112,20 +112,26 @@ pub fn platform_library_filename(basename: &str) -> String {
 }
 
 /// Dispatch a `cos engine <command>` invocation.
+///
+/// **Public surface (5 commands):**
+///   - `list [<engine>] [--verbose]` — list all installed, or detailed info on one
+///   - `update <engine> [--from <archive>] [--pin] [--check] [--to <tag>] [--force] [--accelerator <a>] [--no-activate]`
+///       — fetch (online or offline via `--from`), install, optionally activate + pin
+///   - `activate <engine>@<version>` — switch the active version (no download).
+///       To roll back, run `activate <engine>@<previous>` (see `list <engine>` for previous).
+///   - `remove <engine>[@<version>] [--keep N]`
+///       — with `@<ver>`: uninstall that exact version
+///       — without:        garbage-collect old versions, keeping N most recent (default 3)
+///   - `unpin <engine>` — release the pin so future `update` calls can move forward
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     match command {
-        "list" => cmd_list(),
-        "info" => cmd_info(args),
-        "install" => cmd_install(args),
-        "activate" => cmd_activate(args),
-        "rollback" => cmd_rollback(args),
-        "pin" => cmd_pin(args),
-        "unpin" => cmd_unpin(args),
-        "gc" => cmd_gc(args),
-        "uninstall" => cmd_uninstall(args),
+        "list" => cmd_list(args),
         "update" => cmd_update(args),
+        "activate" => cmd_activate(args),
+        "remove" => cmd_remove(args),
+        "unpin" => cmd_unpin(args),
         other => Err(format!(
-            "unknown engine command: {other}. try: list | info | install | activate | rollback | pin | unpin | gc | uninstall | update"
+            "unknown engine command: {other}. try: list | update | activate | remove | unpin"
         )),
     }
 }
@@ -134,26 +140,58 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 // Sub-command handlers
 // =====================================================================
 
-fn cmd_list() -> Result<Value, String> {
-    let index = registry::EnginesIndex::load_or_default().map_err(|e| e.to_string())?;
-    Ok(json!({
-        "engines_dir": paths::engines_dir().display().to_string(),
-        "engines": index.to_list_view(),
-    }))
-}
+/// `cos engine list [<engine>] [--verbose]`. With no positional arg it
+/// returns the index summary across all engines. With an engine name
+/// (or `--verbose`), it returns detailed info plus the active
+/// version's manifest. This subsumes the old `info` subcommand.
+fn cmd_list(args: &[String]) -> Result<Value, String> {
+    let mut name: Option<String> = None;
+    let mut verbose = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--verbose" | "-v" => {
+                verbose = true;
+                i += 1;
+            }
+            other if other.starts_with("--") => {
+                return Err(format!("unknown flag: {other}"));
+            }
+            _ => {
+                if name.is_none() {
+                    name = Some(args[i].clone());
+                } else {
+                    return Err(format!("unexpected positional arg: {}", args[i]));
+                }
+                i += 1;
+            }
+        }
+    }
 
-fn cmd_info(args: &[String]) -> Result<Value, String> {
-    let name = args
-        .first()
-        .ok_or_else(|| "usage: cos engine info <engine>".to_string())?;
-    if !is_known_engine(name) {
+    let index = registry::EnginesIndex::load_or_default().map_err(|e| e.to_string())?;
+
+    // Plain summary across all engines.
+    if name.is_none() && !verbose {
+        return Ok(json!({
+            "engines_dir": paths::engines_dir().display().to_string(),
+            "engines": index.to_list_view(),
+        }));
+    }
+
+    // Detailed view requires a name. `--verbose` without a name is
+    // ambiguous — bail rather than silently dumping the whole index
+    // verbosely (the summary view is already complete).
+    let name = name.ok_or_else(|| {
+        "usage: cos engine list <engine> [--verbose] (--verbose alone needs an engine name)".to_string()
+    })?;
+
+    if !is_known_engine(&name) {
         return Err(format!(
             "unknown engine: {name}. known: {}",
             KNOWN_ENGINES.join(", ")
         ));
     }
-    let index = registry::EnginesIndex::load_or_default().map_err(|e| e.to_string())?;
-    let mut info = index.info_view(name);
+    let mut info = index.info_view(&name);
     // Attach the active version's manifest (or a synthesized fallback)
     // so operators can see ABI / GGUF compatibility claims at a glance.
     if let Some(obj) = info.as_object_mut() {
@@ -163,14 +201,14 @@ fn cmd_info(args: &[String]) -> Result<Value, String> {
             .unwrap_or("")
             .to_string();
         if !active.is_empty() {
-            let manifest_value = match manifest::EngineManifest::load(name, &active) {
+            let manifest_value = match manifest::EngineManifest::load(&name, &active) {
                 Ok(Some(m)) => json!({
                     "found": true,
                     "source": m.source,
                     "manifest": m,
                 }),
                 Ok(None) => {
-                    let synth = manifest::EngineManifest::synthesize(name, &active);
+                    let synth = manifest::EngineManifest::synthesize(&name, &active);
                     json!({
                         "found": false,
                         "source": synth.source,
@@ -186,91 +224,6 @@ fn cmd_info(args: &[String]) -> Result<Value, String> {
         }
     }
     Ok(info)
-}
-
-fn cmd_install(args: &[String]) -> Result<Value, String> {
-    let mut positional: Option<String> = None;
-    let mut version_flag: Option<String> = None;
-    let mut from_flag: Option<String> = None;
-    let mut activate_flag = true;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--from" => {
-                from_flag = Some(
-                    args.get(i + 1)
-                        .cloned()
-                        .ok_or_else(|| "--from requires a path".to_string())?,
-                );
-                i += 2;
-            }
-            "--version" => {
-                version_flag = Some(
-                    args.get(i + 1)
-                        .cloned()
-                        .ok_or_else(|| "--version requires a value".to_string())?,
-                );
-                i += 2;
-            }
-            "--no-activate" => {
-                activate_flag = false;
-                i += 1;
-            }
-            other if other.starts_with("--") => {
-                return Err(format!("unknown flag: {other}"));
-            }
-            _ => {
-                if positional.is_none() {
-                    positional = Some(args[i].clone());
-                } else {
-                    return Err(format!("unexpected positional arg: {}", args[i]));
-                }
-                i += 1;
-            }
-        }
-    }
-    let positional = positional.ok_or_else(|| {
-        "usage: cos engine install <engine>[@<version>] --from <archive> [--no-activate]"
-            .to_string()
-    })?;
-
-    let (engine, version_in_pos) = match positional.split_once('@') {
-        Some((e, v)) => (e.to_string(), Some(v.to_string())),
-        None => (positional, None),
-    };
-    let version = version_in_pos
-        .or(version_flag)
-        .ok_or_else(|| "missing version. use <engine>@<version> or --version <v>".to_string())?;
-    if !is_known_engine(&engine) {
-        return Err(format!(
-            "unknown engine: {engine}. known: {}",
-            KNOWN_ENGINES.join(", ")
-        ));
-    }
-    let from = from_flag.ok_or_else(|| "--from <archive> is required for P2.1".to_string())?;
-
-    let mut index = registry::EnginesIndex::load_or_default().map_err(|e| e.to_string())?;
-    let result = install_local::install_from_archive(
-        &mut index,
-        &engine,
-        &version,
-        std::path::Path::new(&from),
-    )
-    .map_err(|e| e.to_string())?;
-    if activate_flag {
-        index
-            .activate(&engine, &version)
-            .map_err(|e| e.to_string())?;
-        index.save().map_err(|e| e.to_string())?;
-    }
-    Ok(json!({
-        "status": "installed",
-        "engine": engine,
-        "version": version,
-        "path": result.install_dir.display().to_string(),
-        "files": result.files_extracted,
-        "activated": activate_flag,
-    }))
 }
 
 fn cmd_activate(args: &[String]) -> Result<Value, String> {
@@ -294,39 +247,79 @@ fn cmd_activate(args: &[String]) -> Result<Value, String> {
     }))
 }
 
-fn cmd_rollback(args: &[String]) -> Result<Value, String> {
-    let engine = args
-        .first()
-        .ok_or_else(|| "usage: cos engine rollback <engine>".to_string())?;
-    let mut index = registry::EnginesIndex::load_or_default().map_err(|e| e.to_string())?;
-    let (now_active, now_previous) = index.rollback(engine).map_err(|e| e.to_string())?;
-    index.save().map_err(|e| e.to_string())?;
-    Ok(json!({
-        "status": "rolled-back",
-        "engine": engine,
-        "active": now_active,
-        "previous": now_previous,
-    }))
-}
-
-fn cmd_pin(args: &[String]) -> Result<Value, String> {
-    let arg = args
-        .first()
-        .ok_or_else(|| "usage: cos engine pin <engine>[@<version>]".to_string())?;
-    let (engine, version) = match arg.split_once('@') {
-        Some((e, v)) => (e.to_string(), Some(v.to_string())),
-        None => (arg.clone(), None),
-    };
-    let mut index = registry::EnginesIndex::load_or_default().map_err(|e| e.to_string())?;
-    if let Some(v) = &version {
-        index.activate(&engine, v).map_err(|e| e.to_string())?;
+/// `cos engine remove <engine>[@<version>] [--keep N]`.
+///
+/// Two modes, distinguished by whether a version is given:
+///   - `<engine>@<version>` → uninstall that exact version (will error
+///     if it's the active or previous version — switch first with
+///     `cos engine activate`).
+///   - `<engine>` (no version) → garbage-collect, keeping the N most
+///     recent versions plus active+previous (default `--keep 3`).
+///
+/// Replaces the older `gc` and `uninstall` subcommands.
+fn cmd_remove(args: &[String]) -> Result<Value, String> {
+    let mut positional: Option<String> = None;
+    let mut keep: Option<usize> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--keep" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--keep requires a value".to_string())?;
+                keep = Some(
+                    v.parse()
+                        .map_err(|e: std::num::ParseIntError| format!("--keep: {e}"))?,
+                );
+                i += 2;
+            }
+            other if other.starts_with("--") => {
+                return Err(format!("unknown flag: {other}"));
+            }
+            _ => {
+                if positional.is_none() {
+                    positional = Some(args[i].clone());
+                } else {
+                    return Err(format!("unexpected positional arg: {}", args[i]));
+                }
+                i += 1;
+            }
+        }
     }
-    index.set_pinned(&engine, true).map_err(|e| e.to_string())?;
+    let positional = positional.ok_or_else(|| {
+        "usage: cos engine remove <engine>[@<version>] [--keep N]".to_string()
+    })?;
+
+    let mut index = registry::EnginesIndex::load_or_default().map_err(|e| e.to_string())?;
+    if let Some((engine, version)) = positional.split_once('@') {
+        if keep.is_some() {
+            return Err(
+                "--keep is for gc-mode (no version). With <engine>@<version>, --keep is ambiguous — drop one or the other."
+                    .into(),
+            );
+        }
+        let engine = engine.to_string();
+        let version = version.to_string();
+        index
+            .uninstall(&engine, &version)
+            .map_err(|e| e.to_string())?;
+        index.save().map_err(|e| e.to_string())?;
+        return Ok(json!({
+            "status": "uninstalled",
+            "engine": engine,
+            "version": version,
+        }));
+    }
+
+    let engine = positional;
+    let keep = keep.unwrap_or(3);
+    let removed = index.gc(&engine, keep).map_err(|e| e.to_string())?;
     index.save().map_err(|e| e.to_string())?;
     Ok(json!({
-        "status": "pinned",
+        "status": "gc-complete",
         "engine": engine,
-        "active": index.entry(&engine).map(|e| e.active.clone()),
+        "removed": removed,
+        "kept": keep,
     }))
 }
 
@@ -340,60 +333,20 @@ fn cmd_unpin(args: &[String]) -> Result<Value, String> {
     Ok(json!({"status": "unpinned", "engine": engine}))
 }
 
-fn cmd_gc(args: &[String]) -> Result<Value, String> {
-    let mut keep: usize = 3;
-    let mut engine: Option<String> = None;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--keep" => {
-                keep = args
-                    .get(i + 1)
-                    .ok_or_else(|| "--keep requires a value".to_string())?
-                    .parse()
-                    .map_err(|e: std::num::ParseIntError| e.to_string())?;
-                i += 2;
-            }
-            other if other.starts_with("--") => {
-                return Err(format!("unknown flag: {other}"));
-            }
-            _ => {
-                engine = Some(args[i].clone());
-                i += 1;
-            }
-        }
-    }
-    let engine =
-        engine.ok_or_else(|| "usage: cos engine gc <engine> [--keep N]".to_string())?;
-    let mut index = registry::EnginesIndex::load_or_default().map_err(|e| e.to_string())?;
-    let removed = index.gc(&engine, keep).map_err(|e| e.to_string())?;
-    index.save().map_err(|e| e.to_string())?;
-    Ok(json!({
-        "status": "gc-complete",
-        "engine": engine,
-        "removed": removed,
-        "kept": keep,
-    }))
-}
-
-fn cmd_uninstall(args: &[String]) -> Result<Value, String> {
-    let arg = args
-        .first()
-        .ok_or_else(|| "usage: cos engine uninstall <engine>@<version>".to_string())?;
-    let (engine, version) = arg
-        .split_once('@')
-        .map(|(e, v)| (e.to_string(), v.to_string()))
-        .ok_or_else(|| "expected <engine>@<version>".to_string())?;
-    let mut index = registry::EnginesIndex::load_or_default().map_err(|e| e.to_string())?;
-    index
-        .uninstall(&engine, &version)
-        .map_err(|e| e.to_string())?;
-    index.save().map_err(|e| e.to_string())?;
-    Ok(json!({"status": "uninstalled", "engine": engine, "version": version}))
-}
-
 // =====================================================================
-// `cos engine update [--check] [--to <tag>] [--force]`  (P2.2)
+// `cos engine update <engine>` — combined offline + online installer.
+//
+// Flags:
+//   --from <archive>            offline install from a local archive (no GitHub)
+//   --pin                       pin after install so future `update` is a no-op
+//   --check                     online: report what *would* be downloaded
+//   --to <tag>                  online: install a specific tag instead of latest
+//   --force                     online: override an active pin
+//   --accelerator <a>           online: pick cpu / cuda / vulkan / ... asset
+//   --no-activate               install but don't make it active
+//
+// `--from` and the online-only flags (`--check`, `--to`, `--force`,
+// `--accelerator`) are mutually exclusive — pass one or the other.
 // =====================================================================
 
 fn cmd_update(args: &[String]) -> Result<Value, String> {
@@ -403,6 +356,9 @@ fn cmd_update(args: &[String]) -> Result<Value, String> {
     let mut force = false;
     let mut accelerator: Option<String> = None;
     let mut activate_flag = true;
+    let mut from_archive: Option<String> = None;
+    let mut pin_after = false;
+    let mut version_flag: Option<String> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -417,6 +373,26 @@ fn cmd_update(args: &[String]) -> Result<Value, String> {
                         .ok_or_else(|| "--to requires a tag".to_string())?,
                 );
                 i += 2;
+            }
+            "--from" => {
+                from_archive = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--from requires a path".to_string())?,
+                );
+                i += 2;
+            }
+            "--version" => {
+                version_flag = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--version requires a value".to_string())?,
+                );
+                i += 2;
+            }
+            "--pin" => {
+                pin_after = true;
+                i += 1;
             }
             "--force" => {
                 force = true;
@@ -447,16 +423,73 @@ fn cmd_update(args: &[String]) -> Result<Value, String> {
             }
         }
     }
-    let engine = engine.ok_or_else(|| {
-        "usage: cos engine update <engine> [--check] [--to <tag>] [--force] [--accelerator cpu|cuda|vulkan|...] [--no-activate]"
+    let positional = engine.ok_or_else(|| {
+        "usage: cos engine update <engine>[@<version>] [--from <archive>] [--pin] [--check] [--to <tag>] [--force] [--accelerator cpu|cuda|vulkan|...] [--no-activate]"
             .to_string()
     })?;
+    let (engine, version_in_pos) = match positional.split_once('@') {
+        Some((e, v)) => (e.to_string(), Some(v.to_string())),
+        None => (positional, None),
+    };
     if !is_known_engine(&engine) {
         return Err(format!(
             "unknown engine: {engine}. known: {}",
             KNOWN_ENGINES.join(", ")
         ));
     }
+
+    // ---------- Offline path: --from <archive> ----------
+    // Skips all GitHub interaction; mutually exclusive with the
+    // network-only flags. This subsumes the old `cos engine install`.
+    if let Some(archive) = from_archive {
+        if check_only || to_tag.is_some() || accelerator.is_some() || force {
+            return Err(
+                "--from <archive> is offline; --check/--to/--accelerator/--force are online-only — drop one or the other"
+                    .into(),
+            );
+        }
+        let version = version_in_pos.or(version_flag).ok_or_else(|| {
+            "offline install needs a version: pass <engine>@<version> or --version <v>"
+                .to_string()
+        })?;
+        let mut index =
+            registry::EnginesIndex::load_or_default().map_err(|e| e.to_string())?;
+        let result = install_local::install_from_archive(
+            &mut index,
+            &engine,
+            &version,
+            std::path::Path::new(&archive),
+        )
+        .map_err(|e| e.to_string())?;
+        if activate_flag {
+            index
+                .activate(&engine, &version)
+                .map_err(|e| e.to_string())?;
+        }
+        if pin_after {
+            index.set_pinned(&engine, true).map_err(|e| e.to_string())?;
+        }
+        index.save().map_err(|e| e.to_string())?;
+        return Ok(json!({
+            "status": "installed",
+            "source": "offline",
+            "engine": engine,
+            "version": version,
+            "path": result.install_dir.display().to_string(),
+            "files": result.files_extracted,
+            "activated": activate_flag,
+            "pinned": pin_after,
+        }));
+    }
+
+    // ---------- Online path: GitHub Releases ----------
+    if version_flag.is_some() {
+        return Err(
+            "--version is for offline install (--from). For online, use --to <tag> instead."
+                .into(),
+        );
+    }
+    let to_tag = to_tag.or(version_in_pos);
     let spec = sources::github::spec_for(&engine).ok_or_else(|| {
         format!("no GitHub release source registered for engine \"{engine}\"")
     })?;
@@ -583,10 +616,14 @@ fn cmd_update(args: &[String]) -> Result<Value, String> {
                 .activate(&engine, &release.tag_name)
                 .map_err(|e| e.to_string())?;
         }
+        if pin_after {
+            index.set_pinned(&engine, true).map_err(|e| e.to_string())?;
+        }
         index.save().map_err(|e| e.to_string())?;
 
         Ok(json!({
             "status": "updated",
+            "source": "online",
             "engine": engine,
             "tag": release.tag_name,
             "asset": asset.name,
@@ -595,6 +632,7 @@ fn cmd_update(args: &[String]) -> Result<Value, String> {
             "path": install_result.install_dir.display().to_string(),
             "files": install_result.files_extracted,
             "activated": activate_flag,
+            "pinned": pin_after,
         }))
     })
 }
@@ -745,6 +783,203 @@ mod active_helper_tests {
         write_index(tmp.path(), "llama-cpp", "v0");
         // Directories exist but no library file.
         assert!(active_library_path("llama-cpp", "llama").is_none());
+        paths::set_engines_dir_override(None);
+    }
+}
+
+#[cfg(test)]
+mod dispatch_tests {
+    //! End-to-end coverage for the consolidated CLI surface (5 commands).
+    //! Earlier cuts had `info`/`install`/`pin`/`gc`/`uninstall`/`rollback` as
+    //! separate dispatch arms; these tests pin the new shape so we don't
+    //! accidentally re-grow them.
+
+    use super::*;
+
+    fn fresh_engines_dir() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        paths::set_engines_dir_override(Some(tmp.path().to_path_buf()));
+        tmp
+    }
+
+    fn write_three_versions(engines_dir: &std::path::Path) {
+        let json = serde_json::json!({
+            "version": 1,
+            "engines": {
+                "llama-cpp": {
+                    "active": "v3",
+                    "previous": "v2",
+                    "installed": [
+                        {"version": "v1", "installed_at": "2026-01-01T00:00:00Z", "bytes": 0, "source": "", "sha256": ""},
+                        {"version": "v2", "installed_at": "2026-02-01T00:00:00Z", "bytes": 0, "source": "", "sha256": ""},
+                        {"version": "v3", "installed_at": "2026-03-01T00:00:00Z", "bytes": 0, "source": "", "sha256": ""}
+                    ],
+                    "pinned": false,
+                    "channel": "release",
+                    "accelerator": "",
+                    "source": ""
+                }
+            }
+        });
+        std::fs::write(
+            engines_dir.join("engines.json"),
+            serde_json::to_vec_pretty(&json).unwrap(),
+        )
+        .unwrap();
+        for v in ["v1", "v2", "v3"] {
+            std::fs::create_dir_all(engines_dir.join("llama-cpp").join(v).join("lib")).unwrap();
+        }
+    }
+
+    #[test]
+    fn rejected_legacy_subcommands_have_consistent_error_shape() {
+        // Each of these used to be a top-level command. Make sure the
+        // unknown-command error names them in the suggested set.
+        for cmd in ["info", "install", "pin", "gc", "uninstall", "rollback"] {
+            let err = run(cmd, &[]).expect_err("legacy command should be rejected");
+            assert!(
+                err.contains("unknown engine command")
+                    && err.contains("list | update | activate | remove | unpin"),
+                "cmd={cmd}: unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn list_without_args_returns_index_summary() {
+        let _tmp = fresh_engines_dir();
+        let v = run("list", &[]).expect("list should succeed");
+        let obj = v.as_object().expect("object");
+        assert!(obj.contains_key("engines"));
+        assert!(obj.contains_key("engines_dir"));
+        paths::set_engines_dir_override(None);
+    }
+
+    #[test]
+    fn list_with_engine_name_returns_detail_view() {
+        let tmp = fresh_engines_dir();
+        write_three_versions(tmp.path());
+        let v =
+            run("list", &["llama-cpp".to_string()]).expect("verbose list should succeed");
+        let obj = v.as_object().expect("object");
+        assert_eq!(
+            obj.get("active").and_then(|v| v.as_str()),
+            Some("v3"),
+            "active should be the v3 we wrote",
+        );
+        assert!(
+            obj.contains_key("active_manifest"),
+            "detail view must attach active_manifest",
+        );
+        paths::set_engines_dir_override(None);
+    }
+
+    #[test]
+    fn list_verbose_alone_without_engine_is_explicit_error() {
+        let _tmp = fresh_engines_dir();
+        let err = run("list", &["--verbose".to_string()])
+            .expect_err("--verbose with no name should error");
+        assert!(err.contains("--verbose alone needs an engine name"));
+        paths::set_engines_dir_override(None);
+    }
+
+    /// `remove <engine>@<version>` walks the uninstall path, not the gc path.
+    #[test]
+    fn remove_with_version_is_uninstall() {
+        let tmp = fresh_engines_dir();
+        write_three_versions(tmp.path());
+        // v1 is neither active nor previous → safe to uninstall.
+        let v = run("remove", &["llama-cpp@v1".to_string()]).expect("uninstall ok");
+        assert_eq!(v.get("status").and_then(|v| v.as_str()), Some("uninstalled"));
+        // Directory should be gone.
+        assert!(!tmp.path().join("llama-cpp/v1").exists());
+        paths::set_engines_dir_override(None);
+    }
+
+    /// `remove <engine>` (no version) walks the gc path.
+    #[test]
+    fn remove_without_version_is_gc() {
+        let tmp = fresh_engines_dir();
+        write_three_versions(tmp.path());
+        // keep=1 means "keep one most-recent installed plus active+previous".
+        let v = run("remove", &["llama-cpp".to_string(), "--keep".to_string(), "1".to_string()])
+            .expect("gc ok");
+        assert_eq!(v.get("status").and_then(|v| v.as_str()), Some("gc-complete"));
+        assert_eq!(v.get("kept").and_then(|v| v.as_u64()), Some(1));
+        paths::set_engines_dir_override(None);
+    }
+
+    /// `remove <engine>@<ver> --keep N` is ambiguous on purpose.
+    #[test]
+    fn remove_versioned_with_keep_flag_is_rejected() {
+        let _tmp = fresh_engines_dir();
+        let err = run(
+            "remove",
+            &[
+                "llama-cpp@v1".to_string(),
+                "--keep".to_string(),
+                "3".to_string(),
+            ],
+        )
+        .expect_err("should reject ambiguous combo");
+        assert!(err.contains("--keep is for gc-mode"));
+        paths::set_engines_dir_override(None);
+    }
+
+    /// Update with `--from` rejects online-only flags up front so users
+    /// get a deterministic error instead of a partial offline install.
+    #[test]
+    fn update_from_archive_rejects_online_flags() {
+        let _tmp = fresh_engines_dir();
+        let err = run(
+            "update",
+            &[
+                "llama-cpp".to_string(),
+                "--from".to_string(),
+                "/tmp/x.tar.gz".to_string(),
+                "--to".to_string(),
+                "b9999".to_string(),
+            ],
+        )
+        .expect_err("--from + --to should be rejected");
+        assert!(err.contains("offline") && err.contains("online-only"));
+        paths::set_engines_dir_override(None);
+    }
+
+    /// Online --version is the wrong knob; we steer users to --to.
+    #[test]
+    fn update_online_with_version_flag_steers_to_tag_flag() {
+        let _tmp = fresh_engines_dir();
+        // No --from, and a stray --version: should suggest --to instead.
+        let err = run(
+            "update",
+            &[
+                "llama-cpp".to_string(),
+                "--version".to_string(),
+                "b4001".to_string(),
+            ],
+        )
+        .expect_err("online --version should error");
+        assert!(err.contains("--to"));
+        paths::set_engines_dir_override(None);
+    }
+
+    #[test]
+    fn unpin_clears_the_pin_flag() {
+        let tmp = fresh_engines_dir();
+        write_three_versions(tmp.path());
+        // Set the pin via the registry directly (not exposed as a CLI in
+        // the new surface — `update --pin` is the entry point).
+        let mut idx =
+            registry::EnginesIndex::load_or_default().expect("index loads");
+        idx.set_pinned("llama-cpp", true).expect("set pin");
+        idx.save().expect("save");
+
+        let v = run("unpin", &["llama-cpp".to_string()]).expect("unpin ok");
+        assert_eq!(v.get("status").and_then(|v| v.as_str()), Some("unpinned"));
+
+        let idx = registry::EnginesIndex::load_or_default().expect("reload");
+        assert!(!idx.entry("llama-cpp").unwrap().pinned);
         paths::set_engines_dir_override(None);
     }
 }

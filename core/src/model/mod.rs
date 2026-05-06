@@ -60,10 +60,10 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
                 "received_path": path,
             }))
         }
-        "load" | "unload" | "infer" | "bench" | "rm" => {
+        "load" => run_load(args),
+        "unload" | "infer" | "bench" | "rm" => {
             Ok(json!({"status": "not_implemented", "phase": "0.5", "subcommand": command}))
         }
-        "check" => run_check(args),
         "embed" => run_embed(args),
         "image" | "imagegen" => run_imagegen(args),
         "transcribe" | "stt" => run_transcribe(args, SttMode::Transcribe),
@@ -83,19 +83,38 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
             "tts": tts_status_json(),
         })),
         other => Err(format!(
-            "unknown command: {other}. try: list | import | load | unload | infer | check | embed | image | transcribe | translate | speak | status | bench | rm"
+            "unknown command: {other}. try: list | import | load | unload | infer | embed | image | transcribe | translate | speak | status | bench | rm"
         )),
     }
 }
 
-/// `cos model check <name>@<version>` — validate that the active engine
-/// satisfies the named model manifest's `requires_engine` clause. Phase
-/// 2.4 enforcement seam: when `cos model load` ships, it will share
-/// this check; until then operators can run it manually.
-fn run_check(args: &[String]) -> Result<Value, String> {
+/// `cos model load <name>@<version>` — validates engine compat and
+/// (eventually) loads the model into the daemon. Today the actual
+/// load is a stub; what *does* run is the manifest's
+/// `requires_engine` check against the active engine + version. This
+/// is the enforcement seam for P2.4-B: every load goes through
+/// `compat::check_engine_compat` before the engine sees the file.
+fn run_load(args: &[String]) -> Result<Value, String> {
     let spec = args
         .first()
-        .ok_or_else(|| "usage: cos model check <name>@<version>".to_string())?;
+        .ok_or_else(|| "usage: cos model load <name>@<version>".to_string())?;
+    let manifest = load_model_manifest(spec)?;
+    compat::check_engine_compat(&manifest).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "status": "compat_ok",
+        "phase": "0.5-skeleton",
+        "model": spec,
+        "requires_engine": manifest.requires_engine,
+        "gguf_version": manifest.gguf_version,
+        "arch": manifest.arch,
+        "note": "manifest accepted; native load wiring lands with phase 0.5b",
+    }))
+}
+
+/// Read and parse a model manifest at `<models_dir>/<name>/<version>/manifest.json`.
+/// Used by `run_load` and reusable for any future caller (load,
+/// pre-flight tools, MCP probes).
+pub(crate) fn load_model_manifest(spec: &str) -> Result<registry::Manifest, String> {
     let (name, version) = spec
         .split_once('@')
         .ok_or_else(|| format!("expected <name>@<version>, got \"{spec}\""))?;
@@ -110,18 +129,7 @@ fn run_check(args: &[String]) -> Result<Value, String> {
         ));
     }
     let bytes = std::fs::read(&manifest_path).map_err(|e| e.to_string())?;
-    let manifest: registry::Manifest =
-        serde_json::from_slice(&bytes).map_err(|e| format!("manifest parse: {e}"))?;
-    match compat::check_engine_compat(&manifest) {
-        Ok(()) => Ok(json!({
-            "status": "ok",
-            "model": format!("{name}@{version}"),
-            "requires_engine": manifest.requires_engine,
-            "gguf_version": manifest.gguf_version,
-            "arch": manifest.arch,
-        })),
-        Err(e) => Err(e.to_string()),
-    }
+    serde_json::from_slice(&bytes).map_err(|e| format!("manifest parse: {e}"))
 }
 
 fn embed_status_json() -> Value {
