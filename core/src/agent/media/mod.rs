@@ -16,6 +16,7 @@
 //! exercise the call paths before any real provider is configured.
 
 pub mod imagegen;
+pub mod imagegen_openai;
 pub mod stt;
 pub mod stt_cloud;
 pub mod tts;
