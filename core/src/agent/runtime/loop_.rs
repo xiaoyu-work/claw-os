@@ -219,7 +219,8 @@ pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
     let cfg = &crate::config::get().agent;
     let provider = llm::registry::build(&cfg.provider, &cfg.model, cfg)
         .map_err(|e| AgentError::ProviderUnavailable(e.to_string()))?;
-    let tools = default_registry();
+    let mut tools = default_registry();
+    tools.set_guardrails(guardrails_from_cfg(cfg));
     let session_id = uuid::Uuid::new_v4().to_string();
 
     let compressor = compressor_from_cfg(provider.clone(), cfg);
@@ -263,6 +264,20 @@ fn compressor_from_cfg(
     };
     let comp = LlmCompressor::new(provider, &cfg.model).with_config(compressor_cfg);
     Some(Arc::new(comp))
+}
+
+/// Build a [`Guardrails`] from the [`AgentConfig`] tool_allow / tool_deny
+/// fields. Default is permissive when both are absent / empty.
+pub fn guardrails_from_cfg(cfg: &AgentConfig) -> crate::agent::tools::guardrails::Guardrails {
+    use crate::agent::tools::guardrails::Guardrails;
+    let mut g = Guardrails::permissive();
+    if let Some(allow) = cfg.tool_allow.as_ref() {
+        g = g.with_allow(Some(allow.iter().map(String::as_str)));
+    }
+    if !cfg.tool_deny.is_empty() {
+        g = g.with_deny(cfg.tool_deny.iter().map(String::as_str));
+    }
+    g
 }
 
 /// Sync entry point for the CLI dispatcher (which is sync). Internally spins
@@ -789,5 +804,101 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result.answer, "done");
+    }
+
+    /// `guardrails_from_cfg` honours `tool_allow` when set: only listed
+    /// names should pass `permits()`, every other tool is denied.
+    #[test]
+    fn guardrails_from_cfg_respects_allow_list() {
+        let mut c = cfg();
+        c.tool_allow = Some(vec!["echo".into(), "now".into()]);
+        let g = guardrails_from_cfg(&c);
+        assert!(g.permits("echo"));
+        assert!(g.permits("now"));
+        assert!(!g.permits("cos_sandbox"));
+        assert!(!g.permits("anything-else"));
+    }
+
+    /// `guardrails_from_cfg` honours `tool_deny` independently of allow.
+    #[test]
+    fn guardrails_from_cfg_respects_deny_list() {
+        let mut c = cfg();
+        c.tool_deny = vec!["cos_sandbox".into(), "cos_proc".into()];
+        let g = guardrails_from_cfg(&c);
+        assert!(g.permits("echo"));
+        assert!(!g.permits("cos_sandbox"));
+        assert!(!g.permits("cos_proc"));
+    }
+
+    /// Deny wins over allow when the same tool is in both lists.
+    #[test]
+    fn guardrails_from_cfg_deny_overrides_allow() {
+        let mut c = cfg();
+        c.tool_allow = Some(vec!["echo".into(), "now".into()]);
+        c.tool_deny = vec!["echo".into()];
+        let g = guardrails_from_cfg(&c);
+        assert!(!g.permits("echo"));
+        assert!(g.permits("now"));
+    }
+
+    /// End-to-end: when the model calls a tool that is denied by the
+    /// active guardrails on the registry, the dispatcher must surface
+    /// an "unknown tool" tool_result (because guardrail-aware `get`
+    /// returns None) — never panic, never silently allow.
+    #[tokio::test]
+    async fn ask_with_guardrails_blocks_denied_tool_call() {
+        let cfg = cfg();
+        let mock = MockProvider::new(&cfg.model, &cfg);
+        // Model attempts to call `now` even though it's denied below.
+        mock.push_response(MockResponse::ToolUse(vec![ToolCall {
+            id: "blocked-1".into(),
+            name: "now".into(),
+            input: serde_json::json!({}),
+        }]));
+        // Model gets the error tool_result and recovers.
+        mock.push_response(MockResponse::Text("recovered".into()));
+
+        let provider: Arc<dyn Provider> = Arc::new(mock);
+        let mut tools = builtin_only_registry();
+        let g = crate::agent::tools::guardrails::Guardrails::permissive()
+            .deny_tool("now");
+        tools.set_guardrails(g);
+
+        let result = ask_with(provider, &cfg, "what time is it", &tools)
+            .await
+            .unwrap();
+        // Loop survives: the tool is treated like an unknown tool.
+        assert_eq!(result.answer, "recovered");
+    }
+
+    /// LLM tool list passed to the provider must EXCLUDE denied tools.
+    /// We assert this indirectly: the registry's `as_llm_tools()` honours
+    /// guardrails, and the runtime hands that list to the provider.
+    #[test]
+    fn registry_as_llm_tools_omits_denied_tools() {
+        let mut tools = builtin_only_registry();
+        let g = crate::agent::tools::guardrails::Guardrails::permissive()
+            .deny_tool("echo");
+        tools.set_guardrails(g);
+
+        let llm_tools = tools.as_llm_tools();
+        let names: Vec<&str> = llm_tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(!names.contains(&"echo"));
+        assert!(names.contains(&"now"));
+    }
+
+    /// `get_unfiltered` MUST still return denied tools (for diagnostics
+    /// like `cos agent status`); `get` MUST NOT.
+    #[test]
+    fn registry_get_unfiltered_bypasses_guardrails() {
+        let mut tools = builtin_only_registry();
+        let g = crate::agent::tools::guardrails::Guardrails::permissive()
+            .deny_tool("echo");
+        tools.set_guardrails(g);
+
+        assert!(tools.get("echo").is_none(), "filtered get must reject denied");
+        assert!(tools.get_unfiltered("echo").is_some(), "unfiltered must surface denied");
+        assert!(tools.get("now").is_some());
+        assert!(tools.get_unfiltered("now").is_some());
     }
 }

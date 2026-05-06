@@ -1,14 +1,20 @@
 //! Tool registry — collection of `Arc<dyn Tool>` keyed by name.
+//!
+//! Optionally carries a [`Guardrails`](super::guardrails::Guardrails) that
+//! restricts which tools the model can see and call. The default
+//! is `Guardrails::permissive()` (every registered tool is permitted).
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use super::guardrails::Guardrails;
 use super::Tool;
 use crate::agent::llm;
 
 #[derive(Default)]
 pub struct ToolRegistry {
     tools: HashMap<&'static str, Arc<dyn Tool>>,
+    guardrails: Guardrails,
 }
 
 impl ToolRegistry {
@@ -21,29 +27,70 @@ impl ToolRegistry {
         self.tools.insert(tool.name(), tool);
     }
 
+    /// Replace the active guardrails. Call once at construction time.
+    pub fn set_guardrails(&mut self, guardrails: Guardrails) {
+        self.guardrails = guardrails;
+    }
+
+    /// Borrow the active guardrails.
+    pub fn guardrails(&self) -> &Guardrails {
+        &self.guardrails
+    }
+
+    /// Returns `Some(tool)` only when the tool is registered AND permitted
+    /// by the active guardrails. Returns `None` for absent OR denied tools.
+    /// Used by the runtime turn dispatcher so denied calls are uniformly
+    /// rejected, regardless of whether the model saw the tool in its
+    /// schema list.
     pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
+        if !self.guardrails.permits(name) {
+            return None;
+        }
         self.tools.get(name).cloned()
     }
 
+    /// Like [`get`] but ignores guardrails. Use only when you specifically
+    /// need to bypass policy (e.g. printing the registered set in
+    /// diagnostics). Production runtime code should use [`get`].
+    pub fn get_unfiltered(&self, name: &str) -> Option<Arc<dyn Tool>> {
+        self.tools.get(name).cloned()
+    }
+
+    /// Names of every permitted tool, sorted.
     pub fn names(&self) -> Vec<&'static str> {
+        let mut names: Vec<&'static str> = self
+            .tools
+            .keys()
+            .copied()
+            .filter(|n| self.guardrails.permits(n))
+            .collect();
+        names.sort_unstable();
+        names
+    }
+
+    /// Names of every registered tool ignoring guardrails. For diagnostics.
+    pub fn names_unfiltered(&self) -> Vec<&'static str> {
         let mut names: Vec<&'static str> = self.tools.keys().copied().collect();
         names.sort_unstable();
         names
     }
 
     pub fn len(&self) -> usize {
-        self.tools.len()
+        self.names().len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.tools.is_empty()
+        self.len() == 0
     }
 
-    /// Convert to the LLM-trait-facing representation passed in `ChatRequest.tools`.
+    /// Convert to the LLM-trait-facing representation passed in
+    /// `ChatRequest.tools`. Honours guardrails — denied tools are NOT
+    /// surfaced to the model.
     pub fn as_llm_tools(&self) -> Vec<llm::Tool> {
         let mut out: Vec<llm::Tool> = self
             .tools
             .values()
+            .filter(|t| self.guardrails.permits(t.name()))
             .map(|t| llm::Tool {
                 name: t.name().to_string(),
                 description: t.description().to_string(),
@@ -71,6 +118,7 @@ pub fn default_registry() -> ToolRegistry {
     r.register(Arc::new(super::builtin::Now));
     r.register(Arc::new(super::delegate::Delegate));
     r.register(Arc::new(super::todo::Todo::default_tool()));
+    r.register(Arc::new(super::clarify::Clarify::new()));
     super::cos_proxy::register_all(&mut r);
     super::cos_apps::register_all(&mut r);
     super::media::register_default_media_tools(&mut r);
@@ -103,17 +151,18 @@ mod tests {
         assert!(r.get("now").is_some());
         assert!(r.get("cos_delegate").is_some());
         assert!(r.get("cos_todo").is_some());
+        assert!(r.get("cos_clarify").is_some());
         assert!(r.get("cos_sandbox").is_some());
         assert!(r.get("cos_sysinfo").is_some());
         assert!(r.get("cos_memory").is_some());
         assert!(r.get("cos_tts").is_some());
         assert!(r.get("cos_stt").is_some());
         assert!(r.get("cos_imagegen").is_some());
-        // 2 builtins + cos_delegate + cos_todo + every cos_proxy tool
+        // 2 builtins + cos_delegate + cos_todo + cos_clarify + every cos_proxy tool
         // (primitives + cos_memory) + every cos_app tool + 3 media tools,
         // plus optionally cos_recall (registered iff default DB opens).
         let expected_min =
-            4 + super::super::cos_proxy::total_count() + super::super::cos_apps::count() + 3;
+            5 + super::super::cos_proxy::total_count() + super::super::cos_apps::count() + 3;
         let expected_max = expected_min + 1;
         assert!(
             (expected_min..=expected_max).contains(&r.len()),

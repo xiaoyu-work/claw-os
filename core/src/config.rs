@@ -188,6 +188,21 @@ pub struct AgentConfig {
     /// and want full-fidelity recall.
     #[serde(default = "default_redact_memory_enabled")]
     pub redact_memory_enabled: bool,
+
+    /// Tool guardrails: optional allow-list. When `Some`, only the named
+    /// tools are surfaced to the model and accepted by the dispatcher;
+    /// every other registered tool is denied. When `None` (default)
+    /// every registered tool is permitted unless `tool_deny` blocks it.
+    /// Allow-list semantics: empty `Some(vec![])` denies everything.
+    #[serde(default)]
+    pub tool_allow: Option<Vec<String>>,
+
+    /// Tool guardrails: explicit deny-list. Always wins over `tool_allow`.
+    /// Useful for shipping the same agent loop in different security
+    /// contexts (e.g. prevent prompt-injection from invoking
+    /// `cos_sandbox` exec by adding it here).
+    #[serde(default)]
+    pub tool_deny: Vec<String>,
 }
 
 /// Embedding service configuration. Reads from `[embed]` block.
@@ -541,6 +556,8 @@ impl Default for AgentConfig {
             compress_summary_max_tokens: default_compress_summary_max(),
             think_scrub_enabled: default_think_scrub_enabled(),
             redact_memory_enabled: default_redact_memory_enabled(),
+            tool_allow: None,
+            tool_deny: Vec::new(),
         }
     }
 }

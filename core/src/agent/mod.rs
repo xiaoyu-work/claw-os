@@ -56,7 +56,10 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "chat" => Ok(json!({"status": "not_implemented", "phase": "1+"})),
         "status" => {
             let cfg = &crate::config::get().agent;
-            let tools = tools::registry::default_registry();
+            let mut tools = tools::registry::default_registry();
+            tools.set_guardrails(crate::agent::runtime::loop_::guardrails_from_cfg(cfg));
+            let registered_total = tools.names_unfiltered().len();
+            let permitted = tools.names();
             // Best-effort memory DB stats — read-only, never mutates.
             let memory_stats = match memory::sqlite_fts::MemoryDb::open_default() {
                 Ok(db) => {
@@ -82,8 +85,11 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
                 "max_turns": cfg.max_turns,
                 "max_tokens": cfg.max_tokens,
                 "temperature": cfg.temperature,
-                "tools_registered": tools.len(),
-                "tools": tools.names(),
+                "tools_registered": registered_total,
+                "tools_permitted": permitted.len(),
+                "tools": permitted,
+                "tool_allow": cfg.tool_allow.clone(),
+                "tool_deny": cfg.tool_deny.clone(),
                 "skills_loaded": skills_load.loaded_count(),
                 "skills_disabled": skills_load.disabled.len(),
                 "skills_errors": skills_load.errors.len(),
