@@ -156,7 +156,7 @@ impl TtsProvider for NoopTts {
         request.validate()?;
         let format = request.format.unwrap_or(AudioFormat::Wav);
         let audio = match format {
-            AudioFormat::Wav => empty_wav_header(),
+            AudioFormat::Wav => super::voice::wav::empty_header(1, 22_050),
             _ => Vec::new(),
         };
         Ok(TtsResponse {
@@ -165,27 +165,6 @@ impl TtsProvider for NoopTts {
             sample_rate: Some(22_050),
         })
     }
-}
-
-/// Minimal WAV header: 44 bytes, RIFF/WAVE, mono 16-bit PCM @ 22050,
-/// zero data chunk. Good enough that an ffmpeg-style probe sees a
-/// well-formed (silent) file.
-fn empty_wav_header() -> Vec<u8> {
-    let mut v = Vec::with_capacity(44);
-    v.extend_from_slice(b"RIFF");
-    v.extend_from_slice(&36u32.to_le_bytes());
-    v.extend_from_slice(b"WAVE");
-    v.extend_from_slice(b"fmt ");
-    v.extend_from_slice(&16u32.to_le_bytes());
-    v.extend_from_slice(&1u16.to_le_bytes());
-    v.extend_from_slice(&1u16.to_le_bytes());
-    v.extend_from_slice(&22_050u32.to_le_bytes());
-    v.extend_from_slice(&44_100u32.to_le_bytes());
-    v.extend_from_slice(&2u16.to_le_bytes());
-    v.extend_from_slice(&16u16.to_le_bytes());
-    v.extend_from_slice(b"data");
-    v.extend_from_slice(&0u32.to_le_bytes());
-    v
 }
 
 #[cfg(test)]

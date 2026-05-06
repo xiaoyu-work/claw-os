@@ -18,6 +18,7 @@
 pub mod imagegen;
 pub mod stt;
 pub mod tts;
+pub mod voice;
 
 /// Shared error type for the media subsystem. Per-backend errors
 /// (HTTP, decode, validation) translate into one of these variants
