@@ -1,0 +1,14 @@
+{
+  "name": "gateway-zulip",
+  "version": "0.1.0",
+  "description": "Zulip chat gateway. POSTs to https://<realm>.zulipchat.com/api/v1/messages with HTTP basic auth (bot email + API key). Stdlib-only — no third-party Python deps.",
+  "runtime": "python",
+  "commands": {
+    "send": "Send a message to a Zulip stream/topic or private DM (positional: recipient text)",
+    "status": "Show whether the bot site / email / api-key are configured"
+  },
+  "dependencies": {
+    "credentials": ["zulip_site", "zulip_bot_email", "zulip_bot_api_key"],
+    "engines": []
+  }
+}

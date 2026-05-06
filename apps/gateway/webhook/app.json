@@ -1,0 +1,14 @@
+{
+  "name": "gateway-webhook",
+  "version": "0.1.0",
+  "description": "Generic outbound webhook gateway. POSTs JSON (or text) to any configured URL with optional Bearer / Basic / X-API-Key / HMAC-SHA256 auth. Stdlib-only — no third-party Python deps.",
+  "runtime": "python",
+  "commands": {
+    "send": "Send a message body to a target webhook URL (positional: target body)",
+    "status": "Show whether a default webhook URL / shared-secret is configured"
+  },
+  "dependencies": {
+    "credentials": ["webhook_default_url", "webhook_default_secret"],
+    "engines": []
+  }
+}
