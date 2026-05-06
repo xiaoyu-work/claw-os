@@ -247,6 +247,90 @@ pub fn slugify(title: &str) -> String {
     }
 }
 
+/// Extract tool-call names from a stored assistant message body.
+///
+/// `render_message_content` (memory/sqlite_fts.rs) writes tool_use
+/// blocks as `[tool_use:NAME] {json}` lines. This parser walks each
+/// line of the stored content and pulls the NAME out of every such
+/// header. Returns an empty Vec when no tool calls are present.
+///
+/// Lossy by design: we don't try to recover the JSON `input` blob —
+/// the curator only needs distinct tool names. This means schema
+/// migration is optional: existing memory.db rows already contain
+/// enough information to feed Curator::propose.
+pub fn extract_tool_calls_from_content(content: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        let Some(rest) = trimmed.strip_prefix("[tool_use:") else {
+            continue;
+        };
+        let Some(end) = rest.find(']') else {
+            continue;
+        };
+        let name = rest[..end].trim();
+        if !name.is_empty() {
+            out.push(name.to_string());
+        }
+    }
+    out
+}
+
+/// Map a stored memory message into a ConversationTurn for the
+/// curator. Tool-result messages collapse into `TurnRole::Tool` with
+/// no tool_calls (those came from the *previous* assistant message).
+/// `user_acceptance` is left to the caller to set — sentiment
+/// detection isn't this module's job.
+pub fn message_to_turn(role: &str, content: &str) -> Option<ConversationTurn> {
+    let role = match role {
+        "user" => TurnRole::User,
+        "assistant" => TurnRole::Assistant,
+        "tool" => TurnRole::Tool,
+        // System and unknown roles are not curated.
+        _ => return None,
+    };
+    let tool_calls = if matches!(role, TurnRole::Assistant) {
+        extract_tool_calls_from_content(content)
+    } else {
+        Vec::new()
+    };
+    Some(ConversationTurn {
+        role,
+        content: content.to_string(),
+        tool_calls,
+        user_acceptance: false,
+    })
+}
+
+/// Naive sentiment heuristic: returns true when `content` reads as
+/// a user acceptance ("thanks", "perfect", "exactly", etc.). Used
+/// when the runtime hasn't supplied an explicit acceptance signal.
+/// English-only; conservative to avoid false positives.
+pub fn looks_like_acceptance(content: &str) -> bool {
+    let lower = content.to_lowercase();
+    let trimmed = lower.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    // Multi-word phrases scanned against the full body.
+    const PHRASES: &[&str] = &[
+        "exactly what i wanted",
+        "exactly what i needed",
+        "works perfectly",
+        "that worked",
+        "that's it",
+        "thats it",
+        "great work",
+        "nice work",
+    ];
+    if PHRASES.iter().any(|p| trimmed.contains(p)) {
+        return true;
+    }
+    // Standalone single-word reactions (allow trailing punctuation).
+    let stripped = trimmed.trim_end_matches(|c: char| matches!(c, '.' | '!' | '?' | ',' | ' '));
+    matches!(stripped, "thanks" | "thank you" | "perfect" | "great" | "awesome" | "amazing")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -435,5 +519,79 @@ mod tests {
         } else {
             panic!("expected Drafted");
         }
+    }
+
+    #[test]
+    fn extract_tool_calls_from_content_pulls_names() {
+        let body = "[tool_use:cos_fs] {\"path\":\"/etc\"}\n[tool_use:cos_proc] {}";
+        let names = extract_tool_calls_from_content(body);
+        assert_eq!(names, vec!["cos_fs", "cos_proc"]);
+    }
+
+    #[test]
+    fn extract_tool_calls_ignores_lines_without_marker() {
+        let body = "Plain assistant text\n[tool_result] something\n[tool_use:cos_log] {}";
+        let names = extract_tool_calls_from_content(body);
+        assert_eq!(names, vec!["cos_log"]);
+    }
+
+    #[test]
+    fn extract_tool_calls_skips_malformed_marker() {
+        // Missing closing bracket -> no tool name.
+        assert!(extract_tool_calls_from_content("[tool_use:never_closed").is_empty());
+        // Empty name between colon and bracket -> skipped.
+        assert!(extract_tool_calls_from_content("[tool_use:]").is_empty());
+    }
+
+    #[test]
+    fn message_to_turn_assistant_extracts_tool_calls() {
+        let t = message_to_turn(
+            "assistant",
+            "[tool_use:cos_fs] {\"path\":\"/x\"}\n[tool_use:cos_proc] {}",
+        )
+        .unwrap();
+        assert_eq!(t.role, TurnRole::Assistant);
+        assert_eq!(t.tool_calls, vec!["cos_fs", "cos_proc"]);
+        assert!(!t.user_acceptance);
+    }
+
+    #[test]
+    fn message_to_turn_user_does_not_scan_for_tool_use() {
+        // Even if a user message contains the marker text, it should
+        // be ignored — only assistants emit tool calls.
+        let t = message_to_turn("user", "[tool_use:fake] {}").unwrap();
+        assert_eq!(t.role, TurnRole::User);
+        assert!(t.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn message_to_turn_tool_role_carries_no_calls() {
+        let t = message_to_turn("tool", "[tool_result] success").unwrap();
+        assert_eq!(t.role, TurnRole::Tool);
+        assert!(t.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn message_to_turn_unknown_role_is_none() {
+        assert!(message_to_turn("system", "hi").is_none());
+        assert!(message_to_turn("frob", "hi").is_none());
+    }
+
+    #[test]
+    fn looks_like_acceptance_picks_up_phrases() {
+        assert!(looks_like_acceptance("thanks!"));
+        assert!(looks_like_acceptance("Perfect."));
+        assert!(looks_like_acceptance("That worked, exactly what I needed"));
+        assert!(looks_like_acceptance("Works perfectly"));
+    }
+
+    #[test]
+    fn looks_like_acceptance_avoids_false_positives() {
+        assert!(!looks_like_acceptance("I think it's broken"));
+        assert!(!looks_like_acceptance("perfectly broken"));
+        assert!(!looks_like_acceptance(""));
+        // Word "thanks" embedded in another phrase shouldn't trigger
+        // the standalone-word path.
+        assert!(!looks_like_acceptance("thanksgiving plans"));
     }
 }

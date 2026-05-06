@@ -111,8 +111,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "nudge" => nudge_cmd(args),
         "mcp" => mcp_cmd(args),
         "usage" => usage_cmd(args),
+        "curator" => curator_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator"
         )),
     }
 }
@@ -793,6 +794,120 @@ fn usage_cmd(args: &[String]) -> Result<Value, String> {
     }))
 }
 
+/// `cos agent curator propose <session_id> [--accept] [--limit <n>]`
+/// `[--no-require-acceptance] [--min-tools <n>] [--min-turns <n>]`
+/// — distil a recorded conversation into a draft skill manifest.
+///
+/// Reads the session's history from the memory DB, infers tool
+/// usage from the stored `[tool_use:NAME] ...` markers (no schema
+/// migration required), and runs the deterministic
+/// [`crate::agent::curator::Curator`] pure-function pipeline.
+///
+/// Output is a JSON object with either a `draft` (id/title/desc/
+/// allowed_tools/confidence) or a `not_enough` reason.
+fn curator_cmd(args: &[String]) -> Result<Value, String> {
+    use crate::agent::curator::{
+        looks_like_acceptance, message_to_turn, ConversationTurn, Curator, CuratorConfig,
+        CuratorOutcome,
+    };
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("");
+    if sub != "propose" {
+        return Err(format!(
+            "unknown curator subcommand: '{sub}'. try: propose <session_id> [--accept] [--limit <n>] [--no-require-acceptance] [--min-tools <n>] [--min-turns <n>]"
+        ));
+    }
+    let sid = args
+        .get(1)
+        .cloned()
+        .filter(|s| !s.is_empty() && !s.starts_with("--"))
+        .ok_or_else(|| "usage: cos agent curator propose <session_id> [flags]".to_string())?;
+
+    let mut limit: usize = 200;
+    let mut force_accept = false;
+    let mut config = CuratorConfig::default();
+    let mut i = 2usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--accept" => {
+                force_accept = true;
+                i += 1;
+            }
+            "--no-require-acceptance" => {
+                config.require_user_acceptance = false;
+                i += 1;
+            }
+            "--limit" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--limit needs <n>".to_string())?;
+                limit = v.parse().map_err(|e| format!("--limit: {e}"))?;
+                i += 2;
+            }
+            "--min-tools" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--min-tools needs <n>".to_string())?;
+                config.min_distinct_tools = v.parse().map_err(|e| format!("--min-tools: {e}"))?;
+                i += 2;
+            }
+            "--min-turns" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--min-turns needs <n>".to_string())?;
+                config.min_assistant_turns =
+                    v.parse().map_err(|e| format!("--min-turns: {e}"))?;
+                i += 2;
+            }
+            other => return Err(format!("unknown flag for `curator propose`: {other}")),
+        }
+    }
+
+    let db = memory::sqlite_fts::MemoryDb::open_default()
+        .map_err(|e| format!("memory db unavailable: {e}"))?;
+    let rows = db
+        .recent(&sid, limit)
+        .map_err(|e| format!("memory recent: {e}"))?;
+    if rows.is_empty() {
+        return Ok(json!({
+            "session_id": sid,
+            "outcome": "not_enough",
+            "reason": "session has no recorded messages",
+        }));
+    }
+    let mut turns: Vec<ConversationTurn> = rows
+        .iter()
+        .filter_map(|r| message_to_turn(&r.role, &r.content))
+        .collect();
+    if force_accept {
+        if let Some(last) = turns.last_mut() {
+            last.user_acceptance = true;
+        }
+    } else {
+        // Apply the conservative built-in heuristic to user turns
+        // when the runtime didn't supply an explicit signal.
+        for t in turns.iter_mut() {
+            if matches!(t.role, crate::agent::curator::TurnRole::User) && looks_like_acceptance(&t.content) {
+                t.user_acceptance = true;
+            }
+        }
+    }
+    let curator = Curator::new(config);
+    match curator.propose(&turns) {
+        CuratorOutcome::Drafted(draft) => Ok(json!({
+            "session_id": sid,
+            "outcome": "drafted",
+            "messages_scanned": rows.len(),
+            "draft": draft,
+        })),
+        CuratorOutcome::NotEnough { reason } => Ok(json!({
+            "session_id": sid,
+            "outcome": "not_enough",
+            "messages_scanned": rows.len(),
+            "reason": reason,
+        })),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1112,5 +1227,47 @@ mod tests {
     fn mcp_serve_deny_without_value_errors() {
         let err = mcp_cmd(&["serve".into(), "--deny".into()]).unwrap_err();
         assert!(err.contains("--deny"));
+    }
+
+    #[test]
+    fn curator_unknown_subcommand_lists_propose() {
+        let err = curator_cmd(&["bogus".into()]).unwrap_err();
+        assert!(err.contains("propose"));
+    }
+
+    #[test]
+    fn curator_propose_requires_session_id() {
+        let err = curator_cmd(&["propose".into()]).unwrap_err();
+        assert!(err.to_lowercase().contains("usage"));
+    }
+
+    #[test]
+    fn curator_propose_rejects_flag_as_session_id() {
+        // `propose --accept` without a session id must error rather
+        // than silently treating "--accept" as the session id.
+        let err = curator_cmd(&["propose".into(), "--accept".into()]).unwrap_err();
+        assert!(err.to_lowercase().contains("usage"));
+    }
+
+    #[test]
+    fn curator_propose_unknown_flag_is_rejected() {
+        let err = curator_cmd(&[
+            "propose".into(),
+            "any-sid".into(),
+            "--bogus".into(),
+        ])
+        .unwrap_err();
+        assert!(err.to_lowercase().contains("unknown flag"));
+    }
+
+    #[test]
+    fn curator_propose_min_turns_requires_value() {
+        let err = curator_cmd(&[
+            "propose".into(),
+            "any-sid".into(),
+            "--min-turns".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("--min-turns"));
     }
 }
