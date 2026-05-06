@@ -582,6 +582,24 @@ fn nudge_cmd(args: &[String]) -> Result<Value, String> {
     }
 }
 
+/// Apply ad-hoc `--allow` / `--deny` overrides to a base
+/// [`AgentConfig`] for one-shot scoping (currently used by
+/// `cos agent mcp serve`). Returns the merged config without
+/// mutating the input. Extracted so the merge logic can be tested
+/// independently of the blocking server entry point.
+fn merge_mcp_overrides(
+    base: &crate::config::AgentConfig,
+    allow: Option<Vec<String>>,
+    deny: Vec<String>,
+) -> crate::config::AgentConfig {
+    let mut out = base.clone();
+    if let Some(a) = allow {
+        out.tool_allow = Some(a);
+    }
+    out.tool_deny.extend(deny);
+    out
+}
+
 /// `cos agent mcp [serve|status]` — MCP (Model Context Protocol)
 /// server that exposes the agent's tool registry to external clients
 /// over newline-delimited JSON-RPC on stdio. `serve` runs in the
@@ -609,10 +627,46 @@ fn mcp_cmd(args: &[String]) -> Result<Value, String> {
         "serve" => {
             // Build the registry exactly as `agent::ask` would, so
             // the same guardrails/approval policy applies to MCP-
-            // initiated tool calls.
+            // initiated tool calls. Ad-hoc --allow / --deny flags
+            // narrow the tool surface for this serve invocation
+            // without touching global config — useful for exposing a
+            // restricted catalogue to a single MCP client.
             let cfg = &crate::config::get().agent;
+            let mut allow_overrides: Option<Vec<String>> = None;
+            let mut deny_overrides: Vec<String> = Vec::new();
+            let mut i = 1usize;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--allow" => {
+                        let v = args
+                            .get(i + 1)
+                            .ok_or_else(|| "--allow needs <tool-name>".to_string())?;
+                        allow_overrides
+                            .get_or_insert_with(Vec::new)
+                            .push(v.clone());
+                        i += 2;
+                    }
+                    "--deny" => {
+                        let v = args
+                            .get(i + 1)
+                            .ok_or_else(|| "--deny needs <tool-name>".to_string())?;
+                        deny_overrides.push(v.clone());
+                        i += 2;
+                    }
+                    other => {
+                        return Err(format!(
+                            "unknown flag for `mcp serve`: {other}. try --allow <name> | --deny <name>"
+                        ))
+                    }
+                }
+            }
             let mut tools = tools::registry::default_registry();
-            tools.set_guardrails(crate::agent::runtime::loop_::guardrails_from_cfg(cfg));
+            // Honour allow override when supplied; otherwise inherit
+            // cfg.tool_allow via the standard helper. --deny appends
+            // to (does not replace) cfg.tool_deny so global denies
+            // still apply.
+            let merged = merge_mcp_overrides(cfg, allow_overrides, deny_overrides);
+            tools.set_guardrails(crate::agent::runtime::loop_::guardrails_from_cfg(&merged));
             tools.set_approval(crate::agent::runtime::loop_::approval_from_cfg(cfg));
             let registry = Arc::new(tools);
             let server = McpServer::new(
@@ -1004,5 +1058,59 @@ mod tests {
                 .and_then(|x| x.as_str()),
             Some("anthropic")
         );
+    }
+
+    #[test]
+    fn merge_mcp_overrides_no_flags_is_clone() {
+        let mut base = crate::config::AgentConfig::default();
+        base.tool_allow = Some(vec!["echo".into()]);
+        base.tool_deny = vec!["cos_sandbox".into()];
+        let merged = merge_mcp_overrides(&base, None, Vec::new());
+        assert_eq!(merged.tool_allow, base.tool_allow);
+        assert_eq!(merged.tool_deny, base.tool_deny);
+    }
+
+    #[test]
+    fn merge_mcp_overrides_allow_replaces_base_allow() {
+        let mut base = crate::config::AgentConfig::default();
+        base.tool_allow = Some(vec!["echo".into()]);
+        let merged = merge_mcp_overrides(&base, Some(vec!["now".into()]), Vec::new());
+        assert_eq!(merged.tool_allow, Some(vec!["now".into()]));
+    }
+
+    #[test]
+    fn merge_mcp_overrides_deny_appends_to_base() {
+        let mut base = crate::config::AgentConfig::default();
+        base.tool_deny = vec!["cos_sandbox".into()];
+        let merged = merge_mcp_overrides(&base, None, vec!["cos_proc".into()]);
+        assert_eq!(merged.tool_deny, vec!["cos_sandbox".to_string(), "cos_proc".to_string()]);
+    }
+
+    #[test]
+    fn merge_mcp_overrides_does_not_mutate_base() {
+        let mut base = crate::config::AgentConfig::default();
+        base.tool_allow = Some(vec!["a".into()]);
+        let _ = merge_mcp_overrides(&base, Some(vec!["b".into()]), vec!["c".into()]);
+        // Base unchanged.
+        assert_eq!(base.tool_allow, Some(vec!["a".into()]));
+        assert!(base.tool_deny.is_empty());
+    }
+
+    #[test]
+    fn mcp_serve_unknown_flag_is_rejected() {
+        let err = mcp_cmd(&["serve".into(), "--bogus".into(), "x".into()]).unwrap_err();
+        assert!(err.to_lowercase().contains("unknown flag"));
+    }
+
+    #[test]
+    fn mcp_serve_allow_without_value_errors() {
+        let err = mcp_cmd(&["serve".into(), "--allow".into()]).unwrap_err();
+        assert!(err.contains("--allow"));
+    }
+
+    #[test]
+    fn mcp_serve_deny_without_value_errors() {
+        let err = mcp_cmd(&["serve".into(), "--deny".into()]).unwrap_err();
+        assert!(err.contains("--deny"));
     }
 }
