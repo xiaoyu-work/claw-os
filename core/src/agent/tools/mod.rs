@@ -6,6 +6,7 @@
 //! adds the cos-primitive proxies (fs/exec/proc/net/web/etc.).
 
 pub mod builtin;
+pub mod clarify;
 pub mod cos_proxy;
 pub mod delegate;
 pub mod guardrails;
