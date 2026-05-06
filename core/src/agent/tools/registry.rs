@@ -72,6 +72,7 @@ pub fn default_registry() -> ToolRegistry {
     r.register(Arc::new(super::delegate::Delegate));
     r.register(Arc::new(super::todo::Todo::default_tool()));
     super::cos_proxy::register_all(&mut r);
+    super::media::register_default_media_tools(&mut r);
     // Best-effort: open the default memory DB; if it fails (read-only fs,
     // etc.) the agent still works, just without searchable history.
     match crate::agent::memory::sqlite_fts::MemoryDb::open_default() {
@@ -104,10 +105,13 @@ mod tests {
         assert!(r.get("cos_sandbox").is_some());
         assert!(r.get("cos_sysinfo").is_some());
         assert!(r.get("cos_memory").is_some());
+        assert!(r.get("cos_tts").is_some());
+        assert!(r.get("cos_stt").is_some());
+        assert!(r.get("cos_imagegen").is_some());
         // 2 builtins + cos_delegate + cos_todo + every cos_proxy tool
-        // (primitives + cos_memory), plus optionally cos_recall
-        // (registered iff default DB opens).
-        let expected_min = 4 + super::super::cos_proxy::total_count();
+        // (primitives + cos_memory) + 3 media tools, plus optionally
+        // cos_recall (registered iff default DB opens).
+        let expected_min = 4 + super::super::cos_proxy::total_count() + 3;
         let expected_max = expected_min + 1;
         assert!(
             (expected_min..=expected_max).contains(&r.len()),

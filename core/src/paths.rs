@@ -126,6 +126,16 @@ pub fn agent_skills_dir() -> PathBuf {
     agent_state_dir().join("skills")
 }
 
+/// Output sink for media-tool-generated artifacts (TTS audio,
+/// generated images). Lives under `data_dir/agent/media/outputs/`.
+/// Tools write deterministic uuid-suffixed files here and return
+/// the path to the model so it can hand the user a click-to-open
+/// reference rather than inlining multi-MB binary bytes through
+/// the LLM context.
+pub fn agent_media_outputs_dir() -> PathBuf {
+    agent_state_dir().join("media").join("outputs")
+}
+
 pub fn model_runtime_socket() -> PathBuf {
     runtime_dir().join("model-runtime.sock")
 }

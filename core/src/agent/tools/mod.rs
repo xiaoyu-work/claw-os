@@ -10,6 +10,7 @@ pub mod clarify;
 pub mod cos_proxy;
 pub mod delegate;
 pub mod guardrails;
+pub mod media;
 pub mod registry;
 pub mod todo;
 
