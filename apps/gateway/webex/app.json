@@ -1,0 +1,19 @@
+{
+  "name": "gateway-webex",
+  "version": "0.1.0",
+  "description": "Outbound-only Webex (Cisco Webex App / Webex Teams) gateway via REST API. send POSTs a Markdown or text message to a room, person email, or person id.",
+  "language": "python",
+  "entry": "main.py",
+  "runtime": {
+    "python": ">=3.10"
+  },
+  "credentials": [
+    {
+      "name": "webex_bot_token",
+      "description": "Webex bot access token (from developer.webex.com → My Webex Apps → Create a Bot). Format: 'NjY...' (env override: COS_WEBEX_BOT_TOKEN)"
+    }
+  ],
+  "scopes": [
+    "credential:webex_bot_token"
+  ]
+}

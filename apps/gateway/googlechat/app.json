@@ -1,0 +1,19 @@
+{
+  "name": "gateway-googlechat",
+  "version": "0.1.0",
+  "description": "Outbound-only Google Chat gateway via space Incoming Webhook. send POSTs a text or card v2 message to the configured webhook URL.",
+  "language": "python",
+  "entry": "main.py",
+  "runtime": {
+    "python": ">=3.10"
+  },
+  "credentials": [
+    {
+      "name": "googlechat_webhook_url",
+      "description": "Google Chat Incoming Webhook URL (Space → Apps → Manage webhooks). e.g. https://chat.googleapis.com/v1/spaces/AAA/messages?key=...&token=... (env override: COS_GOOGLECHAT_WEBHOOK_URL)"
+    }
+  ],
+  "scopes": [
+    "credential:googlechat_webhook_url"
+  ]
+}

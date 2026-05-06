@@ -1,0 +1,19 @@
+{
+  "name": "gateway-teams",
+  "version": "0.1.0",
+  "description": "Outbound-only Microsoft Teams gateway via Incoming Webhook (legacy connector or Workflows webhook). send POSTs an Adaptive Card or simple message card to the configured channel webhook.",
+  "language": "python",
+  "entry": "main.py",
+  "runtime": {
+    "python": ">=3.10"
+  },
+  "credentials": [
+    {
+      "name": "teams_webhook_url",
+      "description": "Microsoft Teams Incoming Webhook URL (Connector or Workflows). e.g. https://outlook.office.com/webhook/... (env override: COS_TEAMS_WEBHOOK_URL)"
+    }
+  ],
+  "scopes": [
+    "credential:teams_webhook_url"
+  ]
+}

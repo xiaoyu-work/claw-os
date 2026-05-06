@@ -1,0 +1,19 @@
+{
+  "name": "gateway-mattermost",
+  "version": "0.1.0",
+  "description": "Outbound-only Mattermost gateway via Incoming Webhook. send POSTs a text message (and optional channel/username/icon overrides) to the configured webhook URL.",
+  "language": "python",
+  "entry": "main.py",
+  "runtime": {
+    "python": ">=3.10"
+  },
+  "credentials": [
+    {
+      "name": "mattermost_webhook_url",
+      "description": "Mattermost Incoming Webhook URL, e.g. https://mm.example.com/hooks/abcdefg... (env override: COS_MATTERMOST_WEBHOOK_URL)"
+    }
+  ],
+  "scopes": [
+    "credential:mattermost_webhook_url"
+  ]
+}
