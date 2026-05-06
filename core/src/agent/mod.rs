@@ -31,6 +31,7 @@ pub mod onboarding;
 pub mod prompt;
 pub mod runtime;
 pub mod safety;
+pub mod service;
 pub mod shell_hooks;
 pub mod skills;
 pub mod tools;
@@ -108,7 +109,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
                 "memory": memory_stats,
             }))
         }
-        "service" => Ok(json!({"status": "not_implemented", "phase": "1+"})),
+        "service" => service::cmd(args),
         "insights" => insights_cmd(args),
         "recall" => recall_cmd(args),
         "sessions" => sessions_cmd(args),

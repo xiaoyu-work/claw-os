@@ -378,13 +378,13 @@ fn builtin_apps() -> Vec<(
             ("show", "Show complete trace tree with operations and timing"),
             ("list", "List all traces (--status, --limit)"),
         ]),
-        ("agent", "OS-native agent subsystem — runtime, memory, skills, LLM providers, tools (Phase 0 skeleton)", vec![
-            ("ask", "Single-shot prompt: cos agent ask \"<prompt>\" (Phase 1+)"),
+        ("agent", "OS-native agent subsystem — runtime, memory, skills, LLM providers, tools, FS job queue", vec![
+            ("ask", "Single-shot prompt with full tool/memory loop: cos agent ask \"<prompt>\""),
             ("stream", "Single-shot streaming text-only path (no tools, no memory). Tokens stream to stderr; final JSON envelope to stdout: cos agent stream \"<prompt>\""),
             ("live", "Multi-turn streaming agent: same registry/memory/MCP as `ask` but tokens stream to stderr live as they arrive: cos agent live \"<prompt>\""),
             ("chat", "Interactive multi-turn REPL: cos agent chat [--session <id>] [--no-stream] [--no-memory] [--show-tools] [--max-turns N]. Slash commands: /quit /help /session /clear /history [N] /tools."),
             ("status", "Show agent runtime status — providers, tools, skills"),
-            ("service", "Manage long-running agent service (Phase 1+)"),
+            ("service", "Filesystem-based job queue: cos agent service {submit \"<prompt>\" [--session ID] [--max-turns N] | list [--status pending|running|done|cancelled] [--limit N] | status [<job_id>] | result <job_id> [--wait-secs N] | work [--once] [--poll-ms N] [--max-jobs N] | cancel <job_id> | prune [--older-than-days N] [--keep-last N]}. Composes with cos cron + cos service for managed background workers."),
             ("insights", "Aggregate LLM run-log: cos agent insights [overall|recent N|sessions] [--since <ISO>] [--until <ISO>] [--ok|--error] [--provider <n>] [--model <n>]"),
             ("recall", "FTS5 search across recorded conversations: cos agent recall \"<query>\" [limit]"),
             ("sessions", "Inspect / manage conversation sessions in the memory DB: cos agent sessions [list [N] | title <id> | set-title <id> \"<title>\" | count [<id>] | clear <id> --yes]"),

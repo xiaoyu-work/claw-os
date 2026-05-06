@@ -171,6 +171,15 @@ pub fn agent_shell_hooks_log_path() -> PathBuf {
     agent_state_dir().join("shell-hooks.jsonl")
 }
 
+/// Directory tree for the agent service FS-based job queue. Lives under
+/// `data_dir/agent/jobs/` with three subdirectories: `pending/`,
+/// `running/`, and `done/`. Each job is a JSON file named
+/// `<job_id>.json`. Atomic state transitions use `fs::rename` between
+/// these directories. See [`crate::agent::service`].
+pub fn agent_jobs_dir() -> PathBuf {
+    agent_state_dir().join("jobs")
+}
+
 pub fn model_runtime_socket() -> PathBuf {
     runtime_dir().join("model-runtime.sock")
 }
