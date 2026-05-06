@@ -148,6 +148,14 @@ pub fn agent_media_outputs_dir() -> PathBuf {
     agent_state_dir().join("media").join("outputs")
 }
 
+/// JSON file storing curator drafts (proposed/accepted/rejected).
+/// Lives at `data_dir/agent/curator-drafts.json`. The file is
+/// rewritten atomically (tmp + rename) on every mutation. See
+/// [`crate::agent::curator_drafts`].
+pub fn agent_curator_drafts_path() -> PathBuf {
+    agent_state_dir().join("curator-drafts.json")
+}
+
 pub fn model_runtime_socket() -> PathBuf {
     runtime_dir().join("model-runtime.sock")
 }

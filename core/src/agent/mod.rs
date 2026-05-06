@@ -19,6 +19,7 @@
 
 pub mod context;
 pub mod curator;
+pub mod curator_drafts;
 pub mod display;
 pub mod insights;
 pub mod llm;
@@ -873,25 +874,27 @@ fn usage_cmd(args: &[String]) -> Result<Value, String> {
 
 /// `cos agent curator propose <session_id> [--accept] [--limit <n>]`
 /// `[--no-require-acceptance] [--min-tools <n>] [--min-turns <n>]`
-/// — distil a recorded conversation into a draft skill manifest.
+/// `[--no-save]`
 ///
-/// Reads the session's history from the memory DB, infers tool
-/// usage from the stored `[tool_use:NAME] ...` markers (no schema
-/// migration required), and runs the deterministic
-/// [`crate::agent::curator::Curator`] pure-function pipeline.
-///
-/// Output is a JSON object with either a `draft` (id/title/desc/
-/// allowed_tools/confidence) or a `not_enough` reason.
+/// `cos agent curator drafts list [--status proposed|accepted|rejected]`
+/// `cos agent curator drafts show <draft_id>`
+/// `cos agent curator drafts accept <draft_id> [--note "<text>"]`
+/// `cos agent curator drafts reject <draft_id> [--note "<text>"]`
+/// `cos agent curator drafts delete <draft_id>`
 fn curator_cmd(args: &[String]) -> Result<Value, String> {
     use crate::agent::curator::{
         looks_like_acceptance, message_to_turn, ConversationTurn, Curator, CuratorConfig,
         CuratorOutcome,
     };
     let sub = args.first().map(|s| s.as_str()).unwrap_or("");
-    if sub != "propose" {
-        return Err(format!(
-            "unknown curator subcommand: '{sub}'. try: propose <session_id> [--accept] [--limit <n>] [--no-require-acceptance] [--min-tools <n>] [--min-turns <n>]"
-        ));
+    match sub {
+        "propose" => {}
+        "drafts" => return curator_drafts_cmd(&args[1..]),
+        other => {
+            return Err(format!(
+                "unknown curator subcommand: '{other}'. try: propose <session_id> [...] | drafts list|show|accept|reject|delete"
+            ));
+        }
     }
     let sid = args
         .get(1)
@@ -901,6 +904,7 @@ fn curator_cmd(args: &[String]) -> Result<Value, String> {
 
     let mut limit: usize = 200;
     let mut force_accept = false;
+    let mut save = true;
     let mut config = CuratorConfig::default();
     let mut i = 2usize;
     while i < args.len() {
@@ -911,6 +915,10 @@ fn curator_cmd(args: &[String]) -> Result<Value, String> {
             }
             "--no-require-acceptance" => {
                 config.require_user_acceptance = false;
+                i += 1;
+            }
+            "--no-save" => {
+                save = false;
                 i += 1;
             }
             "--limit" => {
@@ -970,12 +978,31 @@ fn curator_cmd(args: &[String]) -> Result<Value, String> {
     }
     let curator = Curator::new(config);
     match curator.propose(&turns) {
-        CuratorOutcome::Drafted(draft) => Ok(json!({
-            "session_id": sid,
-            "outcome": "drafted",
-            "messages_scanned": rows.len(),
-            "draft": draft,
-        })),
+        CuratorOutcome::Drafted(draft) => {
+            let mut payload = json!({
+                "session_id": sid,
+                "outcome": "drafted",
+                "messages_scanned": rows.len(),
+                "draft": draft,
+            });
+            if save {
+                match curator_drafts::DraftStore::open_default()
+                    .and_then(|mut store| store.add(sid.clone(), draft.clone()))
+                {
+                    Ok(id) => {
+                        payload["draft_id"] = json!(id);
+                        payload["saved"] = json!(true);
+                    }
+                    Err(e) => {
+                        payload["saved"] = json!(false);
+                        payload["save_error"] = json!(e);
+                    }
+                }
+            } else {
+                payload["saved"] = json!(false);
+            }
+            Ok(payload)
+        }
         CuratorOutcome::NotEnough { reason } => Ok(json!({
             "session_id": sid,
             "outcome": "not_enough",
@@ -984,6 +1011,135 @@ fn curator_cmd(args: &[String]) -> Result<Value, String> {
         })),
     }
 }
+
+/// `cos agent curator drafts ...` dispatcher. Pulled into its own
+/// helper so the propose path stays readable.
+fn curator_drafts_cmd(args: &[String]) -> Result<Value, String> {
+    use curator_drafts::{DraftStatus, DraftStore};
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("");
+    match sub {
+        "list" => {
+            let mut filter: Option<DraftStatus> = None;
+            let mut i = 1usize;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--status" => {
+                        let v = args
+                            .get(i + 1)
+                            .ok_or_else(|| "--status needs <proposed|accepted|rejected>".to_string())?;
+                        filter = Some(parse_draft_status(v)?);
+                        i += 2;
+                    }
+                    other => return Err(format!("unknown flag for `drafts list`: {other}")),
+                }
+            }
+            let store = DraftStore::open_default()?;
+            let drafts: Vec<Value> = store
+                .list()
+                .iter()
+                .filter(|r| filter.map(|s| r.status == s).unwrap_or(true))
+                .map(|r| {
+                    json!({
+                        "id": r.id,
+                        "session_id": r.session_id,
+                        "created_ts_ms": r.created_ts_ms,
+                        "status": r.status,
+                        "suggested_id": r.draft.suggested_id,
+                        "title": r.draft.title,
+                        "confidence": r.draft.confidence,
+                        "tools": r.draft.allowed_tools,
+                        "note": r.note,
+                    })
+                })
+                .collect();
+            Ok(json!({
+                "store": store.path().display().to_string(),
+                "count": drafts.len(),
+                "drafts": drafts,
+            }))
+        }
+        "show" => {
+            let id = args
+                .get(1)
+                .cloned()
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| "usage: cos agent curator drafts show <id>".to_string())?;
+            let store = DraftStore::open_default()?;
+            let rec = store
+                .get(&id)
+                .ok_or_else(|| format!("no draft with id {id}"))?;
+            Ok(json!(rec))
+        }
+        "accept" | "reject" => {
+            let id = args
+                .get(1)
+                .cloned()
+                .filter(|s| !s.is_empty() && !s.starts_with("--"))
+                .ok_or_else(|| format!("usage: cos agent curator drafts {sub} <id> [--note ...]"))?;
+            let mut note: Option<String> = None;
+            let mut i = 2usize;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--note" => {
+                        note = Some(
+                            args.get(i + 1)
+                                .cloned()
+                                .ok_or_else(|| "--note needs text".to_string())?,
+                        );
+                        i += 2;
+                    }
+                    other => return Err(format!("unknown flag for `drafts {sub}`: {other}")),
+                }
+            }
+            let status = if sub == "accept" {
+                DraftStatus::Accepted
+            } else {
+                DraftStatus::Rejected
+            };
+            let mut store = DraftStore::open_default()?;
+            store.set_status(&id, status, note)?;
+            let rec = store.get(&id).cloned().ok_or_else(|| {
+                format!("draft {id} disappeared after status change (race)")
+            })?;
+            Ok(json!({
+                "id": rec.id,
+                "status": rec.status,
+                "note": rec.note,
+            }))
+        }
+        "delete" => {
+            let id = args
+                .get(1)
+                .cloned()
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| "usage: cos agent curator drafts delete <id>".to_string())?;
+            let mut store = DraftStore::open_default()?;
+            store.delete(&id)?;
+            Ok(json!({"id": id, "deleted": true}))
+        }
+        other => Err(format!(
+            "unknown drafts subcommand: '{other}'. try: list | show <id> | accept <id> | reject <id> | delete <id>"
+        )),
+    }
+}
+
+fn parse_draft_status(s: &str) -> Result<curator_drafts::DraftStatus, String> {
+    match s {
+        "proposed" => Ok(curator_drafts::DraftStatus::Proposed),
+        "accepted" => Ok(curator_drafts::DraftStatus::Accepted),
+        "rejected" => Ok(curator_drafts::DraftStatus::Rejected),
+        other => Err(format!(
+            "invalid status '{other}': try proposed|accepted|rejected"
+        )),
+    }
+}
+/// Reads the session's history from the memory DB, infers tool
+/// usage from the stored `[tool_use:NAME] ...` markers (no schema
+/// migration required), and runs the deterministic
+/// [`crate::agent::curator::Curator`] pure-function pipeline.
+///
+/// Output is a JSON object with either a `draft` (id/title/desc/
+/// allowed_tools/confidence) or a `not_enough` reason.
 
 #[cfg(test)]
 mod tests {
