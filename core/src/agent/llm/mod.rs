@@ -12,6 +12,7 @@ pub mod auxiliary;
 pub mod credential_pool;
 pub mod error_classifier;
 pub mod metadata;
+pub mod accumulate;
 pub mod aws_eventstream;
 pub mod rate_limit;
 pub mod registry;

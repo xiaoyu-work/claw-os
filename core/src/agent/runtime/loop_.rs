@@ -15,6 +15,7 @@ use crate::agent::context::compressor::{
     self, Compressor, CompressorConfig, LlmCompressor,
 };
 use crate::agent::context::think_scrub::ThinkScrubber;
+use crate::agent::llm::accumulate::StreamSink;
 use crate::agent::llm::{self, Message, Provider};
 use crate::agent::memory::sqlite_fts::{self, MemoryDb};
 use crate::agent::prompt;
@@ -93,6 +94,25 @@ pub async fn ask_with_compressor(
     compressor: Arc<dyn Compressor>,
 ) -> Result<AskResult, AgentError> {
     ask_inner(provider, cfg, user_prompt, tools, db, Some(compressor)).await
+}
+
+/// Streaming variant of [`ask_with`] / [`ask_with_memory`]. Drives
+/// each turn through `provider.chat_stream()` and forwards every
+/// `StreamEvent` to `sink`. Multi-turn agentic loops with live
+/// token feeds (TUI / websocket / SSE-to-client) plug their sink
+/// here.
+///
+/// Pass `db = None` to disable memory recording (mirrors `ask_with`);
+/// pass `Some((db, sid))` to record (mirrors `ask_with_memory`).
+pub async fn ask_with_stream(
+    provider: Arc<dyn Provider>,
+    cfg: &AgentConfig,
+    user_prompt: &str,
+    tools: &ToolRegistry,
+    db: Option<(&MemoryDb, &str)>,
+    sink: Arc<dyn StreamSink>,
+) -> Result<AskResult, AgentError> {
+    ask_inner_streaming(provider, cfg, user_prompt, tools, db, None, sink).await
 }
 
 async fn ask_inner(
@@ -239,6 +259,123 @@ async fn ask_inner(
 
     Err(AgentError::MaxTurnsExceeded(cfg.max_turns))
 }
+
+/// Streaming twin of [`ask_inner`]. Identical behaviour except each
+/// turn calls [`super::turn::run_turn_streaming`] instead of
+/// [`super::turn::run_turn`], so events flow through `sink` as they
+/// stream from the provider.
+async fn ask_inner_streaming(
+    provider: Arc<dyn Provider>,
+    cfg: &AgentConfig,
+    user_prompt: &str,
+    tools: &ToolRegistry,
+    recorder: Option<(&MemoryDb, &str)>,
+    compressor: Option<Arc<dyn Compressor>>,
+    sink: Arc<dyn StreamSink>,
+) -> Result<AskResult, AgentError> {
+    let redactor: Option<Redactor> = if cfg.redact_memory_enabled {
+        Some(Redactor::default_set())
+    } else {
+        None
+    };
+
+    if let Some((db, sid)) = recorder {
+        let to_record = redactor
+            .as_ref()
+            .map(|r| r.redact(user_prompt))
+            .unwrap_or_else(|| user_prompt.to_string());
+        if let Err(e) = db.record_message(sid, "user", &to_record) {
+            tracing::warn!("memory: failed to record user prompt: {e}");
+        }
+    }
+
+    let extra = cfg.system_prompt_path.as_deref().map(Path::new);
+    let system = prompt::build_system_prompt(extra);
+
+    let mut messages: Vec<Message> = vec![Message::user_text(user_prompt)];
+    let llm_tools = tools.as_llm_tools();
+    let session_id = recorder.map(|(_, sid)| sid.to_string()).unwrap_or_default();
+
+    for turn in 1..=cfg.max_turns {
+        if cfg.think_scrub_enabled {
+            let new_msgs =
+                ThinkScrubber::new().scrub_messages(std::mem::take(&mut messages));
+            messages = new_msgs;
+        }
+
+        if let Some(c) = compressor.as_ref() {
+            if c.should_compress(Some(&system), &messages) {
+                messages = c.compress(Some(&system), std::mem::take(&mut messages)).await;
+            }
+        }
+
+        let len_before = messages.len();
+        let outcome = super::turn::run_turn_streaming(
+            provider.clone(),
+            &cfg.model,
+            &system,
+            &mut messages,
+            tools,
+            &llm_tools,
+            cfg.max_tokens,
+            cfg.temperature,
+            recorder.map(|(_, sid)| sid),
+            sink.clone(),
+        )
+        .await?;
+
+        if let Some((db, sid)) = recorder {
+            for new_msg in &messages[len_before..] {
+                let role = sqlite_fts::role_str(new_msg.role);
+                let content = sqlite_fts::render_message_content(new_msg);
+                if content.is_empty() {
+                    continue;
+                }
+                let to_record = redactor
+                    .as_ref()
+                    .map(|r| r.redact(&content))
+                    .unwrap_or(content);
+                if let Err(e) = db.record_message(sid, role, &to_record) {
+                    tracing::warn!("memory: failed to record {role} message: {e}");
+                }
+            }
+        }
+
+        if let super::turn::TurnOutcome::Final(answer) = outcome {
+            if let Some((db, sid)) = recorder {
+                if matches!(db.title_for(sid), Ok(None)) {
+                    let aux = match auxiliary_from_cfg(cfg) {
+                        Ok(a) => a,
+                        Err(e) => {
+                            tracing::warn!(
+                                "title: auxiliary build failed: {e}; using heuristic"
+                            );
+                            None
+                        }
+                    };
+                    let title = crate::agent::title::generate_title(
+                        aux.as_ref(),
+                        user_prompt,
+                    )
+                    .await;
+                    if let Err(e) = db.set_title(sid, &title) {
+                        tracing::warn!("title: failed to record session title: {e}");
+                    }
+                }
+            }
+            return Ok(AskResult {
+                answer,
+                turns: turn,
+                provider: provider.name().to_string(),
+                model: cfg.model.clone(),
+                session_id,
+            });
+        }
+    }
+
+    Err(AgentError::MaxTurnsExceeded(cfg.max_turns))
+}
+
 
 /// Convenience: read `cfg` from global config, build the default tool
 /// registry, construct the registered provider, open the default memory DB,
@@ -1440,5 +1577,110 @@ mod tests {
 
         let result = ask_with(provider, &cfg, "echo hi", &tools).await.unwrap();
         assert_eq!(result.answer, "done");
+    }
+
+    // ---- Streaming integration ----------------------------------------
+
+    use crate::agent::llm::accumulate::StreamSink;
+    use crate::agent::llm::StreamEvent;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct CapturingSink {
+        events: Mutex<Vec<StreamEvent>>,
+    }
+    impl StreamSink for CapturingSink {
+        fn on_event(&self, event: &StreamEvent) {
+            self.events.lock().unwrap().push(event.clone());
+        }
+    }
+
+    #[tokio::test]
+    async fn ask_with_stream_text_response_calls_sink_and_returns_answer() {
+        // The mock provider's chat_stream() shims to chat() and emits
+        // Message + Done — exactly the non-truly-streaming-provider
+        // case the accumulator handles via the explicit-Message path.
+        let cfg = cfg();
+        let provider: Arc<dyn Provider> =
+            Arc::new(MockProvider::new(&cfg.model, &cfg));
+        let tools = builtin_only_registry();
+        let sink: Arc<CapturingSink> = Arc::default();
+        let result = ask_with_stream(
+            provider,
+            &cfg,
+            "hello stream",
+            &tools,
+            None,
+            sink.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.turns, 1);
+        assert!(result.answer.contains("hello stream"));
+        let events = sink.events.lock().unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::Done { .. })),
+            "sink missing Done event; got {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ask_with_stream_drives_tool_loop_through_streaming_path() {
+        // Verify streaming run_turn correctly handles the
+        // Done-with-ToolUse path, dispatches the tool, and
+        // continues to a final answer.
+        let cfg = cfg();
+        let mock = MockProvider::new(&cfg.model, &cfg);
+        mock.push_response(MockResponse::ToolUse(vec![ToolCall {
+            id: "call_s1".into(),
+            name: "echo".into(),
+            input: serde_json::json!({"text": "stream-ping"}),
+        }]));
+        mock.push_response(MockResponse::Text("done streaming".into()));
+
+        let provider: Arc<dyn Provider> = Arc::new(mock);
+        let tools = builtin_only_registry();
+        let sink: Arc<CapturingSink> = Arc::default();
+        let result = ask_with_stream(
+            provider,
+            &cfg,
+            "use echo through stream",
+            &tools,
+            None,
+            sink.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.turns, 2);
+        assert_eq!(result.answer, "done streaming");
+        // Sink should have observed events from BOTH turns.
+        let events = sink.events.lock().unwrap();
+        let dones = events
+            .iter()
+            .filter(|e| matches!(e, StreamEvent::Done { .. }))
+            .count();
+        assert_eq!(dones, 2, "expected one Done per turn; got {events:?}");
+    }
+
+    #[tokio::test]
+    async fn ask_with_stream_propagates_provider_error() {
+        let cfg = cfg();
+        let mock = MockProvider::new(&cfg.model, &cfg);
+        mock.push_response(MockResponse::Error(crate::agent::llm::LlmError::Auth));
+        let provider: Arc<dyn Provider> = Arc::new(mock);
+        let tools = builtin_only_registry();
+        let sink: Arc<CapturingSink> = Arc::default();
+        let res = ask_with_stream(
+            provider,
+            &cfg,
+            "boom",
+            &tools,
+            None,
+            sink,
+        )
+        .await;
+        assert!(matches!(res, Err(AgentError::Llm(_))));
     }
 }

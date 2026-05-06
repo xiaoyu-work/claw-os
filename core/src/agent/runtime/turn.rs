@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::agent::llm::{
+    accumulate::{accumulate_stream, StreamSink},
     run_log::{self, LlmRunRecord},
     ChatRequest, ChatResponse, ContentBlock, FinishReason, Message, Role, Tool as LlmTool,
     ToolChoice, ToolCall,
@@ -164,6 +165,126 @@ pub async fn run_turn(
             // declared it's done.
             Ok(TurnOutcome::Final(extract_text(&response)))
         }
+        FinishReason::ToolUse => Ok(TurnOutcome::ContinueWithTools),
+    }
+}
+
+/// Streaming variant of [`run_turn`] that drives the provider via
+/// [`crate::agent::llm::Provider::chat_stream`] and forwards every
+/// streamed event to `sink` before assembling them back into a
+/// `ChatResponse`. The rest of the turn logic (tool dispatch,
+/// message append, finish-reason handling) is identical to
+/// [`run_turn`].
+///
+/// Live-token UIs (TUI, websocket, SSE-to-client) plug their
+/// `StreamSink` here. `retry_policy` is intentionally unused —
+/// streaming retries would require the provider to surface the
+/// retryable error before any bytes flow, which the current
+/// `chat_stream` contract doesn't guarantee.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_turn_streaming(
+    provider: Arc<dyn crate::agent::llm::Provider>,
+    model: &str,
+    system: &str,
+    messages: &mut Vec<Message>,
+    tools: &ToolRegistry,
+    llm_tools: &[LlmTool],
+    max_tokens: u32,
+    temperature: f32,
+    session_id: Option<&str>,
+    sink: Arc<dyn StreamSink>,
+) -> Result<TurnOutcome, super::loop_::AgentError> {
+    let mut request = ChatRequest {
+        model: model.to_string(),
+        messages: messages.clone(),
+        system: Some(system.to_string()),
+        tools: llm_tools.to_vec(),
+        tool_choice: ToolChoice::Auto,
+        max_tokens: Some(max_tokens),
+        temperature: Some(temperature),
+        top_p: None,
+        stop_sequences: vec![],
+        extra: serde_json::Value::Null,
+    };
+
+    if provider.supports_prompt_cache() {
+        crate::agent::prompt::caching::mark_system_cached(&mut request);
+        if !request.tools.is_empty() {
+            crate::agent::prompt::caching::mark_tools_cached(&mut request);
+        }
+    }
+
+    let start = Instant::now();
+    let stream_result = provider.chat_stream(request).await;
+    let chat_result: crate::agent::llm::Result<ChatResponse> = match stream_result {
+        Ok(stream) => accumulate_stream(stream, sink.clone(), model).await,
+        Err(e) => Err(e),
+    };
+    let duration_ms = start.elapsed().as_millis() as u64;
+
+    let engine = provider.engine_info();
+    let provider_name = provider.name().to_string();
+
+    let response = match chat_result {
+        Ok(resp) => {
+            let rec = LlmRunRecord::from_success(
+                &provider_name,
+                model,
+                engine,
+                resp.finish_reason,
+                &resp.usage,
+                duration_ms,
+                session_id,
+            );
+            run_log::record(&rec);
+            resp
+        }
+        Err(e) => {
+            let rec = LlmRunRecord::from_error(
+                &provider_name,
+                model,
+                engine,
+                &format!("{e}"),
+                duration_ms,
+                session_id,
+            );
+            run_log::record(&rec);
+            return Err(super::loop_::AgentError::Llm(e));
+        }
+    };
+
+    messages.push(Message {
+        role: Role::Assistant,
+        content: response.content.clone(),
+    });
+
+    let tool_calls = collect_tool_calls(&response);
+
+    if tool_calls.is_empty() {
+        let text = extract_text(&response);
+        return Ok(TurnOutcome::Final(text));
+    }
+
+    let mut result_blocks: Vec<ContentBlock> = Vec::with_capacity(tool_calls.len());
+    for call in &tool_calls {
+        let result = dispatch_tool(tools, call).await;
+        result_blocks.push(ContentBlock::ToolResult {
+            tool_use_id: call.id.clone(),
+            is_error: result.is_error,
+            content: result.content,
+        });
+    }
+    messages.push(Message {
+        role: Role::User,
+        content: result_blocks,
+    });
+
+    match response.finish_reason {
+        FinishReason::Stop
+        | FinishReason::Length
+        | FinishReason::Refusal
+        | FinishReason::ContentFilter
+        | FinishReason::Other => Ok(TurnOutcome::Final(extract_text(&response))),
         FinishReason::ToolUse => Ok(TurnOutcome::ContinueWithTools),
     }
 }
