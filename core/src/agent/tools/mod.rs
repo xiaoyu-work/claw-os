@@ -7,6 +7,7 @@
 
 pub mod builtin;
 pub mod clarify;
+pub mod cos_apps;
 pub mod cos_proxy;
 pub mod delegate;
 pub mod guardrails;
