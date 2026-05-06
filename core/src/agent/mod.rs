@@ -24,6 +24,7 @@ pub mod llm;
 pub mod media;
 pub mod memory;
 pub mod nudge;
+pub mod onboarding;
 pub mod prompt;
 pub mod runtime;
 pub mod safety;
