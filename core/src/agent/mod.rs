@@ -5876,9 +5876,10 @@ fn curator_cmd(args: &[String]) -> Result<Value, String> {
         "propose" => {}
         "drafts" => return curator_drafts_cmd(&args[1..]),
         "author" => return curator_author_cmd(&args[1..]),
+        "scan" => return curator_scan_cmd(&args[1..]),
         other => {
             return Err(format!(
-                "unknown curator subcommand: '{other}'. try: propose <session_id> [...] | drafts list|show|accept|reject|delete | author <draft_id> [--model <name>] [--write] [--out <path>]"
+                "unknown curator subcommand: '{other}'. try: propose <session_id> [...] | drafts list|show|accept|reject|delete | author <draft_id> [--model <name>] [--write] [--out <path>] | scan [--limit N] [--save] [--min-tools N] [--min-turns N] [--no-require-acceptance]"
             ));
         }
     }
@@ -6418,6 +6419,214 @@ fn curator_author_cmd(args: &[String]) -> Result<Value, String> {
     }
 
     Ok(payload)
+}
+
+/// `cos agent curator scan [flags]` — batch-propose drafts across
+/// recent sessions.
+///
+/// Walks the most recent N sessions in the memory DB, runs the
+/// deterministic [`Curator::propose`] pipeline against each, and
+/// returns a per-session report. By default nothing is persisted
+/// (`saved: false` for every result) so the user can preview;
+/// `--save` mirrors `propose --save` and writes accepted drafts
+/// to the [`curator_drafts::DraftStore`].
+///
+/// Sessions that already produced a saved draft are skipped (we
+/// don't redraft the same conversation on every scan), unless
+/// `--reprocess` is set.
+///
+/// Flags:
+///  * `--limit N` — examine the most recent N sessions
+///    (default 25).
+///  * `--save` — persist successful drafts.
+///  * `--reprocess` — also include sessions that already have
+///    a saved draft.
+///  * `--min-tools N` — override [`CuratorConfig::min_distinct_tools`].
+///  * `--min-turns N` — override [`CuratorConfig::min_assistant_turns`].
+///  * `--no-require-acceptance` — drop the user-acceptance gate.
+///  * `--message-limit N` — cap messages-per-session pulled from
+///    the DB (default 200, mirrors `propose --limit`).
+fn curator_scan_cmd(args: &[String]) -> Result<Value, String> {
+    use crate::agent::curator::{
+        looks_like_acceptance, message_to_turn, ConversationTurn, Curator, CuratorConfig,
+        CuratorOutcome, TurnRole,
+    };
+    use curator_drafts::DraftStore;
+
+    let mut session_limit: usize = 25;
+    let mut message_limit: usize = 200;
+    let mut save = false;
+    let mut reprocess = false;
+    let mut config = CuratorConfig::default();
+
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--limit" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--limit needs <n>".to_string())?;
+                session_limit = v.parse().map_err(|e| format!("--limit: {e}"))?;
+                i += 2;
+            }
+            "--message-limit" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--message-limit needs <n>".to_string())?;
+                message_limit = v.parse().map_err(|e| format!("--message-limit: {e}"))?;
+                i += 2;
+            }
+            "--save" => {
+                save = true;
+                i += 1;
+            }
+            "--reprocess" => {
+                reprocess = true;
+                i += 1;
+            }
+            "--no-require-acceptance" => {
+                config.require_user_acceptance = false;
+                i += 1;
+            }
+            "--min-tools" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--min-tools needs <n>".to_string())?;
+                config.min_distinct_tools = v.parse().map_err(|e| format!("--min-tools: {e}"))?;
+                i += 2;
+            }
+            "--min-turns" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--min-turns needs <n>".to_string())?;
+                config.min_assistant_turns =
+                    v.parse().map_err(|e| format!("--min-turns: {e}"))?;
+                i += 2;
+            }
+            other => return Err(format!("unknown flag for `curator scan`: {other}")),
+        }
+    }
+
+    let db = memory::sqlite_fts::MemoryDb::open_default()
+        .map_err(|e| format!("memory db unavailable: {e}"))?;
+    let sessions = db
+        .sessions(session_limit)
+        .map_err(|e| format!("sessions query failed: {e}"))?;
+
+    // Pre-load existing drafts so `reprocess: false` can cheaply
+    // skip already-distilled sessions. Falling back to "no
+    // existing drafts" if the store is unreadable lets scan
+    // still work as a preview surface.
+    let drafts_store = DraftStore::open_default().ok();
+    let already_drafted: std::collections::HashSet<String> = drafts_store
+        .as_ref()
+        .map(|s| s.list().iter().map(|r| r.session_id.clone()).collect())
+        .unwrap_or_default();
+
+    let mut store_for_save = if save {
+        Some(DraftStore::open_default().map_err(|e| format!("draft store: {e}"))?)
+    } else {
+        None
+    };
+
+    let curator = Curator::new(config);
+
+    let mut results: Vec<Value> = Vec::new();
+    let mut drafted = 0usize;
+    let mut saved = 0usize;
+    let mut skipped_existing = 0usize;
+    let mut skipped_empty = 0usize;
+    let mut not_enough = 0usize;
+
+    for s in &sessions {
+        if !reprocess && already_drafted.contains(&s.session_id) {
+            skipped_existing += 1;
+            results.push(json!({
+                "session_id": s.session_id,
+                "outcome": "skipped_existing",
+                "title": s.title,
+            }));
+            continue;
+        }
+        let rows = match db.recent(&s.session_id, message_limit) {
+            Ok(r) => r,
+            Err(e) => {
+                results.push(json!({
+                    "session_id": s.session_id,
+                    "outcome": "error",
+                    "error": format!("recent: {e}"),
+                }));
+                continue;
+            }
+        };
+        if rows.is_empty() {
+            skipped_empty += 1;
+            results.push(json!({
+                "session_id": s.session_id,
+                "outcome": "skipped_empty",
+            }));
+            continue;
+        }
+        let mut turns: Vec<ConversationTurn> = rows
+            .iter()
+            .filter_map(|r| message_to_turn(&r.role, &r.content))
+            .collect();
+        // Apply the conservative built-in heuristic to user turns
+        // (matches `propose` without --accept).
+        for t in turns.iter_mut() {
+            if matches!(t.role, TurnRole::User) && looks_like_acceptance(&t.content) {
+                t.user_acceptance = true;
+            }
+        }
+        match curator.propose(&turns) {
+            CuratorOutcome::Drafted(draft) => {
+                drafted += 1;
+                let mut entry = json!({
+                    "session_id": s.session_id,
+                    "outcome": "drafted",
+                    "messages_scanned": rows.len(),
+                    "title": s.title,
+                    "draft": draft,
+                });
+                if let Some(store) = store_for_save.as_mut() {
+                    match store.add(s.session_id.clone(), draft) {
+                        Ok(id) => {
+                            entry["draft_id"] = json!(id);
+                            entry["saved"] = json!(true);
+                            saved += 1;
+                        }
+                        Err(e) => {
+                            entry["saved"] = json!(false);
+                            entry["save_error"] = json!(e);
+                        }
+                    }
+                } else {
+                    entry["saved"] = json!(false);
+                }
+                results.push(entry);
+            }
+            CuratorOutcome::NotEnough { reason } => {
+                not_enough += 1;
+                results.push(json!({
+                    "session_id": s.session_id,
+                    "outcome": "not_enough",
+                    "messages_scanned": rows.len(),
+                    "reason": reason,
+                }));
+            }
+        }
+    }
+
+    Ok(json!({
+        "session_limit": session_limit,
+        "scanned": sessions.len(),
+        "drafted": drafted,
+        "saved": saved,
+        "not_enough": not_enough,
+        "skipped_existing": skipped_existing,
+        "skipped_empty": skipped_empty,
+        "results": results,
+    }))
 }
 
 /// Reads the session's history from the memory DB, infers tool
@@ -7579,6 +7788,47 @@ mod tests {
             err.contains("definitely-not-real") || err.contains("draft store"),
             "want missing-id or draft-store error, got: {err}"
         );
+    }
+
+    #[test]
+    fn curator_scan_unknown_flag_rejected() {
+        let err = curator_cmd(&["scan".into(), "--bogus".into()]).unwrap_err();
+        assert!(err.to_lowercase().contains("unknown flag"));
+    }
+
+    #[test]
+    fn curator_scan_limit_requires_value() {
+        let err = curator_cmd(&["scan".into(), "--limit".into()]).unwrap_err();
+        assert!(err.contains("--limit"));
+    }
+
+    #[test]
+    fn curator_scan_returns_envelope_when_db_available() {
+        // The scan command may succeed (returning an envelope with
+        // zero scanned sessions) or fail with a "memory db
+        // unavailable" error depending on test environment. Both
+        // are acceptable; what matters is no panic and a recognised
+        // outcome shape.
+        match curator_cmd(&["scan".into(), "--limit".into(), "1".into()]) {
+            Ok(v) => {
+                assert!(v.get("scanned").is_some(), "envelope missing 'scanned'");
+                assert!(v.get("results").is_some(), "envelope missing 'results'");
+                assert!(v.get("drafted").is_some(), "envelope missing 'drafted'");
+            }
+            Err(e) => {
+                assert!(
+                    e.contains("memory db") || e.contains("draft store"),
+                    "unexpected scan error: {e}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn curator_scan_listed_in_unknown_subcommand_help() {
+        let err = curator_cmd(&["bogus".into()]).unwrap_err();
+        assert!(err.contains("scan"), "want scan listed in help, got: {err}");
+        assert!(err.contains("author"), "want author listed in help, got: {err}");
     }
 
     #[test]
