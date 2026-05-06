@@ -128,8 +128,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "tools" => tools_cmd(args),
         "guardrails" => guardrails_cmd(args),
         "approval" => approval_cmd(args),
+        "todo" => todo_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | title | summarise | classify | tools | guardrails | approval"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | title | summarise | classify | tools | guardrails | approval | todo"
         )),
     }
 }
@@ -1866,6 +1867,197 @@ fn approval_cmd(args: &[String]) -> Result<Value, String> {
         }
         other => Err(format!(
             "unknown approval subcommand: {other}. try: show | check <tool> [--input '<json>']"
+        )),
+    }
+}
+
+/// `cos agent todo [list <session_id>|add <session_id> <id> <title> [--note <text>]|set-status <session_id> <id> <pending|in_progress|completed|cancelled>|remove <session_id> <id>|clear <session_id> --yes|path]`
+///
+/// Surface for the per-session `TodoStore` (the same store the
+/// `cos_todo` LLM tool writes to). Lets operators inspect or
+/// hand-edit a session's todo list out-of-band — useful when a
+/// long-running session has accumulated state and you want to
+/// see/correct it without re-running the agent.
+///
+/// `clear` requires `--yes` so a typo can't wipe a session's todos.
+/// `add` and `remove` are convenience wrappers over read+write
+/// (whole-list semantics; concurrent writers will race, just like
+/// the on-disk format expects).
+fn todo_cmd(args: &[String]) -> Result<Value, String> {
+    todo_cmd_at(args, &crate::agent::tools::todo::TodoStore::default_store())
+}
+
+/// Inner implementation taking an explicit store, so unit tests can
+/// point at a tempdir without trampling the live `<data_dir>/agent/todos/`.
+fn todo_cmd_at(
+    args: &[String],
+    store: &crate::agent::tools::todo::TodoStore,
+) -> Result<Value, String> {
+    use crate::agent::tools::todo::{TodoItem, TodoList, TodoStatus};
+
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("path");
+    match sub {
+        "path" => Ok(json!({
+            "path": crate::paths::agent_todos_dir().display().to_string(),
+        })),
+        "list" => {
+            let session = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| "usage: cos agent todo list <session_id>".to_string())?;
+            let list = store.read(&session)?;
+            let counts = todo_status_counts(&list);
+            Ok(json!({
+                "session_id": session,
+                "count": list.items.len(),
+                "by_status": counts,
+                "items": list.items,
+            }))
+        }
+        "add" => {
+            let session = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| "usage: cos agent todo add <session_id> <id> <title> [--note <text>]".to_string())?;
+            let id = args
+                .get(2)
+                .cloned()
+                .ok_or_else(|| "todo add: id required".to_string())?;
+            // Title can have spaces; collect non-flag positionals after id and join.
+            let mut note: Option<String> = None;
+            let mut positional: Vec<String> = Vec::new();
+            let mut i = 3usize;
+            while i < args.len() {
+                if args[i].as_str() == "--note" {
+                    note = Some(
+                        args.get(i + 1)
+                            .cloned()
+                            .ok_or_else(|| "--note needs a value".to_string())?,
+                    );
+                    i += 2;
+                } else {
+                    positional.push(args[i].clone());
+                    i += 1;
+                }
+            }
+            if positional.is_empty() {
+                return Err("todo add: title required".into());
+            }
+            let title = positional.join(" ");
+
+            let mut list = store.read(&session)?;
+            if list.items.iter().any(|item| item.id == id) {
+                return Err(format!("todo id already exists: {id}"));
+            }
+            list.items.push(TodoItem {
+                id: id.clone(),
+                title,
+                status: TodoStatus::default(),
+                note,
+            });
+            store.write(&session, &list)?;
+            Ok(json!({
+                "session_id": session,
+                "added": id,
+                "count": list.items.len(),
+            }))
+        }
+        "set-status" | "set_status" => {
+            let session = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| "usage: cos agent todo set-status <session_id> <id> <status>".to_string())?;
+            let id = args
+                .get(2)
+                .cloned()
+                .ok_or_else(|| "todo set-status: id required".to_string())?;
+            let status_raw = args
+                .get(3)
+                .cloned()
+                .ok_or_else(|| "todo set-status: status required".to_string())?;
+            let status = parse_todo_status(&status_raw)?;
+            let updated = store.set_status(&session, &id, status)?;
+            Ok(json!({
+                "session_id": session,
+                "id": id,
+                "status": status.as_str(),
+                "items": updated.items,
+            }))
+        }
+        "remove" => {
+            let session = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| "usage: cos agent todo remove <session_id> <id>".to_string())?;
+            let id = args
+                .get(2)
+                .cloned()
+                .ok_or_else(|| "todo remove: id required".to_string())?;
+            let mut list = store.read(&session)?;
+            let before = list.items.len();
+            list.items.retain(|item| item.id != id);
+            if list.items.len() == before {
+                return Err(format!("todo id not found: {id}"));
+            }
+            store.write(&session, &list)?;
+            Ok(json!({
+                "session_id": session,
+                "removed": id,
+                "count": list.items.len(),
+            }))
+        }
+        "clear" => {
+            let session = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| "usage: cos agent todo clear <session_id> --yes".to_string())?;
+            let confirmed = args.iter().skip(2).any(|a| a == "--yes");
+            if !confirmed {
+                return Err("refusing to clear without --yes".into());
+            }
+            store.clear(&session)?;
+            Ok(json!({
+                "session_id": session,
+                "cleared": true,
+            }))
+        }
+        other => Err(format!(
+            "unknown todo subcommand: {other}. try: list | add | set-status | remove | clear --yes | path"
+        )),
+    }
+}
+
+fn todo_status_counts(list: &crate::agent::tools::todo::TodoList) -> serde_json::Value {
+    use crate::agent::tools::todo::TodoStatus;
+    let mut pending = 0u64;
+    let mut in_progress = 0u64;
+    let mut completed = 0u64;
+    let mut cancelled = 0u64;
+    for item in &list.items {
+        match item.status {
+            TodoStatus::Pending => pending += 1,
+            TodoStatus::InProgress => in_progress += 1,
+            TodoStatus::Completed => completed += 1,
+            TodoStatus::Cancelled => cancelled += 1,
+        }
+    }
+    json!({
+        "pending": pending,
+        "in_progress": in_progress,
+        "completed": completed,
+        "cancelled": cancelled,
+    })
+}
+
+fn parse_todo_status(raw: &str) -> Result<crate::agent::tools::todo::TodoStatus, String> {
+    use crate::agent::tools::todo::TodoStatus;
+    match raw {
+        "pending" => Ok(TodoStatus::Pending),
+        "in_progress" | "in-progress" => Ok(TodoStatus::InProgress),
+        "completed" | "done" => Ok(TodoStatus::Completed),
+        "cancelled" | "canceled" => Ok(TodoStatus::Cancelled),
+        other => Err(format!(
+            "unknown todo status: {other}. try: pending | in_progress | completed | cancelled"
         )),
     }
 }
@@ -4199,5 +4391,300 @@ mod tests {
         let err = approval_cmd(&["bogus".into()]).unwrap_err();
         assert!(err.contains("bogus"));
         assert!(err.contains("show"));
+    }
+
+    // ---- todo_cmd ----
+
+    fn temp_todo_store() -> (tempfile::TempDir, crate::agent::tools::todo::TodoStore) {
+        let dir = tempfile::tempdir().expect("tmp");
+        let store = crate::agent::tools::todo::TodoStore::new(dir.path().to_path_buf());
+        (dir, store)
+    }
+
+    #[test]
+    fn todo_cmd_path_returns_dir() {
+        let v = todo_cmd(&["path".into()]).expect("path ok");
+        assert!(v.get("path").and_then(|p| p.as_str()).is_some());
+    }
+
+    #[test]
+    fn todo_cmd_list_empty_session_returns_empty() {
+        let (_dir, store) = temp_todo_store();
+        let v = todo_cmd_at(&["list".into(), "session-1".into()], &store)
+            .expect("list ok");
+        assert_eq!(v.get("count").and_then(|c| c.as_u64()), Some(0));
+        let items = v.get("items").and_then(|i| i.as_array()).expect("items array");
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn todo_cmd_list_requires_session() {
+        let (_dir, store) = temp_todo_store();
+        let err = todo_cmd_at(&["list".into()], &store).unwrap_err();
+        assert!(err.contains("list"));
+    }
+
+    #[test]
+    fn todo_cmd_add_appends_and_persists() {
+        let (_dir, store) = temp_todo_store();
+        let v = todo_cmd_at(
+            &[
+                "add".into(),
+                "session-1".into(),
+                "t1".into(),
+                "first".into(),
+                "todo".into(),
+                "item".into(),
+            ],
+            &store,
+        )
+        .expect("add ok");
+        assert_eq!(v.get("count").and_then(|c| c.as_u64()), Some(1));
+
+        // Re-read confirms persistence + multi-word title joined.
+        let listed =
+            todo_cmd_at(&["list".into(), "session-1".into()], &store).expect("list ok");
+        let items = listed.get("items").and_then(|i| i.as_array()).expect("items");
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].get("title").and_then(|t| t.as_str()),
+            Some("first todo item")
+        );
+        assert_eq!(
+            items[0].get("status").and_then(|s| s.as_str()),
+            Some("pending")
+        );
+    }
+
+    #[test]
+    fn todo_cmd_add_with_note_flag() {
+        let (_dir, store) = temp_todo_store();
+        todo_cmd_at(
+            &[
+                "add".into(),
+                "session-1".into(),
+                "t1".into(),
+                "title".into(),
+                "--note".into(),
+                "explanatory note".into(),
+            ],
+            &store,
+        )
+        .expect("add ok");
+        let listed =
+            todo_cmd_at(&["list".into(), "session-1".into()], &store).expect("list ok");
+        let items = listed.get("items").and_then(|i| i.as_array()).expect("items");
+        assert_eq!(
+            items[0].get("note").and_then(|n| n.as_str()),
+            Some("explanatory note")
+        );
+    }
+
+    #[test]
+    fn todo_cmd_add_rejects_duplicate_id() {
+        let (_dir, store) = temp_todo_store();
+        todo_cmd_at(
+            &["add".into(), "s1".into(), "t1".into(), "first".into()],
+            &store,
+        )
+        .expect("first add ok");
+        let err = todo_cmd_at(
+            &["add".into(), "s1".into(), "t1".into(), "second".into()],
+            &store,
+        )
+        .unwrap_err();
+        assert!(err.contains("t1"));
+    }
+
+    #[test]
+    fn todo_cmd_add_requires_title() {
+        let (_dir, store) = temp_todo_store();
+        let err = todo_cmd_at(
+            &["add".into(), "s1".into(), "t1".into()],
+            &store,
+        )
+        .unwrap_err();
+        assert!(err.contains("title"));
+    }
+
+    #[test]
+    fn todo_cmd_add_note_flag_requires_value() {
+        let (_dir, store) = temp_todo_store();
+        let err = todo_cmd_at(
+            &[
+                "add".into(),
+                "s1".into(),
+                "t1".into(),
+                "title".into(),
+                "--note".into(),
+            ],
+            &store,
+        )
+        .unwrap_err();
+        assert!(err.contains("--note"));
+    }
+
+    #[test]
+    fn todo_cmd_set_status_updates_one_item() {
+        let (_dir, store) = temp_todo_store();
+        todo_cmd_at(
+            &["add".into(), "s1".into(), "t1".into(), "first".into()],
+            &store,
+        )
+        .expect("add ok");
+        let v = todo_cmd_at(
+            &[
+                "set-status".into(),
+                "s1".into(),
+                "t1".into(),
+                "in_progress".into(),
+            ],
+            &store,
+        )
+        .expect("set-status ok");
+        assert_eq!(
+            v.get("status").and_then(|s| s.as_str()),
+            Some("in_progress")
+        );
+    }
+
+    #[test]
+    fn todo_cmd_set_status_accepts_dash_alias() {
+        let (_dir, store) = temp_todo_store();
+        todo_cmd_at(
+            &["add".into(), "s1".into(), "t1".into(), "first".into()],
+            &store,
+        )
+        .expect("add ok");
+        // Both `in_progress` and `in-progress` should work.
+        todo_cmd_at(
+            &[
+                "set-status".into(),
+                "s1".into(),
+                "t1".into(),
+                "in-progress".into(),
+            ],
+            &store,
+        )
+        .expect("dash alias accepted");
+    }
+
+    #[test]
+    fn todo_cmd_set_status_rejects_unknown_status() {
+        let (_dir, store) = temp_todo_store();
+        todo_cmd_at(
+            &["add".into(), "s1".into(), "t1".into(), "first".into()],
+            &store,
+        )
+        .expect("add ok");
+        let err = todo_cmd_at(
+            &[
+                "set-status".into(),
+                "s1".into(),
+                "t1".into(),
+                "bogus".into(),
+            ],
+            &store,
+        )
+        .unwrap_err();
+        assert!(err.contains("bogus"));
+    }
+
+    #[test]
+    fn todo_cmd_remove_drops_item() {
+        let (_dir, store) = temp_todo_store();
+        todo_cmd_at(
+            &["add".into(), "s1".into(), "t1".into(), "a".into()],
+            &store,
+        )
+        .expect("add ok");
+        todo_cmd_at(
+            &["add".into(), "s1".into(), "t2".into(), "b".into()],
+            &store,
+        )
+        .expect("add ok");
+        let v = todo_cmd_at(
+            &["remove".into(), "s1".into(), "t1".into()],
+            &store,
+        )
+        .expect("remove ok");
+        assert_eq!(v.get("count").and_then(|c| c.as_u64()), Some(1));
+        let listed = todo_cmd_at(&["list".into(), "s1".into()], &store).expect("list ok");
+        let items = listed.get("items").and_then(|i| i.as_array()).expect("items");
+        assert_eq!(items[0].get("id").and_then(|i| i.as_str()), Some("t2"));
+    }
+
+    #[test]
+    fn todo_cmd_remove_unknown_id_errs() {
+        let (_dir, store) = temp_todo_store();
+        let err = todo_cmd_at(
+            &["remove".into(), "s1".into(), "ghost".into()],
+            &store,
+        )
+        .unwrap_err();
+        assert!(err.contains("ghost"));
+    }
+
+    #[test]
+    fn todo_cmd_clear_requires_yes_flag() {
+        let (_dir, store) = temp_todo_store();
+        let err = todo_cmd_at(&["clear".into(), "s1".into()], &store).unwrap_err();
+        assert!(err.contains("--yes"));
+    }
+
+    #[test]
+    fn todo_cmd_clear_with_yes_wipes_session() {
+        let (_dir, store) = temp_todo_store();
+        todo_cmd_at(
+            &["add".into(), "s1".into(), "t1".into(), "a".into()],
+            &store,
+        )
+        .expect("add ok");
+        let v = todo_cmd_at(
+            &["clear".into(), "s1".into(), "--yes".into()],
+            &store,
+        )
+        .expect("clear ok");
+        assert_eq!(v.get("cleared").and_then(|c| c.as_bool()), Some(true));
+        let listed = todo_cmd_at(&["list".into(), "s1".into()], &store).expect("list ok");
+        assert_eq!(listed.get("count").and_then(|c| c.as_u64()), Some(0));
+    }
+
+    #[test]
+    fn todo_cmd_list_includes_status_breakdown() {
+        let (_dir, store) = temp_todo_store();
+        todo_cmd_at(
+            &["add".into(), "s1".into(), "t1".into(), "a".into()],
+            &store,
+        )
+        .expect("add ok");
+        todo_cmd_at(
+            &["add".into(), "s1".into(), "t2".into(), "b".into()],
+            &store,
+        )
+        .expect("add ok");
+        todo_cmd_at(
+            &[
+                "set-status".into(),
+                "s1".into(),
+                "t2".into(),
+                "completed".into(),
+            ],
+            &store,
+        )
+        .expect("status ok");
+        let listed = todo_cmd_at(&["list".into(), "s1".into()], &store).expect("list ok");
+        let counts = listed.get("by_status").expect("by_status");
+        assert_eq!(counts.get("pending").and_then(|n| n.as_u64()), Some(1));
+        assert_eq!(counts.get("completed").and_then(|n| n.as_u64()), Some(1));
+        assert_eq!(counts.get("in_progress").and_then(|n| n.as_u64()), Some(0));
+        assert_eq!(counts.get("cancelled").and_then(|n| n.as_u64()), Some(0));
+    }
+
+    #[test]
+    fn todo_cmd_unknown_subcommand_errs() {
+        let (_dir, store) = temp_todo_store();
+        let err = todo_cmd_at(&["bogus".into()], &store).unwrap_err();
+        assert!(err.contains("bogus"));
     }
 }
