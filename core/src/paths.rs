@@ -70,6 +70,30 @@ pub fn models_cache_dir() -> PathBuf {
     cache_dir().join("models")
 }
 
+/// Root for installed inference engine versions
+/// (`<data_dir>/engines/<engine>/<version>/{bin,lib,include}/`). Each
+/// engine package is independently upgradable; the active version per
+/// engine lives in `<engines_dir>/engines.json`.
+pub fn engines_dir() -> PathBuf {
+    data_dir().join("engines")
+}
+
+/// Per-engine root: `<engines_dir>/<engine>/`.
+pub fn engine_dir(engine: &str) -> PathBuf {
+    engines_dir().join(engine)
+}
+
+/// Specific engine version directory: `<engines_dir>/<engine>/<version>/`.
+pub fn engine_version_dir(engine: &str, version: &str) -> PathBuf {
+    engine_dir(engine).join(version)
+}
+
+/// Persistent registry tracking installed/active/pinned versions per
+/// engine. Lives at `<engines_dir>/engines.json`.
+pub fn engines_index_path() -> PathBuf {
+    engines_dir().join("engines.json")
+}
+
 pub fn agent_state_dir() -> PathBuf {
     data_dir().join("agent")
 }

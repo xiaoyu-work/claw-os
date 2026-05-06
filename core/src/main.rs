@@ -7,6 +7,7 @@ mod checkpoint;
 mod config;
 mod credential;
 mod cron;
+mod engine_pkg;
 pub mod errors;
 mod filelock;
 mod ipc;

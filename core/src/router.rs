@@ -12,6 +12,7 @@ use crate::browser;
 use crate::checkpoint;
 use crate::credential;
 use crate::cron;
+use crate::engine_pkg;
 use crate::ipc;
 use crate::model;
 use crate::netfilter;
@@ -67,6 +68,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         "trace" => dispatch_builtin(args, "trace", trace::run),
         "agent" => dispatch_builtin(args, "agent", agent::run),
         "model" => dispatch_builtin(args, "model", model::run),
+        "engine" => dispatch_builtin(args, "engine", engine_pkg::run),
         _ => {
             // Check if user forgot "app" prefix — helpful error
             let apps_dir = apps_dir();
@@ -391,6 +393,18 @@ fn builtin_apps() -> Vec<(
             ("status", "Runtime status — loaded models, RAM, devices"),
             ("bench", "Benchmark a model"),
             ("rm", "Remove a model from the registry"),
+        ]),
+        ("engine", "Native inference engine package manager — install / activate / rollback llama.cpp, ort, ort-genai versions side-by-side", vec![
+            ("list", "List installed engines and their active versions"),
+            ("info", "Detailed info for one engine: cos engine info <name>"),
+            ("install", "Install from a local archive: cos engine install <name>@<version> --from <path.zip> [--no-activate]"),
+            ("activate", "Switch active version: cos engine activate <name>@<version>"),
+            ("rollback", "Swap active <-> previous: cos engine rollback <name>"),
+            ("update", "Fetch latest from GitHub Releases (Phase 2.2)"),
+            ("pin", "Lock active version against auto-update: cos engine pin <name>[@<version>]"),
+            ("unpin", "Remove pin: cos engine unpin <name>"),
+            ("gc", "Delete old installed versions, keep last N (default 3): cos engine gc <name> [--keep N]"),
+            ("uninstall", "Remove a specific installed version: cos engine uninstall <name>@<version>"),
         ]),
     ]
 }

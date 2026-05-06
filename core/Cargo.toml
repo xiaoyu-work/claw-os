@@ -31,6 +31,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 thiserror = "1"
 rusqlite = { version = "0.39.0", features = ["bundled"] }
 base64 = "0.22.1"
+zip = { version = "8.6.0", default-features = false, features = ["deflate", "deflate64", "bzip2", "zstd"] }
 
 # Phase 0.5 (model engines): added when model files arrive
 # ort = { version = "2", features = [...] }
@@ -46,3 +47,6 @@ cmake = { version = "0.1", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3.27.0"
