@@ -18,6 +18,7 @@
 //! ```
 
 pub mod context;
+pub mod audit_cli;
 pub mod curator;
 pub mod curator_author;
 pub mod curator_drafts;
@@ -150,8 +151,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "interrupt" => interrupt_cmd(args),
         "learn" => learn_cmd(args),
         "hooks" => hooks_cmd(args),
+        "audit" => audit_cli::audit_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | provider-doctor | title | summarise | classify | tools | guardrails | approval | todo | compress | aux | retry | vision | display | shell-hooks | media | binary-ext | context | file-safety | osv | semantic | interrupt | learn | hooks"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | provider-doctor | title | summarise | classify | tools | guardrails | approval | todo | compress | aux | retry | vision | display | shell-hooks | media | binary-ext | context | file-safety | osv | semantic | interrupt | learn | hooks | audit"
         )),
     }
 }
