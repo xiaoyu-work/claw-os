@@ -9,6 +9,7 @@ pub mod builtin;
 pub mod cos_proxy;
 pub mod delegate;
 pub mod registry;
+pub mod todo;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

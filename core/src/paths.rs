@@ -110,6 +110,13 @@ pub fn agent_memory_db_path() -> PathBuf {
     agent_state_dir().join("memory.db")
 }
 
+/// Directory for agent's per-session todo lists. Lives under
+/// `data_dir/agent/todos/`. Each session writes a JSON file named
+/// `<session_id>.json`.
+pub fn agent_todos_dir() -> PathBuf {
+    agent_state_dir().join("todos")
+}
+
 pub fn model_runtime_socket() -> PathBuf {
     runtime_dir().join("model-runtime.sock")
 }
