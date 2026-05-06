@@ -559,10 +559,172 @@ fn skills_cmd(args: &[String]) -> Result<Value, String> {
                 Err(e) => Err(format!("install failed: {e}")),
             }
         }
+        "hub" => skills_hub_cmd(&args[1..]),
         other => Err(format!(
-            "unknown skills subcommand: {other}. try: list | info <id> | disabled | errors | root | install <archive>"
+            "unknown skills subcommand: {other}. try: list | info <id> | disabled | errors | root | install <archive> | hub <list|show|install> <owner/repo> [<id>]"
         )),
     }
+}
+
+/// `cos agent skills hub <list|show|install> <owner/repo> [<id>] [--force]`
+///
+/// Talks to a GitHub Releases-based skills hub
+/// ([`crate::agent::skills::hub`]). `list` fetches the catalogue
+/// from the latest release of `<owner>/<repo>` and emits the
+/// available skills. `show` resolves one skill by id and emits its
+/// download metadata. `install` downloads the asset, validates the
+/// catalogue-declared SHA-256, and hands the local zip off to the
+/// existing [`crate::agent::skills::sync::install_from_archive`]
+/// pipeline.
+///
+/// Auth: optional GitHub PAT from `$COS_HUB_TOKEN`, `$GITHUB_TOKEN`,
+/// or `$GH_TOKEN` (in that order). The token is forwarded to both
+/// the GitHub REST API call and the asset download — required for
+/// private hubs and helpful even for public hubs to avoid
+/// unauthenticated rate limits.
+fn skills_hub_cmd(args: &[String]) -> Result<Value, String> {
+    use crate::agent::skills::hub::{HubConfig, SkillsHub};
+
+    let sub = args
+        .first()
+        .map(|s| s.as_str())
+        .ok_or_else(|| {
+            "usage: cos agent skills hub <list|show|install> <owner/repo> [<id>] [--force]"
+                .to_string()
+        })?;
+
+    let spec = args.get(1).cloned().filter(|s| !s.is_empty()).ok_or_else(|| {
+        format!("usage: cos agent skills hub {sub} <owner/repo> [<id>] [--force]")
+    })?;
+    let (owner, repo) = parse_owner_repo(&spec)?;
+
+    let token = std::env::var("COS_HUB_TOKEN")
+        .ok()
+        .or_else(|| std::env::var("GITHUB_TOKEN").ok())
+        .or_else(|| std::env::var("GH_TOKEN").ok())
+        .filter(|t| !t.is_empty());
+
+    let hub = SkillsHub::new(HubConfig::new(owner.clone(), repo.clone()).with_token(token.clone()));
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("tokio runtime: {e}"))?;
+
+    match sub {
+        "list" => {
+            let cat = runtime
+                .block_on(hub.latest_catalogue())
+                .map_err(|e| format!("hub list failed: {e}"))?;
+            let entries: Vec<Value> = cat
+                .skills
+                .iter()
+                .map(|s| {
+                    json!({
+                        "id": s.id,
+                        "name": s.name,
+                        "version": s.version,
+                        "asset": s.asset,
+                        "sha256": s.sha256,
+                        "tags": s.tags,
+                        "description": s.description,
+                    })
+                })
+                .collect();
+            Ok(json!({
+                "owner": owner,
+                "repo": repo,
+                "release_tag": cat.release_tag,
+                "schema": cat.schema,
+                "count": entries.len(),
+                "skills": entries,
+            }))
+        }
+        "show" => {
+            let id = args
+                .get(2)
+                .cloned()
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    "usage: cos agent skills hub show <owner/repo> <id>".to_string()
+                })?;
+            let resolved = runtime
+                .block_on(hub.resolve(&id))
+                .map_err(|e| format!("hub resolve failed: {e}"))?
+                .ok_or_else(|| format!("no skill '{id}' in hub {owner}/{repo}"))?;
+            Ok(json!({
+                "id": resolved.entry.id,
+                "name": resolved.entry.name,
+                "version": resolved.entry.version,
+                "asset": resolved.entry.asset,
+                "sha256": resolved.entry.sha256,
+                "size": resolved.size,
+                "download_url": resolved.download_url,
+            }))
+        }
+        "install" => {
+            let id = args
+                .get(2)
+                .cloned()
+                .filter(|s| !s.is_empty() && !s.starts_with("--"))
+                .ok_or_else(|| {
+                    "usage: cos agent skills hub install <owner/repo> <id> [--force]"
+                        .to_string()
+                })?;
+            let force = args.iter().any(|a| a == "--force" || a == "-f");
+
+            let resolved = runtime
+                .block_on(hub.resolve(&id))
+                .map_err(|e| format!("hub resolve failed: {e}"))?
+                .ok_or_else(|| format!("no skill '{id}' in hub {owner}/{repo}"))?;
+
+            let auth_header_owned = token.as_ref().map(|t| ("Authorization".to_string(), format!("Bearer {t}")));
+            let mut header_pairs: Vec<(&str, &str)> = Vec::new();
+            if let Some((k, v)) = auth_header_owned.as_ref() {
+                header_pairs.push((k.as_str(), v.as_str()));
+            }
+            let download_label = format!("hub:{}/{}/{}", owner, repo, resolved.entry.id);
+            let opts = crate::engine_pkg::download::DownloadOpts {
+                url: &resolved.download_url,
+                headers: &header_pairs,
+                expected_sha256: Some(resolved.entry.sha256.as_str()),
+                label: &download_label,
+            };
+            let dl = runtime
+                .block_on(crate::engine_pkg::download::stream_to_temp(&opts))
+                .map_err(|e| format!("download failed: {e}"))?;
+
+            let res = skills::sync::install_from_archive(dl.temp_file.path(), force)
+                .map_err(|e| format!("install failed: {e}"))?;
+            Ok(json!({
+                "ok": true,
+                "id": res.id,
+                "hub_id": resolved.entry.id,
+                "version": resolved.entry.version,
+                "install_dir": res.install_dir.display().to_string(),
+                "files_extracted": res.files_extracted,
+                "bytes_on_disk": res.bytes_on_disk,
+                "bytes_downloaded": dl.bytes,
+                "sha256": dl.sha256_hex,
+                "replaced_existing": res.replaced_existing,
+            }))
+        }
+        other => Err(format!(
+            "unknown hub subcommand: {other}. try: list <owner/repo> | show <owner/repo> <id> | install <owner/repo> <id> [--force]"
+        )),
+    }
+}
+
+fn parse_owner_repo(spec: &str) -> Result<(String, String), String> {
+    let mut parts = spec.splitn(2, '/');
+    let owner = parts.next().unwrap_or("").trim();
+    let repo = parts.next().unwrap_or("").trim();
+    if owner.is_empty() || repo.is_empty() {
+        return Err(format!(
+            "expected '<owner>/<repo>' (e.g. clawos/skills-hub), got '{spec}'"
+        ));
+    }
+    Ok((owner.to_string(), repo.to_string()))
 }
 
 /// `cos agent nudge [list|due|add <due_in_secs> <message> [--repeat <secs>] [--tag <tag>]|fire <id>|remove <id>|path]`
@@ -1328,6 +1490,83 @@ mod tests {
         assert!(err.contains("list"));
         assert!(err.contains("info"));
         assert!(err.contains("disabled"));
+    }
+
+    #[test]
+    fn parse_owner_repo_accepts_valid_form() {
+        let (o, r) = parse_owner_repo("clawos/skills-hub").unwrap();
+        assert_eq!(o, "clawos");
+        assert_eq!(r, "skills-hub");
+    }
+
+    #[test]
+    fn parse_owner_repo_trims_whitespace() {
+        let (o, r) = parse_owner_repo(" foo / bar ").unwrap();
+        assert_eq!(o, "foo");
+        assert_eq!(r, "bar");
+    }
+
+    #[test]
+    fn parse_owner_repo_rejects_missing_slash() {
+        let err = parse_owner_repo("noslashhere").unwrap_err();
+        assert!(err.contains("owner"));
+    }
+
+    #[test]
+    fn parse_owner_repo_rejects_empty_segments() {
+        assert!(parse_owner_repo("/repo").is_err());
+        assert!(parse_owner_repo("owner/").is_err());
+        assert!(parse_owner_repo("/").is_err());
+        assert!(parse_owner_repo("").is_err());
+    }
+
+    #[test]
+    fn skills_hub_requires_subcommand() {
+        let err = skills_cmd(&["hub".into()]).unwrap_err();
+        assert!(err.contains("list"));
+        assert!(err.contains("install"));
+    }
+
+    #[test]
+    fn skills_hub_requires_owner_repo() {
+        let err = skills_cmd(&["hub".into(), "list".into()]).unwrap_err();
+        assert!(err.contains("owner/repo"));
+    }
+
+    #[test]
+    fn skills_hub_install_requires_id() {
+        let err = skills_cmd(&[
+            "hub".into(),
+            "install".into(),
+            "owner/repo".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("usage:"));
+        assert!(err.contains("install"));
+    }
+
+    #[test]
+    fn skills_hub_show_requires_id() {
+        let err = skills_cmd(&[
+            "hub".into(),
+            "show".into(),
+            "owner/repo".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("usage:"));
+        assert!(err.contains("show"));
+    }
+
+    #[test]
+    fn skills_hub_unknown_subcommand_lists_options() {
+        let err = skills_cmd(&[
+            "hub".into(),
+            "bogus".into(),
+            "owner/repo".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("list"));
+        assert!(err.contains("install"));
     }
 
     #[test]
