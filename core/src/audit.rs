@@ -80,6 +80,53 @@ pub fn log_entry(
     let _ = crate::filelock::append_locked(audit_path, &entry.to_string());
 }
 
+/// Append a structured JSONL audit event with arbitrary shape.
+///
+/// Used by callers that need a richer schema than the
+/// `app/command/args/duration_ms/status` shape produced by
+/// [`log_entry`] — for example, the agent runtime's `AuditHook`
+/// emits `{ kind, session_id, turn, tool_name, latency_ms,
+/// bytes_returned, error }`.
+///
+/// Behaviour:
+///   - `timestamp` is auto-injected (UTC, `YYYY-MM-DDTHH:MM:SSZ`)
+///     if the entry doesn't already have one.
+///   - `trace_id` / `span_id` are injected from `COS_TRACE_ID` /
+///     `COS_SPAN_ID` env vars when set and not already present.
+///   - Parent directory of `audit_path` is created if missing.
+///   - Write is appended atomically via the file-lock helper.
+///
+/// Failures (IO, lock contention) are silently swallowed — audit
+/// is best-effort and must never block the calling agent loop.
+/// Callers that need stronger guarantees should not use this API.
+pub fn log_event(audit_path: &Path, mut entry: serde_json::Value) {
+    if let Some(obj) = entry.as_object_mut() {
+        obj.entry("timestamp").or_insert_with(|| {
+            json!(Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string())
+        });
+        if !obj.contains_key("trace_id") {
+            if let Ok(tid) = std::env::var("COS_TRACE_ID") {
+                if !tid.is_empty() {
+                    obj.insert("trace_id".to_string(), json!(tid));
+                }
+            }
+        }
+        if !obj.contains_key("span_id") {
+            if let Ok(sid) = std::env::var("COS_SPAN_ID") {
+                if !sid.is_empty() {
+                    obj.insert("span_id".to_string(), json!(sid));
+                }
+            }
+        }
+    }
+
+    if let Some(parent) = audit_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+
+    let _ = crate::filelock::append_locked(audit_path, &entry.to_string());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,5 +239,54 @@ mod tests {
         let args: Vec<String> = vec![];
         let result = redact_args(&args);
         assert!(result.is_empty());
+    }
+
+    // ---- log_event ----
+
+    #[test]
+    fn log_event_appends_jsonl_with_auto_timestamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("audit.jsonl");
+        log_event(&p, json!({ "kind": "smoke", "n": 1 }));
+        log_event(&p, json!({ "kind": "smoke", "n": 2 }));
+        let body = std::fs::read_to_string(&p).unwrap();
+        let mut lines = body.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 2);
+        let v: serde_json::Value = serde_json::from_str(lines.remove(0)).unwrap();
+        assert_eq!(v["kind"], json!("smoke"));
+        assert_eq!(v["n"], json!(1));
+        assert!(v["timestamp"].is_string(), "auto-timestamp should be added");
+    }
+
+    #[test]
+    fn log_event_preserves_caller_supplied_timestamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("audit.jsonl");
+        log_event(
+            &p,
+            json!({ "kind": "x", "timestamp": "2099-01-01T00:00:00Z" }),
+        );
+        let body = std::fs::read_to_string(&p).unwrap();
+        let v: serde_json::Value = serde_json::from_str(body.trim()).unwrap();
+        assert_eq!(v["timestamp"], json!("2099-01-01T00:00:00Z"));
+    }
+
+    #[test]
+    fn log_event_creates_parent_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("nested").join("a").join("audit.jsonl");
+        log_event(&p, json!({ "kind": "x" }));
+        assert!(p.exists());
+    }
+
+    #[test]
+    fn log_event_swallows_non_object_entries_via_no_inject() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("audit.jsonl");
+        // Top-level array is legal JSON; we just don't inject
+        // timestamp/trace_id into it. Should still be appended.
+        log_event(&p, json!(["raw", "values"]));
+        let body = std::fs::read_to_string(&p).unwrap();
+        assert_eq!(body.trim(), "[\"raw\",\"values\"]");
     }
 }

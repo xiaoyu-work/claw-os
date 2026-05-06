@@ -136,6 +136,14 @@ pub fn agent_hooks_path() -> PathBuf {
     agent_state_dir().join("hooks.json")
 }
 
+/// Path to the agent-runtime audit log. JSONL — one event per
+/// line. Captures pre/post-turn and pre/post-tool events when the
+/// `audit` hook is enabled (see `cos agent hooks enable audit`).
+/// Lives at `log_dir()/agent.jsonl`.
+pub fn agent_audit_log_path() -> PathBuf {
+    log_dir().join("agent.jsonl")
+}
+
 /// Directory for agent's per-session todo lists. Lives under
 /// `data_dir/agent/todos/`. Each session writes a JSON file named
 /// `<session_id>.json`.

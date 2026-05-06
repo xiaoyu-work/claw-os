@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::agent::runtime::hooks::{Hook, HookRegistry, LoggingHook};
+use crate::agent::runtime::hooks::{AuditHook, Hook, HookRegistry, LoggingHook};
 
 /// Built-in hook kinds that can be persistently enabled.
 ///
@@ -33,6 +33,7 @@ use crate::agent::runtime::hooks::{Hook, HookRegistry, LoggingHook};
 #[serde(rename_all = "snake_case")]
 pub enum HookKind {
     Logging,
+    Audit,
 }
 
 impl HookKind {
@@ -42,6 +43,7 @@ impl HookKind {
         let lower = s.trim().to_ascii_lowercase();
         match lower.as_str() {
             "logging" | "log" | "tracing" => Some(Self::Logging),
+            "audit" | "audit_log" | "auditlog" => Some(Self::Audit),
             _ => None,
         }
     }
@@ -50,6 +52,7 @@ impl HookKind {
     pub fn canonical(self) -> &'static str {
         match self {
             Self::Logging => "logging",
+            Self::Audit => "audit",
         }
     }
 }
@@ -163,6 +166,7 @@ fn tmp_path_for(path: &Path) -> PathBuf {
 pub fn instantiate(kind: HookKind) -> Arc<dyn Hook> {
     match kind {
         HookKind::Logging => Arc::new(LoggingHook),
+        HookKind::Audit => Arc::new(AuditHook::new()),
     }
 }
 
@@ -245,6 +249,10 @@ mod tests {
         assert_eq!(HookKind::parse("LOGGING"), Some(HookKind::Logging));
         assert_eq!(HookKind::parse("  log  "), Some(HookKind::Logging));
         assert_eq!(HookKind::parse("tracing"), Some(HookKind::Logging));
+        assert_eq!(HookKind::parse("audit"), Some(HookKind::Audit));
+        assert_eq!(HookKind::parse("AUDIT"), Some(HookKind::Audit));
+        assert_eq!(HookKind::parse("audit_log"), Some(HookKind::Audit));
+        assert_eq!(HookKind::parse("auditlog"), Some(HookKind::Audit));
         assert_eq!(HookKind::parse("nope"), None);
         assert_eq!(HookKind::parse(""), None);
     }
@@ -252,14 +260,15 @@ mod tests {
     #[test]
     fn hook_kind_canonical_is_lowercase_snake_case() {
         assert_eq!(HookKind::Logging.canonical(), "logging");
+        assert_eq!(HookKind::Audit.canonical(), "audit");
     }
 
     #[test]
     fn hook_kind_serializes_as_lowercase_string() {
-        let s = serde_json::to_string(&HookKind::Logging).unwrap();
-        assert_eq!(s, "\"logging\"");
-        let back: HookKind = serde_json::from_str("\"logging\"").unwrap();
-        assert_eq!(back, HookKind::Logging);
+        assert_eq!(serde_json::to_string(&HookKind::Logging).unwrap(), "\"logging\"");
+        assert_eq!(serde_json::to_string(&HookKind::Audit).unwrap(), "\"audit\"");
+        let back: HookKind = serde_json::from_str("\"audit\"").unwrap();
+        assert_eq!(back, HookKind::Audit);
     }
 
     // ---- HooksConfig ----
@@ -372,6 +381,26 @@ mod tests {
         let names = register_into(&reg, &cfg);
         assert_eq!(names, vec!["logging".to_string()]);
         assert!(reg.names().contains(&"logging".to_string()));
+    }
+
+    #[test]
+    fn register_into_registers_audit_hook() {
+        let reg = HookRegistry::new();
+        let mut cfg = HooksConfig::default();
+        cfg.enable(HookKind::Audit);
+        let names = register_into(&reg, &cfg);
+        assert_eq!(names, vec!["audit".to_string()]);
+        assert!(reg.names().contains(&"audit".to_string()));
+    }
+
+    #[test]
+    fn register_into_registers_multiple_kinds_in_order() {
+        let reg = HookRegistry::new();
+        let mut cfg = HooksConfig::default();
+        cfg.enable(HookKind::Audit);
+        cfg.enable(HookKind::Logging);
+        let names = register_into(&reg, &cfg);
+        assert_eq!(names, vec!["audit".to_string(), "logging".to_string()]);
     }
 
     #[test]

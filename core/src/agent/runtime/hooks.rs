@@ -446,6 +446,153 @@ impl Hook for LoggingHook {
 }
 
 // =====================================================================
+// Reference impl — append every hook event as JSONL to a file
+// =====================================================================
+
+/// Hook that appends a structured JSONL audit event for every
+/// `pre_turn` / `post_turn` / `pre_tool` / `post_tool` callback.
+///
+/// Default destination is [`crate::paths::agent_audit_log_path()`]
+/// (`<log_dir>/agent.jsonl`). Use [`AuditHook::at`] to point at a
+/// custom path — useful for tests and for routing per-session
+/// audit streams.
+///
+/// Schema per event:
+///
+/// ```json
+/// {
+///   "timestamp": "2026-...Z",   // auto-injected if absent
+///   "kind":      "pre_turn" | "post_turn" | "pre_tool" | "post_tool",
+///   "session_id": "...",
+///   "turn":      N,
+///   "provider":  "...",         // pre/post_turn only
+///   "model":     "...",         // pre/post_turn only
+///   "tool_call_id": "...",      // pre/post_tool only
+///   "tool_name":    "...",      // pre/post_tool only
+///   "success":      bool,       // post_* only
+///   "latency_ms":   N,          // post_* only
+///   ...
+/// }
+/// ```
+///
+/// Audit writes are best-effort — IO errors / lock contention are
+/// silently swallowed. The agent loop is never blocked or aborted
+/// because the audit log is unavailable.
+#[derive(Debug, Clone)]
+pub struct AuditHook {
+    audit_path: std::path::PathBuf,
+}
+
+impl Default for AuditHook {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AuditHook {
+    /// Create an `AuditHook` writing to the canonical
+    /// `<log_dir>/agent.jsonl` location.
+    pub fn new() -> Self {
+        Self {
+            audit_path: crate::paths::agent_audit_log_path(),
+        }
+    }
+
+    /// Create an `AuditHook` writing to a caller-supplied path.
+    pub fn at(audit_path: impl Into<std::path::PathBuf>) -> Self {
+        Self {
+            audit_path: audit_path.into(),
+        }
+    }
+
+    /// The path this hook writes to. Useful for tests.
+    pub fn audit_path(&self) -> &std::path::Path {
+        &self.audit_path
+    }
+}
+
+impl Hook for AuditHook {
+    fn name(&self) -> &str {
+        "audit"
+    }
+
+    fn pre_turn(&self, ctx: &HookContext) -> HookOutcome {
+        crate::audit::log_event(
+            &self.audit_path,
+            serde_json::json!({
+                "kind": "pre_turn",
+                "session_id": ctx.session_id,
+                "turn": ctx.turn_index,
+                "provider": ctx.provider,
+                "model": ctx.model,
+                "is_delegated": ctx.is_delegated,
+                "started_at_ms": ctx.started_at_ms,
+            }),
+        );
+        HookOutcome::Continue
+    }
+
+    fn post_turn(&self, ctx: &HookContext, summary: &TurnSummary) -> HookOutcome {
+        crate::audit::log_event(
+            &self.audit_path,
+            serde_json::json!({
+                "kind": "post_turn",
+                "session_id": ctx.session_id,
+                "turn": ctx.turn_index,
+                "provider": ctx.provider,
+                "model": ctx.model,
+                "is_delegated": ctx.is_delegated,
+                "success": summary.success,
+                "stop_reason": summary.stop_reason,
+                "latency_ms": summary.latency_ms,
+                "input_tokens": summary.input_tokens,
+                "output_tokens": summary.output_tokens,
+                "tool_calls_made": summary.tool_calls_made,
+                "error": summary.error,
+            }),
+        );
+        HookOutcome::Continue
+    }
+
+    fn pre_tool(&self, ctx: &HookContext, tool_call: &ToolCall) -> ToolDecision {
+        crate::audit::log_event(
+            &self.audit_path,
+            serde_json::json!({
+                "kind": "pre_tool",
+                "session_id": ctx.session_id,
+                "turn": ctx.turn_index,
+                "tool_call_id": tool_call.id,
+                "tool_name": tool_call.name,
+            }),
+        );
+        ToolDecision::Allow
+    }
+
+    fn post_tool(
+        &self,
+        ctx: &HookContext,
+        tool_call: &ToolCall,
+        result: &ToolResultSummary,
+    ) -> HookOutcome {
+        crate::audit::log_event(
+            &self.audit_path,
+            serde_json::json!({
+                "kind": "post_tool",
+                "session_id": ctx.session_id,
+                "turn": ctx.turn_index,
+                "tool_call_id": tool_call.id,
+                "tool_name": tool_call.name,
+                "success": result.success,
+                "latency_ms": result.latency_ms,
+                "bytes_returned": result.bytes_returned,
+                "error": result.error,
+            }),
+        );
+        HookOutcome::Continue
+    }
+}
+
+// =====================================================================
 // Tests
 // =====================================================================
 
@@ -867,6 +1014,117 @@ mod tests {
         assert_eq!(
             h.post_tool(&ctx(), &sample_tool_call(), &tool_result_ok()),
             HookOutcome::Continue
+        );
+    }
+
+    // ---- AuditHook ----------------------------------------------------
+
+    fn read_jsonl(p: &std::path::Path) -> Vec<serde_json::Value> {
+        let body = std::fs::read_to_string(p).unwrap_or_default();
+        body.lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str(l).expect("valid JSON line"))
+            .collect()
+    }
+
+    #[test]
+    fn audit_hook_name_is_audit() {
+        let dir = tempfile::tempdir().unwrap();
+        let h = AuditHook::at(dir.path().join("audit.jsonl"));
+        assert_eq!(h.name(), "audit");
+    }
+
+    #[test]
+    fn audit_hook_pre_turn_writes_jsonl_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("audit.jsonl");
+        let h = AuditHook::at(&p);
+        assert_eq!(h.pre_turn(&ctx()), HookOutcome::Continue);
+        let events = read_jsonl(&p);
+        assert_eq!(events.len(), 1);
+        let e = &events[0];
+        assert_eq!(e["kind"], serde_json::json!("pre_turn"));
+        assert_eq!(e["session_id"], serde_json::json!("sess-1"));
+        assert_eq!(e["provider"], serde_json::json!("mock"));
+        assert_eq!(e["model"], serde_json::json!("mock-model"));
+        assert!(e["timestamp"].is_string());
+    }
+
+    #[test]
+    fn audit_hook_post_turn_records_token_usage() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("audit.jsonl");
+        let h = AuditHook::at(&p);
+        let _ = h.post_turn(&ctx(), &turn_summary_ok());
+        let events = read_jsonl(&p);
+        assert_eq!(events.len(), 1);
+        let e = &events[0];
+        assert_eq!(e["kind"], serde_json::json!("post_turn"));
+        assert_eq!(e["success"], serde_json::json!(true));
+        assert_eq!(e["latency_ms"], serde_json::json!(42));
+        assert_eq!(e["input_tokens"], serde_json::json!(10));
+        assert_eq!(e["output_tokens"], serde_json::json!(5));
+        assert_eq!(e["stop_reason"], serde_json::json!("Stop"));
+    }
+
+    #[test]
+    fn audit_hook_pre_tool_records_call_id_and_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("audit.jsonl");
+        let h = AuditHook::at(&p);
+        let dec = h.pre_tool(&ctx(), &sample_tool_call());
+        assert!(dec.is_allow());
+        let events = read_jsonl(&p);
+        assert_eq!(events.len(), 1);
+        let e = &events[0];
+        assert_eq!(e["kind"], serde_json::json!("pre_tool"));
+        assert_eq!(e["tool_call_id"], serde_json::json!("call_1"));
+        assert_eq!(e["tool_name"], serde_json::json!("echo"));
+    }
+
+    #[test]
+    fn audit_hook_post_tool_records_bytes_and_latency() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("audit.jsonl");
+        let h = AuditHook::at(&p);
+        let _ = h.post_tool(&ctx(), &sample_tool_call(), &tool_result_ok());
+        let events = read_jsonl(&p);
+        let e = &events[0];
+        assert_eq!(e["kind"], serde_json::json!("post_tool"));
+        assert_eq!(e["success"], serde_json::json!(true));
+        assert_eq!(e["latency_ms"], serde_json::json!(1));
+        assert_eq!(e["bytes_returned"], serde_json::json!(12));
+    }
+
+    #[test]
+    fn audit_hook_records_error_field_on_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("audit.jsonl");
+        let h = AuditHook::at(&p);
+        let mut bad = tool_result_ok();
+        bad.success = false;
+        bad.error = Some("boom".into());
+        let _ = h.post_tool(&ctx(), &sample_tool_call(), &bad);
+        let events = read_jsonl(&p);
+        let e = &events[0];
+        assert_eq!(e["success"], serde_json::json!(false));
+        assert_eq!(e["error"], serde_json::json!("boom"));
+    }
+
+    #[test]
+    fn audit_hook_full_lifecycle_writes_four_events_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("audit.jsonl");
+        let h = AuditHook::at(&p);
+        let _ = h.pre_turn(&ctx());
+        let _ = h.pre_tool(&ctx(), &sample_tool_call());
+        let _ = h.post_tool(&ctx(), &sample_tool_call(), &tool_result_ok());
+        let _ = h.post_turn(&ctx(), &turn_summary_ok());
+        let events = read_jsonl(&p);
+        let kinds: Vec<&str> = events.iter().map(|e| e["kind"].as_str().unwrap()).collect();
+        assert_eq!(
+            kinds,
+            vec!["pre_turn", "pre_tool", "post_tool", "post_turn"]
         );
     }
 }
