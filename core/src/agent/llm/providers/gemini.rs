@@ -65,13 +65,29 @@ pub fn default_base_url() -> &'static str {
     DEFAULT_BASE
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct GeminiConfig {
     pub base_url: String,
     pub api_key: Option<String>,
     pub model: String,
     pub extra_headers: HashMap<String, String>,
     pub request_timeout: Duration,
+    /// Optional multi-key credential pool. See
+    /// `OpenAICompatConfig::pool` for semantics.
+    pub pool: Option<Arc<crate::agent::llm::credential_pool::Pool>>,
+}
+
+impl std::fmt::Debug for GeminiConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GeminiConfig")
+            .field("base_url", &self.base_url)
+            .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
+            .field("model", &self.model)
+            .field("extra_headers", &self.extra_headers.keys().collect::<Vec<_>>())
+            .field("request_timeout", &self.request_timeout)
+            .field("pool_len", &self.pool.as_ref().map(|p| p.len()))
+            .finish()
+    }
 }
 
 impl GeminiConfig {
@@ -97,12 +113,29 @@ impl GeminiConfig {
             Duration::from_secs(agent.request_timeout)
         };
 
+        let pool = match crate::agent::llm::credential_pool::Pool::try_from_agent_config(
+            "provider:gemini",
+            agent,
+        ) {
+            Ok(Some(p)) => Some(Arc::new(p)),
+            Ok(None) => None,
+            Err(e) => {
+                tracing::warn!(
+                    target: "cos::agent::llm::pool",
+                    "credential pool for provider 'gemini' declared but unresolved: {e}; \
+                     falling back to single-key path"
+                );
+                None
+            }
+        };
+
         Self {
             base_url,
             api_key,
             model: model.to_string(),
             extra_headers: agent.extra_headers.clone(),
             request_timeout,
+            pool,
         }
     }
 }
@@ -148,11 +181,24 @@ impl Provider for GeminiProvider {
     }
 
     fn is_configured(&self) -> bool {
-        self.cfg.api_key.is_some()
+        self.cfg.api_key.is_some() || self.cfg.pool.as_ref().is_some_and(|p| !p.is_empty())
     }
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
         let body = wire::build_request_body(&request, false);
+
+        let lease = if let Some(pool) = &self.cfg.pool {
+            match pool.acquire() {
+                Ok(l) => Some(l),
+                Err(e) => return Err(LlmError::NotConfigured(format!("pool: {e}"))),
+            }
+        } else {
+            None
+        };
+        let api_key: Option<&str> = match &lease {
+            Some(l) => Some(l.value()),
+            None => self.cfg.api_key.as_deref(),
+        };
 
         let mut http = self
             .client
@@ -160,7 +206,7 @@ impl Provider for GeminiProvider {
             .header("Content-Type", "application/json")
             .json(&body);
 
-        if let Some(key) = &self.cfg.api_key {
+        if let Some(key) = api_key {
             // Header form — keeps the key out of URL strings (logs,
             // redirects, tracing).
             http = http.header("x-goog-api-key", key);
@@ -169,23 +215,71 @@ impl Provider for GeminiProvider {
             http = http.header(k.as_str(), v.as_str());
         }
 
-        let resp = http.send().await?;
+        let send_result = http.send().await;
+        let resp = match send_result {
+            Ok(r) => r,
+            Err(e) => {
+                if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
+                    pool.report_failure(
+                        l,
+                        crate::agent::llm::error_classifier::classify_network_error(),
+                    );
+                }
+                return Err(LlmError::Transport(e));
+            }
+        };
         let status = resp.status();
         let retry_after_secs = resp
             .headers()
             .get(reqwest::header::RETRY_AFTER)
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.parse::<u64>().ok());
-        let bytes = resp.bytes().await.map_err(LlmError::Transport)?;
+        let bytes = match resp.bytes().await {
+            Ok(b) => b,
+            Err(e) => {
+                if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
+                    pool.report_failure(
+                        l,
+                        crate::agent::llm::error_classifier::classify_network_error(),
+                    );
+                }
+                return Err(LlmError::Transport(e));
+            }
+        };
 
         if !status.is_success() {
-            return Err(wire::classify_http_error(status, &bytes, retry_after_secs));
+            let err = wire::classify_http_error(status, &bytes, retry_after_secs);
+            if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
+                let body_str = std::str::from_utf8(&bytes).unwrap_or("");
+                let cls = crate::agent::llm::error_classifier::classify(
+                    status.as_u16(),
+                    body_str,
+                );
+                pool.report_failure(l, cls);
+            }
+            return Err(err);
         }
 
-        let parsed: wire::Response =
-            serde_json::from_slice(&bytes).map_err(|e| LlmError::Parse(e.to_string()))?;
+        let parsed: wire::Response = match serde_json::from_slice(&bytes) {
+            Ok(p) => p,
+            Err(e) => {
+                if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
+                    pool.report_failure(
+                        l,
+                        crate::agent::llm::credential_pool::FailureClass::CallerError,
+                    );
+                }
+                return Err(LlmError::Parse(e.to_string()));
+            }
+        };
 
-        wire::response_to_chat(parsed, &self.cfg.model)
+        let result = wire::response_to_chat(parsed, &self.cfg.model);
+        if result.is_ok() {
+            if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
+                pool.report_success(l);
+            }
+        }
+        result
     }
 
     async fn chat_stream(
@@ -1073,5 +1167,41 @@ mod tests {
         assert!(is_alias("gemini"));
         assert!(!is_alias("anthropic"));
         assert!(!is_alias(""));
+    }
+
+    // ---- credential pool wiring ------------------------------------------
+
+    #[test]
+    fn gemini_no_pool_when_neither_plural_field_set() {
+        let c = AgentConfig::default();
+        let gc = GeminiConfig::from_agent_config("gemini-1.5-flash", &c);
+        assert!(gc.pool.is_none());
+    }
+
+    #[test]
+    fn gemini_pool_built_from_envs() {
+        std::env::set_var("COS_TEST_GEM_POOL_A", "gem-aaa");
+        std::env::set_var("COS_TEST_GEM_POOL_B", "gem-bbb");
+        let mut c = AgentConfig::default();
+        c.api_key_envs = vec![
+            "COS_TEST_GEM_POOL_A".into(),
+            "COS_TEST_GEM_POOL_B".into(),
+        ];
+        let gc = GeminiConfig::from_agent_config("gemini-1.5-flash", &c);
+        std::env::remove_var("COS_TEST_GEM_POOL_A");
+        std::env::remove_var("COS_TEST_GEM_POOL_B");
+        let pool = gc.pool.expect("pool should be built");
+        assert_eq!(pool.len(), 2);
+    }
+
+    #[test]
+    fn gemini_is_configured_true_with_pool_only() {
+        std::env::set_var("COS_TEST_GEM_POOL_ICONFIG", "gem-x");
+        let mut c = AgentConfig::default();
+        c.api_key_envs = vec!["COS_TEST_GEM_POOL_ICONFIG".into()];
+        let gc = GeminiConfig::from_agent_config("gemini-1.5-flash", &c);
+        std::env::remove_var("COS_TEST_GEM_POOL_ICONFIG");
+        let provider = GeminiProvider::new(gc);
+        assert!(provider.is_configured());
     }
 }
