@@ -7,6 +7,7 @@
 //! when a concrete one is selected.
 
 pub mod anthropic;
+pub mod bedrock;
 pub mod gemini;
 pub mod llama_local;
 pub mod mock;

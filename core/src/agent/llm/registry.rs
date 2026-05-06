@@ -29,6 +29,7 @@ pub const REGISTERED: &[&str] = &[
     "openrouter",
     "ollama",
     "anthropic",
+    "bedrock",
     "gemini",
 ];
 
@@ -39,6 +40,9 @@ pub fn build(name: &str, model: &str, agent_cfg: &AgentConfig) -> Result<Arc<dyn
     }
     if providers::anthropic::is_alias(name) {
         return Ok(providers::anthropic::build_provider(model, agent_cfg));
+    }
+    if providers::bedrock::is_alias(name) {
+        return Ok(providers::bedrock::build_provider(model, agent_cfg));
     }
     if providers::gemini::is_alias(name) {
         return Ok(providers::gemini::build_provider(model, agent_cfg));

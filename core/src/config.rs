@@ -307,6 +307,62 @@ pub struct AgentConfig {
     /// [`McpServerConfig`] for the per-server fields.
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
+
+    // -- AWS Bedrock credentials -----------------------------------------
+    //
+    // These fields are only consumed by the `bedrock` provider. They
+    // exist on `AgentConfig` (rather than a nested `bedrock = {…}`
+    // block) for two reasons:
+    //
+    //   1. Other providers ignore them — adding new optional fields to
+    //      AgentConfig is a no-op for openai/anthropic/gemini/llama_local.
+    //   2. Lookup precedence is uniform across providers. Every other
+    //      provider already follows the `*_credential` (cos credential
+    //      store) → `*_env` (env var fallback) ladder, and we want
+    //      Bedrock to feel the same.
+    //
+    // All seven are optional; sensible defaults apply at lookup time
+    // (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` /
+    // `AWS_SESSION_TOKEN` env vars and `us-east-1` region).
+    /// AWS region for Bedrock. Defaults to `us-east-1` when unset.
+    /// Bedrock supports a fixed set of regions; consult AWS docs for
+    /// model-region availability (e.g. Claude Opus 4 is in `us-west-2`
+    /// and `us-east-1` only as of this writing).
+    #[serde(default)]
+    pub aws_region: Option<String>,
+
+    /// Name of a credential stored via `cos credential store …
+    /// --namespace agent` that holds the AWS access key ID. Looked up
+    /// at runtime — never read from the config file directly.
+    #[serde(default)]
+    pub aws_access_key_credential: Option<String>,
+
+    /// Fallback environment variable for the AWS access key ID.
+    /// Defaults to `AWS_ACCESS_KEY_ID` (the standard AWS SDK env name)
+    /// when unset.
+    #[serde(default)]
+    pub aws_access_key_env: Option<String>,
+
+    /// Name of a credential stored via `cos credential` that holds the
+    /// AWS secret access key.
+    #[serde(default)]
+    pub aws_secret_key_credential: Option<String>,
+
+    /// Fallback environment variable for the AWS secret access key.
+    /// Defaults to `AWS_SECRET_ACCESS_KEY` when unset.
+    #[serde(default)]
+    pub aws_secret_key_env: Option<String>,
+
+    /// Name of a credential stored via `cos credential` that holds an
+    /// AWS session token (for temporary STS / IAM-role / SSO creds).
+    /// Optional — only required when using temporary credentials.
+    #[serde(default)]
+    pub aws_session_token_credential: Option<String>,
+
+    /// Fallback environment variable for the AWS session token.
+    /// Defaults to `AWS_SESSION_TOKEN` when unset.
+    #[serde(default)]
+    pub aws_session_token_env: Option<String>,
 }
 
 /// One external MCP server attached to the agent. Read from the
@@ -735,6 +791,13 @@ impl Default for AgentConfig {
             pool_strategy: default_pool_strategy(),
             pool_cooldown_secs: default_pool_cooldown_secs(),
             mcp_servers: Vec::new(),
+            aws_region: None,
+            aws_access_key_credential: None,
+            aws_access_key_env: None,
+            aws_secret_key_credential: None,
+            aws_secret_key_env: None,
+            aws_session_token_credential: None,
+            aws_session_token_env: None,
         }
     }
 }

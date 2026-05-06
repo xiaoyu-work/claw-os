@@ -1803,6 +1803,12 @@ fn canonical_env_for_provider(name: &str) -> Option<&'static str> {
         "openrouter" => Some("OPENROUTER_API_KEY"),
         "anthropic" => Some("ANTHROPIC_API_KEY"),
         "gemini" => Some("GEMINI_API_KEY"),
+        // Bedrock uses three env vars (access key + secret + optional
+        // session token). We surface AWS_ACCESS_KEY_ID as the
+        // "primary" one for the env_present indicator — having the
+        // access key without the secret is useless, but having the
+        // access key absent is a definitive "not configured" signal.
+        "bedrock" => Some("AWS_ACCESS_KEY_ID"),
         // Local/no-auth providers.
         "ollama" | "mock" | "llama_local" => None,
         _ => None,
@@ -1811,7 +1817,11 @@ fn canonical_env_for_provider(name: &str) -> Option<&'static str> {
 
 /// Canonical credential name (in the `agent` namespace) per provider
 /// alias. Mirrors `canonical_env_for_provider` but for the
-/// credential store. `None` for providers that never need a key.
+/// credential store. `None` for providers that never need a key OR
+/// for providers (like Bedrock) whose credential model doesn't fit
+/// a single name — Bedrock uses `aws_access_key_credential` /
+/// `aws_secret_key_credential` / `aws_session_token_credential`
+/// independently, so there's no one-name-fits-all.
 fn canonical_credential_for_provider(name: &str) -> Option<&'static str> {
     match name {
         "openai" => Some("openai"),
@@ -1820,7 +1830,7 @@ fn canonical_credential_for_provider(name: &str) -> Option<&'static str> {
         "openrouter" => Some("openrouter"),
         "anthropic" => Some("anthropic"),
         "gemini" => Some("gemini"),
-        "ollama" | "mock" | "llama_local" => None,
+        "ollama" | "mock" | "llama_local" | "bedrock" => None,
         _ => None,
     }
 }
@@ -1834,6 +1844,10 @@ fn default_base_url_for_provider(name: &str) -> Option<&'static str> {
         Some("https://api.anthropic.com/v1")
     } else if name == "gemini" {
         Some("https://generativelanguage.googleapis.com/v1beta")
+    } else if name == "bedrock" {
+        // Region-templated. We surface the template so users see
+        // which region to pin via [agent].aws_region.
+        Some("https://bedrock-runtime.{region}.amazonaws.com (region-derived)")
     } else if name == "llama_local" {
         Some("local: file path via AgentConfig.model")
     } else {
@@ -6978,6 +6992,38 @@ mod tests {
             .expect("providers ok");
         let count = v.get("count").and_then(|c| c.as_u64()).unwrap_or(0);
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn providers_cmd_surfaces_bedrock_with_aws_access_key_env() {
+        // Bedrock uses three env vars (access key, secret, optional
+        // session token); we surface AWS_ACCESS_KEY_ID as the canonical
+        // env, matching AWS SDK convention. credential is None
+        // because Bedrock's three-name credential model doesn't fit
+        // the single-name `*_credential` field.
+        let v = providers_cmd(&["--names".into(), "bedrock".into()])
+            .expect("providers ok");
+        let arr = v.get("providers").and_then(|p| p.as_array()).unwrap();
+        assert_eq!(arr.len(), 1);
+        let entry = &arr[0];
+        assert_eq!(entry.get("name").and_then(|n| n.as_str()), Some("bedrock"));
+        assert_eq!(
+            entry.get("env").and_then(|e| e.as_str()),
+            Some("AWS_ACCESS_KEY_ID")
+        );
+        assert_eq!(entry.get("credential"), Some(&serde_json::Value::Null));
+        assert_eq!(
+            entry.get("key_required"),
+            Some(&serde_json::Value::Bool(true))
+        );
+        let url = entry
+            .get("default_base_url")
+            .and_then(|u| u.as_str())
+            .unwrap_or("");
+        assert!(
+            url.contains("bedrock-runtime") && url.contains("{region}"),
+            "expected region-templated default_base_url, got {url}"
+        );
     }
 
     #[test]
