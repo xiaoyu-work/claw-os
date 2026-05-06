@@ -383,6 +383,9 @@ fn builtin_apps() -> Vec<(
             ("chat", "Interactive session (Phase 1+)"),
             ("status", "Show agent runtime status — providers, tools, skills"),
             ("service", "Manage long-running agent service (Phase 1+)"),
+            ("insights", "Aggregate LLM run-log: cos agent insights [overall|recent N|sessions]"),
+            ("recall", "FTS5 search across recorded conversations: cos agent recall \"<query>\" [limit]"),
+            ("sessions", "List recent conversation sessions: cos agent sessions [limit]"),
         ]),
         ("model", "Local model registry + inference daemon (ort for STT/TTS/embed/vision/imagegen, llama.cpp for LLM) — Phase 0.5 skeleton", vec![
             ("list", "List registered models from /var/lib/cos/models/"),
