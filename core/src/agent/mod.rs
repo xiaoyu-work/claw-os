@@ -71,6 +71,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
                 }
                 Err(e) => json!({ "status": "unavailable", "error": e.to_string() }),
             };
+            let skills_load = skills::loader::load_default();
             Ok(json!({
                 "status": "ok",
                 "phase": "3",
@@ -83,7 +84,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
                 "temperature": cfg.temperature,
                 "tools_registered": tools.len(),
                 "tools": tools.names(),
-                "skills_loaded": 0,
+                "skills_loaded": skills_load.loaded_count(),
+                "skills_disabled": skills_load.disabled.len(),
+                "skills_errors": skills_load.errors.len(),
                 "memory": memory_stats,
             }))
         }
@@ -93,8 +96,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "sessions" => sessions_cmd(args),
         "onboarding" => onboarding_cmd(args),
         "notes" => notes_cmd(args),
+        "skills" => skills_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills"
         )),
     }
 }
@@ -368,6 +372,82 @@ fn notes_cmd(args: &[String]) -> Result<Value, String> {
     }
 }
 
+/// `cos agent skills [list|info <id>|disabled|errors|root]` — exposes
+/// the on-disk skill registry under `data_dir/agent/skills/`.
+fn skills_cmd(args: &[String]) -> Result<Value, String> {
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("list");
+    match sub {
+        "root" => Ok(json!({
+            "root": crate::paths::agent_skills_dir().display().to_string(),
+        })),
+        "list" | "" => {
+            let res = skills::loader::load_default();
+            let names: Vec<&String> = res.skills.keys().collect();
+            Ok(json!({
+                "root": crate::paths::agent_skills_dir().display().to_string(),
+                "loaded": res.loaded_count(),
+                "disabled": res.disabled.len(),
+                "errors": res.errors.len(),
+                "names": names,
+            }))
+        }
+        "info" => {
+            let id = args.get(1).cloned().unwrap_or_default();
+            if id.is_empty() {
+                return Err("usage: cos agent skills info <id>".into());
+            }
+            let res = skills::loader::load_default();
+            if let Some(s) = res.skills.get(&id) {
+                Ok(json!({
+                    "id": s.id,
+                    "dir": s.dir.display().to_string(),
+                    "manifest_path": s.manifest_path.display().to_string(),
+                    "name": s.manifest.name,
+                    "description": s.manifest.description,
+                    "version": s.manifest.version,
+                    "license": s.manifest.license,
+                    "author": s.manifest.author,
+                    "homepage": s.manifest.homepage,
+                    "allowed_tools": s.manifest.allowed_tools,
+                    "triggers": s.manifest.triggers,
+                    "body_bytes": s.body.len(),
+                }))
+            } else if let Some(reason) = res.disabled.get(&id) {
+                Ok(json!({
+                    "id": id,
+                    "status": "disabled",
+                    "reason": reason,
+                }))
+            } else if let Some(err) = res.errors.get(&id) {
+                Ok(json!({
+                    "id": id,
+                    "status": "error",
+                    "error": err,
+                }))
+            } else {
+                Err(format!("unknown skill: {id}"))
+            }
+        }
+        "disabled" => {
+            let res = skills::loader::load_default();
+            Ok(json!({
+                "n": res.disabled.len(),
+                "disabled": res.disabled,
+            }))
+        }
+        "errors" => {
+            let res = skills::loader::load_default();
+            Ok(json!({
+                "n": res.errors.len(),
+                "errors": res.errors,
+            }))
+        }
+        other => Err(format!(
+            "unknown skills subcommand: {other}. try: list | info <id> | disabled | errors | root"
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -472,5 +552,40 @@ mod tests {
         assert!(err.contains("list"));
         assert!(err.contains("read"));
         assert!(err.contains("write"));
+    }
+
+    #[test]
+    fn skills_root_returns_path() {
+        let v = skills_cmd(&["root".into()]).expect("skills root ok");
+        assert!(v.get("root").and_then(|x| x.as_str()).is_some());
+    }
+
+    #[test]
+    fn skills_list_shape_correct() {
+        let v = skills_cmd(&[]).expect("skills list ok");
+        assert!(v.get("loaded").is_some());
+        assert!(v.get("disabled").is_some());
+        assert!(v.get("errors").is_some());
+        assert!(v.get("names").and_then(|x| x.as_array()).is_some());
+    }
+
+    #[test]
+    fn skills_info_requires_id() {
+        let err = skills_cmd(&["info".into()]).unwrap_err();
+        assert!(err.to_lowercase().contains("usage"));
+    }
+
+    #[test]
+    fn skills_info_unknown_id_errors() {
+        let err = skills_cmd(&["info".into(), "definitely-not-a-real-skill".into()]).unwrap_err();
+        assert!(err.contains("definitely-not-a-real-skill"));
+    }
+
+    #[test]
+    fn skills_unknown_subcommand_lists_options() {
+        let err = skills_cmd(&["bogus".into()]).unwrap_err();
+        assert!(err.contains("list"));
+        assert!(err.contains("info"));
+        assert!(err.contains("disabled"));
     }
 }
