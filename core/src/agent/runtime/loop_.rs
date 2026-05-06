@@ -247,12 +247,13 @@ async fn ask_inner(
         let latency_ms = now_ms.saturating_sub(turn_started_ms);
 
         let outcome = match outcome_result {
-            Ok(o) => {
+            Ok(report) => {
+                let o = report.outcome;
                 let summary = hooks::TurnSummary {
                     success: true,
                     latency_ms,
-                    input_tokens: 0,
-                    output_tokens: 0,
+                    input_tokens: report.usage.input_tokens,
+                    output_tokens: report.usage.output_tokens,
                     stop_reason: match &o {
                         super::turn::TurnOutcome::Final(_) => "Final".into(),
                         super::turn::TurnOutcome::ContinueWithTools => "ContinueWithTools".into(),
@@ -464,12 +465,13 @@ async fn ask_inner_streaming(
         let latency_ms = now_ms.saturating_sub(turn_started_ms);
 
         let outcome = match outcome_result {
-            Ok(o) => {
+            Ok(report) => {
+                let o = report.outcome;
                 let summary = hooks::TurnSummary {
                     success: true,
                     latency_ms,
-                    input_tokens: 0,
-                    output_tokens: 0,
+                    input_tokens: report.usage.input_tokens,
+                    output_tokens: report.usage.output_tokens,
                     stop_reason: match &o {
                         super::turn::TurnOutcome::Final(_) => "Final".into(),
                         super::turn::TurnOutcome::ContinueWithTools => "ContinueWithTools".into(),
@@ -2196,5 +2198,56 @@ mod tests {
             }
             other => panic!("expected Interrupted, got {other:?}"),
         }
+    }
+
+    /// Token usage from the provider's ChatResponse must be plumbed
+    /// through TurnReport into the post_turn TurnSummary so observers
+    /// can see per-turn token consumption (cost / billing / rate
+    /// limiting).
+    #[tokio::test]
+    async fn post_turn_summary_carries_input_and_output_tokens() {
+        use crate::agent::llm::Usage;
+        use crate::agent::runtime::hooks::{
+            global_registry, Hook, HookContext, HookOutcome, TurnSummary,
+        };
+
+        struct UsageSpy {
+            captured: Arc<std::sync::Mutex<Option<TurnSummary>>>,
+        }
+        impl Hook for UsageSpy {
+            fn name(&self) -> &str {
+                "usage-spy"
+            }
+            fn post_turn(&self, _c: &HookContext, s: &TurnSummary) -> HookOutcome {
+                *self.captured.lock().unwrap() = Some(s.clone());
+                HookOutcome::Continue
+            }
+        }
+        let captured = Arc::new(std::sync::Mutex::new(None));
+        global_registry().register(Arc::new(UsageSpy {
+            captured: captured.clone(),
+        }));
+
+        let cfg = cfg();
+        let mock = MockProvider::new(&cfg.model, &cfg);
+        mock.set_usage(Usage {
+            input_tokens: 117,
+            output_tokens: 42,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+        });
+        let provider: Arc<dyn Provider> = Arc::new(mock);
+        let tools = builtin_only_registry();
+        let _ = ask_with(provider, &cfg, "hi", &tools).await.unwrap();
+
+        global_registry().unregister("usage-spy");
+
+        let summary = captured
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("post_turn fired");
+        assert_eq!(summary.input_tokens, 117);
+        assert_eq!(summary.output_tokens, 42);
     }
 }

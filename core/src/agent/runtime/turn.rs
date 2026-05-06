@@ -11,7 +11,7 @@ use crate::agent::llm::{
     accumulate::{accumulate_stream, StreamSink},
     run_log::{self, LlmRunRecord},
     ChatRequest, ChatResponse, ContentBlock, FinishReason, Message, Role, Tool as LlmTool,
-    ToolChoice, ToolCall,
+    ToolChoice, ToolCall, Usage,
 };
 use crate::agent::runtime::hooks::{self, HookContext};
 use crate::agent::tools::{registry::ToolRegistry, ToolResult};
@@ -24,6 +24,17 @@ pub enum TurnOutcome {
     /// Provider asked for tool execution; results have already been appended
     /// to `messages`. Run another turn.
     ContinueWithTools,
+}
+
+/// `run_turn` and `run_turn_streaming` return both the
+/// [`TurnOutcome`] and the LLM-reported [`Usage`] for the call so
+/// callers can plumb token counts into per-turn observability
+/// (hook summaries, audit, billing). Usage is zero-filled if the
+/// provider doesn't report one.
+#[derive(Debug)]
+pub struct TurnReport {
+    pub outcome: TurnOutcome,
+    pub usage: Usage,
 }
 
 /// Run a single turn against `provider` with the current `messages`.
@@ -53,7 +64,7 @@ pub async fn run_turn(
     session_id: Option<&str>,
     retry_policy: Option<crate::agent::llm::rate_limit::RetryPolicy>,
     hook_ctx: Option<&HookContext>,
-) -> Result<TurnOutcome, super::loop_::AgentError> {
+) -> Result<TurnReport, super::loop_::AgentError> {
     let mut request = ChatRequest {
         model: model.to_string(),
         messages: messages.clone(),
@@ -141,11 +152,19 @@ pub async fn run_turn(
         content: response.content.clone(),
     });
 
+    // Capture usage up-front so we can plumb it into TurnReport on
+    // every exit path; the response is consumed below by
+    // tool-call collection and finish-reason matching.
+    let usage = response.usage.clone();
+
     let tool_calls = collect_tool_calls(&response);
 
     if tool_calls.is_empty() {
         let text = extract_text(&response);
-        return Ok(TurnOutcome::Final(text));
+        return Ok(TurnReport {
+            outcome: TurnOutcome::Final(text),
+            usage,
+        });
     }
 
     // Dispatch each tool call. Results are appended as a single user-role
@@ -225,14 +244,15 @@ pub async fn run_turn(
 
     // If the provider explicitly said Stop despite producing tool_use blocks,
     // honour that — but typical providers signal `ToolUse` here.
-    match response.finish_reason {
+    let outcome = match response.finish_reason {
         FinishReason::Stop | FinishReason::Length | FinishReason::Refusal | FinishReason::ContentFilter | FinishReason::Other => {
             // Loop will terminate even though tools ran — the provider has
             // declared it's done.
-            Ok(TurnOutcome::Final(extract_text(&response)))
+            TurnOutcome::Final(extract_text(&response))
         }
-        FinishReason::ToolUse => Ok(TurnOutcome::ContinueWithTools),
-    }
+        FinishReason::ToolUse => TurnOutcome::ContinueWithTools,
+    };
+    Ok(TurnReport { outcome, usage })
 }
 
 /// Streaming variant of [`run_turn`] that drives the provider via
@@ -260,7 +280,7 @@ pub async fn run_turn_streaming(
     session_id: Option<&str>,
     sink: Arc<dyn StreamSink>,
     hook_ctx: Option<&HookContext>,
-) -> Result<TurnOutcome, super::loop_::AgentError> {
+) -> Result<TurnReport, super::loop_::AgentError> {
     let mut request = ChatRequest {
         model: model.to_string(),
         messages: messages.clone(),
@@ -325,11 +345,15 @@ pub async fn run_turn_streaming(
         content: response.content.clone(),
     });
 
+    let usage = response.usage.clone();
     let tool_calls = collect_tool_calls(&response);
 
     if tool_calls.is_empty() {
         let text = extract_text(&response);
-        return Ok(TurnOutcome::Final(text));
+        return Ok(TurnReport {
+            outcome: TurnOutcome::Final(text),
+            usage,
+        });
     }
 
     let mut result_blocks: Vec<ContentBlock> = Vec::with_capacity(tool_calls.len());
@@ -396,14 +420,15 @@ pub async fn run_turn_streaming(
         )));
     }
 
-    match response.finish_reason {
+    let outcome = match response.finish_reason {
         FinishReason::Stop
         | FinishReason::Length
         | FinishReason::Refusal
         | FinishReason::ContentFilter
-        | FinishReason::Other => Ok(TurnOutcome::Final(extract_text(&response))),
-        FinishReason::ToolUse => Ok(TurnOutcome::ContinueWithTools),
-    }
+        | FinishReason::Other => TurnOutcome::Final(extract_text(&response)),
+        FinishReason::ToolUse => TurnOutcome::ContinueWithTools,
+    };
+    Ok(TurnReport { outcome, usage })
 }
 
 fn collect_tool_calls(response: &ChatResponse) -> Vec<ToolCall> {

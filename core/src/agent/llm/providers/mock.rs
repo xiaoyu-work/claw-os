@@ -39,6 +39,9 @@ pub struct MockProvider {
     /// Tests inspect this to assert what reached the provider (e.g. that
     /// the runtime attached prompt-cache markers).
     last_request: Mutex<Option<ChatRequest>>,
+    /// Usage to attach to every response. Defaults to all-zeroes;
+    /// tests that exercise token-usage plumbing override it.
+    usage: Mutex<Usage>,
 }
 
 impl MockProvider {
@@ -48,6 +51,7 @@ impl MockProvider {
             script: Mutex::new(Vec::new()),
             cache_capable: std::sync::atomic::AtomicBool::new(false),
             last_request: Mutex::new(None),
+            usage: Mutex::new(Usage::default()),
         }
     }
 
@@ -60,6 +64,13 @@ impl MockProvider {
     pub fn set_supports_prompt_cache(&self, enabled: bool) {
         self.cache_capable
             .store(enabled, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Override the [`Usage`] returned with every scripted response.
+    /// Used by tests that exercise token-usage plumbing through the
+    /// runtime / hooks.
+    pub fn set_usage(&self, usage: Usage) {
+        *self.usage.lock().unwrap() = usage;
     }
 
     /// Snapshot of the most recent `ChatRequest` the mock saw, or `None`
@@ -75,6 +86,10 @@ impl MockProvider {
         } else {
             Some(q.remove(0))
         }
+    }
+
+    fn current_usage(&self) -> Usage {
+        self.usage.lock().unwrap().clone()
     }
 }
 
@@ -124,7 +139,7 @@ impl Provider for MockProvider {
                 content: vec![ContentBlock::Text { text }],
                 tool_calls: Vec::new(),
                 finish_reason: FinishReason::Stop,
-                usage: Usage::default(),
+                usage: self.current_usage(),
             }),
             MockResponse::ToolUse(calls) => {
                 let blocks = calls
@@ -140,7 +155,7 @@ impl Provider for MockProvider {
                     content: blocks,
                     tool_calls: calls,
                     finish_reason: FinishReason::ToolUse,
-                    usage: Usage::default(),
+                    usage: self.current_usage(),
                 })
             }
             MockResponse::Error(err) => Err(err),
