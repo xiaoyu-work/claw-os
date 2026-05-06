@@ -33,6 +33,11 @@ regex = "1"
 bytes = "1"
 crc32fast = "1"
 
+# Phase 5.5 (Edge TTS): WebSocket client. Aligned with workspace 0.26 + rustls
+# to match `reqwest`'s `rustls-tls` feature already in use here, so the binary
+# carries one TLS stack (rustls) instead of two.
+tokio-tungstenite = { version = "0.26", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+
 # Phase 0.5 (engine package management): native runtimes (llama.cpp, ort,
 # ort-genai) are installed by `cos engine update` to /var/lib/cos/engines and
 # loaded at runtime via libloading. No more compile-time link.

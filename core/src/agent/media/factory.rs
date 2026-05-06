@@ -16,6 +16,7 @@
 //!   | `elevenlabs`          | [`ElevenLabsProvider`]                            |
 //!   | `gemini` / `gemini-tts` | [`GeminiTts`]                                  |
 //!   | `minimax`             | [`MiniMaxTts`]                                    |
+//!   | `edge` / `edge-tts`   | [`EdgeTtsProvider`] (free, no key, WebSocket)     |
 //!
 //! Provider name → backend mapping (STT):
 //!
@@ -61,6 +62,7 @@ use super::stt::{SttProvider, SttRegistry};
 use super::stt_cloud::{CloudSttConfig, CloudSttProvider};
 use super::tts::{TtsProvider, TtsRegistry};
 use super::tts_cloud::{CloudTtsConfig, CloudTtsProvider};
+use super::tts_edge::{EdgeTtsConfig, EdgeTtsProvider};
 use super::tts_elevenlabs::{ElevenLabsConfig, ElevenLabsProvider};
 use super::tts_gemini::{GeminiTts, GeminiTtsConfig};
 use super::tts_minimax::{MiniMaxConfig, MiniMaxTts};
@@ -156,6 +158,18 @@ pub fn tts_registry_from_cfg(cfg: &CosConfig) -> TtsRegistry {
                 mc.base_url = b.clone();
             }
             reg.register(Arc::new(MiniMaxTts::new(mc)));
+        }
+        "edge" | "edge-tts" => {
+            let mut ec = EdgeTtsConfig {
+                default_voice: opt_string(&p.default_voice),
+                extra_headers,
+                request_timeout: timeout,
+                ..EdgeTtsConfig::default()
+            };
+            if let Some(b) = &p.base_url {
+                ec.base_url = b.clone();
+            }
+            reg.register(Arc::new(EdgeTtsProvider::new(ec)));
         }
         _ => {
             // Unknown alias — leave only noop registered.
@@ -346,6 +360,25 @@ mod tests {
         c.tts.provider = "minimax".into();
         let reg = tts_registry_from_cfg(&c);
         assert!(reg.get("minimax").is_some());
+    }
+
+    #[test]
+    fn tts_edge_alias_registers() {
+        let mut c = cfg();
+        c.tts.provider = "edge".into();
+        let reg = tts_registry_from_cfg(&c);
+        let p = reg.get("edge-tts").expect("edge-tts registered");
+        assert_eq!(p.name(), "edge-tts");
+        // Edge has no API key requirement.
+        assert!(p.is_configured());
+    }
+
+    #[test]
+    fn tts_edge_tts_alias_registers() {
+        let mut c = cfg();
+        c.tts.provider = "edge-tts".into();
+        let reg = tts_registry_from_cfg(&c);
+        assert!(reg.get("edge-tts").is_some());
     }
 
     #[test]

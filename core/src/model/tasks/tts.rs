@@ -74,6 +74,7 @@ pub fn build_from(cfg: &TtsConfig) -> Result<Option<Box<dyn TextToSpeech>>, Stri
         "openai" | "xai" | "deepseek" | "openrouter" | "ollama" => {
             Ok(Some(Box::new(OpenAICompatTts::from_config(cfg))))
         }
+        "edge" | "edge-tts" => Ok(Some(Box::new(EdgeTtsTask::from_config(cfg)))),
         other => Err(format!("unknown tts provider: {other}")),
     }
 }
@@ -240,6 +241,143 @@ fn classify_http_error(status: u16, bytes: &[u8]) -> TtsError {
 }
 
 // =====================================================================
+// Edge TTS adapter
+//
+// `agent::media::tts_edge::EdgeTtsProvider` is the canonical Edge
+// implementation (used by the agent's media registry). The `cos model
+// speak` CLI plumbs through this `TextToSpeech` trait, so we wrap the
+// canonical provider in a thin adapter that translates the request /
+// response / error types.
+// =====================================================================
+
+const EDGE_PROVIDER_NAME: &str = "edge-tts";
+
+pub struct EdgeTtsTask {
+    inner: crate::agent::media::tts_edge::EdgeTtsProvider,
+    /// `cfg.model` is meaningless for Edge (the voice IS the model)
+    /// but the trait surface still wants a value, so we report the
+    /// configured `default_voice` here (or the canonical default).
+    reported_model: String,
+    default_format: String,
+}
+
+impl EdgeTtsTask {
+    pub fn from_config(cfg: &TtsConfig) -> Self {
+        let default_voice = if cfg.default_voice.is_empty() {
+            None
+        } else {
+            Some(cfg.default_voice.clone())
+        };
+        let request_timeout = if cfg.request_timeout == 0 {
+            Duration::from_secs(0)
+        } else {
+            Duration::from_secs(cfg.request_timeout)
+        };
+        let mut ec = crate::agent::media::tts_edge::EdgeTtsConfig {
+            default_voice: default_voice.clone(),
+            extra_headers: cfg.extra_headers.clone(),
+            request_timeout,
+            ..crate::agent::media::tts_edge::EdgeTtsConfig::default()
+        };
+        if let Some(b) = cfg.base_url.as_ref().filter(|s| !s.is_empty()) {
+            ec.base_url = b.clone();
+        }
+        let reported_model = default_voice.unwrap_or_else(|| "en-US-AriaNeural".to_string());
+        let default_format = if cfg.default_format.is_empty() {
+            "mp3".to_string()
+        } else {
+            cfg.default_format.clone()
+        };
+        Self {
+            inner: crate::agent::media::tts_edge::EdgeTtsProvider::new(ec),
+            reported_model,
+            default_format,
+        }
+    }
+}
+
+#[async_trait]
+impl TextToSpeech for EdgeTtsTask {
+    fn name(&self) -> &str {
+        EDGE_PROVIDER_NAME
+    }
+
+    fn model(&self) -> &str {
+        &self.reported_model
+    }
+
+    fn is_configured(&self) -> bool {
+        // No API key required.
+        true
+    }
+
+    async fn synthesize(&self, request: TtsRequest) -> Result<TtsResponse, TtsError> {
+        if request.text.trim().is_empty() {
+            return Err(TtsError::InvalidInput("text must not be empty".into()));
+        }
+        let format_str = request
+            .format
+            .clone()
+            .unwrap_or_else(|| self.default_format.clone());
+        let format = parse_audio_format(&format_str)?;
+        let media_req = crate::agent::media::tts::TtsRequest {
+            text: request.text,
+            voice: request.voice,
+            language: None,
+            speed: request.speed,
+            format: Some(format),
+        };
+        // `synthesize` lives on the canonical `TtsProvider` trait.
+        use crate::agent::media::tts::TtsProvider as _;
+        let resp = self
+            .inner
+            .synthesize(media_req)
+            .await
+            .map_err(media_error_to_tts_error)?;
+        Ok(TtsResponse {
+            audio: resp.audio,
+            format: format_str,
+            model: self.reported_model.clone(),
+        })
+    }
+}
+
+/// Convert a user-facing format string (`"mp3"`, `"wav"`, `"ogg"`,
+/// `"pcm"`) into the typed [`AudioFormat`]. Any other value (including
+/// OpenAI-only formats like `"opus"`, `"aac"`, `"flac"`) is rejected
+/// with a useful error — Edge has a fixed format menu.
+fn parse_audio_format(s: &str) -> Result<crate::agent::media::tts::AudioFormat, TtsError> {
+    use crate::agent::media::tts::AudioFormat;
+    match s.to_ascii_lowercase().as_str() {
+        "mp3" => Ok(AudioFormat::Mp3),
+        "wav" | "riff" | "pcm-wav" => Ok(AudioFormat::Wav),
+        "ogg" | "opus-ogg" => Ok(AudioFormat::Ogg),
+        "pcm" | "raw" | "pcm16" => Ok(AudioFormat::Pcm16),
+        other => Err(TtsError::InvalidInput(format!(
+            "edge tts does not support format '{other}' — use mp3 | wav | ogg | pcm"
+        ))),
+    }
+}
+
+/// Translate `MediaError` (returned by the canonical media provider)
+/// to `TtsError` (the model-task trait's error type). Keeps the
+/// classifications aligned with `OpenAICompatTts::synthesize`.
+fn media_error_to_tts_error(e: crate::agent::media::MediaError) -> TtsError {
+    use crate::agent::media::MediaError;
+    match e {
+        MediaError::NotConfigured(_) => TtsError::Auth,
+        MediaError::InvalidRequest(msg) => TtsError::InvalidInput(msg),
+        MediaError::Transport(msg) => TtsError::Transport(msg),
+        MediaError::Provider { status, message } => TtsError::Provider { status, message },
+        MediaError::Parse(msg) => TtsError::Provider {
+            status: 0,
+            message: msg,
+        },
+        MediaError::Internal(msg) => TtsError::Transport(msg),
+    }
+}
+
+// =====================================================================
 // Tests
 // =====================================================================
 
@@ -266,6 +404,104 @@ mod tests {
         let mut c = TtsConfig::default();
         c.provider = "unknown".into();
         assert!(build_from(&c).is_err());
+    }
+
+    #[test]
+    fn build_edge_alias_returns_edge_task() {
+        let mut c = TtsConfig::default();
+        c.provider = "edge".into();
+        let t = build_from(&c).unwrap().expect("edge task");
+        assert_eq!(t.name(), "edge-tts");
+        // Edge has no API key requirement.
+        assert!(t.is_configured());
+    }
+
+    #[test]
+    fn build_edge_tts_alias_returns_edge_task() {
+        let mut c = TtsConfig::default();
+        c.provider = "edge-tts".into();
+        let t = build_from(&c).unwrap().expect("edge-tts task");
+        assert_eq!(t.name(), "edge-tts");
+    }
+
+    #[test]
+    fn edge_task_reports_default_voice_as_model() {
+        let mut c = TtsConfig::default();
+        c.provider = "edge".into();
+        c.default_voice = "en-GB-RyanNeural".into();
+        let t = EdgeTtsTask::from_config(&c);
+        assert_eq!(t.model(), "en-GB-RyanNeural");
+    }
+
+    #[test]
+    fn edge_task_falls_back_to_aria_when_voice_empty() {
+        let mut c = TtsConfig::default();
+        c.provider = "edge".into();
+        c.default_voice = "".into();
+        let t = EdgeTtsTask::from_config(&c);
+        assert_eq!(t.model(), "en-US-AriaNeural");
+    }
+
+    #[test]
+    fn parse_audio_format_accepts_known() {
+        use crate::agent::media::tts::AudioFormat;
+        assert!(matches!(parse_audio_format("mp3"), Ok(AudioFormat::Mp3)));
+        assert!(matches!(parse_audio_format("MP3"), Ok(AudioFormat::Mp3)));
+        assert!(matches!(parse_audio_format("wav"), Ok(AudioFormat::Wav)));
+        assert!(matches!(parse_audio_format("ogg"), Ok(AudioFormat::Ogg)));
+        assert!(matches!(parse_audio_format("pcm"), Ok(AudioFormat::Pcm16)));
+    }
+
+    #[test]
+    fn parse_audio_format_rejects_unsupported() {
+        let err = parse_audio_format("opus").unwrap_err();
+        match err {
+            TtsError::InvalidInput(msg) => assert!(msg.contains("opus")),
+            other => panic!("unexpected: {other:?}"),
+        }
+        // OpenAI-compat formats Edge doesn't speak natively are
+        // rejected, not silently coerced.
+        assert!(parse_audio_format("aac").is_err());
+        assert!(parse_audio_format("flac").is_err());
+    }
+
+    #[tokio::test]
+    async fn edge_task_synthesize_rejects_empty_text() {
+        let mut c = TtsConfig::default();
+        c.provider = "edge".into();
+        let t = EdgeTtsTask::from_config(&c);
+        let err = t
+            .synthesize(TtsRequest {
+                text: "".into(),
+                voice: None,
+                format: None,
+                speed: None,
+                instructions: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, TtsError::InvalidInput(_)));
+    }
+
+    #[tokio::test]
+    async fn edge_task_synthesize_rejects_unsupported_format() {
+        let mut c = TtsConfig::default();
+        c.provider = "edge".into();
+        let t = EdgeTtsTask::from_config(&c);
+        let err = t
+            .synthesize(TtsRequest {
+                text: "hi".into(),
+                voice: None,
+                format: Some("flac".into()),
+                speed: None,
+                instructions: None,
+            })
+            .await
+            .unwrap_err();
+        match err {
+            TtsError::InvalidInput(msg) => assert!(msg.contains("flac")),
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 
     #[test]

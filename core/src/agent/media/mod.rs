@@ -24,6 +24,7 @@ pub mod stt;
 pub mod stt_cloud;
 pub mod tts;
 pub mod tts_cloud;
+pub mod tts_edge;
 pub mod tts_elevenlabs;
 pub mod tts_gemini;
 pub mod tts_minimax;
