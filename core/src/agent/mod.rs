@@ -108,8 +108,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "notes" => notes_cmd(args),
         "skills" => skills_cmd(args),
         "nudge" => nudge_cmd(args),
+        "mcp" => mcp_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp"
         )),
     }
 }
@@ -578,6 +579,59 @@ fn nudge_cmd(args: &[String]) -> Result<Value, String> {
     }
 }
 
+/// `cos agent mcp [serve|status]` — MCP (Model Context Protocol)
+/// server that exposes the agent's tool registry to external clients
+/// over newline-delimited JSON-RPC on stdio. `serve` runs in the
+/// foreground until stdin closes; `status` reports the catalog
+/// without listening.
+fn mcp_cmd(args: &[String]) -> Result<Value, String> {
+    use crate::agent::tools::mcp::{server::McpServer, transport::StdioTransport};
+    use std::sync::Arc;
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("status");
+    match sub {
+        "status" | "" => {
+            let cfg = &crate::config::get().agent;
+            let mut tools = tools::registry::default_registry();
+            tools.set_guardrails(crate::agent::runtime::loop_::guardrails_from_cfg(cfg));
+            tools.set_approval(crate::agent::runtime::loop_::approval_from_cfg(cfg));
+            Ok(json!({
+                "status": "ready",
+                "transport": "stdio",
+                "server_name": format!("cos-agent/{}", env!("CARGO_PKG_VERSION")),
+                "tools_registered": tools.names_unfiltered().len(),
+                "tools_permitted": tools.names().len(),
+                "tools": tools.names(),
+            }))
+        }
+        "serve" => {
+            // Build the registry exactly as `agent::ask` would, so
+            // the same guardrails/approval policy applies to MCP-
+            // initiated tool calls.
+            let cfg = &crate::config::get().agent;
+            let mut tools = tools::registry::default_registry();
+            tools.set_guardrails(crate::agent::runtime::loop_::guardrails_from_cfg(cfg));
+            tools.set_approval(crate::agent::runtime::loop_::approval_from_cfg(cfg));
+            let registry = Arc::new(tools);
+            let server = McpServer::new(
+                "cos-agent",
+                env!("CARGO_PKG_VERSION"),
+                registry,
+            );
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| format!("tokio runtime: {e}"))?;
+            runtime
+                .block_on(server.serve(StdioTransport::stdio()))
+                .map_err(|e| format!("mcp serve: {e}"))?;
+            Ok(json!({"status": "stopped", "reason": "stdin closed"}))
+        }
+        other => Err(format!(
+            "unknown mcp subcommand: {other}. try: status | serve"
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -764,5 +818,28 @@ mod tests {
         assert!(err.contains("list"));
         assert!(err.contains("add"));
         assert!(err.contains("fire"));
+    }
+
+    #[test]
+    fn mcp_status_returns_catalogue() {
+        let v = mcp_cmd(&["status".into()]).expect("mcp status ok");
+        assert_eq!(v.get("status").and_then(|x| x.as_str()), Some("ready"));
+        assert_eq!(v.get("transport").and_then(|x| x.as_str()), Some("stdio"));
+        assert!(v.get("tools_registered").is_some());
+        assert!(v.get("tools_permitted").is_some());
+        assert!(v.get("tools").and_then(|x| x.as_array()).is_some());
+    }
+
+    #[test]
+    fn mcp_default_returns_status() {
+        let v = mcp_cmd(&[]).expect("mcp default = status");
+        assert_eq!(v.get("status").and_then(|x| x.as_str()), Some("ready"));
+    }
+
+    #[test]
+    fn mcp_unknown_subcommand_lists_options() {
+        let err = mcp_cmd(&["bogus".into()]).unwrap_err();
+        assert!(err.contains("status"));
+        assert!(err.contains("serve"));
     }
 }
