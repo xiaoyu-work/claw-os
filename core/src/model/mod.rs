@@ -33,6 +33,8 @@ use serde_json::{json, Value};
 
 use tasks::embed::{self, EmbedRequest};
 use tasks::imagegen::{self, ImageData, ImageGenRequest};
+use tasks::stt::{self, SttMode, SttRequest};
+use tasks::tts::{self, TtsRequest};
 
 /// Dispatch a `cos model <command>` invocation.
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
@@ -62,6 +64,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         }
         "embed" => run_embed(args),
         "image" | "imagegen" => run_imagegen(args),
+        "transcribe" | "stt" => run_transcribe(args, SttMode::Transcribe),
+        "translate" => run_transcribe(args, SttMode::Translate),
+        "speak" | "tts" => run_speak(args),
         "status" => Ok(json!({
             "status": "ok",
             "phase": "0.5-skeleton",
@@ -72,9 +77,11 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
             "models_loaded": 0,
             "embed": embed_status_json(),
             "imagegen": imagegen_status_json(),
+            "stt": stt_status_json(),
+            "tts": tts_status_json(),
         })),
         other => Err(format!(
-            "unknown command: {other}. try: list | import | load | unload | infer | embed | image | status | bench | rm"
+            "unknown command: {other}. try: list | import | load | unload | infer | embed | image | transcribe | translate | speak | status | bench | rm"
         )),
     }
 }
@@ -96,6 +103,32 @@ fn imagegen_status_json() -> Value {
     let cfg = &crate::config::get().imagegen;
     let configured = match imagegen::build_from(cfg) {
         Ok(Some(g)) => g.is_configured(),
+        _ => false,
+    };
+    json!({
+        "provider": cfg.provider,
+        "model": cfg.model,
+        "configured": configured,
+    })
+}
+
+fn stt_status_json() -> Value {
+    let cfg = &crate::config::get().stt;
+    let configured = match stt::build_from(cfg) {
+        Ok(Some(s)) => s.is_configured(),
+        _ => false,
+    };
+    json!({
+        "provider": cfg.provider,
+        "model": cfg.model,
+        "configured": configured,
+    })
+}
+
+fn tts_status_json() -> Value {
+    let cfg = &crate::config::get().tts;
+    let configured = match tts::build_from(cfg) {
+        Ok(Some(t)) => t.is_configured(),
         _ => false,
     };
     json!({
@@ -366,5 +399,259 @@ fn base64_decode(s: &str) -> Result<Vec<u8>, String> {
     base64::engine::general_purpose::STANDARD
         .decode(s.trim())
         .map_err(|e| e.to_string())
+}
+
+/// `cos model transcribe <audio-path> [--language en] [--prompt "..."]
+/// [--format json|text|verbose_json|srt|vtt] [--temperature 0.0]
+/// [--model NAME] [--out FILE]`
+///
+/// `cos model translate <audio-path> [...]` is the same but uses the
+/// `/audio/translations` endpoint (always returns English).
+fn run_transcribe(args: &[String], mode: SttMode) -> Result<Value, String> {
+    let mut audio_path: Option<String> = None;
+    let mut language: Option<String> = None;
+    let mut prompt: Option<String> = None;
+    let mut response_format: Option<String> = None;
+    let mut temperature: Option<f32> = None;
+    let mut model_override: Option<String> = None;
+    let mut out_path: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--language" | "--lang" => {
+                language = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--language requires a value".to_string())?,
+                );
+                i += 2;
+            }
+            "--prompt" => {
+                prompt = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--prompt requires a value".to_string())?,
+                );
+                i += 2;
+            }
+            "--format" | "--response-format" => {
+                response_format = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--format requires a value".to_string())?,
+                );
+                i += 2;
+            }
+            "--temperature" => {
+                temperature = Some(
+                    args.get(i + 1)
+                        .ok_or_else(|| "--temperature requires a value".to_string())?
+                        .parse()
+                        .map_err(|e: std::num::ParseFloatError| e.to_string())?,
+                );
+                i += 2;
+            }
+            "--model" => {
+                model_override = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--model requires a value".to_string())?,
+                );
+                i += 2;
+            }
+            "--out" => {
+                out_path = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--out requires a path".to_string())?,
+                );
+                i += 2;
+            }
+            other if other.starts_with("--") => {
+                return Err(format!("unknown flag: {other}"));
+            }
+            _ => {
+                if audio_path.is_none() {
+                    audio_path = Some(args[i].clone());
+                } else {
+                    return Err(format!("unexpected positional arg: {}", args[i]));
+                }
+                i += 1;
+            }
+        }
+    }
+
+    let audio_path = audio_path.ok_or_else(|| {
+        "usage: cos model transcribe <audio-path> [--language LL] [--prompt ...] [--format json|text|verbose_json|srt|vtt]"
+            .to_string()
+    })?;
+    let audio = std::fs::read(&audio_path).map_err(|e| format!("read {audio_path}: {e}"))?;
+    let filename = std::path::Path::new(&audio_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("audio")
+        .to_string();
+
+    let mut cfg = crate::config::get().stt.clone();
+    if let Some(m) = model_override {
+        cfg.model = m;
+    }
+    let stt_impl = stt::build_from(&cfg)
+        .map_err(|e| format!("stt config: {e}"))?
+        .ok_or_else(|| {
+            "STT is disabled (provider=\"none\"). Set [stt] in config.json".to_string()
+        })?;
+    if !stt_impl.is_configured() {
+        return Err(format!(
+            "stt provider \"{}\" missing API key (set api_key_credential or api_key_env)",
+            cfg.provider
+        ));
+    }
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = rt
+        .block_on(stt_impl.transcribe(SttRequest {
+            audio,
+            filename,
+            language,
+            prompt,
+            response_format,
+            temperature,
+            mode,
+        }))
+        .map_err(|e| e.to_string())?;
+
+    if let Some(path) = out_path {
+        std::fs::write(&path, &resp.text).map_err(|e| format!("write {path}: {e}"))?;
+    }
+    Ok(json!({
+        "text": resp.text,
+        "model": resp.model,
+        "language": resp.language,
+        "mode": match mode { SttMode::Transcribe => "transcribe", SttMode::Translate => "translate" },
+    }))
+}
+
+/// `cos model speak <text> --out FILE [--voice alloy] [--format mp3]
+/// [--speed 1.0] [--instructions "..."] [--model NAME]`
+fn run_speak(args: &[String]) -> Result<Value, String> {
+    let mut text_parts: Vec<String> = Vec::new();
+    let mut voice: Option<String> = None;
+    let mut format: Option<String> = None;
+    let mut speed: Option<f32> = None;
+    let mut instructions: Option<String> = None;
+    let mut model_override: Option<String> = None;
+    let mut out_path: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--voice" => {
+                voice = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--voice requires a value".to_string())?,
+                );
+                i += 2;
+            }
+            "--format" => {
+                format = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--format requires a value".to_string())?,
+                );
+                i += 2;
+            }
+            "--speed" => {
+                speed = Some(
+                    args.get(i + 1)
+                        .ok_or_else(|| "--speed requires a value".to_string())?
+                        .parse()
+                        .map_err(|e: std::num::ParseFloatError| e.to_string())?,
+                );
+                i += 2;
+            }
+            "--instructions" => {
+                instructions = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--instructions requires a value".to_string())?,
+                );
+                i += 2;
+            }
+            "--model" => {
+                model_override = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--model requires a value".to_string())?,
+                );
+                i += 2;
+            }
+            "--out" => {
+                out_path = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--out requires a path".to_string())?,
+                );
+                i += 2;
+            }
+            other if other.starts_with("--") => {
+                return Err(format!("unknown flag: {other}"));
+            }
+            _ => {
+                text_parts.push(args[i].clone());
+                i += 1;
+            }
+        }
+    }
+    if text_parts.is_empty() {
+        return Err(
+            "usage: cos model speak <text> --out FILE [--voice alloy] [--format mp3] [--speed 1.0]"
+                .into(),
+        );
+    }
+    let text = text_parts.join(" ");
+
+    let mut cfg = crate::config::get().tts.clone();
+    if let Some(m) = model_override {
+        cfg.model = m;
+    }
+    let tts_impl = tts::build_from(&cfg)
+        .map_err(|e| format!("tts config: {e}"))?
+        .ok_or_else(|| {
+            "TTS is disabled (provider=\"none\"). Set [tts] in config.json".to_string()
+        })?;
+    if !tts_impl.is_configured() {
+        return Err(format!(
+            "tts provider \"{}\" missing API key (set api_key_credential or api_key_env)",
+            cfg.provider
+        ));
+    }
+
+    let chosen_format = format.clone().unwrap_or_else(|| cfg.default_format.clone());
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = rt
+        .block_on(tts_impl.synthesize(TtsRequest {
+            text,
+            voice,
+            format,
+            speed,
+            instructions,
+        }))
+        .map_err(|e| e.to_string())?;
+
+    let path = out_path.unwrap_or_else(|| format!("cos-speech.{chosen_format}"));
+    std::fs::write(&path, &resp.audio).map_err(|e| format!("write {path}: {e}"))?;
+    Ok(json!({
+        "saved": path,
+        "bytes": resp.audio.len(),
+        "format": resp.format,
+        "model": resp.model,
+    }))
 }
 

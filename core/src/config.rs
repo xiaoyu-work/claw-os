@@ -30,6 +30,10 @@ pub struct CosConfig {
     pub embed: EmbedConfig,
     #[serde(default)]
     pub imagegen: ImageGenConfig,
+    #[serde(default)]
+    pub stt: SttConfig,
+    #[serde(default)]
+    pub tts: TtsConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -189,6 +193,57 @@ pub struct ImageGenConfig {
     pub default_format: String,
 }
 
+/// Speech-to-text config. Reads from `[stt]` block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SttConfig {
+    /// `"none"` (disabled) | `"openai"` | self-hosted alias.
+    #[serde(default = "default_stt_provider")]
+    pub provider: String,
+    /// Model name (e.g. `"whisper-1"`, `"whisper-large-v3"`).
+    #[serde(default = "default_stt_model")]
+    pub model: String,
+    #[serde(default)]
+    pub api_key_credential: Option<String>,
+    #[serde(default)]
+    pub api_key_env: Option<String>,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub extra_headers: std::collections::HashMap<String, String>,
+    #[serde(default = "default_agent_request_timeout")]
+    pub request_timeout: u64,
+    /// Default response shape, e.g. `"json"`, `"text"`, `"verbose_json"`.
+    #[serde(default = "default_stt_response_format")]
+    pub default_response_format: String,
+}
+
+/// Text-to-speech config. Reads from `[tts]` block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TtsConfig {
+    /// `"none"` (disabled) | `"openai"` | self-hosted alias.
+    #[serde(default = "default_tts_provider")]
+    pub provider: String,
+    /// Model name (e.g. `"tts-1"`, `"tts-1-hd"`, `"gpt-4o-mini-tts"`).
+    #[serde(default = "default_tts_model")]
+    pub model: String,
+    #[serde(default)]
+    pub api_key_credential: Option<String>,
+    #[serde(default)]
+    pub api_key_env: Option<String>,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub extra_headers: std::collections::HashMap<String, String>,
+    #[serde(default = "default_agent_request_timeout")]
+    pub request_timeout: u64,
+    /// Default voice (alloy, echo, fable, onyx, nova, shimmer for OpenAI).
+    #[serde(default = "default_tts_voice")]
+    pub default_voice: String,
+    /// Default output format (`mp3` | `opus` | `aac` | `flac` | `wav` | `pcm`).
+    #[serde(default = "default_tts_format")]
+    pub default_format: String,
+}
+
 fn default_version() -> String {
     env!("CARGO_PKG_VERSION").into()
 }
@@ -249,6 +304,27 @@ fn default_imagegen_timeout() -> u64 {
 fn default_imagegen_format() -> String {
     "png".into()
 }
+fn default_stt_provider() -> String {
+    "none".into()
+}
+fn default_stt_model() -> String {
+    "whisper-1".into()
+}
+fn default_stt_response_format() -> String {
+    "json".into()
+}
+fn default_tts_provider() -> String {
+    "none".into()
+}
+fn default_tts_model() -> String {
+    "tts-1".into()
+}
+fn default_tts_voice() -> String {
+    "alloy".into()
+}
+fn default_tts_format() -> String {
+    "mp3".into()
+}
 
 impl Default for ExecConfig {
     fn default() -> Self {
@@ -289,6 +365,8 @@ impl Default for CosConfig {
             agent: AgentConfig::default(),
             embed: EmbedConfig::default(),
             imagegen: ImageGenConfig::default(),
+            stt: SttConfig::default(),
+            tts: TtsConfig::default(),
         }
     }
 }
@@ -320,6 +398,37 @@ impl Default for ImageGenConfig {
             default_size: None,
             default_quality: None,
             default_format: default_imagegen_format(),
+        }
+    }
+}
+
+impl Default for SttConfig {
+    fn default() -> Self {
+        Self {
+            provider: default_stt_provider(),
+            model: default_stt_model(),
+            api_key_credential: None,
+            api_key_env: None,
+            base_url: None,
+            extra_headers: std::collections::HashMap::new(),
+            request_timeout: default_agent_request_timeout(),
+            default_response_format: default_stt_response_format(),
+        }
+    }
+}
+
+impl Default for TtsConfig {
+    fn default() -> Self {
+        Self {
+            provider: default_tts_provider(),
+            model: default_tts_model(),
+            api_key_credential: None,
+            api_key_env: None,
+            base_url: None,
+            extra_headers: std::collections::HashMap::new(),
+            request_timeout: default_agent_request_timeout(),
+            default_voice: default_tts_voice(),
+            default_format: default_tts_format(),
         }
     }
 }
