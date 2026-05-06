@@ -136,8 +136,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "vision" => vision_cmd(args),
         "display" => display_cmd(args),
         "shell-hooks" => shell_hooks_cmd(args),
+        "media" => media_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | title | summarise | classify | tools | guardrails | approval | todo | compress | aux | retry | vision | display | shell-hooks"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | title | summarise | classify | tools | guardrails | approval | todo | compress | aux | retry | vision | display | shell-hooks | media"
         )),
     }
 }
@@ -3319,6 +3320,181 @@ fn init_instructions_for(shell: crate::agent::shell_hooks::Shell) -> &'static st
             "append the script to ~/.config/fish/config.fish, or source it: cos agent shell-hooks init fish | jq -r .script | source"
         }
     }
+}
+
+/// `cos agent media <providers|outputs-dir|list-outputs [--limit N] [--ext <e>]>`
+///
+/// Surfaces the media subsystem so operators can introspect:
+///   * which TTS / STT / image-gen providers are wired up and which
+///     are configured (currently only the `noop` reference impls
+///     are auto-registered;  cloud factories will populate this
+///     surface once `with_*_providers_from_cfg` lands)
+///   * where rendered audio / image artifacts are written
+///   * what's recently been generated under that directory
+fn media_cmd(args: &[String]) -> Result<Value, String> {
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("providers");
+    match sub {
+        "providers" | "" => {
+            let tts = crate::agent::media::tts::TtsRegistry::with_default_providers();
+            let stt = crate::agent::media::stt::SttRegistry::with_default_providers();
+            let imagegen =
+                crate::agent::media::imagegen::ImageGenRegistry::with_default_providers();
+
+            let tts_rows: Vec<_> = tts
+                .names()
+                .into_iter()
+                .map(|name| {
+                    let configured =
+                        tts.get(&name).map(|p| p.is_configured()).unwrap_or(false);
+                    json!({"name": name, "configured": configured})
+                })
+                .collect();
+            let stt_rows: Vec<_> = stt
+                .names()
+                .into_iter()
+                .map(|name| {
+                    let configured =
+                        stt.get(&name).map(|p| p.is_configured()).unwrap_or(false);
+                    json!({"name": name, "configured": configured})
+                })
+                .collect();
+            let imagegen_rows: Vec<_> = imagegen
+                .names()
+                .into_iter()
+                .map(|name| {
+                    let configured = imagegen
+                        .get(&name)
+                        .map(|p| p.is_configured())
+                        .unwrap_or(false);
+                    json!({"name": name, "configured": configured})
+                })
+                .collect();
+
+            Ok(json!({
+                "outputs_dir": crate::paths::agent_media_outputs_dir().display().to_string(),
+                "tts": {
+                    "n": tts_rows.len(),
+                    "providers": tts_rows,
+                },
+                "stt": {
+                    "n": stt_rows.len(),
+                    "providers": stt_rows,
+                },
+                "imagegen": {
+                    "n": imagegen_rows.len(),
+                    "providers": imagegen_rows,
+                },
+            }))
+        }
+        "outputs-dir" => Ok(json!({
+            "path": crate::paths::agent_media_outputs_dir().display().to_string(),
+        })),
+        "list-outputs" => {
+            let mut limit: usize = 20;
+            let mut ext_filter: Option<String> = None;
+            let mut i = 1usize;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--limit" => {
+                        let v = args
+                            .get(i + 1)
+                            .ok_or_else(|| "--limit needs <n>".to_string())?;
+                        limit = v
+                            .parse()
+                            .map_err(|_| format!("--limit must be a positive integer, got: {v}"))?;
+                        i += 2;
+                    }
+                    "--ext" => {
+                        let v = args
+                            .get(i + 1)
+                            .ok_or_else(|| "--ext needs <extension>".to_string())?;
+                        ext_filter =
+                            Some(v.trim_start_matches('.').to_ascii_lowercase());
+                        i += 2;
+                    }
+                    other => {
+                        return Err(format!(
+                            "unknown flag for `media list-outputs`: {other}"
+                        ));
+                    }
+                }
+            }
+            let dir = crate::paths::agent_media_outputs_dir();
+            list_media_outputs(&dir, limit, ext_filter.as_deref())
+        }
+        other => Err(format!(
+            "unknown media subcommand: {other}. try: providers | outputs-dir | list-outputs [--limit N] [--ext <e>]"
+        )),
+    }
+}
+
+fn list_media_outputs(
+    dir: &std::path::Path,
+    limit: usize,
+    ext_filter: Option<&str>,
+) -> Result<Value, String> {
+    if !dir.exists() {
+        return Ok(json!({
+            "dir": dir.display().to_string(),
+            "exists": false,
+            "limit": limit,
+            "n": 0,
+            "files": Vec::<Value>::new(),
+        }));
+    }
+    let mut rows: Vec<(std::time::SystemTime, std::path::PathBuf, u64, String)> =
+        Vec::new();
+    let entries = std::fs::read_dir(dir)
+        .map_err(|e| format!("read_dir failed: {e}"))?;
+    for ent in entries.flatten() {
+        let path = ent.path();
+        let meta = match ent.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if let Some(want) = ext_filter {
+            if ext != want {
+                continue;
+            }
+        }
+        let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+        rows.push((mtime, path, meta.len(), ext));
+    }
+    // Newest first.
+    rows.sort_by(|a, b| b.0.cmp(&a.0));
+    rows.truncate(limit);
+    let files: Vec<Value> = rows
+        .into_iter()
+        .map(|(mtime, path, size, ext)| {
+            let mtime_ms = mtime
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            json!({
+                "path": path.display().to_string(),
+                "name": path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string(),
+                "ext": ext,
+                "size": size,
+                "mtime_ms": mtime_ms,
+            })
+        })
+        .collect();
+    Ok(json!({
+        "dir": dir.display().to_string(),
+        "exists": true,
+        "limit": limit,
+        "ext_filter": ext_filter,
+        "n": files.len(),
+        "files": files,
+    }))
 }
 
 fn todo_status_counts(list: &crate::agent::tools::todo::TodoList) -> serde_json::Value {
@@ -7890,5 +8066,140 @@ mod tests {
         let err = shell_hooks_cmd(&["bogus".into()]).unwrap_err();
         assert!(err.contains("bogus"));
         assert!(err.contains("init"));
+    }
+
+    #[test]
+    fn media_default_lists_provider_registries() {
+        let v = media_cmd(&[]).expect("default ok");
+        assert!(v.get("outputs_dir").is_some());
+        // The three registries are always present (with `noop` only
+        // until cloud factories land); each row carries
+        // {name, configured}.
+        for slot in ["tts", "stt", "imagegen"] {
+            let block = v.get(slot).unwrap_or_else(|| panic!("missing {slot}"));
+            let providers = block
+                .get("providers")
+                .and_then(|p| p.as_array())
+                .unwrap_or_else(|| panic!("{slot}.providers not an array"));
+            assert!(!providers.is_empty(), "{slot} has zero providers");
+            let first = &providers[0];
+            assert!(first.get("name").is_some());
+            assert!(first.get("configured").is_some());
+        }
+    }
+
+    #[test]
+    fn media_providers_default_includes_noop_in_each_registry() {
+        let v = media_cmd(&["providers".into()]).expect("providers ok");
+        for slot in ["tts", "stt", "imagegen"] {
+            let names: Vec<String> = v
+                .get(slot)
+                .and_then(|s| s.get("providers"))
+                .and_then(|p| p.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|r| {
+                            r.get("name").and_then(|n| n.as_str()).map(String::from)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            assert!(
+                names.contains(&"noop".to_string()),
+                "{slot} missing noop, got: {names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn media_outputs_dir_returns_path() {
+        let v = media_cmd(&["outputs-dir".into()]).expect("outputs-dir ok");
+        let p = v.get("path").and_then(|s| s.as_str()).expect("path field");
+        assert!(p.contains("media"), "expected 'media' in path, got: {p}");
+    }
+
+    #[test]
+    fn media_list_outputs_unknown_flag_errs() {
+        let err = media_cmd(&["list-outputs".into(), "--bogus".into()]).unwrap_err();
+        assert!(err.contains("unknown flag"));
+    }
+
+    #[test]
+    fn media_list_outputs_limit_requires_value() {
+        let err = media_cmd(&["list-outputs".into(), "--limit".into()]).unwrap_err();
+        assert!(err.contains("--limit"));
+    }
+
+    #[test]
+    fn media_list_outputs_limit_requires_int() {
+        let err = media_cmd(&["list-outputs".into(), "--limit".into(), "abc".into()])
+            .unwrap_err();
+        assert!(err.contains("--limit"));
+    }
+
+    #[test]
+    fn media_list_outputs_ext_requires_value() {
+        let err = media_cmd(&["list-outputs".into(), "--ext".into()]).unwrap_err();
+        assert!(err.contains("--ext"));
+    }
+
+    #[test]
+    fn media_list_outputs_missing_dir_returns_empty() {
+        let dir = std::env::temp_dir().join(format!(
+            "cos-media-list-missing-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let v = list_media_outputs(&dir, 10, None).expect("list ok");
+        assert_eq!(v.get("exists").and_then(|b| b.as_bool()), Some(false));
+        assert_eq!(v.get("n").and_then(|n| n.as_u64()), Some(0));
+        assert_eq!(
+            v.get("files").and_then(|a| a.as_array()).map(|a| a.len()),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn media_list_outputs_returns_files_newest_first_within_limit() {
+        let dir = std::env::temp_dir().join(format!(
+            "cos-media-list-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        // Write files with sleeps between writes so mtime ordering
+        // is deterministic across Windows / Linux / macOS without
+        // pulling a fresh `filetime` dep into the workspace.
+        for (name, body) in [("a.png", "1"), ("b.png", "22"), ("c.wav", "333")] {
+            std::fs::write(dir.join(name), body).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let v = list_media_outputs(&dir, 10, None).expect("list ok");
+        assert_eq!(v.get("n").and_then(|n| n.as_u64()), Some(3));
+        let files = v.get("files").and_then(|a| a.as_array()).unwrap();
+        let names: Vec<&str> = files
+            .iter()
+            .filter_map(|f| f.get("name").and_then(|s| s.as_str()))
+            .collect();
+        assert_eq!(names, vec!["c.wav", "b.png", "a.png"]);
+        // Filtering by ext narrows the list.
+        let v2 = list_media_outputs(&dir, 10, Some("png")).expect("list png ok");
+        let names2: Vec<&str> = v2
+            .get("files")
+            .and_then(|a| a.as_array())
+            .unwrap()
+            .iter()
+            .filter_map(|f| f.get("name").and_then(|s| s.as_str()))
+            .collect();
+        assert_eq!(names2, vec!["b.png", "a.png"]);
+        // Limit caps the result.
+        let v3 = list_media_outputs(&dir, 1, None).expect("list lim ok");
+        assert_eq!(v3.get("n").and_then(|n| n.as_u64()), Some(1));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn media_unknown_subcommand_errs() {
+        let err = media_cmd(&["bogus".into()]).unwrap_err();
+        assert!(err.contains("bogus"));
+        assert!(err.contains("providers"));
     }
 }
