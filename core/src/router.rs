@@ -408,6 +408,7 @@ fn builtin_apps() -> Vec<(
             ("todo", "Manage per-session agent todo lists: cos agent todo [list <session_id>|add <session_id> <id> <title> [--note <text>]|set-status <session_id> <id> <pending|in_progress|completed|cancelled>|remove <session_id> <id>|clear <session_id> --yes|path]"),
             ("compress", "Estimate tokens for a recorded conversation and report whether the compressor would trigger: cos agent compress [show-config|check --file <jsonl> [--system <text>] [--system-file <path>] [--trigger N] [--target N] [--keep-tail N] [--summary-max N]]"),
             ("aux", "Inspect or invoke the auxiliary LLM client (cheap-model fallback for title / classify / summarise): cos agent aux [show|ask --prompt <text> [--system <text>] [--max-tokens N]]"),
+            ("retry", "Inspect the LLM-call retry policy (resolved from agent config) and preview the back-off schedule it would produce: cos agent retry [show|schedule [--attempts N]]"),
         ]),
         ("model", "Local model registry + inference daemon (ort for STT/TTS/embed/vision/imagegen, llama.cpp for LLM) — Phase 0.5 skeleton", vec![
             ("list", "List registered models from /var/lib/cos/models/"),

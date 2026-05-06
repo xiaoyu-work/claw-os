@@ -131,8 +131,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "todo" => todo_cmd(args),
         "compress" => compress_cmd(args),
         "aux" | "auxiliary" => aux_cmd(args),
+        "retry" => retry_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | title | summarise | classify | tools | guardrails | approval | todo | compress | aux"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | title | summarise | classify | tools | guardrails | approval | todo | compress | aux | retry"
         )),
     }
 }
@@ -2302,6 +2303,110 @@ fn aux_cmd(args: &[String]) -> Result<Value, String> {
         }
         other => Err(format!(
             "unknown aux subcommand: {other}. try: show | ask --prompt <text> [--system <text>] [--max-tokens N]"
+        )),
+    }
+}
+
+/// `cos agent retry [show|schedule [--attempts N]]`
+///
+/// Surface for the LLM-call retry policy resolved from the agent
+/// config via [`crate::agent::runtime::loop_::retry_policy_from_cfg`].
+///
+/// `show` reports whether retries are enabled and the resolved
+/// `RetryPolicy` (max_attempts / base_ms / max_ms / jitter), or
+/// reports `enabled: false` when the helper returns `None`.
+///
+/// `schedule` previews the back-off delays the policy would emit per
+/// attempt (1-indexed, exclusive of the first call). Useful for
+/// capacity planning ("if every retry fires, how long until we give
+/// up?") and for verifying that `retry_max_attempts` matches what's
+/// in config without round-tripping a live request.
+///
+/// Because `RetryPolicy::delay_for` adds jitter when configured, the
+/// schedule is non-deterministic when `jitter == true`; the output
+/// includes the per-attempt delay AND the cap (`max_ms`) so callers
+/// can compute worst-case bounds.
+fn retry_cmd(args: &[String]) -> Result<Value, String> {
+    let cfg = &crate::config::get().agent;
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("show");
+    match sub {
+        "show" | "" => {
+            let policy = crate::agent::runtime::loop_::retry_policy_from_cfg(cfg);
+            match policy {
+                Some(p) => Ok(json!({
+                    "enabled": true,
+                    "max_attempts": p.max_attempts,
+                    "base_ms": p.base_ms,
+                    "max_ms": p.max_ms,
+                    "jitter": p.jitter,
+                    "config_retry_enabled": cfg.retry_enabled,
+                    "config_retry_max_attempts": cfg.retry_max_attempts,
+                })),
+                None => Ok(json!({
+                    "enabled": false,
+                    "config_retry_enabled": cfg.retry_enabled,
+                    "config_retry_max_attempts": cfg.retry_max_attempts,
+                    "note": "retry_enabled is false OR retry_max_attempts < 2; only one attempt will fire on transient failure.",
+                })),
+            }
+        }
+        "schedule" => {
+            let mut override_attempts: Option<u32> = None;
+            let mut i = 1usize;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--attempts" => {
+                        override_attempts = Some(parse_u32_arg(args.get(i + 1), "--attempts")?);
+                        i += 2;
+                    }
+                    other => return Err(format!("unknown retry schedule flag: {other}")),
+                }
+            }
+            // Use the cfg-derived policy if present; otherwise fall
+            // back to a synthesised standard policy. Either way,
+            // --attempts overrides max_attempts so callers can probe
+            // alternate schedules without rewriting config.
+            let mut policy = crate::agent::runtime::loop_::retry_policy_from_cfg(cfg)
+                .unwrap_or_else(crate::agent::llm::rate_limit::RetryPolicy::standard);
+            if let Some(a) = override_attempts {
+                policy.max_attempts = a;
+            }
+            let max_attempts = policy.max_attempts.max(1);
+            // delay_for(attempt) is the delay AFTER `attempt` failures
+            // (1-indexed). For max_attempts = N total attempts, there
+            // are N-1 inter-attempt waits.
+            let mut schedule: Vec<Value> = Vec::with_capacity(max_attempts.saturating_sub(1) as usize);
+            let mut total_min_ms: u64 = 0;
+            let mut total_max_ms: u64 = 0;
+            for attempt in 1..max_attempts {
+                let d = policy.delay_for(attempt);
+                let d_ms = d.as_millis() as u64;
+                // Worst case (jitter cap = 1.0): clamped base = base * 2^(attempt-1) capped at max_ms.
+                let exp = attempt.saturating_sub(1).min(20);
+                let raw_base = policy
+                    .base_ms
+                    .saturating_mul(1u64.checked_shl(exp).unwrap_or(u64::MAX));
+                let cap = raw_base.min(policy.max_ms);
+                total_min_ms = total_min_ms.saturating_add(d_ms);
+                total_max_ms = total_max_ms.saturating_add(cap);
+                schedule.push(json!({
+                    "attempt": attempt,
+                    "delay_ms": d_ms,
+                    "cap_ms": cap,
+                }));
+            }
+            Ok(json!({
+                "max_attempts": max_attempts,
+                "base_ms": policy.base_ms,
+                "max_ms": policy.max_ms,
+                "jitter": policy.jitter,
+                "inter_attempt_waits": schedule,
+                "total_observed_ms": total_min_ms,
+                "total_worst_case_ms": total_max_ms,
+            }))
+        }
+        other => Err(format!(
+            "unknown retry subcommand: {other}. try: show | schedule [--attempts N]"
         )),
     }
 }
@@ -5699,6 +5804,112 @@ mod tests {
     #[test]
     fn aux_cmd_unknown_subcommand_errs() {
         let err = aux_cmd(&["bogus".into()]).unwrap_err();
+        assert!(err.contains("bogus"));
+    }
+
+    // ---- retry_cmd ----
+
+    #[test]
+    fn retry_cmd_show_default_disabled() {
+        // Default config has retry_enabled = false.
+        let v = retry_cmd(&["show".into()]).expect("show ok");
+        assert_eq!(v.get("enabled").and_then(|b| b.as_bool()), Some(false));
+        assert!(v.get("config_retry_enabled").is_some());
+        assert!(v.get("note").and_then(|s| s.as_str()).is_some());
+    }
+
+    #[test]
+    fn retry_cmd_default_subcommand_is_show() {
+        let v = retry_cmd(&[]).expect("default ok");
+        assert!(v.get("enabled").is_some());
+    }
+
+    #[test]
+    fn retry_cmd_schedule_falls_back_to_standard_when_disabled() {
+        // retry_cmd schedule should still produce a preview using
+        // RetryPolicy::standard() even when config has retries off.
+        let v = retry_cmd(&["schedule".into()]).expect("schedule ok");
+        let waits = v
+            .get("inter_attempt_waits")
+            .and_then(|w| w.as_array())
+            .expect("array");
+        // standard() = 4 attempts → 3 inter-attempt waits.
+        assert_eq!(waits.len(), 3);
+        assert_eq!(v.get("max_attempts").and_then(|n| n.as_u64()), Some(4));
+    }
+
+    #[test]
+    fn retry_cmd_schedule_attempts_override() {
+        let v = retry_cmd(&[
+            "schedule".into(),
+            "--attempts".into(),
+            "6".into(),
+        ])
+        .expect("schedule ok");
+        let waits = v
+            .get("inter_attempt_waits")
+            .and_then(|w| w.as_array())
+            .expect("array");
+        assert_eq!(waits.len(), 5);
+        assert_eq!(v.get("max_attempts").and_then(|n| n.as_u64()), Some(6));
+    }
+
+    #[test]
+    fn retry_cmd_schedule_one_attempt_has_no_waits() {
+        let v = retry_cmd(&[
+            "schedule".into(),
+            "--attempts".into(),
+            "1".into(),
+        ])
+        .expect("schedule ok");
+        let waits = v
+            .get("inter_attempt_waits")
+            .and_then(|w| w.as_array())
+            .expect("array");
+        assert!(waits.is_empty());
+        assert_eq!(v.get("total_observed_ms").and_then(|n| n.as_u64()), Some(0));
+    }
+
+    #[test]
+    fn retry_cmd_schedule_caps_delay_at_max_ms() {
+        // standard() base=500, max=8000. delay_for(4) would naively
+        // be 500 << 3 = 4000 (≤ max), delay_for(5) = 500 << 4 = 8000
+        // (= max), delay_for(10) > max → capped.
+        let v = retry_cmd(&[
+            "schedule".into(),
+            "--attempts".into(),
+            "11".into(),
+        ])
+        .expect("schedule ok");
+        let waits = v
+            .get("inter_attempt_waits")
+            .and_then(|w| w.as_array())
+            .expect("array");
+        // Find attempt 10 → cap_ms must be exactly max_ms (8000).
+        let last = &waits[waits.len() - 1];
+        assert_eq!(last.get("cap_ms").and_then(|n| n.as_u64()), Some(8000));
+    }
+
+    #[test]
+    fn retry_cmd_schedule_invalid_attempts_errs() {
+        let err = retry_cmd(&[
+            "schedule".into(),
+            "--attempts".into(),
+            "lots".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("--attempts"));
+    }
+
+    #[test]
+    fn retry_cmd_schedule_unknown_flag_errs() {
+        let err = retry_cmd(&["schedule".into(), "--bogus".into()]).unwrap_err();
+        assert!(err.contains("--bogus"));
+    }
+
+    #[test]
+    fn retry_cmd_unknown_subcommand_errs() {
+        let err = retry_cmd(&["bogus".into()]).unwrap_err();
         assert!(err.contains("bogus"));
     }
 }
