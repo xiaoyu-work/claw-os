@@ -540,6 +540,7 @@ dependencies = [
  "futures-util",
  "libc",
  "libloading",
+ "regex",
  "reqwest",
  "rusqlite",
  "semver",
