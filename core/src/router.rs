@@ -380,7 +380,8 @@ fn builtin_apps() -> Vec<(
         ]),
         ("agent", "OS-native agent subsystem — runtime, memory, skills, LLM providers, tools (Phase 0 skeleton)", vec![
             ("ask", "Single-shot prompt: cos agent ask \"<prompt>\" (Phase 1+)"),
-            ("stream", "Like `ask` but streams text deltas live to stderr while tool dispatch continues to run; final JSON envelope still goes to stdout: cos agent stream \"<prompt>\" [--no-tools]"),
+            ("stream", "Single-shot streaming text-only path (no tools, no memory). Tokens stream to stderr; final JSON envelope to stdout: cos agent stream \"<prompt>\""),
+            ("live", "Multi-turn streaming agent: same registry/memory/MCP as `ask` but tokens stream to stderr live as they arrive: cos agent live \"<prompt>\""),
             ("chat", "Interactive session (Phase 1+)"),
             ("status", "Show agent runtime status — providers, tools, skills"),
             ("service", "Manage long-running agent service (Phase 1+)"),

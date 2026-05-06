@@ -59,6 +59,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
             }
         }
         "stream" => stream_cmd(args),
+        "live" => live_cmd(args),
         "chat" => Ok(json!({"status": "not_implemented", "phase": "1+"})),
         "status" => {
             let cfg = &crate::config::get().agent;
@@ -1840,6 +1841,202 @@ async fn stream_cmd_async(
         "provider": provider.name(),
         "model": cfg.model,
     }))
+}
+
+
+/// `cos agent live "<prompt>"` — multi-turn streaming agent with the
+/// full tool registry. Same JSON envelope shape as `cos agent ask`,
+/// but tokens stream live to stderr as they arrive (so the user sees
+/// progress in long tool-driven sessions). Stdout is reserved for the
+/// final JSON envelope so script consumers can `2>/dev/null | jq .`.
+///
+/// Differences from `cos agent stream` (single-shot, no tools, no
+/// memory) and `cos agent ask` (multi-turn, tools, but waits for the
+/// full ChatResponse before printing):
+/// - Like `ask`: builds the full tool registry, opens the default
+///   memory DB if available, runs `max_turns` turns until final.
+/// - Like `stream`: tokens stream to stderr as they arrive; final
+///   answer + per-turn tool dispatch are reflected in the envelope.
+fn live_cmd(args: &[String]) -> Result<Value, String> {
+    let prompt = args.first().cloned().unwrap_or_default();
+    if prompt.is_empty() {
+        return Err("usage: cos agent live \"<prompt>\"".into());
+    }
+    let cfg = &crate::config::get().agent;
+    let provider = llm::registry::build(&cfg.provider, &cfg.model, cfg)
+        .map_err(|e| format!("provider unavailable: {e}"))?;
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("tokio runtime: {e}"))?;
+
+    runtime.block_on(live_cmd_async(provider, cfg, &prompt))
+}
+
+async fn live_cmd_async(
+    provider: std::sync::Arc<dyn llm::Provider>,
+    cfg: &crate::config::AgentConfig,
+    user_prompt: &str,
+) -> Result<Value, String> {
+    use crate::agent::llm::accumulate::StreamSink;
+    use crate::agent::llm::types::StreamEvent;
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    // Build the same registry the production `ask` path builds.
+    let mut tools = crate::agent::tools::registry::default_registry();
+    tools.set_guardrails(runtime::loop_::guardrails_from_cfg(cfg));
+    tools.set_approval(runtime::loop_::approval_from_cfg(cfg));
+    let _mcp_handles = runtime::loop_::attach_mcp_servers_for_cli(&mut tools, cfg).await;
+
+    /// Stream sink that mirrors the `cos agent stream` UX: tokens to
+    /// stderr live, tool starts/inputs as bracketed lines, warnings
+    /// flagged. Captures everything the envelope needs to summarise
+    /// the run (the loop itself returns just the final answer text).
+    struct LiveSink {
+        tool_calls: Mutex<Vec<serde_json::Value>>,
+        warnings: Mutex<Vec<String>>,
+        // Final usage + finish reason from the LAST `Done` event in
+        // the multi-turn run. Earlier turns' Done events are still
+        // forwarded — we just keep the latest.
+        last_usage: Mutex<Option<crate::agent::llm::types::Usage>>,
+        last_finish: Mutex<Option<crate::agent::llm::types::FinishReason>>,
+    }
+    impl StreamSink for LiveSink {
+        fn on_event(&self, event: &StreamEvent) {
+            let stderr = std::io::stderr();
+            let mut err_lock = stderr.lock();
+            match event {
+                StreamEvent::TextDelta { text } => {
+                    let _ = err_lock.write_all(text.as_bytes());
+                    let _ = err_lock.flush();
+                }
+                StreamEvent::ToolUseStart { id, name } => {
+                    let _ = writeln!(
+                        err_lock,
+                        "\n[tool_use_start id={id} name={name}]"
+                    );
+                }
+                StreamEvent::ToolInputDelta { partial_json, .. } => {
+                    let _ = err_lock.write_all(partial_json.as_bytes());
+                    let _ = err_lock.flush();
+                }
+                StreamEvent::ToolUse(call) => {
+                    let _ = writeln!(
+                        err_lock,
+                        "\n[tool_use id={} name={}] {}",
+                        call.id, call.name, call.input
+                    );
+                    self.tool_calls.lock().unwrap().push(serde_json::json!({
+                        "id": call.id,
+                        "name": call.name,
+                        "input": call.input,
+                    }));
+                }
+                StreamEvent::Message(resp) => {
+                    for block in &resp.content {
+                        if let crate::agent::llm::types::ContentBlock::Text {
+                            text,
+                        } = block
+                        {
+                            let _ = err_lock.write_all(text.as_bytes());
+                        }
+                    }
+                    for call in &resp.tool_calls {
+                        let _ = writeln!(
+                            err_lock,
+                            "\n[tool_use id={} name={}] {}",
+                            call.id, call.name, call.input
+                        );
+                        self.tool_calls.lock().unwrap().push(serde_json::json!({
+                            "id": call.id,
+                            "name": call.name,
+                            "input": call.input,
+                        }));
+                    }
+                    let _ = err_lock.flush();
+                }
+                StreamEvent::Done { finish, usage } => {
+                    let _ = writeln!(err_lock, "\n[turn done finish={finish:?}]");
+                    *self.last_usage.lock().unwrap() = Some(usage.clone());
+                    *self.last_finish.lock().unwrap() = Some(*finish);
+                }
+                StreamEvent::Warning { message } => {
+                    let _ = writeln!(err_lock, "\n[warning] {message}");
+                    self.warnings.lock().unwrap().push(message.clone());
+                }
+            }
+        }
+    }
+
+    let sink_obj = Arc::new(LiveSink {
+        tool_calls: Mutex::new(Vec::new()),
+        warnings: Mutex::new(Vec::new()),
+        last_usage: Mutex::new(None),
+        last_finish: Mutex::new(None),
+    });
+    let sink: Arc<dyn StreamSink> = sink_obj.clone();
+
+    // Mirror the `ask` path's memory-DB handling: try default DB,
+    // fall back to no-recording on failure.
+    let result = match memory::sqlite_fts::MemoryDb::open_default() {
+        Ok(db) => {
+            let session_id = uuid::Uuid::new_v4().to_string();
+            runtime::loop_::ask_with_stream(
+                provider.clone(),
+                cfg,
+                user_prompt,
+                &tools,
+                Some((&db, session_id.as_str())),
+                sink,
+            )
+            .await
+        }
+        Err(e) => {
+            tracing::warn!(
+                "memory: default DB unavailable ({e}); running without history recording"
+            );
+            runtime::loop_::ask_with_stream(
+                provider.clone(),
+                cfg,
+                user_prompt,
+                &tools,
+                None,
+                sink,
+            )
+            .await
+        }
+    };
+
+    match result {
+        Ok(ask_result) => {
+            let usage = sink_obj
+                .last_usage
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or_default();
+            let finish = sink_obj.last_finish.lock().unwrap().take();
+            Ok(json!({
+                "answer": ask_result.answer,
+                "turns": ask_result.turns,
+                "provider": ask_result.provider,
+                "model": ask_result.model,
+                "session_id": ask_result.session_id,
+                "tool_calls": *sink_obj.tool_calls.lock().unwrap(),
+                "warnings": *sink_obj.warnings.lock().unwrap(),
+                "finish": finish.map(|f| format!("{f:?}")),
+                "usage": {
+                    "input_tokens": usage.input_tokens,
+                    "output_tokens": usage.output_tokens,
+                    "cache_read_tokens": usage.cache_read_tokens,
+                    "cache_write_tokens": usage.cache_write_tokens,
+                },
+            }))
+        }
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 
@@ -10920,5 +11117,122 @@ mod tests {
         assert!(usage.get("output_tokens").is_some());
         assert!(usage.get("cache_read_tokens").is_some());
         assert!(usage.get("cache_write_tokens").is_some());
+    }
+
+    /// Helper for `cos agent live` integration tests. Mirrors the
+    /// `run_stream_async` helper above but routes through the new
+    /// multi-turn streaming path.
+    fn run_live_async(
+        responses: &[(&str, Option<Vec<llm::types::ToolCall>>)],
+        cfg: &crate::config::AgentConfig,
+        prompt: &str,
+    ) -> Value {
+        use crate::agent::llm::providers::mock::{MockProvider, MockResponse};
+        let mock = MockProvider::new(&cfg.model, cfg);
+        for (text, tool_calls) in responses {
+            match tool_calls {
+                Some(calls) if !calls.is_empty() => {
+                    mock.push_response(MockResponse::ToolUse(calls.clone()));
+                }
+                _ => {
+                    mock.push_response(MockResponse::Text((*text).into()));
+                }
+            }
+        }
+        let provider: std::sync::Arc<dyn llm::Provider> = std::sync::Arc::new(mock);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(live_cmd_async(provider, cfg, prompt))
+            .expect("live ok")
+    }
+
+    #[test]
+    fn live_async_returns_text_envelope() {
+        let mut cfg = crate::config::AgentConfig::default();
+        cfg.provider = "mock".into();
+        cfg.model = "mock-model".into();
+        // Disable memory recording for this test to keep it
+        // hermetic — the temp data_dir scaffolding from
+        // env-overrides is intentionally not set up here, so the
+        // open_default() may fall back to no-recording mode anyway.
+        let v = run_live_async(&[("hello world", None)], &cfg, "say hello");
+        assert_eq!(v["answer"].as_str(), Some("hello world"));
+        assert!(v["session_id"].as_str().unwrap().len() > 0);
+        assert_eq!(v["provider"].as_str(), Some("mock"));
+        assert_eq!(v["model"].as_str(), Some("mock-model"));
+        // Text-only run: no tool calls.
+        assert_eq!(v["tool_calls"].as_array().unwrap().len(), 0);
+        // Mock emits Text via Message → Done with Stop finish.
+        assert_eq!(v["finish"].as_str(), Some("Stop"));
+        let usage = v.get("usage").unwrap();
+        assert!(usage.get("input_tokens").is_some());
+    }
+
+    #[test]
+    fn live_async_records_tool_call_pair() {
+        use crate::agent::llm::types::ToolCall;
+        let mut cfg = crate::config::AgentConfig::default();
+        cfg.provider = "mock".into();
+        cfg.model = "mock-model".into();
+        cfg.max_turns = 2; // tool-call → echo result → final text
+        let v = run_live_async(
+            &[
+                (
+                    "",
+                    Some(vec![ToolCall {
+                        id: "call_1".into(),
+                        name: "echo".into(),
+                        input: serde_json::json!({"text": "abc"}),
+                    }]),
+                ),
+                ("done", None),
+            ],
+            &cfg,
+            "echo abc",
+        );
+        // Streaming sink records the tool_use event.
+        let calls = v["tool_calls"].as_array().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0]["id"], "call_1");
+        assert_eq!(calls[0]["name"], "echo");
+        // Final answer comes from the second turn's Text response.
+        assert_eq!(v["answer"].as_str(), Some("done"));
+        assert!(v["turns"].as_u64().unwrap() >= 2);
+    }
+
+    #[test]
+    fn live_async_propagates_provider_error() {
+        use crate::agent::llm::providers::mock::{MockProvider, MockResponse};
+        let mut cfg = crate::config::AgentConfig::default();
+        cfg.provider = "mock".into();
+        cfg.model = "mock-model".into();
+        let mock = MockProvider::new(&cfg.model, &cfg);
+        mock.push_response(MockResponse::Error(llm::LlmError::Auth));
+        let provider: std::sync::Arc<dyn llm::Provider> = std::sync::Arc::new(mock);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let err = rt
+            .block_on(live_cmd_async(provider, &cfg, "hi"))
+            .unwrap_err();
+        // AgentError::Llm wraps the provider error; the formatter
+        // includes either "auth" or the provider-error prefix.
+        assert!(
+            err.to_lowercase().contains("auth")
+                || err.to_lowercase().contains("llm")
+                || err.to_lowercase().contains("provider"),
+            "want auth/llm/provider in err, got {err}"
+        );
+    }
+
+    #[test]
+    fn live_cmd_rejects_empty_prompt() {
+        let err = live_cmd(&[]).unwrap_err();
+        assert!(err.contains("usage"), "got {err}");
+        let err2 = live_cmd(&["".into()]).unwrap_err();
+        assert!(err2.contains("usage"), "got {err2}");
     }
 }

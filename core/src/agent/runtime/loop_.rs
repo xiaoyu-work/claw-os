@@ -449,6 +449,17 @@ async fn attach_mcp_servers(
     attach_all(&specs, tools).await
 }
 
+/// Crate-public re-export of [`attach_mcp_servers`] so the
+/// `cos agent live` CLI handler (which lives in `agent::mod`) can
+/// build the same registry the production `ask` path builds without
+/// needing to duplicate the spec-translation logic.
+pub async fn attach_mcp_servers_for_cli(
+    tools: &mut ToolRegistry,
+    cfg: &AgentConfig,
+) -> Vec<crate::agent::tools::mcp::integration::McpServerHandle> {
+    attach_mcp_servers(tools, cfg).await
+}
+
 /// Build a [`LlmCompressor`] from `cfg` when `compress_enabled` is set.
 /// Returns `None` otherwise so the runtime keeps zero-overhead behaviour
 /// for the default case.
