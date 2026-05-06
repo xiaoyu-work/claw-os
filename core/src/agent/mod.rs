@@ -140,8 +140,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "binary-ext" => binary_ext_cmd(args),
         "context" => context_cmd(args),
         "file-safety" => file_safety_cmd(args),
+        "osv" => osv_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | title | summarise | classify | tools | guardrails | approval | todo | compress | aux | retry | vision | display | shell-hooks | media | binary-ext | context | file-safety"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | title | summarise | classify | tools | guardrails | approval | todo | compress | aux | retry | vision | display | shell-hooks | media | binary-ext | context | file-safety | osv"
         )),
     }
 }
@@ -4175,6 +4176,145 @@ fn file_safety_to_json(
         "reason":   v.reason(),
         "category": v.category().map(|c| c.as_str()),
     })
+}
+
+/// `cos agent osv [parse <file>|check <file>|query <name>@<version> --ecosystem <eco>|ecosystems]`
+fn osv_cmd(args: &[String]) -> Result<Value, String> {
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("");
+    match sub {
+        "" => Err(
+            "usage: cos agent osv [parse <file> | check <file> | query <name>@<version> --ecosystem <eco> | ecosystems]"
+                .to_string(),
+        ),
+        "parse" => osv_parse_cmd(&args[1..]),
+        "check" => osv_check_cmd(&args[1..]),
+        "query" => osv_query_cmd(&args[1..]),
+        "ecosystems" => Ok(json!({
+            "ecosystems": [
+                "crates.io",
+                "npm",
+                "PyPI",
+                "Go",
+            ],
+            "lockfiles": [
+                "Cargo.lock",
+                "package-lock.json",
+                "requirements.txt",
+                "go.sum",
+            ],
+        })),
+        other => Err(format!(
+            "unknown osv subcommand: {other}. try: parse | check | query | ecosystems"
+        )),
+    }
+}
+
+fn osv_parse_cmd(args: &[String]) -> Result<Value, String> {
+    if args.is_empty() {
+        return Err("usage: cos agent osv parse <lockfile>".to_string());
+    }
+    if args.len() > 1 {
+        return Err("osv parse accepts a single file argument".to_string());
+    }
+    let path = std::path::Path::new(&args[0]);
+    let body = std::fs::read_to_string(path)
+        .map_err(|e| format!("osv: read {}: {e}", path.display()))?;
+    let pkgs = crate::agent::safety::osv::parse_lockfile(path, &body)?;
+    Ok(json!({
+        "lockfile": path.display().to_string(),
+        "count":    pkgs.len(),
+        "packages": pkgs.iter().map(|p| p.to_json()).collect::<Vec<_>>(),
+    }))
+}
+
+fn osv_check_cmd(args: &[String]) -> Result<Value, String> {
+    if args.is_empty() {
+        return Err("usage: cos agent osv check <lockfile>".to_string());
+    }
+    if args.len() > 1 {
+        return Err("osv check accepts a single file argument".to_string());
+    }
+    let path = std::path::Path::new(&args[0]);
+    let body = std::fs::read_to_string(path)
+        .map_err(|e| format!("osv: read {}: {e}", path.display()))?;
+    let pkgs = crate::agent::safety::osv::parse_lockfile(path, &body)?;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("osv: build runtime: {e}"))?;
+    let mut total_vulns = 0u64;
+    let mut results = Vec::with_capacity(pkgs.len());
+    for pkg in &pkgs {
+        let vulns = rt
+            .block_on(crate::agent::safety::osv::query(pkg))
+            .unwrap_or_else(|e| {
+                tracing::warn!("osv: {} {} {}: {}", pkg.ecosystem, pkg.name, pkg.version, e);
+                Vec::new()
+            });
+        total_vulns += vulns.len() as u64;
+        if !vulns.is_empty() {
+            results.push(json!({
+                "package": pkg.to_json(),
+                "vulns":   vulns.iter().map(|v| v.to_json()).collect::<Vec<_>>(),
+            }));
+        }
+    }
+    Ok(json!({
+        "lockfile":      path.display().to_string(),
+        "package_count": pkgs.len(),
+        "vuln_count":    total_vulns,
+        "results":       results,
+    }))
+}
+
+fn osv_query_cmd(args: &[String]) -> Result<Value, String> {
+    let mut name_at_version: Option<String> = None;
+    let mut ecosystem: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        match a.as_str() {
+            "--ecosystem" => {
+                i += 1;
+                ecosystem = Some(
+                    args.get(i)
+                        .ok_or_else(|| "missing value for --ecosystem".to_string())?
+                        .clone(),
+                );
+            }
+            other if other.starts_with("--") => {
+                return Err(format!("osv query: unknown flag: {other}"));
+            }
+            other => {
+                if name_at_version.is_some() {
+                    return Err("osv query: extra positional argument".to_string());
+                }
+                name_at_version = Some(other.to_string());
+            }
+        }
+        i += 1;
+    }
+    let coord = name_at_version
+        .ok_or_else(|| "usage: cos agent osv query <name>@<version> --ecosystem <eco>".to_string())?;
+    let (name, version) = coord
+        .rsplit_once('@')
+        .ok_or_else(|| format!("osv query: '{coord}' is not in <name>@<version> format"))?;
+    if name.is_empty() || version.is_empty() {
+        return Err("osv query: name and version must both be non-empty".to_string());
+    }
+    let eco = ecosystem
+        .ok_or_else(|| "osv query: --ecosystem is required (e.g. crates.io, npm, PyPI, Go)".to_string())?;
+    let pkg = crate::agent::safety::osv::Package::new(eco, name, version);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("osv: build runtime: {e}"))?;
+    let vulns = rt.block_on(crate::agent::safety::osv::query(&pkg))?;
+    Ok(json!({
+        "package":    pkg.to_json(),
+        "vuln_count": vulns.len(),
+        "vulns":      vulns.iter().map(|v| v.to_json()).collect::<Vec<_>>(),
+    }))
 }
 
 fn todo_status_counts(list: &crate::agent::tools::todo::TodoList) -> serde_json::Value {
@@ -9487,5 +9627,130 @@ mod tests {
         let verdicts = v.get("verdicts").and_then(|x| x.as_array()).unwrap();
         let vs: Vec<&str> = verdicts.iter().filter_map(|v| v.as_str()).collect();
         assert_eq!(vs, vec!["allow", "caution", "deny"]);
+    }
+
+    // ---- osv dispatch (no network) ----
+
+    #[test]
+    fn osv_no_args_errs_with_usage() {
+        let err = osv_cmd(&[]).unwrap_err();
+        assert!(err.contains("usage"));
+        assert!(err.contains("parse"));
+    }
+
+    #[test]
+    fn osv_unknown_subcommand_errs() {
+        let err = osv_cmd(&["bogus".into()]).unwrap_err();
+        assert!(err.contains("bogus"));
+    }
+
+    #[test]
+    fn osv_ecosystems_lists_known_ecosystems() {
+        let v = osv_cmd(&["ecosystems".into()]).expect("ok");
+        let eco = v.get("ecosystems").and_then(|x| x.as_array()).unwrap();
+        let names: Vec<&str> = eco.iter().filter_map(|s| s.as_str()).collect();
+        assert!(names.contains(&"crates.io"));
+        assert!(names.contains(&"npm"));
+        assert!(names.contains(&"PyPI"));
+        assert!(names.contains(&"Go"));
+        let lockfiles = v.get("lockfiles").and_then(|x| x.as_array()).unwrap();
+        let ls: Vec<&str> = lockfiles.iter().filter_map(|s| s.as_str()).collect();
+        assert!(ls.contains(&"Cargo.lock"));
+        assert!(ls.contains(&"go.sum"));
+    }
+
+    #[test]
+    fn osv_parse_requires_path() {
+        let err = osv_cmd(&["parse".into()]).unwrap_err();
+        assert!(err.contains("usage"));
+    }
+
+    #[test]
+    fn osv_parse_rejects_extra_args() {
+        let err = osv_cmd(&["parse".into(), "a".into(), "b".into()]).unwrap_err();
+        assert!(err.contains("single"));
+    }
+
+    #[test]
+    fn osv_parse_reads_cargo_lock() {
+        let dir = std::env::temp_dir().join(format!(
+            "cos-osv-parse-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let lock_path = dir.join("Cargo.lock");
+        std::fs::write(
+            &lock_path,
+            "[[package]]\nname = \"foo\"\nversion = \"1.2.3\"\n\n[[package]]\nname = \"bar\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let v = osv_cmd(&["parse".into(), lock_path.to_string_lossy().to_string()])
+            .expect("ok");
+        assert_eq!(v.get("count").and_then(|n| n.as_u64()), Some(2));
+        let pkgs = v.get("packages").and_then(|x| x.as_array()).unwrap();
+        let names: Vec<&str> = pkgs
+            .iter()
+            .filter_map(|p| p.get("name").and_then(|s| s.as_str()))
+            .collect();
+        assert!(names.contains(&"foo"));
+        assert!(names.contains(&"bar"));
+        for p in pkgs {
+            assert_eq!(
+                p.get("ecosystem").and_then(|s| s.as_str()),
+                Some("crates.io")
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn osv_parse_unknown_lockfile_errs() {
+        let dir = std::env::temp_dir().join(format!(
+            "cos-osv-bad-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("Pipfile.lock");
+        std::fs::write(&p, "{}").unwrap();
+        let err =
+            osv_cmd(&["parse".into(), p.to_string_lossy().to_string()]).unwrap_err();
+        assert!(err.contains("unknown lockfile"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn osv_query_requires_coord() {
+        let err = osv_cmd(&["query".into()]).unwrap_err();
+        assert!(err.contains("usage"));
+    }
+
+    #[test]
+    fn osv_query_requires_ecosystem_flag() {
+        let err = osv_cmd(&["query".into(), "lodash@1.0.0".into()]).unwrap_err();
+        assert!(err.contains("--ecosystem"));
+    }
+
+    #[test]
+    fn osv_query_rejects_malformed_coord() {
+        let err = osv_cmd(&[
+            "query".into(),
+            "no-version".into(),
+            "--ecosystem".into(),
+            "npm".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("name>@<version"));
+    }
+
+    #[test]
+    fn osv_query_rejects_unknown_flag() {
+        let err = osv_cmd(&[
+            "query".into(),
+            "foo@1.0".into(),
+            "--bogus".into(),
+            "x".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("--bogus"));
     }
 }
