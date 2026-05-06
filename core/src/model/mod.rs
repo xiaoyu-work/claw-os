@@ -336,13 +336,15 @@ fn tts_status_json() -> Value {
     })
 }
 
-/// `cos model embed <text> [--model NAME]`
+/// `cos model embed <text>`
 ///
 /// For multiple inputs, pass `--input <text>` repeatedly or `--inputs-file <path>`
 /// (one input per line).
+///
+/// The model is fixed to [`embed::MODEL_NAME`] — see that const's
+/// doc comment for why there is no `--model` override.
 fn run_embed(args: &[String]) -> Result<Value, String> {
     let mut inputs: Vec<String> = Vec::new();
-    let mut model_override: Option<String> = None;
     let mut positional: Vec<String> = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -369,14 +371,6 @@ fn run_embed(args: &[String]) -> Result<Value, String> {
                 }
                 i += 2;
             }
-            "--model" => {
-                model_override = Some(
-                    args.get(i + 1)
-                        .cloned()
-                        .ok_or_else(|| "--model requires a value".to_string())?,
-                );
-                i += 2;
-            }
             other if other.starts_with("--") => {
                 return Err(format!("unknown flag: {other}"));
             }
@@ -388,18 +382,13 @@ fn run_embed(args: &[String]) -> Result<Value, String> {
     }
     if inputs.is_empty() {
         if positional.is_empty() {
-            return Err(
-                "usage: cos model embed <text> [--input <text> ...] [--model NAME]".into(),
-            );
+            return Err("usage: cos model embed <text> [--input <text> ...]".into());
         }
         // Treat all positional args joined by space as a single input.
         inputs.push(positional.join(" "));
     }
 
-    let mut cfg = crate::config::get().embed.clone();
-    if let Some(m) = model_override {
-        cfg.model = m;
-    }
+    let cfg = crate::config::get().embed.clone();
     let embedder = embed::build_from(&cfg)
         .map_err(|e| format!("embed config: {e}"))?
         .ok_or_else(|| {

@@ -15,9 +15,22 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::EmbedConfig;
 
-// =====================================================================
-// Public types
-// =====================================================================
+/// Single canonical embedding model. Hardcoded because:
+///
+/// 1. **Vector spaces are model-specific.** Two different embedding
+///    models produce vectors in incompatible spaces — cosine
+///    similarity between them is meaningless. Switching models would
+///    invalidate every row already in `semantic.db` and require a
+///    full re-index.
+/// 2. **Dimensionality is model-specific.** `text-embedding-3-small`
+///    is 1536 dim; `-large` is 3072. Mixing dims in the same SQLite
+///    blob column is a data-corruption foot-gun.
+///
+/// In practice, once a deployment commits to an embedder it stays on
+/// it for life. `EmbedConfig.model` is kept for backward-compatible
+/// deserialisation but is ignored at runtime — this constant is the
+/// only source of truth used to wire requests.
+pub const MODEL_NAME: &str = "text-embedding-3-small";
 
 /// One embedding request — a batch of inputs to embed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -153,7 +166,9 @@ impl OpenAICompatEmbedder {
             alias,
             base_url,
             api_key,
-            model: cfg.model.clone(),
+            // Model name is hardcoded — see `MODEL_NAME` doc comment.
+            // `cfg.model` is intentionally ignored.
+            model: MODEL_NAME.to_string(),
             extra_headers: cfg.extra_headers.clone(),
             client,
         }
@@ -561,5 +576,23 @@ mod tests {
         c.provider = "azure".into();
         c.model = "text-embedding-3-small".into();
         assert!(build_from(&c).unwrap().is_some());
+    }
+
+    #[test]
+    fn cfg_model_is_ignored_embedder_uses_hardcoded_model_name() {
+        // No matter what the config says, the embedder must always
+        // wire `MODEL_NAME` so the SemanticStore stickiness invariant
+        // can never be silently violated by editing config.json.
+        let mut c = cfg();
+        c.model = "junk-model-that-does-not-exist".into();
+        let e = OpenAICompatEmbedder::from_config(&c);
+        assert_eq!(e.model, MODEL_NAME);
+        assert_eq!(MODEL_NAME, "text-embedding-3-small");
+
+        // Also for the azure alias.
+        let mut c2 = c.clone();
+        c2.provider = "azure".into();
+        let e2 = OpenAICompatEmbedder::from_config(&c2);
+        assert_eq!(e2.model, MODEL_NAME);
     }
 }

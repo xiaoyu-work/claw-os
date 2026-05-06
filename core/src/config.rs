@@ -416,6 +416,12 @@ pub struct EmbedConfig {
 
     /// Model identifier (e.g. `"text-embedding-3-small"`,
     /// `"nomic-embed-text"`, `"bge-small-en-v1.5"`).
+    ///
+    /// **Note:** as of this commit the model is hardcoded by
+    /// `crate::model::tasks::embed::MODEL_NAME`. This field is parsed
+    /// from existing configs for backward compatibility but ignored
+    /// at runtime — switching embedding models invalidates every row
+    /// already in `semantic.db`, so the value is fixed deployment-wide.
     #[serde(default = "default_embed_model")]
     pub model: String,
 

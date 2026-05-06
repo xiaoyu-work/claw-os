@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::{params, Connection, OpenFlags};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 
 use crate::model::tasks::embed::{EmbedRequest, Embedder};
 
@@ -46,6 +46,12 @@ pub enum SemanticError {
 
     #[error("dimension mismatch: row has {row}, query has {query}")]
     DimMismatch { row: usize, query: usize },
+
+    #[error("model mismatch: store is pinned to `{existing}`, refused vector from `{incoming}`. Embedding models cannot be mixed in one corpus — clear the store or use a separate db.")]
+    ModelMismatch {
+        existing: String,
+        incoming: String,
+    },
 }
 
 const SCHEMA: &str = r#"
@@ -162,6 +168,12 @@ impl SemanticStore {
     /// configured embedder once; the resulting vector is L2-normalised
     /// in place so cosine similarity reduces to a dot product at query
     /// time.
+    ///
+    /// **Stickiness guard.** Once any row exists, subsequent indexes
+    /// must come from the same model — switching embedders mid-corpus
+    /// produces incompatible vector spaces and silently broken
+    /// search. Mismatches return `SemanticError::ModelMismatch` so
+    /// callers can either keep the old model or wipe the store.
     pub async fn index(
         &self,
         namespace: &str,
@@ -185,6 +197,22 @@ impl SemanticStore {
         let blob = encode_vec(&vec);
         let ts = current_ts_ms();
         let conn = self.lock_conn()?;
+        // Stickiness: refuse to mix vector spaces in one corpus.
+        let existing: Option<String> = conn
+            .query_row(
+                "SELECT model FROM semantic_docs LIMIT 1",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?;
+        if let Some(existing) = existing {
+            if existing != resp.model {
+                return Err(SemanticError::ModelMismatch {
+                    existing,
+                    incoming: resp.model,
+                });
+            }
+        }
         conn.execute(
             "INSERT INTO semantic_docs (namespace, key, text, model, dim, embedding, ts_ms)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -433,6 +461,30 @@ mod tests {
         SemanticStore::open_in_memory(Some(e)).unwrap()
     }
 
+    /// Variant that lets each test pin a custom model identifier.
+    struct TaggedHashEmbedder {
+        inner: HashEmbedder,
+        model: String,
+    }
+
+    #[async_trait]
+    impl Embedder for TaggedHashEmbedder {
+        fn name(&self) -> &str {
+            "tagged"
+        }
+        fn model(&self) -> &str {
+            &self.model
+        }
+        fn is_configured(&self) -> bool {
+            true
+        }
+        async fn embed(&self, request: EmbedRequest) -> Result<EmbedResponse, EmbedError> {
+            let mut resp = self.inner.embed(request).await?;
+            resp.model = self.model.clone();
+            Ok(resp)
+        }
+    }
+
     #[tokio::test]
     async fn index_and_search_roundtrip() {
         let s = store_with_hash(64);
@@ -563,6 +615,37 @@ mod tests {
         normalise(&mut a);
         normalise(&mut b);
         assert!((dot(&a, &b)).abs() < 1e-6);
+    }
+
+    #[tokio::test]
+    async fn index_refuses_to_mix_embedding_models() {
+        // First populate the store with model "model-a".
+        let e1: Arc<dyn Embedder> = Arc::new(TaggedHashEmbedder {
+            inner: HashEmbedder::new(64),
+            model: "model-a".to_string(),
+        });
+        let s = SemanticStore::open_in_memory(Some(e1)).unwrap();
+        s.index("notes", "k1", "alpha").await.unwrap();
+
+        // Swap to a different model — index() must refuse, the
+        // shared sqlite connection is preserved by `with_embedder`.
+        let e2: Arc<dyn Embedder> = Arc::new(TaggedHashEmbedder {
+            inner: HashEmbedder::new(64),
+            model: "model-b".to_string(),
+        });
+        let s2 = s.with_embedder(e2);
+
+        let err = s2.index("notes", "k2", "beta").await.unwrap_err();
+        match err {
+            SemanticError::ModelMismatch {
+                existing,
+                incoming,
+            } => {
+                assert_eq!(existing, "model-a");
+                assert_eq!(incoming, "model-b");
+            }
+            other => panic!("expected ModelMismatch, got {other:?}"),
+        }
     }
 }
 
