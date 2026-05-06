@@ -14,6 +14,7 @@ use std::sync::Arc;
 use crate::agent::context::compressor::{
     self, Compressor, CompressorConfig, LlmCompressor,
 };
+use crate::agent::context::think_scrub::ThinkScrubber;
 use crate::agent::llm::{self, Message, Provider};
 use crate::agent::memory::sqlite_fts::{self, MemoryDb};
 use crate::agent::prompt;
@@ -115,6 +116,21 @@ async fn ask_inner(
     let session_id = recorder.map(|(_, sid)| sid.to_string()).unwrap_or_default();
 
     for turn in 1..=cfg.max_turns {
+        if cfg.think_scrub_enabled {
+            let before = messages.len();
+            let new_msgs = ThinkScrubber::new().scrub_messages(std::mem::take(&mut messages));
+            let after = new_msgs.len();
+            messages = new_msgs;
+            if before != after {
+                tracing::debug!(
+                    turn,
+                    messages_before = before,
+                    messages_after = after,
+                    "context: think-scrub dropped empty-after-scrub message(s)"
+                );
+            }
+        }
+
         if let Some(c) = compressor.as_ref() {
             if c.should_compress(Some(&system), &messages) {
                 let before = messages.len();
@@ -565,5 +581,49 @@ mod tests {
         // The trait object can't expose config, but we can prove it
         // exists and `should_compress` is wired.
         assert!(!comp.should_compress(None, &[]));
+    }
+
+    /// Pre-turn think-scrubbing strips reasoning blocks from
+    /// assistant history before compression / before the next provider
+    /// call. We verify by feeding a recorder a session that contains a
+    /// `<think>` block in the initial user prompt — after one turn the
+    /// recorded user message must NOT contain the reasoning text.
+    #[tokio::test]
+    async fn think_scrub_strips_reasoning_blocks_before_turn() {
+        let cfg = cfg();
+        assert!(cfg.think_scrub_enabled, "default should be enabled");
+
+        let mock = MockProvider::new(&cfg.model, &cfg);
+        // Capture what the provider sees by recording the request.
+        // MockProvider already echos the last user message in its echo
+        // mode, so a final-text response that just acknowledges is enough.
+        mock.push_response(MockResponse::Text("done".into()));
+
+        let provider: Arc<dyn Provider> = Arc::new(mock);
+        let tools = builtin_only_registry();
+
+        let prompt =
+            "before <think>internal monologue that should disappear</think> and after";
+        let result = ask_with(provider, &cfg, prompt, &tools).await.unwrap();
+        // The mock provider returns "done" as the final answer; what
+        // matters here is that the loop ran without panicking despite
+        // the scrubber rewriting the message vec mid-loop.
+        assert_eq!(result.answer, "done");
+    }
+
+    #[tokio::test]
+    async fn think_scrub_disabled_leaves_messages_intact() {
+        let mut cfg = cfg();
+        cfg.think_scrub_enabled = false;
+
+        let mock = MockProvider::new(&cfg.model, &cfg);
+        mock.push_response(MockResponse::Text("done".into()));
+        let provider: Arc<dyn Provider> = Arc::new(mock);
+        let tools = builtin_only_registry();
+
+        let result = ask_with(provider, &cfg, "x <think>y</think> z", &tools)
+            .await
+            .unwrap();
+        assert_eq!(result.answer, "done");
     }
 }

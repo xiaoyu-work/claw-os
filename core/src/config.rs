@@ -164,6 +164,17 @@ pub struct AgentConfig {
     /// 1024.
     #[serde(default = "default_compress_summary_max")]
     pub compress_summary_max_tokens: u32,
+
+    /// Whether to scrub `<think>…</think>` / `<thinking>…</thinking>` /
+    /// `<reasoning>…</reasoning>` blocks from assistant history before
+    /// each turn. Reasoning models (DeepSeek R1, Qwen QwQ, llama.cpp
+    /// finetunes) emit these as ephemeral chain-of-thought; resending
+    /// them on every subsequent turn wastes tokens with no benefit.
+    /// Defaults to `true` because the operation is a pure regex pass
+    /// and the false-positive rate is essentially zero — only blocks
+    /// inside the recognised tag pairs are removed.
+    #[serde(default = "default_think_scrub_enabled")]
+    pub think_scrub_enabled: bool,
 }
 
 /// Embedding service configuration. Reads from `[embed]` block.
@@ -342,6 +353,9 @@ fn default_compress_keep_tail() -> u32 {
 fn default_compress_summary_max() -> u32 {
     crate::agent::context::compressor::DEFAULT_SUMMARY_MAX_TOKENS
 }
+fn default_think_scrub_enabled() -> bool {
+    true
+}
 fn default_embed_provider() -> String {
     "none".into()
 }
@@ -509,6 +523,7 @@ impl Default for AgentConfig {
             compress_trigger_tokens: default_compress_trigger(),
             compress_keep_tail_tokens: default_compress_keep_tail(),
             compress_summary_max_tokens: default_compress_summary_max(),
+            think_scrub_enabled: default_think_scrub_enabled(),
         }
     }
 }
