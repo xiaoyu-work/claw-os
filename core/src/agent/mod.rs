@@ -125,8 +125,11 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "summarise" => summarise_cmd(args),
         "summarize" => summarise_cmd(args),
         "classify" => classify_cmd(args),
+        "tools" => tools_cmd(args),
+        "guardrails" => guardrails_cmd(args),
+        "approval" => approval_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | title | summarise | classify"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | title | summarise | classify | tools | guardrails | approval"
         )),
     }
 }
@@ -1630,6 +1633,241 @@ fn classify_cmd(args: &[String]) -> Result<Value, String> {
         "reply": reply,
         "reply_chars": reply.chars().count(),
     }))
+}
+
+/// `cos agent tools [list [--unfiltered]|show <name>|llm-list]`
+/// — read-only tool registry inspection. `list` (default) returns the
+/// permitted set under the runtime's guardrails (mirrors what the LLM
+/// sees), with `--unfiltered` showing every registered tool including
+/// those denied by config. `show <name>` returns the full schema
+/// (description + JSON Schema input shape) — the same blob sent to
+/// the model. `llm-list` returns the exact `Vec<llm::Tool>` the
+/// model would receive (filtered).
+///
+/// All three subcommands construct the *same* registry+guardrails
+/// pair the runtime would build, so what you see here is what the
+/// model would see if you ran `cos agent ask` in the same env.
+fn tools_cmd(args: &[String]) -> Result<Value, String> {
+    let cfg = &crate::config::get().agent;
+    let mut registry = tools::registry::default_registry();
+    registry.set_guardrails(crate::agent::runtime::loop_::guardrails_from_cfg(cfg));
+    registry.set_approval(crate::agent::runtime::loop_::approval_from_cfg(cfg));
+
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("list");
+    match sub {
+        "list" => {
+            let mut unfiltered = false;
+            for arg in args.iter().skip(1) {
+                match arg.as_str() {
+                    "--unfiltered" => unfiltered = true,
+                    other => {
+                        return Err(format!(
+                            "unknown tools list flag: {other}. try: --unfiltered"
+                        ));
+                    }
+                }
+            }
+            let names: Vec<&'static str> = if unfiltered {
+                registry.names_unfiltered()
+            } else {
+                registry.names()
+            };
+            let entries: Vec<Value> = names
+                .iter()
+                .filter_map(|n| {
+                    registry
+                        .get_unfiltered(n)
+                        .map(|t| {
+                            let permitted = registry.guardrails().permits(n);
+                            json!({
+                                "name": n,
+                                "description": t.description(),
+                                "permitted": permitted,
+                            })
+                        })
+                })
+                .collect();
+            Ok(json!({
+                "registered_total": registry.names_unfiltered().len(),
+                "permitted_count": registry.names().len(),
+                "unfiltered": unfiltered,
+                "tools": entries,
+            }))
+        }
+        "show" => {
+            let name = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| "usage: cos agent tools show <name>".to_string())?;
+            let tool = registry
+                .get_unfiltered(&name)
+                .ok_or_else(|| format!("tool '{name}' not registered"))?;
+            Ok(json!({
+                "name": tool.name(),
+                "description": tool.description(),
+                "input_schema": tool.input_schema(),
+                "permitted": registry.guardrails().permits(&name),
+            }))
+        }
+        "llm-list" => {
+            let llm_tools = tools::guardrails::filter_llm_tools(&registry, registry.guardrails());
+            Ok(json!({
+                "count": llm_tools.len(),
+                "tools": llm_tools.iter().map(|t| json!({
+                    "name": t.name,
+                    "description": t.description,
+                    "input_schema": t.input_schema,
+                })).collect::<Vec<_>>(),
+            }))
+        }
+        other => Err(format!(
+            "unknown tools subcommand: {other}. try: list [--unfiltered] | show <name> | llm-list"
+        )),
+    }
+}
+
+/// `cos agent guardrails [show|check <tool>]`
+/// — surface the allow/deny tool guardrails the runtime would build
+/// from the current `AgentConfig`. `show` (default) reports the
+/// active allow + deny lists. `check <tool>` runs the decision for
+/// `<tool>` and returns `{permitted, decision: "allow"|"deny", reason?}`.
+///
+/// Useful for verifying that a `tool_allow`/`tool_deny` change in
+/// `/etc/cos/config.json` is actually parsed the way you expect
+/// before running a session.
+fn guardrails_cmd(args: &[String]) -> Result<Value, String> {
+    use crate::agent::tools::guardrails::Decision;
+    let cfg = &crate::config::get().agent;
+    let g = crate::agent::runtime::loop_::guardrails_from_cfg(cfg);
+
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("show");
+    match sub {
+        "show" => {
+            let allow_arr: Option<Vec<String>> = g
+                .allow
+                .as_ref()
+                .map(|set| {
+                    let mut v: Vec<String> = set.iter().cloned().collect();
+                    v.sort();
+                    v
+                });
+            let mut deny_arr: Vec<String> = g.deny.iter().cloned().collect();
+            deny_arr.sort();
+            Ok(json!({
+                "mode": if g.allow.is_some() { "allowlist" } else { "permissive" },
+                "allow": allow_arr,
+                "deny": deny_arr,
+                "deny_count": deny_arr.len(),
+                "config_tool_allow": cfg.tool_allow.clone(),
+                "config_tool_deny": cfg.tool_deny.clone(),
+            }))
+        }
+        "check" => {
+            let tool = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| "usage: cos agent guardrails check <tool>".to_string())?;
+            let decision = g.decide(&tool);
+            let (verdict, reason) = match &decision {
+                Decision::Allow => ("allow", None),
+                Decision::Deny(r) => ("deny", Some(r.clone())),
+            };
+            Ok(json!({
+                "tool": tool,
+                "permitted": g.permits(&tool),
+                "decision": verdict,
+                "reason": reason,
+            }))
+        }
+        other => Err(format!(
+            "unknown guardrails subcommand: {other}. try: show | check <tool>"
+        )),
+    }
+}
+
+/// `cos agent approval [show|check <tool> [--input '<json>']]`
+/// — surface the approval gate the runtime would build from the
+/// current `AgentConfig` (auto_approve_tools / auto_deny_tools /
+/// dangerous_tools). `show` lists the three sets. `check <tool>`
+/// runs `ApprovalGate::evaluate` against the tool name and returns
+/// the outcome (`approved` / `denied` / `deferred`).
+///
+/// Headless: no interactive approver is configured, so `dangerous`
+/// tools without an explicit auto_approve return `deferred` — the
+/// same outcome the runtime would surface back to the model as an
+/// error tool_result. `--input` lets you pass a hypothetical JSON
+/// payload (the gate doesn't shape-match yet but will once the
+/// per-call predicate hooks land).
+fn approval_cmd(args: &[String]) -> Result<Value, String> {
+    use crate::agent::runtime::approval::ApprovalOutcome;
+    let cfg = &crate::config::get().agent;
+    let gate = crate::agent::runtime::loop_::approval_from_cfg(cfg);
+
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("show");
+    match sub {
+        "show" => {
+            let acfg = gate.config();
+            let mut auto_approve: Vec<String> = acfg.auto_approve.iter().cloned().collect();
+            let mut auto_deny: Vec<String> = acfg.auto_deny.iter().cloned().collect();
+            let mut dangerous: Vec<String> = acfg.dangerous.iter().cloned().collect();
+            auto_approve.sort();
+            auto_deny.sort();
+            dangerous.sort();
+            Ok(json!({
+                "auto_approve": auto_approve,
+                "auto_deny": auto_deny,
+                "dangerous": dangerous,
+                "config_auto_approve_tools": cfg.auto_approve_tools.clone(),
+                "config_auto_deny_tools": cfg.auto_deny_tools.clone(),
+                "config_dangerous_tools": cfg.dangerous_tools.clone(),
+            }))
+        }
+        "check" => {
+            let tool = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| "usage: cos agent approval check <tool> [--input '<json>']".to_string())?;
+            let mut input: Value = Value::Null;
+            let mut i = 2usize;
+            while i < args.len() {
+                if args[i].as_str() == "--input" {
+                    let raw = args
+                        .get(i + 1)
+                        .ok_or_else(|| "--input needs a JSON string".to_string())?;
+                    input = serde_json::from_str(raw)
+                        .map_err(|e| format!("--input: invalid JSON: {e}"))?;
+                    i += 2;
+                } else {
+                    return Err(format!(
+                        "unknown approval check flag: {}. try: --input <json>",
+                        args[i]
+                    ));
+                }
+            }
+            // ApprovalGate::evaluate is async; spin a small runtime.
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| format!("tokio runtime: {e}"))?;
+            let outcome = runtime.block_on(gate.evaluate(&tool, &input, "cli probe"));
+            let (decision, note, reason, prompt) = match &outcome {
+                ApprovalOutcome::Approved { note } => ("approved", note.clone(), None, None),
+                ApprovalOutcome::Denied { reason } => ("denied", None, reason.clone(), None),
+                ApprovalOutcome::Deferred { prompt } => ("deferred", None, None, prompt.clone()),
+            };
+            Ok(json!({
+                "tool": tool,
+                "decision": decision,
+                "note": note,
+                "reason": reason,
+                "prompt": prompt,
+                "would_short_circuit": gate.would_short_circuit(&tool),
+            }))
+        }
+        other => Err(format!(
+            "unknown approval subcommand: {other}. try: show | check <tool> [--input '<json>']"
+        )),
+    }
 }
 
 /// `cos agent nudge [list|due|add <due_in_secs> <message> [--repeat <secs>] [--tag <tag>]|fire <id>|remove <id>|path]`
@@ -3774,5 +4012,192 @@ mod tests {
             .and_then(|l| l.as_array())
             .expect("labels array");
         assert_eq!(labels.len(), 3);
+    }
+
+    // ---- tools_cmd ----
+
+    #[test]
+    fn tools_cmd_default_lists_permitted_tools() {
+        let v = tools_cmd(&[]).expect("tools list ok");
+        let arr = v
+            .get("tools")
+            .and_then(|t| t.as_array())
+            .expect("tools array");
+        assert!(!arr.is_empty(), "default registry should have at least echo + now");
+        // Every entry should be permitted under the default permissive guardrails.
+        for entry in arr {
+            assert_eq!(
+                entry.get("permitted"),
+                Some(&serde_json::Value::Bool(true))
+            );
+        }
+        let permitted_count = v.get("permitted_count").and_then(|c| c.as_u64()).unwrap_or(0);
+        assert_eq!(permitted_count as usize, arr.len());
+    }
+
+    #[test]
+    fn tools_cmd_show_returns_full_schema() {
+        let v = tools_cmd(&["show".into(), "echo".into()]).expect("tools show ok");
+        assert_eq!(v.get("name").and_then(|n| n.as_str()), Some("echo"));
+        assert!(v.get("description").is_some());
+        assert!(v.get("input_schema").is_some());
+    }
+
+    #[test]
+    fn tools_cmd_show_unknown_tool_errs() {
+        let err = tools_cmd(&["show".into(), "does-not-exist".into()]).unwrap_err();
+        assert!(err.contains("does-not-exist"));
+    }
+
+    #[test]
+    fn tools_cmd_show_requires_name() {
+        let err = tools_cmd(&["show".into()]).unwrap_err();
+        assert!(err.contains("show"));
+    }
+
+    #[test]
+    fn tools_cmd_llm_list_returns_serialised_tool_blob() {
+        let v = tools_cmd(&["llm-list".into()]).expect("tools llm-list ok");
+        let arr = v
+            .get("tools")
+            .and_then(|t| t.as_array())
+            .expect("tools array");
+        assert!(!arr.is_empty());
+        for entry in arr {
+            assert!(entry.get("name").and_then(|n| n.as_str()).is_some());
+            assert!(entry.get("input_schema").is_some());
+        }
+    }
+
+    #[test]
+    fn tools_cmd_unknown_subcommand_errs() {
+        let err = tools_cmd(&["bogus".into()]).unwrap_err();
+        assert!(err.contains("bogus"));
+        assert!(err.contains("list"));
+    }
+
+    #[test]
+    fn tools_cmd_unfiltered_includes_at_least_as_many_as_filtered() {
+        let plain = tools_cmd(&["list".into()]).expect("plain list ok");
+        let unfiltered =
+            tools_cmd(&["list".into(), "--unfiltered".into()]).expect("unfiltered ok");
+        let plain_count = plain
+            .get("tools")
+            .and_then(|t| t.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+        let unfiltered_count = unfiltered
+            .get("tools")
+            .and_then(|t| t.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+        assert!(unfiltered_count >= plain_count);
+    }
+
+    // ---- guardrails_cmd ----
+
+    #[test]
+    fn guardrails_cmd_default_show_reports_permissive_mode() {
+        let v = guardrails_cmd(&[]).expect("guardrails show ok");
+        // Default config has no tool_allow / empty tool_deny → permissive.
+        let mode = v.get("mode").and_then(|m| m.as_str()).unwrap_or("");
+        assert!(
+            mode == "permissive" || mode == "allowlist",
+            "mode {mode:?} should be permissive or allowlist"
+        );
+        assert!(v.get("deny_count").and_then(|c| c.as_u64()).is_some());
+    }
+
+    #[test]
+    fn guardrails_cmd_check_returns_decision_for_known_tool() {
+        let v = guardrails_cmd(&["check".into(), "echo".into()])
+            .expect("guardrails check ok");
+        let decision = v.get("decision").and_then(|d| d.as_str()).unwrap_or("");
+        assert!(decision == "allow" || decision == "deny");
+        assert_eq!(v.get("tool").and_then(|t| t.as_str()), Some("echo"));
+    }
+
+    #[test]
+    fn guardrails_cmd_check_requires_tool_name() {
+        let err = guardrails_cmd(&["check".into()]).unwrap_err();
+        assert!(err.contains("check"));
+    }
+
+    #[test]
+    fn guardrails_cmd_unknown_subcommand_errs() {
+        let err = guardrails_cmd(&["bogus".into()]).unwrap_err();
+        assert!(err.contains("bogus"));
+        assert!(err.contains("show"));
+    }
+
+    // ---- approval_cmd ----
+
+    #[test]
+    fn approval_cmd_default_show_returns_three_sets() {
+        let v = approval_cmd(&[]).expect("approval show ok");
+        assert!(v.get("auto_approve").and_then(|a| a.as_array()).is_some());
+        assert!(v.get("auto_deny").and_then(|a| a.as_array()).is_some());
+        assert!(v.get("dangerous").and_then(|a| a.as_array()).is_some());
+    }
+
+    #[test]
+    fn approval_cmd_check_safe_tool_returns_approved() {
+        // Default config has no dangerous_tools → every tool short-circuits to approved.
+        let v = approval_cmd(&["check".into(), "echo".into()]).expect("approval check ok");
+        assert_eq!(
+            v.get("decision").and_then(|d| d.as_str()),
+            Some("approved")
+        );
+        assert_eq!(
+            v.get("would_short_circuit").and_then(|b| b.as_bool()),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn approval_cmd_check_requires_tool_name() {
+        let err = approval_cmd(&["check".into()]).unwrap_err();
+        assert!(err.contains("check"));
+    }
+
+    #[test]
+    fn approval_cmd_check_input_must_parse_as_json() {
+        let err = approval_cmd(&[
+            "check".into(),
+            "echo".into(),
+            "--input".into(),
+            "not json".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("--input"));
+    }
+
+    #[test]
+    fn approval_cmd_check_input_flag_requires_value() {
+        let err = approval_cmd(&[
+            "check".into(),
+            "echo".into(),
+            "--input".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("--input"));
+    }
+
+    #[test]
+    fn approval_cmd_check_unknown_flag_errs() {
+        let err = approval_cmd(&[
+            "check".into(),
+            "echo".into(),
+            "--bogus".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("--bogus"));
+    }
+
+    #[test]
+    fn approval_cmd_unknown_subcommand_errs() {
+        let err = approval_cmd(&["bogus".into()]).unwrap_err();
+        assert!(err.contains("bogus"));
+        assert!(err.contains("show"));
     }
 }

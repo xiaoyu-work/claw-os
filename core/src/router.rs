@@ -402,6 +402,9 @@ fn builtin_apps() -> Vec<(
             ("title", "Generate a session title from a seed string (heuristic, no LLM call): cos agent title <text> | --file <path> | --stdin"),
             ("summarise", "Summarise text into the first sentence (heuristic, no LLM call), clamped: cos agent summarise <text> | --file <path> | --stdin [--max N]"),
             ("classify", "Match a reply string to one of a label set (case-insensitive, punctuation-tolerant): cos agent classify <reply> --labels <a,b,c> | --file <path> | --stdin"),
+            ("tools", "Inspect the tool registry the runtime would use: cos agent tools [list [--unfiltered]|show <name>|llm-list]"),
+            ("guardrails", "Inspect the allow/deny tool guardrails from agent config: cos agent guardrails [show|check <tool>]"),
+            ("approval", "Inspect the approval gate (auto_approve/auto_deny/dangerous) from agent config: cos agent approval [show|check <tool>]"),
         ]),
         ("model", "Local model registry + inference daemon (ort for STT/TTS/embed/vision/imagegen, llama.cpp for LLM) — Phase 0.5 skeleton", vec![
             ("list", "List registered models from /var/lib/cos/models/"),
