@@ -115,8 +115,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "mcp" => mcp_cmd(args),
         "usage" => usage_cmd(args),
         "curator" => curator_cmd(args),
+        "llm" => llm_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm"
         )),
     }
 }
@@ -725,6 +726,156 @@ fn parse_owner_repo(spec: &str) -> Result<(String, String), String> {
         ));
     }
     Ok((owner.to_string(), repo.to_string()))
+}
+
+/// `cos agent llm <providers|models|model|cost>`
+///
+/// Read-only inspection of the built-in
+/// [`crate::agent::llm::metadata`] table — the static registry of
+/// known LLM models, their context windows, capabilities, and
+/// per-million-token pricing. Useful for cross-checking pricing
+/// against an invoice, picking a model from the CLI without leaving
+/// the terminal, or scripting a "what does this model support?"
+/// guard before issuing a `cos agent ask`.
+///
+/// All data lives in the binary; no network or file IO is involved.
+fn llm_cmd(args: &[String]) -> Result<Value, String> {
+    use crate::agent::llm::metadata;
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("providers");
+    match sub {
+        "providers" => {
+            let providers: Vec<Value> = metadata::known_providers()
+                .into_iter()
+                .map(|name| {
+                    let count = metadata::list_for_provider(name).len();
+                    json!({"name": name, "models": count})
+                })
+                .collect();
+            Ok(json!({
+                "count": providers.len(),
+                "total_entries": metadata::entry_count(),
+                "providers": providers,
+            }))
+        }
+        "models" => {
+            let mut provider: Option<String> = None;
+            let mut i = 1usize;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--provider" => {
+                        provider = Some(
+                            args.get(i + 1)
+                                .cloned()
+                                .ok_or_else(|| "--provider needs a name".to_string())?,
+                        );
+                        i += 2;
+                    }
+                    other => return Err(format!("unknown flag for `llm models`: {other}")),
+                }
+            }
+            let entries: Vec<&'static metadata::ModelMetadata> = match &provider {
+                Some(p) => metadata::list_for_provider(p),
+                None => metadata::known_providers()
+                    .into_iter()
+                    .flat_map(metadata::list_for_provider)
+                    .collect(),
+            };
+            let models: Vec<Value> = entries.iter().map(|m| model_to_json(m)).collect();
+            Ok(json!({
+                "filter_provider": provider,
+                "count": models.len(),
+                "models": models,
+            }))
+        }
+        "model" => {
+            let name = args
+                .get(1)
+                .cloned()
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| "usage: cos agent llm model <name>".to_string())?;
+            let m = metadata::lookup(&name)
+                .ok_or_else(|| format!("unknown model: {name}"))?;
+            Ok(model_to_json(m))
+        }
+        "cost" => {
+            let mut name: Option<String> = None;
+            let mut input: u64 = 0;
+            let mut output: u64 = 0;
+            let mut cache_read: u64 = 0;
+            let mut cache_write: u64 = 0;
+            let mut i = 1usize;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--input" => {
+                        input = parse_u64_arg(args.get(i + 1), "--input")?;
+                        i += 2;
+                    }
+                    "--output" => {
+                        output = parse_u64_arg(args.get(i + 1), "--output")?;
+                        i += 2;
+                    }
+                    "--cache-read" => {
+                        cache_read = parse_u64_arg(args.get(i + 1), "--cache-read")?;
+                        i += 2;
+                    }
+                    "--cache-write" => {
+                        cache_write = parse_u64_arg(args.get(i + 1), "--cache-write")?;
+                        i += 2;
+                    }
+                    other if !other.starts_with("--") && name.is_none() => {
+                        name = Some(other.to_string());
+                        i += 1;
+                    }
+                    other => {
+                        return Err(format!(
+                            "unknown arg for `llm cost`: {other}. usage: cos agent llm cost <model> --input N --output N [--cache-read N] [--cache-write N]"
+                        ));
+                    }
+                }
+            }
+            let name = name.ok_or_else(|| {
+                "usage: cos agent llm cost <model> --input N --output N [--cache-read N] [--cache-write N]"
+                    .to_string()
+            })?;
+            let cost = metadata::estimate_cost_usd(&name, input, output, cache_read, cache_write)
+                .ok_or_else(|| format!("unknown model: {name}"))?;
+            Ok(json!({
+                "model": name,
+                "input_tokens": input,
+                "output_tokens": output,
+                "cache_read_tokens": cache_read,
+                "cache_write_tokens": cache_write,
+                "estimated_usd": cost,
+            }))
+        }
+        other => Err(format!(
+            "unknown llm subcommand: {other}. try: providers | models [--provider X] | model <name> | cost <model> --input N --output N"
+        )),
+    }
+}
+
+fn model_to_json(m: &crate::agent::llm::metadata::ModelMetadata) -> Value {
+    json!({
+        "name": m.name,
+        "provider": m.provider,
+        "context_window": m.context_window,
+        "max_output_tokens": m.max_output_tokens,
+        "supports_tools": m.supports_tools,
+        "supports_vision": m.supports_vision,
+        "supports_streaming": m.supports_streaming,
+        "pricing": {
+            "input_per_mtok_usd": m.pricing.input_per_mtok_usd,
+            "output_per_mtok_usd": m.pricing.output_per_mtok_usd,
+            "cache_read_per_mtok_usd": m.pricing.cache_read_per_mtok_usd,
+            "cache_write_per_mtok_usd": m.pricing.cache_write_per_mtok_usd,
+        },
+    })
+}
+
+fn parse_u64_arg(value: Option<&String>, flag: &str) -> Result<u64, String> {
+    let v = value.ok_or_else(|| format!("{flag} needs an integer"))?;
+    v.parse::<u64>()
+        .map_err(|e| format!("{flag}: invalid integer '{v}': {e}"))
 }
 
 /// `cos agent nudge [list|due|add <due_in_secs> <message> [--repeat <secs>] [--tag <tag>]|fire <id>|remove <id>|path]`
@@ -1567,6 +1718,162 @@ mod tests {
         .unwrap_err();
         assert!(err.contains("list"));
         assert!(err.contains("install"));
+    }
+
+    #[test]
+    fn llm_providers_returns_known_providers_with_counts() {
+        let v = llm_cmd(&["providers".into()]).expect("llm providers ok");
+        let count = v.get("count").and_then(|c| c.as_u64()).expect("count");
+        assert!(count >= 1, "expected at least one provider, got {count}");
+        let providers = v
+            .get("providers")
+            .and_then(|p| p.as_array())
+            .expect("providers array");
+        for p in providers {
+            assert!(p.get("name").and_then(|x| x.as_str()).is_some());
+            assert!(p.get("models").and_then(|x| x.as_u64()).is_some());
+        }
+        let total = v
+            .get("total_entries")
+            .and_then(|c| c.as_u64())
+            .expect("total_entries");
+        assert!(total >= count, "total entries should be >= provider count");
+    }
+
+    #[test]
+    fn llm_providers_default_when_no_args() {
+        // The bare `cos agent llm` invocation with no subcommand
+        // defaults to providers (mirrors `usage` defaulting to overall).
+        let v = llm_cmd(&[]).expect("llm default ok");
+        assert!(v.get("providers").is_some());
+    }
+
+    #[test]
+    fn llm_models_filters_by_provider() {
+        let v = llm_cmd(&["models".into(), "--provider".into(), "anthropic".into()])
+            .expect("llm models filter ok");
+        let models = v
+            .get("models")
+            .and_then(|m| m.as_array())
+            .expect("models array");
+        assert!(!models.is_empty(), "anthropic should have at least one model");
+        for m in models {
+            assert_eq!(
+                m.get("provider").and_then(|p| p.as_str()),
+                Some("anthropic"),
+                "filter leaked: {m:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn llm_models_unfiltered_returns_all() {
+        let v = llm_cmd(&["models".into()]).expect("llm models all ok");
+        let n = v.get("count").and_then(|c| c.as_u64()).expect("count");
+        assert!(n >= 1);
+    }
+
+    #[test]
+    fn llm_model_unknown_errors() {
+        let err = llm_cmd(&["model".into(), "definitely-not-a-real-model".into()])
+            .unwrap_err();
+        assert!(err.contains("unknown model"));
+    }
+
+    #[test]
+    fn llm_model_returns_pricing_and_capability_fields() {
+        // Pick the first model the registry reports for the first
+        // known provider so this test is robust to table changes.
+        let providers = llm_cmd(&["providers".into()]).expect("providers ok");
+        let first = providers
+            .get("providers")
+            .and_then(|p| p.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|p| p.get("name"))
+            .and_then(|n| n.as_str())
+            .expect("at least one known provider")
+            .to_string();
+        let models = llm_cmd(&["models".into(), "--provider".into(), first])
+            .expect("models ok");
+        let first_model = models
+            .get("models")
+            .and_then(|m| m.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|m| m.get("name"))
+            .and_then(|n| n.as_str())
+            .expect("at least one model for first provider")
+            .to_string();
+        let v = llm_cmd(&["model".into(), first_model]).expect("model ok");
+        assert!(v.get("name").and_then(|x| x.as_str()).is_some());
+        assert!(v.get("provider").and_then(|x| x.as_str()).is_some());
+        assert!(v.get("context_window").is_some());
+        assert!(v.get("supports_tools").is_some());
+        assert!(v
+            .get("pricing")
+            .and_then(|p| p.get("input_per_mtok_usd"))
+            .and_then(|x| x.as_f64())
+            .is_some());
+    }
+
+    #[test]
+    fn llm_cost_requires_model_arg() {
+        let err = llm_cmd(&["cost".into(), "--input".into(), "1000".into()])
+            .unwrap_err();
+        assert!(err.contains("usage:"));
+    }
+
+    #[test]
+    fn llm_cost_unknown_model_errors() {
+        let err = llm_cmd(&[
+            "cost".into(),
+            "definitely-not-a-real-model".into(),
+            "--input".into(),
+            "1000".into(),
+            "--output".into(),
+            "100".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("unknown model"));
+    }
+
+    #[test]
+    fn llm_cost_invalid_int_errors() {
+        let providers = llm_cmd(&["providers".into()]).expect("providers ok");
+        let model_name = providers
+            .get("providers")
+            .and_then(|p| p.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|p| p.get("name"))
+            .and_then(|n| n.as_str())
+            .map(|s| s.to_string())
+            .map(|provider| {
+                let models = llm_cmd(&["models".into(), "--provider".into(), provider])
+                    .expect("models ok");
+                models
+                    .get("models")
+                    .and_then(|m| m.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|m| m.get("name"))
+                    .and_then(|n| n.as_str())
+                    .expect("at least one model")
+                    .to_string()
+            })
+            .expect("at least one provider");
+        let err = llm_cmd(&[
+            "cost".into(),
+            model_name,
+            "--input".into(),
+            "not-a-number".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("--input"));
+    }
+
+    #[test]
+    fn llm_unknown_subcommand_lists_options() {
+        let err = llm_cmd(&["bogus".into()]).unwrap_err();
+        assert!(err.contains("providers"));
+        assert!(err.contains("models"));
     }
 
     #[test]

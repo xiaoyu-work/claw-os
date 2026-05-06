@@ -392,7 +392,8 @@ fn builtin_apps() -> Vec<(
             ("nudge", "Manage periodic-nudge reminders auto-injected into the system prompt: cos agent nudge [list|due|add <due_in_secs> <message> [--repeat <secs>] [--tag <tag>]|fire <id>|remove <id>|path]"),
             ("mcp", "MCP (Model Context Protocol) server exposing the cos agent tool catalogue to external clients: cos agent mcp [status|serve [--allow <tool>] [--deny <tool>]]"),
             ("usage", "Filtered aggregation over the LLM run log (llm.jsonl): cos agent usage [overall|provider <name>|model <name>|session <id>] [--since <ISO>] [--until <ISO>] [--ok|--error]"),
-            ("curator", "Distil a recorded session into a draft skill manifest: cos agent curator propose <session_id> [--accept] [--limit <n>] [--no-require-acceptance] [--min-tools <n>] [--min-turns <n>] [--no-save] | drafts list [--status proposed|accepted|rejected] | drafts show <id> | drafts accept <id> [--note ...] | drafts reject <id> [--note ...] | drafts delete <id>"),
+            ("curator", "Distil a recorded session into a draft skill manifest: cos agent curator propose <session_id> [--accept] [--limit <n>] [--no-require-acceptance] [--min-tools <n>] [--min-turns <n>] [--no-save] | drafts list [--status proposed|accepted|rejected] | drafts show <id> | drafts accept <id> [--note ...] | drafts reject <id> [--note ...] | drafts delete <id> | drafts retitle <id> <new title>"),
+            ("llm", "Inspect the built-in LLM model registry: cos agent llm [providers | models [--provider X] | model <name> | cost <model> --input N --output N [--cache-read N] [--cache-write N]]"),
         ]),
         ("model", "Local model registry + inference daemon (ort for STT/TTS/embed/vision/imagegen, llama.cpp for LLM) — Phase 0.5 skeleton", vec![
             ("list", "List registered models from /var/lib/cos/models/"),
