@@ -12,6 +12,8 @@
 //! All injection is best-effort: missing or unreadable files are silently
 //! skipped. The agent must remain operable when nothing exists.
 
+pub mod caching;
+
 use std::fs;
 use std::path::Path;
 

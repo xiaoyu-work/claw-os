@@ -43,6 +43,7 @@ use crate::agent::llm::{
     ChatRequest, ChatResponse, ContentBlock, FinishReason, LlmError, Provider, Result, Role,
     StreamEvent, Tool, ToolCall, ToolChoice, Usage,
 };
+use crate::agent::prompt::caching;
 use crate::config::AgentConfig;
 
 pub const PROVIDER_NAME: &str = "anthropic";
@@ -212,48 +213,94 @@ pub(crate) mod wire {
     /// - `system` is hoisted out of `messages` to top level
     /// - `max_tokens` is always present (Anthropic requires it)
     /// - tool result blocks live inside a `user` message, not their own role
+    ///
+    /// Honours prompt-cache markers from
+    /// [`crate::agent::prompt::caching`]: `cache_control: {"type":"ephemeral"}`
+    /// is attached to the last content block of any breakpoint message,
+    /// to the system block when `cache_system` is set, and to the last
+    /// tool when `cache_tools` is set. Markers are consumed (stripped
+    /// from a working copy of `extra`) so they never appear on the wire.
     pub(crate) fn build_request_body(
         request: &ChatRequest,
         model: &str,
         stream: bool,
     ) -> serde_json::Value {
-        let messages: Vec<serde_json::Value> =
-            request.messages.iter().map(message_to_json).collect();
+        // Work on a clone so we can consume cache markers without
+        // mutating the caller's request.
+        let mut working = request.clone();
+        let markers = caching::consume_markers(&mut working);
+        let bp_set: std::collections::HashSet<u32> = markers.breakpoints.iter().copied().collect();
+        let last_msg_idx = working.messages.len().saturating_sub(1);
 
-        let tools: Vec<serde_json::Value> = request.tools.iter().map(tool_to_json).collect();
+        let messages: Vec<serde_json::Value> = working
+            .messages
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                let cache_this = bp_set.contains(&(i as u32)) && i <= last_msg_idx;
+                message_to_json(m, cache_this)
+            })
+            .collect();
+
+        let tools_count = working.tools.len();
+        let tools: Vec<serde_json::Value> = working
+            .tools
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                let cache_this = markers.cache_tools && i + 1 == tools_count;
+                tool_to_json(t, cache_this)
+            })
+            .collect();
 
         let mut body = serde_json::json!({
             "model": model,
             "messages": messages,
-            "max_tokens": request.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
+            "max_tokens": working.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
         });
 
         if let Some(obj) = body.as_object_mut() {
-            if let Some(sys) = &request.system {
+            if let Some(sys) = &working.system {
                 if !sys.is_empty() {
-                    obj.insert("system".into(), serde_json::json!(sys));
+                    if markers.cache_system {
+                        // Promote string → content-block array so we
+                        // have a place to hang cache_control.
+                        obj.insert(
+                            "system".into(),
+                            serde_json::json!([{
+                                "type": "text",
+                                "text": sys,
+                                "cache_control": {"type": "ephemeral"},
+                            }]),
+                        );
+                    } else {
+                        obj.insert("system".into(), serde_json::json!(sys));
+                    }
                 }
             }
             if !tools.is_empty() {
                 obj.insert("tools".into(), serde_json::Value::Array(tools));
-                obj.insert("tool_choice".into(), tool_choice_to_json(&request.tool_choice));
+                obj.insert(
+                    "tool_choice".into(),
+                    tool_choice_to_json(&working.tool_choice),
+                );
             }
-            if let Some(v) = request.temperature {
+            if let Some(v) = working.temperature {
                 obj.insert("temperature".into(), serde_json::json!(v));
             }
-            if let Some(v) = request.top_p {
+            if let Some(v) = working.top_p {
                 obj.insert("top_p".into(), serde_json::json!(v));
             }
-            if !request.stop_sequences.is_empty() {
+            if !working.stop_sequences.is_empty() {
                 obj.insert(
                     "stop_sequences".into(),
-                    serde_json::json!(request.stop_sequences),
+                    serde_json::json!(working.stop_sequences),
                 );
             }
             if stream {
                 obj.insert("stream".into(), serde_json::json!(true));
             }
-            if let serde_json::Value::Object(extra) = &request.extra {
+            if let serde_json::Value::Object(extra) = &working.extra {
                 for (k, v) in extra {
                     obj.insert(k.clone(), v.clone());
                 }
@@ -273,7 +320,7 @@ pub(crate) mod wire {
         }
     }
 
-    fn message_to_json(m: &crate::agent::llm::Message) -> serde_json::Value {
+    fn message_to_json(m: &crate::agent::llm::Message, cache_breakpoint: bool) -> serde_json::Value {
         let role = role_to_str(m.role);
 
         // System messages would have been hoisted out before getting here.
@@ -286,7 +333,22 @@ pub(crate) mod wire {
             });
         }
 
-        let blocks: Vec<serde_json::Value> = m.content.iter().map(content_block_to_json).collect();
+        let mut blocks: Vec<serde_json::Value> =
+            m.content.iter().map(content_block_to_json).collect();
+
+        // Attach cache_control to the LAST content block of this
+        // message when this message is a breakpoint. No-op if the
+        // message has no content blocks.
+        if cache_breakpoint {
+            if let Some(last) = blocks.last_mut() {
+                if let Some(obj) = last.as_object_mut() {
+                    obj.insert(
+                        "cache_control".into(),
+                        serde_json::json!({"type": "ephemeral"}),
+                    );
+                }
+            }
+        }
 
         serde_json::json!({
             "role": role,
@@ -347,12 +409,21 @@ pub(crate) mod wire {
         }
     }
 
-    fn tool_to_json(t: &Tool) -> serde_json::Value {
-        serde_json::json!({
+    fn tool_to_json(t: &Tool, cache_breakpoint: bool) -> serde_json::Value {
+        let mut obj = serde_json::json!({
             "name": t.name,
             "description": t.description,
             "input_schema": t.input_schema,
-        })
+        });
+        if cache_breakpoint {
+            if let Some(o) = obj.as_object_mut() {
+                o.insert(
+                    "cache_control".into(),
+                    serde_json::json!({"type": "ephemeral"}),
+                );
+            }
+        }
+        obj
     }
 
     fn tool_choice_to_json(c: &ToolChoice) -> serde_json::Value {
@@ -997,5 +1068,146 @@ mod tests {
         assert!(is_alias("anthropic"));
         assert!(!is_alias("openai"));
         assert!(!is_alias(""));
+    }
+
+    // --- Prompt cache wire integration tests --------------------------
+
+    #[test]
+    fn body_no_cache_control_when_no_markers() {
+        let r = req_text("hi");
+        let body = wire::build_request_body(&r, "claude-3-5-sonnet-20241022", false);
+        let serialised = serde_json::to_string(&body).unwrap();
+        assert!(
+            !serialised.contains("cache_control"),
+            "no markers should mean no cache_control on the wire"
+        );
+    }
+
+    #[test]
+    fn body_breakpoint_attaches_cache_control_to_last_block_of_message() {
+        use crate::agent::prompt::caching;
+        let mut r = req_text("hi");
+        r.messages.push(crate::agent::llm::Message::assistant_text(
+            "thinking out loud",
+        ));
+        r.messages
+            .push(crate::agent::llm::Message::user_text("follow-up"));
+        // Mark message at index 1 (the assistant message) as cached.
+        caching::mark_breakpoint(&mut r, 1).unwrap();
+        let body = wire::build_request_body(&r, "claude-3-5-sonnet-20241022", false);
+        let msg1 = &body["messages"][1];
+        let last_block = &msg1["content"][0];
+        assert_eq!(last_block["cache_control"]["type"], "ephemeral");
+        // Other messages have no cache_control.
+        let msg0 = &body["messages"][0];
+        assert!(msg0["content"][0].get("cache_control").is_none());
+        let msg2 = &body["messages"][2];
+        assert!(msg2["content"][0].get("cache_control").is_none());
+    }
+
+    #[test]
+    fn body_cache_system_promotes_string_to_block_array() {
+        use crate::agent::prompt::caching;
+        let mut r = req_text("hi");
+        r.system = Some("be helpful".into());
+        caching::mark_system_cached(&mut r);
+        let body = wire::build_request_body(&r, "claude-3-5-sonnet-20241022", false);
+        let sys = &body["system"];
+        assert!(sys.is_array(), "system should be an array when cached");
+        let first = &sys[0];
+        assert_eq!(first["type"], "text");
+        assert_eq!(first["text"], "be helpful");
+        assert_eq!(first["cache_control"]["type"], "ephemeral");
+    }
+
+    #[test]
+    fn body_cache_tools_attaches_cache_control_to_last_tool() {
+        use crate::agent::prompt::caching;
+        let mut r = req_text("hi");
+        r.tools = vec![
+            Tool {
+                name: "first".into(),
+                description: "".into(),
+                input_schema: serde_json::json!({}),
+            },
+            Tool {
+                name: "second".into(),
+                description: "".into(),
+                input_schema: serde_json::json!({}),
+            },
+        ];
+        caching::mark_tools_cached(&mut r);
+        let body = wire::build_request_body(&r, "claude-3-5-sonnet-20241022", false);
+        let tools = body["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 2);
+        // First tool: no cache_control.
+        assert!(tools[0].get("cache_control").is_none());
+        // Last tool: cache_control attached.
+        assert_eq!(tools[1]["cache_control"]["type"], "ephemeral");
+    }
+
+    #[test]
+    fn body_cache_markers_do_not_leak_into_extras() {
+        use crate::agent::prompt::caching;
+        let mut r = req_text("hi");
+        caching::mark_breakpoint(&mut r, 0).unwrap();
+        caching::mark_system_cached(&mut r);
+        let body = wire::build_request_body(&r, "claude-3-5-sonnet-20241022", false);
+        let serialised = serde_json::to_string(&body).unwrap();
+        assert!(!serialised.contains("__cache_breakpoints"));
+        assert!(!serialised.contains("__cache_system"));
+        assert!(!serialised.contains("__cache_tools"));
+    }
+
+    #[test]
+    fn body_cache_markers_preserve_non_cache_extras() {
+        use crate::agent::prompt::caching;
+        let mut r = req_text("hi");
+        r.extra = serde_json::json!({"metadata": {"user_id": "u-7"}});
+        caching::mark_breakpoint(&mut r, 0).unwrap();
+        let body = wire::build_request_body(&r, "claude-3-5-sonnet-20241022", false);
+        // metadata still present at top level.
+        assert_eq!(body["metadata"]["user_id"], "u-7");
+        // breakpoint applied.
+        assert_eq!(
+            body["messages"][0]["content"][0]["cache_control"]["type"],
+            "ephemeral"
+        );
+    }
+
+    #[test]
+    fn body_breakpoint_does_not_mutate_caller_request() {
+        use crate::agent::prompt::caching;
+        let mut r = req_text("hi");
+        caching::mark_breakpoint(&mut r, 0).unwrap();
+        let _ = wire::build_request_body(&r, "claude-3-5-sonnet-20241022", false);
+        // Marker still present on the original request — wire builder
+        // works on a clone.
+        assert_eq!(caching::get_breakpoints(&r), vec![0]);
+    }
+
+    #[test]
+    fn body_out_of_range_breakpoint_dropped_silently() {
+        use crate::agent::prompt::caching;
+        let mut r = req_text("hi"); // 1 message
+        // Mark index 99 as a breakpoint — bigger than messages.len().
+        caching::set_breakpoints(&mut r, vec![99]);
+        let body = wire::build_request_body(&r, "claude-3-5-sonnet-20241022", false);
+        let serialised = serde_json::to_string(&body).unwrap();
+        assert!(
+            !serialised.contains("cache_control"),
+            "out-of-range breakpoint should not produce cache_control"
+        );
+    }
+
+    #[test]
+    fn body_cache_system_with_empty_system_no_op() {
+        use crate::agent::prompt::caching;
+        let mut r = req_text("hi");
+        r.system = None;
+        caching::mark_system_cached(&mut r);
+        let body = wire::build_request_body(&r, "claude-3-5-sonnet-20241022", false);
+        // No system field on the wire.
+        assert!(body.get("system").is_none());
     }
 }
