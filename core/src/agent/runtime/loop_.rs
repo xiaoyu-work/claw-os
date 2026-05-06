@@ -401,11 +401,28 @@ async fn ask_inner_streaming(
         interrupt::register(session_id.clone())
     };
 
+    // Mirror ask_inner: process-wide hook registry. Empty by default
+    // → zero-cost when no observers registered. Streaming and
+    // non-streaming surfaces share the same hooks.
+    let hook_registry = hooks::global_registry();
+    let hook_ctx_base = hooks::HookContext::new(
+        interrupt_handle.session_id().to_string(),
+        provider.name(),
+        cfg.model.clone(),
+    );
+
     for turn in 1..=cfg.max_turns {
         if interrupt_handle.check() {
             return Err(AgentError::Interrupted(
                 interrupt_handle.session_id().to_string(),
             ));
+        }
+
+        let hook_ctx = hook_ctx_base.clone().with_turn_index(turn);
+        if let hooks::HookOutcome::Stop(reason) = hook_registry.dispatch_pre_turn(&hook_ctx) {
+            return Err(AgentError::Interrupted(format!(
+                "hook stop (pre_turn): {reason}"
+            )));
         }
 
         if cfg.think_scrub_enabled {
@@ -421,7 +438,11 @@ async fn ask_inner_streaming(
         }
 
         let len_before = messages.len();
-        let outcome = super::turn::run_turn_streaming(
+        let turn_started_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let outcome_result = super::turn::run_turn_streaming(
             provider.clone(),
             &cfg.model,
             &system,
@@ -432,9 +453,60 @@ async fn ask_inner_streaming(
             cfg.temperature,
             recorder.map(|(_, sid)| sid),
             sink.clone(),
-            None,
+            Some(&hook_ctx),
         )
-        .await?;
+        .await;
+
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let latency_ms = now_ms.saturating_sub(turn_started_ms);
+
+        let outcome = match outcome_result {
+            Ok(o) => {
+                let summary = hooks::TurnSummary {
+                    success: true,
+                    latency_ms,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    stop_reason: match &o {
+                        super::turn::TurnOutcome::Final(_) => "Final".into(),
+                        super::turn::TurnOutcome::ContinueWithTools => "ContinueWithTools".into(),
+                    },
+                    tool_calls_made: messages[len_before..]
+                        .iter()
+                        .filter(|m| {
+                            m.content.iter().any(|b| {
+                                matches!(b, crate::agent::llm::ContentBlock::ToolUse { .. })
+                            })
+                        })
+                        .count() as u32,
+                    error: None,
+                };
+                if let hooks::HookOutcome::Stop(reason) =
+                    hook_registry.dispatch_post_turn(&hook_ctx, &summary)
+                {
+                    return Err(AgentError::Interrupted(format!(
+                        "hook stop (post_turn): {reason}"
+                    )));
+                }
+                o
+            }
+            Err(e) => {
+                let summary = hooks::TurnSummary {
+                    success: false,
+                    latency_ms,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    stop_reason: "Error".into(),
+                    tool_calls_made: 0,
+                    error: Some(e.to_string()),
+                };
+                let _ = hook_registry.dispatch_post_turn(&hook_ctx, &summary);
+                return Err(e);
+            }
+        };
 
         if let Some((db, sid)) = recorder {
             for new_msg in &messages[len_before..] {
@@ -2022,6 +2094,104 @@ mod tests {
         match err {
             AgentError::Interrupted(reason) => {
                 assert!(reason.contains("test-veto"), "got {reason}");
+                assert!(reason.contains("pre_turn"), "got {reason}");
+            }
+            other => panic!("expected Interrupted, got {other:?}"),
+        }
+    }
+
+    /// Streaming twin: ask_with_stream also dispatches pre_turn /
+    /// post_turn hooks through the same global registry. Pins the
+    /// parity contract — both code paths invoke hooks identically.
+    #[tokio::test]
+    async fn streaming_loop_dispatches_pre_and_post_turn_hooks() {
+        use crate::agent::runtime::hooks::{
+            global_registry, Hook, HookContext, HookOutcome, ToolDecision, ToolResultSummary,
+            TurnSummary,
+        };
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        struct StreamSpy {
+            pre: Arc<AtomicU32>,
+            post: Arc<AtomicU32>,
+        }
+        impl Hook for StreamSpy {
+            fn name(&self) -> &str {
+                "stream-loop-spy"
+            }
+            fn pre_turn(&self, _c: &HookContext) -> HookOutcome {
+                self.pre.fetch_add(1, Ordering::SeqCst);
+                HookOutcome::Continue
+            }
+            fn post_turn(&self, _c: &HookContext, _s: &TurnSummary) -> HookOutcome {
+                self.post.fetch_add(1, Ordering::SeqCst);
+                HookOutcome::Continue
+            }
+            fn pre_tool(&self, _c: &HookContext, _t: &llm::ToolCall) -> ToolDecision {
+                ToolDecision::Allow
+            }
+            fn post_tool(
+                &self,
+                _c: &HookContext,
+                _t: &llm::ToolCall,
+                _r: &ToolResultSummary,
+            ) -> HookOutcome {
+                HookOutcome::Continue
+            }
+        }
+        let pre = Arc::new(AtomicU32::new(0));
+        let post = Arc::new(AtomicU32::new(0));
+        global_registry().register(Arc::new(StreamSpy {
+            pre: pre.clone(),
+            post: post.clone(),
+        }));
+
+        let cfg = cfg();
+        let provider: Arc<dyn Provider> = Arc::new(MockProvider::new(&cfg.model, &cfg));
+        let tools = builtin_only_registry();
+        let sink: Arc<CapturingSink> = Arc::default();
+        let _ = ask_with_stream(provider, &cfg, "hello", &tools, None, sink.clone())
+            .await
+            .unwrap();
+
+        global_registry().unregister("stream-loop-spy");
+
+        assert!(pre.load(Ordering::SeqCst) >= 1, "streaming pre_turn should fire");
+        assert!(post.load(Ordering::SeqCst) >= 1, "streaming post_turn should fire");
+    }
+
+    /// Streaming pre_turn Stop also aborts with Interrupted —
+    /// identical contract to the non-streaming path.
+    #[tokio::test]
+    async fn streaming_pre_turn_hook_stop_aborts_with_interrupted() {
+        use crate::agent::runtime::hooks::{
+            global_registry, Hook, HookContext, HookOutcome,
+        };
+
+        struct StreamStopper;
+        impl Hook for StreamStopper {
+            fn name(&self) -> &str {
+                "stream-loop-stopper"
+            }
+            fn pre_turn(&self, _c: &HookContext) -> HookOutcome {
+                HookOutcome::Stop("stream-veto".into())
+            }
+        }
+        global_registry().register(Arc::new(StreamStopper));
+
+        let cfg = cfg();
+        let provider: Arc<dyn Provider> = Arc::new(MockProvider::new(&cfg.model, &cfg));
+        let tools = builtin_only_registry();
+        let sink: Arc<CapturingSink> = Arc::default();
+        let err = ask_with_stream(provider, &cfg, "hi", &tools, None, sink)
+            .await
+            .unwrap_err();
+
+        global_registry().unregister("stream-loop-stopper");
+
+        match err {
+            AgentError::Interrupted(reason) => {
+                assert!(reason.contains("stream-veto"), "got {reason}");
                 assert!(reason.contains("pre_turn"), "got {reason}");
             }
             other => panic!("expected Interrupted, got {other:?}"),
