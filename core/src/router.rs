@@ -399,6 +399,9 @@ fn builtin_apps() -> Vec<(
             ("think-scrub", "Strip <think>/<thinking>/<reasoning> blocks from text: cos agent think-scrub <text> | --file <path> | --stdin [--check]"),
             ("tokens", "Estimate token count of a string (chars / 4 heuristic): cos agent tokens <text> | --file <path> | --stdin"),
             ("providers", "Probe credential availability for every registered LLM provider: cos agent providers [--names <a,b>] [--probe-credentials]"),
+            ("title", "Generate a session title from a seed string (heuristic, no LLM call): cos agent title <text> | --file <path> | --stdin"),
+            ("summarise", "Summarise text into the first sentence (heuristic, no LLM call), clamped: cos agent summarise <text> | --file <path> | --stdin [--max N]"),
+            ("classify", "Match a reply string to one of a label set (case-insensitive, punctuation-tolerant): cos agent classify <reply> --labels <a,b,c> | --file <path> | --stdin"),
         ]),
         ("model", "Local model registry + inference daemon (ort for STT/TTS/embed/vision/imagegen, llama.cpp for LLM) — Phase 0.5 skeleton", vec![
             ("list", "List registered models from /var/lib/cos/models/"),

@@ -121,8 +121,12 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "think-scrub" => think_scrub_cmd(args),
         "tokens" => tokens_cmd(args),
         "providers" => providers_cmd(args),
+        "title" => title_cmd(args),
+        "summarise" => summarise_cmd(args),
+        "summarize" => summarise_cmd(args),
+        "classify" => classify_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | title | summarise | classify"
         )),
     }
 }
@@ -1521,7 +1525,114 @@ fn default_base_url_for_provider(name: &str) -> Option<&'static str> {
     }
 }
 
+/// `cos agent title <text> | --file <path> | --stdin`
+/// — heuristic-only title generation. Strips a leading slash-command
+/// verb (so `/ask hello` becomes `hello`), takes the first non-empty
+/// line, and clamps to `MAX_TITLE_CHARS`. Pure function, no LLM call,
+/// no IO beyond the input read. The async LLM-backed variant in
+/// `agent::title::generate_title` is what `runtime::loop_` calls when
+/// an auxiliary client is configured; this CLI only surfaces the
+/// fallback so users can preview what would land if the aux call
+/// failed (or wasn't configured).
+fn title_cmd(args: &[String]) -> Result<Value, String> {
+    let (input, _check) = read_text_input(args, "title")?;
+    let title = crate::agent::title::clamp(&crate::agent::title::heuristic(&input));
+    Ok(json!({
+        "title": title,
+        "input_chars": input.chars().count(),
+        "title_chars": title.chars().count(),
+        "method": "heuristic",
+    }))
+}
 
+/// `cos agent summarise <text> | --file <path> | --stdin [--max N]`
+/// — heuristic-only summary: take the first sentence (terminated by
+/// `.`/`!`/`?` followed by whitespace or EOS) and clamp to `--max`
+/// chars (default 200, matching the runtime's compressor default).
+/// Pure function, no LLM call. As with `title`, the async
+/// `agent::summarise::summarise` is the LLM-backed path used by the
+/// runtime when an auxiliary client is configured; this CLI surfaces
+/// the deterministic fallback for testing or for cheap one-offs.
+///
+/// Aliased as `cos agent summarize` (US spelling) so muscle memory
+/// from either spelling works.
+fn summarise_cmd(args: &[String]) -> Result<Value, String> {
+    let mut max_chars: usize = 200;
+    let mut filtered: Vec<String> = Vec::new();
+    let mut i = 0usize;
+    while i < args.len() {
+        if args[i].as_str() == "--max" {
+            let raw = args
+                .get(i + 1)
+                .ok_or_else(|| "--max needs a number".to_string())?;
+            max_chars = raw
+                .parse::<usize>()
+                .map_err(|e| format!("--max: invalid u64: {e}"))?;
+            i += 2;
+        } else {
+            filtered.push(args[i].clone());
+            i += 1;
+        }
+    }
+    let (input, _check) = read_text_input(&filtered, "summarise")?;
+    let raw = crate::agent::summarise::heuristic(&input);
+    let summary = crate::agent::summarise::clamp(&raw, max_chars);
+    Ok(json!({
+        "summary": summary,
+        "input_chars": input.chars().count(),
+        "summary_chars": summary.chars().count(),
+        "max_chars": max_chars,
+        "clamped": raw.chars().count() > max_chars,
+        "method": "heuristic",
+    }))
+}
+
+/// `cos agent classify <reply> --labels <a,b,c> | --file <path> | --stdin`
+/// — match a (typically LLM-generated) reply string against a label
+/// set using `match_label`'s case-insensitive + punctuation-tolerant
+/// rules. Returns `{matched: <label> | null, labels: [...], reply}`.
+/// Useful for testing prompt designs without spending tokens (you
+/// can hand-craft a hypothetical reply and confirm the parser would
+/// accept it).
+fn classify_cmd(args: &[String]) -> Result<Value, String> {
+    let mut labels_raw: Option<String> = None;
+    let mut filtered: Vec<String> = Vec::new();
+    let mut i = 0usize;
+    while i < args.len() {
+        if args[i].as_str() == "--labels" {
+            labels_raw = Some(
+                args.get(i + 1)
+                    .cloned()
+                    .ok_or_else(|| "--labels needs a comma list".to_string())?,
+            );
+            i += 2;
+        } else {
+            filtered.push(args[i].clone());
+            i += 1;
+        }
+    }
+    let labels_str = labels_raw
+        .ok_or_else(|| "usage: cos agent classify <reply> --labels <a,b,c>".to_string())?;
+    let labels: Vec<String> = labels_str
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if labels.is_empty() {
+        return Err("--labels: at least one non-empty label required".into());
+    }
+    let (reply, _check) = read_text_input(&filtered, "classify")?;
+    let label_refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
+    let matched = crate::agent::classify::match_label(&reply, &label_refs);
+    Ok(json!({
+        "matched": matched,
+        "labels": labels,
+        "reply": reply,
+        "reply_chars": reply.chars().count(),
+    }))
+}
+
+/// `cos agent nudge [list|due|add <due_in_secs> <message> [--repeat <secs>] [--tag <tag>]|fire <id>|remove <id>|path]`
 /// — managed periodic-nudge store. `list` shows all nudges; `due`
 /// shows only those with `due_at_epoch_s <= now`. `add` parses a
 /// relative offset in seconds (the most common case for "remind me
@@ -3501,5 +3612,167 @@ mod tests {
             .expect("providers ok");
         let count = v.get("count").and_then(|c| c.as_u64()).unwrap_or(0);
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn title_cmd_returns_first_line_clamped() {
+        let v = title_cmd(&["hello world".into()]).expect("title ok");
+        assert_eq!(v.get("title").and_then(|s| s.as_str()), Some("hello world"));
+        assert_eq!(v.get("method").and_then(|s| s.as_str()), Some("heuristic"));
+    }
+
+    #[test]
+    fn title_cmd_strips_slash_command_verb() {
+        let v = title_cmd(&["/ask hello there".into()]).expect("title ok");
+        assert_eq!(
+            v.get("title").and_then(|s| s.as_str()),
+            Some("hello there")
+        );
+    }
+
+    #[test]
+    fn title_cmd_takes_first_line_only() {
+        let v = title_cmd(&["one\ntwo\nthree".into()]).expect("title ok");
+        assert_eq!(v.get("title").and_then(|s| s.as_str()), Some("one"));
+    }
+
+    #[test]
+    fn title_cmd_empty_input_falls_back_to_untitled() {
+        let v = title_cmd(&["   ".into()]).expect("title ok");
+        assert_eq!(v.get("title").and_then(|s| s.as_str()), Some("untitled"));
+    }
+
+    #[test]
+    fn title_cmd_requires_some_input() {
+        let err = title_cmd(&[]).unwrap_err();
+        assert!(err.contains("title"));
+    }
+
+    #[test]
+    fn summarise_cmd_returns_first_sentence() {
+        let v = summarise_cmd(&["First sentence. Second one.".into()])
+            .expect("summarise ok");
+        assert_eq!(
+            v.get("summary").and_then(|s| s.as_str()),
+            Some("First sentence.")
+        );
+        assert_eq!(
+            v.get("clamped").and_then(|b| b.as_bool()),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn summarise_cmd_clamps_to_max_with_ellipsis() {
+        let v = summarise_cmd(&[
+            "abcdefghij no terminator".into(),
+            "--max".into(),
+            "5".into(),
+        ])
+        .expect("summarise ok");
+        let s = v.get("summary").and_then(|s| s.as_str()).unwrap_or("");
+        assert_eq!(s.chars().count(), 5);
+        assert!(s.ends_with('…'), "should end with ellipsis: {s:?}");
+        assert_eq!(v.get("clamped").and_then(|b| b.as_bool()), Some(true));
+    }
+
+    #[test]
+    fn summarise_cmd_default_max_is_200() {
+        let v = summarise_cmd(&["short input".into()]).expect("summarise ok");
+        assert_eq!(v.get("max_chars").and_then(|n| n.as_u64()), Some(200));
+    }
+
+    #[test]
+    fn summarise_cmd_max_requires_value() {
+        let err = summarise_cmd(&["--max".into()]).unwrap_err();
+        assert!(err.contains("--max"));
+    }
+
+    #[test]
+    fn summarise_cmd_max_must_parse() {
+        let err = summarise_cmd(&["--max".into(), "not-a-number".into(), "x".into()])
+            .unwrap_err();
+        assert!(err.contains("--max"));
+    }
+
+    #[test]
+    fn summarize_alias_dispatches_to_summarise() {
+        // Confirm the US-spelling alias hits the same handler.
+        let v = run("summarize", &["hello.".into()]).expect("summarize ok");
+        assert_eq!(v.get("summary").and_then(|s| s.as_str()), Some("hello."));
+    }
+
+    #[test]
+    fn classify_cmd_matches_label_case_insensitively() {
+        let v = classify_cmd(&[
+            "POSITIVE".into(),
+            "--labels".into(),
+            "positive,negative,neutral".into(),
+        ])
+        .expect("classify ok");
+        assert_eq!(
+            v.get("matched").and_then(|m| m.as_str()),
+            Some("positive")
+        );
+    }
+
+    #[test]
+    fn classify_cmd_returns_null_on_no_match() {
+        let v = classify_cmd(&[
+            "definitely not a label".into(),
+            "--labels".into(),
+            "yes,no".into(),
+        ])
+        .expect("classify ok");
+        assert_eq!(v.get("matched"), Some(&serde_json::Value::Null));
+    }
+
+    #[test]
+    fn classify_cmd_tolerates_trailing_punctuation() {
+        let v = classify_cmd(&[
+            "yes.".into(),
+            "--labels".into(),
+            "yes,no".into(),
+        ])
+        .expect("classify ok");
+        assert_eq!(v.get("matched").and_then(|m| m.as_str()), Some("yes"));
+    }
+
+    #[test]
+    fn classify_cmd_requires_labels_flag() {
+        let err = classify_cmd(&["yes".into()]).unwrap_err();
+        assert!(err.contains("--labels"));
+    }
+
+    #[test]
+    fn classify_cmd_labels_flag_requires_value() {
+        let err = classify_cmd(&["--labels".into()]).unwrap_err();
+        assert!(err.contains("--labels"));
+    }
+
+    #[test]
+    fn classify_cmd_empty_label_list_rejected() {
+        let err = classify_cmd(&[
+            "yes".into(),
+            "--labels".into(),
+            ",, ,".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("--labels"));
+    }
+
+    #[test]
+    fn classify_cmd_returns_label_set_in_response() {
+        let v = classify_cmd(&[
+            "yes".into(),
+            "--labels".into(),
+            "yes,no,maybe".into(),
+        ])
+        .expect("classify ok");
+        let labels = v
+            .get("labels")
+            .and_then(|l| l.as_array())
+            .expect("labels array");
+        assert_eq!(labels.len(), 3);
     }
 }
