@@ -63,11 +63,19 @@ impl ToolRegistry {
 ///   cron, checkpoint, service, trace, watch, ipc, browser, netfilter,
 ///   policy, model). Each proxy gives the model the exact same surface as
 ///   the cos CLI for that primitive.
+/// - `cos_memory` (notes) and, if the default memory DB opens cleanly,
+///   `cos_recall` (FTS5 history search).
 pub fn default_registry() -> ToolRegistry {
     let mut r = ToolRegistry::new();
     r.register(Arc::new(super::builtin::Echo));
     r.register(Arc::new(super::builtin::Now));
     super::cos_proxy::register_all(&mut r);
+    // Best-effort: open the default memory DB; if it fails (read-only fs,
+    // etc.) the agent still works, just without searchable history.
+    match crate::agent::memory::sqlite_fts::MemoryDb::open_default() {
+        Ok(db) => super::cos_proxy::register_recall(&mut r, db),
+        Err(e) => tracing::warn!("cos_recall: failed to open default memory DB: {e}"),
+    }
     r
 }
 
@@ -92,8 +100,17 @@ mod tests {
         assert!(r.get("cos_sandbox").is_some());
         assert!(r.get("cos_sysinfo").is_some());
         assert!(r.get("cos_memory").is_some());
-        // 2 builtins + every cos_proxy tool (primitives + cos_memory)
-        assert_eq!(r.len(), 2 + super::super::cos_proxy::total_count());
+        // 2 builtins + every cos_proxy tool (primitives + cos_memory),
+        // plus optionally cos_recall (registered iff default DB opens).
+        let expected_min = 2 + super::super::cos_proxy::total_count();
+        let expected_max = expected_min + 1;
+        assert!(
+            (expected_min..=expected_max).contains(&r.len()),
+            "expected {}..={} tools, got {}",
+            expected_min,
+            expected_max,
+            r.len()
+        );
     }
 
     #[test]

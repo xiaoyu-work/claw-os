@@ -26,6 +26,7 @@
 //! self-polices destructive operations at the primitive layer.
 
 pub mod memory;
+pub mod recall;
 
 use std::sync::Arc;
 
@@ -278,8 +279,10 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
     },
 ];
 
-/// Register every cos primitive proxy on the supplied registry. Also
-/// registers the higher-level memory tool backed by `agent::memory::notes`.
+/// Register every cos primitive proxy on the supplied registry, plus the
+/// `cos_memory` notes tool. Does NOT register `cos_recall` — the caller must
+/// supply a `MemoryDb` via [`register_recall`]. Keeps the proxy registration
+/// pure (no IO during test setup).
 pub fn register_all(registry: &mut ToolRegistry) {
     for spec in PRIMITIVES {
         registry.register(Arc::new(CosPrimitiveTool::new(
@@ -292,6 +295,15 @@ pub fn register_all(registry: &mut ToolRegistry) {
     registry.register(Arc::new(memory::CosMemoryTool::new()));
 }
 
+/// Register the `cos_recall` history-search tool against an explicit DB.
+/// Production callers pass a default-path DB; tests pass an in-memory DB.
+pub fn register_recall(
+    registry: &mut ToolRegistry,
+    db: crate::agent::memory::sqlite_fts::MemoryDb,
+) {
+    registry.register(Arc::new(recall::CosRecallTool::new(db)));
+}
+
 /// Number of cos primitive tools shipped, *not* counting the higher-level
 /// tools (cos_memory etc.). Useful for tests that want to know specifically
 /// how many primitives were wired.
@@ -299,7 +311,8 @@ pub const fn count() -> usize {
     PRIMITIVES.len()
 }
 
-/// Total number of cos_proxy tools registered (primitives + higher-level).
+/// Total number of cos_proxy tools registered by `register_all` (primitives
+/// + cos_memory). cos_recall is registered separately by `register_recall`.
 pub const fn total_count() -> usize {
     PRIMITIVES.len() + 1 // +1 for cos_memory
 }

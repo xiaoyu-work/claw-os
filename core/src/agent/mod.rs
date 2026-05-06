@@ -42,6 +42,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
                     "turns": result.turns,
                     "provider": result.provider,
                     "model": result.model,
+                    "session_id": result.session_id,
                 })),
                 Err(e) => Err(e.to_string()),
             }
@@ -50,9 +51,23 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "status" => {
             let cfg = &crate::config::get().agent;
             let tools = tools::registry::default_registry();
+            // Best-effort memory DB stats — read-only, never mutates.
+            let memory_stats = match memory::sqlite_fts::MemoryDb::open_default() {
+                Ok(db) => {
+                    let total = db.count_total().unwrap_or(0);
+                    let sessions = db.sessions(1).map(|s| s.len()).unwrap_or(0);
+                    json!({
+                        "status": "ok",
+                        "path": crate::paths::agent_memory_db_path().display().to_string(),
+                        "total_messages": total,
+                        "has_sessions": sessions > 0,
+                    })
+                }
+                Err(e) => json!({ "status": "unavailable", "error": e.to_string() }),
+            };
             Ok(json!({
                 "status": "ok",
-                "phase": "1",
+                "phase": "3",
                 "provider": cfg.provider,
                 "provider_registered": llm::registry::is_registered(&cfg.provider),
                 "providers": llm::available_providers(),
@@ -63,6 +78,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
                 "tools_registered": tools.len(),
                 "tools": tools.names(),
                 "skills_loaded": 0,
+                "memory": memory_stats,
             }))
         }
         "service" => Ok(json!({"status": "not_implemented", "phase": "1+"})),

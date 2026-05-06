@@ -80,6 +80,12 @@ pub fn agent_notes_dir() -> PathBuf {
     agent_state_dir().join("notes")
 }
 
+/// Path to the agent's SQLite FTS5 conversation history database.
+/// Lives at `data_dir/agent/memory.db`. Created on first write.
+pub fn agent_memory_db_path() -> PathBuf {
+    agent_state_dir().join("memory.db")
+}
+
 pub fn model_runtime_socket() -> PathBuf {
     runtime_dir().join("model-runtime.sock")
 }
