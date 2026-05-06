@@ -58,6 +58,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
                 Err(e) => Err(e.to_string()),
             }
         }
+        "stream" => stream_cmd(args),
         "chat" => Ok(json!({"status": "not_implemented", "phase": "1+"})),
         "status" => {
             let cfg = &crate::config::get().agent;
@@ -1669,6 +1670,179 @@ fn read_text_input(args: &[String], cmd: &str) -> Result<(String, bool), String>
 /// is opt-in because the probe touches `<data_dir>/credentials/`
 /// which can be slow on networked storage; the env-var probe is
 /// always cheap and always on.
+/// Stream a single prompt through the active provider's
+/// `chat_stream()` and surface text deltas live to **stderr** so
+/// the user sees incremental output (when the provider truly
+/// streams — anthropic does today; others fall through to the
+/// non-streaming shim and emit one big chunk).
+///
+/// Stdout is reserved for the final JSON envelope so the command
+/// stays scriptable: `cos agent stream "..." 2>/dev/null | jq` is
+/// equivalent to today's `cos agent ask`. Pipe stderr to a TTY
+/// for the live feed.
+///
+/// Single-turn, no tool dispatch, no memory recording — the goal
+/// is the streaming UX itself, not full agent loop integration.
+/// `cos agent ask` remains the multi-turn tool-using path.
+///
+/// Usage: `cos agent stream "<prompt>"`. Errors propagate as
+/// `Err(String)` so the dispatcher logs them through audit.
+fn stream_cmd(args: &[String]) -> Result<Value, String> {
+    let prompt = args.first().cloned().unwrap_or_default();
+    if prompt.is_empty() {
+        return Err("usage: cos agent stream \"<prompt>\"".into());
+    }
+    let cfg = &crate::config::get().agent;
+    let provider = llm::registry::build(&cfg.provider, &cfg.model, cfg)
+        .map_err(|e| format!("provider unavailable: {e}"))?;
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("tokio runtime: {e}"))?;
+
+    runtime.block_on(stream_cmd_async(provider, cfg, &prompt))
+}
+
+async fn stream_cmd_async(
+    provider: std::sync::Arc<dyn llm::Provider>,
+    cfg: &crate::config::AgentConfig,
+    user_prompt: &str,
+) -> Result<Value, String> {
+    use crate::agent::llm::types::{
+        ChatRequest, FinishReason, Message, StreamEvent, ToolChoice, Usage,
+    };
+    use futures_util::StreamExt;
+    use std::io::Write;
+
+    let extra = cfg
+        .system_prompt_path
+        .as_deref()
+        .map(std::path::Path::new);
+    let system = crate::agent::prompt::build_system_prompt(extra);
+
+    let request = ChatRequest {
+        model: cfg.model.clone(),
+        messages: vec![Message::user_text(user_prompt)],
+        system: Some(system),
+        tools: Vec::new(),
+        tool_choice: ToolChoice::Auto,
+        max_tokens: Some(cfg.max_tokens),
+        temperature: Some(cfg.temperature),
+        top_p: None,
+        stop_sequences: Vec::new(),
+        extra: serde_json::Value::Null,
+    };
+
+    let mut stream = provider
+        .chat_stream(request)
+        .await
+        .map_err(|e| format!("chat_stream: {e}"))?;
+
+    let mut answer = String::new();
+    let mut finish: Option<FinishReason> = None;
+    let mut usage = Usage::default();
+    let mut tool_calls: Vec<serde_json::Value> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+
+    let stderr = std::io::stderr();
+    let mut err_lock = stderr.lock();
+
+    while let Some(event) = stream.next().await {
+        match event {
+            Ok(StreamEvent::TextDelta { text }) => {
+                answer.push_str(&text);
+                let _ = err_lock.write_all(text.as_bytes());
+                let _ = err_lock.flush();
+            }
+            Ok(StreamEvent::ToolUseStart { id, name }) => {
+                let _ = writeln!(
+                    err_lock,
+                    "\n[tool_use_start id={id} name={name}]"
+                );
+            }
+            Ok(StreamEvent::ToolInputDelta { partial_json, .. }) => {
+                let _ = err_lock.write_all(partial_json.as_bytes());
+                let _ = err_lock.flush();
+            }
+            Ok(StreamEvent::ToolUse(call)) => {
+                let _ = writeln!(
+                    err_lock,
+                    "\n[tool_use id={} name={}] {}",
+                    call.id, call.name, call.input
+                );
+                tool_calls.push(serde_json::json!({
+                    "id": call.id,
+                    "name": call.name,
+                    "input": call.input,
+                }));
+            }
+            Ok(StreamEvent::Message(resp)) => {
+                // Non-streaming providers (mock / openai_compat /
+                // gemini / bedrock / llama_local today) emit the
+                // whole response as a single Message event. Render
+                // its assembled text and tool_calls so the UX
+                // still looks like a stream.
+                for block in &resp.content {
+                    if let crate::agent::llm::types::ContentBlock::Text {
+                        text,
+                    } = block
+                    {
+                        answer.push_str(text);
+                        let _ = err_lock.write_all(text.as_bytes());
+                    }
+                }
+                for call in &resp.tool_calls {
+                    let _ = writeln!(
+                        err_lock,
+                        "\n[tool_use id={} name={}] {}",
+                        call.id, call.name, call.input
+                    );
+                    tool_calls.push(serde_json::json!({
+                        "id": call.id,
+                        "name": call.name,
+                        "input": call.input,
+                    }));
+                }
+                let _ = err_lock.flush();
+            }
+            Ok(StreamEvent::Done {
+                finish: f,
+                usage: u,
+            }) => {
+                finish = Some(f);
+                usage = u;
+                let _ = writeln!(err_lock);
+                let _ = err_lock.flush();
+            }
+            Ok(StreamEvent::Warning { message }) => {
+                let _ = writeln!(err_lock, "\n[warning] {message}");
+                warnings.push(message);
+            }
+            Err(e) => {
+                let _ = writeln!(err_lock, "\n[error] {e}");
+                return Err(format!("stream error: {e}"));
+            }
+        }
+    }
+
+    Ok(json!({
+        "answer": answer,
+        "finish": finish.map(|f| format!("{f:?}")),
+        "tool_calls": tool_calls,
+        "usage": {
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+            "cache_read_tokens": usage.cache_read_tokens,
+            "cache_write_tokens": usage.cache_write_tokens,
+        },
+        "warnings": warnings,
+        "provider": provider.name(),
+        "model": cfg.model,
+    }))
+}
+
+
 fn providers_cmd(args: &[String]) -> Result<Value, String> {
     let mut filter_names: Option<Vec<String>> = None;
     let mut probe_credentials = false;
@@ -10628,5 +10802,123 @@ mod tests {
         ])
         .unwrap_err();
         assert!(err.contains("--bogus"));
+    }
+
+    // ---- stream subcommand ----------------------------------------------
+
+    /// Build a mock provider with a scripted text response and run
+    /// `stream_cmd_async` against it. Returns the JSON envelope.
+    fn run_stream_async(
+        text: &str,
+        cfg: &crate::config::AgentConfig,
+        prompt: &str,
+    ) -> serde_json::Value {
+        use crate::agent::llm::providers::mock::{MockProvider, MockResponse};
+        let mock = MockProvider::new(&cfg.model, cfg);
+        mock.push_response(MockResponse::Text(text.to_string()));
+        let provider: std::sync::Arc<dyn llm::Provider> = std::sync::Arc::new(mock);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(stream_cmd_async(provider, cfg, prompt))
+            .expect("stream ok")
+    }
+
+    #[test]
+    fn stream_cmd_rejects_empty_prompt() {
+        let err = stream_cmd(&[]).unwrap_err();
+        assert!(err.contains("usage"));
+    }
+
+    #[test]
+    fn stream_cmd_rejects_empty_string_prompt() {
+        let err = stream_cmd(&[String::new()]).unwrap_err();
+        assert!(err.contains("usage"));
+    }
+
+    #[test]
+    fn stream_async_accumulates_text_and_returns_envelope() {
+        let mut cfg = crate::config::AgentConfig::default();
+        cfg.provider = "mock".into();
+        cfg.model = "mock-model".into();
+        let v = run_stream_async("hello world", &cfg, "say hi");
+        assert_eq!(
+            v.get("answer").and_then(|a| a.as_str()),
+            Some("hello world")
+        );
+        assert_eq!(v.get("provider").and_then(|p| p.as_str()), Some("mock"));
+        assert_eq!(v.get("model").and_then(|m| m.as_str()), Some("mock-model"));
+        // mock's chat_stream emits Message + Done; finish_reason for
+        // a plain text reply is FinishReason::Stop.
+        assert_eq!(v.get("finish").and_then(|f| f.as_str()), Some("Stop"));
+        assert!(v.get("tool_calls").unwrap().as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn stream_async_surfaces_tool_calls() {
+        use crate::agent::llm::providers::mock::{MockProvider, MockResponse};
+        use crate::agent::llm::types::ToolCall;
+        let mut cfg = crate::config::AgentConfig::default();
+        cfg.provider = "mock".into();
+        cfg.model = "mock-model".into();
+        let mock = MockProvider::new(&cfg.model, &cfg);
+        mock.push_response(MockResponse::ToolUse(vec![ToolCall {
+            id: "call_1".into(),
+            name: "echo".into(),
+            input: serde_json::json!({"text": "hi"}),
+        }]));
+        let provider: std::sync::Arc<dyn llm::Provider> = std::sync::Arc::new(mock);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let v = rt
+            .block_on(stream_cmd_async(provider, &cfg, "use a tool"))
+            .expect("stream ok");
+        let calls = v.get("tool_calls").unwrap().as_array().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0]["id"], "call_1");
+        assert_eq!(calls[0]["name"], "echo");
+        // mock emits ToolUse via Message variant → finish ToolUse.
+        assert_eq!(
+            v.get("finish").and_then(|f| f.as_str()),
+            Some("ToolUse")
+        );
+    }
+
+    #[test]
+    fn stream_async_propagates_provider_error() {
+        use crate::agent::llm::providers::mock::{MockProvider, MockResponse};
+        let mut cfg = crate::config::AgentConfig::default();
+        cfg.provider = "mock".into();
+        cfg.model = "mock-model".into();
+        let mock = MockProvider::new(&cfg.model, &cfg);
+        mock.push_response(MockResponse::Error(llm::LlmError::Auth));
+        let provider: std::sync::Arc<dyn llm::Provider> = std::sync::Arc::new(mock);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let err = rt
+            .block_on(stream_cmd_async(provider, &cfg, "hi"))
+            .unwrap_err();
+        assert!(
+            err.contains("chat_stream") || err.contains("auth"),
+            "want chat_stream/auth in err, got {err}"
+        );
+    }
+
+    #[test]
+    fn stream_async_envelope_includes_usage_keys() {
+        let mut cfg = crate::config::AgentConfig::default();
+        cfg.provider = "mock".into();
+        cfg.model = "mock-model".into();
+        let v = run_stream_async("ok", &cfg, "ping");
+        let usage = v.get("usage").unwrap();
+        assert!(usage.get("input_tokens").is_some());
+        assert!(usage.get("output_tokens").is_some());
+        assert!(usage.get("cache_read_tokens").is_some());
+        assert!(usage.get("cache_write_tokens").is_some());
     }
 }

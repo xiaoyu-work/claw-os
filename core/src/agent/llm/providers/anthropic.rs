@@ -32,7 +32,7 @@
 //! demands it (Phase 5 alongside prompt caching).
 
 use async_trait::async_trait;
-use futures_util::stream::{self, BoxStream, StreamExt};
+use futures_util::stream::{BoxStream, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;

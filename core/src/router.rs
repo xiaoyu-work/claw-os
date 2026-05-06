@@ -380,6 +380,7 @@ fn builtin_apps() -> Vec<(
         ]),
         ("agent", "OS-native agent subsystem — runtime, memory, skills, LLM providers, tools (Phase 0 skeleton)", vec![
             ("ask", "Single-shot prompt: cos agent ask \"<prompt>\" (Phase 1+)"),
+            ("stream", "Like `ask` but streams text deltas live to stderr while tool dispatch continues to run; final JSON envelope still goes to stdout: cos agent stream \"<prompt>\" [--no-tools]"),
             ("chat", "Interactive session (Phase 1+)"),
             ("status", "Show agent runtime status — providers, tools, skills"),
             ("service", "Manage long-running agent service (Phase 1+)"),
