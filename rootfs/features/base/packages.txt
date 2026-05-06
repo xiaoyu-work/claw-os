@@ -1,0 +1,11 @@
+# Core OS tools shared by all distribution targets.
+bash
+coreutils
+git
+ripgrep
+python3
+python3-pip
+curl
+ca-certificates
+sqlite3
+jq

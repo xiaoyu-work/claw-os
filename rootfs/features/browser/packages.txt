@@ -1,18 +1,7 @@
-bash
-coreutils
-git
-ripgrep
-python3
-python3-pip
-curl
-ca-certificates
-sqlite3
-jq
-
-# Chromium browser (used by `cos app web screenshot` via headless render)
+# Chromium browser engine and shared library dependencies for cos-browser.
 chromium
 
-# Chromium shared library dependencies
+# Chromium / browser-engine runtime libs
 libnss3
 libxss1
 libasound2
