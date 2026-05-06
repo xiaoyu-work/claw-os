@@ -5171,8 +5171,10 @@ fn media_cmd(args: &[String]) -> Result<Value, String> {
             let dir = crate::paths::agent_media_outputs_dir();
             list_media_outputs(&dir, limit, ext_filter.as_deref())
         }
+        "play" => media_play_cmd(&args[1..]),
+        "playback-status" => media_playback_status_cmd(&args[1..]),
         other => Err(format!(
-            "unknown media subcommand: {other}. try: providers | outputs-dir | list-outputs [--limit N] [--ext <e>]"
+            "unknown media subcommand: {other}. try: providers | outputs-dir | list-outputs [--limit N] [--ext <e>] | play <path> | playback-status [--format wav|mp3|ogg|flac]"
         )),
     }
 }
@@ -5243,6 +5245,132 @@ fn list_media_outputs(
         "ext_filter": ext_filter,
         "n": files.len(),
         "files": files,
+    }))
+}
+
+// =====================================================================
+// `cos agent media play <path>` — short-term blocking playback via
+// the OS's native audio facility (PlaySoundW on Windows, afplay on
+// macOS, format-aware CLI player on Linux). See
+// `crate::agent::media::voice::system_playback` for the semantic
+// contract and what's intentionally out of scope.
+// =====================================================================
+
+fn media_play_cmd(args: &[String]) -> Result<Value, String> {
+    use crate::agent::media::voice::system_playback;
+    use std::path::PathBuf;
+
+    let mut path: Option<PathBuf> = None;
+    let mut detect_only = false;
+
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--detect" => {
+                detect_only = true;
+                i += 1;
+            }
+            "--" => {
+                if let Some(p) = args.get(i + 1) {
+                    path = Some(PathBuf::from(p));
+                }
+                i += 2;
+            }
+            other if other.starts_with("--") => {
+                return Err(format!("unknown flag for `media play`: {other}"));
+            }
+            _ => {
+                if path.is_some() {
+                    return Err(format!(
+                        "unexpected extra argument to `media play`: {}",
+                        args[i]
+                    ));
+                }
+                path = Some(PathBuf::from(&args[i]));
+                i += 1;
+            }
+        }
+    }
+
+    let path = path.ok_or("usage: cos agent media play <path> [--detect]")?;
+
+    // Format detection up front so we always report it, even on error.
+    let format = system_playback::PlaybackFormat::from_path(&path);
+    let format_str = format.map(|f| f.as_str().to_string());
+
+    if detect_only {
+        let player = format.and_then(system_playback::detect_player);
+        return Ok(json!({
+            "path": path.display().to_string(),
+            "format": format_str,
+            "player": player,
+            "playable": player.is_some(),
+        }));
+    }
+
+    match system_playback::play_file_blocking(&path) {
+        Ok(()) => Ok(json!({
+            "ok": true,
+            "path": path.display().to_string(),
+            "format": format_str,
+        })),
+        Err(e) => Err(format!("playback failed: {e}")),
+    }
+}
+
+fn media_playback_status_cmd(args: &[String]) -> Result<Value, String> {
+    use crate::agent::media::voice::system_playback::{detect_player, PlaybackFormat};
+
+    let mut filter: Option<PlaybackFormat> = None;
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--format" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--format needs <wav|mp3|ogg|flac>".to_string())?;
+                filter = Some(match v.to_ascii_lowercase().as_str() {
+                    "wav" => PlaybackFormat::Wav,
+                    "mp3" => PlaybackFormat::Mp3,
+                    "ogg" | "oga" => PlaybackFormat::Ogg,
+                    "flac" => PlaybackFormat::Flac,
+                    other => {
+                        return Err(format!(
+                            "--format: unknown value '{other}'. try: wav | mp3 | ogg | flac"
+                        ));
+                    }
+                });
+                i += 2;
+            }
+            other => return Err(format!("unknown flag for `media playback-status`: {other}")),
+        }
+    }
+
+    let formats: Vec<PlaybackFormat> = match filter {
+        Some(f) => vec![f],
+        None => vec![
+            PlaybackFormat::Wav,
+            PlaybackFormat::Mp3,
+            PlaybackFormat::Ogg,
+            PlaybackFormat::Flac,
+        ],
+    };
+
+    let rows: Vec<Value> = formats
+        .iter()
+        .map(|f| {
+            let player = detect_player(*f);
+            json!({
+                "format": f.as_str(),
+                "player": player,
+                "playable": player.is_some(),
+            })
+        })
+        .collect();
+
+    Ok(json!({
+        "os": std::env::consts::OS,
+        "formats": rows,
     }))
 }
 
@@ -12519,5 +12647,117 @@ mod tests {
         // Confirm the agent dispatcher reaches interrupt_cmd.
         let err = run("interrupt", &["frobnicate".into()]).unwrap_err();
         assert!(err.contains("unknown"), "got {err}");
+    }
+
+    // -----------------------------------------------------------------
+    // media play / playback-status
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn media_play_requires_a_path() {
+        let err = media_play_cmd(&[]).unwrap_err();
+        assert!(err.contains("usage"), "got {err}");
+    }
+
+    #[test]
+    fn media_play_rejects_extra_positional_argument() {
+        let err = media_play_cmd(&["a.wav".into(), "b.wav".into()]).unwrap_err();
+        assert!(err.contains("unexpected extra"), "got {err}");
+    }
+
+    #[test]
+    fn media_play_rejects_unknown_flag() {
+        let err = media_play_cmd(&["--frobnicate".into(), "a.wav".into()]).unwrap_err();
+        assert!(err.contains("unknown flag"), "got {err}");
+    }
+
+    #[test]
+    fn media_play_detect_only_returns_format_and_player_for_wav() {
+        // --detect doesn't try to play; it just resolves the format
+        // and tells you which player would be used. Safe to run on
+        // CI because nothing is dispatched.
+        let v = media_play_cmd(&["--detect".into(), "foo.wav".into()]).expect("ok");
+        assert_eq!(v["format"], serde_json::Value::String("wav".to_string()));
+        assert_eq!(v["path"].as_str().unwrap(), "foo.wav");
+        // `playable` is OS-dependent; just sanity-check it's bool.
+        assert!(v["playable"].is_boolean(), "got {v}");
+    }
+
+    #[test]
+    fn media_play_detect_only_returns_null_format_for_unknown_extension() {
+        let v = media_play_cmd(&["--detect".into(), "foo.txt".into()]).expect("ok");
+        assert!(v["format"].is_null(), "got {v}");
+        assert!(v["player"].is_null(), "got {v}");
+        assert_eq!(v["playable"], serde_json::Value::Bool(false));
+    }
+
+    #[test]
+    fn media_play_real_dispatch_missing_file_errs() {
+        let p = format!(
+            "{}\\cos-media-play-test-missing-{}.wav",
+            std::env::temp_dir().display(),
+            uuid::Uuid::new_v4().simple()
+        );
+        let err = media_play_cmd(&[p.clone()]).unwrap_err();
+        assert!(err.contains("playback failed"), "got {err}");
+        assert!(
+            err.contains("does not exist") || err.contains("io error"),
+            "got {err}"
+        );
+    }
+
+    #[test]
+    fn media_playback_status_rejects_unknown_format_value() {
+        let err = media_playback_status_cmd(&["--format".into(), "aac".into()]).unwrap_err();
+        assert!(err.contains("aac"), "got {err}");
+    }
+
+    #[test]
+    fn media_playback_status_format_flag_requires_value() {
+        let err = media_playback_status_cmd(&["--format".into()]).unwrap_err();
+        assert!(err.contains("--format"), "got {err}");
+    }
+
+    #[test]
+    fn media_playback_status_default_returns_all_four_formats() {
+        let v = media_playback_status_cmd(&[]).expect("ok");
+        let arr = v["formats"].as_array().expect("formats array");
+        assert_eq!(arr.len(), 4);
+        let exts: Vec<&str> = arr
+            .iter()
+            .filter_map(|r| r["format"].as_str())
+            .collect();
+        assert!(exts.contains(&"wav"));
+        assert!(exts.contains(&"mp3"));
+        assert!(exts.contains(&"ogg"));
+        assert!(exts.contains(&"flac"));
+        assert!(v["os"].is_string(), "got {v}");
+    }
+
+    #[test]
+    fn media_playback_status_format_filter_returns_just_one_row() {
+        let v = media_playback_status_cmd(&["--format".into(), "wav".into()]).expect("ok");
+        let arr = v["formats"].as_array().expect("formats array");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["format"].as_str().unwrap(), "wav");
+    }
+
+    #[test]
+    fn media_playback_status_unknown_flag_errs() {
+        let err = media_playback_status_cmd(&["--quack".into()]).unwrap_err();
+        assert!(err.contains("unknown flag"), "got {err}");
+    }
+
+    #[test]
+    fn run_media_play_routes_through_dispatcher() {
+        // Confirm the cos-agent dispatcher reaches media_play_cmd.
+        let err = run("media", &["play".into()]).unwrap_err();
+        assert!(err.contains("usage"), "got {err}");
+    }
+
+    #[test]
+    fn run_media_playback_status_routes_through_dispatcher() {
+        let v = run("media", &["playback-status".into()]).expect("ok");
+        assert!(v["formats"].is_array(), "got {v}");
     }
 }
