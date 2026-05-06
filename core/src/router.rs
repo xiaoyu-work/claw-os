@@ -382,7 +382,7 @@ fn builtin_apps() -> Vec<(
             ("ask", "Single-shot prompt: cos agent ask \"<prompt>\" (Phase 1+)"),
             ("stream", "Single-shot streaming text-only path (no tools, no memory). Tokens stream to stderr; final JSON envelope to stdout: cos agent stream \"<prompt>\""),
             ("live", "Multi-turn streaming agent: same registry/memory/MCP as `ask` but tokens stream to stderr live as they arrive: cos agent live \"<prompt>\""),
-            ("chat", "Interactive session (Phase 1+)"),
+            ("chat", "Interactive multi-turn REPL: cos agent chat [--session <id>] [--no-stream] [--no-memory] [--show-tools] [--max-turns N]. Slash commands: /quit /help /session /clear /history [N] /tools."),
             ("status", "Show agent runtime status — providers, tools, skills"),
             ("service", "Manage long-running agent service (Phase 1+)"),
             ("insights", "Aggregate LLM run-log: cos agent insights [overall|recent N|sessions] [--since <ISO>] [--until <ISO>] [--ok|--error] [--provider <n>] [--model <n>]"),

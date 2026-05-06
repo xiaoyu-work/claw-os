@@ -61,7 +61,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         }
         "stream" => stream_cmd(args),
         "live" => live_cmd(args),
-        "chat" => Ok(json!({"status": "not_implemented", "phase": "1+"})),
+        "chat" => chat_cmd(args),
         "status" => {
             let cfg = &crate::config::get().agent;
             let mut tools = tools::registry::default_registry();
@@ -2038,6 +2038,455 @@ async fn live_cmd_async(
         }
         Err(e) => Err(e.to_string()),
     }
+}
+
+
+/// `cos agent chat [--session <id>] [--no-stream] [--no-memory]
+/// [--show-tools] [--max-turns N]` — interactive multi-turn REPL.
+///
+/// Reads prompts from stdin one line at a time and routes each
+/// through the same agent runtime as `cos agent live`. The
+/// session-id is preserved across turns so:
+///   1. Every prompt and assistant turn is recorded under the
+///      same FTS-searchable conversation;
+///   2. The session title is generated once on the first turn
+///      (matches `ask`/`live` semantics);
+///   3. `cos_recall` invocations from inside the model can search
+///      the running conversation as it grows.
+///
+/// **Architecture note:** The model sees ONLY the current prompt
+/// per turn, not in-process replay of prior REPL turns. Cross-turn
+/// memory is provided by:
+///   - System prompt injection from `MEMORY.md` / `USER.md`
+///     (already done by `prompt::build_system_prompt`).
+///   - The `cos_recall` tool, which gives the model on-demand
+///     access to FTS-searchable history.
+/// This matches `live` and `ask`, costs fewer tokens, and avoids
+/// hidden context that the model can't introspect.
+///
+/// **Slash commands** (recognised at the start of a non-empty
+/// prompt; whitespace-trimmed):
+///   - `/quit` / `/exit` / `/q` — leave the REPL.
+///   - `/help` / `/?` — print the slash-command list.
+///   - `/session` — print current session id and turn count.
+///   - `/clear` — drop the current session and start a fresh one.
+///   - `/history [N]` — show the last N (default 10) recorded
+///     messages from the current session.
+///   - `/tools` — list permitted tool names.
+/// Any line that doesn't start with `/` is treated as a prompt.
+///
+/// Streaming behaviour mirrors `live`: tokens flow live to stderr;
+/// the assistant's final text plus a one-line summary go to
+/// stdout after each turn. Pass `--no-stream` to fall back to the
+/// non-streaming `ask_with` path (useful for non-TTY use).
+///
+/// Stdin EOF (Ctrl+D / closed pipe) exits cleanly.
+fn chat_cmd(args: &[String]) -> Result<Value, String> {
+    let mut explicit_session: Option<String> = None;
+    let mut streaming = true;
+    let mut use_memory = true;
+    let mut show_tools = false;
+    let mut max_turns_override: Option<u32> = None;
+
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--session" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--session needs <id>".to_string())?;
+                explicit_session = Some(v.clone());
+                i += 2;
+            }
+            "--no-stream" => {
+                streaming = false;
+                i += 1;
+            }
+            "--no-memory" => {
+                use_memory = false;
+                i += 1;
+            }
+            "--show-tools" => {
+                show_tools = true;
+                i += 1;
+            }
+            "--max-turns" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--max-turns needs <n>".to_string())?;
+                max_turns_override =
+                    Some(v.parse().map_err(|e| format!("--max-turns: {e}"))?);
+                i += 2;
+            }
+            other => return Err(format!("unknown flag for `chat`: {other}")),
+        }
+    }
+
+    let cfg = &crate::config::get().agent;
+    // Build the provider once and reuse across turns. If the user
+    // mid-REPL wants a different model, they can `/quit` and re-launch.
+    let provider = llm::registry::build(&cfg.provider, &cfg.model, cfg)
+        .map_err(|e| format!("provider unavailable: {e}"))?;
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("tokio runtime: {e}"))?;
+
+    runtime.block_on(chat_cmd_async(
+        provider,
+        cfg,
+        explicit_session,
+        streaming,
+        use_memory,
+        show_tools,
+        max_turns_override,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn chat_cmd_async(
+    provider: std::sync::Arc<dyn llm::Provider>,
+    cfg_in: &crate::config::AgentConfig,
+    explicit_session: Option<String>,
+    streaming: bool,
+    use_memory: bool,
+    show_tools: bool,
+    max_turns_override: Option<u32>,
+) -> Result<Value, String> {
+    use crate::agent::llm::accumulate::StreamSink;
+    use crate::agent::llm::types::StreamEvent;
+    use std::io::{BufRead, Write};
+    use std::sync::{Arc, Mutex};
+
+    // Apply --max-turns override locally without mutating global config.
+    let mut cfg_owned = cfg_in.clone();
+    if let Some(n) = max_turns_override {
+        cfg_owned.max_turns = n;
+    }
+    let cfg = &cfg_owned;
+
+    // Build the registry once. MCP servers attach the same way as
+    // `live`/`ask`, so the model has the full toolbox.
+    let mut tools = crate::agent::tools::registry::default_registry();
+    tools.set_guardrails(runtime::loop_::guardrails_from_cfg(cfg));
+    tools.set_approval(runtime::loop_::approval_from_cfg(cfg));
+    let _mcp_handles = runtime::loop_::attach_mcp_servers_for_cli(&mut tools, cfg).await;
+
+    let memory_db = if use_memory {
+        match memory::sqlite_fts::MemoryDb::open_default() {
+            Ok(db) => Some(db),
+            Err(e) => {
+                tracing::warn!(
+                    "memory: default DB unavailable ({e}); chat will run without history"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let mut session_id: String = explicit_session
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    let stdout = std::io::stdout();
+    let stderr = std::io::stderr();
+
+    // Header banner — to stderr so a piped-stdout consumer only
+    // sees the assistant outputs.
+    {
+        let mut e = stderr.lock();
+        let _ = writeln!(
+            e,
+            "cos agent chat — provider={} model={} session={} memory={} streaming={}",
+            cfg.provider,
+            cfg.model,
+            session_id,
+            if memory_db.is_some() { "on" } else { "off" },
+            if streaming { "on" } else { "off" }
+        );
+        let _ = writeln!(e, "Type /help for commands. Ctrl-D or /quit to exit.");
+        if show_tools {
+            let names = tools.names();
+            let _ = writeln!(e, "tools ({}): {}", names.len(), names.join(", "));
+        }
+    }
+
+    let stdin = std::io::stdin();
+    let mut input = String::new();
+    let mut prompt_seq: u32 = 0;
+    let mut clean_exit = false;
+
+    /// Stream sink shared across turns — re-used so allocation
+    /// happens once. Each turn calls `reset()` before invoking
+    /// the runtime so per-turn state doesn't bleed.
+    struct ChatSink {
+        tool_calls: Mutex<Vec<serde_json::Value>>,
+        warnings: Mutex<Vec<String>>,
+        last_usage: Mutex<Option<crate::agent::llm::types::Usage>>,
+        last_finish: Mutex<Option<crate::agent::llm::types::FinishReason>>,
+    }
+    impl ChatSink {
+        fn new() -> Self {
+            Self {
+                tool_calls: Mutex::new(Vec::new()),
+                warnings: Mutex::new(Vec::new()),
+                last_usage: Mutex::new(None),
+                last_finish: Mutex::new(None),
+            }
+        }
+        fn reset(&self) {
+            self.tool_calls.lock().unwrap().clear();
+            self.warnings.lock().unwrap().clear();
+            *self.last_usage.lock().unwrap() = None;
+            *self.last_finish.lock().unwrap() = None;
+        }
+    }
+    impl StreamSink for ChatSink {
+        fn on_event(&self, event: &StreamEvent) {
+            let stderr = std::io::stderr();
+            let mut e = stderr.lock();
+            match event {
+                StreamEvent::TextDelta { text } => {
+                    let _ = e.write_all(text.as_bytes());
+                    let _ = e.flush();
+                }
+                StreamEvent::ToolUseStart { id, name } => {
+                    let _ = writeln!(e, "\n[tool_use_start id={id} name={name}]");
+                }
+                StreamEvent::ToolInputDelta { partial_json, .. } => {
+                    let _ = e.write_all(partial_json.as_bytes());
+                    let _ = e.flush();
+                }
+                StreamEvent::ToolUse(call) => {
+                    let _ = writeln!(
+                        e,
+                        "\n[tool_use id={} name={}] {}",
+                        call.id, call.name, call.input
+                    );
+                    self.tool_calls.lock().unwrap().push(serde_json::json!({
+                        "id": call.id,
+                        "name": call.name,
+                        "input": call.input,
+                    }));
+                }
+                StreamEvent::Message(resp) => {
+                    for block in &resp.content {
+                        if let crate::agent::llm::types::ContentBlock::Text { text } = block {
+                            let _ = e.write_all(text.as_bytes());
+                        }
+                    }
+                    for call in &resp.tool_calls {
+                        let _ = writeln!(
+                            e,
+                            "\n[tool_use id={} name={}] {}",
+                            call.id, call.name, call.input
+                        );
+                        self.tool_calls.lock().unwrap().push(serde_json::json!({
+                            "id": call.id,
+                            "name": call.name,
+                            "input": call.input,
+                        }));
+                    }
+                    let _ = e.flush();
+                }
+                StreamEvent::Done { finish, usage } => {
+                    let _ = writeln!(e, "\n[turn done finish={finish:?}]");
+                    *self.last_usage.lock().unwrap() = Some(usage.clone());
+                    *self.last_finish.lock().unwrap() = Some(*finish);
+                }
+                StreamEvent::Warning { message } => {
+                    let _ = writeln!(e, "\n[warning] {message}");
+                    self.warnings.lock().unwrap().push(message.clone());
+                }
+            }
+        }
+    }
+
+    let sink_obj = Arc::new(ChatSink::new());
+
+    loop {
+        // Prompt user (to stderr so stdout stays clean for
+        // assistant text).
+        {
+            let mut e = stderr.lock();
+            let _ = write!(e, "you> ");
+            let _ = e.flush();
+        }
+        input.clear();
+        let n = match stdin.lock().read_line(&mut input) {
+            Ok(n) => n,
+            Err(e) => {
+                return Err(format!("stdin error: {e}"));
+            }
+        };
+        if n == 0 {
+            // EOF
+            let _ = writeln!(stderr.lock(), "\n[eof]");
+            clean_exit = true;
+            break;
+        }
+
+        let line = input.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        // Slash commands.
+        if let Some(rest) = line.strip_prefix('/') {
+            let mut parts = rest.split_whitespace();
+            let cmd = parts.next().unwrap_or("");
+            match cmd {
+                "quit" | "exit" | "q" => {
+                    clean_exit = true;
+                    break;
+                }
+                "help" | "?" => {
+                    let mut e = stderr.lock();
+                    let _ = writeln!(e, "/quit | /exit | /q       leave the REPL");
+                    let _ = writeln!(e, "/help | /?               this help");
+                    let _ = writeln!(e, "/session                 print current session id");
+                    let _ = writeln!(e, "/clear                   start a fresh session id");
+                    let _ = writeln!(
+                        e,
+                        "/history [N]             show last N (default 10) messages"
+                    );
+                    let _ = writeln!(e, "/tools                   list permitted tools");
+                }
+                "session" => {
+                    let mut e = stderr.lock();
+                    let _ = writeln!(
+                        e,
+                        "session={session_id} prompts_so_far={prompt_seq}"
+                    );
+                }
+                "clear" => {
+                    session_id = uuid::Uuid::new_v4().to_string();
+                    prompt_seq = 0;
+                    let mut e = stderr.lock();
+                    let _ = writeln!(e, "[new session: {session_id}]");
+                }
+                "history" => {
+                    let n: usize = parts
+                        .next()
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(10);
+                    if let Some(db) = &memory_db {
+                        match db.recent(&session_id, n) {
+                            Ok(rows) => {
+                                let mut e = stderr.lock();
+                                if rows.is_empty() {
+                                    let _ = writeln!(e, "(no messages yet)");
+                                } else {
+                                    for r in &rows {
+                                        let snippet: String =
+                                            r.content.chars().take(140).collect();
+                                        let _ = writeln!(
+                                            e,
+                                            "[{}] {}",
+                                            r.role,
+                                            snippet
+                                        );
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                let _ = writeln!(stderr.lock(), "history error: {e}");
+                            }
+                        }
+                    } else {
+                        let _ =
+                            writeln!(stderr.lock(), "history unavailable (memory off)");
+                    }
+                }
+                "tools" => {
+                    let names = tools.names();
+                    let _ = writeln!(
+                        stderr.lock(),
+                        "tools ({}): {}",
+                        names.len(),
+                        names.join(", ")
+                    );
+                }
+                other => {
+                    let _ = writeln!(
+                        stderr.lock(),
+                        "unknown slash command: /{other} (try /help)"
+                    );
+                }
+            }
+            continue;
+        }
+
+        prompt_seq += 1;
+
+        // Run a turn.
+        let user_prompt = line.to_string();
+        let result = if streaming {
+            sink_obj.reset();
+            let sink: Arc<dyn StreamSink> = sink_obj.clone();
+            let recorder = memory_db.as_ref().map(|db| (db, session_id.as_str()));
+            runtime::loop_::ask_with_stream(
+                provider.clone(),
+                cfg,
+                &user_prompt,
+                &tools,
+                recorder,
+                sink,
+            )
+            .await
+        } else if let Some(db) = &memory_db {
+            runtime::loop_::ask_with_memory(
+                provider.clone(),
+                cfg,
+                &user_prompt,
+                &tools,
+                db,
+                &session_id,
+            )
+            .await
+        } else {
+            runtime::loop_::ask_with(provider.clone(), cfg, &user_prompt, &tools)
+                .await
+        };
+
+        match result {
+            Ok(ask_result) => {
+                // The assistant's final text goes to stdout so a
+                // user piping `cos agent chat > replies.txt` still
+                // gets clean output. Streaming already echoed
+                // partial text to stderr so this is the canonical
+                // copy.
+                let mut o = stdout.lock();
+                let _ = writeln!(o, "{}", ask_result.answer);
+                let _ = o.flush();
+
+                let mut e = stderr.lock();
+                let _ = writeln!(
+                    e,
+                    "[turn {} done; turns={} model={} session={}]",
+                    prompt_seq,
+                    ask_result.turns,
+                    ask_result.model,
+                    ask_result.session_id
+                );
+            }
+            Err(err) => {
+                let _ = writeln!(stderr.lock(), "[error] {err}");
+                // Don't break — let the user retry / clear / quit.
+            }
+        }
+    }
+
+    Ok(json!({
+        "status": if clean_exit { "ok" } else { "interrupted" },
+        "session_id": session_id,
+        "prompts": prompt_seq,
+        "provider": cfg.provider,
+        "model": cfg.model,
+    }))
 }
 
 
@@ -11705,5 +12154,38 @@ mod tests {
         assert!(err.contains("usage"), "got {err}");
         let err2 = live_cmd(&["".into()]).unwrap_err();
         assert!(err2.contains("usage"), "got {err2}");
+    }
+
+    #[test]
+    fn chat_cmd_rejects_unknown_flag() {
+        let err = chat_cmd(&["--bogus".into()]).unwrap_err();
+        assert!(err.to_lowercase().contains("unknown flag"), "got {err}");
+    }
+
+    #[test]
+    fn chat_cmd_session_flag_requires_value() {
+        let err = chat_cmd(&["--session".into()]).unwrap_err();
+        assert!(err.contains("--session"), "got {err}");
+    }
+
+    #[test]
+    fn chat_cmd_max_turns_flag_requires_value() {
+        let err = chat_cmd(&["--max-turns".into()]).unwrap_err();
+        assert!(err.contains("--max-turns"), "got {err}");
+    }
+
+    #[test]
+    fn chat_cmd_max_turns_flag_rejects_non_numeric() {
+        let err = chat_cmd(&["--max-turns".into(), "lots".into()]).unwrap_err();
+        assert!(err.contains("--max-turns"), "got {err}");
+    }
+
+    #[test]
+    fn chat_routed_through_run() {
+        // Confirm the dispatcher in `run()` reaches `chat_cmd`. Pass an
+        // unknown flag so we get a deterministic error without trying
+        // to read stdin.
+        let err = run("chat", &["--definitely-not-real".into()]).unwrap_err();
+        assert!(err.to_lowercase().contains("unknown flag"), "got {err}");
     }
 }
