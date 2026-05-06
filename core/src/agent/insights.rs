@@ -20,6 +20,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use crate::agent::llm::run_log::LlmRunRecord;
@@ -83,13 +84,24 @@ impl InsightsReport {
     /// Build aggregate report from a path. Missing files yield an
     /// empty report; malformed lines are silently skipped.
     pub fn from_path(path: &Path) -> Self {
+        Self::from_path_filtered(path, &InsightsFilter::default())
+    }
+
+    pub fn from_path_filtered(path: &Path, filter: &InsightsFilter) -> Self {
         let Ok(text) = fs::read_to_string(path) else {
             return Self::default();
         };
-        Self::from_lines(text.lines())
+        Self::from_lines_filtered(text.lines(), filter)
     }
 
     pub fn from_lines<'a, I: IntoIterator<Item = &'a str>>(lines: I) -> Self {
+        Self::from_lines_filtered(lines, &InsightsFilter::default())
+    }
+
+    pub fn from_lines_filtered<'a, I: IntoIterator<Item = &'a str>>(
+        lines: I,
+        filter: &InsightsFilter,
+    ) -> Self {
         let mut report = Self::default();
         for line in lines {
             let line = line.trim();
@@ -99,6 +111,9 @@ impl InsightsReport {
             let Ok(rec) = serde_json::from_str::<LlmRunRecord>(line) else {
                 continue;
             };
+            if !filter.matches(&rec) {
+                continue;
+            }
             report.overall.fold(&rec);
             report
                 .per_provider
@@ -122,6 +137,13 @@ impl InsightsReport {
     /// Per-session aggregation (records with `session_id == None`
     /// are grouped under the empty-string key).
     pub fn by_session(path: &Path) -> BTreeMap<String, UsageBucket> {
+        Self::by_session_filtered(path, &InsightsFilter::default())
+    }
+
+    pub fn by_session_filtered(
+        path: &Path,
+        filter: &InsightsFilter,
+    ) -> BTreeMap<String, UsageBucket> {
         let Ok(text) = fs::read_to_string(path) else {
             return BTreeMap::new();
         };
@@ -130,6 +152,9 @@ impl InsightsReport {
             let Ok(rec) = serde_json::from_str::<LlmRunRecord>(line) else {
                 continue;
             };
+            if !filter.matches(&rec) {
+                continue;
+            }
             let key = rec.session_id.clone().unwrap_or_default();
             out.entry(key).or_default().fold(&rec);
         }
@@ -139,16 +164,93 @@ impl InsightsReport {
     /// Return the most recent `n` records as parsed structs (newest
     /// last). Useful for `cos agent status --tail 5`-style readouts.
     pub fn recent(path: &Path, n: usize) -> Vec<LlmRunRecord> {
+        Self::recent_filtered(path, n, &InsightsFilter::default())
+    }
+
+    pub fn recent_filtered(
+        path: &Path,
+        n: usize,
+        filter: &InsightsFilter,
+    ) -> Vec<LlmRunRecord> {
         let Ok(text) = fs::read_to_string(path) else {
             return Vec::new();
         };
         let mut all: Vec<LlmRunRecord> = text
             .lines()
             .filter_map(|line| serde_json::from_str::<LlmRunRecord>(line.trim()).ok())
+            .filter(|rec| filter.matches(rec))
             .collect();
         let take_from = all.len().saturating_sub(n);
         all.drain(0..take_from);
         all
+    }
+}
+
+/// Predicate over [`LlmRunRecord`] used by every aggregator. All
+/// fields default to "no constraint"; the empty filter is a no-op
+/// equivalent to the old, unfiltered API.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct InsightsFilter {
+    /// Inclusive lower bound on `LlmRunRecord.timestamp`. Records
+    /// with unparseable RFC3339 timestamps are EXCLUDED when this
+    /// bound is set (a malformed timestamp can't be ordered).
+    pub since: Option<DateTime<Utc>>,
+    /// Inclusive upper bound, same parsing rules as `since`.
+    pub until: Option<DateTime<Utc>>,
+    /// `Some(true)` keeps only successful records (status == "ok").
+    /// `Some(false)` keeps only error records (any other status).
+    /// `None` keeps everything.
+    pub status_ok: Option<bool>,
+    /// Optional exact-match provider filter.
+    pub provider: Option<String>,
+    /// Optional exact-match model filter.
+    pub model: Option<String>,
+}
+
+impl InsightsFilter {
+    /// True when the record passes every active constraint.
+    pub fn matches(&self, rec: &LlmRunRecord) -> bool {
+        if let Some(p) = &self.provider {
+            if &rec.provider != p {
+                return false;
+            }
+        }
+        if let Some(m) = &self.model {
+            if &rec.model != m {
+                return false;
+            }
+        }
+        if let Some(want_ok) = self.status_ok {
+            let is_ok = rec.status == "ok";
+            if want_ok != is_ok {
+                return false;
+            }
+        }
+        if self.since.is_some() || self.until.is_some() {
+            let parsed = DateTime::parse_from_rfc3339(&rec.timestamp)
+                .map(|d| d.with_timezone(&Utc))
+                .ok();
+            let Some(ts) = parsed else { return false };
+            if let Some(s) = self.since {
+                if ts < s {
+                    return false;
+                }
+            }
+            if let Some(u) = self.until {
+                if ts > u {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.since.is_none()
+            && self.until.is_none()
+            && self.status_ok.is_none()
+            && self.provider.is_none()
+            && self.model.is_none()
     }
 }
 
@@ -349,5 +451,150 @@ mod tests {
         assert!(s.contains("100+200"));
         assert!(s.contains("1 errors"));
         assert!(s.contains("avg 200ms"));
+    }
+
+    fn rec_json_at(ts: &str, provider: &str, model: &str, error: Option<&str>) -> String {
+        let (status, error_field) = match error {
+            Some(e) => ("error", format!(",\"error\":\"{e}\"")),
+            None => ("ok", String::new()),
+        };
+        format!(
+            "{{\"timestamp\":\"{ts}\",\
+             \"provider\":\"{provider}\",\
+             \"model\":\"{model}\",\
+             \"duration_ms\":10,\
+             \"input_tokens\":1,\
+             \"output_tokens\":1,\
+             \"finish_reason\":\"stop\",\
+             \"status\":\"{status}\"{error_field}}}"
+        )
+    }
+
+    #[test]
+    fn empty_filter_matches_everything() {
+        let json = rec_json("openai", "gpt-5", None, 1, 1, 10, "stop", None);
+        let rec: LlmRunRecord = serde_json::from_str(&json).unwrap();
+        let filter = InsightsFilter::default();
+        assert!(filter.is_empty());
+        assert!(filter.matches(&rec));
+    }
+
+    #[test]
+    fn filter_by_status_ok_excludes_errors() {
+        let ok_json = rec_json("p", "m", None, 1, 1, 10, "stop", None);
+        let err_json = rec_json("p", "m", None, 1, 1, 10, "stop", Some("boom"));
+        let ok: LlmRunRecord = serde_json::from_str(&ok_json).unwrap();
+        let err: LlmRunRecord = serde_json::from_str(&err_json).unwrap();
+        let mut f = InsightsFilter::default();
+        f.status_ok = Some(true);
+        assert!(f.matches(&ok));
+        assert!(!f.matches(&err));
+    }
+
+    #[test]
+    fn filter_by_status_error_excludes_ok() {
+        let ok_json = rec_json("p", "m", None, 1, 1, 10, "stop", None);
+        let err_json = rec_json("p", "m", None, 1, 1, 10, "stop", Some("boom"));
+        let ok: LlmRunRecord = serde_json::from_str(&ok_json).unwrap();
+        let err: LlmRunRecord = serde_json::from_str(&err_json).unwrap();
+        let mut f = InsightsFilter::default();
+        f.status_ok = Some(false);
+        assert!(!f.matches(&ok));
+        assert!(f.matches(&err));
+    }
+
+    #[test]
+    fn filter_by_provider_and_model_exact_match() {
+        let r1: LlmRunRecord =
+            serde_json::from_str(&rec_json("openai", "gpt-5", None, 1, 1, 10, "stop", None))
+                .unwrap();
+        let r2: LlmRunRecord =
+            serde_json::from_str(&rec_json("anthropic", "claude", None, 1, 1, 10, "stop", None))
+                .unwrap();
+        let mut f = InsightsFilter::default();
+        f.provider = Some("openai".into());
+        assert!(f.matches(&r1));
+        assert!(!f.matches(&r2));
+        let mut g = InsightsFilter::default();
+        g.model = Some("claude".into());
+        assert!(!g.matches(&r1));
+        assert!(g.matches(&r2));
+    }
+
+    #[test]
+    fn filter_since_excludes_earlier_records() {
+        let r: LlmRunRecord =
+            serde_json::from_str(&rec_json_at("2025-01-01T00:00:00Z", "p", "m", None)).unwrap();
+        let mut f = InsightsFilter::default();
+        f.since = Some(
+            DateTime::parse_from_rfc3339("2025-06-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        );
+        assert!(!f.matches(&r));
+        f.since = Some(
+            DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        );
+        assert!(f.matches(&r));
+    }
+
+    #[test]
+    fn filter_until_excludes_later_records() {
+        let r: LlmRunRecord =
+            serde_json::from_str(&rec_json_at("2025-06-01T00:00:00Z", "p", "m", None)).unwrap();
+        let mut f = InsightsFilter::default();
+        f.until = Some(
+            DateTime::parse_from_rfc3339("2025-01-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        );
+        assert!(!f.matches(&r));
+        f.until = Some(
+            DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        );
+        assert!(f.matches(&r));
+    }
+
+    #[test]
+    fn filter_excludes_records_with_unparseable_timestamp_when_bound_set() {
+        let r: LlmRunRecord =
+            serde_json::from_str(&rec_json_at("not-a-timestamp", "p", "m", None)).unwrap();
+        // Without bounds: matches.
+        let f0 = InsightsFilter::default();
+        assert!(f0.matches(&r));
+        // With since: excluded (can't be ordered).
+        let mut f = InsightsFilter::default();
+        f.since = Some(
+            DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        );
+        assert!(!f.matches(&r));
+    }
+
+    #[test]
+    fn from_lines_filtered_aggregates_subset() {
+        let lines = vec![
+            rec_json_at("2025-01-01T00:00:00Z", "openai", "gpt-5", None),
+            rec_json_at("2025-06-01T00:00:00Z", "openai", "gpt-5", None),
+            rec_json_at("2025-06-01T00:00:00Z", "anthropic", "claude", Some("boom")),
+        ];
+        let mut f = InsightsFilter::default();
+        f.since = Some(
+            DateTime::parse_from_rfc3339("2025-03-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        );
+        let r = InsightsReport::from_lines_filtered(lines.iter().map(|s| s.as_str()), &f);
+        assert_eq!(r.overall.calls, 2);
+        f.status_ok = Some(true);
+        let r = InsightsReport::from_lines_filtered(lines.iter().map(|s| s.as_str()), &f);
+        assert_eq!(r.overall.calls, 1);
+        assert!(r.per_provider.contains_key("openai"));
+        assert!(!r.per_provider.contains_key("anthropic"));
     }
 }

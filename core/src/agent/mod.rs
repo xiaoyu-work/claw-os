@@ -121,34 +121,111 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 /// `cos agent insights [overall|recent|sessions] [n]` — aggregate
 /// the JSONL run-record stream produced by every LLM call.
 fn insights_cmd(args: &[String]) -> Result<Value, String> {
+    use chrono::DateTime;
+    use insights::InsightsFilter;
+
     let sub = args.first().map(|s| s.as_str()).unwrap_or("overall");
     let path = crate::paths::llm_run_log_path();
+
+    // Parse trailing flags shared across all three sub-verbs.
+    // For "recent" the optional N positional must come first
+    // (preserves the existing `cos agent insights recent 25` UX).
+    let (n_for_recent, mut i) = if sub == "recent" {
+        let n = args.get(1).and_then(|s| s.parse::<usize>().ok());
+        (n, if n.is_some() { 2 } else { 1 })
+    } else {
+        (None, 1)
+    };
+
+    let mut filter = InsightsFilter::default();
+    while i < args.len() {
+        match args[i].as_str() {
+            "--since" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--since needs <ISO timestamp>".to_string())?;
+                filter.since = Some(
+                    DateTime::parse_from_rfc3339(v)
+                        .map(|d| d.with_timezone(&chrono::Utc))
+                        .map_err(|e| format!("--since: {e}"))?,
+                );
+                i += 2;
+            }
+            "--until" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--until needs <ISO timestamp>".to_string())?;
+                filter.until = Some(
+                    DateTime::parse_from_rfc3339(v)
+                        .map(|d| d.with_timezone(&chrono::Utc))
+                        .map_err(|e| format!("--until: {e}"))?,
+                );
+                i += 2;
+            }
+            "--ok" => {
+                filter.status_ok = Some(true);
+                i += 1;
+            }
+            "--error" => {
+                filter.status_ok = Some(false);
+                i += 1;
+            }
+            "--provider" => {
+                filter.provider = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .filter(|s| !s.is_empty())
+                        .ok_or_else(|| "--provider needs <name>".to_string())?,
+                );
+                i += 2;
+            }
+            "--model" => {
+                filter.model = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .filter(|s| !s.is_empty())
+                        .ok_or_else(|| "--model needs <name>".to_string())?,
+                );
+                i += 2;
+            }
+            other => return Err(format!("unknown flag: {other}")),
+        }
+    }
+
+    let filter_payload = json!({
+        "since": filter.since.map(|d| d.to_rfc3339()),
+        "until": filter.until.map(|d| d.to_rfc3339()),
+        "status_ok": filter.status_ok,
+        "provider": filter.provider.clone(),
+        "model": filter.model.clone(),
+    });
+
     match sub {
         "overall" | "" => {
-            let report = insights::InsightsReport::from_default();
+            let report = insights::InsightsReport::from_path_filtered(&path, &filter);
             Ok(json!({
                 "log": path.display().to_string(),
+                "filter": filter_payload,
                 "overall": report.overall,
                 "per_provider": report.per_provider,
                 "per_model": report.per_model,
             }))
         }
         "recent" => {
-            let n: usize = args
-                .get(1)
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(10);
-            let rows = insights::InsightsReport::recent(&path, n);
+            let n = n_for_recent.unwrap_or(10);
+            let rows = insights::InsightsReport::recent_filtered(&path, n, &filter);
             Ok(json!({
                 "log": path.display().to_string(),
+                "filter": filter_payload,
                 "n": rows.len(),
                 "records": rows,
             }))
         }
         "sessions" => {
-            let by = insights::InsightsReport::by_session(&path);
+            let by = insights::InsightsReport::by_session_filtered(&path, &filter);
             Ok(json!({
                 "log": path.display().to_string(),
+                "filter": filter_payload,
                 "sessions": by,
             }))
         }
