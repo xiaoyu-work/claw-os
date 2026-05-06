@@ -21,6 +21,7 @@ pub mod context;
 pub mod audit_cli;
 pub mod doctor_cli;
 pub mod honcho_cli;
+pub mod replay_cli;
 pub mod run_log_cli;
 pub mod curator;
 pub mod curator_author;
@@ -156,10 +157,11 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "hooks" => hooks_cmd(args),
         "audit" => audit_cli::audit_cmd(args),
         "doctor" => doctor_cli::doctor_cmd(args),
+        "replay" => replay_cli::replay_cmd(args),
         "run-log" | "run_log" => run_log_cli::run_log_cmd(args),
         "honcho" => honcho_cli::honcho_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | provider-doctor | title | summarise | classify | tools | guardrails | approval | todo | compress | aux | retry | vision | display | shell-hooks | media | binary-ext | context | file-safety | osv | semantic | interrupt | learn | hooks | audit | doctor | run-log | honcho"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | provider-doctor | title | summarise | classify | tools | guardrails | approval | todo | compress | aux | retry | vision | display | shell-hooks | media | binary-ext | context | file-safety | osv | semantic | interrupt | learn | hooks | audit | doctor | replay | run-log | honcho"
         )),
     }
 }
