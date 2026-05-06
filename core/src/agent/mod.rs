@@ -109,8 +109,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "skills" => skills_cmd(args),
         "nudge" => nudge_cmd(args),
         "mcp" => mcp_cmd(args),
+        "usage" => usage_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage"
         )),
     }
 }
@@ -632,6 +633,110 @@ fn mcp_cmd(args: &[String]) -> Result<Value, String> {
     }
 }
 
+/// `cos agent usage [overall|provider <name>|model <name>|session <id>]`
+/// `[--since <ISO>] [--until <ISO>] [--ok|--error]` — filtered
+/// aggregation over `llm.jsonl`. Mirrors `agent insights overall` for
+/// the unfiltered case but adds the AND-combined filter set from
+/// [`crate::agent::llm::usage::UsageQuery`].
+fn usage_cmd(args: &[String]) -> Result<Value, String> {
+    use crate::agent::llm::usage::{aggregate_path_filtered, default_log_path, UsageQuery};
+    use chrono::DateTime;
+    let mut query = UsageQuery::default();
+    // Default scope is "overall" — no positional bucket filter applied
+    // beyond the optional flags. `provider <n>` / `model <n>` /
+    // `session <id>` add a single additional filter.
+    let scope = args.first().map(|s| s.as_str()).unwrap_or("overall");
+    let mut i = match scope {
+        "overall" | "" => 1,
+        "provider" => {
+            query.provider = Some(
+                args.get(1)
+                    .cloned()
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| "usage: cos agent usage provider <name>".to_string())?,
+            );
+            2
+        }
+        "model" => {
+            query.model = Some(
+                args.get(1)
+                    .cloned()
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| "usage: cos agent usage model <name>".to_string())?,
+            );
+            2
+        }
+        "session" => {
+            query.session_id = Some(
+                args.get(1)
+                    .cloned()
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| "usage: cos agent usage session <id>".to_string())?,
+            );
+            2
+        }
+        other => {
+            return Err(format!(
+                "unknown usage scope: {other}. try: overall | provider <name> | model <name> | session <id>"
+            ))
+        }
+    };
+    while i < args.len() {
+        match args[i].as_str() {
+            "--since" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--since needs <ISO timestamp>".to_string())?;
+                query.since = Some(
+                    DateTime::parse_from_rfc3339(v)
+                        .map(|d| d.with_timezone(&chrono::Utc))
+                        .map_err(|e| format!("--since: {e}"))?,
+                );
+                i += 2;
+            }
+            "--until" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--until needs <ISO timestamp>".to_string())?;
+                query.until = Some(
+                    DateTime::parse_from_rfc3339(v)
+                        .map(|d| d.with_timezone(&chrono::Utc))
+                        .map_err(|e| format!("--until: {e}"))?,
+                );
+                i += 2;
+            }
+            "--ok" => {
+                query.status_ok = Some(true);
+                i += 1;
+            }
+            "--error" => {
+                query.status_ok = Some(false);
+                i += 1;
+            }
+            other => return Err(format!("unknown flag: {other}")),
+        }
+    }
+    let path = default_log_path();
+    let summary = aggregate_path_filtered(&path, &query);
+    Ok(json!({
+        "log": path.display().to_string(),
+        "scope": scope,
+        "filter": {
+            "provider": query.provider,
+            "model": query.model,
+            "session_id": query.session_id,
+            "since": query.since.map(|d| d.to_rfc3339()),
+            "until": query.until.map(|d| d.to_rfc3339()),
+            "status_ok": query.status_ok,
+        },
+        "total": summary.total,
+        "by_provider": summary.by_provider,
+        "by_model": summary.by_model,
+        "by_session": summary.by_session,
+        "parse_errors": summary.parse_errors,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -841,5 +946,61 @@ mod tests {
         let err = mcp_cmd(&["bogus".into()]).unwrap_err();
         assert!(err.contains("status"));
         assert!(err.contains("serve"));
+    }
+
+    #[test]
+    fn usage_overall_returns_summary_shape() {
+        let v = usage_cmd(&[]).expect("usage default = overall");
+        assert!(v.get("log").is_some());
+        assert_eq!(v.get("scope").and_then(|x| x.as_str()), Some("overall"));
+        assert!(v.get("total").is_some());
+        assert!(v.get("by_provider").is_some());
+        assert!(v.get("by_model").is_some());
+        assert!(v.get("by_session").is_some());
+    }
+
+    #[test]
+    fn usage_provider_requires_name() {
+        let err = usage_cmd(&["provider".into()]).unwrap_err();
+        assert!(err.to_lowercase().contains("usage"));
+    }
+
+    #[test]
+    fn usage_model_requires_name() {
+        let err = usage_cmd(&["model".into()]).unwrap_err();
+        assert!(err.to_lowercase().contains("usage"));
+    }
+
+    #[test]
+    fn usage_session_requires_id() {
+        let err = usage_cmd(&["session".into()]).unwrap_err();
+        assert!(err.to_lowercase().contains("usage"));
+    }
+
+    #[test]
+    fn usage_since_rejects_non_iso_timestamp() {
+        let err =
+            usage_cmd(&["overall".into(), "--since".into(), "not-iso".into()]).unwrap_err();
+        assert!(err.to_lowercase().contains("since"));
+    }
+
+    #[test]
+    fn usage_unknown_scope_lists_options() {
+        let err = usage_cmd(&["bogus".into()]).unwrap_err();
+        assert!(err.contains("provider"));
+        assert!(err.contains("model"));
+        assert!(err.contains("session"));
+    }
+
+    #[test]
+    fn usage_provider_filter_records_in_response() {
+        let v = usage_cmd(&["provider".into(), "anthropic".into()])
+            .expect("usage provider ok");
+        assert_eq!(
+            v.get("filter")
+                .and_then(|f| f.get("provider"))
+                .and_then(|x| x.as_str()),
+            Some("anthropic")
+        );
     }
 }

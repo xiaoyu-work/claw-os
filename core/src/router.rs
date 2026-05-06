@@ -391,6 +391,7 @@ fn builtin_apps() -> Vec<(
             ("skills", "Inspect on-disk skill registry: cos agent skills [list|info <id>|disabled|errors|root]"),
             ("nudge", "Manage periodic-nudge reminders auto-injected into the system prompt: cos agent nudge [list|due|add <due_in_secs> <message> [--repeat <secs>] [--tag <tag>]|fire <id>|remove <id>|path]"),
             ("mcp", "MCP (Model Context Protocol) server exposing the cos agent tool catalogue to external clients: cos agent mcp [status|serve]"),
+            ("usage", "Filtered aggregation over the LLM run log (llm.jsonl): cos agent usage [overall|provider <name>|model <name>|session <id>] [--since <ISO>] [--until <ISO>] [--ok|--error]"),
         ]),
         ("model", "Local model registry + inference daemon (ort for STT/TTS/embed/vision/imagegen, llama.cpp for LLM) — Phase 0.5 skeleton", vec![
             ("list", "List registered models from /var/lib/cos/models/"),
