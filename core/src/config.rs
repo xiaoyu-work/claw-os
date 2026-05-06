@@ -175,6 +175,19 @@ pub struct AgentConfig {
     /// inside the recognised tag pairs are removed.
     #[serde(default = "default_think_scrub_enabled")]
     pub think_scrub_enabled: bool,
+
+    /// Redact secrets (API keys, tokens, AWS keys, GitHub PATs, etc.)
+    /// from messages BEFORE they are persisted to the SQLite-FTS5
+    /// memory database. Default `true`. Rationale: memory is searchable
+    /// forever; once a secret lands in `memory.db` it stays in the
+    /// FTS5 index and is fair game for future `cos_recall` calls. The
+    /// regex pass is the same one used by `safety::redact::Redactor`,
+    /// targeted at high-value low-FP patterns (`sk-…`, `ghp_…`,
+    /// `AKIA…`, JWT-shaped tokens, PEM keys, `Bearer …`, URL creds).
+    /// Set to `false` only if you keep memory.db on encrypted media
+    /// and want full-fidelity recall.
+    #[serde(default = "default_redact_memory_enabled")]
+    pub redact_memory_enabled: bool,
 }
 
 /// Embedding service configuration. Reads from `[embed]` block.
@@ -356,6 +369,9 @@ fn default_compress_summary_max() -> u32 {
 fn default_think_scrub_enabled() -> bool {
     true
 }
+fn default_redact_memory_enabled() -> bool {
+    true
+}
 fn default_embed_provider() -> String {
     "none".into()
 }
@@ -524,6 +540,7 @@ impl Default for AgentConfig {
             compress_keep_tail_tokens: default_compress_keep_tail(),
             compress_summary_max_tokens: default_compress_summary_max(),
             think_scrub_enabled: default_think_scrub_enabled(),
+            redact_memory_enabled: default_redact_memory_enabled(),
         }
     }
 }
