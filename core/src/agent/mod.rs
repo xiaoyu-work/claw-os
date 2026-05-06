@@ -1140,8 +1140,33 @@ fn curator_drafts_cmd(args: &[String]) -> Result<Value, String> {
             store.delete(&id)?;
             Ok(json!({"id": id, "deleted": true}))
         }
+        "retitle" => {
+            let id = args
+                .get(1)
+                .cloned()
+                .filter(|s| !s.is_empty() && !s.starts_with("--"))
+                .ok_or_else(|| {
+                    "usage: cos agent curator drafts retitle <id> \"<new title>\"".to_string()
+                })?;
+            let title = args
+                .get(2)
+                .cloned()
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    "usage: cos agent curator drafts retitle <id> \"<new title>\"".to_string()
+                })?;
+            let mut store = DraftStore::open_default()?;
+            store.set_title(&id, &title)?;
+            let rec = store.get(&id).cloned().ok_or_else(|| {
+                format!("draft {id} disappeared after retitle (race)")
+            })?;
+            Ok(json!({
+                "id": rec.id,
+                "title": rec.draft.title,
+            }))
+        }
         other => Err(format!(
-            "unknown drafts subcommand: '{other}'. try: list | show <id> | accept <id> | reject <id> | delete <id>"
+            "unknown drafts subcommand: '{other}'. try: list | show <id> | accept <id> | reject <id> | delete <id> | retitle <id> <title>"
         )),
     }
 }

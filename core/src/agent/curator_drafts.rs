@@ -180,6 +180,26 @@ impl DraftStore {
         self.save_atomic()
     }
 
+    /// Replace the embedded [`SkillDraft::title`] of a stored
+    /// record. Empty / whitespace-only titles are rejected — the
+    /// curator pipeline guarantees a non-empty title at propose
+    /// time, so callers should preserve that invariant when
+    /// retitling. `Err` when the id is unknown.
+    pub fn set_title(&mut self, id: &str, title: &str) -> Result<(), String> {
+        let trimmed = title.trim();
+        if trimmed.is_empty() {
+            return Err("title must not be empty".into());
+        }
+        let rec = self
+            .file
+            .drafts
+            .iter_mut()
+            .find(|r| r.id == id)
+            .ok_or_else(|| format!("no draft with id {id}"))?;
+        rec.draft.title = trimmed.to_string();
+        self.save_atomic()
+    }
+
     /// Atomic write: serialise to `<path>.tmp`, fsync, rename to
     /// `<path>`. Worst-case crash leaves either the old contents
     /// (if rename hadn't happened yet) or the new contents (rename
@@ -378,6 +398,53 @@ mod tests {
         let tmp = p.with_extension("json.tmp");
         assert!(!tmp.exists(), "tmp file should be renamed away");
         assert!(p.exists());
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn set_title_updates_embedded_skill_draft_title() {
+        let p = tmp_path("retitle-ok");
+        let mut store = DraftStore::open_at(p.clone()).unwrap();
+        let id = store.add("s".into(), sample_draft("a")).unwrap();
+        store.set_title(&id, "Brand-New Title").unwrap();
+        let r = store.get(&id).unwrap();
+        assert_eq!(r.draft.title, "Brand-New Title");
+        // Reload from disk to confirm it persisted.
+        let store2 = DraftStore::open_at(p.clone()).unwrap();
+        assert_eq!(store2.get(&id).unwrap().draft.title, "Brand-New Title");
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn set_title_trims_whitespace() {
+        let p = tmp_path("retitle-trim");
+        let mut store = DraftStore::open_at(p.clone()).unwrap();
+        let id = store.add("s".into(), sample_draft("b")).unwrap();
+        store.set_title(&id, "   Padded Title   ").unwrap();
+        assert_eq!(store.get(&id).unwrap().draft.title, "Padded Title");
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn set_title_rejects_empty_or_whitespace() {
+        let p = tmp_path("retitle-empty");
+        let mut store = DraftStore::open_at(p.clone()).unwrap();
+        let id = store.add("s".into(), sample_draft("c")).unwrap();
+        let err = store.set_title(&id, "").unwrap_err();
+        assert!(err.contains("must not be empty"));
+        let err = store.set_title(&id, "   \t\n").unwrap_err();
+        assert!(err.contains("must not be empty"));
+        // Original title preserved.
+        assert_eq!(store.get(&id).unwrap().draft.title, "demo");
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn set_title_unknown_id_errors() {
+        let p = tmp_path("retitle-unknown");
+        let mut store = DraftStore::open_at(p.clone()).unwrap();
+        let err = store.set_title("does-not-exist", "anything").unwrap_err();
+        assert!(err.contains("no draft with id"));
         std::fs::remove_file(&p).ok();
     }
 }
