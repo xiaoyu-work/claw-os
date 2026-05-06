@@ -17,6 +17,7 @@
 
 pub mod imagegen;
 pub mod stt;
+pub mod stt_cloud;
 pub mod tts;
 pub mod tts_cloud;
 pub mod vision;
