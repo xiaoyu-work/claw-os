@@ -604,6 +604,196 @@ impl Hook for AuditHook {
 }
 
 // =====================================================================
+// CheckpointHook (reference impl)
+// =====================================================================
+
+/// Strategy for how a [`CheckpointHook`] actually creates a checkpoint.
+///
+/// Production code uses [`ProductionCheckpointCreator`], which calls
+/// [`crate::checkpoint::run`]`("create", ...)`. Tests inject a fake
+/// creator so the hook's dispatch logic can be exercised without
+/// touching real overlay state.
+pub trait CheckpointCreator: Send + Sync + std::fmt::Debug {
+    /// Create a checkpoint with the given description.
+    /// Returns the new checkpoint id on success.
+    fn create(&self, description: &str) -> Result<String, String>;
+}
+
+/// Production [`CheckpointCreator`] backed by [`crate::checkpoint::run`].
+///
+/// On Linux with overlayfs, this performs a real filesystem-level
+/// snapshot (cheap CoW). On other platforms, the underlying
+/// `checkpoint::run` may fail (e.g. overlayfs not mounted) — failure
+/// is propagated to the hook, which logs it to the audit trail
+/// without aborting the agent.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ProductionCheckpointCreator;
+
+impl CheckpointCreator for ProductionCheckpointCreator {
+    fn create(&self, description: &str) -> Result<String, String> {
+        let v = crate::checkpoint::run("create", &[description.to_string()])?;
+        v.get("id")
+            .and_then(|x| x.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| "checkpoint::run returned no id".to_string())
+    }
+}
+
+/// Default conservative dangerous-tool list.
+///
+/// These are the tool names whose effects are most likely to mutate
+/// overlay-protected state (filesystem under the workspace overlay,
+/// or system-level resources we want a rollback marker for).
+///
+/// The list intentionally errs on the side of *snapshot more, not
+/// less* — a checkpoint is cheap on overlayfs, expensive only in
+/// directory churn. Operators who want a tighter set can construct
+/// `CheckpointHook` with their own list via [`CheckpointHook::with_dangerous`].
+pub fn default_dangerous_tools() -> std::collections::HashSet<String> {
+    [
+        "cos_sandbox",
+        "cos_proc",
+        "cos_credential",
+        "cos_cron",
+        "cos_netfilter",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
+}
+
+/// Hook that creates a [`crate::checkpoint`] before any tool call
+/// whose name is in its dangerous-tools set.
+///
+/// The hook's behaviour:
+///
+///   * `pre_tool` checks `tool_call.name` against the dangerous set.
+///     If it's not in the set, returns [`ToolDecision::Allow`]
+///     immediately (no checkpoint, no audit entry).
+///   * If it *is* in the set, calls `creator.create(...)` with a
+///     description like
+///     `"agent_pre_tool: <tool_name> session=<sid> turn=<n>"`.
+///   * Whether the checkpoint succeeded or failed, writes a JSONL
+///     event (`kind: "pre_tool_checkpoint"`) to the audit log
+///     containing tool_name, the description, and either
+///     `checkpoint_id` (on success) or `error` (on failure).
+///   * Always returns [`ToolDecision::Allow`] — the hook does *not*
+///     gate execution. A failed checkpoint is best-effort safety,
+///     not a hard precondition. (Operators who want hard gating
+///     should use [`super::approval`] instead.)
+///
+/// `pre_turn`, `post_turn`, and `post_tool` are no-ops — the hook
+/// only fires around dangerous tool calls, not around every turn.
+#[derive(Debug)]
+pub struct CheckpointHook {
+    audit_path: std::path::PathBuf,
+    dangerous: std::collections::HashSet<String>,
+    creator: std::sync::Arc<dyn CheckpointCreator>,
+}
+
+impl CheckpointHook {
+    /// Production constructor: real `crate::checkpoint::run` creator,
+    /// canonical `<log_dir>/agent.jsonl` audit path, default
+    /// dangerous-tools list.
+    pub fn new() -> Self {
+        Self {
+            audit_path: crate::paths::agent_audit_log_path(),
+            dangerous: default_dangerous_tools(),
+            creator: std::sync::Arc::new(ProductionCheckpointCreator),
+        }
+    }
+
+    /// Same as [`Self::new`] but with a custom dangerous-tools set.
+    pub fn with_dangerous(dangerous: std::collections::HashSet<String>) -> Self {
+        Self {
+            audit_path: crate::paths::agent_audit_log_path(),
+            dangerous,
+            creator: std::sync::Arc::new(ProductionCheckpointCreator),
+        }
+    }
+
+    /// Fully-injected constructor for tests:
+    /// caller-supplied creator, audit path, and dangerous set.
+    pub fn with_overrides(
+        creator: std::sync::Arc<dyn CheckpointCreator>,
+        audit_path: impl Into<std::path::PathBuf>,
+        dangerous: std::collections::HashSet<String>,
+    ) -> Self {
+        Self {
+            audit_path: audit_path.into(),
+            dangerous,
+            creator,
+        }
+    }
+
+    /// Returns true iff this hook would create a checkpoint for a
+    /// tool call with the given name.
+    pub fn is_dangerous(&self, tool_name: &str) -> bool {
+        self.dangerous.contains(tool_name)
+    }
+
+    /// The audit path this hook writes to. Useful for tests.
+    pub fn audit_path(&self) -> &std::path::Path {
+        &self.audit_path
+    }
+}
+
+impl Default for CheckpointHook {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Hook for CheckpointHook {
+    fn name(&self) -> &str {
+        "checkpoint"
+    }
+
+    fn pre_tool(&self, ctx: &HookContext, tool_call: &ToolCall) -> ToolDecision {
+        if !self.dangerous.contains(&tool_call.name) {
+            return ToolDecision::Allow;
+        }
+        let description = format!(
+            "agent_pre_tool: {} session={} turn={}",
+            tool_call.name, ctx.session_id, ctx.turn_index
+        );
+        match self.creator.create(&description) {
+            Ok(checkpoint_id) => {
+                crate::audit::log_event(
+                    &self.audit_path,
+                    serde_json::json!({
+                        "kind": "pre_tool_checkpoint",
+                        "session_id": ctx.session_id,
+                        "turn": ctx.turn_index,
+                        "tool_call_id": tool_call.id,
+                        "tool_name": tool_call.name,
+                        "description": description,
+                        "checkpoint_id": checkpoint_id,
+                        "status": "ok",
+                    }),
+                );
+            }
+            Err(error) => {
+                crate::audit::log_event(
+                    &self.audit_path,
+                    serde_json::json!({
+                        "kind": "pre_tool_checkpoint",
+                        "session_id": ctx.session_id,
+                        "turn": ctx.turn_index,
+                        "tool_call_id": tool_call.id,
+                        "tool_name": tool_call.name,
+                        "description": description,
+                        "error": error,
+                        "status": "error",
+                    }),
+                );
+            }
+        }
+        ToolDecision::Allow
+    }
+}
+
+// =====================================================================
 // Tests
 // =====================================================================
 
@@ -1144,5 +1334,228 @@ mod tests {
             kinds,
             vec!["pre_turn", "pre_tool", "post_tool", "post_turn"]
         );
+    }
+
+    // ---- CheckpointHook ----------------------------------------------
+
+    /// Test creator that just records every `create()` call so tests
+    /// can assert dispatch behaviour without touching real overlay
+    /// state. Returns a synthetic id of `cp-N` where N is the call
+    /// counter; if `fail_with` is `Some(s)` returns `Err(s)` instead.
+    #[derive(Debug)]
+    struct RecordingCreator {
+        calls: std::sync::Mutex<Vec<String>>,
+        fail_with: Option<String>,
+    }
+
+    impl RecordingCreator {
+        fn ok() -> std::sync::Arc<Self> {
+            std::sync::Arc::new(Self {
+                calls: std::sync::Mutex::new(Vec::new()),
+                fail_with: None,
+            })
+        }
+
+        fn err(msg: &str) -> std::sync::Arc<Self> {
+            std::sync::Arc::new(Self {
+                calls: std::sync::Mutex::new(Vec::new()),
+                fail_with: Some(msg.to_string()),
+            })
+        }
+
+        fn calls(&self) -> Vec<String> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    impl CheckpointCreator for RecordingCreator {
+        fn create(&self, description: &str) -> Result<String, String> {
+            let mut calls = self.calls.lock().unwrap();
+            let id = format!("cp-{}", calls.len() + 1);
+            calls.push(description.to_string());
+            match &self.fail_with {
+                Some(e) => Err(e.clone()),
+                None => Ok(id),
+            }
+        }
+    }
+
+    fn checkpoint_hook_with(
+        creator: std::sync::Arc<dyn CheckpointCreator>,
+        audit: std::path::PathBuf,
+        dangerous: &[&str],
+    ) -> CheckpointHook {
+        let set: std::collections::HashSet<String> =
+            dangerous.iter().map(|s| s.to_string()).collect();
+        CheckpointHook::with_overrides(creator, audit, set)
+    }
+
+    #[test]
+    fn checkpoint_hook_name_is_canonical() {
+        let h = CheckpointHook::with_overrides(
+            RecordingCreator::ok(),
+            std::env::temp_dir().join("noop.jsonl"),
+            std::collections::HashSet::new(),
+        );
+        assert_eq!(h.name(), "checkpoint");
+    }
+
+    #[test]
+    fn default_dangerous_tools_includes_expected_set() {
+        let s = default_dangerous_tools();
+        assert!(s.contains("cos_sandbox"));
+        assert!(s.contains("cos_proc"));
+        assert!(s.contains("cos_credential"));
+        assert!(s.contains("cos_cron"));
+        assert!(s.contains("cos_netfilter"));
+    }
+
+    #[test]
+    fn checkpoint_hook_skips_safe_tool_calls() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("audit.jsonl");
+        let creator = RecordingCreator::ok();
+        let h = checkpoint_hook_with(
+            creator.clone() as std::sync::Arc<dyn CheckpointCreator>,
+            p.clone(),
+            &["cos_sandbox"],
+        );
+
+        let safe = ToolCall {
+            id: "call_safe".to_string(),
+            name: "cos_sysinfo".to_string(),
+            input: serde_json::json!({}),
+        };
+        let decision = h.pre_tool(&ctx(), &safe);
+        assert!(matches!(decision, ToolDecision::Allow));
+
+        // Creator must not have been called.
+        assert!(creator.calls().is_empty());
+        // No audit entry written either.
+        assert!(!p.exists() || std::fs::read_to_string(&p).unwrap().is_empty());
+    }
+
+    #[test]
+    fn checkpoint_hook_creates_for_dangerous_tool_calls() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("audit.jsonl");
+        let creator = RecordingCreator::ok();
+        let h = checkpoint_hook_with(
+            creator.clone() as std::sync::Arc<dyn CheckpointCreator>,
+            p.clone(),
+            &["cos_sandbox"],
+        );
+
+        let dangerous = ToolCall {
+            id: "call_danger".to_string(),
+            name: "cos_sandbox".to_string(),
+            input: serde_json::json!({"command": "run"}),
+        };
+        let decision = h.pre_tool(&ctx().with_turn_index(7), &dangerous);
+        assert!(
+            matches!(decision, ToolDecision::Allow),
+            "checkpoint hook is best-effort, never blocks tool dispatch"
+        );
+
+        let calls = creator.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(
+            calls[0].contains("cos_sandbox") && calls[0].contains("turn=7"),
+            "description should embed tool name and turn: {:?}",
+            calls[0]
+        );
+
+        let events = read_jsonl(&p);
+        assert_eq!(events.len(), 1);
+        let e = &events[0];
+        assert_eq!(e["kind"], serde_json::json!("pre_tool_checkpoint"));
+        assert_eq!(e["status"], serde_json::json!("ok"));
+        assert_eq!(e["tool_name"], serde_json::json!("cos_sandbox"));
+        assert_eq!(e["tool_call_id"], serde_json::json!("call_danger"));
+        assert_eq!(e["checkpoint_id"], serde_json::json!("cp-1"));
+        assert!(e["error"].is_null());
+    }
+
+    #[test]
+    fn checkpoint_hook_logs_failure_but_still_allows_tool() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("audit.jsonl");
+        let creator = RecordingCreator::err("overlayfs unavailable");
+        let h = checkpoint_hook_with(
+            creator.clone() as std::sync::Arc<dyn CheckpointCreator>,
+            p.clone(),
+            &["cos_sandbox"],
+        );
+
+        let dangerous = ToolCall {
+            id: "call_danger".to_string(),
+            name: "cos_sandbox".to_string(),
+            input: serde_json::json!({}),
+        };
+        let decision = h.pre_tool(&ctx(), &dangerous);
+        assert!(
+            matches!(decision, ToolDecision::Allow),
+            "checkpoint failure must NOT block the tool — best-effort safety"
+        );
+
+        // Creator was attempted exactly once.
+        assert_eq!(creator.calls().len(), 1);
+
+        let events = read_jsonl(&p);
+        assert_eq!(events.len(), 1);
+        let e = &events[0];
+        assert_eq!(e["kind"], serde_json::json!("pre_tool_checkpoint"));
+        assert_eq!(e["status"], serde_json::json!("error"));
+        assert_eq!(e["error"], serde_json::json!("overlayfs unavailable"));
+        assert!(e["checkpoint_id"].is_null());
+    }
+
+    #[test]
+    fn checkpoint_hook_only_fires_on_pre_tool_not_other_callbacks() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("audit.jsonl");
+        let creator = RecordingCreator::ok();
+        let h = checkpoint_hook_with(
+            creator.clone() as std::sync::Arc<dyn CheckpointCreator>,
+            p.clone(),
+            &["cos_sandbox"],
+        );
+        // pre_turn / post_turn / post_tool must all default to no-op.
+        let _ = h.pre_turn(&ctx());
+        let _ = h.post_turn(&ctx(), &turn_summary_ok());
+        let dangerous = ToolCall {
+            id: "id".into(),
+            name: "cos_sandbox".into(),
+            input: serde_json::json!({}),
+        };
+        let _ = h.post_tool(&ctx(), &dangerous, &tool_result_ok());
+        // No checkpoint was created.
+        assert!(creator.calls().is_empty());
+        // No audit events written.
+        assert!(!p.exists() || std::fs::read_to_string(&p).unwrap().is_empty());
+    }
+
+    #[test]
+    fn checkpoint_hook_is_dangerous_query_reflects_set() {
+        let h = checkpoint_hook_with(
+            RecordingCreator::ok() as std::sync::Arc<dyn CheckpointCreator>,
+            std::env::temp_dir().join("no.jsonl"),
+            &["cos_sandbox", "cos_proc"],
+        );
+        assert!(h.is_dangerous("cos_sandbox"));
+        assert!(h.is_dangerous("cos_proc"));
+        assert!(!h.is_dangerous("cos_sysinfo"));
+        assert!(!h.is_dangerous("echo"));
+    }
+
+    #[test]
+    fn checkpoint_hook_default_constructors_use_default_set() {
+        let h = CheckpointHook::new();
+        for t in default_dangerous_tools() {
+            assert!(h.is_dangerous(&t), "{t} should be in the default dangerous set");
+        }
+        let h2 = CheckpointHook::with_dangerous(["custom_tool".to_string()].into_iter().collect());
+        assert!(h2.is_dangerous("custom_tool"));
+        assert!(!h2.is_dangerous("cos_sandbox"));
     }
 }

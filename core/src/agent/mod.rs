@@ -13314,6 +13314,25 @@ mod tests {
     }
 
     #[test]
+    fn hooks_cmd_enable_checkpoint_kind_persists_and_registers() {
+        use crate::agent::runtime::hooks::global_registry;
+        use crate::agent::runtime::hooks_config;
+        let _dir = isolate_cos_data_dir("hooks-enable-checkpoint");
+        global_registry().unregister("checkpoint");
+
+        let v = hooks_cmd(&["enable".into(), "checkpoint".into()]).expect("ok");
+        assert_eq!(v["kind"], serde_json::json!("checkpoint"));
+        assert_eq!(v["persisted"], serde_json::json!(true));
+        assert_eq!(v["registered_now"], serde_json::json!(true));
+
+        let cfg = hooks_config::load(&crate::paths::agent_hooks_path()).expect("load");
+        assert_eq!(cfg.enabled, vec![hooks_config::HookKind::Checkpoint]);
+        assert!(global_registry().names().contains(&"checkpoint".to_string()));
+
+        global_registry().unregister("checkpoint");
+    }
+
+    #[test]
     fn hooks_cmd_disable_removes_from_config_and_registry() {
         use crate::agent::runtime::hooks::global_registry;
         use crate::agent::runtime::hooks_config;
