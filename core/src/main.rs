@@ -1,3 +1,4 @@
+mod agent;
 mod apps;
 mod audit;
 mod bridge;
@@ -9,7 +10,9 @@ mod cron;
 pub mod errors;
 mod filelock;
 mod ipc;
+mod model;
 mod netfilter;
+mod paths;
 mod policy;
 mod proc;
 mod router;

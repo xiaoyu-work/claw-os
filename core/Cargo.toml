@@ -13,5 +13,24 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 
+# --- Phase 0 (agent runtime) ---
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "io-util", "net", "sync", "signal", "process", "fs"] }
+async-trait = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+futures-util = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+thiserror = "1"
+
+# Phase 0.5 (model engines): added when model files arrive
+# ort = { version = "2", features = [...] }
+# llama-cpp-2 = { version = "0.1", features = [...] }
+
+# Phase 3 / 6 (added later)
+# fastembed = "..."
+# rmcp = "..."
+# serde_yaml = "..."
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

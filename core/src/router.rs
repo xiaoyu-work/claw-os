@@ -4,6 +4,7 @@ use std::time::Instant;
 
 use serde_json::{json, Value};
 
+use crate::agent;
 use crate::apps;
 use crate::audit;
 use crate::bridge;
@@ -12,6 +13,7 @@ use crate::checkpoint;
 use crate::credential;
 use crate::cron;
 use crate::ipc;
+use crate::model;
 use crate::netfilter;
 use crate::policy;
 use crate::proc;
@@ -63,6 +65,8 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         "policy" => dispatch_builtin(args, "policy", policy::run),
         "cron" => dispatch_builtin(args, "cron", cron::run),
         "trace" => dispatch_builtin(args, "trace", trace::run),
+        "agent" => dispatch_builtin(args, "agent", agent::run),
+        "model" => dispatch_builtin(args, "model", model::run),
         _ => {
             // Check if user forgot "app" prefix — helpful error
             let apps_dir = apps_dir();
@@ -371,6 +375,22 @@ fn builtin_apps() -> Vec<(
             ("span-end", "End the current span"),
             ("show", "Show complete trace tree with operations and timing"),
             ("list", "List all traces (--status, --limit)"),
+        ]),
+        ("agent", "OS-native agent subsystem — runtime, memory, skills, LLM providers, tools (Phase 0 skeleton)", vec![
+            ("ask", "Single-shot prompt: cos agent ask \"<prompt>\" (Phase 1+)"),
+            ("chat", "Interactive session (Phase 1+)"),
+            ("status", "Show agent runtime status — providers, tools, skills"),
+            ("service", "Manage long-running agent service (Phase 1+)"),
+        ]),
+        ("model", "Local model registry + inference daemon (ort for STT/TTS/embed/vision/imagegen, llama.cpp for LLM) — Phase 0.5 skeleton", vec![
+            ("list", "List registered models from /var/lib/cos/models/"),
+            ("import", "Register a user-provided ONNX or GGUF file: cos model import <path> --as <name> [--task <kind>] [--engine <ort|llama>]"),
+            ("load", "Load a registered model into the runtime daemon"),
+            ("unload", "Unload a model from the runtime"),
+            ("infer", "Run inference (routed via IPC to model-runtime daemon)"),
+            ("status", "Runtime status — loaded models, RAM, devices"),
+            ("bench", "Benchmark a model"),
+            ("rm", "Remove a model from the registry"),
         ]),
     ]
 }
