@@ -116,8 +116,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "usage" => usage_cmd(args),
         "curator" => curator_cmd(args),
         "llm" => llm_cmd(args),
+        "redact" => redact_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact"
         )),
     }
 }
@@ -876,6 +877,104 @@ fn parse_u64_arg(value: Option<&String>, flag: &str) -> Result<u64, String> {
     let v = value.ok_or_else(|| format!("{flag} needs an integer"))?;
     v.parse::<u64>()
         .map_err(|e| format!("{flag}: invalid integer '{v}': {e}"))
+}
+
+/// `cos agent redact <text> [--strict] [--check]`
+/// `cos agent redact --file <path> [--strict] [--check]`
+/// `cos agent redact --stdin [--strict] [--check]`
+///
+/// Standalone interface to [`crate::agent::safety::redact::Redactor`].
+/// Useful for grepping a log file before posting to a bug report,
+/// scrubbing pasted output before piping into a notebook, or scripting
+/// "did this string contain secrets?" gates in CI without spinning up
+/// a full agent loop.
+///
+/// `--strict` enables email redaction (off by default — most emails
+/// are legitimate content).
+///
+/// `--check` returns `{contains_secrets: bool, pattern_count: N}`
+/// instead of redacting, so callers can branch on detection.
+fn redact_cmd(args: &[String]) -> Result<Value, String> {
+    use crate::agent::safety::redact::Redactor;
+
+    let mut strict = false;
+    let mut check = false;
+    let mut from_stdin = false;
+    let mut from_file: Option<String> = None;
+    let mut positional: Vec<String> = Vec::new();
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--strict" => {
+                strict = true;
+                i += 1;
+            }
+            "--check" => {
+                check = true;
+                i += 1;
+            }
+            "--stdin" => {
+                from_stdin = true;
+                i += 1;
+            }
+            "--file" => {
+                from_file = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--file needs a path".to_string())?,
+                );
+                i += 2;
+            }
+            other => {
+                positional.push(other.to_string());
+                i += 1;
+            }
+        }
+    }
+
+    let input = if from_stdin {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin()
+            .read_to_string(&mut buf)
+            .map_err(|e| format!("read stdin: {e}"))?;
+        buf
+    } else if let Some(path) = from_file {
+        std::fs::read_to_string(&path).map_err(|e| format!("read {path}: {e}"))?
+    } else if positional.is_empty() {
+        return Err(
+            "usage: cos agent redact <text> | --file <path> | --stdin [--strict] [--check]"
+                .to_string(),
+        );
+    } else {
+        positional.join(" ")
+    };
+
+    let r = if strict {
+        Redactor::strict()
+    } else {
+        Redactor::default_set()
+    };
+
+    if check {
+        Ok(json!({
+            "contains_secrets": r.contains_secrets(&input),
+            "pattern_count": r.pattern_count(),
+            "input_chars": input.chars().count(),
+            "strict": strict,
+        }))
+    } else {
+        let redacted = r.redact(&input);
+        let changed = redacted != input;
+        Ok(json!({
+            "redacted": redacted,
+            "changed": changed,
+            "input_chars": input.chars().count(),
+            "output_chars": redacted.chars().count(),
+            "pattern_count": r.pattern_count(),
+            "strict": strict,
+        }))
+    }
 }
 
 /// `cos agent nudge [list|due|add <due_in_secs> <message> [--repeat <secs>] [--tag <tag>]|fire <id>|remove <id>|path]`
@@ -1874,6 +1973,105 @@ mod tests {
         let err = llm_cmd(&["bogus".into()]).unwrap_err();
         assert!(err.contains("providers"));
         assert!(err.contains("models"));
+    }
+
+    #[test]
+    fn redact_no_args_errors_with_usage() {
+        let err = redact_cmd(&[]).unwrap_err();
+        assert!(err.contains("usage:"));
+    }
+
+    #[test]
+    fn redact_replaces_known_secrets() {
+        let v = redact_cmd(&["my key is sk-abcdef0123456789ABCDEF0123456789abcd ok".into()])
+            .expect("redact ok");
+        let out = v.get("redacted").and_then(|x| x.as_str()).unwrap();
+        assert!(out.contains("[REDACTED:"), "expected placeholder, got {out}");
+        assert!(!out.contains("sk-abcdef0123456789ABCDEF0123456789abcd"));
+        assert_eq!(v.get("changed").and_then(|x| x.as_bool()), Some(true));
+    }
+
+    #[test]
+    fn redact_unchanged_for_clean_input() {
+        let v = redact_cmd(&["hello world, this is just text".into()]).expect("redact ok");
+        let out = v.get("redacted").and_then(|x| x.as_str()).unwrap();
+        assert_eq!(out, "hello world, this is just text");
+        assert_eq!(v.get("changed").and_then(|x| x.as_bool()), Some(false));
+    }
+
+    #[test]
+    fn redact_check_returns_detection_only() {
+        let v = redact_cmd(&[
+            "--check".into(),
+            "leaks AKIAIOSFODNN7EXAMPLE here".into(),
+        ])
+        .expect("check ok");
+        assert_eq!(v.get("contains_secrets").and_then(|x| x.as_bool()), Some(true));
+        assert!(v.get("redacted").is_none(), "check mode should not include redacted");
+    }
+
+    #[test]
+    fn redact_check_negative() {
+        let v = redact_cmd(&["--check".into(), "innocent text".into()]).expect("check ok");
+        assert_eq!(v.get("contains_secrets").and_then(|x| x.as_bool()), Some(false));
+    }
+
+    #[test]
+    fn redact_strict_flag_propagates() {
+        let v = redact_cmd(&["--strict".into(), "contact me at user@example.com".into()])
+            .expect("strict redact");
+        let out = v.get("redacted").and_then(|x| x.as_str()).unwrap();
+        assert!(out.contains("[REDACTED:email]"), "strict should redact emails: {out}");
+        assert_eq!(v.get("strict").and_then(|x| x.as_bool()), Some(true));
+    }
+
+    #[test]
+    fn redact_default_does_not_redact_email() {
+        let v = redact_cmd(&["contact me at user@example.com".into()])
+            .expect("default redact");
+        let out = v.get("redacted").and_then(|x| x.as_str()).unwrap();
+        assert!(out.contains("user@example.com"), "default should keep email: {out}");
+    }
+
+    #[test]
+    fn redact_from_file() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let p = dir.path().join("sample.txt");
+        std::fs::write(
+            &p,
+            "token=ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789",
+        )
+        .expect("write");
+        let v = redact_cmd(&["--file".into(), p.to_string_lossy().to_string()])
+            .expect("file redact ok");
+        let out = v.get("redacted").and_then(|x| x.as_str()).unwrap();
+        assert!(
+            out.contains("[REDACTED:github_token]"),
+            "expected github_token placeholder, got {out}"
+        );
+    }
+
+    #[test]
+    fn redact_file_missing_path_errors() {
+        let err = redact_cmd(&["--file".into()]).unwrap_err();
+        assert!(err.contains("--file"));
+    }
+
+    #[test]
+    fn redact_joins_multiple_positional_args() {
+        // Without --, the dispatcher will tokenize on spaces; we
+        // re-stitch them so `cos agent redact hello world` doesn't
+        // error out.
+        let v = redact_cmd(&[
+            "hello".into(),
+            "this".into(),
+            "has".into(),
+            "Bearer".into(),
+            "abcdefABCDEF1234567890123456789012345678".into(),
+        ])
+        .expect("multi-arg ok");
+        let out = v.get("redacted").and_then(|x| x.as_str()).unwrap();
+        assert!(out.contains("[REDACTED:"), "got {out}");
     }
 
     #[test]

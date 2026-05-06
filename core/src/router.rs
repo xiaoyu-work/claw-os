@@ -394,6 +394,7 @@ fn builtin_apps() -> Vec<(
             ("usage", "Filtered aggregation over the LLM run log (llm.jsonl): cos agent usage [overall|provider <name>|model <name>|session <id>] [--since <ISO>] [--until <ISO>] [--ok|--error]"),
             ("curator", "Distil a recorded session into a draft skill manifest: cos agent curator propose <session_id> [--accept] [--limit <n>] [--no-require-acceptance] [--min-tools <n>] [--min-turns <n>] [--no-save] | drafts list [--status proposed|accepted|rejected] | drafts show <id> | drafts accept <id> [--note ...] | drafts reject <id> [--note ...] | drafts delete <id> | drafts retitle <id> <new title>"),
             ("llm", "Inspect the built-in LLM model registry: cos agent llm [providers | models [--provider X] | model <name> | cost <model> --input N --output N [--cache-read N] [--cache-write N]]"),
+            ("redact", "Scrub API keys/tokens/secrets from text: cos agent redact <text> | --file <path> | --stdin [--strict] [--check]"),
         ]),
         ("model", "Local model registry + inference daemon (ort for STT/TTS/embed/vision/imagegen, llama.cpp for LLM) — Phase 0.5 skeleton", vec![
             ("list", "List registered models from /var/lib/cos/models/"),
