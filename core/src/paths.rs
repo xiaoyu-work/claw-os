@@ -163,6 +163,14 @@ pub fn agent_skills_usage_path() -> PathBuf {
     agent_state_dir().join("skills-usage.jsonl")
 }
 
+/// JSONL file storing shell-hook records (the user's interactive
+/// shell pre/post-exec events captured by `cos agent shell-hooks
+/// init`). Lives at `data_dir/agent/shell-hooks.jsonl`. See
+/// [`crate::agent::shell_hooks`].
+pub fn agent_shell_hooks_log_path() -> PathBuf {
+    agent_state_dir().join("shell-hooks.jsonl")
+}
+
 pub fn model_runtime_socket() -> PathBuf {
     runtime_dir().join("model-runtime.sock")
 }

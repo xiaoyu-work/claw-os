@@ -30,6 +30,7 @@ pub mod onboarding;
 pub mod prompt;
 pub mod runtime;
 pub mod safety;
+pub mod shell_hooks;
 pub mod skills;
 pub mod tools;
 pub mod title;
@@ -134,8 +135,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "retry" => retry_cmd(args),
         "vision" => vision_cmd(args),
         "display" => display_cmd(args),
+        "shell-hooks" => shell_hooks_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | title | summarise | classify | tools | guardrails | approval | todo | compress | aux | retry | vision | display"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | title | summarise | classify | tools | guardrails | approval | todo | compress | aux | retry | vision | display | shell-hooks"
         )),
     }
 }
@@ -3189,6 +3191,134 @@ fn display_format_duration_cmd(args: &[String]) -> Result<Value, String> {
         "input_ms": ms,
         "formatted": crate::agent::display::format_duration(std::time::Duration::from_millis(ms)),
     }))
+}
+
+/// `cos agent shell-hooks <init <bash|zsh|fish>|record-pre <cmd>|record-post <exit>|tail [--limit N]|clear --yes|path>`
+///
+/// Exposes [`crate::agent::shell_hooks`] as a CLI surface so the
+/// user can install shell-init scripts that capture interactive
+/// commands into a JSONL log the agent can later read for ambient
+/// context. The `record-*` verbs are called by the init-script
+/// hooks themselves; humans only invoke `init`, `tail`, `clear`,
+/// `path`.
+fn shell_hooks_cmd(args: &[String]) -> Result<Value, String> {
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("path");
+    match sub {
+        "path" | "" => Ok(json!({
+            "path": crate::agent::shell_hooks::default_log_path().display().to_string(),
+        })),
+        "init" => {
+            let raw = args
+                .get(1)
+                .map(|s| s.as_str())
+                .ok_or_else(|| {
+                    "usage: cos agent shell-hooks init <bash|zsh|fish>".to_string()
+                })?;
+            let shell = crate::agent::shell_hooks::Shell::parse(raw)?;
+            let script = crate::agent::shell_hooks::render_init(shell);
+            Ok(json!({
+                "shell": shell.label(),
+                "log_path": crate::agent::shell_hooks::default_log_path().display().to_string(),
+                "script": script,
+                "instructions": init_instructions_for(shell),
+            }))
+        }
+        "record-pre" => {
+            let cmd = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| "usage: cos agent shell-hooks record-pre <cmd>".to_string())?;
+            let path = crate::agent::shell_hooks::default_log_path();
+            let ts_ms = crate::agent::shell_hooks::now_ms();
+            crate::agent::shell_hooks::append_pre_at(&path, &cmd, ts_ms)
+                .map_err(|e| format!("write failed: {e}"))?;
+            Ok(json!({
+                "kind": "pre",
+                "ts_ms": ts_ms,
+                "cmd": cmd,
+                "path": path.display().to_string(),
+            }))
+        }
+        "record-post" => {
+            let raw = args
+                .get(1)
+                .ok_or_else(|| "usage: cos agent shell-hooks record-post <exit>".to_string())?;
+            let exit: i32 = raw
+                .parse()
+                .map_err(|_| format!("record-post needs an integer exit code, got: {raw}"))?;
+            let path = crate::agent::shell_hooks::default_log_path();
+            let ts_ms = crate::agent::shell_hooks::now_ms();
+            crate::agent::shell_hooks::append_post_at(&path, exit, ts_ms)
+                .map_err(|e| format!("write failed: {e}"))?;
+            Ok(json!({
+                "kind": "post",
+                "ts_ms": ts_ms,
+                "exit": exit,
+                "path": path.display().to_string(),
+            }))
+        }
+        "tail" => {
+            let mut limit: usize = 20;
+            let mut i = 1usize;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--limit" => {
+                        let v = args
+                            .get(i + 1)
+                            .ok_or_else(|| "--limit needs <n>".to_string())?;
+                        limit = v
+                            .parse()
+                            .map_err(|_| format!("--limit must be a positive integer, got: {v}"))?;
+                        i += 2;
+                    }
+                    other => return Err(format!("unknown flag for `shell-hooks tail`: {other}")),
+                }
+            }
+            let path = crate::agent::shell_hooks::default_log_path();
+            let rows = crate::agent::shell_hooks::tail_at(&path, limit)
+                .map_err(|e| format!("read failed: {e}"))?;
+            Ok(json!({
+                "path": path.display().to_string(),
+                "limit": limit,
+                "n": rows.len(),
+                "records": rows,
+            }))
+        }
+        "clear" => {
+            // Require explicit --yes so it can never happen by accident.
+            let confirmed = args.iter().any(|a| a == "--yes");
+            if !confirmed {
+                return Err(
+                    "usage: cos agent shell-hooks clear --yes  (truncates the JSONL log)".into(),
+                );
+            }
+            let path = crate::agent::shell_hooks::default_log_path();
+            let cleared = crate::agent::shell_hooks::clear_at(&path)
+                .map_err(|e| format!("clear failed: {e}"))?;
+            Ok(json!({
+                "path": path.display().to_string(),
+                "cleared": cleared,
+            }))
+        }
+        other => Err(format!(
+            "unknown shell-hooks subcommand: {other}. try: init <bash|zsh|fish> | record-pre <cmd> | record-post <exit> | tail [--limit N] | clear --yes | path"
+        )),
+    }
+}
+
+fn init_instructions_for(shell: crate::agent::shell_hooks::Shell) -> &'static str {
+    use crate::agent::shell_hooks::Shell;
+    match shell {
+        Shell::Bash => {
+            "append the script to ~/.bashrc, or eval it inline: eval \"$(cos agent shell-hooks init bash | jq -r .script)\""
+        }
+        Shell::Zsh => {
+            "append the script to ~/.zshrc, or eval it inline: eval \"$(cos agent shell-hooks init zsh | jq -r .script)\""
+        }
+        Shell::Fish => {
+            "append the script to ~/.config/fish/config.fish, or source it: cos agent shell-hooks init fish | jq -r .script | source"
+        }
+    }
 }
 
 fn todo_status_counts(list: &crate::agent::tools::todo::TodoList) -> serde_json::Value {
@@ -7661,5 +7791,104 @@ mod tests {
             v.get("transcript").and_then(|s| s.as_str()),
             Some("")
         );
+    }
+
+    #[test]
+    fn shell_hooks_path_returns_default_log_path() {
+        let v = shell_hooks_cmd(&["path".into()]).expect("path ok");
+        let p = v.get("path").and_then(|s| s.as_str()).expect("path field");
+        assert!(p.ends_with("shell-hooks.jsonl"), "got path: {p}");
+    }
+
+    #[test]
+    fn shell_hooks_default_subcommand_is_path() {
+        let v = shell_hooks_cmd(&[]).expect("default ok");
+        assert!(v.get("path").is_some());
+    }
+
+    #[test]
+    fn shell_hooks_init_bash_returns_script_with_trap() {
+        let v = shell_hooks_cmd(&["init".into(), "bash".into()]).expect("init bash ok");
+        assert_eq!(v.get("shell").and_then(|s| s.as_str()), Some("bash"));
+        let script = v.get("script").and_then(|s| s.as_str()).expect("script");
+        assert!(script.contains("trap '__cos_pre_exec' DEBUG"));
+        assert!(v.get("instructions").and_then(|s| s.as_str()).is_some());
+    }
+
+    #[test]
+    fn shell_hooks_init_zsh_returns_zsh_specific_script() {
+        let v = shell_hooks_cmd(&["init".into(), "zsh".into()]).expect("init zsh ok");
+        assert_eq!(v.get("shell").and_then(|s| s.as_str()), Some("zsh"));
+        let script = v.get("script").and_then(|s| s.as_str()).expect("script");
+        assert!(script.contains("add-zsh-hook preexec"));
+    }
+
+    #[test]
+    fn shell_hooks_init_fish_returns_fish_specific_script() {
+        let v = shell_hooks_cmd(&["init".into(), "fish".into()]).expect("init fish ok");
+        assert_eq!(v.get("shell").and_then(|s| s.as_str()), Some("fish"));
+        let script = v.get("script").and_then(|s| s.as_str()).expect("script");
+        assert!(script.contains("--on-event fish_preexec"));
+    }
+
+    #[test]
+    fn shell_hooks_init_unknown_shell_errs() {
+        let err = shell_hooks_cmd(&["init".into(), "powershell".into()]).unwrap_err();
+        assert!(err.contains("powershell"));
+    }
+
+    #[test]
+    fn shell_hooks_init_missing_shell_errs() {
+        let err = shell_hooks_cmd(&["init".into()]).unwrap_err();
+        assert!(err.contains("usage"));
+    }
+
+    #[test]
+    fn shell_hooks_record_pre_requires_cmd() {
+        let err = shell_hooks_cmd(&["record-pre".into()]).unwrap_err();
+        assert!(err.contains("usage"));
+    }
+
+    #[test]
+    fn shell_hooks_record_post_requires_int_exit() {
+        let err = shell_hooks_cmd(&["record-post".into(), "not-a-number".into()]).unwrap_err();
+        assert!(err.contains("integer"));
+    }
+
+    #[test]
+    fn shell_hooks_record_post_requires_arg() {
+        let err = shell_hooks_cmd(&["record-post".into()]).unwrap_err();
+        assert!(err.contains("usage"));
+    }
+
+    #[test]
+    fn shell_hooks_tail_unknown_flag_errs() {
+        let err = shell_hooks_cmd(&["tail".into(), "--bogus".into()]).unwrap_err();
+        assert!(err.contains("unknown flag"));
+    }
+
+    #[test]
+    fn shell_hooks_tail_limit_requires_value() {
+        let err = shell_hooks_cmd(&["tail".into(), "--limit".into()]).unwrap_err();
+        assert!(err.contains("--limit"));
+    }
+
+    #[test]
+    fn shell_hooks_tail_limit_requires_int() {
+        let err = shell_hooks_cmd(&["tail".into(), "--limit".into(), "abc".into()]).unwrap_err();
+        assert!(err.contains("--limit"));
+    }
+
+    #[test]
+    fn shell_hooks_clear_requires_yes_flag() {
+        let err = shell_hooks_cmd(&["clear".into()]).unwrap_err();
+        assert!(err.contains("--yes"));
+    }
+
+    #[test]
+    fn shell_hooks_unknown_subcommand_errs() {
+        let err = shell_hooks_cmd(&["bogus".into()]).unwrap_err();
+        assert!(err.contains("bogus"));
+        assert!(err.contains("init"));
     }
 }
