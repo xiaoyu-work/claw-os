@@ -1751,6 +1751,22 @@ fn providers_cmd(args: &[String]) -> Result<Value, String> {
             false
         };
 
+        // Approximate pool size from declared cfg (without resolving
+        // each entry — that would require building the pool again
+        // here and round-tripping lock contention). This is the count
+        // of *declared* sources for the active provider, or 0 for
+        // others (synthesised configs have no plural fields).
+        let pool_declared_keys = if is_active {
+            cfg.agent.api_key_credentials.len() + cfg.agent.api_key_envs.len()
+        } else {
+            0
+        };
+        let pool_strategy = if is_active && pool_declared_keys > 0 {
+            Some(cfg.agent.pool_strategy.as_str())
+        } else {
+            None
+        };
+
         entries.push(json!({
             "name": name,
             "active": is_active,
@@ -1761,6 +1777,8 @@ fn providers_cmd(args: &[String]) -> Result<Value, String> {
             "credential": canonical_credential,
             "credential_present": credential_present,
             "key_required": canonical_env.is_some(),
+            "pool_declared_keys": pool_declared_keys,
+            "pool_strategy": pool_strategy,
         }));
     }
 
