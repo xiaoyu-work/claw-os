@@ -86,16 +86,85 @@ pub fn active_engine_root(engine: &str) -> Option<PathBuf> {
 /// `basename` is the platform-agnostic library stem (e.g. `"llama"` →
 /// `llama.dll` / `libllama.so` / `libllama.dylib`). Returns `None` if
 /// the active engine isn't installed or the file is missing.
+///
+/// On Linux/macOS the unversioned filename is preferred but missing it
+/// is not fatal: the resolver falls back to versioned siblings (e.g.
+/// `libonnxruntime.so.1.25.1`) when the upstream tarball doesn't include
+/// (or extraction lost) the unversioned symlink. ORT/onnxruntime-genai
+/// release tarballs ship versioned soname targets and rely on a
+/// symlink which not every extractor preserves.
 pub fn active_library_path(engine: &str, basename: &str) -> Option<PathBuf> {
     let root = active_engine_root(engine)?;
     let filename = platform_library_filename(basename);
     for sub in ["lib", "bin"] {
-        let candidate = root.join(sub).join(&filename);
-        if candidate.is_file() {
-            return Some(candidate);
+        let dir = root.join(sub);
+        let exact = dir.join(&filename);
+        if exact.is_file() {
+            return Some(exact);
+        }
+        if let Some(versioned) = find_versioned_library(&dir, basename) {
+            return Some(versioned);
         }
     }
     None
+}
+
+/// Scan `dir` for a versioned shared library matching `basename` and
+/// return the highest-versioned hit, or `None`. No-op on Windows
+/// (`.dll` libraries don't carry version suffixes in this layout).
+///
+/// Linux: matches `lib<basename>.so.<X>(.<Y>)*`.
+/// macOS: matches `lib<basename>.<X>(.<Y>)*.dylib`.
+fn find_versioned_library(dir: &std::path::Path, basename: &str) -> Option<PathBuf> {
+    if cfg!(target_os = "windows") {
+        return None;
+    }
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut best: Option<(Vec<u32>, PathBuf)> = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let name = path.file_name()?.to_str()?;
+        let Some(version_str) = parse_versioned_library_name(name, basename) else {
+            continue;
+        };
+        let parts: Vec<u32> = version_str
+            .split('.')
+            .map(|p| p.parse::<u32>().unwrap_or(0))
+            .collect();
+        match &best {
+            None => best = Some((parts, path)),
+            Some((prev, _)) if parts > *prev => best = Some((parts, path)),
+            _ => {}
+        }
+    }
+    best.map(|(_, p)| p)
+}
+
+/// Parse a versioned library filename into its version-component string.
+/// Returns `None` if `name` doesn't match the expected platform shape.
+///
+/// Linux:   `lib<basename>.so.1.25.1` → `Some("1.25.1")`
+/// macOS:   `lib<basename>.1.25.1.dylib` → `Some("1.25.1")`
+/// Anything else (including the unversioned `lib<basename>.so`/`.dylib`)
+/// returns `None` so the caller's exact-match path retains priority.
+fn parse_versioned_library_name(name: &str, basename: &str) -> Option<String> {
+    let prefix = format!("lib{basename}");
+    let rest = name.strip_prefix(&prefix)?;
+    let version = if cfg!(target_os = "macos") {
+        // lib<basename>.1.25.1.dylib → strip `.dylib`, then leading `.`
+        rest.strip_suffix(".dylib")?.strip_prefix('.')?
+    } else {
+        // lib<basename>.so.1.25.1 → must start with `.so.`
+        rest.strip_prefix(".so.")?
+    };
+    let starts_with_digit = version.chars().next().is_some_and(|c| c.is_ascii_digit());
+    if !starts_with_digit || !version.chars().all(|c| c.is_ascii_digit() || c == '.') {
+        return None;
+    }
+    Some(version.to_string())
 }
 
 /// Compose the platform-specific shared library filename for a given
@@ -783,6 +852,122 @@ mod active_helper_tests {
         write_index(tmp.path(), "llama-cpp", "v0");
         // Directories exist but no library file.
         assert!(active_library_path("llama-cpp", "llama").is_none());
+        paths::set_engines_dir_override(None);
+    }
+
+    #[test]
+    fn parse_versioned_library_name_linux() {
+        // The function is gated on cfg(target_os) at call sites, but the
+        // parse helper itself runs on every host — the cfg switch only
+        // chooses which suffix to strip. So on Windows we still verify
+        // the macOS branch via cfg.
+        if cfg!(target_os = "windows") {
+            // On Windows the parser uses the macOS branch only when
+            // target_os = "macos", so the linux branch is what runs.
+            // Just confirm the unversioned + non-matching cases return None.
+            assert_eq!(parse_versioned_library_name("llama.dll", "llama"), None);
+            return;
+        }
+        if cfg!(target_os = "macos") {
+            assert_eq!(
+                parse_versioned_library_name("libonnxruntime.1.25.1.dylib", "onnxruntime"),
+                Some("1.25.1".into())
+            );
+            // Unversioned .dylib is rejected (caller's exact-match path
+            // wins).
+            assert_eq!(
+                parse_versioned_library_name("libonnxruntime.dylib", "onnxruntime"),
+                None
+            );
+        } else {
+            assert_eq!(
+                parse_versioned_library_name("libonnxruntime.so.1.25.1", "onnxruntime"),
+                Some("1.25.1".into())
+            );
+            assert_eq!(
+                parse_versioned_library_name("libonnxruntime.so.1", "onnxruntime"),
+                Some("1".into())
+            );
+            // Unversioned .so is rejected.
+            assert_eq!(
+                parse_versioned_library_name("libonnxruntime.so", "onnxruntime"),
+                None
+            );
+            // Wrong basename rejected.
+            assert_eq!(
+                parse_versioned_library_name("libllama.so.1.0", "onnxruntime"),
+                None
+            );
+            // Non-numeric reject.
+            assert_eq!(
+                parse_versioned_library_name("libonnxruntime.so.dev", "onnxruntime"),
+                None
+            );
+            // Leading-dot reject (".." after strip_prefix would have empty digit lead).
+            assert_eq!(
+                parse_versioned_library_name("libonnxruntime.so..1", "onnxruntime"),
+                None
+            );
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn active_library_path_finds_versioned_library_when_unversioned_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        paths::set_engines_dir_override(Some(tmp.path().to_path_buf()));
+        let lib_dir = tmp.path().join("ort/v0/lib");
+        std::fs::create_dir_all(&lib_dir).unwrap();
+        let versioned_name = if cfg!(target_os = "macos") {
+            "libonnxruntime.1.25.1.dylib"
+        } else {
+            "libonnxruntime.so.1.25.1"
+        };
+        std::fs::write(lib_dir.join(versioned_name), b"x").unwrap();
+        write_index(tmp.path(), "ort", "v0");
+        let p = active_library_path("ort", "onnxruntime").expect("should resolve via versioned");
+        assert!(p.to_string_lossy().contains(versioned_name));
+        paths::set_engines_dir_override(None);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn active_library_path_unversioned_preferred_over_versioned() {
+        let tmp = tempfile::tempdir().unwrap();
+        paths::set_engines_dir_override(Some(tmp.path().to_path_buf()));
+        let lib_dir = tmp.path().join("ort/v0/lib");
+        std::fs::create_dir_all(&lib_dir).unwrap();
+        let unversioned_name = platform_library_filename("onnxruntime");
+        let versioned_name = if cfg!(target_os = "macos") {
+            "libonnxruntime.1.25.1.dylib"
+        } else {
+            "libonnxruntime.so.1.25.1"
+        };
+        std::fs::write(lib_dir.join(&unversioned_name), b"u").unwrap();
+        std::fs::write(lib_dir.join(versioned_name), b"v").unwrap();
+        write_index(tmp.path(), "ort", "v0");
+        let p = active_library_path("ort", "onnxruntime").expect("should resolve");
+        assert!(p.ends_with(&unversioned_name));
+        paths::set_engines_dir_override(None);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn active_library_path_picks_highest_versioned() {
+        let tmp = tempfile::tempdir().unwrap();
+        paths::set_engines_dir_override(Some(tmp.path().to_path_buf()));
+        let lib_dir = tmp.path().join("ort/v0/lib");
+        std::fs::create_dir_all(&lib_dir).unwrap();
+        let (lower, higher) = if cfg!(target_os = "macos") {
+            ("libonnxruntime.1.20.0.dylib", "libonnxruntime.1.25.1.dylib")
+        } else {
+            ("libonnxruntime.so.1.20.0", "libonnxruntime.so.1.25.1")
+        };
+        std::fs::write(lib_dir.join(lower), b"a").unwrap();
+        std::fs::write(lib_dir.join(higher), b"b").unwrap();
+        write_index(tmp.path(), "ort", "v0");
+        let p = active_library_path("ort", "onnxruntime").expect("should resolve");
+        assert!(p.to_string_lossy().contains(higher));
         paths::set_engines_dir_override(None);
     }
 }
