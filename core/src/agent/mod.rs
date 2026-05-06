@@ -18,6 +18,7 @@
 //! ```
 
 pub mod context;
+pub mod curator;
 pub mod display;
 pub mod insights;
 pub mod llm;
