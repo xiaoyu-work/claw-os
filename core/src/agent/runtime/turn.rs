@@ -5,8 +5,10 @@
 //! reached.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::agent::llm::{
+    run_log::{self, LlmRunRecord},
     ChatRequest, ChatResponse, ContentBlock, FinishReason, Message, Role, Tool as LlmTool,
     ToolChoice, ToolCall,
 };
@@ -27,6 +29,10 @@ pub enum TurnOutcome {
 /// - `messages` is mutated in place: assistant message + tool result messages
 ///   (if any) are appended.
 /// - Returns whether the loop should continue or terminate.
+///
+/// `session_id` is included in the per-call run-log record. Pass `None` if
+/// memory is disabled / the caller doesn't track sessions.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_turn(
     provider: Arc<dyn crate::agent::llm::Provider>,
     model: &str,
@@ -36,6 +42,7 @@ pub async fn run_turn(
     llm_tools: &[LlmTool],
     max_tokens: u32,
     temperature: f32,
+    session_id: Option<&str>,
 ) -> Result<TurnOutcome, super::loop_::AgentError> {
     let request = ChatRequest {
         model: model.to_string(),
@@ -50,10 +57,43 @@ pub async fn run_turn(
         extra: serde_json::Value::Null,
     };
 
-    let response = provider
-        .chat(request)
-        .await
-        .map_err(super::loop_::AgentError::Llm)?;
+    let start = Instant::now();
+    let chat_result = provider.chat(request).await;
+    let duration_ms = start.elapsed().as_millis() as u64;
+
+    // Capture engine_info AFTER the call — for local engines the
+    // engine isn't loaded until the first chat() call, so reading
+    // before would always return None.
+    let engine = provider.engine_info();
+    let provider_name = provider.name().to_string();
+
+    let response = match chat_result {
+        Ok(resp) => {
+            let rec = LlmRunRecord::from_success(
+                &provider_name,
+                model,
+                engine,
+                resp.finish_reason,
+                &resp.usage,
+                duration_ms,
+                session_id,
+            );
+            run_log::record(&rec);
+            resp
+        }
+        Err(e) => {
+            let rec = LlmRunRecord::from_error(
+                &provider_name,
+                model,
+                engine,
+                &format!("{e}"),
+                duration_ms,
+                session_id,
+            );
+            run_log::record(&rec);
+            return Err(super::loop_::AgentError::Llm(e));
+        }
+    };
 
     // Always append the assistant message verbatim so subsequent turns have
     // the full history.

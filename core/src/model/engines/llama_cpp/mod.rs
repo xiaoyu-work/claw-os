@@ -195,6 +195,21 @@ impl LlamaEngine {
         &self.runtime.lib_path
     }
 
+    /// Engine version derived from the **loaded** library path, NOT from
+    /// the engine_pkg registry. Matters for audit-trail correctness: the
+    /// process-wide `LlamaRuntime` cache may hold the previously-active
+    /// version even after `cos engine activate <new>` ran (the user
+    /// must restart the daemon for the new version to take effect).
+    /// The registry would falsely report the new version; this returns
+    /// what's actually executing.
+    ///
+    /// Returns `None` if the path doesn't match the expected
+    /// `<engines_dir>/<engine>/<version>/{lib,bin}/<lib-file>` shape
+    /// (e.g. test-injected path).
+    pub fn engine_version(&self) -> Option<String> {
+        engine_version_from_lib_path(&self.runtime.lib_path)
+    }
+
     pub async fn generate(&self, _prompt: &str) -> Result<Generation, EngineError> {
         Err(EngineError::InferenceFailed(
             "llama_cpp.generate(): wiring complete but tokenize/decode loop pending. \
@@ -202,6 +217,15 @@ impl LlamaEngine {
                 .into(),
         ))
     }
+}
+
+/// Extract `<version>` from `<engines_dir>/llama-cpp/<version>/{lib,bin}/<file>`.
+/// Pulled out so unit tests can pin the layout-parsing logic.
+pub(crate) fn engine_version_from_lib_path(lib_path: &Path) -> Option<String> {
+    // .../<engine>/<version>/<lib-or-bin>/<file>
+    //                ^^^^^^^^^                   parent.parent.file_name
+    let version_dir = lib_path.parent()?.parent()?;
+    version_dir.file_name()?.to_str().map(str::to_string)
 }
 
 // We never call llama_backend_free() — llama.cpp's docs say it's
@@ -515,5 +539,33 @@ mod tests {
 
         let _ = std::fs::remove_file(&gguf);
         crate::engine_pkg::paths::set_engines_dir_override(None);
+    }
+
+    /// Pinning the parsing of the on-disk layout — engine_version() must
+    /// derive `b4001` from `.../llama-cpp/b4001/lib/llama.dll` and from
+    /// the bin/ variant. Negative cases must return None rather than a
+    /// surprising substring (e.g. `lib`, `bin`, etc.).
+    #[test]
+    fn engine_version_from_lib_path_handles_layouts() {
+        let lib_layout = PathBuf::from("/var/lib/cos/engines/llama-cpp/b4001/lib/libllama.so");
+        assert_eq!(
+            super::engine_version_from_lib_path(&lib_layout).as_deref(),
+            Some("b4001"),
+        );
+
+        let bin_layout =
+            PathBuf::from("C:/ProgramData/cos/data/engines/llama-cpp/b4001/bin/llama.dll");
+        assert_eq!(
+            super::engine_version_from_lib_path(&bin_layout).as_deref(),
+            Some("b4001"),
+        );
+
+        // Nonsense path shorter than the expected depth returns None,
+        // not a misleading "lib" or "tmp".
+        let too_short = PathBuf::from("/tmp/llama.dll");
+        assert!(super::engine_version_from_lib_path(&too_short).is_none());
+
+        let just_a_filename = PathBuf::from("llama.dll");
+        assert!(super::engine_version_from_lib_path(&just_a_filename).is_none());
     }
 }

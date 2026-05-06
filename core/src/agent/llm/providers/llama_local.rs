@@ -19,11 +19,11 @@
 use async_trait::async_trait;
 use futures_util::stream::{self, BoxStream, StreamExt};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::agent::llm::{
-    ChatRequest, ChatResponse, ContentBlock, FinishReason, LlmError, Provider, Result,
-    StreamEvent, Usage,
+    ChatRequest, ChatResponse, ContentBlock, EngineInfo, FinishReason, LlmError, Provider,
+    Result, StreamEvent, Usage,
 };
 use crate::config::AgentConfig;
 use crate::model::engines::llama_cpp::{self as llama_engine, LlamaConfig, LlamaEngine};
@@ -44,6 +44,11 @@ pub struct LlamaLocalProvider {
     /// loading a model is expensive and `cos agent status` should not
     /// trigger it.
     engine: tokio::sync::Mutex<Option<Arc<LlamaEngine>>>,
+    /// Captured once the engine is first loaded successfully. Read by
+    /// the sync `Provider::engine_info()` impl, which can't take an
+    /// async mutex. `OnceLock` (sync) avoids needing `block_on` in
+    /// the audit path.
+    loaded_info: OnceLock<EngineInfo>,
 }
 
 // Methods are reached via `dyn Provider` from the runtime when the agent's
@@ -65,6 +70,7 @@ impl LlamaLocalProvider {
             model_spec: model.to_string(),
             cfg,
             engine: tokio::sync::Mutex::new(None),
+            loaded_info: OnceLock::new(),
         }
     }
 
@@ -98,6 +104,17 @@ impl LlamaLocalProvider {
             .await
             .map_err(|e| LlmError::Internal(format!("spawn_blocking join failed: {e}")))?
             .map_err(|e| LlmError::NotConfigured(format!("llama_cpp engine: {e}")))?;
+        // Capture the version that ACTUALLY loaded for the audit
+        // trail. The engine_pkg registry can race with this loaded
+        // singleton (e.g. `cos engine activate <new>` after the
+        // daemon is up — the new version doesn't take effect until
+        // restart). Reading from the runtime is the truth.
+        if let Some(version) = engine.engine_version() {
+            let _ = self.loaded_info.set(EngineInfo {
+                name: llama_engine::PKG_ENGINE_NAME.to_string(),
+                version,
+            });
+        }
         let arc = Arc::new(engine);
         *slot = Some(arc.clone());
         Ok(arc)
@@ -119,6 +136,10 @@ impl Provider for LlamaLocalProvider {
 
     fn is_configured(&self) -> bool {
         self.config_is_usable()
+    }
+
+    fn engine_info(&self) -> Option<EngineInfo> {
+        self.loaded_info.get().cloned()
     }
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {

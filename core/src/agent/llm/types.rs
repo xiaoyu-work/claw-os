@@ -146,6 +146,22 @@ pub struct Usage {
     pub cache_write_tokens: u32,
 }
 
+/// Information about the engine that *actually produced* a response.
+/// Captured for the audit trail (run record). Always reflects the
+/// loaded runtime, never the engine_pkg registry — for local engines
+/// the registry can race with the daemon's process-wide loaded
+/// singleton (the new active version doesn't take effect until restart).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EngineInfo {
+    /// Engine name. For local: matches `engine_pkg::KNOWN_ENGINES`
+    /// (e.g. `"llama-cpp"`). For cloud: empty / not set.
+    pub name: String,
+    /// Engine version. For llama-cpp: the build number (`"b4001"`).
+    /// For ort/ort-genai: SemVer string. Only meaningful for local
+    /// engines.
+    pub version: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
     pub id: String,

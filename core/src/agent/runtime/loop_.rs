@@ -106,6 +106,7 @@ async fn ask_inner(
             &llm_tools,
             cfg.max_tokens,
             cfg.temperature,
+            recorder.map(|(_, sid)| sid),
         )
         .await?;
 

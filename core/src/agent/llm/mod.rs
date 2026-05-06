@@ -9,11 +9,12 @@
 
 pub mod providers;
 pub mod registry;
+pub mod run_log;
 pub mod types;
 
 pub use types::{
-    ChatRequest, ChatResponse, ContentBlock, FinishReason, Message, Role, StreamEvent, Tool,
-    ToolCall, ToolChoice, Usage,
+    ChatRequest, ChatResponse, ContentBlock, EngineInfo, FinishReason, Message, Role,
+    StreamEvent, Tool, ToolCall, ToolChoice, Usage,
 };
 
 use async_trait::async_trait;
@@ -66,6 +67,19 @@ pub trait Provider: Send + Sync {
 
     /// Whether the provider has the credentials / endpoint it needs to run.
     fn is_configured(&self) -> bool;
+
+    /// Information about the engine actually executing inference.
+    /// Default: `None` (cloud providers — the engine is the upstream
+    /// API, not under our audit purview). Local providers should
+    /// return `Some(...)` derived from the **loaded** runtime once
+    /// it's up. Returning `None` before the engine is loaded is fine
+    /// — the run-record consumer logs `null` for those fields.
+    ///
+    /// MUST be cheap (sync, lock-free or near-lock-free). Called from
+    /// the per-turn audit path.
+    fn engine_info(&self) -> Option<EngineInfo> {
+        None
+    }
 
     /// Buffered (non-streaming) chat completion.
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse>;

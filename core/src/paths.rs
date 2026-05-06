@@ -118,6 +118,15 @@ pub fn agent_runtime_socket() -> PathBuf {
     runtime_dir().join("agent.sock")
 }
 
+/// Append-only JSONL stream of per-LLM-call run records (Phase 2.4).
+/// Each line captures provider/model/engine_name/engine_version/
+/// duration/usage/finish_reason for reproducibility and debugging.
+/// Distinct from `audit.rs` which logs the parent `cos <app> <cmd>`
+/// invocation; one CLI call may produce many run-record lines.
+pub fn llm_run_log_path() -> PathBuf {
+    log_dir().join("llm.jsonl")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
