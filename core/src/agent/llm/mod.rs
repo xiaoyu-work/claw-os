@@ -8,6 +8,7 @@
 //! exposed via crate::model::tasks::llm.
 
 pub mod providers;
+pub mod metadata;
 pub mod rate_limit;
 pub mod registry;
 pub mod run_log;
