@@ -19,6 +19,7 @@
 
 pub mod context;
 pub mod display;
+pub mod insights;
 pub mod llm;
 pub mod media;
 pub mod memory;
