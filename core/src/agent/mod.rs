@@ -19,6 +19,7 @@
 
 pub mod context;
 pub mod curator;
+pub mod curator_author;
 pub mod curator_drafts;
 pub mod display;
 pub mod insights;
@@ -5874,9 +5875,10 @@ fn curator_cmd(args: &[String]) -> Result<Value, String> {
     match sub {
         "propose" => {}
         "drafts" => return curator_drafts_cmd(&args[1..]),
+        "author" => return curator_author_cmd(&args[1..]),
         other => {
             return Err(format!(
-                "unknown curator subcommand: '{other}'. try: propose <session_id> [...] | drafts list|show|accept|reject|delete"
+                "unknown curator subcommand: '{other}'. try: propose <session_id> [...] | drafts list|show|accept|reject|delete | author <draft_id> [--model <name>] [--write] [--out <path>]"
             ));
         }
     }
@@ -6235,6 +6237,189 @@ fn parse_draft_status(s: &str) -> Result<curator_drafts::DraftStatus, String> {
         )),
     }
 }
+
+/// `cos agent curator author <draft_id> [--model <name>] [--write] [--out <path>]`
+///
+/// Drives the [`crate::agent::curator_author::author`] LLM pass:
+/// looks up the draft in the persistent draft store, replays the
+/// originating session's history from the memory DB to rebuild the
+/// turn list the deterministic pipeline saw, then asks the
+/// configured LLM to produce a `SKILL.md` document. Output is the
+/// full document on `document` plus metadata on source / chars /
+/// error.
+///
+/// Side effects:
+///  * `--write` (or `--out <path>`): persist the document.
+///    Without `--out`, defaults to
+///    `<agent_skills_dir>/<draft.suggested_id>/SKILL.md`. Refuses
+///    to overwrite an existing file unless `--force` is also set.
+///  * Without `--write`, the document is returned in the JSON
+///    envelope and nothing is touched on disk — useful for
+///    previewing in CI / scripts.
+///
+/// LLM source: by default the auxiliary client is used (cheap
+/// model). `--model <name>` overrides the model id; `--primary`
+/// forces routing through the primary provider instead of the
+/// auxiliary one.
+fn curator_author_cmd(args: &[String]) -> Result<Value, String> {
+    use crate::agent::curator::{message_to_turn, ConversationTurn};
+    use crate::agent::curator_author::{author, AuthorConfig, AuthorSource};
+    use curator_drafts::DraftStore;
+
+    let draft_id = args
+        .first()
+        .cloned()
+        .filter(|s| !s.is_empty() && !s.starts_with("--"))
+        .ok_or_else(|| "usage: cos agent curator author <draft_id> [flags]".to_string())?;
+
+    let mut model_override: Option<String> = None;
+    let mut write_to_disk = false;
+    let mut out_path: Option<String> = None;
+    let mut force = false;
+    let mut use_primary = false;
+    let mut limit: usize = 200;
+
+    let mut i = 1usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--model" => {
+                model_override = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--model needs <name>".to_string())?,
+                );
+                i += 2;
+            }
+            "--write" => {
+                write_to_disk = true;
+                i += 1;
+            }
+            "--out" => {
+                out_path = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--out needs <path>".to_string())?,
+                );
+                write_to_disk = true;
+                i += 2;
+            }
+            "--force" => {
+                force = true;
+                i += 1;
+            }
+            "--primary" => {
+                use_primary = true;
+                i += 1;
+            }
+            "--limit" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--limit needs <n>".to_string())?;
+                limit = v.parse().map_err(|e| format!("--limit: {e}"))?;
+                i += 2;
+            }
+            other => return Err(format!("unknown flag for `curator author`: {other}")),
+        }
+    }
+
+    // Resolve the draft.
+    let store = DraftStore::open_default().map_err(|e| format!("draft store: {e}"))?;
+    let entry = store
+        .get(&draft_id)
+        .ok_or_else(|| format!("no draft with id '{draft_id}' (try `cos agent curator drafts list`)"))?;
+
+    // Replay the session's recorded turns. If the session is gone
+    // (rare but possible if the user cleared memory between
+    // propose and author) we still author from the draft alone.
+    let turns: Vec<ConversationTurn> = match memory::sqlite_fts::MemoryDb::open_default() {
+        Ok(db) => match db.recent(&entry.session_id, limit) {
+            Ok(rows) => rows
+                .iter()
+                .filter_map(|r| message_to_turn(&r.role, &r.content))
+                .collect(),
+            Err(_) => Vec::new(),
+        },
+        Err(_) => Vec::new(),
+    };
+
+    // Build the provider. Auxiliary by default (when configured);
+    // primary on --primary or when auxiliary isn't set.
+    let cfg = &crate::config::get().agent;
+    let aux_available = cfg.auxiliary_provider.as_deref().map(|s| !s.is_empty()).unwrap_or(false)
+        && cfg.auxiliary_model.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
+
+    let (provider, resolved_model, route) = if use_primary || !aux_available {
+        let model = model_override.unwrap_or_else(|| cfg.model.clone());
+        let provider = llm::registry::build(&cfg.provider, &model, cfg)
+            .map_err(|e| format!("primary provider unavailable: {e}"))?;
+        let route = if use_primary { "primary" } else { "primary (auxiliary not configured)" };
+        (provider, model, route)
+    } else {
+        let aux_provider_name = cfg.auxiliary_provider.clone().unwrap_or_default();
+        let aux_model = model_override
+            .clone()
+            .unwrap_or_else(|| cfg.auxiliary_model.clone().unwrap_or_default());
+        let provider = llm::registry::build(&aux_provider_name, &aux_model, cfg)
+            .map_err(|e| format!("auxiliary provider unavailable: {e}"))?;
+        (provider, aux_model, "auxiliary")
+    };
+
+    let acfg = AuthorConfig::for_model(resolved_model.clone());
+
+    // Drive the async authoring call from a blocking dispatcher.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("tokio runtime: {e}"))?;
+    let result = runtime.block_on(author(provider, &acfg, &entry.draft, &turns));
+
+    let mut payload = json!({
+        "draft_id": draft_id,
+        "session_id": entry.session_id,
+        "model": resolved_model,
+        "route": route,
+        "source": match result.source {
+            AuthorSource::Llm => "llm",
+            AuthorSource::Fallback => "fallback",
+        },
+        "body_chars": result.body_chars,
+        "error": result.error,
+        "turns_replayed": turns.len(),
+    });
+
+    if write_to_disk {
+        let target_path = if let Some(custom) = out_path {
+            std::path::PathBuf::from(custom)
+        } else {
+            crate::paths::agent_skills_dir()
+                .join(&entry.draft.suggested_id)
+                .join("SKILL.md")
+        };
+        if target_path.exists() && !force {
+            payload["written"] = json!(false);
+            payload["write_error"] = json!(format!(
+                "refused to overwrite existing {} (pass --force)",
+                target_path.display()
+            ));
+            payload["document"] = json!(result.document);
+            return Ok(payload);
+        }
+        if let Some(parent) = target_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        }
+        std::fs::write(&target_path, &result.document)
+            .map_err(|e| format!("write {}: {e}", target_path.display()))?;
+        payload["written"] = json!(true);
+        payload["path"] = json!(target_path.display().to_string());
+    } else {
+        payload["written"] = json!(false);
+        payload["document"] = json!(result.document);
+    }
+
+    Ok(payload)
+}
+
 /// Reads the session's history from the memory DB, infers tool
 /// usage from the stored `[tool_use:NAME] ...` markers (no schema
 /// migration required), and runs the deterministic
@@ -7358,6 +7543,42 @@ mod tests {
         let err = curator_drafts_cmd(&["bogus".into()]).unwrap_err();
         assert!(err.contains("auto-title"));
         assert!(err.contains("retitle"));
+    }
+
+    #[test]
+    fn curator_author_requires_draft_id() {
+        let err = curator_cmd(&["author".into()]).unwrap_err();
+        assert!(err.to_lowercase().contains("usage"));
+    }
+
+    #[test]
+    fn curator_author_rejects_flag_as_id() {
+        let err = curator_cmd(&["author".into(), "--write".into()]).unwrap_err();
+        assert!(err.to_lowercase().contains("usage"));
+    }
+
+    #[test]
+    fn curator_author_unknown_flag_rejected() {
+        let err = curator_cmd(&[
+            "author".into(),
+            "draft-1".into(),
+            "--bogus".into(),
+        ])
+        .unwrap_err();
+        assert!(err.to_lowercase().contains("unknown flag"));
+    }
+
+    #[test]
+    fn curator_author_missing_draft_returns_helpful_error() {
+        // The default DraftStore should open successfully (or fail
+        // with an IO error); either way, asking for an unknown id
+        // must return a string mentioning the missing id.
+        let result = curator_cmd(&["author".into(), "definitely-not-real".into()]);
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("definitely-not-real") || err.contains("draft store"),
+            "want missing-id or draft-store error, got: {err}"
+        );
     }
 
     #[test]
