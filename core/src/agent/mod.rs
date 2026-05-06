@@ -149,8 +149,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "semantic" => semantic_cmd(args),
         "interrupt" => interrupt_cmd(args),
         "learn" => learn_cmd(args),
+        "hooks" => hooks_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | provider-doctor | title | summarise | classify | tools | guardrails | approval | todo | compress | aux | retry | vision | display | shell-hooks | media | binary-ext | context | file-safety | osv | semantic | interrupt | learn"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | provider-doctor | title | summarise | classify | tools | guardrails | approval | todo | compress | aux | retry | vision | display | shell-hooks | media | binary-ext | context | file-safety | osv | semantic | interrupt | learn | hooks"
         )),
     }
 }
@@ -470,6 +471,30 @@ fn learn_cmd(args: &[String]) -> Result<Value, String> {
 }
 
 
+/// `cos agent hooks <subcmd>` — introspect the runtime hook
+/// registry. Hooks themselves are registered programmatically (no
+/// CLI registration surface today — they live in code paths like
+/// audit / redact / prompt-cache that opt in at startup).
+///
+///   list                 — names of currently-registered hooks +
+///                          count.
+fn hooks_cmd(args: &[String]) -> Result<Value, String> {
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("list");
+    match sub {
+        "list" => {
+            let registry = crate::agent::runtime::hooks::global_registry();
+            let names = registry.names();
+            Ok(json!({
+                "hooks": names.clone(),
+                "count": names.len(),
+            }))
+        }
+        other => Err(format!("unknown hooks subcommand: {other}. try: list")),
+    }
+}
+
+
+/// `cos agent semantic <subcmd>` — vector-memory operations.
 ///
 ///   index <namespace> <key> "<text>" — embed and store
 ///   search [--namespace NS] [--limit N] "<query>"
@@ -13075,6 +13100,56 @@ mod tests {
         // dispatcher routing — using `prompt` because it's IO-free.
         let v = run("learn", &["prompt".into()]).expect("ok");
         assert!(v.get("system_prompt").is_some(), "got {v}");
+    }
+
+    // -----------------------------------------------------------------
+    // hooks (runtime hook registry CLI)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn hooks_cmd_list_default_returns_count() {
+        let v = hooks_cmd(&[]).expect("ok");
+        assert!(v.get("hooks").is_some(), "got {v}");
+        assert!(v.get("count").is_some(), "got {v}");
+        assert!(v["count"].is_number(), "got {v}");
+    }
+
+    #[test]
+    fn hooks_cmd_list_after_register_includes_name() {
+        use crate::agent::runtime::hooks::{global_registry, Hook, HookContext, HookOutcome};
+        struct TestHook;
+        impl Hook for TestHook {
+            fn name(&self) -> &str {
+                "cli-test-hook"
+            }
+            fn pre_turn(&self, _ctx: &HookContext) -> HookOutcome {
+                HookOutcome::Continue
+            }
+        }
+        let registry = global_registry();
+        registry.register(std::sync::Arc::new(TestHook));
+        let v = hooks_cmd(&["list".into()]).expect("ok");
+        let names = v["hooks"].as_array().unwrap();
+        assert!(
+            names
+                .iter()
+                .any(|n| n.as_str() == Some("cli-test-hook")),
+            "got {v}"
+        );
+        // Cleanup so we don't leak the registration into other tests.
+        registry.unregister("cli-test-hook");
+    }
+
+    #[test]
+    fn hooks_cmd_unknown_subcommand_errs() {
+        let err = hooks_cmd(&["frobnicate".into()]).unwrap_err();
+        assert!(err.contains("unknown"), "got {err}");
+    }
+
+    #[test]
+    fn run_hooks_routes_to_hooks_cmd() {
+        let v = run("hooks", &["list".into()]).expect("ok");
+        assert!(v.get("count").is_some(), "got {v}");
     }
 
     // -----------------------------------------------------------------

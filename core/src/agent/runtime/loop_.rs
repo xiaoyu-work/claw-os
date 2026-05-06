@@ -19,6 +19,7 @@ use crate::agent::llm::accumulate::StreamSink;
 use crate::agent::llm::{self, Message, Provider};
 use crate::agent::memory::sqlite_fts::{self, MemoryDb};
 use crate::agent::prompt;
+use crate::agent::runtime::hooks;
 use crate::agent::runtime::interrupt;
 use crate::agent::safety::redact::Redactor;
 use crate::agent::tools::registry::{default_registry, ToolRegistry};
@@ -163,11 +164,27 @@ async fn ask_inner(
         interrupt::register(session_id.clone())
     };
 
+    // Process-wide hook registry (default empty → zero-cost when
+    // no hooks registered). See `agent::runtime::hooks`.
+    let hook_registry = hooks::global_registry();
+    let hook_ctx_base = hooks::HookContext::new(
+        interrupt_handle.session_id().to_string(),
+        provider.name(),
+        cfg.model.clone(),
+    );
+
     for turn in 1..=cfg.max_turns {
         if interrupt_handle.check() {
             return Err(AgentError::Interrupted(
                 interrupt_handle.session_id().to_string(),
             ));
+        }
+
+        let hook_ctx = hook_ctx_base.clone().with_turn_index(turn);
+        if let hooks::HookOutcome::Stop(reason) = hook_registry.dispatch_pre_turn(&hook_ctx) {
+            return Err(AgentError::Interrupted(format!(
+                "hook stop (pre_turn): {reason}"
+            )));
         }
 
         if cfg.think_scrub_enabled {
@@ -204,7 +221,11 @@ async fn ask_inner(
         }
 
         let len_before = messages.len();
-        let outcome = super::turn::run_turn(
+        let turn_started_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let outcome_result = super::turn::run_turn(
             provider.clone(),
             &cfg.model,
             &system,
@@ -216,7 +237,58 @@ async fn ask_inner(
             recorder.map(|(_, sid)| sid),
             retry_policy_from_cfg(cfg),
         )
-        .await?;
+        .await;
+
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let latency_ms = now_ms.saturating_sub(turn_started_ms);
+
+        let outcome = match outcome_result {
+            Ok(o) => {
+                let summary = hooks::TurnSummary {
+                    success: true,
+                    latency_ms,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    stop_reason: match &o {
+                        super::turn::TurnOutcome::Final(_) => "Final".into(),
+                        super::turn::TurnOutcome::ContinueWithTools => "ContinueWithTools".into(),
+                    },
+                    tool_calls_made: messages[len_before..]
+                        .iter()
+                        .filter(|m| {
+                            m.content.iter().any(|b| {
+                                matches!(b, crate::agent::llm::ContentBlock::ToolUse { .. })
+                            })
+                        })
+                        .count() as u32,
+                    error: None,
+                };
+                if let hooks::HookOutcome::Stop(reason) =
+                    hook_registry.dispatch_post_turn(&hook_ctx, &summary)
+                {
+                    return Err(AgentError::Interrupted(format!(
+                        "hook stop (post_turn): {reason}"
+                    )));
+                }
+                o
+            }
+            Err(e) => {
+                let summary = hooks::TurnSummary {
+                    success: false,
+                    latency_ms,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    stop_reason: "Error".into(),
+                    tool_calls_made: 0,
+                    error: Some(e.to_string()),
+                };
+                let _ = hook_registry.dispatch_post_turn(&hook_ctx, &summary);
+                return Err(e);
+            }
+        };
 
         // Persist any messages appended by this turn (assistant message and
         // any tool-result message). When `redact_memory_enabled`, scrub the
@@ -1842,5 +1914,115 @@ mod tests {
         let s = format!("{e}");
         assert!(s.contains("sess-42"));
         assert!(s.to_lowercase().contains("interrupt"));
+    }
+
+    // -------- hooks integration ---------------------------------------
+
+    /// Prove the loop dispatches both pre_turn and post_turn through
+    /// the global hook registry, and that summary fields are
+    /// populated.
+    #[tokio::test]
+    async fn loop_dispatches_pre_and_post_turn_hooks() {
+        use crate::agent::runtime::hooks::{
+            global_registry, Hook, HookContext, HookOutcome, ToolDecision, ToolResultSummary,
+            TurnSummary,
+        };
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        struct Spy {
+            pre: Arc<AtomicU32>,
+            post: Arc<AtomicU32>,
+            last_post_summary: Arc<std::sync::Mutex<Option<TurnSummary>>>,
+        }
+
+        impl Hook for Spy {
+            fn name(&self) -> &str {
+                "loop-spy"
+            }
+            fn pre_turn(&self, _ctx: &HookContext) -> HookOutcome {
+                self.pre.fetch_add(1, Ordering::SeqCst);
+                HookOutcome::Continue
+            }
+            fn post_turn(&self, _ctx: &HookContext, summary: &TurnSummary) -> HookOutcome {
+                self.post.fetch_add(1, Ordering::SeqCst);
+                *self.last_post_summary.lock().unwrap() = Some(summary.clone());
+                HookOutcome::Continue
+            }
+            fn pre_tool(&self, _ctx: &HookContext, _t: &llm::ToolCall) -> ToolDecision {
+                ToolDecision::Allow
+            }
+            fn post_tool(
+                &self,
+                _ctx: &HookContext,
+                _t: &llm::ToolCall,
+                _r: &ToolResultSummary,
+            ) -> HookOutcome {
+                HookOutcome::Continue
+            }
+        }
+
+        let pre = Arc::new(AtomicU32::new(0));
+        let post = Arc::new(AtomicU32::new(0));
+        let last_summary = Arc::new(std::sync::Mutex::new(None));
+        let spy = Arc::new(Spy {
+            pre: pre.clone(),
+            post: post.clone(),
+            last_post_summary: last_summary.clone(),
+        });
+
+        let registry = global_registry();
+        registry.register(spy);
+
+        let cfg = cfg();
+        let provider: Arc<dyn Provider> = Arc::new(MockProvider::new(&cfg.model, &cfg));
+        let tools = builtin_only_registry();
+        let _result = ask_with(provider, &cfg, "hello", &tools).await.unwrap();
+
+        // Cleanup before assertions so a failure doesn't leak the
+        // hook into the next test.
+        registry.unregister("loop-spy");
+
+        assert!(pre.load(Ordering::SeqCst) >= 1, "pre_turn should fire");
+        assert!(post.load(Ordering::SeqCst) >= 1, "post_turn should fire");
+        let summary = last_summary.lock().unwrap().clone().expect("summary captured");
+        assert!(summary.success);
+        assert_eq!(summary.stop_reason, "Final");
+    }
+
+    /// A pre_turn hook returning Stop should abort the loop with
+    /// AgentError::Interrupted before the model is even called.
+    #[tokio::test]
+    async fn pre_turn_hook_stop_aborts_loop_with_interrupted() {
+        use crate::agent::runtime::hooks::{
+            global_registry, Hook, HookContext, HookOutcome,
+        };
+
+        struct Stopper;
+        impl Hook for Stopper {
+            fn name(&self) -> &str {
+                "loop-stopper"
+            }
+            fn pre_turn(&self, _ctx: &HookContext) -> HookOutcome {
+                HookOutcome::Stop("test-veto".into())
+            }
+        }
+
+        let registry = global_registry();
+        registry.register(Arc::new(Stopper));
+
+        let cfg = cfg();
+        let provider: Arc<dyn Provider> = Arc::new(MockProvider::new(&cfg.model, &cfg));
+        let tools = builtin_only_registry();
+        let err = ask_with(provider, &cfg, "hi", &tools).await.unwrap_err();
+
+        registry.unregister("loop-stopper");
+
+        match err {
+            AgentError::Interrupted(reason) => {
+                assert!(reason.contains("test-veto"), "got {reason}");
+                assert!(reason.contains("pre_turn"), "got {reason}");
+            }
+            other => panic!("expected Interrupted, got {other:?}"),
+        }
     }
 }
