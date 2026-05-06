@@ -1,33 +1,48 @@
-"""Slack gateway scaffold.
+"""Slack gateway app.
 
-Phase 9 placeholder. Mirrors apps/gateway/telegram/main.py for
-Slack. Real implementation will use Socket Mode (preferred for
-self-hosted) or HTTP Events.
+Outbound-only baseline: ``send`` POSTs a message via Slack Web API
+``chat.postMessage`` using a bot token (``xoxb-...``).  Inbound (Socket
+Mode / Events HTTP) is still a stub - landing it requires real
+WebSocket / HTTP server plumbing.  Stdlib only.
+
+Credentials: ``cos credential store slack_bot_token`` (or env
+``COS_SLACK_TOKEN``).
 """
 
 from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
+import urllib.error
+import urllib.request
 
 
 PLATFORM = "slack"
+SLACK_API = "https://slack.com/api"
+USER_AGENT = "cos-gateway-slack/0.2.0"
+# Slack hard limit per chat.postMessage text field ~40k chars; keep a
+# conservative cap that still covers normal agent replies cleanly.
+MAX_LEN = 4000
 
 
-def _schema():
+def _schema() -> dict:
     return {
         "name": f"gateway-{PLATFORM}",
-        "version": "0.1.0-scaffold",
-        "description": "Slack bot gateway (scaffold)",
+        "version": "0.2.0",
+        "description": (
+            "Slack gateway. ``send`` works via the Web API. ``start``/``stop`` "
+            "(Socket Mode / Events HTTP) are not yet implemented."
+        ),
         "commands": {
             "start": {
-                "description": "Start the gateway (Socket Mode preferred)",
+                "description": "Start the gateway (Socket Mode / Events HTTP) (NOT IMPLEMENTED)",
                 "parameters": [],
                 "example": "cos app gateway-slack start",
             },
             "stop": {
-                "description": "Stop a running gateway",
+                "description": "Stop a running gateway service (NOT IMPLEMENTED)",
                 "parameters": [],
                 "example": "cos app gateway-slack stop",
             },
@@ -37,44 +52,168 @@ def _schema():
                 "example": "cos app gateway-slack status",
             },
             "send": {
-                "description": "Send a message to a channel",
+                "description": "Send a message to a channel via Slack chat.postMessage",
                 "parameters": [
-                    {"name": "channel_id", "type": "string", "required": True, "description": "Target channel id", "kind": "positional"},
-                    {"name": "text", "type": "string", "required": True, "description": "Message text", "kind": "positional"},
+                    {
+                        "name": "channel_id",
+                        "type": "string",
+                        "required": True,
+                        "description": "Target Slack channel id (e.g. C123ABC) or user id for DM",
+                        "kind": "positional",
+                    },
+                    {
+                        "name": "text",
+                        "type": "string",
+                        "required": True,
+                        "description": "Message text",
+                        "kind": "positional",
+                    },
                 ],
-                "example": "cos app gateway-slack send C123 'hello'",
+                "example": "cos app gateway-slack send C123ABC 'hello'",
             },
         },
     }
 
 
-def _stub(command, args):
+def _load_token() -> tuple[str | None, str | None]:
+    """Returns (token, error)."""
+    env_tok = os.environ.get("COS_SLACK_TOKEN")
+    if env_tok:
+        return env_tok.strip(), None
+    try:
+        proc = subprocess.run(
+            ["cos", "credential", "load", "slack_bot_token"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        return None, f"cos credential load failed: {e}"
+    if proc.returncode != 0:
+        return None, f"cos credential load returned {proc.returncode}: {proc.stderr.strip()}"
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError as e:
+        return None, f"credential payload not JSON: {e}"
+    val = payload.get("value") if isinstance(payload, dict) else None
+    if not isinstance(val, str) or not val.strip():
+        return None, "credential payload missing 'value'"
+    return val.strip(), None
+
+
+def _truncate(text: str, limit: int = MAX_LEN) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "\u2026"
+
+
+def _send(channel_id: str, text: str) -> dict:
+    if not channel_id or not channel_id.strip():
+        return {"ok": False, "error": "channel_id required"}
+    if not text or not str(text).strip():
+        return {"ok": False, "error": "text required"}
+    token, err = _load_token()
+    if not token:
+        return {"ok": False, "error": err or "no token"}
+
+    body = json.dumps({"channel": channel_id, "text": _truncate(str(text))}).encode("utf-8")
+    req = urllib.request.Request(
+        f"{SLACK_API}/chat.postMessage",
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json; charset=utf-8",
+            "User-Agent": USER_AGENT,
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        try:
+            err_body = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            err_body = str(e)
+        return {
+            "ok": False,
+            "platform": PLATFORM,
+            "error": f"HTTP {e.code}: {err_body}",
+        }
+    except urllib.error.URLError as e:
+        return {"ok": False, "platform": PLATFORM, "error": f"URL error: {e}"}
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {"ok": False, "platform": PLATFORM, "error": f"non-JSON response: {raw}"}
+
+    if not isinstance(data, dict) or not data.get("ok"):
+        # Slack always returns 200 OK and signals errors via the JSON
+        # ``ok`` field plus an ``error`` string. Surface that even on
+        # HTTP success so callers don't think the post succeeded.
+        return {
+            "ok": False,
+            "platform": PLATFORM,
+            "error": data.get("error", "unknown") if isinstance(data, dict) else "unknown",
+            "response": data,
+        }
+
+    return {
+        "ok": True,
+        "platform": PLATFORM,
+        "channel_id": channel_id,
+        "ts": data.get("ts"),
+    }
+
+
+def _not_yet(command: str) -> dict:
     return {
         "ok": False,
         "platform": PLATFORM,
         "command": command,
-        "args": args,
         "status": "not_yet_implemented",
         "note": (
-            "Phase 9 scaffold. Wire credentials via `cos credential store "
-            "slack_bot_token` + `slack_app_token`, then implement Socket Mode here."
+            "Slack Socket Mode / Events HTTP loop still pending. "
+            "Use ``send <channel_id> <text>`` for outbound until then."
         ),
     }
 
 
-def run(command, args):
+def _status() -> dict:
+    return {
+        "ok": True,
+        "platform": PLATFORM,
+        "running": False,
+        "note": "Outbound-only mode. Socket Mode / Events HTTP not yet implemented.",
+    }
+
+
+def run(command: str, args):
     if command == "__schema__":
         return _schema()
-    if command not in {"start", "stop", "status", "send"}:
-        return {"error": f"unknown command: {command}"}
-    return _stub(command, args)
+    if command == "send":
+        if isinstance(args, list):
+            channel_id = args[0] if len(args) > 0 else ""
+            text = args[1] if len(args) > 1 else ""
+        elif isinstance(args, dict):
+            channel_id = args.get("channel_id", "")
+            text = args.get("text", "")
+        else:
+            return {"ok": False, "error": "invalid args"}
+        return _send(str(channel_id), str(text))
+    if command == "status":
+        return _status()
+    if command in {"start", "stop"}:
+        return _not_yet(command)
+    return {"ok": False, "error": f"unknown command: {command}"}
 
 
 if __name__ == "__main__":
     cmd = os.environ.get("COS_COMMAND") or (sys.argv[1] if len(sys.argv) > 1 else "")
     raw_args = os.environ.get("COS_ARGS_JSON")
     if raw_args:
-        args = json.loads(raw_args)
+        parsed_args = json.loads(raw_args)
     else:
-        args = sys.argv[2:]
-    print(json.dumps(run(cmd, args)))
+        parsed_args = sys.argv[2:]
+    print(json.dumps(run(cmd, parsed_args)))

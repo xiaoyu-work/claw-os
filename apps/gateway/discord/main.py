@@ -1,80 +1,204 @@
-"""Discord gateway scaffold.
+"""Discord gateway app.
 
-Phase 9 placeholder. See apps/gateway/telegram/main.py for the
-implementation pattern; this module mirrors it for Discord and
-will use the bot-gateway WebSocket once wired up.
+Outbound-only baseline: ``send`` POSTs a message to a Discord channel
+using the Bot REST API (``Authorization: Bot <token>``).  Inbound (the
+Gateway WebSocket loop) is still a stub - landing it requires a
+real WebSocket client.  Stdlib only.
+
+Credentials: ``cos credential store discord_bot_token`` (or env
+``COS_DISCORD_TOKEN``).
 """
 
 from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
+import urllib.error
+import urllib.request
 
 
 PLATFORM = "discord"
+DISCORD_API = "https://discord.com/api/v10"
+USER_AGENT = "DiscordBot (https://github.com/clawos/cos, 0.2.0)"
+MAX_LEN = 2000  # Discord per-message hard limit
 
 
-def _schema():
+def _schema() -> dict:
     return {
         "name": f"gateway-{PLATFORM}",
-        "version": "0.1.0-scaffold",
-        "description": "Discord bot gateway (scaffold)",
+        "version": "0.2.0",
+        "description": (
+            "Discord gateway. ``send`` works via the Bot REST API. "
+            "``start``/``stop`` (WebSocket gateway) are not yet implemented."
+        ),
         "commands": {
             "start": {
-                "description": "Connect to the Discord gateway WebSocket",
+                "description": "Connect to the Discord gateway WebSocket (NOT IMPLEMENTED)",
                 "parameters": [],
                 "example": "cos app gateway-discord start",
             },
             "stop": {
-                "description": "Stop a running gateway",
+                "description": "Stop a running gateway (NOT IMPLEMENTED)",
                 "parameters": [],
                 "example": "cos app gateway-discord stop",
             },
             "status": {
-                "description": "Show running state",
+                "description": "Show running state (always 'stopped' until WS lands)",
                 "parameters": [],
                 "example": "cos app gateway-discord status",
             },
             "send": {
-                "description": "Send a message to a channel",
+                "description": "Send a message to a channel via Bot REST API",
                 "parameters": [
-                    {"name": "channel_id", "type": "string", "required": True, "description": "Target channel id", "kind": "positional"},
-                    {"name": "text", "type": "string", "required": True, "description": "Message text", "kind": "positional"},
+                    {
+                        "name": "channel_id",
+                        "type": "string",
+                        "required": True,
+                        "description": "Target Discord channel id (snowflake)",
+                        "kind": "positional",
+                    },
+                    {
+                        "name": "text",
+                        "type": "string",
+                        "required": True,
+                        "description": "Message text (truncated to 2000 chars)",
+                        "kind": "positional",
+                    },
                 ],
-                "example": "cos app gateway-discord send 12345 'hello'",
+                "example": "cos app gateway-discord send 123456789012345678 'hello'",
             },
         },
     }
 
 
-def _stub(command, args):
+def _load_token() -> tuple[str | None, str | None]:
+    """Returns (token, error)."""
+    env_tok = os.environ.get("COS_DISCORD_TOKEN")
+    if env_tok:
+        return env_tok.strip(), None
+    try:
+        proc = subprocess.run(
+            ["cos", "credential", "load", "discord_bot_token"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        return None, f"cos credential load failed: {e}"
+    if proc.returncode != 0:
+        return None, f"cos credential load returned {proc.returncode}: {proc.stderr.strip()}"
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError as e:
+        return None, f"credential payload not JSON: {e}"
+    val = payload.get("value") if isinstance(payload, dict) else None
+    if not isinstance(val, str) or not val.strip():
+        return None, "credential payload missing 'value'"
+    return val.strip(), None
+
+
+def _truncate(text: str, limit: int = MAX_LEN) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "\u2026"
+
+
+def _send(channel_id: str, text: str) -> dict:
+    if not channel_id or not channel_id.strip():
+        return {"ok": False, "error": "channel_id required"}
+    if not text or not str(text).strip():
+        return {"ok": False, "error": "text required"}
+    token, err = _load_token()
+    if not token:
+        return {"ok": False, "error": err or "no token"}
+
+    body = json.dumps({"content": _truncate(str(text))}).encode("utf-8")
+    req = urllib.request.Request(
+        f"{DISCORD_API}/channels/{channel_id}/messages",
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bot {token}",
+            "Content-Type": "application/json",
+            "User-Agent": USER_AGENT,
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                data = {"raw": raw}
+            return {
+                "ok": True,
+                "platform": PLATFORM,
+                "channel_id": channel_id,
+                "message_id": data.get("id") if isinstance(data, dict) else None,
+            }
+    except urllib.error.HTTPError as e:
+        try:
+            err_body = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            err_body = str(e)
+        return {
+            "ok": False,
+            "platform": PLATFORM,
+            "error": f"HTTP {e.code}: {err_body}",
+        }
+    except urllib.error.URLError as e:
+        return {"ok": False, "platform": PLATFORM, "error": f"URL error: {e}"}
+
+
+def _not_yet(command: str) -> dict:
     return {
         "ok": False,
         "platform": PLATFORM,
         "command": command,
-        "args": args,
         "status": "not_yet_implemented",
         "note": (
-            "Phase 9 scaffold. Wire credentials via `cos credential store "
-            "discord_bot_token`, then implement the gateway WebSocket loop here."
+            "Discord Gateway WebSocket loop still pending. "
+            "Use ``send <channel_id> <text>`` for outbound until then."
         ),
     }
 
 
-def run(command, args):
+def _status() -> dict:
+    return {
+        "ok": True,
+        "platform": PLATFORM,
+        "running": False,
+        "note": "Outbound-only mode. WebSocket gateway not yet implemented.",
+    }
+
+
+def run(command: str, args):
     if command == "__schema__":
         return _schema()
-    if command not in {"start", "stop", "status", "send"}:
-        return {"error": f"unknown command: {command}"}
-    return _stub(command, args)
+    if command == "send":
+        if isinstance(args, list):
+            channel_id = args[0] if len(args) > 0 else ""
+            text = args[1] if len(args) > 1 else ""
+        elif isinstance(args, dict):
+            channel_id = args.get("channel_id", "")
+            text = args.get("text", "")
+        else:
+            return {"ok": False, "error": "invalid args"}
+        return _send(str(channel_id), str(text))
+    if command == "status":
+        return _status()
+    if command in {"start", "stop"}:
+        return _not_yet(command)
+    return {"ok": False, "error": f"unknown command: {command}"}
 
 
 if __name__ == "__main__":
     cmd = os.environ.get("COS_COMMAND") or (sys.argv[1] if len(sys.argv) > 1 else "")
     raw_args = os.environ.get("COS_ARGS_JSON")
     if raw_args:
-        args = json.loads(raw_args)
+        parsed_args = json.loads(raw_args)
     else:
-        args = sys.argv[2:]
-    print(json.dumps(run(cmd, args)))
+        parsed_args = sys.argv[2:]
+    print(json.dumps(run(cmd, parsed_args)))

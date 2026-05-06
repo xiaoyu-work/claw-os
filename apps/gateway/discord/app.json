@@ -1,13 +1,13 @@
 {
   "name": "gateway-discord",
-  "version": "0.1.0-scaffold",
-  "description": "Discord bot gateway. Exposes the cos agent in a Discord server / DMs; receives messages, forwards to `cos agent ask`, replies with the response.",
+  "version": "0.2.0",
+  "description": "Discord gateway. `send` posts via the Bot REST API. `start`/`stop` (gateway WebSocket) not yet implemented.",
   "runtime": "python",
   "commands": {
-    "start": "Start the gateway connection (gateway WebSocket)",
-    "stop": "Stop a running gateway service",
-    "status": "Show running state + recent message stats",
-    "send": "Send a message to a channel (positional: channel_id text)"
+    "start": "Connect to the Discord Gateway WebSocket (NOT IMPLEMENTED)",
+    "stop": "Stop a running gateway service (NOT IMPLEMENTED)",
+    "status": "Show running state",
+    "send": "Send a message to a channel via Bot REST API (positional: channel_id text)"
   },
   "dependencies": {
     "credentials": ["discord_bot_token"],

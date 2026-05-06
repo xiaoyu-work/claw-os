@@ -1,16 +1,16 @@
 {
   "name": "gateway-slack",
-  "version": "0.1.0-scaffold",
-  "description": "Slack bot gateway. Exposes the cos agent as a Slack app; receives mentions / DMs / slash commands, forwards to `cos agent ask`, replies inline.",
+  "version": "0.2.0",
+  "description": "Slack gateway. `send` posts via Web API chat.postMessage. `start`/`stop` (Socket Mode / Events HTTP) not yet implemented.",
   "runtime": "python",
   "commands": {
-    "start": "Start the gateway (Socket Mode or Events HTTP)",
-    "stop": "Stop a running gateway service",
-    "status": "Show running state + recent message stats",
-    "send": "Send a message to a channel (positional: channel_id text)"
+    "start": "Start the gateway (Socket Mode / Events HTTP) (NOT IMPLEMENTED)",
+    "stop": "Stop a running gateway service (NOT IMPLEMENTED)",
+    "status": "Show running state",
+    "send": "Send a message to a channel via Slack Web API (positional: channel_id text)"
   },
   "dependencies": {
-    "credentials": ["slack_bot_token", "slack_app_token"],
+    "credentials": ["slack_bot_token"],
     "engines": []
   }
 }
