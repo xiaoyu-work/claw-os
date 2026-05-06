@@ -398,6 +398,7 @@ fn builtin_apps() -> Vec<(
             ("prompt", "Inspect the system prompt sent to the model: cos agent prompt [show|build] [--extra <path>] [--raw]"),
             ("think-scrub", "Strip <think>/<thinking>/<reasoning> blocks from text: cos agent think-scrub <text> | --file <path> | --stdin [--check]"),
             ("tokens", "Estimate token count of a string (chars / 4 heuristic): cos agent tokens <text> | --file <path> | --stdin"),
+            ("providers", "Probe credential availability for every registered LLM provider: cos agent providers [--names <a,b>] [--probe-credentials]"),
         ]),
         ("model", "Local model registry + inference daemon (ort for STT/TTS/embed/vision/imagegen, llama.cpp for LLM) — Phase 0.5 skeleton", vec![
             ("list", "List registered models from /var/lib/cos/models/"),

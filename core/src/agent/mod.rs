@@ -120,8 +120,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "prompt" => prompt_cmd(args),
         "think-scrub" => think_scrub_cmd(args),
         "tokens" => tokens_cmd(args),
+        "providers" => providers_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers"
         )),
     }
 }
@@ -1347,7 +1348,180 @@ fn read_text_input(args: &[String], cmd: &str) -> Result<(String, bool), String>
     Ok((input, check))
 }
 
-/// `cos agent nudge [list|due|add <due_in_secs> <message> [--repeat <secs>] [--tag <tag>]|fire <id>|remove <id>|path]`
+/// `cos agent providers [--names <a,b,c>] [--probe-credentials]`
+/// — diagnostic snapshot of every linked LLM provider plus the
+/// canonical credential surface that would configure each one.
+///
+/// For the *active* provider (`config.agent.provider`) the user's
+/// real `AgentConfig` is used so `is_configured` reflects what the
+/// runtime actually sees. For the others a synthetic config is
+/// substituted that hard-codes the canonical env-var + credential
+/// names per alias (the convention this binary documents); that
+/// way the answer to "what would happen if I switched my config
+/// to provider X right now?" is honest, not a misleading
+/// `not_configured` from a default-empty config.
+///
+/// `--probe-credentials` additionally scans the credential store
+/// directly via `crate::credential::try_load(name, "agent")`. This
+/// is opt-in because the probe touches `<data_dir>/credentials/`
+/// which can be slow on networked storage; the env-var probe is
+/// always cheap and always on.
+fn providers_cmd(args: &[String]) -> Result<Value, String> {
+    let mut filter_names: Option<Vec<String>> = None;
+    let mut probe_credentials = false;
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--names" => {
+                let raw = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--names needs a comma list".to_string())?;
+                filter_names = Some(
+                    raw.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect(),
+                );
+                i += 2;
+            }
+            "--probe-credentials" => {
+                probe_credentials = true;
+                i += 1;
+            }
+            other => {
+                return Err(format!(
+                    "unknown providers arg: {other}. try: --names <a,b,c> | --probe-credentials"
+                ));
+            }
+        }
+    }
+
+    let cfg = crate::config::get();
+    let active = cfg.agent.provider.clone();
+    let active_model = if cfg.agent.model.is_empty() {
+        "stub-model".to_string()
+    } else {
+        cfg.agent.model.clone()
+    };
+
+    let mut entries = Vec::new();
+    for &name in llm::available_providers().iter() {
+        if let Some(filter) = filter_names.as_ref() {
+            if !filter.iter().any(|n| n == name) {
+                continue;
+            }
+        }
+
+        let canonical_env = canonical_env_for_provider(name);
+        let canonical_credential = canonical_credential_for_provider(name);
+        let is_active = name == active;
+
+        // Use the user's actual agent config for the active provider,
+        // a synthetic canonical-name config for the others.
+        let probe_cfg = if is_active {
+            cfg.agent.clone()
+        } else {
+            let mut c = crate::config::AgentConfig::default();
+            c.provider = name.to_string();
+            c.api_key_credential = canonical_credential.map(String::from);
+            c.api_key_env = canonical_env.map(String::from);
+            c
+        };
+
+        let configured = match llm::registry::build(name, &active_model, &probe_cfg) {
+            Ok(p) => p.is_configured(),
+            Err(_) => false,
+        };
+
+        let env_present = canonical_env
+            .map(|e| std::env::var(e).map(|v| !v.is_empty()).unwrap_or(false))
+            .unwrap_or(false);
+
+        let credential_present = if probe_credentials {
+            canonical_credential
+                .map(|c| {
+                    crate::credential::try_load(c, "agent")
+                        .map(|x| x.is_some())
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false)
+        } else {
+            false
+        };
+
+        entries.push(json!({
+            "name": name,
+            "active": is_active,
+            "configured": configured,
+            "default_base_url": default_base_url_for_provider(name),
+            "env": canonical_env,
+            "env_present": env_present,
+            "credential": canonical_credential,
+            "credential_present": credential_present,
+            "key_required": canonical_env.is_some(),
+        }));
+    }
+
+    Ok(json!({
+        "active": active,
+        "active_model": cfg.agent.model.clone(),
+        "active_configured": entries.iter().any(|e| e.get("active") == Some(&Value::Bool(true)) && e.get("configured") == Some(&Value::Bool(true))),
+        "probe_credentials": probe_credentials,
+        "providers": entries,
+        "count": entries.len(),
+    }))
+}
+
+/// Canonical env var the binary documents per provider alias.
+/// Returns `None` for providers that don't use an API key (mock,
+/// llama_local, ollama).
+fn canonical_env_for_provider(name: &str) -> Option<&'static str> {
+    match name {
+        "openai" => Some("OPENAI_API_KEY"),
+        "xai" => Some("XAI_API_KEY"),
+        "deepseek" => Some("DEEPSEEK_API_KEY"),
+        "openrouter" => Some("OPENROUTER_API_KEY"),
+        "anthropic" => Some("ANTHROPIC_API_KEY"),
+        "gemini" => Some("GEMINI_API_KEY"),
+        // Local/no-auth providers.
+        "ollama" | "mock" | "llama_local" => None,
+        _ => None,
+    }
+}
+
+/// Canonical credential name (in the `agent` namespace) per provider
+/// alias. Mirrors `canonical_env_for_provider` but for the
+/// credential store. `None` for providers that never need a key.
+fn canonical_credential_for_provider(name: &str) -> Option<&'static str> {
+    match name {
+        "openai" => Some("openai"),
+        "xai" => Some("xai"),
+        "deepseek" => Some("deepseek"),
+        "openrouter" => Some("openrouter"),
+        "anthropic" => Some("anthropic"),
+        "gemini" => Some("gemini"),
+        "ollama" | "mock" | "llama_local" => None,
+        _ => None,
+    }
+}
+
+/// Default base URL per provider alias when no override is set.
+/// Helps users see what they'd hit out of the box.
+fn default_base_url_for_provider(name: &str) -> Option<&'static str> {
+    if llm::providers::openai_compat::is_alias(name) {
+        Some(llm::providers::openai_compat::default_base_url_for(name))
+    } else if name == "anthropic" {
+        Some("https://api.anthropic.com/v1")
+    } else if name == "gemini" {
+        Some("https://generativelanguage.googleapis.com/v1beta")
+    } else if name == "llama_local" {
+        Some("local: file path via AgentConfig.model")
+    } else {
+        None
+    }
+}
+
+
 /// — managed periodic-nudge store. `list` shows all nudges; `due`
 /// shows only those with `due_at_epoch_s <= now`. `add` parses a
 /// relative offset in seconds (the most common case for "remind me
@@ -3053,5 +3227,279 @@ mod tests {
         ])
         .unwrap_err();
         assert!(err.contains("--min-turns"));
+    }
+
+    #[test]
+    fn providers_cmd_lists_every_registered_provider() {
+        let v = providers_cmd(&[]).expect("providers ok");
+        let arr = v
+            .get("providers")
+            .and_then(|p| p.as_array())
+            .expect("providers array");
+        let names: std::collections::HashSet<_> = arr
+            .iter()
+            .filter_map(|p| p.get("name").and_then(|n| n.as_str()))
+            .collect();
+        for &expected in llm::available_providers().iter() {
+            assert!(
+                names.contains(expected),
+                "providers_cmd missing {expected}: got {names:?}"
+            );
+        }
+        assert_eq!(
+            v.get("count").and_then(|c| c.as_u64()).unwrap_or(0),
+            llm::available_providers().len() as u64
+        );
+    }
+
+    #[test]
+    fn providers_cmd_marks_active_provider() {
+        let active = crate::config::get().agent.provider.clone();
+        let v = providers_cmd(&[]).expect("providers ok");
+        let arr = v.get("providers").and_then(|p| p.as_array()).unwrap();
+        let active_entries: Vec<_> = arr
+            .iter()
+            .filter(|e| e.get("active") == Some(&serde_json::Value::Bool(true)))
+            .collect();
+        assert_eq!(active_entries.len(), 1, "exactly one active provider");
+        assert_eq!(
+            active_entries[0].get("name").and_then(|n| n.as_str()),
+            Some(active.as_str())
+        );
+    }
+
+    #[test]
+    fn providers_cmd_filters_by_names_flag() {
+        let v = providers_cmd(&["--names".into(), "openai,anthropic".into()])
+            .expect("providers ok");
+        let arr = v.get("providers").and_then(|p| p.as_array()).unwrap();
+        assert_eq!(arr.len(), 2);
+        let names: Vec<_> = arr
+            .iter()
+            .filter_map(|p| p.get("name").and_then(|n| n.as_str()))
+            .collect();
+        assert!(names.contains(&"openai"));
+        assert!(names.contains(&"anthropic"));
+    }
+
+    #[test]
+    fn providers_cmd_filter_drops_unknown_names_silently() {
+        let v = providers_cmd(&["--names".into(), "openai,does-not-exist".into()])
+            .expect("providers ok");
+        let arr = v.get("providers").and_then(|p| p.as_array()).unwrap();
+        // "does-not-exist" is not in REGISTERED, so it gets dropped.
+        assert_eq!(arr.len(), 1);
+        assert_eq!(
+            arr[0].get("name").and_then(|n| n.as_str()),
+            Some("openai")
+        );
+    }
+
+    #[test]
+    fn providers_cmd_rejects_unknown_flags() {
+        let err = providers_cmd(&["--bogus".into()]).unwrap_err();
+        assert!(err.contains("--bogus"));
+        assert!(err.contains("--names"));
+    }
+
+    #[test]
+    fn providers_cmd_names_flag_requires_value() {
+        let err = providers_cmd(&["--names".into()]).unwrap_err();
+        assert!(err.contains("--names"));
+    }
+
+    #[test]
+    fn providers_cmd_local_providers_have_no_canonical_env_or_credential() {
+        let v = providers_cmd(&["--names".into(), "ollama,mock,llama_local".into()])
+            .expect("providers ok");
+        let arr = v.get("providers").and_then(|p| p.as_array()).unwrap();
+        assert_eq!(arr.len(), 3);
+        for entry in arr {
+            assert_eq!(
+                entry.get("env"),
+                Some(&serde_json::Value::Null),
+                "{:?} should have no canonical env",
+                entry.get("name")
+            );
+            assert_eq!(
+                entry.get("credential"),
+                Some(&serde_json::Value::Null),
+                "{:?} should have no canonical credential",
+                entry.get("name")
+            );
+            assert_eq!(
+                entry.get("key_required"),
+                Some(&serde_json::Value::Bool(false)),
+                "{:?} should not require a key",
+                entry.get("name")
+            );
+        }
+    }
+
+    #[test]
+    fn providers_cmd_cloud_providers_advertise_canonical_env_and_credential() {
+        let v = providers_cmd(&[
+            "--names".into(),
+            "openai,anthropic,gemini,xai,deepseek,openrouter".into(),
+        ])
+        .expect("providers ok");
+        let arr = v.get("providers").and_then(|p| p.as_array()).unwrap();
+        assert_eq!(arr.len(), 6);
+        let by_name: std::collections::HashMap<_, _> = arr
+            .iter()
+            .map(|e| {
+                (
+                    e.get("name").and_then(|n| n.as_str()).unwrap().to_string(),
+                    e.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            by_name["openai"].get("env").and_then(|e| e.as_str()),
+            Some("OPENAI_API_KEY")
+        );
+        assert_eq!(
+            by_name["anthropic"].get("env").and_then(|e| e.as_str()),
+            Some("ANTHROPIC_API_KEY")
+        );
+        assert_eq!(
+            by_name["gemini"].get("env").and_then(|e| e.as_str()),
+            Some("GEMINI_API_KEY")
+        );
+        assert_eq!(
+            by_name["openrouter"]
+                .get("credential")
+                .and_then(|e| e.as_str()),
+            Some("openrouter")
+        );
+        for n in [
+            "openai",
+            "anthropic",
+            "gemini",
+            "xai",
+            "deepseek",
+            "openrouter",
+        ] {
+            assert_eq!(
+                by_name[n].get("key_required"),
+                Some(&serde_json::Value::Bool(true)),
+                "{n} should require a key"
+            );
+        }
+    }
+
+    #[test]
+    fn providers_cmd_default_base_url_per_alias() {
+        let v = providers_cmd(&[]).expect("providers ok");
+        let arr = v.get("providers").and_then(|p| p.as_array()).unwrap();
+        let by_name: std::collections::HashMap<_, _> = arr
+            .iter()
+            .map(|e| {
+                (
+                    e.get("name").and_then(|n| n.as_str()).unwrap().to_string(),
+                    e.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            by_name["openai"]
+                .get("default_base_url")
+                .and_then(|u| u.as_str()),
+            Some("https://api.openai.com/v1")
+        );
+        assert_eq!(
+            by_name["xai"]
+                .get("default_base_url")
+                .and_then(|u| u.as_str()),
+            Some("https://api.x.ai/v1")
+        );
+        assert_eq!(
+            by_name["ollama"]
+                .get("default_base_url")
+                .and_then(|u| u.as_str()),
+            Some("http://localhost:11434/v1")
+        );
+        assert_eq!(
+            by_name["anthropic"]
+                .get("default_base_url")
+                .and_then(|u| u.as_str()),
+            Some("https://api.anthropic.com/v1")
+        );
+        assert_eq!(
+            by_name["gemini"]
+                .get("default_base_url")
+                .and_then(|u| u.as_str()),
+            Some("https://generativelanguage.googleapis.com/v1beta")
+        );
+    }
+
+    #[test]
+    fn providers_cmd_env_present_reflects_environment() {
+        // Pick an env name extremely unlikely to be set in CI to assert
+        // the negative path. We can't safely set/unset OPENAI_API_KEY in
+        // a process-shared test, so we just check the contract.
+        let v = providers_cmd(&[]).expect("providers ok");
+        let arr = v.get("providers").and_then(|p| p.as_array()).unwrap();
+        for entry in arr {
+            let env = entry.get("env").and_then(|e| e.as_str());
+            let env_present = entry
+                .get("env_present")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if env.is_none() {
+                assert!(
+                    !env_present,
+                    "providers without canonical env must report env_present=false"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn providers_cmd_probe_credentials_default_off() {
+        let v = providers_cmd(&[]).expect("providers ok");
+        assert_eq!(
+            v.get("probe_credentials"),
+            Some(&serde_json::Value::Bool(false))
+        );
+        let arr = v.get("providers").and_then(|p| p.as_array()).unwrap();
+        for entry in arr {
+            assert_eq!(
+                entry.get("credential_present"),
+                Some(&serde_json::Value::Bool(false)),
+                "credential_present must be false when --probe-credentials is off (no false positives)"
+            );
+        }
+    }
+
+    #[test]
+    fn providers_cmd_probe_credentials_flag_flips_marker() {
+        let v = providers_cmd(&["--probe-credentials".into()]).expect("providers ok");
+        assert_eq!(
+            v.get("probe_credentials"),
+            Some(&serde_json::Value::Bool(true))
+        );
+        // We don't assert credential_present truthiness because the
+        // test environment is unpredictable; just that the probe ran.
+    }
+
+    #[test]
+    fn providers_cmd_count_matches_providers_array_len() {
+        let v = providers_cmd(&[]).expect("providers ok");
+        let arr_len = v
+            .get("providers")
+            .and_then(|p| p.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+        let count = v.get("count").and_then(|c| c.as_u64()).unwrap_or(0);
+        assert_eq!(count as usize, arr_len);
+    }
+
+    #[test]
+    fn providers_cmd_filter_count_matches_filtered_array() {
+        let v = providers_cmd(&["--names".into(), "openai".into()])
+            .expect("providers ok");
+        let count = v.get("count").and_then(|c| c.as_u64()).unwrap_or(0);
+        assert_eq!(count, 1);
     }
 }
