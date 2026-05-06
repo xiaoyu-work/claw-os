@@ -2828,14 +2828,339 @@ fn vision_cmd(args: &[String]) -> Result<Value, String> {
     let sub = args.first().map(|s| s.as_str()).unwrap_or("");
     match sub {
         "route" => vision_route_cmd(&args[1..]),
+        "sniff" => vision_sniff_cmd(&args[1..]),
+        "analyze" => vision_analyze_cmd(&args[1..]),
         "" => Err(
-            "usage: cos agent vision route --file <path> | --bytes N --mime <m> [...]"
+            "usage: cos agent vision <route|sniff|analyze> ... \
+             (e.g. route --file <p> | sniff --file <p> | analyze --file <p> --prompt <t>)"
                 .to_string(),
         ),
         other => Err(format!(
-            "unknown vision subcommand: {other}. try: route --file <path> | route --bytes N --mime <m>"
+            "unknown vision subcommand: {other}. try: route | sniff | analyze"
         )),
     }
+}
+
+/// `cos agent vision sniff --file <path> | --url <url>`
+///
+/// Read the head of an image (file or URL), report the magic-byte
+/// MIME, the byte length, and whether it's a "widely-supported"
+/// vision MIME. Pure inspection — does not call any LLM.
+fn vision_sniff_cmd(args: &[String]) -> Result<Value, String> {
+    use crate::agent::media::vision::analyze::sniff_mime;
+    use crate::agent::media::vision::routing::ImageMime;
+
+    let mut file: Option<String> = None;
+    let mut url: Option<String> = None;
+    let mut head_only_bytes: usize = 32; // sniff_mime needs ~12 bytes max
+    let mut fetch_timeout_ms: u64 = 30_000;
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--file" => {
+                file = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--file needs a path".to_string())?,
+                );
+                i += 2;
+            }
+            "--url" => {
+                url = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--url needs a value".to_string())?,
+                );
+                i += 2;
+            }
+            "--head-bytes" => {
+                let raw = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--head-bytes needs a number".to_string())?;
+                head_only_bytes = raw
+                    .parse::<usize>()
+                    .map_err(|e| format!("--head-bytes parse: {e}"))?;
+                i += 2;
+            }
+            "--fetch-timeout-ms" => {
+                let raw = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--fetch-timeout-ms needs a number".to_string())?;
+                fetch_timeout_ms = raw
+                    .parse::<u64>()
+                    .map_err(|e| format!("--fetch-timeout-ms parse: {e}"))?;
+                i += 2;
+            }
+            other => return Err(format!("unknown vision sniff flag: {other}")),
+        }
+    }
+
+    if file.is_some() == url.is_some() {
+        return Err("vision sniff needs exactly one of --file <path> or --url <url>".to_string());
+    }
+
+    let (bytes_len, head, source) = if let Some(path) = file {
+        let p = std::path::PathBuf::from(&path);
+        let meta = std::fs::metadata(&p).map_err(|e| format!("stat {path}: {e}"))?;
+        let bytes_len = meta.len() as usize;
+        let data = std::fs::read(&p).map_err(|e| format!("read {path}: {e}"))?;
+        let head_n = head_only_bytes.min(data.len());
+        (bytes_len, data[..head_n].to_vec(), format!("file:{path}"))
+    } else {
+        let u = url.unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("tokio runtime: {e}"))?;
+        let (data, _mime) = runtime
+            .block_on(crate::agent::media::vision::analyze::fetch_image(
+                &u,
+                std::time::Duration::from_millis(fetch_timeout_ms),
+            ))
+            .map_err(|e| format!("fetch {u}: {e}"))?;
+        let head_n = head_only_bytes.min(data.len());
+        (data.len(), data[..head_n].to_vec(), format!("url:{u}"))
+    };
+
+    let mime = sniff_mime(&head);
+    Ok(json!({
+        "source": source,
+        "bytes_len": bytes_len,
+        "head_bytes_inspected": head.len(),
+        "mime": format!("{:?}", mime),
+        "mime_widely_supported": mime.is_widely_supported(),
+        "is_other": matches!(mime, ImageMime::Other),
+    }))
+}
+
+/// `cos agent vision analyze --file <path> | --url <url> | --base64 <data> --mime <m>
+///                           --prompt <text> [--system <text>] [--max-tokens N]
+///                           [--provider <name>] [--model <name>]
+///                           [--fetch-timeout-ms N]`
+///
+/// End-to-end vision call: resolves the image to base64, builds a
+/// multimodal chat request, dispatches via the configured (or
+/// overridden) provider, and prints the assistant's text response.
+fn vision_analyze_cmd(args: &[String]) -> Result<Value, String> {
+    use crate::agent::media::vision::analyze::{analyze, ImageInput, VisionRequest};
+    use crate::agent::media::vision::routing::ImageMime;
+
+    let mut file: Option<String> = None;
+    let mut url: Option<String> = None;
+    let mut base64_data: Option<String> = None;
+    let mut mime_override: Option<String> = None;
+    let mut prompt: Option<String> = None;
+    let mut system: Option<String> = None;
+    let mut max_tokens: Option<u32> = None;
+    let mut provider_override: Option<String> = None;
+    let mut model_override: Option<String> = None;
+    let mut fetch_timeout_ms: u64 = 30_000;
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--file" => {
+                file = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--file needs a path".to_string())?,
+                );
+                i += 2;
+            }
+            "--url" => {
+                url = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--url needs a value".to_string())?,
+                );
+                i += 2;
+            }
+            "--base64" => {
+                base64_data = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--base64 needs a value".to_string())?,
+                );
+                i += 2;
+            }
+            "--mime" => {
+                mime_override = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--mime needs a value".to_string())?,
+                );
+                i += 2;
+            }
+            "--prompt" => {
+                prompt = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--prompt needs a value".to_string())?,
+                );
+                i += 2;
+            }
+            "--system" => {
+                system = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--system needs a value".to_string())?,
+                );
+                i += 2;
+            }
+            "--max-tokens" => {
+                let raw = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--max-tokens needs a number".to_string())?;
+                max_tokens = Some(
+                    raw.parse::<u32>()
+                        .map_err(|e| format!("--max-tokens parse: {e}"))?,
+                );
+                i += 2;
+            }
+            "--provider" => {
+                provider_override = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--provider needs a value".to_string())?,
+                );
+                i += 2;
+            }
+            "--model" => {
+                model_override = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--model needs a value".to_string())?,
+                );
+                i += 2;
+            }
+            "--fetch-timeout-ms" => {
+                let raw = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--fetch-timeout-ms needs a number".to_string())?;
+                fetch_timeout_ms = raw
+                    .parse::<u64>()
+                    .map_err(|e| format!("--fetch-timeout-ms parse: {e}"))?;
+                i += 2;
+            }
+            other => return Err(format!("unknown vision analyze flag: {other}")),
+        }
+    }
+
+    let prompt = prompt.ok_or_else(|| "vision analyze: --prompt <text> required".to_string())?;
+    if prompt.trim().is_empty() {
+        return Err("vision analyze: --prompt must be non-empty".to_string());
+    }
+
+    // Mutually-exclusive image source. base64 needs an explicit mime.
+    let sources_set =
+        usize::from(file.is_some()) + usize::from(url.is_some()) + usize::from(base64_data.is_some());
+    if sources_set != 1 {
+        return Err(
+            "vision analyze needs exactly one of --file <path> | --url <url> | --base64 <data>"
+                .to_string(),
+        );
+    }
+
+    let image: ImageInput = if let Some(path) = file {
+        let data = std::fs::read(&path).map_err(|e| format!("read {path}: {e}"))?;
+        // Honour --mime if supplied; otherwise infer from extension; sniff
+        // bytes as last resort so HEIC/BMP etc still get classified.
+        let mime = if let Some(m) = mime_override.as_deref() {
+            ImageMime::from_str(m)
+        } else {
+            let ext = std::path::Path::new(&path)
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|s| s.to_ascii_lowercase())
+                .unwrap_or_default();
+            let by_ext = ImageMime::from_str(&ext);
+            if matches!(by_ext, ImageMime::Other) {
+                crate::agent::media::vision::analyze::sniff_mime(&data)
+            } else {
+                by_ext
+            }
+        };
+        ImageInput::Bytes { data, mime }
+    } else if let Some(u) = url {
+        if let Some(m) = mime_override.as_deref() {
+            // Caller supplied mime → fetch eagerly so we can pass Bytes
+            // (skips fetch_image's per-byte mime sniff, lets caller win).
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| format!("tokio runtime: {e}"))?;
+            let (data, _mime) = runtime
+                .block_on(crate::agent::media::vision::analyze::fetch_image(
+                    &u,
+                    std::time::Duration::from_millis(fetch_timeout_ms),
+                ))
+                .map_err(|e| format!("fetch {u}: {e}"))?;
+            ImageInput::Bytes {
+                data,
+                mime: ImageMime::from_str(m),
+            }
+        } else {
+            ImageInput::Url(u)
+        }
+    } else {
+        let data = base64_data.unwrap();
+        let mime = mime_override
+            .as_deref()
+            .ok_or_else(|| "--base64 requires --mime <m>".to_string())?;
+        ImageInput::Base64 {
+            data,
+            mime: ImageMime::from_str(mime),
+        }
+    };
+
+    let cfg = crate::config::get();
+    let provider_name = provider_override
+        .clone()
+        .unwrap_or_else(|| cfg.agent.provider.clone());
+    if provider_name.trim().is_empty() {
+        return Err(
+            "no provider configured (set agent.provider in config or pass --provider)".to_string(),
+        );
+    }
+    let model_name = model_override
+        .clone()
+        .or_else(|| {
+            if cfg.agent.model.is_empty() {
+                None
+            } else {
+                Some(cfg.agent.model.clone())
+            }
+        })
+        .ok_or_else(|| {
+            "no model configured (set agent.model in config or pass --model)".to_string()
+        })?;
+
+    let provider = crate::agent::llm::registry::build(&provider_name, &model_name, &cfg.agent)
+        .map_err(|e| format!("build provider {provider_name}: {e}"))?;
+
+    let mut req = VisionRequest::new(prompt.clone(), image);
+    req.system = system;
+    req.max_tokens = max_tokens;
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("tokio runtime: {e}"))?;
+
+    let resp = runtime
+        .block_on(analyze(
+            provider.as_ref(),
+            req,
+            std::time::Duration::from_millis(fetch_timeout_ms),
+        ))
+        .map_err(|e| format!("vision analyze: {e}"))?;
+
+    Ok(json!({
+        "ok": true,
+        "provider": provider_name,
+        "model": model_name,
+        "answer": resp.text,
+        "model_reported": resp.model,
+    }))
 }
 
 fn vision_route_cmd(args: &[String]) -> Result<Value, String> {
@@ -7924,6 +8249,227 @@ mod tests {
         .unwrap_err();
         // On unix the path also won't exist.
         assert!(err.contains("stat") || err.contains("not"));
+    }
+
+    // ---- vision_sniff_cmd ----
+
+    #[test]
+    fn vision_sniff_requires_file_or_url() {
+        let err = vision_sniff_cmd(&[]).unwrap_err();
+        assert!(err.contains("--file") && err.contains("--url"));
+    }
+
+    #[test]
+    fn vision_sniff_rejects_both_file_and_url() {
+        let err = vision_sniff_cmd(&[
+            "--file".into(),
+            "x.png".into(),
+            "--url".into(),
+            "https://x.invalid/y".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("exactly one"));
+    }
+
+    #[test]
+    fn vision_sniff_unknown_flag_errs() {
+        let err = vision_sniff_cmd(&["--bogus".into(), "x".into()]).unwrap_err();
+        assert!(err.contains("--bogus"));
+    }
+
+    #[test]
+    fn vision_sniff_file_returns_mime_and_len() {
+        // Write a tiny PNG-magic-byte stub (8-byte signature) to a temp
+        // file and confirm sniff_mime classifies it.
+        let dir = std::env::temp_dir().join(format!(
+            "cos-vision-sniff-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("x.png");
+        std::fs::write(
+            &path,
+            [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01],
+        )
+        .unwrap();
+
+        let v = vision_sniff_cmd(&[
+            "--file".into(),
+            path.to_string_lossy().to_string(),
+        ])
+        .expect("ok");
+        assert_eq!(v.get("bytes_len").and_then(|n| n.as_u64()), Some(10));
+        assert_eq!(v.get("mime").and_then(|s| s.as_str()), Some("Png"));
+        assert_eq!(
+            v.get("mime_widely_supported").and_then(|b| b.as_bool()),
+            Some(true)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn vision_sniff_file_unknown_magic_classifies_other() {
+        let dir = std::env::temp_dir().join(format!(
+            "cos-vision-sniff-other-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("x.bin");
+        std::fs::write(&path, b"this is not an image").unwrap();
+
+        let v = vision_sniff_cmd(&[
+            "--file".into(),
+            path.to_string_lossy().to_string(),
+        ])
+        .expect("ok");
+        assert_eq!(v.get("mime").and_then(|s| s.as_str()), Some("Other"));
+        assert_eq!(v.get("is_other").and_then(|b| b.as_bool()), Some(true));
+        assert_eq!(
+            v.get("mime_widely_supported").and_then(|b| b.as_bool()),
+            Some(false)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn vision_sniff_file_missing_path_errs() {
+        let err = vision_sniff_cmd(&[
+            "--file".into(),
+            "Z:\\definitely\\does\\not\\exist.png".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("stat") || err.contains("not"));
+    }
+
+    #[test]
+    fn vision_sniff_head_bytes_caps_inspection_window() {
+        let dir = std::env::temp_dir().join(format!(
+            "cos-vision-sniff-head-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("x.png");
+        // 1KB file but PNG magic in first 8 bytes.
+        let mut data = vec![0u8; 1024];
+        data[0..8].copy_from_slice(&[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+        std::fs::write(&path, &data).unwrap();
+
+        let v = vision_sniff_cmd(&[
+            "--file".into(),
+            path.to_string_lossy().to_string(),
+            "--head-bytes".into(),
+            "8".into(),
+        ])
+        .expect("ok");
+        assert_eq!(v.get("bytes_len").and_then(|n| n.as_u64()), Some(1024));
+        assert_eq!(
+            v.get("head_bytes_inspected").and_then(|n| n.as_u64()),
+            Some(8)
+        );
+        assert_eq!(v.get("mime").and_then(|s| s.as_str()), Some("Png"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- vision_analyze_cmd ----
+
+    #[test]
+    fn vision_analyze_requires_prompt() {
+        let err = vision_analyze_cmd(&[
+            "--file".into(),
+            "x.png".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("--prompt"));
+    }
+
+    #[test]
+    fn vision_analyze_empty_prompt_errs() {
+        let err = vision_analyze_cmd(&[
+            "--file".into(),
+            "x.png".into(),
+            "--prompt".into(),
+            "   ".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("non-empty"));
+    }
+
+    #[test]
+    fn vision_analyze_rejects_zero_image_sources() {
+        let err = vision_analyze_cmd(&[
+            "--prompt".into(),
+            "describe".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("exactly one"));
+    }
+
+    #[test]
+    fn vision_analyze_rejects_two_image_sources() {
+        let err = vision_analyze_cmd(&[
+            "--file".into(),
+            "x.png".into(),
+            "--url".into(),
+            "https://x.invalid".into(),
+            "--prompt".into(),
+            "describe".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("exactly one"));
+    }
+
+    #[test]
+    fn vision_analyze_base64_requires_mime() {
+        let err = vision_analyze_cmd(&[
+            "--base64".into(),
+            "AAAA".into(),
+            "--prompt".into(),
+            "describe".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("--mime"));
+    }
+
+    #[test]
+    fn vision_analyze_unknown_flag_errs() {
+        let err = vision_analyze_cmd(&[
+            "--bogus".into(),
+            "v".into(),
+            "--file".into(),
+            "x.png".into(),
+            "--prompt".into(),
+            "describe".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("--bogus"));
+    }
+
+    #[test]
+    fn vision_analyze_file_missing_errs_clean() {
+        let err = vision_analyze_cmd(&[
+            "--file".into(),
+            "Z:\\nope\\image.png".into(),
+            "--prompt".into(),
+            "describe".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("read"));
+    }
+
+    // ---- vision_cmd dispatch picks up new subcommands ----
+
+    #[test]
+    fn vision_cmd_routes_sniff_subcommand() {
+        // Empty sniff still dispatches into vision_sniff_cmd; we just
+        // assert that the error originates from that helper.
+        let err = vision_cmd(&["sniff".into()]).unwrap_err();
+        assert!(err.contains("--file") && err.contains("--url"));
+    }
+
+    #[test]
+    fn vision_cmd_routes_analyze_subcommand() {
+        let err = vision_cmd(&["analyze".into()]).unwrap_err();
+        assert!(err.contains("--prompt"));
     }
 
     // ---- display_cmd ----
