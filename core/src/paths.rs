@@ -110,6 +110,12 @@ pub fn agent_memory_db_path() -> PathBuf {
     agent_state_dir().join("memory.db")
 }
 
+/// Path to the persistent first-run onboarding state file. Lives at
+/// `data_dir/agent/onboarding.json`. Created on first save.
+pub fn agent_onboarding_path() -> PathBuf {
+    agent_state_dir().join("onboarding.json")
+}
+
 /// Directory for agent's per-session todo lists. Lives under
 /// `data_dir/agent/todos/`. Each session writes a JSON file named
 /// `<session_id>.json`.
