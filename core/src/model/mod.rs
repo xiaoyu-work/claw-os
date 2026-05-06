@@ -44,26 +44,12 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
             "models": registry::list().map_err(|e| e.to_string())?,
             "models_dir": paths::models_dir().display().to_string(),
         })),
-        "import" => {
-            let path = args.first().cloned().unwrap_or_default();
-            if path.is_empty() {
-                return Err(
-                    "usage: cos model import <path> --as <name> [--task <kind>] [--engine <ort|llama>]"
-                        .into(),
-                );
-            }
-            // Phase 0.5: stub. import::import_model() implementation lands with engines.
-            Ok(json!({
-                "status": "not_implemented",
-                "phase": "0.5-skeleton",
-                "message": "model import lands with engines (waiting for first user-provided ONNX/GGUF)",
-                "received_path": path,
-            }))
-        }
+        "import" => run_import(args),
         "load" => run_load(args),
-        "unload" | "infer" | "bench" | "rm" => {
+        "unload" | "infer" | "bench" => {
             Ok(json!({"status": "not_implemented", "phase": "0.5", "subcommand": command}))
         }
+        "rm" => run_rm(args),
         "embed" => run_embed(args),
         "image" | "imagegen" => run_imagegen(args),
         "transcribe" | "stt" => run_transcribe(args, SttMode::Transcribe),
@@ -130,6 +116,172 @@ pub(crate) fn load_model_manifest(spec: &str) -> Result<registry::Manifest, Stri
     }
     let bytes = std::fs::read(&manifest_path).map_err(|e| e.to_string())?;
     serde_json::from_slice(&bytes).map_err(|e| format!("manifest parse: {e}"))
+}
+
+/// `cos model import <path> --as <name> [--version v] [--task k]
+/// [--engine ort|llama] [--format onnx|gguf] [--move] [--force]
+/// [--device cuda|cpu|metal|...]` — register a user-provided
+/// ONNX/GGUF file in the model registry.
+fn run_import(args: &[String]) -> Result<Value, String> {
+    use import::{ImportConfig, imported_model_json};
+
+    if args.is_empty() {
+        return Err(
+            "usage: cos model import <path> --as <name> [--version <v>] \
+             [--task llm|stt|tts|embed|vision|imagegen] [--engine ort|llama] \
+             [--format onnx|gguf] [--move] [--force] [--device <name>]"
+                .into(),
+        );
+    }
+
+    let mut source = std::path::PathBuf::new();
+    let mut name: Option<String> = None;
+    let mut version: Option<String> = None;
+    let mut task: Option<registry::Task> = None;
+    let mut engine: Option<registry::Engine> = None;
+    let mut format: Option<registry::Format> = None;
+    let mut device: Option<String> = None;
+    let mut move_flag = false;
+    let mut force = false;
+
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--as" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--as needs <name>".to_string())?;
+                name = Some(v.clone());
+                i += 2;
+            }
+            "--version" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--version needs <v>".to_string())?;
+                version = Some(v.clone());
+                i += 2;
+            }
+            "--task" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--task needs <kind>".to_string())?;
+                task = Some(parse_task(v)?);
+                i += 2;
+            }
+            "--engine" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--engine needs <name>".to_string())?;
+                engine = Some(parse_engine(v)?);
+                i += 2;
+            }
+            "--format" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--format needs <onnx|gguf>".to_string())?;
+                format = Some(parse_format(v)?);
+                i += 2;
+            }
+            "--device" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--device needs <name>".to_string())?;
+                device = Some(v.clone());
+                i += 2;
+            }
+            "--move" => {
+                move_flag = true;
+                i += 1;
+            }
+            "--force" => {
+                force = true;
+                i += 1;
+            }
+            other if other.starts_with("--") => {
+                return Err(format!("unknown flag for `model import`: {other}"));
+            }
+            other => {
+                // First positional = source path.
+                if source.as_os_str().is_empty() {
+                    source = std::path::PathBuf::from(other);
+                    i += 1;
+                } else {
+                    return Err(format!(
+                        "unexpected positional argument: {other} (only one source path supported)"
+                    ));
+                }
+            }
+        }
+    }
+
+    if source.as_os_str().is_empty() {
+        return Err("usage: cos model import <path> --as <name> ...".into());
+    }
+    let name = name.ok_or_else(|| "--as <name> is required".to_string())?;
+
+    let mut cfg = ImportConfig::new(source, name);
+    if let Some(v) = version {
+        cfg.version = v;
+    }
+    cfg.task = task;
+    cfg.engine = engine;
+    cfg.format = format;
+    cfg.r#move = move_flag;
+    cfg.force = force;
+    cfg.default_device = device;
+
+    let imported = import::import_model(&cfg).map_err(|e| e.to_string())?;
+    Ok(imported_model_json(&imported))
+}
+
+/// `cos model rm <name>@<version>` — remove a registered model
+/// version. Idempotent: removing a missing entry returns
+/// `{ "removed": false }` rather than erroring.
+fn run_rm(args: &[String]) -> Result<Value, String> {
+    let spec = args
+        .first()
+        .ok_or_else(|| "usage: cos model rm <name>@<version>".to_string())?;
+    let (name, version) = spec
+        .split_once('@')
+        .ok_or_else(|| format!("expected <name>@<version>, got \"{spec}\""))?;
+    let removed = import::remove_model(name, version).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "removed": removed,
+        "model": spec,
+    }))
+}
+
+fn parse_task(v: &str) -> Result<registry::Task, String> {
+    use registry::Task;
+    match v.to_ascii_lowercase().as_str() {
+        "llm" => Ok(Task::Llm),
+        "stt" => Ok(Task::Stt),
+        "tts" => Ok(Task::Tts),
+        "embed" => Ok(Task::Embed),
+        "vision" => Ok(Task::Vision),
+        "imagegen" => Ok(Task::Imagegen),
+        other => Err(format!(
+            "unknown task: {other} (try llm|stt|tts|embed|vision|imagegen)"
+        )),
+    }
+}
+
+fn parse_engine(v: &str) -> Result<registry::Engine, String> {
+    use registry::Engine;
+    match v.to_ascii_lowercase().as_str() {
+        "ort" => Ok(Engine::Ort),
+        "llama" | "llama-cpp" | "llama_cpp" => Ok(Engine::Llama),
+        other => Err(format!("unknown engine: {other} (try ort|llama)")),
+    }
+}
+
+fn parse_format(v: &str) -> Result<registry::Format, String> {
+    use registry::Format;
+    match v.to_ascii_lowercase().as_str() {
+        "onnx" => Ok(Format::Onnx),
+        "gguf" => Ok(Format::Gguf),
+        other => Err(format!("unknown format: {other} (try onnx|gguf)")),
+    }
 }
 
 fn embed_status_json() -> Value {
@@ -701,3 +853,218 @@ fn run_speak(args: &[String]) -> Result<Value, String> {
     }))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Mirror the EnvGuard from `import::tests` — flip COS_DATA_DIR
+    /// to a per-test temp dir so the dispatcher's calls into
+    /// `paths::models_dir()` resolve under that root.
+    struct EnvGuard {
+        prev: Option<String>,
+    }
+    impl EnvGuard {
+        fn set(dir: &std::path::Path) -> Self {
+            let prev = std::env::var("COS_DATA_DIR").ok();
+            std::env::set_var("COS_DATA_DIR", dir);
+            Self { prev }
+        }
+    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => std::env::set_var("COS_DATA_DIR", v),
+                None => std::env::remove_var("COS_DATA_DIR"),
+            }
+        }
+    }
+
+    #[test]
+    fn import_cmd_requires_args() {
+        let err = run("import", &[]).unwrap_err();
+        assert!(err.contains("usage"), "got {err}");
+    }
+
+    #[test]
+    fn import_cmd_requires_as_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = EnvGuard::set(dir.path());
+        let src = dir.path().join("x.gguf");
+        std::fs::write(&src, b"X").unwrap();
+        let err = run("import", &[src.display().to_string()]).unwrap_err();
+        assert!(err.contains("--as"), "got {err}");
+    }
+
+    #[test]
+    fn import_cmd_rejects_unknown_flag() {
+        let err = run(
+            "import",
+            &["a.gguf".into(), "--bogus".into()],
+        )
+        .unwrap_err();
+        assert!(err.to_lowercase().contains("unknown flag"), "got {err}");
+    }
+
+    #[test]
+    fn import_cmd_routes_into_module_with_explicit_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = EnvGuard::set(dir.path());
+        let src = dir.path().join("model.weights");
+        std::fs::write(&src, b"DATA").unwrap();
+        let v = run(
+            "import",
+            &[
+                src.display().to_string(),
+                "--as".into(),
+                "named".into(),
+                "--format".into(),
+                "gguf".into(),
+                "--engine".into(),
+                "llama".into(),
+                "--task".into(),
+                "llm".into(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(v["status"], "imported");
+        assert_eq!(v["name"], "named");
+        assert_eq!(v["engine"], "llama");
+        assert_eq!(v["format"], "gguf");
+        assert_eq!(v["task"], "llm");
+    }
+
+    #[test]
+    fn import_cmd_supports_version_and_force_flow() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = EnvGuard::set(dir.path());
+        let src = dir.path().join("v1.gguf");
+        std::fs::write(&src, b"V1").unwrap();
+        run(
+            "import",
+            &[
+                src.display().to_string(),
+                "--as".into(),
+                "vt".into(),
+                "--version".into(),
+                "v2".into(),
+            ],
+        )
+        .unwrap();
+        // Listing should now report the model under v2.
+        let listed = run("list", &[]).unwrap();
+        let arr = listed["models"].as_array().unwrap();
+        assert!(arr.iter().any(|m| m["name"] == "vt" && m["version"] == "v2"));
+
+        // Re-import without --force fails.
+        let src2 = dir.path().join("v2bytes.gguf");
+        std::fs::write(&src2, b"V2-BYTES").unwrap();
+        let err = run(
+            "import",
+            &[
+                src2.display().to_string(),
+                "--as".into(),
+                "vt".into(),
+                "--version".into(),
+                "v2".into(),
+            ],
+        )
+        .unwrap_err();
+        assert!(err.to_lowercase().contains("already registered"), "got {err}");
+
+        // With --force, succeeds.
+        let v = run(
+            "import",
+            &[
+                src2.display().to_string(),
+                "--as".into(),
+                "vt".into(),
+                "--version".into(),
+                "v2".into(),
+                "--force".into(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(v["status"], "imported");
+        assert_eq!(v["size"], 8);
+    }
+
+    #[test]
+    fn rm_cmd_requires_spec() {
+        let err = run("rm", &[]).unwrap_err();
+        assert!(err.contains("usage"), "got {err}");
+    }
+
+    #[test]
+    fn rm_cmd_rejects_missing_at_separator() {
+        let err = run("rm", &["nameonly".into()]).unwrap_err();
+        assert!(err.contains("@"), "got {err}");
+    }
+
+    #[test]
+    fn rm_cmd_returns_false_for_missing_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = EnvGuard::set(dir.path());
+        let v = run("rm", &["does-not-exist@v1".into()]).unwrap();
+        assert_eq!(v["removed"], false);
+        assert_eq!(v["model"], "does-not-exist@v1");
+    }
+
+    #[test]
+    fn rm_cmd_drops_existing_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = EnvGuard::set(dir.path());
+        let src = dir.path().join("rm.gguf");
+        std::fs::write(&src, b"X").unwrap();
+        run(
+            "import",
+            &[
+                src.display().to_string(),
+                "--as".into(),
+                "removable".into(),
+            ],
+        )
+        .unwrap();
+        let v = run("rm", &["removable@v1".into()]).unwrap();
+        assert_eq!(v["removed"], true);
+        // Listing no longer reports it.
+        let listed = run("list", &[]).unwrap();
+        let arr = listed["models"].as_array().unwrap();
+        assert!(!arr.iter().any(|m| m["name"] == "removable"));
+    }
+
+    #[test]
+    fn parse_task_recognises_all_kinds() {
+        use registry::Task;
+        for (input, want) in [
+            ("llm", Task::Llm),
+            ("LLM", Task::Llm),
+            ("stt", Task::Stt),
+            ("tts", Task::Tts),
+            ("embed", Task::Embed),
+            ("vision", Task::Vision),
+            ("imagegen", Task::Imagegen),
+        ] {
+            assert_eq!(parse_task(input).unwrap(), want, "input {input}");
+        }
+        assert!(parse_task("unknown").is_err());
+    }
+
+    #[test]
+    fn parse_engine_accepts_aliases() {
+        use registry::Engine;
+        assert_eq!(parse_engine("ort").unwrap(), Engine::Ort);
+        assert_eq!(parse_engine("llama").unwrap(), Engine::Llama);
+        assert_eq!(parse_engine("llama-cpp").unwrap(), Engine::Llama);
+        assert_eq!(parse_engine("LLAMA_CPP").unwrap(), Engine::Llama);
+        assert!(parse_engine("ggml").is_err());
+    }
+
+    #[test]
+    fn parse_format_recognises_canonical_names() {
+        use registry::Format;
+        assert_eq!(parse_format("onnx").unwrap(), Format::Onnx);
+        assert_eq!(parse_format("ONNX").unwrap(), Format::Onnx);
+        assert_eq!(parse_format("gguf").unwrap(), Format::Gguf);
+        assert!(parse_format("safetensors").is_err());
+    }
+}

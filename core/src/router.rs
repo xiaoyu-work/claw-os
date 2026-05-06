@@ -420,15 +420,16 @@ fn builtin_apps() -> Vec<(
             ("file-safety", "Classify filesystem paths for write-safety (dangerous extensions, credential dirs, system paths, VCS internals): cos agent file-safety check <path> | batch <path>... | categories"),
             ("osv", "Query the public osv.dev vulnerability API for dependencies. Pure parsers for Cargo.lock / package-lock.json / requirements.txt / go.sum + online checks: cos agent osv parse <lockfile> | check <lockfile> | query <name>@<version> --ecosystem <eco> | ecosystems"),
         ]),
-        ("model", "Local model registry + inference daemon (ort for STT/TTS/embed/vision/imagegen, llama.cpp for LLM) — Phase 0.5 skeleton", vec![
+        ("model", "Local model registry + inference daemon (ort for STT/TTS/embed/vision/imagegen, llama.cpp for LLM)", vec![
             ("list", "List registered models from /var/lib/cos/models/"),
-            ("import", "Register a user-provided ONNX or GGUF file: cos model import <path> --as <name> [--task <kind>] [--engine <ort|llama>]"),
+            ("import", "Register a local ONNX/GGUF file: cos model import <path> --as <name> [--version <v>] [--task llm|stt|tts|embed|vision|imagegen] [--engine ort|llama] [--format onnx|gguf] [--device <id>] [--move] [--force]"),
+            ("rm", "Remove a registered model: cos model rm <name>@<version>"),
+            ("check", "Check engine compatibility for a model: cos model check <name>@<version>"),
             ("load", "Load a registered model into the runtime daemon"),
             ("unload", "Unload a model from the runtime"),
             ("infer", "Run inference (routed via IPC to model-runtime daemon)"),
-            ("status", "Runtime status — loaded models, RAM, devices"),
+            ("status", "Runtime status — loaded models, RAM, devices, linked engines"),
             ("bench", "Benchmark a model"),
-            ("rm", "Remove a model from the registry"),
         ]),
         ("engine", "Native inference engine package manager — install / activate / rollback llama.cpp, ort, ort-genai versions side-by-side", vec![
             ("list", "List installed engines and their active versions"),
