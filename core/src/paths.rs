@@ -128,6 +128,14 @@ pub fn agent_nudges_path() -> PathBuf {
     agent_state_dir().join("nudges.json")
 }
 
+/// Path to the persistent agent-hooks config file. Lives at
+/// `data_dir/agent/hooks.json`. Lists which built-in hook kinds
+/// (`logging`, etc.) should auto-register at the start of every
+/// `cos agent ask` / `cos agent chat` invocation.
+pub fn agent_hooks_path() -> PathBuf {
+    agent_state_dir().join("hooks.json")
+}
+
 /// Directory for agent's per-session todo lists. Lives under
 /// `data_dir/agent/todos/`. Each session writes a JSON file named
 /// `<session_id>.json`.

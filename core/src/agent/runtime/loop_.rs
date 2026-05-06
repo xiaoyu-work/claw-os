@@ -20,6 +20,7 @@ use crate::agent::llm::{self, Message, Provider};
 use crate::agent::memory::sqlite_fts::{self, MemoryDb};
 use crate::agent::prompt;
 use crate::agent::runtime::hooks;
+use crate::agent::runtime::hooks_config;
 use crate::agent::runtime::interrupt;
 use crate::agent::safety::redact::Redactor;
 use crate::agent::tools::registry::{default_registry, ToolRegistry};
@@ -165,8 +166,16 @@ async fn ask_inner(
     };
 
     // Process-wide hook registry (default empty → zero-cost when
-    // no hooks registered). See `agent::runtime::hooks`.
+    // no hooks registered). See `agent::runtime::hooks`. Auto-load
+    // any persistently-enabled hooks from `data_dir/agent/hooks.json`
+    // for the duration of this single invocation; the guard
+    // unregisters them on drop so concurrent unrelated calls / tests
+    // are not affected.
     let hook_registry = hooks::global_registry();
+    let _hooks_auto_guard = hooks_config::load_and_register(
+        &crate::paths::agent_hooks_path(),
+        hook_registry.clone(),
+    );
     let hook_ctx_base = hooks::HookContext::new(
         interrupt_handle.session_id().to_string(),
         provider.name(),
@@ -404,8 +413,13 @@ async fn ask_inner_streaming(
 
     // Mirror ask_inner: process-wide hook registry. Empty by default
     // → zero-cost when no observers registered. Streaming and
-    // non-streaming surfaces share the same hooks.
+    // non-streaming surfaces share the same hooks. Auto-loaded
+    // hooks are scoped to this single invocation via the guard.
     let hook_registry = hooks::global_registry();
+    let _hooks_auto_guard = hooks_config::load_and_register(
+        &crate::paths::agent_hooks_path(),
+        hook_registry.clone(),
+    );
     let hook_ctx_base = hooks::HookContext::new(
         interrupt_handle.session_id().to_string(),
         provider.name(),

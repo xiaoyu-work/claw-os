@@ -471,27 +471,114 @@ fn learn_cmd(args: &[String]) -> Result<Value, String> {
 }
 
 
-/// `cos agent hooks <subcmd>` — introspect the runtime hook
-/// registry. Hooks themselves are registered programmatically (no
-/// CLI registration surface today — they live in code paths like
-/// audit / redact / prompt-cache that opt in at startup).
+/// `cos agent hooks <subcmd>` — manage the runtime hook registry
+/// and the persistent `data_dir/agent/hooks.json` config that
+/// auto-registers hooks on every agent invocation.
 ///
-///   list                 — names of currently-registered hooks +
-///                          count.
+///   list                       — names currently registered in
+///                                this process + persistently
+///                                enabled kinds (from disk).
+///   enable <kind>              — add `<kind>` to hooks.json and
+///                                register it in the current
+///                                process. Idempotent.
+///   disable <kind>             — remove `<kind>` from hooks.json
+///                                and unregister it from the
+///                                current process. Idempotent.
+///
+/// Supported kinds: `logging`. CLI `--kind <k>` form is also
+/// accepted for `enable`/`disable` to mirror common subcommand
+/// conventions.
 fn hooks_cmd(args: &[String]) -> Result<Value, String> {
+    use crate::agent::runtime::hooks::global_registry;
+    use crate::agent::runtime::hooks_config::{self, HookKind};
+
     let sub = args.first().map(|s| s.as_str()).unwrap_or("list");
     match sub {
         "list" => {
-            let registry = crate::agent::runtime::hooks::global_registry();
+            let registry = global_registry();
             let names = registry.names();
+            let cfg = hooks_config::load(&crate::paths::agent_hooks_path()).unwrap_or_default();
+            let enabled_kinds: Vec<String> = cfg
+                .enabled
+                .iter()
+                .map(|k| k.canonical().to_string())
+                .collect();
             Ok(json!({
                 "hooks": names.clone(),
                 "count": names.len(),
+                "persistent": enabled_kinds.clone(),
+                "config_path": crate::paths::agent_hooks_path().display().to_string(),
             }))
         }
-        other => Err(format!("unknown hooks subcommand: {other}. try: list")),
+        "enable" => {
+            let kind_str = parse_kind_arg(&args[1..])?;
+            let kind = HookKind::parse(&kind_str)
+                .ok_or_else(|| format!("unknown hook kind: {kind_str}. try: logging"))?;
+            let path = crate::paths::agent_hooks_path();
+            let mut cfg = hooks_config::load(&path).map_err(|e| e.to_string())?;
+            let added = cfg.enable(kind);
+            if added {
+                hooks_config::save(&path, &cfg).map_err(|e| e.to_string())?;
+            }
+            // Also register in the current process so the change is
+            // visible to anything else running in this binary
+            // invocation (e.g. an immediate follow-up call).
+            let registry = global_registry();
+            let already = registry.names().iter().any(|n| n == kind.canonical());
+            if !already {
+                registry.register(hooks_config::instantiate(kind));
+            }
+            Ok(json!({
+                "kind": kind.canonical(),
+                "persisted": added,
+                "registered_now": !already,
+                "config_path": path.display().to_string(),
+            }))
+        }
+        "disable" => {
+            let kind_str = parse_kind_arg(&args[1..])?;
+            let kind = HookKind::parse(&kind_str)
+                .ok_or_else(|| format!("unknown hook kind: {kind_str}. try: logging"))?;
+            let path = crate::paths::agent_hooks_path();
+            let mut cfg = hooks_config::load(&path).map_err(|e| e.to_string())?;
+            let removed = cfg.disable(kind);
+            if removed {
+                hooks_config::save(&path, &cfg).map_err(|e| e.to_string())?;
+            }
+            let unreg = global_registry().unregister(kind.canonical());
+            Ok(json!({
+                "kind": kind.canonical(),
+                "persisted": removed,
+                "unregistered_now": unreg,
+                "config_path": path.display().to_string(),
+            }))
+        }
+        other => Err(format!(
+            "unknown hooks subcommand: {other}. try: list | enable <kind> | disable <kind>"
+        )),
     }
 }
+
+/// Pull the kind out of `<kind>` or `--kind <kind>` positional/flag
+/// forms. `cos agent hooks enable logging` and
+/// `cos agent hooks enable --kind logging` both work.
+fn parse_kind_arg(rest: &[String]) -> Result<String, String> {
+    let mut iter = rest.iter();
+    while let Some(a) = iter.next() {
+        match a.as_str() {
+            "--kind" => {
+                return iter
+                    .next()
+                    .cloned()
+                    .ok_or_else(|| "--kind requires a value".to_string());
+            }
+            s if !s.starts_with("--") => return Ok(s.to_string()),
+            other => return Err(format!("unexpected flag: {other}")),
+        }
+    }
+    Err("missing hook kind (positional or --kind <kind>)".to_string())
+}
+
 
 
 /// `cos agent semantic <subcmd>` — vector-memory operations.
@@ -13108,15 +13195,19 @@ mod tests {
 
     #[test]
     fn hooks_cmd_list_default_returns_count() {
+        let _dir = isolate_cos_data_dir("hooks-list-default");
         let v = hooks_cmd(&[]).expect("ok");
         assert!(v.get("hooks").is_some(), "got {v}");
         assert!(v.get("count").is_some(), "got {v}");
         assert!(v["count"].is_number(), "got {v}");
+        assert!(v["persistent"].is_array(), "got {v}");
+        assert!(v["config_path"].is_string(), "got {v}");
     }
 
     #[test]
     fn hooks_cmd_list_after_register_includes_name() {
         use crate::agent::runtime::hooks::{global_registry, Hook, HookContext, HookOutcome};
+        let _dir = isolate_cos_data_dir("hooks-list-after-register");
         struct TestHook;
         impl Hook for TestHook {
             fn name(&self) -> &str {
@@ -13148,9 +13239,120 @@ mod tests {
 
     #[test]
     fn run_hooks_routes_to_hooks_cmd() {
+        let _dir = isolate_cos_data_dir("hooks-route");
         let v = run("hooks", &["list".into()]).expect("ok");
         assert!(v.get("count").is_some(), "got {v}");
     }
+
+    #[test]
+    fn hooks_cmd_enable_persists_kind_and_registers_in_process() {
+        use crate::agent::runtime::hooks::global_registry;
+        use crate::agent::runtime::hooks_config;
+        let _dir = isolate_cos_data_dir("hooks-enable");
+        // make sure no leftover registration from a prior test
+        global_registry().unregister("logging");
+
+        let v = hooks_cmd(&["enable".into(), "logging".into()]).expect("ok");
+        assert_eq!(v["kind"], serde_json::json!("logging"));
+        assert_eq!(v["persisted"], serde_json::json!(true));
+        assert_eq!(v["registered_now"], serde_json::json!(true));
+
+        // file exists with logging in enabled list
+        let cfg = hooks_config::load(&crate::paths::agent_hooks_path()).expect("load");
+        assert_eq!(cfg.enabled, vec![hooks_config::HookKind::Logging]);
+
+        // hook actually registered
+        assert!(global_registry().names().contains(&"logging".to_string()));
+
+        // cleanup
+        global_registry().unregister("logging");
+    }
+
+    #[test]
+    fn hooks_cmd_enable_idempotent_second_call_is_noop() {
+        use crate::agent::runtime::hooks::global_registry;
+        let _dir = isolate_cos_data_dir("hooks-enable-idempotent");
+        global_registry().unregister("logging");
+
+        let _ = hooks_cmd(&["enable".into(), "logging".into()]).expect("ok");
+        let v = hooks_cmd(&["enable".into(), "logging".into()]).expect("ok");
+        assert_eq!(v["persisted"], serde_json::json!(false));
+        assert_eq!(v["registered_now"], serde_json::json!(false));
+
+        global_registry().unregister("logging");
+    }
+
+    #[test]
+    fn hooks_cmd_enable_accepts_kind_flag_form() {
+        use crate::agent::runtime::hooks::global_registry;
+        let _dir = isolate_cos_data_dir("hooks-enable-flag");
+        global_registry().unregister("logging");
+
+        let v = hooks_cmd(&[
+            "enable".into(),
+            "--kind".into(),
+            "logging".into(),
+        ])
+        .expect("ok");
+        assert_eq!(v["kind"], serde_json::json!("logging"));
+
+        global_registry().unregister("logging");
+    }
+
+    #[test]
+    fn hooks_cmd_enable_unknown_kind_errs() {
+        let _dir = isolate_cos_data_dir("hooks-enable-unknown");
+        let err = hooks_cmd(&["enable".into(), "frobnicate".into()]).unwrap_err();
+        assert!(err.contains("unknown hook kind"), "got {err}");
+    }
+
+    #[test]
+    fn hooks_cmd_enable_missing_kind_errs() {
+        let _dir = isolate_cos_data_dir("hooks-enable-missing");
+        let err = hooks_cmd(&["enable".into()]).unwrap_err();
+        assert!(err.contains("missing hook kind"), "got {err}");
+    }
+
+    #[test]
+    fn hooks_cmd_disable_removes_from_config_and_registry() {
+        use crate::agent::runtime::hooks::global_registry;
+        use crate::agent::runtime::hooks_config;
+        let _dir = isolate_cos_data_dir("hooks-disable");
+        global_registry().unregister("logging");
+
+        let _ = hooks_cmd(&["enable".into(), "logging".into()]).expect("ok");
+        let v = hooks_cmd(&["disable".into(), "logging".into()]).expect("ok");
+        assert_eq!(v["persisted"], serde_json::json!(true));
+        assert_eq!(v["unregistered_now"], serde_json::json!(true));
+
+        let cfg = hooks_config::load(&crate::paths::agent_hooks_path()).expect("load");
+        assert!(cfg.enabled.is_empty());
+        assert!(!global_registry().names().contains(&"logging".to_string()));
+    }
+
+    #[test]
+    fn hooks_cmd_disable_idempotent_when_not_enabled() {
+        let _dir = isolate_cos_data_dir("hooks-disable-noop");
+        let v = hooks_cmd(&["disable".into(), "logging".into()]).expect("ok");
+        assert_eq!(v["persisted"], serde_json::json!(false));
+        assert_eq!(v["unregistered_now"], serde_json::json!(false));
+    }
+
+    #[test]
+    fn hooks_cmd_list_includes_persistent_kinds() {
+        use crate::agent::runtime::hooks::global_registry;
+        let _dir = isolate_cos_data_dir("hooks-list-persistent");
+        global_registry().unregister("logging");
+
+        let _ = hooks_cmd(&["enable".into(), "logging".into()]).expect("ok");
+        let v = hooks_cmd(&["list".into()]).expect("ok");
+        let pers = v["persistent"].as_array().unwrap();
+        assert!(pers.iter().any(|x| x.as_str() == Some("logging")), "got {v}");
+
+        // cleanup
+        let _ = hooks_cmd(&["disable".into(), "logging".into()]).expect("ok");
+    }
+
 
     // -----------------------------------------------------------------
     // media play / playback-status
