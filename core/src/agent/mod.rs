@@ -132,8 +132,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "compress" => compress_cmd(args),
         "aux" | "auxiliary" => aux_cmd(args),
         "retry" => retry_cmd(args),
+        "vision" => vision_cmd(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | title | summarise | classify | tools | guardrails | approval | todo | compress | aux | retry"
+            "unknown command: {other}. try: ask | chat | status | service | insights | recall | sessions | onboarding | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | title | summarise | classify | tools | guardrails | approval | todo | compress | aux | retry | vision"
         )),
     }
 }
@@ -2691,6 +2692,201 @@ fn retry_cmd(args: &[String]) -> Result<Value, String> {
             "unknown retry subcommand: {other}. try: show | schedule [--attempts N]"
         )),
     }
+}
+
+/// `cos agent vision <subcommand>` — surface for the
+/// [`crate::agent::media::vision::routing`] policy layer.
+///
+/// Currently only `route` is implemented: given an image
+/// descriptor (size + mime + intent) and a policy (provider vision
+/// support, OCR availability, native cap, vision-enabled toggle),
+/// report the [`RoutingDecision`] (Native / Ocr / Skip + reason).
+///
+/// Two input modes:
+///
+/// * `--bytes N --mime <m>` — synthesise a descriptor without
+///   reading any actual image. Useful for previewing decisions in
+///   tests / scripts.
+/// * `--file <path>` — read the file's size on disk; mime is
+///   inferred from the extension unless `--mime` overrides it. The
+///   file is **not** loaded into memory; only `metadata().len()` is
+///   used.
+///
+/// Policy flags map 1:1 to [`RoutingPolicy`] fields. Defaults
+/// match `RoutingPolicy::default()` (no provider vision, no OCR,
+/// 5 MiB native cap, vision enabled).
+fn vision_cmd(args: &[String]) -> Result<Value, String> {
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("");
+    match sub {
+        "route" => vision_route_cmd(&args[1..]),
+        "" => Err(
+            "usage: cos agent vision route --file <path> | --bytes N --mime <m> [...]"
+                .to_string(),
+        ),
+        other => Err(format!(
+            "unknown vision subcommand: {other}. try: route --file <path> | route --bytes N --mime <m>"
+        )),
+    }
+}
+
+fn vision_route_cmd(args: &[String]) -> Result<Value, String> {
+    use crate::agent::media::vision::routing::{
+        route, ImageDescriptor, ImageIntent, ImageMime, RoutingDecision, RoutingPolicy,
+    };
+
+    let mut file: Option<String> = None;
+    let mut bytes_override: Option<usize> = None;
+    let mut mime_override: Option<String> = None;
+    let mut intent = ImageIntent::General;
+    let mut policy = RoutingPolicy::default();
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--file" => {
+                file = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--file needs a path".to_string())?,
+                );
+                i += 2;
+            }
+            "--bytes" => {
+                let raw = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--bytes needs a number".to_string())?;
+                bytes_override = Some(
+                    raw.parse::<usize>()
+                        .map_err(|e| format!("--bytes parse: {e}"))?,
+                );
+                i += 2;
+            }
+            "--mime" => {
+                mime_override = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .ok_or_else(|| "--mime needs a value".to_string())?,
+                );
+                i += 2;
+            }
+            "--intent" => {
+                let raw = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--intent needs a value".to_string())?;
+                intent = match raw.to_ascii_lowercase().as_str() {
+                    "general" => ImageIntent::General,
+                    "extract-text" | "extract_text" => ImageIntent::ExtractText,
+                    "identify" => ImageIntent::Identify,
+                    "caption" => ImageIntent::Caption,
+                    other => {
+                        return Err(format!(
+                            "unknown --intent: {other}. try: general | extract-text | identify | caption"
+                        ))
+                    }
+                };
+                i += 2;
+            }
+            "--provider-vision" => {
+                policy.provider_supports_vision = true;
+                i += 1;
+            }
+            "--no-provider-vision" => {
+                policy.provider_supports_vision = false;
+                i += 1;
+            }
+            "--vision-disabled" => {
+                policy.vision_enabled = false;
+                i += 1;
+            }
+            "--vision-enabled" => {
+                policy.vision_enabled = true;
+                i += 1;
+            }
+            "--ocr-available" => {
+                policy.ocr_available = true;
+                i += 1;
+            }
+            "--no-ocr" => {
+                policy.ocr_available = false;
+                i += 1;
+            }
+            "--max-native-bytes" => {
+                let raw = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--max-native-bytes needs a number".to_string())?;
+                policy.max_native_bytes = raw
+                    .parse::<usize>()
+                    .map_err(|e| format!("--max-native-bytes parse: {e}"))?;
+                i += 2;
+            }
+            other => return Err(format!("unknown vision route flag: {other}")),
+        }
+    }
+
+    let (bytes_len, mime, source) = match (file.as_ref(), bytes_override, mime_override.as_ref()) {
+        (None, None, _) => {
+            return Err(
+                "vision route needs --file <path> or --bytes N (and --mime if no --file)"
+                    .to_string(),
+            );
+        }
+        (Some(path), _, _) => {
+            let p = std::path::PathBuf::from(path);
+            let meta = std::fs::metadata(&p)
+                .map_err(|e| format!("stat {path}: {e}"))?;
+            // --bytes overrides the on-disk size if both supplied (rare;
+            // useful when previewing what would happen if we shrank the file).
+            let len = bytes_override.unwrap_or(meta.len() as usize);
+            // If --mime was supplied, honour it. Otherwise infer from extension.
+            let m = match mime_override.as_deref() {
+                Some(mime_str) => ImageMime::from_str(mime_str),
+                None => {
+                    let ext = p
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .map(|s| s.to_ascii_lowercase())
+                        .unwrap_or_default();
+                    ImageMime::from_str(&ext)
+                }
+            };
+            (len, m, format!("file:{path}"))
+        }
+        (None, Some(b), Some(m)) => {
+            (b, ImageMime::from_str(m), "synthetic".to_string())
+        }
+        (None, Some(_), None) => {
+            return Err("--bytes requires --mime when --file is not supplied".to_string());
+        }
+    };
+
+    let descriptor = ImageDescriptor {
+        bytes_len,
+        mime,
+        intent,
+    };
+    let decision = route(&descriptor, &policy);
+    let (verdict, reason) = match decision {
+        RoutingDecision::Native => ("native", None),
+        RoutingDecision::Ocr => ("ocr", None),
+        RoutingDecision::Skip { reason } => ("skip", Some(reason)),
+    };
+
+    Ok(json!({
+        "source": source,
+        "descriptor": {
+            "bytes_len": descriptor.bytes_len,
+            "mime": format!("{:?}", descriptor.mime),
+            "mime_widely_supported": descriptor.mime.is_widely_supported(),
+            "intent": format!("{:?}", descriptor.intent),
+        },
+        "policy": {
+            "provider_supports_vision": policy.provider_supports_vision,
+            "vision_enabled": policy.vision_enabled,
+            "max_native_bytes": policy.max_native_bytes,
+            "ocr_available": policy.ocr_available,
+        },
+        "decision": verdict,
+        "reason": reason,
+    }))
 }
 
 fn todo_status_counts(list: &crate::agent::tools::todo::TodoList) -> serde_json::Value {
@@ -6606,5 +6802,206 @@ mod tests {
         // Numeric first arg keeps backward-compat: cos agent sessions 5 → list 5.
         let v = sessions_cmd(&["5".into()]).expect("legacy list ok");
         assert_eq!(v.get("limit").and_then(|n| n.as_u64()), Some(5));
+    }
+
+    // ---- vision_cmd / vision_route_cmd ----
+
+    #[test]
+    fn vision_cmd_default_subcommand_errs_with_usage() {
+        let err = vision_cmd(&[]).unwrap_err();
+        assert!(err.contains("usage"));
+    }
+
+    #[test]
+    fn vision_cmd_unknown_subcommand_errs() {
+        let err = vision_cmd(&["bogus".into()]).unwrap_err();
+        assert!(err.contains("bogus"));
+    }
+
+    #[test]
+    fn vision_route_synthetic_native_when_provider_vision_and_widely_supported() {
+        let v = vision_route_cmd(&[
+            "--bytes".into(),
+            "1024".into(),
+            "--mime".into(),
+            "image/png".into(),
+            "--provider-vision".into(),
+        ])
+        .expect("ok");
+        assert_eq!(v.get("decision").and_then(|s| s.as_str()), Some("native"));
+        assert!(v.get("reason").map(|r| r.is_null()).unwrap_or(false));
+    }
+
+    #[test]
+    fn vision_route_skip_when_vision_disabled() {
+        let v = vision_route_cmd(&[
+            "--bytes".into(),
+            "1024".into(),
+            "--mime".into(),
+            "image/png".into(),
+            "--provider-vision".into(),
+            "--vision-disabled".into(),
+        ])
+        .expect("ok");
+        assert_eq!(v.get("decision").and_then(|s| s.as_str()), Some("skip"));
+        assert!(v
+            .get("reason")
+            .and_then(|s| s.as_str())
+            .map(|r| r.contains("vision disabled"))
+            .unwrap_or(false));
+    }
+
+    #[test]
+    fn vision_route_skip_when_zero_bytes() {
+        let v = vision_route_cmd(&[
+            "--bytes".into(),
+            "0".into(),
+            "--mime".into(),
+            "image/png".into(),
+            "--provider-vision".into(),
+        ])
+        .expect("ok");
+        assert_eq!(v.get("decision").and_then(|s| s.as_str()), Some("skip"));
+    }
+
+    #[test]
+    fn vision_route_extract_text_intent_prefers_ocr_when_available() {
+        let v = vision_route_cmd(&[
+            "--bytes".into(),
+            "1024".into(),
+            "--mime".into(),
+            "image/png".into(),
+            "--provider-vision".into(),
+            "--ocr-available".into(),
+            "--intent".into(),
+            "extract-text".into(),
+        ])
+        .expect("ok");
+        assert_eq!(v.get("decision").and_then(|s| s.as_str()), Some("ocr"));
+    }
+
+    #[test]
+    fn vision_route_skip_when_oversized_and_no_ocr() {
+        let v = vision_route_cmd(&[
+            "--bytes".into(),
+            "10000000".into(),
+            "--mime".into(),
+            "image/png".into(),
+            "--provider-vision".into(),
+            "--max-native-bytes".into(),
+            "1000000".into(),
+        ])
+        .expect("ok");
+        assert_eq!(v.get("decision").and_then(|s| s.as_str()), Some("skip"));
+        assert!(v
+            .get("reason")
+            .and_then(|s| s.as_str())
+            .map(|r| r.contains("exceeds native cap"))
+            .unwrap_or(false));
+    }
+
+    #[test]
+    fn vision_route_unsupported_mime_without_ocr_skips() {
+        let v = vision_route_cmd(&[
+            "--bytes".into(),
+            "1024".into(),
+            "--mime".into(),
+            "image/heic".into(),
+            "--provider-vision".into(),
+        ])
+        .expect("ok");
+        assert_eq!(v.get("decision").and_then(|s| s.as_str()), Some("skip"));
+    }
+
+    #[test]
+    fn vision_route_requires_bytes_or_file() {
+        let err = vision_route_cmd(&[]).unwrap_err();
+        assert!(err.contains("--file") || err.contains("--bytes"));
+    }
+
+    #[test]
+    fn vision_route_bytes_without_mime_errs() {
+        let err = vision_route_cmd(&["--bytes".into(), "1024".into()]).unwrap_err();
+        assert!(err.contains("--mime"));
+    }
+
+    #[test]
+    fn vision_route_unknown_intent_errs() {
+        let err = vision_route_cmd(&[
+            "--bytes".into(),
+            "1024".into(),
+            "--mime".into(),
+            "image/png".into(),
+            "--intent".into(),
+            "bogus".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("bogus"));
+    }
+
+    #[test]
+    fn vision_route_unknown_flag_errs() {
+        let err = vision_route_cmd(&["--bytes".into(), "1024".into(), "--bogus".into()])
+            .unwrap_err();
+        assert!(err.contains("--bogus"));
+    }
+
+    #[test]
+    fn vision_route_file_uses_on_disk_size_and_extension_mime() {
+        let dir = std::env::temp_dir().join(format!(
+            "cos-agent-vision-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.png");
+        std::fs::write(&path, vec![0u8; 4096]).unwrap();
+        let v = vision_route_cmd(&[
+            "--file".into(),
+            path.display().to_string(),
+            "--provider-vision".into(),
+        ])
+        .expect("ok");
+        let desc = v.get("descriptor").expect("descriptor");
+        assert_eq!(
+            desc.get("bytes_len").and_then(|n| n.as_u64()),
+            Some(4096)
+        );
+        assert_eq!(desc.get("mime").and_then(|m| m.as_str()), Some("Png"));
+        assert_eq!(v.get("decision").and_then(|s| s.as_str()), Some("native"));
+        // Cleanup.
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn vision_route_file_mime_override_wins() {
+        let dir = std::env::temp_dir().join(format!(
+            "cos-agent-vision-mime-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.dat");
+        std::fs::write(&path, vec![0u8; 100]).unwrap();
+        let v = vision_route_cmd(&[
+            "--file".into(),
+            path.display().to_string(),
+            "--mime".into(),
+            "image/jpeg".into(),
+            "--provider-vision".into(),
+        ])
+        .expect("ok");
+        let desc = v.get("descriptor").expect("descriptor");
+        assert_eq!(desc.get("mime").and_then(|m| m.as_str()), Some("Jpeg"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn vision_route_file_missing_path_errs() {
+        let err = vision_route_cmd(&[
+            "--file".into(),
+            "Z:\\definitely\\does\\not\\exist.png".into(),
+        ])
+        .unwrap_err();
+        // On unix the path also won't exist.
+        assert!(err.contains("stat") || err.contains("not"));
     }
 }
