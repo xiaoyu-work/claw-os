@@ -156,6 +156,13 @@ pub fn agent_curator_drafts_path() -> PathBuf {
     agent_state_dir().join("curator-drafts.json")
 }
 
+/// JSONL file storing skill usage records (one record per
+/// invocation). Lives at `data_dir/agent/skills-usage.jsonl`. See
+/// [`crate::agent::skills::provenance::UsageStore`].
+pub fn agent_skills_usage_path() -> PathBuf {
+    agent_state_dir().join("skills-usage.jsonl")
+}
+
 pub fn model_runtime_socket() -> PathBuf {
     runtime_dir().join("model-runtime.sock")
 }

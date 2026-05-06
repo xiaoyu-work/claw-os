@@ -562,8 +562,161 @@ fn skills_cmd(args: &[String]) -> Result<Value, String> {
             }
         }
         "hub" => skills_hub_cmd(&args[1..]),
+        "usage" => skills_usage_cmd(&args[1..]),
         other => Err(format!(
-            "unknown skills subcommand: {other}. try: list | info <id> | disabled | errors | root | install <archive> | hub <list|show|install> <owner/repo> [<id>]"
+            "unknown skills subcommand: {other}. try: list | info <id> | disabled | errors | root | install <archive> | hub <list|show|install> <owner/repo> [<id>] | usage <stats|record|path|clear>"
+        )),
+    }
+}
+
+/// `cos agent skills usage <stats|record|path|clear>`
+///
+/// Read/write surface over the skill-invocation JSONL log
+/// ([`crate::agent::skills::provenance::UsageStore`]). Lives at
+/// `agent_skills_usage_path()` (typically
+/// `<data_dir>/agent/skills-usage.jsonl`).
+///
+/// * `stats [<id>]` — aggregate over the whole log, optionally
+///   filtered to one skill id. Returns per-skill totals + average
+///   duration + success rate.
+/// * `record <id> --duration-ms N [--ok|--error] [--by <caller>]` —
+///   append one usage record. Useful for external runners (a skill
+///   that wraps an external script) to participate in the same
+///   tracking surface.
+/// * `path` — print the JSONL log path so callers can `tail -f` it
+///   or pipe into their own analysis tooling.
+/// * `clear` — truncate the log. Refuses without `--yes` so a
+///   mistyped command can't wipe weeks of telemetry.
+fn skills_usage_cmd(args: &[String]) -> Result<Value, String> {
+    let path = crate::paths::agent_skills_usage_path();
+    skills_usage_cmd_at(args, &path)
+}
+
+fn skills_usage_cmd_at(args: &[String], path: &std::path::Path) -> Result<Value, String> {
+    use crate::agent::skills::provenance::{UsageRecord, UsageStore};
+    use chrono::Utc;
+
+    let store = UsageStore::new(path);
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("stats");
+    match sub {
+        "path" => Ok(json!({"path": path.display().to_string()})),
+        "stats" | "" => {
+            let agg = store.aggregate();
+            let filter_id = args.get(1).filter(|s| !s.is_empty()).cloned();
+            let entries: Vec<Value> = agg
+                .iter()
+                .filter(|(id, _)| {
+                    filter_id
+                        .as_deref()
+                        .map(|f| f == id.as_str())
+                        .unwrap_or(true)
+                })
+                .map(|(id, s)| {
+                    json!({
+                        "id": id,
+                        "total": s.total,
+                        "success": s.success,
+                        "failure": s.failure,
+                        "total_duration_ms": s.total_duration_ms,
+                        "average_duration_ms": s.average_duration_ms(),
+                        "success_rate": if s.total == 0 {
+                            None
+                        } else {
+                            Some((s.success as f64) / (s.total as f64))
+                        },
+                    })
+                })
+                .collect();
+            Ok(json!({
+                "path": path.display().to_string(),
+                "skill_count": entries.len(),
+                "filter_id": filter_id,
+                "skills": entries,
+            }))
+        }
+        "record" => {
+            let id = args
+                .get(1)
+                .cloned()
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    "usage: cos agent skills usage record <id> --duration-ms N [--ok|--error] [--by <caller>]"
+                        .to_string()
+                })?;
+            let mut duration_ms: Option<u64> = None;
+            let mut success = true;
+            let mut invoked_by: Option<String> = None;
+            let mut i = 2usize;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--duration-ms" => {
+                        duration_ms = Some(parse_u64_arg(args.get(i + 1), "--duration-ms")?);
+                        i += 2;
+                    }
+                    "--ok" => {
+                        success = true;
+                        i += 1;
+                    }
+                    "--error" | "--fail" => {
+                        success = false;
+                        i += 1;
+                    }
+                    "--by" => {
+                        invoked_by = Some(
+                            args.get(i + 1)
+                                .cloned()
+                                .ok_or_else(|| "--by needs a name".to_string())?,
+                        );
+                        i += 2;
+                    }
+                    other => {
+                        return Err(format!("unknown flag for `usage record`: {other}"));
+                    }
+                }
+            }
+            let duration_ms = duration_ms.ok_or_else(|| {
+                "--duration-ms is required for `usage record`".to_string()
+            })?;
+            let rec = UsageRecord {
+                skill_id: id.clone(),
+                timestamp: Utc::now().to_rfc3339(),
+                success,
+                duration_ms,
+                invoked_by: invoked_by.clone(),
+            };
+            store
+                .record(&rec)
+                .map_err(|e| format!("record failed: {e}"))?;
+            Ok(json!({
+                "ok": true,
+                "id": id,
+                "timestamp": rec.timestamp,
+                "success": success,
+                "duration_ms": duration_ms,
+                "invoked_by": invoked_by,
+                "path": path.display().to_string(),
+            }))
+        }
+        "clear" => {
+            let confirmed = args.iter().any(|a| a == "--yes");
+            if !confirmed {
+                return Err(
+                    "refusing to clear usage log without --yes (would discard all per-skill telemetry)"
+                        .to_string(),
+                );
+            }
+            if path.exists() {
+                std::fs::remove_file(path)
+                    .map_err(|e| format!("clear {}: {e}", path.display()))?;
+            }
+            Ok(json!({
+                "ok": true,
+                "path": path.display().to_string(),
+                "cleared": true,
+            }))
+        }
+        other => Err(format!(
+            "unknown usage subcommand: {other}. try: stats [<id>] | record <id> --duration-ms N [--ok|--error] [--by <caller>] | path | clear --yes"
         )),
     }
 }
@@ -2072,6 +2225,183 @@ mod tests {
         .expect("multi-arg ok");
         let out = v.get("redacted").and_then(|x| x.as_str()).unwrap();
         assert!(out.contains("[REDACTED:"), "got {out}");
+    }
+
+    #[test]
+    fn skills_usage_stats_empty_returns_zero_count() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let p = dir.path().join("usage.jsonl");
+        let v = skills_usage_cmd_at(&["stats".into()], &p).expect("stats ok");
+        assert_eq!(v.get("skill_count").and_then(|x| x.as_u64()), Some(0));
+        assert_eq!(
+            v.get("skills").and_then(|x| x.as_array()).map(|a| a.len()),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn skills_usage_record_then_stats_aggregates() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let p = dir.path().join("usage.jsonl");
+        skills_usage_cmd_at(
+            &[
+                "record".into(),
+                "demo".into(),
+                "--duration-ms".into(),
+                "100".into(),
+                "--ok".into(),
+            ],
+            &p,
+        )
+        .expect("record 1");
+        skills_usage_cmd_at(
+            &[
+                "record".into(),
+                "demo".into(),
+                "--duration-ms".into(),
+                "200".into(),
+                "--error".into(),
+            ],
+            &p,
+        )
+        .expect("record 2");
+        let v = skills_usage_cmd_at(&["stats".into()], &p).expect("stats ok");
+        let skills = v.get("skills").and_then(|x| x.as_array()).unwrap();
+        assert_eq!(skills.len(), 1);
+        let s = &skills[0];
+        assert_eq!(s.get("id").and_then(|x| x.as_str()), Some("demo"));
+        assert_eq!(s.get("total").and_then(|x| x.as_u64()), Some(2));
+        assert_eq!(s.get("success").and_then(|x| x.as_u64()), Some(1));
+        assert_eq!(s.get("failure").and_then(|x| x.as_u64()), Some(1));
+        assert_eq!(s.get("total_duration_ms").and_then(|x| x.as_u64()), Some(300));
+        assert_eq!(s.get("average_duration_ms").and_then(|x| x.as_u64()), Some(150));
+    }
+
+    #[test]
+    fn skills_usage_stats_filter_by_id() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let p = dir.path().join("usage.jsonl");
+        for id in ["a", "b", "c"] {
+            skills_usage_cmd_at(
+                &[
+                    "record".into(),
+                    id.into(),
+                    "--duration-ms".into(),
+                    "10".into(),
+                ],
+                &p,
+            )
+            .expect("rec");
+        }
+        let v = skills_usage_cmd_at(&["stats".into(), "b".into()], &p).expect("stats ok");
+        let skills = v.get("skills").and_then(|x| x.as_array()).unwrap();
+        assert_eq!(skills.len(), 1);
+        assert_eq!(
+            skills[0].get("id").and_then(|x| x.as_str()),
+            Some("b"),
+            "filter should keep only `b`"
+        );
+        assert_eq!(v.get("filter_id").and_then(|x| x.as_str()), Some("b"));
+    }
+
+    #[test]
+    fn skills_usage_record_requires_duration() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let p = dir.path().join("usage.jsonl");
+        let err = skills_usage_cmd_at(&["record".into(), "demo".into()], &p).unwrap_err();
+        assert!(err.contains("--duration-ms"));
+    }
+
+    #[test]
+    fn skills_usage_record_requires_id() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let p = dir.path().join("usage.jsonl");
+        let err = skills_usage_cmd_at(&["record".into()], &p).unwrap_err();
+        assert!(err.contains("usage:"));
+    }
+
+    #[test]
+    fn skills_usage_record_with_invoked_by_persists() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let p = dir.path().join("usage.jsonl");
+        skills_usage_cmd_at(
+            &[
+                "record".into(),
+                "demo".into(),
+                "--duration-ms".into(),
+                "5".into(),
+                "--by".into(),
+                "delegate".into(),
+            ],
+            &p,
+        )
+        .expect("record ok");
+        let body = std::fs::read_to_string(&p).expect("read");
+        assert!(body.contains("\"invoked_by\":\"delegate\""), "body: {body}");
+    }
+
+    #[test]
+    fn skills_usage_clear_refuses_without_yes() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let p = dir.path().join("usage.jsonl");
+        std::fs::write(&p, "junk").expect("write");
+        let err = skills_usage_cmd_at(&["clear".into()], &p).unwrap_err();
+        assert!(err.contains("--yes"));
+        assert!(p.exists(), "file must remain after refused clear");
+    }
+
+    #[test]
+    fn skills_usage_clear_with_yes_removes_file() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let p = dir.path().join("usage.jsonl");
+        std::fs::write(&p, "junk").expect("write");
+        let v = skills_usage_cmd_at(&["clear".into(), "--yes".into()], &p).expect("clear ok");
+        assert_eq!(v.get("cleared").and_then(|x| x.as_bool()), Some(true));
+        assert!(!p.exists(), "file should be removed");
+    }
+
+    #[test]
+    fn skills_usage_clear_missing_file_is_ok() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let p = dir.path().join("does-not-exist.jsonl");
+        let v = skills_usage_cmd_at(&["clear".into(), "--yes".into()], &p).expect("clear ok");
+        assert_eq!(v.get("cleared").and_then(|x| x.as_bool()), Some(true));
+    }
+
+    #[test]
+    fn skills_usage_path_returns_path() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let p = dir.path().join("usage.jsonl");
+        let v = skills_usage_cmd_at(&["path".into()], &p).expect("path ok");
+        let returned = v.get("path").and_then(|x| x.as_str()).unwrap();
+        assert!(returned.ends_with("usage.jsonl"), "got {returned}");
+    }
+
+    #[test]
+    fn skills_usage_record_unknown_flag_errors() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let p = dir.path().join("usage.jsonl");
+        let err = skills_usage_cmd_at(
+            &[
+                "record".into(),
+                "demo".into(),
+                "--duration-ms".into(),
+                "1".into(),
+                "--bogus".into(),
+            ],
+            &p,
+        )
+        .unwrap_err();
+        assert!(err.contains("--bogus"));
+    }
+
+    #[test]
+    fn skills_usage_unknown_subcommand_lists_options() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let p = dir.path().join("usage.jsonl");
+        let err = skills_usage_cmd_at(&["bogus".into()], &p).unwrap_err();
+        assert!(err.contains("stats"));
+        assert!(err.contains("record"));
     }
 
     #[test]
