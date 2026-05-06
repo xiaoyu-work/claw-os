@@ -1,0 +1,16 @@
+{
+  "name": "gateway-telegram",
+  "version": "0.1.0-scaffold",
+  "description": "Telegram bot gateway. Exposes the cos agent on a Telegram bot account; receives messages, forwards to `cos agent ask`, replies with the response.",
+  "runtime": "python",
+  "commands": {
+    "start": "Start the long-poll loop (or webhook server)",
+    "stop": "Stop a running gateway service",
+    "status": "Show running state + recent message stats",
+    "send": "Send a message to a chat id (positional: chat_id text)"
+  },
+  "dependencies": {
+    "credentials": ["telegram_bot_token"],
+    "engines": []
+  }
+}
