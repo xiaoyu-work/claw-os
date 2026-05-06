@@ -1,0 +1,19 @@
+[package]
+name = "cos-cli"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/xiaoyu-work/claw-os"
+description = "Interactive REPL / TUI front-end for the cos kernel agent."
+
+[[bin]]
+name = "cos-cli"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true, features = ["env"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
