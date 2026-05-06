@@ -538,8 +538,29 @@ fn skills_cmd(args: &[String]) -> Result<Value, String> {
                 "errors": res.errors,
             }))
         }
+        "install" => {
+            let archive = args.get(1).cloned().unwrap_or_default();
+            if archive.is_empty() {
+                return Err(
+                    "usage: cos agent skills install <archive.zip> [--force]".into(),
+                );
+            }
+            let force = args.iter().any(|a| a == "--force" || a == "-f");
+            let path = std::path::PathBuf::from(&archive);
+            match skills::sync::install_from_archive(&path, force) {
+                Ok(res) => Ok(json!({
+                    "ok": true,
+                    "id": res.id,
+                    "install_dir": res.install_dir.display().to_string(),
+                    "files_extracted": res.files_extracted,
+                    "bytes_on_disk": res.bytes_on_disk,
+                    "replaced_existing": res.replaced_existing,
+                })),
+                Err(e) => Err(format!("install failed: {e}")),
+            }
+        }
         other => Err(format!(
-            "unknown skills subcommand: {other}. try: list | info <id> | disabled | errors | root"
+            "unknown skills subcommand: {other}. try: list | info <id> | disabled | errors | root | install <archive>"
         )),
     }
 }

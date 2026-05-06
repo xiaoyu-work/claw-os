@@ -388,7 +388,7 @@ fn builtin_apps() -> Vec<(
             ("sessions", "List recent conversation sessions: cos agent sessions [limit]"),
             ("onboarding", "First-run setup state machine: cos agent onboarding [status|next|complete <id> [note]|skip <id>|reset [id]]"),
             ("notes", "Manage agent markdown notes (MEMORY.md / USER.md / custom): cos agent notes [list|read <n>|write <n> <content>|append <n> <line>|delete <n>]"),
-            ("skills", "Inspect on-disk skill registry: cos agent skills [list|info <id>|disabled|errors|root]"),
+            ("skills", "Inspect or install skill bundles: cos agent skills [list|info <id>|disabled|errors|root|install <archive.zip> [--force]]"),
             ("nudge", "Manage periodic-nudge reminders auto-injected into the system prompt: cos agent nudge [list|due|add <due_in_secs> <message> [--repeat <secs>] [--tag <tag>]|fire <id>|remove <id>|path]"),
             ("mcp", "MCP (Model Context Protocol) server exposing the cos agent tool catalogue to external clients: cos agent mcp [status|serve [--allow <tool>] [--deny <tool>]]"),
             ("usage", "Filtered aggregation over the LLM run log (llm.jsonl): cos agent usage [overall|provider <name>|model <name>|session <id>] [--since <ISO>] [--until <ISO>] [--ok|--error]"),

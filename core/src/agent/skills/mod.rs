@@ -6,3 +6,4 @@ pub mod hub;
 pub mod loader;
 pub mod manifest;
 pub mod provenance;
+pub mod sync;
