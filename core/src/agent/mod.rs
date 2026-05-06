@@ -3941,13 +3941,14 @@ fn context_cmd(args: &[String]) -> Result<Value, String> {
         "hints" => context_hints_cmd(&args[1..]),
         "refs" | "references" => context_refs_cmd(&args[1..]),
         "markers" => context_markers_cmd(&args[1..]),
+        "build" => context_build_cmd(&args[1..]),
         "" => Err(
-            "usage: cos agent context <hints|refs|markers> ... \
-             (e.g. hints [--cwd <p>] [--depth N] [--render] | refs --text <body> [--unique] | markers)"
+            "usage: cos agent context <hints|refs|markers|build> ... \
+             (e.g. hints [--cwd <p>] [--depth N] [--render] | refs --text <body> [--unique] | markers | build [--cwd <p>] [--depth N] [--text <body>] [--note <line>...] [--max-refs N] [--max-hints N])"
                 .to_string(),
         ),
         other => Err(format!(
-            "unknown context subcommand: {other}. try: hints | refs | markers"
+            "unknown context subcommand: {other}. try: hints | refs | markers | build"
         )),
     }
 }
@@ -4097,6 +4098,74 @@ fn context_markers_cmd(_args: &[String]) -> Result<Value, String> {
         },
         "noise_dirs": NOISE_DIRS,
     }))
+}
+
+/// `cos agent context build [--cwd <p>] [--depth N] [--text <body>] [--note <line>...] [--max-refs N] [--max-hints N] [--no-dedup]`
+fn context_build_cmd(args: &[String]) -> Result<Value, String> {
+    use crate::agent::context::engine::{build, ContextOptions};
+
+    let mut opts = ContextOptions::default();
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        match a.as_str() {
+            "--cwd" => {
+                i += 1;
+                let v = args
+                    .get(i)
+                    .ok_or_else(|| "missing value for --cwd".to_string())?;
+                let p = std::path::PathBuf::from(v);
+                if !p.is_dir() {
+                    return Err(format!("context build: --cwd is not a directory: {v}"));
+                }
+                opts.cwd = Some(p);
+            }
+            "--depth" => {
+                i += 1;
+                let v = args
+                    .get(i)
+                    .ok_or_else(|| "missing value for --depth".to_string())?;
+                opts.scan_depth =
+                    v.parse().map_err(|_| format!("--depth: invalid integer: {v}"))?;
+            }
+            "--text" => {
+                i += 1;
+                let v = args
+                    .get(i)
+                    .ok_or_else(|| "missing value for --text".to_string())?;
+                opts.user_text = Some(v.clone());
+            }
+            "--note" => {
+                i += 1;
+                let v = args
+                    .get(i)
+                    .ok_or_else(|| "missing value for --note".to_string())?;
+                opts.notes.push(v.clone());
+            }
+            "--max-refs" => {
+                i += 1;
+                let v = args
+                    .get(i)
+                    .ok_or_else(|| "missing value for --max-refs".to_string())?;
+                opts.max_refs =
+                    Some(v.parse().map_err(|_| format!("--max-refs: invalid integer: {v}"))?);
+            }
+            "--max-hints" => {
+                i += 1;
+                let v = args
+                    .get(i)
+                    .ok_or_else(|| "missing value for --max-hints".to_string())?;
+                opts.max_hints =
+                    Some(v.parse().map_err(|_| format!("--max-hints: invalid integer: {v}"))?);
+            }
+            "--no-dedup" => {
+                opts.dedup_refs = false;
+            }
+            other => return Err(format!("context build: unknown flag: {other}")),
+        }
+        i += 1;
+    }
+    Ok(build(&opts).to_json())
 }
 
 /// `cos agent file-safety [check <path>|batch <path>...|categories]`
@@ -9505,6 +9574,130 @@ mod tests {
         assert!(names.contains(&"Cargo.toml"));
         assert!(names.contains(&"package.json"));
         assert!(names.contains(&"go.mod"));
+    }
+
+    // ---- context build (engine) ----
+
+    #[test]
+    fn context_build_no_args_returns_empty_block() {
+        let v = context_cmd(&["build".into()]).expect("ok");
+        assert_eq!(v.get("is_empty").and_then(|b| b.as_bool()), Some(true));
+        assert!(v.get("rendered").map(|x| x.is_null()).unwrap_or(false));
+    }
+
+    #[test]
+    fn context_build_unknown_flag_errs() {
+        let err = context_cmd(&["build".into(), "--bogus".into()]).unwrap_err();
+        assert!(err.contains("--bogus"));
+    }
+
+    #[test]
+    fn context_build_invalid_cwd_errs() {
+        let err = context_cmd(&[
+            "build".into(),
+            "--cwd".into(),
+            "Z:\\definitely\\not\\there".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("not a directory"));
+    }
+
+    #[test]
+    fn context_build_invalid_depth_errs() {
+        let err = context_cmd(&[
+            "build".into(),
+            "--depth".into(),
+            "abc".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("--depth"));
+    }
+
+    #[test]
+    fn context_build_with_text_extracts_references() {
+        let v = context_cmd(&[
+            "build".into(),
+            "--text".into(),
+            "look at @notes.md".into(),
+        ])
+        .expect("ok");
+        assert_eq!(v.get("is_empty").and_then(|b| b.as_bool()), Some(false));
+        let refs = v.get("references").and_then(|x| x.as_array()).unwrap();
+        assert_eq!(refs.len(), 1);
+        let rendered = v.get("rendered").and_then(|s| s.as_str()).unwrap_or("");
+        assert!(rendered.contains("PROJECT_CONTEXT"));
+        assert!(rendered.contains("notes.md"));
+    }
+
+    #[test]
+    fn context_build_with_cwd_picks_up_hints() {
+        let dir = std::env::temp_dir().join(format!(
+            "cos-context-build-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Cargo.toml"), "[package]\nname=\"x\"\n").unwrap();
+        let v = context_cmd(&[
+            "build".into(),
+            "--cwd".into(),
+            dir.to_string_lossy().to_string(),
+        ])
+        .expect("ok");
+        let hints = v.get("hints").and_then(|x| x.as_array()).unwrap();
+        assert_eq!(hints.len(), 1);
+        assert_eq!(
+            hints[0].get("label").and_then(|s| s.as_str()),
+            Some("Rust crate")
+        );
+        let rendered = v.get("rendered").and_then(|s| s.as_str()).unwrap_or("");
+        assert!(rendered.contains("Project hints"));
+        assert!(rendered.contains("cwd:"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn context_build_with_notes_appends_them() {
+        let v = context_cmd(&[
+            "build".into(),
+            "--note".into(),
+            "host: Windows".into(),
+            "--note".into(),
+            "12 MB free".into(),
+        ])
+        .expect("ok");
+        let notes = v.get("notes").and_then(|x| x.as_array()).unwrap();
+        assert_eq!(notes.len(), 2);
+        let rendered = v.get("rendered").and_then(|s| s.as_str()).unwrap_or("");
+        assert!(rendered.contains("Notes:"));
+        assert!(rendered.contains("host: Windows"));
+        assert!(rendered.contains("12 MB free"));
+    }
+
+    #[test]
+    fn context_build_max_refs_caps_count() {
+        let v = context_cmd(&[
+            "build".into(),
+            "--text".into(),
+            "@a @b @c @d @e".into(),
+            "--max-refs".into(),
+            "2".into(),
+        ])
+        .expect("ok");
+        let refs = v.get("references").and_then(|x| x.as_array()).unwrap();
+        assert_eq!(refs.len(), 2);
+    }
+
+    #[test]
+    fn context_build_no_dedup_keeps_duplicates() {
+        let v = context_cmd(&[
+            "build".into(),
+            "--text".into(),
+            "@a @a @a".into(),
+            "--no-dedup".into(),
+        ])
+        .expect("ok");
+        let refs = v.get("references").and_then(|x| x.as_array()).unwrap();
+        assert_eq!(refs.len(), 3);
     }
 
     // ---- file-safety dispatch ----

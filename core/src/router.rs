@@ -414,7 +414,7 @@ fn builtin_apps() -> Vec<(
             ("shell-hooks", "Capture interactive shell commands into a JSONL log so the agent can read them as ambient context: cos agent shell-hooks [init <bash|zsh|fish>|record-pre <cmd>|record-post <exit>|tail [--limit N]|clear --yes|path]"),
             ("media", "Inspect the media subsystem (TTS / STT / image-gen providers + outputs directory): cos agent media [providers|outputs-dir|list-outputs [--limit N] [--ext <e>]]"),
             ("binary-ext", "Classify file extensions as binary or text (extension-only, no magic-byte sniff): cos agent binary-ext [list [--limit N] [--no-limit] | extensions | check <path-or-extension>]"),
-            ("context", "Project-context helpers (subdir hints + @-references): cos agent context hints [--cwd <path>] [--depth N] [--render] | cos agent context refs --text <body> [--unique] | cos agent context markers"),
+            ("context", "Project-context helpers (subdir hints + @-references + composer): cos agent context hints [--cwd <path>] [--depth N] [--render] | cos agent context refs --text <body> [--unique] | cos agent context markers | cos agent context build [--cwd <p>] [--depth N] [--text <body>] [--note <line>...] [--max-refs N] [--max-hints N] [--no-dedup]"),
             ("file-safety", "Classify filesystem paths for write-safety (dangerous extensions, credential dirs, system paths, VCS internals): cos agent file-safety check <path> | batch <path>... | categories"),
             ("osv", "Query the public osv.dev vulnerability API for dependencies. Pure parsers for Cargo.lock / package-lock.json / requirements.txt / go.sum + online checks: cos agent osv parse <lockfile> | check <lockfile> | query <name>@<version> --ecosystem <eco> | ecosystems"),
         ]),
