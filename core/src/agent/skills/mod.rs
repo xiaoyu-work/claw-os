@@ -2,4 +2,5 @@
 //! under clawos/skills/ (Q11). Red-teaming and yuanbao-specific skills disabled
 //! by default in the registry.
 
+pub mod loader;
 pub mod manifest;

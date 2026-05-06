@@ -117,6 +117,15 @@ pub fn agent_todos_dir() -> PathBuf {
     agent_state_dir().join("todos")
 }
 
+/// Directory tree for installed skills. Lives under
+/// `data_dir/agent/skills/`. Each subdirectory `<skill-name>/`
+/// contains a `SKILL.md` (agentskills.io frontmatter + body) plus
+/// any helper scripts the skill may invoke. Phase 3 ships the
+/// loader; Phase 6 ships the GitHub-based hub + sync.
+pub fn agent_skills_dir() -> PathBuf {
+    agent_state_dir().join("skills")
+}
+
 pub fn model_runtime_socket() -> PathBuf {
     runtime_dir().join("model-runtime.sock")
 }
