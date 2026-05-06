@@ -4591,6 +4591,21 @@ fn mcp_cmd(args: &[String]) -> Result<Value, String> {
             let mut tools = tools::registry::default_registry();
             tools.set_guardrails(crate::agent::runtime::loop_::guardrails_from_cfg(cfg));
             tools.set_approval(crate::agent::runtime::loop_::approval_from_cfg(cfg));
+            let configured_servers: Vec<Value> = cfg
+                .mcp_servers
+                .iter()
+                .map(|s| {
+                    json!({
+                        "name": s.name,
+                        "command": s.command,
+                        "args_count": s.args.len(),
+                        "env_count": s.env.len(),
+                        "timeout_secs": s.timeout_secs,
+                        "enabled": s.enabled,
+                    })
+                })
+                .collect();
+            let enabled_count = cfg.mcp_servers.iter().filter(|s| s.enabled).count();
             Ok(json!({
                 "status": "ready",
                 "transport": "stdio",
@@ -4598,6 +4613,100 @@ fn mcp_cmd(args: &[String]) -> Result<Value, String> {
                 "tools_registered": tools.names_unfiltered().len(),
                 "tools_permitted": tools.names().len(),
                 "tools": tools.names(),
+                "external_servers_configured": cfg.mcp_servers.len(),
+                "external_servers_enabled": enabled_count,
+                "external_servers": configured_servers,
+            }))
+        }
+        "servers" => {
+            // `cos agent mcp servers [--probe]` — list configured
+            // external MCP servers. With `--probe`, attempt to attach
+            // each enabled one and report tool counts (does not
+            // mutate global state; the runtime registry is built
+            // fresh inside this call and dropped on return).
+            let probe = args.iter().any(|a| a == "--probe");
+            let cfg = &crate::config::get().agent;
+            if !probe {
+                let entries: Vec<Value> = cfg
+                    .mcp_servers
+                    .iter()
+                    .map(|s| {
+                        json!({
+                            "name": s.name,
+                            "command": s.command,
+                            "args": s.args,
+                            "env_keys": s.env.keys().collect::<Vec<_>>(),
+                            "cwd": s.cwd,
+                            "timeout_secs": s.timeout_secs,
+                            "enabled": s.enabled,
+                        })
+                    })
+                    .collect();
+                return Ok(json!({
+                    "ok": true,
+                    "probed": false,
+                    "count": cfg.mcp_servers.len(),
+                    "servers": entries,
+                }));
+            }
+            // Probe: attach each enabled server, report tools, drop
+            // handles immediately (children torn down). Best-effort:
+            // failed attachments are reported per-server.
+            use crate::agent::tools::mcp::integration::{attach_server, McpServerSpec};
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| format!("tokio runtime: {e}"))?;
+            let report = runtime.block_on(async {
+                let mut out: Vec<Value> = Vec::with_capacity(cfg.mcp_servers.len());
+                for s in &cfg.mcp_servers {
+                    if !s.enabled {
+                        out.push(json!({
+                            "name": s.name,
+                            "enabled": false,
+                            "skipped": true,
+                        }));
+                        continue;
+                    }
+                    let spec = McpServerSpec {
+                        name: s.name.clone(),
+                        command: s.command.clone(),
+                        args: s.args.clone(),
+                        env: s.env.clone(),
+                        cwd: s.cwd.clone(),
+                        timeout_secs: s.timeout_secs,
+                    };
+                    let mut throwaway_registry =
+                        crate::agent::tools::registry::ToolRegistry::new();
+                    match attach_server(&spec, &mut throwaway_registry).await {
+                        Ok(handle) => {
+                            let tools = throwaway_registry.names_unfiltered();
+                            out.push(json!({
+                                "name": s.name,
+                                "enabled": true,
+                                "ok": true,
+                                "tool_count": handle.tool_count(),
+                                "tools": tools,
+                            }));
+                            // handle dropped here — child killed
+                        }
+                        Err(e) => {
+                            out.push(json!({
+                                "name": s.name,
+                                "enabled": true,
+                                "ok": false,
+                                "error": e,
+                            }));
+                        }
+                    }
+                }
+                out
+            });
+            Ok(json!({
+                "ok": true,
+                "probed": true,
+                "count": cfg.mcp_servers.len(),
+                "servers": report,
             }))
         }
         "probe" => mcp_probe(&args[1..]),
@@ -4662,7 +4771,7 @@ fn mcp_cmd(args: &[String]) -> Result<Value, String> {
             Ok(json!({"status": "stopped", "reason": "stdin closed"}))
         }
         other => Err(format!(
-            "unknown mcp subcommand: {other}. try: status | serve | probe | call"
+            "unknown mcp subcommand: {other}. try: status | servers [--probe] | serve | probe | call"
         )),
     }
 }
@@ -6382,6 +6491,32 @@ mod tests {
         let err = mcp_cmd(&["bogus".into()]).unwrap_err();
         assert!(err.contains("status"));
         assert!(err.contains("serve"));
+    }
+
+    #[test]
+    fn mcp_status_includes_external_servers_section() {
+        let v = mcp_cmd(&["status".into()]).expect("mcp status ok");
+        // Always present even when no external servers are configured.
+        assert!(v.get("external_servers_configured").is_some());
+        assert!(v.get("external_servers_enabled").is_some());
+        assert!(
+            v.get("external_servers")
+                .and_then(|x| x.as_array())
+                .is_some(),
+            "external_servers must be a JSON array (possibly empty)"
+        );
+    }
+
+    #[test]
+    fn mcp_servers_without_probe_does_not_spawn_anything() {
+        // Default test config has no mcp_servers, so this is a pure
+        // shape assertion. It's still useful because a regression
+        // that turned off the !probe early-return would either spawn
+        // nothing (passes) or panic on attach (we'd see the failure).
+        let v = mcp_cmd(&["servers".into()]).expect("mcp servers ok");
+        assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(true));
+        assert_eq!(v.get("probed").and_then(|x| x.as_bool()), Some(false));
+        assert!(v.get("servers").and_then(|x| x.as_array()).is_some());
     }
 
     #[test]
