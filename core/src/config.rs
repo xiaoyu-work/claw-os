@@ -226,6 +226,35 @@ pub struct AgentConfig {
     /// emits a synthetic `tool_result` with `is_error: true`.
     #[serde(default)]
     pub auto_deny_tools: Vec<String>,
+
+    /// Auxiliary LLM provider — name registered in
+    /// `agent::llm::registry`. When set, lightweight subtasks
+    /// (title generation, classification, query rewriting) are routed
+    /// here instead of the primary `provider`. `None` (default)
+    /// disables the auxiliary path; callers fall back to the primary.
+    /// Honours the same credential resolution as the primary
+    /// (`api_key_credential` / `api_key_env`) by default — overrides
+    /// can be added later if a separate API key is needed.
+    #[serde(default)]
+    pub auxiliary_provider: Option<String>,
+
+    /// Auxiliary model id. Required when `auxiliary_provider` is set
+    /// (build returns an error otherwise). Typically a smaller / cheaper
+    /// SKU than the primary model.
+    #[serde(default)]
+    pub auxiliary_model: Option<String>,
+
+    /// Hard cap on `max_tokens` for auxiliary calls. Defaults to 1024
+    /// — these subtasks are *meant* to be short. Capping at construction
+    /// time prevents an accidental flagship-sized request from sneaking
+    /// through.
+    #[serde(default = "default_auxiliary_max_tokens")]
+    pub auxiliary_max_tokens: u32,
+
+    /// Optional sampling temperature for auxiliary calls. `None`
+    /// (default) lets the auxiliary provider use its own default.
+    #[serde(default)]
+    pub auxiliary_temperature: Option<f32>,
 }
 
 /// Embedding service configuration. Reads from `[embed]` block.
@@ -410,6 +439,9 @@ fn default_think_scrub_enabled() -> bool {
 fn default_redact_memory_enabled() -> bool {
     true
 }
+fn default_auxiliary_max_tokens() -> u32 {
+    1024
+}
 fn default_embed_provider() -> String {
     "none".into()
 }
@@ -584,6 +616,10 @@ impl Default for AgentConfig {
             dangerous_tools: Vec::new(),
             auto_approve_tools: Vec::new(),
             auto_deny_tools: Vec::new(),
+            auxiliary_provider: None,
+            auxiliary_model: None,
+            auxiliary_max_tokens: default_auxiliary_max_tokens(),
+            auxiliary_temperature: None,
         }
     }
 }

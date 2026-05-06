@@ -302,6 +302,44 @@ pub fn approval_from_cfg(cfg: &AgentConfig) -> crate::agent::runtime::approval::
     ApprovalGate::new(acfg)
 }
 
+/// Build an optional [`AuxiliaryClient`] from `cfg`. Returns
+/// `Ok(None)` when `auxiliary_provider` is unset (the runtime falls
+/// back to the primary provider for subtasks). Returns
+/// `Err(InvalidRequest)` when `auxiliary_provider` is set but
+/// `auxiliary_model` is missing — the build is misconfigured and
+/// silently swallowing it would hide the error from operators. The
+/// `request_timeout`, credential, header, and base URL fields from
+/// `cfg` are inherited by the auxiliary provider — auxiliary calls
+/// share the same credentials as the primary unless the underlying
+/// provider builder honours its own env vars (e.g. `OPENAI_API_KEY`).
+pub fn auxiliary_from_cfg(
+    cfg: &AgentConfig,
+) -> Result<Option<crate::agent::llm::auxiliary::AuxiliaryClient>, AgentError> {
+    use crate::agent::llm::auxiliary::{AuxiliaryClient, AuxiliaryConfig};
+    let Some(provider_name) = cfg.auxiliary_provider.as_deref() else {
+        return Ok(None);
+    };
+    if provider_name.is_empty() {
+        return Ok(None);
+    }
+    let model = cfg
+        .auxiliary_model
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            AgentError::Internal(
+                "auxiliary_provider set without auxiliary_model — set both or neither".into(),
+            )
+        })?;
+    let provider = llm::registry::build(provider_name, model, cfg)
+        .map_err(|e| AgentError::Internal(format!("auxiliary provider build: {e}")))?;
+    let mut acfg = AuxiliaryConfig::new(provider_name, model).with_max_tokens(cfg.auxiliary_max_tokens);
+    if let Some(t) = cfg.auxiliary_temperature {
+        acfg = acfg.with_temperature(t);
+    }
+    Ok(Some(AuxiliaryClient::new(provider, acfg)))
+}
+
 /// Sync entry point for the CLI dispatcher (which is sync). Internally spins
 /// up a tokio runtime and `block_on`s the async loop.
 pub fn ask_blocking(user_prompt: &str) -> Result<AskResult, AgentError> {
@@ -1001,6 +1039,93 @@ mod tests {
         assert!(gate.config().dangerous.contains("cos_proc"));
         assert!(gate.config().auto_approve.contains("echo"));
         assert!(gate.config().auto_deny.contains("cos_credential"));
+    }
+
+    /// `auxiliary_from_cfg` returns `Ok(None)` for the default config —
+    /// the runtime falls back to the primary provider for subtasks.
+    #[test]
+    fn auxiliary_from_cfg_default_is_none() {
+        let c = cfg();
+        let aux = auxiliary_from_cfg(&c).expect("default cfg builds");
+        assert!(aux.is_none());
+    }
+
+    /// `auxiliary_from_cfg` returns `Ok(None)` when the provider field
+    /// is set to an empty string — treat as unconfigured rather than
+    /// failing the build (lets `--auxiliary-provider ""` clear it).
+    #[test]
+    fn auxiliary_from_cfg_empty_provider_is_none() {
+        let mut c = cfg();
+        c.auxiliary_provider = Some(String::new());
+        c.auxiliary_model = Some("anything".into());
+        let aux = auxiliary_from_cfg(&c).expect("empty provider treated as unset");
+        assert!(aux.is_none());
+    }
+
+    /// `auxiliary_from_cfg` errors when the provider is set without a
+    /// model — silent fallback would hide the misconfig from operators.
+    #[test]
+    fn auxiliary_from_cfg_provider_without_model_errors() {
+        let mut c = cfg();
+        c.auxiliary_provider = Some("mock".into());
+        c.auxiliary_model = None;
+        let err = auxiliary_from_cfg(&c).unwrap_err();
+        match err {
+            AgentError::Internal(msg) => {
+                assert!(msg.contains("auxiliary_model"), "got: {msg}");
+            }
+            other => panic!("expected Internal, got {other:?}"),
+        }
+    }
+
+    /// `auxiliary_from_cfg` errors when the model is set to an empty
+    /// string — same rationale as the missing-model case.
+    #[test]
+    fn auxiliary_from_cfg_provider_with_empty_model_errors() {
+        let mut c = cfg();
+        c.auxiliary_provider = Some("mock".into());
+        c.auxiliary_model = Some(String::new());
+        let err = auxiliary_from_cfg(&c).unwrap_err();
+        assert!(matches!(err, AgentError::Internal(_)));
+    }
+
+    /// Happy path: aux provider + model + max_tokens override flow
+    /// through to the constructed client.
+    #[test]
+    fn auxiliary_from_cfg_builds_client_with_overrides() {
+        let mut c = cfg();
+        c.auxiliary_provider = Some("mock".into());
+        c.auxiliary_model = Some("aux-tiny".into());
+        c.auxiliary_max_tokens = 256;
+        c.auxiliary_temperature = Some(0.1);
+        let aux = auxiliary_from_cfg(&c)
+            .expect("builds")
+            .expect("Some when configured");
+        let cfg = aux.config();
+        assert_eq!(cfg.provider, "mock");
+        assert_eq!(cfg.model, "aux-tiny");
+        assert_eq!(cfg.max_tokens, 256);
+        assert_eq!(cfg.temperature, Some(0.1));
+    }
+
+    /// Unknown provider name surfaces as an Internal error so the
+    /// caller knows the build failed (rather than silently falling
+    /// back to the heuristic).
+    #[test]
+    fn auxiliary_from_cfg_unknown_provider_errors() {
+        let mut c = cfg();
+        c.auxiliary_provider = Some("nonsense-provider-xyz".into());
+        c.auxiliary_model = Some("x".into());
+        let err = auxiliary_from_cfg(&c).unwrap_err();
+        match err {
+            AgentError::Internal(msg) => {
+                assert!(
+                    msg.contains("auxiliary provider build"),
+                    "got: {msg}"
+                );
+            }
+            other => panic!("expected Internal, got {other:?}"),
+        }
     }
 
     /// End-to-end: when the model calls a tool that is in

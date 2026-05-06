@@ -31,6 +31,7 @@ pub mod runtime;
 pub mod safety;
 pub mod skills;
 pub mod tools;
+pub mod title;
 
 use serde_json::{json, Value};
 

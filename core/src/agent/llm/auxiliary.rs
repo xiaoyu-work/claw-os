@@ -79,6 +79,15 @@ pub struct AuxiliaryClient {
     config: AuxiliaryConfig,
 }
 
+impl std::fmt::Debug for AuxiliaryClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuxiliaryClient")
+            .field("provider_name", &self.inner.name())
+            .field("config", &self.config)
+            .finish()
+    }
+}
+
 impl AuxiliaryClient {
     /// Wrap an existing provider with the given configuration.
     pub fn new(provider: Arc<dyn Provider>, config: AuxiliaryConfig) -> Self {
