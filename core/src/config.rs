@@ -297,6 +297,57 @@ pub struct AgentConfig {
     /// still counted toward LeastErrors picking). Defaults to 60.
     #[serde(default = "default_pool_cooldown_secs")]
     pub pool_cooldown_secs: u64,
+
+    /// External Model Context Protocol (MCP) servers the agent should
+    /// attach to at startup. Each entry spawns a child process,
+    /// performs the MCP handshake, lists its tools, and registers
+    /// every advertised tool under the prefix `mcp_<name>_<remote>`.
+    /// Failures are best-effort: a misconfigured MCP server is
+    /// logged and skipped, never fatal to the agent loop. See
+    /// [`McpServerConfig`] for the per-server fields.
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerConfig>,
+}
+
+/// One external MCP server attached to the agent. Read from the
+/// `[[agent.mcp_servers]]` table in `config.json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerConfig {
+    /// Stable, snake_case identifier. Becomes the prefix in registered
+    /// tool names: `mcp_<name>_<remote_tool>`. Must be unique across
+    /// all entries in this list (the registry will overwrite earlier
+    /// duplicates silently otherwise).
+    pub name: String,
+
+    /// Executable to spawn. Resolved against `PATH`.
+    pub command: String,
+
+    /// Positional / flag args passed verbatim to the child.
+    #[serde(default)]
+    pub args: Vec<String>,
+
+    /// Extra environment variables for the child. Inherited variables
+    /// pass through unchanged unless overridden here.
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+
+    /// Working directory for the child. `None` inherits the parent's
+    /// `cwd` (typical case for stateless servers).
+    #[serde(default)]
+    pub cwd: Option<String>,
+
+    /// Per-RPC timeout (initialize, tools/list, tools/call) in seconds.
+    /// `0` disables the timeout entirely. Defaults to 30 — short
+    /// enough that a hung server doesn't block the agent for long,
+    /// long enough that legitimately slow tools (e.g. large database
+    /// queries) finish.
+    #[serde(default = "default_mcp_timeout_secs")]
+    pub timeout_secs: u64,
+
+    /// Disable this entry without removing it from config. Defaults
+    /// to `true` so adding an entry attaches it.
+    #[serde(default = "default_mcp_enabled")]
+    pub enabled: bool,
 }
 
 /// Embedding service configuration. Reads from `[embed]` block.
@@ -493,6 +544,12 @@ fn default_pool_strategy() -> String {
 fn default_pool_cooldown_secs() -> u64 {
     60
 }
+fn default_mcp_timeout_secs() -> u64 {
+    30
+}
+fn default_mcp_enabled() -> bool {
+    true
+}
 fn default_embed_provider() -> String {
     "none".into()
 }
@@ -677,6 +734,7 @@ impl Default for AgentConfig {
             api_key_envs: Vec::new(),
             pool_strategy: default_pool_strategy(),
             pool_cooldown_secs: default_pool_cooldown_secs(),
+            mcp_servers: Vec::new(),
         }
     }
 }

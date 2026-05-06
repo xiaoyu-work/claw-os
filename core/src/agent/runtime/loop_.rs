@@ -251,6 +251,13 @@ pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
     let mut tools = default_registry();
     tools.set_guardrails(guardrails_from_cfg(cfg));
     tools.set_approval(approval_from_cfg(cfg));
+
+    // Best-effort attach configured MCP servers. `_mcp_handles` MUST
+    // outlive the loop — its Drop tears down children and aborts
+    // background reader tasks. Failures inside attach_all are already
+    // logged and skipped, so this never fails the ask.
+    let _mcp_handles = attach_mcp_servers(&mut tools, cfg).await;
+
     let session_id = uuid::Uuid::new_v4().to_string();
 
     let compressor = compressor_from_cfg(provider.clone(), cfg);
@@ -274,6 +281,35 @@ pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
             ask_inner(provider, cfg, user_prompt, &tools, None, compressor).await
         }
     }
+}
+
+/// Translate `cfg.mcp_servers` into [`McpServerSpec`]s and attach each
+/// enabled entry. Returns the live handles (drop terminates).
+async fn attach_mcp_servers(
+    tools: &mut ToolRegistry,
+    cfg: &AgentConfig,
+) -> Vec<crate::agent::tools::mcp::integration::McpServerHandle> {
+    use crate::agent::tools::mcp::integration::{attach_all, McpServerSpec};
+    if cfg.mcp_servers.is_empty() {
+        return Vec::new();
+    }
+    let specs: Vec<McpServerSpec> = cfg
+        .mcp_servers
+        .iter()
+        .filter(|s| s.enabled)
+        .map(|s| McpServerSpec {
+            name: s.name.clone(),
+            command: s.command.clone(),
+            args: s.args.clone(),
+            env: s.env.clone(),
+            cwd: s.cwd.clone(),
+            timeout_secs: s.timeout_secs,
+        })
+        .collect();
+    if specs.is_empty() {
+        return Vec::new();
+    }
+    attach_all(&specs, tools).await
 }
 
 /// Build a [`LlmCompressor`] from `cfg` when `compress_enabled` is set.
