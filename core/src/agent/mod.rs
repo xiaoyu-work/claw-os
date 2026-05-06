@@ -33,6 +33,8 @@ pub mod safety;
 pub mod skills;
 pub mod tools;
 pub mod title;
+pub mod classify;
+pub mod summarise;
 
 use serde_json::{json, Value};
 
