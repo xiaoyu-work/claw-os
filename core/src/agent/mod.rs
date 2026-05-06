@@ -23,6 +23,7 @@ pub mod insights;
 pub mod llm;
 pub mod media;
 pub mod memory;
+pub mod nudge;
 pub mod prompt;
 pub mod runtime;
 pub mod safety;
