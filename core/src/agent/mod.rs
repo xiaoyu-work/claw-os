@@ -578,8 +578,9 @@ fn skills_cmd(args: &[String]) -> Result<Value, String> {
         }
         "hub" => skills_hub_cmd(&args[1..]),
         "usage" => skills_usage_cmd(&args[1..]),
+        "guard" => skills_guard_cmd(&args[1..]),
         other => Err(format!(
-            "unknown skills subcommand: {other}. try: list | info <id> | disabled | errors | root | install <archive> | hub <list|show|install> <owner/repo> [<id>] | usage <stats|record|path|clear>"
+            "unknown skills subcommand: {other}. try: list | info <id> | disabled | errors | root | install <archive> | hub <list|show|install> <owner/repo> [<id>] | usage <stats|record|path|clear> | guard <id> [--provenance <vendor|hub|user|local|unknown>] [--require-allowed-tools] [--max-file-bytes N] [--ignore-trust]"
         )),
     }
 }
@@ -602,6 +603,125 @@ fn skills_cmd(args: &[String]) -> Result<Value, String> {
 ///   or pipe into their own analysis tooling.
 /// * `clear` — truncate the log. Refuses without `--yes` so a
 ///   mistyped command can't wipe weeks of telemetry.
+/// `cos agent skills guard <id> [--provenance <p>] [--require-allowed-tools] [--max-file-bytes N] [--ignore-trust]`
+///
+/// Run [`crate::agent::skills::provenance::Guard`] against an
+/// installed skill loaded by [`crate::agent::skills::loader::load_default`]
+/// and report what the guard would say at invocation time. Useful
+/// for operators reviewing whether a freshly-installed third-party
+/// skill would actually be allowed to run.
+///
+/// `--provenance` overrides the default `Hub` (the strict path).
+/// Accepts the lowercase forms of [`Provenance`]: vendor / hub /
+/// user / local / unknown. Default is `hub` so the guard runs the
+/// full check tree.
+///
+/// `--require-allowed-tools` flips
+/// [`GuardConfig::require_allowed_tools`] on so a skill with no
+/// declared `allowed_tools` is rejected.
+///
+/// `--max-file-bytes N` overrides the per-sibling-file size cap
+/// (default 5 MiB). Useful to test what would happen with a tighter
+/// policy.
+///
+/// `--ignore-trust` flips
+/// [`GuardConfig::honour_provenance_trust`] off so even
+/// `vendor`/`user` skills run the strict checks (lets you preview
+/// the worst-case verdict for a vendored skill).
+///
+/// Output includes the resolved verdict (allow / deny / require
+/// confirmation), the GuardConfig that produced it, and the
+/// provenance used. Returns an error if the skill id isn't loaded.
+fn skills_guard_cmd(args: &[String]) -> Result<Value, String> {
+    let res = skills::loader::load_default();
+    skills_guard_cmd_against(args, &res.skills)
+}
+
+/// Inner form of [`skills_guard_cmd`] that takes the already-loaded
+/// skill map. Lets tests construct a fake skill in a tempdir without
+/// touching the live data dir.
+fn skills_guard_cmd_against(
+    args: &[String],
+    skills: &std::collections::BTreeMap<String, skills::loader::LoadedSkill>,
+) -> Result<Value, String> {
+    use crate::agent::skills::provenance::{Guard, GuardConfig, GuardOutcome, Provenance};
+
+    let mut id: Option<String> = None;
+    let mut provenance = Provenance::Hub;
+    let mut cfg = GuardConfig::default();
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--provenance" => {
+                let raw = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--provenance needs a value".to_string())?;
+                provenance = match raw.to_ascii_lowercase().as_str() {
+                    "vendor" => Provenance::Vendor,
+                    "hub" => Provenance::Hub,
+                    "user" => Provenance::User,
+                    "local" => Provenance::Local,
+                    "unknown" => Provenance::Unknown,
+                    other => {
+                        return Err(format!(
+                            "unknown provenance: {other}. try: vendor | hub | user | local | unknown"
+                        ))
+                    }
+                };
+                i += 2;
+            }
+            "--require-allowed-tools" => {
+                cfg.require_allowed_tools = true;
+                i += 1;
+            }
+            "--max-file-bytes" => {
+                let raw = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--max-file-bytes needs a value".to_string())?;
+                cfg.max_file_bytes = raw
+                    .parse::<u64>()
+                    .map_err(|e| format!("--max-file-bytes parse: {e}"))?;
+                i += 2;
+            }
+            "--ignore-trust" => {
+                cfg.honour_provenance_trust = false;
+                i += 1;
+            }
+            other if id.is_none() && !other.starts_with("--") => {
+                id = Some(other.to_string());
+                i += 1;
+            }
+            other => return Err(format!("unknown skills guard flag: {other}")),
+        }
+    }
+
+    let id = id.ok_or_else(|| "usage: cos agent skills guard <id>".to_string())?;
+
+    let skill = skills
+        .get(&id)
+        .ok_or_else(|| format!("skill not loaded: {id}"))?;
+
+    let guard = Guard::new(cfg.clone());
+    let outcome = guard.check(skill, provenance);
+    let (verdict, reason) = match outcome {
+        GuardOutcome::Allow => ("allow", None),
+        GuardOutcome::Deny { reason } => ("deny", Some(reason)),
+        GuardOutcome::RequireConfirmation { reason } => ("require_confirmation", Some(reason)),
+    };
+
+    Ok(json!({
+        "id": skill.id,
+        "verdict": verdict,
+        "reason": reason,
+        "provenance": provenance.as_str(),
+        "config": {
+            "max_file_bytes": cfg.max_file_bytes,
+            "require_allowed_tools": cfg.require_allowed_tools,
+            "honour_provenance_trust": cfg.honour_provenance_trust,
+        },
+    }))
+}
+
 fn skills_usage_cmd(args: &[String]) -> Result<Value, String> {
     let path = crate::paths::agent_skills_usage_path();
     skills_usage_cmd_at(args, &path)
@@ -5911,5 +6031,222 @@ mod tests {
     fn retry_cmd_unknown_subcommand_errs() {
         let err = retry_cmd(&["bogus".into()]).unwrap_err();
         assert!(err.contains("bogus"));
+    }
+
+    // ---- skills_guard_cmd ----
+
+    fn skills_guard_test_dir(label: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!(
+            "cos-agent-skills-guard-{label}-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    fn write_test_skill(
+        dir: &std::path::Path,
+        id: &str,
+        tools: &[&str],
+    ) -> crate::agent::skills::loader::LoadedSkill {
+        use crate::agent::skills::loader::LoadedSkill;
+        use std::fs;
+        let sd = dir.join(id);
+        fs::create_dir_all(&sd).unwrap();
+        let mp = sd.join("SKILL.md");
+        let allowed = if tools.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "allowed-tools:\n{}\n",
+                tools
+                    .iter()
+                    .map(|t| format!("  - {t}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
+        };
+        fs::write(
+            &mp,
+            format!("---\nname: {id}\ndescription: test\n{allowed}---\n# body\n"),
+        )
+        .unwrap();
+        let doc = crate::agent::skills::manifest::parse(&fs::read_to_string(&mp).unwrap()).unwrap();
+        LoadedSkill {
+            id: id.to_string(),
+            dir: sd,
+            manifest_path: mp,
+            manifest: doc.manifest,
+            body: doc.body,
+        }
+    }
+
+    fn guard_skills_map(
+        skill: crate::agent::skills::loader::LoadedSkill,
+    ) -> std::collections::BTreeMap<String, crate::agent::skills::loader::LoadedSkill> {
+        let mut m = std::collections::BTreeMap::new();
+        m.insert(skill.id.clone(), skill);
+        m
+    }
+
+    #[test]
+    fn skills_guard_unknown_id_errs() {
+        let map: std::collections::BTreeMap<String, crate::agent::skills::loader::LoadedSkill> =
+            std::collections::BTreeMap::new();
+        let err = skills_guard_cmd_against(&["nope".into()], &map).unwrap_err();
+        assert!(err.contains("not loaded"));
+    }
+
+    #[test]
+    fn skills_guard_missing_id_errs() {
+        let map: std::collections::BTreeMap<String, crate::agent::skills::loader::LoadedSkill> =
+            std::collections::BTreeMap::new();
+        let err = skills_guard_cmd_against(&[], &map).unwrap_err();
+        assert!(err.contains("usage"));
+    }
+
+    #[test]
+    fn skills_guard_default_provenance_hub_allows_clean_skill() {
+        let dir = skills_guard_test_dir("default-hub");
+        let skill = write_test_skill(&dir, "alpha", &["echo"]);
+        let map = guard_skills_map(skill);
+        let v = skills_guard_cmd_against(&["alpha".into()], &map).expect("ok");
+        assert_eq!(v.get("verdict").and_then(|s| s.as_str()), Some("allow"));
+        assert_eq!(v.get("provenance").and_then(|s| s.as_str()), Some("hub"));
+    }
+
+    #[test]
+    fn skills_guard_vendor_provenance_is_trusted() {
+        // Even with require_allowed_tools + zero declared tools,
+        // vendor provenance + honour_provenance_trust = Allow.
+        let dir = skills_guard_test_dir("vendor-trust");
+        let skill = write_test_skill(&dir, "beta", &[]);
+        let map = guard_skills_map(skill);
+        let v = skills_guard_cmd_against(
+            &[
+                "beta".into(),
+                "--provenance".into(),
+                "vendor".into(),
+                "--require-allowed-tools".into(),
+            ],
+            &map,
+        )
+        .expect("ok");
+        assert_eq!(v.get("verdict").and_then(|s| s.as_str()), Some("allow"));
+    }
+
+    #[test]
+    fn skills_guard_require_allowed_tools_denies_empty_hub_skill() {
+        let dir = skills_guard_test_dir("require-tools");
+        let skill = write_test_skill(&dir, "gamma", &[]);
+        let map = guard_skills_map(skill);
+        let v = skills_guard_cmd_against(
+            &[
+                "gamma".into(),
+                "--require-allowed-tools".into(),
+            ],
+            &map,
+        )
+        .expect("ok");
+        assert_eq!(v.get("verdict").and_then(|s| s.as_str()), Some("deny"));
+        assert!(v.get("reason").and_then(|s| s.as_str()).is_some());
+    }
+
+    #[test]
+    fn skills_guard_ignore_trust_strips_vendor_pass() {
+        // vendor + ignore-trust + require-allowed-tools (empty) → deny.
+        let dir = skills_guard_test_dir("ignore-trust");
+        let skill = write_test_skill(&dir, "delta", &[]);
+        let map = guard_skills_map(skill);
+        let v = skills_guard_cmd_against(
+            &[
+                "delta".into(),
+                "--provenance".into(),
+                "vendor".into(),
+                "--ignore-trust".into(),
+                "--require-allowed-tools".into(),
+            ],
+            &map,
+        )
+        .expect("ok");
+        assert_eq!(v.get("verdict").and_then(|s| s.as_str()), Some("deny"));
+        assert_eq!(
+            v.get("config")
+                .and_then(|c| c.get("honour_provenance_trust"))
+                .and_then(|b| b.as_bool()),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn skills_guard_max_file_bytes_triggers_confirmation() {
+        // Write a sibling file larger than the cap and verify the
+        // verdict flips to require_confirmation.
+        let dir = skills_guard_test_dir("max-bytes");
+        let skill = write_test_skill(&dir, "epsilon", &["echo"]);
+        // 200 bytes payload, cap = 100 bytes.
+        std::fs::write(skill.dir.join("data.bin"), vec![0u8; 200]).unwrap();
+        let map = guard_skills_map(skill);
+        let v = skills_guard_cmd_against(
+            &[
+                "epsilon".into(),
+                "--max-file-bytes".into(),
+                "100".into(),
+            ],
+            &map,
+        )
+        .expect("ok");
+        assert_eq!(
+            v.get("verdict").and_then(|s| s.as_str()),
+            Some("require_confirmation")
+        );
+        assert!(v
+            .get("reason")
+            .and_then(|s| s.as_str())
+            .map(|r| r.contains("data.bin"))
+            .unwrap_or(false));
+    }
+
+    #[test]
+    fn skills_guard_unknown_provenance_errs() {
+        let dir = skills_guard_test_dir("bad-prov");
+        let skill = write_test_skill(&dir, "zeta", &["echo"]);
+        let map = guard_skills_map(skill);
+        let err = skills_guard_cmd_against(
+            &[
+                "zeta".into(),
+                "--provenance".into(),
+                "alien".into(),
+            ],
+            &map,
+        )
+        .unwrap_err();
+        assert!(err.contains("alien"));
+    }
+
+    #[test]
+    fn skills_guard_unknown_flag_errs() {
+        let dir = skills_guard_test_dir("bad-flag");
+        let skill = write_test_skill(&dir, "eta", &["echo"]);
+        let map = guard_skills_map(skill);
+        let err = skills_guard_cmd_against(&["eta".into(), "--bogus".into()], &map).unwrap_err();
+        assert!(err.contains("--bogus"));
+    }
+
+    #[test]
+    fn skills_guard_invalid_max_file_bytes_errs() {
+        let dir = skills_guard_test_dir("bad-bytes");
+        let skill = write_test_skill(&dir, "theta", &["echo"]);
+        let map = guard_skills_map(skill);
+        let err = skills_guard_cmd_against(
+            &[
+                "theta".into(),
+                "--max-file-bytes".into(),
+                "lots".into(),
+            ],
+            &map,
+        )
+        .unwrap_err();
+        assert!(err.contains("--max-file-bytes"));
     }
 }
