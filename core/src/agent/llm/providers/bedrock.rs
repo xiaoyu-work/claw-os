@@ -29,18 +29,25 @@
 //! (`aws sso login` / `aws assume-role` / IAM role on EC2) is
 //! expected to keep the env vars fresh.
 //!
+//! ## Streaming
+//!
+//! Real streaming via `/invoke-with-response-stream` is wired in
+//! through [`stream_wire::BedrockStream`]. Bedrock returns
+//! `application/vnd.amazon.eventstream`-framed binary frames; each
+//! frame's payload is a JSON object `{"bytes": "<base64>"}` whose
+//! decoded payload is the same Anthropic SSE event JSON we already
+//! parse. We reuse [`super::anthropic::wire::StreamConverter`] for
+//! the event → [`StreamEvent`] state machine.
+//!
 //! ## What we deliberately don't do (yet)
 //!
-//! - Streaming via `/invoke-with-response-stream` (uses
-//!   AWS-EventStream framing — non-trivial; we ship the same
-//!   non-SSE shim as Anthropic for now).
 //! - IMDS / SSO token fetching — env vars only.
 //! - Cross-region failover.
 //! - Bedrock-Agent / Knowledge-Base APIs (those are different
 //!   endpoints; this provider is for `bedrock-runtime` only).
 
 use async_trait::async_trait;
-use futures_util::stream::{self, BoxStream, StreamExt};
+use futures_util::stream::{BoxStream, StreamExt};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -255,6 +262,17 @@ impl BedrockProvider {
         format!("/model/{}/invoke", url_encode_path_segment(&self.cfg.model))
     }
 
+    fn stream_model_path(&self) -> String {
+        format!(
+            "/model/{}/invoke-with-response-stream",
+            url_encode_path_segment(&self.cfg.model)
+        )
+    }
+
+    fn stream_full_url(&self) -> String {
+        format!("{}{}", self.cfg.endpoint_base(), self.stream_model_path())
+    }
+
     fn full_url(&self) -> String {
         format!("{}{}", self.cfg.endpoint_base(), self.model_path())
     }
@@ -388,18 +406,92 @@ impl Provider for BedrockProvider {
         &self,
         request: ChatRequest,
     ) -> Result<BoxStream<'static, Result<StreamEvent>>> {
-        // Same non-SSE shim as Anthropic provider. Real
-        // /invoke-with-response-stream support requires
-        // AWS-EventStream framing — deferred (not blocking the
-        // critical agent loop, which polls per-turn).
-        let response = self.chat(request).await?;
-        let finish = response.finish_reason;
-        let usage = response.usage.clone();
-        let events: Vec<std::result::Result<StreamEvent, LlmError>> = vec![
-            Ok(StreamEvent::Message(response)),
-            Ok(StreamEvent::Done { finish, usage }),
-        ];
-        Ok(stream::iter(events).boxed())
+        let creds = self.cfg.credentials.as_ref().ok_or_else(|| {
+            LlmError::NotConfigured(
+                "bedrock: missing AWS credentials (set AWS_ACCESS_KEY_ID + \
+                 AWS_SECRET_ACCESS_KEY env vars or aws_*_credential / aws_*_env \
+                 fields in [agent])"
+                    .into(),
+            )
+        })?;
+
+        let body_bytes = build_bedrock_body_bytes(&request)?;
+
+        let amz_date = current_amz_date()
+            .map_err(|e| LlmError::InvalidRequest(format!("clock: {e}")))?;
+        let ctx = SigningContext {
+            region: self.cfg.region.clone(),
+            service: BEDROCK_SERVICE.to_string(),
+            amz_date,
+        };
+        let host = self.cfg.host();
+        let path = self.stream_model_path();
+        // Note: per Bedrock docs the `accept` for streamed responses
+        // is `application/vnd.amazon.eventstream`, expressed via the
+        // `X-Amzn-Bedrock-Accept` header rather than the normal
+        // `Accept` header. We sign content-type only — the bedrock
+        // accept header is informational and not part of the SigV4
+        // canonical headers.
+        let signable = SignableRequest {
+            method: "POST",
+            path: &path,
+            query: &[],
+            headers: &[(
+                "content-type".to_string(),
+                "application/json".to_string(),
+            )],
+            body: &body_bytes,
+        };
+        let signed = sign(creds, &ctx, &host, &signable);
+
+        let mut http = self
+            .client
+            .post(self.stream_full_url())
+            .header("Content-Type", "application/json")
+            .header(
+                "X-Amzn-Bedrock-Accept",
+                "application/vnd.amazon.eventstream",
+            )
+            .body(body_bytes);
+
+        for (name, value) in signed.as_header_pairs() {
+            http = http.header(name, value);
+        }
+        for (k, v) in &self.cfg.extra_headers {
+            http = http.header(k.as_str(), v.as_str());
+        }
+
+        let resp = http.send().await.map_err(LlmError::Transport)?;
+        let status = resp.status();
+        let retry_after_secs = resp
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok());
+        let amz_error_type = resp
+            .headers()
+            .get("x-amzn-errortype")
+            .or_else(|| resp.headers().get("X-Amzn-Errortype"))
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
+        if !status.is_success() {
+            // Pre-stream HTTP error (validation, auth, throttling
+            // before model engagement, ModelNotReadyException, etc).
+            // Body is small JSON; read it synchronously so the error
+            // we surface includes the AWS message.
+            let bytes = resp.bytes().await.map_err(LlmError::Transport)?;
+            return Err(classify_bedrock_error(
+                status,
+                &bytes,
+                amz_error_type.as_deref(),
+                retry_after_secs,
+            ));
+        }
+
+        let bytes_stream = resp.bytes_stream();
+        let stream = stream_wire::BedrockStream::new(bytes_stream, &self.cfg.model);
+        Ok(stream.boxed())
     }
 }
 
@@ -506,6 +598,442 @@ pub fn is_alias(name: &str) -> bool {
 
 pub fn build_provider(model: &str, agent: &AgentConfig) -> Arc<dyn Provider> {
     Arc::new(BedrockProvider::from_agent_config(model, agent))
+}
+
+// --------------------------------------------------------------------
+// Streaming wire layer.
+//
+// Bedrock's `/invoke-with-response-stream` returns an HTTP body
+// framed with the AWS EventStream binary protocol. Each frame is one
+// of three kinds, dispatched on the `:message-type` header:
+//
+//   - `event`     → normal event; `:event-type=chunk` carries
+//                   `{"bytes": "<base64>"}` whose decoded payload is
+//                   the same JSON we'd see on Anthropic's SSE stream
+//                   (`message_start`, `content_block_delta`, etc).
+//   - `exception` → modeled error from the streaming union. The
+//                   `:exception-type` header carries the Smithy
+//                   union-member name in lower-camelCase
+//                   (`throttlingException`, `validationException`, …).
+//                   We accept PascalCase as a defensive fallback.
+//   - `error`     → unmodeled error envelope. `:error-code` /
+//                   `:error-message` headers carry detail.
+//
+// Note that `ModelNotReadyException` is a *pre-stream* HTTP-level
+// error (409), not a streamed exception, so it's handled by the
+// `chat_stream` HTTP-status branch above, not here.
+//
+// We reuse the Anthropic SSE state machine
+// (`anthropic_wire::StreamConverter`) by synthesising synthetic SSE
+// events (`event:` field = inner event type, `data:` field = inner
+// JSON string) from the inner chunk payload.
+pub(crate) mod stream_wire {
+    use super::anthropic_wire;
+    use crate::agent::llm::aws_eventstream::{
+        EventStreamParser, Frame, FrameError,
+    };
+    use crate::agent::llm::sse::SseEvent;
+    use crate::agent::llm::{LlmError, Result, StreamEvent};
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    use bytes::Bytes;
+    use futures_util::Stream;
+    use std::collections::VecDeque;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
+    /// Streaming wrapper that demuxes AWS EventStream frames and
+    /// forwards them through the Anthropic SSE converter.
+    ///
+    /// Generic over the byte source (any
+    /// `Stream<Item=Result<Bytes, reqwest::Error>>`) so unit tests
+    /// can drive it with a `stream::iter([...])` of synthetic
+    /// frames.
+    pub(crate) struct BedrockStream<S> {
+        inner: S,
+        parser: EventStreamParser,
+        converter: anthropic_wire::StreamConverter,
+        /// Events ready to yield to the caller before pulling more
+        /// bytes.
+        pending: VecDeque<Result<StreamEvent>>,
+        /// Once set, no further events are emitted; the next poll
+        /// returns `None` (terminator).
+        done: bool,
+        /// Set when the byte source emits its EOF or its own error.
+        bytes_done: bool,
+    }
+
+    impl<S> BedrockStream<S>
+    where
+        S: Stream<Item = std::result::Result<Bytes, reqwest::Error>>
+            + Send
+            + 'static,
+    {
+        pub(crate) fn new(inner: S, default_model: &str) -> Self {
+            Self {
+                inner,
+                parser: EventStreamParser::new(),
+                converter: anthropic_wire::StreamConverter::new(default_model),
+                pending: VecDeque::new(),
+                done: false,
+                bytes_done: false,
+            }
+        }
+
+        /// Drain frames currently available in the parser and feed
+        /// them to the converter, queueing any resulting events.
+        fn drain_frames(&mut self) {
+            while let Some(frame) = self.parser.pop_frame() {
+                match frame {
+                    Ok(f) => self.handle_frame(f),
+                    Err(e) => {
+                        self.pending.push_back(Err(LlmError::Stream(format!(
+                            "bedrock event stream framing: {e}"
+                        ))));
+                        self.done = true;
+                        return;
+                    }
+                }
+                if self.done {
+                    return;
+                }
+            }
+        }
+
+        fn handle_frame(&mut self, frame: Frame) {
+            let msg_type = frame
+                .headers
+                .get(":message-type")
+                .map(|s| s.as_str())
+                .unwrap_or("");
+            match msg_type {
+                "event" => self.handle_event_frame(frame),
+                "exception" => self.handle_exception_frame(frame),
+                "error" => self.handle_error_frame(frame),
+                "" => {
+                    // No `:message-type` header is malformed —
+                    // surface as a stream error so the caller sees
+                    // it instead of stalling.
+                    self.pending.push_back(Err(LlmError::Stream(
+                        "bedrock frame missing :message-type header".into(),
+                    )));
+                    self.done = true;
+                }
+                other => {
+                    // Unknown message-type. Per forward-compat
+                    // policy, ignore quietly — AWS may add new
+                    // categories. Still log to stderr at debug.
+                    tracing::debug!(
+                        target: "cos::bedrock_stream",
+                        "ignoring unknown :message-type {other:?}"
+                    );
+                }
+            }
+        }
+
+        fn handle_event_frame(&mut self, frame: Frame) {
+            let ev_type = frame
+                .headers
+                .get(":event-type")
+                .map(|s| s.as_str())
+                .unwrap_or("");
+            // The only event-type that carries chat content is
+            // `chunk`. Other event types (e.g. `metadata`) we ignore.
+            if ev_type != "chunk" {
+                return;
+            }
+
+            // chunk payload is `{"bytes": "<base64>"}`. base64 of
+            // the inner Anthropic SSE event JSON.
+            let outer: serde_json::Value =
+                match serde_json::from_slice(&frame.payload) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        self.pending.push_back(Err(LlmError::Parse(format!(
+                            "bedrock chunk frame: outer json: {e}"
+                        ))));
+                        self.done = true;
+                        return;
+                    }
+                };
+            let b64 = match outer.get("bytes").and_then(|v| v.as_str()) {
+                Some(s) => s,
+                None => {
+                    self.pending.push_back(Err(LlmError::Parse(
+                        "bedrock chunk frame missing 'bytes' field".into(),
+                    )));
+                    self.done = true;
+                    return;
+                }
+            };
+            let inner_bytes = match B64.decode(b64) {
+                Ok(b) => b,
+                Err(e) => {
+                    self.pending.push_back(Err(LlmError::Parse(format!(
+                        "bedrock chunk frame: base64: {e}"
+                    ))));
+                    self.done = true;
+                    return;
+                }
+            };
+            let inner_json = match std::str::from_utf8(&inner_bytes) {
+                Ok(s) => s,
+                Err(e) => {
+                    self.pending.push_back(Err(LlmError::Parse(format!(
+                        "bedrock chunk frame: utf8: {e}"
+                    ))));
+                    self.done = true;
+                    return;
+                }
+            };
+
+            // Read inner event type from JSON itself — Bedrock does
+            // not pass the SSE `event:` line, only the JSON. The
+            // converter already supports falling back to
+            // `payload.type` when `ev.event` is empty, but we'll
+            // populate it for clarity.
+            let parsed: serde_json::Value = match serde_json::from_str(inner_json) {
+                Ok(v) => v,
+                Err(e) => {
+                    self.pending.push_back(Err(LlmError::Parse(format!(
+                        "bedrock chunk frame: inner json: {e}"
+                    ))));
+                    self.done = true;
+                    return;
+                }
+            };
+            let ev_kind = parsed
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            let synth = SseEvent {
+                event: ev_kind,
+                data: inner_json.to_string(),
+            };
+            for result in self.converter.process(&synth) {
+                self.pending.push_back(result);
+            }
+            if self.converter.is_finished() {
+                self.done = true;
+            }
+        }
+
+        fn handle_exception_frame(&mut self, frame: Frame) {
+            let exception_type = frame
+                .headers
+                .get(":exception-type")
+                .cloned()
+                .unwrap_or_default();
+            // Try to extract a message from the JSON payload (most
+            // exceptions carry `{"message":"…"}`).
+            let payload_msg = std::str::from_utf8(&frame.payload)
+                .ok()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                .and_then(|v| {
+                    v.get("message")
+                        .or_else(|| v.get("Message"))
+                        .and_then(|m| m.as_str())
+                        .map(|s| s.to_string())
+                })
+                .unwrap_or_default();
+
+            let err = classify_streamed_exception(&exception_type, &payload_msg);
+            self.pending.push_back(Err(err));
+            self.done = true;
+        }
+
+        fn handle_error_frame(&mut self, frame: Frame) {
+            let code = frame
+                .headers
+                .get(":error-code")
+                .cloned()
+                .unwrap_or_default();
+            let message = frame
+                .headers
+                .get(":error-message")
+                .cloned()
+                .unwrap_or_else(|| {
+                    std::str::from_utf8(&frame.payload)
+                        .unwrap_or("")
+                        .to_string()
+                });
+            let summary = if code.is_empty() {
+                format!("bedrock streamed unmodeled error: {message}")
+            } else {
+                format!("bedrock streamed error [{code}]: {message}")
+            };
+            self.pending.push_back(Err(LlmError::Provider {
+                status: 500,
+                message: summary,
+            }));
+            self.done = true;
+        }
+    }
+
+    impl<S> Stream for BedrockStream<S>
+    where
+        S: Stream<Item = std::result::Result<Bytes, reqwest::Error>>
+            + Send
+            + Unpin
+            + 'static,
+    {
+        type Item = Result<StreamEvent>;
+
+        fn poll_next(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<Option<Self::Item>> {
+            loop {
+                if let Some(item) = self.pending.pop_front() {
+                    return Poll::Ready(Some(item));
+                }
+                if self.done {
+                    return Poll::Ready(None);
+                }
+                if self.bytes_done {
+                    // Bytes source is finished; check the parser for
+                    // truncation, then terminate.
+                    let p = std::mem::take(&mut self.parser);
+                    if let Err(e) = p.finish() {
+                        match e {
+                            FrameError::Truncated(n) => {
+                                self.pending.push_back(Err(LlmError::Stream(
+                                    format!(
+                                        "bedrock event stream truncated: {n} \
+                                         byte(s) of partial frame at EOF"
+                                    ),
+                                )));
+                            }
+                            other => {
+                                self.pending.push_back(Err(LlmError::Stream(
+                                    format!(
+                                        "bedrock event stream framing: {other}"
+                                    ),
+                                )));
+                            }
+                        }
+                    }
+                    self.done = true;
+                    continue;
+                }
+
+                match Pin::new(&mut self.inner).poll_next(cx) {
+                    Poll::Ready(Some(Ok(chunk))) => {
+                        self.parser.feed(&chunk);
+                        self.drain_frames();
+                    }
+                    Poll::Ready(Some(Err(e))) => {
+                        self.pending
+                            .push_back(Err(LlmError::Transport(e)));
+                        self.done = true;
+                    }
+                    Poll::Ready(None) => {
+                        self.bytes_done = true;
+                    }
+                    Poll::Pending => return Poll::Pending,
+                }
+            }
+        }
+    }
+
+    /// Map a streamed exception name (from `:exception-type` header)
+    /// to an [`LlmError`]. Bedrock streams exception names as Smithy
+    /// union member names in **lower-camelCase**
+    /// (`throttlingException`); some clients pass PascalCase, so
+    /// this also accepts that form defensively.
+    pub(crate) fn classify_streamed_exception(name: &str, message: &str) -> LlmError {
+        // Normalise to lowercase first letter for matching.
+        let normalised = lower_camel(name);
+        match normalised.as_str() {
+            "throttlingException" => LlmError::RateLimited {
+                retry_after_ms: 0,
+            },
+            "validationException" => {
+                let m = if message.is_empty() {
+                    "bedrock streamed validationException".into()
+                } else {
+                    format!("bedrock validationException: {message}")
+                };
+                LlmError::InvalidRequest(m)
+            }
+            "modelStreamErrorException" => LlmError::Provider {
+                status: 500,
+                message: format!(
+                    "bedrock modelStreamErrorException: {}",
+                    if message.is_empty() {
+                        "model produced unrecoverable stream error"
+                    } else {
+                        message
+                    }
+                ),
+            },
+            "modelTimeoutException" => LlmError::Provider {
+                status: 504,
+                message: format!(
+                    "bedrock modelTimeoutException: {}",
+                    if message.is_empty() {
+                        "model failed to respond within timeout"
+                    } else {
+                        message
+                    }
+                ),
+            },
+            "internalServerException" => LlmError::Provider {
+                status: 500,
+                message: format!(
+                    "bedrock internalServerException: {}",
+                    if message.is_empty() {
+                        "internal server error"
+                    } else {
+                        message
+                    }
+                ),
+            },
+            "serviceUnavailableException" => LlmError::Provider {
+                status: 503,
+                message: format!(
+                    "bedrock serviceUnavailableException: {}",
+                    if message.is_empty() {
+                        "service unavailable"
+                    } else {
+                        message
+                    }
+                ),
+            },
+            other => {
+                // Unknown exception name. Don't swallow — surface
+                // as a generic provider error so the caller can
+                // log it.
+                LlmError::Provider {
+                    status: 500,
+                    message: format!(
+                        "bedrock unknown streamed exception {other:?}: {}",
+                        if message.is_empty() {
+                            "(no message)"
+                        } else {
+                            message
+                        }
+                    ),
+                }
+            }
+        }
+    }
+
+    fn lower_camel(s: &str) -> String {
+        let mut chars = s.chars();
+        match chars.next() {
+            Some(c) => {
+                let mut out = String::with_capacity(s.len());
+                for lower_c in c.to_lowercase() {
+                    out.push(lower_c);
+                }
+                out.push_str(chars.as_str());
+                out
+            }
+            None => String::new(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -931,5 +1459,481 @@ mod tests {
         assert!(s.contains("credentials_present: true"));
         std::env::remove_var("COS_BR_DBG_AK");
         std::env::remove_var("COS_BR_DBG_SK");
+    }
+
+    // ---- Streaming URL & headers ----------------------------------------
+
+    #[test]
+    fn stream_model_path_uses_invoke_with_response_stream_suffix() {
+        let mut c = cfg();
+        c.aws_access_key_env = Some("COS_BR_STR_AK1".into());
+        c.aws_secret_key_env = Some("COS_BR_STR_SK1".into());
+        std::env::set_var("COS_BR_STR_AK1", "AKID");
+        std::env::set_var("COS_BR_STR_SK1", "secret");
+        let p = BedrockProvider::from_agent_config(
+            "anthropic.claude-3-5-sonnet-20241022-v2:0",
+            &c,
+        );
+        assert_eq!(
+            p.stream_model_path(),
+            "/model/anthropic.claude-3-5-sonnet-20241022-v2%3A0/invoke-with-response-stream"
+        );
+        std::env::remove_var("COS_BR_STR_AK1");
+        std::env::remove_var("COS_BR_STR_SK1");
+    }
+
+    #[test]
+    fn stream_model_path_encodes_arn_with_slashes_and_colons() {
+        // Bedrock accepts full provisioned-model ARNs as model IDs.
+        // Path-segment encoding must escape both `/` and `:`.
+        let mut c = cfg();
+        c.aws_access_key_env = Some("COS_BR_STR_AK2".into());
+        c.aws_secret_key_env = Some("COS_BR_STR_SK2".into());
+        std::env::set_var("COS_BR_STR_AK2", "AKID");
+        std::env::set_var("COS_BR_STR_SK2", "secret");
+        let arn = "arn:aws:bedrock:us-east-1:123:provisioned-model/abc";
+        let p = BedrockProvider::from_agent_config(arn, &c);
+        let path = p.stream_model_path();
+        assert!(
+            path.contains("arn%3Aaws%3Abedrock%3Aus-east-1%3A123%3Aprovisioned-model%2Fabc"),
+            "ARN must be fully path-segment-encoded; got {path}"
+        );
+        assert!(path.ends_with("/invoke-with-response-stream"));
+        std::env::remove_var("COS_BR_STR_AK2");
+        std::env::remove_var("COS_BR_STR_SK2");
+    }
+
+    #[test]
+    fn stream_full_url_combines_base_and_stream_path() {
+        let mut c = cfg();
+        c.aws_region = Some("eu-west-1".into());
+        c.aws_access_key_env = Some("COS_BR_STR_AK3".into());
+        c.aws_secret_key_env = Some("COS_BR_STR_SK3".into());
+        std::env::set_var("COS_BR_STR_AK3", "AKID");
+        std::env::set_var("COS_BR_STR_SK3", "secret");
+        let p = BedrockProvider::from_agent_config("anthropic.claude-foo", &c);
+        assert_eq!(
+            p.stream_full_url(),
+            "https://bedrock-runtime.eu-west-1.amazonaws.com/model/anthropic.claude-foo/invoke-with-response-stream"
+        );
+        std::env::remove_var("COS_BR_STR_AK3");
+        std::env::remove_var("COS_BR_STR_SK3");
+    }
+
+    // ---- Streamed exception classifier ----------------------------------
+
+    #[test]
+    fn classify_throttling_lower_camel() {
+        let e = stream_wire::classify_streamed_exception("throttlingException", "");
+        assert!(matches!(e, LlmError::RateLimited { .. }), "got {e:?}");
+    }
+
+    #[test]
+    fn classify_throttling_pascal_case_defensive_fallback() {
+        // Some non-conforming clients emit PascalCase; our matcher
+        // normalises the leading char so we still recognise it.
+        let e = stream_wire::classify_streamed_exception("ThrottlingException", "");
+        assert!(matches!(e, LlmError::RateLimited { .. }), "got {e:?}");
+    }
+
+    #[test]
+    fn classify_validation_with_message_preserves_message() {
+        let e = stream_wire::classify_streamed_exception(
+            "validationException",
+            "max tokens exceeded",
+        );
+        match e {
+            LlmError::InvalidRequest(m) => {
+                assert!(m.contains("max tokens exceeded"), "got {m}");
+                assert!(m.contains("validationException"), "got {m}");
+            }
+            other => panic!("expected InvalidRequest, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_model_stream_error_to_provider_500() {
+        let e = stream_wire::classify_streamed_exception(
+            "modelStreamErrorException",
+            "decoder OOM",
+        );
+        assert!(
+            matches!(e, LlmError::Provider { status: 500, ref message } if message.contains("decoder OOM"))
+        );
+    }
+
+    #[test]
+    fn classify_model_timeout_to_provider_504() {
+        let e = stream_wire::classify_streamed_exception(
+            "modelTimeoutException",
+            "model failed to respond within 30s",
+        );
+        assert!(matches!(e, LlmError::Provider { status: 504, .. }));
+    }
+
+    #[test]
+    fn classify_internal_server_to_provider_500() {
+        let e = stream_wire::classify_streamed_exception("internalServerException", "");
+        assert!(matches!(e, LlmError::Provider { status: 500, .. }));
+    }
+
+    #[test]
+    fn classify_service_unavailable_to_provider_503() {
+        let e = stream_wire::classify_streamed_exception("serviceUnavailableException", "");
+        assert!(matches!(e, LlmError::Provider { status: 503, .. }));
+    }
+
+    #[test]
+    fn classify_unknown_exception_surfaces_as_provider_500_and_includes_name() {
+        // Unknown exception names must NOT be silently swallowed —
+        // surface them so observability picks up new AWS-side error
+        // taxonomy expansions.
+        let e = stream_wire::classify_streamed_exception(
+            "newSurpriseException",
+            "explanatory text",
+        );
+        match e {
+            LlmError::Provider { status, message } => {
+                assert_eq!(status, 500);
+                assert!(message.contains("newSurpriseException"), "got {message}");
+                assert!(message.contains("explanatory text"), "got {message}");
+            }
+            other => panic!("expected Provider, got {other:?}"),
+        }
+    }
+
+    // ---- BedrockStream end-to-end (synthetic frames) --------------------
+
+    use crate::agent::llm::aws_eventstream::encode_frame;
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    use bytes::Bytes;
+    use futures_util::stream as futstream;
+    use futures_util::StreamExt;
+
+    /// Build one event-frame whose inner SSE data field is `inner_json`.
+    fn event_frame_json(inner_json: &str) -> Vec<u8> {
+        let outer = serde_json::json!({
+            "bytes": B64.encode(inner_json),
+        });
+        encode_frame(
+            &[(":message-type", "event"), (":event-type", "chunk")],
+            outer.to_string().as_bytes(),
+        )
+    }
+
+    fn anthropic_event_json(kind: &str, extra: serde_json::Value) -> String {
+        let mut obj = match extra {
+            serde_json::Value::Object(m) => m,
+            _ => serde_json::Map::new(),
+        };
+        obj.insert("type".into(), serde_json::Value::String(kind.into()));
+        serde_json::Value::Object(obj).to_string()
+    }
+
+    fn collect(
+        body: Vec<Vec<u8>>,
+    ) -> Vec<crate::agent::llm::Result<crate::agent::llm::StreamEvent>> {
+        let chunks: Vec<std::result::Result<Bytes, reqwest::Error>> =
+            body.into_iter().map(|v| Ok(Bytes::from(v))).collect();
+        let s = futstream::iter(chunks);
+        let stream = stream_wire::BedrockStream::new(s, "claude-3-5-sonnet-20241022");
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async { stream.collect::<Vec<_>>().await })
+    }
+
+    #[test]
+    fn stream_handles_full_text_lifecycle_with_message_stop() {
+        let frames = vec![
+            event_frame_json(&anthropic_event_json(
+                "message_start",
+                serde_json::json!({
+                    "message": {
+                        "id": "msg_1",
+                        "model": "claude-3-5-sonnet-20241022",
+                        "usage": { "input_tokens": 12, "output_tokens": 0 }
+                    }
+                }),
+            )),
+            event_frame_json(&anthropic_event_json(
+                "content_block_start",
+                serde_json::json!({
+                    "index": 0,
+                    "content_block": { "type": "text", "text": "" }
+                }),
+            )),
+            event_frame_json(&anthropic_event_json(
+                "content_block_delta",
+                serde_json::json!({
+                    "index": 0,
+                    "delta": { "type": "text_delta", "text": "Hello" }
+                }),
+            )),
+            event_frame_json(&anthropic_event_json(
+                "content_block_delta",
+                serde_json::json!({
+                    "index": 0,
+                    "delta": { "type": "text_delta", "text": " world" }
+                }),
+            )),
+            event_frame_json(&anthropic_event_json(
+                "content_block_stop",
+                serde_json::json!({ "index": 0 }),
+            )),
+            event_frame_json(&anthropic_event_json(
+                "message_delta",
+                serde_json::json!({
+                    "delta": { "stop_reason": "end_turn" },
+                    "usage": { "output_tokens": 7 }
+                }),
+            )),
+            event_frame_json(&anthropic_event_json("message_stop", serde_json::json!({}))),
+        ];
+        let events = collect(frames);
+        let oks: Vec<_> = events.iter().map(|r| r.as_ref().unwrap()).collect();
+        // Expect text deltas + final Done (no Message in streaming).
+        let text: String = oks
+            .iter()
+            .filter_map(|e| match e {
+                crate::agent::llm::StreamEvent::TextDelta { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "Hello world");
+        let done = oks.iter().rev().find(|e| {
+            matches!(e, crate::agent::llm::StreamEvent::Done { .. })
+        });
+        assert!(done.is_some(), "expected Done event; got {oks:?}");
+    }
+
+    #[test]
+    fn stream_emits_tool_input_delta_then_final_tool_use() {
+        let frames = vec![
+            event_frame_json(&anthropic_event_json(
+                "message_start",
+                serde_json::json!({
+                    "message": {
+                        "id": "msg_2",
+                        "model": "claude-3-5-sonnet-20241022",
+                        "usage": { "input_tokens": 5, "output_tokens": 0 }
+                    }
+                }),
+            )),
+            event_frame_json(&anthropic_event_json(
+                "content_block_start",
+                serde_json::json!({
+                    "index": 0,
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": "toolu_xyz",
+                        "name": "echo",
+                        "input": {}
+                    }
+                }),
+            )),
+            event_frame_json(&anthropic_event_json(
+                "content_block_delta",
+                serde_json::json!({
+                    "index": 0,
+                    "delta": {
+                        "type": "input_json_delta",
+                        "partial_json": "{\"text\":\"hi"
+                    }
+                }),
+            )),
+            event_frame_json(&anthropic_event_json(
+                "content_block_delta",
+                serde_json::json!({
+                    "index": 0,
+                    "delta": {
+                        "type": "input_json_delta",
+                        "partial_json": "\"}"
+                    }
+                }),
+            )),
+            event_frame_json(&anthropic_event_json(
+                "content_block_stop",
+                serde_json::json!({ "index": 0 }),
+            )),
+            event_frame_json(&anthropic_event_json(
+                "message_delta",
+                serde_json::json!({
+                    "delta": { "stop_reason": "tool_use" },
+                    "usage": { "output_tokens": 9 }
+                }),
+            )),
+            event_frame_json(&anthropic_event_json("message_stop", serde_json::json!({}))),
+        ];
+        let events = collect(frames);
+        let oks: Vec<_> = events.iter().map(|r| r.as_ref().unwrap()).collect();
+        // Expect at least one ToolUseStart, ToolInputDelta(s), ToolUse final.
+        assert!(
+            oks.iter().any(|e| matches!(e, crate::agent::llm::StreamEvent::ToolUseStart { .. })),
+            "missing ToolUseStart in {oks:?}"
+        );
+        let final_tool_use = oks.iter().find_map(|e| match e {
+            crate::agent::llm::StreamEvent::ToolUse(tc) => Some(tc),
+            _ => None,
+        });
+        let tc = final_tool_use.expect("missing final ToolUse event");
+        assert_eq!(tc.name, "echo");
+        assert_eq!(tc.id, "toolu_xyz");
+        assert_eq!(tc.input, serde_json::json!({"text": "hi"}));
+    }
+
+    #[test]
+    fn stream_exception_frame_maps_to_rate_limited() {
+        let frames = vec![encode_frame(
+            &[
+                (":message-type", "exception"),
+                (":exception-type", "throttlingException"),
+                (":content-type", "application/json"),
+            ],
+            br#"{"message":"rate exceeded"}"#,
+        )];
+        let events = collect(frames);
+        // Last (only) event must be a RateLimited error.
+        assert_eq!(events.len(), 1);
+        let err = events[0].as_ref().unwrap_err();
+        assert!(
+            matches!(err, LlmError::RateLimited { .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn stream_exception_frame_unknown_name_surfaces_provider_error() {
+        let frames = vec![encode_frame(
+            &[
+                (":message-type", "exception"),
+                (":exception-type", "newCloudExpansionException"),
+                (":content-type", "application/json"),
+            ],
+            br#"{"message":"future taxonomy"}"#,
+        )];
+        let events = collect(frames);
+        assert_eq!(events.len(), 1);
+        let err = events[0].as_ref().unwrap_err();
+        match err {
+            LlmError::Provider { status, message } => {
+                assert_eq!(*status, 500);
+                assert!(
+                    message.contains("newCloudExpansionException"),
+                    "got {message}"
+                );
+            }
+            other => panic!("expected Provider, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stream_unmodeled_error_frame_maps_to_provider() {
+        let frames = vec![encode_frame(
+            &[
+                (":message-type", "error"),
+                (":error-code", "InternalServerError"),
+                (":error-message", "an error has occurred"),
+            ],
+            b"",
+        )];
+        let events = collect(frames);
+        assert_eq!(events.len(), 1);
+        let err = events[0].as_ref().unwrap_err();
+        match err {
+            LlmError::Provider { status, message } => {
+                assert_eq!(*status, 500);
+                assert!(message.contains("InternalServerError"), "got {message}");
+                assert!(message.contains("an error has occurred"), "got {message}");
+            }
+            other => panic!("expected Provider, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stream_unknown_message_type_is_silently_ignored_for_forward_compat() {
+        // An unrecognised :message-type that arrives BEFORE the
+        // real terminator (message_stop) must not poison the stream.
+        let frames = vec![
+            encode_frame(
+                &[(":message-type", "futureKindWeDontKnow")],
+                b"opaque payload",
+            ),
+            event_frame_json(&anthropic_event_json(
+                "message_start",
+                serde_json::json!({
+                    "message": {
+                        "id": "msg_3",
+                        "model": "claude-3-5-sonnet-20241022",
+                        "usage": { "input_tokens": 1, "output_tokens": 0 }
+                    }
+                }),
+            )),
+            event_frame_json(&anthropic_event_json(
+                "message_delta",
+                serde_json::json!({
+                    "delta": { "stop_reason": "end_turn" },
+                    "usage": { "output_tokens": 1 }
+                }),
+            )),
+            event_frame_json(&anthropic_event_json("message_stop", serde_json::json!({}))),
+        ];
+        let events = collect(frames);
+        let oks: Vec<_> = events.iter().map(|r| r.as_ref().unwrap()).collect();
+        assert!(
+            oks.iter().any(|e| matches!(e, crate::agent::llm::StreamEvent::Done { .. })),
+            "stream should still complete normally; got {oks:?}"
+        );
+    }
+
+    #[test]
+    fn stream_truncated_body_at_eof_surfaces_stream_error() {
+        // Build a complete frame, then chop off the final 4 bytes so
+        // the parser sees a truncated tail at EOF.
+        let mut frame = event_frame_json(&anthropic_event_json(
+            "message_start",
+            serde_json::json!({
+                "message": {
+                    "id": "msg_4",
+                    "model": "claude-3-5-sonnet-20241022",
+                    "usage": { "input_tokens": 1, "output_tokens": 0 }
+                }
+            }),
+        ));
+        let n = frame.len();
+        frame.truncate(n - 4);
+        let events = collect(vec![frame]);
+        // Should contain at least one Stream error at the end.
+        let last = events.last().expect("at least one event");
+        let err = last.as_ref().unwrap_err();
+        assert!(
+            matches!(err, LlmError::Stream(_)),
+            "expected Stream error; got {err:?}"
+        );
+    }
+
+    #[test]
+    fn stream_bad_message_crc_surfaces_stream_error_and_terminates() {
+        let mut frame = event_frame_json(&anthropic_event_json(
+            "message_start",
+            serde_json::json!({
+                "message": {
+                    "id": "msg_5",
+                    "model": "claude-3-5-sonnet-20241022",
+                    "usage": { "input_tokens": 1, "output_tokens": 0 }
+                }
+            }),
+        ));
+        // Corrupt the message CRC (last 4 bytes are the trailer).
+        let n = frame.len();
+        frame[n - 1] ^= 0xff;
+        // Even if more frames follow, the stream must terminate at
+        // the corrupt frame with an error.
+        let events = collect(vec![frame, event_frame_json("{}")]);
+        let any_err = events
+            .iter()
+            .any(|r| matches!(r, Err(LlmError::Stream(_))));
+        assert!(any_err, "expected at least one Stream error; got {events:?}");
     }
 }

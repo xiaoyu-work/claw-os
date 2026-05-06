@@ -538,6 +538,7 @@ dependencies = [
  "base64",
  "bytes",
  "chrono",
+ "crc32fast",
  "futures-util",
  "libc",
  "libloading",
