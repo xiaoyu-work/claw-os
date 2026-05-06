@@ -1,0 +1,14 @@
+{
+  "name": "gateway-ntfy",
+  "version": "0.1.0",
+  "description": "ntfy.sh push-notification gateway. POSTs plain-text bodies to <server>/<topic> with optional Bearer / Basic auth and ntfy headers (Title/Priority/Tags). Stdlib-only.",
+  "runtime": "python",
+  "commands": {
+    "send": "Send a notification to a topic (positional: topic text)",
+    "status": "Show whether the default server / topic / token are configured"
+  },
+  "dependencies": {
+    "credentials": ["ntfy_server", "ntfy_default_topic", "ntfy_token"],
+    "engines": []
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "gateway-rocketchat",
+  "version": "0.1.0",
+  "description": "Rocket.Chat gateway. POSTs to <site>/api/v1/chat.postMessage with personal-access-token headers (X-Auth-Token + X-User-Id). Stdlib-only.",
+  "runtime": "python",
+  "commands": {
+    "send": "Send a message to a Rocket.Chat channel/user (positional: target text)",
+    "status": "Show whether the bot site / token / user-id are configured"
+  },
+  "dependencies": {
+    "credentials": ["rocketchat_site", "rocketchat_user_id", "rocketchat_token"],
+    "engines": []
+  }
+}

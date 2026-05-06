@@ -1,0 +1,15 @@
+{
+  "name": "gateway-homeassistant",
+  "version": "0.1.0",
+  "description": "Home Assistant gateway. Calls REST endpoints under <base>/api/services/<domain>/<service> with a long-lived access token. Stdlib-only.",
+  "runtime": "python",
+  "commands": {
+    "send": "Call a service (positional: domain.service text) — sends notify by default",
+    "call": "Call any service with raw JSON payload (positional: domain.service json)",
+    "status": "Show whether the HA base URL / token are configured"
+  },
+  "dependencies": {
+    "credentials": ["homeassistant_url", "homeassistant_token"],
+    "engines": []
+  }
+}
