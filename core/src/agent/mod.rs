@@ -4122,8 +4122,101 @@ fn curator_drafts_cmd(args: &[String]) -> Result<Value, String> {
                 "title": rec.draft.title,
             }))
         }
+        "auto-title" => {
+            // `cos agent curator drafts auto-title <id> [--seed description|title|both] [--dry-run]`
+            // Re-runs `agent::title::generate_title` against the draft's
+            // text via the auxiliary client and (unless --dry-run) writes
+            // the result back via `set_title`. Uses the same fallback
+            // chain as runtime::loop_: empty model output / errors / no
+            // aux configured all degrade to the heuristic so the command
+            // never produces a blank title.
+            let id = args
+                .get(1)
+                .cloned()
+                .filter(|s| !s.is_empty() && !s.starts_with("--"))
+                .ok_or_else(|| {
+                    "usage: cos agent curator drafts auto-title <id> [--seed description|title|both] [--dry-run]"
+                        .to_string()
+                })?;
+            let mut seed_kind = "description".to_string();
+            let mut dry_run = false;
+            let mut i = 2usize;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--seed" => {
+                        seed_kind = args
+                            .get(i + 1)
+                            .cloned()
+                            .ok_or_else(|| "--seed needs description|title|both".to_string())?;
+                        i += 2;
+                    }
+                    "--dry-run" => {
+                        dry_run = true;
+                        i += 1;
+                    }
+                    other => {
+                        return Err(format!(
+                            "unknown flag for `drafts auto-title`: {other}"
+                        ));
+                    }
+                }
+            }
+            // Validate seed_kind BEFORE touching the live DB so a typo
+            // doesn't leak the error to disk-IO context.
+            match seed_kind.as_str() {
+                "description" | "title" | "both" => {}
+                other => {
+                    return Err(format!(
+                        "--seed: invalid '{other}' (try description|title|both)"
+                    ))
+                }
+            }
+            let mut store = DraftStore::open_default()?;
+            let rec = store
+                .get(&id)
+                .cloned()
+                .ok_or_else(|| format!("no draft with id '{id}'"))?;
+            let seed = match seed_kind.as_str() {
+                "description" => rec.draft.description.clone(),
+                "title" => rec.draft.title.clone(),
+                "both" => format!("{}\n\n{}", rec.draft.title, rec.draft.description),
+                _ => unreachable!("validated above"),
+            };
+            let cfg = &crate::config::get().agent;
+            let aux = crate::agent::runtime::loop_::auxiliary_from_cfg(cfg)
+                .map_err(|e| format!("auxiliary client build failed: {e}"))?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| format!("tokio runtime: {e}"))?;
+            let new_title = runtime
+                .block_on(crate::agent::title::generate_title(aux.as_ref(), &seed));
+            let method = if aux.is_some() { "llm-or-fallback" } else { "heuristic" };
+            if dry_run {
+                return Ok(json!({
+                    "id": rec.id,
+                    "old_title": rec.draft.title,
+                    "proposed_title": new_title,
+                    "method": method,
+                    "seed_kind": seed_kind,
+                    "applied": false,
+                }));
+            }
+            store.set_title(&id, &new_title)?;
+            let after = store.get(&id).cloned().ok_or_else(|| {
+                format!("draft {id} disappeared after auto-title (race)")
+            })?;
+            Ok(json!({
+                "id": after.id,
+                "old_title": rec.draft.title,
+                "title": after.draft.title,
+                "method": method,
+                "seed_kind": seed_kind,
+                "applied": true,
+            }))
+        }
         other => Err(format!(
-            "unknown drafts subcommand: '{other}'. try: list | show <id> | accept <id> | reject <id> | delete <id> | retitle <id> <title>"
+            "unknown drafts subcommand: '{other}'. try: list | show <id> | accept <id> | reject <id> | delete <id> | retitle <id> <title> | auto-title <id> [--seed description|title|both] [--dry-run]"
         )),
     }
 }
@@ -5230,6 +5323,41 @@ mod tests {
         assert!(err.contains("--min-turns"));
     }
 
+    #[test]
+    fn curator_drafts_unknown_subcommand_lists_options() {
+        let err = curator_drafts_cmd(&["bogus".into()]).unwrap_err();
+        assert!(err.contains("auto-title"));
+        assert!(err.contains("retitle"));
+    }
+
+    #[test]
+    fn curator_drafts_auto_title_requires_id() {
+        let err = curator_drafts_cmd(&["auto-title".into()]).unwrap_err();
+        assert!(err.contains("usage"));
+    }
+
+    #[test]
+    fn curator_drafts_auto_title_rejects_unknown_flag() {
+        let err = curator_drafts_cmd(&[
+            "auto-title".into(),
+            "some-id".into(),
+            "--bogus".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("unknown flag"));
+    }
+
+    #[test]
+    fn curator_drafts_auto_title_rejects_invalid_seed() {
+        let err = curator_drafts_cmd(&[
+            "auto-title".into(),
+            "some-id".into(),
+            "--seed".into(),
+            "bogus".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("--seed"));
+    }
     #[test]
     fn providers_cmd_lists_every_registered_provider() {
         let v = providers_cmd(&[]).expect("providers ok");
