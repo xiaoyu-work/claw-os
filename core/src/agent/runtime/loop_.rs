@@ -236,6 +236,7 @@ async fn ask_inner(
             cfg.temperature,
             recorder.map(|(_, sid)| sid),
             retry_policy_from_cfg(cfg),
+            Some(&hook_ctx),
         )
         .await;
 
@@ -431,6 +432,7 @@ async fn ask_inner_streaming(
             cfg.temperature,
             recorder.map(|(_, sid)| sid),
             sink.clone(),
+            None,
         )
         .await?;
 
