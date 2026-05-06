@@ -1903,33 +1903,83 @@ fn title_heuristic_payload(input: &str) -> Value {
 /// from either spelling works.
 fn summarise_cmd(args: &[String]) -> Result<Value, String> {
     let mut max_chars: usize = 200;
+    let mut llm_mode = false;
     let mut filtered: Vec<String> = Vec::new();
     let mut i = 0usize;
     while i < args.len() {
-        if args[i].as_str() == "--max" {
-            let raw = args
-                .get(i + 1)
-                .ok_or_else(|| "--max needs a number".to_string())?;
-            max_chars = raw
-                .parse::<usize>()
-                .map_err(|e| format!("--max: invalid u64: {e}"))?;
-            i += 2;
-        } else {
-            filtered.push(args[i].clone());
-            i += 1;
+        match args[i].as_str() {
+            "--max" => {
+                let raw = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--max needs a number".to_string())?;
+                max_chars = raw
+                    .parse::<usize>()
+                    .map_err(|e| format!("--max: invalid u64: {e}"))?;
+                i += 2;
+            }
+            "--llm" => {
+                llm_mode = true;
+                i += 1;
+            }
+            _ => {
+                filtered.push(args[i].clone());
+                i += 1;
+            }
         }
     }
     let (input, _check) = read_text_input(&filtered, "summarise")?;
-    let raw = crate::agent::summarise::heuristic(&input);
-    let summary = crate::agent::summarise::clamp(&raw, max_chars);
+    if !llm_mode {
+        return Ok(summarise_heuristic_payload(&input, max_chars));
+    }
+    let cfg = &crate::config::get().agent;
+    let aux = crate::agent::runtime::loop_::auxiliary_from_cfg(cfg)
+        .map_err(|e| format!("auxiliary client build failed: {e}"))?
+        .ok_or_else(|| {
+            "auxiliary client is not configured; set agent.auxiliary_provider + auxiliary_model in config or drop --llm"
+                .to_string()
+        })?;
+    summarise_cmd_with_aux(&input, max_chars, Some(&aux))
+}
+
+/// Inner helper used by tests and by the live `--llm` path. When
+/// `aux` is `None` the heuristic payload is returned unchanged so
+/// callers always get a stable JSON shape.
+fn summarise_cmd_with_aux(
+    input: &str,
+    max_chars: usize,
+    aux: Option<&crate::agent::llm::auxiliary::AuxiliaryClient>,
+) -> Result<Value, String> {
+    let Some(aux) = aux else {
+        return Ok(summarise_heuristic_payload(input, max_chars));
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("tokio runtime: {e}"))?;
+    let summary =
+        runtime.block_on(crate::agent::summarise::summarise(Some(aux), input, max_chars));
     Ok(json!({
+        "summary": summary,
+        "input_chars": input.chars().count(),
+        "summary_chars": summary.chars().count(),
+        "max_chars": max_chars,
+        "method": "llm",
+        "provider": aux.provider_name(),
+        "model": aux.config().model,
+    }))
+}
+
+fn summarise_heuristic_payload(input: &str, max_chars: usize) -> Value {
+    let raw = crate::agent::summarise::heuristic(input);
+    let summary = crate::agent::summarise::clamp(&raw, max_chars);
+    json!({
         "summary": summary,
         "input_chars": input.chars().count(),
         "summary_chars": summary.chars().count(),
         "max_chars": max_chars,
         "clamped": raw.chars().count() > max_chars,
         "method": "heuristic",
-    }))
+    })
 }
 
 /// `cos agent classify <reply> --labels <a,b,c> | --file <path> | --stdin`
@@ -5588,6 +5638,42 @@ mod tests {
         // Confirm the US-spelling alias hits the same handler.
         let v = run("summarize", &["hello.".into()]).expect("summarize ok");
         assert_eq!(v.get("summary").and_then(|s| s.as_str()), Some("hello."));
+    }
+
+    #[test]
+    fn summarise_cmd_llm_without_aux_errs() {
+        let err = summarise_cmd(&["hello there".into(), "--llm".into()]).unwrap_err();
+        assert!(err.contains("auxiliary"));
+    }
+
+    #[test]
+    fn summarise_cmd_with_aux_none_falls_back_to_heuristic() {
+        let v = summarise_cmd_with_aux("First sentence. Second one.", 200, None)
+            .expect("ok");
+        assert_eq!(v.get("method").and_then(|s| s.as_str()), Some("heuristic"));
+    }
+
+    #[test]
+    fn summarise_cmd_with_aux_uses_mock_response_when_input_exceeds_max() {
+        use crate::agent::llm::auxiliary::{AuxiliaryClient, AuxiliaryConfig};
+        use crate::agent::llm::providers::mock::{MockProvider, MockResponse};
+        use crate::config::AgentConfig;
+        let cfg = AgentConfig::default();
+        let provider = MockProvider::new("sum-mock", &cfg);
+        provider.push_response(MockResponse::Text("Compact summary".into()));
+        let aux = AuxiliaryClient::new(
+            std::sync::Arc::new(provider),
+            AuxiliaryConfig::new("mock", "sum-mock"),
+        );
+        // Input must exceed max_chars to trigger the aux path (see summarise()).
+        let big = "long ".repeat(60);
+        let v = summarise_cmd_with_aux(&big, 50, Some(&aux)).expect("ok");
+        assert_eq!(v.get("method").and_then(|s| s.as_str()), Some("llm"));
+        assert_eq!(
+            v.get("summary").and_then(|s| s.as_str()),
+            Some("Compact summary")
+        );
+        assert_eq!(v.get("provider").and_then(|s| s.as_str()), Some("mock"));
     }
 
     #[test]

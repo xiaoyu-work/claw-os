@@ -400,7 +400,7 @@ fn builtin_apps() -> Vec<(
             ("tokens", "Estimate token count of a string (chars / 4 heuristic): cos agent tokens <text> | --file <path> | --stdin"),
             ("providers", "Probe credential availability for every registered LLM provider: cos agent providers [--names <a,b>] [--probe-credentials]"),
             ("title", "Generate a session title from a seed string (heuristic by default; --llm routes through the auxiliary client like runtime::loop_): cos agent title <text> | --file <path> | --stdin [--llm]"),
-            ("summarise", "Summarise text into the first sentence (heuristic, no LLM call), clamped: cos agent summarise <text> | --file <path> | --stdin [--max N]"),
+            ("summarise", "Summarise text into the first sentence (heuristic by default; --llm routes through the auxiliary client when input exceeds --max), clamped: cos agent summarise <text> | --file <path> | --stdin [--max N] [--llm]"),
             ("classify", "Match a reply string to one of a label set (case-insensitive, punctuation-tolerant): cos agent classify <reply> --labels <a,b,c> | --file <path> | --stdin"),
             ("tools", "Inspect the tool registry the runtime would use: cos agent tools [list [--unfiltered]|show <name>|llm-list]"),
             ("guardrails", "Inspect the allow/deny tool guardrails from agent config: cos agent guardrails [show|check <tool>]"),
