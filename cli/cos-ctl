@@ -53,7 +53,7 @@ def cmd_build(_args):
 
     result = docker(
         "build",
-        "-f", os.path.join(PROJECT_DIR, "docker", "Dockerfile"),
+        "-f", os.path.join(PROJECT_DIR, "targets", "docker", "Dockerfile"),
         "-t", IMAGE_NAME,
         PROJECT_DIR,
     )

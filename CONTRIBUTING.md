@@ -20,12 +20,21 @@ cargo build --release
 ### Build the Rootfs + Docker Image
 
 ```bash
-# Bootstrap Debian rootfs, install Node.js 24, apps, Jina Reader
+# Bootstrap Debian rootfs, install Node.js 24, apps, browser engine
 sudo ./rootfs/build.sh
 
-# Build the Docker image
+# Build the Docker image (base profile)
+./build.sh docker
+
+# Build a profile variant (openclaw, deerflow, ironclaw)
+PROFILE=openclaw ./build.sh docker
+
+# Or via cos-ctl (equivalent to base profile)
 ./cli/cos-ctl build
 ```
+
+> Other distribution targets (`wsl`, `iso-live`, `iso-installer`, `vm`) are
+> being added in subsequent milestones — see `targets/` for the current set.
 
 ### Run Locally (Development)
 
@@ -59,7 +68,9 @@ claw-os/
 │       └── apps.rs        App manifest discovery
 ├── apps/              Python apps (fs, web, db, doc, etc.)
 ├── rootfs/            Linux rootfs build scripts + overlay
-├── docker/            Dockerfile
+├── targets/           Per-distribution build scripts (docker, wsl, iso, vm)
+│   └── docker/          Dockerfiles + build.sh for the docker target
+├── build.sh           Top-level dispatcher (./build.sh <target>)
 ├── cli/               cos-ctl management tool
 ├── clients/           Bridge (LLM ↔ Claw OS)
 └── tests/             Integration tests

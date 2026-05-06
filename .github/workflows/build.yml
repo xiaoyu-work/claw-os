@@ -120,7 +120,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: docker/Dockerfile
+          file: targets/docker/Dockerfile
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -140,7 +140,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: docker/Dockerfile.openclaw
+          file: targets/docker/Dockerfile.openclaw
           push: true
           tags: ${{ steps.meta-openclaw.outputs.tags }}
           labels: ${{ steps.meta-openclaw.outputs.labels }}
@@ -160,7 +160,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: docker/Dockerfile.deerflow
+          file: targets/docker/Dockerfile.deerflow
           push: true
           tags: ${{ steps.meta-deerflow.outputs.tags }}
           labels: ${{ steps.meta-deerflow.outputs.labels }}
@@ -180,7 +180,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: docker/Dockerfile.ironclaw
+          file: targets/docker/Dockerfile.ironclaw
           push: true
           tags: ${{ steps.meta-ironclaw.outputs.tags }}
           labels: ${{ steps.meta-ironclaw.outputs.labels }}
