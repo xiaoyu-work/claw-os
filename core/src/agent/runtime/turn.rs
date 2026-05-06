@@ -44,7 +44,7 @@ pub async fn run_turn(
     temperature: f32,
     session_id: Option<&str>,
 ) -> Result<TurnOutcome, super::loop_::AgentError> {
-    let request = ChatRequest {
+    let mut request = ChatRequest {
         model: model.to_string(),
         messages: messages.clone(),
         system: Some(system.to_string()),
@@ -56,6 +56,21 @@ pub async fn run_turn(
         stop_sequences: vec![],
         extra: serde_json::Value::Null,
     };
+
+    // Prompt-cache markers are no-ops for providers that don't support
+    // them (the marker keys live in `request.extra` and are ignored by
+    // OpenAI/Gemini/Ollama/llama-local). For Anthropic they translate
+    // into `cache_control: {"type":"ephemeral"}` on the system prompt
+    // and the last tool definition, which is the recommended cache
+    // strategy in `prompt::caching` (system + tools are stable across
+    // a session and dominate prompt size, so caching them gives the
+    // biggest cost/latency win on every turn after the first).
+    if provider.supports_prompt_cache() {
+        crate::agent::prompt::caching::mark_system_cached(&mut request);
+        if !request.tools.is_empty() {
+            crate::agent::prompt::caching::mark_tools_cached(&mut request);
+        }
+    }
 
     let start = Instant::now();
     let chat_result = provider.chat(request).await;

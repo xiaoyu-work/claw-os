@@ -901,4 +901,77 @@ mod tests {
         assert!(tools.get("now").is_some());
         assert!(tools.get_unfiltered("now").is_some());
     }
+
+    /// When the active provider declares `supports_prompt_cache() == true`,
+    /// the runtime turn dispatcher MUST attach prompt-cache markers to the
+    /// outgoing request so downstream Anthropic body-builder turns them
+    /// into `cache_control: {"type":"ephemeral"}` blocks. Verifies via
+    /// MockProvider with cache support flipped on, then inspects
+    /// `last_request()`'s extras for `__cache_system` and `__cache_tools`.
+    #[tokio::test]
+    async fn cache_markers_attached_when_provider_supports_cache() {
+        let cfg = cfg();
+        let mock = MockProvider::new(&cfg.model, &cfg);
+        mock.set_supports_prompt_cache(true);
+        mock.push_response(MockResponse::Text("ok".into()));
+        let mock = Arc::new(mock);
+
+        let provider: Arc<dyn Provider> = mock.clone();
+        let tools = builtin_only_registry();
+        ask_with(provider, &cfg, "ping", &tools).await.unwrap();
+
+        let req = mock.last_request().expect("provider should have been called");
+        assert!(
+            crate::agent::prompt::caching::is_system_cached(&req),
+            "expected __cache_system marker on request when provider supports cache"
+        );
+        assert!(
+            crate::agent::prompt::caching::is_tools_cached(&req),
+            "expected __cache_tools marker on request when provider supports cache and tools nonempty"
+        );
+    }
+
+    /// Default providers (cache_capable = false) MUST NOT have markers
+    /// attached. Verifies the no-op default doesn't accidentally mark
+    /// every request.
+    #[tokio::test]
+    async fn cache_markers_not_attached_by_default() {
+        let cfg = cfg();
+        let mock = MockProvider::new(&cfg.model, &cfg);
+        // Do NOT call set_supports_prompt_cache - default is false.
+        mock.push_response(MockResponse::Text("ok".into()));
+        let mock = Arc::new(mock);
+
+        let provider: Arc<dyn Provider> = mock.clone();
+        let tools = builtin_only_registry();
+        ask_with(provider, &cfg, "ping", &tools).await.unwrap();
+
+        let req = mock.last_request().expect("provider should have been called");
+        assert!(!crate::agent::prompt::caching::is_system_cached(&req));
+        assert!(!crate::agent::prompt::caching::is_tools_cached(&req));
+    }
+
+    /// When tools list is empty, only the system marker should be set
+    /// (caching an empty tools array is meaningless and would trip the
+    /// 4-breakpoint Anthropic budget).
+    #[tokio::test]
+    async fn cache_markers_skip_tools_when_no_tools_registered() {
+        let cfg = cfg();
+        let mock = MockProvider::new(&cfg.model, &cfg);
+        mock.set_supports_prompt_cache(true);
+        mock.push_response(MockResponse::Text("ok".into()));
+        let mock = Arc::new(mock);
+
+        let provider: Arc<dyn Provider> = mock.clone();
+        // Empty registry so as_llm_tools() is empty.
+        let tools = ToolRegistry::new();
+        ask_with(provider, &cfg, "ping", &tools).await.unwrap();
+
+        let req = mock.last_request().expect("provider should have been called");
+        assert!(crate::agent::prompt::caching::is_system_cached(&req));
+        assert!(
+            !crate::agent::prompt::caching::is_tools_cached(&req),
+            "no tools registered -> no __cache_tools marker"
+        );
+    }
 }

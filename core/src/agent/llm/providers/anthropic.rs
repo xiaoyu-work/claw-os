@@ -148,6 +148,10 @@ impl Provider for AnthropicProvider {
         self.cfg.api_key.is_some()
     }
 
+    fn supports_prompt_cache(&self) -> bool {
+        true
+    }
+
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
         let body = wire::build_request_body(&request, &self.cfg.model, false);
 

@@ -85,6 +85,17 @@ pub trait Provider: Send + Sync {
         None
     }
 
+    /// Whether this provider supports prompt caching (today: Anthropic
+    /// only; OpenAI's automatic caching is server-side and needs no
+    /// markers from us). When `true`, the runtime turn dispatcher
+    /// attaches `__cache_system` and `__cache_tools` markers via
+    /// [`crate::agent::prompt::caching`] so the provider's
+    /// `build_request_body` puts `cache_control: {"type":"ephemeral"}`
+    /// on the system prompt and the last tool definition. Default: `false`.
+    fn supports_prompt_cache(&self) -> bool {
+        false
+    }
+
     /// Buffered (non-streaming) chat completion.
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse>;
 

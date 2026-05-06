@@ -28,6 +28,13 @@ pub struct MockProvider {
     /// Scripted queue of responses (popped from the front). When empty, the
     /// mock falls back to echoing the last user message.
     script: Mutex<Vec<MockResponse>>,
+    /// Whether `Provider::supports_prompt_cache()` returns true. Default
+    /// false; tests for cache marker plumbing flip this on.
+    cache_capable: std::sync::atomic::AtomicBool,
+    /// Records the most recent `ChatRequest` the mock was called with.
+    /// Tests inspect this to assert what reached the provider (e.g. that
+    /// the runtime attached prompt-cache markers).
+    last_request: Mutex<Option<ChatRequest>>,
 }
 
 impl MockProvider {
@@ -35,12 +42,26 @@ impl MockProvider {
         Self {
             model: model.to_string(),
             script: Mutex::new(Vec::new()),
+            cache_capable: std::sync::atomic::AtomicBool::new(false),
+            last_request: Mutex::new(None),
         }
     }
 
     /// Queue a scripted response. Tests use this to drive specific loop paths.
     pub fn push_response(&self, response: MockResponse) {
         self.script.lock().unwrap().push(response);
+    }
+
+    /// Override `Provider::supports_prompt_cache` for cache-marker tests.
+    pub fn set_supports_prompt_cache(&self, enabled: bool) {
+        self.cache_capable
+            .store(enabled, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Snapshot of the most recent `ChatRequest` the mock saw, or `None`
+    /// if `chat`/`chat_stream` has not been called yet.
+    pub fn last_request(&self) -> Option<ChatRequest> {
+        self.last_request.lock().unwrap().clone()
     }
 
     fn next_scripted(&self) -> Option<MockResponse> {
@@ -81,7 +102,14 @@ impl Provider for MockProvider {
         true
     }
 
+    fn supports_prompt_cache(&self) -> bool {
+        self.cache_capable
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
+        *self.last_request.lock().unwrap() = Some(request.clone());
+
         let response_kind = self
             .next_scripted()
             .unwrap_or_else(|| MockResponse::Text(format!("[mock] {}", extract_last_user_text(&request))));
