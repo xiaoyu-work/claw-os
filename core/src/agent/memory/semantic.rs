@@ -153,6 +153,14 @@ impl SemanticStore {
         Ok(Some(store))
     }
 
+    /// Open the default-path store WITHOUT touching the embed config.
+    /// Used by maintenance commands (e.g. `semantic clear-all`) that
+    /// must work even when the embedder is misconfigured or broken —
+    /// the whole point of clear-all is to recover from a broken state.
+    pub fn open_default_without_embedder() -> Result<Self, SemanticError> {
+        Self::open(default_path(), None)
+    }
+
     pub fn embedder(&self) -> Option<Arc<dyn Embedder>> {
         self.embedder.clone()
     }
@@ -337,6 +345,32 @@ impl SemanticStore {
             params![namespace],
         )?;
         Ok(n)
+    }
+
+    /// Drop every row in the entire store. Use this when migrating to
+    /// a different embedding model — vector spaces are not compatible
+    /// across models, and the [`SemanticError::ModelMismatch`] check
+    /// will refuse new vectors otherwise. Returns the number deleted.
+    pub fn clear_all(&self) -> Result<usize, SemanticError> {
+        let conn = self.lock_conn()?;
+        let n = conn.execute("DELETE FROM semantic_docs", [])?;
+        Ok(n)
+    }
+
+    /// Returns the model name currently pinned in the store (the model
+    /// of any existing row), or `Ok(None)` if the store is empty.
+    /// Useful for telling the user "your current corpus is on model X,
+    /// switching means you'll need to re-index."
+    pub fn pinned_model(&self) -> Result<Option<String>, SemanticError> {
+        let conn = self.lock_conn()?;
+        let m = conn
+            .query_row(
+                "SELECT model FROM semantic_docs LIMIT 1",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?;
+        Ok(m)
     }
 
     fn lock_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, SemanticError> {
@@ -646,6 +680,71 @@ mod tests {
             }
             other => panic!("expected ModelMismatch, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn pinned_model_returns_none_for_empty_store() {
+        let s: SemanticStore = SemanticStore::open_in_memory(None).unwrap();
+        assert!(s.pinned_model().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn pinned_model_returns_first_row_model() {
+        let e: Arc<dyn Embedder> = Arc::new(TaggedHashEmbedder {
+            inner: HashEmbedder::new(32),
+            model: "model-x".to_string(),
+        });
+        let s = SemanticStore::open_in_memory(Some(e)).unwrap();
+        s.index("notes", "k1", "alpha").await.unwrap();
+        assert_eq!(s.pinned_model().unwrap().as_deref(), Some("model-x"));
+    }
+
+    #[tokio::test]
+    async fn clear_all_drops_every_row_across_namespaces() {
+        let s = store_with_hash(32);
+        s.index("ns_a", "k1", "x").await.unwrap();
+        s.index("ns_a", "k2", "y").await.unwrap();
+        s.index("ns_b", "k3", "z").await.unwrap();
+        s.index("ns_c", "k4", "w").await.unwrap();
+        assert_eq!(s.count(None).unwrap(), 4);
+        let dropped = s.clear_all().unwrap();
+        assert_eq!(dropped, 4);
+        assert_eq!(s.count(None).unwrap(), 0);
+        assert!(s.pinned_model().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn clear_all_unsticks_so_new_model_can_index() {
+        // Demonstrate the migration story: after clear_all, the
+        // ModelMismatch protection is lifted and a different model
+        // can populate the store.
+        let e1: Arc<dyn Embedder> = Arc::new(TaggedHashEmbedder {
+            inner: HashEmbedder::new(32),
+            model: "old-model".to_string(),
+        });
+        let s = SemanticStore::open_in_memory(Some(e1)).unwrap();
+        s.index("notes", "k", "first").await.unwrap();
+        assert_eq!(s.pinned_model().unwrap().as_deref(), Some("old-model"));
+
+        let dropped = s.clear_all().unwrap();
+        assert_eq!(dropped, 1);
+
+        // Now swap to the new model and re-index.
+        let e2: Arc<dyn Embedder> = Arc::new(TaggedHashEmbedder {
+            inner: HashEmbedder::new(32),
+            model: "new-model".to_string(),
+        });
+        let s2 = s.with_embedder(e2);
+        s2.index("notes", "k", "first").await.expect(
+            "after clear_all the new model should be free to index",
+        );
+        assert_eq!(s2.pinned_model().unwrap().as_deref(), Some("new-model"));
+    }
+
+    #[tokio::test]
+    async fn clear_all_on_empty_store_returns_zero() {
+        let s = store_with_hash(16);
+        assert_eq!(s.clear_all().unwrap(), 0);
     }
 }
 

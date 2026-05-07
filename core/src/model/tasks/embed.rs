@@ -15,21 +15,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::EmbedConfig;
 
-/// Single canonical embedding model. Hardcoded because:
+/// Default embedding model name. Used when [`crate::config::EmbedConfig::model`]
+/// is left empty; an explicit `model = "..."` in `[embed]` overrides this.
 ///
-/// 1. **Vector spaces are model-specific.** Two different embedding
-///    models produce vectors in incompatible spaces — cosine
-///    similarity between them is meaningless. Switching models would
-///    invalidate every row already in `semantic.db` and require a
-///    full re-index.
-/// 2. **Dimensionality is model-specific.** `text-embedding-3-small`
-///    is 1536 dim; `-large` is 3072. Mixing dims in the same SQLite
-///    blob column is a data-corruption foot-gun.
-///
-/// In practice, once a deployment commits to an embedder it stays on
-/// it for life. `EmbedConfig.model` is kept for backward-compatible
-/// deserialisation but is ignored at runtime — this constant is the
-/// only source of truth used to wire requests.
+/// **Switching models invalidates every existing row in `semantic.db`.**
+/// Vector spaces are model-specific — cosine similarity between vectors
+/// from two different models is meaningless, and dimensionality usually
+/// differs (`text-embedding-3-small` is 1536, `-large` is 3072).
+/// `SemanticStore` enforces this with a stickiness check that returns
+/// `ModelMismatch` on the first row from a new model. To migrate, run
+/// `cos agent semantic clear-all --yes` and re-index.
 pub const MODEL_NAME: &str = "text-embedding-3-small";
 
 /// One embedding request — a batch of inputs to embed.
@@ -172,9 +167,14 @@ impl OpenAICompatEmbedder {
             alias,
             base_url,
             api_key,
-            // Model name is hardcoded — see `MODEL_NAME` doc comment.
-            // `cfg.model` is intentionally ignored.
-            model: MODEL_NAME.to_string(),
+            // Honor cfg.model when set; fall back to MODEL_NAME if empty.
+            // Switching this value invalidates the existing semantic.db —
+            // see MODEL_NAME doc for the migration story (`semantic clear-all`).
+            model: if cfg.model.trim().is_empty() {
+                MODEL_NAME.to_string()
+            } else {
+                cfg.model.clone()
+            },
             extra_headers: cfg.extra_headers.clone(),
             client,
         }
@@ -585,20 +585,39 @@ mod tests {
     }
 
     #[test]
-    fn cfg_model_is_ignored_embedder_uses_hardcoded_model_name() {
-        // No matter what the config says, the embedder must always
-        // wire `MODEL_NAME` so the SemanticStore stickiness invariant
-        // can never be silently violated by editing config.json.
+    fn cfg_model_overrides_default_for_openai_alias() {
+        // `text-embedding-3-large` is a real OpenAI model with
+        // different dimensionality — verify it round-trips.
         let mut c = cfg();
-        c.model = "junk-model-that-does-not-exist".into();
+        c.model = "text-embedding-3-large".into();
+        let e = OpenAICompatEmbedder::from_config(&c);
+        assert_eq!(e.model, "text-embedding-3-large");
+        assert_eq!(e.model(), "text-embedding-3-large");
+    }
+
+    #[test]
+    fn cfg_model_overrides_default_for_azure_alias() {
+        let mut c = cfg();
+        c.model = "ada-002-deployment".into();
+        c.provider = "azure".into();
+        let e = OpenAICompatEmbedder::from_config(&c);
+        assert_eq!(e.model, "ada-002-deployment");
+    }
+
+    #[test]
+    fn cfg_model_empty_falls_back_to_default() {
+        let mut c = cfg();
+        c.model = "".into();
         let e = OpenAICompatEmbedder::from_config(&c);
         assert_eq!(e.model, MODEL_NAME);
         assert_eq!(MODEL_NAME, "text-embedding-3-small");
+    }
 
-        // Also for the azure alias.
-        let mut c2 = c.clone();
-        c2.provider = "azure".into();
-        let e2 = OpenAICompatEmbedder::from_config(&c2);
-        assert_eq!(e2.model, MODEL_NAME);
+    #[test]
+    fn cfg_model_whitespace_is_treated_as_empty() {
+        let mut c = cfg();
+        c.model = "   ".into();
+        let e = OpenAICompatEmbedder::from_config(&c);
+        assert_eq!(e.model, MODEL_NAME);
     }
 }

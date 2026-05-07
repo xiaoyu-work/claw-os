@@ -415,13 +415,15 @@ pub struct EmbedConfig {
     pub provider: String,
 
     /// Model identifier (e.g. `"text-embedding-3-small"`,
-    /// `"nomic-embed-text"`, `"bge-small-en-v1.5"`).
+    /// `"text-embedding-3-large"`, `"nomic-embed-text"`,
+    /// `"bge-small-en-v1.5"`). Empty falls back to
+    /// `crate::model::tasks::embed::MODEL_NAME`.
     ///
-    /// **Note:** as of this commit the model is hardcoded by
-    /// `crate::model::tasks::embed::MODEL_NAME`. This field is parsed
-    /// from existing configs for backward compatibility but ignored
-    /// at runtime — switching embedding models invalidates every row
-    /// already in `semantic.db`, so the value is fixed deployment-wide.
+    /// **Switching models invalidates every row in `semantic.db`** —
+    /// vector spaces are not interchangeable. `SemanticStore` enforces
+    /// this with a stickiness check that returns `ModelMismatch` on the
+    /// first row from a new model. To migrate, run
+    /// `cos agent semantic clear-all --yes` and re-index.
     #[serde(default = "default_embed_model")]
     pub model: String,
 

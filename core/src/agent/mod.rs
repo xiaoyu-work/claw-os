@@ -599,7 +599,8 @@ fn parse_kind_arg(rest: &[String]) -> Result<String, String> {
 ///   count  [--namespace NS]
 ///   remove <namespace> <key>
 ///   clear  <namespace>
-///   status — show DB path / row count / configured embedder
+///   clear-all --yes — wipe every row (use when migrating embed model)
+///   status — show DB path / row count / pinned model / configured embedder
 ///
 /// All sub-commands respect `[embed]` from config.json.
 fn semantic_cmd(args: &[String]) -> Result<Value, String> {
@@ -608,7 +609,7 @@ fn semantic_cmd(args: &[String]) -> Result<Value, String> {
     let sub = args
         .first()
         .map(|s| s.as_str())
-        .ok_or("usage: cos agent semantic <index|search|list|count|remove|clear|status> ...")?;
+        .ok_or("usage: cos agent semantic <index|search|list|count|remove|clear|clear-all|status> ...")?;
     let rest = &args[1..];
 
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -621,14 +622,22 @@ fn semantic_cmd(args: &[String]) -> Result<Value, String> {
             let cfg = &crate::config::get().embed;
             let store_res = SemanticStore::open_default();
             let path = crate::paths::agent_semantic_db_path();
-            let (configured, count, embedder_model) = match &store_res {
+            let (configured, count, embedder_model, pinned) = match &store_res {
                 Ok(Some(s)) => {
                     let n = s.count(None).unwrap_or(0);
                     let m = s.embedder().map(|e| e.model().to_string());
-                    (true, n, m)
+                    let p = s.pinned_model().ok().flatten();
+                    (true, n, m, p)
                 }
-                Ok(None) => (false, 0, None),
-                Err(_) => (false, 0, None),
+                Ok(None) => (false, 0, None, None),
+                Err(_) => (false, 0, None, None),
+            };
+            // Surface a hint if the embedder model differs from what is
+            // pinned in the corpus — that's the exact "you need to clear
+            // before re-indexing" situation.
+            let model_drift = match (&embedder_model, &pinned) {
+                (Some(a), Some(b)) if a != b => true,
+                _ => false,
             };
             Ok(json!({
                 "status": if configured { "ok" } else { "disabled" },
@@ -637,6 +646,8 @@ fn semantic_cmd(args: &[String]) -> Result<Value, String> {
                 "provider": cfg.provider,
                 "model_config": cfg.model,
                 "embedder_model": embedder_model,
+                "pinned_model": pinned,
+                "model_drift": model_drift,
                 "base_url": cfg.base_url,
             }))
         }
@@ -797,8 +808,33 @@ fn semantic_cmd(args: &[String]) -> Result<Value, String> {
             let n = store.clear_namespace(&rest[0]).map_err(|e| e.to_string())?;
             Ok(json!({ "deleted": n, "namespace": rest[0] }))
         }
+        "clear-all" => {
+            // Mutating + total — require --yes (matches sessions clear /
+            // sessions purge convention). The whole point of this command
+            // is the "I'm switching embed model" foot-gun, so insist on
+            // an explicit confirmation.
+            let confirmed = rest.iter().any(|a| a == "--yes");
+            if !confirmed {
+                return Err(
+                    "refusing to wipe semantic.db without --yes. usage: cos agent semantic clear-all --yes"
+                        .into(),
+                );
+            }
+            // Open without an embedder so a misconfigured / unreachable
+            // provider can't block the cleanup path. We still need a
+            // SemanticStore handle for clear_all().
+            let store = SemanticStore::open_default_without_embedder()
+                .map_err(|e| e.to_string())?;
+            let pinned_before = store.pinned_model().ok().flatten();
+            let n = store.clear_all().map_err(|e| e.to_string())?;
+            Ok(json!({
+                "ok": true,
+                "deleted": n,
+                "previously_pinned_model": pinned_before,
+            }))
+        }
         other => Err(format!(
-            "unknown semantic subcommand: {other}. try: index | search | list | count | remove | clear | status"
+            "unknown semantic subcommand: {other}. try: index | search | list | count | remove | clear | clear-all | status"
         )),
     }
 }
@@ -11757,6 +11793,31 @@ mod tests {
         let v = sessions_cmd(&["top".into(), "5".into()]).expect("dispatch ok");
         assert_eq!(v["limit"], json!(5u64));
         assert_eq!(v["ordered_by"], json!("message_count_desc"));
+    }
+
+    // ---- semantic_cmd: clear-all guards + status drift ----
+
+    #[test]
+    fn semantic_clear_all_refuses_without_yes() {
+        let err = semantic_cmd(&["clear-all".into()]).unwrap_err();
+        assert!(
+            err.contains("--yes"),
+            "expected error to point at --yes, got: {err}"
+        );
+    }
+
+    #[test]
+    fn semantic_unknown_subcommand_errs_with_usage_hint() {
+        let err = semantic_cmd(&["bogus".into()]).unwrap_err();
+        assert!(err.contains("clear-all"), "got: {err}");
+        assert!(err.contains("status"), "got: {err}");
+    }
+
+    #[test]
+    fn semantic_no_subcommand_errs_with_usage() {
+        let err = semantic_cmd(&[]).unwrap_err();
+        assert!(err.contains("usage"));
+        assert!(err.contains("clear-all"));
     }
 
     // ---- vision_cmd / vision_route_cmd ----
