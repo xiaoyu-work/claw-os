@@ -974,8 +974,9 @@ fn sessions_cmd(args: &[String]) -> Result<Value, String> {
         "count" => sessions_count(&args[1..]),
         "clear" => sessions_clear(&args[1..]),
         "purge" => sessions_purge(&args[1..]),
+        "stats" => sessions_stats(&args[1..]),
         other => Err(format!(
-            "unknown sessions subcommand: {other}. try: list [N] | title <id> | set-title <id> \"<title>\" | count [<id>] | clear <id> --yes | purge --older-than <days> [--dry-run] [--yes]"
+            "unknown sessions subcommand: {other}. try: list [N] | title <id> | set-title <id> \"<title>\" | count [<id>] | clear <id> --yes | purge --older-than <days> [--dry-run] [--yes] | stats"
         )),
     }
 }
@@ -1224,6 +1225,52 @@ fn sessions_purge_with(
         "messages_deleted": stats.messages_deleted,
         "sessions_emptied": stats.sessions_emptied,
         "titles_deleted": stats.titles_deleted,
+    }))
+}
+
+/// `cos agent sessions stats` — read-only aggregate over the
+/// memory.db (pairs naturally with `sessions purge` so users can
+/// see what a given `--older-than <days>` would actually delete).
+fn sessions_stats(args: &[String]) -> Result<Value, String> {
+    if !args.is_empty() {
+        return Err(format!(
+            "sessions stats takes no arguments (got '{}'). usage: cos agent sessions stats",
+            args[0]
+        ));
+    }
+    let db = memory::sqlite_fts::MemoryDb::open_default()
+        .map_err(|e| format!("memory db unavailable: {e}"))?;
+    let now_ms: i64 = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    sessions_stats_with(&db, now_ms)
+}
+
+fn sessions_stats_with(
+    db: &memory::sqlite_fts::MemoryDb,
+    now_ms: i64,
+) -> Result<Value, String> {
+    let stats = db
+        .stats(now_ms)
+        .map_err(|e| format!("stats failed: {e}"))?;
+    let by_role = stats
+        .by_role
+        .iter()
+        .map(|(r, n)| json!({"role": r, "count": *n as u64}))
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "ok": true,
+        "now_ms": now_ms,
+        "total_messages": stats.total_messages as u64,
+        "total_sessions": stats.total_sessions as u64,
+        "titled_sessions": stats.titled_sessions as u64,
+        "messages_last_1d": stats.messages_last_1d as u64,
+        "messages_last_7d": stats.messages_last_7d as u64,
+        "messages_last_30d": stats.messages_last_30d as u64,
+        "by_role": by_role,
+        "oldest_ts_ms": stats.oldest_ts_ms,
+        "newest_ts_ms": stats.newest_ts_ms,
     }))
 }
 
@@ -11439,6 +11486,62 @@ mod tests {
         .expect("dispatch ok");
         assert_eq!(v["dry_run"], json!(true));
         assert_eq!(v["older_than_days"], json!(999999u64));
+    }
+
+    // ---- sessions_stats ----
+
+    #[test]
+    fn sessions_stats_rejects_extra_args() {
+        let err = sessions_stats(&["bogus".into()]).unwrap_err();
+        assert!(err.contains("no arguments"), "got {err}");
+    }
+
+    #[test]
+    fn sessions_stats_with_empty_db_is_all_zeros() {
+        let db = fresh_session_db();
+        let v = sessions_stats_with(&db, 1_000_000).expect("stats ok");
+        assert_eq!(v["ok"], json!(true));
+        assert_eq!(v["total_messages"], json!(0u64));
+        assert_eq!(v["total_sessions"], json!(0u64));
+        assert_eq!(v["titled_sessions"], json!(0u64));
+        assert_eq!(v["messages_last_7d"], json!(0u64));
+        assert_eq!(v["by_role"], json!([]));
+        assert_eq!(v["oldest_ts_ms"], json!(null));
+        assert_eq!(v["newest_ts_ms"], json!(null));
+    }
+
+    #[test]
+    fn sessions_stats_with_buckets_recency_and_role() {
+        let db = fresh_session_db();
+        let now: i64 = 100 * 86_400_000;
+        db.record_message_at("s", "user", "fresh", now - 3_600_000)
+            .unwrap();
+        db.record_message_at("s", "assistant", "old", now - 10 * 86_400_000)
+            .unwrap();
+        db.record_message_at("t", "user", "ancient", now - 60 * 86_400_000)
+            .unwrap();
+        db.set_title("s", "Hello").unwrap();
+        let v = sessions_stats_with(&db, now).expect("stats ok");
+        assert_eq!(v["total_messages"], json!(3u64));
+        assert_eq!(v["total_sessions"], json!(2u64));
+        assert_eq!(v["titled_sessions"], json!(1u64));
+        assert_eq!(v["messages_last_1d"], json!(1u64));
+        assert_eq!(v["messages_last_7d"], json!(1u64));
+        assert_eq!(v["messages_last_30d"], json!(2u64));
+        // by_role: "user" leads with 2, "assistant" trails with 1.
+        let roles = v["by_role"].as_array().expect("array");
+        assert_eq!(roles.len(), 2);
+        assert_eq!(roles[0]["role"], json!("user"));
+        assert_eq!(roles[0]["count"], json!(2u64));
+        assert_eq!(v["oldest_ts_ms"], json!(now - 60 * 86_400_000));
+        assert_eq!(v["newest_ts_ms"], json!(now - 3_600_000));
+    }
+
+    #[test]
+    fn sessions_stats_dispatched_via_sessions_cmd() {
+        let v = sessions_cmd(&["stats".into()]).expect("dispatch ok");
+        assert!(v.get("total_messages").is_some());
+        assert!(v.get("by_role").is_some());
     }
 
     // ---- vision_cmd / vision_route_cmd ----

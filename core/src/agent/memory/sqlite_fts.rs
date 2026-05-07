@@ -67,6 +67,25 @@ pub struct PurgeStats {
     pub titles_deleted: usize,
 }
 
+/// Aggregate health/usage view returned by [`MemoryDb::stats`].
+/// Powers `cos agent sessions stats` and is structured so the doctor
+/// command can re-use it later. Recency buckets are caller-provided
+/// (via `now_ms`) so the database does not implicitly pull from the
+/// system clock.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MemoryStats {
+    pub total_messages: usize,
+    pub total_sessions: usize,
+    pub titled_sessions: usize,
+    pub messages_last_1d: usize,
+    pub messages_last_7d: usize,
+    pub messages_last_30d: usize,
+    /// `(role, count)` pairs ordered by count desc.
+    pub by_role: Vec<(String, usize)>,
+    pub oldest_ts_ms: Option<i64>,
+    pub newest_ts_ms: Option<i64>,
+}
+
 const SCHEMA: &str = r#"
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
@@ -398,6 +417,85 @@ impl MemoryDb {
             messages_deleted,
             sessions_emptied,
             titles_deleted,
+        })
+    }
+
+    /// Aggregate health/usage stats. `now_ms` is injected so callers
+    /// (or tests) control the recency buckets. The DB does not itself
+    /// read the system clock.
+    pub fn stats(&self, now_ms: i64) -> Result<MemoryStats, MemoryError> {
+        const DAY_MS: i64 = 86_400_000;
+        let conn = self.lock_conn()?;
+        let total_messages: usize = conn
+            .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get::<_, i64>(0))
+            .map(|n| n as usize)
+            .unwrap_or(0);
+        let total_sessions: usize = conn
+            .query_row(
+                "SELECT COUNT(DISTINCT session_id) FROM messages",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|n| n as usize)
+            .unwrap_or(0);
+        let titled_sessions: usize = conn
+            .query_row(
+                "SELECT COUNT(*) FROM session_titles",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|n| n as usize)
+            .unwrap_or(0);
+        let mut count_since = |cutoff: i64| -> usize {
+            conn.query_row(
+                "SELECT COUNT(*) FROM messages WHERE ts_ms >= ?",
+                params![cutoff],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|n| n as usize)
+            .unwrap_or(0)
+        };
+        let messages_last_1d = count_since(now_ms.saturating_sub(DAY_MS));
+        let messages_last_7d = count_since(now_ms.saturating_sub(7 * DAY_MS));
+        let messages_last_30d = count_since(now_ms.saturating_sub(30 * DAY_MS));
+        // by_role tally, count desc.
+        let mut stmt = conn.prepare(
+            "SELECT role, COUNT(*) AS n FROM messages GROUP BY role ORDER BY n DESC",
+        )?;
+        let by_role: Vec<(String, usize)> = stmt
+            .query_map([], |row| {
+                let role: String = row.get(0)?;
+                let n: i64 = row.get(1)?;
+                Ok((role, n as usize))
+            })?
+            .filter_map(Result::ok)
+            .collect();
+        let (oldest_ts_ms, newest_ts_ms) = if total_messages == 0 {
+            (None, None)
+        } else {
+            let row = conn
+                .query_row(
+                    "SELECT MIN(ts_ms), MAX(ts_ms) FROM messages",
+                    [],
+                    |r| {
+                        let lo: Option<i64> = r.get(0)?;
+                        let hi: Option<i64> = r.get(1)?;
+                        Ok((lo, hi))
+                    },
+                )
+                .unwrap_or((None, None));
+            row
+        };
+        Ok(MemoryStats {
+            total_messages,
+            total_sessions,
+            titled_sessions,
+            messages_last_1d,
+            messages_last_7d,
+            messages_last_30d,
+            by_role,
+            oldest_ts_ms,
+            newest_ts_ms,
         })
     }
 
@@ -785,6 +883,67 @@ mod tests {
             "session still has a remaining row, must not count as emptied"
         );
         assert_eq!(db.count_session("s").unwrap(), 1);
+    }
+
+    #[test]
+    fn stats_empty_db_returns_zero_with_no_extremes() {
+        let db = db();
+        let s = db.stats(10_000).unwrap();
+        assert_eq!(s.total_messages, 0);
+        assert_eq!(s.total_sessions, 0);
+        assert_eq!(s.titled_sessions, 0);
+        assert_eq!(s.messages_last_1d, 0);
+        assert_eq!(s.messages_last_7d, 0);
+        assert_eq!(s.messages_last_30d, 0);
+        assert!(s.by_role.is_empty());
+        assert!(s.oldest_ts_ms.is_none());
+        assert!(s.newest_ts_ms.is_none());
+    }
+
+    #[test]
+    fn stats_buckets_recency_correctly() {
+        let db = db();
+        let now: i64 = 100 * 86_400_000; // day 100 in ms
+        // 1 row at now-2h, 1 at now-3d, 1 at now-15d, 1 at now-60d.
+        db.record_message_at("s", "user", "a", now - 2 * 3_600_000).unwrap();
+        db.record_message_at("s", "user", "b", now - 3 * 86_400_000).unwrap();
+        db.record_message_at("s", "user", "c", now - 15 * 86_400_000).unwrap();
+        db.record_message_at("t", "user", "d", now - 60 * 86_400_000).unwrap();
+        let s = db.stats(now).unwrap();
+        assert_eq!(s.total_messages, 4);
+        assert_eq!(s.total_sessions, 2);
+        assert_eq!(s.messages_last_1d, 1, "only the 2h-old row");
+        assert_eq!(s.messages_last_7d, 2, "2h + 3d");
+        assert_eq!(s.messages_last_30d, 3, "2h + 3d + 15d");
+        assert_eq!(s.oldest_ts_ms, Some(now - 60 * 86_400_000));
+        assert_eq!(s.newest_ts_ms, Some(now - 2 * 3_600_000));
+    }
+
+    #[test]
+    fn stats_by_role_is_count_desc() {
+        let db = db();
+        db.record_message("s", "user", "1").unwrap();
+        db.record_message("s", "user", "2").unwrap();
+        db.record_message("s", "user", "3").unwrap();
+        db.record_message("s", "assistant", "ok").unwrap();
+        db.record_message("s", "system", "init").unwrap();
+        let s = db.stats(0).unwrap();
+        assert_eq!(s.by_role[0], ("user".into(), 3));
+        // Tied roles can land in either order but both must be present.
+        let names: Vec<&str> = s.by_role.iter().map(|(r, _)| r.as_str()).collect();
+        assert!(names.contains(&"assistant"));
+        assert!(names.contains(&"system"));
+    }
+
+    #[test]
+    fn stats_titled_sessions_counts_session_titles_rows() {
+        let db = db();
+        db.record_message("a", "user", "x").unwrap();
+        db.record_message("b", "user", "y").unwrap();
+        db.set_title("a", "Alpha").unwrap();
+        let s = db.stats(0).unwrap();
+        assert_eq!(s.total_sessions, 2);
+        assert_eq!(s.titled_sessions, 1);
     }
 
     #[test]
