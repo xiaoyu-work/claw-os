@@ -975,8 +975,9 @@ fn sessions_cmd(args: &[String]) -> Result<Value, String> {
         "clear" => sessions_clear(&args[1..]),
         "purge" => sessions_purge(&args[1..]),
         "stats" => sessions_stats(&args[1..]),
+        "top" => sessions_top(&args[1..]),
         other => Err(format!(
-            "unknown sessions subcommand: {other}. try: list [N] | title <id> | set-title <id> \"<title>\" | count [<id>] | clear <id> --yes | purge --older-than <days> [--dry-run] [--yes] | stats"
+            "unknown sessions subcommand: {other}. try: list [N] | top [N] | title <id> | set-title <id> \"<title>\" | count [<id>] | clear <id> --yes | purge --older-than <days> [--dry-run] [--yes] | stats"
         )),
     }
 }
@@ -1012,6 +1013,47 @@ fn sessions_list_with(
     Ok(json!({
         "limit": limit,
         "n": rendered.len(),
+        "sessions": rendered,
+    }))
+}
+
+/// `cos agent sessions top [N]` — like `sessions list` but ordered
+/// by message count desc (with last-activity ts as tiebreaker).
+/// Designed to point at exactly the sessions worth `sessions clear
+/// <id> --yes`-ing when memory.db is fat.
+fn sessions_top(args: &[String]) -> Result<Value, String> {
+    let limit: usize = args
+        .first()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20);
+    let db = memory::sqlite_fts::MemoryDb::open_default()
+        .map_err(|e| format!("memory db unavailable: {e}"))?;
+    sessions_top_with(&db, limit)
+}
+
+fn sessions_top_with(
+    db: &memory::sqlite_fts::MemoryDb,
+    limit: usize,
+) -> Result<Value, String> {
+    let sessions = db
+        .sessions_top(limit)
+        .map_err(|e| format!("sessions_top query failed: {e}"))?;
+    let rendered: Vec<Value> = sessions
+        .iter()
+        .map(|s| {
+            json!({
+                "session_id": s.session_id,
+                "last_ts_ms": s.last_ts_ms,
+                "message_count": s.message_count,
+                "title": s.title,
+            })
+        })
+        .collect();
+    Ok(json!({
+        "ok": true,
+        "limit": limit,
+        "n": rendered.len(),
+        "ordered_by": "message_count_desc",
         "sessions": rendered,
     }))
 }
@@ -11542,6 +11584,65 @@ mod tests {
         let v = sessions_cmd(&["stats".into()]).expect("dispatch ok");
         assert!(v.get("total_messages").is_some());
         assert!(v.get("by_role").is_some());
+    }
+
+    // ---- sessions_top ----
+
+    #[test]
+    fn sessions_top_with_empty_db_returns_empty_array() {
+        let db = fresh_session_db();
+        let v = sessions_top_with(&db, 10).expect("top ok");
+        assert_eq!(v["ok"], json!(true));
+        assert_eq!(v["limit"], json!(10u64));
+        assert_eq!(v["n"], json!(0u64));
+        assert_eq!(v["ordered_by"], json!("message_count_desc"));
+        assert_eq!(v["sessions"], json!([]));
+    }
+
+    #[test]
+    fn sessions_top_with_orders_by_count_desc() {
+        let db = fresh_session_db();
+        // "fat" 3 msgs, "mid" 2, "thin" 1.
+        for _ in 0..3 {
+            db.record_message("fat", "user", "x").unwrap();
+        }
+        for _ in 0..2 {
+            db.record_message("mid", "user", "x").unwrap();
+        }
+        db.record_message("thin", "user", "x").unwrap();
+        let v = sessions_top_with(&db, 10).expect("top ok");
+        assert_eq!(v["n"], json!(3u64));
+        let arr = v["sessions"].as_array().unwrap();
+        assert_eq!(arr[0]["session_id"], json!("fat"));
+        assert_eq!(arr[0]["message_count"], json!(3));
+        assert_eq!(arr[1]["session_id"], json!("mid"));
+        assert_eq!(arr[2]["session_id"], json!("thin"));
+    }
+
+    #[test]
+    fn sessions_top_with_carries_titles() {
+        let db = fresh_session_db();
+        db.record_message("s", "user", "x").unwrap();
+        db.set_title("s", "Greeting").unwrap();
+        let v = sessions_top_with(&db, 10).expect("top ok");
+        let arr = v["sessions"].as_array().unwrap();
+        assert_eq!(arr[0]["title"], json!("Greeting"));
+    }
+
+    #[test]
+    fn sessions_top_default_limit_is_20() {
+        let db = fresh_session_db();
+        // Just make sure no parse errors; with no rows the array is
+        // empty but the limit echoes 20.
+        let v = sessions_top(&[]).expect("dispatch ok");
+        assert_eq!(v["limit"], json!(20u64));
+    }
+
+    #[test]
+    fn sessions_top_dispatched_via_sessions_cmd() {
+        let v = sessions_cmd(&["top".into(), "5".into()]).expect("dispatch ok");
+        assert_eq!(v["limit"], json!(5u64));
+        assert_eq!(v["ordered_by"], json!("message_count_desc"));
     }
 
     // ---- vision_cmd / vision_route_cmd ----

@@ -527,6 +527,36 @@ impl MemoryDb {
         Ok(rows)
     }
 
+    /// Like [`Self::sessions`] but ordered by message count desc, with
+    /// `last_ts_ms` as a stable tiebreaker (more-recent first). Useful
+    /// for "which conversations are bloating my memory.db" — the
+    /// natural pre-purge / pre-clear question.
+    pub fn sessions_top(&self, limit: usize) -> Result<Vec<SessionSummary>, MemoryError> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT m.session_id,
+                    MAX(m.ts_ms) AS last_ts,
+                    COUNT(*)     AS n,
+                    t.title      AS title
+             FROM messages AS m
+             LEFT JOIN session_titles AS t ON t.session_id = m.session_id
+             GROUP BY m.session_id
+             ORDER BY n DESC, last_ts DESC
+             LIMIT ?",
+        )?;
+        let rows = stmt
+            .query_map(params![limit as i64], |row| {
+                Ok(SessionSummary {
+                    session_id: row.get(0)?,
+                    last_ts_ms: row.get(1)?,
+                    message_count: row.get(2)?,
+                    title: row.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// Idempotently set the human-readable title for a session.
     /// Overwrites existing titles — callers decide whether to call this
     /// at most once per session (the runtime currently does so via
@@ -956,6 +986,64 @@ mod tests {
         assert_eq!(sessions.len(), 2);
         assert_eq!(sessions[0].session_id, "new");
         assert_eq!(sessions[1].session_id, "old");
+    }
+
+    #[test]
+    fn sessions_top_orders_by_message_count_desc() {
+        let db = db();
+        // "fat" gets 3 messages, "thin" gets 1. last-activity should
+        // not promote "thin" — count is the primary key.
+        db.record_message_at("thin", "user", "x", 9_999).unwrap();
+        db.record_message_at("fat", "user", "a", 100).unwrap();
+        db.record_message_at("fat", "user", "b", 200).unwrap();
+        db.record_message_at("fat", "user", "c", 300).unwrap();
+        let top = db.sessions_top(10).unwrap();
+        assert_eq!(top.len(), 2);
+        assert_eq!(top[0].session_id, "fat");
+        assert_eq!(top[0].message_count, 3);
+        assert_eq!(top[1].session_id, "thin");
+        assert_eq!(top[1].message_count, 1);
+    }
+
+    #[test]
+    fn sessions_top_breaks_ties_by_recency() {
+        let db = db();
+        // Two sessions, both with 2 messages. The one with newer
+        // last_ts should win the tiebreaker.
+        db.record_message_at("a", "user", "1", 100).unwrap();
+        db.record_message_at("a", "user", "2", 200).unwrap();
+        db.record_message_at("b", "user", "1", 100).unwrap();
+        db.record_message_at("b", "user", "2", 9_999).unwrap();
+        let top = db.sessions_top(10).unwrap();
+        assert_eq!(top.len(), 2);
+        assert_eq!(top[0].session_id, "b", "newer last_ts wins tie");
+        assert_eq!(top[1].session_id, "a");
+    }
+
+    #[test]
+    fn sessions_top_respects_limit() {
+        let db = db();
+        for sid in ["a", "b", "c", "d"] {
+            db.record_message(sid, "user", "x").unwrap();
+        }
+        let top = db.sessions_top(2).unwrap();
+        assert_eq!(top.len(), 2);
+    }
+
+    #[test]
+    fn sessions_top_includes_titles_when_set() {
+        let db = db();
+        db.record_message("s", "user", "x").unwrap();
+        db.set_title("s", "Hello").unwrap();
+        let top = db.sessions_top(10).unwrap();
+        assert_eq!(top[0].title.as_deref(), Some("Hello"));
+    }
+
+    #[test]
+    fn sessions_top_empty_db_returns_empty() {
+        let db = db();
+        let top = db.sessions_top(10).unwrap();
+        assert!(top.is_empty());
     }
 
     #[test]
