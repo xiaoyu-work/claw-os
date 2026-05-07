@@ -1270,15 +1270,35 @@ fn sessions_purge_with(
     }))
 }
 
-/// `cos agent sessions stats` — read-only aggregate over the
-/// memory.db (pairs naturally with `sessions purge` so users can
-/// see what a given `--older-than <days>` would actually delete).
+/// `cos agent sessions stats [--session <id>]` — read-only aggregate
+/// over the memory.db (pairs naturally with `sessions purge` so users
+/// can see what a given `--older-than <days>` would actually delete).
+/// With `--session <id>` the result is scoped to one conversation.
 fn sessions_stats(args: &[String]) -> Result<Value, String> {
-    if !args.is_empty() {
-        return Err(format!(
-            "sessions stats takes no arguments (got '{}'). usage: cos agent sessions stats",
-            args[0]
-        ));
+    // Optional --session <id> selects a per-session subset of stats.
+    let mut session_filter: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        match a {
+            "--session" => {
+                let v = args.get(i + 1).ok_or_else(|| {
+                    "sessions stats --session requires an id argument".to_string()
+                })?;
+                if v.is_empty() {
+                    return Err(
+                        "sessions stats --session must not be empty".to_string()
+                    );
+                }
+                session_filter = Some(v.clone());
+                i += 2;
+            }
+            other => {
+                return Err(format!(
+                    "sessions stats: unexpected argument '{other}'. usage: cos agent sessions stats [--session <id>]"
+                ));
+            }
+        }
     }
     let db = memory::sqlite_fts::MemoryDb::open_default()
         .map_err(|e| format!("memory db unavailable: {e}"))?;
@@ -1286,7 +1306,10 @@ fn sessions_stats(args: &[String]) -> Result<Value, String> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
-    sessions_stats_with(&db, now_ms)
+    match session_filter {
+        Some(sid) => sessions_stats_session_with(&db, &sid, now_ms),
+        None => sessions_stats_with(&db, now_ms),
+    }
 }
 
 fn sessions_stats_with(
@@ -1303,10 +1326,40 @@ fn sessions_stats_with(
         .collect::<Vec<_>>();
     Ok(json!({
         "ok": true,
+        "scope": "global",
         "now_ms": now_ms,
         "total_messages": stats.total_messages as u64,
         "total_sessions": stats.total_sessions as u64,
         "titled_sessions": stats.titled_sessions as u64,
+        "messages_last_1d": stats.messages_last_1d as u64,
+        "messages_last_7d": stats.messages_last_7d as u64,
+        "messages_last_30d": stats.messages_last_30d as u64,
+        "by_role": by_role,
+        "oldest_ts_ms": stats.oldest_ts_ms,
+        "newest_ts_ms": stats.newest_ts_ms,
+    }))
+}
+
+fn sessions_stats_session_with(
+    db: &memory::sqlite_fts::MemoryDb,
+    session_id: &str,
+    now_ms: i64,
+) -> Result<Value, String> {
+    let stats = db
+        .stats_for_session(session_id, now_ms)
+        .map_err(|e| format!("stats failed: {e}"))?;
+    let by_role = stats
+        .by_role
+        .iter()
+        .map(|(r, n)| json!({"role": r, "count": *n as u64}))
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "ok": true,
+        "scope": "session",
+        "session_id": stats.session_id,
+        "title": stats.title,
+        "now_ms": now_ms,
+        "total_messages": stats.total_messages as u64,
         "messages_last_1d": stats.messages_last_1d as u64,
         "messages_last_7d": stats.messages_last_7d as u64,
         "messages_last_30d": stats.messages_last_30d as u64,
@@ -11535,7 +11588,68 @@ mod tests {
     #[test]
     fn sessions_stats_rejects_extra_args() {
         let err = sessions_stats(&["bogus".into()]).unwrap_err();
-        assert!(err.contains("no arguments"), "got {err}");
+        assert!(err.contains("unexpected argument"), "got {err}");
+    }
+
+    #[test]
+    fn sessions_stats_session_flag_requires_value() {
+        let err = sessions_stats(&["--session".into()]).unwrap_err();
+        assert!(err.contains("--session requires"), "got {err}");
+    }
+
+    #[test]
+    fn sessions_stats_session_flag_rejects_empty_value() {
+        let err = sessions_stats(&["--session".into(), "".into()]).unwrap_err();
+        assert!(err.contains("must not be empty"), "got {err}");
+    }
+
+    #[test]
+    fn sessions_stats_session_with_unknown_id_returns_zeros() {
+        let db = fresh_session_db();
+        // Other sessions exist, but the requested one does not.
+        db.record_message("other", "user", "x").unwrap();
+        let v = sessions_stats_session_with(&db, "ghost", 1_000_000)
+            .expect("stats ok");
+        assert_eq!(v["scope"], json!("session"));
+        assert_eq!(v["session_id"], json!("ghost"));
+        assert_eq!(v["title"], json!(null));
+        assert_eq!(v["total_messages"], json!(0u64));
+        assert_eq!(v["by_role"], json!([]));
+        // No total_sessions / titled_sessions in per-session shape.
+        assert!(v.get("total_sessions").is_none());
+        assert!(v.get("titled_sessions").is_none());
+    }
+
+    #[test]
+    fn sessions_stats_session_with_isolates_one_session() {
+        let db = fresh_session_db();
+        let now: i64 = 100 * 86_400_000;
+        for _ in 0..3 {
+            db.record_message_at("alpha", "user", "a", now - 3_600_000)
+                .unwrap();
+        }
+        for _ in 0..7 {
+            db.record_message_at("beta", "user", "b", now).unwrap();
+        }
+        db.set_title("alpha", "Alpha").unwrap();
+        let v = sessions_stats_session_with(&db, "alpha", now).expect("stats ok");
+        assert_eq!(v["session_id"], json!("alpha"));
+        assert_eq!(v["title"], json!("Alpha"));
+        assert_eq!(v["total_messages"], json!(3u64));
+        assert_eq!(v["messages_last_1d"], json!(3u64));
+        assert_eq!(v["by_role"], json!([{"role": "user", "count": 3u64}]));
+    }
+
+    #[test]
+    fn sessions_stats_dispatched_with_session_flag() {
+        let v = sessions_cmd(&[
+            "stats".into(),
+            "--session".into(),
+            "no-such-id".into(),
+        ])
+        .expect("dispatch ok");
+        assert_eq!(v["scope"], json!("session"));
+        assert_eq!(v["session_id"], json!("no-such-id"));
     }
 
     #[test]
