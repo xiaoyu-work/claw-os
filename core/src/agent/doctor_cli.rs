@@ -145,13 +145,36 @@ fn check_engines() -> Value {
 }
 
 fn check_memory() -> Value {
+    let now_ms: i64 = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
     let memory_db = match MemoryDb::open_default() {
         Ok(db) => {
             let total = db.count_total().unwrap_or(0);
+            // Best-effort enrichment with the same surface
+            // ``cos agent sessions stats`` exposes — if stats fails
+            // for any reason we still report the basic count. This
+            // lets a single ``cos agent doctor`` answer "how much
+            // history have I accumulated, and is it worth purging?"
+            // without forcing the user to run a second command.
+            let stats_block = match db.stats(now_ms) {
+                Ok(s) => json!({
+                    "total_sessions": s.total_sessions as u64,
+                    "titled_sessions": s.titled_sessions as u64,
+                    "messages_last_1d": s.messages_last_1d as u64,
+                    "messages_last_7d": s.messages_last_7d as u64,
+                    "messages_last_30d": s.messages_last_30d as u64,
+                    "oldest_ts_ms": s.oldest_ts_ms,
+                    "newest_ts_ms": s.newest_ts_ms,
+                }),
+                Err(_) => Value::Null,
+            };
             json!({
                 "status": "ok",
                 "path": paths::agent_memory_db_path().display().to_string(),
                 "total_messages": total,
+                "stats": stats_block,
             })
         }
         Err(e) => json!({
@@ -378,6 +401,24 @@ mod tests {
             assert_eq!(status, "warn");
         } else {
             assert_eq!(status, "ok");
+        }
+    }
+
+    #[test]
+    fn check_memory_attaches_stats_block_when_db_open() {
+        // The default DB lives at agent_memory_db_path() and may or
+        // may not exist; check_memory creates it on demand. Either
+        // way the stats block should be present (object, possibly
+        // with all-zero counts on a fresh install).
+        let v = check_memory();
+        let memory_db = v.get("memory_db").expect("memory_db field");
+        // Only assert the stats sub-shape when the memory_db itself
+        // opened successfully — fail-path doesn't carry stats.
+        if memory_db.get("status").and_then(|s| s.as_str()) == Some("ok") {
+            let stats = memory_db.get("stats").expect("stats field");
+            assert!(stats.is_object(), "stats must be an object");
+            assert!(stats.get("messages_last_7d").is_some());
+            assert!(stats.get("total_sessions").is_some());
         }
     }
 
