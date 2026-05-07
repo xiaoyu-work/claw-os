@@ -1,0 +1,5 @@
+live-boot
+live-config
+live-config-systemd
+network-manager
+openssh-server

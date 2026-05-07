@@ -46,8 +46,26 @@ wsl -d claw-os
 .\targets\wsl\install.ps1
 ```
 
-> Other distribution targets (`iso-live`, `iso-installer`, `vm`) are
-> being added in subsequent milestones — see `targets/` for the current set.
+### Build a Live ISO
+
+```bash
+# Host requirements (Debian/Ubuntu):
+sudo apt install squashfs-tools xorriso grub-pc-bin grub-efi-amd64-bin \
+                 grub-common mtools
+
+# Produces build/claw-os-live-amd64.iso (hybrid BIOS+UEFI bootable)
+sudo ./build.sh iso-live
+
+# Boot in QEMU (BIOS):
+qemu-system-x86_64 -m 2G -cdrom build/claw-os-live-amd64.iso -nographic
+
+# Boot in QEMU (UEFI, requires ovmf package):
+qemu-system-x86_64 -m 2G -bios /usr/share/ovmf/OVMF.fd \
+                   -cdrom build/claw-os-live-amd64.iso
+```
+
+> Other distribution targets (`iso-installer`, `vm`) are being added in
+> subsequent milestones — see `targets/` for the current set.
 
 ### Run Locally (Development)
 
