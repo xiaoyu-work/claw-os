@@ -32,7 +32,8 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
 
-use crate::policy::{self, OpType};
+use crate::caps::{require_or_json, Scope, Verb};
+use crate::policy;
 
 // ===========================================================================
 // Kernel crypto via AF_ALG (Linux) with pure-Rust fallback (non-Linux)
@@ -983,7 +984,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 ///
 /// Usage: cos credential store <name> <value> [--tier N] [--namespace NS] [--ttl SECS]
 fn cmd_store(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::System).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SECRET_WRITE, Scope::wild()).map_err(|v| v.to_string())?;
 
     let (ns_opt, args) = parse_namespace_flag(args);
     let namespace = ns_opt.unwrap_or_else(|| "default".into());
@@ -1102,7 +1103,7 @@ fn cmd_store(args: &[String]) -> Result<Value, String> {
 ///
 /// Usage: cos credential load <name> [--namespace NS]
 fn cmd_load(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SECRET_READ, Scope::wild()).map_err(|v| v.to_string())?;
 
     let (ns_opt, rest) = parse_namespace_flag(args);
     let namespace = ns_opt.unwrap_or_else(|| "default".into());
@@ -1206,7 +1207,7 @@ fn cmd_load(args: &[String]) -> Result<Value, String> {
 ///
 /// Usage: cos credential revoke <name> [--namespace NS]
 fn cmd_revoke(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::System).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SECRET_WRITE, Scope::wild()).map_err(|v| v.to_string())?;
 
     let (ns_opt, rest) = parse_namespace_flag(args);
     let namespace = ns_opt.unwrap_or_else(|| "default".into());
@@ -1231,7 +1232,7 @@ fn cmd_revoke(args: &[String]) -> Result<Value, String> {
 /// With `--namespace NS`: list credentials in that namespace.
 /// Without `--namespace`: list all namespaces with credential counts.
 fn cmd_list(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SECRET_READ, Scope::wild()).map_err(|v| v.to_string())?;
 
     let (ns_opt, _rest) = parse_namespace_flag(args);
 
@@ -1351,7 +1352,7 @@ fn list_all_namespaces() -> Result<Value, String> {
 ///
 /// Usage: cos credential bundle <bundle-name> --keys key1,key2,key3 [--namespace NS]
 fn cmd_bundle(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::System).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SECRET_GRANT, Scope::wild()).map_err(|v| v.to_string())?;
 
     let (ns_opt, rest) = parse_namespace_flag(args);
     let namespace = ns_opt.unwrap_or_else(|| "default".into());
@@ -1414,7 +1415,7 @@ fn cmd_bundle(args: &[String]) -> Result<Value, String> {
 ///
 /// Usage: cos credential load-bundle <bundle-name> [--namespace NS]
 fn cmd_load_bundle(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SECRET_READ, Scope::wild()).map_err(|v| v.to_string())?;
 
     let (ns_opt, rest) = parse_namespace_flag(args);
     let namespace = ns_opt.unwrap_or_else(|| "default".into());
@@ -1583,7 +1584,7 @@ fn compute_original_ttl(cred: &StoredCredential) -> Option<i64> {
 /// Reads <PROVIDER>_REFRESH_TOKEN and <PROVIDER>_CLIENT_ID, <PROVIDER>_CLIENT_SECRET
 /// from the credential store, exchanges for a new access token, and stores it.
 fn cmd_oauth_refresh(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::System).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SECRET_WRITE, Scope::wild()).map_err(|v| v.to_string())?;
 
     let (ns_opt, rest) = parse_namespace_flag(args);
     let namespace = ns_opt.unwrap_or_else(|| "default".into());
@@ -1807,10 +1808,13 @@ pub fn try_load(name: &str, namespace: &str) -> Result<Option<String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{
-        atomic::{AtomicU32, Ordering},
-        Once,
-    };
+
+    use std::sync::Once;
+    static PERMS_INIT: Once = Once::new();
+    fn perms_init() {
+        PERMS_INIT.call_once(|| std::env::set_var("COS_PERMS_MODE", "permissive"));
+    }
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     static INIT: Once = Once::new();
     static COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -1835,6 +1839,7 @@ mod tests {
 
     #[test]
     fn sha256_known_vectors() {
+        perms_init();
         // SHA-256("") = e3b0c44298fc1c149afbf4c8996fb924...
         let empty = sha256::hash(b"");
         assert_eq!(
@@ -1852,6 +1857,7 @@ mod tests {
 
     #[test]
     fn aes_gcm_encrypt_decrypt_roundtrip() {
+        perms_init();
         let key = sha256::hash(b"test-key-for-aes-gcm");
         let nonce = [1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
         let plaintext = b"hello, AES-256-GCM world!";
@@ -1866,6 +1872,7 @@ mod tests {
 
     #[test]
     fn aes_gcm_tampered_ciphertext_fails() {
+        perms_init();
         let key = sha256::hash(b"test-key-tamper");
         let nonce = [0u8; 12];
         let ct = aes_gcm::encrypt(&key, &nonce, b"secret");
@@ -1877,6 +1884,7 @@ mod tests {
 
     #[test]
     fn aes_gcm_empty_plaintext() {
+        perms_init();
         let key = sha256::hash(b"empty-test");
         let nonce = [42u8; 12];
         let ct = aes_gcm::encrypt(&key, &nonce, b"");
@@ -1889,6 +1897,7 @@ mod tests {
 
     #[test]
     fn b64_roundtrip() {
+        perms_init();
         let data = b"hello world 12345!@#$%";
         let encoded = to_b64(data);
         let decoded = from_b64(&encoded).unwrap();
@@ -1899,6 +1908,7 @@ mod tests {
 
     #[test]
     fn legacy_xor_backward_compat() {
+        perms_init();
         setup();
         let name = unique_name("legacy-xor");
         let namespace = "default";
@@ -1942,6 +1952,7 @@ mod tests {
 
     #[test]
     fn store_and_load() {
+        perms_init();
         setup();
         let name = unique_name("store-load");
 
@@ -1965,6 +1976,7 @@ mod tests {
 
     #[test]
     fn revoke_removes_credential() {
+        perms_init();
         setup();
         let name = unique_name("revoke");
 
@@ -1980,6 +1992,7 @@ mod tests {
 
     #[test]
     fn list_shows_names_only() {
+        perms_init();
         setup();
         let a = unique_name("list-a");
         let b = unique_name("list-b");
@@ -1998,6 +2011,7 @@ mod tests {
 
     #[test]
     fn list_all_namespaces() {
+        perms_init();
         setup();
         let name = unique_name("ns-list");
         cmd_store(&[
@@ -2018,6 +2032,7 @@ mod tests {
 
     #[test]
     fn store_invalid_name() {
+        perms_init();
         setup();
         let r = cmd_store(&["bad/name".into(), "val".into()]);
         assert!(r.is_err());
@@ -2026,6 +2041,7 @@ mod tests {
 
     #[test]
     fn load_nonexistent() {
+        perms_init();
         setup();
         let name = unique_name("nonexistent");
         let r = cmd_load(&[name]);
@@ -2037,6 +2053,7 @@ mod tests {
 
     #[test]
     fn namespace_isolation() {
+        perms_init();
         setup();
         let name = unique_name("ns-iso");
 
@@ -2068,6 +2085,7 @@ mod tests {
 
     #[test]
     fn ttl_expired_credential() {
+        perms_init();
         setup();
         let name = unique_name("ttl-exp");
 
@@ -2101,6 +2119,7 @@ mod tests {
 
     #[test]
     fn ttl_not_expired_credential() {
+        perms_init();
         setup();
         let name = unique_name("ttl-ok");
 
@@ -2119,6 +2138,7 @@ mod tests {
 
     #[test]
     fn list_shows_expiry() {
+        perms_init();
         setup();
         let name = unique_name("list-exp");
 
@@ -2137,6 +2157,7 @@ mod tests {
 
     #[test]
     fn bundle_create_and_load() {
+        perms_init();
         setup();
         let k1 = unique_name("bk1");
         let k2 = unique_name("bk2");
@@ -2156,6 +2177,7 @@ mod tests {
 
     #[test]
     fn bundle_with_missing_key() {
+        perms_init();
         setup();
         let k1 = unique_name("bkm1");
         let missing = unique_name("bkm-missing");
@@ -2177,6 +2199,7 @@ mod tests {
 
     #[test]
     fn run_dispatch() {
+        perms_init();
         setup();
         let name = unique_name("dispatch");
 
@@ -2192,6 +2215,7 @@ mod tests {
 
     #[test]
     fn run_dispatch_bundle_commands() {
+        perms_init();
         setup();
         let k = unique_name("dispk");
         let b = unique_name("dispb");
@@ -2206,6 +2230,7 @@ mod tests {
 
     #[test]
     fn store_with_refresh_cmd() {
+        perms_init();
         setup();
         let name = unique_name("refresh-store");
         let r = cmd_store(&[
@@ -2231,6 +2256,7 @@ mod tests {
 
     #[test]
     fn store_rejects_non_cos_refresh_cmd() {
+        perms_init();
         setup();
         let name = unique_name("bad-refresh");
         let r = cmd_store(&[
@@ -2245,6 +2271,7 @@ mod tests {
 
     #[test]
     fn execute_refresh_rejects_non_cos() {
+        perms_init();
         let r = execute_refresh("rm -rf /");
         assert!(r.is_err());
         assert!(r.unwrap_err().contains("must be a cos command"));
@@ -2252,6 +2279,7 @@ mod tests {
 
     #[test]
     fn load_auto_refresh_on_expiry() {
+        perms_init();
         setup();
         let name = unique_name("auto-refresh");
 
@@ -2308,6 +2336,7 @@ mod tests {
 
     #[test]
     fn load_expired_no_refresh_cmd_fails() {
+        perms_init();
         setup();
         let name = unique_name("no-refresh");
         cmd_store(&[name.clone(), "val".into(), "--ttl".into(), "0".into()]).unwrap();
@@ -2323,6 +2352,7 @@ mod tests {
 
     #[test]
     fn urlencoded_special_chars() {
+        perms_init();
         assert_eq!(urlencoded("hello world"), "hello%20world");
         assert_eq!(urlencoded("a+b=c&d"), "a%2Bb%3Dc%26d");
         assert_eq!(urlencoded("simple"), "simple");
@@ -2332,6 +2362,7 @@ mod tests {
 
     #[test]
     fn compute_ttl_from_timestamps() {
+        perms_init();
         let cred = StoredCredential {
             name: "test".into(),
             namespace: "default".into(),
@@ -2351,6 +2382,7 @@ mod tests {
 
     #[test]
     fn oauth_refresh_unknown_provider() {
+        perms_init();
         setup();
         let r = cmd_oauth_refresh(&["unknown".into()]);
         assert!(r.is_err());
@@ -2359,6 +2391,7 @@ mod tests {
 
     #[test]
     fn oauth_refresh_missing_provider() {
+        perms_init();
         setup();
         let r = cmd_oauth_refresh(&[]);
         assert!(r.is_err());
