@@ -8,6 +8,8 @@ import io
 import json
 import os
 
+from _lib import policy
+
 
 def _read_txt(path):
     with open(path, "r", encoding="utf-8") as f:
@@ -122,6 +124,8 @@ def cmd_read(args):
     if not args:
         return {"error": "usage: cos doc read <path>"}
     path = args[0]
+    abs_path = os.path.abspath(path)
+    policy.require("fs.read", path=abs_path)
     if not os.path.isfile(path):
         return {"error": f"file not found: {path}"}
 
@@ -181,6 +185,8 @@ def cmd_info(args):
     if not args:
         return {"error": "usage: cos doc info <path>"}
     path = args[0]
+    abs_path = os.path.abspath(path)
+    policy.require("fs.meta", path=abs_path)
     if not os.path.exists(path):
         return {"error": f"file not found: {path}"}
 
@@ -235,7 +241,6 @@ def cmd_convert(args):
     if not os.path.isfile(path):
         return {"error": f"file not found: {path}"}
 
-    # Parse --to <format>
     target_fmt = None
     for i, a in enumerate(args):
         if a == "--to" and i + 1 < len(args):
@@ -247,6 +252,11 @@ def cmd_convert(args):
     ext = _ext(path)
     base = os.path.splitext(path)[0]
     output_path = f"{base}.{target_fmt}"
+
+    abs_input = os.path.abspath(path)
+    abs_output = os.path.abspath(output_path)
+    policy.require("fs.read", path=abs_input)
+    policy.require("fs.write", path=abs_output)
 
     # JSON -> CSV
     if ext == ".json" and target_fmt == "csv":
@@ -325,4 +335,9 @@ def run(command, args):
     handler = commands.get(command)
     if not handler:
         return {"error": f"unknown command: {command}"}
-    return handler(args)
+    try:
+        return handler(args)
+    except policy.PermissionDenied as denied:
+        return {"error": str(denied), "denial": denied.denial}
+    except policy.PolicyUnavailable as exc:
+        return {"error": f"capability check failed: {exc}"}

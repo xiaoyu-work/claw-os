@@ -3,6 +3,8 @@
 import os
 import sqlite3
 
+from _lib import policy
+
 DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 DB_DIR = os.path.join(DATA_DIR, "db")
 MAX_ROWS = 1000  # Maximum rows returned from a single query
@@ -20,6 +22,7 @@ def cmd_query(args):
         return {"error": "usage: db query <database> <sql>"}
     name = args[0]
     sql = " ".join(args[1:])
+    policy.require("data.db.read", name=name)
     path = _db_path(name)
     try:
         with sqlite3.connect(path) as conn:
@@ -50,6 +53,7 @@ def cmd_exec(args):
         return {"error": "usage: db exec <database> <sql>"}
     name = args[0]
     sql = " ".join(args[1:])
+    policy.require("data.db.write", name=name)
     path = _db_path(name)
     try:
         with sqlite3.connect(path) as conn:
@@ -69,6 +73,7 @@ def cmd_tables(args):
     if len(args) < 1:
         return {"error": "usage: db tables <database>"}
     name = args[0]
+    policy.require("data.db.read", name=name)
     path = _db_path(name)
     try:
         with sqlite3.connect(path) as conn:
@@ -87,6 +92,7 @@ def cmd_schema(args):
         return {"error": "usage: db schema <database> <table>"}
     name = args[0]
     table = args[1]
+    policy.require("data.db.read", name=name)
     path = _db_path(name)
     try:
         with sqlite3.connect(path) as conn:
@@ -104,6 +110,7 @@ def cmd_schema(args):
 
 def cmd_databases(args):
     """List all databases in the data directory."""
+    policy.require("data.db.read", wild=True)
     os.makedirs(DB_DIR, exist_ok=True)
     databases = []
     for entry in sorted(os.listdir(DB_DIR)):
@@ -181,4 +188,9 @@ def run(command, args):
     handler = COMMANDS.get(command)
     if handler is None:
         return {"error": f"unknown command: {command}"}
-    return handler(args)
+    try:
+        return handler(args)
+    except policy.PermissionDenied as denied:
+        return {"error": str(denied), "denial": denied.denial}
+    except policy.PolicyUnavailable as exc:
+        return {"error": f"capability check failed: {exc}"}

@@ -11,14 +11,24 @@
   "runtime": "python",
   "operations": {
     "web": {
-      "label": {
-        "en": "Search the web for information (returns titles, URLs, snippets)"
-      }
+      "label": { "en": "Search the web for information (returns titles, URLs, snippets)" },
+      "needs": [
+        {
+          "verb": "net.dial",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Call the search provider's API (Google or Brave) to fetch results." }
+        }
+      ]
     },
     "image": {
-      "label": {
-        "en": "Search for images (returns titles, URLs, thumbnails)"
-      }
+      "label": { "en": "Search for images (returns titles, URLs, thumbnails)" },
+      "needs": [
+        {
+          "verb": "net.dial",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Call the image search provider's API to fetch results." }
+        }
+      ]
     }
   }
 }

@@ -8,6 +8,8 @@ import fnmatch
 import json
 import os
 
+from _lib import policy
+
 DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 STORE_PATH = os.path.join(DATA_DIR, "kv.json")
 
@@ -76,45 +78,55 @@ def run(command, args):
     if command == "__schema__":
         return _schema()
 
-    if command == "set":
-        if len(args) < 2:
-            return {"error": "usage: kv set <key> <value>"}
-        key = args[0]
-        value = " ".join(args[1:])
-        data = _load()
-        data[key] = value
-        _save(data)
-        return {"key": key, "value": value}
+    try:
+        if command == "set":
+            if len(args) < 2:
+                return {"error": "usage: kv set <key> <value>"}
+            key = args[0]
+            value = " ".join(args[1:])
+            policy.require("data.kv.write", name=key)
+            data = _load()
+            data[key] = value
+            _save(data)
+            return {"key": key, "value": value}
 
-    elif command == "get":
-        if len(args) < 1:
-            return {"error": "usage: kv get <key>"}
-        key = args[0]
-        data = _load()
-        if key not in data:
-            return {"error": f"key not found: {key}"}
-        return {"key": key, "value": data[key]}
+        elif command == "get":
+            if len(args) < 1:
+                return {"error": "usage: kv get <key>"}
+            key = args[0]
+            policy.require("data.kv.read", name=key)
+            data = _load()
+            if key not in data:
+                return {"error": f"key not found: {key}"}
+            return {"key": key, "value": data[key]}
 
-    elif command == "del":
-        if len(args) < 1:
-            return {"error": "usage: kv del <key>"}
-        key = args[0]
-        data = _load()
-        if key not in data:
-            return {"error": f"key not found: {key}"}
-        del data[key]
-        _save(data)
-        return {"deleted": key}
+        elif command == "del":
+            if len(args) < 1:
+                return {"error": "usage: kv del <key>"}
+            key = args[0]
+            policy.require("data.kv.delete", name=key)
+            data = _load()
+            if key not in data:
+                return {"error": f"key not found: {key}"}
+            del data[key]
+            _save(data)
+            return {"deleted": key}
 
-    elif command == "list":
-        pattern = args[0] if args else "*"
-        data = _load()
-        keys = sorted(k for k in data if fnmatch.fnmatch(k, pattern))
-        return {"pattern": pattern, "keys": keys}
+        elif command == "list":
+            policy.require("data.kv.read", wild=True)
+            pattern = args[0] if args else "*"
+            data = _load()
+            keys = sorted(k for k in data if fnmatch.fnmatch(k, pattern))
+            return {"pattern": pattern, "keys": keys}
 
-    elif command == "dump":
-        data = _load()
-        return {"count": len(data), "data": data}
+        elif command == "dump":
+            policy.require("data.kv.read", wild=True)
+            data = _load()
+            return {"count": len(data), "data": data}
 
-    else:
-        return {"error": f"unknown command: {command}"}
+        else:
+            return {"error": f"unknown command: {command}"}
+    except policy.PermissionDenied as denied:
+        return {"error": str(denied), "denial": denied.denial}
+    except policy.PolicyUnavailable as exc:
+        return {"error": f"capability check failed: {exc}"}

@@ -8,6 +8,8 @@ import signal
 import subprocess
 from datetime import datetime, timezone
 
+from _lib import policy
+
 DEFAULT_TIMEOUT = int(os.environ.get("COS_EXEC_TIMEOUT", "300"))
 MAX_OUTPUT_BYTES = 1_000_000  # 1 MB output limit for stdout/stderr
 DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
@@ -62,6 +64,9 @@ def cmd_run(args):
         command = ["/bin/bash", "-c", " ".join(args)]
     else:
         command = args
+
+    program = command[0]
+    policy.require("proc.spawn", name=program)
 
     try:
         result = subprocess.run(
@@ -144,6 +149,8 @@ def cmd_script(args):
     else:
         return {"error": "no script or file specified"}
 
+    policy.require("proc.spawn", wild=True)
+
     try:
         result = subprocess.run(
             command,
@@ -181,6 +188,7 @@ def cmd_which(args):
     """Check if a command exists on the system."""
     if not args:
         return {"error": "no command name specified"}
+    policy.require("fs.meta", wild=True)
     name = args[0]
     path = shutil.which(name)
     if path:
@@ -222,6 +230,8 @@ def cmd_start(args):
     """Run a command in the background."""
     if not args:
         return {"error": "no command specified"}
+
+    policy.require("proc.spawn", name=args[0])
 
     os.makedirs(PROC_DIR, exist_ok=True)
 
@@ -267,6 +277,8 @@ def cmd_stop(args):
     except ValueError:
         return {"error": f"invalid PID: {args[0]}"}
 
+    policy.require("proc.signal", wild=True)
+
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
@@ -292,6 +304,8 @@ def cmd_stop(args):
 
 def cmd_ps(args):
     """List running background processes."""
+    policy.require("proc.observe", wild=True)
+
     def do_ps():
         registry = _load_registry()
         alive = []
@@ -363,17 +377,20 @@ def run(command, args):
     """Entry point called by cos."""
     if command == "__schema__":
         return _schema()
-    if command == "run":
-        return cmd_run(args)
-    elif command == "script":
-        return cmd_script(args)
-    elif command == "which":
-        return cmd_which(args)
-    elif command == "start":
-        return cmd_start(args)
-    elif command == "stop":
-        return cmd_stop(args)
-    elif command == "ps":
-        return cmd_ps(args)
-    else:
+    handlers = {
+        "run": cmd_run,
+        "script": cmd_script,
+        "which": cmd_which,
+        "start": cmd_start,
+        "stop": cmd_stop,
+        "ps": cmd_ps,
+    }
+    handler = handlers.get(command)
+    if handler is None:
         return {"error": f"unknown command: {command}"}
+    try:
+        return handler(args)
+    except policy.PermissionDenied as denied:
+        return {"error": str(denied), "denial": denied.denial}
+    except policy.PolicyUnavailable as exc:
+        return {"error": f"capability check failed: {exc}"}

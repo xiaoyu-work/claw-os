@@ -11,19 +11,38 @@
   "runtime": "python",
   "operations": {
     "need": {
-      "label": {
-        "en": "Ensure packages are installed"
-      }
+      "label": { "en": "Ensure packages are installed" },
+      "summary": { "en": "Install packages that aren't already present." },
+      "needs": [
+        {
+          "verb": "sys.package",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Install or upgrade system packages on this machine." }
+        }
+      ]
     },
     "has": {
-      "label": {
-        "en": "Check if a capability is available"
-      }
+      "label": { "en": "Check if a capability is available" },
+      "args": [
+        { "name": "name", "kind": "name", "required": true }
+      ],
+      "needs": [
+        {
+          "verb": "sys.package",
+          "scope": { "kind": "from-arg", "arg": "name" },
+          "why": { "en": "Look up whether the named package or command is installed." }
+        }
+      ]
     },
     "list": {
-      "label": {
-        "en": "List installed packages"
-      }
+      "label": { "en": "List installed packages" },
+      "needs": [
+        {
+          "verb": "sys.package",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Enumerate every system package currently installed." }
+        }
+      ]
     }
   }
 }

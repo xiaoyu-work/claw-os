@@ -11,24 +11,64 @@
   "runtime": "python",
   "operations": {
     "send": {
-      "label": {
-        "en": "Send an email (--to, --subject, --body, --provider smtp|gmail|outlook)"
-      }
+      "label": { "en": "Send an email (--to, --subject, --body, --provider smtp|gmail|outlook)" },
+      "needs": [
+        {
+          "verb": "net.dial",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Open a network connection to the SMTP server or provider API to deliver the message." }
+        },
+        {
+          "verb": "secret.read",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Read the provider credentials (SMTP password, OAuth token) needed to authenticate." }
+        }
+      ]
     },
     "search": {
-      "label": {
-        "en": "Search emails (--query, --max-results, --provider gmail|outlook)"
-      }
+      "label": { "en": "Search emails (--query, --max-results, --provider gmail|outlook)" },
+      "needs": [
+        {
+          "verb": "net.dial",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Call the provider's API to search your mailbox." }
+        },
+        {
+          "verb": "secret.read",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Read the provider OAuth token needed to authenticate." }
+        }
+      ]
     },
     "list": {
-      "label": {
-        "en": "List recent emails (--max-results, --unread, --provider gmail|outlook)"
-      }
+      "label": { "en": "List recent emails (--max-results, --unread, --provider gmail|outlook)" },
+      "needs": [
+        {
+          "verb": "net.dial",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Call the provider's API to list recent messages." }
+        },
+        {
+          "verb": "secret.read",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Read the provider OAuth token needed to authenticate." }
+        }
+      ]
     },
     "read": {
-      "label": {
-        "en": "Read a specific email by ID (--id, --provider gmail|outlook)"
-      }
+      "label": { "en": "Read a specific email by ID (--id, --provider gmail|outlook)" },
+      "needs": [
+        {
+          "verb": "net.dial",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Call the provider's API to fetch the message body." }
+        },
+        {
+          "verb": "secret.read",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Read the provider OAuth token needed to authenticate." }
+        }
+      ]
     }
   }
 }

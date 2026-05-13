@@ -6,6 +6,8 @@ import os
 import uuid
 from datetime import datetime, timezone
 
+from _lib import policy
+
 
 DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 NOTIFICATIONS_FILE = os.path.join(DATA_DIR, "notifications.json")
@@ -140,4 +142,13 @@ def run(command, args):
     handler = commands.get(command)
     if handler is None:
         return {"error": f"unknown command: {command}"}
-    return handler(args)
+    try:
+        if command == "send":
+            policy.require("ui.notify", wild=True)
+        elif command == "list":
+            policy.require("data.inbox.read", wild=True)
+        return handler(args)
+    except policy.PermissionDenied as denied:
+        return {"error": str(denied), "denial": denied.denial}
+    except policy.PolicyUnavailable as exc:
+        return {"error": f"capability check failed: {exc}"}

@@ -11,24 +11,59 @@
   "runtime": "python",
   "operations": {
     "read": {
-      "label": {
-        "en": "Fetch URL, return {url, title, text, links} (or raw HTML / arbitrary --eval result)"
-      }
+      "label": { "en": "Fetch URL, return {url, title, text, links} (or raw HTML / arbitrary --eval result)" },
+      "args": [
+        { "name": "url", "kind": "text", "required": true }
+      ],
+      "needs": [
+        {
+          "verb": "net.dial",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Open a network connection to the URL you asked to load." }
+        }
+      ]
     },
     "scrape": {
-      "label": {
-        "en": "Fetch many URLs in parallel"
-      }
+      "label": { "en": "Fetch many URLs in parallel" },
+      "needs": [
+        {
+          "verb": "net.dial",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Open network connections to each URL you asked to load." }
+        }
+      ]
     },
     "screenshot": {
-      "label": {
-        "en": "Capture a screenshot of a URL (shells out to chromium)"
-      }
+      "label": { "en": "Capture a screenshot of a URL (shells out to chromium)" },
+      "args": [
+        { "name": "url",    "kind": "text", "required": true },
+        { "name": "output", "kind": "path", "required": true }
+      ],
+      "needs": [
+        {
+          "verb": "net.dial",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Open a network connection to the URL you asked to capture." }
+        },
+        {
+          "verb": "fs.write",
+          "scope": { "kind": "from-arg", "arg": "output" },
+          "why": { "en": "Save the screenshot to the path you specified." }
+        }
+      ]
     },
     "submit": {
-      "label": {
-        "en": "Submit form data (POST) via urllib"
-      }
+      "label": { "en": "Submit form data (POST) via urllib" },
+      "args": [
+        { "name": "url", "kind": "text", "required": true }
+      ],
+      "needs": [
+        {
+          "verb": "net.dial",
+          "scope": { "kind": "wild" },
+          "why": { "en": "POST to the URL you asked to submit data to." }
+        }
+      ]
     }
   },
   "dependencies": {

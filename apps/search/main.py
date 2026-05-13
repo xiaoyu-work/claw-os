@@ -9,11 +9,16 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from _lib import policy
+
 VERSION = os.environ.get("COS_VERSION", "0.1.0")
 USER_AGENT = "cos/" + VERSION
 TIMEOUT = 15
 MAX_RESULTS_DEFAULT = 5
 MAX_RESULTS_LIMIT = 10
+
+GOOGLE_HOST = "www.googleapis.com"
+BRAVE_HOST = "api.search.brave.com"
 
 # ---------------------------------------------------------------------------
 # Credential helpers
@@ -295,11 +300,15 @@ def cmd_web(args):
     if provider is None:
         return config  # config is the error dict
 
+    host = GOOGLE_HOST if provider == "google" else BRAVE_HOST
+    policy.require("net.dial", host=host)
+
     if provider == "google":
         result = _google_web(query, max_results, config)
         # Auto-fallback to Brave if Google fails
         if "error" in result and _brave_credential():
             brave_key = _brave_credential()
+            policy.require("net.dial", host=BRAVE_HOST)
             result = _brave_web(query, max_results, {"key": brave_key})
         return result
     else:
@@ -316,11 +325,15 @@ def cmd_image(args):
     if provider is None:
         return config  # config is the error dict
 
+    host = GOOGLE_HOST if provider == "google" else BRAVE_HOST
+    policy.require("net.dial", host=host)
+
     if provider == "google":
         result = _google_image(query, max_results, config)
         # Auto-fallback to Brave if Google fails
         if "error" in result and _brave_credential():
             brave_key = _brave_credential()
+            policy.require("net.dial", host=BRAVE_HOST)
             result = _brave_image(query, max_results, {"key": brave_key})
         return result
     else:
@@ -365,4 +378,9 @@ def run(command, args):
     handler = commands.get(command)
     if not handler:
         return {"error": f"unknown command: {command}"}
-    return handler(args)
+    try:
+        return handler(args)
+    except policy.PermissionDenied as denied:
+        return {"error": str(denied), "denial": denied.denial}
+    except policy.PolicyUnavailable as exc:
+        return {"error": f"capability check failed: {exc}"}

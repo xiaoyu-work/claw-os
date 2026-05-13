@@ -10,6 +10,16 @@ import urllib.request
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+from _lib import policy
+
+
+# ---------------------------------------------------------------------------
+# Provider host map — used for fine-grained net.dial scoping
+# ---------------------------------------------------------------------------
+
+GMAIL_API_HOST = "gmail.googleapis.com"
+OUTLOOK_API_HOST = "graph.microsoft.com"
+
 
 # ---------------------------------------------------------------------------
 # Provider detection
@@ -452,10 +462,17 @@ def cmd_send(args):
         }
 
     if provider == "smtp":
+        smtp_host = os.environ.get("SMTP_HOST", "localhost")
+        policy.require("secret.read", name="SMTP_PASSWORD")
+        policy.require("net.dial", host=smtp_host)
         return _send_smtp(opts.to, opts.subject, opts.body, cc=opts.cc)
     elif provider == "gmail":
+        policy.require("secret.read", name="GMAIL_ACCESS_TOKEN")
+        policy.require("net.dial", host=GMAIL_API_HOST)
         return _send_gmail(opts.to, opts.subject, opts.body, cc=opts.cc)
     elif provider == "outlook":
+        policy.require("secret.read", name="MICROSOFT_ACCESS_TOKEN")
+        policy.require("net.dial", host=OUTLOOK_API_HOST)
         return _send_outlook(opts.to, opts.subject, opts.body, cc=opts.cc)
     else:
         return {"error": f"unknown provider: {provider}"}
@@ -481,8 +498,12 @@ def cmd_search(args):
         return {"error": "search requires gmail or outlook provider"}
 
     if provider == "gmail":
+        policy.require("secret.read", name="GMAIL_ACCESS_TOKEN")
+        policy.require("net.dial", host=GMAIL_API_HOST)
         return _search_gmail(opts.query, opts.max_results)
     elif provider == "outlook":
+        policy.require("secret.read", name="MICROSOFT_ACCESS_TOKEN")
+        policy.require("net.dial", host=OUTLOOK_API_HOST)
         return _search_outlook(opts.query, opts.max_results)
     else:
         return {"error": f"unknown provider: {provider}"}
@@ -508,8 +529,12 @@ def cmd_list(args):
         return {"error": "list requires gmail or outlook provider"}
 
     if provider == "gmail":
+        policy.require("secret.read", name="GMAIL_ACCESS_TOKEN")
+        policy.require("net.dial", host=GMAIL_API_HOST)
         return _list_gmail(opts.max_results, opts.unread)
     elif provider == "outlook":
+        policy.require("secret.read", name="MICROSOFT_ACCESS_TOKEN")
+        policy.require("net.dial", host=OUTLOOK_API_HOST)
         return _list_outlook(opts.max_results, opts.unread)
     else:
         return {"error": f"unknown provider: {provider}"}
@@ -535,8 +560,12 @@ def cmd_read(args):
         return {"error": "read requires gmail or outlook provider"}
 
     if provider == "gmail":
+        policy.require("secret.read", name="GMAIL_ACCESS_TOKEN")
+        policy.require("net.dial", host=GMAIL_API_HOST)
         return _read_gmail(opts.message_id)
     elif provider == "outlook":
+        policy.require("secret.read", name="MICROSOFT_ACCESS_TOKEN")
+        policy.require("net.dial", host=OUTLOOK_API_HOST)
         return _read_outlook(opts.message_id)
     else:
         return {"error": f"unknown provider: {provider}"}
@@ -592,13 +621,18 @@ def run(command, args):
     """Entry point called by cos."""
     if command == "__schema__":
         return _schema()
-    if command == "send":
-        return cmd_send(args)
-    elif command == "search":
-        return cmd_search(args)
-    elif command == "list":
-        return cmd_list(args)
-    elif command == "read":
-        return cmd_read(args)
-    else:
+    handlers = {
+        "send": cmd_send,
+        "search": cmd_search,
+        "list": cmd_list,
+        "read": cmd_read,
+    }
+    handler = handlers.get(command)
+    if handler is None:
         return {"error": f"unknown command: {command}"}
+    try:
+        return handler(args)
+    except policy.PermissionDenied as denied:
+        return {"error": str(denied), "denial": denied.denial}
+    except policy.PolicyUnavailable as exc:
+        return {"error": f"capability check failed: {exc}"}

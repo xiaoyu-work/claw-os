@@ -11,29 +11,64 @@
   "runtime": "python",
   "operations": {
     "get": {
-      "label": {
-        "en": "Get a value by key"
-      }
+      "label": { "en": "Get a value by key" },
+      "args": [
+        { "name": "key", "kind": "name", "required": true }
+      ],
+      "needs": [
+        {
+          "verb": "data.kv.read",
+          "scope": { "kind": "from-arg", "arg": "key" },
+          "why": { "en": "Read the value stored under the key you asked about." }
+        }
+      ]
     },
     "set": {
-      "label": {
-        "en": "Set a key-value pair"
-      }
+      "label": { "en": "Set a key-value pair" },
+      "args": [
+        { "name": "key",   "kind": "name", "required": true },
+        { "name": "value", "kind": "text", "required": true }
+      ],
+      "needs": [
+        {
+          "verb": "data.kv.write",
+          "scope": { "kind": "from-arg", "arg": "key" },
+          "why": { "en": "Store the value you provided under the named key." }
+        }
+      ]
     },
     "del": {
-      "label": {
-        "en": "Delete a key"
-      }
+      "label": { "en": "Delete a key" },
+      "args": [
+        { "name": "key", "kind": "name", "required": true }
+      ],
+      "needs": [
+        {
+          "verb": "data.kv.delete",
+          "scope": { "kind": "from-arg", "arg": "key" },
+          "why": { "en": "Remove the named key from the store." }
+        }
+      ]
     },
     "list": {
-      "label": {
-        "en": "List keys matching a pattern"
-      }
+      "label": { "en": "List keys matching a pattern" },
+      "needs": [
+        {
+          "verb": "data.kv.read",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Scan every key in the store to filter by your pattern." }
+        }
+      ]
     },
     "dump": {
-      "label": {
-        "en": "Export all key-value pairs"
-      }
+      "label": { "en": "Export all key-value pairs" },
+      "needs": [
+        {
+          "verb": "data.kv.read",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Read every key and value in the store." }
+        }
+      ]
     }
   }
 }

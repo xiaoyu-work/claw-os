@@ -6,6 +6,8 @@ Say what you need, not how to install it.
 import shutil
 import subprocess
 
+from _lib import policy
+
 
 def _dpkg_check(package):
     """Return True if a package is installed according to dpkg."""
@@ -45,6 +47,9 @@ def cmd_need(args):
     if not args:
         return {"error": "need requires at least one package name"}
 
+    for pkg in args:
+        policy.require("sys.package", name=pkg)
+
     already_present = []
     to_install = []
 
@@ -72,6 +77,7 @@ def cmd_has(args):
         return {"error": "has requires a name argument"}
 
     name = args[0]
+    policy.require("sys.package", name=name)
 
     # Check dpkg first
     if _dpkg_check(name):
@@ -102,6 +108,7 @@ def cmd_has(args):
 
 def cmd_list(args):
     """List installed packages via dpkg."""
+    policy.require("sys.package", wild=True)
     try:
         result = subprocess.run(
             ["dpkg", "--get-selections"],
@@ -156,4 +163,9 @@ def run(command, args):
     handler = commands.get(command)
     if handler is None:
         return {"error": f"unknown command: {command}"}
-    return handler(args)
+    try:
+        return handler(args)
+    except policy.PermissionDenied as denied:
+        return {"error": str(denied), "denial": denied.denial}
+    except policy.PolicyUnavailable as exc:
+        return {"error": f"capability check failed: {exc}"}

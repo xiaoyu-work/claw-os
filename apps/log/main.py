@@ -9,6 +9,8 @@ import json
 import os
 from datetime import datetime, timezone
 
+from _lib import policy
+
 DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 LOG_DIR = os.path.join(DATA_DIR, "logs")
 LOG_FILE = os.path.join(LOG_DIR, "audit.jsonl")
@@ -206,4 +208,13 @@ def run(command, args):
     handler = commands.get(command)
     if handler is None:
         return {"error": f"unknown command: {command}"}
-    return handler(args)
+    try:
+        if command == "write":
+            policy.require("data.log.write", wild=True)
+        else:
+            policy.require("data.log.read", wild=True)
+        return handler(args)
+    except policy.PermissionDenied as denied:
+        return {"error": str(denied), "denial": denied.denial}
+    except policy.PolicyUnavailable as exc:
+        return {"error": f"capability check failed: {exc}"}

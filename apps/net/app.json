@@ -11,14 +11,36 @@
   "runtime": "python",
   "operations": {
     "fetch": {
-      "label": {
-        "en": "Make HTTP request (GET/POST/PUT/DELETE)"
-      }
+      "label": { "en": "Make HTTP request (GET/POST/PUT/DELETE)" },
+      "args": [
+        { "name": "url", "kind": "text", "required": true }
+      ],
+      "needs": [
+        {
+          "verb": "net.dial",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Open a network connection to the URL you asked to fetch." }
+        }
+      ]
     },
     "download": {
-      "label": {
-        "en": "Download file from URL"
-      }
+      "label": { "en": "Download file from URL" },
+      "args": [
+        { "name": "url",    "kind": "text", "required": true },
+        { "name": "output", "kind": "path", "required": false }
+      ],
+      "needs": [
+        {
+          "verb": "net.dial",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Open a network connection to the URL you asked to download from." }
+        },
+        {
+          "verb": "fs.write",
+          "scope": { "kind": "from-arg", "arg": "output" },
+          "why": { "en": "Save the downloaded file to the path you specified." }
+        }
+      ]
     }
   },
   "dependencies": {

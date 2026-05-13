@@ -14,7 +14,12 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
+from _lib import policy
+
 DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
+
+GOOGLE_CALENDAR_HOST = "www.googleapis.com"
+OUTLOOK_API_HOST = "graph.microsoft.com"
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +226,19 @@ def _list_outlook(from_time, to_time):
     return [_outlook_event_to_dict(item) for item in data.get("value", [])]
 
 
+def _require_provider_access(provider, *, write):
+    """Require the right combination of caps for the chosen provider."""
+    verb = "data.db.write" if write else "data.db.read"
+    if provider == "local":
+        policy.require(verb, name="calendar")
+    elif provider == "google":
+        policy.require("secret.read", name="GOOGLE_CALENDAR_TOKEN")
+        policy.require("net.dial", host=GOOGLE_CALENDAR_HOST)
+    elif provider == "outlook":
+        policy.require("secret.read", name="MICROSOFT_ACCESS_TOKEN")
+        policy.require("net.dial", host=OUTLOOK_API_HOST)
+
+
 def cmd_list(args):
     """List events in a time range."""
     parsed = _parse_args(args)
@@ -230,6 +248,7 @@ def cmd_list(args):
         return {"error": "usage: calendar list --from <datetime> --to <datetime> [--provider local|google|outlook]"}
 
     provider = _detect_provider(parsed.get("provider"))
+    _require_provider_access(provider, write=False)
 
     try:
         if provider == "google":
@@ -335,6 +354,7 @@ def cmd_create(args):
     description = parsed.get("description", "")
     location = parsed.get("location", "")
     provider = _detect_provider(parsed.get("provider"))
+    _require_provider_access(provider, write=True)
 
     try:
         if provider == "google":
@@ -452,6 +472,7 @@ def cmd_update(args):
 
     provider = _detect_provider(parsed.get("provider"))
     fields = {k: v for k, v in parsed.items() if k in ("title", "start", "end", "description", "location")}
+    _require_provider_access(provider, write=True)
 
     try:
         if provider == "google":
@@ -525,6 +546,7 @@ def cmd_delete(args):
         return {"error": "usage: calendar delete --id <event-id> [--provider local|google|outlook]"}
 
     provider = _detect_provider(parsed.get("provider"))
+    _require_provider_access(provider, write=True)
 
     try:
         if provider == "google":
@@ -648,4 +670,9 @@ def run(command, args):
     handler = COMMANDS.get(command)
     if handler is None:
         return {"error": f"unknown command: {command}"}
-    return handler(args)
+    try:
+        return handler(args)
+    except policy.PermissionDenied as denied:
+        return {"error": str(denied), "denial": denied.denial}
+    except policy.PolicyUnavailable as exc:
+        return {"error": f"capability check failed: {exc}"}

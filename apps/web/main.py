@@ -24,6 +24,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from _lib import policy
+
 TIMEOUT = int(os.environ.get("COS_WEB_TIMEOUT", "30"))
 DEFAULT_MAX_LENGTH = int(os.environ.get("COS_WEB_MAX_CONTENT_LENGTH", "50000"))
 COS_BROWSER_BIN = os.environ.get("COS_BROWSER_BIN", "cos-browser")
@@ -136,6 +138,19 @@ def _normalize_url(url):
     return url
 
 
+def _host_of(url):
+    """Extract host[:port] from a normalized URL, or None if invalid."""
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError:
+        return None
+    if not parsed.hostname:
+        return None
+    if parsed.port:
+        return f"{parsed.hostname}:{parsed.port}"
+    return parsed.hostname
+
+
 def _truncate(s, n):
     if isinstance(s, str) and len(s) > n:
         return s[:n] + "\n\n[truncated]"
@@ -212,6 +227,10 @@ def _cmd_read(args):
         return {"error": "usage: cos web read <url>"}
 
     url = _normalize_url(positional[0])
+    host = _host_of(url)
+    if host is None:
+        return {"error": f"invalid URL: {url}"}
+    policy.require("net.dial", host=host)
 
     try:
         timeout_secs = int(flags["timeout"])
@@ -313,6 +332,13 @@ def _cmd_screenshot(args):
     if not output:
         return {"error": "missing --output PATH"}
 
+    host = _host_of(url)
+    if host is None:
+        return {"error": f"invalid URL: {url}"}
+    output_abs = os.path.abspath(output)
+    policy.require("net.dial", host=host)
+    policy.require("fs.write", path=output_abs)
+
     try:
         width = int(flags["width"])
         height = int(flags["height"])
@@ -360,6 +386,12 @@ def _cmd_scrape(args):
     if not urls:
         return {"error": "no URLs given"}
 
+    for u in urls:
+        host = _host_of(u)
+        if host is None:
+            return {"error": f"invalid URL: {u}"}
+        policy.require("net.dial", host=host)
+
     try:
         concurrency = int(flags["concurrency"])
         timeout_secs = int(flags["timeout"])
@@ -403,6 +435,11 @@ def _cmd_submit(args):
         return {"error": "usage: cos web submit <url> --data '{...}'"}
 
     url = _normalize_url(positional[0])
+    host = _host_of(url)
+    if host is None:
+        return {"error": f"invalid URL: {url}"}
+    policy.require("net.dial", host=host)
+
     raw = flags["data"] or ""
     method = (flags["method"] or "POST").upper()
     try:
@@ -496,13 +533,34 @@ def _schema():
 # Entry point
 # ---------------------------------------------------------------------------
 
+def run(command, args):
+    """Entry point called by cos."""
+    if command == "__schema__":
+        return _schema()
+    handlers = {
+        "read": _cmd_read,
+        "scrape": _cmd_scrape,
+        "screenshot": _cmd_screenshot,
+        "submit": _cmd_submit,
+    }
+    handler = handlers.get(command)
+    if handler is None:
+        return {"error": f"unknown command: {command}"}
+    try:
+        return handler(args)
+    except policy.PermissionDenied as denied:
+        return {"error": str(denied), "denial": denied.denial}
+    except policy.PolicyUnavailable as exc:
+        return {"error": f"capability check failed: {exc}"}
+
+
 def main():
     argv = sys.argv[1:]
 
     if not argv:
         print(json.dumps({
             "error": "usage: cos app web <read|scrape|screenshot|submit> [args...]",
-            "commands": list(_schema()["commands"].keys()),
+            "commands": ["read", "scrape", "screenshot", "submit"],
         }))
         return
 
@@ -511,21 +569,7 @@ def main():
         return
 
     cmd, rest = argv[0], argv[1:]
-    handlers = {
-        "read": _cmd_read,
-        "scrape": _cmd_scrape,
-        "screenshot": _cmd_screenshot,
-        "submit": _cmd_submit,
-    }
-    handler = handlers.get(cmd)
-    if not handler:
-        print(json.dumps({
-            "error": f"unknown command: {cmd}",
-            "commands": list(handlers.keys()),
-        }))
-        sys.exit(2)
-
-    result = handler(rest)
+    result = run(cmd, rest)
     print(json.dumps(result, indent=2, ensure_ascii=False))
     if isinstance(result, dict) and "error" in result:
         sys.exit(1)

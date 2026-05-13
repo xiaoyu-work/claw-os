@@ -11,34 +11,75 @@
   "runtime": "python",
   "operations": {
     "run": {
-      "label": {
-        "en": "Run a shell command"
-      }
+      "label": { "en": "Run a shell command" },
+      "summary": { "en": "Start a process to run the command you specified and capture its output." },
+      "args": [
+        { "name": "command", "kind": "name", "required": true }
+      ],
+      "needs": [
+        {
+          "verb": "proc.spawn",
+          "scope": { "kind": "from-arg", "arg": "command" },
+          "why": { "en": "Start a new process to run the command you asked to run." }
+        }
+      ]
     },
     "script": {
-      "label": {
-        "en": "Run a script file or inline code in any language"
-      }
+      "label": { "en": "Run a script file or inline code in any language" },
+      "summary": { "en": "Run a script inline or from a file using bash, python, or node." },
+      "needs": [
+        {
+          "verb": "proc.spawn",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Start a new process for the interpreter to run your script." }
+        }
+      ]
     },
     "which": {
-      "label": {
-        "en": "Check if a command exists"
-      }
+      "label": { "en": "Check if a command exists" },
+      "args": [
+        { "name": "command", "kind": "name", "required": true }
+      ],
+      "needs": [
+        {
+          "verb": "fs.meta",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Look up where the command lives on the filesystem." }
+        }
+      ]
     },
     "start": {
-      "label": {
-        "en": "Start a command in the background"
-      }
+      "label": { "en": "Start a command in the background" },
+      "args": [
+        { "name": "command", "kind": "name", "required": true }
+      ],
+      "needs": [
+        {
+          "verb": "proc.spawn",
+          "scope": { "kind": "from-arg", "arg": "command" },
+          "why": { "en": "Start a new background process for the command you asked to run." }
+        }
+      ]
     },
     "stop": {
-      "label": {
-        "en": "Stop a background process by PID"
-      }
+      "label": { "en": "Stop a background process by PID" },
+      "needs": [
+        {
+          "verb": "proc.signal",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Send a termination signal to the process you asked to stop." }
+        }
+      ]
     },
     "ps": {
-      "label": {
-        "en": "List running background processes"
-      }
+      "label": { "en": "List running background processes" },
+      "needs": [
+        {
+          "verb": "proc.observe",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Read the list of background processes started by this app." }
+        }
+      ]
     }
   },
   "dependencies": {

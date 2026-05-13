@@ -11,19 +11,49 @@
   "runtime": "python",
   "operations": {
     "read": {
-      "label": {
-        "en": "Read document content (PDF, DOCX, XLSX, PPTX, CSV, etc.)"
-      }
+      "label": { "en": "Read document content (PDF, DOCX, XLSX, PPTX, CSV, etc.)" },
+      "args": [
+        { "name": "path", "kind": "path", "required": true }
+      ],
+      "needs": [
+        {
+          "verb": "fs.read",
+          "scope": { "kind": "from-arg", "arg": "path" },
+          "why": { "en": "Read the contents of the file you asked to open." }
+        }
+      ]
     },
     "info": {
-      "label": {
-        "en": "Get document metadata without reading full content"
-      }
+      "label": { "en": "Get document metadata without reading full content" },
+      "args": [
+        { "name": "path", "kind": "path", "required": true }
+      ],
+      "needs": [
+        {
+          "verb": "fs.meta",
+          "scope": { "kind": "from-arg", "arg": "path" },
+          "why": { "en": "Inspect the file's metadata (size, format) without reading its content." }
+        }
+      ]
     },
     "convert": {
-      "label": {
-        "en": "Convert document to another format"
-      }
+      "label": { "en": "Convert document to another format" },
+      "args": [
+        { "name": "path", "kind": "path", "required": true },
+        { "name": "to",   "kind": "name", "required": true }
+      ],
+      "needs": [
+        {
+          "verb": "fs.read",
+          "scope": { "kind": "from-arg", "arg": "path" },
+          "why": { "en": "Read the source document so it can be converted." }
+        },
+        {
+          "verb": "fs.write",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Write the converted document to disk." }
+        }
+      ]
     }
   },
   "dependencies": {

@@ -8,6 +8,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from _lib import policy
+
 USER_AGENT = "cos/" + os.environ.get("COS_VERSION", "0.1.0")
 DEFAULT_TIMEOUT = int(os.environ.get("COS_NET_TIMEOUT", "30"))
 MAX_RESPONSE_BYTES = 5_000_000  # 5 MB response body limit
@@ -36,9 +38,27 @@ def _parse_header(header_str):
     return key.strip(), value.strip()
 
 
+def _host_from_url(url):
+    """Extract the host[:port] from a URL for capability scoping."""
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError:
+        return None
+    if not parsed.hostname:
+        return None
+    if parsed.port:
+        return f"{parsed.hostname}:{parsed.port}"
+    return parsed.hostname
+
+
 def cmd_fetch(args):
     parser = _build_fetch_parser()
     opts = parser.parse_args(args)
+
+    host = _host_from_url(opts.url)
+    if host is None:
+        return {"error": f"invalid URL: {opts.url}"}
+    policy.require("net.dial", host=host)
 
     headers = {"User-Agent": USER_AGENT}
     for h in opts.header:
@@ -92,10 +112,18 @@ def cmd_download(args):
     parser = _build_download_parser()
     opts = parser.parse_args(args)
 
+    host = _host_from_url(opts.url)
+    if host is None:
+        return {"error": f"invalid URL: {opts.url}"}
+
     output_path = opts.output
     if output_path is None:
         filename = os.path.basename(urllib.parse.urlparse(opts.url).path) or "download"
         output_path = os.path.join("/den", filename)
+    output_path = os.path.abspath(output_path)
+
+    policy.require("net.dial", host=host)
+    policy.require("fs.write", path=output_path)
 
     headers = {"User-Agent": USER_AGENT}
     req = urllib.request.Request(opts.url, headers=headers)
@@ -143,9 +171,16 @@ def run(command, args):
     """Entry point called by cos."""
     if command == "__schema__":
         return _schema()
-    if command == "fetch":
-        return cmd_fetch(args)
-    elif command == "download":
-        return cmd_download(args)
-    else:
+    handlers = {
+        "fetch": cmd_fetch,
+        "download": cmd_download,
+    }
+    handler = handlers.get(command)
+    if handler is None:
         return {"error": f"unknown command: {command}"}
+    try:
+        return handler(args)
+    except policy.PermissionDenied as denied:
+        return {"error": str(denied), "denial": denied.denial}
+    except policy.PolicyUnavailable as exc:
+        return {"error": f"capability check failed: {exc}"}
