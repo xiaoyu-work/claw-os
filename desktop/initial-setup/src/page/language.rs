@@ -188,7 +188,7 @@ impl super::Page for Page {
                 })
                 .collect();
 
-            let config = cosmic::cosmic_config::Config::new("com.system76.CosmicSettings", 1).ok();
+            let config = cosmic::cosmic_config::Config::new("com.clawos.Settings", 1).ok();
 
             let language = system_locales
                 .get("LC_ALL")
@@ -203,18 +203,23 @@ impl super::Page for Page {
             let mut available_languages_set = BTreeSet::new();
 
             // Use 'locale -a' instead of 'localectl list-locales' for OpenRC compatibility
-            let output_result = tokio::process::Command::new("locale")
-                .arg("-a")
-                .output()
-                .await;
+            let output_result = tokio::task::spawn_blocking(|| {
+                claw_bridge::exec::run(&["locale", "-a"], None)
+            })
+            .await;
 
             let locale_list = match output_result {
-                Ok(output) => {
-                    let output_str = String::from_utf8(output.stdout).unwrap_or_default();
-                    parse_locale_output(&output_str)
+                Ok(Ok(result)) => parse_locale_output(&result.stdout),
+                Ok(Err(why)) => {
+                    if why.is_denied() {
+                        tracing::warn!(?why, "exec.run locale -a denied by claw-bridge");
+                    } else {
+                        tracing::error!(?why, "failed to list available locales using 'locale -a'");
+                    }
+                    Vec::new()
                 }
                 Err(why) => {
-                    tracing::error!(?why, "failed to list available locales using 'locale -a'");
+                    tracing::error!(?why, "spawn_blocking failed for 'locale -a'");
                     Vec::new()
                 }
             };

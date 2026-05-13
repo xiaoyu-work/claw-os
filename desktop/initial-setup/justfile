@@ -4,7 +4,7 @@ set unstable
 mod cargo 'cargo.just'
 
 name := 'cosmic-initial-setup'
-appid := 'com.system76.CosmicInitialSetup'
+appid := 'com.clawos.InitialSetup'
 rootdir := ''
 prefix := '/usr'
 

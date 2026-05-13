@@ -5,7 +5,6 @@
 
 use crate::fl;
 use std::collections::{BTreeMap, BTreeSet};
-use std::process::Stdio;
 use std::sync::{Arc, LazyLock};
 
 use cosmic::iced::core::text::Wrapping;
@@ -894,7 +893,7 @@ fn connection_settings(page: &mut Page) -> Task<super::Message> {
 
     let secret_agent = cosmic::Task::stream(
         cosmic_settings_network_manager_subscription::nm_secret_agent::secret_agent_stream(
-            "com.system76.CosmicSettings.WiFi.NetworkManager.SecretAgent",
+            "com.clawos.Settings.WiFi.NetworkManager.SecretAgent",
             rx,
         ),
     )
@@ -944,17 +943,24 @@ async fn nm_edit_connection(uuid: &str) -> Result<(), String> {
 }
 
 async fn nm_connection_editor(args: &[&str]) -> Result<(), String> {
-    tokio::process::Command::new("nm-connection-editor")
-        .args(args)
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|why| why.to_string())
-        .and_then(|output| {
-            if !output.status.success() {
-                Err(String::from_utf8(output.stderr).unwrap_or_default())
-            } else {
-                Ok(())
+    let mut argv: Vec<String> = Vec::with_capacity(args.len() + 1);
+    argv.push("nm-connection-editor".to_string());
+    argv.extend(args.iter().map(|s| s.to_string()));
+
+    let join = tokio::task::spawn_blocking(move || {
+        let argv_refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+        claw_bridge::exec::start(&argv_refs)
+    })
+    .await
+    .map_err(|why| why.to_string())?;
+
+    match join {
+        Ok(_) => Ok(()),
+        Err(why) => {
+            if why.is_denied() {
+                tracing::warn!(?why, "exec.start nm-connection-editor denied by claw-bridge");
             }
-        })
+            Err(why.to_string())
+        }
+    }
 }

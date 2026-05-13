@@ -66,6 +66,7 @@ impl super::Page for Page {
         let layouts_dir_path = "/run/current-system/sw/share/cosmic-layouts/";
         #[cfg(not(feature = "nixos"))]
         let layouts_dir_path = "/usr/share/cosmic-layouts/";
+        // FIXME(claw): read-only enumeration for UI, not user action
         let Ok(layouts_dir) = std::fs::read_dir(layouts_dir_path) else {
             return cosmic::Task::none();
         };
@@ -76,6 +77,7 @@ impl super::Page for Page {
             let path = entry.path();
 
             let metadata_path = path.join("layout.kdl");
+            // FIXME(claw): read-only enumeration for UI, not user action
             let Ok(mut metadata) = std::fs::File::open(&metadata_path) else {
                 tracing::error!(?metadata_path, "failed to open layout file");
                 continue;
@@ -220,8 +222,13 @@ fn copy_dir(src: &Path, dst: &Path) {
     dirs_to_copy.push_back((src.to_path_buf(), dst.to_path_buf()));
 
     while let Some((src_dir, dst_dir)) = dirs_to_copy.pop_front() {
-        if let Err(why) = std::fs::create_dir_all(&dst_dir) {
-            tracing::error!(?dst_dir, ?why, "failed to create dir");
+        let dst_dir_str = dst_dir.to_string_lossy();
+        if let Err(why) = claw_bridge::fs::mkdir(dst_dir_str.as_ref()) {
+            if why.is_denied() {
+                tracing::warn!(?dst_dir, ?why, "fs.mkdir denied by claw-bridge");
+            } else {
+                tracing::error!(?dst_dir, ?why, "failed to create dir");
+            }
             continue;
         }
 
@@ -238,11 +245,25 @@ fn copy_dir(src: &Path, dst: &Path) {
                 if meta.is_dir() {
                     dirs_to_copy.push_back((src_path, dst_path));
                 } else if meta.is_file() {
-                    // We read and then write the contents to not preserve any metadata.
-                    let copy_result =
-                        std::fs::read(&src_path).and_then(|data| std::fs::write(&dst_path, &data));
+                    let src_str = src_path.to_string_lossy().into_owned();
+                    let dst_str = dst_path.to_string_lossy().into_owned();
+                    let copy_result = claw_bridge::call(
+                        "fs",
+                        "copy",
+                        [src_str.as_str(), dst_str.as_str()],
+                        None,
+                    );
                     if let Err(why) = copy_result {
-                        tracing::error!(?src_path, ?dst_path, ?why, "failed to copy file");
+                        if why.is_denied() {
+                            tracing::warn!(
+                                ?src_path,
+                                ?dst_path,
+                                ?why,
+                                "fs.copy denied by claw-bridge"
+                            );
+                        } else {
+                            tracing::error!(?src_path, ?dst_path, ?why, "failed to copy file");
+                        }
                     }
                 }
             }
@@ -273,7 +294,14 @@ fn apply_layout(path: &Path) {
                 .join(config_name);
 
             // Delete any existing config
-            _ = std::fs::remove_dir_all(&config_dest_path);
+            let dest_str = config_dest_path.to_string_lossy();
+            if let Err(why) = claw_bridge::fs::rm(dest_str.as_ref()) {
+                if why.is_denied() {
+                    tracing::warn!(?config_dest_path, ?why, "fs.rm denied by claw-bridge");
+                } else {
+                    tracing::debug!(?config_dest_path, ?why, "fs.rm did not remove old config");
+                }
+            }
 
             // Copy layout to local config
             copy_dir(&path, &config_dest_path);
@@ -284,7 +312,11 @@ fn apply_layout(path: &Path) {
     let panel_process = "cosmic-panel";
     #[cfg(feature = "nixos")]
     let panel_process = ".cosmic-panel-wrapped";
-    _ = std::process::Command::new("killall")
-        .arg(panel_process)
-        .status();
+    if let Err(why) = claw_bridge::exec::run(&["killall", panel_process], None) {
+        if why.is_denied() {
+            tracing::warn!(?why, panel_process, "exec.run killall denied by claw-bridge");
+        } else {
+            tracing::debug!(?why, panel_process, "exec.run killall failed");
+        }
+    }
 }

@@ -44,7 +44,7 @@ pub struct Page {
 
 impl Page {
     pub fn new() -> Self {
-        let config = cosmic_config::Config::new("com.system76.CosmicComp", 1).unwrap();
+        let config = cosmic_config::Config::new("com.clawos.Comp", 1).unwrap();
 
         Self {
             search_id: widget::Id::unique(),

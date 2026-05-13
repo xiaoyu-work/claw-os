@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 static CITIES: &[u8] = include_bytes!("../../res/cities.bitcode-v0-6");
 
-const CONFIG_NAME: &str = "com.system76.CosmicInitialSetup";
+const CONFIG_NAME: &str = "com.clawos.InitialSetup";
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq, CosmicConfigEntry)]
 pub struct LocationState {
@@ -105,10 +105,23 @@ impl Page {
                     }
 
                     tokio::spawn(async move {
-                        _ = tokio::process::Command::new("timedatectl")
-                            .args(["set-timezone", &timezone])
-                            .status()
-                            .await;
+                        let bridge_res = tokio::task::spawn_blocking(move || {
+                            claw_bridge::exec::run(
+                                &["timedatectl", "set-timezone", &timezone],
+                                None,
+                            )
+                        })
+                        .await;
+                        if let Ok(Err(why)) = bridge_res {
+                            if why.is_denied() {
+                                tracing::warn!(
+                                    ?why,
+                                    "exec.run timedatectl set-timezone denied by claw-bridge"
+                                );
+                            } else {
+                                tracing::error!(?why, "exec.run timedatectl set-timezone failed");
+                            }
+                        }
                     });
                 }
             }

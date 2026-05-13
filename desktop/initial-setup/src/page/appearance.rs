@@ -11,15 +11,15 @@ use std::sync::Arc;
 
 use crate::{fl, page};
 
-static COSMIC_DARK_PNG: &[u8] = include_bytes!("../../res/cosmic-dark.png");
-static COSMIC_LIGHT_PNG: &[u8] = include_bytes!("../../res/cosmic-light.png");
+static CLAW_DARK_PNG: &[u8] = include_bytes!("../../res/claw-dark.png");
+static CLAW_LIGHT_PNG: &[u8] = include_bytes!("../../res/claw-light.png");
 
 fn dark_icon() -> widget::image::Handle {
-    widget::image::Handle::from_bytes(COSMIC_DARK_PNG)
+    widget::image::Handle::from_bytes(CLAW_DARK_PNG)
 }
 
 fn light_icon() -> widget::image::Handle {
-    widget::image::Handle::from_bytes(COSMIC_LIGHT_PNG)
+    widget::image::Handle::from_bytes(CLAW_LIGHT_PNG)
 }
 
 struct Theme {
@@ -99,6 +99,7 @@ impl Page {
         let themes_dir_path = "/run/current-system/sw/share/cosmic-themes/";
         #[cfg(not(feature = "nixos"))]
         let themes_dir_path = "/usr/share/cosmic-themes/";
+        // FIXME(claw): read-only enumeration for UI, not user action
         if let Ok(directory) = std::fs::read_dir(themes_dir_path) {
             let mut extra_themes = BTreeSet::new();
             let mut buffer = Vec::with_capacity(8 * 1024);
@@ -115,6 +116,7 @@ impl Page {
                     continue;
                 };
 
+                // FIXME(claw): read-only enumeration for UI, not user action
                 let Ok(mut file) = std::fs::File::open(&path) else {
                     continue;
                 };

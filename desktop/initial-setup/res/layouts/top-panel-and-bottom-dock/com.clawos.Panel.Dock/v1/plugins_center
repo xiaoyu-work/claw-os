@@ -1,0 +1,7 @@
+Some([
+    "com.clawos.PanelLauncherButton",
+    "com.clawos.PanelWorkspacesButton",
+    "com.clawos.PanelAppButton",
+    "com.clawos.AppList",
+    "com.clawos.AppletMinimize",
+])

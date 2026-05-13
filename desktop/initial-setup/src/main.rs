@@ -111,7 +111,7 @@ impl Application for App {
     type Message = Message;
 
     /// The unique application ID to supply to the window manager.
-    const APP_ID: &'static str = "com.system76.CosmicInitialSetup";
+    const APP_ID: &'static str = "com.clawos.InitialSetup";
 
     fn core(&self) -> &Core {
         &self.core
@@ -273,7 +273,19 @@ impl Application for App {
                 let mark_initial_setup_finish = cosmic::Task::future(async {
                     #[allow(deprecated)]
                     let home = std::env::home_dir().unwrap();
-                    _ = std::fs::File::create(home.join(COSMIC_SETUP_DONE_PATH));
+                    let marker = home.join(COSMIC_SETUP_DONE_PATH);
+                    let marker_str = marker.to_string_lossy().into_owned();
+                    let bridge_res = tokio::task::spawn_blocking(move || {
+                        claw_bridge::fs::write(&marker_str, "")
+                    })
+                    .await;
+                    if let Ok(Err(why)) = bridge_res {
+                        if why.is_denied() {
+                            tracing::warn!(?why, "fs.write setup-done marker denied by claw-bridge");
+                        } else {
+                            tracing::error!(?why, "fs.write setup-done marker failed");
+                        }
+                    }
                 })
                 .discard();
 
@@ -295,9 +307,23 @@ impl Application for App {
                     // Automatically log out from the OEM mode after tasks are finished.
                     tasks = tasks.chain(
                         cosmic::Task::future(async {
-                            _ = std::process::Command::new("loginctl")
-                                .args(["terminate-user", "cosmic-initial-setup"])
-                                .status();
+                            let bridge_res = tokio::task::spawn_blocking(|| {
+                                claw_bridge::exec::run(
+                                    &["loginctl", "terminate-user", "cosmic-initial-setup"],
+                                    None,
+                                )
+                            })
+                            .await;
+                            if let Ok(Err(why)) = bridge_res {
+                                if why.is_denied() {
+                                    tracing::warn!(
+                                        ?why,
+                                        "exec.run loginctl terminate-user denied by claw-bridge"
+                                    );
+                                } else {
+                                    tracing::error!(?why, "exec.run loginctl terminate-user failed");
+                                }
+                            }
                         })
                         .discard(),
                     );

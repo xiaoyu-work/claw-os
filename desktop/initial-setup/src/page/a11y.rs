@@ -9,7 +9,7 @@ use cosmic_settings_a11y_manager_subscription::{
 };
 use cosmic_settings_accessibility_subscription as a11y_bus;
 use futures::channel::mpsc::Sender;
-use futures::{FutureExt, SinkExt};
+use futures::SinkExt;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
@@ -349,34 +349,59 @@ impl Page {
                 let scale = (option * 25 + 50) as u32 + self.interface_adjusted_scale.min(20);
                 output.scale = scale as f64 / 100.0;
 
-                let mut command = tokio::process::Command::new("cosmic-randr");
+                let scale_arg = format!("{}.{:02}", scale / 100, scale % 100);
+                let refresh_arg = format!(
+                    "{}.{:03}",
+                    current.refresh_rate / 1000,
+                    current.refresh_rate % 1000
+                );
+                let name_arg = output.name.clone();
+                let w_arg = itoa::Buffer::new().format(current.size.0).to_string();
+                let h_arg = itoa::Buffer::new().format(current.size.1).to_string();
 
-                command
-                    .arg("mode")
-                    .arg("--scale")
-                    .arg(format!("{}.{:02}", scale / 100, scale % 100))
-                    .arg("--refresh")
-                    .arg(format!(
-                        "{}.{:03}",
-                        current.refresh_rate / 1000,
-                        current.refresh_rate % 1000
-                    ))
-                    .arg(output.name.as_str())
-                    .arg(itoa::Buffer::new().format(current.size.0))
-                    .arg(itoa::Buffer::new().format(current.size.1));
+                tracing::debug!(
+                    %scale_arg, %refresh_arg, %name_arg, %w_arg, %h_arg,
+                    "routing cosmic-randr through claw-bridge"
+                );
 
-                tracing::debug!("running command: {command:?}");
-
-                let command_fut = command
-                    .status()
-                    .map(|result| {
-                        Message::ScaleAdjustResult(match result {
-                            Ok(status) if status.success() => ScaleAdjustResult::Success,
-                            Ok(status) => ScaleAdjustResult::FailureCode(status.code()),
-                            Err(why) => ScaleAdjustResult::SpawnFailure(Arc::new(why)),
-                        })
+                let command_fut = async move {
+                    let argv: Vec<String> = vec![
+                        "cosmic-randr".into(),
+                        "mode".into(),
+                        "--scale".into(),
+                        scale_arg,
+                        "--refresh".into(),
+                        refresh_arg,
+                        name_arg,
+                        w_arg,
+                        h_arg,
+                    ];
+                    let bridge_res = tokio::task::spawn_blocking(move || {
+                        let argv_refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+                        claw_bridge::exec::run(&argv_refs, None)
                     })
-                    .map_into::<page::Message>();
+                    .await;
+
+                    let scale_result = match bridge_res {
+                        Ok(Ok(result)) if result.exit_code == 0 => ScaleAdjustResult::Success,
+                        Ok(Ok(result)) => ScaleAdjustResult::FailureCode(Some(result.exit_code)),
+                        Ok(Err(why)) => {
+                            if why.is_denied() {
+                                tracing::warn!(
+                                    ?why,
+                                    "exec.run cosmic-randr denied by claw-bridge"
+                                );
+                            }
+                            ScaleAdjustResult::SpawnFailure(Arc::new(std::io::Error::other(
+                                why.to_string(),
+                            )))
+                        }
+                        Err(why) => ScaleAdjustResult::SpawnFailure(Arc::new(
+                            std::io::Error::other(why.to_string()),
+                        )),
+                    };
+                    page::Message::A11y(Message::ScaleAdjustResult(scale_result))
+                };
 
                 Some(cosmic::task::future(command_fut))
             })

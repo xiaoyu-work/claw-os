@@ -12,5 +12,5 @@ Exec=cosmic-initial-setup
 NoDisplay=true
 Terminal=false
 StartupNotify=true
-StartupWMClass=com.system76.CosmicInitialSetup
+StartupWMClass=com.clawos.InitialSetup
 OnlyShowIn=COSMIC

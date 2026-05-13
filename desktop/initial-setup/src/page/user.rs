@@ -18,7 +18,7 @@ use url::Url;
 use zbus_polkit::policykit1::CheckAuthorizationFlags;
 
 const DEFAULT_ICON_FILE: &str = "/usr/share/pixmaps/faces/pop-robot.png";
-const USERS_ADMIN_POLKIT_POLICY_ID: &str = "com.system76.CosmicSettings.Users.Admin";
+const USERS_ADMIN_POLKIT_POLICY_ID: &str = "com.clawos.Settings.Users.Admin";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EditorField {
@@ -353,6 +353,7 @@ fn hash_password(password_plain: &str) -> String {
 // For now, just grabbing what we need
 fn get_encrypt_method() -> String {
     let mut value = String::new();
+    // FIXME(claw): read-only enumeration for UI, not user action
     let login_defs = if let Ok(file) = File::open("/etc/login.defs") {
         file
     } else {

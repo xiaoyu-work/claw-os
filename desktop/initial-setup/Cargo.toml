@@ -5,6 +5,7 @@ edition = "2024"
 rust-version = "1.93"
 
 [dependencies]
+claw-bridge = { path = "../../crates/claw-bridge" }
 cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols" }
 cosmic-settings-accessibility-subscription = { git = "https://github.com/pop-os/cosmic-settings" }
 cosmic-settings-a11y-manager-subscription = { git = "https://github.com/pop-os/cosmic-settings" }
