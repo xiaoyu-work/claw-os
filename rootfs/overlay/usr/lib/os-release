@@ -5,6 +5,7 @@ VERSION="@COS_VERSION@"
 VERSION_CODENAME=trixie
 ID=clawos
 ID_LIKE=debian
+LOGO=clawos
 HOME_URL="https://github.com/xiaoyu-work/claw-os"
 SUPPORT_URL="https://github.com/xiaoyu-work/claw-os/issues"
 BUG_REPORT_URL="https://github.com/xiaoyu-work/claw-os/issues"

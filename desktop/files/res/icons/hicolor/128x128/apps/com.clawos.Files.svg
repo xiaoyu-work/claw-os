@@ -1,10 +1,22 @@
-<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
-<path d="M4 28C4 23.5817 7.58172 20 12 20H47.8985C49.5893 20 51.2365 20.5357 52.6039 21.5301L57.2922 24.9398C60.0269 26.9287 63.3215 28 66.7029 28H116C120.418 28 124 31.5817 124 36V100C124 104.418 120.418 108 116 108H12C7.58172 108 4 104.418 4 100V28Z" fill="#00717C"/>
-<path d="M4 44C4 39.5817 7.58172 36 12 36H116C120.418 36 124 39.5817 124 44V100C124 104.418 120.418 108 116 108H12C7.58172 108 4 104.418 4 100V44Z" fill="url(#paint0_linear_2004_703)"/>
-<defs>
-<linearGradient id="paint0_linear_2004_703" x1="124" y1="36" x2="20.4185" y2="126.742" gradientUnits="userSpaceOnUse">
-<stop stop-color="#49BAC8"/>
-<stop offset="1" stop-color="#05919F"/>
-</linearGradient>
-</defs>
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" fill="none">
+  <g stroke="#000000" stroke-linecap="round" transform="translate(8,8) scale(0.52)">
+    <line x1="60"  y1="20"  x2="115" y2="218" stroke-width="40"/>
+    <line x1="130" y1="74"  x2="170" y2="218" stroke-width="36"/>
+    <line x1="185" y1="128" x2="205" y2="218" stroke-width="30"/>
+  </g>
+  <g fill="#005CFE">
+    <path d="M 140 158
+             L 140 220
+             Q 140 232 152 232
+             L 232 232
+             Q 244 232 244 220
+             L 244 168
+             Q 244 156 232 156
+             L 192 156
+             L 180 142
+             Q 174 136 168 136
+             L 152 136
+             Q 140 136 140 148 Z"/>
+  </g>
+  <line x1="148" y1="172" x2="236" y2="172" stroke="#FFFFFF" stroke-width="1.5" opacity="0.55"/>
 </svg>

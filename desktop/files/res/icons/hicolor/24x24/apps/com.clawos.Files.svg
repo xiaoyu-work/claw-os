@@ -1,10 +1,22 @@
-<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-<path d="M2 6.25C2 5.00736 3.00736 4 4.25 4H8.06802C8.66476 4 9.23705 4.23705 9.65901 4.65901C10.5176 5.51763 11.6822 6 12.8964 6H19.75C20.9926 6 22 7.00736 22 8.25V17.75C22 18.9926 20.9926 20 19.75 20H4.25C3.00736 20 2 18.9926 2 17.75V6.25Z" fill="#00717C"/>
-<path d="M2 10.25C2 9.00736 3.00736 8 4.25 8H19.75C20.9926 8 22 9.00736 22 10.25V17.75C22 18.9926 20.9926 20 19.75 20H4.25C3.00736 20 2 18.9926 2 17.75V10.25Z" fill="url(#paint0_linear_2004_699)"/>
-<defs>
-<linearGradient id="paint0_linear_2004_699" x1="22" y1="8" x2="4.73642" y2="23.1236" gradientUnits="userSpaceOnUse">
-<stop stop-color="#49BAC8"/>
-<stop offset="1" stop-color="#05919F"/>
-</linearGradient>
-</defs>
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" fill="none">
+  <g stroke="#000000" stroke-linecap="round" transform="translate(8,8) scale(0.52)">
+    <line x1="60"  y1="20"  x2="115" y2="218" stroke-width="40"/>
+    <line x1="130" y1="74"  x2="170" y2="218" stroke-width="36"/>
+    <line x1="185" y1="128" x2="205" y2="218" stroke-width="30"/>
+  </g>
+  <g fill="#005CFE">
+    <path d="M 140 158
+             L 140 220
+             Q 140 232 152 232
+             L 232 232
+             Q 244 232 244 220
+             L 244 168
+             Q 244 156 232 156
+             L 192 156
+             L 180 142
+             Q 174 136 168 136
+             L 152 136
+             Q 140 136 140 148 Z"/>
+  </g>
+  <line x1="148" y1="172" x2="236" y2="172" stroke="#FFFFFF" stroke-width="1.5" opacity="0.55"/>
 </svg>
