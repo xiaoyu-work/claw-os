@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
 
-use crate::policy::{self, OpType};
+use crate::caps::{require_or_json, Scope, Verb};
 
 fn traces_dir() -> PathBuf {
     PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
@@ -65,7 +65,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 // ---------------------------------------------------------------------------
 
 fn cmd_start(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Write).map_err(|v| v.to_string())?;
+    require_or_json(Verb::DATA_LOG_WRITE, Scope::wild()).map_err(|v| v.to_string())?;
 
     if args.is_empty() {
         return Err("usage: cos trace start <trace-id>".into());
@@ -111,7 +111,7 @@ fn cmd_start(args: &[String]) -> Result<Value, String> {
 // ---------------------------------------------------------------------------
 
 fn cmd_end(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Write).map_err(|v| v.to_string())?;
+    require_or_json(Verb::DATA_LOG_WRITE, Scope::wild()).map_err(|v| v.to_string())?;
 
     if args.is_empty() {
         return Err("usage: cos trace end <trace-id> [--status completed|failed]".into());
@@ -169,7 +169,7 @@ fn cmd_end(args: &[String]) -> Result<Value, String> {
 // ---------------------------------------------------------------------------
 
 fn cmd_span(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Write).map_err(|v| v.to_string())?;
+    require_or_json(Verb::DATA_LOG_WRITE, Scope::wild()).map_err(|v| v.to_string())?;
 
     if args.is_empty() {
         return Err("usage: cos trace span <span-name>".into());
@@ -229,7 +229,7 @@ fn cmd_span(args: &[String]) -> Result<Value, String> {
 // ---------------------------------------------------------------------------
 
 fn cmd_span_end(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Write).map_err(|v| v.to_string())?;
+    require_or_json(Verb::DATA_LOG_WRITE, Scope::wild()).map_err(|v| v.to_string())?;
 
     let trace_id = std::env::var("COS_TRACE_ID").map_err(|_| "COS_TRACE_ID not set".to_string())?;
     if trace_id.is_empty() {
@@ -317,7 +317,7 @@ fn cmd_span_end(args: &[String]) -> Result<Value, String> {
 // ---------------------------------------------------------------------------
 
 fn cmd_show(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::DATA_LOG_READ, Scope::wild()).map_err(|v| v.to_string())?;
 
     if args.is_empty() {
         return Err("usage: cos trace show <trace-id>".into());
@@ -471,7 +471,7 @@ fn cmd_show(args: &[String]) -> Result<Value, String> {
 // ---------------------------------------------------------------------------
 
 fn cmd_list(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::DATA_LOG_READ, Scope::wild()).map_err(|v| v.to_string())?;
 
     // Parse flags
     let mut status_filter: Option<String> = None;
@@ -607,6 +607,10 @@ mod tests {
             let dir = std::env::temp_dir().join(format!("cos-test-shared-{}", std::process::id()));
             let _ = fs::create_dir_all(&dir);
             std::env::set_var("COS_DATA_DIR", &dir);
+            // Tests don't set COS_SESSION; the new caps gate (strict by
+            // default) would deny every trace op without an explicit
+            // permissive override.
+            std::env::set_var("COS_PERMS_MODE", "permissive");
         });
         // Clear trace env vars to prevent cross-test pollution
         std::env::remove_var("COS_TRACE_ID");
