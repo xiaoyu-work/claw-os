@@ -106,7 +106,10 @@ for f in "${FEATURE_LIST[@]}"; do
 
     # 3a. Install packages.txt entries via apt inside chroot.
     if [ -f "$feature_dir/packages.txt" ]; then
-        pkgs=$(grep -v '^\s*#' "$feature_dir/packages.txt" | grep -v '^\s*$' | tr '\n' ' ')
+        # Strip comments and blank lines. Guard with `|| true` so a
+        # packages.txt that is entirely comments (e.g. apt-source) does
+        # not return exit 1 from grep and trip `set -o pipefail`.
+        pkgs=$( { grep -vE '^\s*(#|$)' "$feature_dir/packages.txt" || true; } | tr '\n' ' ')
         if [ -n "$pkgs" ]; then
             echo "  :: apt install $pkgs"
             chroot "$ROOTFS" apt-get update -qq
