@@ -24,7 +24,7 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
 
-use crate::policy::{self, OpType};
+use crate::caps::{require_or_json, Scope, Verb};
 use chrono::Timelike;
 
 // ---------------------------------------------------------------------------
@@ -590,7 +590,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 ///
 /// Usage: cos cron add <id> --schedule "*/5 * * * *" --command "..." [options]
 fn cmd_add(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::System).map_err(|v| v.to_string())?;
+    require_or_json(Verb::TIME_CRON, Scope::wild()).map_err(|v| v.to_string())?;
 
     let id = args.first().ok_or(
         "usage: cos cron add <id> --schedule \"EXPR\" --command \"CMD\" [--description TEXT] \
@@ -719,7 +719,7 @@ fn cmd_add(args: &[String]) -> Result<Value, String> {
 
 /// Remove a cron job by ID.
 fn cmd_remove(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::System).map_err(|v| v.to_string())?;
+    require_or_json(Verb::TIME_CRON, Scope::wild()).map_err(|v| v.to_string())?;
 
     let id = args.first().ok_or("usage: cos cron remove <id>")?;
     let path = job_path(id);
@@ -740,7 +740,7 @@ fn cmd_remove(args: &[String]) -> Result<Value, String> {
 
 /// List all cron jobs with summary status.
 fn cmd_list(_args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::TIME_CRON, Scope::wild()).map_err(|v| v.to_string())?;
 
     let jobs = list_all_jobs()?;
     let job_list: Vec<Value> = jobs
@@ -771,7 +771,7 @@ fn cmd_list(_args: &[String]) -> Result<Value, String> {
 
 /// Detailed status of a specific job.
 fn cmd_status(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::TIME_CRON, Scope::wild()).map_err(|v| v.to_string())?;
 
     let id = args.first().ok_or("usage: cos cron status <id>")?;
     let job = load_job(id)?;
@@ -781,7 +781,7 @@ fn cmd_status(args: &[String]) -> Result<Value, String> {
 
 /// Enable a disabled job.
 fn cmd_enable(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::System).map_err(|v| v.to_string())?;
+    require_or_json(Verb::TIME_CRON, Scope::wild()).map_err(|v| v.to_string())?;
 
     let id = args.first().ok_or("usage: cos cron enable <id>")?;
     let mut job = load_job(id)?;
@@ -801,7 +801,7 @@ fn cmd_enable(args: &[String]) -> Result<Value, String> {
 
 /// Disable a job without removing it.
 fn cmd_disable(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::System).map_err(|v| v.to_string())?;
+    require_or_json(Verb::TIME_CRON, Scope::wild()).map_err(|v| v.to_string())?;
 
     let id = args.first().ok_or("usage: cos cron disable <id>")?;
     let mut job = load_job(id)?;
@@ -820,7 +820,7 @@ fn cmd_disable(args: &[String]) -> Result<Value, String> {
 ///
 /// Usage: cos cron logs <id> [--limit N]
 fn cmd_logs(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::DATA_LOG_READ, Scope::wild()).map_err(|v| v.to_string())?;
 
     let id = args
         .first()
@@ -856,7 +856,7 @@ fn cmd_logs(args: &[String]) -> Result<Value, String> {
 
 /// Manually trigger a job immediately.
 fn cmd_run(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Exec).map_err(|v| v.to_string())?;
+    require_or_json(Verb::PROC_SPAWN, Scope::wild()).map_err(|v| v.to_string())?;
 
     let id = args.first().ok_or("usage: cos cron run <id>")?;
     let mut job = load_job(id)?;
@@ -914,7 +914,7 @@ fn cmd_run(args: &[String]) -> Result<Value, String> {
 ///
 /// Usage: cos cron tick
 fn cmd_tick(_args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::System).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_KERNEL, Scope::wild()).map_err(|v| v.to_string())?;
 
     let now = chrono::Utc::now();
     let jobs = list_all_jobs()?;
@@ -1009,12 +1009,19 @@ fn cmd_tick(_args: &[String]) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::sync::Once;
+    static PERMS_INIT: Once = Once::new();
+    fn perms_init() {
+        PERMS_INIT.call_once(|| std::env::set_var("COS_PERMS_MODE", "permissive"));
+    }
     use chrono::TimeZone;
 
     // -- Cron expression matching --
 
     #[test]
     fn test_cron_matches_every_minute() {
+        perms_init();
         let t = chrono::Utc
             .with_ymd_and_hms(2026, 3, 25, 14, 30, 0)
             .unwrap();
@@ -1026,6 +1033,7 @@ mod tests {
 
     #[test]
     fn test_cron_matches_specific() {
+        perms_init();
         let t = chrono::Utc
             .with_ymd_and_hms(2026, 3, 25, 14, 30, 0)
             .unwrap();
@@ -1036,6 +1044,7 @@ mod tests {
 
     #[test]
     fn test_cron_matches_step() {
+        perms_init();
         // */5 means 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55
         for min in [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55] {
             let t = chrono::Utc
@@ -1056,6 +1065,7 @@ mod tests {
 
     #[test]
     fn test_cron_matches_range() {
+        perms_init();
         for min in 1..=5 {
             let t = chrono::Utc
                 .with_ymd_and_hms(2026, 3, 25, 12, min, 0)
@@ -1070,6 +1080,7 @@ mod tests {
 
     #[test]
     fn test_cron_matches_list() {
+        perms_init();
         for min in [1, 15, 30] {
             let t = chrono::Utc
                 .with_ymd_and_hms(2026, 3, 25, 12, min, 0)
@@ -1085,6 +1096,7 @@ mod tests {
 
     #[test]
     fn test_field_matches_star() {
+        perms_init();
         for v in 0..=59 {
             assert!(field_matches("*", v, 0, 59));
         }
@@ -1092,6 +1104,7 @@ mod tests {
 
     #[test]
     fn test_field_matches_step_with_range() {
+        perms_init();
         // 1-10/3 matches 1, 4, 7, 10
         assert!(field_matches("1-10/3", 1, 0, 59));
         assert!(field_matches("1-10/3", 4, 0, 59));
@@ -1103,6 +1116,7 @@ mod tests {
 
     #[test]
     fn test_cron_invalid_fields() {
+        perms_init();
         let t = chrono::Utc
             .with_ymd_and_hms(2026, 3, 25, 14, 30, 0)
             .unwrap();
@@ -1114,6 +1128,7 @@ mod tests {
 
     #[test]
     fn test_cron_day_of_week() {
+        perms_init();
         // 2026-03-25 is a Wednesday (day 3)
         let t = chrono::Utc.with_ymd_and_hms(2026, 3, 25, 12, 0, 0).unwrap();
         assert!(cron_matches("0 12 * * 3", &t)); // Wednesday
@@ -1124,6 +1139,7 @@ mod tests {
 
     #[test]
     fn test_next_run_time_every_minute() {
+        perms_init();
         let from = chrono::Utc
             .with_ymd_and_hms(2026, 3, 25, 14, 30, 0)
             .unwrap();
@@ -1138,6 +1154,7 @@ mod tests {
 
     #[test]
     fn test_next_run_time_specific() {
+        perms_init();
         let from = chrono::Utc
             .with_ymd_and_hms(2026, 3, 25, 14, 30, 0)
             .unwrap();
@@ -1152,6 +1169,7 @@ mod tests {
 
     #[test]
     fn test_overlap_policy_deserialization() {
+        perms_init();
         let policies = [
             (r#""Skip""#, OverlapPolicy::Skip),
             (r#""Queue""#, OverlapPolicy::Queue),
@@ -1167,6 +1185,7 @@ mod tests {
 
     #[test]
     fn test_overlap_policy_default() {
+        perms_init();
         let policy: OverlapPolicy = Default::default();
         assert_eq!(policy, OverlapPolicy::Skip);
     }
@@ -1175,6 +1194,7 @@ mod tests {
 
     #[test]
     fn test_validate_id_valid() {
+        perms_init();
         assert!(validate_id("my-job").is_ok());
         assert!(validate_id("job_1").is_ok());
         assert!(validate_id("test123").is_ok());
@@ -1182,6 +1202,7 @@ mod tests {
 
     #[test]
     fn test_validate_id_invalid() {
+        perms_init();
         assert!(validate_id("").is_err());
         assert!(validate_id("has space").is_err());
         assert!(validate_id("has/slash").is_err());
@@ -1192,12 +1213,14 @@ mod tests {
 
     #[test]
     fn test_tail_string_short() {
+        perms_init();
         let short = "hello world";
         assert_eq!(tail_string(short), "hello world");
     }
 
     #[test]
     fn test_tail_string_long() {
+        perms_init();
         let long = "x".repeat(4000);
         let tailed = tail_string(&long);
         assert!(tailed.len() <= TAIL_BYTES + 4); // +4 for "..."
@@ -1206,7 +1229,7 @@ mod tests {
 
     // -- storage integration tests (use temp dir) --
 
-    use std::sync::{Mutex, Once};
+    use std::sync::Mutex;
 
     static CRON_INIT: Once = Once::new();
     static CRON_LOCK: Mutex<()> = Mutex::new(());
@@ -1233,6 +1256,7 @@ mod tests {
 
     #[test]
     fn test_add_and_list() {
+        perms_init();
         let _g = cron_setup();
 
         let args = vec![
@@ -1258,6 +1282,7 @@ mod tests {
 
     #[test]
     fn test_add_duplicate() {
+        perms_init();
         let _g = cron_setup();
 
         let args = vec![
@@ -1274,6 +1299,7 @@ mod tests {
 
     #[test]
     fn test_remove() {
+        perms_init();
         let _g = cron_setup();
 
         let args = vec![
@@ -1295,6 +1321,7 @@ mod tests {
 
     #[test]
     fn test_remove_nonexistent() {
+        perms_init();
         let _g = cron_setup();
         let err = cmd_remove(&["no-such-job".to_string()]).unwrap_err();
         assert!(err.contains("not found"));
@@ -1302,6 +1329,7 @@ mod tests {
 
     #[test]
     fn test_enable_disable() {
+        perms_init();
         let _g = cron_setup();
 
         let args = vec![
@@ -1334,6 +1362,7 @@ mod tests {
 
     #[test]
     fn test_status() {
+        perms_init();
         let _g = cron_setup();
 
         let args = vec![
@@ -1364,6 +1393,7 @@ mod tests {
 
     #[test]
     fn test_run_dispatch() {
+        perms_init();
         let _g = cron_setup();
 
         // Add a simple echo job
@@ -1392,6 +1422,7 @@ mod tests {
 
     #[test]
     fn test_logs_limit() {
+        perms_init();
         let _g = cron_setup();
 
         // Create a job and save multiple log entries
@@ -1434,12 +1465,14 @@ mod tests {
 
     #[test]
     fn test_unknown_command() {
+        perms_init();
         let err = run("nonexistent", &[]).unwrap_err();
         assert!(err.contains("unknown cron command"));
     }
 
     #[test]
     fn test_add_missing_schedule() {
+        perms_init();
         let _g = cron_setup();
         let args = vec![
             "bad-job".to_string(),
@@ -1452,6 +1485,7 @@ mod tests {
 
     #[test]
     fn test_add_missing_command() {
+        perms_init();
         let _g = cron_setup();
         let args = vec![
             "bad-job".to_string(),
@@ -1464,6 +1498,7 @@ mod tests {
 
     #[test]
     fn test_add_invalid_schedule() {
+        perms_init();
         let _g = cron_setup();
         let args = vec![
             "bad-sched".to_string(),
@@ -1478,6 +1513,7 @@ mod tests {
 
     #[test]
     fn test_tick_no_jobs() {
+        perms_init();
         let _g = cron_setup();
         let result = cmd_tick(&[]).unwrap();
         assert_eq!(result["processed"], 0);
@@ -1485,6 +1521,7 @@ mod tests {
 
     #[test]
     fn test_cronjob_serialization_roundtrip() {
+        perms_init();
         let job = CronJob {
             id: "roundtrip".to_string(),
             schedule: "*/10 * * * *".to_string(),
@@ -1512,6 +1549,7 @@ mod tests {
 
     #[test]
     fn test_is_running() {
+        perms_init();
         let mut job = CronJob {
             id: "run-check".to_string(),
             schedule: "* * * * *".to_string(),
