@@ -216,7 +216,9 @@ fn wizard_cmd() -> Result<Value, String> {
     }
 
     // ---- Step 3: credential ---------------------------------------------
-    let credential_name: Option<String> = if provider_needs_credential(&provider) {
+    let mut credential_name: Option<String> = None;
+    let mut credential_env: Option<String> = None;
+    if provider_needs_credential(&provider) {
         let _ = writeln!(e);
         let _ = writeln!(
             e,
@@ -229,19 +231,51 @@ fn wizard_cmd() -> Result<Value, String> {
             return Err("API key cannot be empty".into());
         }
         let name = format!("{provider}_api_key");
-        store_credential(&name, &key)?;
-        let _ = writeln!(
-            e,
-            "✓ credential stored as `{name}` in namespace `agent`"
-        );
-        Some(name)
+        match store_credential(&name, &key) {
+            Ok(()) => {
+                let _ = writeln!(
+                    e,
+                    "✓ credential stored as `{name}` in namespace `agent`"
+                );
+                credential_name = Some(name);
+            }
+            Err(store_err) => {
+                let env_name = default_env_name(&provider);
+                let _ = writeln!(e);
+                let _ = writeln!(
+                    e,
+                    "⚠  credential store rejected the key (likely a permission gate):"
+                );
+                let _ = writeln!(e, "   {store_err}");
+                let _ = writeln!(e);
+                let _ = writeln!(
+                    e,
+                    "Falling back to environment-variable mode: config will read the key"
+                );
+                let _ = writeln!(
+                    e,
+                    "from `${env_name}`. Add this to your shell rc (or systemd EnvironmentFile):"
+                );
+                let _ = writeln!(e);
+                let _ = writeln!(e, "    export {env_name}='{key}'");
+                let _ = writeln!(e);
+                let _ = writeln!(
+                    e,
+                    "To store the key in the encrypted credential store instead, rerun under"
+                );
+                let _ = writeln!(
+                    e,
+                    "a privileged session (e.g. `sudo COS_CONFIG_PATH=$COS_CONFIG_PATH cos agent setup`)."
+                );
+                credential_env = Some(env_name);
+            }
+        }
     } else {
         let _ = writeln!(
             e,
             "(provider `{provider}` does not need an API key; skipping credential step)"
         );
-        None
-    };
+    }
 
     // ---- Step 4: persist config ----------------------------------------
     let path = config_path();
@@ -261,6 +295,10 @@ fn wizard_cmd() -> Result<Value, String> {
     agent.insert("model".into(), json!(model));
     if let Some(ref n) = credential_name {
         agent.insert("api_key_credential".into(), json!(n));
+        agent.remove("api_key_env");
+    } else if let Some(ref env_name) = credential_env {
+        agent.insert("api_key_env".into(), json!(env_name));
+        agent.insert("api_key_credential".into(), Value::Null);
     }
     write_config_atomic(&path, &cfg)?;
 
@@ -274,9 +312,25 @@ fn wizard_cmd() -> Result<Value, String> {
         "provider": provider,
         "model": model,
         "api_key_credential": credential_name,
+        "api_key_env": credential_env,
         "config_path": path.display().to_string(),
         "next": "cos agent chat",
     }))
+}
+
+fn default_env_name(provider: &str) -> String {
+    match provider {
+        "anthropic" => "ANTHROPIC_API_KEY".into(),
+        "openai" => "OPENAI_API_KEY".into(),
+        "openai_compat" => "OPENAI_API_KEY".into(),
+        "gemini" => "GEMINI_API_KEY".into(),
+        "bedrock" => "AWS_BEARER_TOKEN_BEDROCK".into(),
+        "xai" => "XAI_API_KEY".into(),
+        "deepseek" => "DEEPSEEK_API_KEY".into(),
+        "openrouter" => "OPENROUTER_API_KEY".into(),
+        "ollama" => "OLLAMA_API_KEY".into(),
+        other => format!("{}_API_KEY", other.to_uppercase()),
+    }
 }
 
 // ---------------------------------------------------------------------------
