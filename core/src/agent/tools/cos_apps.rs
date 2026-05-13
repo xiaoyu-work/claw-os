@@ -193,6 +193,25 @@ impl Tool for CosAppTool {
             })
             .unwrap_or_default();
 
+        // Coarse capability gate. Each cos app is reached through
+        // `agent.invoke` with a Name scope equal to the app name —
+        // e.g. holding `agent.invoke:fs` (or `agent.invoke:*`) is the
+        // permission to dispatch *any* `cos_app_fs` command. The
+        // fine-grained per-arg checks (e.g. `fs.read` on a specific
+        // path) happen *inside* the Python app via
+        // `apps/_lib/policy.py::require`, where the args have already
+        // been parsed. Schema introspection bypasses this gate so
+        // tooling / the agent registry can still describe an app it
+        // is not allowed to call.
+        if command != "__schema__" {
+            if let Err(denial) = crate::caps::require(
+                crate::caps::Verb::AGENT_INVOKE,
+                crate::caps::Scope::name(self.app),
+            ) {
+                return ToolResult::err(denial.summary());
+            }
+        }
+
         let app_name = self.app.to_string();
         let app_dir = apps_root().join(&app_name);
         let data = data_dir();
@@ -325,6 +344,77 @@ mod tests {
             None => std::env::remove_var("COS_APPS_DIR"),
         }
         assert!(result.is_error, "expected error for missing app");
+    }
+
+    #[tokio::test]
+    async fn strict_mode_without_session_denies_invocation() {
+        // With strict perms and no session, the capability gate must
+        // refuse before we ever reach the bridge. Other tests set
+        // env in parallel; we serialise via a process-wide lock.
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+        let prev_mode = std::env::var("COS_PERMS_MODE").ok();
+        let prev_session = std::env::var("COS_SESSION").ok();
+        std::env::set_var("COS_PERMS_MODE", "strict");
+        std::env::remove_var("COS_SESSION");
+
+        let tool = CosAppTool::new("cos_app_fs", "fs", "test", &["ls"]);
+        let result = tool.exec(json!({ "command": "ls", "args": [] })).await;
+
+        match prev_mode {
+            Some(v) => std::env::set_var("COS_PERMS_MODE", v),
+            None => std::env::remove_var("COS_PERMS_MODE"),
+        }
+        if let Some(v) = prev_session {
+            std::env::set_var("COS_SESSION", v);
+        }
+
+        assert!(result.is_error, "expected denial in strict mode");
+        // Summary always names the verb that was denied.
+        assert!(
+            result.content.contains("agent.invoke"),
+            "denial summary should mention the verb, got: {}",
+            result.content
+        );
+    }
+
+    #[tokio::test]
+    async fn schema_introspection_bypasses_capability_gate() {
+        // `__schema__` is the introspection escape hatch — the agent
+        // registry must be able to describe an app it cannot run.
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+        let prev_mode = std::env::var("COS_PERMS_MODE").ok();
+        let prev_apps = std::env::var("COS_APPS_DIR").ok();
+        std::env::set_var("COS_PERMS_MODE", "strict");
+        // Force a missing app dir so the bridge errors rather than
+        // launching python — we only care that we got *past* the gate.
+        std::env::set_var("COS_APPS_DIR", std::env::temp_dir());
+
+        let tool = CosAppTool::new("cos_app_fs", "fs", "test", &["ls"]);
+        let result = tool.exec(json!({ "command": "__schema__", "args": [] })).await;
+
+        match prev_mode {
+            Some(v) => std::env::set_var("COS_PERMS_MODE", v),
+            None => std::env::remove_var("COS_PERMS_MODE"),
+        }
+        match prev_apps {
+            Some(v) => std::env::set_var("COS_APPS_DIR", v),
+            None => std::env::remove_var("COS_APPS_DIR"),
+        }
+
+        // The bridge will error (no python app installed under temp),
+        // but the error must NOT be a capability denial — the schema
+        // path is supposed to skip the gate entirely.
+        if result.is_error {
+            assert!(
+                !result.content.contains("agent.invoke"),
+                "__schema__ should bypass the capability gate, got: {}",
+                result.content
+            );
+        }
     }
 
     #[test]

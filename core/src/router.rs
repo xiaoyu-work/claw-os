@@ -16,6 +16,7 @@ use crate::engine_pkg;
 use crate::ipc;
 use crate::model;
 use crate::netfilter;
+use crate::caps;
 use crate::perms;
 use crate::policy;
 use crate::proc;
@@ -210,6 +211,22 @@ fn run_app_command(
     let audit = audit_path();
     let data = data_dir();
     let apps = apps_dir().to_string_lossy().to_string();
+
+    // Capability gate: callers (interactive CLI or agent) must hold
+    // `agent.invoke` on the app's name to dispatch any command.
+    // Schema introspection is allowed unconditionally so tooling can
+    // describe apps it cannot run. In permissive mode (no
+    // `COS_SESSION` set), require() lets the call through, which is
+    // the right default for direct user-terminal invocation during
+    // the migration.
+    if command != "__schema__" {
+        if let Err(denial) = caps::require(
+            caps::Verb::AGENT_INVOKE,
+            caps::Scope::name(app_name),
+        ) {
+            return Err(denial.summary());
+        }
+    }
 
     let result = bridge::run_python_app(&app.dir, command, args, &data, &apps);
 
