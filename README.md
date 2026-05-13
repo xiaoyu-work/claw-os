@@ -79,7 +79,7 @@ cos checkpoint create "clean state"    # snapshot the workspace
 cos checkpoint diff                    # see what changed
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) to build from source.
+See [docs/00-features.md](docs/00-features.md) for the complete feature catalog, or [CONTRIBUTING.md](CONTRIBUTING.md) to build from source.
 
 ## License
 
