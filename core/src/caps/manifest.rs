@@ -1,16 +1,16 @@
-//! App manifest v2 — declarative capability requirements.
+//! App manifest — declarative capability requirements.
 //!
-//! `manifest_version: 2` makes apps speak the same vocabulary as the
-//! kernel: each operation lists the [`Cap`](super::cap::Cap)s it needs,
-//! and the kernel mediates every invocation through that list. There
-//! is no implicit access path; if an op doesn't declare a need, it
-//! cannot exercise the corresponding verb.
+//! Every app on Claw OS ships an `app.json` in this shape. Apps speak
+//! the same vocabulary as the kernel: each operation lists the
+//! [`Cap`](super::cap::Cap)s it needs, and the kernel mediates every
+//! invocation through that list. There is no implicit access path; if
+//! an op doesn't declare a need, it cannot exercise the corresponding
+//! verb.
 //!
 //! ## JSON shape (informal)
 //!
 //! ```jsonc
 //! {
-//!   "manifest_version": 2,
 //!   "id": "fs",
 //!   "version": "0.2.0",
 //!   "name":    "Files",
@@ -52,7 +52,6 @@
 //!
 //! ## Key rules enforced by [`Manifest::validate`]
 //!
-//! - `manifest_version` must be exactly `2`.
 //! - `id` is `[a-z][a-z0-9_-]*` and matches the directory name (the
 //!   caller checks the latter).
 //! - Every `name`, `label`, `summary`, and `why` must include at least
@@ -80,7 +79,6 @@ use super::verb::Verb;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Manifest {
-    pub manifest_version: u8,
     pub id: String,
     pub version: String,
     pub name: LocalizedText,
@@ -122,13 +120,27 @@ pub enum Runtime {
 }
 
 impl Runtime {
-    /// Default entry file for this runtime.
+    /// Default entry file for this runtime. Platform-aware: Windows
+    /// gets `.bat` / `.exe` so packaged apps can ship a single
+    /// manifest that works on every OS.
     pub fn default_entry(self) -> &'static str {
         match self {
             Runtime::Python => "main.py",
             Runtime::Node => "main.js",
-            Runtime::Shell => "main.sh",
-            Runtime::Binary => "main",
+            Runtime::Shell => {
+                if cfg!(windows) {
+                    "main.bat"
+                } else {
+                    "main.sh"
+                }
+            }
+            Runtime::Binary => {
+                if cfg!(windows) {
+                    "main.exe"
+                } else {
+                    "main"
+                }
+            }
         }
     }
 }
@@ -232,8 +244,6 @@ pub enum ScopeBinding {
 pub enum ManifestError {
     #[error("invalid JSON: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("unsupported manifest_version {0}; expected 2")]
-    UnsupportedVersion(u8),
     #[error("invalid manifest id `{0}`: must match [a-z][a-z0-9_-]*")]
     InvalidId(String),
     #[error("operation `{op}`: arg `{arg}` declared twice")]
@@ -271,7 +281,7 @@ pub enum ManifestError {
 }
 
 impl Manifest {
-    /// Parse a v2 manifest from JSON text.
+    /// Parse a manifest from JSON text.
     pub fn from_json(s: &str) -> Result<Self, ManifestError> {
         let m: Manifest = serde_json::from_str(s)?;
         m.validate()?;
@@ -281,9 +291,6 @@ impl Manifest {
     /// Validate the manifest's invariants. Called automatically by
     /// [`from_json`].
     pub fn validate(&self) -> Result<(), ManifestError> {
-        if self.manifest_version != 2 {
-            return Err(ManifestError::UnsupportedVersion(self.manifest_version));
-        }
         if !is_valid_id(&self.id) {
             return Err(ManifestError::InvalidId(self.id.clone()));
         }
@@ -440,7 +447,6 @@ mod tests {
     fn minimal_manifest_parses() {
         let m = parse(
             r#"{
-              "manifest_version": 2,
               "id": "fs",
               "version": "0.2.0",
               "name": "Files"
@@ -452,17 +458,9 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_version_is_rejected() {
-        let err =
-            Manifest::from_json(r#"{"manifest_version": 1, "id":"x", "version":"0", "name":"X"}"#)
-                .unwrap_err();
-        assert!(matches!(err, ManifestError::UnsupportedVersion(1)));
-    }
-
-    #[test]
     fn invalid_id_rejected() {
         let err = Manifest::from_json(
-            r#"{"manifest_version":2,"id":"FS!","version":"0","name":"X"}"#,
+            r#"{"id":"FS!","version":"0","name":"X"}"#,
         )
         .unwrap_err();
         assert!(matches!(err, ManifestError::InvalidId(_)));
@@ -472,7 +470,6 @@ mod tests {
     fn unknown_verb_rejected_at_parse_time() {
         let err = Manifest::from_json(
             r#"{
-              "manifest_version": 2,
               "id": "fs",
               "version": "0.1",
               "name": "Files",
@@ -497,7 +494,6 @@ mod tests {
     fn need_referencing_undeclared_arg_rejected() {
         let err = Manifest::from_json(
             r#"{
-              "manifest_version": 2,
               "id": "fs",
               "version": "0.1",
               "name": "Files",
@@ -527,7 +523,6 @@ mod tests {
     fn need_binding_to_text_arg_rejected() {
         let err = Manifest::from_json(
             r#"{
-              "manifest_version": 2,
               "id": "fs",
               "version": "0.1",
               "name": "Files",
@@ -550,7 +545,6 @@ mod tests {
     fn duplicate_arg_rejected() {
         let err = Manifest::from_json(
             r#"{
-              "manifest_version": 2,
               "id": "fs",
               "version": "0.1",
               "name": "Files",
@@ -573,7 +567,6 @@ mod tests {
     fn missing_english_in_top_level_name_rejected() {
         let err = Manifest::from_json(
             r#"{
-              "manifest_version": 2,
               "id": "fs",
               "version": "0.1",
               "name": {"zh-CN": "文件"}
@@ -587,7 +580,6 @@ mod tests {
     fn missing_english_in_op_label_rejected() {
         let err = Manifest::from_json(
             r#"{
-              "manifest_version": 2,
               "id": "fs",
               "version": "0.1",
               "name": "Files",
@@ -609,7 +601,6 @@ mod tests {
     fn resolve_needs_substitutes_runtime_arg_value() {
         let m = parse(
             r#"{
-              "manifest_version": 2,
               "id": "fs",
               "version": "0.1",
               "name": "Files",
@@ -638,7 +629,6 @@ mod tests {
     fn resolve_needs_with_fixed_scope() {
         let m = parse(
             r#"{
-              "manifest_version": 2,
               "id": "log",
               "version": "0.1",
               "name": "Log",
@@ -663,7 +653,6 @@ mod tests {
     fn resolve_needs_missing_arg_at_runtime_is_error() {
         let m = parse(
             r#"{
-              "manifest_version": 2,
               "id": "fs",
               "version": "0.1",
               "name": "Files",
@@ -693,7 +682,7 @@ mod tests {
     #[test]
     fn runtime_default_is_python() {
         let m = parse(
-            r#"{"manifest_version":2,"id":"x","version":"0","name":"X"}"#,
+            r#"{"id":"x","version":"0","name":"X"}"#,
         );
         assert_eq!(m.runtime, Runtime::Python);
         assert_eq!(m.runtime.default_entry(), "main.py");
@@ -702,7 +691,6 @@ mod tests {
     #[test]
     fn full_example_round_trips() {
         let src = r#"{
-          "manifest_version": 2,
           "id": "fs",
           "version": "0.2.0",
           "name": "Files",

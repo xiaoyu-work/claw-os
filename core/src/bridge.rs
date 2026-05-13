@@ -2,73 +2,7 @@ use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use crate::policy::{self, OpType};
-
-/// Runtime selector for [`run_app`]. Mirrors the `runtime` field in
-/// `app.json`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Runtime {
-    Python,
-    Node,
-    Shell,
-    Binary,
-}
-
-impl Runtime {
-    pub fn parse(s: Option<&str>) -> Option<Self> {
-        match s.unwrap_or("python").to_ascii_lowercase().as_str() {
-            "python" | "py" => Some(Runtime::Python),
-            "node" | "js" | "node.js" | "nodejs" => Some(Runtime::Node),
-            "shell" | "bash" | "sh" => Some(Runtime::Shell),
-            "binary" | "bin" | "exe" => Some(Runtime::Binary),
-            _ => None,
-        }
-    }
-
-    pub fn default_entry(self) -> &'static str {
-        match self {
-            Runtime::Python => "main.py",
-            Runtime::Node => "main.js",
-            Runtime::Shell => {
-                if cfg!(windows) {
-                    "main.bat"
-                } else {
-                    "main.sh"
-                }
-            }
-            Runtime::Binary => {
-                if cfg!(windows) {
-                    "main.exe"
-                } else {
-                    "main"
-                }
-            }
-        }
-    }
-}
-
-/// Infer the policy OpType from a Python app command name.
-fn infer_op_type(command: &str) -> OpType {
-    match command {
-        "read" | "ls" | "stat" | "search" | "recent" | "query" | "tables" | "schema"
-        | "databases" | "get" | "list" | "info" | "tail" | "has" | "which" | "__schema__" => {
-            OpType::Read
-        }
-
-        "write" | "mkdir" | "tag" | "set" | "exec" | "send" => OpType::Write,
-
-        "rm" | "del" | "clear" | "dump" => OpType::Delete,
-
-        "run" | "script" | "start" | "stop" | "ps" | "submit" => OpType::Exec,
-
-        "fetch" | "download" => OpType::Net,
-
-        "need" | "install" => OpType::System,
-
-        // Unknown commands default to Exec (conservative but not overly restrictive)
-        _ => OpType::Exec,
-    }
-}
+use crate::caps::manifest::Runtime;
 
 /// Run a Python app's main.py via subprocess.
 ///
@@ -83,9 +17,6 @@ pub fn run_python_app(
     data_dir: &str,
     apps_dir: &str,
 ) -> Result<Option<String>, String> {
-    let op = infer_op_type(command);
-    policy::require(op).map_err(|v| v.to_string())?;
-
     let main_py = app_dir.join("main.py");
     if !main_py.is_file() {
         return Err(format!("app has no main.py at {}", main_py.display()));
@@ -208,21 +139,15 @@ pub fn run_app(
     apps_dir: &str,
 ) -> Result<Option<String>, String> {
     // Load the manifest if present so we can pick a runtime. Apps
-    // that ship without app.json are treated as legacy python
-    // apps for back-compat.
+    // that ship without app.json default to the Python runtime — this
+    // lets ad-hoc `main.py` apps in development still run.
     let manifest_path = app_dir.join("app.json");
     let (runtime, entry) = if manifest_path.is_file() {
         let body = std::fs::read_to_string(&manifest_path)
             .map_err(|e| format!("read {}: {}", manifest_path.display(), e))?;
-        let manifest: crate::apps::AppManifest = serde_json::from_str(&body)
+        let manifest = crate::apps::AppManifest::from_json(&body)
             .map_err(|e| format!("parse {}: {}", manifest_path.display(), e))?;
-        let rt = Runtime::parse(manifest.runtime.as_deref()).ok_or_else(|| {
-            format!(
-                "unknown runtime '{}' in {}",
-                manifest.runtime.unwrap_or_default(),
-                manifest_path.display()
-            )
-        })?;
+        let rt = manifest.runtime;
         let entry = manifest
             .entry
             .unwrap_or_else(|| rt.default_entry().to_string());
@@ -232,13 +157,10 @@ pub fn run_app(
     };
 
     if matches!(runtime, Runtime::Python) {
-        // Override the entry-point file by symlink / copy is out of
-        // scope; pythonic apps without main.py should opt into the
-        // entry override at the manifest level. For now the python
-        // path uses the existing wrapper which always loads main.py.
-        // Custom entries fall back to the legacy wrapper if it
-        // matches main.py exactly; otherwise we surface a clear
-        // error.
+        // Pythonic apps always run through the shared wrapper which
+        // loads `main.py`. A custom entry name is currently unsupported
+        // for the python runtime; surface a clear error rather than
+        // silently ignoring it.
         if entry != "main.py" {
             return Err(format!(
                 "python runtime currently requires entry='main.py' (got '{entry}'); \
@@ -247,9 +169,6 @@ pub fn run_app(
         }
         return run_python_app(app_dir, command, args, data_dir, apps_dir);
     }
-
-    let op = infer_op_type(command);
-    policy::require(op).map_err(|v| v.to_string())?;
 
     let entry_path = app_dir.join(&entry);
     if !entry_path.is_file() {
@@ -339,27 +258,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn runtime_parses_aliases() {
-        assert_eq!(Runtime::parse(None), Some(Runtime::Python));
-        assert_eq!(Runtime::parse(Some("python")), Some(Runtime::Python));
-        assert_eq!(Runtime::parse(Some("PY")), Some(Runtime::Python));
-        assert_eq!(Runtime::parse(Some("node")), Some(Runtime::Node));
-        assert_eq!(Runtime::parse(Some("nodejs")), Some(Runtime::Node));
-        assert_eq!(Runtime::parse(Some("shell")), Some(Runtime::Shell));
-        assert_eq!(Runtime::parse(Some("bash")), Some(Runtime::Shell));
-        assert_eq!(Runtime::parse(Some("binary")), Some(Runtime::Binary));
-        assert_eq!(Runtime::parse(Some("bin")), Some(Runtime::Binary));
-        assert_eq!(Runtime::parse(Some("exe")), Some(Runtime::Binary));
-        assert!(Runtime::parse(Some("rust")).is_none());
-        assert!(Runtime::parse(Some("")).is_none());
-    }
-
-    #[test]
     fn default_entries_are_runtime_aware() {
         assert_eq!(Runtime::Python.default_entry(), "main.py");
         assert_eq!(Runtime::Node.default_entry(), "main.js");
-        // Shell + Binary are platform-conditional; just assert
-        // non-empty rather than encode the host.
+        // Shell + Binary just need to be non-empty.
         assert!(!Runtime::Shell.default_entry().is_empty());
         assert!(!Runtime::Binary.default_entry().is_empty());
     }
@@ -384,7 +286,7 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         std::fs::write(
             tmp.join("app.json"),
-            r#"{"name":"x","version":"0","description":"","commands":{},"runtime":"python","entry":"alt.py"}"#,
+            r#"{"id":"x","version":"0","name":"X","runtime":"python","entry":"alt.py"}"#,
         )
         .unwrap();
         let err = run_app(&tmp, "ls", &[], "/tmp", "/tmp").unwrap_err();
@@ -402,13 +304,14 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         std::fs::write(
             tmp.join("app.json"),
-            r#"{"name":"x","version":"0","description":"","commands":{},"runtime":"rust"}"#,
+            r#"{"id":"x","version":"0","name":"X","runtime":"rust"}"#,
         )
         .unwrap();
         let err = run_app(&tmp, "ls", &[], "/tmp", "/tmp").unwrap_err();
+        // serde rejects unknown runtime values at parse time.
         assert!(
-            err.contains("unknown runtime"),
-            "expected unknown runtime error, got: {err}"
+            err.contains("unknown variant") || err.contains("runtime"),
+            "expected runtime parse error, got: {err}"
         );
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -420,7 +323,7 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         std::fs::write(
             tmp.join("app.json"),
-            r#"{"name":"x","version":"0","description":"","commands":{},"runtime":"node"}"#,
+            r#"{"id":"x","version":"0","name":"X","runtime":"node"}"#,
         )
         .unwrap();
         let err = run_app(&tmp, "ls", &[], "/tmp", "/tmp").unwrap_err();

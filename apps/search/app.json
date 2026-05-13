@@ -1,10 +1,24 @@
 {
-  "name": "search",
+  "id": "search",
   "version": "0.1.0",
-  "description": "Web and image search — Google Custom Search with Brave fallback",
-  "commands": {
-    "web": "Search the web for information (returns titles, URLs, snippets)",
-    "image": "Search for images (returns titles, URLs, thumbnails)"
+  "name": {
+    "en": "Web Search"
   },
-  "dependencies": {}
+  "summary": {
+    "en": "Web and image search — Google Custom Search with Brave fallback"
+  },
+  "icon": "🔎",
+  "runtime": "python",
+  "operations": {
+    "web": {
+      "label": {
+        "en": "Search the web for information (returns titles, URLs, snippets)"
+      }
+    },
+    "image": {
+      "label": {
+        "en": "Search for images (returns titles, URLs, thumbnails)"
+      }
+    }
+  }
 }

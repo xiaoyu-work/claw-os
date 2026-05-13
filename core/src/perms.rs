@@ -115,28 +115,41 @@ mod tests {
 
     #[test]
     fn check_no_scope_defaults_to_wild_and_permissive_allows() {
-        // Without COS_SESSION the default mode is permissive → allow.
-        // Save/restore env to avoid polluting other tests.
-        let prev = std::env::var("COS_SESSION").ok();
+        // With COS_PERMS_MODE=permissive (opt-in escape hatch) and no
+        // COS_SESSION, every check is allowed. Save/restore env to
+        // avoid polluting other tests.
+        let prev_sess = std::env::var("COS_SESSION").ok();
+        let prev_mode = std::env::var("COS_PERMS_MODE").ok();
         std::env::remove_var("COS_SESSION");
+        std::env::set_var("COS_PERMS_MODE", "permissive");
         let v = cmd_check(&["ui.notify".into()]).unwrap();
         assert_eq!(v["decision"], "allow");
-        if let Some(p) = prev {
+        if let Some(p) = prev_sess {
             std::env::set_var("COS_SESSION", p);
+        }
+        match prev_mode {
+            Some(m) => std::env::set_var("COS_PERMS_MODE", m),
+            None => std::env::remove_var("COS_PERMS_MODE"),
         }
     }
 
     #[test]
     fn check_with_path_scope_encodes_into_response() {
-        let prev = std::env::var("COS_SESSION").ok();
+        let prev_sess = std::env::var("COS_SESSION").ok();
+        let prev_mode = std::env::var("COS_PERMS_MODE").ok();
         std::env::remove_var("COS_SESSION");
+        std::env::set_var("COS_PERMS_MODE", "permissive");
         let v = cmd_check(&["fs.read".into(), "--path".into(), "/tmp/x".into()]).unwrap();
         assert_eq!(v["decision"], "allow");
         assert_eq!(v["verb"], "fs.read");
         assert_eq!(v["scope"]["kind"], "path");
         assert_eq!(v["scope"]["value"], "/tmp/x");
-        if let Some(p) = prev {
+        if let Some(p) = prev_sess {
             std::env::set_var("COS_SESSION", p);
+        }
+        match prev_mode {
+            Some(m) => std::env::set_var("COS_PERMS_MODE", m),
+            None => std::env::remove_var("COS_PERMS_MODE"),
         }
     }
 }

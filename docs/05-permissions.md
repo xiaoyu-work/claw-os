@@ -11,7 +11,7 @@ This guide explains the permission system from a user's
 perspective: what each capability means, what you see when you
 grant or refuse one, and how to undo something an agent did.
 
-> **Developer reading this?** See `docs/06-app-manifest-v2.md`
+> **Developer reading this?** See `docs/06-app-manifest.md`
 > for how apps declare the capabilities they need and how
 > enforcement is wired in code.
 
@@ -273,7 +273,7 @@ $ cos perms check fs.delete --path /etc/passwd
 
 Apps shell out to this command to gate every operation that
 touches the world; the JSON output is therefore part of a stable
-contract — see `docs/06-app-manifest-v2.md`.
+contract — see `docs/06-app-manifest.md`.
 
 ---
 
@@ -282,21 +282,19 @@ contract — see `docs/06-app-manifest-v2.md`.
 The kernel has two modes, controlled by the `COS_PERMS_MODE`
 environment variable.
 
-- **`permissive`** *(default during the migration)* — if no
-  active session is set, any operation is allowed. This exists
-  so the kernel keeps working while we move every legacy code
-  path to the new model. **You will switch this off eventually.**
-- **`strict`** — if there is no active session, or the session
-  has no capabilities matching the request, the kernel refuses.
+- **`strict`** *(default)* — if there is no active session, or the
+  session has no capabilities matching the request, the kernel
+  refuses. This is the normal mode for everyday use.
+- **`permissive`** — opt-in escape hatch. If no active session is
+  set, any operation is allowed. Use this only for first-boot
+  installer scripts that run before the session registry exists.
+  **Never set this on a multi-user machine.**
 
-You can opt into strict mode for a specific shell:
+You can flip into permissive mode for a single command:
 
 ```bash
-export COS_PERMS_MODE=strict
+COS_PERMS_MODE=permissive cos pkg need ripgrep
 ```
-
-We recommend always running with `strict` once you have a
-session set up.
 
 ---
 
@@ -347,7 +345,7 @@ Claw OS i18n layer. The system language is set by the
 `COS_LOCALE` environment variable (also exposed in the GUI's
 settings). The first release ships English; additional locales
 are added by adding a new variant to `Locale` and translating the
-catalog strings — see `docs/06-app-manifest-v2.md` for the
+catalog strings — see `docs/06-app-manifest.md` for the
 manifest-level mechanism.
 
 ---

@@ -1,9 +1,9 @@
-# 06 — App manifest v2 & capability enforcement (for developers)
+# 06 — App manifest & capability enforcement (for developers)
 
 This is the contract between an app and the kernel: how an app
 *declares* the capabilities it needs, how the kernel *resolves*
 those declarations at call time, and how an app must call back
-into the kernel to gate the operation.
+into the kernel to gate each operation.
 
 > Reading this because you're a *user* of Claw OS, not an app
 > author? See `docs/05-permissions.md` instead.
@@ -30,11 +30,12 @@ into the kernel to gate the operation.
    │ caps::require(verb, scope)  — the one and only kernel    │
    │ entry point. Every gated operation flows through here.   │
    │                                                          │
-   │   Mode::Permissive (default during migration) — no       │
-   │     session ⇒ allow. Once everything is on caps, flip    │
-   │     to strict.                                           │
-   │   Mode::Strict — no session, missing cap, scope outside  │
-   │     range, or PID-ancestry mismatch ⇒ structured Denial. │
+   │   Mode::Strict (default) — no session, missing cap,      │
+   │     scope outside range, or PID-ancestry mismatch ⇒      │
+   │     structured Denial.                                   │
+   │   Mode::Permissive — opt-in escape hatch for first-boot  │
+   │     scripts that run before the session registry exists. │
+   │     Set `COS_PERMS_MODE=permissive` to use it.           │
    └──────────────────────────────────────────────────────────┘
                               │
               ┌───────────────┴────────────────┐
@@ -53,72 +54,125 @@ all?") and one **per-operation** gate inside each Python handler
 
 ---
 
-## App manifest v2: declaring needs
+## The manifest: declaring needs
 
-Each app lives under `apps/<name>/` with two files: `main.py`
-(the implementation) and `app.json` (the manifest). The v2
-manifest extends v1 with an `operations` block that names every
-verb the app exposes and the capabilities each verb needs.
+Each app lives under `apps/<id>/` with two files: `main.py`
+(the implementation) and `app.json` (the manifest). The manifest
+names every operation the app exposes and the capabilities each
+operation needs.
+
+There is exactly **one** manifest format — no version field,
+no fallback path. Apps either parse and validate cleanly, or
+they don't load.
 
 ### Minimal example
 
 ```json
 {
-  "name": "fs",
-  "manifest_version": 2,
+  "id": "fs",
   "version": "0.1.0",
-  "label": "Files",
-  "description": "Agent-native file system with metadata and search",
+  "name": { "en": "Files", "zh-CN": "文件" },
+  "summary": { "en": "Browse, read, write, and search files." },
+  "icon": "📁",
   "operations": {
     "ls": {
-      "label": "List a folder",
+      "label": { "en": "List a folder" },
+      "args": [
+        { "name": "path", "kind": "path", "required": true }
+      ],
       "needs": [
         {
           "verb": "fs.read",
-          "scope_from": "$arg.path",
-          "why": "Read the contents of the folder you asked to list."
+          "scope": { "kind": "from-arg", "arg": "path" },
+          "why": { "en": "Read the contents of the folder you asked to list." }
         }
       ]
     },
     "rm": {
-      "label": "Delete a file",
+      "label": { "en": "Delete a file" },
+      "args": [
+        { "name": "path", "kind": "path", "required": true }
+      ],
       "needs": [
         {
           "verb": "fs.delete",
-          "scope_from": "$arg.path",
-          "why": "Remove the file you asked to delete."
+          "scope": { "kind": "from-arg", "arg": "path" },
+          "why": { "en": "Remove the file you asked to delete." }
         }
-      ]
-    },
-    "mv": {
-      "label": "Move a file",
-      "needs": [
-        { "verb": "fs.read",   "scope_from": "$arg.src" },
-        { "verb": "fs.write",  "scope_from": "$arg.dst" },
-        { "verb": "fs.delete", "scope_from": "$arg.src" }
       ]
     }
   }
 }
 ```
 
-### Field reference
+### Top-level fields
 
 | Field | Type | Meaning |
 |---|---|---|
-| `manifest_version` | `2` | Must be exactly `2`. v1 manifests still load via the legacy path. |
-| `name` | string \| LocalizedText | Internal app name; also a `LocalizedText` if you want a translated label. |
-| `label` | string \| LocalizedText | Friendly name shown in approval dialogs. |
-| `description` | string | Single-line summary for the agent registry. |
-| `operations.<verb>.label` | string \| LocalizedText | What this operation does (one short verb). |
-| `operations.<verb>.needs[]` | array | One entry per capability the operation needs. |
-| `operations.<verb>.needs[].verb` | string | The kernel capability verb (e.g. `fs.read`). Validated against the catalog at load time. |
-| `operations.<verb>.needs[].scope_from` | string | A binding for the scope: `$arg.<name>` (use named arg), `$fixed.<value>` (constant), or `$wild` (explicit wildcard — be deliberate). |
-| `operations.<verb>.needs[].why` | string \| LocalizedText | The "why" line shown in the approval dialog. Optional but recommended. |
+| `id` | string `[a-z][a-z0-9_-]*` | Internal app slug; must match the directory name. |
+| `version` | string | App version (semver-ish; the kernel does not parse it). |
+| `name` | LocalizedText | Friendly name shown in lists and approval dialogs. |
+| `summary` | LocalizedText | One-line description. |
+| `icon` | string | Optional emoji or icon name. |
+| `runtime` | `"python"` \| `"node"` \| `"shell"` \| `"binary"` | Bridge target. Defaults to `python`. |
+| `entry` | string | Override entry file. Defaults are `main.py` / `main.js` / `main.sh` (Windows: `main.bat`) / `main` (Windows: `main.exe`). |
+| `operations` | object | The verbs this app exposes, keyed by command name. |
+| `dependencies` | object | Free-form dependency declarations for the package resolver. |
+
+### Per-operation fields
+
+| Field | Type | Meaning |
+|---|---|---|
+| `label` | LocalizedText | What this operation does (one short verb phrase). Required. |
+| `summary` | LocalizedText | Optional longer explanation. |
+| `args` | array of Arg | Declared input parameters. Order matters for the UI. |
+| `needs` | array of Need | Capabilities required to run this operation. Empty = local-only. |
+
+### Arg
+
+```jsonc
+{
+  "name": "path",          // identifier referenced by `from-arg` scopes
+  "kind": "path",          // path | host | name | text | number | bool
+  "required": true,        // optional, default false
+  "default": null,         // optional default value
+  "label": { "en": "..." } // optional UI help text
+}
+```
+
+`kind` values `path`, `host`, and `name` are the only ones that
+can populate a scope (`text` / `number` / `bool` cannot).
+
+### Need
+
+```jsonc
+{
+  "verb": "fs.delete",
+  "scope": { "kind": "from-arg", "arg": "path" },
+  "why":  { "en": "Remove the file you asked to delete." }
+}
+```
+
+`scope` is one of:
+
+* `{ "kind": "from-arg", "arg": "<name>" }` — late binding: at
+  call time the kernel reads the named arg's value and builds a
+  `Scope` matching the arg's declared `kind`.
+* `{ "kind": "fixed", "scope": { "kind": "path", "value": "/foo/**" } }`
+  — the scope is hard-coded in the manifest. Useful for ops
+  that always touch the same resource (e.g. a per-app data dir).
+* `{ "kind": "wild" }` — explicit wildcard. There is no implicit
+  `*`; the author has to spell this out so the approval dialog
+  can flag it red.
+
+`verb` is validated at parse time against
+`core/src/caps/verb.rs::ALL_VERBS`. An unknown verb fails the
+parse with `ManifestError::Json`, not a runtime error — broken
+manifests never load.
 
 ### LocalizedText
 
-Any field marked `string \| LocalizedText` accepts either:
+Any field marked `LocalizedText` accepts either:
 
 ```json
 "label": "Files"
@@ -132,23 +186,8 @@ or:
 
 The bare-string form is treated as the English translation;
 `LocalizedText::validate()` requires that English always be
-present.
-
-### Late binding
-
-`scope_from: "$arg.path"` is *late-bound*: the manifest doesn't
-know the value, only the source. When `Manifest::resolve_needs`
-is called at invocation time with the actual `{path: "/tmp/x"}`
-arguments map, it produces a concrete `Cap { verb: fs.read,
-scope: Path("/tmp/x") }` for the approval check.
-
-`$fixed.<value>` is useful for verbs whose scope is intrinsic to
-the operation (e.g. an app that only ever reads its own data
-directory).
-
-`$wild` produces a `Scope::Wild` request. Every wild request
-shows up red in the approval dialog and audit log — use only for
-operations that *genuinely* need access to everything (very rare).
+present. The user's active locale (`cos locale set`) decides
+which translation renders.
 
 ---
 
@@ -189,11 +228,11 @@ match require(Verb::FS_READ, Scope::path("/tmp/x")) {
 
 Read from `COS_PERMS_MODE`:
 
-* `permissive` *(default)* — no `COS_SESSION` env var ⇒ allow.
-  The migration knob: legacy code keeps working while you wire
-  up `caps::require` site by site.
-* `strict` — no session ⇒ deny with `DenialReason::NoSession`.
-  Set this before flipping the default.
+* `strict` *(default)* — no `COS_SESSION`, missing cap, scope
+  outside range, or PID-ancestry mismatch ⇒ deny.
+* `permissive` — opt-in escape hatch. No session ⇒ allow. Use
+  this only for first-boot installer scripts that run before the
+  session registry exists.
 
 ### Anti-spoofing
 
@@ -369,26 +408,3 @@ the `audit` app or `cos audit` CLI.
 
   `pid: 0` disables the ancestry check, which is necessary in
   tests that cannot fork to inherit the session.
-
----
-
-## Migration from v1 manifests
-
-The v1 manifest had `commands` (a string map of name → blurb)
-and no capability metadata. v1 manifests continue to load — the
-kernel treats their commands as unconstrained and falls back to
-the legacy tier check inside `bridge::run_python_app`. As you
-upgrade each app:
-
-1. Add `"manifest_version": 2` at the top of `app.json`.
-2. Replace `commands` with the v2 `operations` block, declaring
-   the capabilities each operation needs.
-3. Add `from _lib import policy` to `main.py` and call
-   `policy.require()` in each command handler after the args are
-   parsed.
-4. Wrap the dispatcher to surface `PermissionDenied` as a
-   structured error.
-
-Once every app is on v2, the legacy tier path in
-`bridge::run_python_app` will be removed and `Mode::Strict`
-becomes the default.

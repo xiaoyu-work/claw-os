@@ -128,8 +128,8 @@ fn dispatch_app(args: &[String]) -> Result<Option<String>, String> {
     }
 
     // Validate command exists
-    if !app.manifest.commands.contains_key(command.as_str()) {
-        let valid: Vec<&String> = app.manifest.commands.keys().collect();
+    if !app.manifest.operations.contains_key(command.as_str()) {
+        let valid: Vec<&String> = app.manifest.operations.keys().collect();
         return Err(format!(
             "unknown command: cos app {app_name} {command}. available: {valid:?}"
         ));
@@ -175,10 +175,17 @@ fn show_apps(
 ) -> Result<Option<String>, String> {
     let mut app_list = Vec::new();
     for (name, app) in discovered {
+        let cmds: serde_json::Map<String, Value> = app
+            .manifest
+            .operations
+            .iter()
+            .map(|(k, op)| (k.clone(), json!(op.label.current())))
+            .collect();
         app_list.push(json!({
             "name": name,
-            "description": app.manifest.description,
-            "commands": app.manifest.commands,
+            "label": app.manifest.name.current(),
+            "description": app.manifest.summary.current(),
+            "commands": cmds,
         }));
     }
 
@@ -191,11 +198,18 @@ fn show_apps(
 }
 
 fn show_app_help(name: &str, app: &apps::App) -> Result<Option<String>, String> {
+    let cmds: serde_json::Map<String, Value> = app
+        .manifest
+        .operations
+        .iter()
+        .map(|(k, op)| (k.clone(), json!(op.label.current())))
+        .collect();
     let output = json!({
         "app": name,
+        "label": app.manifest.name.current(),
         "version": app.manifest.version,
-        "description": app.manifest.description,
-        "commands": app.manifest.commands,
+        "description": app.manifest.summary.current(),
+        "commands": cmds,
         "hint": format!("Run: cos app {name} <command> [args]"),
     });
     Ok(Some(output.to_string()))
@@ -215,10 +229,9 @@ fn run_app_command(
     // Capability gate: callers (interactive CLI or agent) must hold
     // `agent.invoke` on the app's name to dispatch any command.
     // Schema introspection is allowed unconditionally so tooling can
-    // describe apps it cannot run. In permissive mode (no
-    // `COS_SESSION` set), require() lets the call through, which is
-    // the right default for direct user-terminal invocation during
-    // the migration.
+    // describe apps it cannot run. Strict is the default mode — the
+    // user-terminal CLI gets its caps from the session it was started
+    // in; ad-hoc development can opt into `COS_PERMS_MODE=permissive`.
     if command != "__schema__" {
         if let Err(denial) = caps::require(
             caps::Verb::AGENT_INVOKE,
@@ -407,7 +420,7 @@ fn builtin_apps() -> Vec<(
             ("insights", "Aggregate LLM run-log: cos agent insights [overall|recent N|sessions] [--since <ISO>] [--until <ISO>] [--ok|--error] [--provider <n>] [--model <n>]"),
             ("recall", "FTS5 search across recorded conversations: cos agent recall \"<query>\" [limit]"),
             ("sessions", "Inspect / manage conversation sessions in the memory DB: cos agent sessions [list [N] | title <id> | set-title <id> \"<title>\" | count [<id>] | clear <id> --yes]"),
-            ("onboarding", "First-run setup state machine: cos agent onboarding [status|next|complete <id> [note]|skip <id>|reset [id]]"),
+            ("setup", "Interactive first-run wizard: pick provider, model, and store API key. Non-interactive: cos agent setup [--status|--reset]"),
             ("notes", "Manage agent markdown notes (MEMORY.md / USER.md / custom): cos agent notes [list|read <n>|write <n> <content>|append <n> <line>|delete <n>]"),
             ("skills", "Inspect or install skill bundles: cos agent skills [list|info <id>|disabled|errors|root|install <archive.zip> [--force]|hub <list|show|install> <owner/repo> [<id>]|usage <stats [<id>]|record <id> --duration-ms N [--ok|--error] [--by <caller>]|path|clear --yes>]"),
             ("nudge", "Manage periodic-nudge reminders auto-injected into the system prompt: cos agent nudge [list|due|add <due_in_secs> <message> [--repeat <secs>] [--tag <tag>]|fire <id>|remove <id>|path]"),
@@ -1366,10 +1379,10 @@ fn show_app_command_schema(
                 if let Some(cmd_schema) = schema.get(command) {
                     let desc = app
                         .manifest
-                        .commands
+                        .operations
                         .get(command)
-                        .map(|s| s.as_str())
-                        .unwrap_or("No description");
+                        .map(|op| op.summary.current().to_string())
+                        .unwrap_or_else(|| "No description".to_string());
                     let mut result = json!({
                         "command": format!("cos app {app_name} {command}"),
                         "description": desc,
@@ -1386,10 +1399,10 @@ fn show_app_command_schema(
             // Schema returned but command not found in it
             let desc = app
                 .manifest
-                .commands
+                .operations
                 .get(command)
-                .map(|s| s.as_str())
-                .unwrap_or("No description");
+                .map(|op| op.summary.current().to_string())
+                .unwrap_or_else(|| "No description".to_string());
             Ok(Some(
                 json!({
                     "command": format!("cos app {app_name} {command}"),
@@ -1402,10 +1415,10 @@ fn show_app_command_schema(
             // App doesn't support __schema__ — return basic info
             let desc = app
                 .manifest
-                .commands
+                .operations
                 .get(command)
-                .map(|s| s.as_str())
-                .unwrap_or("No description");
+                .map(|op| op.summary.current().to_string())
+                .unwrap_or_else(|| "No description".to_string());
             Ok(Some(
                 json!({
                     "command": format!("cos app {app_name} {command}"),
@@ -1428,10 +1441,11 @@ fn show_app_schema(app_name: &str, app: &apps::App) -> Result<Option<String>, St
     };
 
     let mut commands = Vec::new();
-    for (cmd_name, cmd_desc) in &app.manifest.commands {
+    for (cmd_name, op) in &app.manifest.operations {
         let mut entry = json!({
             "command": cmd_name,
-            "description": cmd_desc,
+            "label": op.label.current(),
+            "description": op.summary.current(),
         });
         if let Some(ref schema) = live_schema {
             if let Some(cmd_schema) = schema.get(cmd_name.as_str()) {
@@ -1448,7 +1462,8 @@ fn show_app_schema(app_name: &str, app: &apps::App) -> Result<Option<String>, St
 
     let output = json!({
         "app": app_name,
-        "description": app.manifest.description,
+        "label": app.manifest.name.current(),
+        "description": app.manifest.summary.current(),
         "commands": commands,
     });
     Ok(Some(output.to_string()))

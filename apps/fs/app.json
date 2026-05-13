@@ -1,18 +1,140 @@
 {
-  "name": "fs",
+  "id": "fs",
   "version": "0.1.0",
-  "description": "Agent-native file system with metadata and search",
-  "commands": {
-    "ls": "List directory contents",
-    "read": "Read file content",
-    "write": "Write content to file",
-    "rm": "Remove file or directory",
-    "mkdir": "Create directory",
-    "stat": "Get file metadata",
-    "search": "Search files by name or content",
-    "tag": "Add tags to a file",
-    "recent": "List recently accessed files"
+  "name": {
+    "en": "Files",
+    "zh-CN": "文件"
   },
+  "summary": {
+    "en": "Agent-native file system with metadata and search."
+  },
+  "icon": "📁",
+  "runtime": "python",
+  "entry": "main.py",
+
+  "operations": {
+    "ls": {
+      "label": { "en": "List files", "zh-CN": "列出文件" },
+      "summary": { "en": "Show the names of files inside a folder." },
+      "args": [
+        { "name": "path", "kind": "path", "required": false }
+      ],
+      "needs": [
+        {
+          "verb": "fs.read",
+          "scope": { "kind": "from-arg", "arg": "path" },
+          "why": { "en": "Read the contents of the folder you asked to list." }
+        }
+      ]
+    },
+    "read": {
+      "label": { "en": "Read a file", "zh-CN": "读取文件" },
+      "args": [
+        { "name": "path", "kind": "path", "required": true }
+      ],
+      "needs": [
+        {
+          "verb": "fs.read",
+          "scope": { "kind": "from-arg", "arg": "path" },
+          "why": { "en": "Read the file you asked to open." }
+        }
+      ]
+    },
+    "write": {
+      "label": { "en": "Write to a file", "zh-CN": "写入文件" },
+      "args": [
+        { "name": "path", "kind": "path", "required": true }
+      ],
+      "needs": [
+        {
+          "verb": "fs.write",
+          "scope": { "kind": "from-arg", "arg": "path" },
+          "why": { "en": "Write the content you provided to that file." }
+        }
+      ]
+    },
+    "rm": {
+      "label": { "en": "Delete a file", "zh-CN": "删除文件" },
+      "args": [
+        { "name": "path", "kind": "path", "required": true }
+      ],
+      "needs": [
+        {
+          "verb": "fs.delete",
+          "scope": { "kind": "from-arg", "arg": "path" },
+          "why": { "en": "Remove the file you specified." }
+        }
+      ]
+    },
+    "mkdir": {
+      "label": { "en": "Create a folder", "zh-CN": "创建文件夹" },
+      "args": [
+        { "name": "path", "kind": "path", "required": true }
+      ],
+      "needs": [
+        {
+          "verb": "fs.write",
+          "scope": { "kind": "from-arg", "arg": "path" },
+          "why": { "en": "Create a new folder at that path." }
+        }
+      ]
+    },
+    "stat": {
+      "label": { "en": "Show file info", "zh-CN": "显示文件信息" },
+      "args": [
+        { "name": "path", "kind": "path", "required": true }
+      ],
+      "needs": [
+        {
+          "verb": "fs.meta",
+          "scope": { "kind": "from-arg", "arg": "path" },
+          "why": { "en": "Read metadata (size, dates, tags) for the file you asked about." }
+        }
+      ]
+    },
+    "search": {
+      "label": { "en": "Search files", "zh-CN": "搜索文件" },
+      "args": [
+        { "name": "query", "kind": "text", "required": true },
+        { "name": "path",  "kind": "path", "required": false }
+      ],
+      "needs": [
+        {
+          "verb": "fs.read",
+          "scope": { "kind": "from-arg", "arg": "path" },
+          "why": { "en": "Scan files under the path you specified for the search query." }
+        }
+      ]
+    },
+    "tag": {
+      "label": { "en": "Tag a file", "zh-CN": "标记文件" },
+      "args": [
+        { "name": "path", "kind": "path", "required": true },
+        { "name": "tags", "kind": "text", "required": true }
+      ],
+      "needs": [
+        {
+          "verb": "fs.write",
+          "scope": { "kind": "from-arg", "arg": "path" },
+          "why": { "en": "Update the metadata sidecar next to the file with the new tags." }
+        }
+      ]
+    },
+    "recent": {
+      "label": { "en": "Recently changed files", "zh-CN": "最近更改的文件" },
+      "args": [
+        { "name": "n", "kind": "number", "required": false }
+      ],
+      "needs": [
+        {
+          "verb": "fs.read",
+          "scope": { "kind": "fixed", "scope": { "kind": "path", "value": "/workspace/**" } },
+          "why": { "en": "Walk the workspace to find recently modified files." }
+        }
+      ]
+    }
+  },
+
   "dependencies": {
     "system": ["coreutils", "ripgrep"]
   }

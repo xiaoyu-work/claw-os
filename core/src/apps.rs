@@ -1,34 +1,11 @@
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// An app manifest loaded from app.json.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AppManifest {
-    pub name: String,
-    pub version: String,
-    pub description: String,
-    pub commands: BTreeMap<String, String>,
-    #[serde(default)]
-    pub dependencies: serde_json::Value,
-    /// Optional runtime selector for the polyglot bridge. Recognised
-    /// values:
-    ///   * `"python"` (default if omitted) — invoke `main.py` via the
-    ///     existing python wrapper.
-    ///   * `"node"` — spawn `node <entry>` with COS_COMMAND /
-    ///     COS_ARGS_JSON env vars; entry defaults to `main.js`.
-    ///   * `"shell"` — spawn `bash <entry>` (or `cmd /c <entry>` on
-    ///     Windows); entry defaults to `main.sh` / `main.bat`.
-    ///   * `"binary"` — spawn `<entry>` directly (compiled program in
-    ///     the app dir); entry is required.
-    #[serde(default)]
-    pub runtime: Option<String>,
-    /// Override for the entry point file. Defaults are runtime-aware
-    /// (`main.py` / `main.js` / `main.sh` / `main`); see [`Runtime`].
-    #[serde(default)]
-    pub entry: Option<String>,
-}
+/// An app manifest loaded from `app.json`. There is one manifest format
+/// — [`caps::manifest::Manifest`](crate::caps::manifest::Manifest) — and
+/// the loader rejects anything that doesn't validate.
+pub type AppManifest = crate::caps::manifest::Manifest;
 
 /// Discovered app: manifest + path on disk.
 #[derive(Debug, Clone)]
@@ -43,7 +20,12 @@ impl App {
     }
 }
 
-/// Scan `apps_dir` for subdirectories containing a valid app.json.
+/// Scan `apps_dir` for subdirectories containing a valid `app.json`.
+///
+/// Apps whose manifest fails to parse or validate are silently skipped
+/// — keeping a broken app installed must never poison discovery for
+/// the rest of the system. Operators can run `cos app doctor` (TBD) to
+/// see why a specific app is missing.
 pub fn discover(apps_dir: &Path) -> BTreeMap<String, App> {
     let mut apps = BTreeMap::new();
 
@@ -65,13 +47,22 @@ pub fn discover(apps_dir: &Path) -> BTreeMap<String, App> {
             Ok(d) => d,
             Err(_) => continue,
         };
-        let manifest: AppManifest = match serde_json::from_str(&data) {
+        let manifest = match AppManifest::from_json(&data) {
             Ok(m) => m,
             Err(_) => continue,
         };
-        let name = manifest.name.clone();
+        // The directory name is the canonical lookup key; we require it
+        // to match the manifest's declared id so authors can't ship a
+        // mismatched pair that confuses routing.
+        let dir_name = match path.file_name().and_then(|s| s.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+        if dir_name != manifest.id {
+            continue;
+        }
         apps.insert(
-            name,
+            manifest.id.clone(),
             App {
                 manifest,
                 dir: path,

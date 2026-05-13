@@ -1,12 +1,30 @@
 {
-  "name": "net",
+  "id": "net",
   "version": "0.1.0",
-  "description": "HTTP client for API calls",
-  "commands": {
-    "fetch": "Make HTTP request (GET/POST/PUT/DELETE)",
-    "download": "Download file from URL"
+  "name": {
+    "en": "Network"
+  },
+  "summary": {
+    "en": "HTTP client for API calls"
+  },
+  "icon": "🌐",
+  "runtime": "python",
+  "operations": {
+    "fetch": {
+      "label": {
+        "en": "Make HTTP request (GET/POST/PUT/DELETE)"
+      }
+    },
+    "download": {
+      "label": {
+        "en": "Download file from URL"
+      }
+    }
   },
   "dependencies": {
-    "system": ["curl", "ca-certificates"]
+    "system": [
+      "curl",
+      "ca-certificates"
+    ]
   }
 }

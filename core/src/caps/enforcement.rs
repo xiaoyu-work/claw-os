@@ -24,23 +24,17 @@
 //!
 //! Modes are determined by environment, in priority order:
 //!
-//!   * `COS_PERMS_MODE=strict` — every guarded op requires a session
-//!     with caps. Unset `COS_SESSION`, missing session, or missing
-//!     `caps` field → deny.
-//!   * `COS_PERMS_MODE=permissive` — unset `COS_SESSION` is allowed;
-//!     missing session is allowed; missing caps is allowed. Useful for
-//!     installer / first-boot scripts that run before the session
-//!     registry exists.
-//!   * Default (no env): `permissive`. We default to permissive during
-//!     the migration so the kernel keeps working as call sites move
-//!     over; once every site is migrated the default will flip.
+//!   * `COS_PERMS_MODE=strict` (default) — every guarded op requires a
+//!     session with caps. Unset `COS_SESSION`, missing session, or
+//!     missing `caps` field → deny.
+//!   * `COS_PERMS_MODE=permissive` — opt-in escape hatch for first-boot
+//!     installer scripts that run before the session registry exists.
+//!     Unset `COS_SESSION` is allowed; missing session is allowed;
+//!     missing caps is allowed.
 //!
-//! ## Why not just call the old policy.rs?
-//!
-//! The old [`crate::policy::require`] is keyed on `(OpType, tier)` and
-//! cannot express verb-scoped capabilities. It stays in place until
-//! every call site has been migrated; the two systems coexist for the
-//! transition.
+//! Strict is the only safe default for an agent-native OS — the kernel
+//! must not silently allow operations from contexts the policy layer
+//! cannot describe.
 
 use std::path::PathBuf;
 
@@ -59,21 +53,23 @@ use super::verb::Verb;
 /// every call (so tests can flip it without restarting the process).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
-    /// Default during migration. Allow when there is no session, no
-    /// registry entry, or no `caps` on the session. Only sessions that
-    /// have explicit `caps` are gated.
+    /// Opt-in escape hatch for development: allow when there is no
+    /// session, no registry entry, or no `caps` on the session. Only
+    /// sessions that have explicit `caps` are gated. Set
+    /// `COS_PERMS_MODE=permissive` to use this.
     Permissive,
-    /// All gated operations require a session with caps. Anything else
-    /// is denied.
+    /// Default. All gated operations require a session with caps.
+    /// Anything else is denied.
     Strict,
 }
 
 impl Mode {
     fn from_env() -> Self {
         match std::env::var("COS_PERMS_MODE").as_deref() {
-            Ok("strict") => Mode::Strict,
             Ok("permissive") => Mode::Permissive,
-            _ => Mode::Permissive,
+            // Includes the explicit "strict" value and any other value
+            // (typos default to the safer mode).
+            _ => Mode::Strict,
         }
     }
 }
@@ -332,7 +328,7 @@ mod tests {
     #[test]
     fn permissive_allows_when_no_session() {
         let _lock = ENV_LOCK.lock().unwrap();
-        let _g = EnvGuard::new(r#"{"sessions":[]}"#, None, None);
+        let _g = EnvGuard::new(r#"{"sessions":[]}"#, None, Some("permissive"));
         assert!(require(Verb::FS_READ, Scope::path("/etc")).is_ok());
     }
 
@@ -404,8 +400,20 @@ mod tests {
         let reg = r#"{
           "sessions": [{"session_id":"s1","pid":0}]
         }"#;
-        let _g = EnvGuard::new(reg, Some("s1"), None);
+        let _g = EnvGuard::new(reg, Some("s1"), Some("permissive"));
         assert!(require(Verb::FS_READ, Scope::path("/etc")).is_ok());
+    }
+
+    #[test]
+    fn strict_is_the_default() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _g = EnvGuard::new(r#"{"sessions":[]}"#, None, None);
+        // No COS_PERMS_MODE set → strict by default → denies.
+        let err = require(Verb::FS_READ, Scope::path("/etc")).unwrap_err();
+        assert!(matches!(
+            err.reason,
+            super::super::denial::DenialReason::NoSession
+        ));
     }
 
     #[test]

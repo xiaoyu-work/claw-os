@@ -1,15 +1,42 @@
 {
-  "name": "web",
+  "id": "web",
   "version": "0.2.0",
-  "description": "Browser via cos-browser (vendored Obscura) — text/links/JSON output, JS rendering, optional CDP",
-  "commands": {
-    "read": "Fetch URL, return {url, title, text, links} (or raw HTML / arbitrary --eval result)",
-    "scrape": "Fetch many URLs in parallel",
-    "screenshot": "Capture a screenshot of a URL (shells out to chromium)",
-    "submit": "Submit form data (POST) via urllib"
+  "name": {
+    "en": "Browser"
+  },
+  "summary": {
+    "en": "Browser via cos-browser (vendored Obscura) — text/links/JSON output, JS rendering, optional CDP"
+  },
+  "icon": "🧭",
+  "runtime": "python",
+  "operations": {
+    "read": {
+      "label": {
+        "en": "Fetch URL, return {url, title, text, links} (or raw HTML / arbitrary --eval result)"
+      }
+    },
+    "scrape": {
+      "label": {
+        "en": "Fetch many URLs in parallel"
+      }
+    },
+    "screenshot": {
+      "label": {
+        "en": "Capture a screenshot of a URL (shells out to chromium)"
+      }
+    },
+    "submit": {
+      "label": {
+        "en": "Submit form data (POST) via urllib"
+      }
+    }
   },
   "dependencies": {
-    "binaries": ["cos-browser"],
-    "optional_binaries": ["chromium"]
+    "binaries": [
+      "cos-browser"
+    ],
+    "optional_binaries": [
+      "chromium"
+    ]
   }
 }

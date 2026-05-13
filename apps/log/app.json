@@ -1,12 +1,34 @@
 {
-  "name": "log",
+  "id": "log",
   "version": "0.1.0",
-  "description": "System audit log — every command is recorded automatically",
-  "commands": {
-    "read": "Read recent log entries (filter by --app, --status)",
-    "tail": "Show last N log entries",
-    "search": "Search logs by keyword (filter by --app)",
-    "write": "Write a manual log entry"
+  "name": {
+    "en": "Activity Log"
   },
-  "dependencies": {}
+  "summary": {
+    "en": "System audit log — every command is recorded automatically"
+  },
+  "icon": "📜",
+  "runtime": "python",
+  "operations": {
+    "read": {
+      "label": {
+        "en": "Read recent log entries (filter by --app, --status)"
+      }
+    },
+    "tail": {
+      "label": {
+        "en": "Show last N log entries"
+      }
+    },
+    "search": {
+      "label": {
+        "en": "Search logs by keyword (filter by --app)"
+      }
+    },
+    "write": {
+      "label": {
+        "en": "Write a manual log entry"
+      }
+    }
+  }
 }

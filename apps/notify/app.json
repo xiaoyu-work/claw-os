@@ -1,10 +1,24 @@
 {
-  "name": "notify",
+  "id": "notify",
   "version": "0.1.0",
-  "description": "Send notifications to the user",
-  "commands": {
-    "send": "Send a notification message",
-    "list": "List recent notifications"
+  "name": {
+    "en": "Notifications"
   },
-  "dependencies": {}
+  "summary": {
+    "en": "Send notifications to the user"
+  },
+  "icon": "🔔",
+  "runtime": "python",
+  "operations": {
+    "send": {
+      "label": {
+        "en": "Send a notification message"
+      }
+    },
+    "list": {
+      "label": {
+        "en": "List recent notifications"
+      }
+    }
+  }
 }
