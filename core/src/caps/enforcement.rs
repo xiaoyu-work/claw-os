@@ -72,6 +72,14 @@ impl Mode {
             _ => Mode::Strict,
         }
     }
+
+    /// Stable kebab-case label for logs and audit records.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Mode::Permissive => "permissive",
+            Mode::Strict => "strict",
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -120,12 +128,34 @@ fn load_registry() -> Registry {
 /// mode permits it). Returns `Err(Denial)` with a structured reason
 /// otherwise — callers can re-raise it as a JSON error or feed it into
 /// the approval UI.
+///
+/// Every call emits one structured record to `${log_dir}/caps.jsonl`
+/// via [`crate::audit::log_cap_decision`]. Suppress with
+/// `COS_CAPS_AUDIT=0`.
 pub fn require(verb: Verb, scope: Scope) -> Result<(), Denial> {
     let mode = Mode::from_env();
+    let session_id = std::env::var("COS_SESSION").ok();
+    let result = require_impl(verb, scope.clone(), mode, session_id.as_deref());
+    crate::audit::log_cap_decision(build_cap_audit_record(
+        verb,
+        &scope,
+        mode,
+        session_id.as_deref(),
+        &result,
+    ));
+    result
+}
+
+fn require_impl(
+    verb: Verb,
+    scope: Scope,
+    mode: Mode,
+    session_id: Option<&str>,
+) -> Result<(), Denial> {
     let requested = Cap::new(verb, scope.clone());
 
-    let session_id = match std::env::var("COS_SESSION") {
-        Ok(s) if !s.is_empty() => s,
+    let session_id = match session_id {
+        Some(s) if !s.is_empty() => s,
         _ => {
             return match mode {
                 Mode::Permissive => Ok(()),
@@ -194,6 +224,53 @@ pub fn require(verb: Verb, scope: Scope) -> Result<(), Denial> {
     }
 }
 
+/// Build the JSON record emitted to `caps.jsonl` for one decision.
+///
+/// Kept side-effect free so unit tests can inspect the structure
+/// without touching disk.
+fn build_cap_audit_record(
+    verb: Verb,
+    scope: &Scope,
+    mode: Mode,
+    session_id: Option<&str>,
+    result: &Result<(), Denial>,
+) -> serde_json::Value {
+    let agent = std::env::var("COS_AGENT_LABEL")
+        .ok()
+        .or_else(|| std::env::var("COS_APP_ID").ok());
+
+    let (decision, reason, hint) = match result {
+        Ok(()) => ("allow", serde_json::Value::Null, serde_json::Value::Null),
+        Err(d) => (
+            "deny",
+            serde_json::to_value(&d.reason)
+                .unwrap_or(serde_json::Value::Null),
+            d.hint
+                .as_ref()
+                .map(|h| serde_json::Value::String(h.clone()))
+                .unwrap_or(serde_json::Value::Null),
+        ),
+    };
+
+    let target_resource = match scope {
+        Scope::Path(s) | Scope::Host(s) | Scope::Name(s) | Scope::SelfRef(s) => s.clone(),
+        Scope::Wild => "*".to_string(),
+    };
+
+    serde_json::json!({
+        "session_id":      session_id,
+        "pid":             std::process::id(),
+        "agent":           agent,
+        "verb":            verb.as_str(),
+        "scope":           scope,
+        "target_resource": target_resource,
+        "decision":        decision,
+        "reason":          reason,
+        "hint":            hint,
+        "mode":            mode.as_str(),
+    })
+}
+
 /// Variant that converts the structured [`Denial`] into the same
 /// JSON envelope the legacy `policy::require` returns. Call sites
 /// migrating from `policy::require(OpType::X)` can swap to
@@ -255,6 +332,7 @@ mod tests {
     /// mutex below.
     struct EnvGuard {
         prev_data_dir: Option<String>,
+        prev_log_dir: Option<String>,
         prev_session: Option<String>,
         prev_mode: Option<String>,
         _tmp: tempfile::TempDir,
@@ -269,10 +347,14 @@ mod tests {
             f.write_all(registry_json.as_bytes()).unwrap();
 
             let prev_data_dir = std::env::var("COS_DATA_DIR").ok();
+            let prev_log_dir = std::env::var("COS_LOG_DIR").ok();
             let prev_session = std::env::var("COS_SESSION").ok();
             let prev_mode = std::env::var("COS_PERMS_MODE").ok();
 
             std::env::set_var("COS_DATA_DIR", tmp.path());
+            // Redirect caps.jsonl writes into the test tmpdir so the
+            // audit hook doesn't litter the host's logs dir.
+            std::env::set_var("COS_LOG_DIR", tmp.path());
             match session {
                 Some(s) => std::env::set_var("COS_SESSION", s),
                 None => std::env::remove_var("COS_SESSION"),
@@ -283,6 +365,7 @@ mod tests {
             }
             Self {
                 prev_data_dir,
+                prev_log_dir,
                 prev_session,
                 prev_mode,
                 _tmp: tmp,
@@ -295,6 +378,10 @@ mod tests {
             match &self.prev_data_dir {
                 Some(v) => std::env::set_var("COS_DATA_DIR", v),
                 None => std::env::remove_var("COS_DATA_DIR"),
+            }
+            match &self.prev_log_dir {
+                Some(v) => std::env::set_var("COS_LOG_DIR", v),
+                None => std::env::remove_var("COS_LOG_DIR"),
             }
             match &self.prev_session {
                 Some(v) => std::env::set_var("COS_SESSION", v),
@@ -440,5 +527,88 @@ mod tests {
         let err = require_or_json(Verb::FS_DELETE, Scope::path("/etc")).unwrap_err();
         assert_eq!(err["error"], "permission denied");
         assert_eq!(err["verb"], "fs.delete");
+    }
+
+    // ----- audit-record shape ------------------------------------------------
+
+    #[test]
+    fn audit_record_allow_carries_decision_verb_and_target() {
+        let scope = Scope::path("/home/jay/notes.md");
+        let rec = build_cap_audit_record(
+            Verb::FS_READ,
+            &scope,
+            Mode::Strict,
+            Some("s1"),
+            &Ok(()),
+        );
+        assert_eq!(rec["decision"], "allow");
+        assert_eq!(rec["verb"], "fs.read");
+        assert_eq!(rec["session_id"], "s1");
+        assert_eq!(rec["mode"], "strict");
+        assert_eq!(rec["target_resource"], "/home/jay/notes.md");
+        assert_eq!(rec["scope"]["kind"], "path");
+        assert_eq!(rec["scope"]["value"], "/home/jay/notes.md");
+        assert!(rec["reason"].is_null());
+        assert!(rec["hint"].is_null());
+    }
+
+    #[test]
+    fn audit_record_deny_emits_reason_and_hint() {
+        let scope = Scope::path("/etc/passwd");
+        let denial = super::super::denial::Denial::verb_not_granted(Verb::FS_DELETE, scope.clone())
+            .with_hint("ask the user");
+        let rec = build_cap_audit_record(
+            Verb::FS_DELETE,
+            &scope,
+            Mode::Strict,
+            None,
+            &Err(denial),
+        );
+        assert_eq!(rec["decision"], "deny");
+        assert_eq!(rec["reason"], "verb-not-granted");
+        assert_eq!(rec["hint"], "ask the user");
+        assert!(rec["session_id"].is_null());
+    }
+
+    #[test]
+    fn audit_record_wild_scope_renders_as_star() {
+        let scope = Scope::wild();
+        let rec = build_cap_audit_record(Verb::FS_READ, &scope, Mode::Permissive, None, &Ok(()));
+        assert_eq!(rec["target_resource"], "*");
+        assert_eq!(rec["scope"]["kind"], "wild");
+        assert_eq!(rec["mode"], "permissive");
+    }
+
+    #[test]
+    fn require_writes_to_caps_jsonl() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let prev_audit = std::env::var_os("COS_CAPS_AUDIT");
+        std::env::remove_var("COS_CAPS_AUDIT");
+
+        let caps =
+            r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
+        let reg = registry_with_caps("s1", caps);
+        let _g = EnvGuard::new(&reg, Some("s1"), Some("strict"));
+
+        // EnvGuard redirects COS_LOG_DIR to its tempdir, so writes
+        // land at <tmp>/caps.jsonl. One allow + one deny → two lines.
+        let _ = require(Verb::FS_READ, Scope::path("/home/jay/x"));
+        let _ = require(Verb::FS_DELETE, Scope::path("/home/jay/x"));
+
+        let body = std::fs::read_to_string(crate::paths::caps_audit_log_path()).unwrap();
+        let lines: Vec<&str> = body.lines().collect();
+        assert_eq!(lines.len(), 2, "expected two audit lines, got {body:?}");
+        let allow: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        let deny: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(allow["decision"], "allow");
+        assert_eq!(allow["verb"], "fs.read");
+        assert_eq!(deny["decision"], "deny");
+        assert_eq!(deny["verb"], "fs.delete");
+        assert_eq!(deny["reason"], "verb-not-granted");
+
+        match prev_audit {
+            Some(v) => std::env::set_var("COS_CAPS_AUDIT", v),
+            None => std::env::remove_var("COS_CAPS_AUDIT"),
+        }
     }
 }

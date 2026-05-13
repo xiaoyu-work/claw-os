@@ -126,6 +126,102 @@ pub fn log_event(audit_path: &Path, mut entry: serde_json::Value) {
     let _ = crate::filelock::append_locked(audit_path, &entry.to_string());
 }
 
+// ---------------------------------------------------------------------------
+// Capability-decision audit
+// ---------------------------------------------------------------------------
+
+/// Append a capability-decision record to `${log_dir}/caps.jsonl`.
+///
+/// Called by [`crate::caps::require`] on every check — both allows
+/// and denials. The shape is intentionally stable so log consumers
+/// (`cos perms history`, the permission-centre UI, downstream
+/// SIEMs) can rely on the field names:
+///
+/// ```text
+/// {
+///   "ts":              "2026-05-13T20:58:00Z",  // UTC, ISO-8601
+///   "session_id":      "s-1234",                // COS_SESSION
+///   "pid":             4711,                    // caller pid
+///   "agent":           "summarize",             // COS_AGENT_LABEL
+///                                               //   or COS_APP_ID
+///   "verb":            "ai.chat.untrusted",
+///   "scope": {                                  // structured scope
+///     "kind":  "name",
+///     "value": "claude-*"
+///   },
+///   "target_resource": "claude-*",              // flattened scope
+///   "decision":        "allow",                 // allow | deny
+///   "reason":          null,                    // DenialReason kind
+///   "hint":            null,                    // optional hint
+///   "mode":            "strict"                 // strict | permissive
+/// }
+/// ```
+///
+/// Behaviour:
+///   - Best-effort: IO failures are swallowed; enforcement never
+///     blocks on the writer.
+///   - Skips writing when `COS_CAPS_AUDIT=0` (used by the busy unit
+///     tests so they don't spam the user's logs dir).
+///   - `timestamp`, `trace_id`, and `span_id` come from
+///     [`log_event`].
+pub fn log_cap_decision(entry: serde_json::Value) {
+    if std::env::var("COS_CAPS_AUDIT").as_deref() == Ok("0") {
+        return;
+    }
+    let path = crate::paths::caps_audit_log_path();
+    log_event(&path, entry);
+}
+
+#[cfg(test)]
+mod cap_audit_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn log_cap_decision_writes_under_log_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let prev = std::env::var_os("COS_LOG_DIR");
+        std::env::set_var("COS_LOG_DIR", dir.path());
+        std::env::remove_var("COS_CAPS_AUDIT");
+        log_cap_decision(json!({
+            "session_id": "s-1",
+            "verb": "fs.read",
+            "decision": "allow",
+        }));
+        let p = crate::paths::caps_audit_log_path();
+        assert!(p.is_file(), "expected {} to be a file", p.display());
+        let body = std::fs::read_to_string(&p).unwrap();
+        let v: serde_json::Value = serde_json::from_str(body.trim()).unwrap();
+        assert_eq!(v["session_id"], json!("s-1"));
+        assert_eq!(v["verb"], json!("fs.read"));
+        assert!(v["timestamp"].is_string());
+        match prev {
+            Some(v) => std::env::set_var("COS_LOG_DIR", v),
+            None => std::env::remove_var("COS_LOG_DIR"),
+        }
+    }
+
+    #[test]
+    fn log_cap_decision_skipped_when_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let prev = std::env::var_os("COS_LOG_DIR");
+        std::env::set_var("COS_LOG_DIR", dir.path());
+        std::env::set_var("COS_CAPS_AUDIT", "0");
+        log_cap_decision(json!({
+            "session_id": "s-1",
+            "verb": "fs.read",
+            "decision": "deny",
+        }));
+        let p = crate::paths::caps_audit_log_path();
+        assert!(!p.exists(), "expected no caps.jsonl to be written");
+        std::env::remove_var("COS_CAPS_AUDIT");
+        match prev {
+            Some(v) => std::env::set_var("COS_LOG_DIR", v),
+            None => std::env::remove_var("COS_LOG_DIR"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

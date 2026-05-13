@@ -144,6 +144,17 @@ pub fn agent_audit_log_path() -> PathBuf {
     log_dir().join("agent.jsonl")
 }
 
+/// Path to the structured capability-decision log. JSONL — one
+/// record per `caps::require` call (both allows and denials), with
+/// session id, agent label, verb, scope, decision, reason, and the
+/// resolved target resource. Powers `cos perms history`.
+///
+/// Lives at `log_dir()/caps.jsonl`. Set `COS_CAPS_AUDIT=0` to
+/// suppress writing entirely (used by hot-path tests).
+pub fn caps_audit_log_path() -> PathBuf {
+    log_dir().join("caps.jsonl")
+}
+
 /// Directory for agent's per-session todo lists. Lives under
 /// `data_dir/agent/todos/`. Each session writes a JSON file named
 /// `<session_id>.json`.
