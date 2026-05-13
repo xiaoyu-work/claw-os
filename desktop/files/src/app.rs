@@ -2369,7 +2369,7 @@ impl Application for App {
     type Message = Message;
 
     /// The unique application ID to supply to the window manager.
-    const APP_ID: &'static str = "com.system76.CosmicFiles";
+    const APP_ID: &'static str = "com.clawos.Files";
 
     fn core(&self) -> &Core {
         &self.core
@@ -3086,7 +3086,7 @@ impl Application for App {
                 {
                     // Use the dialog ID to make it float
                     settings.platform_specific.application_id =
-                        "com.system76.CosmicFilesDialog".to_string();
+                        "com.clawos.FilesDialog".to_string();
                 }
 
                 let (id, command) = window::open(settings);
@@ -3114,7 +3114,7 @@ impl Application for App {
                         {
                             // Use the dialog ID to make it float
                             settings.platform_specific.application_id =
-                                "com.system76.CosmicFilesDialog".to_string();
+                                "com.clawos.FilesDialog".to_string();
                         }
 
                         let (id, command) = window::open(settings);
@@ -3974,7 +3974,7 @@ impl Application for App {
                 let final_path = copy_unique_path(&base_path, &to);
 
                 // Write image data to file
-                match fs::write(&final_path, &contents.data) {
+                match crate::claw_glue::write_bytes(&final_path, &contents.data) {
                     Ok(_) => {
                         log::info!("Pasted image saved to {:?}", final_path);
                     }
@@ -4009,7 +4009,7 @@ impl Application for App {
                 let final_path = copy_unique_path(&base_path, &to);
 
                 // Write video data to file
-                match fs::write(&final_path, &contents.data) {
+                match crate::claw_glue::write_bytes(&final_path, &contents.data) {
                     Ok(_) => {
                         log::info!("Pasted video saved to {:?}", final_path);
                     }
@@ -4035,7 +4035,7 @@ impl Application for App {
                 let final_path = copy_unique_path(&base_path, &to);
 
                 // Write text data to file
-                match fs::write(&final_path, &contents.data) {
+                match crate::claw_glue::write_bytes(&final_path, &contents.data) {
                     Ok(_) => {
                         log::info!("Pasted text saved to {:?}", final_path);
                     }
@@ -4199,7 +4199,7 @@ impl Application for App {
                             {
                                 // Use the dialog ID to make it float
                                 settings.platform_specific.application_id =
-                                    "com.system76.CosmicFilesDialog".to_string();
+                                    "com.clawos.FilesDialog".to_string();
                             }
 
                             let (id, command) = window::open(settings);

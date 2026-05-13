@@ -8,6 +8,7 @@ rust-version = "1.93"
 
 [dependencies]
 anyhow = "1"
+claw-bridge = { path = "../../crates/claw-bridge" }
 jiff = "0.2"
 jiff-icu = "0.2"
 icu = { version = "2.2.0", features = ["compiled_data"] }

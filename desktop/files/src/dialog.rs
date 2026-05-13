@@ -1007,7 +1007,7 @@ impl Application for App {
     type Message = Message;
 
     /// The unique application ID to supply to the window manager.
-    const APP_ID: &'static str = "com.system76.CosmicFilesDialog";
+    const APP_ID: &'static str = "com.clawos.FilesDialog";
 
     fn core(&self) -> &Core {
         &self.core
@@ -1405,7 +1405,7 @@ impl Application for App {
                     match dialog_page {
                         DialogPage::NewFolder { parent, name } => {
                             let path = parent.join(name);
-                            match fs::create_dir(&path) {
+                            match crate::claw_glue::mkdir_all(&path) {
                                 Ok(()) => {
                                     // cd to directory
                                     let message = Message::TabMessage(tab::Message::Location(

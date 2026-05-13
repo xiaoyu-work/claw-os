@@ -1,5 +1,5 @@
 name := 'cosmic-files'
-export APPID := 'com.system76.CosmicFiles'
+export APPID := 'com.clawos.Files'
 
 rootdir := ''
 prefix := '/usr'

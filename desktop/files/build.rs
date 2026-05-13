@@ -3,7 +3,7 @@ use std::{env, fs};
 use xdgen::{App, Context, FluentString};
 
 fn main() {
-    let id = "com.system76.CosmicFiles";
+    let id = "com.clawos.Files";
     let ctx = Context::new("i18n", env::var("CARGO_PKG_NAME").unwrap()).unwrap();
     let app = App::new(FluentString("cosmic-files"))
         .comment(FluentString("comment"))

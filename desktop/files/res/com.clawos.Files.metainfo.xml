@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>com.system76.CosmicFiles</id>
+  <id>com.clawos.Files</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-only</project_license>
   <project_group>COSMIC</project_group>
@@ -27,10 +27,10 @@
     <keyword>Folder</keyword>
     <keyword>Manager</keyword>
   </keywords>
-  <launchable type="desktop-id">com.system76.CosmicFiles.desktop</launchable>
-  <icon type="remote" height="256" width="256">https://raw.githubusercontent.com/pop-os/cosmic-files/master/res/icons/hicolor/256x256/apps/com.system76.CosmicFiles.svg</icon>
+  <launchable type="desktop-id">com.clawos.Files.desktop</launchable>
+  <icon type="remote" height="256" width="256">https://raw.githubusercontent.com/pop-os/cosmic-files/master/res/icons/hicolor/256x256/apps/com.clawos.Files.svg</icon>
   <provides>
-    <id>com.system76.CosmicApplication</id>
+    <id>com.clawos.Application</id>
     <mimetypes>
       <mimetype>inode/directory</mimetype>
     </mimetypes>

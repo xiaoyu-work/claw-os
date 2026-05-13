@@ -15,6 +15,7 @@ use crate::tab::Location;
 pub mod app;
 mod archive;
 pub mod channel;
+mod claw_glue;
 pub mod clipboard;
 pub mod config;
 mod context_action;

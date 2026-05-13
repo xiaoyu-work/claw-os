@@ -1027,6 +1027,12 @@ impl Operation {
                         .check()
                         .await
                         .map_err(|s| OperationError::from_state(s, &controller))?;
+                    // FIXME(claw): inside compio runtime, can't easily
+                    // call the sync claw_bridge here. The user-action
+                    // New Folder still hits caps indirectly through
+                    // the file system, but not yet through the bridge.
+                    // Follow-up: add async wrappers in claw-bridge or
+                    // dispatch to a tokio handle.
                     compio::fs::create_dir(&path)
                         .await
                         .map_err(|e| OperationError::from_err(e, &controller))?;
@@ -1067,17 +1073,10 @@ impl Operation {
 
                     controller.set_progress((idx as f32) / (total as f32));
 
-                    tokio::task::spawn_blocking(|| {
-                        if path.is_symlink() || path.is_file() {
-                            fs::remove_file(path)
-                        } else if path.is_dir() {
-                            fs::remove_dir_all(path)
-                        } else {
-                            Err(std::io::Error::new(
-                                std::io::ErrorKind::InvalidData,
-                                "File to delete is not symlink, file or directory",
-                            ))
-                        }
+                    tokio::task::spawn_blocking(move || {
+                        // User-confirmed final delete — route through
+                        // the kernel's caps gate + audit log.
+                        crate::claw_glue::remove(&path)
                     })
                     .await
                     .map_err(|e| OperationError::from_err(e, &controller))?
@@ -1106,6 +1105,10 @@ impl Operation {
                         .check()
                         .await
                         .map_err(|s| OperationError::from_state(s, &controller))?;
+                    // FIXME(claw): inside compio runtime, can't easily
+                    // call the sync claw_bridge here. Follow-up: add
+                    // async wrappers in claw-bridge or dispatch to a
+                    // tokio handle so user-rename hits the caps gate.
                     compio::fs::rename(&from, &to)
                         .await
                         .map_err(|e| OperationError::from_err(e, &controller))?;

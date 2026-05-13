@@ -993,6 +993,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "claw-bridge"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "clipboard-win"
 version = "5.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1386,6 +1396,7 @@ dependencies = [
  "atomic_float",
  "bstr",
  "bzip2",
+ "claw-bridge",
  "compio",
  "cosmic-client-toolkit",
  "cosmic-mime-apps",
