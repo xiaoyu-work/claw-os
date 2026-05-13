@@ -267,5 +267,45 @@ class TestReadBytes(unittest.TestCase):
             cmd_read_bytes([])
 
 
+class TestWriteBytes(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_round_trip_base64(self):
+        from main import cmd_write_bytes
+        data = bytes(range(256))
+        encoded = base64.b64encode(data).decode("ascii")
+        dst = os.path.join(self.tmpdir, "out.bin")
+        result = cmd_write_bytes([dst, "--content", encoded])
+        self.assertEqual(result.get("path"), dst)
+        self.assertEqual(result.get("bytes"), len(data))
+        with open(dst, "rb") as f:
+            self.assertEqual(f.read(), data)
+
+    def test_creates_missing_parents(self):
+        from main import cmd_write_bytes
+        nested = os.path.join(self.tmpdir, "a", "b", "c", "out.bin")
+        encoded = base64.b64encode(b"hi").decode("ascii")
+        result = cmd_write_bytes([nested, "--content", encoded])
+        self.assertEqual(result.get("bytes"), 2)
+        self.assertTrue(os.path.exists(nested))
+
+    def test_invalid_base64_returns_error(self):
+        from main import cmd_write_bytes
+        dst = os.path.join(self.tmpdir, "out.bin")
+        result = cmd_write_bytes([dst, "--content", "!@#$%^not-base64"])
+        self.assertIn("error", result)
+        self.assertFalse(os.path.exists(dst))
+
+    def test_requires_path(self):
+        from main import cmd_write_bytes
+        with self.assertRaises(Exception):
+            cmd_write_bytes([])
+
+
 if __name__ == "__main__":
     unittest.main()

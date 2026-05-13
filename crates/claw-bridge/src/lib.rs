@@ -326,4 +326,22 @@ mod tests {
         };
         assert!(err.is_denied());
     }
+
+    #[test]
+    #[cfg(unix)]
+    fn fs_read_bytes_decodes_base64() {
+        // The Python side returns {"base64": "..."} for read_bytes;
+        // the bridge wrapper has to base64-decode that on its way
+        // back to the Rust caller.
+        let dir = tempfile::tempdir().unwrap();
+        // "hello world" base64-encoded is "aGVsbG8gd29ybGQ=".
+        let bin = write_fake_cos(
+            dir.path(),
+            r#"{"path":"/x","base64":"aGVsbG8gd29ybGQ=","bytes_returned":11,"total_size":11}"#,
+        );
+        std::env::set_var("CLAW_COS_BIN", &bin);
+        let v = fs::read_bytes("/x").unwrap();
+        assert_eq!(v, b"hello world");
+        std::env::remove_var("CLAW_COS_BIN");
+    }
 }

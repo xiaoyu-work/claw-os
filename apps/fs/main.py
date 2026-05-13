@@ -421,6 +421,39 @@ def cmd_read_bytes(args):
     return result
 
 
+def cmd_write_bytes(args):
+    """Write raw bytes (base64-encoded on the wire) to a file. The
+    binary-safe counterpart to ``cmd_write``. Use this for clipboard
+    paste of images, drag-drop of binary content, archive extraction,
+    and any other path where the GUI has bytes rather than text.
+
+    Args: <path> [--content <base64>]
+    If ``--content`` is omitted, base64 is read from stdin.
+    """
+    if not args:
+        raise Exception("write_bytes requires a path argument")
+    path = _abs(args[0])
+    policy.require("fs.write", path=path)
+    content_b64 = None
+    rest = args[1:]
+    for i, arg in enumerate(rest):
+        if arg == "--content" and i + 1 < len(rest):
+            content_b64 = rest[i + 1]
+            break
+    if content_b64 is None:
+        content_b64 = sys.stdin.read()
+    try:
+        data = base64.b64decode(content_b64, validate=False)
+    except Exception as exc:
+        return {"error": f"invalid base64: {exc}"}
+    parent = os.path.dirname(path)
+    if parent and not os.path.isdir(parent):
+        os.makedirs(parent, exist_ok=True)
+    with open(path, "wb") as f:
+        n = f.write(data)
+    return {"path": path, "bytes": n}
+
+
 # ── Dispatch ──────────────────────────────────────────────────────
 
 COMMANDS = {
@@ -428,6 +461,7 @@ COMMANDS = {
     "read": cmd_read,
     "read_bytes": cmd_read_bytes,
     "write": cmd_write,
+    "write_bytes": cmd_write_bytes,
     "rm": cmd_rm,
     "mkdir": cmd_mkdir,
     "stat": cmd_stat,
@@ -544,6 +578,14 @@ def _schema():
                 {"name": "--limit", "type": "integer", "required": False, "description": "Maximum bytes to return (max 8 MiB)", "kind": "flag"},
             ],
             "example": "cos app fs read_bytes /workspace/photo.jpg --offset 0 --limit 65536",
+        },
+        "write_bytes": {
+            "description": "Write raw bytes (base64-encoded on the wire) to a file. Use for image paste, binary drop, archive extract.",
+            "parameters": [
+                {"name": "path", "type": "string", "required": True, "description": "File path to write", "kind": "positional"},
+                {"name": "--content", "type": "string", "required": False, "description": "Base64-encoded content (otherwise read from stdin)", "kind": "flag"},
+            ],
+            "example": "echo BASE64 | cos app fs write_bytes /workspace/out.png",
         },
     }
 
