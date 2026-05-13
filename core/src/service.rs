@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use crate::policy::{self, OpType};
+use crate::caps::{require_or_json, Scope, Verb};
 
 const MAX_LOG_BYTES: usize = 200_000;
 const DEFAULT_LOG_TAIL: usize = 20;
@@ -400,7 +400,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 /// Start a service by name.
 /// Sequence: pre_start → spawn → health-wait → post_start
 fn cmd_start(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::System).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_SERVICE, Scope::wild()).map_err(|v| v.to_string())?;
     let name = args.first().ok_or("usage: cos service start <name>")?;
     let def = find_service(name)?;
 
@@ -575,7 +575,7 @@ fn cmd_start(args: &[String]) -> Result<Value, String> {
 /// Graceful stop a service by name.
 /// Sequence: checkpoint → pre_stop → drain → SIGTERM → wait → SIGKILL → post_stop → clear PID
 fn cmd_stop(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::System).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_SERVICE, Scope::wild()).map_err(|v| v.to_string())?;
     let name = args.first().ok_or("usage: cos service stop <name>")?;
 
     let pid =
@@ -667,7 +667,7 @@ fn cmd_stop(args: &[String]) -> Result<Value, String> {
 
 /// Restart a service (stop then start).
 fn cmd_restart(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::System).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_SERVICE, Scope::wild()).map_err(|v| v.to_string())?;
     let _name = args.first().ok_or("usage: cos service restart <name>")?;
 
     // Stop (ignore errors — service may not be running)
@@ -679,7 +679,7 @@ fn cmd_restart(args: &[String]) -> Result<Value, String> {
 /// Stop all running services in reverse dependency order.
 /// If service B depends_on service A, stop B first, then A.
 fn cmd_stop_all(_args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::System).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_SERVICE, Scope::wild()).map_err(|v| v.to_string())?;
     let services = discover_services();
 
     // Build the shutdown order: reverse dependency (dependents first, then dependencies).
@@ -752,7 +752,7 @@ fn reverse_dependency_order(services: &BTreeMap<String, ServiceDef>) -> Vec<Stri
 
 /// Show detailed status for a service.
 fn cmd_status(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_SERVICE, Scope::wild()).map_err(|v| v.to_string())?;
     let name = args.first().ok_or("usage: cos service status <name>")?;
     let def = find_service(name)?;
 
@@ -786,7 +786,7 @@ fn cmd_status(args: &[String]) -> Result<Value, String> {
 
 /// Health check a service, optionally auto-restarting if unhealthy.
 fn cmd_health(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_SERVICE, Scope::wild()).map_err(|v| v.to_string())?;
     let name = args.first().ok_or("usage: cos service health <name>")?;
     let def = find_service(name)?;
     let auto_restart = !args.contains(&"--no-restart".to_string());
@@ -821,7 +821,7 @@ fn cmd_health(args: &[String]) -> Result<Value, String> {
 
 /// List all discovered services with their current status.
 fn cmd_list(_args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_SERVICE, Scope::wild()).map_err(|v| v.to_string())?;
     let services = discover_services();
 
     let list: Vec<Value> = services
@@ -859,7 +859,7 @@ fn cmd_list(_args: &[String]) -> Result<Value, String> {
 
 /// Show service logs.
 fn cmd_logs(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_SERVICE, Scope::wild()).map_err(|v| v.to_string())?;
     let name = args
         .first()
         .ok_or("usage: cos service logs <name> [--tail N]")?;
@@ -901,7 +901,7 @@ fn cmd_logs(args: &[String]) -> Result<Value, String> {
 
 /// Register a new service by creating a service.json in the services directory.
 fn cmd_register(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::System).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_SERVICE, Scope::wild()).map_err(|v| v.to_string())?;
     let mut name: Option<String> = None;
     let mut command: Option<String> = None;
     let mut workdir: Option<String> = None;
@@ -1066,8 +1066,15 @@ fn cmd_register(args: &[String]) -> Result<Value, String> {
 mod tests {
     use super::*;
 
+    use std::sync::Once;
+    static PERMS_INIT: Once = Once::new();
+    fn perms_init() {
+        PERMS_INIT.call_once(|| std::env::set_var("COS_PERMS_MODE", "permissive"));
+    }
+
     #[test]
     fn test_default_values() {
+        perms_init();
         assert_eq!(default_interval(), 10);
         assert_eq!(default_timeout(), 5);
         assert_eq!(default_grace(), 15);
@@ -1076,6 +1083,7 @@ mod tests {
 
     #[test]
     fn test_deserialize_service_def_minimal() {
+        perms_init();
         let json = r#"{"name": "test", "command": "echo hello"}"#;
         let def: ServiceDef = serde_json::from_str(json).unwrap();
         assert_eq!(def.name, "test");
@@ -1091,6 +1099,7 @@ mod tests {
 
     #[test]
     fn test_deserialize_service_def_full() {
+        perms_init();
         let json = r#"{
             "name": "browser",
             "description": "cos-browser CDP server",
@@ -1123,6 +1132,7 @@ mod tests {
 
     #[test]
     fn test_deserialize_health_defaults() {
+        perms_init();
         let json = r#"{"url": "http://localhost:8080"}"#;
         let h: HealthConfig = serde_json::from_str(json).unwrap();
         assert_eq!(h.url.as_deref(), Some("http://localhost:8080"));
@@ -1133,6 +1143,7 @@ mod tests {
 
     #[test]
     fn test_unknown_command() {
+        perms_init();
         let result = run("bogus", &[]);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("unknown service command"));
@@ -1140,6 +1151,7 @@ mod tests {
 
     #[test]
     fn test_start_missing_name() {
+        perms_init();
         let result = cmd_start(&[]);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("usage"));
@@ -1147,6 +1159,7 @@ mod tests {
 
     #[test]
     fn test_stop_missing_name() {
+        perms_init();
         let result = cmd_stop(&[]);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("usage"));
@@ -1154,6 +1167,7 @@ mod tests {
 
     #[test]
     fn test_status_missing_name() {
+        perms_init();
         let result = cmd_status(&[]);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("usage"));
@@ -1161,6 +1175,7 @@ mod tests {
 
     #[test]
     fn test_health_missing_name() {
+        perms_init();
         let result = cmd_health(&[]);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("usage"));
@@ -1168,6 +1183,7 @@ mod tests {
 
     #[test]
     fn test_logs_missing_name() {
+        perms_init();
         let result = cmd_logs(&[]);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("usage"));
@@ -1175,6 +1191,7 @@ mod tests {
 
     #[test]
     fn test_register_missing_args() {
+        perms_init();
         let result = cmd_register(&[]);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("--name is required"));
@@ -1186,6 +1203,7 @@ mod tests {
 
     #[test]
     fn test_register_invalid_name() {
+        perms_init();
         let result = cmd_register(&[
             "--name".into(),
             "bad/name".into(),
@@ -1198,6 +1216,7 @@ mod tests {
 
     #[test]
     fn test_serialize_roundtrip() {
+        perms_init();
         let def = ServiceDef {
             name: "test-svc".into(),
             description: "A test service".into(),
@@ -1241,6 +1260,7 @@ mod tests {
 
     #[test]
     fn test_lifecycle_hooks_deserialization() {
+        perms_init();
         // Empty object should use all defaults
         let json = r#"{}"#;
         let hooks: LifecycleHooks = serde_json::from_str(json).unwrap();
@@ -1274,12 +1294,14 @@ mod tests {
 
     #[test]
     fn test_lifecycle_defaults() {
+        perms_init();
         assert_eq!(default_drain_timeout(), 5);
         assert_eq!(default_stop_timeout(), 10);
     }
 
     #[test]
     fn test_run_hook_success() {
+        perms_init();
         let result = run_hook("test_hook", "echo hello", 10);
         assert_eq!(result["step"], "test_hook");
         assert_eq!(result["status"], "ok");
@@ -1292,6 +1314,7 @@ mod tests {
 
     #[test]
     fn test_run_hook_failure() {
+        perms_init();
         // Use a command that will fail
         #[cfg(unix)]
         let cmd = "sh -c 'echo fail-output >&2; exit 1'";
@@ -1307,6 +1330,7 @@ mod tests {
 
     #[test]
     fn test_stop_all_dispatch() {
+        perms_init();
         // Verify the stop-all command is routed correctly
         let result = run("stop-all", &[]);
         // Should succeed (no running services in test env)
@@ -1319,6 +1343,7 @@ mod tests {
 
     #[test]
     fn test_register_with_lifecycle() {
+        perms_init();
         // Use a temp services dir for this test
         let tmp_dir = std::env::temp_dir().join("cos-test-register-lifecycle");
         let _ = fs::remove_dir_all(&tmp_dir);
@@ -1368,6 +1393,7 @@ mod tests {
 
     #[test]
     fn test_reverse_dependency_order() {
+        perms_init();
         let mut services = BTreeMap::new();
         services.insert(
             "db".into(),
@@ -1433,6 +1459,7 @@ mod tests {
 
     #[test]
     fn test_service_def_with_lifecycle_field() {
+        perms_init();
         let json = r#"{
             "name": "agent",
             "command": "python agent.py",
@@ -1457,6 +1484,7 @@ mod tests {
 
     #[test]
     fn test_service_def_with_credentials() {
+        perms_init();
         let json = r#"{
             "name": "my-agent",
             "command": "python agent.py",
@@ -1468,6 +1496,7 @@ mod tests {
 
     #[test]
     fn test_service_def_without_credentials() {
+        perms_init();
         let json = r#"{"name": "test", "command": "echo hi"}"#;
         let def: ServiceDef = serde_json::from_str(json).unwrap();
         assert!(def.credentials.is_empty());

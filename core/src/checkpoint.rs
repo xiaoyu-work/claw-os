@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 #[cfg(target_os = "linux")]
 use std::process::Command;
 
-use crate::policy::{self, OpType};
+use crate::caps::{require_or_json, Scope, Verb};
 
 // ---------------------------------------------------------------------------
 // Path helpers
@@ -327,7 +327,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 // ---------------------------------------------------------------------------
 
 fn cmd_create(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::System).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_KERNEL, Scope::wild()).map_err(|v| v.to_string())?;
 
     let description = if args.is_empty() {
         "checkpoint".to_string()
@@ -408,7 +408,7 @@ fn cmd_create(args: &[String]) -> Result<Value, String> {
 // ---------------------------------------------------------------------------
 
 fn cmd_diff(_args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::DATA_LOG_READ, Scope::wild()).map_err(|v| v.to_string())?;
 
     let overlay = overlay_dir();
     let upper = overlay.join("upper");
@@ -454,7 +454,7 @@ fn cmd_diff(_args: &[String]) -> Result<Value, String> {
 // ---------------------------------------------------------------------------
 
 fn cmd_rollback(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::System).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_KERNEL, Scope::wild()).map_err(|v| v.to_string())?;
 
     let overlay = overlay_dir();
     let upper = overlay.join("upper");
@@ -556,7 +556,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 fn cmd_list(_args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::DATA_LOG_READ, Scope::wild()).map_err(|v| v.to_string())?;
 
     let checkpoints_dir = overlay_dir().join("checkpoints");
     if !checkpoints_dir.exists() {
@@ -600,7 +600,7 @@ fn cmd_list(_args: &[String]) -> Result<Value, String> {
 // ---------------------------------------------------------------------------
 
 fn cmd_status(_args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::DATA_LOG_READ, Scope::wild()).map_err(|v| v.to_string())?;
 
     let overlay = overlay_dir();
     let upper = overlay.join("upper");
@@ -734,7 +734,7 @@ fn format_bytes(bytes: u64) -> String {
 ///
 /// Usage: cos checkpoint quota-set <size>  (e.g. "2G", "512M")
 fn cmd_quota_set(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::System).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_KERNEL, Scope::wild()).map_err(|v| v.to_string())?;
 
     let size_str = args
         .first()
@@ -755,7 +755,7 @@ fn cmd_quota_set(args: &[String]) -> Result<Value, String> {
 ///
 /// Usage: cos checkpoint quota-status
 fn cmd_quota_status(_args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::DATA_LOG_READ, Scope::wild()).map_err(|v| v.to_string())?;
 
     let upper = overlay_dir().join("upper");
     let used = if upper.exists() { dir_size(&upper) } else { 0 };
@@ -824,7 +824,7 @@ fn namespace_base_dir() -> PathBuf {
 ///
 /// Usage: cos checkpoint namespaces [--create <name>] [--destroy <name>] [--status <name>]
 fn cmd_namespaces(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::DATA_LOG_READ, Scope::wild()).map_err(|v| v.to_string())?;
 
     if args.is_empty() {
         return list_namespaces();
@@ -899,7 +899,7 @@ fn list_namespaces() -> Result<Value, String> {
 }
 
 fn create_namespace(name: &str) -> Result<Value, String> {
-    policy::require(OpType::System).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_KERNEL, Scope::name(name)).map_err(|v| v.to_string())?;
 
     if !name
         .chars()
@@ -929,7 +929,7 @@ fn create_namespace(name: &str) -> Result<Value, String> {
 }
 
 fn destroy_namespace(name: &str) -> Result<Value, String> {
-    policy::require(OpType::System).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_KERNEL, Scope::name(name)).map_err(|v| v.to_string())?;
 
     let ns_dir = namespace_base_dir().join(name);
     if !ns_dir.exists() {
@@ -993,12 +993,19 @@ fn namespace_status(name: &str) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::sync::Once;
+    static PERMS_INIT: Once = Once::new();
+    fn perms_init() {
+        PERMS_INIT.call_once(|| std::env::set_var("COS_PERMS_MODE", "permissive"));
+    }
     use std::fs;
 
     // -- Checkpoint ID generation --
 
     #[test]
     fn next_id_empty_dir() {
+        perms_init();
         let dir = std::env::temp_dir().join("cos-cp-test-empty");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
@@ -1010,6 +1017,7 @@ mod tests {
 
     #[test]
     fn next_id_sequential() {
+        perms_init();
         let dir = std::env::temp_dir().join("cos-cp-test-seq");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
@@ -1024,6 +1032,7 @@ mod tests {
 
     #[test]
     fn next_id_with_gap() {
+        perms_init();
         let dir = std::env::temp_dir().join("cos-cp-test-gap");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
@@ -1039,6 +1048,7 @@ mod tests {
 
     #[test]
     fn next_id_ignores_non_numeric() {
+        perms_init();
         let dir = std::env::temp_dir().join("cos-cp-test-nonnum");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
@@ -1055,6 +1065,7 @@ mod tests {
 
     #[test]
     fn meta_round_trip() {
+        perms_init();
         let meta = CheckpointMeta {
             id: "007".to_string(),
             description: "before refactoring".to_string(),
@@ -1073,6 +1084,7 @@ mod tests {
 
     #[test]
     fn meta_json_has_expected_fields() {
+        perms_init();
         let meta = CheckpointMeta {
             id: "001".to_string(),
             description: "test".to_string(),
@@ -1091,6 +1103,7 @@ mod tests {
 
     #[test]
     fn walk_upper_created_files() {
+        perms_init();
         let root = std::env::temp_dir().join("cos-cp-walk-created");
         let _ = fs::remove_dir_all(&root);
 
@@ -1125,6 +1138,7 @@ mod tests {
 
     #[test]
     fn walk_upper_modified_files() {
+        perms_init();
         let root = std::env::temp_dir().join("cos-cp-walk-modified");
         let _ = fs::remove_dir_all(&root);
 
@@ -1160,6 +1174,7 @@ mod tests {
 
     #[test]
     fn walk_upper_subdirectory() {
+        perms_init();
         let root = std::env::temp_dir().join("cos-cp-walk-subdir");
         let _ = fs::remove_dir_all(&root);
 
@@ -1198,6 +1213,7 @@ mod tests {
 
     #[test]
     fn sanitize_basic() {
+        perms_init();
         assert_eq!(
             sanitize_description("before refactoring"),
             "before-refactoring"
@@ -1206,6 +1222,7 @@ mod tests {
 
     #[test]
     fn sanitize_special_chars() {
+        perms_init();
         assert_eq!(
             sanitize_description("fix: tests & lints!"),
             "fix-tests-lints"
@@ -1214,6 +1231,7 @@ mod tests {
 
     #[test]
     fn sanitize_empty() {
+        perms_init();
         assert_eq!(sanitize_description(""), "");
     }
 
@@ -1221,6 +1239,7 @@ mod tests {
 
     #[test]
     fn count_files_empty() {
+        perms_init();
         let dir = std::env::temp_dir().join("cos-cp-count-empty");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
@@ -1232,6 +1251,7 @@ mod tests {
 
     #[test]
     fn count_files_with_content() {
+        perms_init();
         let dir = std::env::temp_dir().join("cos-cp-count-files");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(dir.join("sub")).unwrap();
@@ -1248,6 +1268,7 @@ mod tests {
 
     #[test]
     fn dir_size_basic() {
+        perms_init();
         let dir = std::env::temp_dir().join("cos-cp-dirsize");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
@@ -1264,6 +1285,7 @@ mod tests {
 
     #[test]
     fn copy_dir_recursive_works() {
+        perms_init();
         let root = std::env::temp_dir().join("cos-cp-copydir");
         let _ = fs::remove_dir_all(&root);
 
@@ -1288,6 +1310,7 @@ mod tests {
 
     #[test]
     fn existing_ids_empty() {
+        perms_init();
         let dir = std::env::temp_dir().join("cos-cp-ids-empty");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
@@ -1299,6 +1322,7 @@ mod tests {
 
     #[test]
     fn existing_ids_mixed() {
+        perms_init();
         let dir = std::env::temp_dir().join("cos-cp-ids-mixed");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
@@ -1318,6 +1342,7 @@ mod tests {
 
     #[test]
     fn run_unknown_command() {
+        perms_init();
         let result = run("bogus", &[]);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("unknown checkpoint command"));
@@ -1327,26 +1352,31 @@ mod tests {
 
     #[test]
     fn parse_size_gigabytes() {
+        perms_init();
         assert_eq!(parse_size("2G").unwrap(), 2 * 1024 * 1024 * 1024);
     }
 
     #[test]
     fn parse_size_megabytes() {
+        perms_init();
         assert_eq!(parse_size("512M").unwrap(), 512 * 1024 * 1024);
     }
 
     #[test]
     fn parse_size_kilobytes() {
+        perms_init();
         assert_eq!(parse_size("100K").unwrap(), 100 * 1024);
     }
 
     #[test]
     fn parse_size_bytes() {
+        perms_init();
         assert_eq!(parse_size("1024").unwrap(), 1024);
     }
 
     #[test]
     fn parse_size_invalid() {
+        perms_init();
         assert!(parse_size("abc").is_err());
     }
 
@@ -1354,12 +1384,14 @@ mod tests {
 
     #[test]
     fn format_bytes_gb() {
+        perms_init();
         let s = format_bytes(2 * 1024 * 1024 * 1024);
         assert!(s.contains("G"));
     }
 
     #[test]
     fn format_bytes_mb() {
+        perms_init();
         let s = format_bytes(100 * 1024 * 1024);
         assert!(s.contains("M"));
     }
@@ -1369,7 +1401,7 @@ mod tests {
     // Quota and namespace tests share a single COS_DATA_DIR (set via Once)
     // and use a Mutex to serialize because they share global state (quota.json,
     // namespace dirs).
-    use std::sync::{Mutex, Once};
+    use std::sync::Mutex;
     static CP_INIT: Once = Once::new();
     static CP_LOCK: Mutex<()> = Mutex::new(());
 
@@ -1386,6 +1418,7 @@ mod tests {
 
     #[test]
     fn quota_set_and_status() {
+        perms_init();
         let _g = cp_setup();
 
         let r = cmd_quota_set(&vec!["1G".into()]).unwrap();
@@ -1400,6 +1433,7 @@ mod tests {
 
     #[test]
     fn namespace_create_list_destroy() {
+        perms_init();
         let _g = cp_setup();
         let ns_name = format!("test-ns-{}", std::process::id());
 
@@ -1419,6 +1453,7 @@ mod tests {
 
     #[test]
     fn namespace_invalid_name() {
+        perms_init();
         std::env::remove_var("COS_SESSION");
         let r = create_namespace("bad/name");
         assert!(r.is_err());
