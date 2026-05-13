@@ -250,6 +250,9 @@ jobs:
       - name: Build WSL rootfs tarball
         run: sudo ./build.sh wsl
 
+      - name: Fix build/ ownership for non-sudo steps
+        run: sudo chown -R "$(id -u):$(id -g)" build
+
       - name: Compute SHA-256 and rename for release
         id: artifact
         run: |
