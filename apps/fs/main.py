@@ -1,5 +1,6 @@
 """fs — Agent-native file system with metadata and search."""
 
+import base64
 import json
 import os
 import shutil
@@ -311,11 +312,121 @@ def cmd_recent(args):
     return {"files": files[:n]}
 
 
+def cmd_rename(args):
+    """Rename / move a file or directory. Requires fs.delete on the
+    source (we're removing it from the source path) AND fs.write on
+    the destination (we're creating it there).
+
+    Args: <src> <dst>
+    """
+    if len(args) < 2:
+        raise Exception("rename requires <src> and <dst> arguments")
+    src = _abs(args[0])
+    dst = _abs(args[1])
+    policy.require("fs.delete", path=src)
+    policy.require("fs.write", path=dst)
+    if not os.path.exists(src):
+        return {"error": f"not found: {src}"}
+    if os.path.exists(dst):
+        return {"error": f"destination already exists: {dst}"}
+    parent = os.path.dirname(dst)
+    if parent and not os.path.isdir(parent):
+        os.makedirs(parent, exist_ok=True)
+    os.rename(src, dst)
+    return {"from": src, "to": dst}
+
+
+# Alias: "move" is what users / GUI menus call this. Same enforcement
+# story (delete src + write dst) so we route through the same handler.
+def cmd_move(args):
+    return cmd_rename(args)
+
+
+def cmd_copy(args):
+    """Copy a file or directory tree. Requires fs.read on the source
+    and fs.write on the destination.
+
+    Args: <src> <dst>
+    """
+    if len(args) < 2:
+        raise Exception("copy requires <src> and <dst> arguments")
+    src = _abs(args[0])
+    dst = _abs(args[1])
+    policy.require("fs.read", path=src)
+    policy.require("fs.write", path=dst)
+    if not os.path.exists(src):
+        return {"error": f"not found: {src}"}
+    if os.path.exists(dst):
+        return {"error": f"destination already exists: {dst}"}
+    parent = os.path.dirname(dst)
+    if parent and not os.path.isdir(parent):
+        os.makedirs(parent, exist_ok=True)
+    if os.path.isdir(src):
+        shutil.copytree(src, dst, symlinks=True)
+        return {"from": src, "to": dst, "kind": "dir"}
+    shutil.copy2(src, dst)
+    return {"from": src, "to": dst, "kind": "file"}
+
+
+# Cap on a single read_bytes response so we don't hand a GUI a 4GB
+# blob in one shot. Larger files are read in pages by passing
+# successive --offset values.
+MAX_READ_BYTES_BINARY = 8 * 1024 * 1024  # 8 MiB
+
+
+def cmd_read_bytes(args):
+    """Read a slice of a file as base64 — the binary-safe counterpart
+    to ``cmd_read``. Doesn't decode as UTF-8, so it works for images
+    and other binary content.
+
+    Args: <path> [--offset N] [--limit N]
+    """
+    if not args:
+        raise Exception("read_bytes requires a path argument")
+    path = _abs(args[0])
+    offset = 0
+    limit = MAX_READ_BYTES_BINARY
+    rest = args[1:]
+    i = 0
+    while i < len(rest):
+        if rest[i] == "--offset" and i + 1 < len(rest):
+            offset = int(rest[i + 1])
+            i += 2
+        elif rest[i] == "--limit" and i + 1 < len(rest):
+            limit = int(rest[i + 1])
+            i += 2
+        else:
+            i += 1
+    policy.require("fs.read", path=path)
+    if not os.path.isfile(path):
+        return {"error": f"file not found: {path}"}
+    total_size = os.path.getsize(path)
+    effective_limit = min(limit, MAX_READ_BYTES_BINARY)
+    with open(path, "rb") as f:
+        if offset > 0:
+            f.seek(offset)
+        raw = f.read(effective_limit + 1)
+    truncated = len(raw) > effective_limit
+    if truncated:
+        raw = raw[:effective_limit]
+    result = {
+        "path": path,
+        "offset": offset,
+        "bytes_returned": len(raw),
+        "total_size": total_size,
+        "base64": base64.b64encode(raw).decode("ascii"),
+    }
+    if truncated:
+        result["truncated"] = True
+    return result
+
+
 # ── Dispatch ──────────────────────────────────────────────────────
 
 COMMANDS = {
     "ls": cmd_ls,
     "read": cmd_read,
+    "read_bytes": cmd_read_bytes,
     "write": cmd_write,
     "rm": cmd_rm,
     "mkdir": cmd_mkdir,
@@ -323,6 +434,9 @@ COMMANDS = {
     "search": cmd_search,
     "tag": cmd_tag,
     "recent": cmd_recent,
+    "rename": cmd_rename,
+    "move": cmd_move,
+    "copy": cmd_copy,
 }
 
 
@@ -397,6 +511,39 @@ def _schema():
                 {"name": "n", "type": "integer", "required": False, "description": "Number of files to return (default 10)", "kind": "positional", "default": 10},
             ],
             "example": "cos app fs recent 20",
+        },
+        "rename": {
+            "description": "Rename or move a file or directory. Capability-wise this is a delete+write pair.",
+            "parameters": [
+                {"name": "src", "type": "string", "required": True, "description": "Source path", "kind": "positional"},
+                {"name": "dst", "type": "string", "required": True, "description": "Destination path", "kind": "positional"},
+            ],
+            "example": "cos app fs rename /workspace/old.txt /workspace/new.txt",
+        },
+        "move": {
+            "description": "Alias for `rename`. Use whichever reads better in the caller's context.",
+            "parameters": [
+                {"name": "src", "type": "string", "required": True, "description": "Source path", "kind": "positional"},
+                {"name": "dst", "type": "string", "required": True, "description": "Destination path", "kind": "positional"},
+            ],
+            "example": "cos app fs move /workspace/a /workspace/b",
+        },
+        "copy": {
+            "description": "Copy a file or directory tree. Requires fs.read on src and fs.write on dst.",
+            "parameters": [
+                {"name": "src", "type": "string", "required": True, "description": "Source path", "kind": "positional"},
+                {"name": "dst", "type": "string", "required": True, "description": "Destination path", "kind": "positional"},
+            ],
+            "example": "cos app fs copy /workspace/a.png /workspace/b.png",
+        },
+        "read_bytes": {
+            "description": "Read a slice of a file as base64 (binary-safe). Use this for images, archives, and other non-text content.",
+            "parameters": [
+                {"name": "path", "type": "string", "required": True, "description": "Path to read", "kind": "positional"},
+                {"name": "--offset", "type": "integer", "required": False, "description": "Byte offset to start at", "kind": "flag"},
+                {"name": "--limit", "type": "integer", "required": False, "description": "Maximum bytes to return (max 8 MiB)", "kind": "flag"},
+            ],
+            "example": "cos app fs read_bytes /workspace/photo.jpg --offset 0 --limit 65536",
         },
     }
 
