@@ -15,7 +15,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use crate::policy::{self, OpType};
+use crate::caps::{require_or_json, Scope, Verb};
 
 const DEFAULT_CDP_PORT: u16 = 9222;
 const HEALTH_TIMEOUT_SECS: u64 = 5;
@@ -134,7 +134,7 @@ fn parse_start_flags(args: &[String]) -> (bool, Option<String>) {
 
 /// Start the cos-browser CDP server.
 fn cmd_start(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::System).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_SERVICE, Scope::name("cos-browser")).map_err(|v| v.to_string())?;
 
     if let Some(pid) = read_pid() {
         if is_process_alive(pid) {
@@ -210,7 +210,7 @@ fn cmd_start(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_stop(_args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::System).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_SERVICE, Scope::name("cos-browser")).map_err(|v| v.to_string())?;
     let pid = read_pid().ok_or("cos-browser is not running (no PID file)")?;
 
     #[cfg(unix)]
@@ -233,14 +233,14 @@ fn cmd_stop(_args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_restart(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::System).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_SERVICE, Scope::name("cos-browser")).map_err(|v| v.to_string())?;
     let _ = cmd_stop(&[]);
     std::thread::sleep(std::time::Duration::from_secs(1));
     cmd_start(args)
 }
 
 fn cmd_status(_args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_SERVICE, Scope::name("cos-browser")).map_err(|v| v.to_string())?;
     let pid = read_pid();
     let alive = pid.map(is_process_alive).unwrap_or(false);
     let healthy = if alive { is_browser_healthy() } else { false };
@@ -279,7 +279,7 @@ fn cmd_status(_args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_health(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_SERVICE, Scope::name("cos-browser")).map_err(|v| v.to_string())?;
     let auto_restart = !args.contains(&"--no-restart".to_string());
 
     if is_browser_healthy() {

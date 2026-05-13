@@ -11,7 +11,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::policy::{self, OpType};
+use crate::caps::{require_or_json, Scope, Verb};
 
 const MAX_OUTPUT_BYTES: usize = 2_000_000;
 
@@ -101,7 +101,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_spawn(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Exec).map_err(|v| v.to_string())?;
+    require_or_json(Verb::PROC_SPAWN, Scope::wild()).map_err(|v| v.to_string())?;
     let mut session_id = None;
     let mut group = None;
     let mut parent = None;
@@ -362,7 +362,7 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_status(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::PROC_OBSERVE, Scope::wild()).map_err(|v| v.to_string())?;
     let sid = args.first().ok_or("usage: cos proc status <session-id>")?;
     let mut reg = load_registry();
     let idx = reg
@@ -403,7 +403,7 @@ fn cmd_status(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_output(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::PROC_OBSERVE, Scope::wild()).map_err(|v| v.to_string())?;
     let sid = args.first().ok_or("usage: cos proc output <session-id>")?;
     let mut tail_lines: Option<usize> = None;
     let mut stream = "both".to_string();
@@ -503,7 +503,7 @@ fn cmd_output(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_kill(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Exec).map_err(|v| v.to_string())?;
+    require_or_json(Verb::PROC_SIGNAL, Scope::wild()).map_err(|v| v.to_string())?;
     // --group mode: kill all sessions in a group
     if args.len() >= 2 && args[0] == "--group" {
         let group_name = &args[1];
@@ -549,7 +549,7 @@ fn cmd_kill(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_list(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::PROC_OBSERVE, Scope::wild()).map_err(|v| v.to_string())?;
     let mut reg = load_registry();
     let mut group_filter: Option<&str> = None;
 
@@ -625,7 +625,7 @@ fn kill_process(pid: u32) {
 }
 
 fn cmd_wait(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::PROC_OBSERVE, Scope::wild()).map_err(|v| v.to_string())?;
     let mut timeout: Option<u64> = None;
     let mut group_name: Option<&str> = None;
     let mut session_id: Option<&str> = None;
@@ -749,7 +749,7 @@ fn cmd_wait(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_signal(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Exec).map_err(|v| v.to_string())?;
+    require_or_json(Verb::PROC_SIGNAL, Scope::wild()).map_err(|v| v.to_string())?;
     if args.len() < 2 {
         return Err("usage: cos proc signal <session-id> <signal-name>".into());
     }
@@ -806,7 +806,7 @@ fn cmd_signal(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_result(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::PROC_OBSERVE, Scope::wild()).map_err(|v| v.to_string())?;
     let sid = args.first().ok_or("usage: cos proc result <session-id>")?;
     let mut reg = load_registry();
     let idx = reg
@@ -878,7 +878,7 @@ fn cmd_result(args: &[String]) -> Result<Value, String> {
 /// Reads from /proc/<pid>/stat and /proc/<pid>/status on Linux.
 /// Usage: cos proc stats <session-id>
 fn cmd_stats(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::PROC_OBSERVE, Scope::wild()).map_err(|v| v.to_string())?;
     let sid = args.first().ok_or("usage: cos proc stats <session-id>")?;
 
     let reg = load_registry();
@@ -985,7 +985,7 @@ fn cmd_stats(args: &[String]) -> Result<Value, String> {
 ///
 /// Usage: cos proc renice <session-id> --priority low|normal|high|realtime
 fn cmd_renice(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Exec).map_err(|v| v.to_string())?;
+    require_or_json(Verb::PROC_SIGNAL, Scope::wild()).map_err(|v| v.to_string())?;
 
     let mut session_id: Option<&str> = None;
     let mut priority: Option<String> = None;

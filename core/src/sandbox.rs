@@ -18,7 +18,7 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use crate::policy::{self, OpType};
+use crate::caps::{require_or_json, Scope, Verb};
 
 const SANDBOX_DIR: &str = "/var/lib/cos/sandboxes";
 
@@ -80,7 +80,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 ///                         [--mem LIMIT] [--cpu PERCENT] [--pids MAX]
 ///                         [--timeout SECS] -- <command> [args...]
 fn cmd_exec(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Exec).map_err(|v| v.to_string())?;
+    require_or_json(Verb::PROC_SPAWN, Scope::wild()).map_err(|v| v.to_string())?;
     let mut network = true;
     let mut read_only = false;
     let mut workspace = "/den".to_string();
@@ -510,7 +510,7 @@ fn exec_fallback(
 /// Network/RO flags are stored in the config for later use by `cmd_exec`.
 /// No process is spawned here — use `cos sandbox exec` to run with this config.
 fn cmd_create(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Exec).map_err(|v| v.to_string())?;
+    require_or_json(Verb::PROC_SPAWN, Scope::wild()).map_err(|v| v.to_string())?;
     let mut network = true;
     let mut mode = "rw".to_string();
     let mut workspace = "/den".to_string();
@@ -561,7 +561,7 @@ fn cmd_create(args: &[String]) -> Result<Value, String> {
 
 /// Destroy a sandbox.
 fn cmd_destroy(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Exec).map_err(|v| v.to_string())?;
+    require_or_json(Verb::PROC_SIGNAL, Scope::wild()).map_err(|v| v.to_string())?;
     let id = args.first().ok_or("usage: cos sandbox destroy <id>")?;
 
     let mut reg = load_registry();
@@ -589,7 +589,7 @@ fn cmd_destroy(args: &[String]) -> Result<Value, String> {
 
 /// List active sandboxes.
 fn cmd_list(_args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::PROC_OBSERVE, Scope::wild()).map_err(|v| v.to_string())?;
     let reg = load_registry();
     Ok(json!({
         "sandboxes": reg.sandboxes,
