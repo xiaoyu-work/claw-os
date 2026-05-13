@@ -40,6 +40,7 @@
 pub mod cap;
 pub mod catalog;
 pub mod denial;
+pub mod enforcement;
 pub mod manifest;
 pub mod risk;
 pub mod role;
@@ -49,6 +50,7 @@ pub mod verb;
 pub use cap::{Cap, CapSet};
 pub use catalog::{lookup as lookup_meta, CapMeta, CATALOG};
 pub use denial::{Denial, DenialReason};
+pub use enforcement::{require, require_or_json, Mode};
 pub use manifest::{Arg, ArgKind, Manifest, ManifestError, Need, Operation, Runtime, ScopeBinding};
 pub use risk::Risk;
 pub use role::{user_selectable, Role, ALL_ROLES};
