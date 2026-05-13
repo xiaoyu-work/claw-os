@@ -30,7 +30,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
-use crate::policy::{self, OpType};
+use crate::caps::{require_or_json, Scope, Verb};
 
 fn netfilter_dir() -> PathBuf {
     PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
@@ -133,7 +133,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 /// Usage: cos netfilter add --allow <domain> [--port N] [--method GET,POST] [--path "/api/**"] [--binary /usr/bin/git] [--tls]
 ///        cos netfilter add --deny <domain>
 fn cmd_add(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::System).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_KERNEL, Scope::wild()).map_err(|v| v.to_string())?;
 
     let mut domain: Option<String> = None;
     let mut action: Option<String> = None;
@@ -238,7 +238,7 @@ fn cmd_add(args: &[String]) -> Result<Value, String> {
 ///
 /// Usage: cos netfilter remove <domain>
 fn cmd_remove(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::System).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_KERNEL, Scope::wild()).map_err(|v| v.to_string())?;
 
     let domain = args.first().ok_or("usage: cos netfilter remove <domain>")?;
     let mut cfg = load_config();
@@ -255,7 +255,7 @@ fn cmd_remove(args: &[String]) -> Result<Value, String> {
 
 /// List all rules.
 fn cmd_list(_args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_KERNEL, Scope::wild()).map_err(|v| v.to_string())?;
 
     let cfg = load_config();
     let rules: Vec<Value> = cfg
@@ -297,7 +297,7 @@ fn cmd_list(_args: &[String]) -> Result<Value, String> {
 ///
 /// Usage: cos netfilter check <domain> [--method GET] [--path /api/v1] [--binary /usr/bin/curl]
 pub fn cmd_check(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_KERNEL, Scope::wild()).map_err(|v| v.to_string())?;
 
     let domain = args
         .first()
@@ -466,7 +466,7 @@ fn domain_matches(pattern: &str, domain: &str) -> bool {
 
 /// Reset all rules and rate limits.
 fn cmd_reset(_args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::System).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_KERNEL, Scope::wild()).map_err(|v| v.to_string())?;
 
     let cfg = NetFilterConfig {
         default_policy: "allow-all".into(),
@@ -486,7 +486,7 @@ fn cmd_reset(_args: &[String]) -> Result<Value, String> {
 ///
 /// Usage: cos netfilter default allow-all|deny-all
 fn cmd_default(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::System).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_KERNEL, Scope::wild()).map_err(|v| v.to_string())?;
 
     let policy_str = args
         .first()
@@ -512,7 +512,7 @@ fn cmd_default(args: &[String]) -> Result<Value, String> {
 /// Returns the full config including all HTTP-level fields,
 /// suitable for consumption by an external proxy (mitmproxy, squid, nginx, etc.).
 fn cmd_export(_args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_KERNEL, Scope::wild()).map_err(|v| v.to_string())?;
 
     let cfg = load_config();
     serde_json::to_value(&cfg).map_err(|e| format!("failed to serialize config: {e}"))
@@ -608,7 +608,7 @@ fn earliest_expiry(timestamps: &[String], window_secs: u64) -> Option<u64> {
 ///
 /// Usage: cos netfilter rate-limit <domain> --rpm N [--burst N]
 fn cmd_rate_limit(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::System).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_KERNEL, Scope::wild()).map_err(|v| v.to_string())?;
 
     let domain = args
         .first()
@@ -664,7 +664,7 @@ fn cmd_rate_limit(args: &[String]) -> Result<Value, String> {
 ///
 /// Usage: cos netfilter rate-limits
 fn cmd_rate_limits(_args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_KERNEL, Scope::wild()).map_err(|v| v.to_string())?;
 
     let cfg = load_config();
     let limits: Vec<Value> = cfg
@@ -690,7 +690,7 @@ fn cmd_rate_limits(_args: &[String]) -> Result<Value, String> {
 ///
 /// Usage: cos netfilter rate-limit-remove <domain>
 fn cmd_rate_limit_remove(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::System).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_KERNEL, Scope::wild()).map_err(|v| v.to_string())?;
 
     let domain = args
         .first()
@@ -717,7 +717,7 @@ fn cmd_rate_limit_remove(args: &[String]) -> Result<Value, String> {
 ///
 /// Usage: cos netfilter rate-check <domain> [--dry-run]
 fn cmd_rate_check(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_KERNEL, Scope::wild()).map_err(|v| v.to_string())?;
 
     let domain = args
         .first()
@@ -803,6 +803,9 @@ mod tests {
             let dir = std::env::temp_dir().join(format!("cos-test-shared-{}", std::process::id()));
             let _ = fs::create_dir_all(&dir);
             std::env::set_var("COS_DATA_DIR", &dir);
+            // Tests don't set COS_SESSION; flip caps to permissive so the
+            // gated dispatchers don't deny every call.
+            std::env::set_var("COS_PERMS_MODE", "permissive");
         });
         std::env::remove_var("COS_SESSION");
         let _ = cmd_reset(&vec![]);
