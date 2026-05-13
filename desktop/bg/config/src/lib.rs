@@ -141,7 +141,7 @@ impl Entry {
         Self {
             output: String::from("all"),
             source: Source::Path(PathBuf::from(
-                "/usr/share/backgrounds/cosmic/orion_nebula_nasa_heic0601a.jpg",
+                "/usr/share/backgrounds/cosmic/claw-default.jpg",
             )),
             filter_by_theme: true,
             rotation_frequency: 3600,
