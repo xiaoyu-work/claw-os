@@ -56,6 +56,8 @@ use crate::fl;
 
 static USERNAME_ID: LazyLock<iced::id::Id> = LazyLock::new(|| iced::id::Id::new("username-id"));
 
+static BRAND_LOGO_SVG: &[u8] = include_bytes!("../res/logo.svg");
+
 #[proxy(
     interface = "com.clawos.Greeter",
     default_service = "com.clawos.Greeter",
@@ -941,6 +943,17 @@ impl App {
         let menu = widget::container(widget::column::with_children(vec![
             widget::space::vertical()
                 .height(Length::FillPortion(1))
+                .into(),
+            widget::container(
+                widget::svg(widget::svg::Handle::from_memory(BRAND_LOGO_SVG))
+                    .width(Length::Fixed(80.0))
+                    .height(Length::Fixed(80.0)),
+            )
+            .width(Length::Fill)
+            .align_x(Alignment::Center)
+            .into(),
+            widget::space::vertical()
+                .height(Length::Fixed(24.0))
                 .into(),
             widget::layer_container(
                 iced::widget::row![left_element, right_element].align_y(Alignment::Start),
