@@ -22,10 +22,11 @@
 //!    the data they label. This keeps translation work co-located with
 //!    feature work.
 //!
-//! 4. **Compile-time string tables only — no runtime loaders yet.** We
-//!    can add `.po` / `.ftl` loading later behind a feature flag without
-//!    changing call sites. Today's `&'static str` storage is enough for
-//!    the OS-internal surface area.
+//! 4. **Two flavours of localized string:**
+//!     - [`LocalizedStr`] — compile-time, `&'static str`-backed.
+//!       Use for catalog labels, role descriptions, kernel templates.
+//!     - [`LocalizedText`] — owned, deserialized from JSON/TOML.
+//!       Use for manifest text, config files, inbox messages.
 //!
 //! Usage:
 //!
@@ -41,6 +42,8 @@
 
 pub mod locale;
 pub mod string;
+pub mod text;
 
 pub use locale::{current_locale, init_locale_from_env, set_locale, Locale};
 pub use string::LocalizedStr;
+pub use text::LocalizedText;
