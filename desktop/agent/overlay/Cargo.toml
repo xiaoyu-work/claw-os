@@ -1,0 +1,25 @@
+[package]
+name = "cos-agent-overlay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Quick-summon layer-shell chat overlay for the ClawOS Agent (Super+A)."
+
+[[bin]]
+name = "cos-agent-overlay"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream"] }
+futures = "0.3"
+
+# The real iced / libcosmic layer-shell wiring lands in the
+# `overlay-quick-chat` todo. Kept off the dep tree for now so the
+# scaffold compiles fast on every platform.

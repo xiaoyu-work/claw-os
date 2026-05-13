@@ -1,0 +1,26 @@
+[package]
+name = "cos-agent-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Local HTTP+SSE bridge between the ClawOS Agent UI (com.clawos.Agent) and the system Agent kernel (cos agent)."
+
+[[bin]]
+name = "cos-agent-bridge"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+axum = { version = "0.7", features = ["macros"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs", "cors", "trace"] }
+futures = "0.3"
+async-stream = "0.3"
+bytes = "1"
+mime_guess = "2"
