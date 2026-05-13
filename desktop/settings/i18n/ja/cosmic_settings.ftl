@@ -1,4 +1,4 @@
-app = COSMIC設定
+app = ClawOS設定
 unknown = 不明
 
 ## Network & Wireless

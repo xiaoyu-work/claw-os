@@ -1,4 +1,4 @@
-app-name = חנות COSMIC
+app-name = חנות ClawOS
 back = חזרה
 cancel = ביטול
 check-for-updates = איתור עדכונים

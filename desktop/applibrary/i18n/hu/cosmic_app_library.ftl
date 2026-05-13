@@ -1,4 +1,4 @@
-cosmic-app-library = COSMIC Alkalmazáskönyvtár
+cosmic-app-library = Alkalmazáskönyvtár
 cosmic-library-home = Kezdőlap
 cosmic-office = Iroda
 cosmic-system = Rendszer

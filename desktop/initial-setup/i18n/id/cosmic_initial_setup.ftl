@@ -68,4 +68,4 @@ workflow-page = Ruang kerja untuk alur kerja anda
         Apung atau ubin jendela secara otomatis per ruang kerja menggunakan applet pengubinan.
         Anda dapat memilih ruang kerja vertikal atau horisontal. Anda juga dapat menyematkan ruang kerja agar tetap statis.
 new-apps-page = Aplikasi sistem baru
-    .description = Nikmati berbagai aplikasi sistem baru yang disertakan dengan lingkungan desktop COSMIC. Termasuk Pengaturan, Toko Aplikasi COSMIC, Berkas, Penyunting Teks, dan Terminal.
+    .description = Nikmati berbagai aplikasi sistem baru yang disertakan dengan lingkungan desktop ClawOS. Termasuk Pengaturan, Toko Aplikasi ClawOS, Berkas, Penyunting Teks, dan Terminal.

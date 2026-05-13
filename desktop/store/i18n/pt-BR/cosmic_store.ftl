@@ -1,5 +1,5 @@
 app-name = Loja de Aplicativos
-comment = Loja de aplicativos do ambiente COSMIC
+comment = Loja de aplicativos do ambiente ClawOS
 back = Voltar
 cancel = Cancelar
 check-for-updates = Verificar por atualizações

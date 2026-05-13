@@ -1,4 +1,4 @@
-cosmic-terminal = เทอร์มินัล COSMIC
+cosmic-terminal = เทอร์มินัล ClawOS
 new-terminal = เทอร์มินัลใหม่
 
 # Context Pages

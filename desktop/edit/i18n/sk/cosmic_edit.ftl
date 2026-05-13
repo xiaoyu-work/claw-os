@@ -1,5 +1,5 @@
-cosmic-text-editor = Textový editor COSMIC
-comment = Textový editor pre pracovné prostredie COSMIC
+cosmic-text-editor = Textový editor ClawOS
+comment = Textový editor pre pracovné prostredie ClawOS
 new-document = Nový dokument
 open-project = Otvoriť projekt
 todo = Úloha

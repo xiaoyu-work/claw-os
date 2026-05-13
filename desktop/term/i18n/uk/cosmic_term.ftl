@@ -1,4 +1,4 @@
-cosmic-terminal = Термінал COSMIC
+cosmic-terminal = Термінал ClawOS
 new-terminal = Новий термінал
 
 # Context Pages
@@ -144,7 +144,7 @@ focus-pane-down = Фокус на нижню панель
 focus-pane-left = Фокус на ліву панель
 focus-pane-right = Фокус на праву панель
 focus-pane-up = Фокус на верхню панель
-comment = Емулятор терміналу для середовища COSMIC
+comment = Емулятор терміналу для середовища ClawOS
 keywords = Команда;Оболонка;Термінал;Інтерфейс;CLI;
 copy-link = Копіювати ланку
 tab-new-inherit-working-directory = У нових вкладках використовується поточний каталог

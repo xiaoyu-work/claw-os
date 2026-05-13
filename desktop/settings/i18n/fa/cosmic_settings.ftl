@@ -1,4 +1,4 @@
-app = تنظیمات COSMIC
+app = تنظیمات ClawOS
 unknown = نامشخص
 number = { $number }
 

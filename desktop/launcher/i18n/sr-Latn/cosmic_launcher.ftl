@@ -1,2 +1,2 @@
-app-name = COSMIC pokretač aplikacija
+app-name = pokretač aplikacija
 type-to-search = Kucajte za pretragu aplikacija ili ukucajte “?” za više opcija...

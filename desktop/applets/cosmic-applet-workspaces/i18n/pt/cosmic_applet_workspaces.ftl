@@ -1,1 +1,1 @@
-cosmic-applet-workspaces = Áreas de trabalho COSMIC
+cosmic-applet-workspaces = Áreas de trabalho ClawOS

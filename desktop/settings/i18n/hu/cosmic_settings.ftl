@@ -1,4 +1,4 @@
-app = COSMIC Beállítások
+app = Beállítások
 dbus-connection-error = Nem sikerült csatlakozni a DBus-hoz
 ok = OK
 unknown = Ismeretlen
@@ -911,7 +911,7 @@ xdg-entry-workspaces-keywords = COSMIC;Munkaterület;Tájolás;Áttekintés;Moni
 xdg-entry-wallpaper-keywords = COSMIC;Háttérkép;Háttér;Diavetítés;
 xdg-entry-users-keywords = COSMIC;Felhasználó;Fiók;
 xdg-entry-vpn-keywords = COSMIC;VPN;Hálózat;Kapcsolat;OpenVPN;OpenConnect;
-xdg-entry-comment = Beállításalkalmazás a COSMIC asztalhoz
+xdg-entry-comment = Beállításalkalmazás a ClawOS asztalhoz
 xdg-entry-window-management-keywords = COSMIC;Ablak;Kezelés;Csempézés;Super;BIllentyű;
 no-search-results = Nem található a keresésnek megfelelő hálózat.
 workspaces-navigation = Navigáció

@@ -1,4 +1,4 @@
-app = Налаштування COSMIC
+app = Налаштування ClawOS
 unknown = Невідомо
 number = { $number }
 
@@ -846,7 +846,7 @@ xdg-entry-x11-applications-comment = Масштабування застосун
 xdg-entry-region-language-comment = Формат дати, часу та чисел на основі вашого регіону
 xdg-entry-about-comment = Назва пристрою, відомості про обладнення і операційну систему
 xdg-entry-appearance-comment = Акцентні кольори та оформлення
-xdg-entry-comment = Застосунок налаштувань для середовища COSMIC
+xdg-entry-comment = Застосунок налаштувань для середовища ClawOS
 xdg-entry-notifications-comment = Не турбувати, сповіщення на екрані блокування, налаштування застосунків
 xdg-entry-applications = Застосунки
 xdg-entry-about = Про систему

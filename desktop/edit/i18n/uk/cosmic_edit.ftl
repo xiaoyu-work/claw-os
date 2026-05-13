@@ -1,4 +1,4 @@
-cosmic-text-editor = Текстовий редактор COSMIC
+cosmic-text-editor = Текстовий редактор ClawOS
 new-document = Новий документ
 open-project = Відкрити проєкт
 todo = ЗРОБИТИ
@@ -131,4 +131,4 @@ zoom-in = Збільшити
 default-size = Стандартний розмір
 zoom-out = Зменшити
 wrap-around = Циклічний пошук
-comment = Текстовий редактор для середовища COSMIC
+comment = Текстовий редактор для середовища ClawOS

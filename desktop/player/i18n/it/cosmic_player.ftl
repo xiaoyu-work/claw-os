@@ -39,6 +39,6 @@ off = Off
 
 # XDG Metadata
 
-xdg-name = COSMIC Media Player
-xdg-comment = Lettore multimediale di COSMIC
+xdg-name = Media Player
+xdg-comment = Lettore multimediale di ClawOS
 xdg-keywords = Audio;Video;Musica;Film;Suoni;Riproduzione;

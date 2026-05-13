@@ -52,6 +52,6 @@ accessibility-page = Chào mừng
         Super + để thu phóng bằng chuột
 identity = Danh tính
 new-apps-page = Các ứng dụng hệ thống mới
-    .description = Tận hưởng các ứng dụng hệ thống mới đi kèm với môi trường desktop COSMIC. Bao gồm Cài đặt, Cửa hàng Ứng dụng COSMIC, Files, Chỉnh sửa Văn bản, và Terminal.
+    .description = Tận hưởng các ứng dụng hệ thống mới đi kèm với môi trường desktop ClawOS. Bao gồm Cài đặt, Cửa hàng Ứng dụng ClawOS, Files, Chỉnh sửa Văn bản, và Terminal.
 new-shortcuts-page = Phím tắt mới
     .description = Sử dụng phím Shift+Super+mũi tên hoặc kéo bằng con trỏ để di chuyển các cửa sổ. Tận dụng các gợi ý trực quan khi sử dụng tính năng xếp lát cửa sổ tự động.

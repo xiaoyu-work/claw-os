@@ -1,4 +1,4 @@
-cosmic-files = Файлове на COSMIC
+cosmic-files = Файлове на ClawOS
 empty-folder = Празна папка
 empty-folder-hidden = Празна папка (съдържа скрити елементи)
 no-results = Няма намерени резултати

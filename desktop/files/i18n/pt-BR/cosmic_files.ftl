@@ -1,5 +1,5 @@
 cosmic-files = Gestor de Arquivos
-comment = Gerenciador de arquivos do ambiente COSMIC
+comment = Gerenciador de arquivos do ambiente ClawOS
 empty-folder = Pasta vazia
 empty-folder-hidden = Pasta vazia (contém itens ocultos)
 no-results = Nenhum item encontrado

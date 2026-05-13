@@ -1,4 +1,4 @@
-cosmic-app-library = COSMIC 應用程式庫
+cosmic-app-library = 應用程式庫
 cosmic-library-home = 應用程式庫首頁
 cosmic-office = 辦公
 cosmic-system = 系統

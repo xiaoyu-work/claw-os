@@ -1,5 +1,5 @@
-cosmic-terminal = طرفية COSMIC
-comment = محاكي طرفي لسطح مكتب COSMIC
+cosmic-terminal = طرفية ClawOS
+comment = محاكي طرفي لسطح مكتب ClawOS
 keywords = cli;طرفية;أوامر;صدفة;أمر;
 new-terminal = طرفية جديدة
 

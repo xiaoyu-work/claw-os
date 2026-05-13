@@ -1,4 +1,4 @@
-cosmic-text-editor = COSMIC 文本编辑器
+cosmic-text-editor = 文本编辑器
 new-document = 新建文件
 open-project = 打开项目
 todo = 待办事项
@@ -131,4 +131,4 @@ menu-keyboard-shortcuts = 键盘快捷键…
 menu-about = 关于 COSMIC 文本编辑器…
 repository = 仓库
 support = 支持
-comment = COSMIC 桌面的文本编辑器
+comment = ClawOS 桌面的文本编辑器

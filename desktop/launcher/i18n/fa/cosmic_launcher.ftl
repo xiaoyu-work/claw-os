@@ -1,1 +1,1 @@
-app-name = لانچر COSMIC
+app-name = لانچر ClawOS

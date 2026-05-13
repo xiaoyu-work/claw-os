@@ -1,4 +1,4 @@
-cosmic-app-library = مكتبة تطبيقات COSMIC
+cosmic-app-library = مكتبة تطبيقات ClawOS
 cosmic-library-home = مكتبة المنزل
 cosmic-office = مكتب
 cosmic-system = النظام

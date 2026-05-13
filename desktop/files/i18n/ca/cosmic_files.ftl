@@ -1,4 +1,4 @@
-cosmic-files = Fitxers del COSMIC
+cosmic-files = Fitxers del ClawOS
 empty-folder = Carpeta buida
 empty-folder-hidden = Carpeta buida (té elements ocults)
 no-results = No s'ha trobat cap resultat

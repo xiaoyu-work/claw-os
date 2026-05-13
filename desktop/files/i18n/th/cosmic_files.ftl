@@ -1,4 +1,4 @@
-cosmic-files = ตัวจัดการไฟล์ COSMIC
+cosmic-files = ตัวจัดการไฟล์ ClawOS
 empty-folder = แฟ้มเปล่า
 empty-folder-hidden = แฟ้มเปล่า (มีแฟ้มที่ซ่อนอยู่)
 no-results = ไม่พบผลลัพธ์

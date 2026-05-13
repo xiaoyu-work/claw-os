@@ -1,5 +1,5 @@
-app-name = Loja de Aplicações COSMIC
-comment = Loja de aplicativos do desktop COSMIC
+app-name = Loja de Aplicações ClawOS
+comment = Loja de aplicativos do desktop ClawOS
 keywords = App;Aplicativos;Software;Programas;Loja;Store;
 back = Voltar
 cancel = Cancelar

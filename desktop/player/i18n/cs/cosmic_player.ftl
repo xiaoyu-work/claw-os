@@ -34,6 +34,6 @@ ab-repeat-clear = Vymazat opakování A-B
 
 # XDG Metadata
 
-xdg-name = Přehrávač médií COSMIC
-xdg-comment = Přehrávač médií pro prostředí COSMIC
+xdg-name = Přehrávač médií ClawOS
+xdg-comment = Přehrávač médií pro prostředí ClawOS
 xdg-keywords = Audio;Film;Hudba;Zvuk;Video;

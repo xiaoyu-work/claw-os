@@ -1,4 +1,4 @@
-cosmic-text-editor = Penyunting Teks COSMIC
+cosmic-text-editor = Penyunting Teks ClawOS
 new-document = Dokumen baru
 cancel = Batalkan
 open-project = Buka proyek
@@ -88,4 +88,4 @@ convert-indentation-to-tabs = Ubah indentasi menjadi tab
 prompt-save-changes-title = Simpan perubahan sebelum menutup?
 prompt-unsaved-changes = Anda memiliki perubahan yang belum disimpan. Jika anda melanjutkan tanpa menyimpan, perubahan ini akan hilang.
 wrap-around = Bungkus
-comment = Penyuntingan teks untuk desktop COSMIC
+comment = Penyuntingan teks untuk desktop ClawOS

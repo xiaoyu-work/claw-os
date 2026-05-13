@@ -25,4 +25,4 @@ snap = Snap
 system = System
 local = Lokalt
 nix = Nix
-cosmic-app-library = COSMIC Programbibliotek
+cosmic-app-library = Programbibliotek

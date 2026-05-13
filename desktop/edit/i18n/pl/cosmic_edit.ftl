@@ -1,5 +1,5 @@
-cosmic-text-editor = Edytor Tekstu COSMIC
-comment = Edytor tekstu pulpitu COSMIC
+cosmic-text-editor = Edytor Tekstu ClawOS
+comment = Edytor tekstu pulpitu ClawOS
 new-document = Nowy dokument
 open-project = Otwórz projekt
 todo = TODO

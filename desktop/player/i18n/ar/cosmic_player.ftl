@@ -49,6 +49,6 @@ ab-repeat-clear = امحُ تكرار A-B
 
 # XDG Metadata
 
-xdg-name = مشغّل وسائط COSMIC
-xdg-comment = مشغّل وسائط لسطح مكتب COSMIC
+xdg-name = مشغّل وسائط ClawOS
+xdg-comment = مشغّل وسائط لسطح مكتب ClawOS
 xdg-keywords = فيلم;مقطع;فيديو;صوت

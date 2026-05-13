@@ -1,4 +1,4 @@
-cosmic-app-library = COSMIC 앱 라이브러리
+cosmic-app-library = 앱 라이브러리
 cosmic-library-home = 라이브러리 홈
 cosmic-office = 오피스
 cosmic-system = 시스템

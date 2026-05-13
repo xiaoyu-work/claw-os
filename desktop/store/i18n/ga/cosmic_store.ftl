@@ -1,4 +1,4 @@
-app-name = Stóras COSMIC
+app-name = Stóras ClawOS
 back = Ar ais
 cancel = Cealaigh
 check-for-updates = Seiceáil do nuashonruithe
@@ -144,5 +144,5 @@ system-packages-summary =
         [one] { $count } pacáiste
        *[other] { $count } pacáistí
     }
-comment = Siopa feidhmchlár don deasc COSMIC
+comment = Siopa feidhmchlár don deasc ClawOS
 keywords = Aip;Bogearraí;Siopa;

@@ -1,5 +1,5 @@
 progress = { $percent }%
-cosmic-files = COSMIC Failai
+cosmic-files = Failai
 empty-folder = Tuščias aplankas
 empty-folder-hidden = Tuščias aplankas (turi paslėptų failų)
 no-results = Rezultatų nėra
@@ -302,7 +302,7 @@ sort-smallest-to-largest = Nuo mažiausio iki didžiausio
 sort-largest-to-smallest = Nuo didžiausio iki mažiausio
 dark = Tamsus
 light = Šviesus
-comment = COSMIC aplinkos failų tvarkyklė
+comment = ClawOS aplinkos failų tvarkyklė
 keywords = Aplankas;Tvarkyklė;
 copy-to-title = Pasirinkti kopijavimo vietą
 copy-to-button-label = Kopijuoti

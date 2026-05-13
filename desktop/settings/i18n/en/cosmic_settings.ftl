@@ -6,8 +6,8 @@ number = { $number }
 
 ## Freedesktop desktop entries
 
-app = COSMIC Settings
-xdg-entry-comment = Settings application for the COSMIC desktop
+app = Settings
+xdg-entry-comment = Settings application for the ClawOS desktop
 xdg-entry-keywords = COSMIC;Settings;
 
 xdg-entry-about = About

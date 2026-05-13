@@ -1,4 +1,4 @@
-comment = Emulátor terminálu pro prostředí COSMIC
+comment = Emulátor terminálu pro prostředí ClawOS
 keywords = Příkazy;Shell;Terminál;Konzole;CLI;
 settings = Nastavení
 appearance = Vzhled
@@ -9,7 +9,7 @@ light = Světlý
 file = Soubor
 quit = Ukončit
 import = Importovat
-cosmic-terminal = Terminál COSMIC
+cosmic-terminal = Terminál ClawOS
 new-terminal = Nový terminál
 repository = Repozitář
 support = Podpora

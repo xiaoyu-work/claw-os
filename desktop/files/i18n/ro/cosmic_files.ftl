@@ -1,4 +1,4 @@
-cosmic-files = Fișiere COSMIC
+cosmic-files = Fișiere ClawOS
 empty-folder = Dosar gol
 empty-folder-hidden = Dosar gol (conține elemente ascunse)
 no-results = Niciun rezultat găsit

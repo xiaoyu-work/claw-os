@@ -1,2 +1,2 @@
-app-name = مُشغِّل COSMIC
+app-name = مُشغِّل ClawOS
 type-to-search = اكتب للبحث عن التطبيقات أو اكتب "?" لمزيد من الخيارات...

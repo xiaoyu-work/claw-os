@@ -1,4 +1,4 @@
-app-name = COSMIC Butikk
+app-name = Butikk
 cancel = Avbryt
 close = Lukk
 back = Tilbake

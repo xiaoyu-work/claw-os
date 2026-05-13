@@ -1,1 +1,1 @@
-cosmic-applet-workspaces = COSMIC Werkbladen
+cosmic-applet-workspaces = ClawOS Werkbladen

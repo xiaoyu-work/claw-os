@@ -1,4 +1,4 @@
-cosmic-files = Файли COSMIC
+cosmic-files = Файли ClawOS
 empty-folder = Порожня тека
 empty-folder-hidden = Порожня тека (містить приховані елементи)
 filesystem = Файлова система
@@ -374,7 +374,7 @@ copy-to = Копіювати до…
 move-to = Перемістити до…
 copy-to-title = Виберіть місце призначення
 move-to-title = Виберіть місце призначення
-comment = Менеджер файлів для середовища COSMIC
+comment = Менеджер файлів для середовища ClawOS
 keywords = Тека;Папка;Провідник;Менеджер;Каталог;
 show-recents = Тека «Нещодавні» на бічній панелі
 copy-path = Копіювати шлях

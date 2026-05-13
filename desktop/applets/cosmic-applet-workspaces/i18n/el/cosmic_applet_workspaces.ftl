@@ -1,1 +1,1 @@
-cosmic-applet-workspaces = Χώροι εργασίας COSMIC
+cosmic-applet-workspaces = Χώροι εργασίας ClawOS

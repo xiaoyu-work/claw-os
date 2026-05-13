@@ -1,4 +1,4 @@
-cosmic-text-editor = Eagarthóir Téacs COSMIC
+cosmic-text-editor = Eagarthóir Téacs ClawOS
 new-document = Doiciméad nua
 open-project = Oscail tionscadal
 todo = LE DÉANAMH
@@ -131,4 +131,4 @@ default-zoom-step = Céimeanna súmála
 zoom-in = Súmáil isteach
 default-size = Méid réamhshocraithe
 zoom-out = Súmáil amach
-comment = Eagarthóir téacs don deasc COSMIC
+comment = Eagarthóir téacs don deasc ClawOS

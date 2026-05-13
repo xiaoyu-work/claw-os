@@ -52,7 +52,7 @@ develop = Ανάπτυξη
 settings = Ρυθμίσεις
 pending = Σε εκκρεμότητα
 development-tools = Εργαλεία ανάπτυξης
-app-name = Κατάστημα COSMIC
+app-name = Κατάστημα ClawOS
 donation = Δωρεά
 install = Εγκατάσταση
 add = Προσθήκη
@@ -121,5 +121,5 @@ system-packages-summary =
        *[other] { $count } πακέτα
     }
 flatpak-runtimes = Flatpak Runtime
-comment = Κατάστημα εφαρμογών για το περιβάλλον επιφάνειας εργασίας COSMIC
+comment = Κατάστημα εφαρμογών για το περιβάλλον επιφάνειας εργασίας ClawOS
 keywords = Κατάστημα;Μαγαζί;Εφαρμογή;Λογισμικό;App;Software;Store;Shop;

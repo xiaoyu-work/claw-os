@@ -1,4 +1,4 @@
-cosmic-text-editor = COSMICテキストエディター
+cosmic-text-editor = ClawOSテキストエディター
 new-document = 新しいドキュメント
 open-project = プロジェクトを開く
 todo = ToDo

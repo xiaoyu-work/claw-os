@@ -1,1 +1,1 @@
-cosmic-app-library = ספריית האפליקציות COSMIC
+cosmic-app-library = ספריית האפליקציות ClawOS

@@ -53,7 +53,7 @@ open-file = ਫ਼ਾਇਲ ਨੂੰ ਖੋਲ੍ਹੋ
 open-folder = ਫੋਲਡਰ ਨੂੰ ਖੋਲ੍ਹੋ
 open-in-new-tab = ਨਵੀਂ ਟੈਬ ਵਿੱਚ ਖੋਲ੍ਹੋ
 open-in-new-window = ਨਵੀਂ ਵਿੰਡੋ ਵਿੱਚ ਖੋਲ੍ਹੋ
-cosmic-files = COSMIC ਫ਼ਾਇਲਾਂ
+cosmic-files = ਫ਼ਾਇਲਾਂ
 operations-running-finished =
     { $running } { $running ->
         [one] ਕਾਰਵਾਈ
@@ -164,7 +164,7 @@ sort = ਲੜੀਬੱਧ
 gallery-preview = ਗੈਲਰੀ ਝਲਕ
 sort-newest-first = ਨਵੀਆਂ ਪਹਿਲਾਂ
 sort-oldest-first = ਪੁਰਾਣੀਆਂ ਪਹਿਲਾਂ
-comment = COSMIC ਡੈਸਕਟਾਪ ਲਈ ਫ਼ਾਇਲ ਮੈਨੇਜਰ
+comment = ClawOS ਡੈਸਕਟਾਪ ਲਈ ਫ਼ਾਇਲ ਮੈਨੇਜਰ
 keywords = ਫੋਲਡਰ;ਮੈਨੇਜਰ;
 copy-to-title = ਕਾਪੀ ਕਰਨ ਲਈ ਟਿਕਾਣੇ ਨੂੁੰ ਚੁਣੋ
 copy-to-button-label = ਕਾਪੀ ਕਰੋ

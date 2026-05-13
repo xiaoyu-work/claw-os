@@ -1,5 +1,5 @@
-app-name = COSMIC Store
-comment = Application store for the COSMIC desktop
+app-name = Store
+comment = Application store for the ClawOS desktop
 keywords = App;Software;Store;Shop;
 back = Back
 cancel = Cancel

@@ -1,4 +1,4 @@
-cosmic-app-library = COSMIC App-Bibliotek
+cosmic-app-library = App-Bibliotek
 cosmic-library-home = Hjem
 cosmic-office = Kontor
 cosmic-system = System

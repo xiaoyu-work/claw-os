@@ -1,4 +1,4 @@
-cosmic-text-editor = ویرایشگر متن COSMIC
+cosmic-text-editor = ویرایشگر متن ClawOS
 new-document = سند جدید
 open-project = باز کردن پروژه
 todo = لیست کارها

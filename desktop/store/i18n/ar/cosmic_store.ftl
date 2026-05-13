@@ -1,5 +1,5 @@
-app-name = متجر COSMIC
-comment = متجر تطبيقات لسطح مكتب COSMIC
+app-name = متجر ClawOS
+comment = متجر تطبيقات لسطح مكتب ClawOS
 keywords = متجر;تطبيق;تطبيقات;برامج;
 back = ارجع
 cancel = ألغِ

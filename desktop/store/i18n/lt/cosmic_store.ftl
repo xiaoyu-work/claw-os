@@ -1,4 +1,4 @@
-app-name = COSMIC Store
+app-name = Store
 back = Grįžti
 cancel = Atšaukti
 check-for-updates = Patikrinti, ar yra atnaujinimų
@@ -121,5 +121,5 @@ system-packages = Sistemos Paketai
 flatpak-runtimes = Flatpak Vykdymo paketai
 light = Šviesus
 dark = Tamsus
-comment = COSMIC desktop aplikacijų parduotuvė
+comment = ClawOS desktop aplikacijų parduotuvė
 keywords = Aplikacija;Programinė įranga;Parduotuvė;Parduotuvė;

@@ -1,4 +1,4 @@
-cosmic-text-editor = Editor de text COSMIC
+cosmic-text-editor = Editor de text ClawOS
 new-document = Document nou
 open-project = Deschide proiect
 todo = TODO

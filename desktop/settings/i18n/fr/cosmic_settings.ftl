@@ -1,4 +1,4 @@
-app = Paramètres COSMIC
+app = Paramètres ClawOS
 dbus-connection-error = Échec de la connexion à DBus
 ok = OK
 unknown = Inconnu
@@ -891,7 +891,7 @@ xdg-entry-users-keywords = COSMIC;Utilisateur;Compte;
 xdg-entry-vpn-keywords = COSMIC;VPN;Réseau;Connexion;OpenVPN;OpenConnect;
 xdg-entry-time-language-keywords = COSMIC;Système;Heure;Date;Région;Langue;
 xdg-entry-input-keywords = COSMIC;Saisie;Clavier;Souris;Souris;
-xdg-entry-comment = Application Paramètres pour le bureau COSMIC
+xdg-entry-comment = Application Paramètres pour le bureau ClawOS
 xdg-entry-sound-keywords = COSMIC;Son;Audio;Alerte;Pipewire;
 xdg-entry-power-keywords = COSMIC;Alimentation;Batterie
 xdg-entry-default-apps-keywords = COSMIC;Défaut;Application

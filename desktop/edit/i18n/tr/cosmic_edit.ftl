@@ -1,4 +1,4 @@
-cosmic-text-editor = COSMIC Metin Düzenleyici
+cosmic-text-editor = Metin Düzenleyici
 new-document = Yeni belge
 open-project = Proje aç
 todo = TODO
@@ -131,4 +131,4 @@ wrap-around = Sona gelince başa dön
 zoom-in = Yakınlaştır
 default-size = Varsayılan boyut
 zoom-out = Uzaklaştır
-comment = COSMIC masaüstü için metin editörü
+comment = ClawOS masaüstü için metin editörü

@@ -1,5 +1,5 @@
-cosmic-terminal = COSMIC Terminal
-comment = Terminalemulator för skrivbordsmiljön COSMIC
+cosmic-terminal = Terminal
+comment = Terminalemulator för skrivbordsmiljön ClawOS
 keywords = Kommando;Skal;Terminal;CLI;Konsol;
 new-terminal = Ny terminal
 

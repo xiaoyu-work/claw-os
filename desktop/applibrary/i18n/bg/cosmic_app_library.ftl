@@ -1,4 +1,4 @@
-cosmic-app-library = Библиотека за програми на COSMIC
+cosmic-app-library = Библиотека за програми на ClawOS
 cosmic-library-home = Начало
 cosmic-office = Офис
 cosmic-system = Системни

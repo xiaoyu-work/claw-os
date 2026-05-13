@@ -1,4 +1,4 @@
-app = COSMIC Ayarları
+app = Ayarları
 dbus-connection-error = DBus'a bağlanılamadı
 ok = Tamam
 unknown = Bilinmiyor
@@ -833,7 +833,7 @@ xdg-entry-dock = Dock
 xdg-entry-about-comment = Cihaz adı, donanım bilgileri, işletim sistemi varsayılan ayarları
 xdg-entry-appearance-comment = Vurgu renkleri ve tema
 xdg-entry-input-keywords = COSMIC;Giriş;Klavye;Fare;Fareler;
-xdg-entry-comment = COSMIC masaüstü için ayarlar uygulaması
+xdg-entry-comment = ClawOS masaüstü için ayarlar uygulaması
 xdg-entry-notifications-comment = Rahatsız Etme modu, kilit ekranı bildirimleri ve uygulama bazlı ayarlar
 xdg-entry-applications = Uygulamalar
 xdg-entry-default-apps-keywords = COSMIC;Varsayılan;Uygulama

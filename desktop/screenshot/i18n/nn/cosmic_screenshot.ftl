@@ -1,2 +1,2 @@
-cosmic-screenshot = COSMIC Skjermbilete
+cosmic-screenshot = Skjermbilete
 screenshot-saved-to-clipboard = Skjermbilete lagra i utklippsboka

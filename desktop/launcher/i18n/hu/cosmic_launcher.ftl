@@ -1,2 +1,2 @@
-app-name = COSMIC Indító
+app-name = Indító
 type-to-search = Gépelj az alkalmazások kereséséhez, vagy „?” a további lehetőségekért…

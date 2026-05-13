@@ -1,2 +1,2 @@
-app-name = Peluncur COSMIC
+app-name = Peluncur ClawOS
 type-to-search = Ketik untuk mencari apps atau tipe "?" informasi lainnya...

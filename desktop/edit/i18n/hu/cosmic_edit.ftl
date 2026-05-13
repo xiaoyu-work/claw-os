@@ -1,5 +1,5 @@
-cosmic-text-editor = COSMIC Szövegszerkesztő
-comment = Szövegszerkesztő a COSMIC asztali környezethez
+cosmic-text-editor = Szövegszerkesztő
+comment = Szövegszerkesztő a ClawOS asztali környezethez
 new-document = Új dokumentum
 open-project = Projekt megnyitása
 todo = Teendők

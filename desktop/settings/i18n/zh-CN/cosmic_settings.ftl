@@ -1,4 +1,4 @@
-app = COSMIC 设置
+app = 设置
 dbus-connection-error = 无法连接到 DBus
 ok = 确定
 unknown = 未知
@@ -879,7 +879,7 @@ workspaces-overview = 工作区总览
     .applications = 打开应用程序
 xdg-entry-about-keywords = COSMIC;关于
 xdg-entry-wireless = Wi-Fi
-xdg-entry-comment = COSMIC 桌面的设置应用程序
+xdg-entry-comment = ClawOS 桌面的设置应用程序
 xdg-entry-mouse-keywords = COSMIC;鼠标;加速度;滚动;
 xdg-entry-notifications-keywords = COSMIC;通知;锁屏;
 xdg-entry-startup-apps-keywords = COSMIC;自动启动;应用程序;

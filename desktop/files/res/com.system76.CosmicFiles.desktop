@@ -1,6 +1,6 @@
 [Desktop Entry]
-Name=COSMIC Files
-Comment=File manager for the COSMIC desktop
+Name=Files
+Comment=File manager for the ClawOS desktop
 Exec=cosmic-files %U
 Terminal=false
 Type=Application

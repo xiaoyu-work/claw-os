@@ -43,7 +43,7 @@ timezone-and-location-page = Aikavyöhyke ja sijainti
     .search-the-closest-major-city = Etsi lähin suuri kaupunki…
     .geonames-attribution = Luettelo lajitellaan kaupungin väkiluvun mukaan. Tiedot: geonames.org (lisenssi CC-BY-4.0).
 new-apps-page = Uudet järjestelmäsovellukset
-    .description = Nauti nipusta uusia järjestelmäsovelluksia, jotka tulevat COSMIC-työpöytäympäristön mukana. Niihin kuuluvat Asetukset, COSMICin sovelluskauppa, Tiedostot, Tekstimuokkain ja Pääte.
+    .description = Nauti nipusta uusia järjestelmäsovelluksia, jotka tulevat ClawOS-työpöytäympäristön mukana. Niihin kuuluvat Asetukset, ClawOSin sovelluskauppa, Tiedostot, Tekstimuokkain ja Pääte.
 workflow-page = Työtilat työnkulkuusi
     .description =
         Kelluta tai asettele ikkunat automaattisesti työtiloittain asettelusovelmalla.

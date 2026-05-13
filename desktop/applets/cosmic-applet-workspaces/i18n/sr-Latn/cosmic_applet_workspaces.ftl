@@ -1,1 +1,1 @@
-cosmic-applet-workspaces = COSMIC radni prostori
+cosmic-applet-workspaces = ClawOS radni prostori

@@ -1,4 +1,4 @@
-app = COSMIC-Einstellungen
+app = ClawOS-Einstellungen
 dbus-connection-error = Verbindung zum DBus ist fehlgeschlagen
 ok = OK
 unknown = Unbekannt
@@ -803,7 +803,7 @@ xdg-entry-input-comment = Tastatur- und Mauseinstellungen
 xdg-entry-dock-comment = Eine optionale Leiste für Apps und Applets
 xdg-entry-dock = Dock
 xdg-entry-input-keywords = COSMIC;Eingabe;Tastatur;Maus;Mäuse;
-xdg-entry-comment = Einstellungsanwendung für den COSMIC Desktop
+xdg-entry-comment = Einstellungsanwendung für den ClawOS Desktop
 xdg-entry-applications = Anwendungen
 xdg-entry-default-apps-keywords = COSMIC;Standard;Anwendung
 xdg-entry-keywords = COSMIC;Einstellungen;

@@ -1,4 +1,4 @@
-app = COSMIC Inställningar
+app = Inställningar
 dbus-connection-error = Misslyckades med att ansluta till DBus
 ok = OK
 unknown = Okänd
@@ -897,7 +897,7 @@ xdg-entry-date-time-keywords = COSMIC;Tidszon;Tid;Zon;
 xdg-entry-desktop-comment = Inställningar för bakgrundsbild, utseende, panel, docka, fönsterhantering och arbetsytor
 xdg-entry-bluetooth-keywords = COSMIC;Bluetooth;
 xdg-entry-input-keywords = COSMIC;Inmatning;Tangentbord;Mus;Möss;
-xdg-entry-comment = Inställningsprogram för skrivbordsmiljön COSMIC
+xdg-entry-comment = Inställningsprogram för skrivbordsmiljön ClawOS
 xdg-entry-default-apps-keywords = COSMIC;Standard;Program
 xdg-entry-keywords = COSMIC;Inställningar;
 xdg-entry-applications-keywords = COSMIC;Standard;Program;Uppstart;X11;Kompatibilitet

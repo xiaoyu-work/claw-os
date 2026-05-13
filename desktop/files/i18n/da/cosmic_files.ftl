@@ -1,4 +1,4 @@
-cosmic-files = COSMIC Filer
+cosmic-files = Filer
 empty-folder = Tom mappe
 empty-folder-hidden = Tom mappe (har skjulte filer)
 no-results = Ingen resultater

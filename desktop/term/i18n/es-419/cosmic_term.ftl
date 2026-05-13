@@ -1,4 +1,4 @@
-cosmic-terminal = Terminal de COSMIC
+cosmic-terminal = Terminal de ClawOS
 new-terminal = Nueva terminal
 
 # Context Pages

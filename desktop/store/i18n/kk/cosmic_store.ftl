@@ -1,4 +1,4 @@
-app-name = COSMIC дүкені
+app-name = дүкені
 back = Артқа
 cancel = Бас тарту
 check-for-updates = Жаңартуларды тексеру
@@ -121,5 +121,5 @@ system-packages-summary =
     }
 system-packages = Жүйелік дестелер
 flatpak-runtimes = Flatpak орындалу орталары
-comment = COSMIC жұмыс үстелі үшін қолданбалар дүкені
+comment = ClawOS жұмыс үстелі үшін қолданбалар дүкені
 keywords = App;Software;Store;Shop;Қолданба;БҚ;Дүкен;

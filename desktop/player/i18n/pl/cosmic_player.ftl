@@ -49,6 +49,6 @@ previous-frame = Poprzednia Klatka
 
 # XDG Metadata
 
-xdg-name = Odtwarzacz Multimediów COSMIC
-xdg-comment = Odtwarzacz Multimediów dla środowiska graficznego COSMIC
+xdg-name = Odtwarzacz Multimediów ClawOS
+xdg-comment = Odtwarzacz Multimediów dla środowiska graficznego ClawOS
 xdg-keywords = Audio;Dźwięki;Filmy;Muzyka;Vídeo;Media;Odtwarzacz;Multimedia;

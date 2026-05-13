@@ -1,2 +1,2 @@
-app-name = COSMIC Programstartare
+app-name = Programstartare
 type-to-search = Skriv för att söka efter program eller skriv "?" för fler alternativ...

@@ -1,4 +1,4 @@
-cosmic-files = Comhaid COSMIC
+cosmic-files = Comhaid ClawOS
 empty-folder = Fillteán folamh
 empty-folder-hidden = Fillteán folamh (tá míreanna folaithe ann)
 no-results = Níor aimsíodh aon torthaí
@@ -428,7 +428,7 @@ move-to-title = Roghnaigh ceann scríbe an bhogtha
 move-to-button-label = Bog
 copy-to = Cóipeáil chuig...
 move-to = Bog go...
-comment = Bainisteoir comhad don deasc COSMIC
+comment = Bainisteoir comhad don deasc ClawOS
 keywords = Fillteán;Bainisteoir;
 show-recents = Fillteán le déanaí sa bharra taoibh
 clear-recents-history = Glan stair na n-earraí le déanaí

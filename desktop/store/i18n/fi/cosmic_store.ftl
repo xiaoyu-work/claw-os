@@ -1,4 +1,4 @@
-app-name = COSMICin sovelluskauppa
+app-name = ClawOSin sovelluskauppa
 back = Takaisin
 cancel = Peru
 check-for-updates = Tarkista päivitykset
@@ -100,7 +100,7 @@ system-packages-summary =
        *[other] { $count } pakettia
     }
 system-packages = Järjestelmäpaketit
-comment = Sovelluskauppa COSMIC-työpöydälle
+comment = Sovelluskauppa ClawOS-työpöydälle
 keywords = App;Software;Store;Shop;Sovellus;Appi;Ohjelma;Ohjelmisto;Kauppa;Sovelluskauppa;
 dismiss = Hylkää viesti
 place-and-refine = Sijoita ja hienosäädä

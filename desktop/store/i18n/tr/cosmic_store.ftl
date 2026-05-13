@@ -1,4 +1,4 @@
-app-name = COSMIC Uygulama Mağazası
+app-name = Uygulama Mağazası
 back = Geri
 cancel = Vazgeç
 check-for-updates = Güncellemeleri kontrol et
@@ -127,7 +127,7 @@ no-custom-flatpak-sources = Özel Flatpak kaynağı yok
 import = İçe aktar
 no-flatpak = Flatpak desteği yok
 software-repositories = Yazılım depoları
-comment = COSMIC masaüstü için uygulama mağazası
+comment = ClawOS masaüstü için uygulama mağazası
 delete-app-data = Uygulama verilerini kalıcı olarak sil
 uninstall-app-flatpak-warning = { $name } uygulamasını kaldırmak, belgelerini ve verilerini koruyacaktır.
 keywords = Uygulama;Yazılım;Mağaza;Dükkan;

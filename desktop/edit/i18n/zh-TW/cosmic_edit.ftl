@@ -1,4 +1,4 @@
-cosmic-text-editor = COSMIC 文字編輯器
+cosmic-text-editor = 文字編輯器
 new-document = 新建文件
 open-project = 開啟專案
 todo = 待辦事項
@@ -131,4 +131,4 @@ zoom-in = 放大
 default-size = 預設大小
 zoom-out = 縮小
 wrap-around = 循環搜尋
-comment = COSMIC 桌面文字編輯器
+comment = ClawOS 桌面文字編輯器

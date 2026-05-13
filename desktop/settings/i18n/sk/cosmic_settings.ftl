@@ -1,4 +1,4 @@
-app = Nastavenia COSMIC
+app = Nastavenia ClawOS
 dbus-connection-error = Nepodarilo sa pripojiť k DBus
 ok = OK
 unknown = Neznáme

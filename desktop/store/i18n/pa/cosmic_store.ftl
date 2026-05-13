@@ -80,7 +80,7 @@ manage-repositories = ਰਿਪੋਜ਼ਟਰੀਆਂ ਦਾ ਇੰਤਜ਼ਾਮ
 addons = ਐਡ-ਆਨ
 develop = ਡਿਵੈਲਪ
 development-tools = ਡਿਵੈਲਪਮੈਂਟ ਟੂਲ
-app-name = COSMIC ਸਟੋਰ
+app-name = ਸਟੋਰ
 donation = ਦਾਨ
 install = ਇੰਸਟਾਲ
 popular-apps = ਹਰਮਨਪਿਆਰੀਆਂ ਐਪਾ
@@ -94,7 +94,7 @@ system-packages-summary =
        *[other] { $count } ਪੈਕੇਜ
     }
 system-packages = ਸਿਸਟਮ ਪੈਕੇਜ
-comment = COSMIC ਡੈਸਕਟਾਪ ਲਈ ਐਪਲੀਕੇਸ਼ਨ ਸਟੋਰ
+comment = ClawOS ਡੈਸਕਟਾਪ ਲਈ ਐਪਲੀਕੇਸ਼ਨ ਸਟੋਰ
 keywords = ਐਪ;ਸਾਫਟਵੇਅਰ;ਸਟੋਰ;ਦੁਕਾਨ;
 faq = ਸਵਾਲ-ਜਵਾਬ
 flatpak-runtimes = ਫਲੈਟਪੈਕ ਰਨਟਾਈਮ

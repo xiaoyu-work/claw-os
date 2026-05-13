@@ -1,4 +1,4 @@
-app-name = COSMIC Prodavnica
+app-name = Prodavnica
 back = Nazad
 cancel = Poništi
 check-for-updates = Proverite ažuriranja

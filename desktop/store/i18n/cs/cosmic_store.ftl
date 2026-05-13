@@ -1,5 +1,5 @@
-app-name = Obchod COSMIC
-comment = Obchod s aplikacemi pro prostředí COSMIC
+app-name = Obchod ClawOS
+comment = Obchod s aplikacemi pro prostředí ClawOS
 keywords = Aplikace;Balíček;Balíčky;Programy;Software;Obchod;Repozitáře;Zdroje;Instalovat;Odinstalovat;Přidat;Odstranit;Odebrat;Aktualizace;Aktualizovat;Flatpak;
 back = Zpět
 cancel = Zrušit

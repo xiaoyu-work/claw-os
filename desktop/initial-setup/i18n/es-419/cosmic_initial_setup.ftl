@@ -41,7 +41,7 @@ appearance-page = Personalización de apariencia
     .description = Puedes personalizar aún más los colores de acento y el aspecto de tu escritorio en la configuración de Apariencia.
 # SystemAppsPage
 new-apps-page = Nuevas Aplicaciones del Sistema
-    .description = Disfruta de una variedad de nuevas aplicaciones del sistema que vienen con el entorno de escritorio COSMIC; incluyendo Configuración, Tienda de Aplicaciones COSMIC, Archivos, Editor de Texto y Terminal.
+    .description = Disfruta de una variedad de nuevas aplicaciones del sistema que vienen con el entorno de escritorio ClawOS; incluyendo Configuración, Tienda de Aplicaciones ClawOS, Archivos, Editor de Texto y Terminal.
 # NewKeyboardShortcutsPage
 new-shortcuts-page = Nuevos Atajos de Teclado
     .description = Usa Mayús+Súper+flechas o arrastra con el puntero para mover ventanas. Aprovecha las pistas visuales al usar el mosaico automático de ventanas.

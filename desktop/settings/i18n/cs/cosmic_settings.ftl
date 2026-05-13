@@ -1,4 +1,4 @@
-app = Nastavení COSMIC
+app = Nastavení ClawOS
 unknown = Neznámé
 number = { $number }
 
@@ -880,7 +880,7 @@ xdg-entry-users-keywords = COSMIC;Uživatel;Uživatelé;Účet;Účty;
 xdg-entry-vpn-keywords = COSMIC;VPN;Síť;Připojení;OpenVPN;OpenConnect;
 xdg-entry-time-language-keywords = COSMIC;Systém;Čas;Datum;Region;Oblast;Jazyk;
 xdg-entry-input-keywords = COSMIC;Vstup;Klávesnice;Myš;Myši;
-xdg-entry-comment = Aplikace nastavení pro prostředí COSMIC
+xdg-entry-comment = Aplikace nastavení pro prostředí ClawOS
 xdg-entry-sound-keywords = COSMIC;Zvuk;Audio;Upozornění;Pipewire;
 xdg-entry-power-keywords = COSMIC;Napájení;Baterie;
 xdg-entry-default-apps-keywords = COSMIC;Výchozí;Aplikace;

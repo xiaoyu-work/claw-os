@@ -1,4 +1,4 @@
-cosmic-files = COSMIC Dateien
+cosmic-files = Dateien
 empty-folder = Leerer Ordner
 empty-folder-hidden = Leerer Ordner (hat versteckte Elemente)
 no-results = Keine Ergebnisse gefunden
@@ -421,7 +421,7 @@ pasted-video = Eingefügtes Video
 copy-to = Kopieren nach...
 show-recents = Ordner zuletzt verwendeter Elemente in der Seitenleiste
 clear-recents-history = Verlauf zuletzt verwendeter Elemente leeren
-comment = Dateimanager für den COSMIC Desktop
+comment = Dateimanager für den ClawOS Desktop
 keywords = Ordner;Manager;
 move-to-button-label = Verschieben
 move-to-title = Verschiebeziel auswählen

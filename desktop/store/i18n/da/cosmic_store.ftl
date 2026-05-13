@@ -1,4 +1,4 @@
-app-name = COSMIC Store
+app-name = Store
 back = Tilbage
 cancel = Annuller
 check-for-updates = Søg efter opdateringer

@@ -1,4 +1,4 @@
-cosmic-text-editor = COSMIC Texteditor
+cosmic-text-editor = Texteditor
 new-document = Neues Dokument
 open-project = Projekt öffnen
 todo = TODO
@@ -131,4 +131,4 @@ menu-keyboard-shortcuts = Tastenkombinationen...
 menu-about = Über COSMIC Texteditor...
 repository = Repository
 support = Unterstützung
-comment = Texteditor für den COSMIC Desktop
+comment = Texteditor für den ClawOS Desktop

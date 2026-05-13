@@ -1,2 +1,2 @@
-app-name = COSMIC Starter
+app-name = Starter
 type-to-search = Typ om toepassingen te zoeken of typ “?” voor meer opties…

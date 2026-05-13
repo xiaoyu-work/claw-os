@@ -1,4 +1,4 @@
-app-name = COSMIC 스토어
+app-name = 스토어
 back = 뒤로가기
 codec-header = "{ $application }"은(는) "{ $description }"을(를) 제공하는 추가 패키지가 필요합니다.
 codec-footer =
@@ -113,7 +113,7 @@ place-on-desktop = 바탕화면에 배치
 custom-flatpak-sources = 사용자 지정 Flatpak 저장소
 import-flatpakrepo = 사용자 지정 저장소를 추가하려면 .flatpakrepo 파일을 가져오세요
 no-custom-flatpak-sources = 추가된 사용자 지정 Flatpak 저장소가 없습니다
-comment = COSMIC 데스크톱용 앱 스토어
+comment = ClawOS 데스크톱용 앱 스토어
 keywords = 앱;소프트웨어;스토어;상점;
 system-package-updates = 패키지 업데이트
 system-packages = 시스템 패키지

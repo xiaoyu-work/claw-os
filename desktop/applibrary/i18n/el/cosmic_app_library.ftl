@@ -1,7 +1,7 @@
 cancel = Ακύρωση
 rename = Μετονομασία
 delete = Διαγραφή
-cosmic-app-library = Βιβλιοθήκη εφαρμογών COSMIC
+cosmic-app-library = Βιβλιοθήκη εφαρμογών ClawOS
 name = Όνομα
 save = Αποθήκευση
 ok = OK

@@ -1,4 +1,4 @@
-cosmic-terminal = Τερματικό COSMIC
+cosmic-terminal = Τερματικό ClawOS
 new-terminal = Νέο τερματικό
 
 # Context Pages
@@ -123,7 +123,7 @@ add-password = Προσθήκη κωδικού πρόσβασης
 menu-password-manager = Κωδικοί πρόσβασης...
 clear-scrollback = Απαλοιφή ιστορικού κύλισης
 open-link = Άνοιγμα συνδέσμου
-comment = Εξομοιωτής τερματικού για το περιβάλλον επιφάνειας εργασίας COSMIC
+comment = Εξομοιωτής τερματικού για το περιβάλλον επιφάνειας εργασίας ClawOS
 keyboard-shortcuts = Συντομεύσεις πληκτρολογίου
 keywords = Εντολή;Κέλυφος;Τερματικό;Command;Shell;Terminal;CLI;
 close-window = Κλείσιμο παραθύρου

@@ -1,4 +1,4 @@
-comment = Textový editor pro prostředí COSMIC
+comment = Textový editor pro prostředí ClawOS
 new-document = Nový dokument
 open-project = Otevřít projekt
 
@@ -78,7 +78,7 @@ syntax-highlighting = Zvýraznění syntaxe...
 menu-settings = Nastavení...
 menu-keyboard-shortcuts = Klávesové zkratky...
 menu-about = O aplikaci Textový editor COSMIC...
-cosmic-text-editor = Textový editor COSMIC
+cosmic-text-editor = Textový editor ClawOS
 repository = Repozitář
 support = Podpora
 git-management = Správa Git

@@ -1,5 +1,5 @@
-cosmic-files = COSMIC Files
-comment = File manager for the COSMIC desktop
+cosmic-files = Files
+comment = File manager for the ClawOS desktop
 keywords = Folder;Manager;
 empty-folder = Empty folder
 empty-folder-hidden = Empty folder (has hidden items)

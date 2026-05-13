@@ -1,4 +1,4 @@
-app = COSMIC 設定
+app = 設定
 dbus-connection-error = 無法連線到 DBus
 ok = 確定
 unknown = 未知
@@ -891,7 +891,7 @@ scan-to-connect-description = 掃描 QR 碼以連接至該網路。
 qr-code-unavailable = QR 碼無可使用
 network-name = 網路名稱
 xdg-entry-touchpad-keywords = COSMIC;觸控板;手勢;
-xdg-entry-comment = COSMIC 桌面設定應用程式
+xdg-entry-comment = ClawOS 桌面設定應用程式
 sound-device-profiles = 裝置設定檔案
 sound-usb-audio = USB 音訊
 sound-hd-audio = 高解析度音訊

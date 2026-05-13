@@ -1,4 +1,4 @@
-cosmic-app-library = COSMIC forritasafn
+cosmic-app-library = forritasafn
 cancel = Hætta við
 rename = Endurnefna
 delete = Eyða

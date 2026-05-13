@@ -1,4 +1,4 @@
-cosmic-text-editor = Éditeur de texte COSMIC
+cosmic-text-editor = Éditeur de texte ClawOS
 new-document = Nouveau document
 open-project = Ouvrir un projet
 todo = À faire
@@ -131,4 +131,4 @@ default-zoom-step = Niveaux de zoom
 zoom-in = Zoomer
 default-size = Taille par défaut
 zoom-out = Dézoomer
-comment = Éditeur de texte pour le bureau COSMIC
+comment = Éditeur de texte pour le bureau ClawOS

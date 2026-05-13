@@ -1,5 +1,5 @@
-cosmic-terminal = COSMIC Terminál
-comment = Terminálemulátor a COSMIC asztali környezethez
+cosmic-terminal = Terminál
+comment = Terminálemulátor a ClawOS asztali környezethez
 keywords = parancssor;terminál;
 new-terminal = Új terminál
 

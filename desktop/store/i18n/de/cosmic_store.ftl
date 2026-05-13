@@ -1,4 +1,4 @@
-app-name = COSMIC Store
+app-name = Store
 back = Zurück
 cancel = Abbrechen
 check-for-updates = Auf Aktualisierungen prüfen
@@ -131,7 +131,7 @@ delete-app-data = App-Daten endgültig löschen
 repository-add-error-title = „Repositorium konnte nicht hinzugefügt werden“
 repository-remove-title = Repositorium „{ $name }“ entfernen?
 place-applet-desc = Wähle aus, wo das Applet hinzugefügt werden soll, bevor du dessen Position anpasst.
-comment = App-Store für den COSMIC Desktop
+comment = App-Store für den ClawOS Desktop
 notification-in-progress = Installationen und Aktualisierungen werden derzeit durchgeführt.
 place-on-desktop = Auf dem Desktop platzieren
 codec-footer =

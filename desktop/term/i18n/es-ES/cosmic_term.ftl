@@ -1,5 +1,5 @@
-cosmic-terminal = Terminal COSMIC
-comment = Emulador de terminal de escritorio COSMIC
+cosmic-terminal = Terminal ClawOS
+comment = Emulador de terminal de escritorio ClawOS
 keywords = Comando;Shell;Terminal;Consola;
 new-terminal = Nuevo terminal
 

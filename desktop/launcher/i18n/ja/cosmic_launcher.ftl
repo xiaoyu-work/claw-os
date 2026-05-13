@@ -1,2 +1,2 @@
-app-name = COSMICランチャー
+app-name = ClawOSランチャー
 type-to-search = アプリを検索するには入力、「?」で詳細なオプションを表示…

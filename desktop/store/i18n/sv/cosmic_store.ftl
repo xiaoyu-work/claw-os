@@ -1,5 +1,5 @@
-app-name = COSMIC Butik
-comment = Programbutik för skrivbordsmiljön COSMIC
+app-name = Butik
+comment = Programbutik för skrivbordsmiljön ClawOS
 keywords = App;Software;Store;Program;Applikation;Butik;
 back = Bakåt
 cancel = Avbryt

@@ -1,4 +1,4 @@
-app-name = Магазин за програми на COSMIC
+app-name = Магазин за програми на ClawOS
 back = Назад
 cancel = Отказване
 check-for-updates = Проверка за обновления

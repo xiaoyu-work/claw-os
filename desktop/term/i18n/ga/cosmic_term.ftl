@@ -1,4 +1,4 @@
-cosmic-terminal = Teirminéal COSMIC
+cosmic-terminal = Teirminéal ClawOS
 new-terminal = Teirminéal nua
 
 # Context Pages
@@ -144,6 +144,6 @@ shortcut-replace-title = Aicearra a athsholáthar?
 tab-activate = Gníomhachtaigh an cluaisín { $number }
 toggle-fullscreen = Scoraigh lánscáileán
 type-to-search = Clóscríobh le cuardach a dhéanamh...
-comment = Aithriseoir teirminéal don deasc COSMIC
+comment = Aithriseoir teirminéal don deasc ClawOS
 keywords = Ordú;Blaosc;Teirminéal;CLI;
 copy-link = Cóipeáil Nasc

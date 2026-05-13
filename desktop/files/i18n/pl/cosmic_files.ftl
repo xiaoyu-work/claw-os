@@ -1,5 +1,5 @@
-cosmic-files = Pliki COSMIC
-comment = Menedżer plików pulpitu COSMIC
+cosmic-files = Pliki ClawOS
+comment = Menedżer plików pulpitu ClawOS
 keywords = Katalogi;Pliki;Menedżer;
 empty-folder = Pusty katalog
 empty-folder-hidden = Pusty katalog (z ukrytymi plikami)

@@ -1,4 +1,4 @@
-app-name = Store COSMIC
+app-name = Store ClawOS
 back = Retour
 cancel = Annuler
 check-for-updates = Rechercher des mises à jour
@@ -144,5 +144,5 @@ system-packages-summary =
     }
 system-packages = Paquets système
 flatpak-runtimes = Runtimes Flatpak
-comment = Store d'applications pour le bureau COSMIC
+comment = Store d'applications pour le bureau ClawOS
 keywords = Appli;Logiciel;Store;Magasin;

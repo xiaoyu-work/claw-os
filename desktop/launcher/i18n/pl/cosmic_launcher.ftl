@@ -1,2 +1,2 @@
-app-name = Program Startowy COSMIC
+app-name = Program Startowy ClawOS
 type-to-search = Zacznij pisać by wyszukać aplikację lub wciśnij “?” by zobaczyć więcej opcji...

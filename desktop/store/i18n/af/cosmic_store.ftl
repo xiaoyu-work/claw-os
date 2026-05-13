@@ -7,6 +7,6 @@ match-desktop = Stelselstandaard
 back = Terug
 check-for-updates = Kyk vir opdaterings
 checking-for-updates = Kyk tans vir opdaterings…
-app-name = COSMIC Winkel
+app-name = Winkel
 appearance = Vertoon
 import = Voer in

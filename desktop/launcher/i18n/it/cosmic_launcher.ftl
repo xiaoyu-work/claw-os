@@ -1,2 +1,2 @@
-app-name = Launcher COSMIC
+app-name = Launcher ClawOS
 type-to-search = Digita per cercare le applicazioni oppure digita "?" per più opzioni...

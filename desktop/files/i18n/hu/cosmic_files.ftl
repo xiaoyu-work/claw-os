@@ -1,5 +1,5 @@
-cosmic-files = COSMIC Fájlok
-comment = Fájlkezelő a COSMIC asztali környezethez
+cosmic-files = Fájlok
+comment = Fájlkezelő a ClawOS asztali környezethez
 keywords = mappa;fájl;kezelő;
 empty-folder = Üres mappa
 empty-folder-hidden = Üres mappa (Rejtett elemeket tartalmaz)

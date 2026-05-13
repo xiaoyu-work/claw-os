@@ -1,5 +1,5 @@
-app-name = Sklep COSMIC
-comment = Sklep z aplikacjami pulpitu COSMIC
+app-name = Sklep ClawOS
+comment = Sklep z aplikacjami pulpitu ClawOS
 keywords = Aplikacje;Soft;Oprogramowanie;Sklep;
 back = Powrót
 cancel = Anuluj

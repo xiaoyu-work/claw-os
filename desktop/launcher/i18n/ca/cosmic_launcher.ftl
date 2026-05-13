@@ -1,2 +1,2 @@
-app-name = Llançador del COSMIC
+app-name = Llançador del ClawOS
 type-to-search = Escriviu per a cercar aplicacions o escriviu "?" per més opcions...

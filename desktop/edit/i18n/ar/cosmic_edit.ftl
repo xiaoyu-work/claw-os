@@ -1,5 +1,5 @@
-cosmic-text-editor = محرِّر نصوص COSMIC
-comment = محرِّر نصوص لسطح مكتب COSMIC
+cosmic-text-editor = محرِّر نصوص ClawOS
+comment = محرِّر نصوص لسطح مكتب ClawOS
 new-document = مستند جديد
 open-project = افتح مشروعًا
 todo = المهامّ

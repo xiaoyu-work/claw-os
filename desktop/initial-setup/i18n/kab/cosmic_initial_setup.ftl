@@ -41,7 +41,7 @@ layout-page = Tawila n tneɣruft
     .top-panel-and-dock = Agalis n ufella d udekkan
     .description = Smutti agalis neɣ adekkan ɣer kra n yiri, senfel tiddi-nsen, u ffer-iten s wudem awurman deg yiɣewwaṛen.
 new-apps-page = Isnasen imaynuten n unagraw
-    .description = Faṛes agraw n isnasen imaynuten i d-yusan s twennaḍt COSMIC. Gar-asen Iɣewwaṛen, Taḥanut n isnasen COSMIC, Ifuyla, Amaẓrag n uḍris, akked Ixef.
+    .description = Faṛes agraw n isnasen imaynuten i d-yusan s twennaḍt ClawOS. Gar-asen Iɣewwaṛen, Taḥanut n isnasen ClawOS, Ifuyla, Amaẓrag n uḍris, akked Ixef.
 workflow-page = Tallunin n umahil i Usuddem umahil-ik·im
     .description =
         Sifliw neɣ fser isfuyla s wudem awurman i yal tallunt n umahil s teppleṭ n ufsar. 

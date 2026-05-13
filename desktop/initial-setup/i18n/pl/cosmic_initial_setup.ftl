@@ -46,7 +46,7 @@ layout-page = Konfiguracja kompozycji
     .description = Przenieś panel lub dok do dowolnej krawędzi, zmień ich wielkość i spraw by chowały się automatycznie w Ustawieniach.
 # SystemAppsPage
 new-apps-page = Nowe aplikacje systemowe
-    .description = Rozkoszuj się wieloma nowymi aplikacjami systemowymi które pochodzą z środowiska graficznego COSMIC. Wliczając w to Ustawienia, Sklep COSMIC, Pliki, Edytor Tekstu i Terminal.
+    .description = Rozkoszuj się wieloma nowymi aplikacjami systemowymi które pochodzą z środowiska graficznego ClawOS. Wliczając w to Ustawienia, Sklep ClawOS, Pliki, Edytor Tekstu i Terminal.
 # NewKeyboardShortcutsPage
 new-shortcuts-page = Nowe skróty klawiszowe
     .description = Użyj Shift + Super + strzałek, lub przeciągnij kursorem by poruszać oknami. Zwróć uwagę na widoczne wskazówki podczas używani okien w trybie kafelków.

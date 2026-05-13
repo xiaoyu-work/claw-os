@@ -1,4 +1,4 @@
-app = إعدادات COSMIC
+app = إعدادات ClawOS
 dbus-connection-error = تعذر الاتصال بـDBus
 ok = حسنًا
 unknown = مجهول
@@ -866,7 +866,7 @@ workspaces-overview = نظرة عامة على مساحات العمل
     .applications = فتح التطبيقات
 xdg-entry-wired = سلكي
 xdg-entry-about-keywords = COSMIC;عن;حول
-xdg-entry-comment = تطبيق الإعدادات لسطح مكتب COSMIC
+xdg-entry-comment = تطبيق الإعدادات لسطح مكتب ClawOS
 xdg-entry-keywords = COSMIC;إعدادات;
 xdg-entry-window-management-comment = إجراء مفتاح Super وخيارات التحكم في النوافذ وخيارات إضافية تبليط النوافذ
 xdg-entry-mouse-keywords = COSMIC;فأرة;تسارع;تمرير;

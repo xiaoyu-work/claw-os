@@ -1,5 +1,5 @@
-cosmic-files = Soubory COSMIC
-comment = Správce souborů pro prostředí COSMIC
+cosmic-files = Soubory ClawOS
+comment = Správce souborů pro prostředí ClawOS
 keywords = Složka;Složky;Správce;Manažer;Prohlížeč;
 empty-folder = Složka je prázdná
 empty-folder-hidden = Složka je prázdná (obsahuje skryté položky)

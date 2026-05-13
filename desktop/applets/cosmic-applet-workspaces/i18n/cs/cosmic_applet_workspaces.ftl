@@ -1,1 +1,1 @@
-cosmic-applet-workspaces = Pracovní plochy COSMIC
+cosmic-applet-workspaces = Pracovní plochy ClawOS

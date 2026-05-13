@@ -43,7 +43,7 @@ layout-page = 版面配置
     .top-panel-and-dock = 頂端面板與程式塢
     .description = 在「設定」中，您可以將面板或程式塢移動到任何一個邊緣、調整其大小，以及使其自動隱藏。
 new-apps-page = 新的系統應用程式
-    .description = 盡情體驗 COSMIC 桌面環境所搭載的全新系統應用程式陣容，包含設定、COSMIC 應用程式商店、檔案管理、文字編輯器及終端機。
+    .description = 盡情體驗 ClawOS 桌面環境所搭載的全新系統應用程式陣容，包含設定、ClawOS 應用程式商店、檔案管理、文字編輯器及終端機。
 workflow-page = 適用於您工作流程的工作區
     .description =
         使用平鋪工具程式，可讓視窗在各工作區中浮動或自動平鋪。。

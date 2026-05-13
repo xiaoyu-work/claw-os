@@ -1,2 +1,2 @@
-app-name = Amsekkar COSMIC
+app-name = Amsekkar ClawOS
 type-to-search = Aru iwakken ad tnadiḍ isnasen neɣ aru “?” i wugar n iɣewwaṛen…

@@ -1,4 +1,4 @@
-cosmic-terminal = COSMIC Uçbirim
+cosmic-terminal = Uçbirim
 new-terminal = Yeni uçbirim
 
 # Context Pages
@@ -111,7 +111,7 @@ working-directory = Çalışma dizini
 hold = Tut
 remain-open = Alt süreç bittikten sonra açık kal.
 clear-scrollback = Kaydırma geçmişini temizle
-comment = COSMIC masaüstü için Uçbirim emülatörü
+comment = ClawOS masaüstü için Uçbirim emülatörü
 keywords = Komut;Kabuk;Uçbirim;Komut satırı arayüzü;
 add-another-keybinding = Başka bir tuş ataması ekle
 cancel = Vazgeç

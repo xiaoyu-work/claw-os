@@ -39,5 +39,5 @@ quit = Sair
 # XDG Metadata
 
 xdg-name = Reprodutor de Mídia
-xdg-comment = Reprodutor de mídia do desktop COSMIC
+xdg-comment = Reprodutor de mídia do desktop ClawOS
 xdg-keywords = Audio;Filme;Música;Som;Vídeo;Media;Player;

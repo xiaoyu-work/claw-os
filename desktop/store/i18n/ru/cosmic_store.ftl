@@ -139,4 +139,4 @@ system-packages-summary =
         [few] { $count } пакета
        *[other] { $count } пакетов
     }
-comment = Магазин приложений для среды COSMIC
+comment = Магазин приложений для среды ClawOS

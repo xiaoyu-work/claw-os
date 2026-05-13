@@ -1,4 +1,4 @@
-cosmic-app-library = Leabharlann Aipeanna COSMIC
+cosmic-app-library = Leabharlann Aipeanna ClawOS
 cosmic-library-home = Baile leabharlainne
 cosmic-office = Oifig
 cosmic-system = Córas

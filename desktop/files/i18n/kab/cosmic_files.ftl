@@ -1,5 +1,5 @@
 change-wallpaper = Beddel aɣrab n ugdil…
-cosmic-files = Ifuyla COSMIC
+cosmic-files = Ifuyla ClawOS
 empty-folder = Akaram d ilem
 empty-folder-hidden = Akaram d ilem (yesɛa iferdisen yeffren)
 no-results = Ulac igmaḍ yettwafen
@@ -68,7 +68,7 @@ copy-to-title = Fren taɣerwaḍt n unɣel
 copy-to-button-label = Nɣel
 move-to-title = Fren taɣerwaḍt n usmutti
 move-to-button-label = Smutti
-comment = Amsefrak n yifuyla i tnarit COSMIC
+comment = Amsefrak n yifuyla i tnarit ClawOS
 keywords = Akaram;Amsefrak;
 delete = kkes
 replace = Semselsi

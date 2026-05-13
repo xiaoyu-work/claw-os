@@ -1,4 +1,4 @@
-cosmic-files = COSMIC 파일
+cosmic-files = 파일
 empty-folder = 빈 폴더
 empty-folder-hidden = 빈 폴더 (숨겨진 항목 있음)
 filesystem = 파일 시스템
@@ -271,7 +271,7 @@ network-drive-schemes =
     SSH 파일 전송 프로토콜 (SFTP),sftp:// 또는 ssh://
     WebDAV,dav:// 또는 davs://
 type-to-search-select = 일치하는 첫 번째 파일 또는 폴더를 선택합니다
-comment = COSMIC 데스크톱용 위한 파일 관리자
+comment = ClawOS 데스크톱용 위한 파일 관리자
 keywords = 폴더;관리자;
 copy-to-button-label = 복사
 move-to-button-label = 이동

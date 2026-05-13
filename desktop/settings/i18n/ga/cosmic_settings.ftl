@@ -1,4 +1,4 @@
-app = Socruithe COSMIC
+app = Socruithe ClawOS
 dbus-connection-error = Theip ar nascadh le DBus
 ok = Ceart go leor
 unknown = Anaithnid
@@ -891,7 +891,7 @@ xdg-entry-about-comment = Ainm gléis, faisnéis crua-earraí, réamhshocruithe 
 xdg-entry-vpn-keywords = COSMIC;VPN;Líonra;Nasc;OpenVPN;OpenConnect;
 xdg-entry-appearance-comment = Dathanna béime agus téamaí
 xdg-entry-time-language-keywords = COSMIC;Córas;Am;Dáta;Réigiún;Teanga;
-xdg-entry-comment = Feidhmchlár socruithe don deasc COSMIC
+xdg-entry-comment = Feidhmchlár socruithe don deasc ClawOS
 xdg-entry-notifications-comment = Ná Cuir Isteach, fógraí glasála scáileáin, agus socruithe in aghaidh an fheidhmchláir
 xdg-entry-sound-keywords = COSMIC;Fuaim;Cloisteáil;Foláireamh;Pipewire;
 xdg-entry-power-keywords = COSMIC;Cumhacht;Ceallraí

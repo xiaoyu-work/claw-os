@@ -1,6 +1,6 @@
 [Desktop Entry]
-Name=COSMIC Store
-Comment=Application store for the COSMIC desktop
+Name=Store
+Comment=Application store for the ClawOS desktop
 Exec=cosmic-store %u
 Terminal=false
 Type=Application

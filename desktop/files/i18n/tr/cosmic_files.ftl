@@ -1,4 +1,4 @@
-cosmic-files = COSMIC Dosyalar
+cosmic-files = Dosyalar
 empty-folder = Boş klasör
 empty-folder-hidden = Boş klasör (gizli ögeler içerir)
 no-results = Sonuç bulunamadı
@@ -384,7 +384,7 @@ delete-permanently = Kalıcı olarak sil
 eject = Çıkart
 remove-from-recents = Son kullanılanlardan kaldır
 reload-folder = Klasörü yeniden yükle
-comment = COSMIC masaüstü için dosya yöneticisi
+comment = ClawOS masaüstü için dosya yöneticisi
 keywords = Klasör;Yönetici;
 empty-trash-title = Çöp boşaltılsın mı?
 copy-to-title = Kopyalama hedefini seçin

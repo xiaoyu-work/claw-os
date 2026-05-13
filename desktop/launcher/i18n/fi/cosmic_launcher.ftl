@@ -1,2 +1,2 @@
-app-name = COSMICin käynnistin
+app-name = ClawOSin käynnistin
 type-to-search = Kirjoita etsiäksesi sovelluksia tai "?" saadaksesi lisää vaihtoehtoja...

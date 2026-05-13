@@ -1,4 +1,4 @@
-app = COSMIC 설정
+app = 설정
 desktop = 데스크톱
 dbus-connection-error = DBus 연결에 실패했습니다
 time-region = 지역 & 언어
@@ -743,7 +743,7 @@ xdg-entry-about-comment = 장치 이름, 하드웨어 정보, 운영체제 기�
 xdg-entry-vpn-keywords = COSMIC;VPN;네트워크;연결;OpenVPN;OpenConnect;
 xdg-entry-appearance-comment = 강조 색상과 테마
 xdg-entry-input-keywords = COSMIC;입력;키보드;마우스;마우스;
-xdg-entry-comment = COSMIC 데스크톱을 위한 설정 앱
+xdg-entry-comment = ClawOS 데스크톱을 위한 설정 앱
 xdg-entry-notifications-comment = 방해 금지와 잠금 화면 알림 및 애플리케이션별 설정
 xdg-entry-applications = 앱
 xdg-entry-power-keywords = COSMIC;전원;배터리

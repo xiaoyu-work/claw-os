@@ -39,6 +39,6 @@ off = Apagado
 
 # XDG Metadata
 
-xdg-name = Reproductor de medios COSMIC
-xdg-comment = Reproductor de medios para el escritorio COSMIC
+xdg-name = Reproductor de medios ClawOS
+xdg-comment = Reproductor de medios para el escritorio ClawOS
 xdg-keywords = Audio;Película;Música;Vídeo;Sonido;Reproductor;

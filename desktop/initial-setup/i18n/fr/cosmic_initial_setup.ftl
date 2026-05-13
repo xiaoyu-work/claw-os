@@ -68,4 +68,4 @@ layout-page = Configuration de la disposition
     .top-panel-and-dock = Panneau du haut et dock
     .description = Déplacez le panneau ou le dock vers n'importe quel bord, changez leur taille, et cachez-les automatiquement dans les Paramètres.
 new-apps-page = Nouvelles applications système
-    .description = Profitez d'un ensemble de nouvelles applications système fournies avec l'environnement de bureau COSMIC. Incluant les Paramètres, l'App Store COSMIC, les Fichiers, l'Éditeur de Texte, et le Terminal.
+    .description = Profitez d'un ensemble de nouvelles applications système fournies avec l'environnement de bureau ClawOS. Incluant les Paramètres, l'App Store ClawOS, les Fichiers, l'Éditeur de Texte, et le Terminal.

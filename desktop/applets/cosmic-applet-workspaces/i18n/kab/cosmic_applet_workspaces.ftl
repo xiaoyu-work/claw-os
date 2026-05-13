@@ -1,1 +1,1 @@
-cosmic-applet-workspaces = Tallunin n umahil COSMIC
+cosmic-applet-workspaces = Tallunin n umahil ClawOS

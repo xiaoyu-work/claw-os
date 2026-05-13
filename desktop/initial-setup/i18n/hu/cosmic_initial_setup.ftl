@@ -48,7 +48,7 @@ layout-page = Elrendezés beállítása
     .description = Helyezd át a panelt vagy a dokkot bármelyik képernyőszélre, módosítsd méretüket, és állítsd be az automatikus elrejtést a Beállításokban.
 # SystemAppsPage
 new-apps-page = Új rendszeralkalmazások
-    .description = Élvezd a COSMIC asztali környezettel érkező új rendszeralkalmazások széles választékát, köztük a Beállításokat, a COSMIC Áruházat, a Fájlkezelőt, a Szövegszerkesztőt és a Terminált.
+    .description = Élvezd a ClawOS asztali környezettel érkező új rendszeralkalmazások széles választékát, köztük a Beállításokat, a ClawOS Áruházat, a Fájlkezelőt, a Szövegszerkesztőt és a Terminált.
 # NewKeyboardShortcutsPage
 new-shortcuts-page = Új gyorsbillentyűk
     .description = Használd a Shift + Super + nyilakat, vagy húzd az egeret az ablakok mozgatásához. Használd ki az automatikus ablakcsempézés vizuális segítségeit.

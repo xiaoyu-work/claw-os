@@ -1,5 +1,5 @@
-cosmic-files = Archivos COSMIC
-comment = Gestor de archivos de COSMIC
+cosmic-files = Archivos ClawOS
+comment = Gestor de archivos de ClawOS
 keywords = Archivos;Ficheros;Gestor;Explorador;
 empty-folder = Carpeta vacía
 empty-folder-hidden = Carpeta vacía (Contiene archivos ocultos)

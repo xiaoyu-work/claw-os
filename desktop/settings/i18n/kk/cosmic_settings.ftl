@@ -1,4 +1,4 @@
-app = COSMIC баптаулары
+app = баптаулары
 dbus-connection-error = DBus-қа қосылу сәтсіз аяқталды
 ok = ОК
 unknown = Белгісіз
@@ -789,7 +789,7 @@ xdg-entry-vpn-keywords = COSMIC;VPN;Желі;Байланыс;OpenVPN;OpenConnec
 xdg-entry-appearance-comment = Акцентті түстер және темалар
 xdg-entry-time-language-keywords = COSMIC;Жүйе;Уақыт;Күн;Аймақ;Тіл;
 xdg-entry-input-keywords = COSMIC;Енгізу;Пернетақта;Тышқан;Тышқандар;
-xdg-entry-comment = COSMIC жұмыс үстеліне арналған баптаулар қолданбасы
+xdg-entry-comment = ClawOS жұмыс үстеліне арналған баптаулар қолданбасы
 xdg-entry-notifications-comment = "Мазаламаңыз" режимі, экранды құлыптау хабарландырулары және әр қолданбаға арналған баптаулар
 xdg-entry-applications = Қолданбалар
 xdg-entry-sound-keywords = COSMIC;Дыбыс;Аудио;Ескерту;Pipewire;

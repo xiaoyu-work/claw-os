@@ -1,4 +1,4 @@
-cosmic-text-editor = Editor de texto de COSMIC
+cosmic-text-editor = Editor de texto de ClawOS
 new-document = Nuevo documento
 open-project = Abrir proyecto
 

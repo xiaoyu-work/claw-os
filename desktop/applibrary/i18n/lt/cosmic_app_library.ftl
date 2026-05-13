@@ -1,4 +1,4 @@
-cosmic-app-library = COSMIC App Library
+cosmic-app-library = App Library
 cancel = Atšaukti
 cosmic-office = Office
 cosmic-system = Sistema

@@ -1,4 +1,4 @@
-cosmic-terminal = COSMIC 终端
+cosmic-terminal = 终端
 new-terminal = 新建终端
 
 # Context Pages
@@ -144,7 +144,7 @@ shortcut-replace-body = { $binding } 已分配给 { $existing }。是否将其�
 shortcut-replace-title = 是否替换快捷键？
 tab-activate = 启用标签 { $number }
 toggle-fullscreen = 切换全屏
-comment = COSMIC 桌面的终端模拟器
+comment = ClawOS 桌面的终端模拟器
 keywords = 指令;外壳;终端;命令行界面;
 copy-link = 复制链接
 tab-new-inherit-working-directory = 新标签使用当前目录

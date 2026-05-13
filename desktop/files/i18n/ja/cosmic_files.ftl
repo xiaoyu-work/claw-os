@@ -1,4 +1,4 @@
-cosmic-files = COSMICファイル
+cosmic-files = ClawOSファイル
 empty-folder = 空のフォルダ
 empty-folder-hidden = 空のフォルダ（隠しファイルあり）
 no-results = 検索結果はありません

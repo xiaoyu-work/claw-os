@@ -1,4 +1,4 @@
-cosmic-terminal = COSMICin pääte
+cosmic-terminal = ClawOSin pääte
 new-terminal = Uusi pääte
 
 # Context Pages
@@ -111,7 +111,7 @@ pane-toggle-maximize = Suurennus päällä tai pois
 menu-color-schemes = Väriteemat…
 menu-settings = Asetukset…
 menu-about = Tietoa COSMICin päätteestä…
-comment = Pääte-emulaattori COSMIC-työpöydälle
+comment = Pääte-emulaattori ClawOS-työpöydälle
 keywords = Command;Shell;Terminal;CLI;Komento;Komentotulkki;Pääte;Terminaali;Komentorivi;
 replace = Korvaa
 disable = Poista käytöstä

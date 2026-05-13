@@ -1,13 +1,13 @@
 [Desktop Entry]
 Type=Application
-Name=COSMIC Initial Setup
-Name[zh_CN]=COSMIC 初始设置
-Name[ar]=الإعداد الأولي ل COSMIC
-Name[cs]=Úvodní nastavení COSMIC
-Name[hu]=COSMIC Első Beállítás
-Name[pl]=Wstępna konfiguracja COSMIC
-Name[pt]=Ajustes Iniciais do COSMIC
-Name[it]=Setup iniziale di COSMIC
+Name=ClawOS Initial Setup
+Name[zh_CN]=初始设置
+Name[ar]=الإعداد الأولي ل ClawOS
+Name[cs]=Úvodní nastavení ClawOS
+Name[hu]=Első Beállítás
+Name[pl]=Wstępna konfiguracja ClawOS
+Name[pt]=Ajustes Iniciais do ClawOS
+Name[it]=Setup iniziale di ClawOS
 Exec=cosmic-initial-setup
 NoDisplay=true
 Terminal=false

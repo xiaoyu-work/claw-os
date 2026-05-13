@@ -1,4 +1,4 @@
-app = Pengaturan COSMIC
+app = Pengaturan ClawOS
 ok = OKE
 dbus-connection-error = Gagal menyambungkan ke DBus
 unknown = Tidak diketahui
@@ -789,7 +789,7 @@ xdg-entry-vpn-keywords = COSMIC;VPN;Jaringan;Sambungan;OpenVPN;OpenConnect;
 xdg-entry-appearance-comment = Warna aksen dan tema
 xdg-entry-time-language-keywords = COSMIC;Sistem;Waktu;Tanggal;Wilayah;Bahasa;
 xdg-entry-input-keywords = COSMIC;Masukan;Papan Ketik;Tetikus;Tetikus;
-xdg-entry-comment = Aplikasi pengaturan untuk desktop COSMIC
+xdg-entry-comment = Aplikasi pengaturan untuk desktop ClawOS
 xdg-entry-notifications-comment = Pengaturan Jangan Ganggu, notifikasi layar kunci, dan per-aplikasi
 xdg-entry-applications = Aplikasi
 xdg-entry-sound-keywords = COSMIC;Suara;Audio;Peringatan;Pipewire;

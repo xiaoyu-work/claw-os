@@ -1,4 +1,4 @@
-app-name = Крама COSMIC
+app-name = Крама ClawOS
 back = Назад
 cancel = Скасаваць
 check-for-updates = Праверыць абнаўленні

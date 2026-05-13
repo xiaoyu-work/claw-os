@@ -1,2 +1,2 @@
-app-name = Запускач COSMIC
+app-name = Запускач ClawOS
 type-to-search = Введіть для пошуку застосунків або «?» для опцій…

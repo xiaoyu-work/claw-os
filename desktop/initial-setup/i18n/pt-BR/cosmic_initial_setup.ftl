@@ -48,7 +48,7 @@ layout-page = Configuração do layout de tela
     .description = Mover o painel ou a dock para qualquer borda da tela, alterar seus tamanhos e ocultá-los automaticamente nas configurações.
 # SystemAppsPage
 new-apps-page = Novos aplicativos de sistema
-    .description = Aproveite uma variedade de novos aplicativos de sistema que acompanham o ambiente de trabalho COSMIC, incluindo: Configurações, Loja de Aplicativos, Gestor de Arquivos, Editor de Texto e Terminal.
+    .description = Aproveite uma variedade de novos aplicativos de sistema que acompanham o ambiente de trabalho ClawOS, incluindo: Configurações, Loja de Aplicativos, Gestor de Arquivos, Editor de Texto e Terminal.
 # NewKeyboardShortcutsPage
 new-shortcuts-page = Novos atalhos de teclado
     .description = Use Shift + Super + setas, ou arraste com o mouse para mover janelas. Aproveite as dicas visuais ao usar o modo automático de janelas lado a lado.

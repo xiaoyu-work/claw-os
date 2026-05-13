@@ -1,3 +1,3 @@
 connect = התחברות
-app = הגדרות COSMIC
+app = הגדרות ClawOS
 number = { $number }

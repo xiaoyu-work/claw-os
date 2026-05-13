@@ -1,4 +1,4 @@
-cosmic-files = COSMICin tiedostot
+cosmic-files = ClawOSin tiedostot
 empty-folder = Tyhjä kansio
 empty-folder-hidden = Tyhjä kansio (sisältää piilotettuja kohteita)
 no-results = Ei tuloksia
@@ -311,7 +311,7 @@ item-created = Luotu: { $created }
 item-modified = Muokattu: { $modified }
 delete-permanently = Poista pysyvästi
 reload-folder = Lataa kansio uudelleen
-comment = Tiedostonhallinta COSMIC-työpöydälle
+comment = Tiedostonhallinta ClawOS-työpöydälle
 keywords = Folder;Manager;Kansio;Hakemisto;Hallinta;Hallinnointi;Hallitse;Hallinnoi;
 copy-to-button-label = Kopioi
 move-to-button-label = Siirrä

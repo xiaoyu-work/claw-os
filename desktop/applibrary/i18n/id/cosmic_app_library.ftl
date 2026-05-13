@@ -1,4 +1,4 @@
-cosmic-app-library = Pustaka Aplikasi COSMIC
+cosmic-app-library = Pustaka Aplikasi ClawOS
 cosmic-library-home = Beranda Pustaka
 cancel = Batalkan
 cosmic-office = Kantor

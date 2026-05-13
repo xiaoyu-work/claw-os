@@ -1,4 +1,4 @@
-app-name = COSMIC 软件商店
+app-name = 软件商店
 back = 返回
 cancel = 取消
 check-for-updates = 检查更新
@@ -153,5 +153,5 @@ system-packages-summary =
     }
 system-packages = 系统软件包
 flatpak-runtimes = Flatpak 运行时
-comment = COSMIC 桌面的软件商店
+comment = ClawOS 桌面的软件商店
 keywords = 应用;应用程序;软件;商店;

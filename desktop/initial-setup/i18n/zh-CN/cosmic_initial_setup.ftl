@@ -48,7 +48,7 @@ layout-page = 布局配置
     .description = 在"设置"中，可以将面板或程序坞移动到任意边缘、更改其大小并设置自动隐藏。
 # SystemAppsPage
 new-apps-page = 新的系统应用
-    .description = 享受随 COSMIC 桌面环境带来的一系列新系统应用，包括设置、COSMIC 应用商店、文件、文本编辑器和终端。
+    .description = 享受随 ClawOS 桌面环境带来的一系列新系统应用，包括设置、ClawOS 应用商店、文件、文本编辑器和终端。
 # NewKeyboardShortcutsPage
 new-shortcuts-page = 新的键盘快捷键
     .description = 使用 Shift + Super + 方向键，或使用指针拖动来移动窗口。在使用自动窗口平铺时，可以利用视觉提示。

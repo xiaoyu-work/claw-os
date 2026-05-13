@@ -1,4 +1,4 @@
-cosmic-app-library = Knižnica aplikácií COSMIC
+cosmic-app-library = Knižnica aplikácií ClawOS
 cosmic-library-home = Domov
 cosmic-office = Kancelária
 cosmic-system = Systém

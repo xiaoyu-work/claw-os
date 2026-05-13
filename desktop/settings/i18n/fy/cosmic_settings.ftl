@@ -1,5 +1,5 @@
 connecting = Wurdt ferbûn…
-app = COSMIC Ynstellingen
+app = Ynstellingen
 dbus-connection-error = Koe net mei DBus ferbine
 ok = Okee
 unknown = Ûnbekend

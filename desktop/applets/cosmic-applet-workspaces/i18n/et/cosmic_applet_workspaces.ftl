@@ -1,1 +1,1 @@
-cosmic-applet-workspaces = COSMICu tööalad
+cosmic-applet-workspaces = ClawOSu tööalad

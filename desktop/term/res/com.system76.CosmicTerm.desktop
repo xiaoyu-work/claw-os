@@ -1,6 +1,6 @@
 [Desktop Entry]
-Name=COSMIC Terminal
-Comment=Terminal emulator for the COSMIC desktop
+Name=Terminal
+Comment=Terminal emulator for the ClawOS desktop
 Exec=cosmic-term
 Terminal=false
 Type=Application

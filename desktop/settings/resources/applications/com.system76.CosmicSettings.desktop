@@ -1,6 +1,6 @@
 [Desktop Entry]
-Name=COSMIC Settings
-Comment=Settings application for COSMIC.
+Name=Settings
+Comment=Settings application for ClawOS.
 Type=Application
 Exec=cosmic-settings
 Terminal=false

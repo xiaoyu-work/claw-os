@@ -1,4 +1,4 @@
-app = Definições COSMIC
+app = Definições ClawOS
 unknown = Desconhecido
 number = { $number }
 

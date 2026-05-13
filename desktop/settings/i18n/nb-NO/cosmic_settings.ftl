@@ -1,7 +1,7 @@
 settings = Innstillinger
 dark = Mørk
 light = Lys
-app = COSMIC Innstillinger
+app = Innstillinger
 dbus-connection-error = Klarte ikke å koble til DBus
 ok = OK
 cancel = Avbryt

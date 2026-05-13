@@ -1,4 +1,4 @@
-cosmic-files = COSMIC Bestanden
+cosmic-files = Bestanden
 empty-folder = Lege map
 empty-folder-hidden = Lege map (met verborgen items)
 no-results = Geen resultaten gevonden
@@ -425,7 +425,7 @@ removed-from-recents =
     } uit { recents } verwijderd
 remove-from-recents = Uit recente verwijderen
 type-to-search-select = Dit selecteert het eerst overeenkomende bestand of map
-comment = Bestandsbeheerder voor COSMIC desktop
+comment = Bestandsbeheerder voor ClawOS desktop
 copy-to-title = Kopieerbestemming aanwijzen
 copy-to-button-label = Kopiëren
 move-to-button-label = Verplaatsen

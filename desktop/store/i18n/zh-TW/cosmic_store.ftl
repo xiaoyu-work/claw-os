@@ -1,4 +1,4 @@
-app-name = COSMIC 應用程式商店
+app-name = 應用程式商店
 back = 返回
 cancel = 取消
 check-for-updates = 檢查更新
@@ -141,4 +141,4 @@ import-flatpakrepo = 匯入 .flatpakrepo 檔案以添增自訂軟體庫來源
 no-custom-flatpak-sources = 無自訂的 Flatpak 軟體庫來源
 no-flatpak = 無 Flatpak 支援
 software-repositories = 軟體庫
-comment = COSMIC 桌面應用程式商店
+comment = ClawOS 桌面應用程式商店

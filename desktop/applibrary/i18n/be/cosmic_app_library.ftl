@@ -1,5 +1,5 @@
 cancel = Скасаваць
-cosmic-app-library = Бібліятэка праграм COSMIC
+cosmic-app-library = Бібліятэка праграм ClawOS
 cosmic-office = Офіс
 cosmic-system = Сістэма
 cosmic-utilities = Утыліты

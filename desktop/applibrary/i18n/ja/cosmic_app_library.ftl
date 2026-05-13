@@ -1,4 +1,4 @@
-cosmic-app-library = COSMICアプリライブラリ
+cosmic-app-library = ClawOSアプリライブラリ
 cosmic-library-home = ライブラリホーム
 cosmic-office = オフィス
 cosmic-system = システム

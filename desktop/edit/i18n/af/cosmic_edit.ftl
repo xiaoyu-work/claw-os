@@ -1,4 +1,4 @@
-cosmic-text-editor = COSMIC Teksedigeerder
+cosmic-text-editor = Teksedigeerder
 new-document = Nuwe dokument
 open-project = Laai 'n projek
 support = Ondersteuning

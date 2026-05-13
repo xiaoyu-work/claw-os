@@ -1,4 +1,4 @@
-app-name = Tienda de aplicaciones de COSMIC
+app-name = Tienda de aplicaciones de ClawOS
 back = Volver
 cancel = Cancelar
 check-for-updates = Buscar actualizaciones

@@ -1,4 +1,4 @@
-cosmic-terminal = COSMIC 終端機
+cosmic-terminal = 終端機
 new-terminal = 新建終端機
 
 # Context Pages
@@ -146,6 +146,6 @@ type-to-search = 輸入進行搜尋...
 copy-link = 複製連結
 shortcut-replace-body = { $binding } 已經分配至 { $existing }。 要取代它為 { $new_action }?
 clear-scrollback = 清除捲動回朔
-comment = COSMIC 桌面終端機模擬器
+comment = ClawOS 桌面終端機模擬器
 tab-new-inherit-working-directory = 新分頁使用目前目錄
 tab-new-inherit-working-directory-description = 在作用中分頁的工作目錄開啟新分頁

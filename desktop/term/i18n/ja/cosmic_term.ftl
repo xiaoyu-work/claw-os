@@ -1,4 +1,4 @@
-cosmic-terminal = COSMIC端末
+cosmic-terminal = ClawOS端末
 new-terminal = 新しい端末
 
 # Context Pages

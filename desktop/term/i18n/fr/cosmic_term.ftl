@@ -1,4 +1,4 @@
-cosmic-terminal = Terminal COSMIC
+cosmic-terminal = Terminal ClawOS
 new-terminal = Nouveau terminal
 
 # Context Pages
@@ -145,7 +145,7 @@ focus-pane-right = Passer au panneau de droite
 focus-pane-up = Passer au panneau du dessus
 reset-to-default = Rétablir les paramètres par défaut
 toggle-fullscreen = Basculer en plein écran
-comment = Émulateur de terminal pour le bureau COSMIC
+comment = Émulateur de terminal pour le bureau ClawOS
 keywords = Commande;Shell;Terminal;CLI;
 tab-new-inherit-working-directory = Les nouveaux onglets utilisent le répertoire actuel
 tab-new-inherit-working-directory-description = Ouvrir les nouveaux onglets dans le répertoire de travail de l'onglet actif

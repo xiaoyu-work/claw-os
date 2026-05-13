@@ -1,4 +1,4 @@
-app = COSMIC podešavanja
+app = podešavanja
 dbus-connection-error = Neuspešno povezivanje sa DBus-om
 ok = U redu
 unknown = Nepoznato

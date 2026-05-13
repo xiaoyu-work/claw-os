@@ -1,5 +1,5 @@
-app-name = Tienda COSMIC
-comment = Tienda de aplicaciones para el escritorio COSMIC
+app-name = Tienda ClawOS
+comment = Tienda de aplicaciones para el escritorio ClawOS
 keywords = Aplicaciones;Software;Tienda;Store;
 back = Atrás
 cancel = Cancelar

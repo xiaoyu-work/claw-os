@@ -1,4 +1,4 @@
-app-name = Крамниця COSMIC
+app-name = Крамниця ClawOS
 back = Назад
 cancel = Скасувати
 check-for-updates = Пошук оновлень
@@ -139,4 +139,4 @@ system-packages-summary =
 system-packages = Системні пакети
 flatpak-runtimes = Інструменти Flatpak
 keywords = Застосунок;Програма;Крам;Крамниця;Магазин;
-comment = Крамниця застосунків для середовища COSMIC
+comment = Крамниця застосунків для середовища ClawOS

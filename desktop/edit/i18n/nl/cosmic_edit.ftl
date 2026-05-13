@@ -1,4 +1,4 @@
-cosmic-text-editor = COSMIC Tekstbewerker
+cosmic-text-editor = Tekstbewerker
 new-document = Nieuw document
 open-project = Project openen
 todo = Takenlijst
@@ -131,4 +131,4 @@ menu-about = Over COSMIC Tekstbewerker…
 open-recent-file = Recent bestand openen
 support = Ondersteuning
 repository = Broncode
-comment = Tekstbewerkingsprogramma voor COSMIC
+comment = Tekstbewerkingsprogramma voor ClawOS

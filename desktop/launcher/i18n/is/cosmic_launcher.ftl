@@ -1,2 +1,2 @@
-app-name = COSMIC forritaræsir
+app-name = forritaræsir
 type-to-search = Sláðu inn til að leita að forritum eða sláðu inn „?“ til að sjá fleiri valkosti...

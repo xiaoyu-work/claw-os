@@ -1,2 +1,2 @@
-app-name = Spúšťač COSMIC
+app-name = Spúšťač ClawOS
 type-to-search = Píšte pre vyhľadávanie aplikácií alebo zadajte „?“ pre viac možností...

@@ -1,4 +1,4 @@
-cosmic-app-library = COSMICin sovelluskirjasto
+cosmic-app-library = ClawOSin sovelluskirjasto
 cancel = Peru
 cosmic-office = Toimisto
 cosmic-system = Järjestelmä

@@ -1,4 +1,4 @@
-cosmic-files = COSMIC файлдары
+cosmic-files = файлдары
 empty-folder = Бос бума
 empty-folder-hidden = Бос бума (жасырын элементтері бар)
 no-results = Нәтижелер табылмады
@@ -313,7 +313,7 @@ move-to-title = Жылжыту мақсатын таңдаңыз
 move-to-button-label = Жылжыту
 copy-to = Қайда көшіріп алу...
 move-to = Қайда жылжыту...
-comment = COSMIC жұмыс үстелі үшін файлдар басқарушысы
+comment = ClawOS жұмыс үстелі үшін файлдар басқарушысы
 keywords = Folder;Manager;Бума;Басқарушы;
 show-recents = Бүйір панеліндегі «Жуырдағы құжаттар» бумасы
 clear-recents-history = Жуырдағылар тарихын өшіру

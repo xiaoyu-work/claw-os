@@ -1,5 +1,5 @@
-app-name = Obchod COSMIC
-comment = Obchod s aplikáciami pre pracovné prostredie COSMIC
+app-name = Obchod ClawOS
+comment = Obchod s aplikáciami pre pracovné prostredie ClawOS
 keywords = Aplikácie;Softvér;Obchod;Shop;Programy;
 back = Späť
 cancel = Zrušiť
