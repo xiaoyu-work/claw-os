@@ -329,8 +329,8 @@ impl Default for AppLibraryConfig {
                             "system76-driver".to_string(),
                         ],
                         exclude: vec![
-                            "com.system76.CosmicStore".to_string(),
-                            "com.system76.CosmicTerm".to_string(),
+                            "com.clawos.Store".to_string(),
+                            "com.clawos.Term".to_string(),
                         ],
                     },
                 },
@@ -341,8 +341,8 @@ impl Default for AppLibraryConfig {
                         categories: vec!["Utility".to_string()],
                         include: vec!["nm-connection-editor".to_string()],
                         exclude: vec![
-                            "com.system76.CosmicEdit".to_string(),
-                            "com.system76.CosmicFiles".to_string(),
+                            "com.clawos.Edit".to_string(),
+                            "com.clawos.Files".to_string(),
                         ],
                     },
                 },

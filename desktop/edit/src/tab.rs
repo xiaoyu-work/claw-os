@@ -144,7 +144,7 @@ impl EditorTab {
             let scroll = editor.with_buffer(|buffer| buffer.scroll());
             //TODO: save/restore more?
 
-            match std::fs::read_to_string(path) {
+            match crate::claw_glue::read_to_string(path) {
                 Ok(file_content) => {
                     log::info!("reloaded {:?}", path);
 
@@ -218,7 +218,7 @@ impl EditorTab {
         if let Some(path) = &self.path_opt {
             let mut editor = self.editor.lock().unwrap();
             let text = editor_text(&editor);
-            match fs::write(path, &text) {
+            match crate::claw_glue::write_text(path, &text) {
                 Ok(()) => {
                     editor.save_point();
                     log::info!("saved {:?}", path);
@@ -227,6 +227,10 @@ impl EditorTab {
                     if err.kind() == std::io::ErrorKind::PermissionDenied {
                         log::warn!("Permission denied. Attempting to save with pkexec.");
 
+                        // FIXME(claw): pkexec is an OS-level escalation
+                        // path that bypasses Claw OS caps. Once the
+                        // kernel grows an "approval" UI we should route
+                        // re-tries through it instead of pkexec.
                         if let Ok(mut output) = Command::new("pkexec")
                             .arg("tee")
                             .arg(path)

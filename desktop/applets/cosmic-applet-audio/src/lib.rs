@@ -239,7 +239,7 @@ impl cosmic::Application for Audio {
     type Message = Message;
     type Executor = cosmic::SingleThreadExecutor;
     type Flags = ();
-    const APP_ID: &'static str = "com.system76.CosmicAppletAudio";
+    const APP_ID: &'static str = "com.clawos.AppletAudio";
 
     fn init(core: cosmic::app::Core, _flags: ()) -> (Self, app::Task<Message>) {
         let mut model = css::Model::default();

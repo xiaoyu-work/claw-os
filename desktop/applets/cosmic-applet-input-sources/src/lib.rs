@@ -31,7 +31,7 @@ use std::sync::LazyLock;
 use xkb_data::KeyboardLayout;
 
 static AUTOSIZE_MAIN_ID: LazyLock<widget::Id> = LazyLock::new(|| widget::Id::new("autosize-main"));
-pub const ID: &str = "com.system76.CosmicAppletInputSources";
+pub const ID: &str = "com.clawos.AppletInputSources";
 
 pub fn run() -> cosmic::iced::Result {
     localize::localize();
@@ -45,7 +45,7 @@ pub fn run() -> cosmic::iced::Result {
     };
 
     let (comp_config_handler, comp_config) =
-        match cosmic_config::Config::new("com.system76.CosmicComp", CosmicCompConfig::VERSION) {
+        match cosmic_config::Config::new("com.clawos.Comp", CosmicCompConfig::VERSION) {
             Ok(config_handler) => {
                 let config = match CosmicCompConfig::get_entry(&config_handler) {
                     Ok(ok) => ok,
@@ -277,7 +277,7 @@ impl cosmic::Application for Window {
         Subscription::batch(vec![
             rectangle_tracker_subscription(0).map(|e| Message::Rectangle(e.1)),
             self.core
-                .watch_config("com.system76.CosmicComp")
+                .watch_config("com.clawos.Comp")
                 .map(|update| {
                     if !update.errors.is_empty() {
                         tracing::error!(

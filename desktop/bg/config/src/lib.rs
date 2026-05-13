@@ -9,7 +9,7 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-pub const NAME: &str = "com.system76.CosmicBackground";
+pub const NAME: &str = "com.clawos.Background";
 pub const BACKGROUNDS: &str = "backgrounds";
 pub const DEFAULT_BACKGROUND: &str = "all";
 pub const SAME_ON_ALL: &str = "same-on-all";

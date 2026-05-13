@@ -59,7 +59,7 @@ fn get_config<T: Default + serde::de::DeserializeOwned>(
 
 impl Default for Page {
     fn default() -> Self {
-        let config = cosmic_config::Config::new("com.system76.CosmicComp", 1).unwrap();
+        let config = cosmic_config::Config::new("com.clawos.Comp", 1).unwrap();
         let input_default: InputConfig = get_config(&config, "input_default");
         let input_touchpad: InputConfig = get_config(&config, "input_touchpad");
 

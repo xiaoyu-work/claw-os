@@ -3,7 +3,7 @@ use ordered_stream::OrderedStreamExt;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
-#[zbus::proxy(interface = "com.system76.CosmicWorkspaces")]
+#[zbus::proxy(interface = "com.clawos.Workspaces")]
 trait CosmicWorkspaces {
     async fn show(&self) -> zbus::Result<()>;
     async fn hide(&self) -> zbus::Result<()>;
@@ -25,8 +25,8 @@ impl CosmicWorkspaces {
         let conn = runtime.block_on(zbus::Connection::session())?;
         let proxy = runtime.block_on(CosmicWorkspacesProxy::new(
             &conn,
-            "com.system76.CosmicWorkspaces",
-            "/com/system76/CosmicWorkspaces",
+            "com.clawos.Workspaces",
+            "/com/clawos/Workspaces",
         ))?;
         Ok(Self { proxy, runtime: Arc::new(runtime) })
     }

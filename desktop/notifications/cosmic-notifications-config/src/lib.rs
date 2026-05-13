@@ -1,6 +1,6 @@
 use cosmic_config::{CosmicConfigEntry, cosmic_config_derive::CosmicConfigEntry};
 
-pub const ID: &str = "com.system76.CosmicNotifications";
+pub const ID: &str = "com.clawos.Notifications";
 
 pub const PANEL_NOTIFICATIONS_FD: &str = "PANEL_NOTIFICATIONS_FD";
 pub const DAEMON_NOTIFICATIONS_FD: &str = "DAEMON_NOTIFICATIONS_FD";

@@ -3,7 +3,7 @@
 use cosmic::iced;
 use futures::stream;
 
-static NAME: &str = "com.system76.CosmicOsd";
+static NAME: &str = "com.clawos.Osd";
 
 #[derive(Clone, Debug)]
 pub enum Event {

@@ -11,7 +11,7 @@ use zbus::zvariant;
 
 use crate::components::polkit_dialog;
 
-const OBJECT_PATH: &str = "/com/system76/CosmicOsd";
+const OBJECT_PATH: &str = "/com/clawos/Osd";
 
 pub fn subscription(system_connection: zbus::Connection) -> Subscription<Event> {
     struct Wrapper {

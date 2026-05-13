@@ -85,7 +85,7 @@ impl cosmic::Application for Notifications {
     type Message = Message;
     type Executor = cosmic::SingleThreadExecutor;
     type Flags = ();
-    const APP_ID: &'static str = "com.system76.CosmicAppletNotifications";
+    const APP_ID: &'static str = "com.clawos.AppletNotifications";
 
     fn init(core: cosmic::app::Core, _flags: Self::Flags) -> (Self, app::Task<Self::Message>) {
         let helper = Config::new(

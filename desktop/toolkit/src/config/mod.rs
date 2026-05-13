@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use std::sync::{LazyLock, RwLock};
 
 /// ID for the `CosmicTk` config.
-pub const ID: &str = "com.system76.CosmicTk";
+pub const ID: &str = "com.clawos.Tk";
 
 const MONO_FAMILY_DEFAULT: &str = "Noto Sans Mono";
 const SANS_FAMILY_DEFAULT: &str = "Open Sans";

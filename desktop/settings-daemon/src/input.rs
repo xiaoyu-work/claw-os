@@ -6,7 +6,7 @@ use cosmic_comp_config::XkbConfig;
 use cosmic_config::{ConfigGet, ConfigSet};
 use xkb_data::KeyboardLayout;
 
-const COSMIC_COMP_CONFIG: &str = "com.system76.CosmicComp";
+const COSMIC_COMP_CONFIG: &str = "com.clawos.Comp";
 const COSMIC_COMP_CONFIG_VERSION: u64 = 1;
 const XKB_CONFIG_KEY: &str = "xkb_config";
 

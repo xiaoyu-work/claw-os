@@ -4,9 +4,9 @@
 use zbus::proxy;
 
 #[proxy(
-    interface = "com.system76.CosmicSession",
-    default_service = "com.system76.CosmicSession",
-    default_path = "/com/system76/CosmicSession"
+    interface = "com.clawos.Session",
+    default_service = "com.clawos.Session",
+    default_path = "/com/clawos/Session"
 )]
 pub trait CosmicSession {
     fn exit(&self) -> zbus::Result<()>;

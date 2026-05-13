@@ -14,7 +14,7 @@ use cosmic_settings_page::{self as page, Section, section};
 use cosmic_settings_sound_subscription as subscription;
 use slotmap::SlotMap;
 
-const AUDIO_CONFIG: &str = "com.system76.CosmicAudio";
+const AUDIO_CONFIG: &str = "com.clawos.Audio";
 const AMPLIFICATION_SINK: &str = "amplification_sink";
 const AMPLIFICATION_SOURCE: &str = "amplification_source";
 

@@ -1,1 +1,1 @@
-pub const APP_ID: &str = "com.system76.CosmicAppletNetwork";
+pub const APP_ID: &str = "com.clawos.AppletNetwork";

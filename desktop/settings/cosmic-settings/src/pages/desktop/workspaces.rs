@@ -38,7 +38,7 @@ pub struct Page {
 
 impl Default for Page {
     fn default() -> Self {
-        let comp_config = cosmic_config::Config::new("com.system76.CosmicComp", 1).unwrap();
+        let comp_config = cosmic_config::Config::new("com.clawos.Comp", 1).unwrap();
         let comp_workspace_config = comp_config.get("workspaces").unwrap_or_else(|err| {
             if err.is_err() {
                 error!(?err, "Failed to read config 'workspaces'");
@@ -46,7 +46,7 @@ impl Default for Page {
 
             WorkspaceConfig::default()
         });
-        let config = cosmic_config::Config::new("com.system76.CosmicWorkspaces", 1).unwrap();
+        let config = cosmic_config::Config::new("com.clawos.Workspaces", 1).unwrap();
         let action_on_typing_active =
             into_active_selection(&comp_workspace_config.action_on_typing);
         let show_workspace_name = config.get("show_workspace_name").unwrap_or_else(|err| {

@@ -1,0 +1,35 @@
+[Desktop Entry]
+Name=Launcher
+Name[zh_CN]=启动器
+Name[ar]=المُشَغِّل
+Name[cs]=Spouštěč
+Name[hu]=Indító
+Name[pl]=Program startowy
+Name[pt]=Lançador
+Name[ru]=Панель запуска
+Name[sk]=Spúšťač ClawOS
+Name[sv]=Programstartare
+Name[it]=Launcher
+Comment=Claw Launcher
+Comment[zh_CN]=ClawOS 启动器
+Comment[ar]=مُشَغِّلُ ClawOS
+Comment[cs]=Spouštěč aplikací pro prostředí ClawOS
+Comment[hu]=ClawOS Indító
+Comment[pl]=Program startowy ClawOS
+Comment[pt]=Botão de inicialização do ClawOS
+Comment[ru]=Панель запуска ClawOS
+Comment[sk]=Spúšťač aplikácií pre prostredie ClawOS
+Comment[sv]=ClawOS Programstartare
+Comment[it]=Launcher ClawOS
+Type=Application
+Exec=cosmic-launcher
+Terminal=false
+Categories=COSMIC;
+# Translators: Search terms to find this application. Do NOT translate or localize the semicolons! The list MUST also end with a semicolon!
+Keywords=COSMIC;ICED;
+Keywords[ar]=COSMIC;آيسِد;
+# Translators: Do NOT translate or transliterate this text (this is an icon file name)!
+Icon=com.clawos.Launcher
+StartupNotify=true
+X-HostWaylandDisplay=true
+NoDisplay=true

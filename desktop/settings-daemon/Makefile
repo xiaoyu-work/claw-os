@@ -19,7 +19,7 @@ ifneq ($(VENDOR),0)
 endif
 
 BIN = cosmic-settings-daemon
-SYSTEM_ACTIONS_CONF = "$(DESTDIR)$(sharedir)/cosmic/com.system76.CosmicSettings.Shortcuts/v1/system_actions"
+SYSTEM_ACTIONS_CONF = "$(DESTDIR)$(sharedir)/cosmic/com.clawos.Settings.Shortcuts/v1/system_actions"
 POLKIT_RULE = "$(DESTDIR)$(sharedir)/polkit-1/rules.d/cosmic-settings-daemon.rules"
 
 all: $(BIN)

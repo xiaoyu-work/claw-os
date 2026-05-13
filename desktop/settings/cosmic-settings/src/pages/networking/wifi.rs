@@ -307,7 +307,7 @@ impl page::Page<crate::pages::Message> for Page {
                     )
                     .apply(crate::pages::Message::WiFi)
             }), cosmic::Task::stream(
-                cosmic_settings_network_manager_subscription::nm_secret_agent::secret_agent_stream("com.system76.CosmicSettings.WiFi.NetworkManager.SecretAgent", rx),
+                cosmic_settings_network_manager_subscription::nm_secret_agent::secret_agent_stream("com.clawos.Settings.WiFi.NetworkManager.SecretAgent", rx),
             )
             .map(|m| crate::pages::Message::WiFi(Message::SecretAgent(m)))]);
         }

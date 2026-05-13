@@ -186,7 +186,7 @@ impl cosmic::Application for SettingsApp {
     type Flags = crate::Args;
     type Message = Message;
 
-    const APP_ID: &'static str = "com.system76.CosmicSettings";
+    const APP_ID: &'static str = "com.clawos.Settings";
 
     fn core(&self) -> &Core {
         &self.core
@@ -338,7 +338,7 @@ impl cosmic::Application for SettingsApp {
             // TODO: This should only be active when the panel page is active.
             #[cfg(feature = "wayland")]
             self.core()
-                .watch_config::<CosmicPanelConfig>("com.system76.CosmicPanel.Panel")
+                .watch_config::<CosmicPanelConfig>("com.clawos.Panel.Panel")
                 .map(|update| {
                     for why in update.errors {
                         tracing::error!(?why, "panel config load error");
@@ -349,7 +349,7 @@ impl cosmic::Application for SettingsApp {
             // TODO: This should only be active when the dock page is active.
             #[cfg(feature = "wayland")]
             self.core()
-                .watch_config::<CosmicPanelConfig>("com.system76.CosmicPanel.Dock")
+                .watch_config::<CosmicPanelConfig>("com.clawos.Panel.Dock")
                 .map(|update| {
                     for why in update.errors {
                         tracing::error!(?why, "dock config load error");
@@ -360,7 +360,7 @@ impl cosmic::Application for SettingsApp {
             page.subscription(self.core()).map(Message::PageMessage),
             #[cfg(feature = "cosmic-comp-config")]
             self.core()
-                .watch_config::<CosmicCompConfig>("com.system76.CosmicComp")
+                .watch_config::<CosmicCompConfig>("com.clawos.Comp")
                 .map(|update| {
                     for why in update.errors {
                         tracing::error!(?why, "comp config load error");

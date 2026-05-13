@@ -318,7 +318,7 @@ impl cosmic::Application for Window {
     type Message = Message;
     type Executor = cosmic::SingleThreadExecutor;
     type Flags = ();
-    const APP_ID: &str = "com.system76.CosmicAppletTime";
+    const APP_ID: &str = "com.clawos.AppletTime";
 
     fn init(core: app::Core, _flags: Self::Flags) -> (Self, app::Task<Self::Message>) {
         let locale = get_system_locale();

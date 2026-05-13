@@ -1,5 +1,5 @@
 name := 'cosmic-settings'
-appid := 'com.system76.CosmicSettings'
+appid := 'com.clawos.Settings'
 rootdir := ''
 prefix := '/usr'
 

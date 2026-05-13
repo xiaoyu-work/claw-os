@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use xkbcommon::xkb;
 
-pub const ID: &str = "com.system76.CosmicSettings.Shortcuts";
+pub const ID: &str = "com.clawos.Settings.Shortcuts";
 
 pub type SystemActions = BTreeMap<action::System, String>;
 
@@ -74,7 +74,7 @@ pub fn system_actions(context: &cosmic_config::Config) -> SystemActions {
     config
 }
 
-/// cosmic-config configuration state for `com.system76.CosmicSettings.Shortcuts`
+/// cosmic-config configuration state for `com.clawos.Settings.Shortcuts`
 #[derive(Clone, Debug, Default, PartialEq, CosmicConfigEntry)]
 #[version = 1]
 pub struct Config {

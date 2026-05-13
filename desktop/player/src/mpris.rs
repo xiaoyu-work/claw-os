@@ -18,7 +18,7 @@ impl MprisMeta {
             //TODO: better track id
             .trackid(
                 mpris_server::TrackId::try_from(format!(
-                    "/com/system76/CosmicPlayer/pid{}/TrackList/0",
+                    "/com/clawos/Player/pid{}/TrackList/0",
                     process::id()
                 ))
                 .unwrap(),
@@ -133,7 +133,7 @@ impl RootInterface for Player {
 
     async fn desktop_entry(&self) -> fdo::Result<String> {
         log::info!("DesktopEntry");
-        Ok("com.system76.CosmicPlayer".to_string())
+        Ok("com.clawos.Player".to_string())
     }
 
     async fn supported_uri_schemes(&self) -> fdo::Result<Vec<String>> {

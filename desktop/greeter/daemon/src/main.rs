@@ -58,7 +58,7 @@ fn run_as_user<F: FnOnce() -> T, T>(user: &pwd::Passwd, f: F) -> Result<T, io::E
 }
 
 #[derive(DBusError, Debug)]
-#[zbus(prefix = "com.system76.CosmicGreeter")]
+#[zbus(prefix = "com.clawos.Greeter")]
 enum GreeterError {
     #[zbus(error)]
     ZBus(zbus::Error),
@@ -68,7 +68,7 @@ enum GreeterError {
 
 struct GreeterProxy;
 
-#[zbus::interface(name = "com.system76.CosmicGreeter")]
+#[zbus::interface(name = "com.clawos.Greeter")]
 impl GreeterProxy {
     fn get_user_data(&mut self) -> Result<String, GreeterError> {
         let user_filter = UserFilter::new();
@@ -130,8 +130,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .wrap_err("failed to initialize logger")?;
 
     let _conn = Builder::system()?
-        .name("com.system76.CosmicGreeter")?
-        .serve_at("/com/system76/CosmicGreeter", GreeterProxy)?
+        .name("com.clawos.Greeter")?
+        .serve_at("/com/clawos/Greeter", GreeterProxy)?
         .build()
         .await?;
 

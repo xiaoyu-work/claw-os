@@ -78,7 +78,7 @@ crate::cache_dynamic_lazy! {
 impl From<&theme_manager::Manager> for Content {
     fn from(theme_manager: &theme_manager::Manager) -> Self {
         let theme = theme_manager.theme();
-        let comp_config = cosmic_config::Config::new("com.system76.CosmicComp", 1).unwrap();
+        let comp_config = cosmic_config::Config::new("com.clawos.Comp", 1).unwrap();
         #[cfg(feature = "cosmic-comp-config")]
         let appearance_conf = comp_config
             .get::<cosmic_comp_config::AppearanceConfig>("appearance_settings")

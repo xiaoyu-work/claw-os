@@ -9,9 +9,9 @@ flatpak:
     - flatpak
   variables:
     BUNDLE: "cosmic-app-library-nightly.flatpak"
-    MANIFEST_PATH: "build-aux/com.system76.CosmicAppLibrary.Devel.json"
+    MANIFEST_PATH: "build-aux/com.clawos.AppLibrary.Devel.json"
     FLATPAK_MODULE: "cosmic-app-library"
-    APP_ID: "com.system76.CosmicAppLibrary.Devel"
+    APP_ID: "com.clawos.AppLibrary.Devel"
     RUNTIME_REPO: "https://nightly.gnome.org/gnome-nightly.flatpakrepo"
   script:
     - >

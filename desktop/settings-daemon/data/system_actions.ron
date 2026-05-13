@@ -2,13 +2,13 @@
     /// Opens the application library
     AppLibrary: "cosmic-app-library",
     /// Decreases screen brightness
-    BrightnessDown: "busctl --user call com.system76.CosmicSettingsDaemon /com/system76/CosmicSettingsDaemon com.system76.CosmicSettingsDaemon DecreaseDisplayBrightness",
+    BrightnessDown: "busctl --user call com.clawos.SettingsDaemon /com/clawos/SettingsDaemon com.clawos.SettingsDaemon DecreaseDisplayBrightness",
     /// Increases screen brightness
-    BrightnessUp: "busctl --user call com.system76.CosmicSettingsDaemon /com/system76/CosmicSettingsDaemon com.system76.CosmicSettingsDaemon IncreaseDisplayBrightness",
+    BrightnessUp: "busctl --user call com.clawos.SettingsDaemon /com/clawos/SettingsDaemon com.clawos.SettingsDaemon IncreaseDisplayBrightness",
     /// Toggles display mode
     DisplayToggle: "cosmic-osd display",
     /// Switch between input sources
-    InputSourceSwitch: "busctl --user call com.system76.CosmicSettingsDaemon /com/system76/CosmicSettingsDaemon com.system76.CosmicSettingsDaemon InputSourceSwitch",
+    InputSourceSwitch: "busctl --user call com.clawos.SettingsDaemon /com/clawos/SettingsDaemon com.clawos.SettingsDaemon InputSourceSwitch",
     /// Opens the home folder in a system default file browser
     HomeFolder: "xdg-open ~",
     /// Logs out
@@ -38,15 +38,15 @@
     /// Suspend the system
     Suspend: "systemctl suspend",
     /// Toggles the screen reader
-    ScreenReader: "busctl --user call com.system76.CosmicSettingsDaemon /com/system76/CosmicSettingsDaemon com.system76.CosmicSettingsDaemon ScreenReader",
+    ScreenReader: "busctl --user call com.clawos.SettingsDaemon /com/clawos/SettingsDaemon com.clawos.SettingsDaemon ScreenReader",
     /// Opens the system default terminal
     Terminal: "cosmic-term",
     /// Toggles touchpad on/off
     TouchpadToggle: "cosmic-osd touchpad",
     /// Lowers the volume of the active output device
-    VolumeLower: "busctl --user call com.system76.CosmicSettingsDaemon /com/system76/CosmicSettingsDaemon com.system76.CosmicSettingsDaemon VolumeDown",
+    VolumeLower: "busctl --user call com.clawos.SettingsDaemon /com/clawos/SettingsDaemon com.clawos.SettingsDaemon VolumeDown",
     /// Raises the volume of the active output device
-    VolumeRaise: "busctl --user call com.system76.CosmicSettingsDaemon /com/system76/CosmicSettingsDaemon com.system76.CosmicSettingsDaemon VolumeUp",
+    VolumeRaise: "busctl --user call com.clawos.SettingsDaemon /com/clawos/SettingsDaemon com.clawos.SettingsDaemon VolumeUp",
     /// Opens the system default web browser
     WebBrowser: "xdg-open http://",
     /// Opens the (alt+tab) window switcher

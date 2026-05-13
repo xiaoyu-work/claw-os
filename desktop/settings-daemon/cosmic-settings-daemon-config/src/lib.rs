@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "greeter")]
 pub mod greeter;
 
-pub const NAME: &str = "com.system76.CosmicSettingsDaemon";
+pub const NAME: &str = "com.clawos.SettingsDaemon";
 
 /// Config structure for settings managed by the daemon
 #[derive(Default, Debug, Deserialize, Serialize, Clone, CosmicConfigEntry)]

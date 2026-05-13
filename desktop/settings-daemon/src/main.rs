@@ -46,10 +46,10 @@ mod time;
 
 pub static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-static DBUS_NAME: &str = "com.system76.CosmicSettingsDaemon";
-static DBUS_PATH: &str = "/com/system76/CosmicSettingsDaemon";
+static DBUS_NAME: &str = "com.clawos.SettingsDaemon";
+static DBUS_PATH: &str = "/com/clawos/SettingsDaemon";
 
-const AUDIO_CONFIG: &str = "com.system76.CosmicAudio";
+const AUDIO_CONFIG: &str = "com.clawos.Audio";
 const AMPLIFICATION_SINK: &str = "amplification_sink";
 // const AMPLIFICATION_SOURCE: &str = "amplification_source";
 
@@ -81,7 +81,7 @@ impl Config {
     }
 }
 
-#[zbus::interface(name = "com.system76.CosmicSettingsDaemon.Config")]
+#[zbus::interface(name = "com.clawos.SettingsDaemon.Config")]
 impl Config {
     #[zbus(signal)]
     async fn changed(emitter: &SignalEmitter<'_>, id: String, key: String) -> zbus::Result<()>;
@@ -98,13 +98,13 @@ impl Config {
         let id = id.replace('.', "/");
 
         ObjectPath::try_from(format!(
-            "/com/system76/CosmicSettingsDaemon/{cfg_type}/{id}/V{version}",
+            "/com/clawos/SettingsDaemon/{cfg_type}/{id}/V{version}",
         ))
         .unwrap_or_else(|_| {
             let next_id = ID_COUNTER.fetch_add(1, Ordering::SeqCst);
 
             ObjectPath::try_from(format!(
-                "/com/system76/CosmicSettingsDaemon/{cfg_type}/C{next_id}/V{version}",
+                "/com/clawos/SettingsDaemon/{cfg_type}/C{next_id}/V{version}",
             ))
             .unwrap()
         })
@@ -117,13 +117,13 @@ impl Config {
             "Config"
         };
         if let Ok(name) = WellKnownName::try_from(format!(
-            "com.system76.CosmicSettingsDaemon.{cfg_type}.{id}.V{version}",
+            "com.clawos.SettingsDaemon.{cfg_type}.{id}.V{version}",
         )) {
             name
         } else {
             let next_id = ID_COUNTER.fetch_add(1, Ordering::SeqCst);
             WellKnownName::try_from(format!(
-                "com.system76.CosmicSettingsDaemon.{cfg_type}.C{next_id}.V{version}",
+                "com.clawos.SettingsDaemon.{cfg_type}.C{next_id}.V{version}",
             ))
             .unwrap()
         }
@@ -163,7 +163,7 @@ fn next_target_raw(raw: i32, max_raw: i32, dir: i8) -> i32 {
     }
 }
 
-#[zbus::interface(name = "com.system76.CosmicSettingsDaemon")]
+#[zbus::interface(name = "com.clawos.SettingsDaemon")]
 impl SettingsDaemon {
     #[zbus(property)]
     async fn display_brightness(&self) -> i32 {
@@ -796,7 +796,7 @@ async fn watch_config_message_stream(
     let config_rule = MatchRule::builder()
         .msg_type(zbus::message::Type::MethodCall)
         .member("WatchConfig")?
-        .interface("com.system76.CosmicSettingsDaemon")?
+        .interface("com.clawos.SettingsDaemon")?
         .build();
     let config_stream = MessageStream::for_match_rule(config_rule, &conn, Some(100)).await?;
 
@@ -806,7 +806,7 @@ async fn watch_config_message_stream(
     let state_rule = MatchRule::builder()
         .msg_type(zbus::message::Type::MethodCall)
         .member("WatchState")?
-        .interface("com.system76.CosmicSettingsDaemon")?
+        .interface("com.clawos.SettingsDaemon")?
         .build();
     let state_stream = MessageStream::for_match_rule(state_rule, &conn, Some(100)).await?;
 

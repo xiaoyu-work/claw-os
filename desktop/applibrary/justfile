@@ -1,5 +1,5 @@
 name := 'cosmic-app-library'
-export APPID := 'com.system76.CosmicAppLibrary'
+export APPID := 'com.clawos.AppLibrary'
 
 rootdir := ''
 prefix := '/usr'

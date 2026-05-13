@@ -6,11 +6,13 @@ upstream `cosmic-` prefix. Each component still ships its original `LICENSE`
 file and any upstream copyright notices — see `PROVENANCE.md` for the
 component → upstream-repo + commit mapping.
 
-> ⚠️ **Rebrand reminder.** Internal binary names, crate names, systemd
-> `.service` files, `.desktop` files, and the `com.system76.*` App ID prefix
-> still carry upstream identifiers. Rename them as you fork before any
-> commercial release. The `LICENSE` files inside each directory must remain
-> (GPL / MPL / Apache / MIT requirement).
+> ⚠️ **Rebrand status.** The `com.system76.Cosmic*` App ID prefix has been
+> migrated to `com.clawos.*` across `.desktop` / `.metainfo.xml` / D-Bus
+> well-known names / GSettings schema names / wayland `app_id`s. Internal
+> binary names (`cosmic-comp`, `cosmic-panel`, …), crate names, and systemd
+> `.service` file basenames still carry upstream `cosmic-*` identifiers and
+> can be renamed in a later pass. The `LICENSE` files inside each directory
+> must remain (GPL / MPL / Apache / MIT requirement).
 
 ## Layout
 

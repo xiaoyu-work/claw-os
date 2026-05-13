@@ -427,7 +427,7 @@ impl Application for App {
     type Message = Msg;
     type Executor = cosmic::SingleThreadExecutor;
     type Flags = Args;
-    const APP_ID: &'static str = "com.system76.CosmicWorkspaces";
+    const APP_ID: &'static str = "com.clawos.Workspaces";
 
     fn init(core: cosmic::app::Core, _flags: Self::Flags) -> (Self, Task<cosmic::Action<Msg>>) {
         (
@@ -841,7 +841,7 @@ impl Application for App {
         });
         let config_subscription = cosmic_config::config_subscription::<_, CosmicWorkspacesConfig>(
             "config-sub",
-            "com.system76.CosmicWorkspaces".into(),
+            "com.clawos.Workspaces".into(),
             1,
         )
         .map(|update| {
@@ -852,7 +852,7 @@ impl Application for App {
         });
         let comp_config_subscription = cosmic_config::config_subscription::<_, CosmicCompConfig>(
             "comp-config-sub",
-            "com.system76.CosmicComp".into(),
+            "com.clawos.Comp".into(),
             1,
         )
         .map(|update| {
@@ -921,7 +921,7 @@ fn panel_subscriptions<'a>(
     let mut subscriptions = vec![
         cosmic_config::config_subscription::<_, CosmicPanelContainerConfigEntry>(
             "panel-config-subscription",
-            "com.system76.CosmicPanel".into(),
+            "com.clawos.Panel".into(),
             1,
         )
         .map(|update| Msg::PanelContainerEntries(update.config.entries)),
@@ -930,7 +930,7 @@ fn panel_subscriptions<'a>(
         subscriptions.push(
             cosmic_config::config_subscription::<_, CosmicPanelConfig>(
                 ("panel-config-subscription", entry.to_owned()),
-                format!("com.system76.CosmicPanel.{}", entry).into(),
+                format!("com.clawos.Panel.{}", entry).into(),
                 1,
             )
             .map(|update| Msg::PanelConfig(update.config)),

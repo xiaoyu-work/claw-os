@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=Workspaces Button
+Comment=Open the workspaces overview to manage and switch workspaces
+Type=Application
+Exec=cosmic-panel-button com.clawos.Workspaces
+Terminal=false
+Categories=COSMIC;
+Keywords=COSMIC;Applet;Workspace;Overview;
+Icon=com.clawos.PanelWorkspacesButton
+StartupNotify=true
+NoDisplay=true
+X-CosmicApplet=true
+X-OverflowPriority=10

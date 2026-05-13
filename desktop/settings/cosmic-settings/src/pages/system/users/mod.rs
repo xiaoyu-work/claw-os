@@ -27,7 +27,7 @@ use url::Url;
 use zbus_polkit::policykit1::CheckAuthorizationFlags;
 
 const DEFAULT_ICON_FILE: &str = "/usr/share/pixmaps/faces/pop-robot.png";
-const USERS_ADMIN_POLKIT_POLICY_ID: &str = "com.system76.CosmicSettings.Users.Admin";
+const USERS_ADMIN_POLKIT_POLICY_ID: &str = "com.clawos.Settings.Users.Admin";
 
 // AccountsService has a hard limit of 1MB for icon files
 // https://gitlab.freedesktop.org/accountsservice/accountsservice/-/blob/main/src/user.c#L3131

@@ -1,5 +1,5 @@
 name := 'cosmic-greeter'
-export APPID := 'com.system76.CosmicGreeter'
+export APPID := 'com.clawos.Greeter'
 
 rootdir := ''
 prefix := '/usr'

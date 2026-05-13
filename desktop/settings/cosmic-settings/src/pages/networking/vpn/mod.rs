@@ -379,7 +379,7 @@ impl page::Page<crate::pages::Message> for Page {
                     )
             }),
             cosmic::Task::stream(
-                cosmic_settings_network_manager_subscription::nm_secret_agent::secret_agent_stream("com.system76.CosmicSettings.VPN.NetworkManager.SecretAgent", rx),
+                cosmic_settings_network_manager_subscription::nm_secret_agent::secret_agent_stream("com.clawos.Settings.VPN.NetworkManager.SecretAgent", rx),
             )
             .map(|m| crate::pages::Message::Vpn(Message::SecretAgent(m))),
         ]);

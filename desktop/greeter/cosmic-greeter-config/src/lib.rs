@@ -9,12 +9,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::num::NonZeroU32;
 
-pub const APP_ID: &str = "com.system76.CosmicGreeter";
+pub const APP_ID: &str = "com.clawos.Greeter";
 pub const CONFIG_VERSION: u64 = 1;
 
 #[derive(Debug, Clone, Default, PartialEq, CosmicConfigEntry, Deserialize, Serialize)]
 #[version = 1]
-#[id = "com.system76.CosmicGreeter"]
+#[id = "com.clawos.Greeter"]
 pub struct Config {
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub users: HashMap<NonZeroU32, user::UserState>,

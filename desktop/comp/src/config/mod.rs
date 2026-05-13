@@ -60,15 +60,15 @@ use types::WlXkbConfig;
 pub struct Config {
     pub dynamic_conf: DynamicConfig,
     pub cosmic_helper: cosmic_config::Config,
-    /// cosmic-config comp configuration for `com.system76.CosmicComp`
+    /// cosmic-config comp configuration for `com.clawos.Comp`
     pub cosmic_conf: CosmicCompConfig,
-    /// cosmic-config context for `com.system76.CosmicSettings.Shortcuts`
+    /// cosmic-config context for `com.clawos.Settings.Shortcuts`
     pub settings_context: cosmic_config::Config,
-    /// Key bindings from `com.system76.CosmicSettings.Shortcuts`
+    /// Key bindings from `com.clawos.Settings.Shortcuts`
     pub shortcuts: Shortcuts,
-    // Tiling exceptions from `com.system76.CosmicSettings.WindowRules`
+    // Tiling exceptions from `com.clawos.Settings.WindowRules`
     pub tiling_exceptions: Vec<ApplicationException>,
-    /// System actions from `com.system76.CosmicSettings.Shortcuts`
+    /// System actions from `com.clawos.Settings.Shortcuts`
     pub system_actions: BTreeMap<shortcuts::action::System, String>,
 }
 
@@ -169,7 +169,7 @@ pub enum ColorFilter {
 
 impl Config {
     pub fn load(loop_handle: &LoopHandle<'_, State>) -> Config {
-        let config = cosmic_config::Config::new("com.system76.CosmicComp", 1).unwrap();
+        let config = cosmic_config::Config::new("com.clawos.Comp", 1).unwrap();
         let source = cosmic_config::calloop::ConfigWatchSource::new(&config).unwrap();
         loop_handle
             .insert_source(source, |(config, keys), (), state| {
@@ -189,7 +189,7 @@ impl Config {
             });
 
         // Listen for updates to the toolkit config
-        if let Ok(tk_config) = cosmic_config::Config::new("com.system76.CosmicTk", 1) {
+        if let Ok(tk_config) = cosmic_config::Config::new("com.clawos.Tk", 1) {
             fn handle_new_toolkit_config(config: CosmicTk, state: &mut State) {
                 if cosmic::icon_theme::default() != config.icon_theme {
                     cosmic::icon_theme::set_default(config.icon_theme.clone());
@@ -232,17 +232,17 @@ impl Config {
                             handle_new_toolkit_config(config, state);
                         })
                     {
-                        warn!(?err, "Failed to watch com.system76.CosmicTk config");
+                        warn!(?err, "Failed to watch com.clawos.Tk config");
                     }
                 }
                 Err(err) => warn!(
                     ?err,
-                    "failed to create config watch source for com.system76.CosmicTk"
+                    "failed to create config watch source for com.clawos.Tk"
                 ),
             }
         }
 
-        // Source key bindings from com.system76.CosmicSettings.Shortcuts
+        // Source key bindings from com.clawos.Settings.Shortcuts
         let settings_context = shortcuts::context().expect("Failed to load shortcuts config");
         let system_actions = shortcuts::system_actions(&settings_context);
         let shortcuts = shortcuts::shortcuts(&settings_context);
@@ -269,13 +269,13 @@ impl Config {
                 }) {
                     warn!(
                         ?err,
-                        "Failed to watch com.system76.CosmicSettings.Shortcuts config"
+                        "Failed to watch com.clawos.Settings.Shortcuts config"
                     );
                 }
             }
             Err(err) => warn!(
                 ?err,
-                "failed to create config watch source for com.system76.CosmicSettings.Shortcuts"
+                "failed to create config watch source for com.clawos.Settings.Shortcuts"
             ),
         };
 
@@ -301,13 +301,13 @@ impl Config {
                 }) {
                     warn!(
                         ?err,
-                        "Failed to watch com.system76.CosmicSettings.WindowRules config"
+                        "Failed to watch com.clawos.Settings.WindowRules config"
                     );
                 }
             }
             Err(err) => warn!(
                 ?err,
-                "failed to create config watch source for com.system76.CosmicSettings.WindowRules"
+                "failed to create config watch source for com.clawos.Settings.WindowRules"
             ),
         };
 

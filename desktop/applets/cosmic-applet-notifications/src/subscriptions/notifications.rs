@@ -132,9 +132,9 @@ pub fn notifications(proxy: NotificationsAppletProxy<'static>) -> Subscription<O
 }
 
 #[proxy(
-    default_service = "com.system76.NotificationsApplet",
-    interface = "com.system76.NotificationsApplet",
-    default_path = "/com/system76/NotificationsApplet"
+    default_service = "com.clawos.NotificationsApplet",
+    interface = "com.clawos.NotificationsApplet",
+    default_path = "/com/clawos/NotificationsApplet"
 )]
 pub trait NotificationsApplet {
     #[zbus(signal)]

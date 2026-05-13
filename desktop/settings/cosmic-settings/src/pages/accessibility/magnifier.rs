@@ -52,7 +52,7 @@ pub enum Message {
 
 impl Default for Page {
     fn default() -> Self {
-        let comp_config = cosmic_config::Config::new("com.system76.CosmicComp", 1).unwrap();
+        let comp_config = cosmic_config::Config::new("com.clawos.Comp", 1).unwrap();
         let zoom_config: ZoomConfig = comp_config
             .get("accessibility_zoom")
             .inspect_err(|err| {

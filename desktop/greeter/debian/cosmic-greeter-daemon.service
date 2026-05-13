@@ -1,9 +1,9 @@
 [Unit]
-Description=COSMIC Greeter Daemon
+Description=ClawOS Greeter Daemon
 
 [Service]
 Type=dbus
-BusName=com.system76.CosmicGreeter
+BusName=com.clawos.Greeter
 ExecStart=/usr/bin/cosmic-greeter-daemon
 Restart=on-failure
 

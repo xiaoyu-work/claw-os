@@ -11,7 +11,7 @@ pub struct SessionService {
 	pub session_tx: mpsc::Sender<SessionRequest>,
 }
 
-#[interface(name = "com.system76.CosmicSession")]
+#[interface(name = "com.clawos.Session")]
 impl SessionService {
 	async fn exit(&mut self) {
 		warn!("exiting session");

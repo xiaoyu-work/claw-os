@@ -25,7 +25,7 @@ pub async fn setup_panel_conn(tx: Sender<Input>) -> Result<Connection> {
             .server(guid)
             .unwrap()
             .serve_at(
-                "/com/system76/NotificationsSocket",
+                "/com/clawos/NotificationsSocket",
                 NotificationsSocket { tx },
             )?
             .build(),
@@ -67,7 +67,7 @@ pub struct NotificationsSocket {
     pub tx: Sender<Input>,
 }
 
-#[interface(name = "com.system76.NotificationsSocket")]
+#[interface(name = "com.clawos.NotificationsSocket")]
 impl NotificationsSocket {
     #[zbus(out_args("fd"))]
     async fn get_fd(&self) -> zbus::fdo::Result<OwnedFd> {
@@ -86,7 +86,7 @@ impl NotificationsSocket {
         let tx_clone = self.tx.clone();
         tokio::spawn(async move {
             let conn = match Builder::socket(mine).p2p().server(guid).unwrap().serve_at(
-                "/com/system76/NotificationsApplet",
+                "/com/clawos/NotificationsApplet",
                 NotificationsApplet {
                     tx: tx_clone.clone(),
                 },
@@ -126,7 +126,7 @@ pub struct NotificationsApplet {
     tx: Sender<Input>,
 }
 
-#[interface(name = "com.system76.NotificationsApplet")]
+#[interface(name = "com.clawos.NotificationsApplet")]
 impl NotificationsApplet {
     #[zbus(signal)]
     pub async fn notify(

@@ -792,7 +792,7 @@ impl cosmic::Application for CosmicNetworkApplet {
                         let (tx, rx) = tokio::sync::mpsc::channel(4);
                         self.secret_tx = Some(tx);
                         let my_id = format!(
-                            "com.system76.CosmicSettings.Applet.{}.NetworkManager.SecretAgent",
+                            "com.clawos.Settings.Applet.{}.NetworkManager.SecretAgent",
                             uuid::Uuid::new_v4()
                         );
                         tasks.push(

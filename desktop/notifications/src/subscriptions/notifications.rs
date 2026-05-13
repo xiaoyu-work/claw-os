@@ -384,7 +384,7 @@ impl Notifications {
                 let Ok(Ok(iface_ref)) = tokio::time::timeout(
                     tokio::time::Duration::from_millis(100),
                     object_server
-                        .interface::<_, NotificationsApplet>("/com/system76/NotificationsApplet"),
+                        .interface::<_, NotificationsApplet>("/com/clawos/NotificationsApplet"),
                 )
                 .await
                 else {

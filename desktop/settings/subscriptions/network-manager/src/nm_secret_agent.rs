@@ -16,7 +16,7 @@ use zbus::{
 
 pub type SecretSender = Arc<tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<SecureString>>>>;
 
-pub const SECRET_ID: &str = "com.system76.CosmicSettings.NetworkManager";
+pub const SECRET_ID: &str = "com.clawos.Settings.NetworkManager";
 pub const DBUS_PATH: &str = "/org/freedesktop/NetworkManager/SecretAgent";
 
 bitflags! {

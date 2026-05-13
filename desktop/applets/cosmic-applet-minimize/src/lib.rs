@@ -133,7 +133,7 @@ impl cosmic::Application for Minimize {
     type Message = Message;
     type Executor = cosmic::SingleThreadExecutor;
     type Flags = ();
-    const APP_ID: &'static str = "com.system76.CosmicAppletMinimize";
+    const APP_ID: &'static str = "com.clawos.AppletMinimize";
 
     fn init(core: cosmic::app::Core, _flags: ()) -> (Self, app::Task<Message>) {
         let mut app = Self {

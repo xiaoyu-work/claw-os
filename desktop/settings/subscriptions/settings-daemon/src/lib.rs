@@ -120,9 +120,9 @@ pub enum Event {
 }
 
 #[zbus::proxy(
-    default_service = "com.system76.CosmicSettingsDaemon",
-    interface = "com.system76.CosmicSettingsDaemon",
-    default_path = "/com/system76/CosmicSettingsDaemon"
+    default_service = "com.clawos.SettingsDaemon",
+    interface = "com.clawos.SettingsDaemon",
+    default_path = "/com/clawos/SettingsDaemon"
 )]
 trait CosmicSettingsDaemon {
     #[zbus(property)]

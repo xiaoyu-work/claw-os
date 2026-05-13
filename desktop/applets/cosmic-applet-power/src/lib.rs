@@ -89,7 +89,7 @@ impl cosmic::Application for Power {
     type Executor = cosmic::SingleThreadExecutor;
     type Flags = ();
     type Message = Message;
-    const APP_ID: &'static str = "com.system76.CosmicAppletPower";
+    const APP_ID: &'static str = "com.clawos.AppletPower";
 
     fn core(&self) -> &cosmic::app::Core {
         &self.core

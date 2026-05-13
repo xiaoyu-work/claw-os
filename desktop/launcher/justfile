@@ -1,5 +1,5 @@
 export NAME := 'cosmic-launcher'
-export APPID := 'com.system76.CosmicLauncher'
+export APPID := 'com.clawos.Launcher'
 
 rootdir := ''
 prefix := '/usr'

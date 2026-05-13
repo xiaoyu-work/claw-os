@@ -94,7 +94,7 @@ const KB_REPEAT_DELAY_MIN: u32 = 200;
 const KB_REPEAT_RATE_MAX: u32 = 45;
 const KB_REPEAT_RATE_MIN: u32 = 5;
 
-const COSMIC_COMP_CONFIG: &str = "com.system76.CosmicComp";
+const COSMIC_COMP_CONFIG: &str = "com.clawos.Comp";
 const COSMIC_COMP_CONFIG_VERSION: u64 = 1;
 
 pub struct Page {

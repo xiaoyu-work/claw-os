@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=com.clawos.StatusNotifierWatcher
+Exec=@bindir@/cosmic-applet-status-area --status-notifier-watcher
+SystemdService=com.clawos.StatusNotifierWatcher.service

@@ -679,7 +679,7 @@ pub async fn page_reload() -> eyre::Result<PageRefresh> {
         })
         .collect();
 
-    let config = cosmic_config::Config::new("com.system76.CosmicSettings", 1)
+    let config = cosmic_config::Config::new("com.clawos.Settings", 1)
         .ok()
         .map(|context| {
             let locales = context
@@ -945,7 +945,7 @@ fn get_default_first_day(locale: &str) -> usize {
 
 fn update_time_settings_after_region_change(region: String) {
     // Create the same config that date.rs uses
-    let cosmic_applet_config = match cosmic_config::Config::new("com.system76.CosmicAppletTime", 1)
+    let cosmic_applet_config = match cosmic_config::Config::new("com.clawos.AppletTime", 1)
     {
         Ok(config) => config,
         Err(err) => {

@@ -211,7 +211,7 @@ impl UserData {
         }
         self.load_wallpapers_as_user();
 
-        match cosmic_config::Config::new("com.system76.CosmicComp", CosmicCompConfig::VERSION) {
+        match cosmic_config::Config::new("com.clawos.Comp", CosmicCompConfig::VERSION) {
             Ok(config_handler) => {
                 match CosmicCompConfig::get_entry(&config_handler) {
                     Ok(config) => {
@@ -243,7 +243,7 @@ impl UserData {
             })
             .unwrap_or_default();
 
-        match cosmic_config::Config::new("com.system76.CosmicAppletTime", TimeAppletConfig::VERSION)
+        match cosmic_config::Config::new("com.clawos.AppletTime", TimeAppletConfig::VERSION)
         {
             Ok(config_handler) => match TimeAppletConfig::get_entry(&config_handler) {
                 Ok(config) => {

@@ -15,7 +15,7 @@ struct CosmicWorkspaces {
     event_sender: broadcast::Sender<Event>,
 }
 
-#[zbus::interface(name = "com.system76.CosmicWorkspaces")]
+#[zbus::interface(name = "com.clawos.Workspaces")]
 impl CosmicWorkspaces {
     fn show(&self) {
         let _ = self.event_sender.send(Event::Show);
@@ -43,7 +43,7 @@ impl Interface {
         let event_sender = broadcast::Sender::new(8);
         conn.object_server()
             .at(
-                "/com/system76/CosmicWorkspaces",
+                "/com/clawos/Workspaces",
                 CosmicWorkspaces {
                     event_sender: event_sender.clone(),
                 },
@@ -52,7 +52,7 @@ impl Interface {
         Ok(Interface {
             emitter: zbus::object_server::SignalEmitter::new(
                 &conn,
-                "/com/system76/CosmicWorkspaces",
+                "/com/clawos/Workspaces",
             )
             .unwrap(),
             event_sender,

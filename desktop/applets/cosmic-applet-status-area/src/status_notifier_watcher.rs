@@ -21,7 +21,7 @@ use std::{collections::HashSet, time::Duration};
 use zbus::fdo;
 use zbus::message::Header;
 
-const DBUS_NAME: &str = "com.system76.CosmicStatusNotifierWatcher";
+const DBUS_NAME: &str = "com.clawos.StatusNotifierWatcher";
 const OBJECT_PATH: &str = "/CosmicStatusNotifierWatcher";
 const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
@@ -51,8 +51,8 @@ pub async fn cosmic_register(conn: &zbus::Connection) -> zbus::Result<()> {
 }
 
 #[zbus::proxy(
-    interface = "com.system76.CosmicStatusNotifierWatcher",
-    default_service = "com.system76.CosmicStatusNotifierWatcher",
+    interface = "com.clawos.StatusNotifierWatcher",
+    default_service = "com.clawos.StatusNotifierWatcher",
     default_path = "/CosmicStatusNotifierWatcher"
 )]
 trait CosmicAppletStatusNotifierWatcher {
@@ -64,7 +64,7 @@ struct CosmicAppletStatusNotifierWatcher {
     unique_names: UniqueNames,
 }
 
-#[zbus::interface(name = "com.system76.CosmicStatusNotifierWatcher")]
+#[zbus::interface(name = "com.clawos.StatusNotifierWatcher")]
 impl CosmicAppletStatusNotifierWatcher {
     fn register_applet(&mut self, #[zbus(header)] hdr: Header<'_>) {
         if let Some(sender) = hdr.sender() {

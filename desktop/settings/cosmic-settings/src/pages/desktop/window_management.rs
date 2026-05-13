@@ -45,7 +45,7 @@ pub struct Page {
 
 impl Default for Page {
     fn default() -> Self {
-        let comp_config = cosmic_config::Config::new("com.system76.CosmicComp", 1).unwrap();
+        let comp_config = cosmic_config::Config::new("com.clawos.Comp", 1).unwrap();
         let focus_follows_cursor = comp_config
             .get("focus_follows_cursor")
             .unwrap_or_else(|err| {

@@ -12,16 +12,16 @@ use serde::{Deserialize, Serialize};
 use std::num::NonZeroUsize;
 
 /// ID for the current dark `ThemeBuilder` config
-pub const DARK_THEME_BUILDER_ID: &str = "com.system76.CosmicTheme.Dark.Builder";
+pub const DARK_THEME_BUILDER_ID: &str = "com.clawos.Theme.Dark.Builder";
 
 /// ID for the current dark Theme config
-pub const DARK_THEME_ID: &str = "com.system76.CosmicTheme.Dark";
+pub const DARK_THEME_ID: &str = "com.clawos.Theme.Dark";
 
 /// ID for the current light `ThemeBuilder`` config
-pub const LIGHT_THEME_BUILDER_ID: &str = "com.system76.CosmicTheme.Light.Builder";
+pub const LIGHT_THEME_BUILDER_ID: &str = "com.clawos.Theme.Light.Builder";
 
 /// ID for the current light Theme config
-pub const LIGHT_THEME_ID: &str = "com.system76.CosmicTheme.Light";
+pub const LIGHT_THEME_ID: &str = "com.clawos.Theme.Light";
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 /// Theme layer type

@@ -19,7 +19,7 @@ ifneq ($(VENDOR),0)
 endif
 
 BIN = cosmic-workspaces
-APPID = com.system76.CosmicWorkspaces
+APPID = com.clawos.Workspaces
 
 all: $(BIN)
 

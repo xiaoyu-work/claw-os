@@ -8,13 +8,13 @@ use serde::{Deserialize, Serialize};
 
 use screenshot::Screenshot;
 
-pub const APP_ID: &str = "com.system76.CosmicPortal";
+pub const APP_ID: &str = "com.clawos.Portal";
 pub const CONFIG_VERSION: u64 = 1;
 
 #[derive(Debug, Clone, Default, PartialEq, CosmicConfigEntry, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 #[version = 1]
-#[id = "com.system76.CosmicPortal"]
+#[id = "com.clawos.Portal"]
 pub struct Config {
     /// Interactive screenshot settings
     pub screenshot: Screenshot,

@@ -6,7 +6,7 @@ use cosmic::cosmic_config::{
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
-pub const APP_ID: &str = "com.system76.CosmicAppList";
+pub const APP_ID: &str = "com.clawos.AppList";
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq)]
 pub enum ToplevelFilter {

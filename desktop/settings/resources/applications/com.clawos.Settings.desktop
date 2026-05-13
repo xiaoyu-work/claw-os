@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Settings
+Comment=Settings application for ClawOS.
+Type=Application
+Exec=cosmic-settings
+Terminal=false
+Categories=COSMIC
+Keywords=COSMIC;Settings;
+OnlyShowIn=COSMIC
+Icon=com.clawos.Settings
+StartupNotify=true

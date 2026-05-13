@@ -87,7 +87,7 @@ impl cosmic::Application for Button {
     type Message = Msg;
     type Executor = cosmic::SingleThreadExecutor;
     type Flags = Desktop;
-    const APP_ID: &'static str = "com.system76.CosmicPanelButton";
+    const APP_ID: &'static str = "com.clawos.PanelButton";
 
     fn init(core: cosmic::app::Core, desktop: Desktop) -> (Self, app::Task<Msg>) {
         let config = Config::new(Self::APP_ID, CosmicPanelButtonConfig::VERSION)

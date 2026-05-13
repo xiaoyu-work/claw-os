@@ -160,12 +160,12 @@ unsafe impl Sync for ClientState {}
 
 impl ClientState {
     /// We treat a client as "sandboxed" if it has a security context for any sandbox engine
-    /// other than `com.system76.CosmicPanel`
+    /// other than `com.clawos.Panel`
     pub fn not_sandboxed(&self) -> bool {
         self.security_context
             .as_ref()
             .is_none_or(|security_context| {
-                security_context.sandbox_engine.as_deref() == Some("com.system76.CosmicPanel")
+                security_context.sandbox_engine.as_deref() == Some("com.clawos.Panel")
             })
     }
 }

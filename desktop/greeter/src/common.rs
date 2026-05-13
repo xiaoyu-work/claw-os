@@ -73,7 +73,7 @@ impl<M: From<Message> + Send + 'static> Common<M> {
         core.window.use_template = false;
 
         let comp_config_handler = match cosmic_config::Config::new(
-            "com.system76.CosmicComp",
+            "com.clawos.Comp",
             CosmicCompConfig::VERSION,
         ) {
             Ok(config_handler) => Some(config_handler),

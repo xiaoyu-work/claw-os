@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 use std::env;
 use std::path::{Path, PathBuf};
 
-const NAME: &str = "com.system76.CosmicSettings.Wallpaper";
+const NAME: &str = "com.clawos.Settings.Wallpaper";
 const VERSION: u64 = 1;
 const CURRENT_FOLDER: &str = "current-folder";
 const CUSTOM_COLORS: &str = "custom-colors";
@@ -40,7 +40,7 @@ impl Config {
             }
         };
 
-        let state = match cosmic_config::Config::new_state("com.system76.CosmicBackground", VERSION)
+        let state = match cosmic_config::Config::new_state("com.clawos.Background", VERSION)
         {
             Ok(state) => state,
             Err(why) => {

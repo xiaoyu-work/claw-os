@@ -1,7 +1,7 @@
 use cosmic_config::{Config, ConfigGet, CosmicConfigEntry};
 
 /// ID for the ThemeMode config
-pub const THEME_MODE_ID: &str = "com.system76.CosmicTheme.Mode";
+pub const THEME_MODE_ID: &str = "com.clawos.Theme.Mode";
 
 /// The config for cosmic theme dark / light settings
 #[derive(

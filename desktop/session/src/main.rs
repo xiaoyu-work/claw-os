@@ -81,9 +81,9 @@ async fn main() -> Result<()> {
 	let (session_tx, mut session_rx) = tokio::sync::mpsc::channel(10);
 	let session_tx_clone = session_tx.clone();
 	let _conn = zbus::connection::Builder::session()?
-		.name("com.system76.CosmicSession")?
+		.name("com.clawos.Session")?
 		.serve_at(
-			"/com/system76/CosmicSession",
+			"/com/clawos/Session",
 			service::SessionService { session_tx },
 		)?
 		.build()

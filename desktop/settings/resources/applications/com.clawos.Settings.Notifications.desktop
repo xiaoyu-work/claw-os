@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Notifications
+Comment=Do Not Disturb, lockscreen notifications, and per-application settings.
+Type=Application
+Exec=cosmic-settings notifications
+Terminal=false
+Categories=COSMIC
+Keywords=COSMIC;Notification;Lock;
+NoDisplay=true
+OnlyShowIn=COSMIC
+Icon=com.clawos.Settings
+StartupNotify=true

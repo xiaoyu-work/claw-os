@@ -2,7 +2,7 @@ use cosmic_config::cosmic_config_derive::CosmicConfigEntry;
 use cosmic_config::{ConfigGet, CosmicConfigEntry};
 use serde::{Deserialize, Serialize};
 
-pub const ID: &str = "com.system76.CosmicSettings.WindowRules";
+pub const ID: &str = "com.clawos.Settings.WindowRules";
 
 /// Gets a cosmic-config [Config] context.
 pub fn context() -> Result<cosmic_config::Config, cosmic_config::Error> {
@@ -35,7 +35,7 @@ pub struct PreciseApplicationException {
     pub enabled: bool,
 }
 
-// cosmic-config configuration state for `com.system76.CosmicSettings.WindowRules`
+// cosmic-config configuration state for `com.clawos.Settings.WindowRules`
 #[derive(Clone, Debug, Default, PartialEq, CosmicConfigEntry)]
 #[version = 1]
 pub struct Config {

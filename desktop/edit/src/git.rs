@@ -99,6 +99,9 @@ impl GitRepository {
     }
 
     fn command(&self) -> Command {
+        // FIXME(claw): migrate to claw-bridge once exec::run_capture
+        // exists. `git diff/status` needs captured stdout, which the
+        // current bridge `exec::start` (fire-and-forget) can't provide.
         let mut command = Command::new("git");
         command.arg("-C").arg(&self.path);
         command

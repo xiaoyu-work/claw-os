@@ -1993,7 +1993,7 @@ impl cosmic::Application for CosmicAppList {
             vec![active]
         } else {
             vec![
-                icon::from_name("com.system76.CosmicAppList")
+                icon::from_name("com.clawos.AppList")
                     .size(self.core.applet.suggested_size(false).0)
                     .into(),
             ]

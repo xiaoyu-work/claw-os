@@ -40,6 +40,8 @@ use std::{
 use tokio::time;
 use unicode_segmentation::UnicodeSegmentation;
 
+mod claw_glue;
+
 use config::{AppTheme, CONFIG_VERSION, Config, ConfigState};
 mod config;
 
@@ -1384,7 +1386,7 @@ impl Application for App {
     type Message = Message;
 
     /// The unique application ID to supply to the window manager.
-    const APP_ID: &'static str = "com.system76.CosmicEdit";
+    const APP_ID: &'static str = "com.clawos.Edit";
 
     fn core(&self) -> &Core {
         &self.core
@@ -2147,8 +2149,8 @@ impl Application for App {
             Message::NewWindow => {
                 //TODO: support multi-window in winit
                 match env::current_exe() {
-                    Ok(exe) => match process::Command::new(&exe).spawn() {
-                        Ok(_child) => {}
+                    Ok(exe) => match crate::claw_glue::start_detached(&exe, &[]) {
+                        Ok(()) => {}
                         Err(err) => {
                             log::error!("failed to execute {:?}: {}", exe, err);
                         }
