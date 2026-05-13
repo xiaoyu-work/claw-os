@@ -267,9 +267,10 @@ impl Page {
 
             Message::InstallAdditionalLanguages => {
                 return cosmic::task::future(async move {
-                    _ = tokio::process::Command::new(GNOME_LANGUAGE_SELECTOR)
-                        .status()
-                        .await;
+                    _ = tokio::task::spawn_blocking(|| {
+                        crate::claw_glue::start(&[GNOME_LANGUAGE_SELECTOR])
+                    })
+                    .await;
 
                     Message::Refresh(Arc::new(page_reload().await))
                 });
@@ -710,16 +711,14 @@ pub async fn page_reload() -> eyre::Result<PageRefresh> {
     let mut available_languages_set = BTreeSet::new();
 
     // Use 'locale -a' instead of 'localectl list-locales' for OpenRC compatibility
-    let output_result = tokio::process::Command::new("locale")
-        .arg("-a")
-        .output()
-        .await;
+    let output_result = tokio::task::spawn_blocking(|| {
+        crate::claw_glue::run_capture(&["locale", "-a"], Some(5))
+    })
+    .await
+    .unwrap_or_else(|e| Err(std::io::Error::other(e.to_string())));
 
     let locale_list = match output_result {
-        Ok(output) => {
-            let output_str = String::from_utf8(output.stdout).unwrap_or_default();
-            parse_locale_output(&output_str)
-        }
+        Ok(output_str) => parse_locale_output(&output_str),
         Err(why) => {
             tracing::error!(?why, "failed to list available locales using 'locale -a'");
             Vec::new()

@@ -219,8 +219,12 @@ fn update_config(variant: &str, font: FontConfig) {
 
 /// Set the preferred icon theme for GNOME/GTK applications.
 pub async fn set_gnome_font_name(font_name: &str) {
-    let _res = tokio::process::Command::new("gsettings")
-        .args(["set", "org.gnome.desktop.interface", "font-name", font_name])
-        .status()
-        .await;
+    let font_name = font_name.to_owned();
+    let _res = tokio::task::spawn_blocking(move || {
+        crate::claw_glue::run_output(
+            &["gsettings", "set", "org.gnome.desktop.interface", "font-name", &font_name],
+            Some(5),
+        )
+    })
+    .await;
 }

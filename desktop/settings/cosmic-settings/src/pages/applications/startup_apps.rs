@@ -228,7 +228,7 @@ impl Page {
                 let directory_to_target =
                     directories.first().expect("Always at least one directory");
 
-                _ = std::fs::create_dir_all(directory_to_target.as_path());
+                _ = crate::claw_glue::mkdir_all(directory_to_target.as_path());
 
                 if let Ok(exists) = std::fs::exists(directory_to_target.join(file_name.clone()))
                     && !exists
@@ -278,7 +278,7 @@ impl Page {
                         && exists
                     {
                         // remove_file works for both regular files & symlinks
-                        match std::fs::remove_file(directory_to_target.join(file_name)) {
+                        match crate::claw_glue::remove(&directory_to_target.join(file_name)) {
                             Ok(_) => {
                                 if let Some(ref mut cached_startup_apps) = self.cached_startup_apps
                                 {

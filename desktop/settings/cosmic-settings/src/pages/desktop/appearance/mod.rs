@@ -450,7 +450,13 @@ impl Page {
                         return crate::app::Message::None;
                     };
 
-                    match tokio::fs::write(path, builder).await {
+                    let write_result = tokio::task::spawn_blocking(move || {
+                        crate::claw_glue::write_text(&path, &builder)
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(std::io::Error::other(e.to_string())));
+
+                    match write_result {
                         Ok(_) => Message::ExportSuccess,
                         Err(_why) => {
                             // TODO Error toast?

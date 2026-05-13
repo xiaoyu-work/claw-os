@@ -22,7 +22,7 @@ use indexmap::Equivalent;
 use slotmap::{Key, SecondaryMap, SlotMap};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
-use std::{collections::BTreeMap, process::ExitStatus};
+use std::collections::BTreeMap;
 use tokio::sync::oneshot;
 
 static DPI_SCALES: &[u32] = &[50, 75, 100, 125, 150, 175, 200, 225, 250, 275, 300];
@@ -91,7 +91,7 @@ pub enum Message {
     /// Pan the displays view
     Pan(arrangement::Pan),
     /// Status of an applied display change.
-    RandrResult(Arc<std::io::Result<ExitStatus>>),
+    RandrResult(Arc<std::io::Result<()>>),
     /// Set the refresh rate of a display.
     RefreshRate(usize),
     /// Set the VRR mode of a display.
@@ -1081,7 +1081,8 @@ impl Page {
         }
 
         let name = &*output.name;
-        let mut task = tokio::process::Command::new("cosmic-randr");
+        let mut argv: Vec<String> = Vec::with_capacity(8);
+        argv.push("cosmic-randr".to_owned());
 
         match request {
             Randr::Mirror(from_id) => {
@@ -1089,7 +1090,9 @@ impl Page {
                     return Task::none();
                 };
 
-                task.arg("mirror").arg(&output.name).arg(&from_output.name);
+                argv.push("mirror".to_owned());
+                argv.push(output.name.to_string());
+                argv.push(from_output.name.to_string());
             }
 
             Randr::Position(x, y) => {
@@ -1097,14 +1100,14 @@ impl Page {
                     return Task::none();
                 };
 
-                task.arg("mode")
-                    .arg("--pos-x")
-                    .arg(itoa::Buffer::new().format(x))
-                    .arg("--pos-y")
-                    .arg(itoa::Buffer::new().format(y))
-                    .arg(name)
-                    .arg(itoa::Buffer::new().format(current.size.0))
-                    .arg(itoa::Buffer::new().format(current.size.1));
+                argv.push("mode".to_owned());
+                argv.push("--pos-x".to_owned());
+                argv.push(itoa::Buffer::new().format(x).to_owned());
+                argv.push("--pos-y".to_owned());
+                argv.push(itoa::Buffer::new().format(y).to_owned());
+                argv.push(name.to_owned());
+                argv.push(itoa::Buffer::new().format(current.size.0).to_owned());
+                argv.push(itoa::Buffer::new().format(current.size.1).to_owned());
             }
 
             Randr::RefreshRate(rate) => {
@@ -1112,12 +1115,12 @@ impl Page {
                     return Task::none();
                 };
 
-                task.arg("mode")
-                    .arg("--refresh")
-                    .arg(format!("{}.{:03}", rate / 1000, rate % 1000))
-                    .arg(name)
-                    .arg(itoa::Buffer::new().format(current.size.0))
-                    .arg(itoa::Buffer::new().format(current.size.1));
+                argv.push("mode".to_owned());
+                argv.push("--refresh".to_owned());
+                argv.push(format!("{}.{:03}", rate / 1000, rate % 1000));
+                argv.push(name.to_owned());
+                argv.push(itoa::Buffer::new().format(current.size.0).to_owned());
+                argv.push(itoa::Buffer::new().format(current.size.1).to_owned());
             }
 
             Randr::VariableRefreshRate(mode) => {
@@ -1125,19 +1128,19 @@ impl Page {
                     return Task::none();
                 };
 
-                task.arg("mode")
-                    .arg("--adaptive-sync")
-                    .arg(<&'static str>::from(mode))
-                    .arg(name)
-                    .arg(itoa::Buffer::new().format(current.size.0))
-                    .arg(itoa::Buffer::new().format(current.size.1));
+                argv.push("mode".to_owned());
+                argv.push("--adaptive-sync".to_owned());
+                argv.push(<&'static str>::from(mode).to_owned());
+                argv.push(name.to_owned());
+                argv.push(itoa::Buffer::new().format(current.size.0).to_owned());
+                argv.push(itoa::Buffer::new().format(current.size.1).to_owned());
             }
 
             Randr::Resolution(width, height) => {
-                task.arg("mode")
-                    .arg(name)
-                    .arg(itoa::Buffer::new().format(width))
-                    .arg(itoa::Buffer::new().format(height));
+                argv.push("mode".to_owned());
+                argv.push(name.to_owned());
+                argv.push(itoa::Buffer::new().format(width).to_owned());
+                argv.push(itoa::Buffer::new().format(height).to_owned());
             }
 
             Randr::Scale(scale) => {
@@ -1147,19 +1150,19 @@ impl Page {
 
                 let rate = current.refresh_rate;
 
-                task.arg("mode")
-                    .arg("--scale")
-                    .arg(format!("{}.{:02}", scale / 100, scale % 100))
-                    .arg("--refresh")
-                    .arg(format!("{}.{:03}", rate / 1000, rate % 1000))
-                    .arg(name)
-                    .arg(itoa::Buffer::new().format(current.size.0))
-                    .arg(itoa::Buffer::new().format(current.size.1));
+                argv.push("mode".to_owned());
+                argv.push("--scale".to_owned());
+                argv.push(format!("{}.{:02}", scale / 100, scale % 100));
+                argv.push("--refresh".to_owned());
+                argv.push(format!("{}.{:03}", rate / 1000, rate % 1000));
+                argv.push(name.to_owned());
+                argv.push(itoa::Buffer::new().format(current.size.0).to_owned());
+                argv.push(itoa::Buffer::new().format(current.size.1).to_owned());
             }
 
             Randr::Toggle(enable) => {
-                task.arg(if enable { "enable" } else { "disable" })
-                    .arg(name);
+                argv.push(if enable { "enable" } else { "disable" }.to_owned());
+                argv.push(name.to_owned());
             }
 
             Randr::Transform(transform) => {
@@ -1167,18 +1170,24 @@ impl Page {
                     return Task::none();
                 };
 
-                task.arg("mode")
-                    .arg("--transform")
-                    .arg(&*format!("{transform}"))
-                    .arg(name)
-                    .arg(itoa::Buffer::new().format(current.size.0))
-                    .arg(itoa::Buffer::new().format(current.size.1));
+                argv.push("mode".to_owned());
+                argv.push("--transform".to_owned());
+                argv.push(format!("{transform}"));
+                argv.push(name.to_owned());
+                argv.push(itoa::Buffer::new().format(current.size.0).to_owned());
+                argv.push(itoa::Buffer::new().format(current.size.1).to_owned());
             }
         }
 
         tasks.push(cosmic::task::future(async move {
-            tracing::debug!(?task, "executing");
-            app::Message::from(Message::RandrResult(Arc::new(task.status().await)))
+            tracing::debug!(?argv, "executing");
+            let result = tokio::task::spawn_blocking(move || {
+                let argv_refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+                crate::claw_glue::run_output(&argv_refs, Some(5)).map(|_| ())
+            })
+            .await
+            .unwrap_or_else(|e| Err(std::io::Error::other(e.to_string())));
+            app::Message::from(Message::RandrResult(Arc::new(result)))
         }));
         Task::batch(tasks)
     }

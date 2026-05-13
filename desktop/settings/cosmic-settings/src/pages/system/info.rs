@@ -3,7 +3,7 @@
 
 #[cfg(feature = "wgpu")]
 use cosmic::iced::wgpu;
-use std::{collections::HashMap, collections::HashSet, ffi::OsStr, process::Command};
+use std::{collections::HashMap, collections::HashSet, ffi::OsStr};
 
 #[must_use]
 #[derive(Clone, Debug, Default)]
@@ -323,13 +323,8 @@ fn format_size(bytes: u64) -> String {
 fn get_all_lspci_gpus() -> Vec<(u32, u32, String)> {
     let mut gpus = Vec::new();
 
-    let output = match Command::new("lspci").arg("-nn").output() {
-        Ok(output) => output,
-        Err(_) => return gpus,
-    };
-
-    let stdout = match std::str::from_utf8(&output.stdout) {
-        Ok(s) => s,
+    let stdout = match crate::claw_glue::run_capture(&["lspci", "-nn"], Some(5)) {
+        Ok(stdout) => stdout,
         Err(_) => return gpus,
     };
 
@@ -395,13 +390,8 @@ fn get_all_lspci_gpus() -> Vec<(u32, u32, String)> {
 fn get_lspci_gpu_names() -> HashMap<u32, String> {
     let mut gpu_map = HashMap::new();
 
-    let output = match Command::new("lspci").arg("-nn").output() {
-        Ok(output) => output,
-        Err(_) => return gpu_map,
-    };
-
-    let stdout = match std::str::from_utf8(&output.stdout) {
-        Ok(s) => s,
+    let stdout = match crate::claw_glue::run_capture(&["lspci", "-nn"], Some(5)) {
+        Ok(stdout) => stdout,
         Err(_) => return gpu_map,
     };
 

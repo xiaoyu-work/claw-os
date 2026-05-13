@@ -1014,6 +1014,7 @@ mod systemd {
     use futures::FutureExt;
 
     pub fn activate_bluetooth() -> impl Future<Output = ()> + Send {
+        // FIXME(claw): pkexec bypasses Claw caps; route through kernel approval UI once it exists.
         tokio::process::Command::new("pkexec")
             .args(["systemctl", "start", "bluetooth"])
             .status()
@@ -1021,6 +1022,7 @@ mod systemd {
     }
 
     pub fn enable_bluetooth() -> impl Future<Output = ()> + Send {
+        // FIXME(claw): pkexec bypasses Claw caps; route through kernel approval UI once it exists.
         tokio::process::Command::new("pkexec")
             .args(["systemctl", "enable", "--now", "bluetooth"])
             .status()
@@ -1028,18 +1030,14 @@ mod systemd {
     }
 
     pub fn is_bluetooth_enabled() -> bool {
-        std::process::Command::new("systemctl")
-            .args(["is-enabled", "bluetooth"])
-            .status()
-            .map(|status| status.success())
+        crate::claw_glue::run_output(&["systemctl", "is-enabled", "bluetooth"], Some(5))
+            .map(|output| output.status.success())
             .unwrap_or(true)
     }
 
     pub fn is_bluetooth_active() -> bool {
-        std::process::Command::new("systemctl")
-            .args(["is-active", "bluetooth"])
-            .status()
-            .map(|status| status.success())
+        crate::claw_glue::run_output(&["systemctl", "is-active", "bluetooth"], Some(5))
+            .map(|output| output.status.success())
             .unwrap_or(true)
     }
 }

@@ -89,7 +89,7 @@ pub fn export_theme(path: &Path) -> color_eyre::Result<()> {
     let ron_string = ron::ser::to_string_pretty(builder, Default::default())
         .map_err(|e| color_eyre::eyre::eyre!("Failed to serialize theme to RON: {}", e))?;
 
-    std::fs::write(path, ron_string).map_err(|e| {
+    crate::claw_glue::write_text(path, &ron_string).map_err(|e| {
         color_eyre::eyre::eyre!("Failed to write theme file '{}': {}", path.display(), e)
     })?;
 

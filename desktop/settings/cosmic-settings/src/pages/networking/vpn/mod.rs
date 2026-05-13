@@ -4,6 +4,7 @@
 pub mod nmcli;
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::{Arc, LazyLock};
 
 use anyhow::Context;
@@ -482,7 +483,7 @@ impl Page {
                 if let Some(VpnDialog::WireGuardName(device, filename, path)) = self.dialog.take() {
                     return cosmic::task::future(async move {
                         let new_path = path.replace(&filename, &device);
-                        _ = std::fs::rename(&path, &new_path);
+                        _ = crate::claw_glue::rename(Path::new(&path), Path::new(&new_path));
                         match super::nm_add_vpn_file("wireguard", new_path).await {
                             Ok(_) => Message::Refresh,
                             Err(why) => Message::Error(ErrorKind::Config, why.to_string()),

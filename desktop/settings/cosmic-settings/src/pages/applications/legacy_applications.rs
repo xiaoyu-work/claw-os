@@ -1,12 +1,9 @@
 // Copyright 2023 System76 <info@system76.com>
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::{
-    process::ExitStatus,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 use cosmic::{
@@ -28,7 +25,7 @@ use tracing::error;
 #[derive(Clone, Debug)]
 pub enum Message {
     RandrUpdate(Arc<Result<List, cosmic_randr_shell::Error>>),
-    RandrResult(Arc<std::io::Result<ExitStatus>>),
+    RandrResult(Arc<std::io::Result<()>>),
     SetXwaylandDescaling(XwaylandDescaling),
     SetXwaylandKeyboardMode(EavesdroppingKeyboardMode),
     SetXwaylandMouseButtonMode(bool),
@@ -239,18 +236,26 @@ impl Page {
                 }
             }
             Message::SetXwaylandPrimaryOutput(idx) => {
-                let mut task = tokio::process::Command::new("cosmic-randr");
-                task.arg("xwayland");
+                let mut argv: Vec<String> = Vec::with_capacity(3);
+                argv.push("cosmic-randr".to_owned());
+                argv.push("xwayland".to_owned());
                 if idx == 0 {
-                    task.arg("--no-primary");
+                    argv.push("--no-primary".to_owned());
                 } else {
-                    task.arg("--primary").arg(&self.output_options[idx]);
+                    argv.push("--primary".to_owned());
+                    argv.push(self.output_options[idx].clone());
                 }
 
                 return cosmic::task::future(async move {
-                    tracing::debug!(?task, "executing");
+                    tracing::debug!(?argv, "executing");
+                    let result = tokio::task::spawn_blocking(move || {
+                        let argv_refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+                        crate::claw_glue::run_output(&argv_refs, Some(5)).map(|_| ())
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(std::io::Error::other(e.to_string())));
                     crate::app::Message::PageMessage(crate::pages::Message::LegacyApplications(
-                        Message::RandrResult(Arc::new(task.status().await)),
+                        Message::RandrResult(Arc::new(result)),
                     ))
                 });
             }

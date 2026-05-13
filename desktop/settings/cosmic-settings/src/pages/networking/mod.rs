@@ -5,7 +5,7 @@ pub mod vpn;
 pub mod wifi;
 pub mod wired;
 
-use std::{ffi::OsStr, process::Stdio, sync::Arc};
+use std::{ffi::OsStr, sync::Arc};
 
 use anyhow::Context;
 use cosmic::{Apply, Element, Task, widget};
@@ -354,13 +354,26 @@ impl Page {
 }
 
 async fn nm_add_vpn_file<P: AsRef<OsStr>>(type_: &str, path: P) -> Result<(), String> {
-    tokio::process::Command::new("nmcli")
-        .args(["connection", "import", "type", type_, "file"])
-        .arg(path)
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .apply(crate::utils::map_stderr_output)
+    let type_owned = type_.to_owned();
+    let path_owned: std::ffi::OsString = path.as_ref().to_owned();
+    tokio::task::spawn_blocking(move || {
+        let path_str = path_owned.to_string_lossy().into_owned();
+        crate::claw_glue::run_output(
+            &[
+                "nmcli",
+                "connection",
+                "import",
+                "type",
+                &type_owned,
+                "file",
+                &path_str,
+            ],
+            Some(5),
+        )
+    })
+    .await
+    .unwrap_or_else(|e| Err(std::io::Error::other(e.to_string())))
+    .apply(crate::utils::map_stderr_output)
 }
 
 async fn nm_add_wired() -> Result<(), String> {
@@ -376,10 +389,16 @@ async fn nm_edit_connection(uuid: &str) -> Result<(), String> {
 }
 
 async fn nm_connection_editor(args: &[&str]) -> Result<(), String> {
-    tokio::process::Command::new(NM_CONNECTION_EDITOR)
-        .args(args)
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .apply(crate::utils::map_stderr_output)
+    let mut argv: Vec<String> = Vec::with_capacity(args.len() + 1);
+    argv.push(NM_CONNECTION_EDITOR.to_owned());
+    for a in args {
+        argv.push((*a).to_owned());
+    }
+
+    tokio::task::spawn_blocking(move || {
+        let argv_refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+        crate::claw_glue::start(&argv_refs).map_err(|err| err.to_string())
+    })
+    .await
+    .unwrap_or_else(|e| Err(e.to_string()))
 }

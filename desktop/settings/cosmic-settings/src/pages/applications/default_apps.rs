@@ -265,8 +265,8 @@ impl Page {
                     let mut buffer = mime_apps.local_list.to_string();
                     buffer.push('\n');
 
-                    _ = std::fs::write(&mime_apps.config_path, buffer);
-                    _ = std::process::Command::new("update-desktop-database").status();
+                    _ = crate::claw_glue::write_text(&mime_apps.config_path, &buffer);
+                    _ = crate::claw_glue::start(&["update-desktop-database"]);
                 }
             }
             Message::Update(mime_apps) => {
@@ -460,19 +460,20 @@ async fn load_defaults(assocs: &BTreeMap<Arc<str>, Arc<App>>, for_mimes: &[&str]
 }
 
 async fn xdg_mime_query_default(mime_type: &str) -> Option<String> {
-    let output = tokio::process::Command::new("xdg-mime")
-        .args(["query", "default", mime_type])
-        .output()
-        .await
-        .ok()?;
+    let mime_type = mime_type.to_owned();
+    let stdout = tokio::task::spawn_blocking(move || {
+        crate::claw_glue::run_capture(&["xdg-mime", "query", "default", &mime_type], Some(5))
+    })
+    .await
+    .ok()?
+    .ok()?;
 
-    if !output.status.success() {
-        return None;
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_owned())
     }
-
-    String::from_utf8(output.stdout)
-        .ok()
-        .map(|string| string.trim().to_owned())
 }
 
 async fn load_terminal_apps(assocs: &BTreeMap<Arc<str>, Arc<App>>) -> AppMeta {

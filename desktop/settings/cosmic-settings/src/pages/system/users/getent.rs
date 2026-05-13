@@ -2,37 +2,31 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use std::io::{BufRead, BufReader};
-use std::process::Stdio;
 use std::str::FromStr;
 
 pub fn passwd(range: (u64, u64)) -> Vec<PasswdUser> {
-    let spawn_res = std::process::Command::new("getent")
-        .arg("passwd")
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .stdout(Stdio::piped())
-        .spawn();
+    let stdout = match crate::claw_glue::run_capture(&["getent", "passwd"], Some(5)) {
+        Ok(stdout) => stdout,
+        Err(_) => return Vec::new(),
+    };
 
     let mut users = Vec::new();
 
-    if let Ok(mut child) = spawn_res {
-        let stdout = child.stdout.take().unwrap();
-        let mut reader = BufReader::new(stdout);
-        let mut line = String::new();
+    let mut reader = BufReader::new(stdout.as_bytes());
+    let mut line = String::new();
 
-        loop {
-            line.clear();
-            match reader.read_line(&mut line) {
-                Ok(0) | Err(_) => break,
-                _ => (),
-            }
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) | Err(_) => break,
+            _ => (),
+        }
 
-            if let Ok(user) = line.trim().parse::<PasswdUser>()
-                && user.uid >= range.0
-                && user.uid <= range.1
-            {
-                users.push(user);
-            }
+        if let Ok(user) = line.trim().parse::<PasswdUser>()
+            && user.uid >= range.0
+            && user.uid <= range.1
+        {
+            users.push(user);
         }
     }
 
@@ -40,30 +34,25 @@ pub fn passwd(range: (u64, u64)) -> Vec<PasswdUser> {
 }
 
 pub fn group() -> Vec<Group> {
-    let spawn_res = std::process::Command::new("getent")
-        .arg("group")
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .stdout(Stdio::piped())
-        .spawn();
+    let stdout = match crate::claw_glue::run_capture(&["getent", "group"], Some(5)) {
+        Ok(stdout) => stdout,
+        Err(_) => return Vec::new(),
+    };
 
     let mut groups = Vec::new();
 
-    if let Ok(mut child) = spawn_res {
-        let stdout = child.stdout.take().unwrap();
-        let mut reader = BufReader::new(stdout);
-        let mut line = String::new();
+    let mut reader = BufReader::new(stdout.as_bytes());
+    let mut line = String::new();
 
-        loop {
-            line.clear();
-            match reader.read_line(&mut line) {
-                Ok(0) | Err(_) => break,
-                _ => (),
-            }
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) | Err(_) => break,
+            _ => (),
+        }
 
-            if let Ok(group) = line.trim().parse::<Group>() {
-                groups.push(group);
-            }
+        if let Ok(group) = line.trim().parse::<Group>() {
+            groups.push(group);
         }
     }
 
