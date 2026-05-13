@@ -64,7 +64,30 @@ qemu-system-x86_64 -m 2G -bios /usr/share/ovmf/OVMF.fd \
                    -cdrom build/claw-os-live-amd64.iso
 ```
 
-> Other distribution targets (`iso-installer`, `vm`) are being added in
+### Build a VM Disk Image
+
+```bash
+# Host requirements (Debian/Ubuntu):
+sudo apt install qemu-utils parted dosfstools rsync
+
+# Produces build/claw-os-vm.qcow2 (hybrid BIOS+UEFI bootable)
+sudo ./build.sh vm
+
+# Multiple formats in one build:
+sudo FORMATS="qcow2 vmdk vhdx" ./build.sh vm
+
+# Larger disk:
+sudo SIZE=16G ./build.sh vm
+
+# Boot in QEMU (BIOS):
+qemu-system-x86_64 -m 2G -nographic \
+    -drive file=build/claw-os-vm.qcow2,format=qcow2,if=virtio
+
+# Boot in Hyper-V Gen 2 (UEFI): disable Secure Boot first
+#   Set-VMFirmware -VMName claw-os -EnableSecureBoot Off
+```
+
+> Other distribution targets (`iso-installer`) are being added in
 > subsequent milestones — see `targets/` for the current set.
 
 ### Run Locally (Development)
