@@ -1,0 +1,6 @@
+# Pre-configure the Claw OS apt repository on the installed system so
+# `apt update && apt upgrade` pulls newer cos packages from
+# https://xiaoyu-work.github.io/claw-os.
+#
+# Apply this feature on every non-Docker target: WSL, ISO, VM, installer.
+# Docker images don't need it (users rebuild rather than apt upgrade).

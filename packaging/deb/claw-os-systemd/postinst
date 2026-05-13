@@ -1,0 +1,31 @@
+#!/bin/sh
+# claw-os-systemd postinst — enable cos-den-setup.service via the standard
+# deb-systemd-helper so it works in a chroot (no dbus required) and on a
+# running system alike.
+
+set -e
+
+case "$1" in
+    configure)
+        if [ -x /usr/bin/deb-systemd-helper ]; then
+            deb-systemd-helper unmask cos-den-setup.service >/dev/null || true
+            deb-systemd-helper --quiet was-enabled cos-den-setup.service \
+                || deb-systemd-helper enable cos-den-setup.service >/dev/null || true
+            deb-systemd-helper unmask cos-browser.service >/dev/null || true
+        fi
+        if [ -d /run/systemd/system ]; then
+            systemctl --system daemon-reload >/dev/null || true
+            if [ -n "$2" ]; then
+                deb-systemd-invoke try-restart cos-den-setup.service >/dev/null || true
+            fi
+        fi
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+    *)
+        echo "postinst called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

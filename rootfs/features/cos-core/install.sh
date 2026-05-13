@@ -1,47 +1,46 @@
 #!/usr/bin/env bash
-# rootfs/features/cos-core/install.sh — install the cos binary plus apps,
-# plugins, and skills.
+# rootfs/features/cos-core/install.sh — install claw-os-base.deb into ROOTFS.
 #
-# Inherited from environment: ROOTFS, PROJECT_DIR.
+# The .deb is the canonical source of truth: this script just makes sure it
+# exists (building it on the fly if needed) and lets dpkg/apt put the files
+# in place. Use of `apt-get install /path/to/file.deb` lets dependencies
+# (Recommends: nodejs, python3, etc.) resolve from the chroot's apt sources.
 #
-# Note: cos must be pre-built before invoking this feature. CI builds it
-# with `cargo build --release -p cos --target x86_64-unknown-linux-musl`.
+# Inherited from environment: ROOTFS, PROJECT_DIR, COS_VERSION.
 
 set -euo pipefail
 
-COS_BIN=""
-for candidate in \
-    "$PROJECT_DIR/target/x86_64-unknown-linux-musl/release/cos" \
-    "$PROJECT_DIR/core/target/x86_64-unknown-linux-musl/release/cos" \
-    "$PROJECT_DIR/target/release/cos" \
-    "$PROJECT_DIR/core/target/release/cos" \
-    "$PROJECT_DIR/target/x86_64-unknown-linux-gnu/release/cos" \
-    "$PROJECT_DIR/core/target/x86_64-unknown-linux-gnu/release/cos"; do
-    if [ -f "$candidate" ]; then
-        COS_BIN="$candidate"
-        break
-    fi
-done
+DEBS_DIR="$PROJECT_DIR/build/debs"
 
-if [ -z "$COS_BIN" ]; then
-    echo "  error: cos binary not found. Build it first:" >&2
-    echo "    cargo build --release -p cos" >&2
-    exit 1
+# Build the .debs if missing — this also handles claw-os-browser/systemd
+# which other features rely on. build-debs.sh is idempotent.
+if ! ls "$DEBS_DIR/claw-os-base_"*.deb >/dev/null 2>&1; then
+    echo "  :: claw-os-base.deb not found — building it"
+    "$PROJECT_DIR/packaging/deb/build-debs.sh"
 fi
 
-echo "  :: installing cos binary from $COS_BIN"
-install -m 755 "$COS_BIN" "$ROOTFS/usr/local/bin/cos"
+BASE_DEB="$(ls "$DEBS_DIR/claw-os-base_"*"_amd64.deb" | head -1)"
+echo "  :: installing $(basename "$BASE_DEB")"
 
-echo "  :: installing apps"
-mkdir -p "$ROOTFS/usr/lib/cos/apps"
-cp -a "$PROJECT_DIR/apps/." "$ROOTFS/usr/lib/cos/apps/"
+# The base overlay (applied in step 2 of rootfs/build.sh) ships these
+# same files; dpkg refuses to overwrite unowned files by default. Remove
+# them so the package can take ownership.
+rm -f \
+    "$ROOTFS/usr/local/bin/cos-init" \
+    "$ROOTFS/usr/local/bin/cos" \
+    "$ROOTFS/usr/lib/cos/init/setup-den.sh" \
+    "$ROOTFS/etc/cos/config.json" \
+    "$ROOTFS/etc/cos/profile.sh"
+rm -rf \
+    "$ROOTFS/usr/lib/cos/apps" \
+    "$ROOTFS/usr/lib/cos/plugins" \
+    "$ROOTFS/usr/lib/cos/skills"
 
-echo "  :: installing plugins and skills"
-mkdir -p "$ROOTFS/usr/lib/cos/plugins"
-mkdir -p "$ROOTFS/usr/lib/cos/skills"
-if [ -d "$PROJECT_DIR/plugins" ]; then
-    cp -a "$PROJECT_DIR/plugins/." "$ROOTFS/usr/lib/cos/plugins/"
-fi
-if [ -d "$PROJECT_DIR/skills" ]; then
-    cp -a "$PROJECT_DIR/skills/." "$ROOTFS/usr/lib/cos/skills/"
-fi
+# Stage the .deb inside the chroot, install via apt so Recommends pull in.
+mkdir -p "$ROOTFS/var/cache/cos-debs"
+cp "$BASE_DEB" "$ROOTFS/var/cache/cos-debs/"
+chroot "$ROOTFS" apt-get update -qq
+chroot "$ROOTFS" apt-get install -y --no-install-recommends \
+    "/var/cache/cos-debs/$(basename "$BASE_DEB")"
+chroot "$ROOTFS" apt-get clean
+rm -rf "$ROOTFS/var/lib/apt/lists"/*

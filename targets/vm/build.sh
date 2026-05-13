@@ -48,7 +48,9 @@ if [ -n "$missing" ]; then
 fi
 
 # 1. Build the rootfs.
-"$PROJECT_DIR/rootfs/build.sh" --features base,cos-core,systemd,kernel,grub-disk,vm
+#    apt-source pre-configures the Claw OS apt repo so users can run
+#    `sudo apt update && sudo apt upgrade` to pull newer claw-os-* packages.
+"$PROJECT_DIR/rootfs/build.sh" --features base,cos-core,systemd,kernel,grub-disk,vm,apt-source
 
 # 2. Reset previous build artefacts.
 rm -f "$RAW"

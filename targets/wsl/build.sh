@@ -25,7 +25,9 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 # 1. Build the rootfs with the WSL feature set.
-"$PROJECT_DIR/rootfs/build.sh" --features base,cos-core,browser,systemd
+#    apt-source pre-configures the Claw OS apt repo so users can later run
+#    `sudo apt update && sudo apt upgrade` to pull newer claw-os-* packages.
+"$PROJECT_DIR/rootfs/build.sh" --features base,cos-core,browser,systemd,apt-source
 
 # 2. Apply WSL-specific overlay (wsl.conf, etc.).
 if [ -d "$SCRIPT_DIR/overlay" ]; then

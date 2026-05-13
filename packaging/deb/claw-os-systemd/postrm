@@ -1,0 +1,21 @@
+#!/bin/sh
+# claw-os-systemd postrm — clean up symlinks on purge.
+
+set -e
+
+case "$1" in
+    purge)
+        if [ -x /usr/bin/deb-systemd-helper ]; then
+            deb-systemd-helper purge cos-den-setup.service >/dev/null || true
+            deb-systemd-helper purge cos-browser.service >/dev/null || true
+        fi
+        ;;
+    remove|upgrade|abort-install|abort-upgrade|disappear|failed-upgrade)
+        ;;
+    *)
+        echo "postrm called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

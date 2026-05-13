@@ -47,7 +47,9 @@ for moddir in /usr/lib/grub/i386-pc /usr/lib/grub/x86_64-efi; do
 done
 
 # 1. Build the rootfs.
-"$PROJECT_DIR/rootfs/build.sh" --features base,cos-core,systemd,kernel,live
+#    apt-source pre-configures the Claw OS apt repo so users who later
+#    install the system (via M8 installer) get apt upgrade out of the box.
+"$PROJECT_DIR/rootfs/build.sh" --features base,cos-core,systemd,kernel,live,apt-source
 
 # 2. Apply iso-live overlay if any.
 if [ -d "$SCRIPT_DIR/overlay" ]; then

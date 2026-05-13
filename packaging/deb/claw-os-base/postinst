@@ -1,0 +1,26 @@
+#!/bin/sh
+# claw-os-base postinst — create runtime directories that the package can't
+# ship as empty dirs (dpkg doesn't preserve them) and ensure the cos profile
+# is sourced by interactive logins.
+
+set -e
+
+case "$1" in
+    configure)
+        mkdir -p /den /var/lib/cos /var/log/aos
+
+        if [ -f /etc/bash.bashrc ] && \
+           ! grep -q 'cos/profile.sh' /etc/bash.bashrc; then
+            echo '[ -f /etc/cos/profile.sh ] && . /etc/cos/profile.sh' \
+                >> /etc/bash.bashrc
+        fi
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+    *)
+        echo "postinst called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+exit 0
