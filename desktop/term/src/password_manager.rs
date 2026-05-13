@@ -430,7 +430,7 @@ mod store {
         let collection = ss.get_default_collection().await?;
 
         let mut attributes = std::collections::HashMap::new();
-        attributes.insert("application", "com.system76.CosmicTerm");
+        attributes.insert("application", "com.clawos.Term");
 
         let search_items = collection.search_items(attributes).await?;
 
@@ -453,7 +453,7 @@ mod store {
         let collection = ss.get_default_collection().await?;
 
         let mut attributes = std::collections::HashMap::new();
-        attributes.insert("application", "com.system76.CosmicTerm");
+        attributes.insert("application", "com.clawos.Term");
         attributes.insert("identifier", &identifier);
 
         let label = format!("CosmicTerm - {}", identifier);
@@ -469,7 +469,7 @@ mod store {
         let collection = ss.get_default_collection().await?;
 
         let mut attributes = std::collections::HashMap::new();
-        attributes.insert("application", "com.system76.CosmicTerm");
+        attributes.insert("application", "com.clawos.Term");
         attributes.insert("identifier", &identifier);
 
         let search_items = collection.search_items(attributes).await?;
@@ -486,7 +486,7 @@ mod store {
         let collection = ss.get_default_collection().await?;
 
         let mut attributes = std::collections::HashMap::new();
-        attributes.insert("application", "com.system76.CosmicTerm");
+        attributes.insert("application", "com.clawos.Term");
         attributes.insert("identifier", &identifier);
 
         let search_items = collection.search_items(attributes).await?;

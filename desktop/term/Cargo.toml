@@ -6,8 +6,11 @@ edition = "2024"
 license = "GPL-3.0-only"
 rust-version = "1.90"
 
+[workspace]
+
 [dependencies]
 alacritty_terminal = "0.25.1"
+claw-bridge = { path = "../../crates/claw-bridge" }
 hex_color = { version = "3", features = ["serde"] }
 indexmap = "2"
 log = "0.4"

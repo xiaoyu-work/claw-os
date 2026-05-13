@@ -1692,7 +1692,7 @@ impl Application for App {
     type Message = Message;
 
     /// The unique application ID to supply to the window manager.
-    const APP_ID: &'static str = "com.system76.CosmicTerm";
+    const APP_ID: &'static str = "com.clawos.Term";
 
     fn core(&self) -> &Core {
         &self.core
@@ -2026,13 +2026,24 @@ impl Application for App {
                                     ron::ser::PrettyConfig::new(),
                                 ) {
                                     Ok(ron) => {
-                                        if let Err(err) = fs::write(path, ron) {
-                                            log::error!(
-                                                "failed to export {:?} to {:?}: {}",
-                                                color_scheme_id,
-                                                path,
-                                                err
-                                            );
+                                        let path_str = path.to_string_lossy();
+                                        if let Err(err) = claw_bridge::fs::write(&path_str, &ron)
+                                        {
+                                            if err.is_denied() {
+                                                log::error!(
+                                                    "permission denied exporting {:?} to {:?}: {}",
+                                                    color_scheme_id,
+                                                    path,
+                                                    err
+                                                );
+                                            } else {
+                                                log::error!(
+                                                    "failed to export {:?} to {:?}: {}",
+                                                    color_scheme_id,
+                                                    path,
+                                                    err
+                                                );
+                                            }
                                         }
                                     }
                                     Err(err) => {
@@ -2065,13 +2076,23 @@ impl Application for App {
                                 ron::ser::PrettyConfig::new(),
                             ) {
                                 Ok(ron) => {
-                                    if let Err(err) = fs::write(path, ron) {
-                                        log::error!(
-                                            "failed to export {:?} to {:?}: {}",
-                                            color_scheme.name,
-                                            path,
-                                            err
-                                        );
+                                    let path_str = path.to_string_lossy();
+                                    if let Err(err) = claw_bridge::fs::write(&path_str, &ron) {
+                                        if err.is_denied() {
+                                            log::error!(
+                                                "permission denied exporting {:?} to {:?}: {}",
+                                                color_scheme.name,
+                                                path,
+                                                err
+                                            );
+                                        } else {
+                                            log::error!(
+                                                "failed to export {:?} to {:?}: {}",
+                                                color_scheme.name,
+                                                path,
+                                                err
+                                            );
+                                        }
                                     }
                                 }
                                 Err(err) => {
@@ -3225,12 +3246,22 @@ impl Application for App {
                 }
             }
             Message::WindowNew => match env::current_exe() {
-                Ok(exe) => match process::Command::new(&exe).spawn() {
-                    Ok(_child) => {}
-                    Err(err) => {
-                        log::error!("failed to execute {:?}: {}", exe, err);
+                Ok(exe) => {
+                    let exe_str = exe.to_string_lossy().into_owned();
+                    match claw_bridge::exec::start(&[exe_str.as_str()]) {
+                        Ok(_) => {}
+                        Err(err) if err.is_denied() => {
+                            log::error!(
+                                "permission denied launching new window {:?}: {}",
+                                exe,
+                                err
+                            );
+                        }
+                        Err(err) => {
+                            log::error!("failed to execute {:?}: {}", exe, err);
+                        }
                     }
-                },
+                }
                 Err(err) => {
                     log::error!("failed to get current executable path: {}", err);
                 }

@@ -982,6 +982,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3e64b0cc0439b12df2fa678eae89a1c56a529fd067a9115f7827f1fffd22b32"
 
 [[package]]
+name = "claw-bridge"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "clipboard-win"
 version = "5.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1459,6 +1469,7 @@ version = "1.0.13"
 dependencies = [
  "alacritty_terminal",
  "clap_lex",
+ "claw-bridge",
  "cosmic-files",
  "cosmic-text",
  "fork 0.4.0",

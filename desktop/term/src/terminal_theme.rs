@@ -3,7 +3,7 @@ use alacritty_terminal::{
     vte::ansi::{NamedColor, Rgb},
 };
 use hex_color::HexColor;
-use std::{collections::HashMap, fs};
+use std::collections::HashMap;
 
 use crate::config::{
     COSMIC_THEME_DARK, COSMIC_THEME_LIGHT, ColorScheme, ColorSchemeAnsi, ColorSchemeKind,
@@ -278,9 +278,12 @@ pub fn export() {
         };
 
         let path = format!("color-schemes/{name}.ron");
-        match fs::write(&path, ron) {
-            Ok(()) => {
+        match claw_bridge::fs::write(&path, &ron) {
+            Ok(_) => {
                 log::info!("exported {path:?}");
+            }
+            Err(err) if err.is_denied() => {
+                log::error!("permission denied exporting {path:?}: {err}");
             }
             Err(err) => {
                 log::error!("failed to esport {path:?}: {err}");

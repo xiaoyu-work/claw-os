@@ -419,6 +419,7 @@ impl Terminal {
         #[cfg(target_os = "linux")]
         {
             let shell_pid = self.shell_pid?;
+            // FIXME(claw): internal /proc read for tab cwd tracking, not user action
             fs::read_link(format!("/proc/{shell_pid}/cwd")).ok()
         }
 
