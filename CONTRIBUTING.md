@@ -87,8 +87,44 @@ qemu-system-x86_64 -m 2G -nographic \
 #   Set-VMFirmware -VMName claw-os -EnableSecureBoot Off
 ```
 
-> Other distribution targets (`iso-installer`) are being added in
-> subsequent milestones — see `targets/` for the current set.
+### Build an Installable ISO
+
+```bash
+# Host requirements (same as iso-live):
+sudo apt install squashfs-tools xorriso grub-pc-bin grub-efi-amd64-bin \
+                 grub-common mtools
+
+# Produces build/claw-os-installer-amd64.iso (hybrid BIOS+UEFI bootable).
+# This ISO boots into a kiosk-mode Calamares installer that copies the
+# live system to a real disk and configures GRUB on the target.
+sudo ./build.sh iso-installer
+
+# Test in QEMU with an empty target disk:
+qemu-img create -f qcow2 build/claw-os-target.qcow2 16G
+qemu-system-x86_64 -m 4G \
+    -cdrom build/claw-os-installer-amd64.iso \
+    -drive file=build/claw-os-target.qcow2,format=qcow2,if=virtio \
+    -boot d
+```
+
+The installed system has the Claw OS apt repository pre-configured, so
+`sudo apt update && sudo apt upgrade` will pull newer `cos` releases.
+
+### `apt` repository
+
+The `claw-os-base`, `claw-os-browser`, and `claw-os-systemd` `.deb`
+packages are built as part of every rootfs build and uploaded as CI
+artifacts. On pushes to `main`, the matching apt repository is published
+to GitHub Pages and consumable as:
+
+```bash
+echo "deb [trusted=yes] https://xiaoyu-work.github.io/claw-os bookworm main" \
+  | sudo tee /etc/apt/sources.list.d/claw-os.list
+sudo apt update
+sudo apt install claw-os-base
+```
+
+For details see `packaging/README.md`.
 
 ### Run Locally (Development)
 

@@ -1,0 +1,21 @@
+#!/bin/sh
+# /etc/cos/installer-xstartup — X session script for the kiosk-mode
+# installer. Started by `startx` from /etc/profile.d/cos-installer.sh.
+#
+# Calamares needs root for partitioning and grub-install. The live user
+# has passwordless sudo (set up by features/installer/install.sh), so we
+# launch Calamares via sudo and preserve $DISPLAY/$XAUTHORITY so the
+# privileged process can attach to the same X server. Without these env
+# vars sudo would invoke Calamares as root with no display and it would
+# exit immediately.
+
+# Background: a stripped-down window manager so Calamares has decorations.
+matchbox-window-manager -use_titlebar no &
+WM_PID=$!
+
+# Foreground: Calamares. When the user finishes (or aborts), startx exits
+# and the user is dropped back to the getty.
+sudo -E DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" calamares
+
+# Tidy up.
+kill "$WM_PID" 2>/dev/null || true

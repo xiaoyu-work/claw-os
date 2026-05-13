@@ -1,0 +1,40 @@
+# Claw OS branding for Calamares.
+#
+# Images and slideshow are deliberately omitted in v1 — Calamares
+# falls back to text-only rendering when image paths point to missing
+# files, so this still works. Replace with branded artwork in M9+.
+
+---
+componentName:  claw-os
+welcomeStyleCalamares:     true
+welcomeExpandingLogo:      false
+
+windowExpanding:    normal
+windowSize:         800px,520px
+windowPlacement:    center
+
+strings:
+    productName:         "Claw OS"
+    shortProductName:    "Claw OS"
+    version:             "0.1"
+    shortVersion:        "0.1"
+    versionedName:       "Claw OS 0.1"
+    shortVersionedName:  "ClawOS 0.1"
+    bootloaderEntryName: "Claw OS"
+    productUrl:          "https://github.com/xiaoyu-work/claw-os"
+    supportUrl:          "https://github.com/xiaoyu-work/claw-os/issues"
+    releaseNotesUrl:     "https://github.com/xiaoyu-work/claw-os/releases"
+    knownIssuesUrl:      "https://github.com/xiaoyu-work/claw-os/issues"
+
+images:
+    productLogo:      "logo.png"
+    productIcon:      "logo.png"
+    productWelcome:   "welcome.png"
+
+slideshow: "show.qml"
+
+style:
+    sidebarBackground:    "#2c3e50"
+    sidebarText:          "#ffffff"
+    sidebarTextSelect:    "#1abc9c"
+    sidebarTextHighlight: "#34495e"

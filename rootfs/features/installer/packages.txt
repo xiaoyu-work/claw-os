@@ -1,0 +1,27 @@
+# Calamares — the graphical installer.
+# Pulls in qt5, polkit, parted, etc. via dependencies (~500MB).
+calamares
+
+# Minimal X stack for kiosk-mode Calamares (no DE, no display manager).
+# Calamares is the only client; matchbox provides window decoration.
+xserver-xorg-core
+xserver-xorg-input-libinput
+xserver-xorg-video-vesa
+xserver-xorg-video-fbdev
+xinit
+matchbox-window-manager
+xterm
+xfonts-base
+
+# Block-device and filesystem tooling Calamares shells out to during install.
+parted
+dosfstools
+e2fsprogs
+gdisk
+util-linux
+rsync
+squashfs-tools
+
+# Required by Calamares postinst hooks.
+polkitd
+sudo
