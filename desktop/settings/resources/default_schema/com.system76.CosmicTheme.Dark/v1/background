@@ -1,8 +1,6 @@
 (
     base: (
-        red: 0.10588235,
-        green: 0.10588235,
-        blue: 0.10588235,
+        red: 0.05882353, green: 0.05882353, blue: 0.10196079,
         alpha: 1.0,
     ),
     component: (
@@ -31,15 +29,11 @@
             alpha: 1.0,
         ),
         selected_text: (
-            red: 0.3882353,
-            green: 0.8156863,
-            blue: 0.8745098,
+            red: 0.64705884, green: 0.7058824, blue: 0.9882353,
             alpha: 1.0,
         ),
         focus: (
-            red: 0.3882353,
-            green: 0.8156863,
-            blue: 0.8745098,
+            red: 0.64705884, green: 0.7058824, blue: 0.9882353,
             alpha: 1.0,
         ),
         divider: (
