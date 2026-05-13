@@ -423,7 +423,12 @@ impl Backend for Flatpak {
                         for package_path in info.package_paths.iter() {
                             log::info!("installing flatpak ref {:?}", package_path);
                             //TODO: keep package data in memory?
-                            let data = fs::read(package_path)?;
+                            let data = crate::claw_glue::read_bytes(std::path::Path::new(
+                                package_path,
+                            ))
+                            .map_err(|err| -> Box<dyn Error> {
+                                crate::claw_glue::user_message(&err).into()
+                            })?;
                             let bytes = glib::Bytes::from_owned(data);
                             tx.add_install_flatpakref(&bytes)?;
                         }
@@ -530,12 +535,20 @@ impl Backend for Flatpak {
 
                             if data_path.exists() {
                                 log::info!("Purging user data for {}: {:?}", app_id, data_path);
-                                if let Err(err) = std::fs::remove_dir_all(&data_path) {
-                                    log::warn!(
-                                        "Failed to remove user data for {}: {}",
-                                        app_id,
-                                        err
-                                    );
+                                if let Err(err) = crate::claw_glue::fs_rm(&data_path) {
+                                    if err.is_denied() {
+                                        log::warn!(
+                                            "Permission denied purging user data for {}: {}",
+                                            app_id,
+                                            crate::claw_glue::user_message(&err)
+                                        );
+                                    } else {
+                                        log::warn!(
+                                            "Failed to remove user data for {}: {}",
+                                            app_id,
+                                            err
+                                        );
+                                    }
                                 } else {
                                     log::info!("Successfully removed user data for {}", app_id);
                                 }

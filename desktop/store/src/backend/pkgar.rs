@@ -41,6 +41,11 @@ impl Backend for Pkgar {
 
         let mut system_packages = Vec::new();
         let mut packages = Vec::new();
+        // FIXME(claw): internal cache, not user action — scans /pkg
+        // for installed-package metadata. If/when we want this to flow
+        // through caps + audit, route via `cos app pkg list` and
+        // consume the typed response instead of read_dir-ing the
+        // filesystem directly.
         for entry_res in fs::read_dir("/pkg")? {
             let entry = entry_res?;
             let file_name_os = entry.file_name();

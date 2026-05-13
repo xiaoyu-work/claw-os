@@ -136,7 +136,7 @@ impl App {
             }
         }
         let is_installed = self.is_installed(selected_backend_name, selected_id, selected_info);
-        let applet_provide = AppProvide::Id("com.system76.CosmicApplet".to_string());
+        let applet_provide = AppProvide::Id("com.clawos.Applet".to_string());
         let mut update_opt = None;
         if let Some(updates) = &self.updates {
             for (backend_name, package) in updates {

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>com.system76.CosmicStore</id>
+  <id>com.clawos.Store</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-only</project_license>
   <project_group>COSMIC</project_group>
@@ -29,10 +29,10 @@
     <keyword>Store</keyword>
     <keyword>Shop</keyword>
   </keywords>
-  <launchable type="desktop-id">com.system76.CosmicStore.desktop</launchable>
-  <icon type="remote" height="256" width="256">https://raw.githubusercontent.com/pop-os/cosmic-store/master/res/icons/hicolor/256x256/apps/com.system76.CosmicStore.svg</icon>
+  <launchable type="desktop-id">com.clawos.Store.desktop</launchable>
+  <icon type="remote" height="256" width="256">https://raw.githubusercontent.com/pop-os/cosmic-store/master/res/icons/hicolor/256x256/apps/com.clawos.Store.svg</icon>
   <provides>
-    <id>com.system76.CosmicApplication</id>
+    <id>com.clawos.Application</id>
     <binaries>
       <binary>cosmic-store</binary>
     </binaries>

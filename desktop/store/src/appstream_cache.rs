@@ -149,6 +149,9 @@ impl AppstreamCache {
                         continue;
                     }
 
+                    // FIXME(claw): internal cache, not user action —
+                    // AppStream metadata is system-provided, not a
+                    // user-mutation site.
                     let readdir = match fs::read_dir(&format_path) {
                         Ok(ok) => ok,
                         Err(err) => {
@@ -221,6 +224,7 @@ impl AppstreamCache {
             }
         }
 
+        // FIXME(claw): internal cache, not user action.
         let read_dir = match fs::read_dir(&cache_dir) {
             Ok(ok) => ok,
             Err(err) => {
@@ -282,6 +286,7 @@ impl AppstreamCache {
         };
         let cache_path = cache_dir.join(Self::cache_filename());
 
+        // FIXME(claw): internal cache, not user action.
         let data = match fs::read(&cache_path) {
             Ok(ok) => ok,
             Err(err) => {

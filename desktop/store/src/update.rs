@@ -545,10 +545,25 @@ impl App {
                                     ));
                                 }
                             };
-                            let data = match tokio::fs::read(&path).await {
-                                Ok(ok) => ok,
-                                Err(err) => {
-                                    return error_dialog(format!("failed to read {path:?}: {err}"));
+                            let data = {
+                                let path_for_read = path.clone();
+                                let join = tokio::task::spawn_blocking(move || {
+                                    crate::claw_glue::read_bytes(&path_for_read)
+                                })
+                                .await;
+                                match join {
+                                    Ok(Ok(bytes)) => bytes,
+                                    Ok(Err(err)) => {
+                                        return error_dialog(format!(
+                                            "failed to read {path:?}: {}",
+                                            crate::claw_glue::user_message(&err)
+                                        ));
+                                    }
+                                    Err(join_err) => {
+                                        return error_dialog(format!(
+                                            "failed to read {path:?}: {join_err}"
+                                        ));
+                                    }
                                 }
                             };
                             action::app(Message::RepositoryAdd(
@@ -648,7 +663,7 @@ impl App {
                                 {
                                     // Use the dialog ID to make it float
                                     settings.platform_specific.application_id =
-                                        "com.system76.CosmicStoreDialog".to_string();
+                                        "com.clawos.StoreDialog".to_string();
                                 }
 
                                 let (window_id, task) = window::open(settings);
@@ -919,12 +934,23 @@ impl App {
                 }
             }
             Message::WindowNew => match env::current_exe() {
-                Ok(exe) => match process::Command::new(&exe).spawn() {
-                    Ok(_child) => {}
-                    Err(err) => {
-                        log::error!("failed to execute {:?}: {}", exe, err);
+                Ok(exe) => {
+                    let exe_str = exe.to_string_lossy().into_owned();
+                    match crate::claw_glue::exec_start(&[exe_str.as_str()]) {
+                        Ok(_) => {}
+                        Err(err) => {
+                            if err.is_denied() {
+                                log::error!(
+                                    "denied launching {:?}: {}",
+                                    exe,
+                                    crate::claw_glue::user_message(&err)
+                                );
+                            } else {
+                                log::error!("failed to execute {:?}: {}", exe, err);
+                            }
+                        }
                     }
-                },
+                }
                 Err(err) => {
                     log::error!("failed to get current executable path: {}", err);
                 }
@@ -1013,7 +1039,7 @@ impl App {
                         cosmic::desktop::spawn_desktop_exec(
                             &exec,
                             Vec::<(&str, &str)>::new(),
-                            Some("com.system76.CosmicSettings"),
+                            Some("com.clawos.Settings"),
                             false,
                         )
                         .await;

@@ -5,6 +5,11 @@ edition = "2024"
 rust-version = "1.90"
 
 [dependencies]
+# Route user-intent fs/exec/pkg calls through the kernel's capability
+# gate + audit log instead of hitting std::fs / Command::new directly.
+# Backed by the `cos app <name> <verb>` dispatcher.
+claw-bridge = { path = "../../crates/claw-bridge" }
+base64 = "0.22"
 chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
 env_logger = "0.11"

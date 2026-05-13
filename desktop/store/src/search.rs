@@ -76,6 +76,7 @@ impl CachedExploreResults {
         let path = Self::cache_path()?;
 
         let disk_start = Instant::now();
+        // FIXME(claw): internal cache, not user action.
         let compressed = std::fs::read(&path).ok()?;
         let disk_time = disk_start.elapsed();
 
@@ -103,6 +104,7 @@ impl CachedExploreResults {
         let total_start = Instant::now();
         let path = Self::cache_path().ok_or("no cache dir")?;
         if let Some(parent) = path.parent() {
+            // FIXME(claw): internal cache, not user action.
             std::fs::create_dir_all(parent)?;
         }
 
@@ -115,6 +117,7 @@ impl CachedExploreResults {
         let compress_time = compress_start.elapsed();
 
         let disk_start = Instant::now();
+        // FIXME(claw): internal cache, not user action.
         std::fs::write(&path, &compressed)?;
         let disk_time = disk_start.elapsed();
 
