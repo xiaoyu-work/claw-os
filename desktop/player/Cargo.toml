@@ -1,0 +1,71 @@
+[package]
+name = "cosmic-player"
+version = "1.0.13"
+edition = "2024"
+rust-version = "1.93"
+
+[build-dependencies]
+vergen = { version = "8", features = ["git", "gitcl"] }
+xdgen = "0.1"
+
+[dependencies]
+ashpd = { version = "0.12", optional = true }
+gstreamer-tag = "0.25"
+image = "0.25"
+serde = { version = "1", features = ["serde_derive"] }
+tempfile = "3"
+tokio = { version = "1", features = ["sync"] }
+url = { version = "2", features = ["serde"] }
+# CLI arguments
+clap_lex = "1.1"
+# Internationalization
+icu_collator = "2.2"
+icu_locale = "2.2"
+i18n-embed = { version = "0.16", features = [
+    "fluent-system",
+    "desktop-requester",
+] }
+i18n-embed-fl = "0.10"
+rust-embed = "8"
+# Logging
+env_logger = "0.11"
+log = "0.4"
+
+[dependencies.iced_video_player]
+git = "https://github.com/wash2/iced_video_player.git"
+branch = "iced-rebase"
+default-features = false
+
+[dependencies.libcosmic]
+git = "https://github.com/pop-os/libcosmic.git"
+default-features = false
+features = ["advanced-shaping", "tokio", "winit", "multi-window"]
+
+[dependencies.mpris-server]
+version = "0.10"
+features = ["tokio"]
+optional = true
+
+[target.'cfg(unix)'.dependencies]
+fork = "0.7"
+
+[features]
+default = ["mpris-server", "xdg-portal", "wgpu", "wayland"]
+xdg-portal = ["ashpd", "libcosmic/xdg-portal"]
+wgpu = ["iced_video_player/wgpu", "libcosmic/wgpu"]
+wayland = ["libcosmic/wayland"]
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true
+
+# [patch.'https://github.com/wash2/iced_video_player']
+# iced_video_player = { path = "../iced_video_player" }
+
+# [patch.'https://github.com/pop-os/libcosmic']
+# libcosmic = { path = "../libcosmic" }
+# cosmic-config = { path = "../libcosmic/cosmic-config" }
+# cosmic-theme = { path = "../libcosmic/cosmic-theme" }
+# libcosmic = { git = "https://github.com/pop-os/libcosmic//", branch = "iced-rebase" }
+# cosmic-config = { git = "https://github.com/pop-os/libcosmic//", branch = "iced-rebase" }
+# cosmic-theme = { git = "https://github.com/pop-os/libcosmic//", branch = "iced-rebase" }

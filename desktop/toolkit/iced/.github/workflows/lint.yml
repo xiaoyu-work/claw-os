@@ -1,0 +1,20 @@
+name: Lint
+on: [push, pull_request]
+jobs:
+  all:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: hecrj/setup-rust-action@v2
+      with:
+        components: clippy
+
+    - uses: actions/checkout@master
+    - name: Install dependencies
+      run: |
+        export DEBIAN_FRONTED=noninteractive
+        sudo apt-get -qq update
+        sudo apt-get install -y libxkbcommon-dev libgtk-3-dev libwayland-dev
+    - name: Check lints
+      run: |
+        cargo clippy --no-default-features --features "winit" --all-targets
+        cargo clippy --no-default-features --features "wayland wgpu svg canvas qr_code lazy debug tokio palette web-colors a11y"

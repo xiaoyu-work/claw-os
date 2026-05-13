@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Displays
+Comment=Manage display configuration settings.
+Type=Application
+Exec=cosmic-settings displays
+Terminal=false
+Categories=COSMIC
+Keywords=COSMIC;Display;
+NoDisplay=true
+OnlyShowIn=COSMIC
+Icon=preferences-displays
+StartupNotify=true

@@ -1,0 +1,40 @@
+Source: cosmic-greeter
+Section: admin
+Priority: optional
+Maintainer: Jeremy Soller <jeremy@system76.com>
+Build-Depends:
+    debhelper-compat (=13),
+    git,
+    just (>= 1.13.0),
+    libclang-dev,
+    libinput-dev,
+    libpam-dev,
+    libwayland-dev,
+    libxkbcommon-dev,
+    pkg-config,
+    rust-all,
+Standards-Version: 4.6.2
+Homepage: https://github.com/pop-os/cosmic-greeter
+
+Package: cosmic-greeter
+Architecture: amd64 arm64
+Pre-Depends: greetd,
+Depends:
+    adduser,
+    cosmic-comp,
+    cosmic-greeter-daemon,
+    cosmic-randr,
+    dbus,
+    ${misc:Depends},
+    ${shlibs:Depends}
+Recommends: xinit
+Suggests: libpam-fprintd
+Provides: x-display-manager
+Description: Cosmic Greeter
+
+Package: cosmic-greeter-daemon
+Architecture: amd64 arm64
+Depends:
+    ${misc:Depends},
+    ${shlibs:Depends}
+Description: Cosmic Greeter daemon

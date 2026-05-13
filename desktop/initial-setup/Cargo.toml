@@ -1,0 +1,85 @@
+[package]
+name = "cosmic-initial-setup"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.93"
+
+[dependencies]
+cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols" }
+cosmic-settings-accessibility-subscription = { git = "https://github.com/pop-os/cosmic-settings" }
+cosmic-settings-a11y-manager-subscription = { git = "https://github.com/pop-os/cosmic-settings" }
+cosmic-settings-network-manager-subscription = { git = "https://github.com/pop-os/cosmic-settings" }
+crabtime = "1.1.4"
+eyre = "0.6.12"
+futures = "0.3.32"
+geonames = { path = "geonames" }
+gettext-rs = { version = "0.7.7", features = ["gettext-system"] }
+heck = "0.5.0"
+# Internationalization
+i18n-embed = { version = "0.16", features = [
+    "fluent-system",
+    "desktop-requester",
+] }
+i18n-embed-fl = "0.10"
+indexmap = "2.14.0"
+itoa = "1.0.18"
+kdl = "6.5.0"
+num-derive = "0.4.2"
+num-traits = "0.2.19"
+pwd = "1.4.0"
+pwhash = "1.0.0"
+regex = "1"
+ron = "0.12"
+rust-embed = "8"
+secure-string = "0.3.0"
+serde = { version = "1.0.228", features = ["derive"] }
+slotmap = "1.1.1"
+tokio = { version = "1", features = ["sync"] }
+tracing = "0.1.44"
+tracing-subscriber = "0.3.23"
+url = "2.5.8"
+xkb-data = "0.2.2"
+zbus = "5.15.0"
+zbus_polkit = "5.0.0"
+
+[dependencies.accounts-zbus]
+git = "https://github.com/pop-os/dbus-settings-bindings"
+
+[dependencies.cosmic-comp-config]
+git = "https://github.com/pop-os/cosmic-comp"
+
+[dependencies.cosmic-randr-shell]
+git = "https://github.com/pop-os/cosmic-randr"
+
+[dependencies.libcosmic]
+git = "https://github.com/pop-os/libcosmic.git"
+default-features = false
+features = ["a11y", "dbus-config", "single-instance", "tokio", "winit", "xdg-portal"]
+
+[dependencies.locale1]
+git = "https://github.com/pop-os/dbus-settings-bindings"
+
+[dependencies.locales-rs]
+git = "https://github.com/AerynOS/locales-rs"
+
+[features]
+default = ["a11y", "wgpu"]
+a11y = ["libcosmic/a11y"]
+nixos = []
+wgpu = ["libcosmic/wgpu"]
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true
+
+[profile.release]
+lto = "thin"
+
+[workspace]
+members = ["geonames"]
+
+# [patch.'https://github.com/pop-os/libcosmic.git']
+# libcosmic = { path = "../libcosmic" }
+# cosmic-config = { path = "../libcosmic/cosmic-config" }
+# cosmic-theme = { path = "../libcosmic/cosmic-theme" }
+# iced_futures = { path = "../libcosmic/iced/futures" }

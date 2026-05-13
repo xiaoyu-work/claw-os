@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Network & Wireless
+Comment=Manage network connections
+Type=Application
+Exec=cosmic-settings network
+Terminal=false
+Categories=COSMIC
+Keywords=COSMIC;Network;Wireless;WiFi;VPN;
+NoDisplay=true
+OnlyShowIn=COSMIC
+Icon=preferences-network-and-wireless
+StartupNotify=true

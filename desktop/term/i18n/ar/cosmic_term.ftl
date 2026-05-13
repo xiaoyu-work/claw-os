@@ -1,0 +1,149 @@
+cosmic-terminal = طرفية COSMIC
+comment = محاكي طرفي لسطح مكتب COSMIC
+keywords = cli;طرفية;أوامر;صدفة;أمر;
+new-terminal = طرفية جديدة
+
+# Context Pages
+
+
+## About
+
+repository = المستودع
+support = الدعم
+
+## Color schemes
+
+color-schemes = مخططات الألوان
+rename = غيِّر الاسم
+export = صدِّر
+delete = احذف
+import = استورد
+import-errors = تعذَّر الاستيراد
+
+## Profiles
+
+profiles = ملفات التعريف
+name = الاسم
+command-line = سطر الأوامر
+tab-title = عنوان اللسان
+tab-title-description = تجاوز عنوان اللسان المبدئي
+add-profile = أضف ملف تعريف
+new-profile = ملف تعريف جديد
+make-default = اجعله المبدئي
+working-directory = المجلَّد الحالي
+hold = التعليق
+remain-open = البقاء مفتوحًا بعد خروج العملية الفرعية.
+
+## Settings
+
+settings = الإعدادات
+
+### Appearance
+
+appearance = المظهر
+theme = النسق
+match-desktop = طابق سطح المكتب
+dark = داكن
+light = فاتح
+syntax-dark = مخطط الألوان الداكن
+syntax-light = مخطط الألوان الفاتح
+default-zoom-step = خطوات التكبير
+opacity = شفافية الخلفية
+
+### Font
+
+font = الخط
+advanced-font-settings = إعدادات الخط المتقدمة
+default-font = الخط
+default-font-size = حجم الخط
+default-font-stretch = تمدد الخط
+default-font-weight = وزن الخط العادي
+default-dim-font-weight = وزن الخط الخافت
+default-bold-font-weight = وزن الخط السميك
+use-bright-bold = اجعل النص السميك ساطعًا
+
+### Splits
+
+splits = انقسامات
+focus-follow-mouse = تركيز الكتابة يتبع الفأرة
+
+### Advanced
+
+advanced = متقدم
+show-headerbar = أظهِر الترويسة
+show-header-description = اكشف الترويسة من خلال قائمة النقر باليمنى
+# Find
+find-placeholder = ابحث عن...
+find-previous = ابحث عن السابق
+find-next = ابحث عن التالي
+
+# Menu
+
+
+## File
+
+file = ملف
+new-tab = لسان جديد
+new-window = نافذة جديدة
+profile = ملف التعريف
+menu-profiles = ملفات التعريف...
+close-tab = أغلق اللسان
+quit = أنهِ
+
+## Edit
+
+edit = عدِّل
+copy = انسخ
+paste = ألصِق
+select-all = حدِّد الكل
+find = ابحث عن
+clear-scrollback = امحُ التمرير الخلفي
+
+## View
+
+view = عرض
+zoom-in = نص أكبر
+zoom-reset = حجم النص المبدئي
+zoom-out = نص أصغر
+next-tab = اللسان التالي
+previous-tab = اللسان السابق
+split-horizontal = اقسم أفقيًا
+split-vertical = اقسم عموديًا
+pane-toggle-maximize = بدِّل التكبير
+menu-color-schemes = مخططات الألوان...
+menu-settings = الإعدادات...
+menu-about = حول طرفية COSMIC...
+passwords-title = كلمات السر
+add-password = أضف كلمة سر
+open-link = افتح الرابط
+menu-password-manager = كلمات السر...
+password-input = كلمة السر
+password-input-description = الوصف
+add-another-keybinding = أضِف ارتباطات مفاتيح أخرى
+cancel = ألغِ
+close-window = أغلِق النافذة
+disable = عطِّل
+focus-pane-left = تركيز على اللوحة الشِمالية
+focus-pane-right = تركيز على اللوحة اليمنى
+focus-pane-up = تركيز على اللوحة الفوقية
+keyboard-shortcuts = اختصارات لوحة المفاتيح
+menu-keyboard-shortcuts = اختصارات لوحة المفاتيح...
+no-shortcuts = لا اختصارات
+password-manager = مدير كلمات السر
+paste-primary = ألصِق الرئيسي
+replace = استبدل
+reset-to-default = صفّر إلى المبدئي
+shortcut-capture-hint = اضغط على تركيبة المفاتيح
+shortcut-group-clipboard = الحافظة
+shortcut-group-other = أخرى
+shortcut-group-tabs = ألسنة
+shortcut-group-window = نافذة
+shortcut-group-zoom = تكبير
+shortcut-replace-body = عُيِّن { $binding } بالفعل لـ { $existing }. أتريد استبداله بـ { $new_action }؟
+shortcut-replace-title = استبدل الاختصار؟
+tab-activate = نشّط لسان { $number }
+toggle-fullscreen = بدّل ملء الشاشة
+type-to-search = اكتب للبحث...
+copy-link = انسخ الرابط
+tab-new-inherit-working-directory = الألسنة الجديدة تستخدم المجلد الحالي
+tab-new-inherit-working-directory-description = افتح ألسنة جديدة في مجلد العمل الخاص باللسان النشط

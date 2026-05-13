@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Dock
+Comment=An optional bar for apps and applets.
+Type=Application
+Exec=cosmic-settings dock
+Terminal=false
+Categories=COSMIC
+Keywords=COSMIC;Dock;Panel;Applet
+NoDisplay=true
+OnlyShowIn=COSMIC
+Icon=preferences-dock
+StartupNotify=true

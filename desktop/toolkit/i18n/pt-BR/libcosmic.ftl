@@ -1,0 +1,36 @@
+# Context Drawer
+close = Fechar
+# About
+license = Licença
+links = Links
+developers = Desenvolvedores
+designers = Designers
+artists = Artistas
+translators = Tradutores
+documenters = Documentadores
+january = Janeiro de { $year }
+february = Fevereiro de { $year }
+march = Março de { $year }
+april = Abril de { $year }
+may = Maio de { $year }
+june = Junho de { $year }
+july = Julho de { $year }
+august = Agosto de { $year }
+september = Setembro de { $year }
+october = Outubro de { $year }
+november = Novembro de { $year }
+december = Dezembro de { $year }
+monday = Segunda-feira
+tuesday = Terça-feira
+wednesday = Quarta-feira
+thursday = Quinta-feira
+friday = Sexta-feira
+saturday = Sábado
+sunday = Domingo
+mon = Seg
+tue = Ter
+wed = Qua
+thu = Qui
+fri = Sex
+sat = Sáb
+sun = Dom

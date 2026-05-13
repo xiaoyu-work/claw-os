@@ -1,0 +1,10 @@
+edition = "2024"
+hard_tabs = true
+use_field_init_shorthand = true
+# Unstable formatting options below; remove if you REALLY don't wanna use `cargo +nightly fmt`
+format_code_in_doc_comments = true
+format_strings = true
+imports_granularity = "Module"
+normalize_comments = true
+reorder_impl_items = true
+wrap_comments = true

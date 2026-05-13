@@ -1,0 +1,51 @@
+Source: cosmic-session
+Section: admin
+Priority: optional
+Maintainer: System76 <info@system76.com>
+Build-Depends:
+  debhelper (>= 11),
+  debhelper-compat (= 11),
+  cargo,
+  just
+Standards-Version: 4.3.0
+Homepage: https://github.com/pop-os/cosmic-session
+
+Package: cosmic-session
+Architecture: amd64 arm64
+Conflicts: seatd
+Depends:
+  ${misc:Depends},
+  ${shlibs:Depends},
+  cosmic-app-library,
+  cosmic-applets,
+  cosmic-bg,
+  cosmic-comp,
+  cosmic-files,
+  cosmic-greeter,
+  cosmic-icons,
+  cosmic-idle,
+  cosmic-launcher,
+  cosmic-notifications,
+  cosmic-osd,
+  cosmic-panel,
+  cosmic-randr,
+  cosmic-screenshot,
+  cosmic-settings,
+  cosmic-settings-daemon,
+  cosmic-workspaces,
+  fonts-open-sans,
+  gnome-keyring,
+  libsecret-1-0,
+  pop-fonts,
+  switcheroo-control,
+  xdg-desktop-portal-cosmic,
+  xwayland,
+Recommends:
+  cosmic-edit,
+  cosmic-player,
+  cosmic-store,
+  cosmic-term,
+  cosmic-wallpapers,
+  orca,
+  system-config-printer,
+Description: The session for the COSMIC desktop

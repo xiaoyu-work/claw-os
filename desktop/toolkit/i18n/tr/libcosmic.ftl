@@ -1,0 +1,36 @@
+# Context Drawer
+close = Kapat
+# About
+license = Lisans
+links = Bağlantılar
+developers = Geliştiriciler
+designers = Tasarımcılar
+artists = Sanatçılar
+translators = Çevirmenler
+documenters = Belgelendiriciler
+january = Ocak { $year }
+february = Şubat { $year }
+march = Mart { $year }
+april = Nisan { $year }
+may = Mayıs { $year }
+june = Haziran { $year }
+july = Temmuz { $year }
+august = Ağustos { $year }
+september = Eylül { $year }
+october = Ekim { $year }
+november = Kasım { $year }
+december = Aralık { $year }
+monday = Pazartesi
+mon = Pzt
+tuesday = Salı
+tue = Sal
+wednesday = Çarşamba
+wed = Çar
+thursday = Perşembe
+thu = Per
+friday = Cuma
+fri = Cum
+saturday = Cumartesi
+sat = Cmt
+sunday = Pazar
+sun = Paz

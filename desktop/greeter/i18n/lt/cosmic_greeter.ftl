@@ -1,0 +1,37 @@
+accessibility = Prieinamumas
+    .screen-reader = Ekrano Skaitytuvas
+    .magnifier = Didinamasis stiklas
+    .high-contrast = Didelis kontrastas
+    .invert-colors = Spalvų Invertavimas
+cancel = Atšaukti
+authenticating = Autentifikuojama...
+caps-lock = Caps Lock aktyvuotas.
+enter-user = Įveskite vardą...
+type-username = Naudotojo vardas:
+keyboard-layout = Klaviatūros išdėstymas
+restart = Paleisti iš naujo
+restart-now = Perkrauti įrenginį dabar?
+restart-timeout =
+    Sistema restartuosis
+    { $seconds ->
+        [0] dabar
+        [1] po 1 sekundės.
+       *[other] po { $seconds } sekundžių.
+    }
+session = Sesija
+shutdown = Išjungti
+shutdown-timeout =
+    Sistema automatiškai išsijungs
+    { $seconds ->
+        [0] dabar.
+        [1] po 1 sekundės.
+       *[other] po { $seconds } sekundžių.
+    }
+user = Naudotojas
+auth-error-default = Autentifikacijos klaida. Bandykite dar karta.
+auth-error-credentials = Neteisingas slaptažodis. Patikrinkite savo klaviatūros išdėstymo nustatymus ir bandykite dar karta.
+auth-error-denied = Prieiga uždrausta.
+auth-error-maxtries = Per daug nesėkmingų autentifikavimo bandymų.
+auth-error-account = Paskyra yra neprieinama arba išjungta.
+shutdown-now = Išjungti įrenginį dabar?
+suspend = Miego režimas

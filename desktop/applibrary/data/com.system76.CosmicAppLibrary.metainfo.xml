@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Ashley Wulber 2019 <ashley@system76.com> -->
+<component type="desktop-application">
+  <id>com.system76.CosmicAppLibrary</id>
+  <metadata_license>CC0</metadata_license>
+  <!-- Insert your license of choice here -->
+  <!-- <project_license>MIT</project_license> -->
+  <name>COSMIC App Library</name>
+  <name xml:lang="ar">مكتبة تطبيقات COSMIC</name>
+  <name xml:lang="bg">Библиотека за програми на COSMIC</name>
+  <name xml:lang="cs">Knihovna aplikací COSMIC</name>
+  <name xml:lang="hu">COSMIC Alkalmazáskönyvtár</name>
+  <name xml:lang="pt_BR">Biblioteca de Aplicativos</name>
+  <name xml:lang="pt">Biblioteca de Aplicativos</name>
+  <name xml:lang="ru">Библиотека приложений COSMIC</name>
+  <name xml:lang="sk">Knižnica aplikácií COSMIC</name>
+  <name xml:lang="es">Biblioteca de aplicaciones COSMIC</name>
+  <name xml:lang="sv">COSMIC Programbibliotek</name>
+  <name xml:lang="it">Libreria applicazioni COSMIC</name>
+  <summary>COSMIC desktop application library</summary>
+  <summary xml:lang="ar">مكتبة تطبيقات سطح المكتب COSMIC</summary>
+  <summary xml:lang="cs">Knihovna aplikací pro prostředí COSMIC</summary>
+  <summary xml:lang="hu">A COSMIC asztali környezet alkalmazáskönyvtára</summary>
+  <summary xml:lang="pt_BR">Biblioteca de aplicativos do desktop COSMIC</summary>
+  <summary xml:lang="pt">Biblioteca de aplicativos do desktop COSMIC</summary>
+  <summary xml:lang="ru">Библиотека приложений оболочки COSMIC</summary>
+  <summary xml:lang="sk">Knižnica aplikácií pre pracovné prostredie COSMIC</summary>
+  <summary xml:lang="es">Biblioteca de aplicaciones para el escritorio COSMIC</summary>
+  <summary xml:lang="sv">Programbibliotek för skrivbordsmiljön COSMIC</summary>
+  <summary xml:lang="it">Libreria di applicazioni del desktop COSMIC</summary>
+  <description>
+    <p>The default application library for the COSMIC desktop</p>
+    <p xml:lang="ar">مكتبة التطبيقات المبدئية لسطح مكتب COSMIC</p>
+    <p xml:lang="cs">Výchozí knihovna aplikací pro prostředí COSMIC</p>
+    <p xml:lang="hu">A COSMIC asztali környezet alapértelmezett alkalmazáskönyvtára</p>
+    <p xml:lang="pt_BR">A aplicação padrão de biblioteca de aplicativos do desktop COSMIC</p>
+    <p xml:lang="pt">A aplicação padrão de biblioteca de aplicativos do desktop COSMIC</p>
+    <p xml:lang="ru">Библиотека приложений по умолчанию для оболочки COSMIC</p>
+    <p xml:lang="sk">Predvolená knižnica aplikácií pre pracovné prostredie COSMIC</p>
+    <p xml:lang="es">Biblioteca de aplicaciones para el escritorio COSMIC</p>
+    <p xml:lang="sv">Standard programbibliotek för skrivbordsmiljön COSMIC</p>
+    <p xml:lang="it">Libreria applicazioni di default per il desktop COSMIC</p>
+  </description>
+  <!-- <screenshots>
+    <screenshot type="default">
+      <image>https://gitlab.gnome.org/bilelmoussaoui/cosmic-app-library/raw/master/data/resources/screenshots/screenshot1.png</image>
+      <caption>Main window</caption>
+    </screenshot>
+  </screenshots> -->
+  <url type="homepage">https://github.com/pop-os/cosmic-applibrary</url>
+  <url type="bugtracker">https://github.com/pop-os/cosmic-applibrary/issues</url>
+  <content_rating type="oars-1.0" />
+  <releases>
+    <release version="0.1.0" date="2019-07-11" />
+  </releases>
+  <kudos>
+     <!--
+       GNOME Software kudos:
+       https://gitlab.gnome.org/GNOME/gnome-software/-/blob/main/doc/kudos.md
+     -->
+     <kudo>ModernToolkit</kudo>
+     <kudo>HiDpiIcon</kudo>
+  </kudos>
+  <developer_name>Ashley Wulber</developer_name>
+  <update_contact>ashley@system76.com</update_contact>
+  <translation type="gettext">cosmic-app-library</translation>
+  <launchable type="desktop-id">com.system76.CosmicAppLibrary.desktop</launchable>
+</component>

@@ -1,0 +1,14 @@
+battery = バッテリー
+battery-desc = 性能と消費は低くなります。
+balanced = バランス
+balanced-desc = 性能と消費は通常になります。
+performance = ハイパフォーマンス
+performance-desc = 性能と消費は高くなります。
+max-charge = バッテリーの寿命を増すために80％だけまで充電する
+seconds = 秒
+minutes = 分
+hours = 時間
+until-empty = 後に切れます
+power-settings = 電源設定...
+dgpu-running = ディスクリートGPU が有効で、バッテリー持続時間を短くする可能性があります
+dgpu-applications = { $gpu_name }ディスクリートGPUを使用中のアプリケーション

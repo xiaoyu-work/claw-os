@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Input Devices
+Comment=Keyboard and mouse settings.
+Type=Application
+Exec=cosmic-settings input
+Terminal=false
+Categories=COSMIC
+Keywords=COSMIC;Input;Keyboard;Mouse;Mice;
+NoDisplay=true
+OnlyShowIn=COSMIC
+Icon=preferences-input-devices
+StartupNotify=true

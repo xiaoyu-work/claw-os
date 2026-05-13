@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.system76.CosmicTerm</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <project_group>COSMIC</project_group>
+  <developer_name>System76</developer_name>
+  <update_contact>jeremy@system76.com</update_contact>
+  <url type="homepage">https://github.com/pop-os/cosmic-term</url>
+  <url type="bugtracker">https://github.com/pop-os/cosmic-term</url>
+  <name>COSMIC Terminal</name>
+  <summary>Terminal emulator for the COSMIC desktop</summary>
+  <description>
+    <p>Terminal emulator for the COSMIC desktop</p>
+    <p xml:lang="ar">محاكي طرفي لسطح مكتب COSMIC</p>
+    <p xml:lang="cs">Emulátor terminálu pro pracovní prostředí COSMIC</p>
+    <p xml:lang="pl">Emulator terminala dla pulpitu COSMIC</p>
+    <p xml:lang="hu">Terminálemulátor a COSMIC asztali környezethez</p>
+    <p xml:lang="pt_BR">Emulador de terminal do desktop COSMIC</p>
+    <p xml:lang="pt">Emulador de terminal do desktop COSMIC</p>
+    <p xml:lang="sk">Emulátor terminálu pre pracovné prostredie COSMIC</p>
+    <p xml:lang="es">Emulador de terminal de escritorio COSMIC</p>
+    <p xml:lang="it">Emulatore di terminale di COSMIC</p>
+    <p xml:lang="sv">Terminalemulator för skrivbordsmiljön COSMIC</p>
+  </description>
+  <keywords>
+    <keyword>Command</keyword>
+    <keyword>Shell</keyword>
+    <keyword>Terminal</keyword>
+    <keyword>CLI</keyword>
+  </keywords>
+  <launchable type="desktop-id">com.system76.CosmicTerm.desktop</launchable>
+  <icon type="remote" height="256" width="256">
+    https://raw.githubusercontent.com/pop-os/cosmic-term/master/res/icons/hicolor/256x256/apps/com.system76.CosmicTerm.svg</icon>
+  <provides>
+    <id>com.system76.CosmicApplication</id>
+    <binaries>
+      <binary>cosmic-term</binary>
+    </binaries>
+  </provides>
+</component>

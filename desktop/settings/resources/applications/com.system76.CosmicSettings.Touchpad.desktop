@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Touchpad
+Comment=Touchpad speed, click options, and gestures.
+Type=Application
+Exec=cosmic-settings touchpad
+Terminal=false
+Categories=COSMIC
+Keywords=COSMIC;System;Time;Date;Region;Language;
+NoDisplay=true
+OnlyShowIn=COSMIC
+Icon=preferences-touchpad
+StartupNotify=true

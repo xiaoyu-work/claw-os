@@ -1,0 +1,101 @@
+set dotenv-load
+just := just_executable()
+make := `which make`
+
+build:
+    mkdir -p build
+    {{ just }} applets/build-release
+    {{ just }} applibrary/build-release
+    {{ just }} bg/build-release
+    {{ make }} -C comp all
+    {{ just }} edit/build-release
+    {{ just }} files/build-release
+    {{ just }} greeter/build-release
+    {{ just }} idle/build-release
+    {{ just }} initial-setup/build-release
+    {{ just }} launcher/build-release
+    {{ just }} notifications/build-release
+    {{ just }} osd/build-release
+    {{ just }} panel/build-release
+    {{ just }} player/build-release
+    {{ just }} randr/build-release
+    {{ just }} screenshot/build-release
+    {{ just }} settings/build-release
+    {{ make }} -C settings-daemon all
+    {{ just }} session/build-release
+    {{ just }} store/build-release
+    {{ just }} term/build-release
+    {{ make }} -C wallpapers all
+    {{ make }} -C workspaces all
+    {{ just }} launcher-backend/build-release
+    {{ make }} -C xdg-desktop-portal all
+
+install rootdir="" prefix="/usr/local": build
+    {{ just }} rootdir={{rootdir}} prefix={{prefix}} applets/install
+    {{ just }} rootdir={{rootdir}} prefix={{prefix}} applibrary/install
+    {{ just }} rootdir={{rootdir}} prefix={{prefix}} bg/install
+    {{ make }} -C comp install DESTDIR={{rootdir}} prefix={{prefix}}
+    {{ just }} rootdir={{rootdir}} prefix={{prefix}} edit/install
+    {{ just }} rootdir={{rootdir}} prefix={{prefix}} files/install
+    {{ just }} rootdir={{rootdir}} prefix={{prefix}} greeter/install
+    {{ just }} rootdir={{rootdir}} prefix={{prefix}} icons/install
+    {{ just }} rootdir={{rootdir}} prefix={{prefix}} idle/install
+    {{ just }} rootdir={{rootdir}} prefix={{prefix}} initial-setup/install
+    {{ just }} rootdir={{rootdir}} prefix={{prefix}} launcher/install
+    {{ just }} rootdir={{rootdir}} prefix={{prefix}} notifications/install
+    {{ just }} rootdir={{rootdir}} prefix={{prefix}} osd/install
+    {{ just }} rootdir={{rootdir}} prefix={{prefix}} panel/install
+    {{ just }} rootdir={{rootdir}} prefix={{prefix}} player/install
+    {{ just }} rootdir={{rootdir}} prefix={{prefix}} randr/install
+    {{ just }} rootdir={{rootdir}} prefix={{prefix}} screenshot/install
+    {{ just }} rootdir={{rootdir}} prefix={{prefix}} settings/install
+    {{ make }} -C settings-daemon install DESTDIR={{rootdir}} prefix={{prefix}}
+    {{ just }} rootdir={{rootdir}} prefix={{prefix}} session/install
+    {{ just }} rootdir={{rootdir}} prefix={{prefix}} store/install
+    {{ just }} rootdir={{rootdir}} prefix={{prefix}} term/install
+    {{ make }} -C wallpapers install DESTDIR={{rootdir}} prefix={{prefix}}
+    {{ make }} -C workspaces install DESTDIR={{rootdir}} prefix={{prefix}}
+    {{ just }} rootdir={{rootdir}} launcher-backend/install
+    {{ make }} -C xdg-desktop-portal install DESTDIR={{rootdir}} prefix={{prefix}}
+
+_mkdir dir:
+   mkdir -p dir
+
+sysext dir=(invocation_directory() / "cosmic-sysext") version=("nightly-" + `git rev-parse --short HEAD`): (_mkdir dir) (install dir "/usr")
+    #!/usr/bin/env sh
+    mkdir -p {{dir}}/usr/lib/extension-release.d/
+    cat >{{dir}}/usr/lib/extension-release.d/extension-release.cosmic-sysext <<EOF
+    NAME="Cosmic DE"
+    VERSION={{version}}
+    $(cat /etc/os-release | grep '^ID=')
+    $(cat /etc/os-release | grep '^VERSION_ID=')
+    EOF
+    echo "Done"
+
+clean:
+    rm -rf cosmic-sysext
+    rm -rf applets/target
+    rm -rf applibrary/target
+    rm -rf bg/target
+    rm -rf comp/target
+    rm -rf edit/target
+    {{ just }} files/clean
+    rm -rf greeter/target
+    {{ just }} idle/clean
+    {{ just }} initial-setup/clean
+    rm -rf launcher/target
+    rm -rf panel/target
+    rm -rf player/target
+    rm -rf notifications/target
+    rm -rf osd/target
+    rm -rf randr/target
+    rm -rf screenshot/target
+    rm -rf settings/target
+    rm -rf settings-daemon/target
+    rm -rf session/target
+    {{ just }} store/clean
+    {{ just }} term/clean
+    {{ make }} -C wallpapers clean
+    rm -rf workspaces/target
+    {{ just }} launcher-backend/clean
+    rm -rf xdg-desktop-portal/target

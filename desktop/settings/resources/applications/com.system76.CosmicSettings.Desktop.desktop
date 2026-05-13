@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Desktop
+Comment=Wallpaper, appearance, panel, dock, window management and workspace settings.
+Type=Application
+Exec=cosmic-settings desktop
+Terminal=false
+Categories=COSMIC
+Keywords=COSMIC;Desktop;
+NoDisplay=true
+OnlyShowIn=COSMIC
+Icon=preferences-desktop
+StartupNotify=true

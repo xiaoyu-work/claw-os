@@ -1,0 +1,164 @@
+[package]
+name = "cosmic-files"
+version = "1.0.13"
+authors = ["Jeremy Soller <jeremy@system76.com>"]
+edition = "2024"
+license = "GPL-3.0-only"
+rust-version = "1.93"
+
+[dependencies]
+anyhow = "1"
+jiff = "0.2"
+jiff-icu = "0.2"
+icu = { version = "2.2.0", features = ["compiled_data"] }
+cctk = { git = "https://github.com/pop-os/cosmic-protocols", package = "cosmic-client-toolkit", rev = "160b086", optional = true }
+cosmic-mime-apps = { git = "https://github.com/pop-os/cosmic-mime-apps.git", optional = true }
+dirs = "6.0.0"
+gio = { version = "0.21", optional = true }
+glib = { version = "0.21", optional = true }
+glob = "0.3"
+ignore = "0.4"
+image = "0.25"
+libc = "0.2"
+log = "0.4"
+mime_guess = "2"
+notify-debouncer-full = "0.7"
+notify-rust = { version = "4", optional = true }
+open = "5.3.4"
+paste = "1.0"
+regex = "1"
+rustc-hash = "2.1"
+serde = { version = "1", features = ["serde_derive"] }
+shlex = { version = "1.3" }
+tempfile = "3"
+tikv-jemallocator = { version = "0.6", optional = true }
+tokio = { version = "1", features = ["process", "sync"] }
+trash = { git = "https://github.com/jackpot51/trash-rs.git", branch = "cosmic" }
+url = "2.5"
+walkdir = "2.5.0"
+wayland-client = { version = "0.31.14", optional = true }
+xdg = { version = "3.0", optional = true }
+xdg-mime = { git = "https://github.com/ebassi/xdg-mime-rs" }
+# Compression
+bzip2 = { version = "0.6", optional = true }           #TODO: replace with pure Rust crate
+flate2 = "1.1"
+tar = "0.4.45"
+lzma-rust2 = { version = "0.16", optional = true }
+ordermap = { version = "1.2.0", features = ["serde"] }
+# Internationalization
+i18n-embed = { version = "0.16", features = [
+    "fluent-system",
+    "desktop-requester",
+] }
+i18n-embed-fl = "0.10"
+rust-embed = "8"
+slotmap = "1.1.1"
+recently-used-xbel = "1.2.0"
+zip = "8"
+md-5 = "0.10.6"
+png = "0.18"
+jxl-oxide = { version = "0.12.5", features = ["image"] }
+num_cpus = "1.17.0"
+filetime = "0.2"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+thiserror = "2.0.18"
+atomic_float = "1.1.0"
+num_enum = "0.7.6"
+bstr = "1.12.1"
+
+# Completion-based IO runtime to enable io_uring / IOCP file IO support.
+[dependencies.compio]
+version = "0.18"
+default-features = false
+features = ["fs", "io", "macros", "polling", "runtime"]
+
+[dependencies.libcosmic]
+git = "https://github.com/pop-os/libcosmic.git"
+default-features = false
+#TODO: a11y feature crashes
+features = [
+    "about",
+    "advanced-shaping",
+    "autosize",
+    "multi-window",
+    "tokio",
+    "winit",
+    "surface-message",
+]
+
+[[example]]
+name = "gio-list"
+required-features = ["gvfs"]
+
+[[example]]
+name = "gio-mount"
+required-features = ["gvfs"]
+
+[[example]]
+name = "gvfs"
+required-features = ["gvfs"]
+
+[features]
+default = [
+    "bzip2",
+    "dbus-config",
+    "desktop",
+    "gvfs",
+    "io-uring",
+    "lzma-rust2",
+    "notify",
+    "wayland",
+    "wgpu",
+]
+dbus-config = ["libcosmic/dbus-config"]
+desktop = ["libcosmic/desktop", "dep:cosmic-mime-apps", "dep:xdg"]
+desktop-applet = []
+gvfs = ["dep:gio", "dep:glib"]
+io-uring = ["compio/io-uring"]
+jemalloc = ["dep:tikv-jemallocator"]
+notify = ["dep:notify-rust"]
+wayland = ["libcosmic/wayland", "dep:cctk", "dep:wayland-client"]
+wgpu = ["libcosmic/wgpu"]
+
+[profile.dev]
+opt-level = 1
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true
+
+[target.'cfg(unix)'.dependencies]
+fork = "0.7"
+uzers = "0.12.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+procfs = "0.18"
+
+[build-dependencies]
+xdgen = "0.1"
+
+[dev-dependencies]
+# cap-std = "3"
+# cap-tempfile = "3"
+fastrand = "2"
+test-log = "0.2"
+tokio = { version = "1", features = ["rt", "macros"] }
+
+# [patch.'https://github.com/pop-os/cosmic-text']
+# cosmic-text = { path = "../cosmic-text" }
+
+# [patch.'https://github.com/pop-os/libcosmic']
+# libcosmic = { path = "../libcosmic" }
+# cosmic-config = { path = "../libcosmic/cosmic-config" }
+# cosmic-theme = { path = "../libcosmic/cosmic-theme" }
+# libcosmic = { git = "https://github.com/pop-os/libcosmic//", branch = "iced-rebase" }
+# cosmic-config = { git = "https://github.com/pop-os/libcosmic//", branch = "iced-rebase" }
+# cosmic-theme = { git = "https://github.com/pop-os/libcosmic//", branch = "iced-rebase" }
+
+
+# [patch.'https://github.com/pop-os/smithay-clipboard']
+# smithay-clipboard = { path = "../smithay-clipboard" }
+
+[workspace]
+members = ["cosmic-files-applet"]

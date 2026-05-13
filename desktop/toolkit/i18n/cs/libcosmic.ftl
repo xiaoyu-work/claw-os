@@ -1,0 +1,36 @@
+# Context Drawer
+close = Zavřít
+# About
+license = Licence
+links = Odkazy
+developers = Vývojáři
+designers = Designéři
+artists = Grafici
+translators = Překladatelé
+documenters = Tvůrci dokumentace
+sunday = Neděle
+january = Leden { $year }
+february = Únor { $year }
+march = Březen { $year }
+april = Duben { $year }
+may = Květen { $year }
+june = Červen { $year }
+july = Červenec { $year }
+august = Srpen { $year }
+september = Září { $year }
+october = Říjen { $year }
+november = Listopad { $year }
+december = Prosinec { $year }
+monday = Pondělí
+tuesday = Úterý
+wednesday = Středa
+thursday = Čtvrtek
+friday = Pátek
+saturday = Sobota
+mon = Po
+tue = Út
+wed = St
+thu = Čt
+fri = Pá
+sat = So
+sun = Ne

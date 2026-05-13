@@ -1,0 +1,57 @@
+[package]
+name = "iced_core"
+description = "The essential ideas of iced"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+categories.workspace = true
+keywords.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+advanced = []
+crisp = []
+basic-shaping = []
+advanced-shaping = []
+a11y = ["iced_accessibility"]
+
+[dependencies]
+palette = "0.7"
+bitflags.workspace = true
+bytes.workspace = true
+glam.workspace = true
+lilt.workspace = true
+log.workspace = true
+num-traits.workspace = true
+rustc-hash.workspace = true
+smol_str.workspace = true
+thiserror.workspace = true
+web-time.workspace = true
+
+serde.workspace = true
+serde.optional = true
+serde.features = ["derive"]
+# TODO(POP): I think some of these dependencies were removed. Check on that
+# xxhash-rust.workspace = true
+window_clipboard.workspace = true
+dnd.workspace = true
+mime.workspace = true
+
+cctk.workspace = true
+cctk.optional = true
+# /TODO(POP)
+[dependencies.iced_accessibility]
+version = "0.1.0"
+path = "../accessibility"
+optional = true
+
+[target.'cfg(windows)'.dependencies]
+raw-window-handle.workspace = true
+
+[dev-dependencies]
+approx = "0.5"

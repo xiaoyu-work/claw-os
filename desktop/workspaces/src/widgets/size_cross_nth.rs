@@ -1,0 +1,234 @@
+// This widget defines it's cross axis size as the `index`th child's size
+
+use cosmic::iced::advanced::layout::flex::Axis;
+use cosmic::iced::advanced::layout::{self, Limits};
+use cosmic::iced::advanced::widget::{Operation, Tree};
+use cosmic::iced::advanced::{Clipboard, Layout, Shell, Widget, mouse, renderer};
+use cosmic::iced::event::Event;
+use cosmic::iced::{Length, Point, Rectangle, Size};
+use std::marker::PhantomData;
+
+// Duplicate of private methods
+trait AxisExt {
+    fn main(&self, size: Size) -> f32;
+    fn cross(&self, size: Size) -> f32;
+    fn pack(&self, main: f32, cross: f32) -> (f32, f32);
+}
+
+impl AxisExt for Axis {
+    fn main(&self, size: Size) -> f32 {
+        match self {
+            Axis::Horizontal => size.width,
+            Axis::Vertical => size.height,
+        }
+    }
+
+    fn cross(&self, size: Size) -> f32 {
+        match self {
+            Axis::Horizontal => size.height,
+            Axis::Vertical => size.width,
+        }
+    }
+
+    fn pack(&self, main: f32, cross: f32) -> (f32, f32) {
+        match self {
+            Axis::Horizontal => (main, cross),
+            Axis::Vertical => (cross, main),
+        }
+    }
+}
+
+pub fn size_cross_nth<Msg>(
+    children: Vec<cosmic::Element<Msg>>,
+    axis: Axis,
+    index: usize,
+) -> SizeCrossNth<Msg> {
+    SizeCrossNth {
+        axis,
+        children,
+        index,
+        _msg: PhantomData,
+    }
+}
+
+pub struct SizeCrossNth<'a, Msg> {
+    axis: Axis,
+    children: Vec<cosmic::Element<'a, Msg>>,
+    index: usize,
+    _msg: PhantomData<Msg>,
+}
+
+impl<Msg> Widget<Msg, cosmic::Theme, cosmic::Renderer> for SizeCrossNth<'_, Msg> {
+    fn size(&self) -> Size<Length> {
+        Size {
+            // width: Length::Fill
+            // XXX doesn't work when used in standard `row` widget
+            // But fixes allocation of `dnd_source` wrapping this, within `Toplevels` row
+            width: Length::Shrink,
+            // TODO Make depend on orientation or drop that option
+            height: Length::Shrink,
+        }
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &cosmic::Renderer,
+        limits: &Limits,
+    ) -> layout::Node {
+        let max_main = self.axis.main(limits.max());
+        let max_cross = self.axis.cross(limits.max());
+
+        // Lay out all non-reference children to get their total main size
+        let mut total_main = 0.0;
+        for (i, (child, tree)) in self
+            .children
+            .iter_mut()
+            .zip(tree.children.iter_mut())
+            .enumerate()
+        {
+            if i != self.index {
+                let (max_width, max_height) = self.axis.pack(max_main - total_main, max_cross);
+                let child_limits = Limits::new(Size::ZERO, Size::new(max_width, max_height));
+                let layout = child.as_widget_mut().layout(tree, renderer, &child_limits);
+                total_main += self.axis.main(layout.size());
+            }
+        }
+
+        // Lay out reference child with remaining main to get max cross size
+        let (max_width, max_height) = self.axis.pack(max_main - total_main, max_cross);
+        let child_limits = Limits::new(Size::ZERO, Size::new(max_width, max_height));
+        let layout = self.children[self.index].as_widget_mut().layout(
+            &mut tree.children[self.index],
+            renderer,
+            &child_limits,
+        );
+        let max_cross = self.axis.cross(layout.size());
+
+        // Lay out all children constrained to reference cross
+        let mut total_main = 0.0;
+        let nodes = self
+            .children
+            .iter_mut()
+            .zip(tree.children.iter_mut())
+            .map(|(child, tree)| {
+                let (max_width, max_height) = self.axis.pack(max_main - total_main, max_cross);
+                let child_limits = Limits::new(Size::ZERO, Size::new(max_width, max_height));
+                let mut layout = child.as_widget_mut().layout(tree, renderer, &child_limits);
+                // Center on cross axis
+                let cross = ((max_cross - self.axis.cross(layout.size())) / 2.).max(0.);
+                let (x, y) = self.axis.pack(total_main, cross);
+                layout = layout.move_to(Point::new(x, y));
+                total_main += self.axis.main(layout.size());
+                layout
+            })
+            .collect();
+
+        let (total_width, total_height) = self.axis.pack(total_main, max_cross);
+        let size = Size::new(total_width, total_height);
+        layout::Node::with_children(size, nodes)
+    }
+
+    fn operate(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        renderer: &cosmic::Renderer,
+        operation: &mut dyn Operation<()>,
+    ) {
+        operation.container(None, layout.bounds());
+        operation.traverse(&mut |operation| {
+            self.children
+                .iter_mut()
+                .zip(&mut tree.children)
+                .zip(layout.children())
+                .for_each(|((child, state), layout)| {
+                    child
+                        .as_widget_mut()
+                        .operate(state, layout, renderer, operation);
+                });
+        });
+    }
+
+    fn update(
+        &mut self,
+        tree: &mut Tree,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &cosmic::Renderer,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Msg>,
+        viewport: &Rectangle,
+    ) {
+        for ((child, state), layout) in self
+            .children
+            .iter_mut()
+            .zip(&mut tree.children)
+            .zip(layout.children())
+        {
+            child.as_widget_mut().update(
+                state, event, layout, cursor, renderer, clipboard, shell, viewport,
+            )
+        }
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &Tree,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+        renderer: &cosmic::Renderer,
+    ) -> mouse::Interaction {
+        self.children
+            .iter()
+            .zip(&tree.children)
+            .zip(layout.children())
+            .map(|((child, state), layout)| {
+                child
+                    .as_widget()
+                    .mouse_interaction(state, layout, cursor, viewport, renderer)
+            })
+            .max()
+            .unwrap_or_default()
+    }
+
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut cosmic::Renderer,
+        theme: &cosmic::Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        if let Some(viewport) = layout.bounds().intersection(viewport) {
+            for ((child, state), layout) in self
+                .children
+                .iter()
+                .zip(&tree.children)
+                .zip(layout.children())
+            {
+                child
+                    .as_widget()
+                    .draw(state, renderer, theme, style, layout, cursor, &viewport);
+            }
+        }
+    }
+
+    fn children(&self) -> Vec<Tree> {
+        self.children.iter().map(Tree::new).collect()
+    }
+
+    fn diff(&mut self, tree: &mut Tree) {
+        tree.diff_children(&mut self.children);
+    }
+}
+
+impl<'a, Msg: 'static> From<SizeCrossNth<'a, Msg>> for cosmic::Element<'a, Msg> {
+    fn from(widget: SizeCrossNth<'a, Msg>) -> Self {
+        cosmic::Element::new(widget)
+    }
+}

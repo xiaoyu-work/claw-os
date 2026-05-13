@@ -1,0 +1,73 @@
+[package]
+name = "cosmic-term"
+version = "1.0.13"
+authors = ["Jeremy Soller <jeremy@system76.com>"]
+edition = "2024"
+license = "GPL-3.0-only"
+rust-version = "1.90"
+
+[dependencies]
+alacritty_terminal = "0.25.1"
+hex_color = { version = "3", features = ["serde"] }
+indexmap = "2"
+log = "0.4"
+open = "5.3.2"
+paste = "1.0"
+regex = "1"
+ron = "0.11"
+serde = { version = "1", features = ["serde_derive"] }
+shlex = "1"
+tokio = { version = "1", features = ["sync"] }
+# CLI arguments
+clap_lex = "0.7"
+# Internationalization
+i18n-embed = { version = "0.16", features = [
+    "fluent-system",
+    "desktop-requester",
+] }
+i18n-embed-fl = "0.10"
+icu = { version = "2.1.1", features = ["compiled_data"] }
+rust-embed = "8"
+url = "2.5"
+secret-service = { version = "5.1.0", features = [
+    "rt-tokio-crypto-rust",
+], optional = true }
+thiserror = { version = "2.0", optional = true }
+secstr = { version = "0.5", optional = true }
+
+[dependencies.cosmic-files]
+git = "https://github.com/pop-os/cosmic-files.git"
+default-features = false
+
+[dependencies.cosmic-text]
+version = "0.19"
+features = ["monospace_fallback", "shape-run-cache"]
+
+[dependencies.libcosmic]
+git = "https://github.com/pop-os/libcosmic.git"
+default-features = false
+#TODO: a11y feature crashes file chooser dialog
+features = ["about", "autosize", "multi-window", "tokio", "winit", "surface-message"]
+
+[target.'cfg(unix)'.dependencies]
+fork = "0.4"
+
+[build-dependencies]
+xdgen = "0.1"
+
+[features]
+default = ["dbus-config", "wgpu", "wayland", "password_manager"]
+dbus-config = ["libcosmic/dbus-config"]
+wgpu = ["libcosmic/wgpu", "cosmic-files/wgpu"]
+wayland = ["libcosmic/wayland", "cosmic-files/wayland"]
+password_manager = ["secret-service", "thiserror", "secstr"]
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true
+
+
+#[patch.'https://github.com/pop-os/libcosmic']
+#libcosmic = { path = "../libcosmic" }
+#cosmic-config = { path = "../libcosmic/cosmic-config" }
+#cosmic-theme = { path = "../libcosmic/cosmic-theme" }

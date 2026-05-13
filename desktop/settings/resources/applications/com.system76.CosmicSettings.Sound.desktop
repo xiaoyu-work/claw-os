@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Sound
+Comment=Audio settings for devices, alerts, and applications.
+Type=Application
+Exec=cosmic-settings sound
+Terminal=false
+Categories=COSMIC
+Keywords=COSMIC;Sound;Audio;Alert;Pipewire;
+NoDisplay=true
+OnlyShowIn=COSMIC
+Icon=preferences-sound
+StartupNotify=true

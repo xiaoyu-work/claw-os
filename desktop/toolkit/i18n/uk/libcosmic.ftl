@@ -1,0 +1,36 @@
+# Context Drawer
+close = Закрити
+# About
+license = Ліцензія
+links = Ланки
+developers = Розробники
+designers = Дизайнери
+artists = Художники
+translators = Перекладачі
+documenters = Документатори
+february = Лютий { $year }
+november = Листопад { $year }
+friday = П'ятниця
+tuesday = Вівторок
+may = Травень { $year }
+wednesday = Середа
+april = Квітень { $year }
+monday = Понеділок
+december = Грудень { $year }
+sunday = Неділя
+march = Березень { $year }
+june = Червень { $year }
+saturday = Субота
+august = Серпень { $year }
+july = Липень { $year }
+thursday = Четвер
+september = Вересень { $year }
+october = Жовтень { $year }
+january = Січень { $year }
+mon = Пн
+tue = Вт
+wed = Ср
+thu = Чт
+fri = Пт
+sat = Cб
+sun = Нд

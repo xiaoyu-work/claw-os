@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Keyboard
+Comment=Input sources, switching, special character entry, shortcuts.
+Type=Application
+Exec=cosmic-settings keyboard
+Terminal=false
+Categories=COSMIC
+Keywords=COSMIC;Keyboard;Input;Source;Shortcuts;
+NoDisplay=true
+OnlyShowIn=COSMIC
+Icon=preferences-desktop-keyboard
+StartupNotify=true

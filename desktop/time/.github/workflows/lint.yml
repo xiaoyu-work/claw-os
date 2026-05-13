@@ -1,0 +1,20 @@
+name: Lint
+on: [push, pull_request]
+jobs:
+  all:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: hecrj/setup-rust-action@v1
+      with:
+        components: clippy
+    - uses: actions/checkout@master
+    - name: Install cargo-deb
+      run: cargo install cargo-deb
+    - uses: actions/checkout@master
+    - name: Install dependencies
+      run: |
+        export DEBIAN_FRONTED=noninteractive
+        sudo apt-get -qq update
+        sudo apt-get install -y libxkbcommon-dev
+    - name: Check lints iced
+      run: cargo clippy --workspace --no-default-features --features=once_cell --all-targets --no-deps -- -D warnings

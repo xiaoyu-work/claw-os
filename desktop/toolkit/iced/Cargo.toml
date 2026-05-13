@@ -1,0 +1,335 @@
+[package]
+name = "iced"
+description = "A cross-platform GUI library inspired by Elm"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+categories.workspace = true
+keywords.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+all-features = true
+
+[badges]
+maintenance = { status = "actively-developed" }
+
+[features]
+wgpu = ["wgpu-bare", "iced_renderer/wgpu"]
+# Enables the `wgpu` GPU-accelerated renderer with the minimum required features (no backends!)
+wgpu-bare = ["iced_renderer/wgpu-bare", "iced_widget/wgpu"]
+# Enables the `tiny-skia` software renderer
+
+
+default = ["a11y", "tiny-skia", "tokio", "wayland", "x11"]
+# Enable the `tiny-skia` software renderer backend
+tiny-skia = ["iced_renderer/tiny-skia"]
+# Enables the `image` widget
+image = ["image-without-codecs", "image/default"]
+# Enables the `image` widget, without any built-in codecs of the `image` crate
+image-without-codecs = ["iced_widget/image", "dep:image"]
+# Enables the `svg` widget
+svg = ["iced_widget/svg"]
+# Enables the `canvas` widget
+canvas = ["iced_widget/canvas"]
+# Enables the `qr_code` widget
+qr_code = ["iced_widget/qr_code"]
+
+
+# Enables debug metrics in native platforms (press F12)
+lazy = ["iced_widget/lazy"]                       # Enables lazy widgets
+markdown = ["iced_widget/markdown"]               # Enables the `markdown` widget
+debug = ["iced_winit/debug", "dep:iced_devtools"]
+# Enables time-travel debugging (very experimental!)
+time-travel = ["debug", "iced_devtools/time-travel"]
+# Enables hot reloading (very experimental!)
+hot = ["debug", "iced_debug/hot"]
+# Enables the tester developer tool for recording and playing tests (press F12)
+tester = ["dep:iced_tester"]
+
+
+# Enables the `thread-pool` futures executor as the `executor::Default` on native platforms
+thread-pool = ["iced_futures/thread-pool"]
+
+# Enables `tokio` as the `executor::Default` on native platforms
+tokio = ["iced_futures/tokio", "iced_accessibility?/tokio"]
+# Enables `async-std` as the `executor::Default` on native platforms
+async-std = ["iced_accessibility?/async-io"]
+# Enables `smol` as the `executor::Default` on native platforms
+smol = ["iced_futures/smol"]
+# Enables querying system information
+sysinfo = ["iced_winit/sysinfo"]
+# Enables broken "sRGB linear" blending to reproduce color management of the Web
+web-colors = ["iced_renderer/web-colors"]
+# Enables pixel snapping for crisp edges by default (can cause jitter!)
+
+
+# Enables the `widget::selector` module
+crisp = ["iced_core/crisp", "iced_widget/crisp"]
+# Enables the WebGL backend
+
+
+webgl = ["iced_renderer/webgl"]
+# Enables syntax highlighting
+highlighter = ["iced_highlighter", "iced_widget/highlighter"]
+selector = ["iced_runtime/selector"]
+
+
+# Enables basic text shaping by default
+fira-sans = [
+    "iced_renderer/fira-sans",
+] # Embeds Fira Sans into the final application; useful for testing and Wasm builds
+advanced = [
+    "iced_core/advanced",
+    "iced_widget/advanced",
+] # Enables the advanced module
+basic-shaping = ["iced_core/basic-shaping"]
+# Enables advanced text shaping by default
+advanced-shaping = ["iced_core/advanced-shaping"]
+# Enables strict assertions for debugging purposes at the expense of performance
+strict-assertions = ["iced_renderer/strict-assertions"]
+# Redraws on every runtime event, and not only when a widget requests it
+unconditional-rendering = ["iced_winit/unconditional-rendering"]
+# Enables support for the `sipper` library
+sipper = ["iced_runtime/sipper"]
+
+
+# Enables Linux system theme detection
+linux-theme-detection = ["iced_winit/linux-theme-detection"]
+# Enables the Unix X11 backend
+x11 = ["iced_renderer/x11", "iced_winit/x11"]
+# Enables the `accesskit` accessibility library
+a11y = [
+    "iced_accessibility",
+    "iced_core/a11y",
+    "iced_widget/a11y",
+    "iced_winit?/a11y",
+]
+# Enables the winit shell. Conflicts with `wayland` and `glutin`.
+winit = [
+    "iced_winit",
+    "iced_accessibility?/accesskit_winit",
+    "iced_program/winit",
+]
+wayland = ["iced_renderer/wayland", "iced_winit/wayland"]
+cctk = ["iced_winit/cctk", "iced_widget/cctk", "iced_core/cctk", "wayland"]
+# Enables the sctk shell. 
+[dependencies]
+
+
+iced_devtools.workspace = true
+iced_debug.workspace = true
+
+iced_program.workspace = true
+iced_core.workspace = true
+iced_futures.workspace = true
+iced_renderer.workspace = true
+iced_runtime.workspace = true
+iced_widget.workspace = true
+iced_winit.workspace = true
+iced_devtools.optional = true
+iced_tester.workspace = true
+iced_tester.optional = true
+iced_winit.optional = true
+iced_highlighter.workspace = true
+iced_highlighter.optional = true
+iced_accessibility.workspace = true
+iced_accessibility.optional = true
+thiserror.workspace = true
+window_clipboard.workspace = true
+mime.workspace = true
+dnd.workspace = true
+
+image.workspace = true
+image.optional = true
+
+[dev-dependencies]
+criterion = "0.5"
+iced_wgpu.workspace = true
+
+[[bench]]
+name = "wgpu"
+harness = false
+required-features = ["canvas"]
+
+[profile.release-opt]
+inherits = "release"
+codegen-units = 1
+debug = false
+lto = true
+incremental = false
+opt-level = 3
+overflow-checks = false
+strip = "debuginfo"
+
+[workspace]
+members = [
+    "beacon",
+    "core",
+    "debug",
+    "devtools",
+    "futures",
+    "graphics",
+    "highlighter",
+    "program",
+    "renderer",
+    "runtime",
+    "selector",
+    "test",
+    "tester",
+    "tiny_skia",
+    "wgpu",
+    "widget",
+    "winit",
+    "examples/*",
+    "accessibility",
+]
+exclude = ["examples/integration"]
+
+[workspace.package]
+version = "0.14.0"
+authors = ["Héctor Ramón Jiménez <hector@hecrj.dev>"]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/iced-rs/iced"
+homepage = "https://iced.rs"
+categories = ["gui"]
+keywords = ["gui", "ui", "graphics", "interface", "widgets"]
+rust-version = "1.92"
+
+[workspace.dependencies]
+iced = { version = "0.14.0", path = "." }
+iced_beacon = { version = "0.14.0", path = "beacon" }
+iced_core = { version = "0.14.0", path = "core" }
+iced_debug = { version = "0.14.0", path = "debug" }
+iced_devtools = { version = "0.14.0", path = "devtools" }
+iced_futures = { version = "0.14.0", path = "futures" }
+iced_graphics = { version = "0.14.0", path = "graphics" }
+iced_highlighter = { version = "0.14.0", path = "highlighter" }
+iced_program = { version = "0.14.0", path = "program" }
+iced_renderer = { version = "0.14.0", path = "renderer" }
+iced_runtime = { version = "0.14.0", path = "runtime" }
+iced_selector = { version = "0.14.0", path = "selector" }
+iced_test = { version = "0.14.0", path = "test" }
+iced_tester = { version = "0.14.0", path = "tester" }
+iced_tiny_skia = { version = "0.14.0", path = "tiny_skia", default-features = false }
+iced_wgpu = { version = "0.14.0", path = "wgpu", default-features = false }
+iced_widget = { version = "0.14.0", path = "widget" }
+iced_winit = { version = "0.14.0", path = "winit", default-features = false }
+bincode = "1.3"
+cargo-hot = { version = "0.1", package = "cargo-hot-protocol" }
+futures = { version = "0.3", default-features = false, features = [
+    "std",
+    "async-await",
+] }
+glam = "0.25"
+iced_accessibility = { version = "0.1", path = "accessibility" }
+
+async-std = "1.0"
+
+
+bitflags = "2.5"
+bytemuck = { version = "1.0", features = ["derive"] }
+bytes = "1.6"
+cosmic-text = "0.19"
+cryoglyph = { git = "https://github.com/iced-rs/cryoglyph.git", rev = "e429a025df36ab8145708acb309080ae3deec17a" }
+dark-light = "1.0"
+resvg = "0.45"
+web-sys = "0.3.69"
+guillotiere = "0.6"
+half = "2.2"
+image = { version = "0.25", default-features = false }
+kamadak-exif = "0.6"
+kurbo = "0.10"
+lilt = "0.8"
+log = "0.4"
+lyon = "1.0"
+lyon_path = "1.0"
+mundy = { version = "0.2", default-features = false }
+nom = "8"
+num-traits = "0.2"
+ouroboros = "0.18"
+png = "0.18"
+pulldown-cmark = "0.12"
+qrcode = { version = "0.13", default-features = false }
+raw-window-handle = "0.6"
+rfd = "0.16"
+rustc-hash = "2.0"
+semver = "1.0"
+serde = "1.0"
+sha2 = "0.10"
+sipper = "0.1"
+smol = "2"
+smol_str = "0.3"
+sysinfo = "0.33"
+thiserror = "2"
+tiny-skia = { version = "0.11", default-features = false, features = [
+    "std",
+    "simd",
+] }
+cctk = { git = "https://github.com/pop-os/cosmic-protocols", package = "cosmic-client-toolkit", rev = "160b086" }
+softbuffer = { git = "https://github.com/pop-os/softbuffer", tag = "cosmic-4.0" }
+syntect = "5.2"
+tokio = "1.0"
+tracing = "0.1"
+two-face = { version = "0.4", default-features = false, features = [
+    "syntect-default-fancy",
+] }
+unicode-segmentation = "1.0"
+url = "2.5"
+wasm-bindgen-futures = "0.4"
+wasmtimer = "0.4.2"
+web-time = "1.1"
+wgpu = { version = "28.0", default-features = false, features = [
+    "std",
+    "wgsl",
+] }
+wayland-protocols = { version = "0.32.1", features = ["staging"] }
+wayland-client = { version = "0.31.5" }
+# web-time = "1.1"
+
+
+# wgpu = "0.19"
+# Newer wgpu commit that fixes Vulkan backend on Nvidia
+winapi = "0.3"
+# window_clipboard = "0.4.1"
+
+window_clipboard = { git = "https://github.com/pop-os/window_clipboard.git", tag = "sctk-0.20" }
+dnd = { git = "https://github.com/pop-os/window_clipboard.git", tag = "sctk-0.20" }
+mime = { git = "https://github.com/pop-os/window_clipboard.git", tag = "sctk-0.20" }
+winit = { git = "https://github.com/pop-os/winit.git", tag = "cosmic-0.14" }
+winit-core = { git = "https://github.com/pop-os/winit.git", tag = "cosmic-0.14" }
+cursor-icon = "1.1.0"
+
+
+[workspace.lints.rust]
+rust_2018_idioms = { level = "deny", priority = -1 }
+unused_results = "deny"
+
+[workspace.lints.clippy]
+type-complexity = "allow"
+map-entry = "allow"
+large-enum-variant = "allow"
+result_large_err = "allow"
+semicolon_if_nothing_returned = "deny"
+trivially-copy-pass-by-ref = "deny"
+default_trait_access = "deny"
+match-wildcard-for-single-variants = "deny"
+redundant-closure-for-method-calls = "deny"
+filter_map_next = "deny"
+manual_let_else = "deny"
+unused_async = "deny"
+from_over_into = "deny"
+needless_borrow = "deny"
+new_without_default = "deny"
+useless_conversion = "deny"
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "forbid"

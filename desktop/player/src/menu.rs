@@ -1,0 +1,140 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
+use cosmic::widget::RcElementWrapper;
+use cosmic::widget::menu::key_bind::KeyBind;
+use cosmic::widget::menu::{self, ItemHeight, ItemWidth, MenuBar};
+use cosmic::{Element, theme};
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+use crate::{Action, Config, ConfigState, Message, fl};
+
+pub fn menu_bar<'a>(
+    _config: &Config,
+    config_state: &ConfigState,
+    key_binds: &HashMap<KeyBind, Action>,
+    projects: &[(String, PathBuf)],
+    ab_repeat: &Option<(Option<f64>, Option<f64>)>,
+    has_video: bool,
+) -> Element<'a, Message> {
+    let home_dir_opt = std::env::home_dir();
+    let format_path = |path: &PathBuf| -> String {
+        if let Some(home_dir) = &home_dir_opt
+            && let Ok(part) = path.strip_prefix(home_dir)
+        {
+            return format!("~/{}", part.display());
+        }
+        path.display().to_string()
+    };
+    let format_url = |url: &url::Url| -> String {
+        match url.to_file_path() {
+            Ok(path) => format_path(&path),
+            Err(()) => url.to_string(),
+        }
+    };
+
+    let files_len = if config_state.recent_files.is_empty() {
+        0
+    } else {
+        config_state.recent_files.len() + 2
+    };
+    let mut recent_files = Vec::with_capacity(files_len);
+    for (i, path) in config_state.recent_files.iter().enumerate() {
+        recent_files.push(menu::Item::Button(
+            format_url(path),
+            None,
+            Action::FileOpenRecent(i),
+        ));
+    }
+    if files_len > 0 {
+        recent_files.push(menu::Item::Divider);
+        recent_files.push(menu::Item::Button(
+            fl!("clear-recent"),
+            None,
+            Action::FileClearRecents,
+        ));
+    }
+
+    let projects_len = if config_state.recent_projects.is_empty() {
+        0
+    } else {
+        config_state.recent_projects.len() + 2
+    };
+    let mut recent_projects = Vec::with_capacity(projects_len);
+    for (i, path) in config_state.recent_projects.iter().enumerate() {
+        recent_projects.push(menu::Item::Button(
+            format_path(path),
+            None,
+            Action::FolderOpenRecent(i),
+        ));
+    }
+    if projects_len > 0 {
+        recent_projects.push(menu::Item::Divider);
+        recent_projects.push(menu::Item::Button(
+            fl!("clear-recent"),
+            None,
+            Action::FolderClearRecents,
+        ));
+    }
+
+    let mut close_projects = Vec::with_capacity(projects.len());
+    for (folder_i, (name, _path)) in projects.iter().enumerate() {
+        close_projects.push(menu::Item::Button(
+            name.clone(),
+            None,
+            Action::FolderClose(folder_i),
+        ));
+    }
+
+    let mut playback = Vec::with_capacity(3);
+
+    if has_video {
+        playback.push(menu::Item::Button(
+            fl!("next-frame"),
+            None,
+            Action::NextFrame,
+        ));
+        playback.push(menu::Item::Button(
+            fl!("previous-frame"),
+            None,
+            Action::PreviousFrame,
+        ));
+    }
+
+    playback.push(menu::Item::Button(
+        match ab_repeat {
+            None => fl!("ab-repeat-set-a"),
+            Some((_, None)) => fl!("ab-repeat-set-b"),
+            Some((_, Some(_))) => fl!("ab-repeat-clear"),
+        },
+        None,
+        Action::AbRepeat,
+    ));
+    MenuBar::new(vec![
+        menu::Tree::with_children(
+            RcElementWrapper::new(Element::from(menu::root(fl!("file")))),
+            menu::items(
+                key_binds,
+                vec![
+                    menu::Item::Button(fl!("open-media"), None, Action::FileOpen),
+                    menu::Item::Folder(fl!("open-recent-media"), recent_files),
+                    menu::Item::Button(fl!("close-file"), None, Action::FileClose),
+                    menu::Item::Divider,
+                    menu::Item::Button(fl!("open-media-folder"), None, Action::FolderOpen),
+                    menu::Item::Folder(fl!("open-recent-media-folder"), recent_projects),
+                    menu::Item::Folder(fl!("close-media-folder"), close_projects),
+                    menu::Item::Divider,
+                    menu::Item::Button(fl!("quit"), None, Action::WindowClose),
+                ],
+            ),
+        ),
+        menu::Tree::with_children(
+            RcElementWrapper::new(Element::from(menu::root(fl!("playback")))),
+            menu::items(key_binds, playback),
+        ),
+    ])
+    .item_height(ItemHeight::Dynamic(40))
+    .item_width(ItemWidth::Uniform(320))
+    .spacing(theme::active().cosmic().spacing.space_xxxs.into())
+    .into()
+}

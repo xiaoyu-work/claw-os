@@ -1,0 +1,12 @@
+bluetooth = Bluetooth
+other-devices = Outros dispositivos Bluetooth
+settings = Configurações de Bluetooth...
+connected = Conectado
+confirm-pin = Por favor, confirme se o seguinte PIN corresponde ao exibido em { $deviceName }
+confirm = Confirmar
+cancel = Cancelar
+unsuccessful = Falha no emparelhamento
+check-device = Certifique-se de que { $deviceName } esteja ligado, dentro do alcance e pronto para emparelhar.
+try-again = Tente novamente
+discoverable = Visível
+pairable = Emparelhável

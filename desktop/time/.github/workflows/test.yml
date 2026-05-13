@@ -1,0 +1,24 @@
+name: Test
+on: [push, pull_request]
+jobs:
+  native:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macOS-latest]
+        rust: [stable, beta]
+    steps:
+    - uses: hecrj/setup-rust-action@v1
+      with:
+        rust-version: ${{ matrix.rust }}
+    - uses: actions/checkout@master
+    - name: Install dependencies
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        export DEBIAN_FRONTED=noninteractive
+        sudo apt-get -qq update
+        sudo apt-get install -y libxkbcommon-dev
+    - name: Run tests
+      run: |
+        cargo test --verbose --workspace
+

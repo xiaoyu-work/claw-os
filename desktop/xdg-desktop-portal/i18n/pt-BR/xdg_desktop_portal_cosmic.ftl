@@ -1,0 +1,14 @@
+allow = Permitir
+cancel = Cancelar
+capture = Capturar
+share = Compartilhar
+save-to = Salvar
+    .clipboard = { save-to } na Área de Transferência
+    .pictures = { save-to } em Imagens
+    .documents = { save-to } em Documentos
+choose-folder = Selecione uma pasta
+share-screen = Compartilhar a tela
+    .description = O sistema deseja compartilhar o conteúdo de sua tela com "{ $app_name }". Selecione uma tela ou janela para compartilhar.
+unknown-application = Aplicativo desconhecido
+output = Saída
+window = Janela

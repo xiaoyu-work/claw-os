@@ -1,0 +1,22 @@
+Source: cosmic-panel
+Section: admin
+Priority: optional
+Maintainer: System76 <info@system76.com>
+Build-Depends:
+  debhelper (>= 11),
+  debhelper-compat (= 11),
+  just,
+  cargo,
+  libwayland-dev,
+  libxkbcommon-dev,
+  pkg-config,
+  desktop-file-utils,
+Standards-Version: 4.3.0
+Homepage: https://github.com/pop-os/cosmic-panel
+
+Package: cosmic-panel
+Architecture: amd64 arm64
+Depends:
+  ${misc:Depends},
+  ${shlibs:Depends}
+Description: XDG Shell Wrapper Panel for COSMIC

@@ -1,0 +1,14 @@
+name: Continuous Integration
+
+on: [push, pull_request]
+
+jobs:
+  formatting:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+      - name: Run rustfmt
+        run: cargo +nightly fmt --all -- --check

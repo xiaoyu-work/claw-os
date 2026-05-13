@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=COSMIC Files
+Comment=File manager for the COSMIC desktop
+Exec=cosmic-files %U
+Terminal=false
+Type=Application
+StartupNotify=true
+Icon=com.system76.CosmicFiles
+Categories=COSMIC;Utility;FileManager;
+Keywords=Folder;Manager;
+MimeType=inode/directory;

@@ -1,0 +1,14 @@
+allow = Permitir
+cancel = Cancelar
+capture = Capturar
+save-to = Guardar en
+    .clipboard = { save-to } el portapapeles
+    .pictures = { save-to } imágenes
+    .documents = { save-to } documentos
+choose-folder = Elegir carpeta
+share = Compartir
+share-screen = Compartir tu pantalla
+    .description = El sistema quiere compartir el contenido de tu pantalla con "{ $app_name }". Selecciona una pantalla o ventana para compartir.
+unknown-application = Aplicación desconocida
+output = Salida
+window = Ventana

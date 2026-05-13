@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Appearance
+Comment=Accent colors and theming.
+Type=Application
+Exec=cosmic-settings appearance
+Terminal=false
+Categories=COSMIC
+Keywords=COSMIC;Accent;Color;Icon;Font;Theme
+NoDisplay=true
+OnlyShowIn=COSMIC
+Icon=preferences-appearance
+StartupNotify=true

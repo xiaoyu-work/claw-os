@@ -1,0 +1,110 @@
+[package]
+name = "cosmic-store"
+version = "1.0.13"
+edition = "2024"
+rust-version = "1.90"
+
+[dependencies]
+chrono = "0.4"
+clap = { version = "4", features = ["derive"] }
+env_logger = "0.11"
+freedesktop_entry_parser = "2"
+futures = "0.3"
+log = "0.4"
+open = "5"
+paste = "1"
+rayon = "1"
+regex = "1"
+reqwest = "0.13"
+serde = { version = "1", features = ["rc", "serde_derive"] }
+spdx = { git = "https://github.com/jackpot51/spdx.git" }
+tokio = { version = "1", features = ["sync"] }
+xdg = "3"
+# Internationalization
+i18n-embed = { version = "0.16", features = [
+    "fluent-system",
+    "desktop-requester",
+] }
+i18n-embed-fl = "0.10"
+rust-embed = "8"
+icu_collator = "2.2"
+icu_locale = "2.2"
+# appstream
+appstream = { git = "https://github.com/jackpot51/appstream.git" }
+flate2 = "1"
+libc = "0.2"
+sys-locale = "0.3"
+serde_yaml = "0.9"
+# fast cache
+atomicwrites = { git = "https://github.com/jackpot51/rust-atomicwrites" }
+bitcode = { version = "0.6", features = ["serde"] }
+dirs = "6"
+zstd = "0.13"
+# flatpak feature
+libflatpak = { version = "0.7", optional = true }
+# logind feature (for inhibiting suspend/restart/shutdown)
+logind-zbus = { version = "5", optional = true }
+zbus = { version = "5", optional = true }
+# notify feature
+notify-rust = { version = "4", optional = true }
+# packagekit feature
+packagekit-zbus = { version = "0.2", optional = true }
+cosmic-panel-config = { git = "https://github.com/pop-os/cosmic-panel", optional = true }
+freedesktop-desktop-entry = { version = "0.8.1", optional = true }
+switcheroo-control = { git = "https://github.com/pop-os/dbus-settings-bindings", optional = true }
+
+[dependencies.libcosmic]
+git = "https://github.com/pop-os/libcosmic.git"
+default-features = false
+features = ["multi-window", "tokio", "winit"]
+
+[build-dependencies]
+xdgen = "0.1"
+
+[features]
+#todo : add a11y back to default
+default = [
+    "dbus-config",
+    "desktop-systemd-scope",
+    "flatpak",
+    "logind",
+    "notify",
+    "single-instance",
+    "wgpu",
+    "wayland",
+    "xdg-portal",
+]
+a11y = ["libcosmic/a11y"]
+dbus-config = ["libcosmic/dbus-config"]
+desktop = ["dep:freedesktop-desktop-entry", "dep:switcheroo-control", "libcosmic/desktop"]
+desktop-systemd-scope = ["desktop", "libcosmic/desktop-systemd-scope"]
+flatpak = ["dep:libflatpak", "xdg-portal"]
+logind = ["dep:logind-zbus", "dep:zbus"]
+notify = ["dep:notify-rust"]
+packagekit = ["dep:packagekit-zbus"]
+pkgar = []
+single-instance = ["libcosmic/single-instance"]
+wayland = ["libcosmic/wayland", "dep:cosmic-panel-config"]
+wgpu = ["libcosmic/wgpu"]
+xdg-portal = ["libcosmic/xdg-portal"]
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true
+
+[workspace]
+members = ["flathub-stats"]
+
+# [patch.'https://github.com/pop-os/cosmic-text.git']
+# cosmic-text = { path = "../cosmic-text" }
+
+# [patch.'https://github.com/pop-os/libcosmic.git']
+# libcosmic = { path = "../libcosmic" }
+# cosmic-config = { path = "../libcosmic/cosmic-config" }
+# cosmic-theme = { path = "../libcosmic/cosmic-theme" }
+
+# [patch.'https://github.com/jackpot51/appstream.git']
+# appstream = { path = "../../appstream" }
+
+# [patch.'https://github.com/jackpot51/spdx.git']
+# spdx = { path = "../../spdx" }

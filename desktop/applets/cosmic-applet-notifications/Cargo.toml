@@ -1,0 +1,27 @@
+[package]
+name = "cosmic-applet-notifications"
+version = "1.0.2"
+edition = "2024"
+license = "GPL-3.0-only"
+
+[dependencies]
+cosmic-notifications-util = { git = "https://github.com/pop-os/cosmic-notifications" }
+cosmic-notifications-config = { git = "https://github.com/pop-os/cosmic-notifications" }
+anyhow.workspace = true
+libcosmic.workspace = true
+tokio.workspace = true
+# cosmic-notifications-util = { path = "../../cosmic-notifications-daemon/cosmic-notifications-util" }
+# cosmic-notifications-config = { path = "../../cosmic-notifications-daemon/cosmic-notifications-config" }
+futures-util = { workspace = true, features = ["sink"] }
+tracing-subscriber.workspace = true
+tracing-log.workspace = true
+tracing.workspace = true
+# Application i18n
+i18n-embed = { workspace = true, features = [
+    "fluent-system",
+    "desktop-requester",
+] }
+i18n-embed-fl.workspace = true
+rust-embed.workspace = true
+zbus = { workspace = true, features = ["tokio", "p2p"] }
+url = "2.5.8"

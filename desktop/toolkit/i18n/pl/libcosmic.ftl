@@ -1,0 +1,36 @@
+# Context Drawer
+close = Zamknij
+# About
+license = Licencja
+links = Linki
+developers = Programiści
+designers = Projektanci
+artists = Artyści
+translators = Tłumacze
+documenters = Dokumentaliści
+january = Styczeń { $year }
+february = Luty { $year }
+march = Marzec { $year }
+april = Kwiecień { $year }
+may = Maj { $year }
+june = Czerwiec { $year }
+july = Lipiec { $year }
+august = Sierpień { $year }
+september = Wrzesień { $year }
+october = Październik { $year }
+november = Listopad { $year }
+december = Grudzień { $year }
+monday = Poniedziałek
+tuesday = Wtorek
+wednesday = Środa
+thursday = Czwartek
+friday = Piątek
+saturday = Sobota
+sunday = Niedziela
+mon = Pon
+tue = Wto
+wed = Śro
+thu = Czw
+fri = Pia
+sat = Sob
+sun = Nie

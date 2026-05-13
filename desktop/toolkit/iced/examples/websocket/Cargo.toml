@@ -1,0 +1,20 @@
+[package]
+name = "websocket"
+version = "1.0.0"
+authors = ["Héctor Ramón Jiménez <hector0193@gmail.com>"]
+edition = "2024"
+publish = false
+
+[dependencies]
+iced.workspace = true
+iced.features = ["debug", "tokio", "sipper"]
+
+warp = "0.3"
+
+[dependencies.async-tungstenite]
+version = "0.25"
+features = ["tokio-rustls-webpki-roots"]
+
+[dependencies.tokio]
+workspace = true
+features = ["time"]

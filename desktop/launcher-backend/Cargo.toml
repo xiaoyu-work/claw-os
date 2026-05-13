@@ -1,0 +1,56 @@
+[package]
+name = "pop-launcher"
+version = "1.2.7"
+license = "MPL-2.0"
+authors = ["Michael Aaron Murphy <michael@mmurphy.dev>"]
+description = "Library for writing plugins and frontends for pop-launcher"
+repository = "https://github.com/pop-os/launcher"
+edition.workspace = true
+
+[workspace]
+members = ["bin", "plugins", "service", "toolkit"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+
+[workspace.dependencies]
+anyhow = "1.0.100"
+serde = { version = "1.0.226", features = ["derive"] }
+serde_json = "1.0.145"
+tracing = "0.1.41"
+dirs = "6.0.0"
+serde_with = "3.14.1"
+futures = "0.3.31"
+flume = "0.11.1"
+toml = "0.9.7"
+regex = "1.11.2"
+ron = "0.11.0"
+tokio = "1.47.1"
+tokio-stream = "0.1.17"
+
+[dependencies]
+const_format = "0.2.34"
+dirs.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_with.workspace = true
+
+[profile.release]
+lto = "fat"
+panic = "abort"
+
+[dependencies.tokio]
+workspace = true
+features = ["io-std", "io-util"]
+
+[dependencies.tokio-stream]
+workspace = true
+features = ["io-util"]
+
+# [patch.crates-io]
+# freedesktop-desktop-entry = { path = "../freedesktop-desktop-entry" }
+
+[patch."https://github.com/pop-os/cosmic-protocols"]
+"cosmic-client-toolkit" = { git = "https://github.com/pop-os//cosmic-protocols" }

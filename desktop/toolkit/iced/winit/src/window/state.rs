@@ -1,0 +1,315 @@
+use crate::conversion;
+use crate::core::{Color, Size};
+use crate::core::{mouse, theme, window};
+use crate::graphics::Viewport;
+use crate::program::{self, Program};
+
+use winit::dpi::LogicalPosition;
+use winit::event::{PointerKind, WindowEvent};
+use winit::window::Window;
+
+use std::fmt::{Debug, Formatter};
+
+/// The state of the window of a [`Program`].
+pub struct State<P: Program>
+where
+    P::Theme: theme::Base,
+{
+    pub(crate) title: String,
+    scale_factor: f64,
+    viewport: Viewport,
+    surface_version: u64,
+    cursor_position: Option<winit::dpi::PhysicalPosition<f64>>,
+    modifiers: winit::keyboard::ModifiersState,
+    theme: Option<P::Theme>,
+    theme_mode: theme::Mode,
+    default_theme: P::Theme,
+    style: theme::Style,
+    ready: bool,
+    a11y_ready: bool,
+}
+
+impl<P: Program> Debug for State<P>
+where
+    P::Theme: theme::Base,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("window::State")
+            .field("title", &self.title)
+            .field("scale_factor", &self.scale_factor)
+            .field("viewport", &self.viewport)
+            .field("cursor_position", &self.cursor_position)
+            .field("style", &self.style)
+            .finish()
+    }
+}
+
+impl<P: Program> State<P>
+where
+    P::Theme: theme::Base,
+{
+    /// Creates a new [`State`] for the provided [`Program`]'s `window`.
+    pub fn new(
+        program: &program::Instance<P>,
+        window_id: window::Id,
+        system_theme: theme::Mode,
+        window: &dyn Window,
+    ) -> Self {
+        let title = program.title(window_id);
+        let scale_factor = program.scale_factor(window_id);
+        let theme = program.theme(window_id);
+        let theme_mode =
+            theme.as_ref().map(theme::Base::mode).unwrap_or_default();
+        let default_theme = <P::Theme as theme::Base>::default(system_theme);
+        let style = program.style(theme.as_ref().unwrap_or(&default_theme));
+
+        let viewport = {
+            let physical_size = window.surface_size();
+
+            Viewport::with_physical_size(
+                Size::new(physical_size.width, physical_size.height),
+                window.scale_factor() as f64 * scale_factor,
+            )
+        };
+
+        Self {
+            title,
+            scale_factor,
+            viewport,
+            surface_version: 0,
+            cursor_position: None,
+            modifiers: winit::keyboard::ModifiersState::default(),
+            theme,
+            theme_mode,
+            default_theme,
+            style,
+
+            ready: true,
+            a11y_ready: cfg!(not(feature = "a11y")),
+        }
+    }
+
+    pub(crate) fn is_ready(&self) -> bool {
+        self.ready && self.a11y_ready
+    }
+
+    pub(crate) fn set_ready(&mut self, ready: bool) {
+        self.ready = ready;
+    }
+
+    pub(crate) fn set_a11y_ready(&mut self, ready: bool) {
+        self.a11y_ready = ready;
+    }
+
+    pub fn viewport(&self) -> &Viewport {
+        &self.viewport
+    }
+
+    pub fn surface_version(&self) -> u64 {
+        self.surface_version
+    }
+
+    pub fn physical_size(&self) -> Size<u32> {
+        self.viewport.physical_size()
+    }
+
+    pub fn logical_size(&self) -> Size<f32> {
+        self.viewport.logical_size()
+    }
+
+    pub fn scale_factor(&self) -> f64 {
+        self.viewport.scale_factor()
+    }
+
+    pub fn set_logical_cursor_pos(&mut self, pos: LogicalPosition<f64>) {
+        let physical = pos.to_physical(self.scale_factor());
+        self.cursor_position = Some(physical);
+    }
+
+    /// Returns the current cursor position of the [`State`].
+    pub fn cursor(&self) -> mouse::Cursor {
+        self.cursor_position
+            .map(|cursor_position| {
+                conversion::cursor_position(
+                    cursor_position,
+                    self.viewport.scale_factor(),
+                )
+            })
+            .map(mouse::Cursor::Available)
+            .unwrap_or(mouse::Cursor::Unavailable)
+    }
+
+    pub fn modifiers(&self) -> winit::keyboard::ModifiersState {
+        self.modifiers
+    }
+
+    pub fn theme(&self) -> &P::Theme {
+        self.theme.as_ref().unwrap_or(&self.default_theme)
+    }
+
+    pub fn theme_mode(&self) -> theme::Mode {
+        self.theme_mode
+    }
+
+    pub fn background_color(&self) -> Color {
+        self.style.background_color
+    }
+
+    pub fn text_color(&self) -> Color {
+        self.style.text_color
+    }
+
+    /// Returns the current icon [`Color`] of the [`State`].
+    pub fn icon_color(&self) -> Color {
+        self.style.icon_color
+    }
+
+    /// Update the scale factor
+    pub(crate) fn update_scale_factor(&mut self, new_scale_factor: f64) {
+        let size = self.viewport.logical_size();
+
+        self.viewport = Viewport::with_logical_size(
+            size,
+            new_scale_factor * self.scale_factor,
+        );
+
+        self.surface_version = self.surface_version.wrapping_add(1);
+    }
+
+    /// Processes the provided window event and updates the [`State`] accordingly.
+    pub fn update(
+        &mut self,
+        program: &program::Instance<P>,
+        window: &dyn Window,
+        event: &WindowEvent,
+    ) {
+        match event {
+            WindowEvent::SurfaceResized(new_size) => {
+                let size = Size::new(new_size.width, new_size.height);
+
+                self.viewport = Viewport::with_physical_size(
+                    size,
+                    window.scale_factor() * self.scale_factor,
+                );
+                self.surface_version += 1;
+            }
+            WindowEvent::ScaleFactorChanged {
+                scale_factor: new_scale_factor,
+                ..
+            } => {
+                self.update_scale_factor(*new_scale_factor);
+            }
+            WindowEvent::PointerEntered { position, .. } => {
+                self.cursor_position = Some(*position);
+            }
+            WindowEvent::PointerMoved { position, .. }
+            | WindowEvent::PointerButton { position, .. } => {
+                self.cursor_position = Some(*position);
+            }
+            WindowEvent::PointerLeft {
+                kind: PointerKind::Mouse,
+                ..
+            } => {
+                self.cursor_position = None;
+            }
+            WindowEvent::ModifiersChanged(new_modifiers) => {
+                self.modifiers = new_modifiers.state();
+            }
+            WindowEvent::ThemeChanged(theme) => {
+                self.default_theme = <P::Theme as theme::Base>::default(
+                    conversion::theme_mode(*theme),
+                );
+
+                if self.theme.is_none() {
+                    self.style = program.style(&self.default_theme);
+                    window.request_redraw();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub fn synchronize(
+        &mut self,
+        program: &program::Instance<P>,
+        window_id: window::Id,
+        window: &dyn Window,
+    ) {
+        // Update window title
+        let new_title = program.title(window_id);
+
+        if self.title != new_title {
+            window.set_title(&new_title);
+            self.title = new_title;
+        }
+
+        // Update scale factor and size
+        let new_scale_factor = program.scale_factor(window_id);
+        let window_scale = window.scale_factor();
+        let mut new_size = window.surface_size();
+        let current_size = self.viewport.physical_size();
+
+        if self.scale_factor != new_scale_factor
+            || (current_size.width, current_size.height)
+                != (new_size.width, new_size.height)
+                && !(new_size.width == 0 && new_size.height == 0)
+        {
+            if new_size.width == 0 {
+                new_size.width = current_size.width;
+            }
+            if new_size.height == 0 {
+                new_size.height = current_size.height;
+            }
+            self.viewport = Viewport::with_physical_size(
+                Size::new(new_size.width, new_size.height),
+                window_scale * new_scale_factor,
+            );
+
+            self.scale_factor = new_scale_factor;
+            self.surface_version = self.surface_version.wrapping_add(1);
+        }
+
+        // Update theme and appearance
+        self.theme = program.theme(window_id);
+        self.style = program.style(self.theme());
+
+        let new_mode = self
+            .theme
+            .as_ref()
+            .map(theme::Base::mode)
+            .unwrap_or_default();
+
+        if self.theme_mode != new_mode {
+            #[cfg(not(target_os = "linux"))]
+            {
+                window.set_theme(conversion::window_theme(new_mode));
+
+                // Assume the old mode matches the system one
+                // We will be notified otherwise
+                if new_mode == theme::Mode::None {
+                    self.default_theme =
+                        <P::Theme as theme::Base>::default(self.theme_mode);
+
+                    if self.theme.is_none() {
+                        self.style = program.style(&self.default_theme);
+                    }
+                }
+            }
+
+            #[cfg(target_os = "linux")]
+            {
+                // mundy always notifies system theme changes, so we
+                // just restore the default theme mode.
+                let new_mode = if new_mode == theme::Mode::None {
+                    theme::Base::mode(&self.default_theme)
+                } else {
+                    new_mode
+                };
+
+                window.set_theme(conversion::window_theme(new_mode));
+            }
+
+            self.theme_mode = new_mode;
+        }
+    }
+}

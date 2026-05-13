@@ -1,0 +1,87 @@
+back = Voltar
+cancel = Cancelar
+finish = Concluir
+identity = Identidade
+next = Avançar
+password = Senha
+password-confirm = Confirme a senha
+settings = Configurações
+skip = Ignorar
+skip-setup-and-close = Pular a configuração e fechar
+type-to-search = Digite para pesquisar…
+wifi = Wi-Fi
+accessibility-page = Configurações de acessibilidade
+    .display-scaling = Escala da tela
+    .scale = Escala
+    .scale-options = Mais opções de escala
+    .screen-reader = Leitor de tela
+    .interface-size = Tamanho da interface
+    .magnifier = Ampliador de tela
+    .magnifier-description =
+        Ou use teclas de atalho:
+        Super + = para aumentar o zoom, Super + - para diminuir o zoom,
+        Super + rolar com o mouse
+# SelectLanguagePage
+select-language-page = Selecione o idioma
+# SelectKeyboardLayoutPage
+keyboard-layout-page = Selecione o layout de teclado
+# CreateAccountPage
+create-account-page = Crie sua conta
+    .full-name = Nome completo
+    .user-name = Nome de usuário
+    .user-name-note = Este será usado para nomear sua pasta pessoal, e não pode ser alterado.
+    .dialog-add = Adicionar
+    .profile-add = Escolha a imagem do seu perfil
+    .invalid-username = Nome de usuário inválido
+    .password-mismatch = As senhas não conferem
+# LocationPage
+timezone-and-location-page = Fuso horário e localização
+    .search-the-closest-major-city = Pesquise a cidade mais próxima...
+    .geonames-attribution = A lista é classificada pela população da cidade. Fonte: geonames.org (licença CC-BY-4.0).
+# AppearancePage
+appearance-page = Personalize a aparência
+    .description = Você pode alterar também as cores de destaque e a aparência da sua área de trabalho nas configurações de aparência.
+# LayoutPage
+layout-page = Configuração do layout de tela
+    .bottom-panel = Painel inferior
+    .top-panel-and-dock = Painel superior e dock
+    .description = Mover o painel ou a dock para qualquer borda da tela, alterar seus tamanhos e ocultá-los automaticamente nas configurações.
+# SystemAppsPage
+new-apps-page = Novos aplicativos de sistema
+    .description = Aproveite uma variedade de novos aplicativos de sistema que acompanham o ambiente de trabalho COSMIC, incluindo: Configurações, Loja de Aplicativos, Gestor de Arquivos, Editor de Texto e Terminal.
+# NewKeyboardShortcutsPage
+new-shortcuts-page = Novos atalhos de teclado
+    .description = Use Shift + Super + setas, ou arraste com o mouse para mover janelas. Aproveite as dicas visuais ao usar o modo automático de janelas lado a lado.
+# WorkflowPage
+workflow-page = Espaços de trabalho para seu fluxo de trabalho
+    .description =
+        Alterne entre os modos de janelas flutuantes e lado a lado por espaço de trabalho usando o miniaplicativo de organização de janelas.
+        Você pode selecionar espaços de trabalho verticais ou horizontais e fixá-los na visão geral para torná-los estáticos.
+# LauncherPage
+launcher-page = Rápido e eficiente
+    .description = Pressione a tecla Super (ou Windows) para ativar o lançador. Pesquise e pressione Enter para abrir um aplicativo ou alternar para ele. Você também pode acessar as configurações ou funções do sistema, como suspender. Digite "?" para saber mais sobre os recursos avançados do lançador.
+
+# WirelessPage
+
+wireless-page = Mantenha-se conectado
+    .explain = Quando estiver conectado, você irá obter as atualizações mais recentes do sistema de segurança.
+    .airplane-mode = Modo avião está ativo
+    .connect = Conectar
+    .connected = Conectado
+    .connecting = Conectando…
+    .disconnect = Desconectar
+    .forget = Esquecer
+    .no-networks = Nenhuma rede foi encontrada
+    .known-networks = Redes conhecidas
+    .visible-networks = Redes visíveis
+auth-dialog = Autenticação obrigatória
+    .wifi-description = Digite a senha ou chave de criptografia. Você também pode conectar pressionando o botão “WPS” no roteador.
+forget-dialog = Esquecer esta rede Wi-Fi?
+    .description = Você precisará informar uma senha novamente para usar esta rede no futuro.
+
+## Users
+
+users = Usuários
+    .desc = Autenticação e contas de usuário.
+    .admin = Administrador
+    .standard = Padrão

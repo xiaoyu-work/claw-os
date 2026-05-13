@@ -1,0 +1,15 @@
+[Desktop Entry]
+Name=Accessibility
+Comment=Configure accessibility settings from the panel
+Type=Application
+Exec=cosmic-applet-a11y
+Terminal=false
+Categories=COSMIC;
+Keywords=COSMIC;Applet;Accessibility;A11y;Screen;Reader;Magnifier;Contrast;Color;
+Icon=preferences-desktop-accessibility-symbolic
+StartupNotify=true
+NoDisplay=true
+X-CosmicApplet=true
+X-CosmicShrinkable=true
+X-CosmicHoverPopup=Auto
+X-OverflowPriority=10

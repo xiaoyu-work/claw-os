@@ -1,0 +1,36 @@
+[package]
+name = "cosmic-bg"
+version = "1.0.3"
+edition = "2024"
+rust-version = "1.93"
+
+[dependencies]
+color-eyre = "0.6.5"
+colorgrad = { workspace = true }
+cosmic-bg-config = { path = "./config" }
+eyre = "0.6.12"
+fast_image_resize = { version = "6.0.0", features = ["image"] }
+image = { workspace = true, features = ["hdr", "jpeg", "png", "rayon", "webp"] }
+rayon = "1.12"
+jxl-oxide = { version = "0.12.5", features = ["image"] }
+notify = "8.2.0"
+rand = "0.10"
+sctk = { package = "smithay-client-toolkit", version = "0.20.0" }
+tracing = { workspace = true }
+tracing-subscriber = "0.3.23"
+walkdir = "2.5"
+
+[workspace]
+members = ["config"]
+
+[workspace.dependencies]
+colorgrad = "0.8.0"
+image = { version = "0.25.10", default-features = false }
+tracing = "0.1.44"
+
+[dependencies.cosmic-config]
+git = "https://github.com/pop-os/libcosmic"
+features = ["calloop"]
+
+[profile.release]
+opt-level = 3

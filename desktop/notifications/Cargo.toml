@@ -1,0 +1,52 @@
+[package]
+name = "cosmic-notifications"
+version = "0.1.0"
+authors = ["Ashley Wulber <ashley@system76.com>"]
+edition = "2024"
+rust-version = "1.93"
+
+[dependencies]
+libcosmic = { git = "https://github.com/pop-os/libcosmic", default-features = false, features = [
+    "autosize",
+    "dbus-config",
+    "a11y",
+    "winit",
+    "multi-window",
+    "wayland",
+    "tokio",
+    "dbus-config",
+] }
+anyhow = "1.0"
+color-backtrace = "0.7.2"
+cosmic-notifications-util = { path = "./cosmic-notifications-util" }
+cosmic-notifications-config = { path = "./cosmic-notifications-config" }
+cosmic-panel-config = { git = "https://github.com/pop-os/cosmic-panel" }
+rustix = "1.1.4"
+tokio = { version = "1.52.1", features = [
+    "sync",
+    "rt",
+    "tracing",
+    "macros",
+    "net",
+    "io-util",
+] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3.23", features = ["std", "env-filter"] }
+tracing-journald = { version = "0.3.2", optional = true }
+zbus = { version = "5.14.0", features = ["tokio", "p2p"] }
+
+[features]
+systemd = ["dep:tracing-journald"]
+default = ["systemd"]
+
+[workspace]
+members = ["cosmic-notifications-util", "cosmic-notifications-config"]
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+
+# cosmic-config = { git = "https://github.com/pop-os/libcosmic//" }
+# [patch.'https://github.com/pop-os/libcosmic']
+# libcosmic = { git = "https://github.com/pop-os/libcosmic//" }
+# cosmic-config = { git = "https://github.com/pop-os/libcosmic//" }

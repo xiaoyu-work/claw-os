@@ -1,0 +1,7 @@
+appid := env_var('APPID')
+install-dir := env_var('INSTALL_DIR')
+
+default-schema-target := install-dir / 'cosmic' / appid
+
+install:
+    find v1 -type f -exec install -Dm0644 {} {{default-schema-target}}/{} \;

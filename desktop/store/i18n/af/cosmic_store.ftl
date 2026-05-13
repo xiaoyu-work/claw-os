@@ -1,0 +1,12 @@
+cancel = Kanselleer
+settings = Instellings
+theme = Tema
+light = Lig
+dark = Donker
+match-desktop = Stelselstandaard
+back = Terug
+check-for-updates = Kyk vir opdaterings
+checking-for-updates = Kyk tans vir opdaterings…
+app-name = COSMIC Winkel
+appearance = Vertoon
+import = Voer in

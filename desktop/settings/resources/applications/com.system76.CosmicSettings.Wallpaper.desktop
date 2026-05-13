@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Wallpaper
+Comment=Wallpaper images, colors, and slideshow options.
+Type=Application
+Exec=cosmic-settings wallpaper
+Terminal=false
+Categories=COSMIC
+Keywords=COSMIC;Wallpaper;Background;Slideshow;
+NoDisplay=true
+OnlyShowIn=COSMIC
+Icon=preferences-desktop-wallpaper
+StartupNotify=true

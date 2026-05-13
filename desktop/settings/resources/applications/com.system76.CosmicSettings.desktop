@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=COSMIC Settings
+Comment=Settings application for COSMIC.
+Type=Application
+Exec=cosmic-settings
+Terminal=false
+Categories=COSMIC
+Keywords=COSMIC;Settings;
+OnlyShowIn=COSMIC
+Icon=com.system76.CosmicSettings
+StartupNotify=true

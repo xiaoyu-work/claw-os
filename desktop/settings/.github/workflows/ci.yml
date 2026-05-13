@@ -1,0 +1,58 @@
+name: Continuous integration
+
+env:
+  # Stops the `debconf: unable to initialize frontend: {Dialog, Readline, Teletype}` errors
+  # See https://stackoverflow.com/a/34774096
+  DEBIAN_FRONTEND: noninteractive
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  fmt:
+    name: Rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: install toolchain
+        run: rustup toolchain install 1.90.0 --component rustfmt
+      - name: fmt
+        run: cargo fmt --all --check
+
+  clippy:
+    name: Clippy Check
+    runs-on: ubuntu-24.04
+    steps:
+      - name: install system dependencies
+        run: sudo apt-get update && sudo apt-get install lld cmake libclang-dev libexpat1-dev libfontconfig-dev libfreetype-dev libpipewire-0.3-dev libpulse-dev pkg-config libxkbcommon-dev libudev-dev libinput-dev libwayland-dev
+      - uses: actions/checkout@v6
+      - name: install toolchain
+        run: rustup toolchain install 1.90.0 --component clippy
+      - name: clippy
+        run: cargo clippy --all-features
+
+  test:
+    name: Test
+    runs-on: ubuntu-24.04
+    steps:
+      - name: install system dependencies
+        run: sudo apt-get update && sudo apt-get install lld cmake libclang-dev libexpat1-dev libfontconfig-dev libfreetype-dev libpipewire-0.3-dev libpulse-dev pkg-config libxkbcommon-dev libudev-dev libinput-dev libwayland-dev
+      - uses: actions/checkout@v6
+      - name: install toolchain
+        run: rustup show
+      - name: test
+        run: cargo test --all-features
+
+  check-features:
+    name: Check features
+    runs-on: ubuntu-24.04
+    steps:
+      - name: install system dependencies
+        run: sudo apt-get update && sudo apt-get install lld cmake libclang-dev libexpat1-dev libfontconfig-dev libfreetype-dev libpipewire-0.3-dev libpulse-dev pkg-config libxkbcommon-dev libudev-dev libinput-dev libwayland-dev just
+      - uses: actions/checkout@v6
+      - name: install toolchain
+        run: rustup show
+      - name: check features
+        run: just check-features

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Date & Time
+Comment=Time zone, automatic clock settings, and time formatting.
+Type=Application
+Exec=cosmic-settings date-time
+Terminal=false
+Categories=COSMIC
+Keywords= COSMIC;Time;Zone;
+NoDisplay=true
+OnlyShowIn=COSMIC
+Icon=preferences-date-and-time
+StartupNotify=true

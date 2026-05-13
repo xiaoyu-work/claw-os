@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Startup Applications
+Comment=Configure applications which run on login.
+Type=Application
+Exec=cosmic-settings startup-apps
+Terminal=false
+Categories=COSMIC
+Keywords=COSMIC;Startup;Application;
+NoDisplay=true
+OnlyShowIn=COSMIC
+Icon=preferences-startup-applications
+StartupNotify=true

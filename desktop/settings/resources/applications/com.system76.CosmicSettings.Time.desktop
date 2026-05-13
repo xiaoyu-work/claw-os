@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Time & Language
+Comment=Manage system date, time, region, and language.
+Type=Application
+Exec=cosmic-settings time
+Terminal=false
+Categories=COSMIC
+Keywords=COSMIC;System;Time;Date;Region;Language;
+NoDisplay=true
+OnlyShowIn=COSMIC
+Icon=preferences-time-and-language
+StartupNotify=true

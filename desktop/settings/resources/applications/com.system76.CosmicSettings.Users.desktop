@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Users
+Comment=Authentication and user accounts.
+Type=Application
+Exec=cosmic-settings users
+Terminal=false
+Categories=COSMIC
+Keywords=COSMIC;User;Account;
+NoDisplay=true
+OnlyShowIn=COSMIC
+Icon=preferences-users
+StartupNotify=true

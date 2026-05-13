@@ -18,6 +18,7 @@ Both are optional. `packages.txt` runs first, then `install.sh`.
 | `base` | Core CLI tools, Node.js 24 (+ pnpm/typescript/tsx), Python apt packages, runtime dirs, `/etc/cos/profile.sh` sourcing, version injection |
 | `cos-core` | The `cos` binary, `apps/`, `plugins/`, `skills/` |
 | `browser` | Chromium runtime libs, the `cos-browser` and (optional) `cos-browser-worker` binaries |
+| `desktop` | Wayland desktop stack (compositor, panel, launcher, settings, greeter, …) built from the vendored monorepo at `<repo>/desktop/`. Set `DESKTOP_SKIP=1` to install runtime deps only. |
 
 Default feature set (when no `--features` is given): `base,cos-core,browser`.
 

@@ -1,0 +1,12 @@
+/.cargo/
+/debian/*debhelper*
+/debian/cosmic-files.substvars
+/debian/cosmic-files/
+/debian/files
+/flamegraph.svg
+/heaptrack.*
+/perf.*
+/target/
+/test/
+/vendor.tar
+/vendor/

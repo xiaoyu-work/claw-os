@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=X11 Applications Compatibility
+Comment=X11 window system application scaling, primary display, and global shortcuts.
+Type=Application
+Exec=cosmic-settings legacy-applications
+Terminal=false
+Categories=COSMIC
+Keywords=COSMIC;X11;Application;Game;Compatibility;
+NoDisplay=true
+OnlyShowIn=COSMIC
+Icon=preferences-x11-applications-compatibility
+StartupNotify=true

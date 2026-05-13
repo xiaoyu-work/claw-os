@@ -1,0 +1,23 @@
+cosmic-settings (1.0.12) noble; urgency=medium
+
+  * release: 1.0.12
+
+ -- Michael Murphy <mmstick@pop-os>  Mon, 27 Apr 2026 15:24:27 +0200
+
+cosmic-settings (1.0.7) noble; urgency=medium
+
+  * release: 1.0.7
+
+ -- Michael Murphy <michael@mmurphy.dev>  Tue, 17 Feb 2026 17:02:45 +0100
+
+cosmic-settings (1.0.2) noble; urgency=medium
+
+  * Released version
+
+ -- Michael Murphy <michael@mmurphy.dev>  Fri, 09 Jan 2026 21:31:17 +0100
+
+cosmic-settings (0.1.0) jammy; urgency=medium
+
+  * Project in development
+
+ -- Michael Murphy <michael@mmurphy.dev>  Wed, 25 Jan 2023 16:27:38 +0100

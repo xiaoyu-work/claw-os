@@ -1,0 +1,14 @@
+allow = Toestaan
+cancel = Annuleren
+capture = Opnemen
+share = Delen
+save-to = Opslaan naar
+    .clipboard = { save-to } Klembord
+    .pictures = { save-to } Afbeeldingen
+    .documents = { save-to } Documenten
+choose-folder = Map selecteren
+share-screen = Scherm delen
+    .description = Het systeem wil de inhoud van uw scherm delen met "{ $app_name }". Selecteer een schem of venster dat u wilt delen.
+unknown-application = Onbekende Applicatie
+output = Uitvoer
+window = Venster

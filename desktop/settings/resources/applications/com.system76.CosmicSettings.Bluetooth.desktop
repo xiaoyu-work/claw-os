@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Bluetooth
+Comment=Manage Bluetooth devices.
+Type=Application
+Exec=cosmic-settings bluetooth
+Terminal=false
+Categories=COSMIC
+Keywords=COSMIC;Bluetooth;
+NoDisplay=true
+OnlyShowIn=COSMIC
+Icon=preferences-bluetooth
+StartupNotify=true

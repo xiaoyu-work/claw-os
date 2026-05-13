@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Mouse
+Comment=Mouse speed, acceleration, and natural scrolling.
+Type=Application
+Exec=cosmic-settings mouse
+Terminal=false
+Categories=COSMIC
+Keywords=COSMIC;Mouse;Acceleration;Scrolling;
+NoDisplay=true
+OnlyShowIn=COSMIC
+Icon=preferences-mouse
+StartupNotify=true

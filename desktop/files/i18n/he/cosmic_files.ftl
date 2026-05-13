@@ -1,0 +1,2 @@
+connect = התחברות
+progress = { $percent }%

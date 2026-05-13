@@ -1,0 +1,19 @@
+[Desktop Entry]
+Name=Initial Setup
+Name[zh_CN]=初始设置
+Name[ar]=الإعداد الأولي
+Name[cs]=Úvodní nastavení
+Name[hu]=Első Beállítás
+Name[pl]=Wstępna konfiguracja
+Name[pt]=Ajustes Iniciais
+Name[it]=Setup iniziale
+Icon=com.system76.CosmicInitialSetup
+Exec=cosmic-initial-setup
+Terminal=false
+Type=Application
+StartupNotify=true
+Categories=COSMIC;System
+OnlyShowIn=COSMIC
+NoDisplay=true
+X-GNOME-HiddenUnderSystemd=@systemd_hidden@
+StartupWMClass=com.system76.CosmicInitialSetup

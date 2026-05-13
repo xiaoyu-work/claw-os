@@ -1,0 +1,72 @@
+[package]
+name = "cosmic-edit"
+version = "1.0.13"
+authors = ["Jeremy Soller <jeremy@system76.com>"]
+edition = "2024"
+license = "GPL-3.0-only"
+rust-version = "1.90"
+
+[dependencies]
+dirs = "6"
+env_logger = "0.11.8"
+grep = "0.3.2"
+ignore = "0.4.23"
+log = "0.4.28"
+notify = "8.2.0"
+open = "5.3.2"
+paste = "1.0.15"
+patch = "0.7.0"
+regex = "1.11"
+serde = { version = "1", features = ["serde_derive"] }
+tokio = { version = "1", features = ["process", "time"] }
+# Extra syntax highlighting
+syntect = "5.2.0"
+two-face = "0.4.3"
+# Internationalization
+icu = { version = "2.0.0", features = ["compiled_data"] }
+unicode-segmentation = "1.12"
+i18n-embed = { version = "0.16", features = [
+    "fluent-system",
+    "desktop-requester",
+] }
+i18n-embed-fl = "0.10"
+rust-embed = "8"
+
+[dependencies.cosmic-files]
+git = "https://github.com/pop-os/cosmic-files.git"
+default-features = false
+
+[dependencies.cosmic-syntax-theme]
+git = "https://github.com/pop-os/cosmic-syntax-theme.git"
+
+[dependencies.cosmic-text]
+version = "0.19"
+features = ["syntect", "vi"]
+
+[dependencies.libcosmic]
+git = "https://github.com/pop-os/libcosmic.git"
+default-features = false
+#TODO: a11y feature crashes file choser dialog
+features = ["about", "multi-window", "tokio", "winit", "surface-message"]
+
+[target.'cfg(unix)'.dependencies]
+fork = "0.2"
+
+[build-dependencies]
+xdgen = "0.1"
+
+[features]
+default = ["dbus-config", "gvfs", "wgpu", "wayland"]
+dbus-config = ["libcosmic/dbus-config"]
+gvfs = ["cosmic-files/gvfs"]
+wgpu = ["libcosmic/wgpu", "cosmic-files/wgpu"]
+wayland = ["libcosmic/wayland", "cosmic-files/wayland"]
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true
+
+# [patch.'https://github.com/pop-os/libcosmic']
+# libcosmic = { git = "https://github.com/pop-os/libcosmic//" }
+# cosmic-config = { git = "https://github.com/pop-os/libcosmic//" }
+# cosmic-theme = { git = "https://github.com/pop-os/libcosmic//" }

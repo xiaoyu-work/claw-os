@@ -4,3 +4,10 @@ __pycache__/
 .pytest_cache/
 core/target/
 target/
+
+# Desktop build artifacts (vendored monorepo under desktop/)
+desktop/**/target/
+desktop/**/node_modules/
+desktop/**/build/
+desktop/**/flatpak_app/
+desktop/**/.flatpak-builder/

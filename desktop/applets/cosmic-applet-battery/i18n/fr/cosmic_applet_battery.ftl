@@ -1,0 +1,14 @@
+battery = Batterie
+battery-desc = Consommation et performances réduites.
+balanced = Équilibré
+balanced-desc = Performances et usage de la batterie standard.
+performance = Hautes performances
+performance-desc = Performances et consommation élevées.
+max-charge = Prolongez la durée de vie de votre batterie en arrêtant la charge à 80%
+seconds = s
+minutes = m
+hours = h
+until-empty = avant décharge complète
+power-settings = Paramètres d'alimentation...
+dgpu-running = Le GPU dédié est actif et peut réduire la durée de vie de la batterie
+dgpu-applications = Applications utilisant le GPU dédié { $gpu_name }

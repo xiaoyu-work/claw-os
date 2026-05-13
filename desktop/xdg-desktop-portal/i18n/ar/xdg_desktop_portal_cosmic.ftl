@@ -1,0 +1,14 @@
+allow = اسمح
+cancel = ألغِ
+capture = التقط
+share = شارك
+save-to = احفظ إلى
+    .clipboard = { save-to } الحافظة
+    .pictures = { save-to } الصور
+    .documents = { save-to } المستندات
+choose-folder = اختر المجلد
+share-screen = شارك شاشتك
+    .description = النظام يريد مشاركة محتويات شاشتك مع «{ $app_name }». حدِّد شاشة أو نافذة للمشاركة.
+unknown-application = تطبيق مجهول
+output = الخرج
+window = نافذة

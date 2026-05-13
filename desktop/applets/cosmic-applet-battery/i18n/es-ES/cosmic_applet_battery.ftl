@@ -1,0 +1,14 @@
+battery = Modo ahorro de energía
+battery-desc = Menor rendimiento pero inferior consumo de energía.
+balanced = Modo balanceado
+balanced-desc = Rendimiento y consumo de energía equilibrados.
+performance = Modo de rendimiento
+performance-desc = Máximo rendimiento pero mayor consumo de energía.
+max-charge = Aumentar la vida útil de la batería al poner un límite de carga del 80%
+seconds = s
+minutes = m
+hours = h
+until-empty = hasta que se agote
+power-settings = Configuración de alimentación y batería...
+dgpu-running = La tarjeta gráfica externa está activada y puede reducir la carga restante
+dgpu-applications = Programas utilizando {$gpu_name} la tarjeta gráfica externa

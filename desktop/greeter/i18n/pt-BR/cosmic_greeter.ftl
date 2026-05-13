@@ -1,0 +1,37 @@
+accessibility = Acessibilidade
+    .screen-reader = Leitor de tela
+    .magnifier = Ampliador de tela
+    .high-contrast = Alto contraste
+    .invert-colors = Inverter cores
+cancel = Cancelar
+caps-lock = Caps Lock ativado.
+enter-user = Digite o nome...
+type-username = Usuário:
+keyboard-layout = Layout do teclado
+restart = Reiniciar
+restart-now = Reiniciar agora?
+restart-timeout =
+    O sistema será reiniciado automaticamente
+    { $seconds ->
+        [0] agora.
+        [1] em 1 segundo.
+       *[other] em { $seconds } segundos.
+    }
+session = Sessão
+shutdown = Desligar
+shutdown-now = Desligar agora?
+shutdown-timeout =
+    O sistema será desligado automaticamente
+    { $seconds ->
+        [0] agora.
+        [1] em 1 segundo.
+       *[other] em { $seconds } segundos.
+    }
+suspend = Suspender
+user = Usuário
+authenticating = Autenticando…
+auth-error-default = A autenticação falhou. Tente novamente.
+auth-error-credentials = Senha incorreta. Verifique o layout do seu teclado e tente novamente.
+auth-error-denied = Acesso negado.
+auth-error-maxtries = Muitas tentativas de autenticação falharam.
+auth-error-account = A conta está indisponível ou desativada.

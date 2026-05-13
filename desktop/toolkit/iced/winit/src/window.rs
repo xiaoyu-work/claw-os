@@ -1,0 +1,537 @@
+mod state;
+
+use state::State;
+use winit::dpi::PhysicalPosition;
+
+pub use crate::core::window::{Event, Id, RedrawRequest, Settings};
+
+use crate::conversion;
+use crate::core::alignment;
+use crate::core::input_method;
+use crate::core::mouse;
+use crate::core::renderer;
+use crate::core::text;
+use crate::core::theme::{self, Base};
+use crate::core::time::Instant;
+use crate::core::{
+    Color, Element, InputMethod, Padding, Point, Rectangle, Size, Text, Vector,
+};
+use crate::graphics::Compositor;
+use crate::program::{self, Program};
+use crate::runtime::window::raw_window_handle;
+
+use winit::dpi::{LogicalPosition, LogicalSize};
+use winit::monitor::MonitorHandle;
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+pub(crate) type ViewFn<M, T, R> = Arc<
+    Box<dyn Fn() -> Option<Element<'static, M, T, R>> + Send + Sync + 'static>,
+>;
+
+pub struct WindowManager<P, C>
+where
+    P: Program,
+    C: Compositor<Renderer = P::Renderer>,
+    P::Theme: theme::Base,
+{
+    pub(crate) aliases: BTreeMap<winit::window::WindowId, Id>,
+    entries: BTreeMap<Id, Window<P, C>>,
+}
+
+impl<P, C> WindowManager<P, C>
+where
+    P: Program,
+    C: Compositor<Renderer = P::Renderer>,
+    P::Theme: theme::Base,
+{
+    pub fn new() -> Self {
+        Self {
+            aliases: BTreeMap::new(),
+            entries: BTreeMap::new(),
+        }
+    }
+
+    pub fn insert(
+        &mut self,
+        id: Id,
+        window: Arc<dyn winit::window::Window>,
+        program: &program::Instance<P>,
+        compositor: &mut C,
+        exit_on_close_request: bool,
+        system_theme: theme::Mode,
+        resize_border: u32,
+    ) -> &mut Window<P, C> {
+        let state = State::new(program, id, system_theme, window.as_ref());
+        let surface_size = state.physical_size();
+        let surface_version = state.surface_version();
+        let surface = compositor.create_surface(
+            window.clone(),
+            surface_size.width,
+            surface_size.height,
+        );
+        let renderer = compositor.create_renderer();
+
+        self.aliases.retain(|w, i| *w != window.id() && *i != id);
+        let _ = self.aliases.insert(window.id(), id);
+
+        self.entries.retain(|old, _| id != *old);
+        let _ = self.entries.insert(
+            id,
+            Window {
+                drag_resize_window_func: super::drag_resize::event_func(
+                    window.as_ref(),
+                    resize_border as f64 * window.scale_factor(),
+                ),
+                raw: window,
+                state,
+                exit_on_close_request,
+                surface,
+                surface_version,
+                renderer,
+                mouse_interaction: mouse::Interaction::None,
+                redraw_at: None,
+                preedit: None,
+                ime_state: None,
+                prev_dnd_destination_rectangles_count: 0,
+                viewport_version: 0,
+                redraw_requested: false,
+                resize_enabled: false,
+            },
+        );
+
+        self.entries
+            .get_mut(&id)
+            .expect("Get window that was just inserted")
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn is_idle(&self) -> bool {
+        self.entries
+            .values()
+            .all(|window| window.redraw_at.is_none() && !window.resize_enabled)
+    }
+
+    pub fn redraw_at(&self) -> Option<Instant> {
+        self.entries
+            .values()
+            .filter_map(|window| window.redraw_at)
+            .min()
+    }
+
+    pub fn first(&self) -> Option<&Window<P, C>> {
+        self.entries.first_key_value().map(|(_id, window)| window)
+    }
+
+    pub fn iter_mut(
+        &mut self,
+    ) -> impl Iterator<Item = (Id, &mut Window<P, C>)> {
+        self.entries.iter_mut().map(|(k, v)| (*k, v))
+    }
+
+    pub fn get(&self, id: Id) -> Option<&Window<P, C>> {
+        self.entries.get(&id)
+    }
+
+    pub fn get_mut(&mut self, id: Id) -> Option<&mut Window<P, C>> {
+        self.entries.get_mut(&id)
+    }
+
+    pub fn ids(&self) -> impl Iterator<Item = Id> + '_ {
+        self.entries.keys().cloned()
+    }
+
+    pub fn get_mut_alias(
+        &mut self,
+        id: winit::window::WindowId,
+    ) -> Option<(Id, &mut Window<P, C>)> {
+        let id = self.aliases.get(&id).copied()?;
+
+        Some((id, self.get_mut(id)?))
+    }
+
+    pub fn last_monitor(&self) -> Option<MonitorHandle> {
+        self.entries.values().last()?.raw.current_monitor()
+    }
+
+    pub fn remove(&mut self, id: Id) -> Option<Window<P, C>> {
+        let window = self.entries.remove(&id)?;
+        let _ = self.aliases.remove(&window.raw.id());
+
+        Some(window)
+    }
+}
+
+impl<P, C> Default for WindowManager<P, C>
+where
+    P: Program,
+    C: Compositor<Renderer = P::Renderer>,
+    P::Theme: theme::Base,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub struct Window<P, C>
+where
+    P: Program,
+    C: Compositor<Renderer = P::Renderer>,
+    P::Theme: theme::Base,
+{
+    pub raw: Arc<dyn winit::window::Window>,
+    pub state: State<P>,
+    pub viewport_version: u64,
+    pub drag_resize_window_func: Option<
+        Box<
+            dyn FnMut(
+                &dyn winit::window::Window,
+                &winit::event::WindowEvent,
+            ) -> bool,
+        >,
+    >,
+    pub prev_dnd_destination_rectangles_count: usize,
+    pub exit_on_close_request: bool,
+    pub mouse_interaction: mouse::Interaction,
+    pub surface: C::Surface,
+    pub surface_version: u64,
+    pub renderer: P::Renderer,
+    pub redraw_at: Option<Instant>,
+    preedit: Option<Preedit<P::Renderer>>,
+    ime_state: Option<(Rectangle, input_method::Purpose)>,
+    pub(crate) redraw_requested: bool,
+    pub resize_enabled: bool,
+}
+
+impl<P, C> Window<P, C>
+where
+    P: Program,
+    C: Compositor<Renderer = P::Renderer>,
+    P::Theme: theme::Base,
+{
+    pub fn position(&self) -> Option<Point> {
+        self.raw
+            .outer_position()
+            .ok()
+            .map(|position: PhysicalPosition<i32>| {
+                position.to_logical(self.raw.scale_factor())
+            })
+            .map(|position: LogicalPosition<f32>| Point {
+                x: position.x as f32,
+                y: position.y as f32,
+            })
+    }
+
+    pub fn logical_size(&self) -> Size {
+        self.state.logical_size()
+    }
+
+    pub fn request_redraw(&mut self, redraw_request: RedrawRequest) {
+        match redraw_request {
+            RedrawRequest::NextFrame => {
+                if !self.redraw_requested {
+                    self.redraw_requested = true;
+                    self.raw.request_redraw();
+                }
+                self.redraw_at = None;
+            }
+            RedrawRequest::At(at) => {
+                self.redraw_at = Some(at);
+                self.redraw_requested = false;
+            }
+            RedrawRequest::Wait => {}
+        }
+    }
+
+    pub fn request_input_method(&mut self, input_method: InputMethod) {
+        match input_method {
+            InputMethod::Disabled => {
+                self.disable_ime();
+            }
+            InputMethod::Enabled {
+                cursor,
+                purpose,
+                preedit,
+            } => {
+                self.enable_ime(cursor, purpose);
+
+                if let Some(preedit) = preedit {
+                    if preedit.content.is_empty() {
+                        self.preedit = None;
+                    } else {
+                        let mut overlay =
+                            self.preedit.take().unwrap_or_else(Preedit::new);
+
+                        let mut background_color =
+                            self.state.background_color();
+                        if background_color.a < 1.0 {
+                            let style = self.state.theme().base();
+                            background_color = style.background_color;
+                        }
+                        overlay.update(
+                            cursor,
+                            &preedit,
+                            background_color,
+                            &self.renderer,
+                        );
+
+                        self.preedit = Some(overlay);
+                    }
+                } else {
+                    self.preedit = None;
+                }
+            }
+        }
+    }
+
+    pub fn update_mouse(&mut self, interaction: mouse::Interaction) {
+        if interaction != self.mouse_interaction {
+            if let Some(icon) = conversion::mouse_interaction(interaction) {
+                self.raw.set_cursor(icon.into());
+
+                if self.mouse_interaction == mouse::Interaction::Hidden {
+                    self.raw.set_cursor_visible(true);
+                }
+            } else {
+                self.raw.set_cursor_visible(false);
+            }
+
+            self.mouse_interaction = interaction;
+        }
+    }
+
+    pub fn draw_preedit(&mut self) {
+        if let Some(preedit) = &self.preedit {
+            let mut text_color = self.state.text_color();
+            let mut background_color = self.state.background_color();
+            if background_color.a < 1.0 {
+                let style = self.state.theme().base();
+                text_color = style.text_color;
+                background_color = style.background_color;
+            }
+            preedit.draw(
+                &mut self.renderer,
+                text_color,
+                background_color,
+                &Rectangle::new(
+                    Point::ORIGIN,
+                    self.state.viewport().logical_size(),
+                ),
+            );
+        }
+    }
+
+    fn enable_ime(
+        &mut self,
+        cursor: Rectangle,
+        purpose: input_method::Purpose,
+    ) {
+        if self.ime_state.is_none() {
+            self.raw.set_ime_allowed(true);
+        }
+
+        if self.ime_state != Some((cursor, purpose)) {
+            self.raw.set_ime_cursor_area(
+                LogicalPosition::new(cursor.x, cursor.y).into(),
+                LogicalSize::new(cursor.width, cursor.height).into(),
+            );
+            self.raw.set_ime_purpose(conversion::ime_purpose(purpose));
+
+            self.ime_state = Some((cursor, purpose));
+        }
+    }
+
+    fn disable_ime(&mut self) {
+        if self.ime_state.is_some() {
+            self.raw.set_ime_allowed(false);
+            self.ime_state = None;
+        }
+
+        self.preedit = None;
+    }
+}
+
+impl<P, C> raw_window_handle::HasWindowHandle for Window<P, C>
+where
+    P: Program,
+    C: Compositor<Renderer = P::Renderer>,
+{
+    fn window_handle(
+        &self,
+    ) -> Result<
+        raw_window_handle::WindowHandle<'_>,
+        raw_window_handle::HandleError,
+    > {
+        self.raw.window_handle()
+    }
+}
+
+impl<P, C> raw_window_handle::HasDisplayHandle for Window<P, C>
+where
+    P: Program,
+    C: Compositor<Renderer = P::Renderer>,
+{
+    fn display_handle(
+        &self,
+    ) -> Result<
+        raw_window_handle::DisplayHandle<'_>,
+        raw_window_handle::HandleError,
+    > {
+        self.raw.display_handle()
+    }
+}
+
+struct Preedit<Renderer>
+where
+    Renderer: text::Renderer,
+{
+    position: Point,
+    content: Renderer::Paragraph,
+    spans: Vec<text::Span<'static, (), Renderer::Font>>,
+}
+
+impl<Renderer> Preedit<Renderer>
+where
+    Renderer: text::Renderer,
+{
+    fn new() -> Self {
+        Self {
+            position: Point::ORIGIN,
+            spans: Vec::new(),
+            content: Renderer::Paragraph::default(),
+        }
+    }
+
+    fn update(
+        &mut self,
+        cursor: Rectangle,
+        preedit: &input_method::Preedit,
+        background: Color,
+        renderer: &Renderer,
+    ) {
+        self.position = cursor.position() + Vector::new(0.0, cursor.height);
+
+        let background = Color {
+            a: 1.0,
+            ..background
+        };
+
+        let spans = match &preedit.selection {
+            Some(selection) => {
+                vec![
+                    text::Span::new(&preedit.content[..selection.start]),
+                    text::Span::new(if selection.start == selection.end {
+                        "\u{200A}"
+                    } else {
+                        &preedit.content[selection.start..selection.end]
+                    })
+                    .color(background),
+                    text::Span::new(&preedit.content[selection.end..]),
+                ]
+            }
+            _ => vec![text::Span::new(&preedit.content)],
+        };
+
+        if spans != self.spans.as_slice() {
+            use text::Paragraph as _;
+
+            self.content = Renderer::Paragraph::with_spans(Text {
+                content: &spans,
+                bounds: Size::INFINITE,
+                size: preedit
+                    .text_size
+                    .unwrap_or_else(|| renderer.default_size()),
+                line_height: text::LineHeight::default(),
+                font: renderer.default_font(),
+                align_x: text::Alignment::Default,
+                align_y: alignment::Vertical::Top,
+                shaping: text::Shaping::Advanced,
+                wrapping: text::Wrapping::None,
+                ellipsize: text::Ellipsize::default(),
+            });
+
+            self.spans.clear();
+            self.spans
+                .extend(spans.into_iter().map(text::Span::to_static));
+        }
+    }
+
+    fn draw(
+        &self,
+        renderer: &mut Renderer,
+        color: Color,
+        background: Color,
+        viewport: &Rectangle,
+    ) {
+        use text::Paragraph as _;
+
+        if self.content.min_width() < 1.0 {
+            return;
+        }
+
+        let mut bounds = Rectangle::new(
+            self.position - Vector::new(0.0, self.content.min_height()),
+            self.content.min_bounds(),
+        );
+
+        bounds.x = bounds
+            .x
+            .max(viewport.x)
+            .min(viewport.x + viewport.width - bounds.width);
+
+        bounds.y = bounds
+            .y
+            .max(viewport.y)
+            .min(viewport.y + viewport.height - bounds.height);
+
+        renderer.with_layer(bounds, |renderer| {
+            let background = Color {
+                a: 1.0,
+                ..background
+            };
+
+            renderer.fill_quad(
+                renderer::Quad {
+                    bounds,
+                    ..Default::default()
+                },
+                background,
+            );
+
+            renderer.fill_paragraph(
+                &self.content,
+                bounds.position(),
+                color,
+                bounds,
+            );
+
+            const UNDERLINE: f32 = 2.0;
+
+            renderer.fill_quad(
+                renderer::Quad {
+                    bounds: bounds.shrink(Padding {
+                        top: bounds.height - UNDERLINE,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                color,
+            );
+
+            for span_bounds in self.content.span_bounds(1) {
+                renderer.fill_quad(
+                    renderer::Quad {
+                        bounds: span_bounds
+                            + (bounds.position() - Point::ORIGIN),
+                        ..Default::default()
+                    },
+                    color,
+                );
+            }
+        });
+    }
+}

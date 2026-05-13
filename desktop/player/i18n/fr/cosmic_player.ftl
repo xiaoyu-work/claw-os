@@ -1,0 +1,51 @@
+album = Album : { $album }
+audio = Audio
+no-video-or-audio-file-open = Aucun média sélectionné
+open-file = Ouvrir le fichier
+open-folder = Ouvrir dossier
+subtitles = Sous-titres
+unknown-author = Auteur Inconnu
+untitled = Sans titre
+
+# Context Pages
+
+
+## Settings
+
+settings = Paramètres
+
+### Appearance
+
+appearance = Apparence
+theme = Thème
+match-desktop = Assortir au bureau
+dark = Sombre
+light = Clair
+
+# Menu
+
+
+## File
+
+file = Fichier
+open-media = Ouvrir média...
+open-recent-media = Ouvrir média récent
+close-file = Fermer le fichier
+open-media-folder = Ouvrir le dossier du média...
+open-recent-media-folder = Ouvrir le dossier du média récent
+close-media-folder = Fermer le dossier du média
+quit = Quitter
+off = Désactivé
+clear-recent = Effacer la liste récente
+repeat-disabled = Répétition désactivée
+repeat-track = Répéter la piste
+playback = Lecture
+next-frame = Prochaine image
+previous-frame = Image précédente
+ab-repeat = Répétition A-B
+ab-repeat-set-a = Répétition A-B (A)
+ab-repeat-set-b = Répétition A-B (B)
+ab-repeat-clear = Effacer la répétition A-B
+xdg-name = Lecteur Multimédia COSMIC
+xdg-comment = Lecteur Multimédia pour le bureau COSMIC
+xdg-keywords = Audio;Film;Musique;Son;Vidéo;

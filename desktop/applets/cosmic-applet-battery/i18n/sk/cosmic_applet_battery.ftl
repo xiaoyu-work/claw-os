@@ -1,0 +1,14 @@
+battery = Batéria
+battery-desc = Znížená spotreba energie a výkon.
+balanced = Vyvážený
+balanced-desc = Štandardný výkon a spotreba batérie.
+performance = Vysoký výkon
+performance-desc = Vysoký výkon a spotreba energie.
+max-charge = Predĺžte životnosť batérie nastavením maximálnej hodnoty nabitia na 80 %
+seconds = s
+minutes = m
+hours = h
+until-empty = do vybitia
+power-settings = Nastavenia napájania a batérie...
+dgpu-running = Diskrétna GPU je aktívna a môže znížiť výdrž batérie
+dgpu-applications = Aplikácie používajúce diskrétnu GPU {$gpu_name}

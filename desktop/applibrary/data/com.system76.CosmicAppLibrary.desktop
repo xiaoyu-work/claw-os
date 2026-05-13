@@ -1,0 +1,39 @@
+[Desktop Entry]
+Name=Applications
+Name[ar]=تطبيقات
+Name[bg]=Програми
+Name[cs]=Aplikace
+Name[zh_CN]=应用程序库
+Name[pl]=Aplikacje
+Name[hu]=Alkalmazások
+Name[pt_BR]=Aplicativos
+Name[pt]=Aplicativos
+Name[ru]=Приложения
+Name[sv]=Program
+Name[sk]=Aplikácie
+Name[es]=Aplicaciones
+Name[it]=Applicazioni
+Comment=COSMIC App Library shell application
+Comment[ar]=تطبيق صدفة مكتبة تطبيقات COSMIC
+Comment[bg]=Библиотека за програми на COSMIC
+Comment[cs]=Shell aplikace knihovny aplikací COSMIC
+Comment[zh_CN]=COSMIC应用程序库命令行程序
+Comment[pl]=Aplikacja powłoki Biblioteka aplikacji COSMIC
+Comment[hu]=A COSMIC alkalmazáskönyvtár felületalkalmazása
+Comment[pt_BR]=Biblioteca de aplicativos
+Comment[pt]=Biblioteca de aplicativos
+Comment[ru]=Библиотека приложений COSMIC
+Comment[sv]=COSMIC programbibliotek skalprogram
+Comment[sk]=Shell aplikácia knižnice aplikácií COSMIC
+Comment[es]=Aplicación shell de biblioteca para aplicaciones COSMIC
+Comment[it]=Libreria delle applicazioni di COSMIC
+Type=Application
+Exec=cosmic-app-library
+Terminal=false
+Categories=COSMIC;
+# Translators: Search terms to find this application. Do NOT translate or localize the semicolons! The list MUST also end with a semicolon!
+Keywords=COSMIC;ICED;
+# Translators: Do NOT translate or transliterate this text (this is an icon file name)!
+Icon=com.system76.CosmicAppLibrary
+StartupNotify=true
+NoDisplay=true

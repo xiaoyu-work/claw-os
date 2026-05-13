@@ -1,0 +1,27 @@
+[package]
+name = "cosmic-client-toolkit"
+version = "0.2.0"
+edition = "2024"
+repository = "https://github.com/pop-os/cosmic-protocols"
+license = "GPL-3.0-only"
+description = "Helpers for implement clients with COSMIC Wayland protocols"
+
+[dependencies]
+cosmic-protocols = { version = "0.2.0", path = "../" }
+sctk = { package = "smithay-client-toolkit", version = "0.20.0" }
+wayland-client = { version = "0.31.11" }
+libc = "0.2.175"
+wayland-protocols = { version = "0.32.9", features = ["client", "staging"] }
+bitflags = "2.9.3"
+
+[dev-dependencies]
+png = "0.18.0"
+wayland-backend = { version = "0.3.11", features = ["client_system"] }
+gbm = "0.18.0"
+smithay = { version = "0.7.0", default-features = false, features = [
+    "renderer_gl",
+    "backend_drm",
+] }
+
+[features]
+default = []

@@ -1,0 +1,11 @@
+appid := env_var('APPID')
+install-dir := env_var('INSTALL_DIR')
+
+scalable-src := appid + '.svg'
+scalable-dst := install-dir / 'icons' / 'hicolor' / 'scalable' / 'apps' / scalable-src
+
+install:
+    install -Dm0644 {{scalable-src}} {{scalable-dst}}
+
+uninstall:
+    rm {{scalable-dst}}

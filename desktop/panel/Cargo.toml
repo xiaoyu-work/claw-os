@@ -1,0 +1,37 @@
+[workspace]
+members = [
+    "cosmic-panel-bin",
+    "cosmic-panel-config",
+    "xdg-shell-wrapper-config",
+]
+resolver = "3"
+
+[profile.dev]
+opt-level = 1
+
+[workspace.package]
+license = "GPL-3.0-only"
+
+[profile.release]
+lto = "thin"
+
+[workspace.dependencies]
+sctk = { package = "smithay-client-toolkit", version = "0.20.0", features = [
+    "calloop",
+    "xkbcommon",
+] }
+
+[patch."https://github.com/pop-os/cosmic-protocols"]
+cctk = { package = "cosmic-client-toolkit", git = "https://github.com/pop-os//cosmic-protocols" }
+
+# [patch."https://github.com/pop-os/xdg-shell-wrapper"]
+# xdg-shell-wrapper-config = { path = "../xdg-shell-wrapper/xdg-shell-wrapper-config" }
+# xdg-shell-wrapper = { path = "../xdg-shell-wrapper" }
+# xdg-shell-wrapper = { git = "https://github.com/pop-os/xdg-shell-wrapper//", branch = "update" }
+# xdg-shell-wrapper-config = { git = "https://github.com/pop-os/xdg-shell-wrapper//", branch = "update" }
+
+# [patch."https://github.com/pop-os/libcosmic"]
+# cosmic-config = { git = "https://github.com/pop-os/libcosmic//" }
+# libcosmic = { git = "https://github.com/pop-os/libcosmic//" }
+# cosmic-theme = { git = "https://github.com/pop-os/libcosmic//" }
+# iced_tiny_skia = { git = "https://github.com/pop-os/libcosmic//" }

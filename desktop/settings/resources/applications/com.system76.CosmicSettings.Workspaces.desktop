@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Workspaces
+Comment=Workspace orientation, overview, and multi-monitor behavior.
+Type=Application
+Exec=cosmic-settings workspaces
+Terminal=false
+Categories=COSMIC
+Keywords=COSMIC;Workspace;Orientation;Overview;Monitor;
+NoDisplay=true
+OnlyShowIn=COSMIC
+Icon=preferences-workspaces
+StartupNotify=true

@@ -1,0 +1,36 @@
+# Context Drawer
+close = أغلِق
+# About
+license = الترخيص
+links = الروابط
+developers = المطوِّرون
+designers = المصمّمون
+artists = الفنانون
+translators = المترجمون
+documenters = الموثقون
+january = يناير { $year }
+february = فبراير { $year }
+march = مارس { $year }
+april = ابريل { $year }
+may = مايو { $year }
+june = يونيو { $year }
+july = يوليو { $year }
+august = أغسطس { $year }
+september = سبتمبر { $year }
+october = أكتوبر { $year }
+november = نوفمبر { $year }
+december = ديسمبر { $year }
+monday = الاثنين
+tuesday = الثلاثاء
+wednesday = الأربعاء
+thursday = الخميس
+friday = الجمعة
+saturday = السبت
+sunday = الأحد
+mon = ن
+tue = ث
+wed = ر
+thu = خ
+fri = ج
+sat = س
+sun = ح

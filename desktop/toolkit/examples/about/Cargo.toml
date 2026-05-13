@@ -1,0 +1,22 @@
+[package]
+name = "about"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+open = "5.3.3"
+
+[dependencies.libcosmic]
+path = "../../"
+features = [
+    "debug",
+    "winit",
+    "tokio",
+    "xdg-portal",
+    "desktop",
+    "a11y",
+    "wayland",
+    "wgpu",
+    "single-instance",
+    "about",
+]

@@ -1,0 +1,40 @@
+Source: cosmic-settings
+Section: utils
+Priority: optional
+Maintainer: Michael Murphy <mmstick@pm.me>
+Build-Depends:
+    debhelper-compat (=13),
+    cmake,
+    fonts-open-sans,
+    just,
+    libclang-dev,
+    libexpat1-dev,
+    libfontconfig-dev,
+    libfreetype-dev,
+    libinput-dev,
+    libpipewire-0.3-dev,
+    libudev-dev,
+    libwayland-dev,
+    libxkbcommon-dev,
+    mold,
+    pkg-config,
+    rust-all,
+Standards-Version: 4.6.2
+Homepage: https://github.com/pop-os/cosmic-settings
+
+Package: cosmic-settings
+Architecture: amd64 arm64
+Depends:
+    ${misc:Depends},
+    ${shlibs:Depends},
+    accountsservice,
+    cosmic-randr,
+    gettext,
+    iso-codes,
+    network-manager-gnome,
+    network-manager-openvpn,
+    network-manager-openvpn-gnome,
+    xkb-data,
+Recommends: adw-gtk3
+Description: Settings application for the COSMIC desktop environment
+ Settings application for the COSMIC desktop environment

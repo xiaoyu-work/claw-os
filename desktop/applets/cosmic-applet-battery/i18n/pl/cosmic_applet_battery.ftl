@@ -1,0 +1,14 @@
+battery = Na baterii
+battery-desc = Zmniejszone zużycie energii i zmniejszona wydajność.
+balanced = Zrównoważony
+balanced-desc = Standardowa wydajność i zużycie baterii.
+performance = Wysoka wydajność
+performance-desc = Wysoka wydajność i zwiększone zużycie energii.
+max-charge = Zwiększ żywotność swojej baterii, ustawiając maksymalny poziom naładowania na 80%
+seconds = s
+minutes = min
+hours = g
+until-empty = Do wyczerpania baterii
+power-settings = Ustawienia zasilania i baterii…
+dgpu-running = Dedykowana karta graficzna jest aktywna, co może zwiększyć zużycie baterii
+dgpu-applications = Aplikacje użytkujące dedykowaną kartę graficzną { $gpu_name }

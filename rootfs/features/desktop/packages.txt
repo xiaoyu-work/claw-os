@@ -1,0 +1,92 @@
+# desktop — claw-os desktop environment runtime + build dependencies.
+#
+# The desktop is built from source by install.sh. The packages below are
+# the union of:
+#   - build deps for the Rust + Wayland desktop tree
+#   - runtime libs needed to actually run the compositor + shell
+#   - pam / polkit / seatd needed by the display manager and session
+
+# --- Build toolchain (host-side, used during rootfs build only) ---
+build-essential
+pkg-config
+clang
+mold
+lld
+just
+git
+
+# --- Wayland / graphics core ---
+libwayland-dev
+libwayland-client0
+libwayland-server0
+libwayland-cursor0
+libwayland-egl1
+libxkbcommon-dev
+libxkbcommon0
+libinput-dev
+libinput10
+libudev-dev
+libdrm-dev
+libgbm-dev
+libgbm1
+libglvnd-dev
+libegl1
+libgles2
+libgl1
+mesa-utils
+mesa-vulkan-drivers
+libvulkan1
+libdisplay-info-dev
+libseat-dev
+libseat1
+seatd
+
+# --- Session / system services ---
+dbus
+libdbus-1-dev
+libsystemd-dev
+libpam0g-dev
+polkitd
+udev
+xdg-user-dirs
+
+# --- Pipewire (screen capture, screen sharing via xdg-desktop-portal) ---
+libpipewire-0.3-dev
+pipewire
+pipewire-pulse
+wireplumber
+
+# --- Text / font rendering (UI toolkit dependencies) ---
+libfontconfig-dev
+libfontconfig1
+libfreetype-dev
+libfreetype6
+libexpat1-dev
+libexpat1
+libpixman-1-dev
+
+# --- Multimedia (media player) ---
+libgstreamer1.0-dev
+libgstreamer-plugins-base1.0-dev
+gstreamer1.0-plugins-base
+gstreamer1.0-plugins-good
+gstreamer1.0-plugins-bad
+gstreamer1.0-libav
+
+# --- SSL + Flatpak (app store) ---
+libssl-dev
+libflatpak-dev
+
+# --- Other compile-time bindgen targets ---
+libclang-dev
+
+# --- Fonts and icons baseline ---
+fonts-noto-core
+fonts-noto-cjk
+fonts-noto-color-emoji
+adwaita-icon-theme
+hicolor-icon-theme
+
+# --- Keyboard / locale ---
+xkb-data
+locales

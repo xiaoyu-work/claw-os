@@ -1,0 +1,8 @@
+data/com.System76.CosmicThemeEditor.desktop.in.in
+data/com.System76.CosmicThemeEditor.gschema.xml.in
+data/com.System76.CosmicThemeEditor.metainfo.xml.in.in
+data/resources/ui/shortcuts.ui
+data/resources/ui/window.ui
+src/application.rs
+src/components/theme_editor/mod.rs
+src/components/file_button/mod.rs

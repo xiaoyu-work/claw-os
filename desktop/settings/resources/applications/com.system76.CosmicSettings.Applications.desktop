@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Applications
+Comment=Default applications, startup applications, and X11 application compatibility settings.
+Type=Application
+Exec=cosmic-settings applications
+Terminal=false
+Categories=COSMIC
+Keywords=COSMIC;Default;Application;Startup;X11;Compatibility
+NoDisplay=true
+OnlyShowIn=COSMIC
+Icon=preferences-applications
+StartupNotify=true

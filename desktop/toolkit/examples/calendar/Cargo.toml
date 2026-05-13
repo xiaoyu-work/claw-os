@@ -1,0 +1,13 @@
+[package]
+name = "calendar"
+version = "1.0.0"
+edition = "2024"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+jiff = "0.2"
+
+[dependencies.libcosmic]
+path = "../../"
+features = ["debug", "winit", "tokio", "xdg-portal", "wgpu"]

@@ -1,0 +1,39 @@
+album = Album: { $album }
+audio = Zvuk
+no-video-or-audio-file-open = Není otevřen žádný mediální soubor
+open-file = Otevřít soubor
+open-folder = Otevřít složku
+subtitles = Titulky
+unknown-author = Neznámý autor
+untitled = Bez názvu
+settings = Nastavení
+appearance = Vzhled
+theme = Motiv
+match-desktop = Podle systému
+dark = Tmavý
+light = Světlý
+file = Soubor
+open-media = Otevřít média...
+open-recent-media = Otevřít nedávná média
+close-file = Zavřít soubor
+open-media-folder = Otevřít složku s médii...
+open-recent-media-folder = Otevřít nedávnou složku s médii
+close-media-folder = Zavřít složku s médii
+quit = Ukončit
+off = Vypnuto
+clear-recent = Vymazat seznam nedávných
+repeat-track = Opakovat stopu
+repeat-disabled = Opakování vypnuto
+playback = Přehrávání
+next-frame = Další snímek
+previous-frame = Předchozí snímek
+ab-repeat = Opakování A-B
+ab-repeat-set-a = Opakování A-B (A)
+ab-repeat-set-b = Opakování A-B (B)
+ab-repeat-clear = Vymazat opakování A-B
+
+# XDG Metadata
+
+xdg-name = Přehrávač médií COSMIC
+xdg-comment = Přehrávač médií pro prostředí COSMIC
+xdg-keywords = Audio;Film;Hudba;Zvuk;Video;

@@ -1,0 +1,75 @@
+pop-launcher (1.2.6) jammy; urgency=medium
+
+  * Update all cargo dependencies as of 2025-09-25
+  * Fixes for some desktop entries
+  * Fixes for the cosmic beta
+
+ -- Michael Murphy <michael@mmurphy.dev>  Thu, 25 Sep 2025 19:55:10 +0200
+
+pop-launcher (1.2.4) jammy; urgency=medium
+
+  * Update all cargo dependencies as of 2024-10-18
+  * Search optimizations
+
+ -- Michael Aaron Murphy <michael@mmurphy.dev>  Fri, 18 Oct 2024 17:01:55 +0200
+
+pop-launcher (1.2.3) jammy; urgency=medium
+
+  * Update crate dependencies
+  * Fix order of desktop entry search
+
+ -- Michael Aaron Murphy <michael@mmurphy.dev>  Fri, 26 Apr 2024 17:05:24 +0200
+
+pop-launcher (1.2.2) jammy; urgency=medium
+
+  * Various bug fixes and improvements
+  * Many dependency updates
+  * Recent application search enhancements
+  * New web plugin shortcuts
+
+ -- Michael Murphy <mmstick@pm.me>  Sat, 05 Nov 2022 00:39:40 +0100
+
+pop-launcher (1.2.1) impish; urgency=medium
+
+  * Use mimalloc as global allocator because it is 2x faster than glib
+  * Enable LTO, panic=abort, strip-true for reduce binary size
+
+ -- Michael Aaron Murphy <mmstick@pm.me>  Tue, 29 Mar 2022 13:17:57 +0200
+
+pop-launcher (1.2.0) impish; urgency=medium
+
+  * Switch from smol-rs to tokio-rs
+  * Switch from isahc to reqwest
+  * Drop GTK dependency requirement
+
+ -- Michael Aaron Murphy <mmstick@pm.me>  Sun, 27 Mar 2022 20:16:19 +0200
+
+pop-launcher (1.1.1) impish; urgency=medium
+
+  * Calculator fix
+
+ -- Michael Aaron Murphy <mmstick@gaze15.lan>  Sat, 26 Mar 2022 12:56:41 +0100
+
+pop-launcher (1.1.0) impish; urgency=medium
+
+  * Pop Shell API Improvements
+
+ -- Michael Aaron Murphy <mmstick@pm.me>  Mon, 22 Nov 2021 22:09:57 +0100
+
+pop-launcher (1.0.3) impish; urgency=medium
+
+  * Additional fixes
+
+ -- Michael Aaron Murphy <mmstick@aorus-b550.localdomain>  Sun, 31 Oct 2021 14:07:36 +0100
+
+pop-launcher (1.0.2) impish; urgency=medium
+
+  * Post-launch fixes
+
+ -- Michael Aaron Murphy <mmstick@pm.me>  Tue, 19 Oct 2021 17:19:04 +0200
+
+pop-launcher (1.0.0) hirsute; urgency=medium
+
+  * Initial release.
+
+ -- Michael Aaron Murphy <mmstick@pm.me>  Thu, 12 Aug 2021 22:01:44 +0200

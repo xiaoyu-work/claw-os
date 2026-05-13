@@ -1,0 +1,606 @@
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::rc::Rc;
+use std::sync::Arc;
+
+use crate::PanelCalloopMsg;
+use crate::iced::elements::PanelSpaceElement;
+use crate::minimize::MinimizeApplet;
+use crate::space::{AppletMsg, PanelColors, PanelSharedState, PanelSpace};
+use crate::workspaces_dbus::CosmicWorkspaces;
+use crate::xdg_shell_wrapper::client::handlers::overlap::OverlapNotifyV1;
+use crate::xdg_shell_wrapper::shared_state::GlobalState;
+use crate::xdg_shell_wrapper::space::WrapperSpace;
+use crate::xdg_shell_wrapper::wp_fractional_scaling::FractionalScalingManager;
+use crate::xdg_shell_wrapper::wp_viewporter::ViewporterState;
+use cctk::toplevel_info::ToplevelInfo;
+use cctk::wayland_client::protocol::wl_seat::WlSeat;
+use cctk::workspace::{Workspace, WorkspaceGroup};
+use cosmic::cosmic_config::CosmicConfigEntry;
+use cosmic::iced::id;
+use cosmic::theme;
+use cosmic_panel_config::{
+    CosmicPanelBackground, CosmicPanelConfig, CosmicPanelContainerConfig, CosmicPanelOuput,
+    PanelAnchor,
+};
+use cosmic_theme::{Theme, ThemeMode};
+use notify::RecommendedWatcher;
+use sctk::output::OutputInfo;
+use sctk::reexports::calloop;
+use sctk::reexports::client::protocol::wl_output::WlOutput;
+use sctk::reexports::client::{Connection, QueueHandle};
+use sctk::shell::wlr_layer::LayerShell;
+use sctk::subcompositor::SubcompositorState;
+use smithay::backend::renderer::gles::GlesRenderer;
+use smithay::output::Output;
+use smithay::reexports::wayland_server::backend::ClientId;
+use smithay::reexports::wayland_server::{self};
+use smithay::wayland::shell::xdg::ToplevelSurface;
+use tokio::sync::mpsc;
+use tracing::{error, info};
+use wayland_server::Resource;
+
+pub struct SpaceContainer {
+    pub(crate) connection: Option<Connection>,
+    pub(crate) config: CosmicPanelContainerConfig,
+    pub(crate) space_list: Vec<PanelSpace>,
+    pub(crate) renderer: Option<GlesRenderer>,
+    pub(crate) s_display: Option<wayland_server::DisplayHandle>,
+    pub(crate) outputs: Vec<(WlOutput, Output, OutputInfo)>,
+    pub(crate) watchers: HashMap<String, RecommendedWatcher>,
+    pub(crate) maximized_toplevels: Vec<ToplevelInfo>,
+    pub(crate) toplevels: Vec<ToplevelInfo>,
+    pub(crate) workspace_groups: Vec<WorkspaceGroup>,
+    pub(crate) workspaces: Vec<Workspace>,
+    pub(crate) is_dark: bool,
+    pub(crate) light_theme: cosmic::Theme,
+    pub(crate) dark_theme: cosmic::Theme,
+    /// map from output name to minimized applet info
+    pub(crate) minimized_applets: HashMap<String, MinimizeApplet>,
+    pub(crate) overlap_notify: Option<OverlapNotifyV1>,
+    pub(crate) shared: Rc<PanelSharedState>,
+}
+
+impl SpaceContainer {
+    pub fn new(
+        config: CosmicPanelContainerConfig,
+        tx: mpsc::Sender<AppletMsg>,
+        panel_tx: calloop::channel::Sender<PanelCalloopMsg>,
+        loop_handle: calloop::LoopHandle<'static, GlobalState>,
+    ) -> Self {
+        let is_dark = ThemeMode::config()
+            .ok()
+            .and_then(|c| ThemeMode::get_entry(&c).ok())
+            .unwrap_or_default()
+            .is_dark;
+
+        let light = Theme::light_config()
+            .ok()
+            .and_then(|c| Theme::get_entry(&c).ok())
+            .unwrap_or_else(Theme::light_default);
+        let dark = Theme::dark_config()
+            .ok()
+            .and_then(|c| Theme::get_entry(&c).ok())
+            .unwrap_or_else(Theme::dark_default);
+
+        let cosmic_workspaces = match CosmicWorkspaces::new() {
+            Ok(cosmic_workspaces) => Some(cosmic_workspaces),
+            Err(err) => {
+                tracing::error!("failed to create workspaces dbus proxy: {}", err);
+                None
+            },
+        };
+
+        if let Some(cosmic_workspaces) = &cosmic_workspaces {
+            let _ = loop_handle.insert_source(
+                cosmic_workspaces.is_shown_event_source(),
+                move |event, (), state| {
+                    if let calloop::channel::Event::Msg(value) = event {
+                        state.space.update_workspaces_shown(value);
+                    }
+                },
+            );
+        }
+
+        Self {
+            connection: None,
+            config,
+            space_list: Vec::with_capacity(1),
+            renderer: None,
+            s_display: None,
+            outputs: vec![],
+            watchers: HashMap::new(),
+            maximized_toplevels: Vec::with_capacity(1),
+            toplevels: Vec::new(),
+            workspace_groups: Vec::new(),
+            workspaces: Vec::new(),
+            is_dark,
+            light_theme: cosmic::Theme::system(Arc::new(light)),
+            dark_theme: cosmic::Theme::system(Arc::new(dark)),
+            minimized_applets: HashMap::new(),
+            overlap_notify: None,
+            shared: Rc::new(PanelSharedState {
+                c_focused_surface: Default::default(),
+                c_hovered_surface: Default::default(),
+                applet_tx: tx,
+                panel_tx,
+                security_context_manager: RefCell::new(None),
+                loop_handle,
+                cosmic_workspaces,
+                workspaces_shown: Cell::new(false),
+            }),
+        }
+    }
+
+    pub fn set_dark(&mut self, theme: theme::CosmicTheme) {
+        self.dark_theme = cosmic::Theme::system(Arc::new(theme));
+
+        for space in &mut self.space_list {
+            let is_dark = space.is_dark(self.is_dark);
+            if is_dark {
+                space.set_theme(
+                    PanelColors::new(self.dark_theme.clone())
+                        .with_color_override(space.config.bg_color_override()),
+                );
+            }
+        }
+    }
+
+    pub fn set_light(&mut self, theme: theme::CosmicTheme) {
+        self.light_theme = cosmic::Theme::system(Arc::new(theme));
+
+        for space in &mut self.space_list {
+            let is_dark = space.is_dark(self.is_dark);
+            if !is_dark {
+                space.set_theme(
+                    PanelColors::new(self.light_theme.clone())
+                        .with_color_override(space.config.bg_color_override()),
+                );
+            }
+        }
+    }
+
+    pub fn cur_theme(&self) -> cosmic::Theme {
+        if self.is_dark { self.dark_theme.clone() } else { self.light_theme.clone() }
+    }
+
+    pub fn cleanup_client(&mut self, old_client_id: ClientId) {
+        for s in &mut self.space_list {
+            // cleanup leftover windows
+            let w = {
+                s.space
+                    .elements()
+                    .find(|w| {
+                        w.toplevel().is_some_and(|t| {
+                            t.wl_surface().client().map(|c| c.id()).as_ref() == Some(&old_client_id)
+                        })
+                    })
+                    .cloned()
+            };
+            let mut found_window = false;
+            if let Some(w) = w {
+                s.space.unmap_elem(&w);
+                found_window = true;
+            }
+            let len = s.popups.len();
+            // TODO handle cleanup of nested popups
+            s.popups.retain(|p| {
+                let Some(client) = p.s_surface.wl_surface().client() else {
+                    return false;
+                };
+                client.id() != old_client_id
+            });
+            if found_window || len != s.popups.len() {
+                s.is_dirty = true;
+                break;
+            }
+        }
+    }
+
+    pub(crate) fn set_theme_mode(&mut self, is_dark: bool) {
+        let changed = self.is_dark != is_dark;
+        self.is_dark = is_dark;
+        if changed {
+            let cur = self.cur_theme();
+            for space in &mut self.space_list {
+                if matches!(space.config.background, CosmicPanelBackground::ThemeDefault) {
+                    space.set_theme(
+                        PanelColors::new(cur.clone())
+                            .with_color_override(space.config.bg_color_override()),
+                    );
+                }
+            }
+        }
+    }
+
+    /// apply a removed entry to the space list
+    pub fn remove_space(&mut self, name: String) {
+        self.space_list.retain(|s| s.config.name != name);
+        self.config.config_list.retain(|c| c.name != name);
+        self.watchers.remove(&name);
+    }
+
+    /// apply a new or updated entry to the space list
+    pub fn update_space(
+        &mut self,
+        mut entry: CosmicPanelConfig,
+        compositor_state: &sctk::compositor::CompositorState,
+        fractional_scale_manager: Option<&FractionalScalingManager>,
+        viewport: Option<&ViewporterState>,
+        layer_state: &mut LayerShell,
+        qh: &QueueHandle<GlobalState>,
+        force_output: Option<WlOutput>,
+        _overlap_notify: Option<OverlapNotifyV1>,
+    ) {
+        // if the output is set to "all", we need to check if the config is the same for
+        // all outputs if the output is set to a specific output, we need to
+        // make sure it doesn't exist on another output
+        let mut output_count = if matches!(entry.output, CosmicPanelOuput::All) {
+            self.outputs.len()
+        } else {
+            self.space_list.iter().filter(|s| s.config.name == entry.name).count()
+        } as isize;
+
+        if force_output.is_none()
+            && self.space_list.iter_mut().any(|s| {
+                let ret = if matches!(entry.output, CosmicPanelOuput::All) {
+                    entry.output = s.config.output.clone();
+                    let ret = s.config == entry;
+                    entry.output = CosmicPanelOuput::All;
+                    ret
+                } else {
+                    s.config == entry
+                };
+                if ret {
+                    output_count -= 1;
+                }
+                output_count <= 0
+            })
+        {
+            info!("config unchanged, skipping");
+            return;
+        } else {
+            info!("config changed, updating");
+        }
+
+        let connection = match self.connection.as_ref() {
+            Some(c) => c,
+            None => return,
+        };
+
+        let output_count_mismatch = match entry.output {
+            CosmicPanelOuput::All => {
+                self.space_list.iter().filter(|s| s.config.name == entry.name).count()
+                    != self.outputs.len()
+            },
+            CosmicPanelOuput::Name(_) => {
+                self.space_list.iter().filter(|s| s.config.name == entry.name).count() != 1
+            },
+            _ => true,
+        };
+        let new_priority = entry.get_priority();
+        let (old_priority, old_anchor) = self
+            .config
+            .config_list
+            .iter()
+            .find(|c| c.name == entry.name)
+            .map(|c| (c.get_priority(), c.anchor))
+            .unwrap_or((0, entry.anchor));
+
+        let opposite_anchor = if old_anchor == entry.anchor {
+            None
+        } else {
+            Some(match entry.anchor {
+                PanelAnchor::Top => PanelAnchor::Bottom,
+                PanelAnchor::Bottom => PanelAnchor::Top,
+                PanelAnchor::Left => PanelAnchor::Right,
+                PanelAnchor::Right => PanelAnchor::Left,
+            })
+        };
+        // recreate the original if: output changed
+        // or if the output is the same, but the priority changes to conflict with an
+        // adjacent panel or if applet size changes
+        let must_recreate =
+        // implies that there is at least one output which needs to be recreated
+        output_count_mismatch
+        || self.config.config_list.iter().any(|c| {
+            // size changed
+            c.name == entry.name && c.size != entry.size
+            // spacing changed
+            || (c.name == entry.name && c.spacing != entry.spacing)
+            // size overrides changed
+            || (c.name == entry.name && (c.size_center != entry.size_center || c.size_wings != entry.size_wings))
+            // output changed
+            || (entry.output != CosmicPanelOuput::All &&
+            (c.name == entry.name && c.output != entry.output))
+            // panel anchor change forces restart
+            || opposite_anchor.is_some()
+            // applet restarts are required
+            || (c.name == entry.name
+                && (c.is_horizontal() != entry.is_horizontal()
+                || c.size != entry.size
+                || c.background != entry.background
+                || c.plugins_center != entry.plugins_center
+                || c.plugins_wings != entry.plugins_wings))
+            // Priority change to conflict with adjacent panel
+            || c.name != entry.name
+                && Some(c.anchor) != opposite_anchor
+                && (old_priority < c.get_priority() && new_priority > c.get_priority() || old_priority > c.get_priority() && new_priority < c.get_priority())}
+            || c.name != entry.name && old_priority != new_priority && c.anchor == entry.anchor
+            // || self.space_list.iter().any(|s| s.has_layer_overlap())
+
+        );
+
+        self.config.config_list.retain(|c| c.name != entry.name);
+        self.config.config_list.push(entry.clone());
+
+        if !must_recreate {
+            let bg_color = match entry.background {
+                CosmicPanelBackground::Color(c) => Some([c[0], c[1], c[2], entry.opacity]),
+                _ => None,
+            };
+
+            for space in &mut self.space_list {
+                if space.config.name != entry.name {
+                    continue;
+                }
+
+                entry.output = space.config.output.clone();
+                space.update_config(entry.clone(), bg_color, true);
+            }
+            self.apply_toplevel_changes();
+            return;
+        }
+
+        // remove old one if it exists
+        self.space_list.retain(|s| {
+            // keep if the name is different or the output is different
+            s.config.name != entry.name
+                || force_output.is_some()
+                    && s.output
+                        .as_ref()
+                        .map(|(wl_output, ..)| Some(wl_output) != force_output.as_ref())
+                        .unwrap_or_default()
+        });
+
+        let outputs: Vec<_> = match &entry.output {
+            CosmicPanelOuput::Active => {
+                let mut space = PanelSpace::new(
+                    entry.clone(),
+                    &self.shared,
+                    match entry.background {
+                        CosmicPanelBackground::ThemeDefault | CosmicPanelBackground::Color(_) => {
+                            self.cur_theme()
+                        },
+                        CosmicPanelBackground::Dark => self.dark_theme.clone(),
+                        CosmicPanelBackground::Light => self.light_theme.clone(),
+                    },
+                    self.s_display.clone().unwrap(),
+                    self.connection.as_ref().unwrap(),
+                );
+                space.overlap_notify = self.overlap_notify.clone();
+                if let Err(err) = space.new_output(
+                    compositor_state,
+                    fractional_scale_manager,
+                    viewport,
+                    layer_state,
+                    connection,
+                    qh,
+                    None,
+                    None,
+                    None,
+                ) {
+                    error!("Failed to create space for active output: {}", err);
+                } else {
+                    self.space_list.push(space);
+                }
+                vec![]
+            },
+            CosmicPanelOuput::All => self.outputs.iter().collect(),
+            CosmicPanelOuput::Name(name) => {
+                self.outputs.iter().filter(|(_, output, _)| &output.name() == name).collect()
+            },
+        };
+
+        let maximized_outputs = self.maximized_outputs();
+        for (wl_output, output, info) in outputs {
+            let output_name = output.name();
+            if force_output.as_ref() != Some(wl_output) && force_output.is_some() {
+                continue;
+            }
+
+            let maximized_output = maximized_outputs.contains(wl_output);
+            let mut configs = self.config.configs_for_output(&output_name);
+            configs.sort_by_key(|b| std::cmp::Reverse(b.get_priority()));
+            for c in &configs {
+                let is_recreated = c.name == entry.name
+                    || Some(c.anchor) == opposite_anchor && c.get_priority() < new_priority
+                    || configs.iter().any(|other| {
+                        let other_opposite_anchor = match other.anchor {
+                            PanelAnchor::Top => PanelAnchor::Bottom,
+                            PanelAnchor::Bottom => PanelAnchor::Top,
+                            PanelAnchor::Left => PanelAnchor::Right,
+                            PanelAnchor::Right => PanelAnchor::Left,
+                        };
+                        c.anchor != other_opposite_anchor && c.get_priority() < other.get_priority()
+                    });
+
+                if !is_recreated {
+                    continue;
+                }
+                // remove old one if it exists
+                self.space_list.retain(|s| {
+                    // keep if the name is different or the output is different
+                    s.config.name != c.name
+                        || s.output.as_ref().is_some_and(|(_, o, _)| o.name() != output_name)
+                });
+                let mut new_config = (*c).clone();
+                if maximized_output {
+                    new_config.maximize();
+                }
+                new_config.output = CosmicPanelOuput::Name(output_name.clone());
+                let mut space = PanelSpace::new(
+                    new_config.clone(),
+                    &self.shared,
+                    match entry.background {
+                        CosmicPanelBackground::ThemeDefault | CosmicPanelBackground::Color(_) => {
+                            self.cur_theme()
+                        },
+                        CosmicPanelBackground::Dark => self.dark_theme.clone(),
+                        CosmicPanelBackground::Light => self.light_theme.clone(),
+                    },
+                    self.s_display.clone().unwrap(),
+                    self.connection.as_ref().unwrap(),
+                );
+                if let Some(s_display) = self.s_display.as_ref() {
+                    space.set_display_handle(s_display.clone());
+                }
+                space.overlap_notify = self.overlap_notify.clone();
+                if let Err(err) = space.new_output(
+                    compositor_state,
+                    fractional_scale_manager,
+                    viewport,
+                    layer_state,
+                    connection,
+                    qh,
+                    Some(wl_output.clone()),
+                    Some(output.clone()),
+                    Some(info.clone()),
+                ) {
+                    error!("Failed to create space for output: {}", err);
+                } else {
+                    self.space_list.push(space);
+                }
+            }
+        }
+        self.apply_toplevel_changes();
+    }
+
+    pub fn stacked_spaces_by_priority(
+        &mut self,
+        output_id: &str,
+        anchor: PanelAnchor,
+    ) -> Vec<&mut PanelSpace> {
+        let mut spaces = self
+            .space_list
+            .iter_mut()
+            .filter(|s| {
+                s.output.as_ref().is_some_and(|o| o.1.name().as_str() == output_id)
+                    && s.config.anchor == anchor
+            })
+            .collect::<Vec<_>>();
+
+        spaces.sort_by(|a, b| a.config.get_stack_priority().cmp(&b.config.get_stack_priority()));
+        spaces.reverse();
+        spaces
+    }
+
+    pub fn toggle_overflow_popup(
+        &mut self,
+        panel_id: usize,
+        element_id: id::Id,
+        compositor_state: &sctk::compositor::CompositorState,
+        fractional_scale_manager: Option<&FractionalScalingManager>,
+        viewport: Option<&ViewporterState>,
+        qh: &QueueHandle<GlobalState>,
+        xdg_shell_state: &mut sctk::shell::xdg::XdgShell,
+        seat: (u32, WlSeat),
+        force_hide: bool,
+    ) {
+        for space in &mut self.space_list {
+            if space.space.id() == panel_id {
+                if let Err(err) = space.toggle_overflow_popup(
+                    element_id,
+                    compositor_state,
+                    fractional_scale_manager,
+                    viewport,
+                    qh,
+                    xdg_shell_state,
+                    seat,
+                    force_hide,
+                ) {
+                    error!("Failed to toggle overflow popup: {}", err);
+                }
+                break;
+            }
+        }
+    }
+
+    pub fn iced_request_redraw(&mut self, panel_id: usize) {
+        for space in &mut self.space_list {
+            if space.space.id() == panel_id {
+                space.is_dirty = true;
+                break;
+            }
+        }
+    }
+
+    pub fn update_hidden_applet_frame(&mut self) {
+        for space in &mut self.space_list {
+            space.update_hidden_applet_frame();
+        }
+    }
+
+    pub fn cleanup(&mut self, compositor_state: &sctk::compositor::CompositorState) {
+        for space in &mut self.space_list {
+            space.cleanup(compositor_state);
+        }
+    }
+
+    pub fn dirty_subsurface(
+        &mut self,
+        compositor_state: &sctk::compositor::CompositorState,
+        wl_subcompositor: &SubcompositorState,
+        fractional_scale_manager: Option<&FractionalScalingManager>,
+        viewport: Option<&ViewporterState>,
+        qh: &QueueHandle<GlobalState>,
+        wlsurface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    ) {
+        // add window to the space with a client that matches the window
+        let s_client = wlsurface.client().map(|c| c.id());
+
+        if let Some(space) = self.space_list.iter_mut().find(|space| {
+            space
+                .clients_center
+                .lock()
+                .unwrap()
+                .iter()
+                .chain(space.clients_left.lock().unwrap().iter())
+                .chain(space.clients_right.lock().unwrap().iter())
+                .any(|c| c.client.as_ref().map(|c| c.id()) == s_client)
+        }) {
+            space.dirty_subsurface(
+                self.renderer.as_mut(),
+                compositor_state,
+                wl_subcompositor,
+                fractional_scale_manager,
+                viewport,
+                qh,
+                wlsurface,
+            );
+        }
+    }
+
+    pub(crate) fn minimize_window(&mut self, surface: ToplevelSurface) {
+        for space in &mut self.space_list {
+            if space.minimize_window(surface.clone()) {
+                break;
+            }
+        }
+    }
+
+    pub(crate) fn maximize_window(&mut self, surface: ToplevelSurface) {
+        for space in &mut self.space_list {
+            if space.unminimize_window(surface.clone()) {
+                break;
+            }
+        }
+    }
+
+    fn update_workspaces_shown(&mut self, shown: bool) {
+        self.shared.workspaces_shown.set(shown);
+        for i in &mut self.space_list {
+            i.update_workspaces_shown();
+        }
+    }
+}

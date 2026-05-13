@@ -1,0 +1,14 @@
+battery = Risparmio energetico
+battery-desc = Consumi minimi, performance ridotta.
+balanced = Bilanciato
+balanced-desc = Consumi bilanciati, performance dinamica.
+performance = Performance
+performance-desc = Consumi alti, performance massima.
+max-charge = Migliora la durata di vita della batteria caricandola fino all'80%
+seconds = s
+minutes = m
+hours = h
+until-empty = fino alla scarica
+power-settings = Impostazioni energetiche...
+dgpu-running = La GPU discreta è attiva e può ridurre la durata della batteria
+dgpu-applications = Applicazioni che stanno usando la GPU discreta { $gpu_name }

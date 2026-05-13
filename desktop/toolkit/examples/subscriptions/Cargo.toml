@@ -1,0 +1,10 @@
+[package]
+name = "subscriptions"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+
+[dependencies.libcosmic]
+path = "../../"
+features = ["debug", "winit", "wgpu", "tokio", "xdg-portal"]

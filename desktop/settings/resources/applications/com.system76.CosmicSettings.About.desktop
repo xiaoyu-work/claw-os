@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=About
+Comment=Device name, hardware information, operating system defaults.
+Type=Application
+Exec=cosmic-settings about
+Terminal=false
+Categories=COSMIC
+Keywords=COSMIC;About
+NoDisplay=true
+OnlyShowIn=COSMIC
+Icon=preferences-about
+StartupNotify=true

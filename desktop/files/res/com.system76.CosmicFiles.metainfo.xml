@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.system76.CosmicFiles</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <project_group>COSMIC</project_group>
+  <developer_name>System76</developer_name>
+  <update_contact>jeremy@system76.com</update_contact>
+  <url type="homepage">https://github.com/pop-os/cosmic-files</url>
+  <url type="bugtracker">https://github.com/pop-os/cosmic-files</url>
+  <name>COSMIC Files</name>
+  <summary>File manager for the COSMIC desktop</summary>
+  <description>
+    <p>File manager for the COSMIC desktop</p>
+    <p xml:lang="ar">مدير ملفات لسطح مكتب COSMIC</p>
+    <p xml:lang="cs">Správce souborů pro prostředí COSMIC</p>
+    <p xml:lang="pl">Menedżer plików pulpitu COSMIC</p>
+    <p xml:lang="hu">Fájlkezelő a COSMIC asztali környezethez</p>
+    <p xml:lang="pt_BR">Gerenciador de arquivos do COSMIC</p>
+    <p xml:lang="pt">Gerenciador de arquivos do COSMIC</p>
+    <p xml:lang="sk">Správca súborov pre prostredie COSMIC</p>
+    <p xml:lang="es">Gestor de archivos de COSMIC</p>
+    <p xml:lang="it">File manager di COSMIC</p>
+    <p xml:lang="sv">Filhanterare för skrivbordsmiljön COSMIC</p>
+  </description>
+  <keywords>
+    <keyword>Folder</keyword>
+    <keyword>Manager</keyword>
+  </keywords>
+  <launchable type="desktop-id">com.system76.CosmicFiles.desktop</launchable>
+  <icon type="remote" height="256" width="256">https://raw.githubusercontent.com/pop-os/cosmic-files/master/res/icons/hicolor/256x256/apps/com.system76.CosmicFiles.svg</icon>
+  <provides>
+    <id>com.system76.CosmicApplication</id>
+    <mimetypes>
+      <mimetype>inode/directory</mimetype>
+    </mimetypes>
+    <binaries>
+      <binary>cosmic-files</binary>
+    </binaries>
+  </provides>
+</component>
