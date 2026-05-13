@@ -209,8 +209,11 @@ jobs:
   #   - push to main          → rolling pre-release tagged `wsl-latest`
   #   - push of a `v*` tag    → versioned release tagged with that tag
   # Pull requests still get the artifact for inspection but no release.
+  #
+  # Intentionally does NOT `needs: test` — we want the WSL artifact to be
+  # produced even while unrelated tests are red, since the artifact value
+  # (a bootable rootfs) is independent of test status.
   release-wsl:
-    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: write  # needed to create/update GitHub Releases
