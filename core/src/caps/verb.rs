@@ -1,0 +1,250 @@
+//! Capability verb identifiers.
+//!
+//! A [`Verb`] is the *what* half of a capability — e.g. `fs.read`,
+//! `net.dial`, `secret.grant`. The other half is the [`Scope`](super::scope::Scope)
+//! that bounds it. Verbs form a **closed** set defined by the OS: third-party
+//! apps and user-supplied agents can only request verbs that already exist
+//! here. New verbs require a code change (and matching catalog entry +
+//! enforcement hook), so the surface stays auditable.
+//!
+//! Internally a `Verb` is a `&'static str` so it costs nothing to copy and
+//! compares as a pointer-equivalent. All verbs are constructed exclusively
+//! from the [`ALL_VERBS`] table in this module; deserializers and CLI
+//! parsers route through [`Verb::parse`], which rejects unknown strings.
+
+use std::fmt;
+
+/// A capability verb. Cheap to clone; pattern-equal to its constant.
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+pub struct Verb(&'static str);
+
+impl Verb {
+    /// Internal constructor. Public callers must go through
+    /// [`Verb::parse`] so we can validate against [`ALL_VERBS`].
+    const fn new(s: &'static str) -> Self {
+        Self(s)
+    }
+
+    /// String form, suitable for logs, serialization, and audit records.
+    pub fn as_str(&self) -> &'static str {
+        self.0
+    }
+
+    /// Look up a verb by its string identifier. Returns `None` if no
+    /// such verb is registered. Case-sensitive: verbs are always
+    /// lower-case kebab-with-dots (`fs.read`, `data.kv.write`).
+    pub fn parse(s: &str) -> Option<Self> {
+        ALL_VERBS.iter().copied().find(|v| v.0 == s)
+    }
+}
+
+impl fmt::Display for Verb {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+impl serde::Serialize for Verb {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.0)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Verb {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = <&str as serde::Deserialize>::deserialize(d)?;
+        Verb::parse(raw).ok_or_else(|| serde::de::Error::custom(format!("unknown verb: {raw}")))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Verb registry — single source of truth for "what verbs exist".
+//
+// Each module of the kernel reaches for one of these constants when it
+// needs to gate an action. Adding a verb here costs:
+//   1. A line in `ALL_VERBS` below.
+//   2. A `CapMeta` entry in `catalog.rs` (otherwise it's invisible to UI).
+//   3. Optionally, role memberships in `role.rs`.
+// ---------------------------------------------------------------------------
+
+impl Verb {
+    // -- File system -------------------------------------------------------
+    pub const FS_READ: Verb = Verb::new("fs.read");
+    pub const FS_WRITE: Verb = Verb::new("fs.write");
+    pub const FS_DELETE: Verb = Verb::new("fs.delete");
+    pub const FS_EXEC: Verb = Verb::new("fs.exec");
+    pub const FS_WATCH: Verb = Verb::new("fs.watch");
+    pub const FS_META: Verb = Verb::new("fs.meta");
+
+    // -- Network -----------------------------------------------------------
+    pub const NET_DIAL: Verb = Verb::new("net.dial");
+    pub const NET_LISTEN: Verb = Verb::new("net.listen");
+    pub const NET_RAW: Verb = Verb::new("net.raw");
+    pub const NET_RESOLVE: Verb = Verb::new("net.resolve");
+
+    // -- Processes ---------------------------------------------------------
+    pub const PROC_SPAWN: Verb = Verb::new("proc.spawn");
+    pub const PROC_SIGNAL: Verb = Verb::new("proc.signal");
+    pub const PROC_OBSERVE: Verb = Verb::new("proc.observe");
+
+    // -- System state -----------------------------------------------------
+    pub const SYS_SERVICE: Verb = Verb::new("sys.service");
+    pub const SYS_PACKAGE: Verb = Verb::new("sys.package");
+    pub const SYS_MOUNT: Verb = Verb::new("sys.mount");
+    pub const SYS_TIME: Verb = Verb::new("sys.time");
+    pub const SYS_POWER: Verb = Verb::new("sys.power");
+    pub const SYS_KERNEL: Verb = Verb::new("sys.kernel");
+
+    // -- Secrets / credentials --------------------------------------------
+    pub const SECRET_READ: Verb = Verb::new("secret.read");
+    pub const SECRET_WRITE: Verb = Verb::new("secret.write");
+    pub const SECRET_GRANT: Verb = Verb::new("secret.grant");
+
+    // -- Agents (the agent-orchestrating-agents axis) ----------------------
+    pub const AGENT_SPAWN: Verb = Verb::new("agent.spawn");
+    pub const AGENT_INVOKE: Verb = Verb::new("agent.invoke");
+    pub const AGENT_OBSERVE: Verb = Verb::new("agent.observe");
+    pub const AGENT_DELEGATE: Verb = Verb::new("agent.delegate");
+
+    // -- Built-in data stores ---------------------------------------------
+    pub const DATA_KV_READ: Verb = Verb::new("data.kv.read");
+    pub const DATA_KV_WRITE: Verb = Verb::new("data.kv.write");
+    pub const DATA_KV_DELETE: Verb = Verb::new("data.kv.delete");
+    pub const DATA_DB_READ: Verb = Verb::new("data.db.read");
+    pub const DATA_DB_WRITE: Verb = Verb::new("data.db.write");
+    pub const DATA_LOG_READ: Verb = Verb::new("data.log.read");
+    pub const DATA_LOG_WRITE: Verb = Verb::new("data.log.write");
+    pub const DATA_INBOX_READ: Verb = Verb::new("data.inbox.read");
+    pub const DATA_INBOX_WRITE: Verb = Verb::new("data.inbox.write");
+
+    // -- IPC / messaging ---------------------------------------------------
+    pub const IPC_PUBLISH: Verb = Verb::new("ipc.publish");
+    pub const IPC_SUBSCRIBE: Verb = Verb::new("ipc.subscribe");
+    pub const IPC_INVOKE: Verb = Verb::new("ipc.invoke");
+
+    // -- User interface ----------------------------------------------------
+    pub const UI_NOTIFY: Verb = Verb::new("ui.notify");
+    pub const UI_PROMPT: Verb = Verb::new("ui.prompt");
+    pub const UI_WINDOW: Verb = Verb::new("ui.window");
+    pub const UI_INPUT: Verb = Verb::new("ui.input");
+
+    // -- Devices -----------------------------------------------------------
+    pub const DEVICE_AUDIO: Verb = Verb::new("device.audio");
+    pub const DEVICE_CAMERA: Verb = Verb::new("device.camera");
+    pub const DEVICE_MICROPHONE: Verb = Verb::new("device.microphone");
+    pub const DEVICE_LOCATION: Verb = Verb::new("device.location");
+    pub const DEVICE_SENSOR: Verb = Verb::new("device.sensor");
+    pub const DEVICE_USB: Verb = Verb::new("device.usb");
+
+    // -- Time / scheduling -------------------------------------------------
+    pub const TIME_CRON: Verb = Verb::new("time.cron");
+    pub const TIME_DELAY: Verb = Verb::new("time.delay");
+}
+
+/// Every verb the OS recognises. Order is the canonical display order
+/// (UI lists, audit columns, etc).
+pub const ALL_VERBS: &[Verb] = &[
+    Verb::FS_READ,
+    Verb::FS_WRITE,
+    Verb::FS_DELETE,
+    Verb::FS_EXEC,
+    Verb::FS_WATCH,
+    Verb::FS_META,
+    Verb::NET_DIAL,
+    Verb::NET_LISTEN,
+    Verb::NET_RAW,
+    Verb::NET_RESOLVE,
+    Verb::PROC_SPAWN,
+    Verb::PROC_SIGNAL,
+    Verb::PROC_OBSERVE,
+    Verb::SYS_SERVICE,
+    Verb::SYS_PACKAGE,
+    Verb::SYS_MOUNT,
+    Verb::SYS_TIME,
+    Verb::SYS_POWER,
+    Verb::SYS_KERNEL,
+    Verb::SECRET_READ,
+    Verb::SECRET_WRITE,
+    Verb::SECRET_GRANT,
+    Verb::AGENT_SPAWN,
+    Verb::AGENT_INVOKE,
+    Verb::AGENT_OBSERVE,
+    Verb::AGENT_DELEGATE,
+    Verb::DATA_KV_READ,
+    Verb::DATA_KV_WRITE,
+    Verb::DATA_KV_DELETE,
+    Verb::DATA_DB_READ,
+    Verb::DATA_DB_WRITE,
+    Verb::DATA_LOG_READ,
+    Verb::DATA_LOG_WRITE,
+    Verb::DATA_INBOX_READ,
+    Verb::DATA_INBOX_WRITE,
+    Verb::IPC_PUBLISH,
+    Verb::IPC_SUBSCRIBE,
+    Verb::IPC_INVOKE,
+    Verb::UI_NOTIFY,
+    Verb::UI_PROMPT,
+    Verb::UI_WINDOW,
+    Verb::UI_INPUT,
+    Verb::DEVICE_AUDIO,
+    Verb::DEVICE_CAMERA,
+    Verb::DEVICE_MICROPHONE,
+    Verb::DEVICE_LOCATION,
+    Verb::DEVICE_SENSOR,
+    Verb::DEVICE_USB,
+    Verb::TIME_CRON,
+    Verb::TIME_DELAY,
+];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_known_verb() {
+        assert_eq!(Verb::parse("fs.read"), Some(Verb::FS_READ));
+        assert_eq!(Verb::parse("device.microphone"), Some(Verb::DEVICE_MICROPHONE));
+    }
+
+    #[test]
+    fn parse_unknown_verb_is_none() {
+        assert_eq!(Verb::parse("fs.unknown"), None);
+        assert_eq!(Verb::parse(""), None);
+        assert_eq!(Verb::parse("FS.READ"), None); // case-sensitive
+    }
+
+    #[test]
+    fn all_verbs_are_unique() {
+        let mut seen = std::collections::HashSet::new();
+        for v in ALL_VERBS {
+            assert!(seen.insert(v.as_str()), "duplicate verb: {}", v.as_str());
+        }
+    }
+
+    #[test]
+    fn all_verbs_round_trip_through_parse() {
+        for v in ALL_VERBS {
+            assert_eq!(Verb::parse(v.as_str()), Some(*v));
+        }
+    }
+
+    #[test]
+    fn display_matches_as_str() {
+        assert_eq!(Verb::FS_READ.to_string(), "fs.read");
+    }
+
+    #[test]
+    fn serde_round_trip() {
+        let v = Verb::NET_DIAL;
+        let json = serde_json::to_string(&v).unwrap();
+        assert_eq!(json, "\"net.dial\"");
+        let back: Verb = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, v);
+    }
+
+    #[test]
+    fn serde_rejects_unknown_verb() {
+        let result: Result<Verb, _> = serde_json::from_str("\"fs.totally-not-real\"");
+        assert!(result.is_err());
+    }
+}
