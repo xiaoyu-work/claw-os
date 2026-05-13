@@ -1,0 +1,46 @@
+{
+  "id": "summarize",
+  "version": "0.1.0",
+  "name": {
+    "en": "Summarize"
+  },
+  "summary": {
+    "en": "Summarize a block of text using a language model."
+  },
+  "icon": "📝",
+  "runtime": "python",
+  "ai": {
+    "budget": {
+      "monthly_units": 100000,
+      "monthly_usd": 1.00
+    },
+    "models": ["claude-*", "gpt-4o*", "mock-model"],
+    "safety": "strict",
+    "origins": ["external-content"]
+  },
+  "operations": {
+    "run": {
+      "label": { "en": "Summarize text" },
+      "summary": { "en": "Read text from --file or stdin and return a 3-line summary." },
+      "args": [
+        {
+          "name": "file",
+          "kind": "path",
+          "required": false
+        }
+      ],
+      "needs": [
+        {
+          "verb": "ai.chat.untrusted",
+          "scope": {
+            "kind": "fixed",
+            "scope": { "kind": "name", "value": "claude-*" }
+          },
+          "why": {
+            "en": "Send the text to a model so it can be condensed for you."
+          }
+        }
+      ]
+    }
+  }
+}

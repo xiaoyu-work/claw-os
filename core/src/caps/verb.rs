@@ -139,6 +139,24 @@ impl Verb {
     // -- Time / scheduling -------------------------------------------------
     pub const TIME_CRON: Verb = Verb::new("time.cron");
     pub const TIME_DELAY: Verb = Verb::new("time.delay");
+
+    // -- AI (modality-agnostic gateway) -----------------------------------
+    // The kernel routes every cloud / on-device model call through
+    // `core/src/ai/gate.rs` so budget, safety, and audit apply uniformly.
+    // Origin (trusted | external_content | user_input) is carried as a
+    // request field, not a verb; `ai.chat.untrusted` is a hardened variant
+    // that *requires* origin=external_content.
+    pub const AI_CHAT: Verb = Verb::new("ai.chat");
+    pub const AI_CHAT_UNTRUSTED: Verb = Verb::new("ai.chat.untrusted");
+    pub const AI_EMBED: Verb = Verb::new("ai.embed");
+    pub const AI_IMAGE_GENERATE: Verb = Verb::new("ai.image.generate");
+    pub const AI_IMAGE_ANALYZE: Verb = Verb::new("ai.image.analyze");
+    pub const AI_AUDIO_TTS: Verb = Verb::new("ai.audio.tts");
+    pub const AI_AUDIO_STT: Verb = Verb::new("ai.audio.stt");
+    pub const AI_VISION_ANALYZE: Verb = Verb::new("ai.vision.analyze");
+    /// User-only verb: lets the owner skip a safety / budget gate for a
+    /// single call, app, or session. Apps must never be granted this.
+    pub const AI_BYPASS: Verb = Verb::new("ai.bypass");
 }
 
 /// Every verb the OS recognises. Order is the canonical display order
@@ -194,6 +212,15 @@ pub const ALL_VERBS: &[Verb] = &[
     Verb::DEVICE_USB,
     Verb::TIME_CRON,
     Verb::TIME_DELAY,
+    Verb::AI_CHAT,
+    Verb::AI_CHAT_UNTRUSTED,
+    Verb::AI_EMBED,
+    Verb::AI_IMAGE_GENERATE,
+    Verb::AI_IMAGE_ANALYZE,
+    Verb::AI_AUDIO_TTS,
+    Verb::AI_AUDIO_STT,
+    Verb::AI_VISION_ANALYZE,
+    Verb::AI_BYPASS,
 ];
 
 #[cfg(test)]

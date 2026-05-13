@@ -220,6 +220,8 @@ const WORKER_VERBS: &[Verb] = &[
     Verb::DATA_INBOX_WRITE,
     Verb::IPC_PUBLISH,
     Verb::UI_PROMPT,
+    Verb::AI_CHAT,
+    Verb::AI_EMBED,
 ];
 
 const CURATOR_VERBS: &[Verb] = &[
@@ -243,6 +245,8 @@ const CURATOR_VERBS: &[Verb] = &[
     Verb::DATA_INBOX_WRITE,
     Verb::IPC_PUBLISH,
     Verb::UI_PROMPT,
+    Verb::AI_CHAT,
+    Verb::AI_EMBED,
     // curator additions ↓
     Verb::FS_DELETE,
     Verb::DATA_KV_DELETE,
@@ -266,6 +270,10 @@ const CONNECTOR_VERBS: &[Verb] = &[
     Verb::NET_DIAL,
     Verb::NET_RESOLVE,
     Verb::SECRET_READ,
+    Verb::AI_CHAT,
+    Verb::AI_CHAT_UNTRUSTED,
+    Verb::AI_EMBED,
+    Verb::AI_VISION_ANALYZE,
 ];
 
 const AUTOMATOR_VERBS: &[Verb] = &[
@@ -299,6 +307,14 @@ const AUTOMATOR_VERBS: &[Verb] = &[
     Verb::SECRET_READ,
     Verb::IPC_INVOKE,
     Verb::TIME_CRON,
+    Verb::AI_CHAT,
+    Verb::AI_CHAT_UNTRUSTED,
+    Verb::AI_EMBED,
+    Verb::AI_IMAGE_GENERATE,
+    Verb::AI_IMAGE_ANALYZE,
+    Verb::AI_AUDIO_TTS,
+    Verb::AI_AUDIO_STT,
+    Verb::AI_VISION_ANALYZE,
 ];
 
 const AGENT_HOST_VERBS: &[Verb] = &[
@@ -331,6 +347,14 @@ const AGENT_HOST_VERBS: &[Verb] = &[
     Verb::SECRET_READ,
     Verb::IPC_INVOKE,
     Verb::TIME_CRON,
+    Verb::AI_CHAT,
+    Verb::AI_CHAT_UNTRUSTED,
+    Verb::AI_EMBED,
+    Verb::AI_IMAGE_GENERATE,
+    Verb::AI_IMAGE_ANALYZE,
+    Verb::AI_AUDIO_TTS,
+    Verb::AI_AUDIO_STT,
+    Verb::AI_VISION_ANALYZE,
     // agent-host additions ↓
     Verb::AGENT_SPAWN,
     Verb::AGENT_INVOKE,
@@ -368,6 +392,14 @@ const ADMIN_VERBS: &[Verb] = &[
     Verb::SECRET_READ,
     Verb::IPC_INVOKE,
     Verb::TIME_CRON,
+    Verb::AI_CHAT,
+    Verb::AI_CHAT_UNTRUSTED,
+    Verb::AI_EMBED,
+    Verb::AI_IMAGE_GENERATE,
+    Verb::AI_IMAGE_ANALYZE,
+    Verb::AI_AUDIO_TTS,
+    Verb::AI_AUDIO_STT,
+    Verb::AI_VISION_ANALYZE,
     Verb::AGENT_SPAWN,
     Verb::AGENT_INVOKE,
     Verb::AGENT_DELEGATE,

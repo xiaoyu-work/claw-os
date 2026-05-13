@@ -5,6 +5,7 @@ use std::time::Instant;
 use serde_json::{json, Value};
 
 use crate::agent;
+use crate::ai;
 use crate::apps;
 use crate::audit;
 use crate::bridge;
@@ -70,6 +71,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         "cron" => dispatch_builtin(args, "cron", cron::run),
         "trace" => dispatch_builtin(args, "trace", trace::run),
         "agent" => dispatch_builtin(args, "agent", agent::run),
+        "ai" => dispatch_builtin(args, "ai", ai::run),
         "model" => dispatch_builtin(args, "model", model::run),
         "engine" => dispatch_builtin(args, "engine", engine_pkg::run),
         _ => {
@@ -101,6 +103,14 @@ fn dispatch_app(args: &[String]) -> Result<Option<String>, String> {
     }
 
     let app_name = &args[0];
+
+    // Special: `cos app lint [<name>]` — refuses AI-using apps that
+    // import provider SDKs directly. Run before the "unknown app"
+    // check so `lint` itself doesn't collide with an app name.
+    if app_name == "lint" {
+        let target = args.get(1).map(String::as_str);
+        return lint_apps(&discovered, target);
+    }
 
     // Check if it's a known app
     if !discovered.contains_key(app_name.as_str()) {
@@ -136,6 +146,126 @@ fn dispatch_app(args: &[String]) -> Result<Option<String>, String> {
     }
 
     run_app_command(app_name, command, &cmd_args, app)
+}
+
+/// `cos app lint [<name>]` — refuse apps that smuggle in AI SDKs.
+///
+/// Apps are required to route every model call through the kernel's
+/// `cos ai chat` gate (via `apps/_lib/ai.py`). Importing
+/// `openai`, `anthropic`, or `google.generativeai` directly would
+/// bypass budget, safety, and audit — so the linter looks for those
+/// imports in every `*.py` file under each app's directory and reports
+/// the offenders.
+fn lint_apps(
+    discovered: &std::collections::BTreeMap<String, apps::App>,
+    target: Option<&str>,
+) -> Result<Option<String>, String> {
+    let mut results = Vec::new();
+    let mut any_violation = false;
+
+    let apps_to_check: Vec<&apps::App> = match target {
+        Some(name) => match discovered.get(name) {
+            Some(a) => vec![a],
+            None => {
+                let names: Vec<&String> = discovered.keys().collect();
+                return Err(format!("unknown app: {name}. installed: {names:?}"));
+            }
+        },
+        None => discovered.values().collect(),
+    };
+
+    for app in apps_to_check {
+        let violations = scan_app_for_ai_imports(&app.dir);
+        if !violations.is_empty() {
+            any_violation = true;
+        }
+        results.push(json!({
+            "app": app.manifest.id,
+            "ok": violations.is_empty(),
+            "violations": violations,
+        }));
+    }
+
+    Ok(Some(
+        json!({
+            "results": results,
+            "ok": !any_violation,
+            "hint": if any_violation {
+                "Apps must import from `_lib.ai` (which shells out to `cos ai chat`); \
+                 they must not import provider SDKs directly."
+            } else {
+                "All apps route their AI calls through the kernel gate."
+            },
+        })
+        .to_string(),
+    ))
+}
+
+/// Walk an app directory looking for `*.py` files that import one of
+/// the forbidden provider SDKs. Returns a list of `{file, line, text}`
+/// hits.
+fn scan_app_for_ai_imports(app_dir: &Path) -> Vec<Value> {
+    const FORBIDDEN: &[&str] = &[
+        "openai",
+        "anthropic",
+        "google.generativeai",
+        "vertexai",
+        "cohere",
+        "mistralai",
+        "replicate",
+        "boto3.client(\"bedrock",
+        "boto3.client('bedrock",
+    ];
+    let mut hits = Vec::new();
+    walk_py(app_dir, &mut |path, contents| {
+        for (idx, line) in contents.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if !(trimmed.starts_with("import ") || trimmed.starts_with("from ")) {
+                // Allow grepping for the boto3-bedrock shape too.
+                if !FORBIDDEN.iter().any(|f| trimmed.contains(f)) {
+                    continue;
+                }
+            }
+            for needle in FORBIDDEN {
+                if trimmed.contains(needle)
+                    && (trimmed.starts_with("import ")
+                        || trimmed.starts_with("from ")
+                        || trimmed.contains(".client"))
+                {
+                    hits.push(json!({
+                        "file": path.display().to_string(),
+                        "line": idx + 1,
+                        "text": line.to_string(),
+                        "matched": needle.to_string(),
+                    }));
+                    break;
+                }
+            }
+        }
+    });
+    hits
+}
+
+fn walk_py(dir: &Path, f: &mut dyn FnMut(&Path, &str)) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            // Skip vendored / build / hidden directories.
+            let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if name.starts_with('.') || name == "node_modules" || name == "__pycache__" {
+                continue;
+            }
+            walk_py(&p, f);
+        } else if p.extension().and_then(|e| e.to_str()) == Some("py") {
+            if let Ok(contents) = std::fs::read_to_string(&p) {
+                f(&p, &contents);
+            }
+        }
+    }
 }
 
 fn show_overview() -> Result<Option<String>, String> {
@@ -451,6 +581,10 @@ fn builtin_apps() -> Vec<(
             ("context", "Project-context helpers (subdir hints + @-references + composer): cos agent context hints [--cwd <path>] [--depth N] [--render] | cos agent context refs --text <body> [--unique] | cos agent context markers | cos agent context build [--cwd <p>] [--depth N] [--text <body>] [--note <line>...] [--max-refs N] [--max-hints N] [--no-dedup]"),
             ("file-safety", "Classify filesystem paths for write-safety (dangerous extensions, credential dirs, system paths, VCS internals): cos agent file-safety check <path> | batch <path>... | categories"),
             ("osv", "Query the public osv.dev vulnerability API for dependencies. Pure parsers for Cargo.lock / package-lock.json / requirements.txt / go.sum + online checks: cos agent osv parse <lockfile> | check <lockfile> | query <name>@<version> --ecosystem <eco> | ecosystems"),
+        ]),
+        ("ai", "App–AI gate — every app-driven model call is brokered here (caps + budget + safety + audit)", vec![
+            ("chat", "One-shot LLM chat for an app: cos ai chat --app <id> --prompt <text> [--prompt-file <p>] [--model <name>] [--origin trusted|user-input|external-content] [--verb ai.chat|ai.chat.untrusted] [--max-units N] [--system <text>]"),
+            ("budget", "Inspect or reset an app's AI budget for the current period: cos ai budget show|reset|history <app>"),
         ]),
         ("model", "Local model registry + inference daemon (ort for STT/TTS/embed/vision/imagegen, llama.cpp for LLM)", vec![
             ("list", "List registered models from /var/lib/cos/models/"),

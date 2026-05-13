@@ -56,6 +56,15 @@ if result is not None:
 
     let python = if cfg!(windows) { "python" } else { "python3" };
 
+    // The directory name is the canonical app id (the manifest loader
+    // enforces this — see apps::discover). The Python helpers read
+    // `COS_APP_ID` to identify which app is calling them.
+    let app_id = app_dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string();
+
     let mut child = Command::new(python)
         .arg("-c")
         .arg(&wrapper)
@@ -71,6 +80,7 @@ if result is not None:
         .env("PIP_NO_INPUT", "1")
         .env("NPM_CONFIG_YES", "true")
         .env("PYTHONDONTWRITEBYTECODE", "1")
+        .env("COS_APP_ID", &app_id)
         // Pass config values so Python apps use config.json instead of hardcoded defaults
         .envs(crate::config::as_env_vars())
         .spawn()
@@ -207,6 +217,10 @@ pub fn run_app(
         .env("COS_ARGS_JSON", &args_json)
         .env("COS_DATA_DIR", data_dir)
         .env("COS_APPS_DIR", apps_dir)
+        .env(
+            "COS_APP_ID",
+            app_dir.file_name().and_then(|s| s.to_str()).unwrap_or(""),
+        )
         .env("DEBIAN_FRONTEND", "noninteractive")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("CI", "true")

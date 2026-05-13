@@ -103,10 +103,107 @@ pub struct Manifest {
     #[serde(default)]
     pub operations: BTreeMap<String, Operation>,
 
+    /// AI policy. Required iff any operation declares an `ai.*` need.
+    /// Absent means the app cannot exercise any AI verb at all — even
+    /// if the user explicitly granted it. Authors describe how much
+    /// the app may spend, which model families it accepts, and what
+    /// prompt origins it expects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai: Option<AiPolicy>,
+
     /// Free-form dependency declarations. Preserved for forward
     /// compatibility — the bridge's package resolver consumes this.
     #[serde(default)]
     pub dependencies: serde_json::Value,
+}
+
+// ---------------------------------------------------------------------------
+// AI policy
+// ---------------------------------------------------------------------------
+
+/// AI policy block: describes the budget envelope and the model /
+/// safety constraints under which this app may exercise `ai.*` verbs.
+///
+/// All fields are required when the block itself is present, but each
+/// has a sensible default (see field docs). If `ai` is absent from a
+/// manifest, the kernel rejects every `ai.*` need at validation time.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AiPolicy {
+    /// How much the app may spend in a single billing period.
+    pub budget: AiBudget,
+
+    /// Model glob allowlist (e.g. `["claude-*", "gpt-4*"]`). The
+    /// kernel rejects calls that name a model not matching any
+    /// pattern here. Empty means "no models allowed" — authors must
+    /// list at least one for the block to be useful.
+    #[serde(default)]
+    pub models: Vec<String>,
+
+    /// Safety profile applied to every call. `strict` forces the full
+    /// safety pipeline (redact-in, injection detect, classifier,
+    /// redact-out); `standard` keeps the cheap layers; `minimal`
+    /// disables everything but the audit log. The owner can lower a
+    /// profile per-call with `ai.bypass`; the app cannot.
+    #[serde(default)]
+    pub safety: AiSafety,
+
+    /// Which prompt origins the app expects to handle. The kernel
+    /// rejects calls whose declared `origin` is not in this list.
+    /// Defaults to `["trusted"]` — apps must opt in to receiving
+    /// external content.
+    #[serde(default = "default_origins")]
+    pub origins: Vec<PromptOrigin>,
+}
+
+/// Per-period AI spending cap. Either limit can be zero to disable
+/// that axis. The kernel hard-denies any call whose pre-charge
+/// estimate would exceed either cap.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+pub struct AiBudget {
+    /// Abstract billing units (1 chat token = 1 unit, 1 image = 1000
+    /// units, 1s TTS = 50 units, etc — see `/etc/cos/ai/prices.yaml`).
+    #[serde(default)]
+    pub monthly_units: u64,
+    /// US dollars cap, two-decimal precision. Useful for budget
+    /// dashboards even when units are imprecise.
+    #[serde(default)]
+    pub monthly_usd: f64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum AiSafety {
+    /// Full pipeline: redact in / injection detect / classifier /
+    /// redact out / approval. Default for any app handling external
+    /// content.
+    #[default]
+    Strict,
+    /// Cheaper subset: redact in/out only.
+    Standard,
+    /// Audit-only. Reserved for fully trusted system apps; user must
+    /// confirm at install time.
+    Minimal,
+}
+
+/// Where the prompt content originated. Carrying this on every AI
+/// call is the kernel's single hardest defence against prompt
+/// injection: external_content always routes through the strictest
+/// pipeline regardless of the app's declared safety profile.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum PromptOrigin {
+    /// Prompt is fully authored by the app developer.
+    Trusted,
+    /// Prompt contains text the user typed in this session.
+    UserInput,
+    /// Prompt contains content fetched from outside (email body, web
+    /// page, file contents, another agent's output). Always routes
+    /// through the strict safety pipeline.
+    ExternalContent,
+}
+
+fn default_origins() -> Vec<PromptOrigin> {
+    vec![PromptOrigin::Trusted]
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -278,6 +375,32 @@ pub enum ManifestError {
         field: &'static str,
         detail: String,
     },
+    #[error(
+        "operation `{op}`: need #{idx} (verb `{verb}`) is an AI verb but the manifest \
+         has no `ai` block — declare one with budget, models, safety, and origins"
+    )]
+    AiNeedMissingPolicy {
+        op: String,
+        idx: usize,
+        verb: String,
+    },
+    #[error(
+        "manifest `ai` block: `models` list is empty — at least one glob \
+         pattern is required (e.g. `claude-*`)"
+    )]
+    AiPolicyNoModels,
+    #[error(
+        "manifest `ai` block: `origins` list is empty — at least one of \
+         `trusted`, `user-input`, `external-content` is required"
+    )]
+    AiPolicyNoOrigins,
+    #[error(
+        "manifest field `{field}`: apps cannot request `ai.bypass`; it is \
+         reserved for the device owner"
+    )]
+    AiBypassNotAllowedForApps {
+        field: &'static str,
+    },
 }
 
 impl Manifest {
@@ -298,6 +421,15 @@ impl Manifest {
             field: "name",
             detail: d,
         })?;
+
+        if let Some(policy) = &self.ai {
+            if policy.models.is_empty() {
+                return Err(ManifestError::AiPolicyNoModels);
+            }
+            if policy.origins.is_empty() {
+                return Err(ManifestError::AiPolicyNoOrigins);
+            }
+        }
 
         for (op_name, op) in &self.operations {
             op.label
@@ -326,6 +458,23 @@ impl Manifest {
                         idx,
                         detail: format!("why: {d}"),
                     })?;
+
+                // AI verbs require an `ai` block on the manifest, and
+                // `ai.bypass` is owner-only — apps can never declare it.
+                let verb_str = need.verb.as_str();
+                if verb_str == Verb::AI_BYPASS.as_str() {
+                    return Err(ManifestError::AiBypassNotAllowedForApps {
+                        field: "operations[].needs[].verb",
+                    });
+                }
+                if verb_str.starts_with("ai.") && self.ai.is_none() {
+                    return Err(ManifestError::AiNeedMissingPolicy {
+                        op: op_name.clone(),
+                        idx,
+                        verb: verb_str.to_string(),
+                    });
+                }
+
                 match &need.scope {
                     ScopeBinding::FromArg { arg } => {
                         let a = seen_args.get(arg.as_str()).ok_or_else(|| {
@@ -729,5 +878,157 @@ mod tests {
         assert_eq!(back.id, m.id);
         assert_eq!(back.operations.len(), m.operations.len());
         assert_eq!(back.operations["mv"].needs.len(), 3);
+    }
+
+    // ---------------------------------------------------------------
+    // AI policy block
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn ai_block_with_valid_policy_parses() {
+        let m = Manifest::from_json(
+            r#"{
+              "id": "summarize",
+              "version": "0.1",
+              "name": "Summarize",
+              "ai": {
+                "budget": {"monthly_units": 100000, "monthly_usd": 1.0},
+                "models": ["claude-*"],
+                "safety": "strict",
+                "origins": ["external-content"]
+              },
+              "operations": {
+                "run": {
+                  "label": "Summarize text",
+                  "needs": [
+                    {"verb": "ai.chat.untrusted",
+                     "scope": {"kind":"fixed","scope":{"kind":"name","value":"claude-*"}},
+                     "why": "Summarize the input text."}
+                  ]
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+        let policy = m.ai.as_ref().unwrap();
+        assert_eq!(policy.models, vec!["claude-*"]);
+        assert_eq!(policy.safety, AiSafety::Strict);
+        assert_eq!(policy.origins, vec![PromptOrigin::ExternalContent]);
+        assert_eq!(policy.budget.monthly_units, 100000);
+    }
+
+    #[test]
+    fn ai_need_without_ai_block_rejected() {
+        let err = Manifest::from_json(
+            r#"{
+              "id": "rogue",
+              "version": "0.1",
+              "name": "Rogue",
+              "operations": {
+                "run": {
+                  "label": "Run",
+                  "needs": [
+                    {"verb": "ai.chat",
+                     "scope": {"kind":"fixed","scope":{"kind":"name","value":"claude-*"}},
+                     "why": "Talk to a model without declaring a policy."}
+                  ]
+                }
+              }
+            }"#,
+        )
+        .unwrap_err();
+        match err {
+            ManifestError::AiNeedMissingPolicy { op, verb, .. } => {
+                assert_eq!(op, "run");
+                assert_eq!(verb, "ai.chat");
+            }
+            other => panic!("expected AiNeedMissingPolicy, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ai_bypass_rejected_for_apps() {
+        let err = Manifest::from_json(
+            r#"{
+              "id": "rogue",
+              "version": "0.1",
+              "name": "Rogue",
+              "ai": {
+                "budget": {"monthly_units": 1, "monthly_usd": 0.0},
+                "models": ["*"],
+                "safety": "minimal",
+                "origins": ["trusted"]
+              },
+              "operations": {
+                "run": {
+                  "label": "Run",
+                  "needs": [
+                    {"verb": "ai.bypass",
+                     "scope": {"kind":"fixed","scope":{"kind":"name","value":"*"}},
+                     "why": "Skip safety pipeline."}
+                  ]
+                }
+              }
+            }"#,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ManifestError::AiBypassNotAllowedForApps { .. }));
+    }
+
+    #[test]
+    fn ai_block_with_empty_models_rejected() {
+        let err = Manifest::from_json(
+            r#"{
+              "id": "summarize",
+              "version": "0.1",
+              "name": "Summarize",
+              "ai": {
+                "budget": {"monthly_units": 1, "monthly_usd": 0.0},
+                "models": [],
+                "safety": "strict",
+                "origins": ["trusted"]
+              }
+            }"#,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ManifestError::AiPolicyNoModels));
+    }
+
+    #[test]
+    fn ai_block_with_empty_origins_rejected() {
+        let err = Manifest::from_json(
+            r#"{
+              "id": "summarize",
+              "version": "0.1",
+              "name": "Summarize",
+              "ai": {
+                "budget": {"monthly_units": 1, "monthly_usd": 0.0},
+                "models": ["*"],
+                "safety": "strict",
+                "origins": []
+              }
+            }"#,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ManifestError::AiPolicyNoOrigins));
+    }
+
+    #[test]
+    fn ai_origins_default_to_trusted() {
+        let m = Manifest::from_json(
+            r#"{
+              "id": "summarize",
+              "version": "0.1",
+              "name": "Summarize",
+              "ai": {
+                "budget": {"monthly_units": 1, "monthly_usd": 0.0},
+                "models": ["*"],
+                "safety": "strict"
+              }
+            }"#,
+        )
+        .unwrap();
+        let policy = m.ai.as_ref().unwrap();
+        assert_eq!(policy.origins, vec![PromptOrigin::Trusted]);
     }
 }

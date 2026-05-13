@@ -1,4 +1,5 @@
 mod agent;
+mod ai;
 mod apps;
 mod audit;
 mod bridge;
