@@ -187,6 +187,13 @@ impl Info {
             if let Some(first) = session.get_mut(0..1) {
                 first.make_ascii_uppercase();
             }
+            // The session ID still uses the upstream "COSMIC" XDG name for
+            // protocol reasons (DesktopNames=, Categories=), but display
+            // ClawOS for the About page so the user-facing branding is
+            // consistent with the rest of the OS.
+            if session.eq_ignore_ascii_case("cosmic") {
+                session = String::from("ClawOS");
+            }
             info.desktop_environment = session;
         }
 

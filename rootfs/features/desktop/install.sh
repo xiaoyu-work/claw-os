@@ -174,6 +174,12 @@ for unit in pipewire.service wireplumber.service; do
             "$ROOTFS/etc/systemd/user/default.target.wants/$unit"
 done
 
+# Plymouth boot splash — the overlay shipped the "claw" theme files
+# (claw.plymouth, claw.script, watermark.png, dot.png). Activate it as the
+# default; initramfs is rebuilt lazily on first boot or by update-initramfs.
+echo "  :: setting plymouth default theme = claw"
+chroot "$ROOTFS" plymouth-set-default-theme claw || true
+
 echo "  :: desktop installed; default target = graphical.target"
 echo "  :: greeter:  /etc/systemd/system/display-manager.service -> cosmic-greeter.service"
 echo "  :: greetd cfg: /etc/greetd/cosmic-greeter.toml"

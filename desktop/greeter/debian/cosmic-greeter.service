@@ -1,5 +1,5 @@
 [Unit]
-Description=COSMIC Greeter
+Description=ClawOS Greeter
 After=systemd-user-sessions.service plymouth-quit-wait.service cosmic-greeter-daemon.service
 After=getty@tty1.service
 Conflicts=getty@tty1.service

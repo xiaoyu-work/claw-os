@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=Claw
+Description=ClawOS boot splash
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/claw
+ScriptFile=/usr/share/plymouth/themes/claw/claw.script

@@ -2,7 +2,7 @@
 name = "cosmic-greeter-config"
 version = "0.1.0"
 edition = "2024"
-description = "Configuration for COSMIC Greeter"
+description = "Configuration for ClawOS Greeter"
 repository = "https://github.com/pop-os/cosmic-greeter"
 license = "GPL-3.0-only"
 

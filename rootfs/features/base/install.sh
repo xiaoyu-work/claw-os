@@ -35,6 +35,11 @@ chroot "$ROOTFS" pip3 install --break-system-packages --no-cache-dir \
 echo "  :: injecting version $COS_VERSION"
 sed -i "s/\"version\": \".*\"/\"version\": \"$COS_VERSION\"/" "$ROOTFS/etc/cos/config.json"
 sed -i "s/COS_VERSION=\".*\"/COS_VERSION=\"$COS_VERSION\"/" "$ROOTFS/etc/cos/profile.sh"
+sed -i "s/@COS_VERSION@/$COS_VERSION/g" \
+    "$ROOTFS/etc/os-release" \
+    "$ROOTFS/usr/lib/os-release" \
+    "$ROOTFS/etc/issue" \
+    "$ROOTFS/etc/issue.net"
 
 # Runtime directories.
 mkdir -p "$ROOTFS/den"

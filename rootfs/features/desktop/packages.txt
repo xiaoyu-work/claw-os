@@ -126,3 +126,7 @@ locales
 # --- VM integration (no-op on bare metal; tiny on disk) ---
 qemu-guest-agent
 spice-vdagent
+
+# --- Boot splash (Plymouth, themed by the "claw" overlay) ---
+plymouth
+plymouth-themes

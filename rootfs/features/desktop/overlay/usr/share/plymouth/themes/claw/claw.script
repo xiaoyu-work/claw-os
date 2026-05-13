@@ -1,0 +1,41 @@
+# ClawOS Plymouth boot splash.
+#
+# Plymouth's "script" module evaluates this in its tiny scripting language.
+# We avoid math features (no Math.Sin) for portability; the result is a
+# static logo centred over the ClawOS deep-indigo background, plus a row of
+# pulsing dots driven by the refresh callback.
+
+Window.SetBackgroundTopColor(0.0588, 0.0588, 0.1020);
+Window.SetBackgroundBottomColor(0.0588, 0.0588, 0.1020);
+
+logo.image = Image("watermark.png");
+logo.sprite = Sprite(logo.image);
+logo.sprite.SetX(Window.GetX() + (Window.GetWidth() - logo.image.GetWidth()) / 2);
+logo.sprite.SetY(Window.GetY() + (Window.GetHeight() - logo.image.GetHeight()) / 2 - 40);
+
+dot_count = 5;
+dot_spacing = 24;
+dot_y = Window.GetY() + (Window.GetHeight() + logo.image.GetHeight()) / 2 + 16;
+dot_x0 = Window.GetX() + (Window.GetWidth() - dot_count * dot_spacing) / 2;
+
+for (i = 0; i < dot_count; i++) {
+    dots[i].image = Image("dot.png");
+    dots[i].sprite = Sprite(dots[i].image);
+    dots[i].sprite.SetX(dot_x0 + i * dot_spacing);
+    dots[i].sprite.SetY(dot_y);
+    dots[i].sprite.SetOpacity(0.2);
+}
+
+frame = 0;
+fun refresh_callback() {
+    frame++;
+    active = (frame / 8) % dot_count;
+    for (i = 0; i < dot_count; i++) {
+        if (i == active) {
+            dots[i].sprite.SetOpacity(1.0);
+        } else {
+            dots[i].sprite.SetOpacity(0.2);
+        }
+    }
+}
+Plymouth.SetRefreshFunction(refresh_callback);
