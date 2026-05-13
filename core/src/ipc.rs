@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
 
-use crate::policy::{self, OpType};
+use crate::caps::{require_or_json, Scope, Verb};
 
 fn ipc_dir() -> PathBuf {
     PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
@@ -104,7 +104,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_send(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Write).map_err(|v| v.to_string())?;
+    require_or_json(Verb::IPC_PUBLISH, Scope::wild()).map_err(|v| v.to_string())?;
     let mut from: Option<String> = None;
     let mut positional: Vec<String> = Vec::new();
 
@@ -158,7 +158,7 @@ fn cmd_send(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_recv(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::IPC_SUBSCRIBE, Scope::wild()).map_err(|v| v.to_string())?;
     let session_id = args
         .first()
         .ok_or("usage: cos ipc recv <session-id> [--timeout N] [--peek]")?;
@@ -215,7 +215,7 @@ fn cmd_recv(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_list(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::IPC_SUBSCRIBE, Scope::wild()).map_err(|v| v.to_string())?;
     let session_id = args.first().ok_or("usage: cos ipc list <session-id>")?;
     let dir = session_queue_dir(session_id);
     let messages = sorted_messages(&dir);
@@ -243,7 +243,7 @@ fn cmd_list(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_clear(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Delete).map_err(|v| v.to_string())?;
+    require_or_json(Verb::IPC_PUBLISH, Scope::wild()).map_err(|v| v.to_string())?;
     let session_id = args.first().ok_or("usage: cos ipc clear <session-id>")?;
     let dir = session_queue_dir(session_id);
     let messages = sorted_messages(&dir);
@@ -285,7 +285,7 @@ fn is_pid_alive(pid: u32) -> bool {
 }
 
 fn cmd_lock(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Write).map_err(|v| v.to_string())?;
+    require_or_json(Verb::IPC_INVOKE, Scope::wild()).map_err(|v| v.to_string())?;
     let mut holder: Option<String> = None;
     let mut timeout_secs: u64 = 0;
     let mut positional: Vec<String> = Vec::new();
@@ -379,7 +379,7 @@ fn cmd_lock(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_unlock(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Write).map_err(|v| v.to_string())?;
+    require_or_json(Verb::IPC_INVOKE, Scope::wild()).map_err(|v| v.to_string())?;
     let mut holder: Option<String> = None;
     let mut positional: Vec<String> = Vec::new();
 
@@ -438,7 +438,7 @@ fn cmd_unlock(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_locks(_args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::IPC_SUBSCRIBE, Scope::wild()).map_err(|v| v.to_string())?;
     let dir = locks_dir();
     if !dir.exists() {
         return Ok(json!({ "count": 0, "locks": [] }));
@@ -479,7 +479,7 @@ fn barriers_dir() -> PathBuf {
 }
 
 fn cmd_barrier(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Write).map_err(|v| v.to_string())?;
+    require_or_json(Verb::IPC_INVOKE, Scope::wild()).map_err(|v| v.to_string())?;
     let mut expect: Option<u64> = None;
     let mut session: Option<String> = None;
     let mut timeout_secs: u64 = 0;
@@ -647,7 +647,7 @@ fn cmd_pipe(args: &[String]) -> Result<Value, String> {
 }
 
 fn pipe_create(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Write).map_err(|v| v.to_string())?;
+    require_or_json(Verb::IPC_PUBLISH, Scope::wild()).map_err(|v| v.to_string())?;
 
     let mut buffer_size: u64 = 1000;
     let mut positional: Vec<String> = Vec::new();
@@ -694,7 +694,7 @@ fn pipe_create(args: &[String]) -> Result<Value, String> {
 }
 
 fn pipe_publish(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Write).map_err(|v| v.to_string())?;
+    require_or_json(Verb::IPC_PUBLISH, Scope::wild()).map_err(|v| v.to_string())?;
 
     let mut from: Option<String> = None;
     let mut positional: Vec<String> = Vec::new();
@@ -777,7 +777,7 @@ fn pipe_publish(args: &[String]) -> Result<Value, String> {
 }
 
 fn pipe_subscribe(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::IPC_SUBSCRIBE, Scope::wild()).map_err(|v| v.to_string())?;
 
     let mut since: Option<String> = None;
     let mut limit: u64 = 100;
@@ -931,7 +931,7 @@ fn pipe_subscribe(args: &[String]) -> Result<Value, String> {
 }
 
 fn pipe_list(_args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Read).map_err(|v| v.to_string())?;
+    require_or_json(Verb::IPC_SUBSCRIBE, Scope::wild()).map_err(|v| v.to_string())?;
 
     let dir = pipes_dir();
     if !dir.exists() {
@@ -972,7 +972,7 @@ fn pipe_list(_args: &[String]) -> Result<Value, String> {
 }
 
 fn pipe_destroy(args: &[String]) -> Result<Value, String> {
-    policy::require(OpType::Delete).map_err(|v| v.to_string())?;
+    require_or_json(Verb::IPC_PUBLISH, Scope::wild()).map_err(|v| v.to_string())?;
 
     let name = args.first().ok_or("usage: cos ipc pipe destroy <name>")?;
 
@@ -1008,6 +1008,10 @@ mod tests {
             let dir = env::temp_dir().join(format!("cos-test-shared-{}", std::process::id()));
             let _ = fs::create_dir_all(&dir);
             env::set_var("COS_DATA_DIR", &dir);
+            // Tests don't set COS_SESSION; flip the caps gate to its
+            // opt-in permissive mode so the gated dispatchers don't
+            // deny every call.
+            env::set_var("COS_PERMS_MODE", "permissive");
         });
         format!("{prefix}-{n}")
     }
@@ -1136,6 +1140,7 @@ mod tests {
             let dir = env::temp_dir().join(format!("cos-test-shared-{}", std::process::id()));
             let _ = fs::create_dir_all(&dir);
             env::set_var("COS_DATA_DIR", &dir);
+            env::set_var("COS_PERMS_MODE", "permissive");
         });
         format!("{prefix}-{n}")
     }
