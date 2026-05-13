@@ -17,6 +17,7 @@ mod ipc;
 mod model;
 mod netfilter;
 mod paths;
+mod perms;
 mod policy;
 mod proc;
 mod router;
