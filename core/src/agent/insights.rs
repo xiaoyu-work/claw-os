@@ -60,9 +60,7 @@ impl UsageBucket {
         self.cache_write_tokens = self
             .cache_write_tokens
             .saturating_add(rec.cache_write_tokens as u64);
-        self.total_duration_ms = self
-            .total_duration_ms
-            .saturating_add(rec.duration_ms);
+        self.total_duration_ms = self.total_duration_ms.saturating_add(rec.duration_ms);
         *self
             .finish_reasons
             .entry(rec.finish_reason.clone())
@@ -167,11 +165,7 @@ impl InsightsReport {
         Self::recent_filtered(path, n, &InsightsFilter::default())
     }
 
-    pub fn recent_filtered(
-        path: &Path,
-        n: usize,
-        filter: &InsightsFilter,
-    ) -> Vec<LlmRunRecord> {
+    pub fn recent_filtered(path: &Path, n: usize, filter: &InsightsFilter) -> Vec<LlmRunRecord> {
         let Ok(text) = fs::read_to_string(path) else {
             return Vec::new();
         };
@@ -327,7 +321,16 @@ mod tests {
             rec_json("openai", "gpt-5", None, 10, 20, 100, "stop", None),
             rec_json("openai", "gpt-5", None, 5, 15, 50, "stop", None),
             rec_json("anthropic", "claude-x", None, 7, 13, 80, "tool_use", None),
-            rec_json("openai", "gpt-5-mini", None, 1, 2, 30, "length", Some("rate")),
+            rec_json(
+                "openai",
+                "gpt-5-mini",
+                None,
+                1,
+                2,
+                30,
+                "length",
+                Some("rate"),
+            ),
         ];
         let r = InsightsReport::from_lines(lines.iter().map(|s| s.as_str()));
         assert_eq!(r.overall.calls, 4);
@@ -508,9 +511,17 @@ mod tests {
         let r1: LlmRunRecord =
             serde_json::from_str(&rec_json("openai", "gpt-5", None, 1, 1, 10, "stop", None))
                 .unwrap();
-        let r2: LlmRunRecord =
-            serde_json::from_str(&rec_json("anthropic", "claude", None, 1, 1, 10, "stop", None))
-                .unwrap();
+        let r2: LlmRunRecord = serde_json::from_str(&rec_json(
+            "anthropic",
+            "claude",
+            None,
+            1,
+            1,
+            10,
+            "stop",
+            None,
+        ))
+        .unwrap();
         let mut f = InsightsFilter::default();
         f.provider = Some("openai".into());
         assert!(f.matches(&r1));

@@ -250,10 +250,7 @@ impl Pool {
         if entries.len() > MAX_POOL_SIZE {
             return Err(PoolError::InvalidEntry {
                 name,
-                reason: format!(
-                    "pool size {} exceeds max {MAX_POOL_SIZE}",
-                    entries.len()
-                ),
+                reason: format!("pool size {} exceeds max {MAX_POOL_SIZE}", entries.len()),
             });
         }
         for (i, e) in entries.iter().enumerate() {
@@ -616,12 +613,7 @@ mod tests {
     }
 
     fn pool(values: &[(&str, &str)], strat: SelectionStrategy) -> Pool {
-        Pool::from_entries(
-            "test",
-            values.iter().map(|(n, v)| p(n, v)).collect(),
-            strat,
-        )
-        .unwrap()
+        Pool::from_entries("test", values.iter().map(|(n, v)| p(n, v)).collect(), strat).unwrap()
     }
 
     // ---- construction ------------------------------------------------------
@@ -772,10 +764,7 @@ mod tests {
 
     #[test]
     fn least_errors_picks_healthier_key() {
-        let pool = pool(
-            &[("A", "kA"), ("B", "kB")],
-            SelectionStrategy::LeastErrors,
-        );
+        let pool = pool(&[("A", "kA"), ("B", "kB")], SelectionStrategy::LeastErrors);
         let l1 = pool.acquire().unwrap();
         // Tie -> first
         assert_eq!(l1.value(), "kA");

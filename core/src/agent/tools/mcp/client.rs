@@ -7,18 +7,18 @@
 //! responses to per-request oneshot channels.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Arc;
 
 use serde_json::Value;
-use tokio::sync::Mutex;
 use tokio::sync::oneshot;
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 use super::protocol::{
     CallToolParams, CallToolResult, ClientCapabilities, Implementation, InitializeParams,
     InitializeResult, JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
-    ListToolsResult, PROTOCOL_VERSION, RequestId,
+    ListToolsResult, RequestId, PROTOCOL_VERSION,
 };
 use super::transport::{Transport, TransportError};
 
@@ -137,8 +137,7 @@ impl McpClient {
             let mut p = self.pending.lock().await;
             p.insert(id.clone(), tx);
         }
-        let body =
-            serde_json::to_string(&env).map_err(|e| ClientError::Encode(e.to_string()))?;
+        let body = serde_json::to_string(&env).map_err(|e| ClientError::Encode(e.to_string()))?;
         if let Err(send_err) = self.transport.send(body).await {
             // Drop the pending entry so we don't leak the oneshot.
             let mut p = self.pending.lock().await;
@@ -153,14 +152,9 @@ impl McpClient {
     }
 
     /// Fire-and-forget notification.
-    pub async fn notify(
-        &self,
-        method: &str,
-        params: Option<Value>,
-    ) -> Result<(), ClientError> {
+    pub async fn notify(&self, method: &str, params: Option<Value>) -> Result<(), ClientError> {
         let env = JsonRpcNotification::new(method, params);
-        let body =
-            serde_json::to_string(&env).map_err(|e| ClientError::Encode(e.to_string()))?;
+        let body = serde_json::to_string(&env).map_err(|e| ClientError::Encode(e.to_string()))?;
         self.transport.send(body).await?;
         Ok(())
     }
@@ -232,9 +226,11 @@ mod tests {
         let server = tokio::spawn(async move {
             while let Ok(Some(frame)) = server_t.recv().await {
                 let req: JsonRpcRequest = serde_json::from_str(&frame).unwrap();
-                let resp =
-                    JsonRpcResponse::ok(req.id, req.params.unwrap_or(Value::Null));
-                server_t.send(serde_json::to_string(&resp).unwrap()).await.unwrap();
+                let resp = JsonRpcResponse::ok(req.id, req.params.unwrap_or(Value::Null));
+                server_t
+                    .send(serde_json::to_string(&resp).unwrap())
+                    .await
+                    .unwrap();
             }
         });
 
@@ -259,17 +255,19 @@ mod tests {
             let req: JsonRpcRequest = serde_json::from_str(&frame).unwrap();
             let resp = JsonRpcResponse::err(
                 req.id,
-                JsonRpcError::new(
-                    super::super::protocol::ERR_METHOD_NOT_FOUND,
-                    "no method",
-                ),
+                JsonRpcError::new(super::super::protocol::ERR_METHOD_NOT_FOUND, "no method"),
             );
-            server_t.send(serde_json::to_string(&resp).unwrap()).await.unwrap();
+            server_t
+                .send(serde_json::to_string(&resp).unwrap())
+                .await
+                .unwrap();
         });
 
         let err = client.request("missing", None).await.unwrap_err();
         match err {
-            ClientError::Server { code, .. } => assert_eq!(code, super::super::protocol::ERR_METHOD_NOT_FOUND),
+            ClientError::Server { code, .. } => {
+                assert_eq!(code, super::super::protocol::ERR_METHOD_NOT_FOUND)
+            }
             other => panic!("expected Server error, got {other:?}"),
         }
         let _ = server.await;
@@ -290,7 +288,10 @@ mod tests {
         // first and we get ConnectionClosed when the oneshot is
         // dropped.
         assert!(
-            matches!(err, ClientError::ConnectionClosed | ClientError::Transport(_)),
+            matches!(
+                err,
+                ClientError::ConnectionClosed | ClientError::Transport(_)
+            ),
             "expected ConnectionClosed or Transport, got {err:?}"
         );
     }

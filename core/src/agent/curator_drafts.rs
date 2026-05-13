@@ -94,14 +94,12 @@ impl DraftStore {
 
     pub fn open_at(path: PathBuf) -> Result<Self, String> {
         let file = if path.exists() {
-            let bytes = fs::read(&path)
-                .map_err(|e| format!("read {}: {e}", path.display()))?;
+            let bytes = fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
             if bytes.is_empty() {
                 DraftFile::default()
             } else {
-                let parsed: DraftFile = serde_json::from_slice(&bytes).map_err(|e| {
-                    format!("parse {}: {e}", path.display())
-                })?;
+                let parsed: DraftFile = serde_json::from_slice(&bytes)
+                    .map_err(|e| format!("parse {}: {e}", path.display()))?;
                 if parsed.schema != SCHEMA_VERSION {
                     return Err(format!(
                         "{} has schema v{}, expected v{}",
@@ -206,15 +204,13 @@ impl DraftStore {
     /// succeeded) — never a torn file.
     fn save_atomic(&self) -> Result<(), String> {
         if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+            fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
         }
-        let json = serde_json::to_vec_pretty(&self.file)
-            .map_err(|e| format!("serialise: {e}"))?;
+        let json = serde_json::to_vec_pretty(&self.file).map_err(|e| format!("serialise: {e}"))?;
         let tmp = self.path.with_extension("json.tmp");
         {
-            let mut f = fs::File::create(&tmp)
-                .map_err(|e| format!("create {}: {e}", tmp.display()))?;
+            let mut f =
+                fs::File::create(&tmp).map_err(|e| format!("create {}: {e}", tmp.display()))?;
             f.write_all(&json)
                 .map_err(|e| format!("write {}: {e}", tmp.display()))?;
             f.sync_all().ok();
@@ -380,9 +376,7 @@ mod tests {
             .set_status(&id, DraftStatus::Accepted, Some("first".into()))
             .unwrap();
         // Second transition with note=None should keep the prior note.
-        store
-            .set_status(&id, DraftStatus::Rejected, None)
-            .unwrap();
+        store.set_status(&id, DraftStatus::Rejected, None).unwrap();
         let r = store.get(&id).unwrap();
         assert_eq!(r.status, DraftStatus::Rejected);
         assert_eq!(r.note.as_deref(), Some("first"));

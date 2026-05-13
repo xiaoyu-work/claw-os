@@ -168,9 +168,8 @@ fn write_record(path: &Path, rec: &Record) -> std::io::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let mut f = OpenOptions::new().create(true).append(true).open(path)?;
-    let line = serde_json::to_string(rec).map_err(|e| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, e)
-    })?;
+    let line = serde_json::to_string(rec)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     writeln!(f, "{line}")?;
     Ok(())
 }

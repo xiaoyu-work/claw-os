@@ -123,8 +123,7 @@ pub fn is_installed() -> bool {
 pub fn validate_config(cfg: &LlamaConfig) -> Result<(), EngineError> {
     if cfg.model_path.as_os_str().is_empty() {
         return Err(EngineError::InvalidModelPath(
-            "model_path is empty — set agent.model to a GGUF path or 'llama_local:<path>'"
-                .into(),
+            "model_path is empty — set agent.model to a GGUF path or 'llama_local:<path>'".into(),
         ));
     }
     if !cfg.model_path.is_file() {
@@ -176,9 +175,10 @@ impl LlamaEngine {
         validate_config(&cfg)?;
         // Catches non-UTF-8 paths early so future load_from_file calls
         // can't surprise us.
-        let _ = cfg.model_path.to_str().ok_or_else(|| {
-            EngineError::InvalidModelPath("non-utf8 model path".into())
-        })?;
+        let _ = cfg
+            .model_path
+            .to_str()
+            .ok_or_else(|| EngineError::InvalidModelPath("non-utf8 model path".into()))?;
         let runtime = runtime::LlamaRuntime::shared()?;
         ensure_backend(&runtime);
         Ok(Self { cfg, runtime })
@@ -328,7 +328,9 @@ mod tests {
             },
             Message {
                 role: Role::Assistant,
-                content: vec![ContentBlock::Text { text: "hello".into() }],
+                content: vec![ContentBlock::Text {
+                    text: "hello".into(),
+                }],
             },
         ];
         let p = render_messages_as_prompt(Some("you are helpful"), &msgs);
@@ -346,7 +348,9 @@ mod tests {
         let msgs = vec![Message {
             role: Role::User,
             content: vec![
-                ContentBlock::Text { text: "look".into() },
+                ContentBlock::Text {
+                    text: "look".into(),
+                },
                 ContentBlock::Image {
                     media_type: "image/png".into(),
                     data: "...".into(),

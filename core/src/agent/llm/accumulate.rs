@@ -273,7 +273,9 @@ mod tests {
     fn assembles_text_only_response() {
         let sink: Arc<CountingSink> = Arc::default();
         let stream = s(vec![
-            Ok(StreamEvent::TextDelta { text: "Hello".into() }),
+            Ok(StreamEvent::TextDelta {
+                text: "Hello".into(),
+            }),
             Ok(StreamEvent::TextDelta {
                 text: " world".into(),
             }),
@@ -331,10 +333,7 @@ mod tests {
             .unwrap();
         assert_eq!(resp.tool_calls.len(), 1);
         assert_eq!(resp.tool_calls[0].name, "echo");
-        assert_eq!(
-            resp.tool_calls[0].input,
-            serde_json::json!({"text": "hi"})
-        );
+        assert_eq!(resp.tool_calls[0].input, serde_json::json!({"text": "hi"}));
         assert!(matches!(resp.finish_reason, FinishReason::ToolUse));
     }
 
@@ -363,10 +362,7 @@ mod tests {
         let resp = rt()
             .block_on(accumulate_stream(stream, sink, "test-model"))
             .unwrap();
-        assert_eq!(
-            resp.tool_calls[0].input,
-            serde_json::json!({"final": true})
-        );
+        assert_eq!(resp.tool_calls[0].input, serde_json::json!({"final": true}));
     }
 
     #[test]

@@ -94,8 +94,10 @@ impl LlamaSyms {
         // raw fn pointer; instead we transmute via the deref. As long as
         // the `Library` outlives the function pointers (it does — the
         // owning `LlamaRuntime` keeps it), this is sound.
-        let backend_init: libloading::Symbol<unsafe extern "C" fn()> = lib.get(b"llama_backend_init\0")?;
-        let backend_free: libloading::Symbol<unsafe extern "C" fn()> = lib.get(b"llama_backend_free\0")?;
+        let backend_init: libloading::Symbol<unsafe extern "C" fn()> =
+            lib.get(b"llama_backend_init\0")?;
+        let backend_free: libloading::Symbol<unsafe extern "C" fn()> =
+            lib.get(b"llama_backend_free\0")?;
         let log_set: libloading::Symbol<
             unsafe extern "C" fn(callback: llama_log_callback, user_data: *mut c_void),
         > = lib.get(b"llama_log_set\0")?;

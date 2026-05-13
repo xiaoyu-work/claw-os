@@ -11,7 +11,7 @@ use crate::agent::llm::{
     accumulate::{accumulate_stream, StreamSink},
     run_log::{self, LlmRunRecord},
     ChatRequest, ChatResponse, ContentBlock, FinishReason, Message, Role, Tool as LlmTool,
-    ToolChoice, ToolCall, Usage,
+    ToolCall, ToolChoice, Usage,
 };
 use crate::agent::runtime::hooks::{self, HookContext};
 use crate::agent::tools::{registry::ToolRegistry, ToolResult};
@@ -214,11 +214,15 @@ pub async fn run_turn(
                 success: !result.is_error,
                 latency_ms,
                 bytes_returned: result.content.len(),
-                error: if result.is_error { Some(result.content.clone()) } else { None },
+                error: if result.is_error {
+                    Some(result.content.clone())
+                } else {
+                    None
+                },
             };
             if pending_stop.is_none() {
-                if let hooks::HookOutcome::Stop(reason) = hooks::global_registry()
-                    .dispatch_post_tool(ctx, &effective_call, &summary)
+                if let hooks::HookOutcome::Stop(reason) =
+                    hooks::global_registry().dispatch_post_tool(ctx, &effective_call, &summary)
                 {
                     pending_stop = Some(reason);
                 }
@@ -245,7 +249,11 @@ pub async fn run_turn(
     // If the provider explicitly said Stop despite producing tool_use blocks,
     // honour that — but typical providers signal `ToolUse` here.
     let outcome = match response.finish_reason {
-        FinishReason::Stop | FinishReason::Length | FinishReason::Refusal | FinishReason::ContentFilter | FinishReason::Other => {
+        FinishReason::Stop
+        | FinishReason::Length
+        | FinishReason::Refusal
+        | FinishReason::ContentFilter
+        | FinishReason::Other => {
             // Loop will terminate even though tools ran — the provider has
             // declared it's done.
             TurnOutcome::Final(extract_text(&response))
@@ -392,11 +400,15 @@ pub async fn run_turn_streaming(
                 success: !result.is_error,
                 latency_ms,
                 bytes_returned: result.content.len(),
-                error: if result.is_error { Some(result.content.clone()) } else { None },
+                error: if result.is_error {
+                    Some(result.content.clone())
+                } else {
+                    None
+                },
             };
             if pending_stop.is_none() {
-                if let hooks::HookOutcome::Stop(reason) = hooks::global_registry()
-                    .dispatch_post_tool(ctx, &effective_call, &summary)
+                if let hooks::HookOutcome::Stop(reason) =
+                    hooks::global_registry().dispatch_post_tool(ctx, &effective_call, &summary)
                 {
                     pending_stop = Some(reason);
                 }
@@ -890,4 +902,3 @@ mod tests {
         }
     }
 }
-

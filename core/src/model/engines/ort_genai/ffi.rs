@@ -166,11 +166,8 @@ pub struct OrtGenaiSyms {
         *mut *mut sys::OgaGenerator,
     ) -> *mut sys::OgaResult,
     pub OgaDestroyGenerator: unsafe extern "system" fn(*mut sys::OgaGenerator),
-    pub OgaGenerator_AppendTokens: unsafe extern "system" fn(
-        *mut sys::OgaGenerator,
-        *const i32,
-        usize,
-    ) -> *mut sys::OgaResult,
+    pub OgaGenerator_AppendTokens:
+        unsafe extern "system" fn(*mut sys::OgaGenerator, *const i32, usize) -> *mut sys::OgaResult,
     pub OgaGenerator_GetOutput: unsafe extern "system" fn(
         *const sys::OgaGenerator,
         *const c_char,
@@ -179,17 +176,12 @@ pub struct OrtGenaiSyms {
 
     // --- Tensor ---
     pub OgaDestroyTensor: unsafe extern "system" fn(*mut sys::OgaTensor),
-    pub OgaTensorGetType: unsafe extern "system" fn(
-        *mut sys::OgaTensor,
-        *mut OgaElementType,
-    ) -> *mut sys::OgaResult,
+    pub OgaTensorGetType:
+        unsafe extern "system" fn(*mut sys::OgaTensor, *mut OgaElementType) -> *mut sys::OgaResult,
     pub OgaTensorGetShapeRank:
         unsafe extern "system" fn(*mut sys::OgaTensor, *mut usize) -> *mut sys::OgaResult,
-    pub OgaTensorGetShape: unsafe extern "system" fn(
-        *mut sys::OgaTensor,
-        *mut i64,
-        usize,
-    ) -> *mut sys::OgaResult,
+    pub OgaTensorGetShape:
+        unsafe extern "system" fn(*mut sys::OgaTensor, *mut i64, usize) -> *mut sys::OgaResult,
     pub OgaTensorGetData:
         unsafe extern "system" fn(*mut sys::OgaTensor, *mut *mut c_void) -> *mut sys::OgaResult,
 }
@@ -368,10 +360,7 @@ impl OrtGenaiSyms {
             OgaTensorGetShapeRank: sym!(
                 lib,
                 "OgaTensorGetShapeRank",
-                unsafe extern "system" fn(
-                    *mut sys::OgaTensor,
-                    *mut usize,
-                ) -> *mut sys::OgaResult
+                unsafe extern "system" fn(*mut sys::OgaTensor, *mut usize) -> *mut sys::OgaResult
             ),
             OgaTensorGetShape: sym!(
                 lib,

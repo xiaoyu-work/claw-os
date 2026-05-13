@@ -120,9 +120,8 @@ pub struct Redactor {
 static EMAIL_RE: OnceLock<Regex> = OnceLock::new();
 
 fn email_regex() -> &'static Regex {
-    EMAIL_RE.get_or_init(|| {
-        Regex::new(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}").unwrap()
-    })
+    EMAIL_RE
+        .get_or_init(|| Regex::new(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}").unwrap())
 }
 
 impl Redactor {
@@ -226,11 +225,7 @@ fn default_patterns() -> Vec<Pattern> {
             0,
         ),
         // GitHub family. github_pat_ has a longer prefix; check before ghp_.
-        pat(
-            r"github_pat_[A-Za-z0-9_]{20,}",
-            SecretKind::GithubToken,
-            0,
-        ),
+        pat(r"github_pat_[A-Za-z0-9_]{20,}", SecretKind::GithubToken, 0),
         pat(r"gh[opusr]_[A-Za-z0-9]{30,}", SecretKind::GithubToken, 0),
         // GitLab.
         pat(r"glpat-[A-Za-z0-9_\-]{10,}", SecretKind::GitlabToken, 0),
@@ -387,7 +382,8 @@ mod tests {
 
     #[test]
     fn private_key_block_fully_redacted() {
-        let s = "before\n-----BEGIN PRIVATE KEY-----\nMIIE...AAAA\n-----END PRIVATE KEY-----\nafter";
+        let s =
+            "before\n-----BEGIN PRIVATE KEY-----\nMIIE...AAAA\n-----END PRIVATE KEY-----\nafter";
         let out = r().redact(s);
         assert!(out.starts_with("before"));
         assert!(out.contains("[REDACTED:private_key]"));

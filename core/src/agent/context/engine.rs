@@ -348,11 +348,7 @@ mod tests {
         std::fs::write(nested.join("package.json"), "{}").unwrap();
         let depth0 = build(&ContextOptions::default().with_cwd(&dir));
         assert_eq!(depth0.hints.len(), 0);
-        let depth3 = build(
-            &ContextOptions::default()
-                .with_cwd(&dir)
-                .with_scan_depth(3),
-        );
+        let depth3 = build(&ContextOptions::default().with_cwd(&dir).with_scan_depth(3));
         assert_eq!(depth3.hints.len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -375,8 +371,7 @@ mod tests {
     #[test]
     fn references_only_render_in_block() {
         let block = build(
-            &ContextOptions::default()
-                .with_user_text("see @notes.md and @https://example.com/x"),
+            &ContextOptions::default().with_user_text("see @notes.md and @https://example.com/x"),
         );
         assert_eq!(block.references.len(), 2);
         let r = block.rendered();
@@ -389,9 +384,7 @@ mod tests {
 
     #[test]
     fn references_dedup_default_collapses_duplicates() {
-        let block = build(
-            &ContextOptions::default().with_user_text("@a @a @a"),
-        );
+        let block = build(&ContextOptions::default().with_user_text("@a @a @a"));
         assert_eq!(block.references.len(), 1);
     }
 
@@ -470,18 +463,17 @@ mod tests {
 
     #[test]
     fn to_json_roundtrips_basic_fields() {
-        let block = build(
-            &ContextOptions::default().with_user_text("@a"),
-        );
+        let block = build(&ContextOptions::default().with_user_text("@a"));
         let v = block.to_json();
         assert_eq!(v.get("is_empty").and_then(|b| b.as_bool()), Some(false));
         let refs = v.get("references").and_then(|r| r.as_array()).unwrap();
         assert_eq!(refs.len(), 1);
-        assert_eq!(
-            refs[0].get("raw").and_then(|s| s.as_str()),
-            Some("a")
-        );
-        assert!(v.get("rendered").and_then(|s| s.as_str()).unwrap_or("").contains("PROJECT_CONTEXT"));
+        assert_eq!(refs[0].get("raw").and_then(|s| s.as_str()), Some("a"));
+        assert!(v
+            .get("rendered")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .contains("PROJECT_CONTEXT"));
     }
 
     #[test]

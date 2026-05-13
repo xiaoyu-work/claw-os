@@ -247,14 +247,11 @@ pub fn run_app(
 
     let entry_path = app_dir.join(&entry);
     if !entry_path.is_file() {
-        return Err(format!(
-            "app entry not found: {}",
-            entry_path.display()
-        ));
+        return Err(format!("app entry not found: {}", entry_path.display()));
     }
 
-    let args_json = serde_json::to_string(args)
-        .map_err(|e| format!("failed to serialize args: {e}"))?;
+    let args_json =
+        serde_json::to_string(args).map_err(|e| format!("failed to serialize args: {e}"))?;
 
     let mut cmd = match runtime {
         Runtime::Node => {

@@ -27,10 +27,7 @@ use crate::agent::memory::honcho::{HonchoClient, HonchoConfig, HonchoError, Mess
 
 /// Top-level dispatcher for `cos agent honcho <subcmd>`.
 pub fn honcho_cmd(args: &[String]) -> Result<Value, String> {
-    let sub = args
-        .first()
-        .map(|s| s.as_str())
-        .unwrap_or("status");
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("status");
     let rest = if args.is_empty() { &[][..] } else { &args[1..] };
     match sub {
         "status" => cmd_status(),
@@ -192,7 +189,10 @@ mod tests {
         let v = honcho_cmd(&args(&["status"])).unwrap();
         restore_env(saved);
         assert_eq!(v["configured"], json!(false));
-        assert!(v["reason"].as_str().unwrap_or("").contains("HONCHO_BASE_URL"));
+        assert!(v["reason"]
+            .as_str()
+            .unwrap_or("")
+            .contains("HONCHO_BASE_URL"));
     }
 
     #[test]

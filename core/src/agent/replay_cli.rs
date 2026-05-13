@@ -35,8 +35,7 @@ use crate::agent::memory::sqlite_fts::{MemoryDb, MessageRow};
 /// Top-level dispatcher.
 pub fn replay_cmd(args: &[String]) -> Result<Value, String> {
     let opts = parse_args(args)?;
-    let db = MemoryDb::open_default()
-        .map_err(|e| format!("memory db unavailable: {e}"))?;
+    let db = MemoryDb::open_default().map_err(|e| format!("memory db unavailable: {e}"))?;
     replay_with(&db, &opts)
 }
 

@@ -92,8 +92,8 @@ pub struct MiniMaxTts {
 
 impl MiniMaxTts {
     pub fn new(cfg: MiniMaxConfig) -> Self {
-        let mut builder = reqwest::Client::builder()
-            .user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")));
+        let mut builder =
+            reqwest::Client::builder().user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")));
         if cfg.request_timeout > Duration::from_secs(0) {
             builder = builder.timeout(cfg.request_timeout);
         }
@@ -358,9 +358,13 @@ mod tests {
         let p = MiniMaxTts::new(cfg.clone());
         assert!(!<MiniMaxTts as TtsProvider>::is_configured(&p));
         cfg.api_key = Some("k".into());
-        assert!(!<MiniMaxTts as TtsProvider>::is_configured(&MiniMaxTts::new(cfg.clone())));
+        assert!(!<MiniMaxTts as TtsProvider>::is_configured(
+            &MiniMaxTts::new(cfg.clone())
+        ));
         cfg.group_id = Some("g".into());
-        assert!(<MiniMaxTts as TtsProvider>::is_configured(&MiniMaxTts::new(cfg)));
+        assert!(<MiniMaxTts as TtsProvider>::is_configured(
+            &MiniMaxTts::new(cfg)
+        ));
     }
 
     #[tokio::test]
@@ -415,7 +419,10 @@ mod tests {
 
     #[test]
     fn decode_hex_accepts_uppercase() {
-        assert_eq!(decode_hex("DEADBEEF").unwrap(), vec![0xde, 0xad, 0xbe, 0xef]);
+        assert_eq!(
+            decode_hex("DEADBEEF").unwrap(),
+            vec![0xde, 0xad, 0xbe, 0xef]
+        );
     }
 
     #[test]

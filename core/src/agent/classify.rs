@@ -111,10 +111,7 @@ fn build_prompt(text: &str, labels: &[&str]) -> String {
 /// Pure function — no I/O, no logging — so callers can unit-test
 /// it without an auxiliary mock.
 pub fn match_label(reply: &str, labels: &[&str]) -> Option<String> {
-    let line = reply
-        .lines()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("");
+    let line = reply.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
     let cleaned = strip_wrap_chars(line.trim()).to_lowercase();
     if cleaned.is_empty() {
         return None;
@@ -268,9 +265,9 @@ mod tests {
     async fn aux_error_returns_none() {
         let cfg = AgentConfig::default();
         let provider = MockProvider::new("err-mock", &cfg);
-        provider.push_response(MockResponse::Error(
-            crate::agent::llm::LlmError::Internal("boom".into()),
-        ));
+        provider.push_response(MockResponse::Error(crate::agent::llm::LlmError::Internal(
+            "boom".into(),
+        )));
         let aux = AuxiliaryClient::new(
             Arc::new(provider) as Arc<dyn Provider>,
             AuxiliaryConfig::new("mock", "err-mock"),
@@ -297,10 +294,7 @@ mod tests {
     fn match_label_returns_first_when_duplicate_labels() {
         // Caller-provided duplicate labels are a bug, but the
         // function must be deterministic. Pick the first.
-        assert_eq!(
-            match_label("yes", &["yes", "yes"]),
-            Some("yes".to_string())
-        );
+        assert_eq!(match_label("yes", &["yes", "yes"]), Some("yes".to_string()));
     }
 
     #[test]

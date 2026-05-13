@@ -1433,7 +1433,6 @@ mod tests {
         assert_eq!(result["count"], 1);
         // Should be the last entry.
         assert_eq!(result["events"][0]["source"], "proc");
-
     }
 
     #[test]

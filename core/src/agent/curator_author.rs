@@ -190,9 +190,13 @@ fn build_author_prompt(
         "Below is a transcript of the conversation that solved the task. Write a concise SKILL.md body in Markdown that teaches a future agent how to perform the same task. Required structure:\n\n",
     );
     out.push_str("1. A short overview paragraph (2-3 sentences).\n");
-    out.push_str("2. A '## Steps' section with numbered, concrete steps the agent should follow.\n");
+    out.push_str(
+        "2. A '## Steps' section with numbered, concrete steps the agent should follow.\n",
+    );
     out.push_str("3. A '## Tools' section listing each tool used and what it was used for.\n");
-    out.push_str("4. A '## Notes' section with caveats, error-handling tips, or things to verify.\n\n");
+    out.push_str(
+        "4. A '## Notes' section with caveats, error-handling tips, or things to verify.\n\n",
+    );
     out.push_str(
         "Do NOT include any frontmatter (no `---` blocks). Output Markdown only. Keep total length under 1200 words.\n\n",
     );
@@ -219,10 +223,7 @@ fn build_author_prompt(
         };
         out.push_str(&format!("\n[Turn {}] {role}:\n{body}\n", i + 1));
         if !turn.tool_calls.is_empty() {
-            out.push_str(&format!(
-                "  (tool_calls: {})\n",
-                turn.tool_calls.join(", ")
-            ));
+            out.push_str(&format!("  (tool_calls: {})\n", turn.tool_calls.join(", ")));
         }
     }
     out.push_str("\n--- End transcript ---\n");
@@ -426,7 +427,10 @@ mod tests {
         let document = format!("{fm}# Body\n\nLorem.\n");
         let parsed = manifest::parse(&document).expect("parse ok");
         assert_eq!(parsed.manifest.name, draft.title);
-        assert_eq!(parsed.manifest.description.as_deref(), Some(draft.description.as_str()));
+        assert_eq!(
+            parsed.manifest.description.as_deref(),
+            Some(draft.description.as_str())
+        );
         assert_eq!(parsed.manifest.allowed_tools, draft.allowed_tools);
         assert!(parsed.body.contains("# Body"));
     }
@@ -546,7 +550,8 @@ mod tests {
         let cfg = crate::config::AgentConfig::default();
         let mock = MockProvider::new("mock-author", &cfg);
         mock.push_response(MockResponse::Text(
-            "## Overview\nThis skill summarises CSVs.\n\n## Steps\n1. Read.\n2. Summarise.\n".into(),
+            "## Overview\nThis skill summarises CSVs.\n\n## Steps\n1. Read.\n2. Summarise.\n"
+                .into(),
         ));
         let provider: Arc<dyn Provider> = Arc::new(mock);
         let acfg = AuthorConfig::for_model("mock-author");

@@ -264,11 +264,14 @@ mod tests {
         let opts: zip::write::FileOptions<()> =
             zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
         let prefix = if wrap { "wrapper/" } else { "" };
-        zw.start_file(format!("{prefix}bin/llama-cli.exe"), opts).unwrap();
+        zw.start_file(format!("{prefix}bin/llama-cli.exe"), opts)
+            .unwrap();
         zw.write_all(b"MZ\x00\x00fake exe").unwrap();
-        zw.start_file(format!("{prefix}lib/llama.dll"), opts).unwrap();
+        zw.start_file(format!("{prefix}lib/llama.dll"), opts)
+            .unwrap();
         zw.write_all(b"MZ\x00\x00fake dll").unwrap();
-        zw.start_file(format!("{prefix}include/llama.h"), opts).unwrap();
+        zw.start_file(format!("{prefix}include/llama.h"), opts)
+            .unwrap();
         zw.write_all(b"// header").unwrap();
         zw.finish().unwrap();
         f

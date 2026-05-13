@@ -131,11 +131,7 @@ pub trait Compressor: Send + Sync {
     /// Compress `messages`. If compression is unnecessary or
     /// impossible (too few messages, head boundary at 0, etc.) the
     /// input is returned unchanged.
-    async fn compress(
-        &self,
-        system: Option<&str>,
-        messages: Vec<Message>,
-    ) -> Vec<Message>;
+    async fn compress(&self, system: Option<&str>, messages: Vec<Message>) -> Vec<Message>;
 }
 
 /// Tunables for [`LlmCompressor`].
@@ -216,8 +212,7 @@ impl LlmCompressor {
     /// is in the head, we extend the tail backward to include them.
     fn adjust_for_tool_pairs(messages: &[Message], mut boundary: usize) -> usize {
         // Collect tool_use ids referenced by tool_results in the tail.
-        let mut needed_ids: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        let mut needed_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
         for m in &messages[boundary..] {
             for b in &m.content {
                 if let ContentBlock::ToolResult { tool_use_id, .. } = b {
@@ -234,9 +229,10 @@ impl LlmCompressor {
                 break;
             }
             let prev = &messages[boundary - 1];
-            let prev_has_needed_use = prev.content.iter().any(|b| {
-                matches!(b, ContentBlock::ToolUse { id, .. } if needed_ids.contains(id))
-            });
+            let prev_has_needed_use = prev
+                .content
+                .iter()
+                .any(|b| matches!(b, ContentBlock::ToolUse { id, .. } if needed_ids.contains(id)));
             // Also: if the message at `boundary` has a tool_result
             // whose tool_use id is NOT in any later (tail) message,
             // we need to absorb its tool_use into the tail.
@@ -345,11 +341,7 @@ impl Compressor for LlmCompressor {
         estimate_total_tokens(system, messages) >= self.cfg.trigger_tokens
     }
 
-    async fn compress(
-        &self,
-        system: Option<&str>,
-        messages: Vec<Message>,
-    ) -> Vec<Message> {
+    async fn compress(&self, system: Option<&str>, messages: Vec<Message>) -> Vec<Message> {
         if !self.should_compress(system, &messages) {
             return messages;
         }
@@ -432,11 +424,7 @@ impl Compressor for NoopCompressor {
         false
     }
 
-    async fn compress(
-        &self,
-        _system: Option<&str>,
-        messages: Vec<Message>,
-    ) -> Vec<Message> {
+    async fn compress(&self, _system: Option<&str>, messages: Vec<Message>) -> Vec<Message> {
         messages
     }
 }
@@ -497,8 +485,7 @@ mod tests {
     }
 
     fn make_compressor(cfg: CompressorConfig) -> LlmCompressor {
-        let provider: Arc<dyn Provider> =
-            Arc::new(MockProvider::new("mock-model", &parent_cfg()));
+        let provider: Arc<dyn Provider> = Arc::new(MockProvider::new("mock-model", &parent_cfg()));
         LlmCompressor::new(provider, "mock-model").with_config(cfg)
     }
 
@@ -699,9 +686,7 @@ mod tests {
         };
         let provider_arc: Arc<MockProvider> =
             Arc::new(MockProvider::new("mock-model", &parent_cfg()));
-        provider_arc.push_response(MockResponse::Text(
-            "compressed history goes here".into(),
-        ));
+        provider_arc.push_response(MockResponse::Text("compressed history goes here".into()));
         let provider: Arc<dyn Provider> = provider_arc.clone();
         let c = LlmCompressor::new(provider, "mock-model").with_config(cfg);
         let msgs: Vec<Message> = (0..8).map(|i| user_msg(&format!("msg-{i}"))).collect();

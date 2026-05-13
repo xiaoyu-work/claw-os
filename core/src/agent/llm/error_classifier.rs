@@ -124,11 +124,11 @@ mod tests {
 
     #[test]
     fn auth_codes_are_cooldown_worthy() {
-        assert_eq!(classify(401, "invalid api key"), FailureClass::CooldownWorthy);
         assert_eq!(
-            classify(403, "forbidden"),
+            classify(401, "invalid api key"),
             FailureClass::CooldownWorthy
         );
+        assert_eq!(classify(403, "forbidden"), FailureClass::CooldownWorthy);
     }
 
     #[test]
@@ -178,11 +178,11 @@ mod tests {
             classify(400, "invalid model: gpt-99"),
             FailureClass::CallerError
         );
+        assert_eq!(classify(404, "model not found"), FailureClass::CallerError);
         assert_eq!(
-            classify(404, "model not found"),
+            classify(422, "validation failed"),
             FailureClass::CallerError
         );
-        assert_eq!(classify(422, "validation failed"), FailureClass::CallerError);
         assert_eq!(classify(400, ""), FailureClass::CallerError);
     }
 

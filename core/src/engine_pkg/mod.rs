@@ -251,7 +251,8 @@ fn cmd_list(args: &[String]) -> Result<Value, String> {
     // ambiguous — bail rather than silently dumping the whole index
     // verbosely (the summary view is already complete).
     let name = name.ok_or_else(|| {
-        "usage: cos engine list <engine> [--verbose] (--verbose alone needs an engine name)".to_string()
+        "usage: cos engine list <engine> [--verbose] (--verbose alone needs an engine name)"
+            .to_string()
     })?;
 
     if !is_known_engine(&name) {
@@ -355,9 +356,8 @@ fn cmd_remove(args: &[String]) -> Result<Value, String> {
             }
         }
     }
-    let positional = positional.ok_or_else(|| {
-        "usage: cos engine remove <engine>[@<version>] [--keep N]".to_string()
-    })?;
+    let positional = positional
+        .ok_or_else(|| "usage: cos engine remove <engine>[@<version>] [--keep N]".to_string())?;
 
     let mut index = registry::EnginesIndex::load_or_default().map_err(|e| e.to_string())?;
     if let Some((engine, version)) = positional.split_once('@') {
@@ -518,11 +518,9 @@ fn cmd_update(args: &[String]) -> Result<Value, String> {
             );
         }
         let version = version_in_pos.or(version_flag).ok_or_else(|| {
-            "offline install needs a version: pass <engine>@<version> or --version <v>"
-                .to_string()
+            "offline install needs a version: pass <engine>@<version> or --version <v>".to_string()
         })?;
-        let mut index =
-            registry::EnginesIndex::load_or_default().map_err(|e| e.to_string())?;
+        let mut index = registry::EnginesIndex::load_or_default().map_err(|e| e.to_string())?;
         let result = install_local::install_from_archive(
             &mut index,
             &engine,
@@ -554,23 +552,21 @@ fn cmd_update(args: &[String]) -> Result<Value, String> {
     // ---------- Online path: GitHub Releases ----------
     if version_flag.is_some() {
         return Err(
-            "--version is for offline install (--from). For online, use --to <tag> instead."
-                .into(),
+            "--version is for offline install (--from). For online, use --to <tag> instead.".into(),
         );
     }
     let to_tag = to_tag.or(version_in_pos);
-    let spec = sources::github::spec_for(&engine).ok_or_else(|| {
-        format!("no GitHub release source registered for engine \"{engine}\"")
-    })?;
+    let spec = sources::github::spec_for(&engine)
+        .ok_or_else(|| format!("no GitHub release source registered for engine \"{engine}\""))?;
 
     let mut ctx = sources::asset_select::SelectionContext::current();
     if let Some(a) = accelerator {
         ctx.accelerator = a.to_lowercase();
     }
 
-    let token = std::env::var("GITHUB_TOKEN").ok().or_else(|| {
-        std::env::var("GH_TOKEN").ok()
-    });
+    let token = std::env::var("GITHUB_TOKEN")
+        .ok()
+        .or_else(|| std::env::var("GH_TOKEN").ok());
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1044,8 +1040,7 @@ mod dispatch_tests {
     fn list_with_engine_name_returns_detail_view() {
         let tmp = fresh_engines_dir();
         write_three_versions(tmp.path());
-        let v =
-            run("list", &["llama-cpp".to_string()]).expect("verbose list should succeed");
+        let v = run("list", &["llama-cpp".to_string()]).expect("verbose list should succeed");
         let obj = v.as_object().expect("object");
         assert_eq!(
             obj.get("active").and_then(|v| v.as_str()),
@@ -1075,7 +1070,10 @@ mod dispatch_tests {
         write_three_versions(tmp.path());
         // v1 is neither active nor previous → safe to uninstall.
         let v = run("remove", &["llama-cpp@v1".to_string()]).expect("uninstall ok");
-        assert_eq!(v.get("status").and_then(|v| v.as_str()), Some("uninstalled"));
+        assert_eq!(
+            v.get("status").and_then(|v| v.as_str()),
+            Some("uninstalled")
+        );
         // Directory should be gone.
         assert!(!tmp.path().join("llama-cpp/v1").exists());
         paths::set_engines_dir_override(None);
@@ -1087,9 +1085,19 @@ mod dispatch_tests {
         let tmp = fresh_engines_dir();
         write_three_versions(tmp.path());
         // keep=1 means "keep one most-recent installed plus active+previous".
-        let v = run("remove", &["llama-cpp".to_string(), "--keep".to_string(), "1".to_string()])
-            .expect("gc ok");
-        assert_eq!(v.get("status").and_then(|v| v.as_str()), Some("gc-complete"));
+        let v = run(
+            "remove",
+            &[
+                "llama-cpp".to_string(),
+                "--keep".to_string(),
+                "1".to_string(),
+            ],
+        )
+        .expect("gc ok");
+        assert_eq!(
+            v.get("status").and_then(|v| v.as_str()),
+            Some("gc-complete")
+        );
         assert_eq!(v.get("kept").and_then(|v| v.as_u64()), Some(1));
         paths::set_engines_dir_override(None);
     }
@@ -1155,8 +1163,7 @@ mod dispatch_tests {
         write_three_versions(tmp.path());
         // Set the pin via the registry directly (not exposed as a CLI in
         // the new surface — `update --pin` is the entry point).
-        let mut idx =
-            registry::EnginesIndex::load_or_default().expect("index loads");
+        let mut idx = registry::EnginesIndex::load_or_default().expect("index loads");
         idx.set_pinned("llama-cpp", true).expect("set pin");
         idx.save().expect("save");
 

@@ -36,7 +36,9 @@ pub const REGISTERED: &[&str] = &[
 /// Construct a provider by name.
 pub fn build(name: &str, model: &str, agent_cfg: &AgentConfig) -> Result<Arc<dyn Provider>> {
     if providers::openai_compat::is_alias(name) {
-        return Ok(providers::openai_compat::build_provider(name, model, agent_cfg));
+        return Ok(providers::openai_compat::build_provider(
+            name, model, agent_cfg,
+        ));
     }
     if providers::anthropic::is_alias(name) {
         return Ok(providers::anthropic::build_provider(model, agent_cfg));
@@ -48,7 +50,9 @@ pub fn build(name: &str, model: &str, agent_cfg: &AgentConfig) -> Result<Arc<dyn
         return Ok(providers::gemini::build_provider(model, agent_cfg));
     }
     match name {
-        "mock" => Ok(Arc::new(providers::mock::MockProvider::new(model, agent_cfg))),
+        "mock" => Ok(Arc::new(providers::mock::MockProvider::new(
+            model, agent_cfg,
+        ))),
         "llama_local" => Ok(Arc::new(providers::llama_local::LlamaLocalProvider::new(
             model, agent_cfg,
         ))),

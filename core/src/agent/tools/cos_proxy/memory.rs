@@ -135,7 +135,9 @@ impl Tool for CosMemoryTool {
         .await;
 
         match join {
-            Ok(Ok(v)) => ToolResult::ok(serde_json::to_string(&v).unwrap_or_else(|_| v.to_string())),
+            Ok(Ok(v)) => {
+                ToolResult::ok(serde_json::to_string(&v).unwrap_or_else(|_| v.to_string()))
+            }
             Ok(Err(msg)) => ToolResult::err(msg),
             Err(e) => ToolResult::err(format!("cos_memory panicked: {e}")),
         }

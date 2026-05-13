@@ -92,11 +92,7 @@ impl OnboardingState {
         })
     }
 
-    pub fn complete_step(
-        &mut self,
-        id: &str,
-        note: Option<String>,
-    ) -> Result<(), OnboardingError> {
+    pub fn complete_step(&mut self, id: &str, note: Option<String>) -> Result<(), OnboardingError> {
         match self.step_mut(id) {
             Some(s) => {
                 s.status = StepStatus::Completed;
@@ -192,8 +188,7 @@ mod tests {
     use uuid::Uuid;
 
     fn tmp() -> PathBuf {
-        std::env::temp_dir()
-            .join(format!("cos-onboarding-{}.json", Uuid::new_v4().simple()))
+        std::env::temp_dir().join(format!("cos-onboarding-{}.json", Uuid::new_v4().simple()))
     }
 
     #[test]
@@ -270,7 +265,14 @@ mod tests {
     #[test]
     fn is_complete_accepts_completed_optionals() {
         let mut s = OnboardingState::default_steps();
-        for id in ["provider", "model", "credential", "memory_seed", "skills_accept", "gateway"] {
+        for id in [
+            "provider",
+            "model",
+            "credential",
+            "memory_seed",
+            "skills_accept",
+            "gateway",
+        ] {
             s.complete_step(id, None).unwrap();
         }
         assert!(s.is_complete());

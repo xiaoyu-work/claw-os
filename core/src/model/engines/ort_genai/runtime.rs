@@ -62,15 +62,14 @@ impl OrtGenaiRuntime {
             return Ok(existing.clone());
         }
 
-        let lib_path = crate::engine_pkg::active_library_path(
-            super::PKG_ENGINE_NAME,
-            super::LIB_BASENAME,
-        )
-        .ok_or_else(|| {
-            EngineError::NotInstalled(
-                "no active ort-genai engine — run `cos engine update ort-genai` to install".into(),
-            )
-        })?;
+        let lib_path =
+            crate::engine_pkg::active_library_path(super::PKG_ENGINE_NAME, super::LIB_BASENAME)
+                .ok_or_else(|| {
+                    EngineError::NotInstalled(
+                        "no active ort-genai engine — run `cos engine update ort-genai` to install"
+                            .into(),
+                    )
+                })?;
 
         let runtime = Arc::new(Self::load(&lib_path)?);
         let _ = SHARED.set(runtime.clone());

@@ -403,7 +403,11 @@ mod tests {
     #[test]
     fn default_classifier_is_non_empty_and_dedupes() {
         let c = BinaryExtensions::default();
-        assert!(c.len() > 50, "default list smaller than expected: {}", c.len());
+        assert!(
+            c.len() > 50,
+            "default list smaller than expected: {}",
+            c.len()
+        );
         // The data table is hand-maintained — it has at least one
         // duplicate (`key` appears under both crypto and Apple iWork
         // categories). Confirm dedup happens at construction time.

@@ -175,7 +175,12 @@ impl SkillsHub {
             .timeout(std::time::Duration::from_secs(60))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
-        Self { cfg, spec, gh, http }
+        Self {
+            cfg,
+            spec,
+            gh,
+            http,
+        }
     }
 
     /// Allow tests to inject a custom-base GhClient (e.g. wiremock).
@@ -187,7 +192,12 @@ impl SkillsHub {
             .timeout(std::time::Duration::from_secs(5))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
-        Self { cfg, spec, gh, http }
+        Self {
+            cfg,
+            spec,
+            gh,
+            http,
+        }
     }
 
     /// Fetch the hub catalogue from the latest release of the

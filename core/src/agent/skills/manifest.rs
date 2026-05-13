@@ -182,11 +182,10 @@ fn parse_yaml_subset(input: &str) -> Result<BTreeMap<String, RawValue>, Manifest
             });
         }
 
-        let (key, after) =
-            split_key(raw_line).ok_or_else(|| ManifestError::MalformedYaml {
-                line: lineno,
-                reason: "expected `key: value` or `key:`".to_string(),
-            })?;
+        let (key, after) = split_key(raw_line).ok_or_else(|| ManifestError::MalformedYaml {
+            line: lineno,
+            reason: "expected `key: value` or `key:`".to_string(),
+        })?;
 
         if out.contains_key(&key) {
             return Err(ManifestError::MalformedYaml {
@@ -342,19 +341,16 @@ fn parse_yaml_subset(input: &str) -> Result<BTreeMap<String, RawValue>, Manifest
         }
 
         if let Some(stripped) = value_part.strip_prefix('[') {
-            let inner = stripped.strip_suffix(']').ok_or_else(|| {
-                ManifestError::MalformedYaml {
+            let inner = stripped
+                .strip_suffix(']')
+                .ok_or_else(|| ManifestError::MalformedYaml {
                     line: lineno,
                     reason: "unterminated flow sequence".to_string(),
-                }
-            })?;
+                })?;
             let items: Vec<String> = if inner.trim().is_empty() {
                 Vec::new()
             } else {
-                inner
-                    .split(',')
-                    .map(|s| unquote_scalar(s.trim()))
-                    .collect()
+                inner.split(',').map(|s| unquote_scalar(s.trim())).collect()
             };
             out.insert(key, RawValue::Sequence(items));
             idx += 1;
@@ -445,9 +441,7 @@ fn expand_double_quoted(s: &str) -> String {
     out
 }
 
-fn build_manifest(
-    mut raw: BTreeMap<String, RawValue>,
-) -> Result<SkillManifest, ManifestError> {
+fn build_manifest(mut raw: BTreeMap<String, RawValue>) -> Result<SkillManifest, ManifestError> {
     let name = take_scalar(&mut raw, "name").ok_or(ManifestError::MissingName)?;
     if name.trim().is_empty() {
         return Err(ManifestError::EmptyName);
@@ -500,10 +494,7 @@ fn take_scalar(map: &mut BTreeMap<String, RawValue>, key: &str) -> Option<String
     }
 }
 
-fn take_sequence_or_csv(
-    map: &mut BTreeMap<String, RawValue>,
-    key: &str,
-) -> Option<Vec<String>> {
+fn take_sequence_or_csv(map: &mut BTreeMap<String, RawValue>, key: &str) -> Option<Vec<String>> {
     match map.remove(key) {
         Some(RawValue::Sequence(items)) => Some(
             items
@@ -613,9 +604,8 @@ mod tests {
     fn nested_mapping_under_empty_key_is_tolerated() {
         // Hermes-style metadata blocks: parent has empty value, then
         // an indented sub-mapping. Captured verbatim into `extra`.
-        let s = doc(
-            "---\nname: foo\nmetadata:\n  hermes:\n    tags: [a, b]\n    related: [c]\n---\n",
-        );
+        let s =
+            doc("---\nname: foo\nmetadata:\n  hermes:\n    tags: [a, b]\n    related: [c]\n---\n");
         let m = s.manifest;
         assert_eq!(m.name, "foo");
         let stored = m.extra.get("metadata").expect("metadata preserved");
@@ -666,9 +656,7 @@ mod tests {
 
     #[test]
     fn block_sequence_with_quoted_items() {
-        let s = doc(
-            "---\nname: x\ntriggers:\n  - 'one'\n  - \"two\"\n  - three\n---\n",
-        );
+        let s = doc("---\nname: x\ntriggers:\n  - 'one'\n  - \"two\"\n  - three\n---\n");
         assert_eq!(s.manifest.triggers, vec!["one", "two", "three"]);
     }
 

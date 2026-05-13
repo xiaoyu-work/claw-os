@@ -81,7 +81,11 @@ pub struct HookContext {
 
 impl HookContext {
     /// Builder-style starter; runtime callers fill in the rest.
-    pub fn new(session_id: impl Into<String>, provider: impl Into<String>, model: impl Into<String>) -> Self {
+    pub fn new(
+        session_id: impl Into<String>,
+        provider: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Self {
         Self {
             session_id: session_id.into(),
             turn_index: 0,
@@ -311,10 +315,7 @@ impl HookRegistry {
     /// holding the read lock across hook callbacks (so a hook is
     /// free to mutate the registry — though that's not recommended).
     fn snapshot(&self) -> Vec<Arc<dyn Hook>> {
-        self.inner
-            .read()
-            .map(|g| g.clone())
-            .unwrap_or_default()
+        self.inner.read().map(|g| g.clone()).unwrap_or_default()
     }
 
     pub fn dispatch_pre_turn(&self, ctx: &HookContext) -> HookOutcome {
@@ -932,7 +933,10 @@ mod tests {
     fn default_hook_methods_are_noop_continue() {
         let h = NameOnly;
         assert_eq!(h.pre_turn(&ctx()), HookOutcome::Continue);
-        assert_eq!(h.post_turn(&ctx(), &turn_summary_ok()), HookOutcome::Continue);
+        assert_eq!(
+            h.post_turn(&ctx(), &turn_summary_ok()),
+            HookOutcome::Continue
+        );
         assert!(h.pre_tool(&ctx(), &sample_tool_call()).is_allow());
         assert_eq!(
             h.post_tool(&ctx(), &sample_tool_call(), &tool_result_ok()),
@@ -1212,7 +1216,10 @@ mod tests {
         let h = LoggingHook;
         assert_eq!(h.name(), "logging");
         assert_eq!(h.pre_turn(&ctx()), HookOutcome::Continue);
-        assert_eq!(h.post_turn(&ctx(), &turn_summary_ok()), HookOutcome::Continue);
+        assert_eq!(
+            h.post_turn(&ctx(), &turn_summary_ok()),
+            HookOutcome::Continue
+        );
         assert!(h.pre_tool(&ctx(), &sample_tool_call()).is_allow());
         assert_eq!(
             h.post_tool(&ctx(), &sample_tool_call(), &tool_result_ok()),
@@ -1552,7 +1559,10 @@ mod tests {
     fn checkpoint_hook_default_constructors_use_default_set() {
         let h = CheckpointHook::new();
         for t in default_dangerous_tools() {
-            assert!(h.is_dangerous(&t), "{t} should be in the default dangerous set");
+            assert!(
+                h.is_dangerous(&t),
+                "{t} should be in the default dangerous set"
+            );
         }
         let h2 = CheckpointHook::with_dangerous(["custom_tool".to_string()].into_iter().collect());
         assert!(h2.is_dangerous("custom_tool"));

@@ -115,7 +115,9 @@ impl Guardrails {
     /// Add a single allowlist entry. Initialises the allowlist if it
     /// was `None`.
     pub fn allow_tool(mut self, name: impl Into<String>) -> Self {
-        self.allow.get_or_insert_with(HashSet::new).insert(name.into());
+        self.allow
+            .get_or_insert_with(HashSet::new)
+            .insert(name.into());
         self
     }
 

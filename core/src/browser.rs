@@ -162,8 +162,7 @@ fn cmd_start(args: &[String]) -> Result<Value, String> {
     }
     let _ = fs::create_dir_all(data_dir());
 
-    let log_file = fs::File::create(&log)
-        .map_err(|e| format!("failed to create log file: {e}"))?;
+    let log_file = fs::File::create(&log).map_err(|e| format!("failed to create log file: {e}"))?;
     let log_err = log_file
         .try_clone()
         .map_err(|e| format!("failed to clone log file: {e}"))?;

@@ -180,7 +180,10 @@ impl TextToSpeech for OpenAICompatTts {
         });
         if let Some(obj) = body.as_object_mut() {
             if !is_azure_deployment {
-                obj.insert("model".into(), serde_json::Value::String(self.model.clone()));
+                obj.insert(
+                    "model".into(),
+                    serde_json::Value::String(self.model.clone()),
+                );
             }
             if let Some(s) = request.speed {
                 obj.insert("speed".into(), serde_json::json!(s));
@@ -577,8 +580,7 @@ mod tests {
                 total.extend_from_slice(&buf[..n]);
                 if total.windows(4).any(|w| w == b"\r\n\r\n") {
                     let head = String::from_utf8_lossy(&total);
-                    let body_start =
-                        total.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+                    let body_start = total.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
                     let cl = head
                         .lines()
                         .find_map(|l| {
@@ -610,12 +612,8 @@ mod tests {
         std::env::set_var("COS_TEST_TTS_KEY", "sk-tts");
         // Pretend the response is an MP3. (4 bytes of fake audio.)
         let fake_audio = vec![0xff, 0xfb, 0x90, 0x44];
-        let (base_url, handle) = spawn_one_shot_mock_binary(
-            fake_audio.clone(),
-            "HTTP/1.1 200 OK",
-            "audio/mpeg",
-        )
-        .await;
+        let (base_url, handle) =
+            spawn_one_shot_mock_binary(fake_audio.clone(), "HTTP/1.1 200 OK", "audio/mpeg").await;
         let mut c = cfg();
         c.base_url = Some(base_url);
         c.api_key_env = Some("COS_TEST_TTS_KEY".into());

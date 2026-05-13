@@ -108,11 +108,7 @@ pub fn render_message(role: Role, content: &str, cfg: &DisplayConfig) -> String 
 /// Render a tool-call summary line. Mirrors the role glyph
 /// approach but adds the tool name.
 pub fn render_tool_call(name: &str, args_summary: &str, cfg: &DisplayConfig) -> String {
-    render_message(
-        Role::Tool,
-        &format!("call {name}({args_summary})"),
-        cfg,
-    )
+    render_message(Role::Tool, &format!("call {name}({args_summary})"), cfg)
 }
 
 /// Render a tool-result summary line.

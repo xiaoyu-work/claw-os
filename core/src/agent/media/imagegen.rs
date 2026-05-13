@@ -174,10 +174,7 @@ impl ImageGenProvider for NoopImageGen {
     fn is_configured(&self) -> bool {
         true
     }
-    async fn generate(
-        &self,
-        request: ImageGenRequest,
-    ) -> Result<ImageGenResponse, MediaError> {
+    async fn generate(&self, request: ImageGenRequest) -> Result<ImageGenResponse, MediaError> {
         request.validate()?;
         let format = request.format.unwrap_or(ImageFormat::Png);
         let images = (0..request.n)
@@ -202,15 +199,11 @@ impl ImageGenProvider for NoopImageGen {
 /// placeholder use.
 fn minimal_png_1x1() -> Vec<u8> {
     vec![
-        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-        0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-        0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
-        0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41,
-        0x54, 0x78, 0x9C, 0x62, 0x00, 0x01, 0x00, 0x00,
-        0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
-        0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
-        0x42, 0x60, 0x82,
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
+        0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x62, 0x00,
+        0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
+        0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
     ]
 }
 
@@ -268,7 +261,10 @@ mod tests {
         assert_eq!(resp.images.len(), 3);
         for img in &resp.images {
             assert_eq!(img.format, ImageFormat::Png);
-            assert_eq!(&img.bytes[..8], &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
+            assert_eq!(
+                &img.bytes[..8],
+                &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]
+            );
         }
     }
 
@@ -305,10 +301,7 @@ mod tests {
             fn is_configured(&self) -> bool {
                 false
             }
-            async fn generate(
-                &self,
-                _: ImageGenRequest,
-            ) -> Result<ImageGenResponse, MediaError> {
+            async fn generate(&self, _: ImageGenRequest) -> Result<ImageGenResponse, MediaError> {
                 Err(MediaError::NotConfigured("custom".to_string()))
             }
         }
@@ -330,10 +323,7 @@ mod tests {
             fn is_configured(&self) -> bool {
                 true
             }
-            async fn generate(
-                &self,
-                _: ImageGenRequest,
-            ) -> Result<ImageGenResponse, MediaError> {
+            async fn generate(&self, _: ImageGenRequest) -> Result<ImageGenResponse, MediaError> {
                 Ok(ImageGenResponse {
                     images: Vec::new(),
                     model: None,

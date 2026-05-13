@@ -365,7 +365,8 @@ mod tests {
     fn save_then_load_round_trips() {
         let _g = EnginesDirGuard::new();
         let mut idx = EnginesIndex::empty();
-        idx.record_install("llama-cpp", fake_install("b4001")).unwrap();
+        idx.record_install("llama-cpp", fake_install("b4001"))
+            .unwrap();
         idx.save().unwrap();
         let reloaded = EnginesIndex::load_or_default().unwrap();
         let entry = reloaded.entry("llama-cpp").unwrap();
@@ -377,8 +378,11 @@ mod tests {
     fn record_install_rejects_duplicates() {
         let _g = EnginesDirGuard::new();
         let mut idx = EnginesIndex::empty();
-        idx.record_install("llama-cpp", fake_install("b4001")).unwrap();
-        let err = idx.record_install("llama-cpp", fake_install("b4001")).unwrap_err();
+        idx.record_install("llama-cpp", fake_install("b4001"))
+            .unwrap();
+        let err = idx
+            .record_install("llama-cpp", fake_install("b4001"))
+            .unwrap_err();
         assert!(matches!(err, RegistryError::DuplicateVersion { .. }));
     }
 
@@ -386,8 +390,10 @@ mod tests {
     fn activate_sets_active_and_moves_previous() {
         let _g = EnginesDirGuard::new();
         let mut idx = EnginesIndex::empty();
-        idx.record_install("llama-cpp", fake_install("b3950")).unwrap();
-        idx.record_install("llama-cpp", fake_install("b4001")).unwrap();
+        idx.record_install("llama-cpp", fake_install("b3950"))
+            .unwrap();
+        idx.record_install("llama-cpp", fake_install("b4001"))
+            .unwrap();
         let prior = idx.activate("llama-cpp", "b3950").unwrap();
         assert_eq!(prior, "");
         let prior = idx.activate("llama-cpp", "b4001").unwrap();
@@ -401,7 +407,8 @@ mod tests {
     fn activate_rejects_unknown_version() {
         let _g = EnginesDirGuard::new();
         let mut idx = EnginesIndex::empty();
-        idx.record_install("llama-cpp", fake_install("b3950")).unwrap();
+        idx.record_install("llama-cpp", fake_install("b3950"))
+            .unwrap();
         let err = idx.activate("llama-cpp", "b9999").unwrap_err();
         assert!(matches!(err, RegistryError::UnknownVersion { .. }));
     }
@@ -410,8 +417,10 @@ mod tests {
     fn rollback_swaps_active_and_previous() {
         let _g = EnginesDirGuard::new();
         let mut idx = EnginesIndex::empty();
-        idx.record_install("llama-cpp", fake_install("b3950")).unwrap();
-        idx.record_install("llama-cpp", fake_install("b4001")).unwrap();
+        idx.record_install("llama-cpp", fake_install("b3950"))
+            .unwrap();
+        idx.record_install("llama-cpp", fake_install("b4001"))
+            .unwrap();
         idx.activate("llama-cpp", "b3950").unwrap();
         idx.activate("llama-cpp", "b4001").unwrap();
         let (active, previous) = idx.rollback("llama-cpp").unwrap();
@@ -426,7 +435,8 @@ mod tests {
     fn rollback_errors_with_no_previous() {
         let _g = EnginesDirGuard::new();
         let mut idx = EnginesIndex::empty();
-        idx.record_install("llama-cpp", fake_install("b4001")).unwrap();
+        idx.record_install("llama-cpp", fake_install("b4001"))
+            .unwrap();
         idx.activate("llama-cpp", "b4001").unwrap();
         let err = idx.rollback("llama-cpp").unwrap_err();
         assert!(matches!(err, RegistryError::UnknownVersion { .. }));
@@ -436,7 +446,8 @@ mod tests {
     fn uninstall_refuses_active_version() {
         let _g = EnginesDirGuard::new();
         let mut idx = EnginesIndex::empty();
-        idx.record_install("llama-cpp", fake_install("b4001")).unwrap();
+        idx.record_install("llama-cpp", fake_install("b4001"))
+            .unwrap();
         idx.activate("llama-cpp", "b4001").unwrap();
         let err = idx.uninstall("llama-cpp", "b4001").unwrap_err();
         assert!(matches!(err, RegistryError::UninstallActive { .. }));
@@ -482,7 +493,8 @@ mod tests {
     fn pin_unpin_round_trip() {
         let _g = EnginesDirGuard::new();
         let mut idx = EnginesIndex::empty();
-        idx.record_install("llama-cpp", fake_install("b4001")).unwrap();
+        idx.record_install("llama-cpp", fake_install("b4001"))
+            .unwrap();
         idx.set_pinned("llama-cpp", true).unwrap();
         assert!(idx.entry("llama-cpp").unwrap().pinned);
         idx.set_pinned("llama-cpp", false).unwrap();
@@ -516,7 +528,8 @@ mod tests {
     fn info_view_returns_structured_metadata() {
         let _g = EnginesDirGuard::new();
         let mut idx = EnginesIndex::empty();
-        idx.record_install("llama-cpp", fake_install("b4001")).unwrap();
+        idx.record_install("llama-cpp", fake_install("b4001"))
+            .unwrap();
         idx.activate("llama-cpp", "b4001").unwrap();
         let v = idx.info_view("llama-cpp");
         assert_eq!(v["engine"], "llama-cpp");

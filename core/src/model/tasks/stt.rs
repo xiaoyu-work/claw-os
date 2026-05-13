@@ -190,7 +190,9 @@ impl SpeechToText for OpenAICompatStt {
 
     async fn transcribe(&self, request: SttRequest) -> Result<SttResponse, SttError> {
         if request.audio.is_empty() {
-            return Err(SttError::InvalidInput("audio bytes must not be empty".into()));
+            return Err(SttError::InvalidInput(
+                "audio bytes must not be empty".into(),
+            ));
         }
         if request.filename.trim().is_empty() {
             return Err(SttError::InvalidInput("filename must not be empty".into()));
@@ -226,7 +228,10 @@ impl SpeechToText for OpenAICompatStt {
             }
         }
 
-        let mut http = self.client.post(self.endpoint(request.mode)).multipart(form);
+        let mut http = self
+            .client
+            .post(self.endpoint(request.mode))
+            .multipart(form);
         if let Some(key) = &self.api_key {
             http = http.bearer_auth(key);
         }
@@ -257,8 +262,8 @@ impl SpeechToText for OpenAICompatStt {
                 raw: serde_json::Value::String(body_str),
             }),
             _ => {
-                let raw: serde_json::Value = serde_json::from_slice(&bytes)
-                    .map_err(|e| SttError::Parse(e.to_string()))?;
+                let raw: serde_json::Value =
+                    serde_json::from_slice(&bytes).map_err(|e| SttError::Parse(e.to_string()))?;
                 let text = raw
                     .get("text")
                     .and_then(|v| v.as_str())
@@ -437,8 +442,7 @@ mod tests {
                 total.extend_from_slice(&buf[..n]);
                 if total.windows(4).any(|w| w == b"\r\n\r\n") {
                     let head = String::from_utf8_lossy(&total);
-                    let body_start =
-                        total.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+                    let body_start = total.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
                     let cl = head
                         .lines()
                         .find_map(|l| {

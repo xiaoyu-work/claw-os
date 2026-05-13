@@ -78,10 +78,8 @@ pub struct OpenAiImageGenProvider {
 
 impl OpenAiImageGenProvider {
     pub fn new(cfg: OpenAiImageGenConfig) -> Self {
-        let mut builder = reqwest::Client::builder().user_agent(concat!(
-            "cos-agent/",
-            env!("CARGO_PKG_VERSION")
-        ));
+        let mut builder =
+            reqwest::Client::builder().user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")));
         if cfg.request_timeout > Duration::from_secs(0) {
             builder = builder.timeout(cfg.request_timeout);
         }
@@ -261,11 +259,11 @@ mod tests {
 
     #[test]
     fn name_reflects_alias() {
-        let p = OpenAiImageGenProvider::new(OpenAiImageGenConfig::for_alias(
-            "openai",
-            "dall-e-3",
-        ));
-        assert_eq!(<OpenAiImageGenProvider as ImageGenProvider>::name(&p), "openai");
+        let p = OpenAiImageGenProvider::new(OpenAiImageGenConfig::for_alias("openai", "dall-e-3"));
+        assert_eq!(
+            <OpenAiImageGenProvider as ImageGenProvider>::name(&p),
+            "openai"
+        );
     }
 
     #[test]
@@ -275,15 +273,14 @@ mod tests {
         assert!(!<OpenAiImageGenProvider as ImageGenProvider>::is_configured(&p1));
         c.api_key = Some("sk".to_string());
         let p2 = OpenAiImageGenProvider::new(c);
-        assert!(<OpenAiImageGenProvider as ImageGenProvider>::is_configured(&p2));
+        assert!(<OpenAiImageGenProvider as ImageGenProvider>::is_configured(
+            &p2
+        ));
     }
 
     #[tokio::test]
     async fn generate_without_key_errors_not_configured() {
-        let p = OpenAiImageGenProvider::new(OpenAiImageGenConfig::for_alias(
-            "openai",
-            "dall-e-3",
-        ));
+        let p = OpenAiImageGenProvider::new(OpenAiImageGenConfig::for_alias("openai", "dall-e-3"));
         let err = p.generate(ImageGenRequest::new("a cat")).await.unwrap_err();
         assert!(matches!(err, MediaError::NotConfigured(_)));
     }
@@ -299,7 +296,10 @@ mod tests {
 
     #[test]
     fn derive_size_only_when_both_present() {
-        assert_eq!(derive_size(Some(1024), Some(1024)).as_deref(), Some("1024x1024"));
+        assert_eq!(
+            derive_size(Some(1024), Some(1024)).as_deref(),
+            Some("1024x1024")
+        );
         assert!(derive_size(Some(1024), None).is_none());
         assert!(derive_size(None, Some(1024)).is_none());
         assert!(derive_size(None, None).is_none());

@@ -31,7 +31,11 @@ pub struct Package {
 }
 
 impl Package {
-    pub fn new(ecosystem: impl Into<String>, name: impl Into<String>, version: impl Into<String>) -> Self {
+    pub fn new(
+        ecosystem: impl Into<String>,
+        name: impl Into<String>,
+        version: impl Into<String>,
+    ) -> Self {
         Self {
             ecosystem: ecosystem.into(),
             name: name.into(),
@@ -154,8 +158,8 @@ pub fn parse_query_response(payload: &Value) -> Result<Vec<OsvVulnerability>, St
     };
     let mut out = Vec::with_capacity(arr.len());
     for v in arr {
-        let parsed: OsvVulnerability = serde_json::from_value(v.clone())
-            .map_err(|e| format!("osv: vuln payload: {e}"))?;
+        let parsed: OsvVulnerability =
+            serde_json::from_value(v.clone()).map_err(|e| format!("osv: vuln payload: {e}"))?;
         out.push(parsed);
     }
     Ok(out)
@@ -262,7 +266,8 @@ fn parse_toml_string_value(rest: &str) -> Option<String> {
 /// package-lock.json — supports both lockfileVersion 1 (`dependencies`)
 /// and 2/3 (`packages` keyed by `node_modules/<name>`).
 pub fn parse_package_lock_json(body: &str) -> Result<Vec<Package>, String> {
-    let v: Value = serde_json::from_str(body).map_err(|e| format!("osv: package-lock json: {e}"))?;
+    let v: Value =
+        serde_json::from_str(body).map_err(|e| format!("osv: package-lock json: {e}"))?;
     let mut out = Vec::new();
     if let Some(packages) = v.get("packages").and_then(|p| p.as_object()) {
         for (key, val) in packages {
@@ -292,10 +297,7 @@ pub fn parse_package_lock_json(body: &str) -> Result<Vec<Package>, String> {
     Ok(out)
 }
 
-fn collect_npm_deps_v1(
-    deps: &serde_json::Map<String, Value>,
-    out: &mut Vec<Package>,
-) {
+fn collect_npm_deps_v1(deps: &serde_json::Map<String, Value>, out: &mut Vec<Package>) {
     for (name, val) in deps {
         if let Some(version) = val.get("version").and_then(|v| v.as_str()) {
             out.push(Package::new("npm", name.clone(), version.to_string()));
@@ -324,13 +326,11 @@ pub fn parse_requirements_txt(body: &str) -> Vec<Package> {
             Some((before, _)) => before.trim(),
             None => line,
         };
-        let Some((name, version)) = core.split_once("==") else { continue };
+        let Some((name, version)) = core.split_once("==") else {
+            continue;
+        };
         // Strip extras: `name[extra]==1.2.3`.
-        let name = name
-            .split_once('[')
-            .map(|(n, _)| n)
-            .unwrap_or(name)
-            .trim();
+        let name = name.split_once('[').map(|(n, _)| n).unwrap_or(name).trim();
         let version = version.trim();
         if name.is_empty() || version.is_empty() {
             continue;
@@ -355,7 +355,9 @@ pub fn parse_go_sum(body: &str) -> Vec<Package> {
         }
         let mut parts = line.split_whitespace();
         let Some(name) = parts.next() else { continue };
-        let Some(mut version) = parts.next() else { continue };
+        let Some(mut version) = parts.next() else {
+            continue;
+        };
         if let Some(stripped) = version.strip_suffix("/go.mod") {
             version = stripped;
         }
@@ -443,8 +445,12 @@ version = "0.1.0" # other
 }"#;
         let pkgs = parse_package_lock_json(body).expect("ok");
         assert_eq!(pkgs.len(), 2);
-        assert!(pkgs.iter().any(|p| p.name == "lodash" && p.version == "4.17.21"));
-        assert!(pkgs.iter().any(|p| p.name == "react" && p.version == "18.2.0"));
+        assert!(pkgs
+            .iter()
+            .any(|p| p.name == "lodash" && p.version == "4.17.21"));
+        assert!(pkgs
+            .iter()
+            .any(|p| p.name == "react" && p.version == "18.2.0"));
         for p in &pkgs {
             assert_eq!(p.ecosystem, "npm");
         }
@@ -532,10 +538,7 @@ version = "0.1.0" # other
         assert_eq!(pkgs.len(), 2);
         let mut names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
         names.sort();
-        assert_eq!(
-            names,
-            vec!["github.com/stretchr/testify", "rsc.io/quote"]
-        );
+        assert_eq!(names, vec!["github.com/stretchr/testify", "rsc.io/quote"]);
         for p in &pkgs {
             assert_eq!(p.ecosystem, "Go");
             assert!(!p.version.contains("/go.mod"));

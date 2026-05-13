@@ -56,9 +56,7 @@ use super::anthropic::wire as anthropic_wire;
 use crate::agent::llm::sigv4::{
     current_amz_date, sign, AwsCredentials, SignableRequest, SigningContext,
 };
-use crate::agent::llm::{
-    ChatRequest, ChatResponse, LlmError, Provider, Result, StreamEvent,
-};
+use crate::agent::llm::{ChatRequest, ChatResponse, LlmError, Provider, Result, StreamEvent};
 use crate::config::AgentConfig;
 
 pub const PROVIDER_NAME: &str = "bedrock";
@@ -102,10 +100,7 @@ impl std::fmt::Debug for BedrockConfig {
             .field("region", &self.region)
             .field("base_url", &self.base_url)
             .field("model", &self.model)
-            .field(
-                "credentials_present",
-                &self.credentials.as_ref().is_some(),
-            )
+            .field("credentials_present", &self.credentials.as_ref().is_some())
             .field(
                 "session_token_present",
                 &self
@@ -154,9 +149,8 @@ impl BedrockConfig {
         if let Some(url) = &self.base_url {
             // Strip scheme + path so the canonical host header matches
             // what reqwest writes on the wire.
-            host_from_url(url).unwrap_or_else(|| {
-                format!("bedrock-runtime.{}.amazonaws.com", self.region)
-            })
+            host_from_url(url)
+                .unwrap_or_else(|| format!("bedrock-runtime.{}.amazonaws.com", self.region))
         } else {
             format!("bedrock-runtime.{}.amazonaws.com", self.region)
         }
@@ -243,8 +237,8 @@ pub struct BedrockProvider {
 
 impl BedrockProvider {
     pub fn new(cfg: BedrockConfig) -> Self {
-        let mut builder = reqwest::Client::builder()
-            .user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")));
+        let mut builder =
+            reqwest::Client::builder().user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")));
         if cfg.request_timeout > Duration::from_secs(0) {
             builder = builder.timeout(cfg.request_timeout);
         }
@@ -332,8 +326,8 @@ impl Provider for BedrockProvider {
 
         let body_bytes = build_bedrock_body_bytes(&request)?;
 
-        let amz_date = current_amz_date()
-            .map_err(|e| LlmError::InvalidRequest(format!("clock: {e}")))?;
+        let amz_date =
+            current_amz_date().map_err(|e| LlmError::InvalidRequest(format!("clock: {e}")))?;
         let ctx = SigningContext {
             region: self.cfg.region.clone(),
             service: BEDROCK_SERVICE.to_string(),
@@ -348,10 +342,7 @@ impl Provider for BedrockProvider {
             // We pass an explicit content-type so it's part of the
             // signature scope — any tampering at the proxy layer
             // would invalidate the signature.
-            headers: &[(
-                "content-type".to_string(),
-                "application/json".to_string(),
-            )],
+            headers: &[("content-type".to_string(), "application/json".to_string())],
             body: &body_bytes,
         };
         let signed = sign(creds, &ctx, &host, &signable);
@@ -397,8 +388,8 @@ impl Provider for BedrockProvider {
 
         // Body shape is identical to Anthropic's Messages API
         // response — reuse the parser.
-        let parsed: anthropic_wire::Response = serde_json::from_slice(&bytes)
-            .map_err(|e| LlmError::Parse(e.to_string()))?;
+        let parsed: anthropic_wire::Response =
+            serde_json::from_slice(&bytes).map_err(|e| LlmError::Parse(e.to_string()))?;
         anthropic_wire::response_to_chat(parsed, &self.cfg.model)
     }
 
@@ -417,8 +408,8 @@ impl Provider for BedrockProvider {
 
         let body_bytes = build_bedrock_body_bytes(&request)?;
 
-        let amz_date = current_amz_date()
-            .map_err(|e| LlmError::InvalidRequest(format!("clock: {e}")))?;
+        let amz_date =
+            current_amz_date().map_err(|e| LlmError::InvalidRequest(format!("clock: {e}")))?;
         let ctx = SigningContext {
             region: self.cfg.region.clone(),
             service: BEDROCK_SERVICE.to_string(),
@@ -436,10 +427,7 @@ impl Provider for BedrockProvider {
             method: "POST",
             path: &path,
             query: &[],
-            headers: &[(
-                "content-type".to_string(),
-                "application/json".to_string(),
-            )],
+            headers: &[("content-type".to_string(), "application/json".to_string())],
             body: &body_bytes,
         };
         let signed = sign(creds, &ctx, &host, &signable);
@@ -629,9 +617,7 @@ pub fn build_provider(model: &str, agent: &AgentConfig) -> Arc<dyn Provider> {
 // JSON string) from the inner chunk payload.
 pub(crate) mod stream_wire {
     use super::anthropic_wire;
-    use crate::agent::llm::aws_eventstream::{
-        EventStreamParser, Frame, FrameError,
-    };
+    use crate::agent::llm::aws_eventstream::{EventStreamParser, Frame, FrameError};
     use crate::agent::llm::sse::SseEvent;
     use crate::agent::llm::{LlmError, Result, StreamEvent};
     use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
@@ -664,9 +650,7 @@ pub(crate) mod stream_wire {
 
     impl<S> BedrockStream<S>
     where
-        S: Stream<Item = std::result::Result<Bytes, reqwest::Error>>
-            + Send
-            + 'static,
+        S: Stream<Item = std::result::Result<Bytes, reqwest::Error>> + Send + 'static,
     {
         pub(crate) fn new(inner: S, default_model: &str) -> Self {
             Self {
@@ -744,17 +728,16 @@ pub(crate) mod stream_wire {
 
             // chunk payload is `{"bytes": "<base64>"}`. base64 of
             // the inner Anthropic SSE event JSON.
-            let outer: serde_json::Value =
-                match serde_json::from_slice(&frame.payload) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        self.pending.push_back(Err(LlmError::Parse(format!(
-                            "bedrock chunk frame: outer json: {e}"
-                        ))));
-                        self.done = true;
-                        return;
-                    }
-                };
+            let outer: serde_json::Value = match serde_json::from_slice(&frame.payload) {
+                Ok(v) => v,
+                Err(e) => {
+                    self.pending.push_back(Err(LlmError::Parse(format!(
+                        "bedrock chunk frame: outer json: {e}"
+                    ))));
+                    self.done = true;
+                    return;
+                }
+            };
             let b64 = match outer.get("bytes").and_then(|v| v.as_str()) {
                 Some(s) => s,
                 None => {
@@ -873,17 +856,11 @@ pub(crate) mod stream_wire {
 
     impl<S> Stream for BedrockStream<S>
     where
-        S: Stream<Item = std::result::Result<Bytes, reqwest::Error>>
-            + Send
-            + Unpin
-            + 'static,
+        S: Stream<Item = std::result::Result<Bytes, reqwest::Error>> + Send + Unpin + 'static,
     {
         type Item = Result<StreamEvent>;
 
-        fn poll_next(
-            mut self: Pin<&mut Self>,
-            cx: &mut Context<'_>,
-        ) -> Poll<Option<Self::Item>> {
+        fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
             loop {
                 if let Some(item) = self.pending.pop_front() {
                     return Poll::Ready(Some(item));
@@ -898,19 +875,15 @@ pub(crate) mod stream_wire {
                     if let Err(e) = p.finish() {
                         match e {
                             FrameError::Truncated(n) => {
-                                self.pending.push_back(Err(LlmError::Stream(
-                                    format!(
-                                        "bedrock event stream truncated: {n} \
+                                self.pending.push_back(Err(LlmError::Stream(format!(
+                                    "bedrock event stream truncated: {n} \
                                          byte(s) of partial frame at EOF"
-                                    ),
-                                )));
+                                ))));
                             }
                             other => {
-                                self.pending.push_back(Err(LlmError::Stream(
-                                    format!(
-                                        "bedrock event stream framing: {other}"
-                                    ),
-                                )));
+                                self.pending.push_back(Err(LlmError::Stream(format!(
+                                    "bedrock event stream framing: {other}"
+                                ))));
                             }
                         }
                     }
@@ -924,8 +897,7 @@ pub(crate) mod stream_wire {
                         self.drain_frames();
                     }
                     Poll::Ready(Some(Err(e))) => {
-                        self.pending
-                            .push_back(Err(LlmError::Transport(e)));
+                        self.pending.push_back(Err(LlmError::Transport(e)));
                         self.done = true;
                     }
                     Poll::Ready(None) => {
@@ -946,9 +918,7 @@ pub(crate) mod stream_wire {
         // Normalise to lowercase first letter for matching.
         let normalised = lower_camel(name);
         match normalised.as_str() {
-            "throttlingException" => LlmError::RateLimited {
-                retry_after_ms: 0,
-            },
+            "throttlingException" => LlmError::RateLimited { retry_after_ms: 0 },
             "validationException" => {
                 let m = if message.is_empty() {
                     "bedrock streamed validationException".into()
@@ -1128,10 +1098,7 @@ mod tests {
         c.aws_secret_key_env = Some("COS_BR_SK_TEST_X".into());
         std::env::set_var("COS_BR_AK_TEST_X", "AKID");
         std::env::set_var("COS_BR_SK_TEST_X", "secret");
-        let p = BedrockProvider::from_agent_config(
-            "anthropic.claude-3-5-sonnet-20241022-v2:0",
-            &c,
-        );
+        let p = BedrockProvider::from_agent_config("anthropic.claude-3-5-sonnet-20241022-v2:0", &c);
         // : → %3A, dot stays, dash stays.
         assert_eq!(
             p.model_path(),
@@ -1249,7 +1216,10 @@ mod tests {
         let body_bytes = build_bedrock_body_bytes(&req_text("hello")).unwrap();
         let v: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
         // System hoisted to top-level (Anthropic shape).
-        assert_eq!(v.get("system").and_then(|s| s.as_str()), Some("you are helpful"));
+        assert_eq!(
+            v.get("system").and_then(|s| s.as_str()),
+            Some("you are helpful")
+        );
         // max_tokens preserved.
         assert_eq!(v.get("max_tokens").and_then(|m| m.as_u64()), Some(64));
         // messages array survives.
@@ -1314,23 +1284,20 @@ mod tests {
 
     #[test]
     fn http_429_without_amz_type_still_rate_limited() {
-        let err = classify_bedrock_error(
-            reqwest::StatusCode::from_u16(429).unwrap(),
-            b"",
-            None,
-            None,
-        );
-        assert!(matches!(err, LlmError::RateLimited { retry_after_ms: 1000 }));
+        let err =
+            classify_bedrock_error(reqwest::StatusCode::from_u16(429).unwrap(), b"", None, None);
+        assert!(matches!(
+            err,
+            LlmError::RateLimited {
+                retry_after_ms: 1000
+            }
+        ));
     }
 
     #[test]
     fn http_403_without_amz_type_still_auth() {
-        let err = classify_bedrock_error(
-            reqwest::StatusCode::from_u16(403).unwrap(),
-            b"",
-            None,
-            None,
-        );
+        let err =
+            classify_bedrock_error(reqwest::StatusCode::from_u16(403).unwrap(), b"", None, None);
         assert!(matches!(err, LlmError::Auth));
     }
 
@@ -1357,10 +1324,7 @@ mod tests {
 
     #[test]
     fn url_encode_keeps_unreserved_chars() {
-        assert_eq!(
-            url_encode_path_segment("AbZ-_.~09"),
-            "AbZ-_.~09"
-        );
+        assert_eq!(url_encode_path_segment("AbZ-_.~09"), "AbZ-_.~09");
     }
 
     #[test]
@@ -1419,7 +1383,8 @@ mod tests {
 
     #[test]
     fn supported_models_echoes_configured_model() {
-        let p = BedrockProvider::from_agent_config("anthropic.claude-3-haiku-20240307-v1:0", &cfg());
+        let p =
+            BedrockProvider::from_agent_config("anthropic.claude-3-haiku-20240307-v1:0", &cfg());
         assert_eq!(
             p.supported_models(),
             vec!["anthropic.claude-3-haiku-20240307-v1:0".to_string()]
@@ -1470,10 +1435,7 @@ mod tests {
         c.aws_secret_key_env = Some("COS_BR_STR_SK1".into());
         std::env::set_var("COS_BR_STR_AK1", "AKID");
         std::env::set_var("COS_BR_STR_SK1", "secret");
-        let p = BedrockProvider::from_agent_config(
-            "anthropic.claude-3-5-sonnet-20241022-v2:0",
-            &c,
-        );
+        let p = BedrockProvider::from_agent_config("anthropic.claude-3-5-sonnet-20241022-v2:0", &c);
         assert_eq!(
             p.stream_model_path(),
             "/model/anthropic.claude-3-5-sonnet-20241022-v2%3A0/invoke-with-response-stream"
@@ -1538,10 +1500,8 @@ mod tests {
 
     #[test]
     fn classify_validation_with_message_preserves_message() {
-        let e = stream_wire::classify_streamed_exception(
-            "validationException",
-            "max tokens exceeded",
-        );
+        let e =
+            stream_wire::classify_streamed_exception("validationException", "max tokens exceeded");
         match e {
             LlmError::InvalidRequest(m) => {
                 assert!(m.contains("max tokens exceeded"), "got {m}");
@@ -1553,10 +1513,8 @@ mod tests {
 
     #[test]
     fn classify_model_stream_error_to_provider_500() {
-        let e = stream_wire::classify_streamed_exception(
-            "modelStreamErrorException",
-            "decoder OOM",
-        );
+        let e =
+            stream_wire::classify_streamed_exception("modelStreamErrorException", "decoder OOM");
         assert!(
             matches!(e, LlmError::Provider { status: 500, ref message } if message.contains("decoder OOM"))
         );
@@ -1588,10 +1546,8 @@ mod tests {
         // Unknown exception names must NOT be silently swallowed —
         // surface them so observability picks up new AWS-side error
         // taxonomy expansions.
-        let e = stream_wire::classify_streamed_exception(
-            "newSurpriseException",
-            "explanatory text",
-        );
+        let e =
+            stream_wire::classify_streamed_exception("newSurpriseException", "explanatory text");
         match e {
             LlmError::Provider { status, message } => {
                 assert_eq!(status, 500);
@@ -1702,9 +1658,10 @@ mod tests {
             })
             .collect();
         assert_eq!(text, "Hello world");
-        let done = oks.iter().rev().find(|e| {
-            matches!(e, crate::agent::llm::StreamEvent::Done { .. })
-        });
+        let done = oks
+            .iter()
+            .rev()
+            .find(|e| matches!(e, crate::agent::llm::StreamEvent::Done { .. }));
         assert!(done.is_some(), "expected Done event; got {oks:?}");
     }
 
@@ -1770,7 +1727,8 @@ mod tests {
         let oks: Vec<_> = events.iter().map(|r| r.as_ref().unwrap()).collect();
         // Expect at least one ToolUseStart, ToolInputDelta(s), ToolUse final.
         assert!(
-            oks.iter().any(|e| matches!(e, crate::agent::llm::StreamEvent::ToolUseStart { .. })),
+            oks.iter()
+                .any(|e| matches!(e, crate::agent::llm::StreamEvent::ToolUseStart { .. })),
             "missing ToolUseStart in {oks:?}"
         );
         let final_tool_use = oks.iter().find_map(|e| match e {
@@ -1797,10 +1755,7 @@ mod tests {
         // Last (only) event must be a RateLimited error.
         assert_eq!(events.len(), 1);
         let err = events[0].as_ref().unwrap_err();
-        assert!(
-            matches!(err, LlmError::RateLimited { .. }),
-            "got {err:?}"
-        );
+        assert!(matches!(err, LlmError::RateLimited { .. }), "got {err:?}");
     }
 
     #[test]
@@ -1882,7 +1837,8 @@ mod tests {
         let events = collect(frames);
         let oks: Vec<_> = events.iter().map(|r| r.as_ref().unwrap()).collect();
         assert!(
-            oks.iter().any(|e| matches!(e, crate::agent::llm::StreamEvent::Done { .. })),
+            oks.iter()
+                .any(|e| matches!(e, crate::agent::llm::StreamEvent::Done { .. })),
             "stream should still complete normally; got {oks:?}"
         );
     }
@@ -1931,9 +1887,10 @@ mod tests {
         // Even if more frames follow, the stream must terminate at
         // the corrupt frame with an error.
         let events = collect(vec![frame, event_frame_json("{}")]);
-        let any_err = events
-            .iter()
-            .any(|r| matches!(r, Err(LlmError::Stream(_))));
-        assert!(any_err, "expected at least one Stream error; got {events:?}");
+        let any_err = events.iter().any(|r| matches!(r, Err(LlmError::Stream(_))));
+        assert!(
+            any_err,
+            "expected at least one Stream error; got {events:?}"
+        );
     }
 }

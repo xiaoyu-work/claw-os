@@ -65,67 +65,347 @@ pub struct Marker {
 /// declaration order (we re-sort by relative path).
 pub const MARKERS: &[Marker] = &[
     // --- VCS ---------------------------------------------------------
-    Marker { name: ".git",        is_dir: true,  kind: HintKind::Vcs,       label: "Git repository" },
-    Marker { name: ".hg",         is_dir: true,  kind: HintKind::Vcs,       label: "Mercurial repository" },
-    Marker { name: ".svn",        is_dir: true,  kind: HintKind::Vcs,       label: "Subversion checkout" },
-    Marker { name: ".jj",         is_dir: true,  kind: HintKind::Vcs,       label: "Jujutsu repository" },
+    Marker {
+        name: ".git",
+        is_dir: true,
+        kind: HintKind::Vcs,
+        label: "Git repository",
+    },
+    Marker {
+        name: ".hg",
+        is_dir: true,
+        kind: HintKind::Vcs,
+        label: "Mercurial repository",
+    },
+    Marker {
+        name: ".svn",
+        is_dir: true,
+        kind: HintKind::Vcs,
+        label: "Subversion checkout",
+    },
+    Marker {
+        name: ".jj",
+        is_dir: true,
+        kind: HintKind::Vcs,
+        label: "Jujutsu repository",
+    },
     // --- Editor ------------------------------------------------------
-    Marker { name: ".editorconfig", is_dir: false, kind: HintKind::Editor, label: "EditorConfig" },
-    Marker { name: ".idea",       is_dir: true,  kind: HintKind::Editor,   label: "IntelliJ project" },
-    Marker { name: ".vscode",     is_dir: true,  kind: HintKind::Editor,   label: "VS Code workspace" },
+    Marker {
+        name: ".editorconfig",
+        is_dir: false,
+        kind: HintKind::Editor,
+        label: "EditorConfig",
+    },
+    Marker {
+        name: ".idea",
+        is_dir: true,
+        kind: HintKind::Editor,
+        label: "IntelliJ project",
+    },
+    Marker {
+        name: ".vscode",
+        is_dir: true,
+        kind: HintKind::Editor,
+        label: "VS Code workspace",
+    },
     // --- CI / build automation --------------------------------------
-    Marker { name: ".github",     is_dir: true,  kind: HintKind::Ci,       label: "GitHub config (likely Actions)" },
-    Marker { name: ".gitlab-ci.yml", is_dir: false, kind: HintKind::Ci,    label: "GitLab CI" },
-    Marker { name: "Dockerfile",  is_dir: false, kind: HintKind::Ci,       label: "Docker image" },
-    Marker { name: "docker-compose.yml", is_dir: false, kind: HintKind::Ci, label: "Docker Compose stack" },
-    Marker { name: "docker-compose.yaml", is_dir: false, kind: HintKind::Ci, label: "Docker Compose stack" },
-    Marker { name: "Makefile",    is_dir: false, kind: HintKind::Ci,       label: "Makefile" },
-    Marker { name: "Justfile",    is_dir: false, kind: HintKind::Ci,       label: "Just task runner" },
-    Marker { name: "Taskfile.yml", is_dir: false, kind: HintKind::Ci,      label: "Task runner" },
+    Marker {
+        name: ".github",
+        is_dir: true,
+        kind: HintKind::Ci,
+        label: "GitHub config (likely Actions)",
+    },
+    Marker {
+        name: ".gitlab-ci.yml",
+        is_dir: false,
+        kind: HintKind::Ci,
+        label: "GitLab CI",
+    },
+    Marker {
+        name: "Dockerfile",
+        is_dir: false,
+        kind: HintKind::Ci,
+        label: "Docker image",
+    },
+    Marker {
+        name: "docker-compose.yml",
+        is_dir: false,
+        kind: HintKind::Ci,
+        label: "Docker Compose stack",
+    },
+    Marker {
+        name: "docker-compose.yaml",
+        is_dir: false,
+        kind: HintKind::Ci,
+        label: "Docker Compose stack",
+    },
+    Marker {
+        name: "Makefile",
+        is_dir: false,
+        kind: HintKind::Ci,
+        label: "Makefile",
+    },
+    Marker {
+        name: "Justfile",
+        is_dir: false,
+        kind: HintKind::Ci,
+        label: "Just task runner",
+    },
+    Marker {
+        name: "Taskfile.yml",
+        is_dir: false,
+        kind: HintKind::Ci,
+        label: "Task runner",
+    },
     // --- Manifests (build / package) --------------------------------
-    Marker { name: "Cargo.toml",  is_dir: false, kind: HintKind::Manifest, label: "Rust crate" },
-    Marker { name: "Gemfile",     is_dir: false, kind: HintKind::Manifest, label: "Ruby project" },
-    Marker { name: "Package.swift", is_dir: false, kind: HintKind::Manifest, label: "Swift package" },
-    Marker { name: "Pipfile",     is_dir: false, kind: HintKind::Manifest, label: "Pipenv project" },
-    Marker { name: "Project.toml", is_dir: false, kind: HintKind::Manifest, label: "Julia project" },
-    Marker { name: "build.gradle", is_dir: false, kind: HintKind::Manifest, label: "Gradle project" },
-    Marker { name: "build.gradle.kts", is_dir: false, kind: HintKind::Manifest, label: "Gradle (Kotlin DSL) project" },
-    Marker { name: "composer.json", is_dir: false, kind: HintKind::Manifest, label: "PHP Composer project" },
-    Marker { name: "go.mod",      is_dir: false, kind: HintKind::Manifest, label: "Go module" },
-    Marker { name: "mix.exs",     is_dir: false, kind: HintKind::Manifest, label: "Elixir project" },
-    Marker { name: "package.json", is_dir: false, kind: HintKind::Manifest, label: "Node.js project" },
-    Marker { name: "pom.xml",     is_dir: false, kind: HintKind::Manifest, label: "Maven project" },
-    Marker { name: "pyproject.toml", is_dir: false, kind: HintKind::Manifest, label: "Python project" },
-    Marker { name: "requirements.txt", is_dir: false, kind: HintKind::Manifest, label: "Python requirements" },
-    Marker { name: "shard.yml",   is_dir: false, kind: HintKind::Manifest, label: "Crystal project" },
-    Marker { name: "stack.yaml",  is_dir: false, kind: HintKind::Manifest, label: "Haskell stack" },
+    Marker {
+        name: "Cargo.toml",
+        is_dir: false,
+        kind: HintKind::Manifest,
+        label: "Rust crate",
+    },
+    Marker {
+        name: "Gemfile",
+        is_dir: false,
+        kind: HintKind::Manifest,
+        label: "Ruby project",
+    },
+    Marker {
+        name: "Package.swift",
+        is_dir: false,
+        kind: HintKind::Manifest,
+        label: "Swift package",
+    },
+    Marker {
+        name: "Pipfile",
+        is_dir: false,
+        kind: HintKind::Manifest,
+        label: "Pipenv project",
+    },
+    Marker {
+        name: "Project.toml",
+        is_dir: false,
+        kind: HintKind::Manifest,
+        label: "Julia project",
+    },
+    Marker {
+        name: "build.gradle",
+        is_dir: false,
+        kind: HintKind::Manifest,
+        label: "Gradle project",
+    },
+    Marker {
+        name: "build.gradle.kts",
+        is_dir: false,
+        kind: HintKind::Manifest,
+        label: "Gradle (Kotlin DSL) project",
+    },
+    Marker {
+        name: "composer.json",
+        is_dir: false,
+        kind: HintKind::Manifest,
+        label: "PHP Composer project",
+    },
+    Marker {
+        name: "go.mod",
+        is_dir: false,
+        kind: HintKind::Manifest,
+        label: "Go module",
+    },
+    Marker {
+        name: "mix.exs",
+        is_dir: false,
+        kind: HintKind::Manifest,
+        label: "Elixir project",
+    },
+    Marker {
+        name: "package.json",
+        is_dir: false,
+        kind: HintKind::Manifest,
+        label: "Node.js project",
+    },
+    Marker {
+        name: "pom.xml",
+        is_dir: false,
+        kind: HintKind::Manifest,
+        label: "Maven project",
+    },
+    Marker {
+        name: "pyproject.toml",
+        is_dir: false,
+        kind: HintKind::Manifest,
+        label: "Python project",
+    },
+    Marker {
+        name: "requirements.txt",
+        is_dir: false,
+        kind: HintKind::Manifest,
+        label: "Python requirements",
+    },
+    Marker {
+        name: "shard.yml",
+        is_dir: false,
+        kind: HintKind::Manifest,
+        label: "Crystal project",
+    },
+    Marker {
+        name: "stack.yaml",
+        is_dir: false,
+        kind: HintKind::Manifest,
+        label: "Haskell stack",
+    },
     // --- Frameworks --------------------------------------------------
-    Marker { name: "next.config.js", is_dir: false, kind: HintKind::Framework, label: "Next.js app" },
-    Marker { name: "next.config.mjs", is_dir: false, kind: HintKind::Framework, label: "Next.js app" },
-    Marker { name: "next.config.ts", is_dir: false, kind: HintKind::Framework, label: "Next.js app" },
-    Marker { name: "nuxt.config.ts", is_dir: false, kind: HintKind::Framework, label: "Nuxt app" },
-    Marker { name: "vite.config.js", is_dir: false, kind: HintKind::Framework, label: "Vite app" },
-    Marker { name: "vite.config.ts", is_dir: false, kind: HintKind::Framework, label: "Vite app" },
-    Marker { name: "remix.config.js", is_dir: false, kind: HintKind::Framework, label: "Remix app" },
-    Marker { name: "astro.config.mjs", is_dir: false, kind: HintKind::Framework, label: "Astro site" },
-    Marker { name: "svelte.config.js", is_dir: false, kind: HintKind::Framework, label: "SvelteKit app" },
-    Marker { name: "tailwind.config.js", is_dir: false, kind: HintKind::Framework, label: "Tailwind CSS" },
-    Marker { name: "tailwind.config.ts", is_dir: false, kind: HintKind::Framework, label: "Tailwind CSS" },
-    Marker { name: "manage.py", is_dir: false, kind: HintKind::Framework, label: "Django project" },
-    Marker { name: "Rakefile", is_dir: false, kind: HintKind::Framework, label: "Ruby Rake (likely Rails)" },
-    Marker { name: "tsconfig.json", is_dir: false, kind: HintKind::Framework, label: "TypeScript project" },
-    Marker { name: "deno.json", is_dir: false, kind: HintKind::Framework, label: "Deno project" },
-    Marker { name: "deno.jsonc", is_dir: false, kind: HintKind::Framework, label: "Deno project" },
-    Marker { name: "bun.lockb", is_dir: false, kind: HintKind::Framework, label: "Bun project" },
-    Marker { name: "pnpm-workspace.yaml", is_dir: false, kind: HintKind::Framework, label: "pnpm workspace" },
+    Marker {
+        name: "next.config.js",
+        is_dir: false,
+        kind: HintKind::Framework,
+        label: "Next.js app",
+    },
+    Marker {
+        name: "next.config.mjs",
+        is_dir: false,
+        kind: HintKind::Framework,
+        label: "Next.js app",
+    },
+    Marker {
+        name: "next.config.ts",
+        is_dir: false,
+        kind: HintKind::Framework,
+        label: "Next.js app",
+    },
+    Marker {
+        name: "nuxt.config.ts",
+        is_dir: false,
+        kind: HintKind::Framework,
+        label: "Nuxt app",
+    },
+    Marker {
+        name: "vite.config.js",
+        is_dir: false,
+        kind: HintKind::Framework,
+        label: "Vite app",
+    },
+    Marker {
+        name: "vite.config.ts",
+        is_dir: false,
+        kind: HintKind::Framework,
+        label: "Vite app",
+    },
+    Marker {
+        name: "remix.config.js",
+        is_dir: false,
+        kind: HintKind::Framework,
+        label: "Remix app",
+    },
+    Marker {
+        name: "astro.config.mjs",
+        is_dir: false,
+        kind: HintKind::Framework,
+        label: "Astro site",
+    },
+    Marker {
+        name: "svelte.config.js",
+        is_dir: false,
+        kind: HintKind::Framework,
+        label: "SvelteKit app",
+    },
+    Marker {
+        name: "tailwind.config.js",
+        is_dir: false,
+        kind: HintKind::Framework,
+        label: "Tailwind CSS",
+    },
+    Marker {
+        name: "tailwind.config.ts",
+        is_dir: false,
+        kind: HintKind::Framework,
+        label: "Tailwind CSS",
+    },
+    Marker {
+        name: "manage.py",
+        is_dir: false,
+        kind: HintKind::Framework,
+        label: "Django project",
+    },
+    Marker {
+        name: "Rakefile",
+        is_dir: false,
+        kind: HintKind::Framework,
+        label: "Ruby Rake (likely Rails)",
+    },
+    Marker {
+        name: "tsconfig.json",
+        is_dir: false,
+        kind: HintKind::Framework,
+        label: "TypeScript project",
+    },
+    Marker {
+        name: "deno.json",
+        is_dir: false,
+        kind: HintKind::Framework,
+        label: "Deno project",
+    },
+    Marker {
+        name: "deno.jsonc",
+        is_dir: false,
+        kind: HintKind::Framework,
+        label: "Deno project",
+    },
+    Marker {
+        name: "bun.lockb",
+        is_dir: false,
+        kind: HintKind::Framework,
+        label: "Bun project",
+    },
+    Marker {
+        name: "pnpm-workspace.yaml",
+        is_dir: false,
+        kind: HintKind::Framework,
+        label: "pnpm workspace",
+    },
     // --- Env / runtime ----------------------------------------------
-    Marker { name: ".env",        is_dir: false, kind: HintKind::Env,      label: "dotenv defaults" },
-    Marker { name: ".env.local",  is_dir: false, kind: HintKind::Env,      label: "dotenv overrides" },
-    Marker { name: ".nvmrc",      is_dir: false, kind: HintKind::Env,      label: "Node version pin" },
-    Marker { name: ".python-version", is_dir: false, kind: HintKind::Env,  label: "Python version pin" },
-    Marker { name: ".tool-versions", is_dir: false, kind: HintKind::Env,   label: "asdf tool versions" },
-    Marker { name: ".rust-toolchain", is_dir: false, kind: HintKind::Env,  label: "Rust toolchain pin" },
-    Marker { name: ".rust-toolchain.toml", is_dir: false, kind: HintKind::Env, label: "Rust toolchain pin" },
+    Marker {
+        name: ".env",
+        is_dir: false,
+        kind: HintKind::Env,
+        label: "dotenv defaults",
+    },
+    Marker {
+        name: ".env.local",
+        is_dir: false,
+        kind: HintKind::Env,
+        label: "dotenv overrides",
+    },
+    Marker {
+        name: ".nvmrc",
+        is_dir: false,
+        kind: HintKind::Env,
+        label: "Node version pin",
+    },
+    Marker {
+        name: ".python-version",
+        is_dir: false,
+        kind: HintKind::Env,
+        label: "Python version pin",
+    },
+    Marker {
+        name: ".tool-versions",
+        is_dir: false,
+        kind: HintKind::Env,
+        label: "asdf tool versions",
+    },
+    Marker {
+        name: ".rust-toolchain",
+        is_dir: false,
+        kind: HintKind::Env,
+        label: "Rust toolchain pin",
+    },
+    Marker {
+        name: ".rust-toolchain.toml",
+        is_dir: false,
+        kind: HintKind::Env,
+        label: "Rust toolchain pin",
+    },
 ];
 
 /// Directory names we never descend into during recursive scans.
@@ -179,13 +459,7 @@ pub fn scan_dir_recursive(root: &Path, max_depth: usize) -> Vec<Hint> {
     by_rel.into_values().collect()
 }
 
-fn walk(
-    base: &Path,
-    cur: &Path,
-    depth: usize,
-    max_depth: usize,
-    out: &mut BTreeMap<String, Hint>,
-) {
+fn walk(base: &Path, cur: &Path, depth: usize, max_depth: usize, out: &mut BTreeMap<String, Hint>) {
     scan_one(base, cur, out);
     if depth >= max_depth {
         return;
@@ -255,7 +529,11 @@ fn relative_to(base: &Path, full: &Path) -> Option<String> {
         .filter_map(|c| c.as_os_str().to_str())
         .collect::<Vec<_>>()
         .join("/");
-    if s.is_empty() { None } else { Some(s) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 /// Render a list of hints as a single short paragraph suitable for
@@ -363,7 +641,10 @@ mod tests {
         fs::create_dir_all(dir.join("subproj")).unwrap();
         touch(&dir.join("subproj").join("Cargo.toml"));
         let hits = scan_dir(&dir);
-        assert!(hits.is_empty(), "single-level scan should not find subproj/Cargo.toml");
+        assert!(
+            hits.is_empty(),
+            "single-level scan should not find subproj/Cargo.toml"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -398,7 +679,10 @@ mod tests {
         touch(&dir.join("a").join("b").join("c").join("Cargo.toml"));
         // depth 2 from root: visits root, a/, a/b/ — does NOT enter a/b/c/.
         let hits = scan_dir_recursive(&dir, 2);
-        assert!(hits.is_empty(), "depth-2 scan should not find a/b/c/Cargo.toml");
+        assert!(
+            hits.is_empty(),
+            "depth-2 scan should not find a/b/c/Cargo.toml"
+        );
         // depth 3 should pick it up.
         let hits = scan_dir_recursive(&dir, 3);
         assert_eq!(hits.len(), 1);

@@ -100,7 +100,10 @@ fn cmd_summary(args: &[String]) -> Result<Value, String> {
     let mut first_ts: Option<String> = None;
     let mut last_ts: Option<String> = None;
 
-    for e in events.iter().filter(|e| match_session(e, session.as_deref())) {
+    for e in events
+        .iter()
+        .filter(|e| match_session(e, session.as_deref()))
+    {
         total += 1;
         let kind = e
             .get("kind")
@@ -167,7 +170,10 @@ fn cmd_cache_stats(args: &[String]) -> Result<Value, String> {
     // "free".
     let mut any_pricing_known = false;
 
-    for e in events.iter().filter(|e| match_session(e, session.as_deref())) {
+    for e in events
+        .iter()
+        .filter(|e| match_session(e, session.as_deref()))
+    {
         if e.get("kind").and_then(|v| v.as_str()) != Some("post_turn") {
             continue;
         }
@@ -703,9 +709,12 @@ mod tests {
         // never resolves to pricing. cost_total_usd / cost_savings_usd
         // must be JSON null (not 0.0) so callers don't conflate
         // "no data" with "free".
-        let events = vec![
-            ev("post_turn", "s1", 0, json!({"input_tokens": 100, "output_tokens": 50})),
-        ];
+        let events = vec![ev(
+            "post_turn",
+            "s1",
+            0,
+            json!({"input_tokens": 100, "output_tokens": 50}),
+        )];
         let (_d, p) = fixture(&events);
         let v = audit_cmd(&argv_with_path(&p, &["cache-stats"])).unwrap();
         assert_eq!(v["cost_total_usd"], Value::Null);
@@ -724,20 +733,18 @@ mod tests {
         //   cache_read  $0.10 / Mtok
         //   cache_write $1.25 / Mtok
         // 1_000_000 input + 1_000_000 output tokens = $1 + $5 = $6.
-        let events = vec![
-            ev(
-                "post_turn",
-                "s1",
-                0,
-                json!({
-                    "model": "claude-haiku-4-5",
-                    "input_tokens": 1_000_000_u64,
-                    "output_tokens": 1_000_000_u64,
-                    "cache_read_tokens": 0,
-                    "cache_write_tokens": 0,
-                }),
-            ),
-        ];
+        let events = vec![ev(
+            "post_turn",
+            "s1",
+            0,
+            json!({
+                "model": "claude-haiku-4-5",
+                "input_tokens": 1_000_000_u64,
+                "output_tokens": 1_000_000_u64,
+                "cache_read_tokens": 0,
+                "cache_write_tokens": 0,
+            }),
+        )];
         let (_d, p) = fixture(&events);
         let v = audit_cmd(&argv_with_path(&p, &["cache-stats"])).unwrap();
         let cost = v["cost_total_usd"].as_f64().unwrap();
@@ -756,20 +763,18 @@ mod tests {
         // 1M cache_read tokens cost: 1M * 0.10/1M = $0.10
         // Counterfactual (billed as input): 1M * 1.00/1M = $1.00
         // Savings = $1.00 - $0.10 = $0.90.
-        let events = vec![
-            ev(
-                "post_turn",
-                "s1",
-                0,
-                json!({
-                    "model": "claude-haiku-4-5",
-                    "input_tokens": 0,
-                    "output_tokens": 0,
-                    "cache_read_tokens": 1_000_000_u64,
-                    "cache_write_tokens": 0,
-                }),
-            ),
-        ];
+        let events = vec![ev(
+            "post_turn",
+            "s1",
+            0,
+            json!({
+                "model": "claude-haiku-4-5",
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_read_tokens": 1_000_000_u64,
+                "cache_write_tokens": 0,
+            }),
+        )];
         let (_d, p) = fixture(&events);
         let v = audit_cmd(&argv_with_path(&p, &["cache-stats"])).unwrap();
         let savings = v["cost_savings_usd"].as_f64().unwrap();
@@ -814,7 +819,10 @@ mod tests {
         let v = audit_cmd(&argv_with_path(&p, &["cache-stats"])).unwrap();
         let by_model = v["by_model"].as_object().unwrap();
         assert_eq!(by_model["claude-haiku-4-5"]["turns"], json!(2));
-        assert_eq!(by_model["claude-haiku-4-5"]["input_tokens"], json!(2_000_000_u64));
+        assert_eq!(
+            by_model["claude-haiku-4-5"]["input_tokens"],
+            json!(2_000_000_u64)
+        );
         let haiku_cost = by_model["claude-haiku-4-5"]["cost_usd"].as_f64().unwrap();
         assert!((haiku_cost - 2.0).abs() < 1e-9, "haiku cost: {haiku_cost}");
         // Unknown model: counted but cost is null.

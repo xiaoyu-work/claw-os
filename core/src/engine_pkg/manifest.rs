@@ -106,7 +106,9 @@ pub enum ManifestError {
     Malformed { path: PathBuf, message: String },
 
     /// Schema version on disk is newer than this binary supports.
-    #[error("manifest at {path} has unsupported schema_version {got} (max supported: {supported})")]
+    #[error(
+        "manifest at {path} has unsupported schema_version {got} (max supported: {supported})"
+    )]
     UnsupportedSchema {
         path: PathBuf,
         got: u32,
@@ -132,12 +134,11 @@ impl EngineManifest {
             return Ok(None);
         }
         let bytes = std::fs::read(&p)?;
-        let mut m: EngineManifest = serde_json::from_slice(&bytes).map_err(|e| {
-            ManifestError::Malformed {
+        let mut m: EngineManifest =
+            serde_json::from_slice(&bytes).map_err(|e| ManifestError::Malformed {
                 path: p.clone(),
                 message: e.to_string(),
-            }
-        })?;
+            })?;
         if m.schema_version > SCHEMA_VERSION {
             return Err(ManifestError::UnsupportedSchema {
                 path: p,
@@ -259,8 +260,7 @@ mod tests {
     }
 
     fn lay_down_install(engine: &str, version: &str) {
-        std::fs::create_dir_all(super::super::paths::engine_version_dir(engine, version))
-            .unwrap();
+        std::fs::create_dir_all(super::super::paths::engine_version_dir(engine, version)).unwrap();
     }
 
     #[test]
@@ -353,7 +353,10 @@ mod tests {
     fn synthesize_picks_per_engine_basename() {
         assert_eq!(default_library_basename_for("llama-cpp"), "llama");
         assert_eq!(default_library_basename_for("ort"), "onnxruntime");
-        assert_eq!(default_library_basename_for("ort-genai"), "onnxruntime-genai");
+        assert_eq!(
+            default_library_basename_for("ort-genai"),
+            "onnxruntime-genai"
+        );
         // Unknown engine still gets a sane fallback rather than an empty string.
         assert_eq!(default_library_basename_for("future-engine"), "lib");
     }
@@ -368,7 +371,10 @@ mod tests {
         } else if cfg!(target_os = "macos") {
             assert!(tag.starts_with("darwin-"), "got {tag}");
         }
-        assert!(tag.ends_with("-cpu"), "synth tag never claims accelerator: {tag}");
+        assert!(
+            tag.ends_with("-cpu"),
+            "synth tag never claims accelerator: {tag}"
+        );
     }
 
     #[test]

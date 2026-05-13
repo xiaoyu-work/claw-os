@@ -122,8 +122,8 @@ impl OgaModel {
         let path_str = dir
             .to_str()
             .ok_or_else(|| OrtGenaiError::PathWithNul(dir.display().to_string()))?;
-        let c_path = CString::new(path_str)
-            .map_err(|_| OrtGenaiError::PathWithNul(path_str.to_string()))?;
+        let c_path =
+            CString::new(path_str).map_err(|_| OrtGenaiError::PathWithNul(path_str.to_string()))?;
         let mut out: *mut sys::OgaModel = std::ptr::null_mut();
         // SAFETY: `c_path` lives until end of call; `out` is a stack slot.
         unsafe {
@@ -196,11 +196,8 @@ impl OgaTokenizer {
         let seqs = OgaSequences::new(self.rt.clone())?;
         // SAFETY: self.ptr live; c_text alive; seqs.ptr live.
         unsafe {
-            let r = (self.rt.syms.OgaTokenizerEncode)(
-                self.ptr as *const _,
-                c_text.as_ptr(),
-                seqs.ptr,
-            );
+            let r =
+                (self.rt.syms.OgaTokenizerEncode)(self.ptr as *const _, c_text.as_ptr(), seqs.ptr);
             check_result(&self.rt, r)?;
         }
         Ok(seqs)
@@ -304,11 +301,8 @@ impl OgaGeneratorParams {
         let c_name = CString::new(name).map_err(|_| OrtGenaiError::InputWithNul)?;
         // SAFETY: self.ptr live; c_name alive.
         unsafe {
-            let r = (self.rt.syms.OgaGeneratorParamsSetSearchNumber)(
-                self.ptr,
-                c_name.as_ptr(),
-                value,
-            );
+            let r =
+                (self.rt.syms.OgaGeneratorParamsSetSearchNumber)(self.ptr, c_name.as_ptr(), value);
             check_result(&self.rt, r)?;
         }
         Ok(())

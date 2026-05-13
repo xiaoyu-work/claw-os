@@ -118,16 +118,11 @@ const DENY_EXTENSIONS: &[&str] = &[
     // Windows scripts
     "bat", "cmd", "ps1", "psm1", "psd1", "vbs", "vbe", "wsf", "wsh", "hta",
     // Unix executables
-    "elf",
-    // Loadable libraries
-    "dll", "so", "dylib",
-    // Java / browser plugins
-    "jar", "class",
-    // macOS bundles (treated as opaque)
-    "app", "kext",
-    // Kernel modules
-    "ko",
-    // Firmware / disk images that should never be agent-authored
+    "elf", // Loadable libraries
+    "dll", "so", "dylib", // Java / browser plugins
+    "jar", "class", // macOS bundles (treated as opaque)
+    "app", "kext", // Kernel modules
+    "ko",   // Firmware / disk images that should never be agent-authored
     "iso", "img", "dmg", "vhd", "vhdx", "vmdk",
 ];
 
@@ -135,27 +130,18 @@ const DENY_EXTENSIONS: &[&str] = &[
 /// warn instead of deny.
 const CAUTION_EXTENSIONS: &[&str] = &[
     // Shell scripts
-    "sh", "bash", "zsh", "fish", "ksh",
-    // Other interpreted launchers
-    "cgi",
-    // AppleScript / Automator
+    "sh", "bash", "zsh", "fish", "ksh", // Other interpreted launchers
+    "cgi", // AppleScript / Automator
     "scpt", "scptd", "workflow",
 ];
 
 /// Path components (matched anywhere in the path) that mark a credential
 /// store. Stored without the leading `~` / `/`.
 const CREDENTIAL_DIR_COMPONENTS: &[&str] = &[
-    ".ssh",
-    ".aws",
-    ".gnupg",
-    ".azure",
-    ".gcloud",
-    ".kube",
-    ".docker",
-    ".npmrc.d",
-    ".m2",         // Maven settings.xml may contain creds
-    ".pypirc",     // file
-    ".cargo",      // for credentials.toml in particular
+    ".ssh", ".aws", ".gnupg", ".azure", ".gcloud", ".kube", ".docker", ".npmrc.d",
+    ".m2",     // Maven settings.xml may contain creds
+    ".pypirc", // file
+    ".cargo",  // for credentials.toml in particular
 ];
 
 /// Specific filenames that should always be flagged regardless of dir.
@@ -390,9 +376,7 @@ fn match_windows_system_dir(path: &Path) -> Option<&'static str> {
 }
 
 fn component_lower(comp: &Component<'_>) -> Option<String> {
-    comp.as_os_str()
-        .to_str()
-        .map(|s| s.to_ascii_lowercase())
+    comp.as_os_str().to_str().map(|s| s.to_ascii_lowercase())
 }
 
 #[cfg(test)]
@@ -403,20 +387,12 @@ mod tests {
 
     fn allow(path: &str) {
         let v = classify_str(path);
-        assert!(
-            v.is_allow(),
-            "expected '{path}' to be Allow, got {:?}",
-            v
-        );
+        assert!(v.is_allow(), "expected '{path}' to be Allow, got {:?}", v);
     }
 
     fn deny(path: &str, expected_cat: SafetyCategory) {
         let v = classify_str(path);
-        assert!(
-            v.is_deny(),
-            "expected '{path}' to be Deny, got {:?}",
-            v
-        );
+        assert!(v.is_deny(), "expected '{path}' to be Deny, got {:?}", v);
         assert_eq!(v.category(), Some(expected_cat));
     }
 
@@ -439,10 +415,7 @@ mod tests {
 
     #[test]
     fn deny_dll_extension() {
-        deny(
-            "/home/user/foo/bar.dll",
-            SafetyCategory::DangerousExtension,
-        );
+        deny("/home/user/foo/bar.dll", SafetyCategory::DangerousExtension);
     }
 
     #[test]
@@ -470,10 +443,7 @@ mod tests {
 
     #[test]
     fn caution_shell_script_extension() {
-        caution(
-            "/home/user/run.sh",
-            SafetyCategory::DangerousExtension,
-        );
+        caution("/home/user/run.sh", SafetyCategory::DangerousExtension);
     }
 
     #[test]
@@ -494,34 +464,22 @@ mod tests {
 
     #[test]
     fn deny_ssh_directory() {
-        deny(
-            "/home/user/.ssh/id_ed25519",
-            SafetyCategory::Credential,
-        );
+        deny("/home/user/.ssh/id_ed25519", SafetyCategory::Credential);
     }
 
     #[test]
     fn deny_ssh_known_hosts() {
-        deny(
-            "/home/user/.ssh/known_hosts",
-            SafetyCategory::Credential,
-        );
+        deny("/home/user/.ssh/known_hosts", SafetyCategory::Credential);
     }
 
     #[test]
     fn deny_aws_credentials() {
-        deny(
-            "/home/user/.aws/credentials",
-            SafetyCategory::Credential,
-        );
+        deny("/home/user/.aws/credentials", SafetyCategory::Credential);
     }
 
     #[test]
     fn deny_gnupg_directory() {
-        deny(
-            "/home/user/.gnupg/pubring.kbx",
-            SafetyCategory::Credential,
-        );
+        deny("/home/user/.gnupg/pubring.kbx", SafetyCategory::Credential);
     }
 
     #[test]
@@ -532,10 +490,7 @@ mod tests {
 
     #[test]
     fn deny_docker_config_under_dot_docker() {
-        deny(
-            "/home/user/.docker/config.json",
-            SafetyCategory::Credential,
-        );
+        deny("/home/user/.docker/config.json", SafetyCategory::Credential);
     }
 
     #[test]
@@ -624,18 +579,12 @@ mod tests {
 
     #[test]
     fn caution_git_internals() {
-        caution(
-            "/home/user/repo/.git/HEAD",
-            SafetyCategory::VcsInternal,
-        );
+        caution("/home/user/repo/.git/HEAD", SafetyCategory::VcsInternal);
     }
 
     #[test]
     fn caution_svn_internals() {
-        caution(
-            "/home/user/repo/.svn/entries",
-            SafetyCategory::VcsInternal,
-        );
+        caution("/home/user/repo/.svn/entries", SafetyCategory::VcsInternal);
     }
 
     #[test]

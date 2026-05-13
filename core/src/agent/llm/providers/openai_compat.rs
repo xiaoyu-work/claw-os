@@ -117,7 +117,10 @@ impl std::fmt::Debug for OpenAICompatConfig {
             .field("base_url", &self.base_url)
             .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
             .field("model", &self.model)
-            .field("extra_headers", &self.extra_headers.keys().collect::<Vec<_>>())
+            .field(
+                "extra_headers",
+                &self.extra_headers.keys().collect::<Vec<_>>(),
+            )
             .field("request_timeout", &self.request_timeout)
             .field("pool_len", &self.pool.as_ref().map(|p| p.len()))
             .finish()
@@ -188,10 +191,8 @@ pub struct OpenAICompatProvider {
 
 impl OpenAICompatProvider {
     pub fn new(cfg: OpenAICompatConfig) -> Self {
-        let mut builder = reqwest::Client::builder().user_agent(concat!(
-            "cos-agent/",
-            env!("CARGO_PKG_VERSION")
-        ));
+        let mut builder =
+            reqwest::Client::builder().user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")));
         if cfg.request_timeout > Duration::from_secs(0) {
             builder = builder.timeout(cfg.request_timeout);
         }
@@ -302,10 +303,7 @@ impl Provider for OpenAICompatProvider {
             let err = wire::classify_http_error(status, &bytes);
             if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
                 let body_str = std::str::from_utf8(&bytes).unwrap_or("");
-                let cls = crate::agent::llm::error_classifier::classify(
-                    status.as_u16(),
-                    body_str,
-                );
+                let cls = crate::agent::llm::error_classifier::classify(status.as_u16(), body_str);
                 pool.report_failure(l, cls);
             }
             return Err(err);
@@ -446,7 +444,10 @@ pub(crate) mod wire {
         if let Some(obj) = body.as_object_mut() {
             if !tools.is_empty() {
                 obj.insert("tools".into(), serde_json::Value::Array(tools));
-                obj.insert("tool_choice".into(), tool_choice_to_json(&request.tool_choice));
+                obj.insert(
+                    "tool_choice".into(),
+                    tool_choice_to_json(&request.tool_choice),
+                );
             }
             if let Some(v) = request.max_tokens {
                 let key = if modern {
@@ -537,10 +538,7 @@ pub(crate) mod wire {
                 }
                 ContentBlock::Image { media_type, data } => {
                     // OpenAI vision: send as content list with image_url.
-                    text_parts.push(format!(
-                        "[image {} base64 attached]",
-                        media_type
-                    ));
+                    text_parts.push(format!("[image {} base64 attached]", media_type));
                     let _ = data; // future: emit as { type: image_url } block
                 }
             }
@@ -631,10 +629,7 @@ pub(crate) mod wire {
         pub completion_tokens: u32,
     }
 
-    pub(crate) fn response_to_chat(
-        resp: Response,
-        fallback_model: &str,
-    ) -> Result<ChatResponse> {
+    pub(crate) fn response_to_chat(resp: Response, fallback_model: &str) -> Result<ChatResponse> {
         let choice = resp
             .choices
             .into_iter()
@@ -690,10 +685,7 @@ pub(crate) mod wire {
     }
 
     /// Map a non-2xx HTTP response into the right [`LlmError`].
-    pub(crate) fn classify_http_error(
-        status: reqwest::StatusCode,
-        body: &[u8],
-    ) -> LlmError {
+    pub(crate) fn classify_http_error(status: reqwest::StatusCode, body: &[u8]) -> LlmError {
         let body_text = String::from_utf8_lossy(body).to_string();
         let upstream_message = extract_error_message(&body_text);
 
@@ -747,11 +739,7 @@ pub fn is_alias(name: &str) -> bool {
 }
 
 // Construction helper used by the registry. Returns Arc<dyn Provider>.
-pub fn build_provider(
-    alias: &str,
-    model: &str,
-    agent: &AgentConfig,
-) -> Arc<dyn Provider> {
+pub fn build_provider(alias: &str, model: &str, agent: &AgentConfig) -> Arc<dyn Provider> {
     Arc::new(OpenAICompatProvider::from_agent_config(alias, model, agent))
 }
 
@@ -907,7 +895,14 @@ mod tests {
 
     #[test]
     fn modern_models_use_max_completion_tokens() {
-        for m in &["gpt-5", "gpt-5.4-mini", "gpt-6-pro", "o1-mini", "o3", "o4-preview"] {
+        for m in &[
+            "gpt-5",
+            "gpt-5.4-mini",
+            "gpt-6-pro",
+            "o1-mini",
+            "o3",
+            "o4-preview",
+        ] {
             assert!(
                 wire::use_max_completion_tokens(m),
                 "expected {m} to use max_completion_tokens"
@@ -933,7 +928,10 @@ mod tests {
         let r = req_text("hi");
         let body = wire::build_request_body(&r, "gpt-5.4-mini", false);
         assert_eq!(body["max_completion_tokens"], 64);
-        assert!(body.get("max_tokens").is_none(), "legacy field must be absent");
+        assert!(
+            body.get("max_tokens").is_none(),
+            "legacy field must be absent"
+        );
         // o-series / gpt-5 only support default temperature → field omitted.
         assert!(body.get("temperature").is_none());
     }
@@ -1091,10 +1089,8 @@ mod tests {
 
     #[test]
     fn classifies_403_as_auth() {
-        let err = wire::classify_http_error(
-            reqwest::StatusCode::from_u16(403).unwrap(),
-            b"forbidden",
-        );
+        let err =
+            wire::classify_http_error(reqwest::StatusCode::from_u16(403).unwrap(), b"forbidden");
         assert!(matches!(err, LlmError::Auth));
     }
 
@@ -1161,9 +1157,8 @@ mod tests {
                         // Parse Content-Length.
                         let headers = std::str::from_utf8(&buf[..pos]).unwrap_or("");
                         for line in headers.split("\r\n") {
-                            if let Some(rest) = line
-                                .to_ascii_lowercase()
-                                .strip_prefix("content-length:")
+                            if let Some(rest) =
+                                line.to_ascii_lowercase().strip_prefix("content-length:")
                             {
                                 content_length = rest.trim().parse().unwrap_or(0);
                             }
@@ -1194,8 +1189,7 @@ mod tests {
                 "message":{"role":"assistant","content":"hi from mock"}}],
             "usage":{"prompt_tokens":3,"completion_tokens":4,"total_tokens":7}
         }"#;
-        let (base_url, handle) =
-            spawn_one_shot_mock("HTTP/1.1 200 OK", response_body).await;
+        let (base_url, handle) = spawn_one_shot_mock("HTTP/1.1 200 OK", response_body).await;
 
         let mut c = AgentConfig::default();
         c.base_url = Some(base_url.clone());
@@ -1227,8 +1221,7 @@ mod tests {
     #[tokio::test]
     async fn end_to_end_401_maps_to_auth_error() {
         let body = r#"{"error":{"message":"bad key"}}"#;
-        let (base_url, handle) =
-            spawn_one_shot_mock("HTTP/1.1 401 Unauthorized", body).await;
+        let (base_url, handle) = spawn_one_shot_mock("HTTP/1.1 401 Unauthorized", body).await;
 
         let mut c = AgentConfig::default();
         c.base_url = Some(base_url);
@@ -1248,19 +1241,16 @@ mod tests {
     async fn end_to_end_includes_extra_headers() {
         let response_body = r#"{"choices":[{"finish_reason":"stop",
             "message":{"role":"assistant","content":"ok"}}]}"#;
-        let (base_url, handle) =
-            spawn_one_shot_mock("HTTP/1.1 200 OK", response_body).await;
+        let (base_url, handle) = spawn_one_shot_mock("HTTP/1.1 200 OK", response_body).await;
 
         let mut c = AgentConfig::default();
         c.base_url = Some(base_url);
         c.extra_headers
             .insert("HTTP-Referer".into(), "https://cos.example".into());
-        c.extra_headers
-            .insert("X-Title".into(), "cos agent".into());
+        c.extra_headers.insert("X-Title".into(), "cos agent".into());
         c.request_timeout = 5;
 
-        let provider =
-            OpenAICompatProvider::from_agent_config("openrouter", "openrouter/auto", &c);
+        let provider = OpenAICompatProvider::from_agent_config("openrouter", "openrouter/auto", &c);
         let _ = provider.chat(req_text("hi")).await; // success or not, we want to inspect req
         let request = String::from_utf8_lossy(&handle.await.unwrap()).to_lowercase();
         assert!(request.contains("http-referer: https://cos.example"));
@@ -1281,10 +1271,7 @@ mod tests {
         std::env::set_var("COS_TEST_POOL_KEY_A", "sk-aaa");
         std::env::set_var("COS_TEST_POOL_KEY_B", "sk-bbb");
         let mut c = AgentConfig::default();
-        c.api_key_envs = vec![
-            "COS_TEST_POOL_KEY_A".into(),
-            "COS_TEST_POOL_KEY_B".into(),
-        ];
+        c.api_key_envs = vec!["COS_TEST_POOL_KEY_A".into(), "COS_TEST_POOL_KEY_B".into()];
         let oc = OpenAICompatConfig::from_agent_config("openai", "gpt-4o-mini", &c);
         std::env::remove_var("COS_TEST_POOL_KEY_A");
         std::env::remove_var("COS_TEST_POOL_KEY_B");
@@ -1320,10 +1307,7 @@ mod tests {
         std::env::set_var("COS_TEST_POOL_RR_X", "k1");
         std::env::set_var("COS_TEST_POOL_RR_Y", "k2");
         let mut c = AgentConfig::default();
-        c.api_key_envs = vec![
-            "COS_TEST_POOL_RR_X".into(),
-            "COS_TEST_POOL_RR_Y".into(),
-        ];
+        c.api_key_envs = vec!["COS_TEST_POOL_RR_X".into(), "COS_TEST_POOL_RR_Y".into()];
         c.pool_strategy = "round-robin".into();
         let oc = OpenAICompatConfig::from_agent_config("openai", "gpt-4o-mini", &c);
         std::env::remove_var("COS_TEST_POOL_RR_X");
@@ -1352,8 +1336,7 @@ mod tests {
         std::env::set_var("COS_TEST_POOL_LEASE_K", "sk-from-pool-aaa");
         let response_body = r#"{"choices":[{"finish_reason":"stop",
             "message":{"role":"assistant","content":"ok"}}]}"#;
-        let (base_url, handle) =
-            spawn_one_shot_mock("HTTP/1.1 200 OK", response_body).await;
+        let (base_url, handle) = spawn_one_shot_mock("HTTP/1.1 200 OK", response_body).await;
 
         let mut c = AgentConfig::default();
         c.base_url = Some(base_url);

@@ -122,16 +122,15 @@ impl Provider for MockProvider {
     }
 
     fn supports_prompt_cache(&self) -> bool {
-        self.cache_capable
-            .load(std::sync::atomic::Ordering::SeqCst)
+        self.cache_capable.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
         *self.last_request.lock().unwrap() = Some(request.clone());
 
-        let response_kind = self
-            .next_scripted()
-            .unwrap_or_else(|| MockResponse::Text(format!("[mock] {}", extract_last_user_text(&request))));
+        let response_kind = self.next_scripted().unwrap_or_else(|| {
+            MockResponse::Text(format!("[mock] {}", extract_last_user_text(&request)))
+        });
 
         match response_kind {
             MockResponse::Text(text) => Ok(ChatResponse {

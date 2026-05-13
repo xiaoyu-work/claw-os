@@ -565,11 +565,20 @@ mod tests {
         let _guard = EnvGuard::set(root.path());
         let src = make_source(root.path(), "f.gguf", b"X");
         let mut cfg = ImportConfig::new(&src, "");
-        assert!(matches!(import_model(&cfg).unwrap_err(), ImportError::InvalidName(_)));
+        assert!(matches!(
+            import_model(&cfg).unwrap_err(),
+            ImportError::InvalidName(_)
+        ));
         cfg.name = "../escape".into();
-        assert!(matches!(import_model(&cfg).unwrap_err(), ImportError::InvalidName(_)));
+        assert!(matches!(
+            import_model(&cfg).unwrap_err(),
+            ImportError::InvalidName(_)
+        ));
         cfg.name = ".hidden".into();
-        assert!(matches!(import_model(&cfg).unwrap_err(), ImportError::InvalidName(_)));
+        assert!(matches!(
+            import_model(&cfg).unwrap_err(),
+            ImportError::InvalidName(_)
+        ));
         cfg.name = "ok-name_v1".into();
         assert!(import_model(&cfg).is_ok());
     }

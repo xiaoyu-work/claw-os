@@ -141,9 +141,7 @@ impl Tool for CosRecallTool {
                 "stats" => {
                     let total = db.count_total().map_err(|e| e.to_string())?;
                     let session_count = match &session_id {
-                        Some(sid) => Some(
-                            db.count_session(sid).map_err(|e| e.to_string())?,
-                        ),
+                        Some(sid) => Some(db.count_session(sid).map_err(|e| e.to_string())?),
                         None => None,
                     };
                     Ok(json!({
@@ -160,7 +158,9 @@ impl Tool for CosRecallTool {
         .await;
 
         match join {
-            Ok(Ok(v)) => ToolResult::ok(serde_json::to_string(&v).unwrap_or_else(|_| v.to_string())),
+            Ok(Ok(v)) => {
+                ToolResult::ok(serde_json::to_string(&v).unwrap_or_else(|_| v.to_string()))
+            }
             Ok(Err(msg)) => ToolResult::err(msg),
             Err(e) => ToolResult::err(format!("cos_recall panicked: {e}")),
         }

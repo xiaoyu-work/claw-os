@@ -93,8 +93,7 @@ mod tests {
 
     #[test]
     fn engine_version_from_lib_path_windows_layout() {
-        let p =
-            PathBuf::from(r"C:\ProgramData\cos\engines\ort\1.25.1\lib\onnxruntime.dll");
+        let p = PathBuf::from(r"C:\ProgramData\cos\engines\ort\1.25.1\lib\onnxruntime.dll");
         assert_eq!(engine_version_from_lib_path(&p), Some("1.25.1".into()));
     }
 
@@ -112,8 +111,7 @@ mod tests {
         // Linux versioned-only fallback — versioned soname instead of
         // unversioned symlink. The version parser keys off the directory
         // containing the file, not the filename, so this still resolves.
-        let p =
-            PathBuf::from("/var/lib/cos/engines/ort/1.25.1/lib/libonnxruntime.so.1.25.1");
+        let p = PathBuf::from("/var/lib/cos/engines/ort/1.25.1/lib/libonnxruntime.so.1.25.1");
         assert_eq!(engine_version_from_lib_path(&p), Some("1.25.1".into()));
     }
 

@@ -365,9 +365,7 @@ mod tests {
     async fn tts_tool_unknown_provider_errors() {
         let reg = Arc::new(TtsRegistry::with_default_providers());
         let tool = TtsTool::new(reg);
-        let r = tool
-            .exec(json!({"text": "hi", "provider": "nope"}))
-            .await;
+        let r = tool.exec(json!({"text": "hi", "provider": "nope"})).await;
         assert!(r.is_error);
         assert!(r.content.contains("not registered"));
     }
@@ -411,9 +409,7 @@ mod tests {
     async fn imagegen_tool_writes_n_images() {
         let reg = Arc::new(ImageGenRegistry::with_default_providers());
         let tool = ImageGenTool::new(reg);
-        let r = tool
-            .exec(json!({"prompt": "a cat", "n": 2}))
-            .await;
+        let r = tool.exec(json!({"prompt": "a cat", "n": 2})).await;
         assert!(!r.is_error, "got error: {}", r.content);
         let v: Value = serde_json::from_str(&r.content).unwrap();
         assert_eq!(v["count"], 2);

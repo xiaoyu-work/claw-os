@@ -232,8 +232,8 @@ impl CurationLog {
             fs::create_dir_all(parent).map_err(|e| CurationError::Log(e.to_string()))?;
         }
         let tmp = path.with_extension("json.tmp");
-        let body = serde_json::to_string_pretty(self)
-            .map_err(|e| CurationError::Log(e.to_string()))?;
+        let body =
+            serde_json::to_string_pretty(self).map_err(|e| CurationError::Log(e.to_string()))?;
         fs::write(&tmp, body).map_err(|e| CurationError::Log(e.to_string()))?;
         fs::rename(&tmp, path).map_err(|e| CurationError::Log(e.to_string()))?;
         Ok(())
@@ -245,12 +245,7 @@ impl CurationLog {
             .map(|e| e.last_curated_message_id)
     }
 
-    pub fn record_run(
-        &mut self,
-        session_id: &str,
-        last_message_id: i64,
-        facts_added: usize,
-    ) {
+    pub fn record_run(&mut self, session_id: &str, last_message_id: i64, facts_added: usize) {
         let entry = self
             .sessions
             .entry(session_id.to_string())
@@ -270,7 +265,9 @@ impl CurationLog {
 
 /// Default location for the curation log.
 pub fn default_log_path() -> PathBuf {
-    crate::paths::agent_state_dir().join("memory").join("curation_log.json")
+    crate::paths::agent_state_dir()
+        .join("memory")
+        .join("curation_log.json")
 }
 
 // =====================================================================
@@ -460,7 +457,10 @@ fn find_subseq(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
 }
 
 fn memchr(haystack: &[u8], byte: u8, from: usize) -> Option<usize> {
-    haystack[from..].iter().position(|b| *b == byte).map(|p| p + from)
+    haystack[from..]
+        .iter()
+        .position(|b| *b == byte)
+        .map(|p| p + from)
 }
 
 // =====================================================================
@@ -474,10 +474,16 @@ fn memchr(haystack: &[u8], byte: u8, from: usize) -> Option<usize> {
 pub fn looks_secret(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     let credential_words = [
-        "api key", "api-key", "apikey",
-        "secret", "password", "passwd",
-        "token", "bearer ",
-        "ssh-rsa", "ssh-ed25519",
+        "api key",
+        "api-key",
+        "apikey",
+        "secret",
+        "password",
+        "passwd",
+        "token",
+        "bearer ",
+        "ssh-rsa",
+        "ssh-ed25519",
         "-----begin",
     ];
     if credential_words.iter().any(|w| lower.contains(w)) {
@@ -790,27 +796,22 @@ mod tests {
 
     #[test]
     fn parse_facts_tolerates_single_quotes() {
-        let out = parse_facts(
-            r#"<fact category='skill' confidence='0.7'>fluent in Rust</fact>"#,
-        );
+        let out = parse_facts(r#"<fact category='skill' confidence='0.7'>fluent in Rust</fact>"#);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].category, FactCategory::Skill);
     }
 
     #[test]
     fn parse_facts_tolerates_missing_confidence() {
-        let out = parse_facts(
-            r#"<fact category="identity">Name is Alex</fact>"#,
-        );
+        let out = parse_facts(r#"<fact category="identity">Name is Alex</fact>"#);
         assert_eq!(out.len(), 1);
         assert!((out[0].confidence - 0.5).abs() < 1e-4);
     }
 
     #[test]
     fn parse_facts_tolerates_extra_whitespace_and_newlines_inside_body() {
-        let out = parse_facts(
-            "<fact category=\"identity\" confidence=\"0.8\">  hello\nworld  </fact>",
-        );
+        let out =
+            parse_facts("<fact category=\"identity\" confidence=\"0.8\">  hello\nworld  </fact>");
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].text, "hello\nworld");
     }
@@ -1067,7 +1068,8 @@ other content
         let db = MemoryDb::open_in_memory().expect("memory db");
         db.record_message("sess-1", "user", "I love Rust!").unwrap();
         db.record_message("sess-1", "assistant", "Noted.").unwrap();
-        db.record_message("sess-1", "user", "I'm on Windows 11.").unwrap();
+        db.record_message("sess-1", "user", "I'm on Windows 11.")
+            .unwrap();
 
         let dir = std::env::temp_dir().join(format!(
             "cos-curator-e2e-{}-{}",
@@ -1173,8 +1175,7 @@ other content
         // would either error or return empty. We assert dry_run stops
         // before getting there.
         let cfg = AgentConfig::default();
-        let provider: Arc<dyn Provider> =
-            Arc::new(MockProvider::new("mock-aux", &cfg));
+        let provider: Arc<dyn Provider> = Arc::new(MockProvider::new("mock-aux", &cfg));
         let aux = AuxiliaryClient::new(provider, AuxiliaryConfig::new("mock", "mock-aux"));
 
         let db = MemoryDb::open_in_memory().unwrap();

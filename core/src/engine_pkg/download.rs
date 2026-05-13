@@ -43,9 +43,7 @@ pub enum DownloadError {
     Http(#[from] reqwest::Error),
     #[error("download {label} returned {status}")]
     Status { label: String, status: u16 },
-    #[error(
-        "checksum mismatch for {label}: expected {expected}, got {actual}"
-    )]
+    #[error("checksum mismatch for {label}: expected {expected}, got {actual}")]
     ChecksumMismatch {
         label: String,
         expected: String,
@@ -118,7 +116,9 @@ fn url_extension(url: &str) -> Option<String> {
     let path_part = path_part.split('#').next().unwrap_or(path_part);
     let last_seg = path_part.rsplit('/').next().unwrap_or(path_part);
     let lower = last_seg.to_ascii_lowercase();
-    for ext in [".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".zip", ".gz", ".7z"] {
+    for ext in [
+        ".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".zip", ".gz", ".7z",
+    ] {
         if lower.ends_with(ext) {
             return Some(ext.to_string());
         }
@@ -169,9 +169,7 @@ mod tests {
     fn sha256_known(s: &str) -> String {
         // SHA-256 of literal "abc" is a fixed published vector.
         match s {
-            "abc" => {
-                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".to_string()
-            }
+            "abc" => "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".to_string(),
             "" => "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string(),
             _ => panic!("no precomputed hash for input"),
         }
@@ -233,8 +231,8 @@ mod tests {
 
     #[tokio::test]
     async fn non_2xx_propagates_status() {
-        let (url, _h) = spawn_blob_server(b"oops".to_vec(), "HTTP/1.1 500 Internal Server Error")
-            .await;
+        let (url, _h) =
+            spawn_blob_server(b"oops".to_vec(), "HTTP/1.1 500 Internal Server Error").await;
         let err = stream_to_temp(&DownloadOpts {
             url: &url,
             headers: &[],
@@ -254,7 +252,10 @@ mod tests {
         let (url, handle) = spawn_blob_server(b"abc".to_vec(), "HTTP/1.1 200 OK").await;
         stream_to_temp(&DownloadOpts {
             url: &url,
-            headers: &[("Authorization", "Bearer t1"), ("Accept", "application/zip")],
+            headers: &[
+                ("Authorization", "Bearer t1"),
+                ("Accept", "application/zip"),
+            ],
             expected_sha256: None,
             label: "test",
         })

@@ -7,13 +7,13 @@
 //! `providers::local` (Phase 0.5+) routes to the in-process llama.cpp engine
 //! exposed via crate::model::tasks::llm.
 
-pub mod providers;
+pub mod accumulate;
 pub mod auxiliary;
+pub mod aws_eventstream;
 pub mod credential_pool;
 pub mod error_classifier;
 pub mod metadata;
-pub mod accumulate;
-pub mod aws_eventstream;
+pub mod providers;
 pub mod rate_limit;
 pub mod registry;
 pub mod run_log;
@@ -23,8 +23,8 @@ pub mod types;
 pub mod usage;
 
 pub use types::{
-    ChatRequest, ChatResponse, ContentBlock, EngineInfo, FinishReason, Message, Role,
-    StreamEvent, Tool, ToolCall, ToolChoice, Usage,
+    ChatRequest, ChatResponse, ContentBlock, EngineInfo, FinishReason, Message, Role, StreamEvent,
+    Tool, ToolCall, ToolChoice, Usage,
 };
 
 use async_trait::async_trait;

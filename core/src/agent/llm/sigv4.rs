@@ -184,10 +184,7 @@ pub fn sign(
 
     // Step 2: string to sign.
     let date_stamp = &ctx.amz_date[..8]; // YYYYMMDD
-    let credential_scope = format!(
-        "{}/{}/{}/aws4_request",
-        date_stamp, ctx.region, ctx.service
-    );
+    let credential_scope = format!("{}/{}/{}/aws4_request", date_stamp, ctx.region, ctx.service);
     let canonical_request_hash = sha256_hex(canonical_request.as_bytes());
     let string_to_sign = format!(
         "AWS4-HMAC-SHA256\n{}\n{}\n{}",
@@ -410,7 +407,9 @@ mod tests {
             signed.authorization
         );
         // SignedHeaders order must be lexicographic.
-        assert!(signed.authorization.contains("SignedHeaders=host;x-amz-date"));
+        assert!(signed
+            .authorization
+            .contains("SignedHeaders=host;x-amz-date"));
     }
 
     /// Same idea as the GET vector but with a body and a Content-Type
@@ -449,11 +448,9 @@ mod tests {
             "got authorization: {}",
             signed.authorization
         );
-        assert!(
-            signed
-                .authorization
-                .contains("SignedHeaders=content-type;host;x-amz-date")
-        );
+        assert!(signed
+            .authorization
+            .contains("SignedHeaders=content-type;host;x-amz-date"));
     }
 
     #[test]
@@ -471,7 +468,12 @@ mod tests {
             headers: &[],
             body: b"{}",
         };
-        let signed = sign(&creds, &ctx, "bedrock-runtime.us-east-1.amazonaws.com", &req);
+        let signed = sign(
+            &creds,
+            &ctx,
+            "bedrock-runtime.us-east-1.amazonaws.com",
+            &req,
+        );
         let pairs = signed.as_header_pairs();
         let names: Vec<&str> = pairs.iter().map(|(k, _)| *k).collect();
         assert!(names.contains(&"x-amz-security-token"));
@@ -663,7 +665,10 @@ mod tests {
     #[test]
     fn format_amz_date_is_compact_iso8601() {
         assert_eq!(format_amz_date(2024, 5, 1, 12, 0, 0), "20240501T120000Z");
-        assert_eq!(format_amz_date(2099, 12, 31, 23, 59, 59), "20991231T235959Z");
+        assert_eq!(
+            format_amz_date(2099, 12, 31, 23, 59, 59),
+            "20991231T235959Z"
+        );
     }
 
     #[test]

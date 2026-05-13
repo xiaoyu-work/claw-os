@@ -147,7 +147,10 @@ impl McpRemoteTool {
         let prefixed = format!("mcp_{prefix}_{}", descriptor.name);
         let name: &'static str = Box::leak(prefixed.into_boxed_str());
         let raw_desc = descriptor.description.unwrap_or_else(|| {
-            format!("Remote MCP tool `{}` from server `{prefix}`.", descriptor.name)
+            format!(
+                "Remote MCP tool `{}` from server `{prefix}`.",
+                descriptor.name
+            )
         });
         let description: &'static str = Box::leak(raw_desc.into_boxed_str());
         // Some MCP servers report Null / missing `inputSchema`. The
@@ -205,7 +208,11 @@ impl Tool for McpRemoteTool {
         };
         match res {
             Ok(call_result) => render_call_result(&self.name, call_result),
-            Err(e) => ToolResult::err(format!("MCP `{}` failed: {}", self.name, render_client_err(e))),
+            Err(e) => ToolResult::err(format!(
+                "MCP `{}` failed: {}",
+                self.name,
+                render_client_err(e)
+            )),
         }
     }
 }
@@ -224,10 +231,7 @@ fn render_client_err(e: ClientError) -> String {
 /// rendered as a placeholder line so the model knows non-text content
 /// was returned without us double-encoding base64. `isError: true`
 /// from the server flips us to [`ToolResult::err`].
-fn render_call_result(
-    tool_name: &str,
-    res: super::protocol::CallToolResult,
-) -> ToolResult {
+fn render_call_result(tool_name: &str, res: super::protocol::CallToolResult) -> ToolResult {
     use super::protocol::ContentItem;
     let mut chunks: Vec<String> = Vec::new();
     for item in res.content {
@@ -340,12 +344,7 @@ pub async fn attach_server(
 
     let mut registered = 0usize;
     for descriptor in tools.tools {
-        let tool = McpRemoteTool::new(
-            &spec.name,
-            descriptor,
-            client.clone(),
-            timeout_dur,
-        );
+        let tool = McpRemoteTool::new(&spec.name, descriptor, client.clone(), timeout_dur);
         registry.register(Arc::new(tool));
         registered += 1;
     }
@@ -423,8 +422,12 @@ mod tests {
     fn render_call_result_concatenates_text() {
         let res = CallToolResult {
             content: vec![
-                ContentItem::Text { text: "hello".into() },
-                ContentItem::Text { text: "world".into() },
+                ContentItem::Text {
+                    text: "hello".into(),
+                },
+                ContentItem::Text {
+                    text: "world".into(),
+                },
             ],
             is_error: None,
         };
@@ -436,7 +439,9 @@ mod tests {
     #[test]
     fn render_call_result_marks_error_when_is_error_true() {
         let res = CallToolResult {
-            content: vec![ContentItem::Text { text: "boom".into() }],
+            content: vec![ContentItem::Text {
+                text: "boom".into(),
+            }],
             is_error: Some(true),
         };
         let r = render_call_result("mcp_x_y", res);
@@ -568,7 +573,10 @@ mod tests {
                     _ => json!({}),
                 };
                 let resp = JsonRpcResponse::ok(req.id, result);
-                server_t.send(serde_json::to_string(&resp).unwrap()).await.unwrap();
+                server_t
+                    .send(serde_json::to_string(&resp).unwrap())
+                    .await
+                    .unwrap();
             }
         });
 

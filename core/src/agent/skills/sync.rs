@@ -62,9 +62,7 @@ pub enum SyncError {
     InvalidManifest(#[from] ManifestError),
     #[error("manifest name is not safe to use as a directory name: {0}")]
     UnsafeSkillName(String),
-    #[error(
-        "destination already exists: {0} (use --force to overwrite, or remove it first)"
-    )]
+    #[error("destination already exists: {0} (use --force to overwrite, or remove it first)")]
     DestinationExists(PathBuf),
     #[error("zip slip detected — entry path escapes destination: {0}")]
     PathTraversal(String),
@@ -276,12 +274,18 @@ mod tests {
 
     #[test]
     fn sanitize_lowercases_and_keeps_dash_underscore() {
-        assert_eq!(sanitize_skill_id("Foo-Bar_42").as_deref(), Some("foo-bar_42"));
+        assert_eq!(
+            sanitize_skill_id("Foo-Bar_42").as_deref(),
+            Some("foo-bar_42")
+        );
     }
 
     #[test]
     fn sanitize_replaces_unsafe_chars_with_dash() {
-        assert_eq!(sanitize_skill_id("hello world!").as_deref(), Some("hello-world"));
+        assert_eq!(
+            sanitize_skill_id("hello world!").as_deref(),
+            Some("hello-world")
+        );
     }
 
     #[test]
@@ -300,7 +304,10 @@ mod tests {
 
     #[test]
     fn sanitize_strips_leading_trailing_separators() {
-        assert_eq!(sanitize_skill_id("---my-skill---").as_deref(), Some("my-skill"));
+        assert_eq!(
+            sanitize_skill_id("---my-skill---").as_deref(),
+            Some("my-skill")
+        );
     }
 
     #[test]

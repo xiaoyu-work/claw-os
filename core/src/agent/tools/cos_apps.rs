@@ -129,9 +129,7 @@ impl CosAppTool {
 }
 
 fn apps_root() -> PathBuf {
-    PathBuf::from(
-        std::env::var("COS_APPS_DIR").unwrap_or_else(|_| "/usr/lib/cos/apps".into()),
-    )
+    PathBuf::from(std::env::var("COS_APPS_DIR").unwrap_or_else(|_| "/usr/lib/cos/apps".into()))
 }
 
 fn data_dir() -> String {
@@ -292,12 +290,10 @@ mod tests {
             .pointer("/properties/command/enum")
             .and_then(Value::as_array)
             .expect("enum must be present");
-        let names: Vec<&str> = enum_vals
-            .iter()
-            .filter_map(|v| v.as_str())
-            .collect();
-        for expected in ["ls", "read", "write", "rm", "mkdir", "stat", "search", "tag", "recent"]
-        {
+        let names: Vec<&str> = enum_vals.iter().filter_map(|v| v.as_str()).collect();
+        for expected in [
+            "ls", "read", "write", "rm", "mkdir", "stat", "search", "tag", "recent",
+        ] {
             assert!(
                 names.contains(&expected),
                 "fs schema enum should contain {expected}, got {names:?}"
@@ -307,12 +303,7 @@ mod tests {
 
     #[tokio::test]
     async fn missing_command_field_is_returned_as_tool_error() {
-        let tool = CosAppTool::new(
-            "cos_app_fs",
-            "fs",
-            "test",
-            &["ls"],
-        );
+        let tool = CosAppTool::new("cos_app_fs", "fs", "test", &["ls"]);
         let result = tool.exec(json!({ "args": ["whatever"] })).await;
         assert!(result.is_error);
         assert!(result.content.contains("missing 'command'"));
@@ -324,12 +315,7 @@ mod tests {
         // dir will surface as a bridge error so we exercise the
         // error-pass-through path without depending on python in
         // CI.
-        let tool = CosAppTool::new(
-            "cos_app_fs",
-            "definitely-not-an-app",
-            "test",
-            &["ls"],
-        );
+        let tool = CosAppTool::new("cos_app_fs", "definitely-not-an-app", "test", &["ls"]);
         // Force an apps dir that doesn't contain the app.
         let prev = std::env::var("COS_APPS_DIR").ok();
         std::env::set_var("COS_APPS_DIR", std::env::temp_dir());

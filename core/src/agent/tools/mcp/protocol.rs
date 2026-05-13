@@ -195,7 +195,11 @@ pub struct ClientCapabilities {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RootsCapability {
-    #[serde(default, rename = "listChanged", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "listChanged",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub list_changed: Option<bool>,
 }
 
@@ -216,13 +220,21 @@ pub struct ServerCapabilities {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolsCapability {
-    #[serde(default, rename = "listChanged", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "listChanged",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub list_changed: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ResourcesCapability {
-    #[serde(default, rename = "listChanged", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "listChanged",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub list_changed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subscribe: Option<bool>,
@@ -230,7 +242,11 @@ pub struct ResourcesCapability {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PromptsCapability {
-    #[serde(default, rename = "listChanged", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "listChanged",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub list_changed: Option<bool>,
 }
 
@@ -239,7 +255,11 @@ pub struct PromptsCapability {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListToolsResult {
     pub tools: Vec<ToolDescriptor>,
-    #[serde(default, rename = "nextCursor", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "nextCursor",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub next_cursor: Option<String>,
 }
 
@@ -323,9 +343,10 @@ mod tests {
 
     #[test]
     fn request_id_round_trips_both_kinds() {
-        for input in ["{\"jsonrpc\":\"2.0\",\"id\":42,\"method\":\"x\"}",
-                      "{\"jsonrpc\":\"2.0\",\"id\":\"abc\",\"method\":\"x\"}"]
-        {
+        for input in [
+            "{\"jsonrpc\":\"2.0\",\"id\":42,\"method\":\"x\"}",
+            "{\"jsonrpc\":\"2.0\",\"id\":\"abc\",\"method\":\"x\"}",
+        ] {
             let r: JsonRpcRequest = serde_json::from_str(input).unwrap();
             let again = serde_json::to_string(&r).unwrap();
             // Parse again to confirm round-trip is stable.

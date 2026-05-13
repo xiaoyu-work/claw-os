@@ -76,8 +76,8 @@ pub struct ElevenLabsProvider {
 
 impl ElevenLabsProvider {
     pub fn new(cfg: ElevenLabsConfig) -> Self {
-        let mut builder = reqwest::Client::builder()
-            .user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")));
+        let mut builder =
+            reqwest::Client::builder().user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")));
         if cfg.request_timeout > Duration::from_secs(0) {
             builder = builder.timeout(cfg.request_timeout);
         }

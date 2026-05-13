@@ -256,10 +256,7 @@ async fn run_delegate(
     match outcome {
         Ok(Ok(result)) => ToolResult::ok(format_result(&result)),
         Ok(Err(e)) => ToolResult::err(format!("delegate child failed: {e}")),
-        Err(_) => ToolResult::err(format!(
-            "delegate timed out after {}s",
-            timeout.as_secs()
-        )),
+        Err(_) => ToolResult::err(format!("delegate timed out after {}s", timeout.as_secs())),
     }
 }
 
@@ -367,9 +364,7 @@ mod tests {
 
     #[tokio::test]
     async fn current_depth_inside_scope_reflects_value() {
-        let observed = DELEGATE_DEPTH
-            .scope(2u32, async { current_depth() })
-            .await;
+        let observed = DELEGATE_DEPTH.scope(2u32, async { current_depth() }).await;
         assert_eq!(observed, 2);
     }
 
@@ -464,7 +459,11 @@ mod tests {
         let cfg = parent_cfg();
         let input = fresh_input("hello child agent", &["echo"]);
         let result = run_delegate(input, &cfg, test_registry).await;
-        assert!(!result.is_error, "expected success, got: {}", result.content);
+        assert!(
+            !result.is_error,
+            "expected success, got: {}",
+            result.content
+        );
         // MockProvider's default echoes the user prompt back as a Text
         // message; ask_with terminates in 1 turn with that text. Our
         // formatted output should mention the provider and model.

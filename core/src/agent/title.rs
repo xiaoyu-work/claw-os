@@ -77,12 +77,16 @@ pub async fn generate_title(aux: Option<&AuxiliaryClient>, seed: &str) -> String
 /// `"untitled"` when the seed has no usable content.
 pub fn heuristic(seed: &str) -> String {
     let line = seed.lines().next().unwrap_or("").trim();
-    let line = line.strip_prefix('/').map(|rest| {
-        // Drop the verb itself: `/ask hello` → `hello`.
-        rest.split_once(char::is_whitespace)
-            .map(|(_, rest)| rest)
-            .unwrap_or("")
-    }).unwrap_or(line).trim();
+    let line = line
+        .strip_prefix('/')
+        .map(|rest| {
+            // Drop the verb itself: `/ask hello` → `hello`.
+            rest.split_once(char::is_whitespace)
+                .map(|(_, rest)| rest)
+                .unwrap_or("")
+        })
+        .unwrap_or(line)
+        .trim();
     if line.is_empty() {
         "untitled".to_string()
     } else {
@@ -110,8 +114,11 @@ fn clean_model_output(s: &str) -> String {
     let line = line.trim();
     // Drop matched wrapping quotes (",',`,“”).
     let line = match (line.chars().next(), line.chars().last()) {
-        (Some('"'), Some('"')) | (Some('\''), Some('\'')) | (Some('`'), Some('`'))
-        | (Some('“'), Some('”')) if line.chars().count() >= 2 =>
+        (Some('"'), Some('"'))
+        | (Some('\''), Some('\''))
+        | (Some('`'), Some('`'))
+        | (Some('“'), Some('”'))
+            if line.chars().count() >= 2 =>
         {
             let mut chars: Vec<char> = line.chars().collect();
             chars.remove(0);
@@ -121,7 +128,9 @@ fn clean_model_output(s: &str) -> String {
         _ => line.to_string(),
     };
     // Strip trailing `.`, `!`, `?`, `:`, `,`.
-    let line = line.trim_end_matches(|c: char| matches!(c, '.' | '!' | '?' | ':' | ',')).trim();
+    let line = line
+        .trim_end_matches(|c: char| matches!(c, '.' | '!' | '?' | ':' | ','))
+        .trim();
     line.to_string()
 }
 
@@ -139,7 +148,10 @@ mod tests {
         for r in responses {
             provider.push_response(r);
         }
-        AuxiliaryClient::new(Arc::new(provider), AuxiliaryConfig::new("mock", "title-mock"))
+        AuxiliaryClient::new(
+            Arc::new(provider),
+            AuxiliaryConfig::new("mock", "title-mock"),
+        )
     }
 
     #[test]
@@ -186,7 +198,10 @@ mod tests {
 
     #[test]
     fn clean_takes_first_nonempty_line() {
-        assert_eq!(clean_model_output("\n\nReal title\nfollow-up"), "Real title");
+        assert_eq!(
+            clean_model_output("\n\nReal title\nfollow-up"),
+            "Real title"
+        );
     }
 
     #[tokio::test]

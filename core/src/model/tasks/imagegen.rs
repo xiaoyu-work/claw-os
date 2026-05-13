@@ -208,7 +208,10 @@ impl ImageGenerator for OpenAICompatImageGen {
         });
         if let Some(obj) = body.as_object_mut() {
             if !is_azure_deployment {
-                obj.insert("model".into(), serde_json::Value::String(self.model.clone()));
+                obj.insert(
+                    "model".into(),
+                    serde_json::Value::String(self.model.clone()),
+                );
             }
             if let Some(s) = size {
                 obj.insert("size".into(), serde_json::Value::String(s));
@@ -259,7 +262,9 @@ impl ImageGenerator for OpenAICompatImageGen {
                 } else {
                     // Fall back to an empty base64 string — provider
                     // returned neither field. Surface as parse error.
-                    ImageData::Base64 { data: String::new() }
+                    ImageData::Base64 {
+                        data: String::new(),
+                    }
                 }
             })
             .collect();
@@ -352,10 +357,7 @@ mod tests {
         let mut c = cfg();
         c.base_url = Some("https://api.openai.com/v1".into());
         let g = OpenAICompatImageGen::from_config(&c);
-        assert_eq!(
-            g.endpoint(),
-            "https://api.openai.com/v1/images/generations"
-        );
+        assert_eq!(g.endpoint(), "https://api.openai.com/v1/images/generations");
     }
 
     #[test]
@@ -410,8 +412,7 @@ mod tests {
                 total.extend_from_slice(&buf[..n]);
                 if total.windows(4).any(|w| w == b"\r\n\r\n") {
                     let head = String::from_utf8_lossy(&total);
-                    let body_start =
-                        total.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+                    let body_start = total.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
                     let cl = head
                         .lines()
                         .find_map(|l| {
@@ -507,8 +508,7 @@ mod tests {
                 total.extend_from_slice(&buf[..n]);
                 if total.windows(4).any(|w| w == b"\r\n\r\n") {
                     let head = String::from_utf8_lossy(&total);
-                    let body_start =
-                        total.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+                    let body_start = total.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
                     let cl = head
                         .lines()
                         .find_map(|l| {
@@ -560,4 +560,3 @@ mod tests {
         std::env::remove_var("COS_TEST_IMAGE_KEY_2");
     }
 }
-

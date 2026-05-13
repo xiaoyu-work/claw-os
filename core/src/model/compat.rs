@@ -55,7 +55,9 @@ pub enum CompatError {
     /// An active engine exists but its name does not match what the
     /// model wants. Typically only happens if the runtime config tries
     /// to coerce a model into the wrong engine kind.
-    #[error("model requires engine \"{required}\" but the active engine for the runtime is \"{found}\"")]
+    #[error(
+        "model requires engine \"{required}\" but the active engine for the runtime is \"{found}\""
+    )]
     EngineMismatch { required: String, found: String },
 
     /// Active engine version doesn't satisfy the declared range.
@@ -293,10 +295,7 @@ pub fn match_version(engine: &str, active: &str, range: &VersionRange) -> Result
             Op::Lt => ord == std::cmp::Ordering::Less,
         };
         if !satisfied {
-            return Err(format!(
-                "fails comparator {:?} {}",
-                cmp.op, cmp.operand
-            ));
+            return Err(format!("fails comparator {:?} {}", cmp.op, cmp.operand));
         }
     }
     Ok(())
@@ -304,7 +303,11 @@ pub fn match_version(engine: &str, active: &str, range: &VersionRange) -> Result
 
 /// Engine-aware version compare. Returns `active.cmp(operand)` under
 /// the engine's version scheme.
-pub fn compare_versions(engine: &str, active: &str, operand: &str) -> Result<std::cmp::Ordering, String> {
+pub fn compare_versions(
+    engine: &str,
+    active: &str,
+    operand: &str,
+) -> Result<std::cmp::Ordering, String> {
     match version_scheme(engine) {
         VersionScheme::LlamaBuild => compare_llama_build(active, operand),
         VersionScheme::Semver => compare_semver(active, operand),
@@ -382,8 +385,7 @@ mod tests {
     }
 
     fn lay_down_active(engine: &str, version: &str) {
-        std::fs::create_dir_all(engine_pkg::paths::engine_version_dir(engine, version))
-            .unwrap();
+        std::fs::create_dir_all(engine_pkg::paths::engine_version_dir(engine, version)).unwrap();
         let mut idx = EnginesIndex::empty();
         idx.record_install(
             engine,
@@ -401,8 +403,7 @@ mod tests {
     }
 
     fn lay_down_manifest(engine: &str, version: &str, m: &EngineManifest) {
-        std::fs::create_dir_all(engine_pkg::paths::engine_version_dir(engine, version))
-            .unwrap();
+        std::fs::create_dir_all(engine_pkg::paths::engine_version_dir(engine, version)).unwrap();
         m.save(engine, version).unwrap();
     }
 
@@ -529,8 +530,7 @@ mod tests {
     #[test]
     fn check_fails_when_no_active_engine() {
         let _g = EnginesDirGuard::new();
-        let err =
-            check_against_active_engine(&req("llama-cpp", "*"), None, None).unwrap_err();
+        let err = check_against_active_engine(&req("llama-cpp", "*"), None, None).unwrap_err();
         assert!(matches!(err, CompatError::NoActiveEngine { .. }));
     }
 
@@ -578,9 +578,11 @@ mod tests {
         m.gguf_versions = vec![3];
         lay_down_manifest("llama-cpp", "b4001", &m);
         // Model needs GGUF v4, engine claims v3 only → fail.
-        let err =
-            check_against_active_engine(&req("llama-cpp", "*"), Some(4), None).unwrap_err();
-        assert!(matches!(err, CompatError::GgufVersionUnsupported { needed: 4, .. }));
+        let err = check_against_active_engine(&req("llama-cpp", "*"), Some(4), None).unwrap_err();
+        assert!(matches!(
+            err,
+            CompatError::GgufVersionUnsupported { needed: 4, .. }
+        ));
     }
 
     #[test]
@@ -640,8 +642,7 @@ mod tests {
     fn check_with_invalid_range_surfaces_invalid_range() {
         let _g = EnginesDirGuard::new();
         lay_down_active("llama-cpp", "b4001");
-        let err =
-            check_against_active_engine(&req("llama-cpp", ">="), None, None).unwrap_err();
+        let err = check_against_active_engine(&req("llama-cpp", ">="), None, None).unwrap_err();
         assert!(matches!(err, CompatError::InvalidRange { .. }));
     }
 

@@ -81,10 +81,8 @@ pub struct FalImageGenProvider {
 
 impl FalImageGenProvider {
     pub fn new(cfg: FalImageGenConfig) -> Self {
-        let mut builder = reqwest::Client::builder().user_agent(concat!(
-            "cos-agent/",
-            env!("CARGO_PKG_VERSION")
-        ));
+        let mut builder =
+            reqwest::Client::builder().user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")));
         if cfg.request_timeout > Duration::from_secs(0) {
             builder = builder.timeout(cfg.request_timeout);
         }
@@ -164,9 +162,7 @@ pub fn parse_envelope(bytes: &[u8]) -> Result<WireParsed, MediaError> {
     let parsed: WireResponse =
         serde_json::from_slice(bytes).map_err(|e| MediaError::Parse(e.to_string()))?;
     if parsed.images.is_empty() {
-        return Err(MediaError::Parse(
-            "fal: response had no images".to_string(),
-        ));
+        return Err(MediaError::Parse("fal: response had no images".to_string()));
     }
     Ok(WireParsed {
         images: parsed
@@ -222,8 +218,8 @@ impl ImageGenProvider for FalImageGenProvider {
             image_size: derive_image_size(request.width, request.height),
         };
         // Merge extra_payload over the standard body.
-        let mut body_value = serde_json::to_value(&std_body)
-            .map_err(|e| MediaError::Internal(e.to_string()))?;
+        let mut body_value =
+            serde_json::to_value(&std_body).map_err(|e| MediaError::Internal(e.to_string()))?;
         if let Value::Object(ref mut map) = body_value {
             for (k, v) in &self.cfg.extra_payload {
                 map.insert(k.clone(), v.clone());
@@ -327,17 +323,24 @@ mod tests {
     #[test]
     fn name_reflects_alias() {
         let p = FalImageGenProvider::new(FalImageGenConfig::new("fal-flux", "fal-ai/flux/dev"));
-        assert_eq!(<FalImageGenProvider as ImageGenProvider>::name(&p), "fal-flux");
+        assert_eq!(
+            <FalImageGenProvider as ImageGenProvider>::name(&p),
+            "fal-flux"
+        );
     }
 
     #[test]
     fn is_configured_requires_api_key() {
         let mut c = FalImageGenConfig::new("fal", "fal-ai/flux/dev");
         let p1 = FalImageGenProvider::new(c.clone());
-        assert!(!<FalImageGenProvider as ImageGenProvider>::is_configured(&p1));
+        assert!(!<FalImageGenProvider as ImageGenProvider>::is_configured(
+            &p1
+        ));
         c.api_key = Some("k".into());
         let p2 = FalImageGenProvider::new(c);
-        assert!(<FalImageGenProvider as ImageGenProvider>::is_configured(&p2));
+        assert!(<FalImageGenProvider as ImageGenProvider>::is_configured(
+            &p2
+        ));
     }
 
     #[tokio::test]
@@ -369,12 +372,30 @@ mod tests {
 
     #[test]
     fn format_from_content_type_known_types() {
-        assert_eq!(format_from_content_type(Some("image/png")), ImageFormat::Png);
-        assert_eq!(format_from_content_type(Some("image/jpeg")), ImageFormat::Jpeg);
-        assert_eq!(format_from_content_type(Some("image/jpg")), ImageFormat::Jpeg);
-        assert_eq!(format_from_content_type(Some("image/webp")), ImageFormat::Webp);
-        assert_eq!(format_from_content_type(Some("IMAGE/PNG")), ImageFormat::Png);
-        assert_eq!(format_from_content_type(Some("application/octet-stream")), ImageFormat::Other);
+        assert_eq!(
+            format_from_content_type(Some("image/png")),
+            ImageFormat::Png
+        );
+        assert_eq!(
+            format_from_content_type(Some("image/jpeg")),
+            ImageFormat::Jpeg
+        );
+        assert_eq!(
+            format_from_content_type(Some("image/jpg")),
+            ImageFormat::Jpeg
+        );
+        assert_eq!(
+            format_from_content_type(Some("image/webp")),
+            ImageFormat::Webp
+        );
+        assert_eq!(
+            format_from_content_type(Some("IMAGE/PNG")),
+            ImageFormat::Png
+        );
+        assert_eq!(
+            format_from_content_type(Some("application/octet-stream")),
+            ImageFormat::Other
+        );
         assert_eq!(format_from_content_type(None), ImageFormat::Other);
     }
 

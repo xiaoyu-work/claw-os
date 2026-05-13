@@ -212,8 +212,7 @@ mod tests {
     use super::*;
 
     fn tmpdir(label: &str) -> PathBuf {
-        let p = std::env::temp_dir()
-            .join(format!("cos-notes-{}-{}", label, std::process::id()));
+        let p = std::env::temp_dir().join(format!("cos-notes-{}-{}", label, std::process::id()));
         let _ = fs::remove_dir_all(&p);
         p
     }
@@ -325,7 +324,10 @@ mod tests {
         let out = truncate_for_prompt(&s, 200);
         let chars: usize = out.chars().count();
         assert!(chars <= 200, "got {chars} chars, expected <= 200");
-        assert!(out.contains("[…]"), "expected truncation marker, got {out:?}");
+        assert!(
+            out.contains("[…]"),
+            "expected truncation marker, got {out:?}"
+        );
         assert!(out.contains("of 2000 chars"));
     }
 

@@ -17,16 +17,15 @@
 //! └── safety/         redact, policy hooks, approval
 //! ```
 
-pub mod context;
 pub mod audit_cli;
-pub mod doctor_cli;
-pub mod honcho_cli;
-pub mod replay_cli;
-pub mod run_log_cli;
+pub mod classify;
+pub mod context;
 pub mod curator;
 pub mod curator_author;
 pub mod curator_drafts;
 pub mod display;
+pub mod doctor_cli;
+pub mod honcho_cli;
 pub mod insights;
 pub mod llm;
 pub mod media;
@@ -34,15 +33,16 @@ pub mod memory;
 pub mod nudge;
 pub mod onboarding;
 pub mod prompt;
+pub mod replay_cli;
+pub mod run_log_cli;
 pub mod runtime;
 pub mod safety;
 pub mod service;
 pub mod shell_hooks;
 pub mod skills;
-pub mod tools;
-pub mod title;
-pub mod classify;
 pub mod summarise;
+pub mod title;
+pub mod tools;
 
 use serde_json::{json, Value};
 
@@ -313,10 +313,7 @@ fn learn_cmd(args: &[String]) -> Result<Value, String> {
                             "mock-aux",
                             &crate::config::AgentConfig::default(),
                         ));
-                        AuxiliaryClient::new(
-                            provider,
-                            AuxiliaryConfig::new("mock", "mock-aux"),
-                        )
+                        AuxiliaryClient::new(provider, AuxiliaryConfig::new("mock", "mock-aux"))
                     }
                 }
             } else {
@@ -480,7 +477,6 @@ fn learn_cmd(args: &[String]) -> Result<Value, String> {
     }
 }
 
-
 /// `cos agent hooks <subcmd>` — manage the runtime hook registry
 /// and the persistent `data_dir/agent/hooks.json` config that
 /// auto-registers hooks on every agent invocation.
@@ -589,8 +585,6 @@ fn parse_kind_arg(rest: &[String]) -> Result<String, String> {
     Err("missing hook kind (positional or --kind <kind>)".to_string())
 }
 
-
-
 /// `cos agent semantic <subcmd>` — vector-memory operations.
 ///
 ///   index <namespace> <key> "<text>" — embed and store
@@ -606,10 +600,9 @@ fn parse_kind_arg(rest: &[String]) -> Result<String, String> {
 fn semantic_cmd(args: &[String]) -> Result<Value, String> {
     use crate::agent::memory::semantic::SemanticStore;
 
-    let sub = args
-        .first()
-        .map(|s| s.as_str())
-        .ok_or("usage: cos agent semantic <index|search|list|count|remove|clear|clear-all|status> ...")?;
+    let sub = args.first().map(|s| s.as_str()).ok_or(
+        "usage: cos agent semantic <index|search|list|count|remove|clear|clear-all|status> ...",
+    )?;
     let rest = &args[1..];
 
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -963,10 +956,7 @@ fn recall_cmd(args: &[String]) -> Result<Value, String> {
     if query.is_empty() {
         return Err("usage: cos agent recall \"<query>\" [limit]".into());
     }
-    let limit: usize = args
-        .get(1)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(10);
+    let limit: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(10);
     let db = memory::sqlite_fts::MemoryDb::open_default()
         .map_err(|e| format!("memory db unavailable: {e}"))?;
     let hits = db
@@ -1019,19 +1009,13 @@ fn sessions_cmd(args: &[String]) -> Result<Value, String> {
 }
 
 fn sessions_list(args: &[String]) -> Result<Value, String> {
-    let limit: usize = args
-        .first()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(20);
+    let limit: usize = args.first().and_then(|s| s.parse().ok()).unwrap_or(20);
     let db = memory::sqlite_fts::MemoryDb::open_default()
         .map_err(|e| format!("memory db unavailable: {e}"))?;
     sessions_list_with(&db, limit)
 }
 
-fn sessions_list_with(
-    db: &memory::sqlite_fts::MemoryDb,
-    limit: usize,
-) -> Result<Value, String> {
+fn sessions_list_with(db: &memory::sqlite_fts::MemoryDb, limit: usize) -> Result<Value, String> {
     let sessions = db
         .sessions(limit)
         .map_err(|e| format!("sessions query failed: {e}"))?;
@@ -1058,19 +1042,13 @@ fn sessions_list_with(
 /// Designed to point at exactly the sessions worth `sessions clear
 /// <id> --yes`-ing when memory.db is fat.
 fn sessions_top(args: &[String]) -> Result<Value, String> {
-    let limit: usize = args
-        .first()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(20);
+    let limit: usize = args.first().and_then(|s| s.parse().ok()).unwrap_or(20);
     let db = memory::sqlite_fts::MemoryDb::open_default()
         .map_err(|e| format!("memory db unavailable: {e}"))?;
     sessions_top_with(&db, limit)
 }
 
-fn sessions_top_with(
-    db: &memory::sqlite_fts::MemoryDb,
-    limit: usize,
-) -> Result<Value, String> {
+fn sessions_top_with(db: &memory::sqlite_fts::MemoryDb, limit: usize) -> Result<Value, String> {
     let sessions = db
         .sessions_top(limit)
         .map_err(|e| format!("sessions_top query failed: {e}"))?;
@@ -1105,10 +1083,7 @@ fn sessions_title(args: &[String]) -> Result<Value, String> {
     sessions_title_with(&db, &id)
 }
 
-fn sessions_title_with(
-    db: &memory::sqlite_fts::MemoryDb,
-    id: &str,
-) -> Result<Value, String> {
+fn sessions_title_with(db: &memory::sqlite_fts::MemoryDb, id: &str) -> Result<Value, String> {
     let title = db
         .title_for(id)
         .map_err(|e| format!("title lookup failed: {e}"))?;
@@ -1189,9 +1164,7 @@ fn sessions_count_with(
             }))
         }
         None => {
-            let n = db
-                .count_total()
-                .map_err(|e| format!("count failed: {e}"))?;
+            let n = db.count_total().map_err(|e| format!("count failed: {e}"))?;
             Ok(json!({
                 "total_messages": n,
             }))
@@ -1215,10 +1188,7 @@ fn sessions_clear(args: &[String]) -> Result<Value, String> {
     sessions_clear_with(&db, &id)
 }
 
-fn sessions_clear_with(
-    db: &memory::sqlite_fts::MemoryDb,
-    id: &str,
-) -> Result<Value, String> {
+fn sessions_clear_with(db: &memory::sqlite_fts::MemoryDb, id: &str) -> Result<Value, String> {
     let n = db
         .clear_session(id)
         .map_err(|e| format!("clear failed: {e}"))?;
@@ -1322,9 +1292,7 @@ fn sessions_stats(args: &[String]) -> Result<Value, String> {
                     "sessions stats --session requires an id argument".to_string()
                 })?;
                 if v.is_empty() {
-                    return Err(
-                        "sessions stats --session must not be empty".to_string()
-                    );
+                    return Err("sessions stats --session must not be empty".to_string());
                 }
                 session_filter = Some(v.clone());
                 i += 2;
@@ -1348,13 +1316,8 @@ fn sessions_stats(args: &[String]) -> Result<Value, String> {
     }
 }
 
-fn sessions_stats_with(
-    db: &memory::sqlite_fts::MemoryDb,
-    now_ms: i64,
-) -> Result<Value, String> {
-    let stats = db
-        .stats(now_ms)
-        .map_err(|e| format!("stats failed: {e}"))?;
+fn sessions_stats_with(db: &memory::sqlite_fts::MemoryDb, now_ms: i64) -> Result<Value, String> {
+    let stats = db.stats(now_ms).map_err(|e| format!("stats failed: {e}"))?;
     let by_role = stats
         .by_role
         .iter()
@@ -1747,8 +1710,8 @@ fn skills_guard_cmd_against(
                     "unknown" => Provenance::Unknown,
                     other => {
                         return Err(format!(
-                            "unknown provenance: {other}. try: vendor | hub | user | local | unknown"
-                        ))
+                        "unknown provenance: {other}. try: vendor | hub | user | local | unknown"
+                    ))
                     }
                 };
                 i += 2;
@@ -1958,17 +1921,17 @@ fn skills_usage_cmd_at(args: &[String], path: &std::path::Path) -> Result<Value,
 fn skills_hub_cmd(args: &[String]) -> Result<Value, String> {
     use crate::agent::skills::hub::{HubConfig, SkillsHub};
 
-    let sub = args
-        .first()
-        .map(|s| s.as_str())
-        .ok_or_else(|| {
-            "usage: cos agent skills hub <list|show|install> <owner/repo> [<id>] [--force]"
-                .to_string()
-        })?;
-
-    let spec = args.get(1).cloned().filter(|s| !s.is_empty()).ok_or_else(|| {
-        format!("usage: cos agent skills hub {sub} <owner/repo> [<id>] [--force]")
+    let sub = args.first().map(|s| s.as_str()).ok_or_else(|| {
+        "usage: cos agent skills hub <list|show|install> <owner/repo> [<id>] [--force]".to_string()
     })?;
+
+    let spec = args
+        .get(1)
+        .cloned()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            format!("usage: cos agent skills hub {sub} <owner/repo> [<id>] [--force]")
+        })?;
     let (owner, repo) = parse_owner_repo(&spec)?;
 
     let token = std::env::var("COS_HUB_TOKEN")
@@ -2625,10 +2588,7 @@ async fn stream_cmd_async(
     use futures_util::StreamExt;
     use std::io::Write;
 
-    let extra = cfg
-        .system_prompt_path
-        .as_deref()
-        .map(std::path::Path::new);
+    let extra = cfg.system_prompt_path.as_deref().map(std::path::Path::new);
     let system = crate::agent::prompt::build_system_prompt(extra);
 
     let request = ChatRequest {
@@ -2666,10 +2626,7 @@ async fn stream_cmd_async(
                 let _ = err_lock.flush();
             }
             Ok(StreamEvent::ToolUseStart { id, name }) => {
-                let _ = writeln!(
-                    err_lock,
-                    "\n[tool_use_start id={id} name={name}]"
-                );
+                let _ = writeln!(err_lock, "\n[tool_use_start id={id} name={name}]");
             }
             Ok(StreamEvent::ToolInputDelta { partial_json, .. }) => {
                 let _ = err_lock.write_all(partial_json.as_bytes());
@@ -2694,10 +2651,7 @@ async fn stream_cmd_async(
                 // its assembled text and tool_calls so the UX
                 // still looks like a stream.
                 for block in &resp.content {
-                    if let crate::agent::llm::types::ContentBlock::Text {
-                        text,
-                    } = block
-                    {
+                    if let crate::agent::llm::types::ContentBlock::Text { text } = block {
                         answer.push_str(text);
                         let _ = err_lock.write_all(text.as_bytes());
                     }
@@ -2751,7 +2705,6 @@ async fn stream_cmd_async(
         "model": cfg.model,
     }))
 }
-
 
 /// `cos agent live "<prompt>"` — multi-turn streaming agent with the
 /// full tool registry. Same JSON envelope shape as `cos agent ask`,
@@ -2822,10 +2775,7 @@ async fn live_cmd_async(
                     let _ = err_lock.flush();
                 }
                 StreamEvent::ToolUseStart { id, name } => {
-                    let _ = writeln!(
-                        err_lock,
-                        "\n[tool_use_start id={id} name={name}]"
-                    );
+                    let _ = writeln!(err_lock, "\n[tool_use_start id={id} name={name}]");
                 }
                 StreamEvent::ToolInputDelta { partial_json, .. } => {
                     let _ = err_lock.write_all(partial_json.as_bytes());
@@ -2845,10 +2795,7 @@ async fn live_cmd_async(
                 }
                 StreamEvent::Message(resp) => {
                     for block in &resp.content {
-                        if let crate::agent::llm::types::ContentBlock::Text {
-                            text,
-                        } = block
-                        {
+                        if let crate::agent::llm::types::ContentBlock::Text { text } = block {
                             let _ = err_lock.write_all(text.as_bytes());
                         }
                     }
@@ -2906,15 +2853,8 @@ async fn live_cmd_async(
             tracing::warn!(
                 "memory: default DB unavailable ({e}); running without history recording"
             );
-            runtime::loop_::ask_with_stream(
-                provider.clone(),
-                cfg,
-                user_prompt,
-                &tools,
-                None,
-                sink,
-            )
-            .await
+            runtime::loop_::ask_with_stream(provider.clone(), cfg, user_prompt, &tools, None, sink)
+                .await
         }
     };
 
@@ -2947,7 +2887,6 @@ async fn live_cmd_async(
         Err(e) => Err(e.to_string()),
     }
 }
-
 
 /// `cos agent chat [--session <id>] [--no-stream] [--no-memory]
 /// [--show-tools] [--max-turns N]` — interactive multi-turn REPL.
@@ -3022,8 +2961,7 @@ fn chat_cmd(args: &[String]) -> Result<Value, String> {
                 let v = args
                     .get(i + 1)
                     .ok_or_else(|| "--max-turns needs <n>".to_string())?;
-                max_turns_override =
-                    Some(v.parse().map_err(|e| format!("--max-turns: {e}"))?);
+                max_turns_override = Some(v.parse().map_err(|e| format!("--max-turns: {e}"))?);
                 i += 2;
             }
             other => return Err(format!("unknown flag for `chat`: {other}")),
@@ -3265,10 +3203,7 @@ async fn chat_cmd_async(
                 }
                 "session" => {
                     let mut e = stderr.lock();
-                    let _ = writeln!(
-                        e,
-                        "session={session_id} prompts_so_far={prompt_seq}"
-                    );
+                    let _ = writeln!(e, "session={session_id} prompts_so_far={prompt_seq}");
                 }
                 "clear" => {
                     session_id = uuid::Uuid::new_v4().to_string();
@@ -3277,10 +3212,7 @@ async fn chat_cmd_async(
                     let _ = writeln!(e, "[new session: {session_id}]");
                 }
                 "history" => {
-                    let n: usize = parts
-                        .next()
-                        .and_then(|s| s.parse().ok())
-                        .unwrap_or(10);
+                    let n: usize = parts.next().and_then(|s| s.parse().ok()).unwrap_or(10);
                     if let Some(db) = &memory_db {
                         match db.recent(&session_id, n) {
                             Ok(rows) => {
@@ -3289,14 +3221,8 @@ async fn chat_cmd_async(
                                     let _ = writeln!(e, "(no messages yet)");
                                 } else {
                                     for r in &rows {
-                                        let snippet: String =
-                                            r.content.chars().take(140).collect();
-                                        let _ = writeln!(
-                                            e,
-                                            "[{}] {}",
-                                            r.role,
-                                            snippet
-                                        );
+                                        let snippet: String = r.content.chars().take(140).collect();
+                                        let _ = writeln!(e, "[{}] {}", r.role, snippet);
                                     }
                                 }
                             }
@@ -3305,8 +3231,7 @@ async fn chat_cmd_async(
                             }
                         }
                     } else {
-                        let _ =
-                            writeln!(stderr.lock(), "history unavailable (memory off)");
+                        let _ = writeln!(stderr.lock(), "history unavailable (memory off)");
                     }
                 }
                 "tools" => {
@@ -3319,10 +3244,7 @@ async fn chat_cmd_async(
                     );
                 }
                 other => {
-                    let _ = writeln!(
-                        stderr.lock(),
-                        "unknown slash command: /{other} (try /help)"
-                    );
+                    let _ = writeln!(stderr.lock(), "unknown slash command: /{other} (try /help)");
                 }
             }
             continue;
@@ -3356,8 +3278,7 @@ async fn chat_cmd_async(
             )
             .await
         } else {
-            runtime::loop_::ask_with(provider.clone(), cfg, &user_prompt, &tools)
-                .await
+            runtime::loop_::ask_with(provider.clone(), cfg, &user_prompt, &tools).await
         };
 
         match result {
@@ -3375,10 +3296,7 @@ async fn chat_cmd_async(
                 let _ = writeln!(
                     e,
                     "[turn {} done; turns={} model={} session={}]",
-                    prompt_seq,
-                    ask_result.turns,
-                    ask_result.model,
-                    ask_result.session_id
+                    prompt_seq, ask_result.turns, ask_result.model, ask_result.session_id
                 );
             }
             Err(err) => {
@@ -3396,7 +3314,6 @@ async fn chat_cmd_async(
         "model": cfg.model,
     }))
 }
-
 
 fn providers_cmd(args: &[String]) -> Result<Value, String> {
     let mut filter_names: Option<Vec<String>> = None;
@@ -3596,9 +3513,9 @@ fn provider_doctor_cmd(args: &[String]) -> Result<Value, String> {
                 let raw = args
                     .get(i + 1)
                     .ok_or_else(|| "--timeout needs <secs>".to_string())?;
-                timeout_secs = raw.parse::<u64>().map_err(|_| {
-                    format!("--timeout must be a positive integer (got '{raw}')")
-                })?;
+                timeout_secs = raw
+                    .parse::<u64>()
+                    .map_err(|_| format!("--timeout must be a positive integer (got '{raw}')"))?;
                 if timeout_secs == 0 {
                     return Err("--timeout must be > 0".into());
                 }
@@ -3676,7 +3593,11 @@ fn provider_doctor_cmd(args: &[String]) -> Result<Value, String> {
 /// fresh provider instance (no shared state with concurrent
 /// commands), spins up a single-thread Tokio runtime, and reports
 /// a structured verdict. All error/excerpt strings are redacted.
-fn run_active_provider_probe(name: &str, agent_cfg: &crate::config::AgentConfig, timeout_secs: u64) -> Value {
+fn run_active_provider_probe(
+    name: &str,
+    agent_cfg: &crate::config::AgentConfig,
+    timeout_secs: u64,
+) -> Value {
     use crate::agent::llm::types::{ChatRequest, ContentBlock, Message};
     use crate::agent::safety::redact::Redactor;
 
@@ -3728,9 +3649,8 @@ fn run_active_provider_probe(name: &str, agent_cfg: &crate::config::AgentConfig,
 
     let timeout = std::time::Duration::from_secs(timeout_secs);
     let start = std::time::Instant::now();
-    let result = runtime.block_on(async move {
-        tokio::time::timeout(timeout, provider.chat(req)).await
-    });
+    let result =
+        runtime.block_on(async move { tokio::time::timeout(timeout, provider.chat(req)).await });
     let duration_ms = start.elapsed().as_millis() as u64;
 
     match result {
@@ -4021,8 +3941,11 @@ fn summarise_cmd_with_aux(
         .enable_all()
         .build()
         .map_err(|e| format!("tokio runtime: {e}"))?;
-    let summary =
-        runtime.block_on(crate::agent::summarise::summarise(Some(aux), input, max_chars));
+    let summary = runtime.block_on(crate::agent::summarise::summarise(
+        Some(aux),
+        input,
+        max_chars,
+    ));
     Ok(json!({
         "summary": summary,
         "input_chars": input.chars().count(),
@@ -4132,16 +4055,14 @@ fn tools_cmd(args: &[String]) -> Result<Value, String> {
             let entries: Vec<Value> = names
                 .iter()
                 .filter_map(|n| {
-                    registry
-                        .get_unfiltered(n)
-                        .map(|t| {
-                            let permitted = registry.guardrails().permits(n);
-                            json!({
-                                "name": n,
-                                "description": t.description(),
-                                "permitted": permitted,
-                            })
+                    registry.get_unfiltered(n).map(|t| {
+                        let permitted = registry.guardrails().permits(n);
+                        json!({
+                            "name": n,
+                            "description": t.description(),
+                            "permitted": permitted,
                         })
+                    })
                 })
                 .collect();
             Ok(json!({
@@ -4200,14 +4121,11 @@ fn guardrails_cmd(args: &[String]) -> Result<Value, String> {
     let sub = args.first().map(|s| s.as_str()).unwrap_or("show");
     match sub {
         "show" => {
-            let allow_arr: Option<Vec<String>> = g
-                .allow
-                .as_ref()
-                .map(|set| {
-                    let mut v: Vec<String> = set.iter().cloned().collect();
-                    v.sort();
-                    v
-                });
+            let allow_arr: Option<Vec<String>> = g.allow.as_ref().map(|set| {
+                let mut v: Vec<String> = set.iter().cloned().collect();
+                v.sort();
+                v
+            });
             let mut deny_arr: Vec<String> = g.deny.iter().cloned().collect();
             deny_arr.sort();
             Ok(json!({
@@ -4280,10 +4198,9 @@ fn approval_cmd(args: &[String]) -> Result<Value, String> {
             }))
         }
         "check" => {
-            let tool = args
-                .get(1)
-                .cloned()
-                .ok_or_else(|| "usage: cos agent approval check <tool> [--input '<json>']".to_string())?;
+            let tool = args.get(1).cloned().ok_or_else(|| {
+                "usage: cos agent approval check <tool> [--input '<json>']".to_string()
+            })?;
             let mut input: Value = Value::Null;
             let mut i = 2usize;
             while i < args.len() {
@@ -4504,8 +4421,7 @@ fn todo_cmd_at(
 /// conversation can be inspected against multiple budget profiles.
 fn compress_cmd(args: &[String]) -> Result<Value, String> {
     use crate::agent::context::compressor::{
-        estimate_message_tokens, estimate_total_tokens, estimate_text_tokens,
-        CompressorConfig,
+        estimate_message_tokens, estimate_text_tokens, estimate_total_tokens, CompressorConfig,
     };
     use crate::agent::llm::types::{Message, Role};
 
@@ -4565,8 +4481,7 @@ fn compress_cmd(args: &[String]) -> Result<Value, String> {
                         i += 2;
                     }
                     "--summary-max" | "--summary_max" => {
-                        cfg.summary_max_tokens =
-                            parse_u32_arg(args.get(i + 1), "--summary-max")?;
+                        cfg.summary_max_tokens = parse_u32_arg(args.get(i + 1), "--summary-max")?;
                         i += 2;
                     }
                     other => {
@@ -4576,17 +4491,15 @@ fn compress_cmd(args: &[String]) -> Result<Value, String> {
             }
 
             let path = file.ok_or_else(|| "--file required".to_string())?;
-            let raw = std::fs::read_to_string(&path)
-                .map_err(|e| format!("read {path}: {e}"))?;
+            let raw = std::fs::read_to_string(&path).map_err(|e| format!("read {path}: {e}"))?;
             let mut messages: Vec<Message> = Vec::new();
             for (line_no, line) in raw.lines().enumerate() {
                 let trimmed = line.trim();
                 if trimmed.is_empty() {
                     continue;
                 }
-                let msg: Message = serde_json::from_str(trimmed).map_err(|e| {
-                    format!("parse line {} of {}: {}", line_no + 1, path, e)
-                })?;
+                let msg: Message = serde_json::from_str(trimmed)
+                    .map_err(|e| format!("parse line {} of {}: {}", line_no + 1, path, e))?;
                 messages.push(msg);
             }
 
@@ -4595,10 +4508,9 @@ fn compress_cmd(args: &[String]) -> Result<Value, String> {
                     return Err("--system and --system-file are mutually exclusive".into());
                 }
                 (Some(s), None) => Some(s),
-                (None, Some(p)) => Some(
-                    std::fs::read_to_string(&p)
-                        .map_err(|e| format!("read {p}: {e}"))?,
-                ),
+                (None, Some(p)) => {
+                    Some(std::fs::read_to_string(&p).map_err(|e| format!("read {p}: {e}"))?)
+                }
                 (None, None) => None,
             };
 
@@ -4828,7 +4740,8 @@ fn retry_cmd(args: &[String]) -> Result<Value, String> {
             // delay_for(attempt) is the delay AFTER `attempt` failures
             // (1-indexed). For max_attempts = N total attempts, there
             // are N-1 inter-attempt waits.
-            let mut schedule: Vec<Value> = Vec::with_capacity(max_attempts.saturating_sub(1) as usize);
+            let mut schedule: Vec<Value> =
+                Vec::with_capacity(max_attempts.saturating_sub(1) as usize);
             let mut total_min_ms: u64 = 0;
             let mut total_max_ms: u64 = 0;
             for attempt in 1..max_attempts {
@@ -4891,11 +4804,9 @@ fn vision_cmd(args: &[String]) -> Result<Value, String> {
         "route" => vision_route_cmd(&args[1..]),
         "sniff" => vision_sniff_cmd(&args[1..]),
         "analyze" => vision_analyze_cmd(&args[1..]),
-        "" => Err(
-            "usage: cos agent vision <route|sniff|analyze> ... \
+        "" => Err("usage: cos agent vision <route|sniff|analyze> ... \
              (e.g. route --file <p> | sniff --file <p> | analyze --file <p> --prompt <t>)"
-                .to_string(),
-        ),
+            .to_string()),
         other => Err(format!(
             "unknown vision subcommand: {other}. try: route | sniff | analyze"
         )),
@@ -5112,8 +5023,9 @@ fn vision_analyze_cmd(args: &[String]) -> Result<Value, String> {
     }
 
     // Mutually-exclusive image source. base64 needs an explicit mime.
-    let sources_set =
-        usize::from(file.is_some()) + usize::from(url.is_some()) + usize::from(base64_data.is_some());
+    let sources_set = usize::from(file.is_some())
+        + usize::from(url.is_some())
+        + usize::from(base64_data.is_some());
     if sources_set != 1 {
         return Err(
             "vision analyze needs exactly one of --file <path> | --url <url> | --base64 <data>"
@@ -5326,8 +5238,7 @@ fn vision_route_cmd(args: &[String]) -> Result<Value, String> {
         }
         (Some(path), _, _) => {
             let p = std::path::PathBuf::from(path);
-            let meta = std::fs::metadata(&p)
-                .map_err(|e| format!("stat {path}: {e}"))?;
+            let meta = std::fs::metadata(&p).map_err(|e| format!("stat {path}: {e}"))?;
             // --bytes overrides the on-disk size if both supplied (rare;
             // useful when previewing what would happen if we shrank the file).
             let len = bytes_override.unwrap_or(meta.len() as usize);
@@ -5345,9 +5256,7 @@ fn vision_route_cmd(args: &[String]) -> Result<Value, String> {
             };
             (len, m, format!("file:{path}"))
         }
-        (None, Some(b), Some(m)) => {
-            (b, ImageMime::from_str(m), "synthetic".to_string())
-        }
+        (None, Some(b), Some(m)) => (b, ImageMime::from_str(m), "synthetic".to_string()),
         (None, Some(_), None) => {
             return Err("--bytes requires --mime when --file is not supplied".to_string());
         }
@@ -5536,11 +5445,7 @@ fn display_transcript_with(
     let lines: Vec<String> = rows
         .iter()
         .map(|row| {
-            crate::agent::display::render_message(
-                role_from_str(&row.role),
-                &row.content,
-                &cfg,
-            )
+            crate::agent::display::render_message(role_from_str(&row.role), &row.content, &cfg)
         })
         .collect();
     let transcript = lines.join("\n");
@@ -5831,10 +5736,8 @@ fn list_media_outputs(
             "files": Vec::<Value>::new(),
         }));
     }
-    let mut rows: Vec<(std::time::SystemTime, std::path::PathBuf, u64, String)> =
-        Vec::new();
-    let entries = std::fs::read_dir(dir)
-        .map_err(|e| format!("read_dir failed: {e}"))?;
+    let mut rows: Vec<(std::time::SystemTime, std::path::PathBuf, u64, String)> = Vec::new();
+    let entries = std::fs::read_dir(dir).map_err(|e| format!("read_dir failed: {e}"))?;
     for ent in entries.flatten() {
         let path = ent.path();
         let meta = match ent.metadata() {
@@ -6241,7 +6144,11 @@ fn context_refs_cmd(args: &[String]) -> Result<Value, String> {
     }
 
     let body = text.ok_or_else(|| "context refs: --text <body> required".to_string())?;
-    let refs = if unique { extract_unique(&body) } else { extract(&body) };
+    let refs = if unique {
+        extract_unique(&body)
+    } else {
+        extract(&body)
+    };
     let refs_json: Vec<Value> = refs
         .iter()
         .map(|r| {
@@ -6311,8 +6218,9 @@ fn context_build_cmd(args: &[String]) -> Result<Value, String> {
                 let v = args
                     .get(i)
                     .ok_or_else(|| "missing value for --depth".to_string())?;
-                opts.scan_depth =
-                    v.parse().map_err(|_| format!("--depth: invalid integer: {v}"))?;
+                opts.scan_depth = v
+                    .parse()
+                    .map_err(|_| format!("--depth: invalid integer: {v}"))?;
             }
             "--text" => {
                 i += 1;
@@ -6333,16 +6241,20 @@ fn context_build_cmd(args: &[String]) -> Result<Value, String> {
                 let v = args
                     .get(i)
                     .ok_or_else(|| "missing value for --max-refs".to_string())?;
-                opts.max_refs =
-                    Some(v.parse().map_err(|_| format!("--max-refs: invalid integer: {v}"))?);
+                opts.max_refs = Some(
+                    v.parse()
+                        .map_err(|_| format!("--max-refs: invalid integer: {v}"))?,
+                );
             }
             "--max-hints" => {
                 i += 1;
                 let v = args
                     .get(i)
                     .ok_or_else(|| "missing value for --max-hints".to_string())?;
-                opts.max_hints =
-                    Some(v.parse().map_err(|_| format!("--max-hints: invalid integer: {v}"))?);
+                opts.max_hints = Some(
+                    v.parse()
+                        .map_err(|_| format!("--max-hints: invalid integer: {v}"))?,
+                );
             }
             "--no-dedup" => {
                 opts.dedup_refs = false;
@@ -6421,10 +6333,7 @@ fn file_safety_batch_cmd(args: &[String]) -> Result<Value, String> {
     }))
 }
 
-fn file_safety_to_json(
-    path: &str,
-    v: &crate::agent::safety::file_safety::FileSafety,
-) -> Value {
+fn file_safety_to_json(path: &str, v: &crate::agent::safety::file_safety::FileSafety) -> Value {
     json!({
         "path":     path,
         "verdict":  v.label(),
@@ -6472,8 +6381,8 @@ fn osv_parse_cmd(args: &[String]) -> Result<Value, String> {
         return Err("osv parse accepts a single file argument".to_string());
     }
     let path = std::path::Path::new(&args[0]);
-    let body = std::fs::read_to_string(path)
-        .map_err(|e| format!("osv: read {}: {e}", path.display()))?;
+    let body =
+        std::fs::read_to_string(path).map_err(|e| format!("osv: read {}: {e}", path.display()))?;
     let pkgs = crate::agent::safety::osv::parse_lockfile(path, &body)?;
     Ok(json!({
         "lockfile": path.display().to_string(),
@@ -6490,8 +6399,8 @@ fn osv_check_cmd(args: &[String]) -> Result<Value, String> {
         return Err("osv check accepts a single file argument".to_string());
     }
     let path = std::path::Path::new(&args[0]);
-    let body = std::fs::read_to_string(path)
-        .map_err(|e| format!("osv: read {}: {e}", path.display()))?;
+    let body =
+        std::fs::read_to_string(path).map_err(|e| format!("osv: read {}: {e}", path.display()))?;
     let pkgs = crate::agent::safety::osv::parse_lockfile(path, &body)?;
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -6549,16 +6458,18 @@ fn osv_query_cmd(args: &[String]) -> Result<Value, String> {
         }
         i += 1;
     }
-    let coord = name_at_version
-        .ok_or_else(|| "usage: cos agent osv query <name>@<version> --ecosystem <eco>".to_string())?;
+    let coord = name_at_version.ok_or_else(|| {
+        "usage: cos agent osv query <name>@<version> --ecosystem <eco>".to_string()
+    })?;
     let (name, version) = coord
         .rsplit_once('@')
         .ok_or_else(|| format!("osv query: '{coord}' is not in <name>@<version> format"))?;
     if name.is_empty() || version.is_empty() {
         return Err("osv query: name and version must both be non-empty".to_string());
     }
-    let eco = ecosystem
-        .ok_or_else(|| "osv query: --ecosystem is required (e.g. crates.io, npm, PyPI, Go)".to_string())?;
+    let eco = ecosystem.ok_or_else(|| {
+        "osv query: --ecosystem is required (e.g. crates.io, npm, PyPI, Go)".to_string()
+    })?;
     let pkg = crate::agent::safety::osv::Package::new(eco, name, version);
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -7003,9 +6914,7 @@ fn parse_mcp_spawn_spec(args: &[String]) -> Result<(McpSpawnSpec, Vec<String>), 
                 let raw = args
                     .get(i + 1)
                     .ok_or_else(|| "--timeout needs <secs>".to_string())?;
-                timeout_secs = raw
-                    .parse::<u64>()
-                    .map_err(|e| format!("--timeout: {e}"))?;
+                timeout_secs = raw.parse::<u64>().map_err(|e| format!("--timeout: {e}"))?;
                 i += 2;
             }
             other if other.starts_with("--") => {
@@ -7017,8 +6926,7 @@ fn parse_mcp_spawn_spec(args: &[String]) -> Result<(McpSpawnSpec, Vec<String>), 
             }
         }
     }
-    let cmd =
-        cmd.ok_or_else(|| "--cmd <executable> required".to_string())?;
+    let cmd = cmd.ok_or_else(|| "--cmd <executable> required".to_string())?;
     Ok((
         McpSpawnSpec {
             cmd,
@@ -7057,26 +6965,25 @@ fn mcp_probe(args: &[String]) -> Result<Value, String> {
             },
             crate::agent::tools::mcp::protocol::ClientCapabilities::default(),
         );
-        let init = tokio::time::timeout(
-            std::time::Duration::from_secs(spec.timeout_secs),
-            init_fut,
-        )
-        .await
-        .map_err(|_| {
-            // Best-effort kill — child holds stdio fds.
-            let _ = child.start_kill();
-            format!("timed out waiting for initialize after {}s", spec.timeout_secs)
-        })?
-        .map_err(|e| format!("initialize: {e}"))?;
+        let init =
+            tokio::time::timeout(std::time::Duration::from_secs(spec.timeout_secs), init_fut)
+                .await
+                .map_err(|_| {
+                    // Best-effort kill — child holds stdio fds.
+                    let _ = child.start_kill();
+                    format!(
+                        "timed out waiting for initialize after {}s",
+                        spec.timeout_secs
+                    )
+                })?
+                .map_err(|e| format!("initialize: {e}"))?;
         // initialized notification — many servers don't gate on it,
         // but spec-correct clients send it.
         let _ = client.notify("notifications/initialized", None).await;
         let tools_fut = client.list_tools();
-        let tools_res = tokio::time::timeout(
-            std::time::Duration::from_secs(spec.timeout_secs),
-            tools_fut,
-        )
-        .await;
+        let tools_res =
+            tokio::time::timeout(std::time::Duration::from_secs(spec.timeout_secs), tools_fut)
+                .await;
         let tools_payload = match tools_res {
             Ok(Ok(list)) => json!({
                 "ok": true,
@@ -7160,28 +7067,27 @@ fn mcp_call(args: &[String]) -> Result<Value, String> {
             },
             crate::agent::tools::mcp::protocol::ClientCapabilities::default(),
         );
-        let _init = tokio::time::timeout(
-            std::time::Duration::from_secs(spec.timeout_secs),
-            init_fut,
-        )
-        .await
-        .map_err(|_| {
-            let _ = child.start_kill();
-            format!("timed out waiting for initialize after {}s", spec.timeout_secs)
-        })?
-        .map_err(|e| format!("initialize: {e}"))?;
+        let _init =
+            tokio::time::timeout(std::time::Duration::from_secs(spec.timeout_secs), init_fut)
+                .await
+                .map_err(|_| {
+                    let _ = child.start_kill();
+                    format!(
+                        "timed out waiting for initialize after {}s",
+                        spec.timeout_secs
+                    )
+                })?
+                .map_err(|e| format!("initialize: {e}"))?;
         let _ = client.notify("notifications/initialized", None).await;
         let call_fut = client.call_tool(tool.clone(), input.clone());
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(spec.timeout_secs),
-            call_fut,
-        )
-        .await
-        .map_err(|_| {
-            let _ = child.start_kill();
-            format!("timed out calling {} after {}s", tool, spec.timeout_secs)
-        })?
-        .map_err(|e| format!("tools/call: {e}"))?;
+        let result =
+            tokio::time::timeout(std::time::Duration::from_secs(spec.timeout_secs), call_fut)
+                .await
+                .map_err(|_| {
+                    let _ = child.start_kill();
+                    format!("timed out calling {} after {}s", tool, spec.timeout_secs)
+                })?
+                .map_err(|e| format!("tools/call: {e}"))?;
         drop(client);
         let _ = child.start_kill();
         let _ = child.wait().await;
@@ -7411,8 +7317,7 @@ fn curator_cmd(args: &[String]) -> Result<Value, String> {
                 let v = args
                     .get(i + 1)
                     .ok_or_else(|| "--min-turns needs <n>".to_string())?;
-                config.min_assistant_turns =
-                    v.parse().map_err(|e| format!("--min-turns: {e}"))?;
+                config.min_assistant_turns = v.parse().map_err(|e| format!("--min-turns: {e}"))?;
                 i += 2;
             }
             other => return Err(format!("unknown flag for `curator propose`: {other}")),
@@ -7443,7 +7348,9 @@ fn curator_cmd(args: &[String]) -> Result<Value, String> {
         // Apply the conservative built-in heuristic to user turns
         // when the runtime didn't supply an explicit signal.
         for t in turns.iter_mut() {
-            if matches!(t.role, crate::agent::curator::TurnRole::User) && looks_like_acceptance(&t.content) {
+            if matches!(t.role, crate::agent::curator::TurnRole::User)
+                && looks_like_acceptance(&t.content)
+            {
                 t.user_acceptance = true;
             }
         }
@@ -7810,9 +7717,9 @@ fn curator_author_cmd(args: &[String]) -> Result<Value, String> {
 
     // Resolve the draft.
     let store = DraftStore::open_default().map_err(|e| format!("draft store: {e}"))?;
-    let entry = store
-        .get(&draft_id)
-        .ok_or_else(|| format!("no draft with id '{draft_id}' (try `cos agent curator drafts list`)"))?;
+    let entry = store.get(&draft_id).ok_or_else(|| {
+        format!("no draft with id '{draft_id}' (try `cos agent curator drafts list`)")
+    })?;
 
     // Replay the session's recorded turns. If the session is gone
     // (rare but possible if the user cleared memory between
@@ -7831,14 +7738,26 @@ fn curator_author_cmd(args: &[String]) -> Result<Value, String> {
     // Build the provider. Auxiliary by default (when configured);
     // primary on --primary or when auxiliary isn't set.
     let cfg = &crate::config::get().agent;
-    let aux_available = cfg.auxiliary_provider.as_deref().map(|s| !s.is_empty()).unwrap_or(false)
-        && cfg.auxiliary_model.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
+    let aux_available = cfg
+        .auxiliary_provider
+        .as_deref()
+        .map(|s| !s.is_empty())
+        .unwrap_or(false)
+        && cfg
+            .auxiliary_model
+            .as_deref()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
 
     let (provider, resolved_model, route) = if use_primary || !aux_available {
         let model = model_override.unwrap_or_else(|| cfg.model.clone());
         let provider = llm::registry::build(&cfg.provider, &model, cfg)
             .map_err(|e| format!("primary provider unavailable: {e}"))?;
-        let route = if use_primary { "primary" } else { "primary (auxiliary not configured)" };
+        let route = if use_primary {
+            "primary"
+        } else {
+            "primary (auxiliary not configured)"
+        };
         (provider, model, route)
     } else {
         let aux_provider_name = cfg.auxiliary_provider.clone().unwrap_or_default();
@@ -7984,8 +7903,7 @@ fn curator_scan_cmd(args: &[String]) -> Result<Value, String> {
                 let v = args
                     .get(i + 1)
                     .ok_or_else(|| "--min-turns needs <n>".to_string())?;
-                config.min_assistant_turns =
-                    v.parse().map_err(|e| format!("--min-turns: {e}"))?;
+                config.min_assistant_turns = v.parse().map_err(|e| format!("--min-turns: {e}"))?;
                 i += 2;
             }
             other => return Err(format!("unknown flag for `curator scan`: {other}")),
@@ -8306,36 +8224,21 @@ mod tests {
 
     #[test]
     fn skills_hub_install_requires_id() {
-        let err = skills_cmd(&[
-            "hub".into(),
-            "install".into(),
-            "owner/repo".into(),
-        ])
-        .unwrap_err();
+        let err = skills_cmd(&["hub".into(), "install".into(), "owner/repo".into()]).unwrap_err();
         assert!(err.contains("usage:"));
         assert!(err.contains("install"));
     }
 
     #[test]
     fn skills_hub_show_requires_id() {
-        let err = skills_cmd(&[
-            "hub".into(),
-            "show".into(),
-            "owner/repo".into(),
-        ])
-        .unwrap_err();
+        let err = skills_cmd(&["hub".into(), "show".into(), "owner/repo".into()]).unwrap_err();
         assert!(err.contains("usage:"));
         assert!(err.contains("show"));
     }
 
     #[test]
     fn skills_hub_unknown_subcommand_lists_options() {
-        let err = skills_cmd(&[
-            "hub".into(),
-            "bogus".into(),
-            "owner/repo".into(),
-        ])
-        .unwrap_err();
+        let err = skills_cmd(&["hub".into(), "bogus".into(), "owner/repo".into()]).unwrap_err();
         assert!(err.contains("list"));
         assert!(err.contains("install"));
     }
@@ -8376,7 +8279,10 @@ mod tests {
             .get("models")
             .and_then(|m| m.as_array())
             .expect("models array");
-        assert!(!models.is_empty(), "anthropic should have at least one model");
+        assert!(
+            !models.is_empty(),
+            "anthropic should have at least one model"
+        );
         for m in models {
             assert_eq!(
                 m.get("provider").and_then(|p| p.as_str()),
@@ -8395,8 +8301,7 @@ mod tests {
 
     #[test]
     fn llm_model_unknown_errors() {
-        let err = llm_cmd(&["model".into(), "definitely-not-a-real-model".into()])
-            .unwrap_err();
+        let err = llm_cmd(&["model".into(), "definitely-not-a-real-model".into()]).unwrap_err();
         assert!(err.contains("unknown model"));
     }
 
@@ -8413,8 +8318,7 @@ mod tests {
             .and_then(|n| n.as_str())
             .expect("at least one known provider")
             .to_string();
-        let models = llm_cmd(&["models".into(), "--provider".into(), first])
-            .expect("models ok");
+        let models = llm_cmd(&["models".into(), "--provider".into(), first]).expect("models ok");
         let first_model = models
             .get("models")
             .and_then(|m| m.as_array())
@@ -8437,8 +8341,7 @@ mod tests {
 
     #[test]
     fn llm_cost_requires_model_arg() {
-        let err = llm_cmd(&["cost".into(), "--input".into(), "1000".into()])
-            .unwrap_err();
+        let err = llm_cmd(&["cost".into(), "--input".into(), "1000".into()]).unwrap_err();
         assert!(err.contains("usage:"));
     }
 
@@ -8467,8 +8370,8 @@ mod tests {
             .and_then(|n| n.as_str())
             .map(|s| s.to_string())
             .map(|provider| {
-                let models = llm_cmd(&["models".into(), "--provider".into(), provider])
-                    .expect("models ok");
+                let models =
+                    llm_cmd(&["models".into(), "--provider".into(), provider]).expect("models ok");
                 models
                     .get("models")
                     .and_then(|m| m.as_array())
@@ -8507,7 +8410,10 @@ mod tests {
         let v = redact_cmd(&["my key is sk-abcdef0123456789ABCDEF0123456789abcd ok".into()])
             .expect("redact ok");
         let out = v.get("redacted").and_then(|x| x.as_str()).unwrap();
-        assert!(out.contains("[REDACTED:"), "expected placeholder, got {out}");
+        assert!(
+            out.contains("[REDACTED:"),
+            "expected placeholder, got {out}"
+        );
         assert!(!out.contains("sk-abcdef0123456789ABCDEF0123456789abcd"));
         assert_eq!(v.get("changed").and_then(|x| x.as_bool()), Some(true));
     }
@@ -8522,19 +8428,25 @@ mod tests {
 
     #[test]
     fn redact_check_returns_detection_only() {
-        let v = redact_cmd(&[
-            "--check".into(),
-            "leaks AKIAIOSFODNN7EXAMPLE here".into(),
-        ])
-        .expect("check ok");
-        assert_eq!(v.get("contains_secrets").and_then(|x| x.as_bool()), Some(true));
-        assert!(v.get("redacted").is_none(), "check mode should not include redacted");
+        let v = redact_cmd(&["--check".into(), "leaks AKIAIOSFODNN7EXAMPLE here".into()])
+            .expect("check ok");
+        assert_eq!(
+            v.get("contains_secrets").and_then(|x| x.as_bool()),
+            Some(true)
+        );
+        assert!(
+            v.get("redacted").is_none(),
+            "check mode should not include redacted"
+        );
     }
 
     #[test]
     fn redact_check_negative() {
         let v = redact_cmd(&["--check".into(), "innocent text".into()]).expect("check ok");
-        assert_eq!(v.get("contains_secrets").and_then(|x| x.as_bool()), Some(false));
+        assert_eq!(
+            v.get("contains_secrets").and_then(|x| x.as_bool()),
+            Some(false)
+        );
     }
 
     #[test]
@@ -8542,27 +8454,28 @@ mod tests {
         let v = redact_cmd(&["--strict".into(), "contact me at user@example.com".into()])
             .expect("strict redact");
         let out = v.get("redacted").and_then(|x| x.as_str()).unwrap();
-        assert!(out.contains("[REDACTED:email]"), "strict should redact emails: {out}");
+        assert!(
+            out.contains("[REDACTED:email]"),
+            "strict should redact emails: {out}"
+        );
         assert_eq!(v.get("strict").and_then(|x| x.as_bool()), Some(true));
     }
 
     #[test]
     fn redact_default_does_not_redact_email() {
-        let v = redact_cmd(&["contact me at user@example.com".into()])
-            .expect("default redact");
+        let v = redact_cmd(&["contact me at user@example.com".into()]).expect("default redact");
         let out = v.get("redacted").and_then(|x| x.as_str()).unwrap();
-        assert!(out.contains("user@example.com"), "default should keep email: {out}");
+        assert!(
+            out.contains("user@example.com"),
+            "default should keep email: {out}"
+        );
     }
 
     #[test]
     fn redact_from_file() {
         let dir = tempfile::tempdir().expect("tmp");
         let p = dir.path().join("sample.txt");
-        std::fs::write(
-            &p,
-            "token=ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789",
-        )
-        .expect("write");
+        std::fs::write(&p, "token=ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789").expect("write");
         let v = redact_cmd(&["--file".into(), p.to_string_lossy().to_string()])
             .expect("file redact ok");
         let out = v.get("redacted").and_then(|x| x.as_str()).unwrap();
@@ -8641,8 +8554,14 @@ mod tests {
         assert_eq!(s.get("total").and_then(|x| x.as_u64()), Some(2));
         assert_eq!(s.get("success").and_then(|x| x.as_u64()), Some(1));
         assert_eq!(s.get("failure").and_then(|x| x.as_u64()), Some(1));
-        assert_eq!(s.get("total_duration_ms").and_then(|x| x.as_u64()), Some(300));
-        assert_eq!(s.get("average_duration_ms").and_then(|x| x.as_u64()), Some(150));
+        assert_eq!(
+            s.get("total_duration_ms").and_then(|x| x.as_u64()),
+            Some(300)
+        );
+        assert_eq!(
+            s.get("average_duration_ms").and_then(|x| x.as_u64()),
+            Some(150)
+        );
     }
 
     #[test]
@@ -8775,7 +8694,10 @@ mod tests {
     #[test]
     fn prompt_show_returns_prompt_string() {
         let v = prompt_cmd(&[]).expect("prompt show ok");
-        let p = v.get("prompt").and_then(|x| x.as_str()).expect("prompt str");
+        let p = v
+            .get("prompt")
+            .and_then(|x| x.as_str())
+            .expect("prompt str");
         assert!(!p.is_empty());
         let chars = v.get("chars").and_then(|x| x.as_u64()).expect("chars");
         assert!(chars > 0);
@@ -8863,10 +8785,8 @@ mod tests {
 
     #[test]
     fn think_scrub_strips_think_block() {
-        let v = think_scrub_cmd(&[
-            "before <think>secret reasoning</think> after".into(),
-        ])
-        .expect("ok");
+        let v =
+            think_scrub_cmd(&["before <think>secret reasoning</think> after".into()]).expect("ok");
         let out = v.get("scrubbed").and_then(|x| x.as_str()).unwrap();
         assert!(!out.contains("secret reasoning"), "got {out}");
         assert!(out.contains("before"));
@@ -8893,17 +8813,14 @@ mod tests {
 
     #[test]
     fn think_scrub_check_negative() {
-        let v = think_scrub_cmd(&["--check".into(), "no tags here".into()])
-            .expect("ok");
+        let v = think_scrub_cmd(&["--check".into(), "no tags here".into()]).expect("ok");
         assert_eq!(v.get("has_thinking").and_then(|x| x.as_bool()), Some(false));
     }
 
     #[test]
     fn think_scrub_handles_multiline_block() {
-        let v = think_scrub_cmd(&[
-            "<thinking>\nline one\nline two\n</thinking>\nfinal".into(),
-        ])
-        .expect("ok");
+        let v = think_scrub_cmd(&["<thinking>\nline one\nline two\n</thinking>\nfinal".into()])
+            .expect("ok");
         let out = v.get("scrubbed").and_then(|x| x.as_str()).unwrap();
         assert!(!out.contains("line one"), "got {out}");
         assert!(out.contains("final"));
@@ -8919,13 +8836,8 @@ mod tests {
     fn think_scrub_from_file() {
         let dir = tempfile::tempdir().expect("tmp");
         let p = dir.path().join("trace.txt");
-        std::fs::write(
-            &p,
-            "<reasoning>internal</reasoning>\nthe answer is 42",
-        )
-        .expect("write");
-        let v = think_scrub_cmd(&["--file".into(), p.to_string_lossy().to_string()])
-            .expect("ok");
+        std::fs::write(&p, "<reasoning>internal</reasoning>\nthe answer is 42").expect("write");
+        let v = think_scrub_cmd(&["--file".into(), p.to_string_lossy().to_string()]).expect("ok");
         let out = v.get("scrubbed").and_then(|x| x.as_str()).unwrap();
         assert!(!out.contains("internal"), "got {out}");
         assert!(out.contains("the answer is 42"));
@@ -8954,8 +8866,7 @@ mod tests {
         let p = dir.path().join("body.txt");
         let content = "x".repeat(400);
         std::fs::write(&p, &content).expect("write");
-        let v = tokens_cmd(&["--file".into(), p.to_string_lossy().to_string()])
-            .expect("ok");
+        let v = tokens_cmd(&["--file".into(), p.to_string_lossy().to_string()]).expect("ok");
         assert_eq!(v.get("chars").and_then(|x| x.as_u64()), Some(400));
         // chars / 4 = 100
         assert_eq!(v.get("approx_tokens").and_then(|x| x.as_u64()), Some(100));
@@ -8970,11 +8881,7 @@ mod tests {
 
     #[test]
     fn read_text_input_joins_positional_with_spaces() {
-        let (s, _) = read_text_input(
-            &["a".into(), "b".into(), "c".into()],
-            "tokens",
-        )
-        .expect("ok");
+        let (s, _) = read_text_input(&["a".into(), "b".into(), "c".into()], "tokens").expect("ok");
         assert_eq!(s, "a b c");
     }
 
@@ -9008,12 +8915,7 @@ mod tests {
 
     #[test]
     fn nudge_add_rejects_non_integer_due() {
-        let err = nudge_cmd(&[
-            "add".into(),
-            "not-a-number".into(),
-            "msg".into(),
-        ])
-        .unwrap_err();
+        let err = nudge_cmd(&["add".into(), "not-a-number".into(), "msg".into()]).unwrap_err();
         assert!(err.contains("integer"));
     }
 
@@ -9111,8 +9013,7 @@ mod tests {
 
     #[test]
     fn usage_since_rejects_non_iso_timestamp() {
-        let err =
-            usage_cmd(&["overall".into(), "--since".into(), "not-iso".into()]).unwrap_err();
+        let err = usage_cmd(&["overall".into(), "--since".into(), "not-iso".into()]).unwrap_err();
         assert!(err.to_lowercase().contains("since"));
     }
 
@@ -9126,8 +9027,7 @@ mod tests {
 
     #[test]
     fn usage_provider_filter_records_in_response() {
-        let v = usage_cmd(&["provider".into(), "anthropic".into()])
-            .expect("usage provider ok");
+        let v = usage_cmd(&["provider".into(), "anthropic".into()]).expect("usage provider ok");
         assert_eq!(
             v.get("filter")
                 .and_then(|f| f.get("provider"))
@@ -9159,7 +9059,10 @@ mod tests {
         let mut base = crate::config::AgentConfig::default();
         base.tool_deny = vec!["cos_sandbox".into()];
         let merged = merge_mcp_overrides(&base, None, vec!["cos_proc".into()]);
-        assert_eq!(merged.tool_deny, vec!["cos_sandbox".to_string(), "cos_proc".to_string()]);
+        assert_eq!(
+            merged.tool_deny,
+            vec!["cos_sandbox".to_string(), "cos_proc".to_string()]
+        );
     }
 
     #[test]
@@ -9212,23 +9115,14 @@ mod tests {
 
     #[test]
     fn curator_propose_unknown_flag_is_rejected() {
-        let err = curator_cmd(&[
-            "propose".into(),
-            "any-sid".into(),
-            "--bogus".into(),
-        ])
-        .unwrap_err();
+        let err = curator_cmd(&["propose".into(), "any-sid".into(), "--bogus".into()]).unwrap_err();
         assert!(err.to_lowercase().contains("unknown flag"));
     }
 
     #[test]
     fn curator_propose_min_turns_requires_value() {
-        let err = curator_cmd(&[
-            "propose".into(),
-            "any-sid".into(),
-            "--min-turns".into(),
-        ])
-        .unwrap_err();
+        let err =
+            curator_cmd(&["propose".into(), "any-sid".into(), "--min-turns".into()]).unwrap_err();
         assert!(err.contains("--min-turns"));
     }
 
@@ -9253,12 +9147,7 @@ mod tests {
 
     #[test]
     fn curator_author_unknown_flag_rejected() {
-        let err = curator_cmd(&[
-            "author".into(),
-            "draft-1".into(),
-            "--bogus".into(),
-        ])
-        .unwrap_err();
+        let err = curator_cmd(&["author".into(), "draft-1".into(), "--bogus".into()]).unwrap_err();
         assert!(err.to_lowercase().contains("unknown flag"));
     }
 
@@ -9313,7 +9202,10 @@ mod tests {
     fn curator_scan_listed_in_unknown_subcommand_help() {
         let err = curator_cmd(&["bogus".into()]).unwrap_err();
         assert!(err.contains("scan"), "want scan listed in help, got: {err}");
-        assert!(err.contains("author"), "want author listed in help, got: {err}");
+        assert!(
+            err.contains("author"),
+            "want author listed in help, got: {err}"
+        );
     }
 
     #[test]
@@ -9324,12 +9216,8 @@ mod tests {
 
     #[test]
     fn curator_drafts_auto_title_rejects_unknown_flag() {
-        let err = curator_drafts_cmd(&[
-            "auto-title".into(),
-            "some-id".into(),
-            "--bogus".into(),
-        ])
-        .unwrap_err();
+        let err = curator_drafts_cmd(&["auto-title".into(), "some-id".into(), "--bogus".into()])
+            .unwrap_err();
         assert!(err.contains("unknown flag"));
     }
 
@@ -9385,8 +9273,8 @@ mod tests {
 
     #[test]
     fn providers_cmd_filters_by_names_flag() {
-        let v = providers_cmd(&["--names".into(), "openai,anthropic".into()])
-            .expect("providers ok");
+        let v =
+            providers_cmd(&["--names".into(), "openai,anthropic".into()]).expect("providers ok");
         let arr = v.get("providers").and_then(|p| p.as_array()).unwrap();
         assert_eq!(arr.len(), 2);
         let names: Vec<_> = arr
@@ -9404,10 +9292,7 @@ mod tests {
         let arr = v.get("providers").and_then(|p| p.as_array()).unwrap();
         // "does-not-exist" is not in REGISTERED, so it gets dropped.
         assert_eq!(arr.len(), 1);
-        assert_eq!(
-            arr[0].get("name").and_then(|n| n.as_str()),
-            Some("openai")
-        );
+        assert_eq!(arr[0].get("name").and_then(|n| n.as_str()), Some("openai"));
     }
 
     #[test]
@@ -9612,8 +9497,7 @@ mod tests {
 
     #[test]
     fn providers_cmd_filter_count_matches_filtered_array() {
-        let v = providers_cmd(&["--names".into(), "openai".into()])
-            .expect("providers ok");
+        let v = providers_cmd(&["--names".into(), "openai".into()]).expect("providers ok");
         let count = v.get("count").and_then(|c| c.as_u64()).unwrap_or(0);
         assert_eq!(count, 1);
     }
@@ -9625,8 +9509,7 @@ mod tests {
         // env, matching AWS SDK convention. credential is None
         // because Bedrock's three-name credential model doesn't fit
         // the single-name `*_credential` field.
-        let v = providers_cmd(&["--names".into(), "bedrock".into()])
-            .expect("providers ok");
+        let v = providers_cmd(&["--names".into(), "bedrock".into()]).expect("providers ok");
         let arr = v.get("providers").and_then(|p| p.as_array()).unwrap();
         assert_eq!(arr.len(), 1);
         let entry = &arr[0];
@@ -9684,8 +9567,7 @@ mod tests {
 
     #[test]
     fn provider_doctor_custom_timeout_parses() {
-        let v = provider_doctor_cmd(&["--timeout".into(), "5".into()])
-            .expect("doctor ok");
+        let v = provider_doctor_cmd(&["--timeout".into(), "5".into()]).expect("doctor ok");
         let doctor = v.get("doctor").unwrap();
         assert_eq!(
             doctor.get("probe_timeout_secs").and_then(|t| t.as_u64()),
@@ -9695,15 +9577,13 @@ mod tests {
 
     #[test]
     fn provider_doctor_zero_timeout_rejected() {
-        let err =
-            provider_doctor_cmd(&["--timeout".into(), "0".into()]).unwrap_err();
+        let err = provider_doctor_cmd(&["--timeout".into(), "0".into()]).unwrap_err();
         assert!(err.contains("--timeout"));
     }
 
     #[test]
     fn provider_doctor_non_numeric_timeout_rejected() {
-        let err = provider_doctor_cmd(&["--timeout".into(), "soon".into()])
-            .unwrap_err();
+        let err = provider_doctor_cmd(&["--timeout".into(), "soon".into()]).unwrap_err();
         assert!(err.contains("--timeout"));
     }
 
@@ -9725,8 +9605,7 @@ mod tests {
         // The default test config provider is "mock" (see config.rs Default).
         // Verify --probe-network is gracefully skipped without spinning a
         // tokio runtime or hitting the network.
-        let v = provider_doctor_cmd(&["--probe-network".into()])
-            .expect("doctor ok");
+        let v = provider_doctor_cmd(&["--probe-network".into()]).expect("doctor ok");
         let probe = v
             .get("doctor")
             .and_then(|d| d.get("active_probe"))
@@ -9742,10 +9621,7 @@ mod tests {
             probe.get("attempted"),
             Some(&serde_json::Value::Bool(false))
         );
-        let reason = probe
-            .get("reason")
-            .and_then(|r| r.as_str())
-            .unwrap_or("");
+        let reason = probe.get("reason").and_then(|r| r.as_str()).unwrap_or("");
         assert!(
             reason.contains("mock") || reason.contains("meaningless"),
             "expected mock-skip reason, got {reason:?}"
@@ -9755,12 +9631,8 @@ mod tests {
     #[test]
     fn provider_doctor_filter_excluding_active_marks_out_of_scope() {
         // Active is "mock" in test config; filter to "openai" only.
-        let v = provider_doctor_cmd(&[
-            "--probe-network".into(),
-            "--names".into(),
-            "openai".into(),
-        ])
-        .expect("doctor ok");
+        let v = provider_doctor_cmd(&["--probe-network".into(), "--names".into(), "openai".into()])
+            .expect("doctor ok");
         let doctor = v.get("doctor").unwrap();
         assert_eq!(
             doctor.get("active_in_scope"),
@@ -9779,8 +9651,7 @@ mod tests {
     fn provider_doctor_surfaces_effective_timeout_min_of_two() {
         // probe_timeout 9999 + provider request_timeout (default = some
         // smaller value from CosConfig) → effective is the smaller one.
-        let v = provider_doctor_cmd(&["--timeout".into(), "9999".into()])
-            .expect("doctor ok");
+        let v = provider_doctor_cmd(&["--timeout".into(), "9999".into()]).expect("doctor ok");
         let doctor = v.get("doctor").unwrap();
         let probe_t = doctor
             .get("probe_timeout_secs")
@@ -9822,14 +9693,8 @@ mod tests {
             "rate_limited"
         );
         assert_eq!(llm_error_kind(&llm::LlmError::Auth), "auth");
-        assert_eq!(
-            llm_error_kind(&llm::LlmError::Parse("x".into())),
-            "parse"
-        );
-        assert_eq!(
-            llm_error_kind(&llm::LlmError::Stream("x".into())),
-            "stream"
-        );
+        assert_eq!(llm_error_kind(&llm::LlmError::Parse("x".into())), "parse");
+        assert_eq!(llm_error_kind(&llm::LlmError::Stream("x".into())), "stream");
         assert_eq!(
             llm_error_kind(&llm::LlmError::Internal("x".into())),
             "internal"
@@ -9846,10 +9711,7 @@ mod tests {
     #[test]
     fn title_cmd_strips_slash_command_verb() {
         let v = title_cmd(&["/ask hello there".into()]).expect("title ok");
-        assert_eq!(
-            v.get("title").and_then(|s| s.as_str()),
-            Some("hello there")
-        );
+        assert_eq!(v.get("title").and_then(|s| s.as_str()), Some("hello there"));
     }
 
     #[test]
@@ -9899,8 +9761,7 @@ mod tests {
         use crate::config::AgentConfig;
         let cfg = AgentConfig::default();
         let provider = MockProvider::new("title-mock", &cfg);
-        provider
-            .push_response(MockResponse::Text("Quick rust setup".into()));
+        provider.push_response(MockResponse::Text("Quick rust setup".into()));
         let aux = AuxiliaryClient::new(
             std::sync::Arc::new(provider),
             AuxiliaryConfig::new("mock", "title-mock"),
@@ -9912,24 +9773,17 @@ mod tests {
             Some("Quick rust setup")
         );
         assert_eq!(v.get("provider").and_then(|s| s.as_str()), Some("mock"));
-        assert_eq!(
-            v.get("model").and_then(|s| s.as_str()),
-            Some("title-mock")
-        );
+        assert_eq!(v.get("model").and_then(|s| s.as_str()), Some("title-mock"));
     }
 
     #[test]
     fn summarise_cmd_returns_first_sentence() {
-        let v = summarise_cmd(&["First sentence. Second one.".into()])
-            .expect("summarise ok");
+        let v = summarise_cmd(&["First sentence. Second one.".into()]).expect("summarise ok");
         assert_eq!(
             v.get("summary").and_then(|s| s.as_str()),
             Some("First sentence.")
         );
-        assert_eq!(
-            v.get("clamped").and_then(|b| b.as_bool()),
-            Some(false)
-        );
+        assert_eq!(v.get("clamped").and_then(|b| b.as_bool()), Some(false));
     }
 
     #[test]
@@ -9960,8 +9814,7 @@ mod tests {
 
     #[test]
     fn summarise_cmd_max_must_parse() {
-        let err = summarise_cmd(&["--max".into(), "not-a-number".into(), "x".into()])
-            .unwrap_err();
+        let err = summarise_cmd(&["--max".into(), "not-a-number".into(), "x".into()]).unwrap_err();
         assert!(err.contains("--max"));
     }
 
@@ -9980,8 +9833,7 @@ mod tests {
 
     #[test]
     fn summarise_cmd_with_aux_none_falls_back_to_heuristic() {
-        let v = summarise_cmd_with_aux("First sentence. Second one.", 200, None)
-            .expect("ok");
+        let v = summarise_cmd_with_aux("First sentence. Second one.", 200, None).expect("ok");
         assert_eq!(v.get("method").and_then(|s| s.as_str()), Some("heuristic"));
     }
 
@@ -10016,10 +9868,7 @@ mod tests {
             "positive,negative,neutral".into(),
         ])
         .expect("classify ok");
-        assert_eq!(
-            v.get("matched").and_then(|m| m.as_str()),
-            Some("positive")
-        );
+        assert_eq!(v.get("matched").and_then(|m| m.as_str()), Some("positive"));
     }
 
     #[test]
@@ -10035,12 +9884,8 @@ mod tests {
 
     #[test]
     fn classify_cmd_tolerates_trailing_punctuation() {
-        let v = classify_cmd(&[
-            "yes.".into(),
-            "--labels".into(),
-            "yes,no".into(),
-        ])
-        .expect("classify ok");
+        let v = classify_cmd(&["yes.".into(), "--labels".into(), "yes,no".into()])
+            .expect("classify ok");
         assert_eq!(v.get("matched").and_then(|m| m.as_str()), Some("yes"));
     }
 
@@ -10058,23 +9903,14 @@ mod tests {
 
     #[test]
     fn classify_cmd_empty_label_list_rejected() {
-        let err = classify_cmd(&[
-            "yes".into(),
-            "--labels".into(),
-            ",, ,".into(),
-        ])
-        .unwrap_err();
+        let err = classify_cmd(&["yes".into(), "--labels".into(), ",, ,".into()]).unwrap_err();
         assert!(err.contains("--labels"));
     }
 
     #[test]
     fn classify_cmd_returns_label_set_in_response() {
-        let v = classify_cmd(&[
-            "yes".into(),
-            "--labels".into(),
-            "yes,no,maybe".into(),
-        ])
-        .expect("classify ok");
+        let v = classify_cmd(&["yes".into(), "--labels".into(), "yes,no,maybe".into()])
+            .expect("classify ok");
         let labels = v
             .get("labels")
             .and_then(|l| l.as_array())
@@ -10091,15 +9927,18 @@ mod tests {
             .get("tools")
             .and_then(|t| t.as_array())
             .expect("tools array");
-        assert!(!arr.is_empty(), "default registry should have at least echo + now");
+        assert!(
+            !arr.is_empty(),
+            "default registry should have at least echo + now"
+        );
         // Every entry should be permitted under the default permissive guardrails.
         for entry in arr {
-            assert_eq!(
-                entry.get("permitted"),
-                Some(&serde_json::Value::Bool(true))
-            );
+            assert_eq!(entry.get("permitted"), Some(&serde_json::Value::Bool(true)));
         }
-        let permitted_count = v.get("permitted_count").and_then(|c| c.as_u64()).unwrap_or(0);
+        let permitted_count = v
+            .get("permitted_count")
+            .and_then(|c| c.as_u64())
+            .unwrap_or(0);
         assert_eq!(permitted_count as usize, arr.len());
     }
 
@@ -10147,8 +9986,7 @@ mod tests {
     #[test]
     fn tools_cmd_unfiltered_includes_at_least_as_many_as_filtered() {
         let plain = tools_cmd(&["list".into()]).expect("plain list ok");
-        let unfiltered =
-            tools_cmd(&["list".into(), "--unfiltered".into()]).expect("unfiltered ok");
+        let unfiltered = tools_cmd(&["list".into(), "--unfiltered".into()]).expect("unfiltered ok");
         let plain_count = plain
             .get("tools")
             .and_then(|t| t.as_array())
@@ -10178,8 +10016,7 @@ mod tests {
 
     #[test]
     fn guardrails_cmd_check_returns_decision_for_known_tool() {
-        let v = guardrails_cmd(&["check".into(), "echo".into()])
-            .expect("guardrails check ok");
+        let v = guardrails_cmd(&["check".into(), "echo".into()]).expect("guardrails check ok");
         let decision = v.get("decision").and_then(|d| d.as_str()).unwrap_or("");
         assert!(decision == "allow" || decision == "deny");
         assert_eq!(v.get("tool").and_then(|t| t.as_str()), Some("echo"));
@@ -10212,10 +10049,7 @@ mod tests {
     fn approval_cmd_check_safe_tool_returns_approved() {
         // Default config has no dangerous_tools → every tool short-circuits to approved.
         let v = approval_cmd(&["check".into(), "echo".into()]).expect("approval check ok");
-        assert_eq!(
-            v.get("decision").and_then(|d| d.as_str()),
-            Some("approved")
-        );
+        assert_eq!(v.get("decision").and_then(|d| d.as_str()), Some("approved"));
         assert_eq!(
             v.get("would_short_circuit").and_then(|b| b.as_bool()),
             Some(true)
@@ -10242,23 +10076,13 @@ mod tests {
 
     #[test]
     fn approval_cmd_check_input_flag_requires_value() {
-        let err = approval_cmd(&[
-            "check".into(),
-            "echo".into(),
-            "--input".into(),
-        ])
-        .unwrap_err();
+        let err = approval_cmd(&["check".into(), "echo".into(), "--input".into()]).unwrap_err();
         assert!(err.contains("--input"));
     }
 
     #[test]
     fn approval_cmd_check_unknown_flag_errs() {
-        let err = approval_cmd(&[
-            "check".into(),
-            "echo".into(),
-            "--bogus".into(),
-        ])
-        .unwrap_err();
+        let err = approval_cmd(&["check".into(), "echo".into(), "--bogus".into()]).unwrap_err();
         assert!(err.contains("--bogus"));
     }
 
@@ -10286,10 +10110,12 @@ mod tests {
     #[test]
     fn todo_cmd_list_empty_session_returns_empty() {
         let (_dir, store) = temp_todo_store();
-        let v = todo_cmd_at(&["list".into(), "session-1".into()], &store)
-            .expect("list ok");
+        let v = todo_cmd_at(&["list".into(), "session-1".into()], &store).expect("list ok");
         assert_eq!(v.get("count").and_then(|c| c.as_u64()), Some(0));
-        let items = v.get("items").and_then(|i| i.as_array()).expect("items array");
+        let items = v
+            .get("items")
+            .and_then(|i| i.as_array())
+            .expect("items array");
         assert!(items.is_empty());
     }
 
@@ -10318,9 +10144,11 @@ mod tests {
         assert_eq!(v.get("count").and_then(|c| c.as_u64()), Some(1));
 
         // Re-read confirms persistence + multi-word title joined.
-        let listed =
-            todo_cmd_at(&["list".into(), "session-1".into()], &store).expect("list ok");
-        let items = listed.get("items").and_then(|i| i.as_array()).expect("items");
+        let listed = todo_cmd_at(&["list".into(), "session-1".into()], &store).expect("list ok");
+        let items = listed
+            .get("items")
+            .and_then(|i| i.as_array())
+            .expect("items");
         assert_eq!(items.len(), 1);
         assert_eq!(
             items[0].get("title").and_then(|t| t.as_str()),
@@ -10347,9 +10175,11 @@ mod tests {
             &store,
         )
         .expect("add ok");
-        let listed =
-            todo_cmd_at(&["list".into(), "session-1".into()], &store).expect("list ok");
-        let items = listed.get("items").and_then(|i| i.as_array()).expect("items");
+        let listed = todo_cmd_at(&["list".into(), "session-1".into()], &store).expect("list ok");
+        let items = listed
+            .get("items")
+            .and_then(|i| i.as_array())
+            .expect("items");
         assert_eq!(
             items[0].get("note").and_then(|n| n.as_str()),
             Some("explanatory note")
@@ -10375,11 +10205,7 @@ mod tests {
     #[test]
     fn todo_cmd_add_requires_title() {
         let (_dir, store) = temp_todo_store();
-        let err = todo_cmd_at(
-            &["add".into(), "s1".into(), "t1".into()],
-            &store,
-        )
-        .unwrap_err();
+        let err = todo_cmd_at(&["add".into(), "s1".into(), "t1".into()], &store).unwrap_err();
         assert!(err.contains("title"));
     }
 
@@ -10479,25 +10305,21 @@ mod tests {
             &store,
         )
         .expect("add ok");
-        let v = todo_cmd_at(
-            &["remove".into(), "s1".into(), "t1".into()],
-            &store,
-        )
-        .expect("remove ok");
+        let v =
+            todo_cmd_at(&["remove".into(), "s1".into(), "t1".into()], &store).expect("remove ok");
         assert_eq!(v.get("count").and_then(|c| c.as_u64()), Some(1));
         let listed = todo_cmd_at(&["list".into(), "s1".into()], &store).expect("list ok");
-        let items = listed.get("items").and_then(|i| i.as_array()).expect("items");
+        let items = listed
+            .get("items")
+            .and_then(|i| i.as_array())
+            .expect("items");
         assert_eq!(items[0].get("id").and_then(|i| i.as_str()), Some("t2"));
     }
 
     #[test]
     fn todo_cmd_remove_unknown_id_errs() {
         let (_dir, store) = temp_todo_store();
-        let err = todo_cmd_at(
-            &["remove".into(), "s1".into(), "ghost".into()],
-            &store,
-        )
-        .unwrap_err();
+        let err = todo_cmd_at(&["remove".into(), "s1".into(), "ghost".into()], &store).unwrap_err();
         assert!(err.contains("ghost"));
     }
 
@@ -10516,11 +10338,8 @@ mod tests {
             &store,
         )
         .expect("add ok");
-        let v = todo_cmd_at(
-            &["clear".into(), "s1".into(), "--yes".into()],
-            &store,
-        )
-        .expect("clear ok");
+        let v =
+            todo_cmd_at(&["clear".into(), "s1".into(), "--yes".into()], &store).expect("clear ok");
         assert_eq!(v.get("cleared").and_then(|c| c.as_bool()), Some(true));
         let listed = todo_cmd_at(&["list".into(), "s1".into()], &store).expect("list ok");
         assert_eq!(listed.get("count").and_then(|c| c.as_u64()), Some(0));
@@ -10570,9 +10389,17 @@ mod tests {
     fn compress_cmd_show_config_returns_defaults() {
         let v = compress_cmd(&["show-config".into()]).expect("show-config ok");
         assert!(v.get("target_tokens").and_then(|n| n.as_u64()).unwrap_or(0) > 0);
-        assert!(v.get("trigger_tokens").and_then(|n| n.as_u64()).unwrap_or(0) > 0);
+        assert!(
+            v.get("trigger_tokens")
+                .and_then(|n| n.as_u64())
+                .unwrap_or(0)
+                > 0
+        );
         assert!(v.get("keep_tail_tokens").and_then(|n| n.as_u64()).is_some());
-        assert!(v.get("summary_max_tokens").and_then(|n| n.as_u64()).is_some());
+        assert!(v
+            .get("summary_max_tokens")
+            .and_then(|n| n.as_u64())
+            .is_some());
     }
 
     #[test]
@@ -10592,15 +10419,14 @@ mod tests {
         let dir = tempfile::tempdir().expect("tmp");
         let path = dir.path().join("conv.jsonl");
         std::fs::write(&path, "").expect("write");
-        let v = compress_cmd(&[
-            "check".into(),
-            "--file".into(),
-            path.display().to_string(),
-        ])
-        .expect("check ok");
+        let v = compress_cmd(&["check".into(), "--file".into(), path.display().to_string()])
+            .expect("check ok");
         assert_eq!(v.get("message_count").and_then(|n| n.as_u64()), Some(0));
         assert_eq!(v.get("total_tokens").and_then(|n| n.as_u64()), Some(0));
-        assert_eq!(v.get("would_trigger").and_then(|b| b.as_bool()), Some(false));
+        assert_eq!(
+            v.get("would_trigger").and_then(|b| b.as_bool()),
+            Some(false)
+        );
     }
 
     #[test]
@@ -10609,20 +10435,15 @@ mod tests {
         let path = dir.path().join("conv.jsonl");
         let body = format!(
             "{}\n\n{}\n",
-            serde_json::to_string(&crate::agent::llm::types::Message::user_text("hello"))
-                .unwrap(),
+            serde_json::to_string(&crate::agent::llm::types::Message::user_text("hello")).unwrap(),
             serde_json::to_string(&crate::agent::llm::types::Message::assistant_text(
                 "hi back"
             ))
             .unwrap(),
         );
         std::fs::write(&path, body).expect("write");
-        let v = compress_cmd(&[
-            "check".into(),
-            "--file".into(),
-            path.display().to_string(),
-        ])
-        .expect("check ok");
+        let v = compress_cmd(&["check".into(), "--file".into(), path.display().to_string()])
+            .expect("check ok");
         assert_eq!(v.get("message_count").and_then(|n| n.as_u64()), Some(2));
     }
 
@@ -10632,20 +10453,14 @@ mod tests {
         let path = dir.path().join("conv.jsonl");
         let body = format!(
             "{}\n{}\n{}\n",
-            serde_json::to_string(&crate::agent::llm::types::Message::user_text("u1"))
-                .unwrap(),
+            serde_json::to_string(&crate::agent::llm::types::Message::user_text("u1")).unwrap(),
             serde_json::to_string(&crate::agent::llm::types::Message::assistant_text("a1"))
                 .unwrap(),
-            serde_json::to_string(&crate::agent::llm::types::Message::user_text("u2"))
-                .unwrap(),
+            serde_json::to_string(&crate::agent::llm::types::Message::user_text("u2")).unwrap(),
         );
         std::fs::write(&path, body).expect("write");
-        let v = compress_cmd(&[
-            "check".into(),
-            "--file".into(),
-            path.display().to_string(),
-        ])
-        .expect("check ok");
+        let v = compress_cmd(&["check".into(), "--file".into(), path.display().to_string()])
+            .expect("check ok");
         let by_role = v.get("by_role").expect("by_role");
         let counts = by_role.get("counts").expect("counts");
         assert_eq!(counts.get("user").and_then(|n| n.as_u64()), Some(2));
@@ -10747,10 +10562,22 @@ mod tests {
         ])
         .expect("check ok");
         let cfg = v.get("config").expect("config");
-        assert_eq!(cfg.get("trigger_tokens").and_then(|n| n.as_u64()), Some(12345));
-        assert_eq!(cfg.get("target_tokens").and_then(|n| n.as_u64()), Some(8000));
-        assert_eq!(cfg.get("keep_tail_tokens").and_then(|n| n.as_u64()), Some(1234));
-        assert_eq!(cfg.get("summary_max_tokens").and_then(|n| n.as_u64()), Some(777));
+        assert_eq!(
+            cfg.get("trigger_tokens").and_then(|n| n.as_u64()),
+            Some(12345)
+        );
+        assert_eq!(
+            cfg.get("target_tokens").and_then(|n| n.as_u64()),
+            Some(8000)
+        );
+        assert_eq!(
+            cfg.get("keep_tail_tokens").and_then(|n| n.as_u64()),
+            Some(1234)
+        );
+        assert_eq!(
+            cfg.get("summary_max_tokens").and_then(|n| n.as_u64()),
+            Some(777)
+        );
     }
 
     #[test]
@@ -10758,12 +10585,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("tmp");
         let path = dir.path().join("conv.jsonl");
         std::fs::write(&path, "{not json}\n").expect("write");
-        let err = compress_cmd(&[
-            "check".into(),
-            "--file".into(),
-            path.display().to_string(),
-        ])
-        .unwrap_err();
+        let err = compress_cmd(&["check".into(), "--file".into(), path.display().to_string()])
+            .unwrap_err();
         assert!(err.contains("parse line 1"));
     }
 
@@ -10795,11 +10618,7 @@ mod tests {
 
     #[test]
     fn mcp_call_requires_tool_positional() {
-        let err = mcp_call(&[
-            "--cmd".into(),
-            "nonexistent-binary-xyz-zyx".into(),
-        ])
-        .unwrap_err();
+        let err = mcp_call(&["--cmd".into(), "nonexistent-binary-xyz-zyx".into()]).unwrap_err();
         assert!(err.contains("tool name"));
     }
 
@@ -10851,11 +10670,7 @@ mod tests {
 
     #[test]
     fn parse_mcp_spawn_spec_rejects_unknown_flag() {
-        let raw: Vec<String> = vec![
-            "--cmd".into(),
-            "x".into(),
-            "--bogus".into(),
-        ];
+        let raw: Vec<String> = vec!["--cmd".into(), "x".into(), "--bogus".into()];
         let err = parse_mcp_spawn_spec(&raw).unwrap_err();
         assert!(err.contains("--bogus"));
     }
@@ -10899,12 +10714,7 @@ mod tests {
 
     #[test]
     fn mcp_probe_rejects_extra_positional() {
-        let err = mcp_probe(&[
-            "--cmd".into(),
-            "python".into(),
-            "extra".into(),
-        ])
-        .unwrap_err();
+        let err = mcp_probe(&["--cmd".into(), "python".into(), "extra".into()]).unwrap_err();
         assert!(err.contains("positional"));
     }
 
@@ -10975,12 +10785,7 @@ mod tests {
     fn aux_cmd_ask_when_unconfigured_errs() {
         // Default config has no aux, so ask MUST refuse before doing
         // any network IO.
-        let err = aux_cmd(&[
-            "ask".into(),
-            "--prompt".into(),
-            "hello".into(),
-        ])
-        .unwrap_err();
+        let err = aux_cmd(&["ask".into(), "--prompt".into(), "hello".into()]).unwrap_err();
         assert!(err.contains("auxiliary"));
     }
 
@@ -11036,12 +10841,8 @@ mod tests {
 
     #[test]
     fn retry_cmd_schedule_attempts_override() {
-        let v = retry_cmd(&[
-            "schedule".into(),
-            "--attempts".into(),
-            "6".into(),
-        ])
-        .expect("schedule ok");
+        let v =
+            retry_cmd(&["schedule".into(), "--attempts".into(), "6".into()]).expect("schedule ok");
         let waits = v
             .get("inter_attempt_waits")
             .and_then(|w| w.as_array())
@@ -11052,12 +10853,8 @@ mod tests {
 
     #[test]
     fn retry_cmd_schedule_one_attempt_has_no_waits() {
-        let v = retry_cmd(&[
-            "schedule".into(),
-            "--attempts".into(),
-            "1".into(),
-        ])
-        .expect("schedule ok");
+        let v =
+            retry_cmd(&["schedule".into(), "--attempts".into(), "1".into()]).expect("schedule ok");
         let waits = v
             .get("inter_attempt_waits")
             .and_then(|w| w.as_array())
@@ -11071,12 +10868,8 @@ mod tests {
         // standard() base=500, max=8000. delay_for(4) would naively
         // be 500 << 3 = 4000 (≤ max), delay_for(5) = 500 << 4 = 8000
         // (= max), delay_for(10) > max → capped.
-        let v = retry_cmd(&[
-            "schedule".into(),
-            "--attempts".into(),
-            "11".into(),
-        ])
-        .expect("schedule ok");
+        let v =
+            retry_cmd(&["schedule".into(), "--attempts".into(), "11".into()]).expect("schedule ok");
         let waits = v
             .get("inter_attempt_waits")
             .and_then(|w| w.as_array())
@@ -11088,12 +10881,7 @@ mod tests {
 
     #[test]
     fn retry_cmd_schedule_invalid_attempts_errs() {
-        let err = retry_cmd(&[
-            "schedule".into(),
-            "--attempts".into(),
-            "lots".into(),
-        ])
-        .unwrap_err();
+        let err = retry_cmd(&["schedule".into(), "--attempts".into(), "lots".into()]).unwrap_err();
         assert!(err.contains("--attempts"));
     }
 
@@ -11216,14 +11004,8 @@ mod tests {
         let dir = skills_guard_test_dir("require-tools");
         let skill = write_test_skill(&dir, "gamma", &[]);
         let map = guard_skills_map(skill);
-        let v = skills_guard_cmd_against(
-            &[
-                "gamma".into(),
-                "--require-allowed-tools".into(),
-            ],
-            &map,
-        )
-        .expect("ok");
+        let v = skills_guard_cmd_against(&["gamma".into(), "--require-allowed-tools".into()], &map)
+            .expect("ok");
         assert_eq!(v.get("verdict").and_then(|s| s.as_str()), Some("deny"));
         assert!(v.get("reason").and_then(|s| s.as_str()).is_some());
     }
@@ -11264,11 +11046,7 @@ mod tests {
         std::fs::write(skill.dir.join("data.bin"), vec![0u8; 200]).unwrap();
         let map = guard_skills_map(skill);
         let v = skills_guard_cmd_against(
-            &[
-                "epsilon".into(),
-                "--max-file-bytes".into(),
-                "100".into(),
-            ],
+            &["epsilon".into(), "--max-file-bytes".into(), "100".into()],
             &map,
         )
         .expect("ok");
@@ -11289,11 +11067,7 @@ mod tests {
         let skill = write_test_skill(&dir, "zeta", &["echo"]);
         let map = guard_skills_map(skill);
         let err = skills_guard_cmd_against(
-            &[
-                "zeta".into(),
-                "--provenance".into(),
-                "alien".into(),
-            ],
+            &["zeta".into(), "--provenance".into(), "alien".into()],
             &map,
         )
         .unwrap_err();
@@ -11315,11 +11089,7 @@ mod tests {
         let skill = write_test_skill(&dir, "theta", &["echo"]);
         let map = guard_skills_map(skill);
         let err = skills_guard_cmd_against(
-            &[
-                "theta".into(),
-                "--max-file-bytes".into(),
-                "lots".into(),
-            ],
+            &["theta".into(), "--max-file-bytes".into(), "lots".into()],
             &map,
         )
         .unwrap_err();
@@ -11354,10 +11124,7 @@ mod tests {
         db.record_message("s-new", "user", "hi new").unwrap();
 
         let v = sessions_list_with(&db, 10).expect("list ok");
-        let arr = v
-            .get("sessions")
-            .and_then(|s| s.as_array())
-            .expect("array");
+        let arr = v.get("sessions").and_then(|s| s.as_array()).expect("array");
         assert_eq!(arr.len(), 2);
         // Most recent first.
         assert_eq!(
@@ -11384,10 +11151,7 @@ mod tests {
         let v = sessions_set_title_with(&db, "sx", "My Session").expect("set ok");
         assert_eq!(v.get("title").and_then(|s| s.as_str()), Some("My Session"));
         let v2 = sessions_title_with(&db, "sx").expect("title ok");
-        assert_eq!(
-            v2.get("title").and_then(|s| s.as_str()),
-            Some("My Session")
-        );
+        assert_eq!(v2.get("title").and_then(|s| s.as_str()), Some("My Session"));
         assert_eq!(v2.get("set").and_then(|b| b.as_bool()), Some(true));
     }
 
@@ -11453,10 +11217,7 @@ mod tests {
         db.record_message("s1", "assistant", "b").unwrap();
         db.record_message("s2", "user", "c").unwrap();
         let v = sessions_count_with(&db, None).expect("count ok");
-        assert_eq!(
-            v.get("total_messages").and_then(|n| n.as_i64()),
-            Some(3)
-        );
+        assert_eq!(v.get("total_messages").and_then(|n| n.as_i64()), Some(3));
     }
 
     #[test]
@@ -11467,10 +11228,7 @@ mod tests {
         db.record_message("s2", "user", "c").unwrap();
         let v = sessions_count_with(&db, Some("s1")).expect("count ok");
         assert_eq!(v.get("messages").and_then(|n| n.as_i64()), Some(2));
-        assert_eq!(
-            v.get("session_id").and_then(|s| s.as_str()),
-            Some("s1")
-        );
+        assert_eq!(v.get("session_id").and_then(|s| s.as_str()), Some("s1"));
     }
 
     #[test]
@@ -11532,19 +11290,10 @@ mod tests {
 
     #[test]
     fn sessions_purge_validates_days_is_positive_integer() {
-        let err = sessions_purge(&[
-            "--older-than".into(),
-            "0".into(),
-            "--yes".into(),
-        ])
-        .unwrap_err();
+        let err = sessions_purge(&["--older-than".into(), "0".into(), "--yes".into()]).unwrap_err();
         assert!(err.contains("> 0"), "got {err}");
-        let err2 = sessions_purge(&[
-            "--older-than".into(),
-            "abc".into(),
-            "--yes".into(),
-        ])
-        .unwrap_err();
+        let err2 =
+            sessions_purge(&["--older-than".into(), "abc".into(), "--yes".into()]).unwrap_err();
         assert!(err2.contains("positive integer"), "got {err2}");
     }
 
@@ -11644,8 +11393,7 @@ mod tests {
         let db = fresh_session_db();
         // Other sessions exist, but the requested one does not.
         db.record_message("other", "user", "x").unwrap();
-        let v = sessions_stats_session_with(&db, "ghost", 1_000_000)
-            .expect("stats ok");
+        let v = sessions_stats_session_with(&db, "ghost", 1_000_000).expect("stats ok");
         assert_eq!(v["scope"], json!("session"));
         assert_eq!(v["session_id"], json!("ghost"));
         assert_eq!(v["title"], json!(null));
@@ -11678,12 +11426,8 @@ mod tests {
 
     #[test]
     fn sessions_stats_dispatched_with_session_flag() {
-        let v = sessions_cmd(&[
-            "stats".into(),
-            "--session".into(),
-            "no-such-id".into(),
-        ])
-        .expect("dispatch ok");
+        let v = sessions_cmd(&["stats".into(), "--session".into(), "no-such-id".into()])
+            .expect("dispatch ok");
         assert_eq!(v["scope"], json!("session"));
         assert_eq!(v["session_id"], json!("no-such-id"));
     }
@@ -11957,8 +11701,8 @@ mod tests {
 
     #[test]
     fn vision_route_unknown_flag_errs() {
-        let err = vision_route_cmd(&["--bytes".into(), "1024".into(), "--bogus".into()])
-            .unwrap_err();
+        let err =
+            vision_route_cmd(&["--bytes".into(), "1024".into(), "--bogus".into()]).unwrap_err();
         assert!(err.contains("--bogus"));
     }
 
@@ -11978,10 +11722,7 @@ mod tests {
         ])
         .expect("ok");
         let desc = v.get("descriptor").expect("descriptor");
-        assert_eq!(
-            desc.get("bytes_len").and_then(|n| n.as_u64()),
-            Some(4096)
-        );
+        assert_eq!(desc.get("bytes_len").and_then(|n| n.as_u64()), Some(4096));
         assert_eq!(desc.get("mime").and_then(|m| m.as_str()), Some("Png"));
         assert_eq!(v.get("decision").and_then(|s| s.as_str()), Some("native"));
         // Cleanup.
@@ -12063,11 +11804,8 @@ mod tests {
         )
         .unwrap();
 
-        let v = vision_sniff_cmd(&[
-            "--file".into(),
-            path.to_string_lossy().to_string(),
-        ])
-        .expect("ok");
+        let v =
+            vision_sniff_cmd(&["--file".into(), path.to_string_lossy().to_string()]).expect("ok");
         assert_eq!(v.get("bytes_len").and_then(|n| n.as_u64()), Some(10));
         assert_eq!(v.get("mime").and_then(|s| s.as_str()), Some("Png"));
         assert_eq!(
@@ -12087,11 +11825,8 @@ mod tests {
         let path = dir.join("x.bin");
         std::fs::write(&path, b"this is not an image").unwrap();
 
-        let v = vision_sniff_cmd(&[
-            "--file".into(),
-            path.to_string_lossy().to_string(),
-        ])
-        .expect("ok");
+        let v =
+            vision_sniff_cmd(&["--file".into(), path.to_string_lossy().to_string()]).expect("ok");
         assert_eq!(v.get("mime").and_then(|s| s.as_str()), Some("Other"));
         assert_eq!(v.get("is_other").and_then(|b| b.as_bool()), Some(true));
         assert_eq!(
@@ -12144,11 +11879,7 @@ mod tests {
 
     #[test]
     fn vision_analyze_requires_prompt() {
-        let err = vision_analyze_cmd(&[
-            "--file".into(),
-            "x.png".into(),
-        ])
-        .unwrap_err();
+        let err = vision_analyze_cmd(&["--file".into(), "x.png".into()]).unwrap_err();
         assert!(err.contains("--prompt"));
     }
 
@@ -12166,11 +11897,7 @@ mod tests {
 
     #[test]
     fn vision_analyze_rejects_zero_image_sources() {
-        let err = vision_analyze_cmd(&[
-            "--prompt".into(),
-            "describe".into(),
-        ])
-        .unwrap_err();
+        let err = vision_analyze_cmd(&["--prompt".into(), "describe".into()]).unwrap_err();
         assert!(err.contains("exactly one"));
     }
 
@@ -12260,10 +11987,7 @@ mod tests {
     fn display_format_bytes_renders_human_readable() {
         let v = display_format_bytes_cmd(&["1536".into()]).expect("ok");
         assert_eq!(v.get("input").and_then(|n| n.as_u64()), Some(1536));
-        assert_eq!(
-            v.get("formatted").and_then(|s| s.as_str()),
-            Some("1.5 KB")
-        );
+        assert_eq!(v.get("formatted").and_then(|s| s.as_str()), Some("1.5 KB"));
     }
 
     #[test]
@@ -12310,13 +12034,13 @@ mod tests {
 
     #[test]
     fn display_transcript_renders_messages_oldest_first() {
-        let db = crate::agent::memory::sqlite_fts::MemoryDb::open_in_memory()
-            .expect("open mem db");
+        let db = crate::agent::memory::sqlite_fts::MemoryDb::open_in_memory().expect("open mem db");
         db.record_message("sess-x", "user", "hello world").unwrap();
         std::thread::sleep(std::time::Duration::from_millis(5));
         db.record_message("sess-x", "assistant", "hi back").unwrap();
         std::thread::sleep(std::time::Duration::from_millis(5));
-        db.record_message("sess-x", "tool", "result foo: 42").unwrap();
+        db.record_message("sess-x", "tool", "result foo: 42")
+            .unwrap();
         let parsed = DisplayTranscriptArgs {
             session: Some("sess-x".into()),
             limit: Some(10),
@@ -12337,8 +12061,7 @@ mod tests {
 
     #[test]
     fn display_transcript_truncates_long_content_by_default() {
-        let db = crate::agent::memory::sqlite_fts::MemoryDb::open_in_memory()
-            .expect("open mem db");
+        let db = crate::agent::memory::sqlite_fts::MemoryDb::open_in_memory().expect("open mem db");
         let big = "X".repeat(10_000);
         db.record_message("sess-y", "user", &big).unwrap();
         let parsed = DisplayTranscriptArgs {
@@ -12352,8 +12075,7 @@ mod tests {
 
     #[test]
     fn display_transcript_no_truncate_keeps_full_content() {
-        let db = crate::agent::memory::sqlite_fts::MemoryDb::open_in_memory()
-            .expect("open mem db");
+        let db = crate::agent::memory::sqlite_fts::MemoryDb::open_in_memory().expect("open mem db");
         let big = "Y".repeat(10_000);
         db.record_message("sess-z", "user", &big).unwrap();
         let parsed = DisplayTranscriptArgs {
@@ -12372,18 +12094,14 @@ mod tests {
 
     #[test]
     fn display_transcript_empty_session_renders_empty_transcript() {
-        let db = crate::agent::memory::sqlite_fts::MemoryDb::open_in_memory()
-            .expect("open mem db");
+        let db = crate::agent::memory::sqlite_fts::MemoryDb::open_in_memory().expect("open mem db");
         let parsed = DisplayTranscriptArgs {
             session: Some("nope".into()),
             ..Default::default()
         };
         let v = display_transcript_with(&db, "nope", &parsed).expect("render");
         assert_eq!(v.get("message_count").and_then(|n| n.as_u64()), Some(0));
-        assert_eq!(
-            v.get("transcript").and_then(|s| s.as_str()),
-            Some("")
-        );
+        assert_eq!(v.get("transcript").and_then(|s| s.as_str()), Some(""));
     }
 
     #[test]
@@ -12516,9 +12234,7 @@ mod tests {
                 .and_then(|p| p.as_array())
                 .map(|arr| {
                     arr.iter()
-                        .filter_map(|r| {
-                            r.get("name").and_then(|n| n.as_str()).map(String::from)
-                        })
+                        .filter_map(|r| r.get("name").and_then(|n| n.as_str()).map(String::from))
                         .collect()
                 })
                 .unwrap_or_default();
@@ -12550,8 +12266,7 @@ mod tests {
 
     #[test]
     fn media_list_outputs_limit_requires_int() {
-        let err = media_cmd(&["list-outputs".into(), "--limit".into(), "abc".into()])
-            .unwrap_err();
+        let err = media_cmd(&["list-outputs".into(), "--limit".into(), "abc".into()]).unwrap_err();
         assert!(err.contains("--limit"));
     }
 
@@ -12578,10 +12293,8 @@ mod tests {
 
     #[test]
     fn media_list_outputs_returns_files_newest_first_within_limit() {
-        let dir = std::env::temp_dir().join(format!(
-            "cos-media-list-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("cos-media-list-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).expect("mkdir");
         // Write files with sleeps between writes so mtime ordering
         // is deterministic across Windows / Linux / macOS without
@@ -12671,8 +12384,8 @@ mod tests {
 
     #[test]
     fn binary_ext_check_recognises_path_with_known_ext() {
-        let v = binary_ext_cmd(&["check".into(), "C:\\Users\\me\\image.PNG".into()])
-            .expect("check ok");
+        let v =
+            binary_ext_cmd(&["check".into(), "C:\\Users\\me\\image.PNG".into()]).expect("check ok");
         assert_eq!(v.get("mode").and_then(|s| s.as_str()), Some("path"));
         assert_eq!(v.get("is_binary").and_then(|b| b.as_bool()), Some(true));
         assert_eq!(v.get("extension").and_then(|s| s.as_str()), Some("png"));
@@ -12680,8 +12393,7 @@ mod tests {
 
     #[test]
     fn binary_ext_check_recognises_text_path_as_not_binary() {
-        let v = binary_ext_cmd(&["check".into(), "/etc/cos/config.json".into()])
-            .expect("check ok");
+        let v = binary_ext_cmd(&["check".into(), "/etc/cos/config.json".into()]).expect("check ok");
         assert_eq!(v.get("mode").and_then(|s| s.as_str()), Some("path"));
         assert_eq!(v.get("is_binary").and_then(|b| b.as_bool()), Some(false));
     }
@@ -12700,8 +12412,7 @@ mod tests {
 
     #[test]
     fn binary_ext_check_unknown_extension_returns_false() {
-        let v = binary_ext_cmd(&["check".into(), "logfile.unknown".into()])
-            .expect("check ok");
+        let v = binary_ext_cmd(&["check".into(), "logfile.unknown".into()]).expect("check ok");
         assert_eq!(v.get("is_binary").and_then(|b| b.as_bool()), Some(false));
     }
 
@@ -12743,11 +12454,8 @@ mod tests {
 
     #[test]
     fn context_hints_invalid_cwd_errs() {
-        let err = context_hints_cmd(&[
-            "--cwd".into(),
-            "Z:\\definitely\\not\\there".into(),
-        ])
-        .unwrap_err();
+        let err =
+            context_hints_cmd(&["--cwd".into(), "Z:\\definitely\\not\\there".into()]).unwrap_err();
         assert!(err.contains("not a directory"));
     }
 
@@ -12759,17 +12467,13 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("Cargo.toml"), "[package]\nname=\"x\"\n").unwrap();
-        let v = context_hints_cmd(&[
-            "--cwd".into(),
-            dir.to_string_lossy().to_string(),
-        ])
-        .expect("ok");
+        let v =
+            context_hints_cmd(&["--cwd".into(), dir.to_string_lossy().to_string()]).expect("ok");
         assert_eq!(v.get("count").and_then(|n| n.as_u64()), Some(1));
         let hints = v.get("hints").and_then(|h| h.as_array()).unwrap();
-        assert!(hints.iter().any(|h| h
-            .get("label")
-            .and_then(|s| s.as_str())
-            == Some("Rust crate")));
+        assert!(hints
+            .iter()
+            .any(|h| h.get("label").and_then(|s| s.as_str()) == Some("Rust crate")));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -12846,22 +12550,18 @@ mod tests {
         .expect("ok");
         assert_eq!(v.get("count").and_then(|n| n.as_u64()), Some(2));
         let refs = v.get("references").and_then(|x| x.as_array()).unwrap();
+        assert_eq!(refs[0].get("kind").and_then(|s| s.as_str()), Some("Path"));
         assert_eq!(
-            refs[0].get("kind").and_then(|s| s.as_str()),
-            Some("Path")
+            refs[0].get("raw").and_then(|s| s.as_str()),
+            Some("notes.md")
         );
-        assert_eq!(refs[0].get("raw").and_then(|s| s.as_str()), Some("notes.md"));
         assert_eq!(refs[1].get("kind").and_then(|s| s.as_str()), Some("Url"));
     }
 
     #[test]
     fn context_refs_unique_dedupes() {
-        let v = context_refs_cmd(&[
-            "--text".into(),
-            "@a @a @a".into(),
-            "--unique".into(),
-        ])
-        .expect("ok");
+        let v =
+            context_refs_cmd(&["--text".into(), "@a @a @a".into(), "--unique".into()]).expect("ok");
         assert_eq!(v.get("count").and_then(|n| n.as_u64()), Some(1));
         assert_eq!(v.get("unique").and_then(|b| b.as_bool()), Some(true));
     }
@@ -12874,10 +12574,7 @@ mod tests {
         let total = v.get("total").and_then(|n| n.as_u64()).unwrap();
         assert!(total >= 30);
         let by_kind = v.get("by_kind").and_then(|x| x.as_object()).unwrap();
-        let manifests = by_kind
-            .get("Manifest")
-            .and_then(|x| x.as_array())
-            .unwrap();
+        let manifests = by_kind.get("Manifest").and_then(|x| x.as_array()).unwrap();
         let names: Vec<&str> = manifests.iter().filter_map(|s| s.as_str()).collect();
         assert!(names.contains(&"Cargo.toml"));
         assert!(names.contains(&"package.json"));
@@ -12912,23 +12609,14 @@ mod tests {
 
     #[test]
     fn context_build_invalid_depth_errs() {
-        let err = context_cmd(&[
-            "build".into(),
-            "--depth".into(),
-            "abc".into(),
-        ])
-        .unwrap_err();
+        let err = context_cmd(&["build".into(), "--depth".into(), "abc".into()]).unwrap_err();
         assert!(err.contains("--depth"));
     }
 
     #[test]
     fn context_build_with_text_extracts_references() {
-        let v = context_cmd(&[
-            "build".into(),
-            "--text".into(),
-            "look at @notes.md".into(),
-        ])
-        .expect("ok");
+        let v = context_cmd(&["build".into(), "--text".into(), "look at @notes.md".into()])
+            .expect("ok");
         assert_eq!(v.get("is_empty").and_then(|b| b.as_bool()), Some(false));
         let refs = v.get("references").and_then(|x| x.as_array()).unwrap();
         assert_eq!(refs.len(), 1);
@@ -13031,29 +12719,21 @@ mod tests {
 
     #[test]
     fn file_safety_check_rejects_multiple_paths() {
-        let err =
-            file_safety_cmd(&["check".into(), "a".into(), "b".into()]).unwrap_err();
+        let err = file_safety_cmd(&["check".into(), "a".into(), "b".into()]).unwrap_err();
         assert!(err.contains("single path"));
     }
 
     #[test]
     fn file_safety_check_allows_normal_file() {
-        let v = file_safety_cmd(&[
-            "check".into(),
-            "/home/user/project/main.rs".into(),
-        ])
-        .expect("ok");
+        let v =
+            file_safety_cmd(&["check".into(), "/home/user/project/main.rs".into()]).expect("ok");
         assert_eq!(v.get("verdict").and_then(|s| s.as_str()), Some("allow"));
         assert!(v.get("category").and_then(|c| c.as_str()).is_none());
     }
 
     #[test]
     fn file_safety_check_denies_credential_dir() {
-        let v = file_safety_cmd(&[
-            "check".into(),
-            "/home/user/.ssh/id_rsa".into(),
-        ])
-        .expect("ok");
+        let v = file_safety_cmd(&["check".into(), "/home/user/.ssh/id_rsa".into()]).expect("ok");
         assert_eq!(v.get("verdict").and_then(|s| s.as_str()), Some("deny"));
         assert_eq!(
             v.get("category").and_then(|c| c.as_str()),
@@ -13063,11 +12743,7 @@ mod tests {
 
     #[test]
     fn file_safety_check_denies_dangerous_extension() {
-        let v = file_safety_cmd(&[
-            "check".into(),
-            "/tmp/payload.exe".into(),
-        ])
-        .expect("ok");
+        let v = file_safety_cmd(&["check".into(), "/tmp/payload.exe".into()]).expect("ok");
         assert_eq!(v.get("verdict").and_then(|s| s.as_str()), Some("deny"));
         assert_eq!(
             v.get("category").and_then(|c| c.as_str()),
@@ -13077,15 +12753,8 @@ mod tests {
 
     #[test]
     fn file_safety_check_caution_for_shell_script() {
-        let v = file_safety_cmd(&[
-            "check".into(),
-            "/home/user/run.sh".into(),
-        ])
-        .expect("ok");
-        assert_eq!(
-            v.get("verdict").and_then(|s| s.as_str()),
-            Some("caution")
-        );
+        let v = file_safety_cmd(&["check".into(), "/home/user/run.sh".into()]).expect("ok");
+        assert_eq!(v.get("verdict").and_then(|s| s.as_str()), Some("caution"));
     }
 
     #[test]
@@ -13099,14 +12768,8 @@ mod tests {
         .expect("ok");
         assert_eq!(v.get("count").and_then(|n| n.as_u64()), Some(3));
         let summary = v.get("summary").and_then(|x| x.as_object()).unwrap();
-        assert_eq!(
-            summary.get("allow").and_then(|n| n.as_u64()),
-            Some(1)
-        );
-        assert_eq!(
-            summary.get("caution").and_then(|n| n.as_u64()),
-            Some(1)
-        );
+        assert_eq!(summary.get("allow").and_then(|n| n.as_u64()), Some(1));
+        assert_eq!(summary.get("caution").and_then(|n| n.as_u64()), Some(1));
         assert_eq!(summary.get("deny").and_then(|n| n.as_u64()), Some(1));
     }
 
@@ -13174,10 +12837,8 @@ mod tests {
 
     #[test]
     fn osv_parse_reads_cargo_lock() {
-        let dir = std::env::temp_dir().join(format!(
-            "cos-osv-parse-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("cos-osv-parse-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let lock_path = dir.join("Cargo.lock");
         std::fs::write(
@@ -13185,8 +12846,7 @@ mod tests {
             "[[package]]\nname = \"foo\"\nversion = \"1.2.3\"\n\n[[package]]\nname = \"bar\"\nversion = \"0.1.0\"\n",
         )
         .unwrap();
-        let v = osv_cmd(&["parse".into(), lock_path.to_string_lossy().to_string()])
-            .expect("ok");
+        let v = osv_cmd(&["parse".into(), lock_path.to_string_lossy().to_string()]).expect("ok");
         assert_eq!(v.get("count").and_then(|n| n.as_u64()), Some(2));
         let pkgs = v.get("packages").and_then(|x| x.as_array()).unwrap();
         let names: Vec<&str> = pkgs
@@ -13206,15 +12866,12 @@ mod tests {
 
     #[test]
     fn osv_parse_unknown_lockfile_errs() {
-        let dir = std::env::temp_dir().join(format!(
-            "cos-osv-bad-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("cos-osv-bad-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("Pipfile.lock");
         std::fs::write(&p, "{}").unwrap();
-        let err =
-            osv_cmd(&["parse".into(), p.to_string_lossy().to_string()]).unwrap_err();
+        let err = osv_cmd(&["parse".into(), p.to_string_lossy().to_string()]).unwrap_err();
         assert!(err.contains("unknown lockfile"));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -13332,10 +12989,7 @@ mod tests {
         assert_eq!(calls[0]["id"], "call_1");
         assert_eq!(calls[0]["name"], "echo");
         // mock emits ToolUse via Message variant → finish ToolUse.
-        assert_eq!(
-            v.get("finish").and_then(|f| f.as_str()),
-            Some("ToolUse")
-        );
+        assert_eq!(v.get("finish").and_then(|f| f.as_str()), Some("ToolUse"));
     }
 
     #[test]
@@ -13621,12 +13275,7 @@ mod tests {
 
     #[test]
     fn learn_cmd_extract_unknown_flag_errs() {
-        let err = learn_cmd(&[
-            "extract".into(),
-            "--frobnicate".into(),
-            "x".into(),
-        ])
-        .unwrap_err();
+        let err = learn_cmd(&["extract".into(), "--frobnicate".into(), "x".into()]).unwrap_err();
         assert!(err.contains("unknown"), "got {err}");
     }
 
@@ -13729,12 +13378,7 @@ mod tests {
     #[test]
     fn learn_cmd_clear_log_for_unknown_session_reports_zero_removed() {
         let _dir = isolate_cos_data_dir("clear-unknown");
-        let v = learn_cmd(&[
-            "clear-log".into(),
-            "--session".into(),
-            "ghost".into(),
-        ])
-        .expect("ok");
+        let v = learn_cmd(&["clear-log".into(), "--session".into(), "ghost".into()]).expect("ok");
         assert_eq!(v["removed_entries"], serde_json::json!(0));
     }
 
@@ -13786,9 +13430,7 @@ mod tests {
         let v = hooks_cmd(&["list".into()]).expect("ok");
         let names = v["hooks"].as_array().unwrap();
         assert!(
-            names
-                .iter()
-                .any(|n| n.as_str() == Some("cli-test-hook")),
+            names.iter().any(|n| n.as_str() == Some("cli-test-hook")),
             "got {v}"
         );
         // Cleanup so we don't leak the registration into other tests.
@@ -13852,12 +13494,7 @@ mod tests {
         let _dir = isolate_cos_data_dir("hooks-enable-flag");
         global_registry().unregister("logging");
 
-        let v = hooks_cmd(&[
-            "enable".into(),
-            "--kind".into(),
-            "logging".into(),
-        ])
-        .expect("ok");
+        let v = hooks_cmd(&["enable".into(), "--kind".into(), "logging".into()]).expect("ok");
         assert_eq!(v["kind"], serde_json::json!("logging"));
 
         global_registry().unregister("logging");
@@ -13891,7 +13528,9 @@ mod tests {
 
         let cfg = hooks_config::load(&crate::paths::agent_hooks_path()).expect("load");
         assert_eq!(cfg.enabled, vec![hooks_config::HookKind::Checkpoint]);
-        assert!(global_registry().names().contains(&"checkpoint".to_string()));
+        assert!(global_registry()
+            .names()
+            .contains(&"checkpoint".to_string()));
 
         global_registry().unregister("checkpoint");
     }
@@ -13930,12 +13569,14 @@ mod tests {
         let _ = hooks_cmd(&["enable".into(), "logging".into()]).expect("ok");
         let v = hooks_cmd(&["list".into()]).expect("ok");
         let pers = v["persistent"].as_array().unwrap();
-        assert!(pers.iter().any(|x| x.as_str() == Some("logging")), "got {v}");
+        assert!(
+            pers.iter().any(|x| x.as_str() == Some("logging")),
+            "got {v}"
+        );
 
         // cleanup
         let _ = hooks_cmd(&["disable".into(), "logging".into()]).expect("ok");
     }
-
 
     // -----------------------------------------------------------------
     // media play / playback-status
@@ -14011,10 +13652,7 @@ mod tests {
         let v = media_playback_status_cmd(&[]).expect("ok");
         let arr = v["formats"].as_array().expect("formats array");
         assert_eq!(arr.len(), 4);
-        let exts: Vec<&str> = arr
-            .iter()
-            .filter_map(|r| r["format"].as_str())
-            .collect();
+        let exts: Vec<&str> = arr.iter().filter_map(|r| r["format"].as_str()).collect();
         assert!(exts.contains(&"wav"));
         assert!(exts.contains(&"mp3"));
         assert!(exts.contains(&"ogg"));

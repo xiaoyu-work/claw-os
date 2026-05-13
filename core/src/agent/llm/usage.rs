@@ -352,14 +352,8 @@ mod tests {
     fn separates_success_and_error_counts() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("llm.jsonl");
-        let mut err = LlmRunRecord::from_error(
-            "anthropic",
-            "sonnet",
-            None,
-            "529 overloaded",
-            5,
-            Some("s1"),
-        );
+        let mut err =
+            LlmRunRecord::from_error("anthropic", "sonnet", None, "529 overloaded", 5, Some("s1"));
         err.timestamp = "2026-01-01T00:00:00.000Z".into();
         write(&p, &[rec("anthropic", "sonnet", 10, 10, Some("s1")), err]);
         let s = aggregate_path(&p);

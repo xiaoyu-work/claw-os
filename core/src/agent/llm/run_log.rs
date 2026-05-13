@@ -125,7 +125,10 @@ impl LlmRunRecord {
             session_id: nonempty(session_id),
             provider: provider.to_string(),
             model: model.to_string(),
-            engine_name: engine.as_ref().map(|e| e.name.clone()).filter(|s| !s.is_empty()),
+            engine_name: engine
+                .as_ref()
+                .map(|e| e.name.clone())
+                .filter(|s| !s.is_empty()),
             engine_version: engine
                 .as_ref()
                 .map(|e| e.version.clone())
@@ -157,7 +160,10 @@ impl LlmRunRecord {
             session_id: nonempty(session_id),
             provider: provider.to_string(),
             model: model.to_string(),
-            engine_name: engine.as_ref().map(|e| e.name.clone()).filter(|s| !s.is_empty()),
+            engine_name: engine
+                .as_ref()
+                .map(|e| e.name.clone())
+                .filter(|s| !s.is_empty()),
             engine_version: engine
                 .as_ref()
                 .map(|e| e.version.clone())
@@ -379,7 +385,10 @@ mod tests {
         assert_eq!(finish_reason_str(FinishReason::Length), "length");
         assert_eq!(finish_reason_str(FinishReason::ToolUse), "tool_use");
         assert_eq!(finish_reason_str(FinishReason::Refusal), "refusal");
-        assert_eq!(finish_reason_str(FinishReason::ContentFilter), "content_filter");
+        assert_eq!(
+            finish_reason_str(FinishReason::ContentFilter),
+            "content_filter"
+        );
         assert_eq!(finish_reason_str(FinishReason::Other), "other");
     }
 }

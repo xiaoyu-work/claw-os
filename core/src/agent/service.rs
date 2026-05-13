@@ -279,7 +279,9 @@ impl Store {
             if path.extension().and_then(|s| s.to_str()) != Some("json") {
                 continue;
             }
-            let mtime = e.metadata().and_then(|m| m.modified())
+            let mtime = e
+                .metadata()
+                .and_then(|m| m.modified())
                 .unwrap_or(std::time::UNIX_EPOCH);
             candidates.push((mtime, path));
         }
@@ -312,14 +314,15 @@ impl Store {
 
     /// Mark a running job finished. Atomically rewrites the file in
     /// `running/`, then renames into `done/`.
-    pub fn finish(
-        &self,
-        mut job: Job,
-        outcome: FinishOutcome,
-    ) -> io::Result<Job> {
+    pub fn finish(&self, mut job: Job, outcome: FinishOutcome) -> io::Result<Job> {
         let running_path = self.path_for(JobStatus::Running, &job.id);
         match outcome {
-            FinishOutcome::Ok { response, turns_used, provider, model } => {
+            FinishOutcome::Ok {
+                response,
+                turns_used,
+                provider,
+                model,
+            } => {
                 job.status = JobStatus::Ok;
                 job.response = Some(response);
                 job.turns_used = Some(turns_used);
@@ -372,7 +375,9 @@ impl Store {
             if path.extension().and_then(|s| s.to_str()) != Some("json") {
                 continue;
             }
-            let mtime = e.metadata().and_then(|m| m.modified())
+            let mtime = e
+                .metadata()
+                .and_then(|m| m.modified())
                 .unwrap_or(std::time::UNIX_EPOCH);
             entries.push((mtime, path));
         }
@@ -471,7 +476,11 @@ fn job_to_summary(job: &Job) -> Value {
 /// Entry point invoked from `agent::run("service", args)`.
 pub fn cmd(args: &[String]) -> Result<Value, String> {
     let sub = args.first().map(|s| s.as_str()).unwrap_or("");
-    let rest = if args.is_empty() { &[] as &[String] } else { &args[1..] };
+    let rest = if args.is_empty() {
+        &[] as &[String]
+    } else {
+        &args[1..]
+    };
     match sub {
         "" | "help" | "-h" | "--help" => Ok(help_value()),
         "submit" => cmd_submit(rest),
@@ -615,9 +624,7 @@ fn cmd_status(args: &[String]) -> Result<Value, String> {
     }
     let id = &args[0];
     match store.locate(id).map_err(|e| e.to_string())? {
-        Some((_, job)) => {
-            Ok(serde_json::to_value(&job).map_err(|e| e.to_string())?)
-        }
+        Some((_, job)) => Ok(serde_json::to_value(&job).map_err(|e| e.to_string())?),
         None => Err(format!("job not found: {id}")),
     }
 }
@@ -812,7 +819,9 @@ async fn run_one_job(job: &Job) -> FinishOutcome {
 
     let result = if let Some(sid) = job.session_id.as_deref() {
         match crate::agent::memory::sqlite_fts::MemoryDb::open_default() {
-            Ok(db) => loop_::ask_with_memory(provider.clone(), &cfg, &job.prompt, &tools, &db, sid).await,
+            Ok(db) => {
+                loop_::ask_with_memory(provider.clone(), &cfg, &job.prompt, &tools, &db, sid).await
+            }
             Err(_) => loop_::ask_with(provider.clone(), &cfg, &job.prompt, &tools).await,
         }
     } else {
@@ -924,8 +933,16 @@ mod tests {
         assert!(claimed.started_at.is_some());
         assert_eq!(claimed.worker_pid, Some(std::process::id()));
         // pending/<id>.json gone, running/<id>.json present
-        assert!(!dir.path().join("pending").join(format!("{}.json", job.id)).exists());
-        assert!(dir.path().join("running").join(format!("{}.json", job.id)).is_file());
+        assert!(!dir
+            .path()
+            .join("pending")
+            .join(format!("{}.json", job.id))
+            .exists());
+        assert!(dir
+            .path()
+            .join("running")
+            .join(format!("{}.json", job.id))
+            .is_file());
     }
 
     #[test]
@@ -968,8 +985,16 @@ mod tests {
         assert_eq!(finished.status, JobStatus::Ok);
         assert_eq!(finished.response.as_deref(), Some("answer"));
         assert_eq!(finished.turns_used, Some(2));
-        assert!(!dir.path().join("running").join(format!("{}.json", job.id)).exists());
-        assert!(dir.path().join("done").join(format!("{}.json", job.id)).is_file());
+        assert!(!dir
+            .path()
+            .join("running")
+            .join(format!("{}.json", job.id))
+            .exists());
+        assert!(dir
+            .path()
+            .join("done")
+            .join(format!("{}.json", job.id))
+            .is_file());
     }
 
     #[test]
@@ -992,8 +1017,16 @@ mod tests {
         let job = store.submit("p".into(), None, None).unwrap();
         let cancelled = store.cancel_pending(&job.id).unwrap().unwrap();
         assert_eq!(cancelled.status, JobStatus::Cancelled);
-        assert!(dir.path().join("done").join(format!("{}.json", job.id)).is_file());
-        assert!(!dir.path().join("pending").join(format!("{}.json", job.id)).exists());
+        assert!(dir
+            .path()
+            .join("done")
+            .join(format!("{}.json", job.id))
+            .is_file());
+        assert!(!dir
+            .path()
+            .join("pending")
+            .join(format!("{}.json", job.id))
+            .exists());
     }
 
     #[test]
@@ -1090,7 +1123,9 @@ mod tests {
         let _g = EnvGuard::set(dir.path());
         let v = cmd(&[]).unwrap();
         let arr = v["subcommands"].as_array().unwrap();
-        assert!(arr.iter().any(|s| s.as_str().unwrap().starts_with("submit")));
+        assert!(arr
+            .iter()
+            .any(|s| s.as_str().unwrap().starts_with("submit")));
         assert!(arr.iter().any(|s| s.as_str().unwrap().starts_with("work")));
     }
 
@@ -1288,7 +1323,7 @@ mod tests {
         // Submit oldest pending.
         let oldest = store.submit("oldest".into(), None, None).unwrap();
         std::thread::sleep(Duration::from_millis(1100)); // ensure created_at second-rollover
-        // Submit middle, then claim+finish (lands in done/).
+                                                         // Submit middle, then claim+finish (lands in done/).
         let mid = store.submit("middle".into(), None, None).unwrap();
         let claimed = store.claim_one().unwrap().unwrap();
         // claimed should be the oldest pending (FIFO). Finish it.

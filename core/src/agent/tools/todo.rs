@@ -154,8 +154,7 @@ impl TodoStore {
                 .map_err(|e| format!("failed to create {}: {e}", parent.display()))?;
         }
         let tmp = path.with_extension("json.tmp");
-        let bytes = serde_json::to_vec_pretty(list)
-            .map_err(|e| format!("serialize todos: {e}"))?;
+        let bytes = serde_json::to_vec_pretty(list).map_err(|e| format!("serialize todos: {e}"))?;
         fs::write(&tmp, &bytes).map_err(|e| format!("write {}: {e}", tmp.display()))?;
         fs::rename(&tmp, &path).map_err(|e| {
             // Best-effort cleanup of the tmp file on rename failure.
@@ -454,9 +453,7 @@ mod tests {
                 },
             )
             .unwrap();
-        let updated = store
-            .set_status("s1", "a", TodoStatus::Completed)
-            .unwrap();
+        let updated = store.set_status("s1", "a", TodoStatus::Completed).unwrap();
         assert_eq!(updated.items[0].status, TodoStatus::Completed);
     }
 
@@ -555,9 +552,7 @@ mod tests {
     async fn tool_exec_read_then_write_then_read_via_json() {
         let (store, _g) = tmp_store();
         let tool = Todo::new(store);
-        let r = tool
-            .exec(json!({"command":"read","session_id":"s1"}))
-            .await;
+        let r = tool.exec(json!({"command":"read","session_id":"s1"})).await;
         assert!(!r.is_error);
         assert!(r.content.contains("(no todos)"));
 
@@ -571,9 +566,7 @@ mod tests {
         assert!(!r.is_error);
         assert!(r.content.contains("wrote 1"));
 
-        let r = tool
-            .exec(json!({"command":"read","session_id":"s1"}))
-            .await;
+        let r = tool.exec(json!({"command":"read","session_id":"s1"})).await;
         assert!(r.content.contains("[~] a plan"));
     }
 
@@ -630,9 +623,7 @@ mod tests {
             .exec(json!({"command":"clear","session_id":"s1"}))
             .await;
         assert!(!r.is_error);
-        let r = tool
-            .exec(json!({"command":"read","session_id":"s1"}))
-            .await;
+        let r = tool.exec(json!({"command":"read","session_id":"s1"})).await;
         assert!(r.content.contains("(no todos)"));
     }
 

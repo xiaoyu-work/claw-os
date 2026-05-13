@@ -328,7 +328,10 @@ pub fn looks_like_acceptance(content: &str) -> bool {
     }
     // Standalone single-word reactions (allow trailing punctuation).
     let stripped = trimmed.trim_end_matches(|c: char| matches!(c, '.' | '!' | '?' | ',' | ' '));
-    matches!(stripped, "thanks" | "thank you" | "perfect" | "great" | "awesome" | "amazing")
+    matches!(
+        stripped,
+        "thanks" | "thank you" | "perfect" | "great" | "awesome" | "amazing"
+    )
 }
 
 #[cfg(test)]
@@ -369,7 +372,8 @@ mod tests {
 
     #[test]
     fn derive_title_truncates_long() {
-        let long = "extract metadata from a really long pdf with many fields and stuff that goes on";
+        let long =
+            "extract metadata from a really long pdf with many fields and stuff that goes on";
         let t = derive_title(long);
         assert!(t.ends_with('…'));
         assert!(t.chars().count() <= 62);

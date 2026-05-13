@@ -273,7 +273,11 @@ fn jitter_factor() -> f64 {
             .map(|d| d.as_nanos() as u64 ^ 0xdead_beef_cafe_babe)
             .unwrap_or(0xdead_beef_cafe_babe);
         // Avoid 0 (xorshift fixed-point) — coerce to non-zero.
-        if now == 0 { 0xdead_beef_cafe_babe } else { now }
+        if now == 0 {
+            0xdead_beef_cafe_babe
+        } else {
+            now
+        }
     } else {
         seed
     };
@@ -532,7 +536,9 @@ mod tests {
             async move {
                 let n = c.fetch_add(1, Ordering::SeqCst) + 1;
                 if n == 1 {
-                    Err(LlmError::RateLimited { retry_after_ms: 5000 })
+                    Err(LlmError::RateLimited {
+                        retry_after_ms: 5000,
+                    })
                 } else {
                     Err(LlmError::RateLimited { retry_after_ms: 0 })
                 }

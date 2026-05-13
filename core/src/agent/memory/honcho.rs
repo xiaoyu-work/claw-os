@@ -442,13 +442,10 @@ mod tests {
     #[test]
     fn from_env_ignores_invalid_timeout() {
         let _g = ENV_LOCK.lock().unwrap();
-        let saved: Vec<(String, Option<String>)> = [
-            "HONCHO_BASE_URL",
-            "HONCHO_TIMEOUT_SECS",
-        ]
-        .iter()
-        .map(|k| (k.to_string(), std::env::var(k).ok()))
-        .collect();
+        let saved: Vec<(String, Option<String>)> = ["HONCHO_BASE_URL", "HONCHO_TIMEOUT_SECS"]
+            .iter()
+            .map(|k| (k.to_string(), std::env::var(k).ok()))
+            .collect();
         std::env::set_var("HONCHO_BASE_URL", "http://x/");
         std::env::set_var("HONCHO_TIMEOUT_SECS", "not-a-number");
         let cfg = HonchoConfig::from_env().expect("Some cfg");
@@ -506,10 +503,7 @@ mod tests {
     #[tokio::test]
     async fn dialectic_query_rejects_empty_query() {
         let c = HonchoClient::new(cfg()).unwrap();
-        let err = c
-            .dialectic_query("p1", "  \n", None)
-            .await
-            .unwrap_err();
+        let err = c.dialectic_query("p1", "  \n", None).await.unwrap_err();
         assert!(matches!(err, HonchoError::Config(_)), "{err:?}");
     }
 
@@ -549,9 +543,8 @@ mod tests {
                         header_end = Some(pos + 4);
                         let headers = std::str::from_utf8(&buf[..pos]).unwrap_or("");
                         for line in headers.split("\r\n") {
-                            if let Some(rest) = line
-                                .to_ascii_lowercase()
-                                .strip_prefix("content-length:")
+                            if let Some(rest) =
+                                line.to_ascii_lowercase().strip_prefix("content-length:")
                             {
                                 content_length = rest.trim().parse().unwrap_or(0);
                             }
@@ -574,12 +567,8 @@ mod tests {
 
     #[tokio::test]
     async fn append_message_sends_correct_body_and_url() {
-        let (base, handle) = spawn_one_shot_mock(
-            "HTTP/1.1 200 OK",
-            "{}".to_string(),
-            "application/json",
-        )
-        .await;
+        let (base, handle) =
+            spawn_one_shot_mock("HTTP/1.1 200 OK", "{}".to_string(), "application/json").await;
         let cfg = HonchoConfig {
             base_url: base.clone(),
             api_key: Some("secret-token".to_string()),
@@ -600,7 +589,9 @@ mod tests {
         );
         // Bearer auth header set.
         assert!(
-            req_str.to_lowercase().contains("authorization: bearer secret-token"),
+            req_str
+                .to_lowercase()
+                .contains("authorization: bearer secret-token"),
             "missing bearer token: {req_str}"
         );
         // Body contains expected JSON shape.
@@ -611,12 +602,8 @@ mod tests {
 
     #[tokio::test]
     async fn append_message_omits_auth_header_when_no_key() {
-        let (base, handle) = spawn_one_shot_mock(
-            "HTTP/1.1 200 OK",
-            "{}".to_string(),
-            "application/json",
-        )
-        .await;
+        let (base, handle) =
+            spawn_one_shot_mock("HTTP/1.1 200 OK", "{}".to_string(), "application/json").await;
         let cfg = HonchoConfig {
             base_url: base,
             api_key: None,

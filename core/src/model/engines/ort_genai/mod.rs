@@ -57,17 +57,14 @@ mod tests {
 
     #[test]
     fn engine_version_from_lib_path_unix_layout() {
-        let p = PathBuf::from(
-            "/var/lib/cos/engines/ort-genai/0.13.1/lib/libonnxruntime-genai.so",
-        );
+        let p = PathBuf::from("/var/lib/cos/engines/ort-genai/0.13.1/lib/libonnxruntime-genai.so");
         assert_eq!(engine_version_from_lib_path(&p), Some("0.13.1".into()));
     }
 
     #[test]
     fn engine_version_from_lib_path_windows_layout() {
-        let p = PathBuf::from(
-            r"C:\ProgramData\cos\engines\ort-genai\0.13.1\lib\onnxruntime-genai.dll",
-        );
+        let p =
+            PathBuf::from(r"C:\ProgramData\cos\engines\ort-genai\0.13.1\lib\onnxruntime-genai.dll");
         assert_eq!(engine_version_from_lib_path(&p), Some("0.13.1".into()));
     }
 

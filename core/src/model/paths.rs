@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-pub use crate::paths::{models_cache_dir, models_dir, model_runtime_socket as socket_path};
+pub use crate::paths::{model_runtime_socket as socket_path, models_cache_dir, models_dir};
 
 /// Directory holding all versions of a single model: `<models>/<name>/`.
 pub fn model_dir(name: &str) -> PathBuf {

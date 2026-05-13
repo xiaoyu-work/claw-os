@@ -158,8 +158,10 @@ pub fn load_dir(root: &Path, opts: &LoadOptions) -> LoadResult {
         Ok(it) => it,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return out,
         Err(err) => {
-            out.errors
-                .insert(root.display().to_string(), format!("read_dir failed: {err}"));
+            out.errors.insert(
+                root.display().to_string(),
+                format!("read_dir failed: {err}"),
+            );
             return out;
         }
     };
@@ -180,7 +182,8 @@ pub fn load_dir(root: &Path, opts: &LoadOptions) -> LoadResult {
             _ => continue,
         };
 
-        if out.skills.contains_key(&id) || out.disabled.contains_key(&id)
+        if out.skills.contains_key(&id)
+            || out.disabled.contains_key(&id)
             || out.errors.contains_key(&id)
         {
             // Filesystems that case-fold could collide; record loser.
@@ -212,8 +215,8 @@ pub fn load_dir(root: &Path, opts: &LoadOptions) -> LoadResult {
 
 fn load_one(id: &str, dir: &Path, opts: &LoadOptions) -> Result<LoadedSkill, String> {
     let manifest_path = dir.join("SKILL.md");
-    let metadata = fs::metadata(&manifest_path)
-        .map_err(|e| format!("SKILL.md not readable: {e}"))?;
+    let metadata =
+        fs::metadata(&manifest_path).map_err(|e| format!("SKILL.md not readable: {e}"))?;
     if !metadata.is_file() {
         return Err("SKILL.md is not a regular file".to_string());
     }
@@ -225,8 +228,8 @@ fn load_one(id: &str, dir: &Path, opts: &LoadOptions) -> Result<LoadedSkill, Str
         ));
     }
 
-    let raw = fs::read_to_string(&manifest_path)
-        .map_err(|e| format!("failed to read SKILL.md: {e}"))?;
+    let raw =
+        fs::read_to_string(&manifest_path).map_err(|e| format!("failed to read SKILL.md: {e}"))?;
     let doc = manifest::parse(&raw).map_err(|e| format!("manifest parse error: {e}"))?;
 
     Ok(LoadedSkill {
@@ -366,7 +369,11 @@ mod tests {
         // `red-team-strategy` would match `red-team-` if we used a
         // raw startswith; ensure the boundary check holds: only
         // `red-teaming` (exact) and `red-teaming-...` are denied.
-        write_skill(tmp.path(), "red-team-strategy", &minimal("red-team-strategy"));
+        write_skill(
+            tmp.path(),
+            "red-team-strategy",
+            &minimal("red-team-strategy"),
+        );
         let r = load_dir(tmp.path(), &LoadOptions::default());
         assert!(r.skills.contains_key("red-team-strategy"));
         assert!(!r.disabled.contains_key("red-team-strategy"));

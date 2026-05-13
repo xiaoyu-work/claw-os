@@ -45,9 +45,13 @@ pub struct Frame {
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum FrameError {
-    #[error("invalid prelude crc32 (expected {expected:#010x}, got {actual:#010x}); stream corrupt")]
+    #[error(
+        "invalid prelude crc32 (expected {expected:#010x}, got {actual:#010x}); stream corrupt"
+    )]
     PreludeCrc { expected: u32, actual: u32 },
-    #[error("invalid message crc32 (expected {expected:#010x}, got {actual:#010x}); stream corrupt")]
+    #[error(
+        "invalid message crc32 (expected {expected:#010x}, got {actual:#010x}); stream corrupt"
+    )]
     MessageCrc { expected: u32, actual: u32 },
     #[error("structurally invalid frame: total_len={total_len}, headers_len={headers_len} (need total_len >= 16 and headers_len <= total_len - 16)")]
     BadStructure { total_len: u32, headers_len: u32 },
@@ -192,9 +196,7 @@ fn parse_headers(mut buf: &[u8]) -> Result<HashMap<String, String>, FrameError> 
     let mut out = HashMap::new();
     while !buf.is_empty() {
         if buf.is_empty() {
-            return Err(FrameError::BadHeader(
-                "missing name length byte".into(),
-            ));
+            return Err(FrameError::BadHeader("missing name length byte".into()));
         }
         let name_len = buf[0] as usize;
         buf = &buf[1..];
@@ -218,10 +220,7 @@ fn parse_headers(mut buf: &[u8]) -> Result<HashMap<String, String>, FrameError> 
         buf = &buf[1..];
 
         if value_type != STRING_HEADER_TYPE {
-            return Err(FrameError::UnsupportedHeaderType {
-                name,
-                value_type,
-            });
+            return Err(FrameError::UnsupportedHeaderType { name, value_type });
         }
 
         if buf.len() < 2 {
@@ -473,8 +472,8 @@ mod tests {
         headers.push(name.len() as u8);
         headers.extend_from_slice(name.as_bytes());
         headers.push(9); // unsupported
-        // 8 more bytes — type 9 is timestamp (u64); we just stuff zeros
-        // because parsing should bail out.
+                         // 8 more bytes — type 9 is timestamp (u64); we just stuff zeros
+                         // because parsing should bail out.
         headers.extend_from_slice(&[0u8; 8]);
 
         let payload = b"";

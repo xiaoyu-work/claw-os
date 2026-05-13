@@ -153,7 +153,11 @@ impl Qwen3GenaiEmbedder {
         Ok(Inner { tokenizer, model })
     }
 
-    fn embed_one(inner: &Inner, text: &str, max_input_tokens: usize) -> Result<Vec<f32>, EmbedError> {
+    fn embed_one(
+        inner: &Inner,
+        text: &str,
+        max_input_tokens: usize,
+    ) -> Result<Vec<f32>, EmbedError> {
         if text.is_empty() {
             return Err(EmbedError::InvalidInput("empty input".into()));
         }
@@ -180,7 +184,10 @@ impl Qwen3GenaiEmbedder {
         if shape.len() != 3 {
             return Err(EmbedError::Provider {
                 status: 500,
-                message: format!("hidden_states shape rank {} != 3 (got {shape:?})", shape.len()),
+                message: format!(
+                    "hidden_states shape rank {} != 3 (got {shape:?})",
+                    shape.len()
+                ),
             });
         }
         let batch = shape[0] as usize;
@@ -374,7 +381,10 @@ mod tests {
         let e = Qwen3GenaiEmbedder::new("/some/path");
         assert_eq!(e.name(), "qwen3-local");
         assert_eq!(e.model(), MODEL_NAME);
-        assert!(!e.is_configured(), "non-existent path should not be configured");
+        assert!(
+            !e.is_configured(),
+            "non-existent path should not be configured"
+        );
     }
 
     #[test]
@@ -384,7 +394,9 @@ mod tests {
         let dir = resolve_model_dir(&cfg);
         // Pinned default — if the registry layout changes, this test
         // catches it.
-        assert!(dir.ends_with("qwen3-embedding-0.6b/v1") || dir.ends_with("qwen3-embedding-0.6b\\v1"));
+        assert!(
+            dir.ends_with("qwen3-embedding-0.6b/v1") || dir.ends_with("qwen3-embedding-0.6b\\v1")
+        );
     }
 
     #[test]

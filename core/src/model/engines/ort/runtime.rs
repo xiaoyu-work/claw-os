@@ -98,15 +98,13 @@ impl OrtRuntime {
             return Ok(existing.clone());
         }
 
-        let lib_path = crate::engine_pkg::active_library_path(
-            super::PKG_ENGINE_NAME,
-            super::LIB_BASENAME,
-        )
-        .ok_or_else(|| {
-            EngineError::NotInstalled(
-                "no active ort engine — run `cos engine update ort` to install".into(),
-            )
-        })?;
+        let lib_path =
+            crate::engine_pkg::active_library_path(super::PKG_ENGINE_NAME, super::LIB_BASENAME)
+                .ok_or_else(|| {
+                    EngineError::NotInstalled(
+                        "no active ort engine — run `cos engine update ort` to install".into(),
+                    )
+                })?;
 
         let runtime = Arc::new(Self::load(&lib_path)?);
         // Race tolerated: see llama_cpp::runtime::shared() for why this
@@ -214,7 +212,10 @@ mod tests {
         // Exercise the resolution path that `shared()` delegates to —
         // the OnceLock path itself can't be tested hermetically across
         // test threads.
-        let p = crate::engine_pkg::active_library_path(super::super::PKG_ENGINE_NAME, super::super::LIB_BASENAME);
+        let p = crate::engine_pkg::active_library_path(
+            super::super::PKG_ENGINE_NAME,
+            super::super::LIB_BASENAME,
+        );
         assert!(p.is_none(), "no active engine should be resolvable");
 
         crate::engine_pkg::paths::set_engines_dir_override(None);

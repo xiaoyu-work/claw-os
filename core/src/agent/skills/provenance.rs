@@ -227,9 +227,7 @@ impl Guard {
             return GuardOutcome::Allow;
         }
 
-        if self.config.require_allowed_tools
-            && manifest_allowed_tools_empty(&skill.manifest)
-        {
+        if self.config.require_allowed_tools && manifest_allowed_tools_empty(&skill.manifest) {
             return GuardOutcome::Deny {
                 reason: format!(
                     "skill {} declares no allowed-tools but require_allowed_tools is set",
@@ -311,9 +309,7 @@ mod tests {
         };
         fs::write(
             &mp,
-            format!(
-                "---\nname: {id}\ndescription: test skill\n{allowed}---\n{body}\n"
-            ),
+            format!("---\nname: {id}\ndescription: test skill\n{allowed}---\n{body}\n"),
         )
         .unwrap();
         let doc = super::super::manifest::parse(&fs::read_to_string(&mp).unwrap()).unwrap();

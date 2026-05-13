@@ -123,7 +123,7 @@ pub(crate) fn load_model_manifest(spec: &str) -> Result<registry::Manifest, Stri
 /// [--device cuda|cpu|metal|...]` — register a user-provided
 /// ONNX/GGUF file in the model registry.
 fn run_import(args: &[String]) -> Result<Value, String> {
-    use import::{ImportConfig, imported_model_json};
+    use import::{imported_model_json, ImportConfig};
 
     if args.is_empty() {
         return Err(
@@ -282,7 +282,9 @@ fn parse_format(v: &str) -> Result<registry::Format, String> {
         "onnx" => Ok(Format::Onnx),
         "gguf" => Ok(Format::Gguf),
         "onnx-genai" | "onnx_genai" | "genai" => Ok(Format::OnnxGenai),
-        other => Err(format!("unknown format: {other} (try onnx|gguf|onnx-genai)")),
+        other => Err(format!(
+            "unknown format: {other} (try onnx|gguf|onnx-genai)"
+        )),
     }
 }
 
@@ -363,8 +365,8 @@ fn run_embed(args: &[String]) -> Result<Value, String> {
                 let path = args
                     .get(i + 1)
                     .ok_or_else(|| "--inputs-file requires a path".to_string())?;
-                let body = std::fs::read_to_string(path)
-                    .map_err(|e| format!("read {path}: {e}"))?;
+                let body =
+                    std::fs::read_to_string(path).map_err(|e| format!("read {path}: {e}"))?;
                 for line in body.lines() {
                     let s = line.trim();
                     if !s.is_empty() {
@@ -409,7 +411,9 @@ fn run_embed(args: &[String]) -> Result<Value, String> {
         .build()
         .map_err(|e| e.to_string())?;
     let resp = rt
-        .block_on(embedder.embed(EmbedRequest { inputs: inputs.clone() }))
+        .block_on(embedder.embed(EmbedRequest {
+            inputs: inputs.clone(),
+        }))
         .map_err(|e| e.to_string())?;
     Ok(json!({
         "model": resp.model,
@@ -888,11 +892,7 @@ mod tests {
 
     #[test]
     fn import_cmd_rejects_unknown_flag() {
-        let err = run(
-            "import",
-            &["a.gguf".into(), "--bogus".into()],
-        )
-        .unwrap_err();
+        let err = run("import", &["a.gguf".into(), "--bogus".into()]).unwrap_err();
         assert!(err.to_lowercase().contains("unknown flag"), "got {err}");
     }
 
@@ -944,7 +944,9 @@ mod tests {
         // Listing should now report the model under v2.
         let listed = run("list", &[]).unwrap();
         let arr = listed["models"].as_array().unwrap();
-        assert!(arr.iter().any(|m| m["name"] == "vt" && m["version"] == "v2"));
+        assert!(arr
+            .iter()
+            .any(|m| m["name"] == "vt" && m["version"] == "v2"));
 
         // Re-import without --force fails.
         let src2 = dir.path().join("v2bytes.gguf");
@@ -960,7 +962,10 @@ mod tests {
             ],
         )
         .unwrap_err();
-        assert!(err.to_lowercase().contains("already registered"), "got {err}");
+        assert!(
+            err.to_lowercase().contains("already registered"),
+            "got {err}"
+        );
 
         // With --force, succeeds.
         let v = run(
@@ -1008,11 +1013,7 @@ mod tests {
         std::fs::write(&src, b"X").unwrap();
         run(
             "import",
-            &[
-                src.display().to_string(),
-                "--as".into(),
-                "removable".into(),
-            ],
+            &[src.display().to_string(), "--as".into(), "removable".into()],
         )
         .unwrap();
         let v = run("rm", &["removable@v1".into()]).unwrap();

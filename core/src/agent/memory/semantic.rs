@@ -48,10 +48,7 @@ pub enum SemanticError {
     DimMismatch { row: usize, query: usize },
 
     #[error("model mismatch: store is pinned to `{existing}`, refused vector from `{incoming}`. Embedding models cannot be mixed in one corpus — clear the store or use a separate db.")]
-    ModelMismatch {
-        existing: String,
-        incoming: String,
-    },
+    ModelMismatch { existing: String, incoming: String },
 }
 
 const SCHEMA: &str = r#"
@@ -207,11 +204,9 @@ impl SemanticStore {
         let conn = self.lock_conn()?;
         // Stickiness: refuse to mix vector spaces in one corpus.
         let existing: Option<String> = conn
-            .query_row(
-                "SELECT model FROM semantic_docs LIMIT 1",
-                [],
-                |r| r.get::<_, String>(0),
-            )
+            .query_row("SELECT model FROM semantic_docs LIMIT 1", [], |r| {
+                r.get::<_, String>(0)
+            })
             .optional()?;
         if let Some(existing) = existing {
             if existing != resp.model {
@@ -306,7 +301,11 @@ impl SemanticStore {
                 ts_ms: row.get(7)?,
             });
         }
-        hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        hits.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         hits.truncate(limit);
         Ok(hits)
     }
@@ -364,11 +363,9 @@ impl SemanticStore {
     pub fn pinned_model(&self) -> Result<Option<String>, SemanticError> {
         let conn = self.lock_conn()?;
         let m = conn
-            .query_row(
-                "SELECT model FROM semantic_docs LIMIT 1",
-                [],
-                |r| r.get::<_, String>(0),
-            )
+            .query_row("SELECT model FROM semantic_docs LIMIT 1", [], |r| {
+                r.get::<_, String>(0)
+            })
             .optional()?;
         Ok(m)
     }
@@ -671,10 +668,7 @@ mod tests {
 
         let err = s2.index("notes", "k2", "beta").await.unwrap_err();
         match err {
-            SemanticError::ModelMismatch {
-                existing,
-                incoming,
-            } => {
+            SemanticError::ModelMismatch { existing, incoming } => {
                 assert_eq!(existing, "model-a");
                 assert_eq!(incoming, "model-b");
             }
@@ -735,9 +729,9 @@ mod tests {
             model: "new-model".to_string(),
         });
         let s2 = s.with_embedder(e2);
-        s2.index("notes", "k", "first").await.expect(
-            "after clear_all the new model should be free to index",
-        );
+        s2.index("notes", "k", "first")
+            .await
+            .expect("after clear_all the new model should be free to index");
         assert_eq!(s2.pinned_model().unwrap().as_deref(), Some("new-model"));
     }
 

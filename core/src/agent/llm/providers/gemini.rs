@@ -83,7 +83,10 @@ impl std::fmt::Debug for GeminiConfig {
             .field("base_url", &self.base_url)
             .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
             .field("model", &self.model)
-            .field("extra_headers", &self.extra_headers.keys().collect::<Vec<_>>())
+            .field(
+                "extra_headers",
+                &self.extra_headers.keys().collect::<Vec<_>>(),
+            )
             .field("request_timeout", &self.request_timeout)
             .field("pool_len", &self.pool.as_ref().map(|p| p.len()))
             .finish()
@@ -147,10 +150,8 @@ pub struct GeminiProvider {
 
 impl GeminiProvider {
     pub fn new(cfg: GeminiConfig) -> Self {
-        let mut builder = reqwest::Client::builder().user_agent(concat!(
-            "cos-agent/",
-            env!("CARGO_PKG_VERSION")
-        ));
+        let mut builder =
+            reqwest::Client::builder().user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")));
         if cfg.request_timeout > Duration::from_secs(0) {
             builder = builder.timeout(cfg.request_timeout);
         }
@@ -251,10 +252,7 @@ impl Provider for GeminiProvider {
             let err = wire::classify_http_error(status, &bytes, retry_after_secs);
             if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
                 let body_str = std::str::from_utf8(&bytes).unwrap_or("");
-                let cls = crate::agent::llm::error_classifier::classify(
-                    status.as_u16(),
-                    body_str,
-                );
+                let cls = crate::agent::llm::error_classifier::classify(status.as_u16(), body_str);
                 pool.report_failure(l, cls);
             }
             return Err(err);
@@ -341,7 +339,10 @@ pub(crate) mod wire {
                     serde_json::json!(request.stop_sequences),
                 );
             }
-            obj.insert("generationConfig".into(), serde_json::Value::Object(gen_cfg));
+            obj.insert(
+                "generationConfig".into(),
+                serde_json::Value::Object(gen_cfg),
+            );
 
             // Tools — nested as functionDeclarations.
             if !request.tools.is_empty() {
@@ -351,7 +352,10 @@ pub(crate) mod wire {
                     "tools".into(),
                     serde_json::json!([{"functionDeclarations": decls}]),
                 );
-                obj.insert("toolConfig".into(), tool_choice_to_json(&request.tool_choice));
+                obj.insert(
+                    "toolConfig".into(),
+                    tool_choice_to_json(&request.tool_choice),
+                );
             }
 
             if stream {
@@ -452,10 +456,7 @@ pub(crate) mod wire {
         let mut cfg = serde_json::json!({"mode": mode});
         if let ToolChoice::Tool { name } = c {
             if let Some(o) = cfg.as_object_mut() {
-                o.insert(
-                    "allowedFunctionNames".into(),
-                    serde_json::json!([name]),
-                );
+                o.insert("allowedFunctionNames".into(), serde_json::json!([name]));
             }
         }
         serde_json::json!({"functionCallingConfig": cfg})
@@ -520,10 +521,7 @@ pub(crate) mod wire {
         pub cached_content_token_count: u32,
     }
 
-    pub(crate) fn response_to_chat(
-        resp: Response,
-        fallback_model: &str,
-    ) -> Result<ChatResponse> {
+    pub(crate) fn response_to_chat(resp: Response, fallback_model: &str) -> Result<ChatResponse> {
         let candidate = resp
             .candidates
             .into_iter()
@@ -566,8 +564,11 @@ pub(crate) mod wire {
         let finish_reason = match candidate.finish_reason.as_deref() {
             Some("STOP") | Some("FINISH_REASON_UNSPECIFIED") | None => FinishReason::Stop,
             Some("MAX_TOKENS") => FinishReason::Length,
-            Some("SAFETY") | Some("RECITATION") | Some("BLOCKLIST")
-            | Some("PROHIBITED_CONTENT") | Some("SPII") => FinishReason::ContentFilter,
+            Some("SAFETY")
+            | Some("RECITATION")
+            | Some("BLOCKLIST")
+            | Some("PROHIBITED_CONTENT")
+            | Some("SPII") => FinishReason::ContentFilter,
             // Gemini doesn't emit a "tool_use" finish reason — it just
             // includes a functionCall part with STOP. Detect tool_use by
             // checking whether tool_calls accumulated.
@@ -595,7 +596,9 @@ pub(crate) mod wire {
             .unwrap_or_default();
 
         Ok(ChatResponse {
-            model: resp.model_version.unwrap_or_else(|| fallback_model.to_string()),
+            model: resp
+                .model_version
+                .unwrap_or_else(|| fallback_model.to_string()),
             content: content_blocks,
             tool_calls,
             finish_reason,
@@ -733,7 +736,10 @@ mod tests {
         let r = req_text("hello");
         let body = wire::build_request_body(&r, false);
         // System hoisted to systemInstruction at top level.
-        assert_eq!(body["systemInstruction"]["parts"][0]["text"], "you are helpful");
+        assert_eq!(
+            body["systemInstruction"]["parts"][0]["text"],
+            "you are helpful"
+        );
         // Contents has only the user turn (system is NOT a message).
         assert_eq!(body["contents"].as_array().unwrap().len(), 1);
         assert_eq!(body["contents"][0]["role"], "user");
@@ -843,10 +849,7 @@ mod tests {
         assert_eq!(msg["role"], "user");
         assert_eq!(msg["parts"][0]["functionResponse"]["name"], "echo");
         // JSON content is parsed and inlined into `response`.
-        assert_eq!(
-            msg["parts"][0]["functionResponse"]["response"]["ok"],
-            true
-        );
+        assert_eq!(msg["parts"][0]["functionResponse"]["response"]["ok"], true);
     }
 
     #[test]
@@ -1183,10 +1186,7 @@ mod tests {
         std::env::set_var("COS_TEST_GEM_POOL_A", "gem-aaa");
         std::env::set_var("COS_TEST_GEM_POOL_B", "gem-bbb");
         let mut c = AgentConfig::default();
-        c.api_key_envs = vec![
-            "COS_TEST_GEM_POOL_A".into(),
-            "COS_TEST_GEM_POOL_B".into(),
-        ];
+        c.api_key_envs = vec!["COS_TEST_GEM_POOL_A".into(), "COS_TEST_GEM_POOL_B".into()];
         let gc = GeminiConfig::from_agent_config("gemini-1.5-flash", &c);
         std::env::remove_var("COS_TEST_GEM_POOL_A");
         std::env::remove_var("COS_TEST_GEM_POOL_B");

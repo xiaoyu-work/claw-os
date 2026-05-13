@@ -233,8 +233,7 @@ mod tests {
 
     #[test]
     fn id_and_retry_fields_are_ignored() {
-        let events =
-            one_chunk(b"id: 42\nretry: 5000\nevent: foo\ndata: bar\n\n");
+        let events = one_chunk(b"id: 42\nretry: 5000\nevent: foo\ndata: bar\n\n");
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event, "foo");
         assert_eq!(events[0].data, "bar");

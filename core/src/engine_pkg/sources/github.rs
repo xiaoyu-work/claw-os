@@ -137,11 +137,7 @@ impl GhClient {
         self.fetch_one(&url).await
     }
 
-    pub async fn list(
-        &self,
-        spec: &GhSpec,
-        per_page: usize,
-    ) -> Result<Vec<GhRelease>, GhError> {
+    pub async fn list(&self, spec: &GhSpec, per_page: usize) -> Result<Vec<GhRelease>, GhError> {
         let url = format!(
             "{}/repos/{}/{}/releases?per_page={}",
             self.base_url,

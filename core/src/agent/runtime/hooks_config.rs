@@ -274,8 +274,14 @@ mod tests {
 
     #[test]
     fn hook_kind_serializes_as_lowercase_string() {
-        assert_eq!(serde_json::to_string(&HookKind::Logging).unwrap(), "\"logging\"");
-        assert_eq!(serde_json::to_string(&HookKind::Audit).unwrap(), "\"audit\"");
+        assert_eq!(
+            serde_json::to_string(&HookKind::Logging).unwrap(),
+            "\"logging\""
+        );
+        assert_eq!(
+            serde_json::to_string(&HookKind::Audit).unwrap(),
+            "\"audit\""
+        );
         assert_eq!(
             serde_json::to_string(&HookKind::Checkpoint).unwrap(),
             "\"checkpoint\""

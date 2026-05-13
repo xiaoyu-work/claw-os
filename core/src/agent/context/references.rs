@@ -82,7 +82,9 @@ fn is_drive_prefix(s: &str) -> bool {
 /// Trailing punctuation chars stripped from non-quoted refs so
 /// `Read @notes.md.` doesn't end up referencing `notes.md.` (which
 /// is rarely intended).
-const TRIM_TAIL: &[char] = &[',', '.', ';', ':', '!', '?', ')', ']', '}', '>', '"', '\'', '`'];
+const TRIM_TAIL: &[char] = &[
+    ',', '.', ';', ':', '!', '?', ')', ']', '}', '>', '"', '\'', '`',
+];
 
 /// Extract every `@`-reference from `text`, in source order.
 pub fn extract(text: &str) -> Vec<Reference> {

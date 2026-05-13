@@ -19,10 +19,10 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use super::protocol::{
-    CallToolParams, CallToolResult, ContentItem, ERR_INTERNAL, ERR_INVALID_PARAMS,
-    ERR_METHOD_NOT_FOUND, Implementation, InitializeParams, InitializeResult, JsonRpcError,
-    JsonRpcRequest, JsonRpcResponse, ListToolsResult, PROTOCOL_VERSION, ServerCapabilities,
-    ToolDescriptor, ToolsCapability,
+    CallToolParams, CallToolResult, ContentItem, Implementation, InitializeParams,
+    InitializeResult, JsonRpcError, JsonRpcRequest, JsonRpcResponse, ListToolsResult,
+    ServerCapabilities, ToolDescriptor, ToolsCapability, ERR_INTERNAL, ERR_INVALID_PARAMS,
+    ERR_METHOD_NOT_FOUND, PROTOCOL_VERSION,
 };
 use super::transport::{Transport, TransportError};
 use crate::agent::tools::registry::ToolRegistry;
@@ -101,10 +101,7 @@ impl McpServer {
             "tools/call" => self.handle_tools_call(req).await,
             other => JsonRpcResponse::err(
                 id,
-                JsonRpcError::new(
-                    ERR_METHOD_NOT_FOUND,
-                    format!("method not found: {other}"),
-                ),
+                JsonRpcError::new(ERR_METHOD_NOT_FOUND, format!("method not found: {other}")),
             ),
         }
     }
@@ -144,10 +141,7 @@ impl McpServer {
         };
         match serde_json::to_value(&result) {
             Ok(v) => JsonRpcResponse::ok(id, v),
-            Err(e) => JsonRpcResponse::err(
-                id,
-                JsonRpcError::new(ERR_INTERNAL, e.to_string()),
-            ),
+            Err(e) => JsonRpcResponse::err(id, JsonRpcError::new(ERR_INTERNAL, e.to_string())),
         }
     }
 
@@ -168,10 +162,7 @@ impl McpServer {
         };
         match serde_json::to_value(&result) {
             Ok(v) => JsonRpcResponse::ok(id, v),
-            Err(e) => JsonRpcResponse::err(
-                id,
-                JsonRpcError::new(ERR_INTERNAL, e.to_string()),
-            ),
+            Err(e) => JsonRpcResponse::err(id, JsonRpcError::new(ERR_INTERNAL, e.to_string())),
         }
     }
 
@@ -216,10 +207,7 @@ impl McpServer {
         };
         match serde_json::to_value(&body) {
             Ok(v) => JsonRpcResponse::ok(id, v),
-            Err(e) => JsonRpcResponse::err(
-                id,
-                JsonRpcError::new(ERR_INTERNAL, e.to_string()),
-            ),
+            Err(e) => JsonRpcResponse::err(id, JsonRpcError::new(ERR_INTERNAL, e.to_string())),
         }
     }
 }
@@ -227,9 +215,7 @@ impl McpServer {
 #[cfg(test)]
 mod tests {
     use super::super::client::{ClientError, McpClient};
-    use super::super::protocol::{
-        ClientCapabilities, ContentItem, Implementation,
-    };
+    use super::super::protocol::{ClientCapabilities, ContentItem, Implementation};
     use super::super::transport::in_memory_pair;
     use super::*;
     use crate::agent::tools::builtin::Echo;

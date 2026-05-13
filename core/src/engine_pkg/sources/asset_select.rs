@@ -74,7 +74,9 @@ pub fn select<'a>(
             if want_neg.iter().any(|n| lower.contains(&n.to_lowercase())) {
                 return false;
             }
-            want_tokens.iter().all(|t| lower.contains(&t.to_lowercase()))
+            want_tokens
+                .iter()
+                .all(|t| lower.contains(&t.to_lowercase()))
         })
         .collect();
 

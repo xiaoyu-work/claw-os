@@ -240,9 +240,9 @@ mod tests {
     async fn aux_error_falls_back_to_heuristic() {
         let cfg = AgentConfig::default();
         let provider = MockProvider::new("err-mock", &cfg);
-        provider.push_response(MockResponse::Error(
-            crate::agent::llm::LlmError::Internal("boom".into()),
-        ));
+        provider.push_response(MockResponse::Error(crate::agent::llm::LlmError::Internal(
+            "boom".into(),
+        )));
         let aux = AuxiliaryClient::new(
             Arc::new(provider) as Arc<dyn Provider>,
             AuxiliaryConfig::new("mock", "err-mock"),
@@ -262,10 +262,7 @@ mod tests {
 
     #[test]
     fn heuristic_picks_first_sentence() {
-        assert_eq!(
-            heuristic("First sentence. Second."),
-            "First sentence."
-        );
+        assert_eq!(heuristic("First sentence. Second."), "First sentence.");
     }
 
     #[test]
@@ -278,10 +275,7 @@ mod tests {
         // "3.14 is pi. The end." should pick "3.14 is pi." as the
         // first sentence (the period inside 3.14 isn't followed by
         // whitespace).
-        assert_eq!(
-            heuristic("3.14 is pi. The end."),
-            "3.14 is pi."
-        );
+        assert_eq!(heuristic("3.14 is pi. The end."), "3.14 is pi.");
     }
 
     #[test]

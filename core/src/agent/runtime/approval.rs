@@ -340,8 +340,8 @@ mod tests {
                 panic!("approver should not be called for non-dangerous tool");
             }
         }
-        let gate = ApprovalGate::new(ApprovalConfig::new())
-            .with_approver(Arc::new(ShouldNotBeCalled));
+        let gate =
+            ApprovalGate::new(ApprovalConfig::new()).with_approver(Arc::new(ShouldNotBeCalled));
         let out = gate.evaluate("safe", &json!({}), "n/a").await;
         assert!(matches!(out, ApprovalOutcome::Approved { .. }));
     }

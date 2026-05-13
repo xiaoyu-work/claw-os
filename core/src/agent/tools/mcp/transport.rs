@@ -17,8 +17,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
-use tokio::sync::Mutex;
 use tokio::sync::mpsc;
+use tokio::sync::Mutex;
 
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
@@ -133,7 +133,9 @@ impl Transport for StdioTransport {
         w.write_all(b"\n")
             .await
             .map_err(|e| TransportError::Io(e.to_string()))?;
-        w.flush().await.map_err(|e| TransportError::Io(e.to_string()))?;
+        w.flush()
+            .await
+            .map_err(|e| TransportError::Io(e.to_string()))?;
         Ok(())
     }
 
@@ -214,7 +216,10 @@ mod tests {
         let mut buf = vec![0u8; 64];
         let n = cli_w_from_srv.take(64).read(&mut buf).await.unwrap();
         let s = std::str::from_utf8(&buf[..n]).unwrap();
-        assert!(s.starts_with("{\"ok\":true}"), "frame should be JSON line, got {s:?}");
+        assert!(
+            s.starts_with("{\"ok\":true}"),
+            "frame should be JSON line, got {s:?}"
+        );
         assert!(s.contains('\n'), "frame must end with newline");
     }
 

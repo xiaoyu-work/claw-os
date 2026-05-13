@@ -91,7 +91,9 @@ pub fn decode_pcm16(bytes: &[u8]) -> Result<WavInfo, MediaError> {
         )));
     }
     if &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
-        return Err(MediaError::Parse("wav: missing RIFF/WAVE header".to_string()));
+        return Err(MediaError::Parse(
+            "wav: missing RIFF/WAVE header".to_string(),
+        ));
     }
 
     let mut cursor = 12usize;
@@ -152,7 +154,8 @@ pub fn decode_pcm16(bytes: &[u8]) -> Result<WavInfo, MediaError> {
 
     let (channels, sample_rate_hz, bits_per_sample) =
         fmt.ok_or_else(|| MediaError::Parse("wav: no fmt chunk".to_string()))?;
-    let data_start = data_start.ok_or_else(|| MediaError::Parse("wav: no data chunk".to_string()))?;
+    let data_start =
+        data_start.ok_or_else(|| MediaError::Parse("wav: no data chunk".to_string()))?;
     let data_len = data_len.unwrap_or(0);
 
     if bits_per_sample != 16 {
@@ -274,7 +277,7 @@ mod tests {
         chunk.extend_from_slice(&16000u32.to_le_bytes()); // byte rate
         chunk.extend_from_slice(&2u16.to_le_bytes()); // block align
         chunk.extend_from_slice(&16u16.to_le_bytes()); // bits
-        // Unknown JUNK chunk to skip
+                                                       // Unknown JUNK chunk to skip
         chunk.extend_from_slice(b"JUNK");
         chunk.extend_from_slice(&4u32.to_le_bytes());
         chunk.extend_from_slice(&[0xFFu8; 4]);

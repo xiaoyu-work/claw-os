@@ -106,11 +106,15 @@ mod tests {
     #[test]
     fn is_configured_requires_api_key() {
         let p1 = XaiImageGenProvider::new(XaiImageGenConfig::default());
-        assert!(!<XaiImageGenProvider as ImageGenProvider>::is_configured(&p1));
+        assert!(!<XaiImageGenProvider as ImageGenProvider>::is_configured(
+            &p1
+        ));
         let mut c = XaiImageGenConfig::default();
         c.api_key = Some("sk".to_string());
         let p2 = XaiImageGenProvider::new(c);
-        assert!(<XaiImageGenProvider as ImageGenProvider>::is_configured(&p2));
+        assert!(<XaiImageGenProvider as ImageGenProvider>::is_configured(
+            &p2
+        ));
     }
 
     #[tokio::test]

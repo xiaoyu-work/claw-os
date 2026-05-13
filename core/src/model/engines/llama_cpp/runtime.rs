@@ -100,8 +100,8 @@ impl LlamaRuntime {
             return Ok(existing.clone());
         }
 
-        let lib_path = crate::engine_pkg::active_library_path("llama-cpp", "llama")
-            .ok_or_else(|| {
+        let lib_path =
+            crate::engine_pkg::active_library_path("llama-cpp", "llama").ok_or_else(|| {
                 EngineError::NotInstalled(
                     "no active llama-cpp engine — run `cos engine update llama-cpp` to install"
                         .into(),
@@ -133,9 +133,7 @@ fn test_override_runtime() -> Option<Arc<LlamaRuntime>> {
 #[cfg(test)]
 #[allow(dead_code)] // Reserved for future tests that want to mock.
 pub fn set_test_override(rt: Option<Arc<LlamaRuntime>>) -> Option<Arc<LlamaRuntime>> {
-    let mut slot = TEST_OVERRIDE
-        .write()
-        .expect("test override lock poisoned");
+    let mut slot = TEST_OVERRIDE.write().expect("test override lock poisoned");
     std::mem::replace(&mut *slot, rt)
 }
 

@@ -99,9 +99,7 @@ pub fn build_from(cfg: &EmbedConfig) -> Result<Option<Box<dyn Embedder>>, String
         // Local Qwen3-Embedding-0.6B via onnxruntime-genai. Reads the
         // model directory from `cfg.model_dir` (or the default registry
         // slot). The model is loaded lazily on first call.
-        "qwen3-local" | "local" => Ok(Some(Box::new(
-            super::qwen3_genai::build_from_config(cfg),
-        ))),
+        "qwen3-local" | "local" => Ok(Some(Box::new(super::qwen3_genai::build_from_config(cfg)))),
         other => Err(format!("unknown embed provider: {other}")),
     }
 }
@@ -394,10 +392,7 @@ mod tests {
         assert!(matches!(auth, EmbedError::Auth));
         let rate = classify_http_error(429, b"{}");
         assert!(matches!(rate, EmbedError::RateLimited { .. }));
-        let prov = classify_http_error(
-            500,
-            br#"{"error":{"message":"the model is overloaded"}}"#,
-        );
+        let prov = classify_http_error(500, br#"{"error":{"message":"the model is overloaded"}}"#);
         if let EmbedError::Provider { status, message } = prov {
             assert_eq!(status, 500);
             assert!(message.contains("overloaded"));
@@ -432,8 +427,7 @@ mod tests {
                     // Need to also consume the body. Find the
                     // Content-Length to know when we have it all.
                     let head = String::from_utf8_lossy(&total);
-                    let body_start =
-                        total.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+                    let body_start = total.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
                     let cl = head
                         .lines()
                         .find_map(|l| {
@@ -474,8 +468,7 @@ mod tests {
             "usage": {"prompt_tokens": 4, "total_tokens": 4}
         })
         .to_string();
-        let (base_url, handle) =
-            spawn_one_shot_mock(body, "HTTP/1.1 200 OK").await;
+        let (base_url, handle) = spawn_one_shot_mock(body, "HTTP/1.1 200 OK").await;
         let mut c = EmbedConfig::default();
         c.provider = "openai".into();
         c.model = "text-embedding-3-small".into();

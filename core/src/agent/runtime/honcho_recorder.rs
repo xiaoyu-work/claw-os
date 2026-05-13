@@ -113,12 +113,7 @@ impl HonchoRecorder {
     ///
     /// Empty `content` is silently ignored — sqlite_fts already
     /// applies the same filter to keep noise out of memory.
-    pub fn spawn_message(
-        self: &Arc<Self>,
-        session_id: String,
-        role: Role,
-        content: String,
-    ) {
+    pub fn spawn_message(self: &Arc<Self>, session_id: String, role: Role, content: String) {
         let Some((peer_id, msg_role)) = Self::map_role(role) else {
             return;
         };
@@ -242,19 +237,12 @@ mod tests {
         };
         let client = HonchoClient::new(cfg).unwrap();
         let r = HonchoRecorder::from_client(client);
-        r.spawn_message(
-            "sess-1".into(),
-            Role::User,
-            "hello world".into(),
-        );
+        r.spawn_message("sess-1".into(), Role::User, "hello world".into());
 
         // give the spawned task time to drain
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_secs(3),
-            server,
-        )
-        .await
-        .expect("server completed");
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(3), server)
+            .await
+            .expect("server completed");
         assert_eq!(hits.load(Ordering::SeqCst), 1);
     }
 

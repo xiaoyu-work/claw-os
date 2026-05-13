@@ -71,10 +71,8 @@ pub struct CloudSttProvider {
 
 impl CloudSttProvider {
     pub fn new(cfg: CloudSttConfig) -> Self {
-        let mut builder = reqwest::Client::builder().user_agent(concat!(
-            "cos-agent/",
-            env!("CARGO_PKG_VERSION")
-        ));
+        let mut builder =
+            reqwest::Client::builder().user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")));
         if cfg.request_timeout > Duration::from_secs(0) {
             builder = builder.timeout(cfg.request_timeout);
         }
@@ -246,7 +244,10 @@ mod tests {
         let mut c = CloudSttConfig::for_alias("openai", "whisper-1");
         c.base_url = "https://api.openai.com/v1/".to_string();
         let p = CloudSttProvider::new(c);
-        assert_eq!(p.endpoint(), "https://api.openai.com/v1/audio/transcriptions");
+        assert_eq!(
+            p.endpoint(),
+            "https://api.openai.com/v1/audio/transcriptions"
+        );
     }
 
     #[test]

@@ -529,8 +529,8 @@ mod tests {
     #[test]
     fn estimate_cost_basic_input_output() {
         // claude-sonnet-4-5: $3/MTok in, $15/MTok out
-        let cost = estimate_cost_usd("claude-sonnet-4-5", 1_000_000, 100_000, 0, 0)
-            .expect("known model");
+        let cost =
+            estimate_cost_usd("claude-sonnet-4-5", 1_000_000, 100_000, 0, 0).expect("known model");
         // 1.0 * 3 + 0.1 * 15 = 3 + 1.5 = 4.5
         assert!((cost - 4.5).abs() < 1e-9, "got {}", cost);
     }
@@ -538,8 +538,8 @@ mod tests {
     #[test]
     fn estimate_cost_includes_cache_when_supported() {
         // claude-sonnet-4-5 cache read is $0.30/MTok, write is $3.75
-        let cost = estimate_cost_usd("claude-sonnet-4-5", 0, 0, 1_000_000, 100_000)
-            .expect("known model");
+        let cost =
+            estimate_cost_usd("claude-sonnet-4-5", 0, 0, 1_000_000, 100_000).expect("known model");
         // 1.0 * 0.30 + 0.1 * 3.75 = 0.30 + 0.375 = 0.675
         assert!((cost - 0.675).abs() < 1e-9, "got {}", cost);
     }

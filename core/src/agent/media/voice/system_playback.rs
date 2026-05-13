@@ -102,10 +102,7 @@ pub enum SystemPlaybackError {
 
     /// The configured `COS_AUDIO_PLAYER` binary couldn't be spawned
     /// (missing executable / permission denied / etc).
-    ConfiguredPlayerUnavailable {
-        player: PathBuf,
-        source: io::Error,
-    },
+    ConfiguredPlayerUnavailable { player: PathBuf, source: io::Error },
 
     /// A spawned player exited non-zero.
     PlayerFailed {
@@ -201,11 +198,10 @@ impl From<io::Error> for SystemPlaybackError {
 /// from an async context.
 pub fn play_file_blocking(path: &Path) -> Result<(), SystemPlaybackError> {
     validate_path(path)?;
-    let format = PlaybackFormat::from_path(path).ok_or_else(|| {
-        SystemPlaybackError::UnsupportedFormat {
+    let format =
+        PlaybackFormat::from_path(path).ok_or_else(|| SystemPlaybackError::UnsupportedFormat {
             path: path.to_path_buf(),
-        }
-    })?;
+        })?;
     backend::play(path, format)
 }
 
@@ -314,9 +310,7 @@ mod backend {
             )
         };
         if ok == 0 {
-            return Err(SystemPlaybackError::WinmmPlayFailed {
-                path: canon,
-            });
+            return Err(SystemPlaybackError::WinmmPlayFailed { path: canon });
         }
         Ok(())
     }
@@ -435,12 +429,13 @@ mod backend {
             .unwrap_or("?")
             .to_string();
         let args: &[&OsStr] = &[target.as_os_str()];
-        let output = Command::new(&player_path).args(args).output().map_err(|e| {
-            SystemPlaybackError::ConfiguredPlayerUnavailable {
+        let output = Command::new(&player_path)
+            .args(args)
+            .output()
+            .map_err(|e| SystemPlaybackError::ConfiguredPlayerUnavailable {
                 player: player_path.clone(),
                 source: e,
-            }
-        })?;
+            })?;
         if !output.status.success() {
             return Err(SystemPlaybackError::PlayerFailed {
                 player: bin_name,
@@ -739,7 +734,10 @@ mod tests {
             reason: "file does not exist",
         };
         let s = format!("{e}");
-        assert!(s.contains("/x/y.wav") || s.contains("\\x\\y.wav"), "got {s}");
+        assert!(
+            s.contains("/x/y.wav") || s.contains("\\x\\y.wav"),
+            "got {s}"
+        );
         assert!(s.contains("file does not exist"), "got {s}");
     }
 

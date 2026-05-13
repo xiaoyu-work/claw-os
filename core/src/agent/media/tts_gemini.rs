@@ -96,8 +96,8 @@ pub struct GeminiTts {
 
 impl GeminiTts {
     pub fn new(cfg: GeminiTtsConfig) -> Self {
-        let mut builder = reqwest::Client::builder()
-            .user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")));
+        let mut builder =
+            reqwest::Client::builder().user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")));
         if cfg.request_timeout > Duration::from_secs(0) {
             builder = builder.timeout(cfg.request_timeout);
         }
@@ -222,7 +222,9 @@ impl TtsProvider for GeminiTts {
 
         let body = WireRequest {
             contents: vec![Content {
-                parts: vec![Part { text: &request.text }],
+                parts: vec![Part {
+                    text: &request.text,
+                }],
             }],
             generation_config: GenerationConfig {
                 response_modalities: vec!["AUDIO"],
@@ -403,7 +405,9 @@ mod tests {
         let p1 = GeminiTts::new(cfg.clone());
         assert!(!<GeminiTts as TtsProvider>::is_configured(&p1));
         cfg.api_key = Some("k".into());
-        assert!(<GeminiTts as TtsProvider>::is_configured(&GeminiTts::new(cfg)));
+        assert!(<GeminiTts as TtsProvider>::is_configured(&GeminiTts::new(
+            cfg
+        )));
     }
 
     #[tokio::test]
@@ -424,8 +428,14 @@ mod tests {
 
     #[test]
     fn parse_sample_rate_extracts_rate() {
-        assert_eq!(parse_sample_rate("audio/L16;codec=pcm;rate=24000"), Some(24_000));
-        assert_eq!(parse_sample_rate("audio/L16; codec=pcm; rate=16000"), Some(16_000));
+        assert_eq!(
+            parse_sample_rate("audio/L16;codec=pcm;rate=24000"),
+            Some(24_000)
+        );
+        assert_eq!(
+            parse_sample_rate("audio/L16; codec=pcm; rate=16000"),
+            Some(16_000)
+        );
         assert_eq!(parse_sample_rate("audio/L16;codec=pcm"), None);
         assert_eq!(parse_sample_rate(""), None);
         assert_eq!(parse_sample_rate("rate=oops"), None);
@@ -466,7 +476,8 @@ mod tests {
         assert_eq!(json["contents"][0]["parts"][0]["text"], "hi");
         assert_eq!(json["generationConfig"]["responseModalities"][0], "AUDIO");
         assert_eq!(
-            json["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"],
+            json["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]
+                ["voiceName"],
             "Kore"
         );
     }
@@ -483,11 +494,7 @@ mod tests {
             }]
         }"#;
         let r: WireResponse = serde_json::from_str(raw).unwrap();
-        let inline = r.candidates[0]
-            .content
-            .as_ref()
-            .unwrap()
-            .parts[0]
+        let inline = r.candidates[0].content.as_ref().unwrap().parts[0]
             .inline_data
             .as_ref()
             .unwrap();

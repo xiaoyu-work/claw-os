@@ -113,7 +113,10 @@ fn cmd_summary(args: &[String]) -> Result<Value, String> {
     let mut count: u64 = 0;
     let mut first_ts: Option<String> = None;
     let mut last_ts: Option<String> = None;
-    for e in events.iter().filter(|e| match_session(e, session.as_deref())) {
+    for e in events
+        .iter()
+        .filter(|e| match_session(e, session.as_deref()))
+    {
         count += 1;
         if let Some(p) = e.get("provider").and_then(|v| v.as_str()) {
             *by_provider.entry(p.to_string()).or_insert(0) += 1;
@@ -317,9 +320,7 @@ fn cmd_clear(args: &[String]) -> Result<Value, String> {
     let path = resolve_path(args)?;
     let force = args.iter().any(|a| a == "--force");
     if !force {
-        return Err(
-            "refusing to clear without --force. pass --force to confirm.".to_string(),
-        );
+        return Err("refusing to clear without --force. pass --force to confirm.".to_string());
     }
     if !path.exists() {
         return Ok(json!({
@@ -553,8 +554,7 @@ mod tests {
     fn tail_invalid_lines_errors() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("none.jsonl");
-        let err =
-            run_log_cmd(&argv_with_path(&p, &["tail", "--lines", "abc"])).unwrap_err();
+        let err = run_log_cmd(&argv_with_path(&p, &["tail", "--lines", "abc"])).unwrap_err();
         assert!(err.contains("invalid --lines"), "got {err}");
     }
 
@@ -607,10 +607,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("llm.jsonl");
         let mut f = fs::File::create(&p).unwrap();
-        writeln!(f, r#"{{"timestamp":"t","provider":"p","model":"m","status":"ok"}}"#).unwrap();
+        writeln!(
+            f,
+            r#"{{"timestamp":"t","provider":"p","model":"m","status":"ok"}}"#
+        )
+        .unwrap();
         writeln!(f, "{{ this is not valid json").unwrap();
         writeln!(f, r#""hello""#).unwrap(); // valid JSON but not an object
-        writeln!(f, r#"{{"timestamp":"t","provider":"p","model":"m","status":"ok"}}"#).unwrap();
+        writeln!(
+            f,
+            r#"{{"timestamp":"t","provider":"p","model":"m","status":"ok"}}"#
+        )
+        .unwrap();
         f.flush().unwrap();
         drop(f);
         let v = run_log_cmd(&argv_with_path(&p, &["summary"])).unwrap();

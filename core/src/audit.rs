@@ -101,9 +101,8 @@ pub fn log_entry(
 /// Callers that need stronger guarantees should not use this API.
 pub fn log_event(audit_path: &Path, mut entry: serde_json::Value) {
     if let Some(obj) = entry.as_object_mut() {
-        obj.entry("timestamp").or_insert_with(|| {
-            json!(Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string())
-        });
+        obj.entry("timestamp")
+            .or_insert_with(|| json!(Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()));
         if !obj.contains_key("trace_id") {
             if let Ok(tid) = std::env::var("COS_TRACE_ID") {
                 if !tid.is_empty() {

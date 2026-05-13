@@ -20,8 +20,8 @@ use base64::Engine;
 
 use crate::agent::llm::{ChatRequest, ContentBlock, Message, Provider, Role};
 
-use super::routing::ImageMime;
 use super::super::MediaError;
+use super::routing::ImageMime;
 
 #[derive(Debug, Clone)]
 pub enum ImageInput {
@@ -153,14 +153,14 @@ pub fn build_user_message(prompt: &str, mime: ImageMime, base64_data: &str) -> M
 
 /// Download a remote image and return (bytes, sniffed_mime).
 pub async fn fetch_image(url: &str, timeout: Duration) -> Result<(Vec<u8>, ImageMime), MediaError> {
-    let mut builder = reqwest::Client::builder().user_agent(concat!(
-        "cos-agent/",
-        env!("CARGO_PKG_VERSION")
-    ));
+    let mut builder =
+        reqwest::Client::builder().user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")));
     if timeout > Duration::from_secs(0) {
         builder = builder.timeout(timeout);
     }
-    let client = builder.build().map_err(|e| MediaError::Internal(e.to_string()))?;
+    let client = builder
+        .build()
+        .map_err(|e| MediaError::Internal(e.to_string()))?;
     let resp = client
         .get(url)
         .send()
@@ -281,8 +281,8 @@ mod tests {
     use futures_util::stream::BoxStream;
 
     use crate::agent::llm::{
-        ChatRequest, ChatResponse, ContentBlock, FinishReason, Provider, Result as LlmResult,
-        Role, StreamEvent, Usage,
+        ChatRequest, ChatResponse, ContentBlock, FinishReason, Provider, Result as LlmResult, Role,
+        StreamEvent, Usage,
     };
 
     #[test]

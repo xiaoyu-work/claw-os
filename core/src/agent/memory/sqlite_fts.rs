@@ -224,11 +224,7 @@ impl MemoryDb {
     }
 
     /// Most recent `limit` messages for `session_id`, oldest first.
-    pub fn recent(
-        &self,
-        session_id: &str,
-        limit: usize,
-    ) -> Result<Vec<MessageRow>, MemoryError> {
+    pub fn recent(&self, session_id: &str, limit: usize) -> Result<Vec<MessageRow>, MemoryError> {
         let conn = self.lock_conn()?;
         // Use id as a tiebreaker — ts_ms granularity is milliseconds, but
         // inserts on a fast machine can collide. id is monotonic.
@@ -344,19 +340,14 @@ impl MemoryDb {
     /// kept in sync via the `messages_ad` trigger; orphaned rows in
     /// `session_titles` (titles for sessions whose every message was
     /// purged) are also removed.
-    pub fn purge_older_than_ms(
-        &self,
-        cutoff_ts_ms: i64,
-    ) -> Result<PurgeStats, MemoryError> {
+    pub fn purge_older_than_ms(&self, cutoff_ts_ms: i64) -> Result<PurgeStats, MemoryError> {
         let conn = self.lock_conn()?;
         // Count distinct sessions that will be fully emptied so we
         // can report it before the DELETE wipes the rows.
         let sessions_before: usize = conn
-            .query_row(
-                "SELECT COUNT(DISTINCT session_id) FROM messages",
-                [],
-                |r| r.get::<_, i64>(0),
-            )
+            .query_row("SELECT COUNT(DISTINCT session_id) FROM messages", [], |r| {
+                r.get::<_, i64>(0)
+            })
             .map(|n| n as usize)
             .unwrap_or(0);
         let messages_deleted = conn.execute(
@@ -364,11 +355,9 @@ impl MemoryDb {
             params![cutoff_ts_ms],
         )?;
         let sessions_after: usize = conn
-            .query_row(
-                "SELECT COUNT(DISTINCT session_id) FROM messages",
-                [],
-                |r| r.get::<_, i64>(0),
-            )
+            .query_row("SELECT COUNT(DISTINCT session_id) FROM messages", [], |r| {
+                r.get::<_, i64>(0)
+            })
             .map(|n| n as usize)
             .unwrap_or(0);
         let sessions_emptied = sessions_before.saturating_sub(sessions_after);
@@ -388,10 +377,7 @@ impl MemoryDb {
     /// Read-only counterpart of [`purge_older_than_ms`]. Returns
     /// what *would* be deleted without mutating any rows, so callers
     /// can implement `--dry-run`.
-    pub fn count_older_than_ms(
-        &self,
-        cutoff_ts_ms: i64,
-    ) -> Result<PurgeStats, MemoryError> {
+    pub fn count_older_than_ms(&self, cutoff_ts_ms: i64) -> Result<PurgeStats, MemoryError> {
         let conn = self.lock_conn()?;
         let messages_deleted: usize = conn
             .query_row(
@@ -448,19 +434,15 @@ impl MemoryDb {
             .map(|n| n as usize)
             .unwrap_or(0);
         let total_sessions: usize = conn
-            .query_row(
-                "SELECT COUNT(DISTINCT session_id) FROM messages",
-                [],
-                |r| r.get::<_, i64>(0),
-            )
+            .query_row("SELECT COUNT(DISTINCT session_id) FROM messages", [], |r| {
+                r.get::<_, i64>(0)
+            })
             .map(|n| n as usize)
             .unwrap_or(0);
         let titled_sessions: usize = conn
-            .query_row(
-                "SELECT COUNT(*) FROM session_titles",
-                [],
-                |r| r.get::<_, i64>(0),
-            )
+            .query_row("SELECT COUNT(*) FROM session_titles", [], |r| {
+                r.get::<_, i64>(0)
+            })
             .map(|n| n as usize)
             .unwrap_or(0);
         let mut count_since = |cutoff: i64| -> usize {
@@ -476,9 +458,8 @@ impl MemoryDb {
         let messages_last_7d = count_since(now_ms.saturating_sub(7 * DAY_MS));
         let messages_last_30d = count_since(now_ms.saturating_sub(30 * DAY_MS));
         // by_role tally, count desc.
-        let mut stmt = conn.prepare(
-            "SELECT role, COUNT(*) AS n FROM messages GROUP BY role ORDER BY n DESC",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT role, COUNT(*) AS n FROM messages GROUP BY role ORDER BY n DESC")?;
         let by_role: Vec<(String, usize)> = stmt
             .query_map([], |row| {
                 let role: String = row.get(0)?;
@@ -491,15 +472,11 @@ impl MemoryDb {
             (None, None)
         } else {
             let row = conn
-                .query_row(
-                    "SELECT MIN(ts_ms), MAX(ts_ms) FROM messages",
-                    [],
-                    |r| {
-                        let lo: Option<i64> = r.get(0)?;
-                        let hi: Option<i64> = r.get(1)?;
-                        Ok((lo, hi))
-                    },
-                )
+                .query_row("SELECT MIN(ts_ms), MAX(ts_ms) FROM messages", [], |r| {
+                    let lo: Option<i64> = r.get(0)?;
+                    let hi: Option<i64> = r.get(1)?;
+                    Ok((lo, hi))
+                })
                 .unwrap_or((None, None));
             row
         };
@@ -885,7 +862,8 @@ mod tests {
     #[test]
     fn search_multi_word_is_implicit_and() {
         let db = db();
-        db.record_message("s", "user", "hot soup is delicious").unwrap();
+        db.record_message("s", "user", "hot soup is delicious")
+            .unwrap();
         db.record_message("s", "user", "cold lemonade is refreshing")
             .unwrap();
         let hits = db.search("hot soup", 10).unwrap();
@@ -947,7 +925,8 @@ mod tests {
     fn purge_older_than_ms_drops_only_below_cutoff() {
         let db = db();
         db.record_message_at("a", "user", "ancient", 100).unwrap();
-        db.record_message_at("a", "user", "less ancient", 500).unwrap();
+        db.record_message_at("a", "user", "less ancient", 500)
+            .unwrap();
         db.record_message_at("b", "user", "fresh", 5000).unwrap();
         let stats = db.purge_older_than_ms(1000).unwrap();
         assert_eq!(stats.messages_deleted, 2);
@@ -998,7 +977,10 @@ mod tests {
         let db = db();
         db.record_message_at("s", "user", "exact", 1000).unwrap();
         let stats = db.purge_older_than_ms(1000).unwrap();
-        assert_eq!(stats.messages_deleted, 0, "row at exact cutoff must be kept");
+        assert_eq!(
+            stats.messages_deleted, 0,
+            "row at exact cutoff must be kept"
+        );
         assert_eq!(db.count_total().unwrap(), 1);
     }
 
@@ -1035,11 +1017,15 @@ mod tests {
     fn stats_buckets_recency_correctly() {
         let db = db();
         let now: i64 = 100 * 86_400_000; // day 100 in ms
-        // 1 row at now-2h, 1 at now-3d, 1 at now-15d, 1 at now-60d.
-        db.record_message_at("s", "user", "a", now - 2 * 3_600_000).unwrap();
-        db.record_message_at("s", "user", "b", now - 3 * 86_400_000).unwrap();
-        db.record_message_at("s", "user", "c", now - 15 * 86_400_000).unwrap();
-        db.record_message_at("t", "user", "d", now - 60 * 86_400_000).unwrap();
+                                         // 1 row at now-2h, 1 at now-3d, 1 at now-15d, 1 at now-60d.
+        db.record_message_at("s", "user", "a", now - 2 * 3_600_000)
+            .unwrap();
+        db.record_message_at("s", "user", "b", now - 3 * 86_400_000)
+            .unwrap();
+        db.record_message_at("s", "user", "c", now - 15 * 86_400_000)
+            .unwrap();
+        db.record_message_at("t", "user", "d", now - 60 * 86_400_000)
+            .unwrap();
         let s = db.stats(now).unwrap();
         assert_eq!(s.total_messages, 4);
         assert_eq!(s.total_sessions, 2);
@@ -1115,10 +1101,14 @@ mod tests {
         let db = db();
         let now: i64 = 100 * 86_400_000;
         // 1 row at now-2h, 1 at now-3d, 1 at now-15d, 1 at now-60d.
-        db.record_message_at("s", "user", "a", now - 2 * 3_600_000).unwrap();
-        db.record_message_at("s", "user", "b", now - 3 * 86_400_000).unwrap();
-        db.record_message_at("s", "user", "c", now - 15 * 86_400_000).unwrap();
-        db.record_message_at("s", "user", "d", now - 60 * 86_400_000).unwrap();
+        db.record_message_at("s", "user", "a", now - 2 * 3_600_000)
+            .unwrap();
+        db.record_message_at("s", "user", "b", now - 3 * 86_400_000)
+            .unwrap();
+        db.record_message_at("s", "user", "c", now - 15 * 86_400_000)
+            .unwrap();
+        db.record_message_at("s", "user", "d", now - 60 * 86_400_000)
+            .unwrap();
         // Add noise in another session — must not leak into our buckets.
         db.record_message_at("noise", "user", "z", now).unwrap();
         let s = db.stats_for_session("s", now).unwrap();
@@ -1257,7 +1247,10 @@ mod tests {
     fn set_title_persists_and_reads_back() {
         let db = db();
         db.set_title("s1", "Hello session").unwrap();
-        assert_eq!(db.title_for("s1").unwrap().as_deref(), Some("Hello session"));
+        assert_eq!(
+            db.title_for("s1").unwrap().as_deref(),
+            Some("Hello session")
+        );
     }
 
     #[test]
@@ -1291,8 +1284,7 @@ mod tests {
 
     #[test]
     fn open_persists_and_reopens_cleanly() {
-        let dir = std::env::temp_dir()
-            .join(format!("cos-mem-persist-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("cos-mem-persist-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("memory.db");
 

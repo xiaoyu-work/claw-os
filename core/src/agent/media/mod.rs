@@ -54,4 +54,3 @@ pub enum MediaError {
     #[error("media internal: {0}")]
     Internal(String),
 }
-

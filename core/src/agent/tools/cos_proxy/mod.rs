@@ -123,8 +123,8 @@ impl Tool for CosPrimitiveTool {
 
         match join {
             Ok(Ok(value)) => {
-                let serialized = serde_json::to_string(&value)
-                    .unwrap_or_else(|_| value.to_string());
+                let serialized =
+                    serde_json::to_string(&value).unwrap_or_else(|_| value.to_string());
                 ToolResult::ok(serialized)
             }
             Ok(Err(message)) => ToolResult::err(message),
@@ -160,8 +160,8 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
                       stats, result.",
         primitive: crate::proc::run,
         commands: &[
-            "spawn", "status", "output", "kill", "list", "wait", "signal",
-            "result", "stats", "renice",
+            "spawn", "status", "output", "kill", "list", "wait", "signal", "result", "stats",
+            "renice",
         ],
     },
     PrimitiveSpec {
@@ -170,7 +170,13 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
                       uptime, proc, mounts, net, cgroup.",
         primitive: crate::sysinfo::run,
         commands: &[
-            "info", "env", "resources", "uptime", "proc", "mounts", "net",
+            "info",
+            "env",
+            "resources",
+            "uptime",
+            "proc",
+            "mounts",
+            "net",
             "cgroup",
         ],
     },
@@ -181,7 +187,12 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
                       and OAuth-token refresh supported.",
         primitive: crate::credential::run,
         commands: &[
-            "store", "load", "revoke", "list", "bundle", "load-bundle",
+            "store",
+            "load",
+            "revoke",
+            "list",
+            "bundle",
+            "load-bundle",
             "oauth-refresh",
         ],
     },
@@ -191,8 +202,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
                       service. Cron expression syntax.",
         primitive: crate::cron::run,
         commands: &[
-            "add", "remove", "list", "status", "enable", "disable", "logs",
-            "run", "tick",
+            "add", "remove", "list", "status", "enable", "disable", "logs", "run", "tick",
         ],
     },
     PrimitiveSpec {
@@ -202,8 +212,14 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
                       supported. Quotas enforced per namespace.",
         primitive: crate::checkpoint::run,
         commands: &[
-            "create", "diff", "rollback", "list", "status", "quota-set",
-            "quota-status", "namespaces",
+            "create",
+            "diff",
+            "rollback",
+            "list",
+            "status",
+            "quota-set",
+            "quota-status",
+            "namespaces",
         ],
     },
     PrimitiveSpec {
@@ -213,8 +229,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
                       stop-all to halt every running service.",
         primitive: crate::service::run,
         commands: &[
-            "start", "stop", "stop-all", "restart", "status", "health", "list",
-            "logs", "register",
+            "start", "stop", "stop-all", "restart", "status", "health", "list", "logs", "register",
         ],
     },
     PrimitiveSpec {
@@ -238,8 +253,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
                       pipes on Windows). Includes lock/barrier primitives.",
         primitive: crate::ipc::run,
         commands: &[
-            "send", "recv", "list", "clear", "lock", "unlock", "locks",
-            "barrier", "pipe",
+            "send", "recv", "list", "clear", "lock", "unlock", "locks", "barrier", "pipe",
         ],
     },
     PrimitiveSpec {
@@ -256,8 +270,17 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
                       policy, export, per-rule rate limits.",
         primitive: crate::netfilter::run,
         commands: &[
-            "add", "remove", "list", "check", "reset", "default", "export",
-            "rate-limit", "rate-limits", "rate-limit-remove", "rate-check",
+            "add",
+            "remove",
+            "list",
+            "check",
+            "reset",
+            "default",
+            "export",
+            "rate-limit",
+            "rate-limits",
+            "rate-limit-remove",
+            "rate-check",
         ],
     },
     PrimitiveSpec {
@@ -343,7 +366,9 @@ mod tests {
                 spec.name
             );
             assert!(
-                spec.name.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+                spec.name
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c == '_'),
                 "name {} not snake_case",
                 spec.name
             );
@@ -371,9 +396,7 @@ mod tests {
             .pointer("/properties/command/enum")
             .and_then(Value::as_array)
             .expect("enum must be present");
-        assert!(enum_vals
-            .iter()
-            .any(|v| v.as_str() == Some("exec")));
+        assert!(enum_vals.iter().any(|v| v.as_str() == Some("exec")));
     }
 
     #[tokio::test]
@@ -392,12 +415,7 @@ mod tests {
 
     #[tokio::test]
     async fn missing_command_field_is_returned_as_tool_error() {
-        let tool = CosPrimitiveTool::new(
-            "cos_sandbox",
-            "test",
-            crate::sandbox::run,
-            &["exec"],
-        );
+        let tool = CosPrimitiveTool::new("cos_sandbox", "test", crate::sandbox::run, &["exec"]);
         let result = tool.exec(json!({ "args": ["whatever"] })).await;
         assert!(result.is_error);
         assert!(result.content.contains("missing 'command'"));
@@ -406,12 +424,7 @@ mod tests {
     #[tokio::test]
     async fn args_default_to_empty() {
         // sysinfo "info" works with zero args on every platform.
-        let tool = CosPrimitiveTool::new(
-            "cos_sysinfo",
-            "test",
-            crate::sysinfo::run,
-            &["info"],
-        );
+        let tool = CosPrimitiveTool::new("cos_sysinfo", "test", crate::sysinfo::run, &["info"]);
         let result = tool.exec(json!({ "command": "info" })).await;
         assert!(
             !result.is_error,

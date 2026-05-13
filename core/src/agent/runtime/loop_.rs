@@ -11,9 +11,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::agent::context::compressor::{
-    self, Compressor, CompressorConfig, LlmCompressor,
-};
+use crate::agent::context::compressor::{self, Compressor, CompressorConfig, LlmCompressor};
 use crate::agent::context::think_scrub::ThinkScrubber;
 use crate::agent::llm::accumulate::StreamSink;
 use crate::agent::llm::{self, Message, Provider};
@@ -85,7 +83,15 @@ pub async fn ask_with_memory(
     db: &MemoryDb,
     session_id: &str,
 ) -> Result<AskResult, AgentError> {
-    ask_inner(provider, cfg, user_prompt, tools, Some((db, session_id)), None).await
+    ask_inner(
+        provider,
+        cfg,
+        user_prompt,
+        tools,
+        Some((db, session_id)),
+        None,
+    )
+    .await
 }
 
 /// Same as [`ask_with_memory`] but additionally compresses the running
@@ -171,10 +177,7 @@ async fn ask_inner(
     // freshly-minted UUID so concurrent unrecorded sessions still get
     // independent interrupt scopes. Handle's `Drop` cleans up.
     let interrupt_handle = if session_id.is_empty() {
-        interrupt::register(format!(
-            "ephemeral-{}",
-            uuid::Uuid::new_v4().simple()
-        ))
+        interrupt::register(format!("ephemeral-{}", uuid::Uuid::new_v4().simple()))
     } else {
         interrupt::register(session_id.clone())
     };
@@ -186,10 +189,8 @@ async fn ask_inner(
     // unregisters them on drop so concurrent unrelated calls / tests
     // are not affected.
     let hook_registry = hooks::global_registry();
-    let _hooks_auto_guard = hooks_config::load_and_register(
-        &crate::paths::agent_hooks_path(),
-        hook_registry.clone(),
-    );
+    let _hooks_auto_guard =
+        hooks_config::load_and_register(&crate::paths::agent_hooks_path(), hook_registry.clone());
     let hook_ctx_base = hooks::HookContext::new(
         interrupt_handle.session_id().to_string(),
         provider.name(),
@@ -229,7 +230,9 @@ async fn ask_inner(
             if c.should_compress(Some(&system), &messages) {
                 let before = messages.len();
                 let est_before = compressor::estimate_total_tokens(Some(&system), &messages);
-                messages = c.compress(Some(&system), std::mem::take(&mut messages)).await;
+                messages = c
+                    .compress(Some(&system), std::mem::take(&mut messages))
+                    .await;
                 let after = messages.len();
                 let est_after = compressor::estimate_total_tokens(Some(&system), &messages);
                 tracing::info!(
@@ -358,17 +361,12 @@ async fn ask_inner(
                     let aux = match auxiliary_from_cfg(cfg) {
                         Ok(a) => a,
                         Err(e) => {
-                            tracing::warn!(
-                                "title: auxiliary build failed: {e}; using heuristic"
-                            );
+                            tracing::warn!("title: auxiliary build failed: {e}; using heuristic");
                             None
                         }
                     };
-                    let title = crate::agent::title::generate_title(
-                        aux.as_ref(),
-                        user_prompt,
-                    )
-                    .await;
+                    let title =
+                        crate::agent::title::generate_title(aux.as_ref(), user_prompt).await;
                     if let Err(e) = db.set_title(sid, &title) {
                         tracing::warn!("title: failed to record session title: {e}");
                     }
@@ -436,10 +434,7 @@ async fn ask_inner_streaming(
     let session_id = recorder.map(|(_, sid)| sid.to_string()).unwrap_or_default();
 
     let interrupt_handle = if session_id.is_empty() {
-        interrupt::register(format!(
-            "ephemeral-{}",
-            uuid::Uuid::new_v4().simple()
-        ))
+        interrupt::register(format!("ephemeral-{}", uuid::Uuid::new_v4().simple()))
     } else {
         interrupt::register(session_id.clone())
     };
@@ -449,10 +444,8 @@ async fn ask_inner_streaming(
     // non-streaming surfaces share the same hooks. Auto-loaded
     // hooks are scoped to this single invocation via the guard.
     let hook_registry = hooks::global_registry();
-    let _hooks_auto_guard = hooks_config::load_and_register(
-        &crate::paths::agent_hooks_path(),
-        hook_registry.clone(),
-    );
+    let _hooks_auto_guard =
+        hooks_config::load_and_register(&crate::paths::agent_hooks_path(), hook_registry.clone());
     let hook_ctx_base = hooks::HookContext::new(
         interrupt_handle.session_id().to_string(),
         provider.name(),
@@ -474,14 +467,15 @@ async fn ask_inner_streaming(
         }
 
         if cfg.think_scrub_enabled {
-            let new_msgs =
-                ThinkScrubber::new().scrub_messages(std::mem::take(&mut messages));
+            let new_msgs = ThinkScrubber::new().scrub_messages(std::mem::take(&mut messages));
             messages = new_msgs;
         }
 
         if let Some(c) = compressor.as_ref() {
             if c.should_compress(Some(&system), &messages) {
-                messages = c.compress(Some(&system), std::mem::take(&mut messages)).await;
+                messages = c
+                    .compress(Some(&system), std::mem::take(&mut messages))
+                    .await;
             }
         }
 
@@ -587,17 +581,12 @@ async fn ask_inner_streaming(
                     let aux = match auxiliary_from_cfg(cfg) {
                         Ok(a) => a,
                         Err(e) => {
-                            tracing::warn!(
-                                "title: auxiliary build failed: {e}; using heuristic"
-                            );
+                            tracing::warn!("title: auxiliary build failed: {e}; using heuristic");
                             None
                         }
                     };
-                    let title = crate::agent::title::generate_title(
-                        aux.as_ref(),
-                        user_prompt,
-                    )
-                    .await;
+                    let title =
+                        crate::agent::title::generate_title(aux.as_ref(), user_prompt).await;
                     if let Err(e) = db.set_title(sid, &title) {
                         tracing::warn!("title: failed to record session title: {e}");
                     }
@@ -615,7 +604,6 @@ async fn ask_inner_streaming(
 
     Err(AgentError::MaxTurnsExceeded(cfg.max_turns))
 }
-
 
 /// Convenience: read `cfg` from global config, build the default tool
 /// registry, construct the registered provider, open the default memory DB,
@@ -786,7 +774,8 @@ pub fn auxiliary_from_cfg(
         })?;
     let provider = llm::registry::build(provider_name, model, cfg)
         .map_err(|e| AgentError::Internal(format!("auxiliary provider build: {e}")))?;
-    let mut acfg = AuxiliaryConfig::new(provider_name, model).with_max_tokens(cfg.auxiliary_max_tokens);
+    let mut acfg =
+        AuxiliaryConfig::new(provider_name, model).with_max_tokens(cfg.auxiliary_max_tokens);
     if let Some(t) = cfg.auxiliary_temperature {
         acfg = acfg.with_temperature(t);
     }
@@ -846,7 +835,9 @@ mod tests {
         let cfg = cfg();
         let provider: Arc<dyn Provider> = Arc::new(MockProvider::new(&cfg.model, &cfg));
         let tools = builtin_only_registry();
-        let result = ask_with(provider, &cfg, "hello there", &tools).await.unwrap();
+        let result = ask_with(provider, &cfg, "hello there", &tools)
+            .await
+            .unwrap();
         assert_eq!(result.turns, 1);
         assert!(result.answer.contains("hello there"));
     }
@@ -885,7 +876,9 @@ mod tests {
 
         let provider: Arc<dyn Provider> = Arc::new(mock);
         let tools = builtin_only_registry();
-        let result = ask_with(provider, &cfg, "do bad thing", &tools).await.unwrap();
+        let result = ask_with(provider, &cfg, "do bad thing", &tools)
+            .await
+            .unwrap();
         // Loop should not panic; final answer arrives turn 2.
         assert_eq!(result.answer, "recovered");
     }
@@ -950,16 +943,9 @@ mod tests {
         let db = MemoryDb::open_in_memory().unwrap();
         let sid = "test-session";
 
-        let result = ask_with_memory(
-            provider,
-            &cfg,
-            "what is 2 + 2?",
-            &tools,
-            &db,
-            sid,
-        )
-        .await
-        .unwrap();
+        let result = ask_with_memory(provider, &cfg, "what is 2 + 2?", &tools, &db, sid)
+            .await
+            .unwrap();
         assert_eq!(result.answer, "a deliberate reply");
         assert_eq!(result.session_id, sid);
 
@@ -986,9 +972,16 @@ mod tests {
         let db = MemoryDb::open_in_memory().unwrap();
         let sid = "title-1";
 
-        ask_with_memory(provider, &cfg, "How does Rust borrow checker work?", &tools, &db, sid)
-            .await
-            .unwrap();
+        ask_with_memory(
+            provider,
+            &cfg,
+            "How does Rust borrow checker work?",
+            &tools,
+            &db,
+            sid,
+        )
+        .await
+        .unwrap();
 
         let title = db.title_for(sid).unwrap();
         assert_eq!(title.as_deref(), Some("How does Rust borrow checker work?"));
@@ -1029,7 +1022,9 @@ mod tests {
         let provider: Arc<dyn Provider> = Arc::new(mock);
         let tools = builtin_only_registry();
 
-        let _ = ask_with(provider, &cfg, "no memory here", &tools).await.unwrap();
+        let _ = ask_with(provider, &cfg, "no memory here", &tools)
+            .await
+            .unwrap();
         // Open a fresh in-memory DB and confirm it stayed untouched
         // (ask_with received no DB handle).
         let db = MemoryDb::open_in_memory().unwrap();
@@ -1068,7 +1063,9 @@ mod tests {
             user_row.content
         );
         assert!(
-            !user_row.content.contains("ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+            !user_row
+                .content
+                .contains("ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
             "user content should not retain raw ghp_ token: {}",
             user_row.content
         );
@@ -1099,10 +1096,15 @@ mod tests {
         let db = MemoryDb::open_in_memory().unwrap();
         let sid = "redact-tool";
 
-        ask_with_memory(provider, &cfg, "go", &tools, &db, sid).await.unwrap();
+        ask_with_memory(provider, &cfg, "go", &tools, &db, sid)
+            .await
+            .unwrap();
 
         let recent = db.recent(sid, 10).unwrap();
-        let tool_row = recent.iter().find(|r| r.content.contains("[tool_result]")).expect("tool_result row present");
+        let tool_row = recent
+            .iter()
+            .find(|r| r.content.contains("[tool_result]"))
+            .expect("tool_result row present");
         assert!(
             !tool_row.content.contains("AKIAIOSFODNN7EXAMPLE"),
             "tool_result row leaked AWS key into memory.db: {}",
@@ -1303,11 +1305,7 @@ mod tests {
             fn should_compress(&self, _: Option<&str>, _: &[Message]) -> bool {
                 false
             }
-            async fn compress(
-                &self,
-                _: Option<&str>,
-                msgs: Vec<Message>,
-            ) -> Vec<Message> {
+            async fn compress(&self, _: Option<&str>, msgs: Vec<Message>) -> Vec<Message> {
                 self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 msgs
             }
@@ -1377,8 +1375,7 @@ mod tests {
         let provider: Arc<dyn Provider> = Arc::new(mock);
         let tools = builtin_only_registry();
 
-        let prompt =
-            "before <think>internal monologue that should disappear</think> and after";
+        let prompt = "before <think>internal monologue that should disappear</think> and after";
         let result = ask_with(provider, &cfg, prompt, &tools).await.unwrap();
         // The mock provider returns "done" as the final answer; what
         // matters here is that the loop ran without panicking despite
@@ -1456,8 +1453,7 @@ mod tests {
 
         let provider: Arc<dyn Provider> = Arc::new(mock);
         let mut tools = builtin_only_registry();
-        let g = crate::agent::tools::guardrails::Guardrails::permissive()
-            .deny_tool("now");
+        let g = crate::agent::tools::guardrails::Guardrails::permissive().deny_tool("now");
         tools.set_guardrails(g);
 
         let result = ask_with(provider, &cfg, "what time is it", &tools)
@@ -1473,8 +1469,7 @@ mod tests {
     #[test]
     fn registry_as_llm_tools_omits_denied_tools() {
         let mut tools = builtin_only_registry();
-        let g = crate::agent::tools::guardrails::Guardrails::permissive()
-            .deny_tool("echo");
+        let g = crate::agent::tools::guardrails::Guardrails::permissive().deny_tool("echo");
         tools.set_guardrails(g);
 
         let llm_tools = tools.as_llm_tools();
@@ -1488,12 +1483,17 @@ mod tests {
     #[test]
     fn registry_get_unfiltered_bypasses_guardrails() {
         let mut tools = builtin_only_registry();
-        let g = crate::agent::tools::guardrails::Guardrails::permissive()
-            .deny_tool("echo");
+        let g = crate::agent::tools::guardrails::Guardrails::permissive().deny_tool("echo");
         tools.set_guardrails(g);
 
-        assert!(tools.get("echo").is_none(), "filtered get must reject denied");
-        assert!(tools.get_unfiltered("echo").is_some(), "unfiltered must surface denied");
+        assert!(
+            tools.get("echo").is_none(),
+            "filtered get must reject denied"
+        );
+        assert!(
+            tools.get_unfiltered("echo").is_some(),
+            "unfiltered must surface denied"
+        );
         assert!(tools.get("now").is_some());
         assert!(tools.get_unfiltered("now").is_some());
     }
@@ -1516,7 +1516,9 @@ mod tests {
         let tools = builtin_only_registry();
         ask_with(provider, &cfg, "ping", &tools).await.unwrap();
 
-        let req = mock.last_request().expect("provider should have been called");
+        let req = mock
+            .last_request()
+            .expect("provider should have been called");
         assert!(
             crate::agent::prompt::caching::is_system_cached(&req),
             "expected __cache_system marker on request when provider supports cache"
@@ -1542,7 +1544,9 @@ mod tests {
         let tools = builtin_only_registry();
         ask_with(provider, &cfg, "ping", &tools).await.unwrap();
 
-        let req = mock.last_request().expect("provider should have been called");
+        let req = mock
+            .last_request()
+            .expect("provider should have been called");
         assert!(!crate::agent::prompt::caching::is_system_cached(&req));
         assert!(!crate::agent::prompt::caching::is_tools_cached(&req));
     }
@@ -1557,7 +1561,9 @@ mod tests {
         assert!(gate.config().dangerous.is_empty());
         assert!(gate.config().auto_approve.is_empty());
         assert!(gate.config().auto_deny.is_empty());
-        let out = gate.evaluate("anything", &serde_json::json!({}), "n/a").await;
+        let out = gate
+            .evaluate("anything", &serde_json::json!({}), "n/a")
+            .await;
         assert!(matches!(
             out,
             crate::agent::runtime::approval::ApprovalOutcome::Approved { .. }
@@ -1655,10 +1661,7 @@ mod tests {
         let err = auxiliary_from_cfg(&c).unwrap_err();
         match err {
             AgentError::Internal(msg) => {
-                assert!(
-                    msg.contains("auxiliary provider build"),
-                    "got: {msg}"
-                );
+                assert!(msg.contains("auxiliary provider build"), "got: {msg}");
             }
             other => panic!("expected Internal, got {other:?}"),
         }
@@ -1852,27 +1855,17 @@ mod tests {
         // Message + Done — exactly the non-truly-streaming-provider
         // case the accumulator handles via the explicit-Message path.
         let cfg = cfg();
-        let provider: Arc<dyn Provider> =
-            Arc::new(MockProvider::new(&cfg.model, &cfg));
+        let provider: Arc<dyn Provider> = Arc::new(MockProvider::new(&cfg.model, &cfg));
         let tools = builtin_only_registry();
         let sink: Arc<CapturingSink> = Arc::default();
-        let result = ask_with_stream(
-            provider,
-            &cfg,
-            "hello stream",
-            &tools,
-            None,
-            sink.clone(),
-        )
-        .await
-        .unwrap();
+        let result = ask_with_stream(provider, &cfg, "hello stream", &tools, None, sink.clone())
+            .await
+            .unwrap();
         assert_eq!(result.turns, 1);
         assert!(result.answer.contains("hello stream"));
         let events = sink.events.lock().unwrap();
         assert!(
-            events
-                .iter()
-                .any(|e| matches!(e, StreamEvent::Done { .. })),
+            events.iter().any(|e| matches!(e, StreamEvent::Done { .. })),
             "sink missing Done event; got {events:?}"
         );
     }
@@ -1923,15 +1916,7 @@ mod tests {
         let provider: Arc<dyn Provider> = Arc::new(mock);
         let tools = builtin_only_registry();
         let sink: Arc<CapturingSink> = Arc::default();
-        let res = ask_with_stream(
-            provider,
-            &cfg,
-            "boom",
-            &tools,
-            None,
-            sink,
-        )
-        .await;
+        let res = ask_with_stream(provider, &cfg, "boom", &tools, None, sink).await;
         assert!(matches!(res, Err(AgentError::Llm(_))));
     }
 
@@ -1969,8 +1954,7 @@ mod tests {
             // Tight loop: as soon as `ask_with_memory` registers under
             // `sid_clone`, signal it. Bound by 200ms so we don't hang
             // CI if registration ever stalls (it shouldn't).
-            let deadline = tokio::time::Instant::now()
-                + std::time::Duration::from_millis(200);
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(200);
             loop {
                 if interrupt::signal(&sid_clone) {
                     break;
@@ -1982,15 +1966,7 @@ mod tests {
             }
         });
 
-        let res = ask_with_memory(
-            provider,
-            &cfg,
-            "irrelevant",
-            &tools,
-            &db,
-            &sid,
-        )
-        .await;
+        let res = ask_with_memory(provider, &cfg, "irrelevant", &tools, &db, &sid).await;
         signaller.await.unwrap();
 
         // We expect an Interrupted error OR — in the rare race where
@@ -2114,7 +2090,11 @@ mod tests {
 
         assert!(pre.load(Ordering::SeqCst) >= 1, "pre_turn should fire");
         assert!(post.load(Ordering::SeqCst) >= 1, "post_turn should fire");
-        let summary = last_summary.lock().unwrap().clone().expect("summary captured");
+        let summary = last_summary
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("summary captured");
         assert!(summary.success);
         assert_eq!(summary.stop_reason, "Final");
     }
@@ -2123,9 +2103,7 @@ mod tests {
     /// AgentError::Interrupted before the model is even called.
     #[tokio::test]
     async fn pre_turn_hook_stop_aborts_loop_with_interrupted() {
-        use crate::agent::runtime::hooks::{
-            global_registry, Hook, HookContext, HookOutcome,
-        };
+        use crate::agent::runtime::hooks::{global_registry, Hook, HookContext, HookOutcome};
 
         struct Stopper;
         impl Hook for Stopper {
@@ -2212,17 +2190,21 @@ mod tests {
 
         global_registry().unregister("stream-loop-spy");
 
-        assert!(pre.load(Ordering::SeqCst) >= 1, "streaming pre_turn should fire");
-        assert!(post.load(Ordering::SeqCst) >= 1, "streaming post_turn should fire");
+        assert!(
+            pre.load(Ordering::SeqCst) >= 1,
+            "streaming pre_turn should fire"
+        );
+        assert!(
+            post.load(Ordering::SeqCst) >= 1,
+            "streaming post_turn should fire"
+        );
     }
 
     /// Streaming pre_turn Stop also aborts with Interrupted —
     /// identical contract to the non-streaming path.
     #[tokio::test]
     async fn streaming_pre_turn_hook_stop_aborts_with_interrupted() {
-        use crate::agent::runtime::hooks::{
-            global_registry, Hook, HookContext, HookOutcome,
-        };
+        use crate::agent::runtime::hooks::{global_registry, Hook, HookContext, HookOutcome};
 
         struct StreamStopper;
         impl Hook for StreamStopper {
@@ -2296,11 +2278,7 @@ mod tests {
 
         global_registry().unregister("usage-spy");
 
-        let summary = captured
-            .lock()
-            .unwrap()
-            .clone()
-            .expect("post_turn fired");
+        let summary = captured.lock().unwrap().clone().expect("post_turn fired");
         assert_eq!(summary.input_tokens, 117);
         assert_eq!(summary.output_tokens, 42);
         assert_eq!(summary.cache_read_tokens, 11);

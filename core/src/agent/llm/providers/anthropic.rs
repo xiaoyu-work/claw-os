@@ -83,7 +83,10 @@ impl std::fmt::Debug for AnthropicConfig {
             .field("base_url", &self.base_url)
             .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
             .field("model", &self.model)
-            .field("extra_headers", &self.extra_headers.keys().collect::<Vec<_>>())
+            .field(
+                "extra_headers",
+                &self.extra_headers.keys().collect::<Vec<_>>(),
+            )
             .field("request_timeout", &self.request_timeout)
             .field("pool_len", &self.pool.as_ref().map(|p| p.len()))
             .finish()
@@ -147,10 +150,8 @@ pub struct AnthropicProvider {
 
 impl AnthropicProvider {
     pub fn new(cfg: AnthropicConfig) -> Self {
-        let mut builder = reqwest::Client::builder().user_agent(concat!(
-            "cos-agent/",
-            env!("CARGO_PKG_VERSION")
-        ));
+        let mut builder =
+            reqwest::Client::builder().user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")));
         if cfg.request_timeout > Duration::from_secs(0) {
             builder = builder.timeout(cfg.request_timeout);
         }
@@ -251,10 +252,7 @@ impl Provider for AnthropicProvider {
             let err = wire::classify_http_error(status, &bytes, retry_after_secs);
             if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
                 let body_str = std::str::from_utf8(&bytes).unwrap_or("");
-                let cls = crate::agent::llm::error_classifier::classify(
-                    status.as_u16(),
-                    body_str,
-                );
+                let cls = crate::agent::llm::error_classifier::classify(status.as_u16(), body_str);
                 pool.report_failure(l, cls);
             }
             return Err(err);
@@ -343,10 +341,7 @@ impl Provider for AnthropicProvider {
             let err = wire::classify_http_error(status, &bytes, retry_after_secs);
             if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
                 let body_str = std::str::from_utf8(&bytes).unwrap_or("");
-                let cls = crate::agent::llm::error_classifier::classify(
-                    status.as_u16(),
-                    body_str,
-                );
+                let cls = crate::agent::llm::error_classifier::classify(status.as_u16(), body_str);
                 pool.report_failure(l, cls);
             }
             return Err(err);
@@ -488,7 +483,10 @@ pub(crate) mod wire {
         }
     }
 
-    fn message_to_json(m: &crate::agent::llm::Message, cache_breakpoint: bool) -> serde_json::Value {
+    fn message_to_json(
+        m: &crate::agent::llm::Message,
+        cache_breakpoint: bool,
+    ) -> serde_json::Value {
         let role = role_to_str(m.role);
 
         // System messages would have been hoisted out before getting here.
@@ -653,10 +651,7 @@ pub(crate) mod wire {
         pub cache_creation_input_tokens: u32,
     }
 
-    pub(crate) fn response_to_chat(
-        resp: Response,
-        fallback_model: &str,
-    ) -> Result<ChatResponse> {
+    pub(crate) fn response_to_chat(resp: Response, fallback_model: &str) -> Result<ChatResponse> {
         let mut content_blocks: Vec<ContentBlock> = Vec::new();
         let mut tool_calls: Vec<ToolCall> = Vec::new();
 
@@ -671,11 +666,7 @@ pub(crate) mod wire {
                         name: name.clone(),
                         input: input.clone(),
                     });
-                    tool_calls.push(ToolCall {
-                        id,
-                        name,
-                        input,
-                    });
+                    tool_calls.push(ToolCall { id, name, input });
                 }
                 ContentBlockJson::Other => {}
             }
@@ -809,10 +800,7 @@ pub(crate) mod wire {
         /// `error` SSE events as `Err(LlmError::...)` without
         /// terminating the stream — caller decides whether to stop
         /// on first error.
-        pub(crate) fn process(
-            &mut self,
-            ev: &SseEvent,
-        ) -> Vec<Result<StreamEvent>> {
+        pub(crate) fn process(&mut self, ev: &SseEvent) -> Vec<Result<StreamEvent>> {
             // Once message_stop has fired, the stream is logically
             // closed. Any trailing events the upstream sends (or
             // bytes we haven't yet consumed when the wrapper signals
@@ -824,15 +812,12 @@ pub(crate) mod wire {
             // `event:` field is authoritative; `data` is JSON. We
             // also peek at the JSON's `type` to be defensive against
             // missing event headers (some upstreams omit them).
-            let payload: serde_json::Value =
-                match serde_json::from_str(&ev.data) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        return vec![Err(LlmError::Parse(format!(
-                            "anthropic sse json: {e}"
-                        )))];
-                    }
-                };
+            let payload: serde_json::Value = match serde_json::from_str(&ev.data) {
+                Ok(v) => v,
+                Err(e) => {
+                    return vec![Err(LlmError::Parse(format!("anthropic sse json: {e}")))];
+                }
+            };
             let kind = payload
                 .get("type")
                 .and_then(|t| t.as_str())
@@ -853,23 +838,16 @@ pub(crate) mod wire {
             }
         }
 
-        fn on_message_start(
-            &mut self,
-            payload: &serde_json::Value,
-        ) -> Vec<Result<StreamEvent>> {
+        fn on_message_start(&mut self, payload: &serde_json::Value) -> Vec<Result<StreamEvent>> {
             if let Some(msg) = payload.get("message") {
                 if let Some(m) = msg.get("model").and_then(|v| v.as_str()) {
                     self.model = m.to_string();
                 }
                 if let Some(u) = msg.get("usage") {
-                    self.usage.input_tokens = u
-                        .get("input_tokens")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0) as u32;
-                    self.usage.output_tokens = u
-                        .get("output_tokens")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0) as u32;
+                    self.usage.input_tokens =
+                        u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                    self.usage.output_tokens =
+                        u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                     self.usage.cache_read_tokens = u
                         .get("cache_read_input_tokens")
                         .and_then(|v| v.as_u64())
@@ -887,18 +865,12 @@ pub(crate) mod wire {
             &mut self,
             payload: &serde_json::Value,
         ) -> Vec<Result<StreamEvent>> {
-            let index = payload
-                .get("index")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32;
+            let index = payload.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
             let block = match payload.get("content_block") {
                 Some(b) => b,
                 None => return Vec::new(),
             };
-            let block_type = block
-                .get("type")
-                .and_then(|t| t.as_str())
-                .unwrap_or("");
+            let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
             match block_type {
                 "text" => {
                     self.blocks.insert(index, BlockState::Text);
@@ -933,18 +905,12 @@ pub(crate) mod wire {
             &mut self,
             payload: &serde_json::Value,
         ) -> Vec<Result<StreamEvent>> {
-            let index = payload
-                .get("index")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32;
+            let index = payload.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
             let delta = match payload.get("delta") {
                 Some(d) => d,
                 None => return Vec::new(),
             };
-            let delta_type = delta
-                .get("type")
-                .and_then(|t| t.as_str())
-                .unwrap_or("");
+            let delta_type = delta.get("type").and_then(|t| t.as_str()).unwrap_or("");
             match delta_type {
                 "text_delta" => {
                     let text = delta
@@ -965,9 +931,7 @@ pub(crate) mod wire {
                         .unwrap_or("")
                         .to_string();
                     let id_for_event = match self.blocks.get_mut(&index) {
-                        Some(BlockState::ToolUse {
-                            id, json_accum, ..
-                        }) => {
+                        Some(BlockState::ToolUse { id, json_accum, .. }) => {
                             json_accum.push_str(&partial);
                             id.clone()
                         }
@@ -993,10 +957,7 @@ pub(crate) mod wire {
             &mut self,
             payload: &serde_json::Value,
         ) -> Vec<Result<StreamEvent>> {
-            let index = payload
-                .get("index")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32;
+            let index = payload.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
             // For tool_use: parse accumulated JSON, emit final
             // ToolUse(ToolCall). For text: nothing — text deltas
             // already streamed; the consumer concatenates.
@@ -1014,33 +975,22 @@ pub(crate) mod wire {
                             Err(_) => serde_json::Value::String(json_accum),
                         }
                     };
-                    vec![Ok(StreamEvent::ToolUse(ToolCall {
-                        id,
-                        name,
-                        input,
-                    }))]
+                    vec![Ok(StreamEvent::ToolUse(ToolCall { id, name, input }))]
                 }
                 _ => Vec::new(),
             }
         }
 
-        fn on_message_delta(
-            &mut self,
-            payload: &serde_json::Value,
-        ) -> Vec<Result<StreamEvent>> {
+        fn on_message_delta(&mut self, payload: &serde_json::Value) -> Vec<Result<StreamEvent>> {
             if let Some(d) = payload.get("delta") {
-                if let Some(reason) =
-                    d.get("stop_reason").and_then(|v| v.as_str())
-                {
+                if let Some(reason) = d.get("stop_reason").and_then(|v| v.as_str()) {
                     self.stop_reason = Some(reason.to_string());
                 }
             }
             // Per Anthropic docs: usage.output_tokens here is the
             // running total. Overwrite (not accumulate).
             if let Some(u) = payload.get("usage") {
-                if let Some(out) =
-                    u.get("output_tokens").and_then(|v| v.as_u64())
-                {
+                if let Some(out) = u.get("output_tokens").and_then(|v| v.as_u64()) {
                     self.usage.output_tokens = out as u32;
                 }
             }
@@ -1059,9 +1009,9 @@ pub(crate) mod wire {
                 .unwrap_or("upstream stream error")
                 .to_string();
             match kind {
-                "rate_limit_error" => {
-                    LlmError::RateLimited { retry_after_ms: 1_000 }
-                }
+                "rate_limit_error" => LlmError::RateLimited {
+                    retry_after_ms: 1_000,
+                },
                 "authentication_error" | "permission_error" => LlmError::Auth,
                 "overloaded_error" => LlmError::Provider {
                     status: 529,
@@ -1250,10 +1200,7 @@ mod tests {
         let mut c = cfg();
         c.base_url = Some("https://api.anthropic.com".into());
         let provider = AnthropicProvider::from_agent_config("claude-3-5-haiku-20241022", &c);
-        assert_eq!(
-            provider.endpoint(),
-            "https://api.anthropic.com/v1/messages"
-        );
+        assert_eq!(provider.endpoint(), "https://api.anthropic.com/v1/messages");
     }
 
     // ---- is_configured ---------------------------------------------------
@@ -1786,7 +1733,7 @@ mod tests {
     fn body_out_of_range_breakpoint_dropped_silently() {
         use crate::agent::prompt::caching;
         let mut r = req_text("hi"); // 1 message
-        // Mark index 99 as a breakpoint — bigger than messages.len().
+                                    // Mark index 99 as a breakpoint — bigger than messages.len().
         caching::set_breakpoints(&mut r, vec![99]);
         let body = wire::build_request_body(&r, "claude-3-5-sonnet-20241022", false);
         let serialised = serde_json::to_string(&body).unwrap();
@@ -1821,10 +1768,7 @@ mod tests {
         std::env::set_var("COS_TEST_ANTH_POOL_A", "sk-ant-aaa");
         std::env::set_var("COS_TEST_ANTH_POOL_B", "sk-ant-bbb");
         let mut c = AgentConfig::default();
-        c.api_key_envs = vec![
-            "COS_TEST_ANTH_POOL_A".into(),
-            "COS_TEST_ANTH_POOL_B".into(),
-        ];
+        c.api_key_envs = vec!["COS_TEST_ANTH_POOL_A".into(), "COS_TEST_ANTH_POOL_B".into()];
         let ac = AnthropicConfig::from_agent_config("claude-3-5-haiku-20241022", &c);
         std::env::remove_var("COS_TEST_ANTH_POOL_A");
         std::env::remove_var("COS_TEST_ANTH_POOL_B");
@@ -1909,7 +1853,10 @@ mod tests {
                     "content_block_delta",
                     r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"!"}}"#,
                 ),
-                ev("content_block_stop", r#"{"type":"content_block_stop","index":0}"#),
+                ev(
+                    "content_block_stop",
+                    r#"{"type":"content_block_stop","index":0}"#,
+                ),
                 ev(
                     "message_delta",
                     r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}"#,
@@ -1967,7 +1914,10 @@ mod tests {
                     "content_block_delta",
                     r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"42}"}}"#,
                 ),
-                ev("content_block_stop", r#"{"type":"content_block_stop","index":0}"#),
+                ev(
+                    "content_block_stop",
+                    r#"{"type":"content_block_stop","index":0}"#,
+                ),
                 ev(
                     "message_delta",
                     r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":3}}"#,
@@ -2023,7 +1973,10 @@ mod tests {
                     "content_block_delta",
                     r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"not-json"}}"#,
                 ),
-                ev("content_block_stop", r#"{"type":"content_block_stop","index":0}"#),
+                ev(
+                    "content_block_stop",
+                    r#"{"type":"content_block_stop","index":0}"#,
+                ),
             ];
             let out: Vec<StreamEvent> = run(&mut c, events.iter())
                 .into_iter()
@@ -2063,7 +2016,10 @@ mod tests {
                     "content_block_delta",
                     r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"abc"}}"#,
                 ),
-                ev("content_block_stop", r#"{"type":"content_block_stop","index":0}"#),
+                ev(
+                    "content_block_stop",
+                    r#"{"type":"content_block_stop","index":0}"#,
+                ),
             ];
             let out = run(&mut c, events.iter());
             assert!(out.is_empty(), "thinking should not surface: {out:?}");
@@ -2190,7 +2146,13 @@ mod tests {
                 ],
             );
             let done = out.last().unwrap().as_ref().unwrap();
-            assert!(matches!(done, StreamEvent::Done { finish: FinishReason::Stop, .. }));
+            assert!(matches!(
+                done,
+                StreamEvent::Done {
+                    finish: FinishReason::Stop,
+                    ..
+                }
+            ));
         }
 
         #[test]
@@ -2207,7 +2169,13 @@ mod tests {
                 ],
             );
             let done = out.last().unwrap().as_ref().unwrap();
-            assert!(matches!(done, StreamEvent::Done { finish: FinishReason::Refusal, .. }));
+            assert!(matches!(
+                done,
+                StreamEvent::Done {
+                    finish: FinishReason::Refusal,
+                    ..
+                }
+            ));
         }
 
         #[test]
@@ -2275,12 +2243,8 @@ mod tests {
             s
         }
 
-        async fn collect(
-            chunks: Vec<Bytes>,
-        ) -> Vec<Result<StreamEvent>> {
-            let bytes_stream = stream::iter(
-                chunks.into_iter().map(Ok::<_, reqwest::Error>),
-            );
+        async fn collect(chunks: Vec<Bytes>) -> Vec<Result<StreamEvent>> {
+            let bytes_stream = stream::iter(chunks.into_iter().map(Ok::<_, reqwest::Error>));
             let mut s = wire::AnthropicStream::new(bytes_stream, "claude-x");
             let mut out = Vec::new();
             while let Some(ev) = s.next().await {

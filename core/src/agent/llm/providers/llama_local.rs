@@ -22,8 +22,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 use crate::agent::llm::{
-    ChatRequest, ChatResponse, ContentBlock, EngineInfo, FinishReason, LlmError, Provider,
-    Result, StreamEvent, Usage,
+    ChatRequest, ChatResponse, ContentBlock, EngineInfo, FinishReason, LlmError, Provider, Result,
+    StreamEvent, Usage,
 };
 use crate::config::AgentConfig;
 use crate::model::engines::llama_cpp::{self as llama_engine, LlamaConfig, LlamaEngine};
@@ -145,10 +145,8 @@ impl Provider for LlamaLocalProvider {
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
         let engine = self.ensure_engine().await?;
 
-        let prompt = llama_engine::render_messages_as_prompt(
-            request.system.as_deref(),
-            &request.messages,
-        );
+        let prompt =
+            llama_engine::render_messages_as_prompt(request.system.as_deref(), &request.messages);
 
         // Engine.generate is the Phase 0.5 boundary: returns a clear
         // "pending" error when the decode loop hasn't been wired yet.
@@ -216,8 +214,14 @@ mod tests {
             extract_model_path("llama_local:/tmp/m.gguf"),
             PathBuf::from("/tmp/m.gguf")
         );
-        assert_eq!(extract_model_path("/abs/m.gguf"), PathBuf::from("/abs/m.gguf"));
-        assert_eq!(extract_model_path("model.gguf"), PathBuf::from("model.gguf"));
+        assert_eq!(
+            extract_model_path("/abs/m.gguf"),
+            PathBuf::from("/abs/m.gguf")
+        );
+        assert_eq!(
+            extract_model_path("model.gguf"),
+            PathBuf::from("model.gguf")
+        );
     }
 
     #[test]
@@ -235,10 +239,8 @@ mod tests {
 
     #[test]
     fn is_configured_false_when_path_missing() {
-        let p = LlamaLocalProvider::new(
-            "/this/path/should/not/exist.gguf",
-            &AgentConfig::default(),
-        );
+        let p =
+            LlamaLocalProvider::new("/this/path/should/not/exist.gguf", &AgentConfig::default());
         assert!(!p.is_configured());
     }
 
@@ -249,9 +251,7 @@ mod tests {
     #[test]
     fn is_configured_requires_installed_engine() {
         let tmp_engines = tempfile::tempdir().unwrap();
-        crate::engine_pkg::paths::set_engines_dir_override(Some(
-            tmp_engines.path().to_path_buf(),
-        ));
+        crate::engine_pkg::paths::set_engines_dir_override(Some(tmp_engines.path().to_path_buf()));
 
         let tmp_gguf = std::env::temp_dir().join(format!(
             "cos-llama-prov-{}-{}.gguf",
@@ -277,9 +277,7 @@ mod tests {
     #[test]
     fn is_configured_true_when_engine_and_model_present() {
         let tmp_engines = tempfile::tempdir().unwrap();
-        crate::engine_pkg::paths::set_engines_dir_override(Some(
-            tmp_engines.path().to_path_buf(),
-        ));
+        crate::engine_pkg::paths::set_engines_dir_override(Some(tmp_engines.path().to_path_buf()));
 
         // Stand up a fake "installed engine".
         let lib_dir = tmp_engines.path().join("llama-cpp/v0/lib");
@@ -340,9 +338,7 @@ mod tests {
         // through `ensure_engine().await` runs on the current task
         // until it hits `spawn_blocking`. The `is_installed()` check
         // happens BEFORE `spawn_blocking`, so the override applies.
-        crate::engine_pkg::paths::set_engines_dir_override(Some(
-            tmp_engines.path().to_path_buf(),
-        ));
+        crate::engine_pkg::paths::set_engines_dir_override(Some(tmp_engines.path().to_path_buf()));
 
         let p = LlamaLocalProvider::new("/tmp/anything.gguf", &AgentConfig::default());
         let err = p.chat(req("/tmp/anything.gguf", "hi")).await.unwrap_err();

@@ -167,7 +167,12 @@ impl TtsProvider for EdgeTtsProvider {
         let now_js = utc_now_js_style(now_unix);
         let sec_ms_gec = generate_sec_ms_gec(now_unix);
         let sec_ms_gec_version = format!("1-{CHROMIUM_FULL_VERSION}");
-        let url = build_endpoint_url(&self.cfg.base_url, &connection_id, &sec_ms_gec, &sec_ms_gec_version)?;
+        let url = build_endpoint_url(
+            &self.cfg.base_url,
+            &connection_id,
+            &sec_ms_gec,
+            &sec_ms_gec_version,
+        )?;
         let config_frame = build_config_frame(&now_js, output_format);
         let ssml_frame = build_ssml_frame(&now_js, &request_id, &voice, &rate, &request.text);
 
@@ -177,9 +182,7 @@ impl TtsProvider for EdgeTtsProvider {
         } else {
             tokio::time::timeout(self.cfg.request_timeout, fut)
                 .await
-                .map_err(|_| {
-                    MediaError::Transport("edge tts: request timed out".to_string())
-                })??
+                .map_err(|_| MediaError::Transport("edge tts: request timed out".to_string()))??
         };
 
         if audio.is_empty() {
@@ -326,13 +329,7 @@ fn build_config_frame(now: &str, output_format: &str) -> String {
     )
 }
 
-fn build_ssml_frame(
-    now: &str,
-    request_id: &str,
-    voice: &str,
-    rate: &str,
-    text: &str,
-) -> String {
+fn build_ssml_frame(now: &str, request_id: &str, voice: &str, rate: &str, text: &str) -> String {
     let escaped_text = xml_escape(text);
     let escaped_voice = xml_escape(voice);
     let body = format!(
@@ -401,7 +398,10 @@ async fn run_synthesize(
             headers.insert("Sec-CH-UA", v);
         }
         headers.insert("Sec-CH-UA-Mobile", HeaderValue::from_static("?0"));
-        headers.insert("Sec-CH-UA-Platform", HeaderValue::from_static("\"Windows\""));
+        headers.insert(
+            "Sec-CH-UA-Platform",
+            HeaderValue::from_static("\"Windows\""),
+        );
     }
 
     let (mut ws, _resp) = tokio_tungstenite::connect_async(req)
@@ -417,9 +417,7 @@ async fn run_synthesize(
 
     let mut audio: Vec<u8> = Vec::new();
     while let Some(msg) = ws.next().await {
-        let msg = msg.map_err(|e| {
-            MediaError::Transport(format!("edge tts: ws recv: {e}"))
-        })?;
+        let msg = msg.map_err(|e| MediaError::Transport(format!("edge tts: ws recv: {e}")))?;
         match msg {
             Message::Text(text) => {
                 let path = parse_text_path(&text);
@@ -511,9 +509,8 @@ fn parse_binary_audio(data: &[u8]) -> Result<&[u8], MediaError> {
             data.len()
         )));
     }
-    let headers = std::str::from_utf8(&data[2..header_end]).map_err(|e| {
-        MediaError::Parse(format!("edge tts: binary frame headers not utf-8: {e}"))
-    })?;
+    let headers = std::str::from_utf8(&data[2..header_end])
+        .map_err(|e| MediaError::Parse(format!("edge tts: binary frame headers not utf-8: {e}")))?;
     let mut path: Option<&str> = None;
     for line in headers.split("\r\n") {
         if let Some(rest) = line.strip_prefix("Path:") {
@@ -606,12 +603,17 @@ mod tests {
     fn request_id_is_32_lowercase_hex() {
         let id = new_request_id();
         assert_eq!(id.len(), 32);
-        assert!(id.chars().all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()));
+        assert!(id
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()));
     }
 
     #[test]
     fn config_frame_includes_format_and_path() {
-        let f = build_config_frame("Wed, 06 May 2026 19:00:00 GMT", "audio-24khz-48kbitrate-mono-mp3");
+        let f = build_config_frame(
+            "Wed, 06 May 2026 19:00:00 GMT",
+            "audio-24khz-48kbitrate-mono-mp3",
+        );
         assert!(f.contains("Path:speech.config"));
         assert!(f.contains("X-Timestamp:Wed, 06 May 2026 19:00:00 GMT"));
         assert!(f.contains("Content-Type:application/json"));
@@ -639,13 +641,7 @@ mod tests {
 
     #[test]
     fn ssml_frame_escapes_text() {
-        let f = build_ssml_frame(
-            "T",
-            "id",
-            "v",
-            "+0%",
-            "Tom & Jerry <chase>",
-        );
+        let f = build_ssml_frame("T", "id", "v", "+0%", "Tom & Jerry <chase>");
         assert!(f.contains("Tom &amp; Jerry &lt;chase&gt;"));
         // Raw `<chase>` must not appear in the body.
         assert!(!f.contains(">Tom & Jerry <chase><"));
@@ -779,8 +775,7 @@ mod tests {
 
     #[test]
     fn build_endpoint_url_appends_with_ampersand_when_base_has_query() {
-        let url =
-            build_endpoint_url("wss://x?foo=bar", "abc", "DEAD", "1-1.0").unwrap();
+        let url = build_endpoint_url("wss://x?foo=bar", "abc", "DEAD", "1-1.0").unwrap();
         assert_eq!(
             url,
             "wss://x?foo=bar&ConnectionId=abc&Sec-MS-GEC=DEAD&Sec-MS-GEC-Version=1-1.0"
@@ -789,8 +784,7 @@ mod tests {
 
     #[test]
     fn build_endpoint_url_appends_with_question_mark_when_base_has_no_query() {
-        let url =
-            build_endpoint_url("wss://x/edge/v1", "abc", "DEAD", "1-1.0").unwrap();
+        let url = build_endpoint_url("wss://x/edge/v1", "abc", "DEAD", "1-1.0").unwrap();
         assert_eq!(
             url,
             "wss://x/edge/v1?ConnectionId=abc&Sec-MS-GEC=DEAD&Sec-MS-GEC-Version=1-1.0"
@@ -810,15 +804,22 @@ mod tests {
     fn ssml_frame_x_timestamp_has_trailing_z() {
         // Edge server quirk — the SSML frame's X-Timestamp gets an
         // extra `Z` on the end. The speech.config frame does NOT.
-        let f =
-            build_ssml_frame("Mon Jan 02 2006 15:04:05 GMT+0000 (UTC)", "rid", "v", "+0%", "x");
+        let f = build_ssml_frame(
+            "Mon Jan 02 2006 15:04:05 GMT+0000 (UTC)",
+            "rid",
+            "v",
+            "+0%",
+            "x",
+        );
         assert!(f.contains("X-Timestamp:Mon Jan 02 2006 15:04:05 GMT+0000 (UTC)Z\r\n"));
     }
 
     #[test]
     fn config_frame_x_timestamp_has_no_trailing_z() {
-        let f =
-            build_config_frame("Mon Jan 02 2006 15:04:05 GMT+0000 (UTC)", "audio-24khz-48kbitrate-mono-mp3");
+        let f = build_config_frame(
+            "Mon Jan 02 2006 15:04:05 GMT+0000 (UTC)",
+            "audio-24khz-48kbitrate-mono-mp3",
+        );
         assert!(f.contains("X-Timestamp:Mon Jan 02 2006 15:04:05 GMT+0000 (UTC)\r\n"));
         assert!(!f.contains("UTC)Z"));
     }
