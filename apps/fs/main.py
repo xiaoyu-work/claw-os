@@ -7,6 +7,8 @@ import subprocess
 import sys
 import time
 
+from _lib import policy
+
 
 WORKSPACE = "/workspace"
 META_FILENAME = ".cos-meta.json"
@@ -39,6 +41,7 @@ def _save_meta(directory, meta):
 
 def cmd_ls(args):
     path = _abs(args[0]) if args else os.getcwd()
+    policy.require("fs.read", path=path)
     if not os.path.isdir(path):
         return {"error": f"not a directory: {path}"}
     entries = sorted(os.listdir(path))
@@ -87,6 +90,7 @@ def cmd_read(args):
     if not positional:
         raise Exception("read requires a path argument")
     path = _abs(positional[0])
+    policy.require("fs.read", path=path)
 
     if not os.path.isfile(path):
         return {"error": f"file not found: {path}"}
@@ -147,6 +151,7 @@ def cmd_write(args):
     if not args:
         raise Exception("write requires a path argument")
     path = _abs(args[0])
+    policy.require("fs.write", path=path)
     # Parse --content flag
     content = None
     rest = args[1:]
@@ -170,6 +175,7 @@ def cmd_rm(args):
     if not args:
         raise Exception("rm requires a path argument")
     path = _abs(args[0])
+    policy.require("fs.delete", path=path)
     if not os.path.exists(path):
         return {"error": f"not found: {path}"}
     if os.path.isdir(path):
@@ -183,6 +189,7 @@ def cmd_mkdir(args):
     if not args:
         raise Exception("mkdir requires a path argument")
     path = _abs(args[0])
+    policy.require("fs.write", path=path)
     os.makedirs(path, exist_ok=True)
     return {"created": path}
 
@@ -191,6 +198,7 @@ def cmd_stat(args):
     if not args:
         raise Exception("stat requires a path argument")
     path = _abs(args[0])
+    policy.require("fs.meta", path=path)
     if not os.path.exists(path):
         return {"error": f"not found: {path}"}
     st = os.stat(path)
@@ -217,6 +225,7 @@ def cmd_search(args):
         raise Exception("search requires a query argument")
     query = args[0]
     search_path = _abs(args[1]) if len(args) > 1 else WORKSPACE
+    policy.require("fs.read", path=search_path)
     if not os.path.exists(search_path):
         return {"error": f"path not found: {search_path}"}
     matches = []
@@ -263,9 +272,10 @@ def cmd_tag(args):
         raise Exception("tag requires a path and at least one tag")
     path = _abs(args[0])
     new_tags = args[1:]
+    directory = os.path.dirname(path) if os.path.isfile(path) else path
+    policy.require("fs.write", path=directory)
     if not os.path.exists(path):
         return {"error": f"not found: {path}"}
-    directory = os.path.dirname(path) if os.path.isfile(path) else path
     basename = os.path.basename(path)
     meta = _load_meta(directory)
     if basename not in meta:
@@ -282,6 +292,7 @@ def cmd_tag(args):
 
 def cmd_recent(args):
     n = int(args[0]) if args else 10
+    policy.require("fs.read", path=WORKSPACE)
     files = []
     for dirpath, dirnames, filenames in os.walk(WORKSPACE):
         # Skip hidden directories
@@ -396,4 +407,9 @@ def run(command, args):
     handler = COMMANDS.get(command)
     if handler is None:
         return {"error": f"unknown command: {command}"}
-    return handler(args)
+    try:
+        return handler(args)
+    except policy.PermissionDenied as denied:
+        return {"error": str(denied), "denial": denied.denial}
+    except policy.PolicyUnavailable as exc:
+        return {"error": f"capability check failed: {exc}"}
