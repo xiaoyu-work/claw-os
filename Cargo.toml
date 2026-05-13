@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "core",
+    "crates/claw-bridge",
     "crates/obscura-dom",
     "crates/obscura-net",
     "crates/obscura-js",
