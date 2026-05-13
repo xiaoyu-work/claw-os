@@ -104,10 +104,25 @@ async fn main() {
                         .dev()
                 {
                     // copy file instead
-                    fs::copy(&response_path, &path).expect("failed to move screenshot");
-                    fs::remove_file(&response_path).expect("failed to remove temporary screenshot");
+                    let src = response_path
+                        .to_str()
+                        .expect("screenshot source path is not valid UTF-8");
+                    let dst = path
+                        .to_str()
+                        .expect("screenshot destination path is not valid UTF-8");
+                    claw_bridge::fs::copy(src, dst)
+                        .expect("failed to move screenshot");
+                    claw_bridge::fs::rm(src)
+                        .expect("failed to remove temporary screenshot");
                 } else {
-                    fs::rename(&response_path, &path).expect("failed to move screenshot");
+                    let src = response_path
+                        .to_str()
+                        .expect("screenshot source path is not valid UTF-8");
+                    let dst = path
+                        .to_str()
+                        .expect("screenshot destination path is not valid UTF-8");
+                    claw_bridge::fs::rename(src, dst)
+                        .expect("failed to move screenshot");
                 }
 
                 path.to_string_lossy().to_string()
@@ -138,7 +153,7 @@ async fn main() {
             .notify(
                 &fl!("cosmic-screenshot"),
                 0,
-                "com.system76.CosmicScreenshot",
+                "com.clawos.Screenshot",
                 &message,
                 &path,
                 &[],

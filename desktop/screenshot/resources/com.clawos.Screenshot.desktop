@@ -25,5 +25,5 @@ Keywords[sv]=COSMIC;fånga;skärmbild;inspelning;
 Keywords[nl]=COSMIC;afdruk;schermafdruk;
 Keywords[af]=COSMIC;afdruk;skermafdruk;
 Keywords[hu]=rögzítés;
-Icon=com.system76.CosmicScreenshot
+Icon=com.clawos.Screenshot
 StartupNotify=true
