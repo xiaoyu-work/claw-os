@@ -44,7 +44,7 @@ cargo build --release -p cos-browser --target x86_64-unknown-linux-gnu
 
 # Build apt repo
 ./packaging/apt-repo/build-repo.sh
-# -> build/apt-repo/dists/bookworm/main/binary-amd64/Packages.gz
+# -> build/apt-repo/dists/trixie/main/binary-amd64/Packages.gz
 # -> build/apt-repo/pool/main/c/claw-os-{base,browser,systemd}/*.deb
 ```
 
@@ -56,7 +56,7 @@ CI publishes the repo to GitHub Pages. The default URL hard-coded in the
 End-user setup on a non-Claw-OS Debian/Ubuntu machine:
 
 ```bash
-echo "deb [trusted=yes] https://xiaoyu-work.github.io/claw-os bookworm main" \
+echo "deb [trusted=yes] https://xiaoyu-work.github.io/claw-os trixie main" \
   | sudo tee /etc/apt/sources.list.d/claw-os.list
 sudo apt update
 sudo apt install claw-os-base

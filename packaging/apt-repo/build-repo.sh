@@ -5,7 +5,7 @@
 # Layout produced (Debian "flat-and-pool" style):
 #
 #   build/apt-repo/
-#   ├── dists/bookworm/
+#   ├── dists/trixie/
 #   │   ├── InRelease           (signed Release, omitted if no GPG key)
 #   │   ├── Release             (always)
 #   │   ├── Release.gpg         (detached signature, omitted if no GPG key)
@@ -25,7 +25,7 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 DEBS_DIR="$PROJECT_DIR/build/debs"
 REPO_DIR="$PROJECT_DIR/build/apt-repo"
-SUITE="${SUITE:-bookworm}"
+SUITE="${SUITE:-trixie}"
 COMPONENT="main"
 ARCH="amd64"
 GPG_KEY_ID="${GPG_KEY_ID:-}"

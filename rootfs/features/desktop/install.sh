@@ -1,32 +1,40 @@
 #!/usr/bin/env bash
 # rootfs/features/desktop/install.sh — build the claw-os desktop from
-# source (vendored under PROJECT_DIR/desktop) and install it into the rootfs.
+# source (vendored under PROJECT_DIR/desktop) and wire it up so the rootfs
+# boots into a Wayland login.
 #
-# The desktop source tree lives in-tree at $PROJECT_DIR/desktop/ — see
-# desktop/README.md and desktop/PROVENANCE.md. install.sh runs `just build`
-# + `just install` against that tree to populate $ROOTFS/usr with binaries,
-# .desktop entries, systemd units, polkit rules, etc.
+# Target distro: Debian 13 "trixie" (kernel 6.12 LTS, PipeWire 1.4, Mesa 24).
 #
 # Inputs (env):
 #   ROOTFS       — target rootfs (from rootfs/build.sh)
 #   PROJECT_DIR  — claw-os repo root (from rootfs/build.sh)
+#   SCRIPT_DIR   — rootfs/ dir (from rootfs/build.sh)
 #   DESKTOP_SRC  — optional override; otherwise $PROJECT_DIR/desktop
 #
-# Prerequisites:
-#   - Host Linux build tools + a rustup toolchain are installed inside the
-#     chroot (this script bind-mounts the source into the chroot and builds
-#     there so the produced binaries link against rootfs glibc, not the
-#     host's).
-#
-# Skipping: set DESKTOP_SKIP=1 to scaffold-only (no build). Useful for fast
-# iteration on packages.txt and overlay/ without paying the ~30-60min build.
+# Skipping: set DESKTOP_SKIP=1 to install runtime deps + overlay only and
+# skip the ~30-60min cargo build. Useful when iterating on packages.txt /
+# overlay / wiring without rebuilding the binaries.
 
 set -euo pipefail
 
 DESKTOP_SRC="${DESKTOP_SRC:-$PROJECT_DIR/desktop}"
+FEATURE_DIR="$SCRIPT_DIR/features/desktop"
 
+# ---------------------------------------------------------------------------
+# 0. Apply static overlay (drop-in files, default configs) — always runs.
+# ---------------------------------------------------------------------------
+if [ -d "$FEATURE_DIR/overlay" ] && [ -n "$(ls -A "$FEATURE_DIR/overlay" 2>/dev/null)" ]; then
+    echo "  :: applying desktop overlay"
+    cp -a "$FEATURE_DIR/overlay/." "$ROOTFS/"
+fi
+
+# ---------------------------------------------------------------------------
+# 1. Validate source tree (unless skipped).
+# ---------------------------------------------------------------------------
 if [ "${DESKTOP_SKIP:-0}" = "1" ]; then
-    echo "  :: DESKTOP_SKIP=1 — overlay applied, build skipped"
+    echo "  :: DESKTOP_SKIP=1 — runtime deps + overlay applied, build skipped"
+    echo "  :: NOTE: login chain not wired (greeter binary missing). Re-run"
+    echo "         without DESKTOP_SKIP to get a bootable graphical session."
     exit 0
 fi
 
@@ -42,7 +50,6 @@ EOF
     exit 1
 fi
 
-# Validate the tree has the expected component dirs.
 echo "  :: validating desktop source tree at $DESKTOP_SRC"
 missing=0
 for sub in comp session panel launcher settings greeter toolkit; do
@@ -53,7 +60,10 @@ done
     exit 1
 }
 
-# Bind-mount the source into the chroot so we build against rootfs libs.
+# ---------------------------------------------------------------------------
+# 2. Build the desktop inside the chroot so binaries link against rootfs
+#    glibc, not the host's.
+# ---------------------------------------------------------------------------
 CHROOT_SRC="$ROOTFS/build/desktop-src"
 mkdir -p "$CHROOT_SRC"
 if ! mountpoint -q "$CHROOT_SRC"; then
@@ -67,24 +77,20 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Install rustup toolchain inside the chroot (idempotent).
+# Rust toolchain inside the chroot. `rustup` package is in trixie; we use
+# the minimal stable profile to keep image size down.
 echo "  :: ensuring rustup toolchain in chroot"
 chroot "$ROOTFS" bash -c '
     set -e
-    if ! command -v rustup >/dev/null; then
-        apt-get install -y --no-install-recommends rustup
-    fi
     if ! rustup show active-toolchain >/dev/null 2>&1; then
         rustup toolchain install stable --profile minimal
         rustup default stable
     fi
-    if ! command -v just >/dev/null; then
-        cargo install --quiet just
-    fi
+    export PATH="/root/.cargo/bin:$PATH"
+    command -v just >/dev/null || cargo install --quiet just
 '
 
-# Build + install desktop binaries into /usr inside the chroot.
-echo "  :: building desktop (this takes 30–60 minutes on a fresh tree)"
+echo "  :: building desktop (cold tree: 30–60 minutes)"
 chroot "$ROOTFS" bash -c '
     set -e
     export CARGO_HOME=/root/.cargo
@@ -94,17 +100,80 @@ chroot "$ROOTFS" bash -c '
     just install rootdir="" prefix=/usr
 '
 
-# Wire up the greeter as the default display manager. The upstream binary
-# is still named cosmic-greeter; rename here once you fork+rename it.
-echo "  :: enabling greeter as default display manager"
+# ---------------------------------------------------------------------------
+# 3. Wire up the login chain.
+#
+# `just install` puts the binaries / .desktop / sysusers / tmpfiles in
+# place, but the upstream Debian packaging (which we are NOT using) is
+# responsible for systemd .service files, the greetd config, and the PAM
+# stack. We install them by hand here.
+# ---------------------------------------------------------------------------
+GREETER_DEB="$DESKTOP_SRC/greeter/debian"
+
+echo "  :: installing greeter systemd units, PAM, greetd config"
+install -Dm0644 "$GREETER_DEB/cosmic-greeter.service" \
+    "$ROOTFS/lib/systemd/system/cosmic-greeter.service"
+install -Dm0644 "$GREETER_DEB/cosmic-greeter-daemon.service" \
+    "$ROOTFS/lib/systemd/system/cosmic-greeter-daemon.service"
+install -Dm0644 "$GREETER_DEB/cosmic-greeter.pam" \
+    "$ROOTFS/etc/pam.d/cosmic-greeter"
+install -Dm0644 "$DESKTOP_SRC/greeter/cosmic-greeter.toml" \
+    "$ROOTFS/etc/greetd/cosmic-greeter.toml"
+
+# Create the cosmic-greeter system user + its runtime/state dirs from the
+# sysusers.d / tmpfiles.d that `just install` already dropped.
+echo "  :: applying systemd-sysusers / systemd-tmpfiles"
+chroot "$ROOTFS" systemd-sysusers
+chroot "$ROOTFS" systemd-tmpfiles --create
+
+# Upstream cosmic-greeter.service has its [Install] section commented out
+# (the deb postinst manages display-manager.service symlinking via debconf).
+# We are not running dpkg, so wire the systemd targets explicitly.
+echo "  :: enabling display-manager + supporting services"
+mkdir -p "$ROOTFS/etc/systemd/system/graphical.target.wants"
+mkdir -p "$ROOTFS/etc/systemd/system/multi-user.target.wants"
+
+ln -sf /lib/systemd/system/cosmic-greeter.service \
+    "$ROOTFS/etc/systemd/system/graphical.target.wants/cosmic-greeter.service"
+ln -sf /lib/systemd/system/cosmic-greeter.service \
+    "$ROOTFS/etc/systemd/system/display-manager.service"
+ln -sf /lib/systemd/system/cosmic-greeter-daemon.service \
+    "$ROOTFS/etc/systemd/system/multi-user.target.wants/cosmic-greeter-daemon.service"
+
+# Boot to graphical.target by default.
+ln -sf /lib/systemd/system/graphical.target \
+    "$ROOTFS/etc/systemd/system/default.target"
+
+# System services the desktop expects.
 chroot "$ROOTFS" bash -c '
     set -e
-    if [ -f /usr/lib/systemd/system/cosmic-greeter.service ]; then
-        systemctl enable cosmic-greeter.service
-        systemctl set-default graphical.target
-    else
-        echo "    warn: greeter service not installed; skipping enable"
-    fi
+    systemctl enable NetworkManager.service
+    systemctl enable bluetooth.service        || true
+    systemctl enable polkit.service           || true
+    systemctl enable power-profiles-daemon.service || true
+    systemctl enable upower.service           || true
+    systemctl enable accounts-daemon.service  || true
+    # VM integration — no-op on bare metal.
+    systemctl enable qemu-guest-agent.service || true
+    systemctl enable spice-vdagentd.service   || true
 '
 
-echo "  :: desktop installed under $ROOTFS/usr"
+# Per-user services (PipeWire, WirePlumber, xdg-desktop-portal). These ship
+# with default.target.wants symlinks from their deb packages, but in case
+# they ever stop doing so, force-enable them here in /etc/systemd/user/.
+mkdir -p "$ROOTFS/etc/systemd/user/sockets.target.wants"
+mkdir -p "$ROOTFS/etc/systemd/user/default.target.wants"
+for unit in pipewire.socket pipewire-pulse.socket; do
+    [ -e "$ROOTFS/usr/lib/systemd/user/$unit" ] && \
+        ln -sf "/usr/lib/systemd/user/$unit" \
+            "$ROOTFS/etc/systemd/user/sockets.target.wants/$unit"
+done
+for unit in pipewire.service wireplumber.service; do
+    [ -e "$ROOTFS/usr/lib/systemd/user/$unit" ] && \
+        ln -sf "/usr/lib/systemd/user/$unit" \
+            "$ROOTFS/etc/systemd/user/default.target.wants/$unit"
+done
+
+echo "  :: desktop installed; default target = graphical.target"
+echo "  :: greeter:  /etc/systemd/system/display-manager.service -> cosmic-greeter.service"
+echo "  :: greetd cfg: /etc/greetd/cosmic-greeter.toml"

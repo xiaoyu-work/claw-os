@@ -7,12 +7,12 @@
 #
 # Overridable env vars:
 #   COS_APT_REPO_URL    — repo base URL (default: official GH Pages)
-#   COS_APT_REPO_SUITE  — suite name    (default: bookworm)
+#   COS_APT_REPO_SUITE  — suite name    (default: trixie)
 
 set -euo pipefail
 
 COS_APT_REPO_URL="${COS_APT_REPO_URL:-https://xiaoyu-work.github.io/claw-os}"
-COS_APT_REPO_SUITE="${COS_APT_REPO_SUITE:-bookworm}"
+COS_APT_REPO_SUITE="${COS_APT_REPO_SUITE:-trixie}"
 
 echo "  :: writing /etc/apt/sources.list.d/claw-os.list"
 mkdir -p "$ROOTFS/etc/apt/sources.list.d"

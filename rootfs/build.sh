@@ -18,7 +18,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 ROOTFS="$PROJECT_DIR/build/claw-os-rootfs"
-SUITE="bookworm"
+SUITE="trixie"
 
 DEFAULT_FEATURES="base,cos-core,browser"
 FEATURES="$DEFAULT_FEATURES"

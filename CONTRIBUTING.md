@@ -118,7 +118,7 @@ artifacts. On pushes to `main`, the matching apt repository is published
 to GitHub Pages and consumable as:
 
 ```bash
-echo "deb [trusted=yes] https://xiaoyu-work.github.io/claw-os bookworm main" \
+echo "deb [trusted=yes] https://xiaoyu-work.github.io/claw-os trixie main" \
   | sudo tee /etc/apt/sources.list.d/claw-os.list
 sudo apt update
 sudo apt install claw-os-base

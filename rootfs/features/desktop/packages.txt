@@ -1,10 +1,12 @@
-# desktop — claw-os desktop environment runtime + build dependencies.
+# desktop — claw-os desktop environment build + runtime dependencies.
 #
-# The desktop is built from source by install.sh. The packages below are
-# the union of:
-#   - build deps for the Rust + Wayland desktop tree
-#   - runtime libs needed to actually run the compositor + shell
-#   - pam / polkit / seatd needed by the display manager and session
+# Target distro: Debian 13 "trixie" (kernel 6.12 LTS, PipeWire 1.4, Mesa 24).
+#
+# The desktop is built from the vendored monorepo under <repo>/desktop/.
+# install.sh runs `just build` + `just install` against that tree to put the
+# binaries / .desktop / systemd unit files into the rootfs, then wires up
+# the greeter / display manager / user services so the system boots into a
+# graphical login.
 
 # --- Build toolchain (host-side, used during rootfs build only) ---
 build-essential
@@ -14,6 +16,7 @@ mold
 lld
 just
 git
+rustup
 
 # --- Wayland / graphics core ---
 libwayland-dev
@@ -40,23 +43,46 @@ libdisplay-info-dev
 libseat-dev
 libseat1
 seatd
+xwayland
 
-# --- Session / system services ---
-dbus
-libdbus-1-dev
-libsystemd-dev
+# --- Display manager / login chain ---
+greetd
 libpam0g-dev
+gnome-keyring
 polkitd
 udev
 xdg-user-dirs
+accountsservice
 
-# --- Pipewire (screen capture, screen sharing via xdg-desktop-portal) ---
+# --- D-Bus / system services ---
+dbus
+libdbus-1-dev
+libsystemd-dev
+
+# --- PipeWire (audio + screen capture for xdg-desktop-portal) ---
 libpipewire-0.3-dev
 pipewire
 pipewire-pulse
+pipewire-alsa
 wireplumber
+libpulse0
+alsa-utils
 
-# --- Text / font rendering (UI toolkit dependencies) ---
+# --- Network ---
+network-manager
+iwd
+wpasupplicant
+
+# --- Bluetooth ---
+bluez
+bluez-tools
+libbluetooth-dev
+
+# --- Power management (battery / power-profiles applets) ---
+upower
+power-profiles-daemon
+
+# --- Text / font rendering (UI toolkit) ---
 libfontconfig-dev
 libfontconfig1
 libfreetype-dev
@@ -65,22 +91,28 @@ libexpat1-dev
 libexpat1
 libpixman-1-dev
 
-# --- Multimedia (media player) ---
+# --- GTK4 (for apps that link against it) ---
+libgtk-4-1
+libgtk-4-dev
+
+# --- Multimedia (cosmic-player) ---
 libgstreamer1.0-dev
 libgstreamer-plugins-base1.0-dev
 gstreamer1.0-plugins-base
 gstreamer1.0-plugins-good
 gstreamer1.0-plugins-bad
+gstreamer1.0-plugins-ugly
 gstreamer1.0-libav
 
 # --- SSL + Flatpak (app store) ---
 libssl-dev
 libflatpak-dev
+flatpak
 
-# --- Other compile-time bindgen targets ---
+# --- bindgen targets for crates that wrap C libs ---
 libclang-dev
 
-# --- Fonts and icons baseline ---
+# --- Fonts and icons ---
 fonts-noto-core
 fonts-noto-cjk
 fonts-noto-color-emoji
@@ -90,3 +122,7 @@ hicolor-icon-theme
 # --- Keyboard / locale ---
 xkb-data
 locales
+
+# --- VM integration (no-op on bare metal; tiny on disk) ---
+qemu-guest-agent
+spice-vdagent
