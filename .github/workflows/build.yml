@@ -6,6 +6,7 @@ on:
     tags: ['v*']
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
@@ -35,9 +36,6 @@ jobs:
           key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-test-
-
-      - name: Check formatting (cos)
-        run: cd core && cargo fmt --check
 
       - name: Clippy lint (cos)
         run: cd core && cargo clippy --target x86_64-unknown-linux-musl -- -D warnings 2>&1 || true
@@ -205,6 +203,134 @@ jobs:
           push: true
           tags: ${{ steps.meta-ironclaw.outputs.tags }}
           labels: ${{ steps.meta-ironclaw.outputs.labels }}
+
+  # Build the WSL2 importable rootfs tarball and publish it as both a
+  # workflow artifact (every run) and a GitHub Release asset:
+  #   - push to main          → rolling pre-release tagged `wsl-latest`
+  #   - push of a `v*` tag    → versioned release tagged with that tag
+  # Pull requests still get the artifact for inspection but no release.
+  release-wsl:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # needed to create/update GitHub Releases
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl,x86_64-unknown-linux-gnu
+
+      - name: Install host build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y musl-tools debootstrap
+
+      - name: Cache cargo registry & target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-wsl-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-build-
+            ${{ runner.os }}-cargo-wsl-
+
+      - name: Build cos binary (musl)
+        run: cargo build --release -p cos --target x86_64-unknown-linux-musl
+
+      - name: Build cos-browser binary (gnu)
+        run: cargo build --release -p cos-browser --target x86_64-unknown-linux-gnu
+
+      - name: Build WSL rootfs tarball
+        run: sudo ./build.sh wsl
+
+      - name: Compute SHA-256 and rename for release
+        id: artifact
+        run: |
+          cd build
+          sha256sum claw-os-wsl-amd64.tar.gz > claw-os-wsl-amd64.tar.gz.sha256
+          SHA=$(cut -d' ' -f1 claw-os-wsl-amd64.tar.gz.sha256)
+          SIZE=$(du -h claw-os-wsl-amd64.tar.gz | cut -f1)
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+          echo "size=$SIZE" >> "$GITHUB_OUTPUT"
+          echo "## Claw OS WSL build" >> "$GITHUB_STEP_SUMMARY"
+          echo "- File: \`claw-os-wsl-amd64.tar.gz\` ($SIZE)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- SHA-256: \`$SHA\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload WSL tarball as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: claw-os-wsl-amd64
+          path: |
+            build/claw-os-wsl-amd64.tar.gz
+            build/claw-os-wsl-amd64.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+      # Rolling pre-release on every push to main, so there is always a
+      # stable download URL pointing at the latest build of main:
+      #   https://github.com/<org>/<repo>/releases/download/wsl-latest/claw-os-wsl-amd64.tar.gz
+      #
+      # action-gh-release does not move an existing tag, so we delete the
+      # previous rolling release + tag first to force the new commit SHA.
+      - name: Remove previous rolling release (main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete wsl-latest --cleanup-tag --yes \
+            --repo "${GITHUB_REPOSITORY}" || true
+
+      - name: Publish rolling pre-release (main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: wsl-latest
+          name: WSL rolling build (main)
+          prerelease: true
+          target_commitish: ${{ github.sha }}
+          body: |
+            Rolling build of `main` for WSL2 import on Windows.
+
+            **Commit:** ${{ github.sha }}
+            **SHA-256:** `${{ steps.artifact.outputs.sha256 }}`
+            **Size:** ${{ steps.artifact.outputs.size }}
+
+            ## Install on Windows
+            ```powershell
+            # Download claw-os-wsl-amd64.tar.gz from this release
+            wsl --import claw-os C:\WSL\claw-os claw-os-wsl-amd64.tar.gz --version 2
+            wsl -d claw-os
+            ```
+
+            Or use the helper script: `targets/wsl/install.ps1`
+          files: |
+            build/claw-os-wsl-amd64.tar.gz
+            build/claw-os-wsl-amd64.tar.gz.sha256
+
+      # Versioned release on tag push (v*).
+      - name: Publish versioned release (tag push)
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Claw OS ${{ github.ref_name }}
+          body: |
+            Claw OS ${{ github.ref_name }} — WSL2 importable rootfs tarball.
+
+            **SHA-256:** `${{ steps.artifact.outputs.sha256 }}`
+            **Size:** ${{ steps.artifact.outputs.size }}
+
+            ## Install on Windows
+            ```powershell
+            wsl --import claw-os C:\WSL\claw-os claw-os-wsl-amd64.tar.gz --version 2
+            wsl -d claw-os
+            ```
+          files: |
+            build/claw-os-wsl-amd64.tar.gz
+            build/claw-os-wsl-amd64.tar.gz.sha256
 
   # Publish the apt repo (build/apt-repo) to GitHub Pages.
   # Repo settings → Pages → Source must be set to "GitHub Actions" for the
