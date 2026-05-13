@@ -98,6 +98,12 @@ pub fn run_python_app(
 import importlib.util, json, sys, os
 os.environ.setdefault("COS_DATA_DIR", {data_dir})
 os.environ.setdefault("COS_APPS_DIR", {apps_dir})
+# Make the apps/_lib helper package importable from every app, so
+# Python apps can `from _lib import policy` for capability checks
+# without bundling the helper into each app's own tree.
+_apps_root = os.environ["COS_APPS_DIR"]
+if _apps_root and _apps_root not in sys.path:
+    sys.path.insert(0, _apps_root)
 spec = importlib.util.spec_from_file_location("app", {main_py})
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
