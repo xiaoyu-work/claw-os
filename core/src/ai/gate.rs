@@ -1,7 +1,7 @@
 //! The App–AI Gate. Single entry point apps use to reach a model.
 //!
 //! ```text
-//!     cos ai chat …             apps/_lib/ai.py
+//!     cos agent chat --app …    apps/_lib/ai.py
 //!          │                          │
 //!          ▼                          ▼
 //!   ai::gate::chat_blocking ─── caps::require(ai.*, name(model))
@@ -482,7 +482,7 @@ fn _ensure_arc_send<T: ?Sized + Send + Sync>(_: &Arc<T>) {}
 // ---------------------------------------------------------------------------
 
 /// Stable pseudo-app id under which the system agent's AI usage is
-/// rolled up. Surfaces alongside real apps in `cos ai budget show`.
+/// rolled up. Surfaces alongside real apps in `cos agent budget show`.
 pub const SYSTEM_AGENT_BUCKET: &str = "system.agent";
 
 /// Wrap an LLM provider so the kernel-resident agent reaches the

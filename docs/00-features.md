@@ -85,11 +85,10 @@ Snapshot and roll back the filesystem instantly — no git, no copies.
 - Multiple independent namespaces (parallel sandbox runs each get their own overlay)
 - Quota enforcement: `cos checkpoint quota-set 2G` caps unbounded growth
 
-### 1.4 Sandboxed execution (`cos sandbox`)
+### 1.4 Sandboxed execution (agent tool)
 
-Run untrusted code in a confined namespace + cgroup + seccomp box.
+The agent runs untrusted / model-generated code inside a confined namespace + cgroup + seccomp box. This is exposed only as the `cos_sandbox` LLM tool — not as a user-facing CLI command — so untrusted execution always goes through the agent.
 
-- `cos sandbox exec --no-network --mem 512M --timeout 60 -- python untrusted.py`
 - Memory / CPU / task / runtime limits
 - Optional network isolation
 - Three seccomp profiles: `minimal`, `network`, `full`

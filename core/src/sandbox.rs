@@ -1,26 +1,23 @@
 /// Lightweight sandbox using Linux namespaces.
 ///
-/// Instead of Docker-in-Docker, Claw OS provides native process isolation
-/// via unshare/clone. This eliminates ~6000 lines of Docker boilerplate
-/// in OpenClaw's sandbox module.
+/// Exposed only as an agent tool (`cos_sandbox` in
+/// `crate::agent::tools::cos_proxy`), not as a user-facing CLI
+/// primitive. The agent uses this to run model-generated or
+/// otherwise untrusted commands under `unshare(1)` + cgroup v2
+/// + seccomp.
 ///
-/// Sandbox modes:
-///   - `exec`:  Run a command in an isolated namespace (PID + mount + optional network)
-///   - `create`: Create a persistent sandbox environment
-///   - `destroy`: Tear down a sandbox
-///   - `list`: List active sandboxes
+/// Only one operation is supported: `exec`. Persistent sandboxes
+/// (create/destroy/list) were OpenClaw-era surface area; they
+/// never spawned a real init process and have been removed.
 ///
-/// On non-Linux platforms, sandbox falls back to basic subprocess isolation.
-use serde::{Deserialize, Serialize};
+/// On non-Linux platforms the implementation falls back to a
+/// plain subprocess so dev builds compile — production cos
+/// always runs on Linux.
 use serde_json::{json, Value};
-use std::fs;
 use std::io::Read;
-use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use crate::caps::{require_or_json, Scope, Verb};
-
-const SANDBOX_DIR: &str = "/var/lib/cos/sandboxes";
 
 struct ResourceLimits {
     mem_limit: Option<String>,       // e.g. "512M"
@@ -30,55 +27,21 @@ struct ResourceLimits {
     seccomp_profile: Option<String>, // e.g. "minimal", "network", "full"
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SandboxConfig {
-    pub id: String,
-    pub mode: String,      // "rw" | "ro"
-    pub workspace: String, // path mounted into sandbox
-    pub network: bool,     // allow network access
-    pub created_at: String,
-    pub pid: Option<u32>, // init process PID (if persistent)
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SandboxRegistry {
-    sandboxes: Vec<SandboxConfig>,
-}
-
-fn registry_path() -> PathBuf {
-    PathBuf::from(SANDBOX_DIR).join("registry.json")
-}
-
-fn load_registry() -> SandboxRegistry {
-    match crate::filelock::read_locked(&registry_path()) {
-        Ok(Some(data)) => {
-            serde_json::from_str(&data).unwrap_or(SandboxRegistry { sandboxes: vec![] })
-        }
-        _ => SandboxRegistry { sandboxes: vec![] },
-    }
-}
-
-fn save_registry(reg: &SandboxRegistry) {
-    if let Ok(data) = serde_json::to_string_pretty(reg) {
-        let _ = crate::filelock::write_locked(&registry_path(), &data);
-    }
-}
-
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     match command {
         "exec" => cmd_exec(args),
-        "create" => cmd_create(args),
-        "destroy" => cmd_destroy(args),
-        "list" => cmd_list(args),
         _ => Err(format!("unknown sandbox command: {command}")),
     }
 }
 
 /// Execute a command in an isolated sandbox.
 ///
-/// Usage: cos sandbox exec [--no-network] [--ro] [--workspace DIR]
-///                         [--mem LIMIT] [--cpu PERCENT] [--pids MAX]
-///                         [--timeout SECS] -- <command> [args...]
+/// Args mirror the agent tool schema in
+/// `agent::tools::cos_proxy::PRIMITIVES`:
+///   [--no-network] [--ro] [--workspace DIR]
+///   [--mem LIMIT] [--cpu PERCENT] [--pids MAX]
+///   [--timeout SECS] [--seccomp-profile minimal|network|full]
+///   -- <command> [args...]
 fn cmd_exec(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::PROC_SPAWN, Scope::wild()).map_err(|v| v.to_string())?;
     let mut network = true;
@@ -503,96 +466,5 @@ fn exec_fallback(
         "stderr": stderr,
         "isolated": false,
         "note": "namespace/cgroup isolation requires Linux",
-    }))
-}
-
-/// Create a persistent sandbox configuration (stored, not executed).
-/// Network/RO flags are stored in the config for later use by `cmd_exec`.
-/// No process is spawned here — use `cos sandbox exec` to run with this config.
-fn cmd_create(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::PROC_SPAWN, Scope::wild()).map_err(|v| v.to_string())?;
-    let mut network = true;
-    let mut mode = "rw".to_string();
-    let mut workspace = crate::config::get().home.clone();
-
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--no-network" => {
-                network = false;
-                i += 1;
-            }
-            "--mode" if i + 1 < args.len() => {
-                mode = args[i + 1].clone();
-                i += 2;
-            }
-            "--workspace" if i + 1 < args.len() => {
-                workspace = args[i + 1].clone();
-                i += 2;
-            }
-            _ => i += 1,
-        }
-    }
-
-    let id = format!("sb-{}", &short_id());
-    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-
-    let config = SandboxConfig {
-        id: id.clone(),
-        mode,
-        workspace,
-        network,
-        created_at: now,
-        pid: None,
-    };
-
-    let mut reg = load_registry();
-    reg.sandboxes.push(config.clone());
-    save_registry(&reg);
-
-    Ok(json!({
-        "id": id,
-        "mode": config.mode,
-        "workspace": config.workspace,
-        "network": config.network,
-        "created_at": config.created_at,
-    }))
-}
-
-/// Destroy a sandbox.
-fn cmd_destroy(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::PROC_SIGNAL, Scope::wild()).map_err(|v| v.to_string())?;
-    let id = args.first().ok_or("usage: cos sandbox destroy <id>")?;
-
-    let mut reg = load_registry();
-    let before = reg.sandboxes.len();
-
-    // Kill the init process if running
-    if let Some(sb) = reg.sandboxes.iter().find(|s| &s.id == id) {
-        if let Some(pid) = sb.pid {
-            #[cfg(unix)]
-            unsafe {
-                libc::kill(pid as i32, libc::SIGTERM);
-            }
-        }
-    }
-
-    reg.sandboxes.retain(|s| &s.id != id);
-    save_registry(&reg);
-
-    if reg.sandboxes.len() == before {
-        return Err(format!("sandbox not found: {id}"));
-    }
-
-    Ok(json!({"destroyed": id}))
-}
-
-/// List active sandboxes.
-fn cmd_list(_args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::PROC_OBSERVE, Scope::wild()).map_err(|v| v.to_string())?;
-    let reg = load_registry();
-    Ok(json!({
-        "sandboxes": reg.sandboxes,
-        "count": reg.sandboxes.len(),
     }))
 }

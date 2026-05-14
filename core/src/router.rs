@@ -5,7 +5,6 @@ use std::time::Instant;
 use serde_json::{json, Value};
 
 use crate::agent;
-use crate::ai;
 use crate::apps;
 use crate::audit;
 use crate::bridge;
@@ -20,7 +19,6 @@ use crate::netfilter;
 use crate::caps;
 use crate::perms;
 use crate::proc;
-use crate::sandbox;
 use crate::service;
 use crate::sysinfo;
 use crate::trace;
@@ -81,7 +79,6 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
     // Built-in OS primitives
     match name.as_str() {
         "sys" => dispatch_builtin(args, "sys", sysinfo::run),
-        "sandbox" => dispatch_builtin(args, "sandbox", sandbox::run),
         "proc" => dispatch_builtin(args, "proc", proc::run),
         "ipc" => dispatch_builtin(args, "ipc", ipc::run),
         "browser" => dispatch_builtin(args, "browser", browser::run),
@@ -94,7 +91,6 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         "cron" => dispatch_builtin(args, "cron", cron::run),
         "trace" => dispatch_builtin(args, "trace", trace::run),
         "agent" => dispatch_agent(args),
-        "ai" => dispatch_builtin(args, "ai", ai::run),
         "model" => dispatch_builtin(args, "model", model::run),
         "engine" => dispatch_builtin(args, "engine", engine_pkg::run),
         _ => {
@@ -175,7 +171,7 @@ fn dispatch_app(args: &[String]) -> Result<Option<String>, String> {
 /// `cos app lint [<name>]` — refuse apps that smuggle in AI SDKs.
 ///
 /// Apps are required to route every model call through the kernel's
-/// `cos ai chat` gate (via `apps/_lib/ai.py`). Importing
+/// `cos agent chat --app <id>` gate (via `apps/_lib/ai.py`). Importing
 /// `openai`, `anthropic`, or `google.generativeai` directly would
 /// bypass budget, safety, and audit — so the linter looks for those
 /// imports in every `*.py` file under each app's directory and reports
@@ -215,7 +211,7 @@ fn lint_apps(
             "results": results,
             "ok": !any_violation,
             "hint": if any_violation {
-                "Apps must import from `_lib.ai` (which shells out to `cos ai chat`); \
+                "Apps must import from `_lib.ai` (which shells out to `cos agent chat --app <id>`); \
                  they must not import provider SDKs directly."
             } else {
                 "All apps route their AI calls through the kernel gate."
@@ -499,12 +495,6 @@ fn builtin_apps() -> Vec<(
             ("net", "Show network interfaces and TCP connections (structured /proc/net/*)"),
             ("cgroup", "Show cgroup v2 limits and usage — memory, CPU, PIDs (/sys/fs/cgroup/)"),
         ]),
-        ("sandbox", "Lightweight process isolation using Linux namespaces + cgroup v2 + seccomp", vec![
-            ("exec", "Run a command in an isolated namespace (--mem, --cpu, --pids, --timeout, --seccomp-profile minimal|network|full)"),
-            ("create", "Create a persistent sandbox configuration"),
-            ("destroy", "Remove a sandbox by ID"),
-            ("list", "List all active sandboxes"),
-        ]),
         ("proc", "Process session manager — spawn, track, control, and monitor processes", vec![
             ("spawn", "Start a process (--session ID, --group NAME, --priority low|normal|high|realtime, --role NAME, --caps verb,..., --scope-path P, --scope-host H, --scope-name N; --tier N is deprecated)"),
             ("status", "Check if a session's process is still running"),
@@ -625,7 +615,8 @@ fn builtin_apps() -> Vec<(
         ("agent", "OS-native agent subsystem — runtime, memory, skills, LLM providers, tools, FS job queue", vec![
             ("setup", "Per-modality config wizard: cos agent setup <llm|tts|stt|imagegen|embed|all> [--status|--reset|--verify-only|--no-verify]. Bare `cos agent setup` opens an interactive modality picker."),
             ("ask", "Single-shot prompt with full tool/memory loop: cos agent ask \"<prompt>\" [--stream] — without --stream waits for the full response; with --stream tokens are written live to stderr while the JSON envelope still lands on stdout."),
-            ("chat", "Interactive multi-turn REPL: cos agent chat [--session <id>] [--no-stream] [--no-memory] [--show-tools] [--max-turns N]. Slash commands: /quit /help /session /clear /history [N] /tools."),
+            ("chat", "Two modes — (1) interactive REPL for the system agent: cos agent chat [--session <id>] [--no-stream] [--no-memory] [--show-tools] [--max-turns N] (slash commands: /quit /help /session /clear /history [N] /tools); (2) one-shot app-gated chat for installed apps: cos agent chat --app <id> --prompt <text> [--prompt-file <p>] [--model <name>] [--origin trusted|user-input|external-content] [--verb ai.chat|ai.chat.untrusted] [--max-units N] [--system <text>]. The mode is selected by whether --app is present."),
+            ("budget", "Inspect or reset an app's monthly AI budget: cos agent budget show|reset|history <app>. The system agent reports under the pseudo-app id `system.agent`."),
             ("status", "Short live verdict: provider/model/key source, ready/not-ready, most-recent session. Use `cos agent doctor` for the full provider matrix, tool list, skills, usage."),
             ("sessions", "Inspect / manage conversation sessions in the memory DB: cos agent sessions [list [N] | title <id> | set-title <id> \"<title>\" | count [<id>] | clear <id> --yes]"),
             ("recall", "FTS5 search across recorded conversations: cos agent recall \"<query>\" [limit]"),
@@ -636,10 +627,6 @@ fn builtin_apps() -> Vec<(
             ("mcp", "MCP (Model Context Protocol) bridge — server exposes the cos agent tool catalogue; client probes/invokes a remote MCP subprocess"),
             ("doctor", "Aggregate diagnostic — provider config matrix, engines, memory, skills, hooks, audit/run-log + last 7d usage & insights. Add --probe-network for a live provider ping."),
             ("dev", "Power-user / internal namespace — exposes building blocks (token estimator, redactor, scrubbers, classifier, diagnostics dumps). Run `cos agent dev` for the list. Not a stable surface."),
-        ]),
-        ("ai", "App–AI gate — every app-driven model call is brokered here (caps + budget + safety + audit)", vec![
-            ("chat", "One-shot LLM chat for an app: cos ai chat --app <id> --prompt <text> [--prompt-file <p>] [--model <name>] [--origin trusted|user-input|external-content] [--verb ai.chat|ai.chat.untrusted] [--max-units N] [--system <text>]"),
-            ("budget", "Inspect or reset an app's AI budget for the current period: cos ai budget show|reset|history <app>"),
         ]),
         ("model", "Local model registry + inference daemon (ort for STT/TTS/embed/vision/imagegen, llama.cpp for LLM)", vec![
             ("list", "List registered models from /var/lib/cos/models/"),
@@ -1324,30 +1311,6 @@ fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandSchema>)> {
                     example: "cos netfilter rate-check api.openai.com",
                 },
             ],
-        ),
-        (
-            "sandbox",
-            "Process isolation",
-            vec![CommandSchema {
-                command: "exec",
-                description: "Run in isolated namespace + cgroup",
-                params: vec![
-                    Param::flag("--mem", "string", false, "Memory limit (e.g., 512M)"),
-                    Param::flag("--cpu", "integer", false, "CPU percent"),
-                    Param::flag("--pids", "integer", false, "Max processes"),
-                    Param::flag("--timeout", "integer", false, "Kill after N seconds"),
-                    Param::flag("--no-network", "boolean", false, "Disable network"),
-                    Param::flag(
-                        "--seccomp-profile",
-                        "enum:minimal|network|full",
-                        false,
-                        "Syscall filter",
-                    ),
-                    Param::positional("command", "string[]", true, "Command (after --)"),
-                ],
-                example:
-                    "cos sandbox exec --no-network --mem 256M --timeout 30 -- python untrusted.py",
-            }],
         ),
         (
             "policy",
@@ -2037,7 +2000,6 @@ mod tests {
             "service",
             "watch",
             "netfilter",
-            "sandbox",
             "policy",
             "sys",
         ];

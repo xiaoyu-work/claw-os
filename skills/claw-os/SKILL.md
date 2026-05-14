@@ -16,7 +16,6 @@ You are running on Claw OS. All commands return structured JSON.
 |---|---|
 | `checkpoint` | Snapshot, diff, rollback workspace ([details](checkpoint.md)) |
 | `proc` | Spawn and manage processes by session ([details](process.md)) |
-| `sandbox` | Isolated execution with resource limits ([details](sandbox.md)) |
 | `ipc` | Messages, locks, barriers, streaming pipes ([details](ipc.md)) |
 | `service` | Lifecycle hooks, graceful shutdown ([details](service.md)) |
 | `credential` | Encrypted secrets, namespaces, TTL, bundles ([details](credential.md)) |

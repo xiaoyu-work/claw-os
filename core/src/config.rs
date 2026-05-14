@@ -250,7 +250,7 @@ pub struct AgentConfig {
     /// service, and friends. The system agent is not an installed
     /// app but it still flows through the same gate as real apps;
     /// usage rolls up under the pseudo-app id `system.agent` and is
-    /// visible alongside other apps in `cos ai budget show`. Set to
+    /// visible alongside other apps in `cos agent budget show`. Set to
     /// `0` to disable the unit cap entirely. Default: 10_000_000.
     #[serde(default = "default_system_budget_units")]
     pub system_budget_monthly_units: u64,

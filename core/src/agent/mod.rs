@@ -101,6 +101,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
             }
         }
         "chat" => chat_cmd(args),
+        "budget" => budget_cmd(args),
         "status" => {
             let cfg = &crate::config::get().agent;
             let ready = setup::is_ready(cfg);
@@ -167,7 +168,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "doctor" => doctor_cli::doctor_cmd(args),
         "dev" => dev_dispatch(args),
         other => Err(format!(
-            "unknown command: {other}. try: setup | ask | chat | status | sessions | recall | service | notes | skills | todo | mcp | doctor | dev"
+            "unknown command: {other}. try: setup | ask | chat | budget | status | sessions | recall | service | notes | skills | todo | mcp | doctor | dev"
         )),
     }
 }
@@ -2856,7 +2857,20 @@ async fn live_cmd_async(
 /// non-streaming `ask_with` path (useful for non-TTY use).
 ///
 /// Stdin EOF (Ctrl+D / closed pipe) exits cleanly.
+///
+/// ## App-gated mode (`--app <id>`)
+///
+/// When `--app` is present, `chat` switches into the one-shot
+/// app-gated path: no REPL, no first-party tools/memory. The kernel
+/// routes the call through [`crate::ai::gate`] (capability check,
+/// manifest model/origin allowlists, per-app budget, safety
+/// pipeline, audit) and prints a single JSON envelope to stdout.
+/// This is the only sanctioned entry point for installed apps.
 fn chat_cmd(args: &[String]) -> Result<Value, String> {
+    if args.iter().any(|a| a == "--app") {
+        return chat_cmd_app_gated(args);
+    }
+
     let mut explicit_session: Option<String> = None;
     let mut streaming = true;
     let mut use_memory = true;
@@ -2918,6 +2932,162 @@ fn chat_cmd(args: &[String]) -> Result<Value, String> {
         show_tools,
         max_turns_override,
     ))
+}
+
+/// `cos agent chat --app <id>` — single-shot text completion routed
+/// through the App–AI Gate.
+///
+/// This is the kernel's only sanctioned entry point for an installed
+/// app to reach a model. The gate enforces, in order: capability
+/// (`ai.chat` / `ai.chat.untrusted`), manifest model glob + prompt
+/// origin allowlist, per-app monthly budget, safety profile, audit.
+///
+/// Flags (all but `--app`/`--prompt`/`--prompt-file` optional):
+///   --app <id>         App requesting the call (required).
+///   --prompt <text>    User prompt (required, unless --prompt-file).
+///   --prompt-file <p>  Read prompt body from a file.
+///   --model <name>     Model name to use (default: app's first
+///                      glob, resolved against installed providers).
+///   --origin <kind>    trusted | user-input | external-content
+///                      (default: trusted).
+///   --verb <name>      AI verb to require (default: ai.chat). Use
+///                      `ai.chat.untrusted` when origin is external.
+///   --max-units <N>    Cap units for this call (default: budget
+///                      remaining).
+///   --system <text>    Optional system prompt.
+fn chat_cmd_app_gated(args: &[String]) -> Result<Value, String> {
+    use crate::ai::gate;
+
+    let mut app: Option<String> = None;
+    let mut prompt: Option<String> = None;
+    let mut prompt_file: Option<String> = None;
+    let mut model: Option<String> = None;
+    let mut origin = "trusted".to_string();
+    let mut verb = "ai.chat".to_string();
+    let mut max_units: Option<u64> = None;
+    let mut system: Option<String> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--app" => {
+                app = args.get(i + 1).cloned();
+                i += 2;
+            }
+            "--prompt" => {
+                prompt = args.get(i + 1).cloned();
+                i += 2;
+            }
+            "--prompt-file" => {
+                prompt_file = args.get(i + 1).cloned();
+                i += 2;
+            }
+            "--model" => {
+                model = args.get(i + 1).cloned();
+                i += 2;
+            }
+            "--origin" => {
+                origin = args
+                    .get(i + 1)
+                    .cloned()
+                    .ok_or_else(|| "missing value for --origin".to_string())?;
+                i += 2;
+            }
+            "--verb" => {
+                verb = args
+                    .get(i + 1)
+                    .cloned()
+                    .ok_or_else(|| "missing value for --verb".to_string())?;
+                i += 2;
+            }
+            "--max-units" => {
+                max_units = Some(
+                    args.get(i + 1)
+                        .and_then(|s| s.parse().ok())
+                        .ok_or_else(|| "--max-units expects an integer".to_string())?,
+                );
+                i += 2;
+            }
+            "--system" => {
+                system = args.get(i + 1).cloned();
+                i += 2;
+            }
+            other => return Err(format!("unknown flag for app-gated chat: {other}")),
+        }
+    }
+
+    let app = app.ok_or_else(|| "--app is required".to_string())?;
+
+    let prompt_text = match (prompt, prompt_file) {
+        (Some(p), _) => p,
+        (None, Some(path)) => std::fs::read_to_string(&path)
+            .map_err(|e| format!("--prompt-file {path}: {e}"))?,
+        (None, None) => {
+            return Err("either --prompt or --prompt-file is required".to_string())
+        }
+    };
+
+    let req = gate::ChatRequest {
+        app_id: app,
+        verb,
+        model,
+        origin,
+        prompt: prompt_text,
+        system,
+        max_units,
+    };
+
+    match gate::chat_blocking(req) {
+        Ok(r) => Ok(serde_json::to_value(r).unwrap_or(json!({}))),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// `cos agent budget` — inspect per-app AI spend.
+///
+/// Subcommands:
+///   show <app>          Current period: used vs cap.
+///   reset <app>         Roll over to next period (clears used).
+///   history <app>       List past periods.
+///
+/// The system agent's usage is rolled up under the pseudo-app id
+/// `system.agent`.
+fn budget_cmd(args: &[String]) -> Result<Value, String> {
+    use crate::ai::budget;
+
+    let sub = args.first().map(String::as_str).unwrap_or("");
+    match sub {
+        "show" => {
+            let app = args
+                .get(1)
+                .ok_or_else(|| "usage: cos agent budget show <app>".to_string())?;
+            let store = budget::Store::open()?;
+            let snap = store.current(app).map_err(|e| e.to_string())?;
+            Ok(json!({
+                "app": app,
+                "period": snap.period,
+                "units_used": snap.units_used,
+                "usd_used": snap.usd_used,
+            }))
+        }
+        "reset" => {
+            let app = args
+                .get(1)
+                .ok_or_else(|| "usage: cos agent budget reset <app>".to_string())?;
+            let store = budget::Store::open()?;
+            store.reset(app).map_err(|e| e.to_string())?;
+            Ok(json!({"app": app, "reset": true}))
+        }
+        "history" => {
+            let app = args
+                .get(1)
+                .ok_or_else(|| "usage: cos agent budget history <app>".to_string())?;
+            let store = budget::Store::open()?;
+            let rows = store.history(app).map_err(|e| e.to_string())?;
+            Ok(json!({"app": app, "history": rows}))
+        }
+        _ => Err("usage: cos agent budget <show|reset|history> <app>".to_string()),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

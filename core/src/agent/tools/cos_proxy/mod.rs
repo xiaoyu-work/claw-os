@@ -152,7 +152,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
                       seccomp profile). Use for any user-supplied or \
                       model-generated shell command.",
         primitive: crate::sandbox::run,
-        commands: &["exec", "create", "destroy", "list"],
+        commands: &["exec"],
     },
     PrimitiveSpec {
         name: "cos_proc",
@@ -399,7 +399,7 @@ mod tests {
             "cos_sandbox",
             "test",
             crate::sandbox::run,
-            &["exec", "create", "destroy", "list"],
+            &["exec"],
         );
         let result = tool
             .exec(json!({ "command": "definitely-not-a-command", "args": [] }))

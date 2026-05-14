@@ -2,11 +2,12 @@
 
 Every Python app that needs to talk to a model (LLM, embedding,
 image-gen, TTS, STT, vision) must go through this helper. The helper
-shells out to ``cos ai chat`` (or its sibling commands), which is the
-kernel's authoritative entry point for AI requests. The kernel applies
-capability checks, the app's manifest ``ai`` policy (model allowlist,
-prompt-origin allowlist), per-month budget enforcement, the safety
-pipeline, and audit before letting any model see the prompt.
+shells out to ``cos agent chat --app <id>`` (or its sibling commands),
+which is the kernel's authoritative entry point for AI requests. The
+kernel applies capability checks, the app's manifest ``ai`` policy
+(model allowlist, prompt-origin allowlist), per-month budget
+enforcement, the safety pipeline, and audit before letting any model
+see the prompt.
 
 Typical usage::
 
@@ -31,7 +32,7 @@ Why a subprocess and not an in-process check?
 Apps are **not** allowed to import provider SDKs (openai, anthropic,
 google.generativeai, ...). The kernel enforces this at install time
 via ``cos app lint``; the AI helper is the *only* sanctioned route to
-a model. Centralising the request in ``cos ai chat`` means the
+a model. Centralising the request in ``cos agent chat`` means the
 kernel — not the app — controls budget, safety, and audit.
 """
 
@@ -61,9 +62,9 @@ class AiUnavailable(AiError):
 class AiDenied(AiError):
     """A gate (capability / origin / model glob / budget) refused the call.
 
-    The ``payload`` attribute holds the structured envelope ``cos ai
-    chat`` returned (verb, scope, reason, hint, …) — suitable for
-    forwarding back to the agent.
+    The ``payload`` attribute holds the structured envelope
+    ``cos agent chat`` returned (verb, scope, reason, hint, …) —
+    suitable for forwarding back to the agent.
     """
 
     def __init__(self, payload: Mapping[str, Any]):
@@ -139,11 +140,11 @@ def chat(
 ) -> AiResponse:
     """Send a single-shot chat completion through the kernel's AI gate.
 
-    Parameters mirror ``cos ai chat`` exactly. ``origin`` defaults to
-    ``"trusted"`` — apps that feed in third-party text (emails, web
-    pages, file contents, another agent's output) MUST pass
-    ``"external-content"`` and use ``verb="ai.chat.untrusted"`` so the
-    strict safety pipeline kicks in.
+    Parameters mirror ``cos agent chat --app <id>`` exactly. ``origin``
+    defaults to ``"trusted"`` — apps that feed in third-party text
+    (emails, web pages, file contents, another agent's output) MUST
+    pass ``"external-content"`` and use ``verb="ai.chat.untrusted"``
+    so the strict safety pipeline kicks in.
 
     Returns an :class:`AiResponse`. Raises :class:`AiBudgetExceeded`,
     :class:`AiModelNotAllowed`, :class:`AiSafetyViolation`,
@@ -158,7 +159,7 @@ def chat(
             "chat: app_id is required (pass app_id= or set COS_APP_ID)"
         )
 
-    cmd = [_cos_binary(), "ai", "chat", "--app", app, "--prompt", prompt,
+    cmd = [_cos_binary(), "agent", "chat", "--app", app, "--prompt", prompt,
            "--origin", origin, "--verb", verb]
     if model is not None:
         cmd.extend(["--model", model])
@@ -171,14 +172,14 @@ def chat(
     payload_text = (proc.stdout or "").strip() or (proc.stderr or "").strip()
     if not payload_text:
         raise AiUnavailable(
-            f"cos ai chat returned no output (exit {proc.returncode})"
+            f"cos agent chat returned no output (exit {proc.returncode})"
         )
 
     try:
         envelope = json.loads(payload_text)
     except json.JSONDecodeError as exc:
         raise AiUnavailable(
-            f"cos ai chat returned non-JSON output: {payload_text!r}"
+            f"cos agent chat returned non-JSON output: {payload_text!r}"
         ) from exc
 
     if proc.returncode != 0 or "error" in envelope:
@@ -192,18 +193,18 @@ def budget(app_id: Optional[str] = None) -> Budget:
     app = app_id or os.environ.get("COS_APP_ID")
     if not app:
         raise AiError("budget: app_id is required")
-    cmd = [_cos_binary(), "ai", "budget", "show", app]
+    cmd = [_cos_binary(), "agent", "budget", "show", app]
     proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
     text = (proc.stdout or "").strip() or (proc.stderr or "").strip()
     if not text:
         raise AiUnavailable(
-            f"cos ai budget show returned no output (exit {proc.returncode})"
+            f"cos agent budget show returned no output (exit {proc.returncode})"
         )
     try:
         env = json.loads(text)
     except json.JSONDecodeError as exc:
         raise AiUnavailable(
-            f"cos ai budget show returned non-JSON output: {text!r}"
+            f"cos agent budget show returned non-JSON output: {text!r}"
         ) from exc
     return Budget(
         period=env.get("period", ""),

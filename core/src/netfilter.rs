@@ -7,8 +7,10 @@
 /// iptables/nftables directly.
 ///
 /// For full enforcement, combine with:
-///   - `cos sandbox exec --no-network` for complete network isolation
 ///   - An HTTP proxy that calls `cos netfilter check` before forwarding
+///   - The agent's sandbox tool, which can run subprocesses with
+///     `--no-network` for complete isolation (see
+///     `crate::agent::tools::cos_proxy::cos_sandbox`)
 ///
 /// Storage: `$COS_DATA_DIR/netfilter/rules.json`
 ///            `$COS_DATA_DIR/netfilter/rate-state.json`

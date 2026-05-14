@@ -284,19 +284,19 @@ cos proc kill --group research
 
 ### Sandboxed Untrusted Code
 
-```bash
-# Agent received code from external source — run it safely
-cos sandbox exec \
-  --no-network \
-  --mem 256M \
-  --timeout 30 \
-  --pids 50 \
-  --seccomp-profile minimal \
-  --ro \
-  -- python /home/cos/untrusted_script.py
+The agent calls its `cos_sandbox` tool (not a user CLI) when running model-generated or otherwise untrusted code:
 
-# Result includes exit code, stdout, stderr, and whether it was killed (OOM, timeout)
+```json
+{
+  "tool": "cos_sandbox",
+  "command": "exec",
+  "args": ["--no-network", "--mem", "256M", "--timeout", "30",
+           "--pids", "50", "--seccomp-profile", "minimal", "--ro",
+           "--", "python", "/home/cos/untrusted_script.py"]
+}
 ```
+
+The result includes exit code, stdout, stderr, and whether it was killed (OOM, timeout).
 
 ### Service-Oriented Architecture
 

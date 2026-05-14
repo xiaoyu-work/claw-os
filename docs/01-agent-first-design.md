@@ -223,10 +223,14 @@ cos checkpoint quota-status  # → {"used_bytes": 156000000, "limit_bytes": 2147
 
 ### Linux Namespaces: Sandbox Isolation
 
-`cos sandbox exec` uses Linux namespace isolation:
+The agent's `cos_sandbox` tool uses Linux namespace isolation. It is not exposed as a user-facing CLI command — every sandbox invocation flows through the agent, which calls the tool with a JSON envelope:
 
-```bash
-cos sandbox exec --no-network --mem 512M --timeout 60 -- python untrusted.py
+```json
+{
+  "command": "exec",
+  "args": ["--no-network", "--mem", "512M", "--timeout", "60",
+           "--", "python", "untrusted.py"]
+}
 ```
 
 Under the hood:
