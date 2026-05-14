@@ -88,7 +88,12 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
                     .enable_all()
                     .build()
                     .map_err(|e| format!("tokio runtime: {e}"))?;
-                runtime.block_on(live_cmd_async(provider, &cfg_snapshot, &prompt))
+                let timeout = runtime::loop_::background_drain_timeout();
+                runtime.block_on(async move {
+                    let outcome = live_cmd_async(provider, &cfg_snapshot, &prompt).await;
+                    runtime::background::drain(timeout).await;
+                    outcome
+                })
             } else {
                 match runtime::loop_::ask_blocking(&prompt) {
                     Ok(result) => Ok(json!({
@@ -2876,16 +2881,21 @@ fn chat_cmd(args: &[String]) -> Result<Value, String> {
         .enable_all()
         .build()
         .map_err(|e| format!("tokio runtime: {e}"))?;
-
-    runtime.block_on(chat_cmd_async(
-        provider,
-        cfg,
-        explicit_session,
-        streaming,
-        use_memory,
-        show_tools,
-        max_turns_override,
-    ))
+    let timeout = runtime::loop_::background_drain_timeout();
+    runtime.block_on(async move {
+        let outcome = chat_cmd_async(
+            provider,
+            cfg,
+            explicit_session,
+            streaming,
+            use_memory,
+            show_tools,
+            max_turns_override,
+        )
+        .await;
+        runtime::background::drain(timeout).await;
+        outcome
+    })
 }
 
 

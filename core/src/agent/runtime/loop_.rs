@@ -832,12 +832,42 @@ pub fn retry_policy_from_cfg(
 
 /// Sync entry point for the CLI dispatcher (which is sync). Internally spins
 /// up a tokio runtime and `block_on`s the async loop.
+///
+/// After the ask future completes, we drain any background tasks
+/// (auto-curator, semantic indexer) that the loop spawned via
+/// [`crate::agent::runtime::background::spawn`] before the runtime is
+/// dropped. Without this, `cos agent ask` in one-shot mode cancels
+/// the curator mid-LLM-call and `MEMORY.md` never gets updated —
+/// runtime drop kills every spawned task immediately
+/// (`shutdown_timeout` only helps `spawn_blocking`, not async
+/// `spawn`). The drain caps the wait at
+/// [`background_drain_timeout`].
 pub fn ask_blocking(user_prompt: &str) -> Result<AskResult, AgentError> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|e| AgentError::Internal(format!("tokio runtime: {e}")))?;
-    runtime.block_on(ask(user_prompt))
+    let timeout = background_drain_timeout();
+    runtime.block_on(async move {
+        let result = ask(user_prompt).await;
+        crate::agent::runtime::background::drain(timeout).await;
+        result
+    })
+}
+
+/// Worst-case wait for background tasks (curator + semantic indexer) at the
+/// end of a one-shot `cos agent ask` invocation. Overridable via
+/// `COS_AGENT_BACKGROUND_DRAIN_SECS` for tests / debugging; defaults to 30s
+/// which comfortably covers a slow auxiliary-LLM curator call without
+/// noticeably delaying normal CLI exit (the drain returns as soon as all
+/// registered tasks settle, which is typically sub-second when there's
+/// nothing new to curate).
+pub fn background_drain_timeout() -> std::time::Duration {
+    let secs = std::env::var("COS_AGENT_BACKGROUND_DRAIN_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(30);
+    std::time::Duration::from_secs(secs)
 }
 
 #[cfg(test)]
@@ -2312,5 +2342,59 @@ mod tests {
         assert_eq!(summary.output_tokens, 42);
         assert_eq!(summary.cache_read_tokens, 11);
         assert_eq!(summary.cache_write_tokens, 5);
+    }
+
+    /// Regression: `cos agent ask` one-shot mode used to cancel
+    /// background curator + semantic-indexer tasks the instant
+    /// `ask_blocking` returned, because dropping the current-thread
+    /// runtime aborts every `tokio::spawn`. This test reproduces the
+    /// real fix path: route the spawn through
+    /// `runtime::background::spawn` and call `drain` inside
+    /// `block_on` before the runtime is dropped.
+    #[test]
+    fn background_drain_keeps_pending_tasks_alive_past_block_on() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let finished = Arc::new(AtomicBool::new(false));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let f = finished.clone();
+        runtime.block_on(async move {
+            crate::agent::runtime::background::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                f.store(true, Ordering::SeqCst);
+            });
+            // Foreground "ask" returns essentially immediately.
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            crate::agent::runtime::background::drain(std::time::Duration::from_secs(5)).await;
+        });
+        assert!(
+            finished.load(Ordering::SeqCst),
+            "background task should have been drained before runtime drop"
+        );
+    }
+
+    /// `COS_AGENT_BACKGROUND_DRAIN_SECS` overrides the default 30s
+    /// timeout. Useful for tests that need a tighter bound and for
+    /// users on slow LLMs who want to wait longer.
+    #[test]
+    fn background_drain_timeout_respects_env_override() {
+        let prev = std::env::var("COS_AGENT_BACKGROUND_DRAIN_SECS").ok();
+        std::env::set_var("COS_AGENT_BACKGROUND_DRAIN_SECS", "7");
+        assert_eq!(background_drain_timeout(), std::time::Duration::from_secs(7));
+        std::env::set_var("COS_AGENT_BACKGROUND_DRAIN_SECS", "not-a-number");
+        assert_eq!(
+            background_drain_timeout(),
+            std::time::Duration::from_secs(30),
+            "malformed env value falls back to the 30s default"
+        );
+        std::env::remove_var("COS_AGENT_BACKGROUND_DRAIN_SECS");
+        assert_eq!(background_drain_timeout(), std::time::Duration::from_secs(30));
+        if let Some(v) = prev {
+            std::env::set_var("COS_AGENT_BACKGROUND_DRAIN_SECS", v);
+        }
     }
 }
