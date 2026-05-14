@@ -430,6 +430,7 @@ mod tests {
     #[tokio::test]
     async fn args_default_to_empty() {
         // sysinfo "info" works with zero args on every platform.
+        let _perms = crate::test_env::PermissiveModeGuard::new();
         let tool = CosPrimitiveTool::new("cos_sysinfo", "test", crate::sysinfo::run, &["info"]);
         let result = tool.exec(json!({ "command": "info" })).await;
         assert!(

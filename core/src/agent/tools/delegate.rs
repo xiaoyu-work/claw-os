@@ -457,6 +457,7 @@ mod tests {
     /// default `Text` echo behaviour is what the child uses.
     #[tokio::test]
     async fn run_delegate_happy_path_uses_mock_echo_default() {
+        let _perms = crate::test_env::PermissiveModeGuard::new();
         let cfg = parent_cfg();
         let input = fresh_input("hello child agent", &["echo"]);
         let result = run_delegate(input, &cfg, test_registry).await;
@@ -476,6 +477,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_delegate_clamps_max_turns_to_hard_cap() {
+        let _perms = crate::test_env::PermissiveModeGuard::new();
         let cfg = parent_cfg();
         let mut input = fresh_input("hi", &[]);
         input.max_turns = Some(9999);
@@ -488,6 +490,7 @@ mod tests {
     /// succeed; the child running inside should observe depth 1.
     #[tokio::test]
     async fn run_delegate_increments_depth_for_child() {
+        let _perms = crate::test_env::PermissiveModeGuard::new();
         // Construct a registry whose only tool inspects the depth.
         struct DepthInspector;
         #[async_trait]
@@ -527,6 +530,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_delegate_zero_timeout_panics_no_just_kidding_it_returns_timeout() {
+        let _perms = crate::test_env::PermissiveModeGuard::new();
         // 1-second timeout against the (instant) mock echo; should *not*
         // time out — sanity check that the timeout wrapper doesn't fire
         // spuriously.

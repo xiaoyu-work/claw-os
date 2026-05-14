@@ -91,11 +91,12 @@ mod tests {
         assert_eq!(engine_version_from_lib_path(&p), Some("1.25.1".into()));
     }
 
-    #[test]
-    fn engine_version_from_lib_path_windows_layout() {
-        let p = PathBuf::from(r"C:\ProgramData\cos\engines\ort\1.25.1\lib\onnxruntime.dll");
-        assert_eq!(engine_version_from_lib_path(&p), Some("1.25.1".into()));
-    }
+    // Windows-layout test removed: `Path::parent()` on Linux does not
+    // recognise `\` as a separator, so a path like
+    // `C:\ProgramData\cos\engines\ort\1.25.1\lib\onnxruntime.dll` parses
+    // as a single bare filename and `engine_version_from_lib_path`
+    // returns None. The unix_layout test above covers the production
+    // path on the only platforms claw-os ships for.
 
     #[test]
     fn engine_version_from_lib_path_bin_dir_supported() {

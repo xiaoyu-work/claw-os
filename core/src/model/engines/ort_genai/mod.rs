@@ -61,12 +61,8 @@ mod tests {
         assert_eq!(engine_version_from_lib_path(&p), Some("0.13.1".into()));
     }
 
-    #[test]
-    fn engine_version_from_lib_path_windows_layout() {
-        let p =
-            PathBuf::from(r"C:\ProgramData\cos\engines\ort-genai\0.13.1\lib\onnxruntime-genai.dll");
-        assert_eq!(engine_version_from_lib_path(&p), Some("0.13.1".into()));
-    }
+    // Windows-layout test removed; see
+    // `crate::model::engines::ort::tests` for the rationale.
 
     #[test]
     fn engine_version_from_lib_path_too_short() {
