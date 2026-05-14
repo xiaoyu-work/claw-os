@@ -22,6 +22,7 @@
 //! module is just the storage + waiter layer.
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -114,11 +115,21 @@ fn approved_dir() -> PathBuf {
 fn denied_dir() -> PathBuf {
     root().join("denied")
 }
+/// Holding area for requests that have been claimed by a resolver
+/// (atomically renamed out of `pending/`) but not yet written to
+/// `approved/` or `denied/`. A crash between the claim and the final
+/// write leaves an orphan here; that is acceptable because the
+/// alternative is the request being silently lost or — worse — being
+/// resolved by two callers simultaneously.
+fn scratch_dir() -> PathBuf {
+    root().join("scratch")
+}
 
 fn ensure_dirs() -> std::io::Result<()> {
     fs::create_dir_all(pending_dir())?;
     fs::create_dir_all(approved_dir())?;
     fs::create_dir_all(denied_dir())?;
+    fs::create_dir_all(scratch_dir())?;
     Ok(())
 }
 
@@ -142,6 +153,63 @@ fn short_id() -> String {
         .hash(&mut h);
     std::process::id().hash(&mut h);
     format!("{:012x}", h.finish() & 0xFFFFFFFFFFFF)
+}
+
+/// Atomically write `data` to `path`. Writes go through a sibling
+/// `.tmp.<nonce>` file, are fsynced, and are then renamed over the
+/// final path. On Linux + POSIX this guarantees a reader sees either
+/// the previous bytes or the new bytes — never a truncated payload.
+/// The parent directory is also fsynced so the rename survives an
+/// abrupt power loss on filesystems where directory metadata is not
+/// auto-flushed (ext4 with `data=writeback`, xfs, …).
+///
+/// Why we need this: the approval queue is the trust boundary
+/// between a gated agent action and the user's consent. A partial
+/// write of `pending/<id>.json` followed by a process kill would
+/// leave a non-parseable file; the read side filters parse errors
+/// silently, so the user's request would just disappear. With the
+/// tmp-write + rename pattern that scenario is impossible.
+fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no parent")
+    })?;
+    fs::create_dir_all(parent)?;
+
+    let leaf = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("anon");
+    // Hidden tmp name so partial writes never appear in directory
+    // listings. The .tmp suffix + nonce keep concurrent writers from
+    // racing on the same scratch path.
+    let tmp_path = parent.join(format!(".{leaf}.tmp.{}", short_id()));
+
+    {
+        let mut f = fs::File::create(&tmp_path)?;
+        f.write_all(data)?;
+        // fsync the data + metadata of the tmp file before linking
+        // it into place under the user-visible name.
+        f.sync_all()?;
+    }
+
+    // Atomic rename is unconditional and overwrites the destination
+    // on POSIX. After this call a reader sees the new bytes; before
+    // it, the old bytes.
+    if let Err(e) = fs::rename(&tmp_path, path) {
+        // Best-effort cleanup — the tmp file is hidden, so leaving
+        // it behind is at worst a tiny disk-space leak.
+        let _ = fs::remove_file(&tmp_path);
+        return Err(e);
+    }
+
+    // Best-effort: fsync the parent directory so the rename
+    // survives a crash. Not all filesystems require this but it
+    // costs ~one syscall and makes the durability guarantee
+    // unambiguous.
+    if let Ok(dir) = fs::File::open(parent) {
+        let _ = dir.sync_all();
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -169,7 +237,7 @@ pub fn submit(
     };
     let path = pending_dir().join(format!("{}.json", req.id));
     let data = serde_json::to_string_pretty(&req).map_err(|e| e.to_string())?;
-    fs::write(&path, data).map_err(|e| e.to_string())?;
+    write_atomic(&path, data.as_bytes()).map_err(|e| format!("write pending: {e}"))?;
     Ok(req.id)
 }
 
@@ -199,11 +267,40 @@ fn resolve(
 ) -> Result<Resolved, String> {
     ensure_dirs().map_err(|e| format!("approvals dir: {e}"))?;
     let pending = pending_dir().join(format!("{id}.json"));
-    if !pending.exists() {
-        return Err(format!("no pending request with id `{id}`"));
+
+    // Atomically claim the request: rename `pending/<id>.json` out of
+    // the pending directory into our process-private scratch path.
+    // POSIX rename is atomic, so concurrent resolvers (CLI + GUI
+    // applet, two reviewers, …) see exactly ONE winner — the one
+    // whose rename succeeded. Everyone else gets ENOENT and a clean
+    // "no pending request" error.
+    //
+    // The scratch path includes a per-resolver nonce so two simultaneous
+    // resolvers do not race on the same destination either.
+    let scratch = scratch_dir().join(format!("{id}.{}.json", short_id()));
+    if let Some(parent) = scratch.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("scratch dir: {e}"))?;
     }
-    let data = fs::read_to_string(&pending).map_err(|e| e.to_string())?;
-    let request: Request = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+    match fs::rename(&pending, &scratch) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(format!("no pending request with id `{id}`"));
+        }
+        Err(e) => return Err(format!("claim pending {id}: {e}")),
+    }
+
+    // From here on we exclusively own `scratch`. A crash between this
+    // point and the final write leaves an orphan file in scratch_dir
+    // that can be inspected post-mortem; correctness is preserved
+    // (the request is not in pending/, not in approved/, not in
+    // denied/ — it is "in flight" and recoverable by hand).
+    let data = match fs::read_to_string(&scratch) {
+        Ok(s) => s,
+        Err(e) => return Err(format!("read claimed {id}: {e}")),
+    };
+    let request: Request = serde_json::from_str(&data)
+        .map_err(|e| format!("parse claimed {id}: {e}"))?;
+
     let decision = Decision {
         outcome,
         decided_at: now_secs(),
@@ -217,13 +314,23 @@ fn resolve(
         Outcome::Denied => denied_dir(),
     };
     let dest = dest_dir.join(format!("{id}.json"));
-    fs::write(
-        &dest,
-        serde_json::to_string_pretty(&resolved).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
-    fs::remove_file(&pending).map_err(|e| e.to_string())?;
+    let payload = serde_json::to_string_pretty(&resolved).map_err(|e| e.to_string())?;
+    write_atomic(&dest, payload.as_bytes())
+        .map_err(|e| format!("write {} {id}: {e}", outcome_dir_name(outcome)))?;
+
+    // Best-effort cleanup of the scratch file. If this fails the
+    // authoritative copy is already in approved/ or denied/ and the
+    // scratch file is harmless.
+    let _ = fs::remove_file(&scratch);
+
     Ok(resolved)
+}
+
+fn outcome_dir_name(o: Outcome) -> &'static str {
+    match o {
+        Outcome::Approved => "approved",
+        Outcome::Denied => "denied",
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -362,5 +469,131 @@ mod tests {
         assert_eq!(GrantDuration::parse("Session"), Some(GrantDuration::Session));
         assert_eq!(GrantDuration::parse("FOREVER"), Some(GrantDuration::Forever));
         assert_eq!(GrantDuration::parse("nope"), None);
+    }
+
+    /// `submit` must never leave a partially-written file behind. We
+    /// can't easily simulate a process kill, but we can assert (a)
+    /// the temp file is gone after `submit` returns and (b) the
+    /// resulting pending/<id>.json parses cleanly.
+    #[test]
+    fn submit_writes_atomically_no_tmp_leftovers() {
+        let _tmp = isolated_env();
+        let id = submit(
+            Verb::FS_WRITE,
+            Scope::path("/etc/hosts"),
+            "sess",
+            "want to edit hosts",
+            None,
+        )
+        .unwrap();
+        let path = pending_dir().join(format!("{id}.json"));
+        let parsed: Request = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(parsed.id, id);
+
+        // No hidden `.<id>.json.tmp.*` siblings should remain.
+        for e in fs::read_dir(pending_dir()).unwrap().flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            assert!(
+                !name.contains(".tmp."),
+                "leftover tmp file in pending/: {name}"
+            );
+        }
+    }
+
+    /// Two concurrent resolvers on the same request id (e.g. CLI
+    /// approve racing the GUI applet's deny) must NOT both succeed.
+    /// Exactly one wins; the other gets "no pending request".
+    /// Before the rename-claim fix this race could leave the same id
+    /// in BOTH approved/ and denied/.
+    #[test]
+    fn concurrent_approve_and_deny_only_one_wins() {
+        let _tmp = isolated_env();
+        let id = submit(
+            Verb::FS_WRITE,
+            Scope::path("/race"),
+            "sess",
+            "race target",
+            None,
+        )
+        .unwrap();
+
+        // Run approve and deny on background threads. Whichever
+        // rename-claims first writes its outcome and the other has
+        // to fail. We don't care which side wins; we care that
+        // exactly one side is recorded.
+        let id_a = id.clone();
+        let id_b = id.clone();
+        let h_a = std::thread::spawn(move || approve(&id_a, GrantDuration::Once, None, None));
+        let h_b = std::thread::spawn(move || deny(&id_b, None, None));
+        let r_a = h_a.join().unwrap();
+        let r_b = h_b.join().unwrap();
+
+        let approved_exists = approved_dir().join(format!("{id}.json")).exists();
+        let denied_exists = denied_dir().join(format!("{id}.json")).exists();
+        let pending_exists = pending_dir().join(format!("{id}.json")).exists();
+
+        assert!(
+            !pending_exists,
+            "pending file must be gone after either resolver wins"
+        );
+        assert_ne!(
+            approved_exists, denied_exists,
+            "exactly one of approved/ or denied/ must exist (got approved={approved_exists}, denied={denied_exists})"
+        );
+        // Exactly one of the two calls succeeded.
+        assert_eq!(
+            r_a.is_ok() ^ r_b.is_ok(),
+            true,
+            "exactly one resolver should have succeeded; got approve={:?}, deny={:?}",
+            r_a,
+            r_b
+        );
+        let loser_err = if r_a.is_err() {
+            r_a.unwrap_err()
+        } else {
+            r_b.unwrap_err()
+        };
+        assert!(
+            loser_err.contains("no pending request"),
+            "loser should see 'no pending request', got: {loser_err}"
+        );
+    }
+
+    /// Resolving the same id twice in serial (legitimate retry, not a
+    /// race) must error the second time with a clear message — not
+    /// crash, not double-write.
+    #[test]
+    fn second_resolve_after_approve_errors_cleanly() {
+        let _tmp = isolated_env();
+        let id = submit(Verb::FS_READ, Scope::path("/x"), "s", "r", None).unwrap();
+        approve(&id, GrantDuration::Once, None, None).unwrap();
+        let err = deny(&id, None, None).unwrap_err();
+        assert!(
+            err.contains("no pending request"),
+            "expected 'no pending request', got: {err}"
+        );
+        // Approve outcome is preserved; no denied/<id>.json appears.
+        assert!(approved_dir().join(format!("{id}.json")).exists());
+        assert!(!denied_dir().join(format!("{id}.json")).exists());
+    }
+
+    /// Approval queue should survive a power-loss simulation: if a
+    /// pending file's tmp sibling appears mid-write, the read side
+    /// must NOT mistake it for a real pending request.
+    #[test]
+    fn list_pending_ignores_tmp_files() {
+        let _tmp = isolated_env();
+        fs::create_dir_all(pending_dir()).unwrap();
+        // Simulate an in-flight atomic write: hidden tmp file with
+        // a `.tmp.` infix. list_dir already filters by `.json`
+        // extension, but the leading `.` and the `.tmp.` infix
+        // double-protect us.
+        fs::write(
+            pending_dir().join(".ap-xyz.json.tmp.abc"),
+            r#"not real json"#,
+        )
+        .unwrap();
+        let pending = list_pending();
+        assert!(pending.is_empty(), "should ignore tmp file, got {pending:?}");
     }
 }
