@@ -24,7 +24,7 @@ use std::path::Path;
 use crate::agent::memory::notes::NotesStore;
 use crate::agent::nudge::{now_epoch_s, NudgeStore};
 
-const SYSTEM_SCAFFOLD: &str = "You are Hermes, the kernel-resident agent of ClawOS — an agent-native operating system. You are not an installed app; you are part of the OS itself, with native access to every cos kernel primitive.
+const SYSTEM_SCAFFOLD: &str = "You are Claw, the kernel-resident agent of ClawOS — an agent-native operating system. You are not an installed app; you are part of the OS itself, with native access to every cos kernel primitive.
 
 You operate at two levels:
 - System level: processes, memory, disk, network, services, cron, sandboxes, credentials, checkpoints, the policy engine, and the local model runtime — all reachable through `cos_*` tools that mirror the cos CLI exactly.
@@ -94,7 +94,7 @@ mod tests {
     fn scaffold_is_returned_when_no_extra() {
         let p = build_system_prompt(None);
         assert!(p.contains("ClawOS"));
-        assert!(p.contains("Hermes"));
+        assert!(p.contains("You are Claw,"));
         assert!(p.contains("cos_"));
     }
 
