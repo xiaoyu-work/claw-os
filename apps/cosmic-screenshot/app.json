@@ -1,0 +1,62 @@
+{
+  "id": "cosmic-screenshot",
+  "version": "0.1.0",
+  "name": {
+    "en": "Screenshot"
+  },
+  "summary": {
+    "en": "Capture the screen via xdg-desktop-portal and save a PNG."
+  },
+  "icon": "📸",
+  "runtime": "binary",
+  "operations": {},
+  "session": {
+    "entry": "/usr/bin/cosmic-screenshot",
+    "transport": "stdio",
+    "tools": [
+      {
+        "name": "screenshot.capture",
+        "summary": {
+          "en": "Take a screenshot through the desktop portal. Saves a PNG to `save_dir` (or ~/Pictures by default) and returns the absolute file path."
+        },
+        "args": [
+          {
+            "name": "interactive",
+            "kind": "bool",
+            "required": false,
+            "default": false,
+            "label": {
+              "en": "Let the user choose the capture region via the portal UI."
+            }
+          },
+          {
+            "name": "modal",
+            "kind": "bool",
+            "required": false,
+            "default": true,
+            "label": {
+              "en": "Render the portal dialog as modal."
+            }
+          },
+          {
+            "name": "save_dir",
+            "kind": "path",
+            "required": false,
+            "label": {
+              "en": "Directory to save the PNG to. Must already exist."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.write",
+            "scope": { "kind": "wild" },
+            "why": {
+              "en": "Write the captured PNG into the destination directory."
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
