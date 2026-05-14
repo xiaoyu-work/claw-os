@@ -295,6 +295,12 @@ pub struct State {
     pub last_apply: Option<Result<ApplyResult, String>>,
     pub last_test: Option<Result<TestResult, String>>,
     pub load_error: Option<String>,
+    /// Cached dropdown labels — owned here so the iced widgets can borrow
+    /// them with a lifetime tied to `State`, not to a local in `view()`.
+    /// Recomputed on provider/model changes via `refresh_labels`.
+    provider_labels: Vec<String>,
+    model_labels: Vec<String>,
+    mode_labels: Vec<String>,
 }
 
 impl State {
@@ -315,12 +321,42 @@ impl State {
             last_apply: None,
             last_test: None,
             load_error: None,
+            provider_labels: Vec::new(),
+            model_labels: Vec::new(),
+            mode_labels: KeyMode::PICKER.iter().map(|m| m.label()).collect(),
         }
     }
 
     pub fn selected_provider(&self) -> Option<&ProviderEntry> {
         let providers = self.providers.as_ref()?;
         providers.providers.get(self.provider_idx?)
+    }
+
+    /// Rebuild the cached dropdown labels from the current providers /
+    /// selected provider. Cheap (small allocs) and called after every state
+    /// mutation that affects what the dropdowns show.
+    fn refresh_labels(&mut self) {
+        self.provider_labels = self
+            .providers
+            .as_ref()
+            .map(|p| {
+                p.providers
+                    .iter()
+                    .map(|entry| {
+                        if entry.label.is_empty() || entry.label == entry.name {
+                            entry.name.clone()
+                        } else {
+                            format!("{} — {}", entry.name, entry.label)
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        self.model_labels = self
+            .selected_provider()
+            .map(|p| p.models.iter().map(|m| m.name.clone()).collect())
+            .unwrap_or_default();
     }
 
     pub fn selected_model_name(&self) -> String {
@@ -425,6 +461,8 @@ impl State {
                 }
             }
         }
+
+        self.refresh_labels();
     }
 
     // -----------------------------------------------------------------------
@@ -469,6 +507,7 @@ impl State {
                     };
                     self.env_var_input = default_env;
                 }
+                self.refresh_labels();
             }
             Message::ModelSelected(idx) => {
                 self.model_idx = Some(idx);
@@ -995,20 +1034,8 @@ fn configuration_view(state: &State) -> Element<'_, Message> {
         return text::body(crate::fl!("agent-providers-empty")).into();
     }
 
-    let provider_labels: Vec<String> = providers
-        .providers
-        .iter()
-        .map(|p| {
-            if p.label.is_empty() || p.label == p.name {
-                p.name.clone()
-            } else {
-                format!("{} — {}", p.name, p.label)
-            }
-        })
-        .collect();
-
     let provider_dropdown = dropdown(
-        &provider_labels,
+        &state.provider_labels,
         state.provider_idx,
         Message::ProviderSelected,
     );
@@ -1022,10 +1049,11 @@ fn configuration_view(state: &State) -> Element<'_, Message> {
         // Model picker. If we have a curated list, render a dropdown; the
         // text input is always available so users can override.
         if !provider.models.is_empty() {
-            let model_names: Vec<String> =
-                provider.models.iter().map(|m| m.name.clone()).collect();
-            let model_dropdown =
-                dropdown(&model_names, state.model_idx, Message::ModelSelected);
+            let model_dropdown = dropdown(
+                &state.model_labels,
+                state.model_idx,
+                Message::ModelSelected,
+            );
             col = col.push(
                 settings::item::builder(crate::fl!("agent-model"))
                     .flex_control(model_dropdown.apply(Element::from)),
@@ -1069,9 +1097,7 @@ fn configuration_view(state: &State) -> Element<'_, Message> {
                 KeyMode::EnvVar => Some(1usize),
                 KeyMode::NotRequired => None,
             };
-            let mode_labels: Vec<String> =
-                KeyMode::PICKER.iter().map(|m| m.label()).collect();
-            let mode_dropdown = dropdown(&mode_labels, mode_idx, |idx| {
+            let mode_dropdown = dropdown(&state.mode_labels, mode_idx, |idx| {
                 Message::KeyModeSelected(KeyMode::PICKER[idx])
             });
             col = col.push(
