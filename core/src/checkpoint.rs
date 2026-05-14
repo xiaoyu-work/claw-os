@@ -545,7 +545,23 @@ fn find_checkpoint_dir(checkpoints_dir: &Path, id: &str) -> Result<PathBuf, Stri
     Err(format!("checkpoint not found: {id}"))
 }
 
-/// Recursively copy a directory tree.
+/// Recursively copy a directory tree, preserving symbolic links
+/// as symlinks (not following them).
+///
+/// Pre-fix this function used `src_path.is_dir()` (which follows
+/// symlinks) and `fs::copy` (which reads + writes the *target*'s
+/// bytes), so a symlink in the source tree would either:
+///
+/// * recurse into the link target if it was a directory (copying
+///   data that lives outside `src`), or
+/// * silently materialize the target's bytes as a regular file at
+///   the link's path in `dst`.
+///
+/// Either way the checkpoint loses the link identity, and on
+/// restore the directory layout no longer matches what was
+/// captured. Switch to `fs::symlink_metadata` to inspect entries
+/// without traversing links, and rebuild symlinks at the
+/// destination with `std::os::unix::fs::symlink`.
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
     fs::create_dir_all(dst).map_err(|e| format!("mkdir {}: {e}", dst.display()))?;
 
@@ -554,7 +570,32 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
 
-        if src_path.is_dir() {
+        let metadata = fs::symlink_metadata(&src_path)
+            .map_err(|e| format!("symlink_metadata {}: {e}", src_path.display()))?;
+        let ft = metadata.file_type();
+
+        if ft.is_symlink() {
+            let target = fs::read_link(&src_path)
+                .map_err(|e| format!("read_link {}: {e}", src_path.display()))?;
+            #[cfg(unix)]
+            {
+                if let Err(e) = std::os::unix::fs::symlink(&target, &dst_path) {
+                    return Err(format!(
+                        "symlink {} → {}: {e}",
+                        dst_path.display(),
+                        target.display()
+                    ));
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                return Err(format!(
+                    "symlink {} → {}: symlink reconstruction unsupported on this platform",
+                    dst_path.display(),
+                    target.display()
+                ));
+            }
+        } else if ft.is_dir() {
             copy_dir_recursive(&src_path, &dst_path)?;
         } else {
             fs::copy(&src_path, &dst_path).map_err(|e| {
@@ -1315,6 +1356,83 @@ mod tests {
         assert_eq!(
             fs::read_to_string(dst.join("sub").join("b.txt")).unwrap(),
             "bbb"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Pre-fix: a symlink in the source tree was dereferenced —
+    /// `is_dir()` followed links and `fs::copy` materialized the
+    /// target's bytes. After: symlinks are preserved as symlinks
+    /// at the destination, with their original target path.
+    #[cfg(unix)]
+    #[test]
+    fn copy_dir_recursive_preserves_symlinks() {
+        perms_init();
+        let root = std::env::temp_dir().join("cos-cp-copydir-symlinks");
+        let _ = fs::remove_dir_all(&root);
+
+        let src = root.join("src");
+        let dst = root.join("dst");
+        fs::create_dir_all(&src).unwrap();
+
+        // file -> file symlink with a relative target
+        fs::write(src.join("real.txt"), "real-bytes").unwrap();
+        std::os::unix::fs::symlink("real.txt", src.join("link-to-file")).unwrap();
+
+        // file -> file symlink with an absolute target that points
+        // *outside* src; the pre-fix code would happily inline its
+        // bytes, leaking external content into the checkpoint.
+        let outside = root.join("outside.txt");
+        fs::write(&outside, "outside-bytes").unwrap();
+        std::os::unix::fs::symlink(&outside, src.join("link-absolute")).unwrap();
+
+        // dir -> dir symlink — pre-fix this would have triggered
+        // recursive copy of the linked directory contents.
+        fs::create_dir_all(src.join("real_dir")).unwrap();
+        fs::write(src.join("real_dir").join("inside.txt"), "inside-bytes").unwrap();
+        std::os::unix::fs::symlink("real_dir", src.join("link-to-dir")).unwrap();
+
+        // Dangling symlink — must still round-trip as a dangling
+        // symlink rather than failing the copy.
+        std::os::unix::fs::symlink("nonexistent-target", src.join("link-dangling")).unwrap();
+
+        copy_dir_recursive(&src, &dst).unwrap();
+
+        // The real file should be copied as a regular file.
+        let real_meta = fs::symlink_metadata(dst.join("real.txt")).unwrap();
+        assert!(real_meta.file_type().is_file(), "real.txt must stay a file");
+
+        // All four links must be symlinks at dst (NOT regular files).
+        for name in ["link-to-file", "link-absolute", "link-to-dir", "link-dangling"] {
+            let meta = fs::symlink_metadata(dst.join(name))
+                .unwrap_or_else(|e| panic!("symlink_metadata {name}: {e}"));
+            assert!(
+                meta.file_type().is_symlink(),
+                "{name} must be a symlink at dst, not {:?}",
+                meta.file_type()
+            );
+        }
+
+        // Targets must round-trip unchanged.
+        assert_eq!(fs::read_link(dst.join("link-to-file")).unwrap(), Path::new("real.txt"));
+        assert_eq!(fs::read_link(dst.join("link-absolute")).unwrap(), outside);
+        assert_eq!(fs::read_link(dst.join("link-to-dir")).unwrap(), Path::new("real_dir"));
+        assert_eq!(
+            fs::read_link(dst.join("link-dangling")).unwrap(),
+            Path::new("nonexistent-target")
+        );
+
+        // real_dir was a real directory, so it should still be a
+        // real directory at dst with its contents intact.
+        let dir_meta = fs::symlink_metadata(dst.join("real_dir")).unwrap();
+        assert!(
+            dir_meta.file_type().is_dir() && !dir_meta.file_type().is_symlink(),
+            "real_dir must stay a real directory"
+        );
+        assert_eq!(
+            fs::read_to_string(dst.join("real_dir").join("inside.txt")).unwrap(),
+            "inside-bytes"
         );
 
         let _ = fs::remove_dir_all(&root);
