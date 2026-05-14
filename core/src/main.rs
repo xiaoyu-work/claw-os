@@ -86,6 +86,12 @@ fn main() {
     let raw_args: Vec<String> = env::args().skip(1).collect();
     let (args, fmt) = extract_format(raw_args);
 
+    // Bootstrap a CLI session if the caller didn't already gate us
+    // through one (typical for `cos agent setup`, `cos agent chat`,
+    // and other commands a human runs straight from a shell). The
+    // guard cleans up its registry row on Drop.
+    let _session_guard = caps::bootstrap_user_cli_session();
+
     let result = router::dispatch(&args);
 
     match result {

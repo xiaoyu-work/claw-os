@@ -1,8 +1,0 @@
-{
-  "extends": "@open-agents/tsconfig/bun.json",
-  "include": ["./**/*"],
-  "exclude": ["node_modules"],
-  "compilerOptions": {
-    "strictNullChecks": true
-  }
-}

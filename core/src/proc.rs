@@ -79,6 +79,36 @@ fn save_registry(reg: &Registry) {
     }
 }
 
+/// Register a freshly-built [`SessionInfo`] into the on-disk registry.
+///
+/// Used by interactive entry points (e.g. the user-CLI session
+/// bootstrap in `caps::bootstrap`) to create a session row without
+/// spawning a child process the way `proc spawn` does. Creates the
+/// data dir on first call. Best-effort: returns `Err` only if the
+/// registry write itself failed.
+pub fn register_session(info: SessionInfo) -> Result<(), String> {
+    let _ = fs::create_dir_all(proc_dir());
+    let mut reg = load_registry();
+    reg.sessions.push(info);
+
+    let data = serde_json::to_string_pretty(&reg)
+        .map_err(|e| format!("serialize registry: {e}"))?;
+    crate::filelock::write_locked(&registry_path(), &data)
+        .map_err(|e| format!("write registry: {e}"))
+}
+
+/// Remove a session row by id. No-op if it is not present.
+/// Counterpart to [`register_session`], called on process exit by
+/// the CLI session guard so the registry doesn't accumulate ghosts.
+pub fn deregister_session(session_id: &str) {
+    let mut reg = load_registry();
+    let before = reg.sessions.len();
+    reg.sessions.retain(|s| s.session_id != session_id);
+    if reg.sessions.len() != before {
+        save_registry(&reg);
+    }
+}
+
 fn is_alive(pid: u32) -> bool {
     #[cfg(unix)]
     unsafe {

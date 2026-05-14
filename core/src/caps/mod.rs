@@ -46,6 +46,7 @@ pub mod risk;
 pub mod role;
 pub mod scope;
 pub mod verb;
+pub mod bootstrap;
 
 pub use cap::{Cap, CapSet};
 pub use catalog::{lookup as lookup_meta, CapMeta, CATALOG};
@@ -56,6 +57,7 @@ pub use risk::Risk;
 pub use role::{user_selectable, Role, ALL_ROLES};
 pub use scope::{Scope, ScopeKind};
 pub use verb::{Verb, ALL_VERBS};
+pub use bootstrap::{bootstrap_user_cli_session, SessionGuard};
 
 /// Run all static self-checks on the cap subsystem. Intended to be
 /// called once at boot (after [`crate::i18n::init_locale_from_env`])
