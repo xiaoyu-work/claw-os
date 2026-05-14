@@ -1330,3 +1330,211 @@ fn rollback_on_empty_session_is_empty_vec() {
     let outcomes = rollback(&sid).unwrap();
     assert!(outcomes.is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// Phase 3b — Python `apps/_lib/snapshot.py` mirrors into mutations.jsonl
+// ---------------------------------------------------------------------------
+//
+// These tests prove that the Python helper and the Rust kernel agree
+// on the file-schema contract. We literally invoke `python3 -c "..."`
+// with snapshot.py on the import path, then read the resulting
+// mutations.jsonl back through Rust's iter_mutations + rollback.
+//
+// If `python3` is unavailable on the build host we skip the test —
+// some CI containers strip python out, and this is a contract test,
+// not a unit test.
+
+fn python3_available() -> bool {
+    std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn apps_lib_dir() -> std::path::PathBuf {
+    // tests run from the package dir (`core/`); apps/_lib is two
+    // levels up.
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    std::path::PathBuf::from(manifest)
+        .parent()
+        .unwrap()
+        .join("apps")
+        .join("_lib")
+}
+
+fn run_python_snapshot(sid: &SessionId, path: &std::path::Path, op: &str) {
+    let lib = apps_lib_dir();
+    assert!(
+        lib.join("snapshot.py").is_file(),
+        "snapshot.py missing at {}",
+        lib.display()
+    );
+    let data_dir = env::var("COS_DATA_DIR").expect("COS_DATA_DIR set");
+    let script = format!(
+        "import sys; sys.path.insert(0, {lib:?}); import snapshot; \
+         snapshot.snapshot({path:?}, {op:?})",
+        lib = lib.to_string_lossy(),
+        path = path.to_string_lossy(),
+        op = op,
+    );
+    let out = std::process::Command::new("python3")
+        .arg("-c")
+        .arg(&script)
+        .env("COS_DATA_DIR", &data_dir)
+        .env("COS_SESSION", sid.as_str())
+        .env("COS_SNAPSHOT", "1")
+        .output()
+        .expect("spawn python3");
+    assert!(
+        out.status.success(),
+        "python snapshot.py failed:\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
+#[test]
+fn python_snapshot_mirrors_into_durable_mutations_log() {
+    if !python3_available() {
+        eprintln!("python3 unavailable; skipping cross-language snapshot test");
+        return;
+    }
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    let sid = create("python bridge").unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let path = work.path().join("doc.txt");
+    std::fs::write(&path, b"original").unwrap();
+
+    // Python side records the snapshot for an upcoming overwrite.
+    run_python_snapshot(&sid, &path, "write");
+
+    // Rust side reads it back from mutations.jsonl — proves the
+    // schema (kebab-case kind, prev_blob field name, etc.) matches.
+    let muts = iter_mutations(&sid).unwrap();
+    assert_eq!(muts.len(), 1, "exactly one record");
+    let blob_id = match &muts[0].mutation {
+        Mutation::FsWrite { path: p, prev_blob } => {
+            assert_eq!(*p, path.to_string_lossy().into_owned());
+            prev_blob.clone().expect("file existed, blob recorded")
+        }
+        other => panic!("expected FsWrite, got {other:?}"),
+    };
+    assert_eq!(blob_id.len(), 32, "uuid simple hex");
+    assert_eq!(read_blob(&sid, &blob_id).unwrap(), b"original");
+
+    // End-to-end: simulate the gated app overwriting the file, then
+    // run Rust rollback and verify the original bytes come back.
+    std::fs::write(&path, b"overwritten").unwrap();
+    let outcomes = rollback(&sid).unwrap();
+    assert_eq!(outcomes[0].status, RollbackStatus::Restored);
+    assert_eq!(std::fs::read(&path).unwrap(), b"original");
+}
+
+#[test]
+fn python_snapshot_rm_records_fs_delete_with_blob() {
+    if !python3_available() {
+        eprintln!("python3 unavailable; skipping cross-language snapshot test");
+        return;
+    }
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    let sid = create("python rm").unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let path = work.path().join("bye.txt");
+    std::fs::write(&path, b"farewell").unwrap();
+
+    run_python_snapshot(&sid, &path, "rm");
+
+    let muts = iter_mutations(&sid).unwrap();
+    let (recorded_path, blob_id) = match &muts[0].mutation {
+        Mutation::FsDelete { path, blob_id } => (path.clone(), blob_id.clone()),
+        other => panic!("expected FsDelete, got {other:?}"),
+    };
+    assert_eq!(recorded_path, path.to_string_lossy().into_owned());
+    assert_eq!(read_blob(&sid, &blob_id).unwrap(), b"farewell");
+
+    // Simulate the actual delete and roll back.
+    std::fs::remove_file(&path).unwrap();
+    let outcomes = rollback(&sid).unwrap();
+    assert_eq!(outcomes[0].status, RollbackStatus::Restored);
+    assert_eq!(std::fs::read(&path).unwrap(), b"farewell");
+}
+
+#[test]
+fn python_snapshot_records_absent_for_new_path() {
+    if !python3_available() {
+        eprintln!("python3 unavailable; skipping cross-language snapshot test");
+        return;
+    }
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    let sid = create("python absent").unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let path = work.path().join("brand_new.txt");
+
+    run_python_snapshot(&sid, &path, "write");
+
+    let muts = iter_mutations(&sid).unwrap();
+    match &muts[0].mutation {
+        Mutation::FsWrite {
+            path: _,
+            prev_blob: None,
+        } => {}
+        other => panic!("expected FsWrite{{prev_blob: None}}, got {other:?}"),
+    }
+}
+
+#[test]
+fn python_snapshot_no_mirror_for_ephemeral_session() {
+    if !python3_available() {
+        eprintln!("python3 unavailable; skipping cross-language snapshot test");
+        return;
+    }
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    // Don't create a durable session — pretend COS_SESSION is the
+    // ephemeral CLI session id (`cli-1234-abcd`). Python should still
+    // write the trash dir but skip the durable mirror because no
+    // <sessions>/<sid>/meta.json exists.
+    let work = tempfile::tempdir().unwrap();
+    let path = work.path().join("legacy.txt");
+    std::fs::write(&path, b"legacy bytes").unwrap();
+
+    let lib = apps_lib_dir();
+    let data_dir = env::var("COS_DATA_DIR").unwrap();
+    let script = format!(
+        "import sys; sys.path.insert(0, {lib:?}); import snapshot; \
+         snapshot.snapshot({path:?}, 'write')",
+        lib = lib.to_string_lossy(),
+        path = path.to_string_lossy(),
+    );
+    let out = std::process::Command::new("python3")
+        .arg("-c")
+        .arg(&script)
+        .env("COS_DATA_DIR", &data_dir)
+        .env("COS_SESSION", "cli-9999-abcd-not-durable")
+        .output()
+        .expect("python");
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+
+    // Trash dir got written.
+    let trash = std::path::Path::new(&data_dir)
+        .join("trash")
+        .join("cli-9999-abcd-not-durable");
+    assert!(trash.is_dir(), "trash dir created");
+
+    // Sessions dir does NOT have a mutations.jsonl for this fake sid.
+    let sessions_dir = std::path::Path::new(&data_dir)
+        .join("sessions")
+        .join("cli-9999-abcd-not-durable");
+    assert!(
+        !sessions_dir.join("mutations.jsonl").exists(),
+        "no mirror written for ephemeral CLI session"
+    );
+}

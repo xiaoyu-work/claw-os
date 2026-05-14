@@ -200,6 +200,17 @@ fn cmd_trash(args: &[String]) -> Result<Value, String> {
 /// snapshot recorded for the session, restoring the on-disk state to
 /// what it was before the gated operations ran. Always returns a
 /// per-entry report.
+///
+/// Routing:
+///
+/// - If the sid points at a **durable session**
+///   (`<COS_DATA_DIR>/sessions/<sid>/meta.json` exists), we replay
+///   `mutations.jsonl` via [`crate::session::rollback`]. This is the
+///   path long-lived agent runtimes go through.
+/// - Otherwise we fall back to the legacy per-CLI trash directory
+///   (`<COS_DATA_DIR>/trash/<sid>/`), preserving how every existing
+///   `cos fs write` invocation has worked since before durable
+///   sessions existed.
 fn cmd_undo(args: &[String]) -> Result<Value, String> {
     let mut dry_run = false;
     let mut rest = Vec::new();
@@ -211,6 +222,11 @@ fn cmd_undo(args: &[String]) -> Result<Value, String> {
         }
     }
     let sid = parse_session_arg(&rest)?;
+
+    if is_durable_session(&sid) {
+        return cmd_undo_durable(&sid, dry_run);
+    }
+
     let entries = load_entries(&sid);
     if entries.is_empty() {
         return Ok(json!({
@@ -258,6 +274,75 @@ fn cmd_undo(args: &[String]) -> Result<Value, String> {
         "undone": report.len(),
         "dry_run": dry_run,
         "entries": report,
+    }))
+}
+
+/// True if `sid_str` is the id of a durable session that lives under
+/// `<COS_DATA_DIR>/sessions/`. A malformed sid (anything that fails
+/// the `SessionId` parser) is reported as not durable so we fall
+/// through to the legacy CLI-session trash path without complaining.
+fn is_durable_session(sid_str: &str) -> bool {
+    let Ok(sid) = sid_str.parse::<crate::session::SessionId>() else {
+        return false;
+    };
+    crate::session::session_dir(&sid).join("meta.json").is_file()
+}
+
+/// Rollback path for durable sessions. Uses the typed mutation log
+/// (`<session>/mutations.jsonl`) instead of the legacy trash dir.
+fn cmd_undo_durable(sid_str: &str, dry_run: bool) -> Result<Value, String> {
+    let sid: crate::session::SessionId = sid_str
+        .parse()
+        .map_err(|e: crate::session::InvalidSessionId| e.to_string())?;
+
+    let muts = crate::session::iter_mutations(&sid)
+        .map_err(|e| format!("read mutations: {e}"))?;
+
+    if dry_run {
+        let entries: Vec<Value> = muts
+            .iter()
+            .rev()
+            .map(|rec| {
+                json!({
+                    "seq": rec.seq,
+                    "mutation": &rec.mutation,
+                    "dry_run": true,
+                })
+            })
+            .collect();
+        return Ok(json!({
+            "session": sid_str,
+            "kind": "durable",
+            "undone": entries.len(),
+            "dry_run": true,
+            "entries": entries,
+        }));
+    }
+
+    let outcomes = crate::session::rollback(&sid)
+        .map_err(|e| format!("rollback: {e}"))?;
+    let entries: Vec<Value> = outcomes
+        .iter()
+        .map(|o| {
+            json!({
+                "seq": o.seq,
+                "verb": o.verb,
+                "status": o.status,
+                "detail": o.detail,
+                "ok": matches!(
+                    o.status,
+                    crate::session::RollbackStatus::Restored
+                        | crate::session::RollbackStatus::AlreadyDone
+                ),
+            })
+        })
+        .collect();
+    Ok(json!({
+        "session": sid_str,
+        "kind": "durable",
+        "undone": entries.len(),
+        "dry_run": false,
+        "entries": entries,
     }))
 }
 
