@@ -62,7 +62,7 @@ import os
 import shutil
 import time
 import uuid
-from typing import Iterator, Optional
+from typing import Iterator, Optional, Tuple
 
 
 # ---------------------------------------------------------------------------
@@ -83,13 +83,54 @@ def trash_dir(session_id: str) -> str:
     return os.path.join(_data_root(), "trash", session_id)
 
 
-def _next_seq(sid_dir: str) -> str:
-    if not os.path.isdir(sid_dir):
-        return "000001"
-    existing = [name for name in os.listdir(sid_dir) if name.isdigit()]
-    if not existing:
-        return "000001"
-    return f"{max(int(n) for n in existing) + 1:06d}"
+def _allocate_seq_dir(sid_dir: str) -> Tuple[str, str]:
+    """Allocate the next sequence directory under ``sid_dir`` and
+    return ``(seq, entry_dir_path)``.
+
+    Pre-fix the snapshot code called ``_next_seq`` (which scanned
+    ``listdir`` and picked ``max+1``) and then ``os.makedirs(
+    entry_dir, exist_ok=True)``. Two snapshots running concurrently
+    inside the same session — easy to hit because each app process
+    is its own snapshot writer and the trash dir is shared — could
+    both compute the same next seq, both succeed under
+    ``exist_ok=True``, and stomp each other's ``blob`` /
+    ``meta.json`` files. ``exist_ok=True`` masked the collision.
+
+    The fix: probe with ``os.mkdir`` which is atomic on POSIX and
+    raises ``FileExistsError`` on collision. On collision, advance
+    past the conflict (by rescanning ``listdir`` so we also catch
+    seq dirs created by other processes since our last scan) and
+    retry. After a bounded number of attempts we give up — a real
+    bug, not a thundering herd.
+    """
+    os.makedirs(sid_dir, exist_ok=True)
+
+    def _scan_max() -> int:
+        try:
+            existing = [name for name in os.listdir(sid_dir) if name.isdigit()]
+        except FileNotFoundError:
+            return 0
+        if not existing:
+            return 0
+        return max(int(n) for n in existing)
+
+    next_n = _scan_max() + 1
+    for _ in range(64):
+        seq = f"{next_n:06d}"
+        entry_dir = os.path.join(sid_dir, seq)
+        try:
+            os.mkdir(entry_dir)
+            return seq, entry_dir
+        except FileExistsError:
+            # Another writer (this process or another) grabbed this
+            # seq between our scan and our mkdir. Rescan rather than
+            # blindly +1, because they may have taken multiple slots
+            # while we were retrying.
+            next_n = max(next_n + 1, _scan_max() + 1)
+    raise RuntimeError(
+        f"snapshot: could not allocate sequence directory in {sid_dir} "
+        f"after 64 retries"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -312,10 +353,7 @@ def snapshot(path: str, op: str, *, session_id: Optional[str] = None) -> Optiona
         return None
 
     sid_dir = trash_dir(sid)
-    os.makedirs(sid_dir, exist_ok=True)
-    seq = _next_seq(sid_dir)
-    entry_dir = os.path.join(sid_dir, seq)
-    os.makedirs(entry_dir, exist_ok=True)
+    seq, entry_dir = _allocate_seq_dir(sid_dir)
 
     abs_path = os.path.abspath(path)
     if os.path.isdir(abs_path) and not os.path.islink(abs_path):
