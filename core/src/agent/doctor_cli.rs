@@ -39,8 +39,7 @@
 //!     "usage":     { "status": "ok", "total": {...} },
 //!     "insights":  { "status": "ok", "overall": {...} },
 //!     "skills":    { "status": "ok",   ... },
-//!     "hooks":     { "status": "ok",   ... },
-//!     "honcho":    { "status": "ok",   ... }
+//!     "hooks":     { "status": "ok",   ... }
 //!   }
 //! }
 //! ```
@@ -143,7 +142,6 @@ pub fn doctor_cmd(args: &[String]) -> Result<Value, String> {
     };
     let skills = check_skills();
     let hooks = check_hooks();
-    let honcho = check_honcho();
     let media = check_media_modalities();
 
     let checks = json!({
@@ -156,7 +154,6 @@ pub fn doctor_cmd(args: &[String]) -> Result<Value, String> {
         "insights": insights,
         "skills": skills,
         "hooks": hooks,
-        "honcho": honcho,
         "media": media,
     });
 
@@ -614,25 +611,6 @@ fn check_hooks() -> Value {
     })
 }
 
-fn check_honcho() -> Value {
-    use crate::agent::memory::honcho::HonchoConfig;
-    match HonchoConfig::from_env() {
-        None => json!({
-            "status": "ok",
-            "configured": false,
-            "reason": "HONCHO_BASE_URL not set",
-        }),
-        Some(cfg) => json!({
-            "status": "ok",
-            "configured": true,
-            "base_url": cfg.base_url,
-            "workspace_id": cfg.workspace_id,
-            "auth": if cfg.api_key.is_some() { "bearer" } else { "none" },
-            "timeout_secs": cfg.timeout_secs,
-        }),
-    }
-}
-
 // Force the `tools` import to count even though doctor doesn't
 // itself enumerate them — provider/skills/memory/etc cover the
 // surface this command was originally going to expose. Keeping the
@@ -660,7 +638,7 @@ mod tests {
         let checks = v.get("checks").unwrap().as_object().unwrap();
         for k in [
             "provider", "engines", "memory", "audit", "run_log",
-            "usage", "insights", "skills", "hooks", "honcho",
+            "usage", "insights", "skills", "hooks",
         ] {
             assert!(checks.contains_key(k), "missing check: {k}");
             assert!(
@@ -811,19 +789,6 @@ mod tests {
         let v = check_log_file(&p, "test");
         assert_eq!(v["status"], json!("ok"));
         assert_eq!(v["lines"], json!(3));
-    }
-
-    #[test]
-    fn check_honcho_unconfigured_when_env_unset() {
-        // We snapshot env vars to avoid stomping on other tests.
-        let saved = std::env::var("HONCHO_BASE_URL").ok();
-        std::env::remove_var("HONCHO_BASE_URL");
-        let v = check_honcho();
-        if let Some(s) = saved {
-            std::env::set_var("HONCHO_BASE_URL", s);
-        }
-        assert_eq!(v["status"], json!("ok"));
-        assert_eq!(v["configured"], json!(false));
     }
 
     #[test]

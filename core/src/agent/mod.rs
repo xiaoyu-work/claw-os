@@ -10,7 +10,7 @@
 //! ├── runtime/        loop_, scheduler, turn, hooks
 //! ├── prompt/         system prompt, MEMORY.md, USER.md injection
 //! ├── context/        session, history, compression
-//! ├── memory/         sqlite_fts, semantic, honcho, curator
+//! ├── memory/         sqlite_fts, semantic, curator
 //! ├── skills/         skill registry, loader, exec
 //! ├── llm/            Provider trait + provider impls (anthropic, openai, ...)
 //! ├── tools/          tool registry, exec proxies into cos primitives
@@ -25,7 +25,6 @@ pub mod curator_author;
 pub mod curator_drafts;
 pub mod display;
 pub mod doctor_cli;
-pub mod honcho_cli;
 pub mod insights;
 pub mod llm;
 pub mod media;
@@ -194,7 +193,7 @@ fn dev_dispatch(args: &[String]) -> Result<Value, String> {
                 "display", "binary-ext", "file-safety", "context",
                 "compress", "aux", "retry", "vision", "osv",
                 "curator", "nudge", "shell-hooks", "media",
-                "semantic", "interrupt", "learn", "hooks", "honcho",
+                "semantic", "interrupt", "learn", "hooks",
             ],
         })),
         "insights" => insights_cmd(&rest),
@@ -232,7 +231,6 @@ fn dev_dispatch(args: &[String]) -> Result<Value, String> {
         "interrupt" => interrupt_cmd(&rest),
         "learn" => learn_cmd(&rest),
         "hooks" => hooks_cmd(&rest),
-        "honcho" => honcho_cli::honcho_cmd(&rest),
         other => Err(format!(
             "unknown dev subcommand: {other}. run `cos agent dev` for the list."
         )),
