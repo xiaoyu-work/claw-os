@@ -535,6 +535,50 @@ List all installed packages.
 cos app pkg list [--filter "python*"]
 ```
 
+### pkg search
+
+Browse the apt catalog for packages matching a query — use when answering "what software can do X?" Pair with `show` to vet a candidate and `need` to install it.
+
+```bash
+cos app pkg search image converter
+cos app pkg search pdf --limit 5
+```
+```json
+{
+  "query": "image converter",
+  "count": 3,
+  "results": [
+    {"name": "imagemagick", "summary": "image manipulation programs -- binaries"},
+    {"name": "graphicsmagick", "summary": "collection of image processing tools"},
+    {"name": "convert", "summary": "tool to convert images"}
+  ]
+}
+```
+
+Defaults to 25 results, capped at 100. Uses `apt-cache search --names-only` underneath.
+
+### pkg show
+
+Show detailed metadata for a single package: version, full description, homepage, dependencies, installed size, maintainer.
+
+```bash
+cos app pkg show imagemagick
+```
+```json
+{
+  "name": "imagemagick",
+  "found": true,
+  "version": "8:6.9.11.60+dfsg-1.6",
+  "summary": "image manipulation programs -- binaries",
+  "description": "ImageMagick is a collection of tools for creating, editing,\nand converting images.",
+  "section": "graphics",
+  "homepage": "https://imagemagick.org/",
+  "depends": "libc6, libmagickcore-6.q16-6",
+  "installed_size": "100",
+  "maintainer": "Debian QA <pkg@debian.org>"
+}
+```
+
 ---
 
 ## search — Web & Image Search

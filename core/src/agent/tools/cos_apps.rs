@@ -103,6 +103,18 @@ const APPS: &[AppSpec] = &[
                       DOM-rendered output, or visual capture.",
         commands: &["read", "scrape", "screenshot", "submit"],
     },
+    AppSpec {
+        name: "cos_app_pkg",
+        app: "pkg",
+        description: "System package manager. `search <query>` browses the apt \
+                      catalog when the user asks \"what software can do X?\" — \
+                      returns name + one-line summary. `show <name>` returns \
+                      full metadata (version, description, homepage, depends). \
+                      `has <name>` checks whether a package or command is \
+                      installed; `need <name>...` installs anything missing; \
+                      `list` enumerates installed packages.",
+        commands: &["need", "has", "list", "search", "show"],
+    },
 ];
 
 pub struct CosAppTool {
@@ -297,6 +309,7 @@ mod tests {
         assert!(r.get("cos_app_calendar").is_some());
         assert!(r.get("cos_app_search").is_some());
         assert!(r.get("cos_app_web").is_some());
+        assert!(r.get("cos_app_pkg").is_some());
     }
 
     #[test]
@@ -420,7 +433,7 @@ mod tests {
     #[test]
     fn count_constant_matches_table() {
         assert_eq!(count(), APPS.len());
-        assert_eq!(count(), 9);
+        assert_eq!(count(), 10);
     }
 
     #[test]

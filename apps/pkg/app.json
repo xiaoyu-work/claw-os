@@ -43,6 +43,32 @@
           "why": { "en": "Enumerate every system package currently installed." }
         }
       ]
+    },
+    "search": {
+      "label": { "en": "Search the apt catalog for installable packages" },
+      "args": [
+        { "name": "query", "kind": "text", "required": true }
+      ],
+      "needs": [
+        {
+          "verb": "sys.package",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Browse the local apt package catalog to find software that matches the user's intent." }
+        }
+      ]
+    },
+    "show": {
+      "label": { "en": "Show metadata for a specific apt package" },
+      "args": [
+        { "name": "name", "kind": "name", "required": true }
+      ],
+      "needs": [
+        {
+          "verb": "sys.package",
+          "scope": { "kind": "from-arg", "arg": "name" },
+          "why": { "en": "Read catalog metadata (description, homepage, dependencies, size) for the named package." }
+        }
+      ]
     }
   }
 }
