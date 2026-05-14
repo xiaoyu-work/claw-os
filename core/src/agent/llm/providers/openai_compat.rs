@@ -220,9 +220,33 @@ impl OpenAICompatProvider {
     }
 
     fn endpoint(&self) -> String {
-        // Split off any query string (Azure OpenAI requires
-        // ?api-version=...). Append the path, then re-attach the
-        // query.
+        // Azure OpenAI uses a different URL shape than every other
+        // openai-compat provider: the stored `base_url` is the
+        // *resource root* (e.g. `https://acme.openai.azure.com/`),
+        // the deployment name is the `model` field, and the api
+        // version is required as a query string. The official
+        // Python/JS SDKs take exactly the same two pieces of input
+        // (`azure_endpoint` + `deployment`) and assemble the path
+        // internally — we do the same so the prompt the wizard
+        // shows the user matches what they see in the Azure portal.
+        if self.cfg.alias == "azure" {
+            let (base, query) = match self.cfg.base_url.split_once('?') {
+                Some((b, q)) => (b.trim_end_matches('/'), Some(q)),
+                None => (self.cfg.base_url.trim_end_matches('/'), None),
+            };
+            let deployment = self.cfg.model.as_str();
+            return match query {
+                Some(q) => {
+                    format!("{base}/openai/deployments/{deployment}/chat/completions?{q}")
+                }
+                None => format!("{base}/openai/deployments/{deployment}/chat/completions"),
+            };
+        }
+
+        // Generic openai-compat: stored base_url already includes
+        // the API version path (e.g. `/v1`), so we just append
+        // `/chat/completions` plus any trailing query string the
+        // user may have configured for a proxy.
         let (base, query) = match self.cfg.base_url.split_once('?') {
             Some((b, q)) => (b.trim_end_matches('/'), Some(q)),
             None => (self.cfg.base_url.as_str(), None),
@@ -259,9 +283,13 @@ impl Provider for OpenAICompatProvider {
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
         if self.cfg.alias == "azure" && self.cfg.base_url.is_empty() {
             return Err(LlmError::NotConfigured(
-                "azure provider needs `agent.base_url` set to the deployment URL \
-                 (e.g. https://<resource>.openai.azure.com/openai/deployments/<deployment>?api-version=2024-12-01-preview). \
-                 Run `cos agent setup llm apply --provider azure --base-url <URL> --model <DEPLOYMENT> --api-key-stdin`."
+                "azure provider needs `agent.base_url` set to the Azure OpenAI \
+                 resource root (e.g. https://<resource>.openai.azure.com/). The \
+                 model field is treated as the deployment name. Run \
+                 `cos agent setup llm apply --provider azure \
+                 --base-url https://<resource>.openai.azure.com/ \
+                 --model <deployment> --api-version <version> \
+                 --api-key-stdin`."
                     .into(),
             ));
         }
@@ -874,15 +902,61 @@ mod tests {
 
     #[test]
     fn endpoint_handles_query_string_in_base_url() {
-        // Azure OpenAI requires ?api-version=...
+        // Non-azure alias: query string passthrough (e.g. a proxy that
+        // requires a routing query). The path is appended in front of
+        // the existing query.
         let mut c = cfg();
         c.base_url = Some(
-            "https://xiaoyu-eastus2.openai.azure.com/openai/deployments/gpt-5.4-mini?api-version=2024-12-01-preview".into(),
+            "https://my.proxy.example.com/v1?route=blue".into(),
         );
-        let provider = OpenAICompatProvider::from_agent_config("openai", "gpt-5.4-mini", &c);
+        let provider = OpenAICompatProvider::from_agent_config("openai", "gpt-4o-mini", &c);
         assert_eq!(
             provider.endpoint(),
-            "https://xiaoyu-eastus2.openai.azure.com/openai/deployments/gpt-5.4-mini/chat/completions?api-version=2024-12-01-preview"
+            "https://my.proxy.example.com/v1/chat/completions?route=blue"
+        );
+    }
+
+    #[test]
+    fn azure_endpoint_uses_resource_root_and_deployment_name() {
+        // The user pastes the resource root from the Azure portal
+        // (the same string the Python SDK takes as `azure_endpoint`)
+        // and supplies the deployment name via `model`. The provider
+        // composes the full `/openai/deployments/<dep>/chat/completions`
+        // path itself, mirroring the official SDK behaviour.
+        let mut c = cfg();
+        c.base_url = Some(
+            "https://xiaoyu-eastus2.openai.azure.com/?api-version=2024-12-01-preview".into(),
+        );
+        let provider = OpenAICompatProvider::from_agent_config("azure", "gpt-5.4", &c);
+        assert_eq!(
+            provider.endpoint(),
+            "https://xiaoyu-eastus2.openai.azure.com/openai/deployments/gpt-5.4/chat/completions?api-version=2024-12-01-preview"
+        );
+    }
+
+    #[test]
+    fn azure_endpoint_strips_trailing_slash_on_resource_root() {
+        let mut c = cfg();
+        // Same resource root the user pasted in the wizard, no
+        // trailing query.
+        c.base_url = Some("https://acme.openai.azure.com/".into());
+        let provider = OpenAICompatProvider::from_agent_config("azure", "my-deployment", &c);
+        assert_eq!(
+            provider.endpoint(),
+            "https://acme.openai.azure.com/openai/deployments/my-deployment/chat/completions"
+        );
+    }
+
+    #[test]
+    fn azure_endpoint_handles_resource_root_without_trailing_slash() {
+        let mut c = cfg();
+        c.base_url = Some(
+            "https://acme.openai.azure.com?api-version=2024-12-01-preview".into(),
+        );
+        let provider = OpenAICompatProvider::from_agent_config("azure", "gpt-5.4", &c);
+        assert_eq!(
+            provider.endpoint(),
+            "https://acme.openai.azure.com/openai/deployments/gpt-5.4/chat/completions?api-version=2024-12-01-preview"
         );
     }
 

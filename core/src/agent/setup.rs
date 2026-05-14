@@ -667,17 +667,28 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
         let _ = writeln!(e);
         let _ = writeln!(
             e,
-            "Azure OpenAI: paste the deployment URL from your Azure resource."
+            "Azure OpenAI: paste the resource root URL from your Azure portal."
         );
+        let _ = writeln!(e, "(e.g. https://acme.openai.azure.com/)");
         let _ = writeln!(
             e,
-            "(e.g. https://acme.openai.azure.com/openai/deployments/my-deployment)"
+            "Do NOT include /openai/deployments/...  — that path is added"
         );
+        let _ = writeln!(e, "automatically using the model name you supply below.");
         let _ = write!(e, "Endpoint: ");
         let _ = e.flush();
         let url = read_line()?.trim().to_string();
         if url.is_empty() {
             return Err("azure endpoint cannot be empty".into());
+        }
+        let lower = url.to_ascii_lowercase();
+        if lower.contains("/openai/deployments/") || lower.contains("/openai/responses") {
+            return Err(
+                "that looks like a full deployment URL — paste the resource root only \
+                 (e.g. https://<resource>.openai.azure.com/). The deployment path is \
+                 added automatically from the model name."
+                    .into(),
+            );
         }
         azure_base_url = Some(url);
 
@@ -699,7 +710,7 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
         let _ = writeln!(e);
         let _ = writeln!(
             e,
-            "Note: under Azure, the model name should match the deployment name above."
+            "Note: the model name below must match the deployment name in Azure."
         );
     }
 
@@ -891,10 +902,12 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
         agent.insert("api_key_credential".into(), Value::Null);
     }
 
-    // Azure deployment URL (+ optional --api-version glue), normalised
-    // through the same helper the non-interactive `apply` uses so the
-    // on-disk shape is identical no matter which entry point persisted
-    // the config.
+    // Azure resource-root URL (+ optional --api-version glue),
+    // normalised through the same helper the non-interactive `apply`
+    // uses so the on-disk shape is identical no matter which entry
+    // point persisted the config. The kernel's openai_compat provider
+    // composes the full `/openai/deployments/<dep>/chat/completions`
+    // path itself using the `model` field as the deployment name.
     if provider == "azure" {
         let resolved = resolve_base_url_args(
             &provider,
@@ -1771,8 +1784,8 @@ fn extra_fields_for(provider: &str) -> Vec<Value> {
             json!({
                 "key": "base_url",
                 "label": "Azure endpoint",
-                "placeholder": "https://<resource>.openai.azure.com/openai/deployments/<deployment>",
-                "help": "The deployment URL from your Azure OpenAI resource. The model name above must match the deployment name.",
+                "placeholder": "https://<resource>.openai.azure.com/",
+                "help": "The resource root URL from your Azure OpenAI portal. Do NOT include /openai/deployments/… — that path is constructed automatically using the model field (which must match your Azure deployment name).",
                 "required": true,
                 "secret": false,
             }),
@@ -2066,14 +2079,33 @@ fn resolve_base_url_args(
     let trimmed = base_url.map(str::trim).filter(|s| !s.is_empty());
     if provider_name == "azure" && trimmed.is_none() {
         return Err(
-            "provider `azure` requires --base-url <DEPLOYMENT_URL> \
-             (e.g. https://<resource>.openai.azure.com/openai/deployments/<deployment>)"
+            "provider `azure` requires --base-url <RESOURCE_ROOT> \
+             (e.g. https://<resource>.openai.azure.com/). The /openai/deployments/… \
+             path is added automatically using the --model value as the deployment name."
                 .into(),
         );
     }
     let Some(base) = trimmed else {
         return Ok(None);
     };
+
+    // Common Azure footgun: the user grabs the "Target URI" from the
+    // portal which already includes `/openai/deployments/<deployment>`
+    // (and sometimes `/chat/completions` or `/responses`). Detect and
+    // reject up front so it doesn't 404 later.
+    if provider_name == "azure" {
+        let lower = base.to_ascii_lowercase();
+        if lower.contains("/openai/deployments/") || lower.contains("/openai/responses") {
+            return Err(
+                "azure --base-url should be the resource root \
+                 (e.g. https://<resource>.openai.azure.com/), not the full \
+                 deployment URL. Pass the deployment name via --model and the \
+                 API version via --api-version."
+                    .into(),
+            );
+        }
+    }
+
     let av = api_version.map(str::trim).filter(|s| !s.is_empty());
     let already_has_query = base.contains('?');
     let final_url = match av {
@@ -2410,13 +2442,13 @@ mod tests {
     fn resolve_base_url_appends_api_version_when_missing_query() {
         let got = resolve_base_url_args(
             "azure",
-            Some("https://acme.openai.azure.com/openai/deployments/dep"),
+            Some("https://acme.openai.azure.com/"),
             Some("2024-12-01-preview"),
         )
         .unwrap();
         assert_eq!(
             got.as_deref(),
-            Some("https://acme.openai.azure.com/openai/deployments/dep?api-version=2024-12-01-preview")
+            Some("https://acme.openai.azure.com/?api-version=2024-12-01-preview")
         );
     }
 
@@ -2424,14 +2456,36 @@ mod tests {
     fn resolve_base_url_preserves_existing_query() {
         let got = resolve_base_url_args(
             "azure",
-            Some("https://acme.openai.azure.com/openai/deployments/dep?api-version=2024-12-01-preview&foo=bar"),
+            Some("https://acme.openai.azure.com/?api-version=2024-12-01-preview&foo=bar"),
             Some("ignored-because-base-already-has-query"),
         )
         .unwrap();
         assert_eq!(
             got.as_deref(),
-            Some("https://acme.openai.azure.com/openai/deployments/dep?api-version=2024-12-01-preview&foo=bar")
+            Some("https://acme.openai.azure.com/?api-version=2024-12-01-preview&foo=bar")
         );
+    }
+
+    #[test]
+    fn resolve_base_url_azure_rejects_full_deployment_url() {
+        let err = resolve_base_url_args(
+            "azure",
+            Some("https://acme.openai.azure.com/openai/deployments/gpt-5.4"),
+            Some("2024-12-01-preview"),
+        )
+        .unwrap_err();
+        assert!(err.contains("resource root"), "msg was: {err}");
+    }
+
+    #[test]
+    fn resolve_base_url_azure_rejects_responses_endpoint() {
+        let err = resolve_base_url_args(
+            "azure",
+            Some("https://acme.openai.azure.com/openai/responses"),
+            Some("2025-04-01-preview"),
+        )
+        .unwrap_err();
+        assert!(err.contains("resource root"), "msg was: {err}");
     }
 
     #[test]
@@ -2574,7 +2628,7 @@ mod tests {
             "--model".into(),
             "my-deployment".into(),
             "--base-url".into(),
-            "https://acme.openai.azure.com/openai/deployments/my-deployment".into(),
+            "https://acme.openai.azure.com/".into(),
             "--api-version".into(),
             "2024-12-01-preview".into(),
             "--api-key-env".into(),
@@ -2586,7 +2640,7 @@ mod tests {
         assert_eq!(v["provider"].as_str(), Some("azure"));
         assert_eq!(
             v["base_url"].as_str(),
-            Some("https://acme.openai.azure.com/openai/deployments/my-deployment?api-version=2024-12-01-preview")
+            Some("https://acme.openai.azure.com/?api-version=2024-12-01-preview")
         );
 
         let text = std::fs::read_to_string(&cfg_path).unwrap();
@@ -2595,8 +2649,40 @@ mod tests {
         assert_eq!(parsed["agent"]["model"].as_str(), Some("my-deployment"));
         assert_eq!(
             parsed["agent"]["base_url"].as_str(),
-            Some("https://acme.openai.azure.com/openai/deployments/my-deployment?api-version=2024-12-01-preview")
+            Some("https://acme.openai.azure.com/?api-version=2024-12-01-preview")
         );
+
+        std::env::remove_var("COS_CONFIG_PATH");
+        std::fs::remove_dir_all(&tmp_dir).ok();
+    }
+
+    #[test]
+    fn azure_apply_rejects_deployment_in_base_url() {
+        let _g = env_lock();
+        let tmp_dir = std::env::temp_dir().join(format!(
+            "cos-setup-test-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+        let cfg_path = tmp_dir.join("config.json");
+        std::env::set_var("COS_CONFIG_PATH", &cfg_path);
+
+        let err = run(&[
+            "llm".into(),
+            "apply".into(),
+            "--provider".into(),
+            "azure".into(),
+            "--model".into(),
+            "my-deployment".into(),
+            "--base-url".into(),
+            "https://acme.openai.azure.com/openai/deployments/my-deployment".into(),
+            "--api-version".into(),
+            "2024-12-01-preview".into(),
+            "--api-key-env".into(),
+            "__AZURE_TEST_KEY__".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("resource root"), "msg was: {err}");
 
         std::env::remove_var("COS_CONFIG_PATH");
         std::fs::remove_dir_all(&tmp_dir).ok();
