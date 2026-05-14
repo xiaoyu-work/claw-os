@@ -1,0 +1,137 @@
+{
+  "id": "cosmic-files",
+  "version": "0.1.0",
+  "name": {
+    "en": "Files"
+  },
+  "summary": {
+    "en": "Headless file-system browsing: directory listings, recursive name search, and metadata."
+  },
+  "icon": "📁",
+  "runtime": "binary",
+  "operations": {},
+  "session": {
+    "entry": "/usr/bin/cosmic-files",
+    "transport": "stdio",
+    "tools": [
+      {
+        "name": "files.list",
+        "summary": {
+          "en": "List entries directly under `path` (non-recursive). Returns an array of {path, name, kind, size, mtime_unix} objects."
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "Absolute or relative directory path to list."
+            }
+          },
+          {
+            "name": "include_hidden",
+            "kind": "bool",
+            "required": false,
+            "default": false,
+            "label": {
+              "en": "Include dot-prefixed entries."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Read the directory's entries."
+            }
+          }
+        ]
+      },
+      {
+        "name": "files.search",
+        "summary": {
+          "en": "Recursively walk `root` and return entries whose filename matches the case-insensitive substring `query`. Respects .gitignore by default."
+        },
+        "args": [
+          {
+            "name": "root",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "Directory tree to search."
+            }
+          },
+          {
+            "name": "query",
+            "kind": "text",
+            "required": true,
+            "label": {
+              "en": "Case-insensitive substring matched against filenames."
+            }
+          },
+          {
+            "name": "limit",
+            "kind": "number",
+            "required": false,
+            "label": {
+              "en": "Maximum number of matches (default 200, max 5000)."
+            }
+          },
+          {
+            "name": "respect_gitignore",
+            "kind": "bool",
+            "required": false,
+            "default": true,
+            "label": {
+              "en": "Skip entries matched by .gitignore / hidden files."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "root"
+            },
+            "why": {
+              "en": "Read the directory tree to find matching files."
+            }
+          }
+        ]
+      },
+      {
+        "name": "files.metadata",
+        "summary": {
+          "en": "Stat a single path: {path, name, kind, size, mtime_unix}."
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "File or directory to stat."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.meta",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Read metadata for the given path."
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

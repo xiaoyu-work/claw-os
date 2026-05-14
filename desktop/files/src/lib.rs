@@ -24,6 +24,7 @@ mod key_bind;
 pub(crate) mod large_image;
 pub(crate) mod load_image;
 mod localize;
+pub mod mcp;
 mod menu;
 mod mime_app;
 pub mod mime_icon;
@@ -129,6 +130,13 @@ pub fn desktop() -> Result<(), Box<dyn std::error::Error>> {
 /// Runs application with these settings
 #[rustfmt::skip]
 pub fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // MCP server mode: kernel agent spawns us headless to expose
+    // structured file-system tools. Bail out before tracing /
+    // libcosmic setup.
+    if std::env::var("COS_MCP_SERVER").as_deref() == Ok("1") {
+        return mcp::run();
+    }
+
     let log_format = tracing_subscriber::fmt::format()
         .pretty()
         .with_line_number(true)
