@@ -3176,15 +3176,22 @@ async fn chat_cmd_async(
     /// Stream sink shared across turns — re-used so allocation
     /// happens once. Each turn calls `reset()` before invoking
     /// the runtime so per-turn state doesn't bleed.
+    ///
+    /// `verbose_telemetry` controls the `[turn done finish=...]`
+    /// telemetry line. We only want it when stdout is being piped
+    /// somewhere (so a log consumer can see finish reasons); on an
+    /// interactive terminal it's just noise after every reply.
     struct ChatSink {
+        verbose_telemetry: bool,
         tool_calls: Mutex<Vec<serde_json::Value>>,
         warnings: Mutex<Vec<String>>,
         last_usage: Mutex<Option<crate::agent::llm::types::Usage>>,
         last_finish: Mutex<Option<crate::agent::llm::types::FinishReason>>,
     }
     impl ChatSink {
-        fn new() -> Self {
+        fn new(verbose_telemetry: bool) -> Self {
             Self {
+                verbose_telemetry,
                 tool_calls: Mutex::new(Vec::new()),
                 warnings: Mutex::new(Vec::new()),
                 last_usage: Mutex::new(None),
@@ -3247,7 +3254,14 @@ async fn chat_cmd_async(
                     let _ = e.flush();
                 }
                 StreamEvent::Done { finish, usage } => {
-                    let _ = writeln!(e, "\n[turn done finish={finish:?}]");
+                    if self.verbose_telemetry {
+                        let _ = writeln!(e, "\n[turn done finish={finish:?}]");
+                    } else {
+                        // Still advance to a fresh line so the next
+                        // `you> ` prompt isn't appended to the
+                        // assistant's last token.
+                        let _ = writeln!(e);
+                    }
                     *self.last_usage.lock().unwrap() = Some(usage.clone());
                     *self.last_finish.lock().unwrap() = Some(*finish);
                 }
@@ -3259,7 +3273,7 @@ async fn chat_cmd_async(
         }
     }
 
-    let sink_obj = Arc::new(ChatSink::new());
+    let sink_obj = Arc::new(ChatSink::new(!stdout_is_tty));
 
     loop {
         // Prompt user (to stderr so stdout stays clean for
@@ -3404,12 +3418,21 @@ async fn chat_cmd_async(
                     let _ = o.flush();
                 }
 
-                let mut e = stderr.lock();
-                let _ = writeln!(
-                    e,
-                    "[turn {} done; turns={} model={} session={}]",
-                    prompt_seq, ask_result.turns, ask_result.model, ask_result.session_id
-                );
+                // Per-turn telemetry footer (turn index, model,
+                // session id) is debugging metadata. Keep it for
+                // piped/logged runs but suppress on an interactive
+                // terminal so the conversation reads cleanly.
+                if !stdout_is_tty {
+                    let mut e = stderr.lock();
+                    let _ = writeln!(
+                        e,
+                        "[turn {} done; turns={} model={} session={}]",
+                        prompt_seq,
+                        ask_result.turns,
+                        ask_result.model,
+                        ask_result.session_id
+                    );
+                }
             }
             Err(err) => {
                 let _ = writeln!(stderr.lock(), "[error] {err}");
