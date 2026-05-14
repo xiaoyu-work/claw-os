@@ -1024,3 +1024,309 @@ fn lease_released_when_holder_process_dies() {
         drop(g);
     });
 }
+
+// ---------------------------------------------------------------------------
+// Phase 3 — inverse blob store, typed recorders, rollback
+// ---------------------------------------------------------------------------
+
+#[test]
+fn write_blob_and_read_blob_round_trip() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    let sid = create("blob test").unwrap();
+    let id1 = write_blob(&sid, b"hello world").unwrap();
+    let id2 = write_blob(&sid, b"second blob").unwrap();
+    assert_ne!(id1, id2, "fresh ids per call");
+    assert_eq!(id1.len(), 32, "uuid simple format = 32 hex chars");
+
+    assert_eq!(read_blob(&sid, &id1).unwrap(), b"hello world");
+    assert_eq!(read_blob(&sid, &id2).unwrap(), b"second blob");
+
+    let path = blob_path(&sid, &id1);
+    assert!(path.starts_with(inverse_root(&sid)));
+    assert!(path.is_file());
+}
+
+#[test]
+fn read_blob_missing_returns_not_found() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+    let sid = create("blob missing").unwrap();
+    let err = read_blob(&sid, "deadbeef").unwrap_err();
+    assert!(matches!(err, SessionError::NotFound(_)), "got {err:?}");
+}
+
+#[test]
+fn delete_blob_is_idempotent() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+    let sid = create("blob del").unwrap();
+    let id = write_blob(&sid, b"x").unwrap();
+    delete_blob(&sid, &id).unwrap();
+    assert!(read_blob(&sid, &id).is_err());
+    // Second delete is a no-op.
+    delete_blob(&sid, &id).unwrap();
+    delete_blob(&sid, "never-existed-id").unwrap();
+}
+
+#[test]
+fn record_fs_write_snapshots_existing_file() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    let sid = create("write snapshot").unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let path = work.path().join("hello.txt");
+    std::fs::write(&path, b"original bytes").unwrap();
+
+    let seq = record_fs_write(&sid, &path).unwrap();
+    assert_eq!(seq, 0, "first mutation gets seq 0");
+
+    let muts = iter_mutations(&sid).unwrap();
+    assert_eq!(muts.len(), 1);
+    let blob_id = match &muts[0].mutation {
+        Mutation::FsWrite { path: p, prev_blob } => {
+            assert_eq!(*p, path.to_string_lossy().into_owned());
+            prev_blob.clone().expect("path existed, prev_blob must be Some")
+        }
+        other => panic!("expected FsWrite, got {other:?}"),
+    };
+
+    assert_eq!(read_blob(&sid, &blob_id).unwrap(), b"original bytes");
+}
+
+#[test]
+fn record_fs_write_records_none_blob_for_missing_target() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    let sid = create("write fresh").unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let path = work.path().join("does_not_exist.txt");
+
+    record_fs_write(&sid, &path).unwrap();
+
+    let muts = iter_mutations(&sid).unwrap();
+    match &muts[0].mutation {
+        Mutation::FsWrite { prev_blob: None, .. } => {}
+        other => panic!("expected FsWrite{{prev_blob: None}}, got {other:?}"),
+    }
+}
+
+#[test]
+fn record_fs_delete_snapshots_bytes() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    let sid = create("delete snapshot").unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let path = work.path().join("dies.txt");
+    std::fs::write(&path, b"about to die").unwrap();
+
+    record_fs_delete(&sid, &path).unwrap();
+
+    let muts = iter_mutations(&sid).unwrap();
+    let (recorded_path, blob_id) = match &muts[0].mutation {
+        Mutation::FsDelete { path, blob_id } => (path.clone(), blob_id.clone()),
+        other => panic!("expected FsDelete, got {other:?}"),
+    };
+    assert_eq!(recorded_path, path.to_string_lossy().into_owned());
+    assert_eq!(read_blob(&sid, &blob_id).unwrap(), b"about to die");
+}
+
+#[test]
+fn record_fs_delete_rejects_missing_file() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    let sid = create("delete missing").unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let path = work.path().join("nothing.txt");
+    let err = record_fs_delete(&sid, &path).unwrap_err();
+    assert!(matches!(err, SessionError::NotFound(_)), "got {err:?}");
+}
+
+#[test]
+fn record_fs_rename_records_both_paths() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    let sid = create("rename").unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let from = work.path().join("a.txt");
+    let to = work.path().join("b.txt");
+
+    record_fs_rename(&sid, &from, &to).unwrap();
+
+    let muts = iter_mutations(&sid).unwrap();
+    match &muts[0].mutation {
+        Mutation::FsRename { from: f, to: t } => {
+            assert_eq!(*f, from.to_string_lossy().into_owned());
+            assert_eq!(*t, to.to_string_lossy().into_owned());
+        }
+        other => panic!("expected FsRename, got {other:?}"),
+    }
+}
+
+#[test]
+fn rollback_restores_overwritten_file() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    let sid = create("rollback overwrite").unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let path = work.path().join("doc.txt");
+    std::fs::write(&path, b"v1").unwrap();
+
+    record_fs_write(&sid, &path).unwrap();
+    // Simulate the gated app actually performing the write:
+    std::fs::write(&path, b"v2").unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"v2");
+
+    let outcomes = rollback(&sid).unwrap();
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes[0].verb, "fs.write");
+    assert_eq!(outcomes[0].status, RollbackStatus::Restored);
+    assert_eq!(std::fs::read(&path).unwrap(), b"v1");
+}
+
+#[test]
+fn rollback_deletes_file_created_from_nothing() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    let sid = create("rollback create").unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let path = work.path().join("new.txt");
+
+    record_fs_write(&sid, &path).unwrap();
+    std::fs::write(&path, b"created").unwrap();
+    assert!(path.exists());
+
+    let outcomes = rollback(&sid).unwrap();
+    assert_eq!(outcomes[0].status, RollbackStatus::Restored);
+    assert!(!path.exists(), "rollback removed the path");
+}
+
+#[test]
+fn rollback_undeletes_file_with_saved_bytes() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    let sid = create("rollback delete").unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let path = work.path().join("important.txt");
+    std::fs::write(&path, b"keep me").unwrap();
+
+    record_fs_delete(&sid, &path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    assert!(!path.exists());
+
+    let outcomes = rollback(&sid).unwrap();
+    assert_eq!(outcomes[0].status, RollbackStatus::Restored);
+    assert_eq!(std::fs::read(&path).unwrap(), b"keep me");
+}
+
+#[test]
+fn rollback_reverses_rename() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    let sid = create("rollback rename").unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let from = work.path().join("old.txt");
+    let to = work.path().join("new.txt");
+    std::fs::write(&from, b"x").unwrap();
+
+    record_fs_rename(&sid, &from, &to).unwrap();
+    std::fs::rename(&from, &to).unwrap();
+    assert!(!from.exists() && to.exists());
+
+    let outcomes = rollback(&sid).unwrap();
+    assert_eq!(outcomes[0].status, RollbackStatus::Restored);
+    assert!(from.exists() && !to.exists());
+    assert_eq!(std::fs::read(&from).unwrap(), b"x");
+}
+
+#[test]
+fn rollback_replays_in_reverse_seq_order() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    let sid = create("rollback order").unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let path = work.path().join("doc.txt");
+    std::fs::write(&path, b"v1").unwrap();
+
+    // Two successive writes — the agent did v1 -> v2 -> v3.
+    record_fs_write(&sid, &path).unwrap();
+    std::fs::write(&path, b"v2").unwrap();
+    record_fs_write(&sid, &path).unwrap();
+    std::fs::write(&path, b"v3").unwrap();
+
+    let outcomes = rollback(&sid).unwrap();
+    assert_eq!(outcomes.len(), 2);
+    // Newest-first: seq 1 then seq 0.
+    assert_eq!(outcomes[0].seq, 1);
+    assert_eq!(outcomes[1].seq, 0);
+    // Both restored cleanly.
+    assert!(outcomes.iter().all(|o| o.status == RollbackStatus::Restored));
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        b"v1",
+        "fully unwound back to original"
+    );
+}
+
+#[test]
+fn rollback_marks_already_done_when_path_already_absent() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    let sid = create("already done").unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let path = work.path().join("created.txt");
+
+    record_fs_write(&sid, &path).unwrap();
+    // Imagine the user manually cleaned up the file before rollback.
+    // Don't write anything to `path` — it never appeared.
+
+    let outcomes = rollback(&sid).unwrap();
+    assert_eq!(outcomes[0].status, RollbackStatus::AlreadyDone);
+}
+
+#[test]
+fn rollback_skips_opaque_with_helpful_detail() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    let sid = create("opaque").unwrap();
+    record_mutation(
+        &sid,
+        MutationRecord::new(Mutation::Opaque {
+            verb: "calendar.event.create".into(),
+            forward: json!({"event_id": "abc"}),
+            inverse: json!({"verb": "calendar.event.delete", "event_id": "abc"}),
+        }),
+    )
+    .unwrap();
+
+    let outcomes = rollback(&sid).unwrap();
+    assert_eq!(outcomes[0].status, RollbackStatus::Skipped);
+    assert!(
+        outcomes[0].detail.contains("calendar.event.create"),
+        "detail names the verb: {}",
+        outcomes[0].detail
+    );
+}
+
+#[test]
+fn rollback_on_empty_session_is_empty_vec() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    let sid = create("empty").unwrap();
+    let outcomes = rollback(&sid).unwrap();
+    assert!(outcomes.is_empty());
+}

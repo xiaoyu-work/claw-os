@@ -132,7 +132,7 @@ pub enum SessionError {
 }
 
 impl SessionError {
-    fn io(path: PathBuf, source: std::io::Error) -> Self {
+    pub(super) fn io(path: PathBuf, source: std::io::Error) -> Self {
         Self::Io { path, source }
     }
     fn decode(path: PathBuf, source: serde_json::Error) -> Self {
