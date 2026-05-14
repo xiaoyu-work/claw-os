@@ -109,7 +109,15 @@ chroot "$ROOTFS" bash -c '
 '
 
 echo "  :: building desktop (cold tree: 30–60 minutes)"
-chroot "$ROOTFS" bash -c '
+# Several desktop crates (greeter, player) use `vergen` in their build.rs to
+# embed VERGEN_GIT_SHA / VERGEN_GIT_COMMIT_DATE at compile time. The chroot
+# has no .git so vergen fails. Pre-compute on the host and pass through.
+VERGEN_GIT_SHA="$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
+VERGEN_GIT_COMMIT_DATE="$(git -C "$PROJECT_DIR" log -1 --format=%cs HEAD 2>/dev/null || date -u +%Y-%m-%d)"
+chroot "$ROOTFS" env \
+    VERGEN_GIT_SHA="$VERGEN_GIT_SHA" \
+    VERGEN_GIT_COMMIT_DATE="$VERGEN_GIT_COMMIT_DATE" \
+    bash -c '
     set -e
     export CARGO_HOME=/root/.cargo
     export PATH="$CARGO_HOME/bin:$PATH"
