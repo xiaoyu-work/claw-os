@@ -907,6 +907,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cos-mcp-serve"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "cosmic-client-toolkit"
 version = "0.2.0"
 source = "git+https://github.com/pop-os/cosmic-protocols?rev=160b086#160b086abe03cd34a8a375d7fbe47b24308d1f38"
@@ -968,12 +979,15 @@ name = "cosmic-notifications"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "color-backtrace",
+ "cos-mcp-serve",
  "cosmic-notifications-config",
  "cosmic-notifications-util",
  "cosmic-panel-config",
  "libcosmic",
  "rustix 1.1.4",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-journald",
