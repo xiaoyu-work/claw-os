@@ -3228,6 +3228,7 @@ impl Application for App {
                 if let Some((dialog_page, task)) = self.dialog_pages.pop_front() {
                     let mut tasks = vec![task];
                     match dialog_page {
+                        DialogPage::AiSummary { .. } => {}
                         DialogPage::Compress {
                             paths,
                             to,
