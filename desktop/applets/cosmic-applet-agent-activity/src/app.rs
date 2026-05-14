@@ -12,7 +12,9 @@ use cosmic::{
         time, window,
     },
     theme,
-    widget::{button, column, container, divider, horizontal_space, row, text},
+    widget::{
+        button, column, container, divider, row, space::horizontal as horizontal_space, text,
+    },
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -328,10 +330,10 @@ fn relative_time_rfc3339(rfc: &str) -> String {
     let delta = now.saturating_sub(then);
     match delta {
         0..=4 => fl!("just-now"),
-        5..=59 => fl!("seconds-ago", n = delta as u32),
-        60..=3599 => fl!("minutes-ago", n = (delta / 60) as u32),
-        3600..=86399 => fl!("hours-ago", n = (delta / 3600) as u32),
-        _ => fl!("days-ago", n = (delta / 86400) as u32),
+        5..=59 => fl!("seconds-ago", n = (delta as u32)),
+        60..=3599 => fl!("minutes-ago", n = ((delta / 60) as u32)),
+        3600..=86399 => fl!("hours-ago", n = ((delta / 3600) as u32)),
+        _ => fl!("days-ago", n = ((delta / 86400) as u32)),
     }
 }
 

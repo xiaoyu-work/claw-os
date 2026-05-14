@@ -17,7 +17,7 @@ if ! ls "$DEBS_DIR/claw-os-browser_"*.deb >/dev/null 2>&1; then
     "$PROJECT_DIR/packaging/deb/build-debs.sh"
 fi
 
-BROWSER_DEB="$(ls "$DEBS_DIR/claw-os-browser_"*"_amd64.deb" | head -1)"
+BROWSER_DEB="$(ls "$DEBS_DIR/claw-os-browser_"*"_${DEB_ARCH:-amd64}.deb" | head -1)"
 echo "  :: installing $(basename "$BROWSER_DEB")"
 
 # Remove the overlay copy so dpkg can claim the file.

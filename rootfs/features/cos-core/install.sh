@@ -19,7 +19,7 @@ if ! ls "$DEBS_DIR/claw-os-base_"*.deb >/dev/null 2>&1; then
     "$PROJECT_DIR/packaging/deb/build-debs.sh"
 fi
 
-BASE_DEB="$(ls "$DEBS_DIR/claw-os-base_"*"_amd64.deb" | head -1)"
+BASE_DEB="$(ls "$DEBS_DIR/claw-os-base_"*"_${DEB_ARCH:-amd64}.deb" | head -1)"
 echo "  :: installing $(basename "$BASE_DEB")"
 
 # The base overlay (applied in step 2 of rootfs/build.sh) ships these
