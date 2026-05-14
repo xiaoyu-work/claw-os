@@ -42,8 +42,13 @@ export const metadata: Metadata = {
   },
   description: "Your Claw OS system agent.",
   icons: {
-    icon: "/favicon.ico",
+    icon: [
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/clawos-icon-192.png", type: "image/png", sizes: "192x192" },
+      { url: "/clawos-icon-512.png", type: "image/png", sizes: "512x512" },
+    ],
     shortcut: "/favicon.ico",
+    apple: "/clawos-apple-touch-icon.png",
   },
 };
 

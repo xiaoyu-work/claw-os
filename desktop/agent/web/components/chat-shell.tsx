@@ -1,8 +1,9 @@
 "use client";
 
 import { type FormEvent, useCallback, useRef, useState } from "react";
-import { Send, Sparkles } from "lucide-react";
+import { Send } from "lucide-react";
 
+import { BrandSymbol } from "@/components/brand";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -156,17 +157,34 @@ export function ChatShell() {
     <div className="flex min-h-screen flex-col bg-background text-foreground">
       <header className="border-b border-border px-6 py-4">
         <div className="flex items-center gap-3">
-          <Sparkles className="size-5 text-primary" />
-          <h1 className="text-lg font-semibold">Claw OS Agent</h1>
+          <BrandSymbol size={28} className="text-foreground" />
+          <h1 className="text-lg font-semibold tracking-tight">
+            Claw OS Agent
+          </h1>
         </div>
       </header>
 
       <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-6 py-8">
         <div className="flex-1 space-y-4">
           {messages.length === 0 ? (
-            <p className="text-muted-foreground text-sm">
-              Say hi to your Claw OS agent.
-            </p>
+            <div className="flex h-full min-h-[40vh] flex-col items-center justify-center gap-4 text-center">
+              <BrandSymbol
+                size={56}
+                aria-hidden
+                className="text-foreground"
+              />
+              <div className="space-y-1">
+                <p className="text-foreground text-base font-medium">
+                  How can your agent help today?
+                </p>
+                <p className="text-muted-foreground text-sm">
+                  Press <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-xs">Super</kbd>
+                  {" + "}
+                  <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-xs">A</kbd>
+                  {" "}from anywhere to summon me.
+                </p>
+              </div>
+            </div>
           ) : (
             messages.map((m) => (
               <div
