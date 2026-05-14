@@ -229,41 +229,64 @@ fn exec_linux(
 ///
 /// systemd-run creates a transient scope with cgroup limits.
 /// Combined with unshare flags for PID/mount/net namespace isolation.
-#[cfg(target_os = "linux")]
-fn exec_linux_with_cgroup(
+/// Build the `systemd-run` argv used by `exec_linux_with_cgroup`.
+/// Factored out as a pure function for unit-test coverage: the
+/// pre-fix code packed `-p` flag + value into a single argv slot
+/// (e.g. `"-p MemoryMax=512M"`) which systemd-run rejects, breaking
+/// every sandbox-with-limits invocation. We must guarantee `-p`
+/// flags and their `KEY=VALUE` payloads land in separate argv
+/// elements.
+///
+/// `#[cfg(unix)]` (not `target_os = "linux"`) so we can unit-test
+/// the argv structure on developer macOS hosts. The function only
+/// constructs strings; it does not invoke systemd-run, so the
+/// platform doesn't matter for its correctness.
+#[cfg(unix)]
+fn build_systemd_run_args(
+    scope_name: &str,
     command_args: &[String],
     network: bool,
     read_only: bool,
     workspace: &str,
     limits: &ResourceLimits,
-) -> Result<Value, String> {
-    let scope_name = format!("cos-sandbox-{}", short_id());
-
+) -> Vec<String> {
     let mut sr_args = vec![
         "--scope".to_string(),
         format!("--unit={scope_name}"),
         "--quiet".to_string(),
     ];
 
+    // systemd-run accepts each property as TWO argv elements: the
+    // literal `-p` flag and the `KEY=VALUE` payload. The earlier
+    // `format!("-p X=Y")` packed both into a single argv slot which
+    // systemd-run interprets as an unknown option and rejects with
+    // "unrecognized option". Mirror the already-correct
+    // SystemCallFilter / ReadOnlyPaths blocks below.
+
     // Memory limit (cgroup v2: MemoryMax)
     if let Some(ref mem) = limits.mem_limit {
-        sr_args.push(format!("-p MemoryMax={mem}"));
-        sr_args.push(format!("-p MemorySwapMax=0")); // no swap
+        sr_args.push("-p".to_string());
+        sr_args.push(format!("MemoryMax={mem}"));
+        sr_args.push("-p".to_string());
+        sr_args.push("MemorySwapMax=0".to_string()); // no swap
     }
 
     // CPU limit (cgroup v2: CPUQuota)
     if let Some(cpu) = limits.cpu_percent {
-        sr_args.push(format!("-p CPUQuota={cpu}%"));
+        sr_args.push("-p".to_string());
+        sr_args.push(format!("CPUQuota={cpu}%"));
     }
 
     // PID limit (cgroup v2: TasksMax)
     if let Some(pids) = limits.pids_max {
-        sr_args.push(format!("-p TasksMax={pids}"));
+        sr_args.push("-p".to_string());
+        sr_args.push(format!("TasksMax={pids}"));
     }
 
     // Timeout via RuntimeMaxSec
     if let Some(secs) = limits.timeout_secs {
-        sr_args.push(format!("-p RuntimeMaxSec={secs}"));
+        sr_args.push("-p".to_string());
+        sr_args.push(format!("RuntimeMaxSec={secs}"));
     }
 
     // Read-only filesystem via systemd property
@@ -281,7 +304,8 @@ fn exec_linux_with_cgroup(
     }
 
     // Set working directory to workspace
-    sr_args.push(format!("-p WorkingDirectory={workspace}"));
+    sr_args.push("-p".to_string());
+    sr_args.push(format!("WorkingDirectory={workspace}"));
 
     // Wrap the actual command in unshare for namespace isolation
     sr_args.push("--".to_string());
@@ -295,6 +319,19 @@ fn exec_linux_with_cgroup(
     }
     sr_args.push("--".to_string());
     sr_args.extend_from_slice(command_args);
+    sr_args
+}
+
+#[cfg(target_os = "linux")]
+fn exec_linux_with_cgroup(
+    command_args: &[String],
+    network: bool,
+    read_only: bool,
+    workspace: &str,
+    limits: &ResourceLimits,
+) -> Result<Value, String> {
+    let scope_name = format!("cos-sandbox-{}", short_id());
+    let sr_args = build_systemd_run_args(&scope_name, command_args, network, read_only, workspace, limits);
 
     let mut child = Command::new("systemd-run")
         .args(&sr_args)
@@ -391,7 +428,11 @@ fn shell_escape(s: &str) -> String {
 ///   - `minimal`: only basic I/O and process management syscalls
 ///   - `network`: minimal + networking syscalls (socket, connect, etc.)
 ///   - `full`: all syscalls allowed (no filtering)
-#[cfg(target_os = "linux")]
+///
+/// `#[cfg(unix)]` (not `target_os = "linux"`) so the argv-builder
+/// helper above stays compilable on macOS for unit tests. The
+/// function only returns strings; it does not load any BPF program.
+#[cfg(unix)]
 fn seccomp_syscall_filter(profile: &str) -> Option<String> {
     match profile {
         "minimal" => {
@@ -467,4 +508,127 @@ fn exec_fallback(
         "isolated": false,
         "note": "namespace/cgroup isolation requires Linux",
     }))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    fn mk_limits(mem: Option<&str>, cpu: Option<u32>, pids: Option<u32>, secs: Option<u32>) -> ResourceLimits {
+        ResourceLimits {
+            mem_limit: mem.map(|s| s.to_string()),
+            cpu_percent: cpu,
+            pids_max: pids,
+            timeout_secs: secs,
+            seccomp_profile: None,
+        }
+    }
+
+    /// Helper: assert the windowed pair (left, right) appears
+    /// consecutively somewhere in `args`. Models the exact systemd-run
+    /// argv contract: `-p` and `KEY=VAL` MUST be separate elements.
+    fn contains_window(args: &[String], left: &str, right: &str) -> bool {
+        args.windows(2).any(|w| w[0] == left && w[1] == right)
+    }
+
+    /// Anti-test for the original bug: no single argv element may
+    /// contain both `-p ` and `=` packed together (e.g.
+    /// "-p MemoryMax=512M"). systemd-run rejects that form.
+    fn no_packed_p_flag(args: &[String]) {
+        for a in args {
+            assert!(
+                !(a.starts_with("-p ") && a.contains('=')),
+                "argv contains packed -p flag: {a:?}"
+            );
+            // Also catch the related "-p X" with embedded space form.
+            assert!(
+                !(a.starts_with("-p ") || a == "-p MemorySwapMax=0"),
+                "argv contains space-packed -p flag: {a:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn systemd_run_args_split_memory_limit() {
+        let args = build_systemd_run_args(
+            "scope-x",
+            &["echo".to_string(), "hi".to_string()],
+            false,
+            false,
+            "/tmp",
+            &mk_limits(Some("512M"), None, None, None),
+        );
+        assert!(contains_window(&args, "-p", "MemoryMax=512M"), "missing MemoryMax pair: {args:?}");
+        assert!(contains_window(&args, "-p", "MemorySwapMax=0"), "missing MemorySwapMax pair: {args:?}");
+        no_packed_p_flag(&args);
+    }
+
+    #[test]
+    fn systemd_run_args_split_cpu_pids_timeout() {
+        let args = build_systemd_run_args(
+            "scope-y",
+            &["true".to_string()],
+            false,
+            false,
+            "/var/lib/cos/ws",
+            &mk_limits(None, Some(50), Some(100), Some(300)),
+        );
+        assert!(contains_window(&args, "-p", "CPUQuota=50%"), "missing CPUQuota pair: {args:?}");
+        assert!(contains_window(&args, "-p", "TasksMax=100"), "missing TasksMax pair: {args:?}");
+        assert!(contains_window(&args, "-p", "RuntimeMaxSec=300"), "missing RuntimeMaxSec pair: {args:?}");
+        no_packed_p_flag(&args);
+    }
+
+    #[test]
+    fn systemd_run_args_split_working_directory_and_readonly() {
+        let args = build_systemd_run_args(
+            "scope-z",
+            &["true".to_string()],
+            false,
+            true,
+            "/sandbox/ws-1",
+            &mk_limits(None, None, None, None),
+        );
+        assert!(contains_window(&args, "-p", "WorkingDirectory=/sandbox/ws-1"), "missing WorkingDirectory pair: {args:?}");
+        assert!(contains_window(&args, "-p", "ReadOnlyPaths=/"), "missing ReadOnlyPaths pair: {args:?}");
+        no_packed_p_flag(&args);
+    }
+
+    /// With no limits at all there should still be no `-p X=Y`
+    /// elements and the trailing argv must dispatch unshare ->
+    /// command_args correctly.
+    #[test]
+    fn systemd_run_args_no_limits_dispatches_unshare_command() {
+        let args = build_systemd_run_args(
+            "scope-empty",
+            &["true".to_string()],
+            true, // network on -> no --net
+            false,
+            "/tmp",
+            &mk_limits(None, None, None, None),
+        );
+        no_packed_p_flag(&args);
+        // The argv must end in `-- unshare ... -- true`
+        let pos_unshare = args.iter().position(|s| s == "unshare").expect("unshare in argv");
+        // Two `--` separators: one before unshare, one before command.
+        let dash_dash_count = args.iter().filter(|s| s.as_str() == "--").count();
+        assert!(dash_dash_count >= 2, "expected two `--` separators, got {dash_dash_count}: {args:?}");
+        assert!(args.iter().any(|s| s == "true"), "missing trailing command: {args:?}");
+        // Network on: `--net` MUST be absent.
+        assert!(!args.iter().any(|s| s == "--net"), "network=true should suppress --net: {args:?}");
+        let _ = pos_unshare;
+    }
+
+    #[test]
+    fn systemd_run_args_network_off_adds_net_namespace() {
+        let args = build_systemd_run_args(
+            "scope-net-off",
+            &["true".to_string()],
+            false, // network off -> --net present
+            false,
+            "/tmp",
+            &mk_limits(None, None, None, None),
+        );
+        assert!(args.iter().any(|s| s == "--net"), "network=false must add --net: {args:?}");
+    }
 }
