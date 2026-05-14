@@ -3139,6 +3139,14 @@ async fn chat_cmd_async(
 
     let stdout = std::io::stdout();
     let stderr = std::io::stderr();
+    // When the user is at an interactive terminal, the stream sink
+    // already echoed the assistant's text to stderr (which is the
+    // same terminal as stdout), so printing the assembled answer
+    // again to stdout would duplicate it. Skip the second copy in
+    // that case. When stdout is piped to a file or another command
+    // we still want the canonical answer on stdout — the streaming
+    // copy on stderr is the "progress" view there.
+    let stdout_is_tty = std::io::IsTerminal::is_terminal(&std::io::stdout());
 
     // Header banner — to stderr so a piped-stdout consumer only
     // sees the assistant outputs.
@@ -3383,14 +3391,18 @@ async fn chat_cmd_async(
 
         match result {
             Ok(ask_result) => {
-                // The assistant's final text goes to stdout so a
-                // user piping `cos agent chat > replies.txt` still
-                // gets clean output. Streaming already echoed
-                // partial text to stderr so this is the canonical
-                // copy.
-                let mut o = stdout.lock();
-                let _ = writeln!(o, "{}", ask_result.answer);
-                let _ = o.flush();
+                // Streaming sink echoes incremental text to stderr.
+                // When stderr+stdout share a terminal (interactive
+                // use), printing the final answer to stdout would
+                // duplicate the response on screen. Only emit the
+                // stdout copy when piping or when streaming is off
+                // (i.e. the user hasn't seen the text yet).
+                let print_final_to_stdout = !(streaming && stdout_is_tty);
+                if print_final_to_stdout {
+                    let mut o = stdout.lock();
+                    let _ = writeln!(o, "{}", ask_result.answer);
+                    let _ = o.flush();
+                }
 
                 let mut e = stderr.lock();
                 let _ = writeln!(
