@@ -38,6 +38,15 @@
 //!   --audio-output <p>   Path the gate writes synthesised speech to.
 //!   --video-input <p>    Video to analyse.
 //!   --video-output <p>   Path the gate writes the generated video to.
+//!   --tools <list>       Comma-separated catalog tool names to expose
+//!                        to the model (e.g. `fs.read_text,kv.get`).
+//!                        Each name is resolved against
+//!                        `cos ai tools`; unknown names hard-deny.
+//!                        The model may *propose* calls; the gate
+//!                        returns them in `tool_calls[]` and never
+//!                        executes them. Apps shell back via
+//!                        `cos ai tool <name>` to fulfil whichever
+//!                        they choose.
 //!
 //! Apps do **not** pick the model — the OS owner configures one
 //! provider/model in `/etc/cos/agent.toml` and the gate uses it for
@@ -73,6 +82,7 @@ pub fn chat_cmd(args: &[String]) -> Result<Value, String> {
     let mut audio_output: Option<std::path::PathBuf> = None;
     let mut video_input: Option<std::path::PathBuf> = None;
     let mut video_output: Option<std::path::PathBuf> = None;
+    let mut tools: Vec<String> = Vec::new();
 
     fn take_path(args: &[String], i: usize, flag: &str) -> Result<std::path::PathBuf, String> {
         args.get(i + 1)
@@ -143,6 +153,13 @@ pub fn chat_cmd(args: &[String]) -> Result<Value, String> {
                 video_output = Some(take_path(args, i, "--video-output")?);
                 i += 2;
             }
+            "--tools" => {
+                let raw = args
+                    .get(i + 1)
+                    .ok_or_else(|| "missing value for --tools".to_string())?;
+                tools = parse_tools_flag(raw);
+                i += 2;
+            }
             other => return Err(format!("unknown flag for `cos ai chat`: {other}")),
         }
     }
@@ -172,6 +189,7 @@ pub fn chat_cmd(args: &[String]) -> Result<Value, String> {
         audio_output,
         video_input,
         video_output,
+        tools,
     };
 
     match gate::chat_blocking(req) {
@@ -211,6 +229,16 @@ fn enforce_identity(arg_app: &str, env_app: Option<&str>) -> Result<(), String> 
 /// `COS_APP_ID` from the current process env.
 pub fn enforce_identity_for(arg_app: &str) -> Result<(), String> {
     enforce_identity(arg_app, std::env::var("COS_APP_ID").ok().as_deref())
+}
+
+/// Parse `--tools` value (e.g. `"fs.read_text,kv.get"`) into a clean
+/// list. Whitespace around items is trimmed and empty segments are
+/// dropped, so `"fs.read_text, , kv.get"` collapses to two entries.
+fn parse_tools_flag(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 #[cfg(test)]
@@ -257,5 +285,23 @@ mod tests {
     #[test]
     fn identity_is_case_sensitive() {
         assert!(enforce_identity("summarize", Some("Summarize")).is_err());
+    }
+
+    #[test]
+    fn parse_tools_flag_basic() {
+        let v = parse_tools_flag("fs.read_text,kv.get");
+        assert_eq!(v, vec!["fs.read_text".to_string(), "kv.get".to_string()]);
+    }
+
+    #[test]
+    fn parse_tools_flag_trims_and_drops_empty() {
+        let v = parse_tools_flag("fs.read_text,  ,kv.get , ");
+        assert_eq!(v, vec!["fs.read_text".to_string(), "kv.get".to_string()]);
+    }
+
+    #[test]
+    fn parse_tools_flag_empty_string_yields_empty_vec() {
+        assert!(parse_tools_flag("").is_empty());
+        assert!(parse_tools_flag("  ,  ").is_empty());
     }
 }

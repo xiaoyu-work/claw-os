@@ -130,6 +130,15 @@ pub struct ChatRequest {
     pub audio_output: Option<PathBuf>,
     pub video_input: Option<PathBuf>,
     pub video_output: Option<PathBuf>,
+
+    /// Names of App-facing Tools (from `crate::ai::tools::CATALOG`)
+    /// that the App wants exposed to the model on this single call.
+    /// The gate filters this against the App's manifest `ai.tools[]`
+    /// allowlist, then rewrites them as provider-format tool specs.
+    /// The model **proposes** calls; the gate returns them as
+    /// `tool_calls[]` and never executes them in-line. Empty by
+    /// default — most modalities don't need tools.
+    pub tools: Vec<String>,
 }
 
 /// Structured envelope returned to apps. Always JSON-serialisable.
@@ -155,6 +164,27 @@ pub struct ChatResult {
     pub usage: Usage,
     pub budget: BudgetReport,
     pub review: ReviewReport,
+
+    /// Tool calls the model proposed. Empty when no tools were
+    /// requested or when the model produced no tool calls. The gate
+    /// **never** executes these — Apps inspect them and re-call the
+    /// kernel via `cos ai tool <name>` for whichever they choose.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<ProposedToolCall>,
+}
+
+/// Provider-agnostic shape of a model-proposed tool call. Mirrors
+/// `crate::agent::llm::types::ToolCall` but lives in the public gate
+/// API so App authors don't have to import internal LLM types.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProposedToolCall {
+    /// Provider-issued unique id. Echo it back when the App later
+    /// fulfils the call so the model can correlate the result.
+    pub id: String,
+    /// Tool name from the App-facing catalog (e.g. `"fs.read_text"`).
+    pub name: String,
+    /// JSON arguments the model wants to pass.
+    pub input: serde_json::Value,
 }
 
 // ---------------------------------------------------------------------------
@@ -681,11 +711,42 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
             field: "prompt",
         })?;
 
+    // 9b. Resolve any requested Tools against the kernel catalog. The
+    // App-facing manifest allowlist (Phase 8) will further restrict
+    // this list; for now, anything in CATALOG is offered. Unknown
+    // names hard-deny so model-discovered typos never leak through.
+    let resolved_tools: Vec<crate::agent::llm::types::Tool> =
+        if req.tools.is_empty() {
+            Vec::new()
+        } else {
+            let mut out = Vec::with_capacity(req.tools.len());
+            for name in &req.tools {
+                let def = crate::ai::tools::lookup(name).ok_or_else(|| {
+                    AiError::Provider(format!(
+                        "unknown tool requested: {name} (not in catalog)"
+                    ))
+                })?;
+                let schema: serde_json::Value =
+                    serde_json::from_str(def.args_schema).unwrap_or(serde_json::json!({}));
+                out.push(crate::agent::llm::types::Tool {
+                    name: def.name.to_string(),
+                    description: def.summary.to_string(),
+                    input_schema: schema,
+                });
+            }
+            out
+        };
+
     // 10. Build the provider request.
     let provider = llm::registry::build(&cfg.provider, &model, cfg)
         .map_err(|e| AiError::Provider(e.to_string()))?;
 
-    let llm_req = build_chat_request(&model, &prompt, req.system.as_deref());
+    let llm_req = build_chat_request(
+        &model,
+        &prompt,
+        req.system.as_deref(),
+        resolved_tools,
+    );
     let llm_resp = provider
         .chat(llm_req)
         .await
@@ -739,6 +800,15 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
             safety: safety_label(policy.safety),
             prompt_redacted,
         },
+        tool_calls: llm_resp
+            .tool_calls
+            .into_iter()
+            .map(|tc| ProposedToolCall {
+                id: tc.id,
+                name: tc.name,
+                input: tc.input,
+            })
+            .collect(),
     })
 }
 
@@ -864,7 +934,12 @@ fn apply_safety(prompt: &str, safety: AiSafety) -> (String, bool) {
     }
 }
 
-fn build_chat_request(model: &str, user: &str, system: Option<&str>) -> LlmChatRequest {
+fn build_chat_request(
+    model: &str,
+    user: &str,
+    system: Option<&str>,
+    tools: Vec<crate::agent::llm::types::Tool>,
+) -> LlmChatRequest {
     LlmChatRequest {
         model: model.to_string(),
         messages: vec![Message {
@@ -874,7 +949,7 @@ fn build_chat_request(model: &str, user: &str, system: Option<&str>) -> LlmChatR
             }],
         }],
         system: system.map(|s| s.to_string()),
-        tools: Vec::new(),
+        tools,
         tool_choice: Default::default(),
         max_tokens: Some(1024),
         temperature: None,
