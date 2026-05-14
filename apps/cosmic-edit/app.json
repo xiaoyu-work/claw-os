@@ -1,0 +1,119 @@
+{
+  "id": "cosmic-edit",
+  "version": "0.1.0",
+  "name": {
+    "en": "Text Editor"
+  },
+  "summary": {
+    "en": "Headless text-file read / write / append."
+  },
+  "icon": "✏️",
+  "runtime": "binary",
+  "operations": {},
+  "session": {
+    "entry": "/usr/bin/cosmic-edit",
+    "transport": "stdio",
+    "tools": [
+      {
+        "name": "edit.read_file",
+        "summary": {
+          "en": "Read a UTF-8 text file (≤ 4 MiB). Returns {path, bytes, content}."
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "File to read."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Read the file contents."
+            }
+          }
+        ]
+      },
+      {
+        "name": "edit.write_file",
+        "summary": {
+          "en": "Atomically replace the contents of `path` with `content` (creates parents as needed)."
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "File to write."
+            }
+          },
+          {
+            "name": "content",
+            "kind": "text",
+            "required": true,
+            "label": {
+              "en": "UTF-8 contents to write."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.write",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Replace the file's contents."
+            }
+          }
+        ]
+      },
+      {
+        "name": "edit.append",
+        "summary": {
+          "en": "Append `content` to `path`. Creates the file (and parents) if absent."
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "File to append to."
+            }
+          },
+          {
+            "name": "content",
+            "kind": "text",
+            "required": true,
+            "label": {
+              "en": "UTF-8 text to append."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.write",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Append to the file."
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
