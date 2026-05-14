@@ -1,0 +1,34 @@
+[Unit]
+Description=Claw OS — Agent Bridge (HTTP+SSE → cos agent)
+Documentation=https://github.com/xiaoyu-work/claw-os
+# Bridge belongs to the graphical session: it serves the desktop Agent
+# app (com.clawos.Agent) and the Super+A overlay, both of which are
+# only meaningful while the user is logged in graphically.
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/cos-agent-bridge
+Restart=on-failure
+RestartSec=3
+# Default port = 0 (kernel-assigned). The bound port is published to
+# $XDG_RUNTIME_DIR/cos-agent-bridge.port for launchers to discover.
+# Override via drop-in if a fixed port is required.
+Environment=COS_AGENT_WEB_ROOT=/usr/share/cos-agent/web
+Environment=COS_BIN=/usr/local/bin/cos
+# Hardening: bridge is local-only, never exec, never write outside its
+# own runtime dir.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+# Need read access to ~/.config/cos for the cos agent subprocess to find
+# its provider config.
+ProtectHome=read-only
+# The bridge writes the port file under XDG_RUNTIME_DIR (%t for user
+# units).
+ReadWritePaths=%t
+
+[Install]
+WantedBy=graphical-session.target

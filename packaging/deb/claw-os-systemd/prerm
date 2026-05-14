@@ -13,6 +13,10 @@ case "$1" in
             deb-systemd-helper disable cos-den-setup.service >/dev/null || true
             deb-systemd-helper disable cos-browser.service >/dev/null || true
         fi
+        # User unit: remove the global enable symlink we created in
+        # postinst. We can't reach into individual user sessions, but
+        # this prevents new logins from starting the bridge.
+        rm -f /etc/systemd/user/graphical-session.target.wants/cos-agent-bridge.service
         ;;
     upgrade|deconfigure|failed-upgrade)
         ;;

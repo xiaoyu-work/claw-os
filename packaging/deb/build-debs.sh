@@ -60,7 +60,9 @@ find_bin() {
         "$PROJECT_DIR/target/x86_64-unknown-linux-gnu/release/$name" \
         "$PROJECT_DIR/target/release/$name" \
         "$PROJECT_DIR/core/target/x86_64-unknown-linux-musl/release/$name" \
-        "$PROJECT_DIR/core/target/release/$name"; do
+        "$PROJECT_DIR/core/target/release/$name" \
+        "$PROJECT_DIR/desktop/agent/target/x86_64-unknown-linux-musl/release/$name" \
+        "$PROJECT_DIR/desktop/agent/target/release/$name"; do
         if [ -f "$candidate" ]; then
             echo "$candidate"
             return 0
@@ -89,6 +91,7 @@ mkdir -p "$BASE_STAGE/usr/lib/cos/apps"
 mkdir -p "$BASE_STAGE/usr/lib/cos/plugins"
 mkdir -p "$BASE_STAGE/usr/lib/cos/skills"
 mkdir -p "$BASE_STAGE/usr/lib/cos/init"
+mkdir -p "$BASE_STAGE/usr/share/cos-agent/web"
 mkdir -p "$BASE_STAGE/etc/cos"
 
 # Control + maintainer scripts.
@@ -100,6 +103,43 @@ install -m 755 "$SCRIPT_DIR/claw-os-base/postinst" "$BASE_STAGE/DEBIAN/postinst"
 COS_BIN="$(find_bin cos)" || { echo "error: cos binary not built" >&2; exit 1; }
 echo "  :: cos          <- $COS_BIN"
 install -m 755 "$COS_BIN" "$BASE_STAGE/usr/local/bin/cos"
+
+# Binary: cos-agent-bridge (HTTP+SSE daemon for com.clawos.Agent).
+# Optional — the rest of the OS works without it, so a missing bridge
+# binary just produces a warning rather than failing the deb build.
+COS_AGENT_BRIDGE_BIN="$(find_bin cos-agent-bridge || true)"
+if [ -n "$COS_AGENT_BRIDGE_BIN" ] && [ -f "$COS_AGENT_BRIDGE_BIN" ]; then
+    echo "  :: cos-agent-bridge  <- $COS_AGENT_BRIDGE_BIN"
+    install -m 755 "$COS_AGENT_BRIDGE_BIN" "$BASE_STAGE/usr/local/bin/cos-agent-bridge"
+else
+    echo "  :: WARNING — cos-agent-bridge binary not built; skipping" >&2
+fi
+
+# Agent web SPA: ship whatever Next/Vite export lives at
+# desktop/agent/web/out or .next/standalone. Falls back to a stub
+# index.html so the bridge's static file server has something to
+# return until the UI build is wired into CI.
+AGENT_WEB_SRC=""
+for candidate in \
+    "$PROJECT_DIR/desktop/agent/web/out" \
+    "$PROJECT_DIR/desktop/agent/web/.next/standalone/desktop/agent/web/public"; do
+    if [ -d "$candidate" ] && [ -f "$candidate/index.html" ]; then
+        AGENT_WEB_SRC="$candidate"
+        break
+    fi
+done
+if [ -n "$AGENT_WEB_SRC" ]; then
+    echo "  :: cos-agent web SPA <- $AGENT_WEB_SRC"
+    cp -a "$AGENT_WEB_SRC/." "$BASE_STAGE/usr/share/cos-agent/web/"
+else
+    echo "  :: cos-agent web SPA — no export found, writing placeholder index.html" >&2
+    cat > "$BASE_STAGE/usr/share/cos-agent/web/index.html" <<'PLACEHOLDER'
+<!doctype html>
+<html><head><meta charset="utf-8"><title>ClawOS Agent</title></head>
+<body><pre>ClawOS Agent — web UI not yet built into this image.
+The agent bridge is running on this port; talk to /api/chat directly.</pre></body></html>
+PLACEHOLDER
+fi
 
 # Shell scripts shared with all targets.
 install -m 755 "$PROJECT_DIR/rootfs/overlay/usr/local/bin/cos-init" \
@@ -170,6 +210,7 @@ echo "===> staging claw-os-systemd"
 SYSTEMD_STAGE="$STAGE_DIR/claw-os-systemd"
 mkdir -p "$SYSTEMD_STAGE/DEBIAN"
 mkdir -p "$SYSTEMD_STAGE/usr/lib/systemd/system"
+mkdir -p "$SYSTEMD_STAGE/usr/lib/systemd/user"
 
 render_control "$SCRIPT_DIR/claw-os-systemd/control" "$SYSTEMD_STAGE/DEBIAN/control"
 install -m 755 "$SCRIPT_DIR/claw-os-systemd/postinst" "$SYSTEMD_STAGE/DEBIAN/postinst"
@@ -181,6 +222,12 @@ install -m 644 "$UNITS_SRC/cos-den-setup.service" \
     "$SYSTEMD_STAGE/usr/lib/systemd/system/cos-den-setup.service"
 install -m 644 "$UNITS_SRC/cos-browser.service" \
     "$SYSTEMD_STAGE/usr/lib/systemd/system/cos-browser.service"
+
+# User-scoped unit: auto-start cos-agent-bridge in every logged-in
+# user's graphical session. Enabled globally by the postinst.
+USER_UNITS_SRC="$PROJECT_DIR/rootfs/features/systemd/overlay/usr/lib/systemd/user"
+install -m 644 "$USER_UNITS_SRC/cos-agent-bridge.service" \
+    "$SYSTEMD_STAGE/usr/lib/systemd/user/cos-agent-bridge.service"
 
 echo "  :: dpkg-deb --build claw-os-systemd"
 $FAKEROOT $DPKG_DEB --root-owner-group --build "$SYSTEMD_STAGE" \

@@ -30,7 +30,7 @@ impl AppState {
             .unwrap_or_else(|_| PathBuf::from("/usr/share/cos-agent/web"));
         let cos_bin = std::env::var("COS_BIN")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("/usr/bin/cos"));
+            .unwrap_or_else(|_| PathBuf::from("/usr/local/bin/cos"));
         Ok(Self {
             port,
             web_root,

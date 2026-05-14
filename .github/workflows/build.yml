@@ -81,6 +81,9 @@ jobs:
       - name: Build cos-browser binary (gnu)
         run: cargo build --release -p cos-browser --target x86_64-unknown-linux-gnu
 
+      - name: Build cos-agent-bridge binary (musl)
+        run: cd desktop/agent && cargo build --release -p cos-agent-bridge --target x86_64-unknown-linux-musl
+
       # Build the rootfs from scratch using debootstrap
       - name: Install debootstrap
         run: sudo apt-get update -qq && sudo apt-get install -y debootstrap
@@ -246,6 +249,9 @@ jobs:
 
       - name: Build cos-browser binary (gnu)
         run: cargo build --release -p cos-browser --target x86_64-unknown-linux-gnu
+
+      - name: Build cos-agent-bridge binary (musl)
+        run: cd desktop/agent && cargo build --release -p cos-agent-bridge --target x86_64-unknown-linux-musl
 
       - name: Build WSL rootfs tarball
         run: sudo ./build.sh wsl

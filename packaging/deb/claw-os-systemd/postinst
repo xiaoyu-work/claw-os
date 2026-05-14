@@ -13,8 +13,20 @@ case "$1" in
                 || deb-systemd-helper enable cos-den-setup.service >/dev/null || true
             deb-systemd-helper unmask cos-browser.service >/dev/null || true
         fi
+
+        # User unit: cos-agent-bridge.service. Enable globally so that
+        # every logging-in user starts the bridge under their own
+        # systemd --user instance. deb-systemd-helper does not handle
+        # user units, so do the symlink directly (this is what
+        # `systemctl --global enable` does internally and is safe in a
+        # chroot — no systemd needs to be running).
+        mkdir -p /etc/systemd/user/graphical-session.target.wants
+        ln -sf /usr/lib/systemd/user/cos-agent-bridge.service \
+            /etc/systemd/user/graphical-session.target.wants/cos-agent-bridge.service
+
         if [ -d /run/systemd/system ]; then
             systemctl --system daemon-reload >/dev/null || true
+            systemctl --global daemon-reload >/dev/null 2>&1 || true
             if [ -n "$2" ]; then
                 deb-systemd-invoke try-restart cos-den-setup.service >/dev/null || true
             fi
