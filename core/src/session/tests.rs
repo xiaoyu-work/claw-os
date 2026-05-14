@@ -661,3 +661,366 @@ fn current_lease_is_none_when_session_never_acquired() {
     let sid = create("idle").unwrap();
     assert!(current_lease(&sid).unwrap().is_none());
 }
+
+// ---------------------------------------------------------------------------
+// Phase 2.4 / 2.5 — promote_to_durable, pause, resume
+// ---------------------------------------------------------------------------
+
+/// Save/restore COS_SESSION around a closure so each promote/resume
+/// test starts with a clean env regardless of test order.
+fn with_cleared_session<F: FnOnce()>(f: F) {
+    let prev = env::var_os("COS_SESSION");
+    env::remove_var("COS_SESSION");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    match prev {
+        Some(v) => env::set_var("COS_SESSION", v),
+        None => env::remove_var("COS_SESSION"),
+    }
+    if let Err(p) = result {
+        std::panic::resume_unwind(p);
+    }
+}
+
+#[test]
+fn promote_creates_session_acquires_lease_and_sets_env() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    with_cleared_session(|| {
+        let s = promote_to_durable("invoice agent", "cos-agent").unwrap();
+        let sid = s.sid().clone();
+
+        assert_eq!(env::var("COS_SESSION").unwrap(), sid.as_str());
+
+        let meta = get_meta(&sid).unwrap();
+        assert_eq!(meta.status, Status::Running);
+        assert_eq!(meta.creator_runtime.as_deref(), Some("cos-agent"));
+        assert_eq!(meta.purpose, "invoice agent");
+
+        let lease = current_lease(&sid).unwrap().expect("lease.json exists");
+        assert_eq!(lease.pid, std::process::id());
+
+        // Other processes must see the lease as held.
+        match try_acquire(&sid) {
+            Err(AcquireError::Held { .. }) => {}
+            other => panic!("expected Held, got {other:?}"),
+        }
+
+        s.finish(Status::Done).unwrap();
+
+        let meta = get_meta(&sid).unwrap();
+        assert_eq!(meta.status, Status::Done);
+        assert!(meta.ended_at.is_some(), "ended_at stamped on finish");
+        assert!(
+            current_lease(&sid).unwrap().is_none(),
+            "lease.json removed on finish"
+        );
+        assert!(env::var("COS_SESSION").is_err(), "env restored to unset");
+    });
+}
+
+#[test]
+fn promote_drop_without_finish_marks_failed() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    with_cleared_session(|| {
+        let s = promote_to_durable("oops", "cos-agent").unwrap();
+        let sid = s.sid().clone();
+        drop(s);
+
+        let meta = get_meta(&sid).unwrap();
+        assert_eq!(
+            meta.status,
+            Status::Failed,
+            "drop without finish marks Failed"
+        );
+        assert!(meta.ended_at.is_some());
+        assert!(current_lease(&sid).unwrap().is_none());
+    });
+}
+
+#[test]
+fn promote_restores_previous_cos_session_env() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    with_cleared_session(|| {
+        env::set_var("COS_SESSION", "ses_outer_value");
+        let s = promote_to_durable("nested", "cos-agent").unwrap();
+        let sid = s.sid().clone();
+        assert_eq!(env::var("COS_SESSION").unwrap(), sid.as_str());
+
+        s.finish(Status::Done).unwrap();
+        assert_eq!(
+            env::var("COS_SESSION").unwrap(),
+            "ses_outer_value",
+            "outer COS_SESSION restored after finish"
+        );
+    });
+}
+
+#[test]
+fn heartbeat_via_durable_session_refreshes_lease_json() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    with_cleared_session(|| {
+        let s = promote_to_durable("hb", "cos-agent").unwrap();
+        let sid = s.sid().clone();
+        let before = current_lease(&sid).unwrap().unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        s.heartbeat().unwrap();
+
+        let after = current_lease(&sid).unwrap().unwrap();
+        assert_eq!(after.pid, before.pid);
+        assert_eq!(after.started_at, before.started_at);
+        assert!(
+            after.heartbeat_at > before.heartbeat_at,
+            "heartbeat_at moved: {} -> {}",
+            before.heartbeat_at,
+            after.heartbeat_at
+        );
+
+        s.finish(Status::Done).unwrap();
+    });
+}
+
+#[test]
+fn pause_moves_status_to_paused_and_releases_lease() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    with_cleared_session(|| {
+        let s = promote_to_durable("pausable", "cos-agent").unwrap();
+        let sid = s.sid().clone();
+
+        pause(s).unwrap();
+
+        let meta = get_meta(&sid).unwrap();
+        assert_eq!(meta.status, Status::Paused);
+        assert!(
+            meta.ended_at.is_none(),
+            "pause is not terminal — no ended_at"
+        );
+        assert!(
+            current_lease(&sid).unwrap().is_none(),
+            "lease.json gone after pause"
+        );
+        assert!(env::var("COS_SESSION").is_err(), "env restored on pause");
+
+        // A fresh acquire from the same process must succeed.
+        let g = try_acquire(&sid).unwrap();
+        drop(g);
+    });
+}
+
+#[test]
+fn resume_picks_up_paused_session() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    with_cleared_session(|| {
+        let s = promote_to_durable("hand-off", "cos-agent").unwrap();
+        let sid = s.sid().clone();
+        pause(s).unwrap();
+
+        let s2 = resume(&sid, "langchain-py").unwrap();
+        assert_eq!(s2.sid(), &sid);
+        assert_eq!(s2.runtime(), "langchain-py");
+        assert_eq!(env::var("COS_SESSION").unwrap(), sid.as_str());
+
+        let meta = get_meta(&sid).unwrap();
+        assert_eq!(meta.status, Status::Running);
+        // creator_runtime was set by the original promote and must NOT
+        // change on resume — it is the *creator*, not the *current*
+        // runtime.
+        assert_eq!(meta.creator_runtime.as_deref(), Some("cos-agent"));
+
+        s2.finish(Status::Done).unwrap();
+    });
+}
+
+#[test]
+fn resume_rejects_non_paused_status() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    with_cleared_session(|| {
+        let s = promote_to_durable("running", "cos-agent").unwrap();
+        let sid = s.sid().clone();
+
+        // Status is Running. resume must refuse.
+        match resume(&sid, "other") {
+            Err(TransitionError::InvalidStatus {
+                actual: Status::Running,
+            }) => {}
+            other => panic!("expected InvalidStatus(Running), got {other:?}"),
+        }
+
+        s.finish(Status::Done).unwrap();
+
+        // Status is Done. resume still refuses (terminal).
+        match resume(&sid, "other") {
+            Err(TransitionError::InvalidStatus {
+                actual: Status::Done,
+            }) => {}
+            other => panic!("expected InvalidStatus(Done), got {other:?}"),
+        }
+    });
+}
+
+#[test]
+fn resume_returns_not_found_for_missing_session() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    with_cleared_session(|| {
+        let bogus: SessionId =
+            "ses_0000000000000_000000000000".parse().unwrap();
+        match resume(&bogus, "x") {
+            Err(TransitionError::NotFound(s)) => assert_eq!(s, bogus.as_str()),
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+    });
+}
+
+#[test]
+fn pause_then_resume_preserves_turns_and_mutations() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    with_cleared_session(|| {
+        let s1 = promote_to_durable("with-history", "cos-agent").unwrap();
+        let sid = s1.sid().clone();
+
+        append_turn(&sid, Turn::text(TurnRole::User, "step 1")).unwrap();
+        record_mutation(
+            &sid,
+            MutationRecord::new(Mutation::Opaque {
+                verb: "step".into(),
+                forward: json!({"step": 1}),
+                inverse: json!({}),
+            }),
+        )
+        .unwrap();
+
+        pause(s1).unwrap();
+
+        let s2 = resume(&sid, "second").unwrap();
+
+        append_turn(&sid, Turn::text(TurnRole::User, "step 2")).unwrap();
+        record_mutation(
+            &sid,
+            MutationRecord::new(Mutation::Opaque {
+                verb: "step".into(),
+                forward: json!({"step": 2}),
+                inverse: json!({}),
+            }),
+        )
+        .unwrap();
+
+        let turns = iter_turns(&sid).unwrap();
+        assert_eq!(turns.len(), 2, "turns survive pause/resume");
+        assert_eq!(turns[0].content, "step 1");
+        assert_eq!(turns[1].content, "step 2");
+        assert_eq!(turns[0].seq, 0);
+        assert_eq!(turns[1].seq, 1, "seq continues monotonically");
+
+        let muts = iter_mutations(&sid).unwrap();
+        assert_eq!(muts.len(), 2, "mutations survive pause/resume");
+        assert_eq!(muts[0].seq, 0);
+        assert_eq!(muts[1].seq, 1);
+
+        s2.finish(Status::Done).unwrap();
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2.6 — cross-process integration: lease auto-released on holder death
+// ---------------------------------------------------------------------------
+//
+// The trick: re-exec our own test binary with a magic env var. The
+// child path runs the SAME test function but checks the env at the
+// top and switches into "child mode" — acquire the lease, abort. The
+// kernel releases the flock on abort; the parent then asserts a fresh
+// try_acquire succeeds.
+
+const ENV_DEATH_CHILD_SID: &str = "COS_LEASE_DEATH_CHILD_SID";
+const ENV_DEATH_CHILD_DATA: &str = "COS_LEASE_DEATH_CHILD_DATA";
+const DEATH_CHILD_SENTINEL: &str = "CHILD-ACQUIRED-SESSION-LEASE";
+
+#[test]
+fn lease_released_when_holder_process_dies() {
+    // CHILD MODE — runs in the spawned subprocess.
+    if let Ok(sid_str) = env::var(ENV_DEATH_CHILD_SID) {
+        // The parent passed COS_DATA_DIR via env (subprocess inherits).
+        // Don't touch the global mutex — this is a different process,
+        // it has its own copy.
+        let sid: SessionId = sid_str.parse().expect("child sid valid");
+        let _g = try_acquire(&sid).expect("child acquires lease");
+        // Print a sentinel the parent can grep for, then abort. The
+        // abort kills the process without running Drop (which would
+        // remove lease.json), forcing the parent to verify recovery
+        // when only the kernel-released flock signals lease freedom.
+        eprintln!("{DEATH_CHILD_SENTINEL}");
+        // Flush so the parent's stderr capture sees the sentinel.
+        use std::io::Write;
+        let _ = std::io::stderr().flush();
+        std::process::abort();
+    }
+
+    // PARENT MODE
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    with_cleared_session(|| {
+        let sid = create("crash-test").unwrap();
+        let data_dir = env::var("COS_DATA_DIR").expect("redirect_data_dir set it");
+
+        let exe = env::current_exe().expect("current_exe");
+        let output = std::process::Command::new(&exe)
+            .args([
+                "--exact",
+                "--nocapture",
+                "session::tests::lease_released_when_holder_process_dies",
+            ])
+            .env(ENV_DEATH_CHILD_SID, sid.as_str())
+            .env(ENV_DEATH_CHILD_DATA, &data_dir)
+            .env("COS_DATA_DIR", &data_dir)
+            // Belt and suspenders: clear COS_SESSION so child's bootstrap
+            // (if any) doesn't try to attach to our env's value.
+            .env_remove("COS_SESSION")
+            .output()
+            .expect("spawn child");
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(DEATH_CHILD_SENTINEL),
+            "child should have acquired lease before aborting; stderr was:\n{stderr}"
+        );
+        assert!(
+            !output.status.success(),
+            "child must have aborted (non-zero exit)"
+        );
+
+        // The kernel released the flock when the child died. The
+        // stale lease.json may still be on disk (child crashed before
+        // Drop), but try_acquire must overwrite it and succeed.
+        let g = match try_acquire(&sid) {
+            Ok(g) => g,
+            Err(e) => panic!(
+                "parent failed to re-acquire lease after child death: {e}\nchild stderr:\n{stderr}"
+            ),
+        };
+        assert_eq!(g.pid(), std::process::id());
+        let lease = current_lease(&sid).unwrap().unwrap();
+        assert_eq!(
+            lease.pid,
+            std::process::id(),
+            "lease.json reflects new holder, not the dead child"
+        );
+        drop(g);
+    });
+}

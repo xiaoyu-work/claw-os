@@ -52,6 +52,7 @@ mod id;
 mod lease;
 mod meta;
 mod mutation;
+mod runtime;
 mod store;
 mod turn;
 
@@ -63,6 +64,9 @@ pub use id::{InvalidSessionId, SessionId};
 pub use lease::{current as current_lease, try_acquire, AcquireError, LeaseGuard};
 pub use meta::{Budget, Lease, SessionMeta, Status};
 pub use mutation::{Mutation, MutationRecord};
+pub use runtime::{
+    pause, promote_to_durable, resume, DurableSession, PromoteError, TransitionError,
+};
 pub use store::{
     append_turn, create, end, get_caps, get_meta, iter_mutations, iter_turns, list, read_state,
     record_mutation, session_dir, sessions_root, set_caps, update_meta, write_state, SessionError,
