@@ -13,7 +13,6 @@
     "budget": {
       "monthly_units": 100000
     },
-    "models": ["claude-*", "gpt-4o*", "mock-model"],
     "safety": "standard",
     "origins": ["trusted"]
   },

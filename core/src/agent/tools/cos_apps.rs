@@ -444,9 +444,6 @@ fn render_app_detail(app: &crate::apps::App) -> String {
             "  budget: {} units / month\n",
             ai.budget.monthly_units
         ));
-        if !ai.models.is_empty() {
-            out.push_str(&format!("  models: {}\n", ai.models.join(", ")));
-        }
         if !ai.origins.is_empty() {
             out.push_str(&format!("  origins: {:?}\n", ai.origins));
         }

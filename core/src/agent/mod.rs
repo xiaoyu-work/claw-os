@@ -2901,8 +2901,6 @@ fn chat_cmd(args: &[String]) -> Result<Value, String> {
 ///   --app <id>           App requesting the call (required).
 ///   --prompt <text>      Text portion of the request (modality-dependent).
 ///   --prompt-file <p>    Read prompt body from a file.
-///   --model <name>       Model name to use (default: app's first
-///                        concrete manifest glob).
 ///   --origin <kind>      trusted | user-input | external-content (default: trusted).
 ///   --max-units <N>      Cap units for this call.
 ///   --system <text>      Optional system prompt.
@@ -2913,13 +2911,16 @@ fn chat_cmd(args: &[String]) -> Result<Value, String> {
 ///   --audio-output <p>   Path the gate writes synthesised speech to.
 ///   --video-input <p>    Video to analyse.
 ///   --video-output <p>   Path the gate writes the generated video to.
+///
+/// Apps do **not** pick the model — the OS owner configures one
+/// provider/model in `/etc/cos/agent.toml` and the gate uses it for
+/// every app call.
 fn chat_cmd_app_gated(args: &[String]) -> Result<Value, String> {
     use crate::ai::gate;
 
     let mut app: Option<String> = None;
     let mut prompt: Option<String> = None;
     let mut prompt_file: Option<String> = None;
-    let mut model: Option<String> = None;
     let mut origin = "trusted".to_string();
     let mut max_units: Option<u64> = None;
     let mut system: Option<String> = None;
@@ -2951,10 +2952,6 @@ fn chat_cmd_app_gated(args: &[String]) -> Result<Value, String> {
             }
             "--prompt-file" => {
                 prompt_file = args.get(i + 1).cloned();
-                i += 2;
-            }
-            "--model" => {
-                model = args.get(i + 1).cloned();
                 i += 2;
             }
             "--origin" => {
@@ -3024,7 +3021,6 @@ fn chat_cmd_app_gated(args: &[String]) -> Result<Value, String> {
         origin,
         prompt: prompt_text,
         system,
-        model,
         max_units,
         embed,
         image_input,

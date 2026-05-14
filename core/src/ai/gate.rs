@@ -7,7 +7,10 @@
 //!   ai::gate::chat_blocking ─── caps::require(ai.*, name(model))
 //!          │                          │
 //!          │                          ▼
-//!          │                  manifest.ai allowlist (models, origins)
+//!          │                  manifest.ai origin allowlist
+//!          │                          │
+//!          │                          ▼
+//!          │                  OS-level model from agent.toml
 //!          │                          │
 //!          │                          ▼
 //!          │                  budget::reserve (hard-deny overcap)
@@ -27,7 +30,9 @@
 //! to register such an app in the first place if it declared an
 //! `ai.*` need. This file is the runtime defence on top of that:
 //! even if a session somehow carries an AI verb, the gate still
-//! re-checks the manifest's model + origin allowlist.
+//! re-checks the manifest's origin allowlist and uses the OS-owned
+//! provider/model from `/etc/cos/agent.toml`. **Apps never pick the
+//! model** — the machine owner does, once, in agent config.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -63,8 +68,9 @@ use super::budget::{BudgetError, Store};
 #[derive(Debug, Clone, Default)]
 pub struct ChatRequest {
     /// App id this call is attributed to. The gate looks up the app's
-    /// manifest to honour its `ai` policy (model allowlist, prompt
-    /// origin allowlist, monthly budget, safety profile).
+    /// manifest to honour its `ai` policy (prompt origin allowlist,
+    /// monthly budget, safety profile). The model is **not** under app
+    /// control — the OS picks it from `/etc/cos/agent.toml`.
     pub app_id: String,
     /// Where the prompt text originated — `"trusted"`, `"user-input"`,
     /// or `"external-content"`. `external-content` automatically
@@ -75,7 +81,6 @@ pub struct ChatRequest {
     /// "analyse this artefact" modalities.
     pub prompt: Option<String>,
     pub system: Option<String>,
-    pub model: Option<String>,
     pub max_units: Option<u64>,
 
     // Modality selectors. The gate derives the verb from these — the
@@ -323,17 +328,6 @@ pub enum AiError {
         allowed: Vec<String>,
     },
 
-    #[error(
-        "model `{got}` does not match any of the app's declared model globs: {allowed:?}"
-    )]
-    ModelNotAllowed {
-        got: String,
-        allowed: Vec<String>,
-    },
-
-    #[error("app `{0}` declared no AI models — cannot resolve a default")]
-    NoDefaultModel(String),
-
     #[error("invalid request: {0}")]
     ModalityConflict(String),
 
@@ -418,7 +412,7 @@ pub async fn chat(req: ChatRequest) -> Result<ChatResult, AiError> {
         Err(err) => {
             let mut rec = LlmRunRecord::from_denial(
                 &req.app_id,
-                req.model.as_deref().unwrap_or(""),
+                &config::get().agent.model,
                 denial_reason_token(err),
                 &err.to_string(),
                 duration_ms,
@@ -444,8 +438,6 @@ fn denial_reason_token(err: &AiError) -> &'static str {
         AiError::NoAiPolicy { .. } => "no_ai_policy",
         AiError::BadOrigin(_) => "bad_origin",
         AiError::OriginNotAllowed { .. } => "origin_not_allowed",
-        AiError::ModelNotAllowed { .. } => "model_not_allowed",
-        AiError::NoDefaultModel(_) => "no_default_model",
         AiError::ModalityConflict(_) => "modality_conflict",
         AiError::ModalityNotSupported(_) => "modality_not_supported",
         AiError::MissingInput { .. } => "missing_input",
@@ -498,21 +490,11 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
     //    an input file; the "generate" verbs require a text prompt.
     validate_inputs(req, modality)?;
 
-    // 5. Resolve the model. The app can omit it (then we use the
-    //    first declared glob's literal form if any) — otherwise the
-    //    requested model must match one of the manifest globs.
-    let model = match &req.model {
-        Some(m) => {
-            if !matches_any_glob(m, &policy.models) {
-                return Err(AiError::ModelNotAllowed {
-                    got: m.clone(),
-                    allowed: policy.models.clone(),
-                });
-            }
-            m.clone()
-        }
-        None => default_model_from_globs(&policy.models, &req.app_id)?,
-    };
+    // 5. Resolve the model. Apps don't get to pick — the OS owner
+    //    configures one provider and one model in
+    //    `/etc/cos/agent.toml`, and every app call uses that.
+    let cfg = &config::get().agent;
+    let model = cfg.model.clone();
 
     // 6. Capability check at the kernel boundary.
     caps::require(verb, Scope::name(&model))
@@ -560,7 +542,6 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
         })?;
 
     // 10. Build the provider request.
-    let cfg = &config::get().agent;
     let provider = llm::registry::build(&cfg.provider, &model, cfg)
         .map_err(|e| AiError::Provider(e.to_string()))?;
 
@@ -721,54 +702,6 @@ fn safety_label(s: AiSafety) -> String {
         AiSafety::Standard => "standard".into(),
         AiSafety::Minimal => "minimal".into(),
     }
-}
-
-/// Simple `*`-glob match (no character classes). Sufficient for model
-/// allowlists like `claude-*`, `gpt-4*`, `*`.
-fn matches_any_glob(model: &str, globs: &[String]) -> bool {
-    globs.iter().any(|g| match_glob(g, model))
-}
-
-fn match_glob(pattern: &str, s: &str) -> bool {
-    // Anchored match with `*` = `.*`. Hand-rolled rather than pulling
-    // the `glob` crate (which targets paths, not arbitrary strings).
-    let parts: Vec<&str> = pattern.split('*').collect();
-    if parts.len() == 1 {
-        return parts[0] == s;
-    }
-    let mut pos = 0usize;
-    let bytes = s.as_bytes();
-    for (idx, part) in parts.iter().enumerate() {
-        if part.is_empty() {
-            continue;
-        }
-        if idx == 0 {
-            if !s.starts_with(part) {
-                return false;
-            }
-            pos = part.len();
-        } else if idx == parts.len() - 1 {
-            return s.ends_with(part) && bytes.len() - part.len() >= pos;
-        } else {
-            match s[pos..].find(part) {
-                Some(off) => pos += off + part.len(),
-                None => return false,
-            }
-        }
-    }
-    true
-}
-
-/// Pick a default model when the app didn't say which one to use. We
-/// use the first glob *without* a wildcard, since wildcards are not
-/// resolvable on their own; otherwise the call fails and the app must
-/// pass `--model`.
-fn default_model_from_globs(globs: &[String], app_id: &str) -> Result<String, AiError> {
-    globs
-        .iter()
-        .find(|g| !g.contains('*'))
-        .cloned()
-        .ok_or_else(|| AiError::NoDefaultModel(app_id.to_string()))
 }
 
 fn apply_safety(prompt: &str, safety: AiSafety) -> (String, bool) {
@@ -982,43 +915,6 @@ fn estimate_request_units(req: &LlmChatRequest) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn glob_exact() {
-        assert!(match_glob("claude-3", "claude-3"));
-        assert!(!match_glob("claude-3", "claude-4"));
-    }
-
-    #[test]
-    fn glob_prefix() {
-        assert!(match_glob("claude-*", "claude-3.5-sonnet"));
-        assert!(!match_glob("claude-*", "gpt-4"));
-    }
-
-    #[test]
-    fn glob_suffix() {
-        assert!(match_glob("*-mini", "gpt-4o-mini"));
-        assert!(!match_glob("*-mini", "gpt-4o"));
-    }
-
-    #[test]
-    fn glob_star_matches_anything() {
-        assert!(match_glob("*", "anything-here"));
-        assert!(match_glob("*", ""));
-    }
-
-    #[test]
-    fn default_model_picks_concrete_entry() {
-        let globs = vec!["claude-*".to_string(), "gpt-4o".to_string()];
-        assert_eq!(default_model_from_globs(&globs, "app").unwrap(), "gpt-4o");
-    }
-
-    #[test]
-    fn default_model_fails_when_all_globs_wild() {
-        let globs = vec!["claude-*".to_string(), "gpt-*".to_string()];
-        let err = default_model_from_globs(&globs, "app").unwrap_err();
-        assert!(matches!(err, AiError::NoDefaultModel(_)));
-    }
 
     #[test]
     fn parse_origin_known() {

@@ -77,7 +77,7 @@ def _ai_call(*, text, source, system, max_units):
     if len(text) > _MAX_INPUT_CHARS:
         text = text[:_MAX_INPUT_CHARS]
 
-    policy.require("ai.chat.untrusted", name="claude-*")
+    policy.require("ai.chat.untrusted", wild=True)
 
     try:
         response = ai.chat(
@@ -88,8 +88,6 @@ def _ai_call(*, text, source, system, max_units):
         )
     except ai.AiBudgetExceeded as exc:
         return {"error": "AI budget exceeded for this app", "detail": exc.payload}
-    except ai.AiModelNotAllowed as exc:
-        return {"error": "model not allowed", "detail": exc.payload}
     except ai.AiSafetyViolation as exc:
         return {"error": "safety violation", "detail": exc.payload}
     except ai.AiDenied as exc:

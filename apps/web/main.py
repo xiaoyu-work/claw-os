@@ -328,7 +328,7 @@ def _cmd_summarize(args):
 
     # Coarse-grained capability check — fail fast before fetching the
     # page if the agent doesn't actually have AI access.
-    policy.require("ai.chat.untrusted", name="claude-*")
+    policy.require("ai.chat.untrusted", wild=True)
 
     read_result = _cmd_read(args)
     if isinstance(read_result, dict) and "error" in read_result:
@@ -349,8 +349,6 @@ def _cmd_summarize(args):
         )
     except ai.AiBudgetExceeded as exc:
         return {"error": "AI budget exceeded for this app", "detail": exc.payload}
-    except ai.AiModelNotAllowed as exc:
-        return {"error": "model not allowed", "detail": exc.payload}
     except ai.AiSafetyViolation as exc:
         return {"error": "safety violation", "detail": exc.payload}
     except ai.AiDenied as exc:

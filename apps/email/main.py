@@ -613,7 +613,7 @@ def cmd_draft(args):
         return {"error": "--context must be non-empty"}
 
     # Coarse-grained capability check — fail fast on a denied agent.
-    policy.require("ai.chat", name="claude-*")
+    policy.require("ai.chat", wild=True)
 
     system_prompt = _DRAFT_SYSTEMS.get(opts.style, _DRAFT_SYSTEMS["formal"])
 
@@ -626,8 +626,6 @@ def cmd_draft(args):
         )
     except ai.AiBudgetExceeded as exc:
         return {"error": "AI budget exceeded for this app", "detail": exc.payload}
-    except ai.AiModelNotAllowed as exc:
-        return {"error": "model not allowed", "detail": exc.payload}
     except ai.AiSafetyViolation as exc:
         return {"error": "safety violation", "detail": exc.payload}
     except ai.AiDenied as exc:

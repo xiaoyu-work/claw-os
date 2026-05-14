@@ -106,8 +106,8 @@ pub struct Manifest {
     /// AI policy. Required iff any operation declares an `ai.*` need.
     /// Absent means the app cannot exercise any AI verb at all — even
     /// if the user explicitly granted it. Authors describe how much
-    /// the app may spend, which model families it accepts, and what
-    /// prompt origins it expects.
+    /// the app may spend, what prompt origins it accepts, and which
+    /// safety profile it expects.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ai: Option<AiPolicy>,
 
@@ -121,23 +121,23 @@ pub struct Manifest {
 // AI policy
 // ---------------------------------------------------------------------------
 
-/// AI policy block: describes the budget envelope and the model /
-/// safety constraints under which this app may exercise `ai.*` verbs.
+/// AI policy block: describes the budget envelope and safety
+/// constraints under which this app may exercise `ai.*` verbs.
 ///
 /// All fields are required when the block itself is present, but each
 /// has a sensible default (see field docs). If `ai` is absent from a
 /// manifest, the kernel rejects every `ai.*` need at validation time.
+///
+/// **Apps do not pick the model.** The OS owns the AI provider; the
+/// machine owner configures it once in `/etc/cos/agent.toml`. Every
+/// app's call runs through that same provider/model. Apps declare
+/// *capability* (which verbs they need), *budget* (how many tokens
+/// they may spend), *safety* profile, and *origin* — never which model
+/// to talk to.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AiPolicy {
     /// How much the app may spend in a single billing period.
     pub budget: AiBudget,
-
-    /// Model glob allowlist (e.g. `["claude-*", "gpt-4*"]`). The
-    /// kernel rejects calls that name a model not matching any
-    /// pattern here. Empty means "no models allowed" — authors must
-    /// list at least one for the block to be useful.
-    #[serde(default)]
-    pub models: Vec<String>,
 
     /// Safety profile applied to every call. `strict` forces the full
     /// safety pipeline (redact-in, injection detect, classifier,
@@ -372,18 +372,13 @@ pub enum ManifestError {
     },
     #[error(
         "operation `{op}`: need #{idx} (verb `{verb}`) is an AI verb but the manifest \
-         has no `ai` block — declare one with budget, models, safety, and origins"
+         has no `ai` block — declare one with budget, safety, and origins"
     )]
     AiNeedMissingPolicy {
         op: String,
         idx: usize,
         verb: String,
     },
-    #[error(
-        "manifest `ai` block: `models` list is empty — at least one glob \
-         pattern is required (e.g. `claude-*`)"
-    )]
-    AiPolicyNoModels,
     #[error(
         "manifest `ai` block: `origins` list is empty — at least one of \
          `trusted`, `user-input`, `external-content` is required"
@@ -418,9 +413,6 @@ impl Manifest {
         })?;
 
         if let Some(policy) = &self.ai {
-            if policy.models.is_empty() {
-                return Err(ManifestError::AiPolicyNoModels);
-            }
             if policy.origins.is_empty() {
                 return Err(ManifestError::AiPolicyNoOrigins);
             }
@@ -888,7 +880,6 @@ mod tests {
               "name": "Summarize",
               "ai": {
                 "budget": {"monthly_units": 100000},
-                "models": ["claude-*"],
                 "safety": "strict",
                 "origins": ["external-content"]
               },
@@ -897,7 +888,7 @@ mod tests {
                   "label": "Summarize text",
                   "needs": [
                     {"verb": "ai.chat.untrusted",
-                     "scope": {"kind":"fixed","scope":{"kind":"name","value":"claude-*"}},
+                     "scope": {"kind":"fixed","scope":{"kind":"name","value":"*"}},
                      "why": "Summarize the input text."}
                   ]
                 }
@@ -906,7 +897,6 @@ mod tests {
         )
         .unwrap();
         let policy = m.ai.as_ref().unwrap();
-        assert_eq!(policy.models, vec!["claude-*"]);
         assert_eq!(policy.safety, AiSafety::Strict);
         assert_eq!(policy.origins, vec![PromptOrigin::ExternalContent]);
         assert_eq!(policy.budget.monthly_units, 100000);
@@ -924,7 +914,7 @@ mod tests {
                   "label": "Run",
                   "needs": [
                     {"verb": "ai.chat",
-                     "scope": {"kind":"fixed","scope":{"kind":"name","value":"claude-*"}},
+                     "scope": {"kind":"fixed","scope":{"kind":"name","value":"*"}},
                      "why": "Talk to a model without declaring a policy."}
                   ]
                 }
@@ -950,7 +940,6 @@ mod tests {
               "name": "Rogue",
               "ai": {
                 "budget": {"monthly_units": 1},
-                "models": ["*"],
                 "safety": "minimal",
                 "origins": ["trusted"]
               },
@@ -971,25 +960,6 @@ mod tests {
     }
 
     #[test]
-    fn ai_block_with_empty_models_rejected() {
-        let err = Manifest::from_json(
-            r#"{
-              "id": "summarize",
-              "version": "0.1",
-              "name": "Summarize",
-              "ai": {
-                "budget": {"monthly_units": 1},
-                "models": [],
-                "safety": "strict",
-                "origins": ["trusted"]
-              }
-            }"#,
-        )
-        .unwrap_err();
-        assert!(matches!(err, ManifestError::AiPolicyNoModels));
-    }
-
-    #[test]
     fn ai_block_with_empty_origins_rejected() {
         let err = Manifest::from_json(
             r#"{
@@ -998,7 +968,6 @@ mod tests {
               "name": "Summarize",
               "ai": {
                 "budget": {"monthly_units": 1},
-                "models": ["*"],
                 "safety": "strict",
                 "origins": []
               }
@@ -1017,7 +986,6 @@ mod tests {
               "name": "Summarize",
               "ai": {
                 "budget": {"monthly_units": 1},
-                "models": ["*"],
                 "safety": "strict"
               }
             }"#,

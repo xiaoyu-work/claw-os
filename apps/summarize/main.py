@@ -57,8 +57,6 @@ def _cmd_run(args):
         )
     except ai.AiBudgetExceeded as exc:
         return {"error": "AI budget exceeded for this app", "detail": exc.payload}
-    except ai.AiModelNotAllowed as exc:
-        return {"error": "model not allowed", "detail": exc.payload}
     except ai.AiSafetyViolation as exc:
         return {"error": "safety violation", "detail": exc.payload}
     except ai.AiDenied as exc:
@@ -120,7 +118,7 @@ def run(command, args):
         # The coarse-grained capability is also re-checked here so we
         # fail fast on a denied agent without paying for a subprocess
         # boot of the gate.
-        policy.require("ai.chat.untrusted", name="claude-*")
+        policy.require("ai.chat.untrusted", wild=True)
         return handler(args)
     except policy.PermissionDenied as denied:
         return {"error": str(denied), "denial": denied.denial}

@@ -5,9 +5,9 @@ image-gen, TTS, STT, vision, video) must go through this helper. The
 helper shells out to ``cos agent chat --app <id>`` — the single,
 authoritative entry point for AI requests of every modality. The
 kernel derives the modality (and the underlying caps verb) from the
-shape of the request, then runs capability check, model allowlist,
-prompt-origin allowlist, per-month budget, the safety pipeline, and
-audit before letting any model see the prompt.
+shape of the request, then runs capability check, prompt-origin
+allowlist, per-month budget, the safety pipeline, and audit before
+letting any model see the prompt.
 
 Apps **never** name a verb. They describe what they want and the
 gate picks the verb. The helpers here are the supported Python
@@ -22,6 +22,11 @@ surface for each modality:
     ai.audio_stt(audio=...)               → ai.audio.stt
     ai.video_generate(prompt, output=...) → ai.video.generate
     ai.video_analyze(video=..., prompt=)  → ai.video.analyze
+
+Apps also do **not** pick the model. The machine owner configures one
+provider/model in ``/etc/cos/agent.toml`` and every app's call uses
+that. The helpers expose ``origin``, ``max_units``, and prompt /
+artifact arguments — never a ``model`` argument.
 
 Typical usage::
 
@@ -73,7 +78,7 @@ class AiUnavailable(AiError):
 
 
 class AiDenied(AiError):
-    """A gate (capability / origin / model glob / budget) refused the call.
+    """A gate (capability / origin / budget) refused the call.
 
     The ``payload`` attribute holds the structured envelope
     ``cos agent chat`` returned (verb, scope, reason, hint, …) —
@@ -91,10 +96,6 @@ class AiBudgetExceeded(AiDenied):
 
 class AiSafetyViolation(AiDenied):
     """The safety pipeline refused the request."""
-
-
-class AiModelNotAllowed(AiDenied):
-    """The app's manifest does not allow the requested model."""
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +146,6 @@ def chat(
     prompt: str,
     *,
     origin: str = "trusted",
-    model: Optional[str] = None,
     max_units: Optional[int] = None,
     system: Optional[str] = None,
     app_id: Optional[str] = None,
@@ -158,8 +158,8 @@ def chat(
     so the strict safety pipeline kicks in.
 
     Returns an :class:`AiResponse`. Raises :class:`AiBudgetExceeded`,
-    :class:`AiModelNotAllowed`, :class:`AiSafetyViolation`,
-    :class:`AiDenied`, or :class:`AiUnavailable` on failure.
+    :class:`AiSafetyViolation`, :class:`AiDenied`, or
+    :class:`AiUnavailable` on failure.
     """
     if not prompt or not prompt.strip():
         raise AiError("chat: prompt must be non-empty")
@@ -167,7 +167,6 @@ def chat(
         modality="chat",
         prompt=prompt,
         origin=origin,
-        model=model,
         max_units=max_units,
         system=system,
         app_id=app_id,
@@ -178,7 +177,6 @@ def embed(
     prompt: str,
     *,
     origin: str = "trusted",
-    model: Optional[str] = None,
     max_units: Optional[int] = None,
     app_id: Optional[str] = None,
 ) -> AiResponse:
@@ -189,7 +187,6 @@ def embed(
         modality="embed",
         prompt=prompt,
         origin=origin,
-        model=model,
         max_units=max_units,
         app_id=app_id,
         embed=True,
@@ -201,7 +198,6 @@ def image_generate(
     *,
     output: str,
     origin: str = "trusted",
-    model: Optional[str] = None,
     max_units: Optional[int] = None,
     app_id: Optional[str] = None,
 ) -> AiResponse:
@@ -212,7 +208,6 @@ def image_generate(
         modality="image.generate",
         prompt=prompt,
         origin=origin,
-        model=model,
         max_units=max_units,
         app_id=app_id,
         image_output=output,
@@ -223,7 +218,6 @@ def image_analyze(
     *,
     image: str,
     origin: str = "trusted",
-    model: Optional[str] = None,
     max_units: Optional[int] = None,
     app_id: Optional[str] = None,
 ) -> AiResponse:
@@ -232,7 +226,6 @@ def image_analyze(
         modality="image.analyze",
         prompt=None,
         origin=origin,
-        model=model,
         max_units=max_units,
         app_id=app_id,
         image_input=image,
@@ -244,7 +237,6 @@ def vision_analyze(
     *,
     image: str,
     origin: str = "trusted",
-    model: Optional[str] = None,
     max_units: Optional[int] = None,
     system: Optional[str] = None,
     app_id: Optional[str] = None,
@@ -256,7 +248,6 @@ def vision_analyze(
         modality="vision.analyze",
         prompt=prompt,
         origin=origin,
-        model=model,
         max_units=max_units,
         system=system,
         app_id=app_id,
@@ -269,7 +260,6 @@ def audio_tts(
     *,
     output: str,
     origin: str = "trusted",
-    model: Optional[str] = None,
     max_units: Optional[int] = None,
     app_id: Optional[str] = None,
 ) -> AiResponse:
@@ -280,7 +270,6 @@ def audio_tts(
         modality="audio.tts",
         prompt=prompt,
         origin=origin,
-        model=model,
         max_units=max_units,
         app_id=app_id,
         audio_output=output,
@@ -291,7 +280,6 @@ def audio_stt(
     *,
     audio: str,
     origin: str = "trusted",
-    model: Optional[str] = None,
     max_units: Optional[int] = None,
     app_id: Optional[str] = None,
 ) -> AiResponse:
@@ -300,7 +288,6 @@ def audio_stt(
         modality="audio.stt",
         prompt=None,
         origin=origin,
-        model=model,
         max_units=max_units,
         app_id=app_id,
         audio_input=audio,
@@ -312,7 +299,6 @@ def video_generate(
     *,
     output: str,
     origin: str = "trusted",
-    model: Optional[str] = None,
     max_units: Optional[int] = None,
     app_id: Optional[str] = None,
 ) -> AiResponse:
@@ -323,7 +309,6 @@ def video_generate(
         modality="video.generate",
         prompt=prompt,
         origin=origin,
-        model=model,
         max_units=max_units,
         app_id=app_id,
         video_output=output,
@@ -335,7 +320,6 @@ def video_analyze(
     video: str,
     prompt: Optional[str] = None,
     origin: str = "trusted",
-    model: Optional[str] = None,
     max_units: Optional[int] = None,
     app_id: Optional[str] = None,
 ) -> AiResponse:
@@ -344,7 +328,6 @@ def video_analyze(
         modality="video.analyze",
         prompt=prompt,
         origin=origin,
-        model=model,
         max_units=max_units,
         app_id=app_id,
         video_input=video,
@@ -386,7 +369,6 @@ def _dispatch(
     modality: str,
     prompt: Optional[str],
     origin: str,
-    model: Optional[str],
     max_units: Optional[int],
     app_id: Optional[str],
     system: Optional[str] = None,
@@ -413,8 +395,6 @@ def _dispatch(
     cmd = [_cos_binary(), "agent", "chat", "--app", app, "--origin", origin]
     if prompt is not None:
         cmd.extend(["--prompt", prompt])
-    if model is not None:
-        cmd.extend(["--model", model])
     if max_units is not None:
         cmd.extend(["--max-units", str(max_units)])
     if system is not None:
@@ -488,8 +468,6 @@ def _raise_for_error(env: Mapping[str, Any]) -> None:
     msg = (env.get("error") or "").lower()
     if "budget" in msg and ("exceed" in msg or "over" in msg):
         raise AiBudgetExceeded(env)
-    if "model" in msg and ("not allowed" in msg or "does not match" in msg):
-        raise AiModelNotAllowed(env)
     if "safety" in msg or "redact" in msg or "injection" in msg:
         raise AiSafetyViolation(env)
     raise AiDenied(env)
