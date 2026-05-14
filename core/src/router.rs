@@ -19,7 +19,6 @@ use crate::model;
 use crate::netfilter;
 use crate::caps;
 use crate::perms;
-use crate::policy;
 use crate::proc;
 use crate::sandbox;
 use crate::service;
@@ -66,7 +65,6 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         "checkpoint" => dispatch_builtin(args, "checkpoint", checkpoint::run),
         "credential" => dispatch_builtin(args, "credential", credential::run),
         "netfilter" => dispatch_builtin(args, "netfilter", netfilter::run),
-        "policy" => dispatch_builtin(args, "policy", policy::run),
         "perms" => dispatch_builtin(args, "perms", perms::run),
         "cron" => dispatch_builtin(args, "cron", cron::run),
         "trace" => dispatch_builtin(args, "trace", trace::run),
