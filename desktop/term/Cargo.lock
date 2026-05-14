@@ -1326,6 +1326,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cos-mcp-serve"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "cosmic-client-toolkit"
 version = "0.2.0"
 source = "git+https://github.com/pop-os/cosmic-protocols?rev=160b086#160b086abe03cd34a8a375d7fbe47b24308d1f38"
@@ -1468,8 +1479,11 @@ name = "cosmic-term"
 version = "1.0.13"
 dependencies = [
  "alacritty_terminal",
+ "anyhow",
+ "async-trait",
  "clap_lex",
  "claw-bridge",
+ "cos-mcp-serve",
  "cosmic-files",
  "cosmic-text",
  "fork 0.4.0",
@@ -1488,6 +1502,7 @@ dependencies = [
  "secret-service",
  "secstr",
  "serde",
+ "serde_json",
  "shlex",
  "thiserror 2.0.18",
  "tokio",
