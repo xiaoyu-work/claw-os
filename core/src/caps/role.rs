@@ -274,6 +274,9 @@ const CONNECTOR_VERBS: &[Verb] = &[
     Verb::AI_CHAT_UNTRUSTED,
     Verb::AI_EMBED,
     Verb::AI_VISION_ANALYZE,
+    Verb::BROWSER_TABS_READ,
+    Verb::BROWSER_NAV,
+    Verb::BROWSER_DOM_READ,
 ];
 
 const AUTOMATOR_VERBS: &[Verb] = &[
@@ -317,6 +320,10 @@ const AUTOMATOR_VERBS: &[Verb] = &[
     Verb::AI_VISION_ANALYZE,
     Verb::AI_VIDEO_GENERATE,
     Verb::AI_VIDEO_ANALYZE,
+    Verb::BROWSER_TABS_READ,
+    Verb::BROWSER_NAV,
+    Verb::BROWSER_DOM_READ,
+    Verb::BROWSER_DOM_WRITE,
 ];
 
 const AGENT_HOST_VERBS: &[Verb] = &[
@@ -364,6 +371,10 @@ const AGENT_HOST_VERBS: &[Verb] = &[
     Verb::AGENT_INVOKE,
     Verb::AGENT_DELEGATE,
     Verb::PROC_SIGNAL,
+    Verb::BROWSER_TABS_READ,
+    Verb::BROWSER_NAV,
+    Verb::BROWSER_DOM_READ,
+    Verb::BROWSER_DOM_WRITE,
 ];
 
 const ADMIN_VERBS: &[Verb] = &[
@@ -427,6 +438,12 @@ const ADMIN_VERBS: &[Verb] = &[
     Verb::DEVICE_LOCATION,
     Verb::DEVICE_SENSOR,
     Verb::DEVICE_USB,
+    Verb::BROWSER_TABS_READ,
+    Verb::BROWSER_NAV,
+    Verb::BROWSER_DOM_READ,
+    Verb::BROWSER_DOM_WRITE,
+    Verb::BROWSER_INPUT_SECRET,
+    Verb::BROWSER_EVAL,
 ];
 
 /// `kernel` is the OS process itself: every verb in `ALL_VERBS`.

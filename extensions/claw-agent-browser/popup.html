@@ -1,0 +1,31 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Claw Agent</title>
+  <style>
+    body { font: 13px/1.4 -apple-system, "Segoe UI", sans-serif; width: 240px; padding: 10px; margin: 0; }
+    h1 { font-size: 14px; margin: 0 0 8px 0; }
+    .row { display: flex; justify-content: space-between; padding: 2px 0; }
+    .pill { padding: 1px 6px; border-radius: 8px; color: white; font-size: 11px; }
+    .idle { background: #666; }
+    .acting { background: #10b981; }
+    .waiting-approval { background: #f59e0b; }
+    .error { background: #ef4444; }
+    button { width: 100%; margin-top: 8px; padding: 6px; }
+  </style>
+</head>
+<body>
+  <h1>Claw Agent</h1>
+  <div class="row">
+    <span>state</span>
+    <span id="state" class="pill idle">idle</span>
+  </div>
+  <div class="row">
+    <span>tab being acted on</span>
+    <span id="tab">—</span>
+  </div>
+  <button id="stop">STOP all activity</button>
+  <script src="popup.js"></script>
+</body>
+</html>

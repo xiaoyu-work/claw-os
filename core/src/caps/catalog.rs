@@ -576,6 +576,59 @@ pub const CATALOG: &[CapMeta] = &[
         "🛂",
         Risk::Critical,
     ),
+
+    // -- Attached browser -------------------------------------------------
+    // Gates the user's GUI browser (Chromium with the user's profile)
+    // when reached through the Claw agent WebExtension + Native Messaging
+    // host. Per-page actions are host-scoped.
+    CapMeta::new(
+        Verb::BROWSER_TABS_READ,
+        ScopeKind::None,
+        LocalizedStr::new("See your open browser tabs"),
+        LocalizedStr::new("List the tabs you have open in Chromium (title, URL, active flag). Does not read page contents."),
+        "🗂",
+        Risk::Low,
+    ),
+    CapMeta::new(
+        Verb::BROWSER_NAV,
+        ScopeKind::Host,
+        LocalizedStr::new("Navigate your browser"),
+        LocalizedStr::new("Send a tab to a URL on the listed hosts (and use back / forward / reload). Limited to the hosts you allow."),
+        "🧭",
+        Risk::Low,
+    ),
+    CapMeta::new(
+        Verb::BROWSER_DOM_READ,
+        ScopeKind::Host,
+        LocalizedStr::new("Read page contents in your browser"),
+        LocalizedStr::new("Read the DOM, accessibility tree, and screenshots of pages from the listed hosts — including content only your logged-in session can see."),
+        "👁",
+        Risk::Medium,
+    ),
+    CapMeta::new(
+        Verb::BROWSER_DOM_WRITE,
+        ScopeKind::Host,
+        LocalizedStr::new("Click and type in your browser"),
+        LocalizedStr::new("Click buttons, fill form fields, scroll, and submit forms on pages from the listed hosts. Acts as you, with your session."),
+        "✍",
+        Risk::High,
+    ),
+    CapMeta::new(
+        Verb::BROWSER_INPUT_SECRET,
+        ScopeKind::Host,
+        LocalizedStr::new("Type into password / payment fields"),
+        LocalizedStr::new("Fill fields the page marks as password, credit card, or other sensitive input. Each call goes through the approval queue; never auto-granted."),
+        "🔐",
+        Risk::Critical,
+    ),
+    CapMeta::new(
+        Verb::BROWSER_EVAL,
+        ScopeKind::Host,
+        LocalizedStr::new("Run arbitrary JavaScript in your browser"),
+        LocalizedStr::new("Execute attacker-equivalent JS in a page on the listed hosts. Bypasses every per-page safety helper; reserved for admin role and explicit per-call grants."),
+        "⚠",
+        Risk::Critical,
+    ),
 ];
 
 /// Look up the metadata for a verb. Returns `None` only if the verb

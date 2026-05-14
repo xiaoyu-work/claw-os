@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "Claw Agent",
+  "short_name": "claw-agent",
+  "version": "0.1.0",
+  "description": "Lets the Claw OS agent operate this browser through a permission-gated Native Messaging bridge.",
+  "minimum_chrome_version": "120",
+  "permissions": [
+    "tabs",
+    "scripting",
+    "activeTab",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "all_frames": true,
+      "match_about_blank": true,
+      "run_at": "document_idle",
+      "js": ["content.js"]
+    }
+  ],
+  "action": {
+    "default_title": "Claw Agent",
+    "default_popup": "popup.html"
+  }
+}

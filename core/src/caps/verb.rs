@@ -159,6 +159,23 @@ impl Verb {
     /// User-only verb: lets the owner skip a safety / budget gate for a
     /// single call, app, or session. Apps must never be granted this.
     pub const AI_BYPASS: Verb = Verb::new("ai.bypass");
+
+    // -- Attached browser (WebExtension + Native Messaging) ---------------
+    // These verbs gate the *user's* GUI browser (the Chromium that ships
+    // with the OS, with the user's logged-in profile). Per-tab actions
+    // are scoped to the page's host. Headless browser ops (apps/web →
+    // cos-browser) use net.dial instead — that's a different surface.
+    pub const BROWSER_TABS_READ: Verb = Verb::new("browser.tabs.read");
+    pub const BROWSER_NAV: Verb = Verb::new("browser.nav");
+    pub const BROWSER_DOM_READ: Verb = Verb::new("browser.dom.read");
+    pub const BROWSER_DOM_WRITE: Verb = Verb::new("browser.dom.write");
+    /// Fill into fields the content script classified as
+    /// password / credit-card / SSN / other secret. Always Critical;
+    /// not in any default role; user must grant per-call.
+    pub const BROWSER_INPUT_SECRET: Verb = Verb::new("browser.input.secret");
+    /// Run arbitrary JS in the page (`page.eval`). Bypasses the
+    /// content-script's safety abstractions; admin only.
+    pub const BROWSER_EVAL: Verb = Verb::new("browser.eval");
 }
 
 /// Every verb the OS recognises. Order is the canonical display order
@@ -225,6 +242,12 @@ pub const ALL_VERBS: &[Verb] = &[
     Verb::AI_VIDEO_GENERATE,
     Verb::AI_VIDEO_ANALYZE,
     Verb::AI_BYPASS,
+    Verb::BROWSER_TABS_READ,
+    Verb::BROWSER_NAV,
+    Verb::BROWSER_DOM_READ,
+    Verb::BROWSER_DOM_WRITE,
+    Verb::BROWSER_INPUT_SECRET,
+    Verb::BROWSER_EVAL,
 ];
 
 #[cfg(test)]
