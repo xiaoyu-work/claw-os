@@ -615,16 +615,47 @@ needs → call interleaved tools across multiple Apps → close.
 | --- | --- | --- | --- |
 | `cos_app_<id>` (§4) | No — fresh spawn per call | No — CLI string args | App `main.py` `operations[]` |
 | `cos_app_run` (§4) | No | No | Generic |
-| `app_<id>__<tool>` (§12) | Yes — long-lived server | Yes — JSON Schema | App `server.py` + manifest `session.tools[]` |
+| `app_<id>__<tool>` (§12) | Yes — long-lived server | Yes — JSON Schema | App `server.py` (Python) or the App's own binary (Rust) + manifest `session.tools[]` |
 
 The old `cos_app_<id>` proxies stay. Session tools are additive — Apps
 can ship either, both, or neither.
 
-### 12.8 Out of scope (this iteration)
+### 12.8 Rust SDK: `crates/cos-mcp-serve`
 
-- Desktop binaries (`cosmic-edit`, `files`, …) becoming MCP servers.
-  They'd need a Rust SDK and a D-Bus or socket bridge; punted until
-  the Python SDK proves the model.
+Desktop Apps that ship as native `libcosmic` GUI binaries (under
+`desktop/*`) cannot exec a Python `server.py` — they already own a
+running event loop. Instead, the **same binary** flips into MCP
+server mode when launched with `COS_MCP_SERVER=1` in the environment
+(the kernel agent sets it automatically; see `bring_up_app`).
+
+`crates/cos-mcp-serve` is the Rust counterpart to `apps/_lib/serve.py`.
+It exposes a tiny builder API:
+
+```rust
+use cos_mcp_serve::{Server, Tool, ToolResult};
+use std::sync::Arc;
+
+if std::env::var("COS_MCP_SERVER").as_deref() == Ok("1") {
+    Server::new("my-app", env!("CARGO_PKG_VERSION"))
+        .tool(Arc::new(MyTool))
+        .serve_stdio().await?;
+    return;
+}
+// ... normal GUI main() below ...
+```
+
+The wire format and method surface are identical to the Python SDK
+(`initialize` / `tools/list` / `tools/call` / `ping`); the kernel's
+MCP client cannot tell which one is on the other end.
+
+The manifest for a binary-runtime App sets `runtime: "binary"` and
+points `session.entry` at the **installed** absolute path of the
+binary (e.g. `/usr/bin/cosmic-screenshot`), since `Command::new`
+runs it directly with no interpreter. See
+`apps/cosmic-screenshot/app.json` for the canonical example.
+
+### 12.9 Out of scope (this iteration)
+
 - MCP progress notifications for long-running tools. Apps that need
   background work should use the `start_task` / `poll` pattern (one
   tool kicks off work and returns a handle; another polls).
