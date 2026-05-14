@@ -424,35 +424,44 @@ This document is the contract. Concrete work falls into roughly:
 1. **App registry & installer.** `cos app install <dir>` — validates
    the manifest, writes it under `/var/lib/cos/apps/<id>/`, runs the
    `ai.tools[]` consent UI. Plus `cos app list / show / uninstall`.
-2. **Multi-runtime bridge.** Extend `core/src/bridge.rs` to dispatch on
-   the manifest `runtime` field (`python` / `node` / `binary`). Every
-   path must set `COS_APP_ID` before `exec`.
+2. **Multi-runtime bridge.** ✅ Done. `core/src/bridge.rs` dispatches
+   on the manifest `runtime` field (`python` / `node` / `binary`) and
+   sets `COS_APP_ID` before `exec`.
 3. **Identity enforcement.** ✅ Done for `cos ai chat`. The CLI rejects any
    call where `COS_APP_ID` is unset (caller not kernel-spawned) or where
    `--app <id>` disagrees with the env value (cross-App impersonation
-   attempt). Lives in `core/src/ai/chat.rs::enforce_identity`. `cos ai
-   tool` will share the same helper when introduced.
-4. **Tool registry.** Build `core/src/ai/tools.rs::CATALOG` — the
+   attempt). Lives in `core/src/ai/chat.rs::enforce_identity`.
+   `cos ai tool` shares the same helper via `enforce_identity_for`.
+4. **Tool registry.** ✅ Done. `core/src/ai/tools.rs::CATALOG` —
    shared Tool definitions, capability verbs, scope policies,
-   stability tiers.
-5. **`cos ai tool` command.** Single-tool executor; routes through the
-   capability layer; emits one audit row per call.
-6. **`cos ai chat` command.** ✅ Namespace migration done — the
-   single-shot, gated, modality-derived LLM path lives at
-   `cos ai chat --app <id>` (`core/src/ai/chat.rs`); `cos agent chat`
-   now rejects `--app` and is the kernel Agent's REPL only. Remaining
-   work: accept a `--tools <list>` (filtered against the App's
-   manifest) and return structured `tool_calls` instead of
-   executing them.
-7. **In-process SDK.** Ship `apps/_lib/ai.py` and `apps/_lib/tools.py`
-   as thin subprocess wrappers; document the equivalent Node / Rust /
-   Go shapes.
-8. **Manifest validator.** Extend `app.json` schema to accept and
-   verify `ai.tools[]` entries against the live catalog at install
-   time.
-9. **Audit rows.** Define `kind: "ai.chat"` and `kind: "ai.tool"` row
-   shapes; wire into `cos app log`.
-10. **Tool reference doc.** `docs/app-ai-tool-catalog.md` — per-Tool
-    reference for App authors.
+   stability tiers. Starter set: `fs.read_text`, `fs.list`, `kv.get`.
+5. **`cos ai tool` command.** ✅ Done. Single-tool executor; routes
+   through the capability layer; emits one audit row per call. Plus
+   `cos ai tools` to print the catalog.
+6. **`cos ai chat` command.** ✅ Done. Namespace migration plus
+   `--tools <comma-list>` flag: each name is resolved against the
+   kernel catalog and exposed to the model as a callable. The gate
+   **never** executes the proposed calls — it surfaces them in
+   `tool_calls[]` and lets the App fulfil whichever it chooses via
+   `cos ai tool <name>`.
+7. **In-process SDK.** ✅ Done for Python. `apps/_lib/ai.py` exposes
+   `ai.chat(..., tools=[...])` and an `AiResponse.tool_calls` field;
+   `apps/_lib/tools.py` exposes `tools.call`, `tools.catalog`, and
+   `tools.for_chat`. Node / Rust / Go shapes are described in §7
+   above.
+8. **Manifest validator.** ✅ Done. `app.json` schema accepts an
+   `ai.tools[]` allowlist; duplicate entries are rejected by the
+   shape-only `validate()` and unknown names are rejected by
+   `validate_tools_against_catalog(&[&str])`. `bridge.rs` runs the
+   catalog check at App launch so a typo'd allowlist fails fast.
+9. **Audit rows.** ✅ Done. Both `cos ai chat` and `cos ai tool`
+   write to the same `<log_dir>/ai.jsonl` stream via
+   `LlmRunRecord`. Tool rows use `provider="kernel"`,
+   `model="tool:<name>"`, and the derived caps verb so dashboards
+   that group by `verb` continue to work. See `core/src/agent/llm/run_log.rs`
+   for the row shape.
+10. **Tool reference doc.** ✅ Done. See
+    [`docs/app-ai-tool-catalog.md`](./app-ai-tool-catalog.md) for the
+    per-Tool reference and the "How to add a new Tool" appendix.
 
 Each phase is independently shippable.
