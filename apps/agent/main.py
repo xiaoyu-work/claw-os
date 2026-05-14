@@ -172,13 +172,17 @@ def _cmd_overlay(args):
     React UI's `overlay=1` query param triggers the compact layout.
 
     Optional `--voice` arms the mic on open (used by Super+Shift+A).
-    Currently only honored by the chromium fallback — native `--voice`
-    will land with the cos-agent-ui voice port (Stage 3).
+    The native UI accepts `--voice` directly; the chromium fallback
+    threads it through as a `voice=1` query param the React composer
+    auto-reads.
     """
     voice = "--voice" in args
 
     if _find_native_ui():
-        return _exec_native(["--overlay"])
+        argv = ["--overlay"]
+        if voice:
+            argv.append("--voice")
+        return _exec_native(argv)
 
     port = _ensure_port()
     if port is None:

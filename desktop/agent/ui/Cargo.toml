@@ -18,13 +18,21 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
-reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls", "json", "multipart"] }
 futures = "0.3"
 futures-util = "0.3"
 async-stream = "0.3"
 bytes = "1"
 uuid = { version = "1", features = ["v4"] }
 url = "2"
+
+# Microphone capture (replaces React's MediaRecorder + getUserMedia).
+# cpal is the standard cross-platform audio crate; on Linux it talks
+# ALSA directly so we don't need PulseAudio glue. hound writes WAVs in
+# pure Rust — we use a 16 kHz mono i16 spec because the bridge's STT
+# backend treats `audio/wav` as the canonical upload format.
+cpal = "0.15"
+hound = "3.5"
 
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic.git"

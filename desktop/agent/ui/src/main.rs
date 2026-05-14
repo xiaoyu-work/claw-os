@@ -25,9 +25,11 @@ use cosmic::{Application, Element, executor, theme, widget};
 use tracing::warn;
 
 mod bridge;
+mod recorder;
 mod sse;
 
 use crate::bridge::{ChatRequest, StreamEvent, read_bridge_port};
+use crate::recorder::Recorder;
 
 /// Symbol PNGs (square logo) for the header.
 static SYMBOL_LIGHT: &[u8] = include_bytes!("../assets/clawos-symbol.png");
@@ -41,6 +43,9 @@ static WORDMARK_DARK: &[u8] = include_bytes!("../assets/clawos-wordmark-dark.png
 #[derive(Debug, Clone, Default)]
 pub struct Flags {
     pub overlay: bool,
+    /// Auto-arm the microphone on launch (used by the Super+Shift+A
+    /// hotkey routing through `cos app agent overlay --voice`).
+    pub voice: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +67,33 @@ pub enum Message {
     EscapePressed,
     /// Markdown link clicked in a rendered assistant message.
     LinkClicked(String),
+    /// User clicked the mic — toggles between idle and recording.
+    ToggleMic,
+    /// Recording finished and the WAV was uploaded; populate the input.
+    VoiceTranscribed { text: String, placeholder: bool },
+    /// Mic open / encode / upload failed.
+    VoiceError(String),
+}
+
+/// Microphone capture state. Mirrors the React `useAudioRecording`
+/// hook's `state: "idle" | "recording" | "processing"`.
+#[derive(Default)]
+pub enum VoiceState {
+    #[default]
+    Idle,
+    Recording(Recorder),
+    /// Encoding the WAV and waiting on `POST /api/voice/upload`.
+    Processing,
+}
+
+impl VoiceState {
+    fn is_recording(&self) -> bool {
+        matches!(self, VoiceState::Recording(_))
+    }
+
+    fn is_processing(&self) -> bool {
+        matches!(self, VoiceState::Processing)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,6 +120,7 @@ pub struct App {
     input: String,
     streaming: bool,
     error: Option<String>,
+    voice: VoiceState,
 }
 
 impl Application for App {
@@ -122,15 +155,25 @@ impl Application for App {
 
         let app = App {
             core,
-            flags,
+            flags: flags.clone(),
             bridge_port,
             bridge_error,
             messages: Vec::new(),
             input: String::new(),
             streaming: false,
             error: None,
+            voice: VoiceState::Idle,
         };
-        (app, Task::none())
+        // When launched with --voice (Super+Shift+A path), pre-arm the
+        // mic so the user can start speaking immediately. Wrapping in
+        // a Task::done lets init() return synchronously and the mic
+        // opens on the first frame.
+        let initial = if flags.voice {
+            cosmic::Task::done(cosmic::Action::App(Message::ToggleMic))
+        } else {
+            Task::none()
+        };
+        (app, initial)
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -187,6 +230,38 @@ impl Application for App {
                 if let Err(e) = open_uri(&uri) {
                     warn!("failed to open link {uri}: {e:#}");
                 }
+                Task::none()
+            }
+
+            Message::ToggleMic => self.toggle_mic(),
+
+            Message::VoiceTranscribed { text, placeholder } => {
+                self.voice = VoiceState::Idle;
+                if placeholder {
+                    // Surface as an error/tip rather than dropping the
+                    // stub string into the user's input. Once the
+                    // bridge wires a real STT backend this branch goes
+                    // away — `placeholder=false` will populate input
+                    // verbatim like the React app did.
+                    self.error = Some(
+                        "Voice transcription isn't enabled on this system yet.".into(),
+                    );
+                } else if !text.is_empty() {
+                    if self.input.is_empty() {
+                        self.input = text;
+                    } else {
+                        // Append with a space so users can chain
+                        // dictation onto a partial draft.
+                        self.input.push(' ');
+                        self.input.push_str(&text);
+                    }
+                }
+                Task::none()
+            }
+
+            Message::VoiceError(msg) => {
+                self.voice = VoiceState::Idle;
+                self.error = Some(msg);
                 Task::none()
             }
         }
@@ -393,10 +468,17 @@ impl App {
         let cosmic_theme = theme::active().cosmic().clone();
         let spacing = cosmic_theme.spacing;
 
-        let placeholder = if compact {
+        let recording = self.voice.is_recording();
+        let processing = self.voice.is_processing();
+
+        let placeholder = if recording {
+            "Listening…"
+        } else if processing {
+            "Transcribing…"
+        } else if compact {
             "Ask anything…"
         } else {
-            "Ask the agent anything. Shift+Enter for newline."
+            "Ask the agent anything."
         };
 
         let send_label = if self.streaming { "…" } else { "Send" };
@@ -406,6 +488,29 @@ impl App {
             .on_submit(|_| Message::Submit)
             .padding(spacing.space_xs)
             .width(Length::Fill);
+
+        // Mic toggle. Mirrors the React composer button:
+        //   idle       → 🎙 (start)
+        //   recording  → ⏺ (stop, with red accent via destructive variant)
+        //   processing → ⌛ disabled
+        let mic = {
+            let label = if recording {
+                "⏺ Stop"
+            } else if processing {
+                "⌛"
+            } else {
+                "🎙"
+            };
+            let mut b = if recording {
+                button::destructive(label)
+            } else {
+                button::standard(label)
+            };
+            if !processing && !self.streaming {
+                b = b.on_press(Message::ToggleMic);
+            }
+            b
+        };
 
         let send = {
             let mut b = button::suggested(send_label);
@@ -417,10 +522,75 @@ impl App {
 
         row()
             .push(input)
+            .push(mic)
             .push(send)
             .spacing(spacing.space_xs)
             .align_y(Alignment::Center)
             .into()
+    }
+
+    /// Mic toggle handler. Idle → start capture; Recording → stop +
+    /// upload + populate input on success.
+    fn toggle_mic(&mut self) -> Task<Message> {
+        match std::mem::take(&mut self.voice) {
+            VoiceState::Idle => match Recorder::start() {
+                Ok(rec) => {
+                    self.voice = VoiceState::Recording(rec);
+                    self.error = None;
+                    Task::none()
+                }
+                Err(e) => {
+                    self.voice = VoiceState::Idle;
+                    self.error = Some(format!("Microphone unavailable: {e}"));
+                    Task::none()
+                }
+            },
+            VoiceState::Recording(rec) => {
+                self.voice = VoiceState::Processing;
+                let Some(port) = self.bridge_port else {
+                    self.voice = VoiceState::Idle;
+                    self.error = Some(
+                        self.bridge_error
+                            .clone()
+                            .unwrap_or_else(|| "Bridge not running".into()),
+                    );
+                    return Task::none();
+                };
+                cosmic::Task::perform(
+                    async move {
+                        // Encoding + the thread-join are blocking, so
+                        // hop to a blocking pool to keep the UI loop
+                        // responsive. The upload itself is async.
+                        let wav = match tokio::task::spawn_blocking(move || rec.stop())
+                            .await
+                        {
+                            Ok(Ok(wav)) => wav,
+                            Ok(Err(e)) => {
+                                return Message::VoiceError(format!("recording: {e}"));
+                            }
+                            Err(e) => {
+                                return Message::VoiceError(format!("recorder task: {e}"));
+                            }
+                        };
+                        match recorder::upload(port, wav).await {
+                            Ok(resp) => Message::VoiceTranscribed {
+                                text: resp.text,
+                                placeholder: resp.placeholder,
+                            },
+                            Err(e) => Message::VoiceError(format!("upload: {e}")),
+                        }
+                    },
+                    |m| m,
+                )
+                .map(cosmic::Action::App)
+            }
+            // Mid-processing clicks are ignored — the UI button is
+            // disabled during processing so this is defensive.
+            VoiceState::Processing => {
+                self.voice = VoiceState::Processing;
+                Task::none()
+            }
+        }
     }
 }
 
@@ -528,9 +698,10 @@ fn parse_flags() -> Flags {
     for arg in env::args().skip(1) {
         match arg.as_str() {
             "--overlay" => flags.overlay = true,
+            "--voice" => flags.voice = true,
             "-h" | "--help" => {
                 eprintln!(
-                    "cos-agent-ui [--overlay]\n  --overlay   compact, Esc-to-close mode for global summon"
+                    "cos-agent-ui [--overlay] [--voice]\n  --overlay   compact, Esc-to-close mode for global summon\n  --voice     auto-arm the microphone on launch"
                 );
                 std::process::exit(0);
             }
