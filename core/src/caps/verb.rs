@@ -160,6 +160,15 @@ impl Verb {
     /// single call, app, or session. Apps must never be granted this.
     pub const AI_BYPASS: Verb = Verb::new("ai.bypass");
 
+    // -- Desktop apps ------------------------------------------------------
+    // `desktop.launch` gates AI-initiated launches of installed GUI apps.
+    // Scope is the `.desktop` AppID (e.g. `com.clawos.Files`); the kernel
+    // never lets the agent name a binary path or pass a `-e bash` payload
+    // — args are restricted to URI/path substitutions in the entry's
+    // `Exec=` line. `cos app exec start <binary>` is the power-user path
+    // and is gated separately by `proc.spawn`.
+    pub const DESKTOP_LAUNCH: Verb = Verb::new("desktop.launch");
+
     // -- Attached browser (WebExtension + Native Messaging) ---------------
     // These verbs gate the *user's* GUI browser (the Chromium that ships
     // with the OS, with the user's logged-in profile). Per-tab actions
@@ -242,6 +251,7 @@ pub const ALL_VERBS: &[Verb] = &[
     Verb::AI_VIDEO_GENERATE,
     Verb::AI_VIDEO_ANALYZE,
     Verb::AI_BYPASS,
+    Verb::DESKTOP_LAUNCH,
     Verb::BROWSER_TABS_READ,
     Verb::BROWSER_NAV,
     Verb::BROWSER_DOM_READ,
