@@ -110,11 +110,20 @@ def _cmd_overlay(args):
 
     Spawns `cos-agent-ui --overlay`. With `--voice`, the native UI
     auto-arms the microphone on launch (used by the Super+Shift+A
-    global hotkey).
+    global hotkey). With `--query <text>`, the prompt is pre-filled
+    and submitted immediately (used by the launcher's "Ask Claw AI").
     """
     argv = ["--overlay"]
-    if "--voice" in args:
-        argv.append("--voice")
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--voice":
+            argv.append("--voice")
+        elif a == "--query" and i + 1 < len(args):
+            argv.append("--query")
+            argv.append(args[i + 1])
+            i += 1
+        i += 1
     return _exec_native(argv)
 
 
@@ -131,8 +140,11 @@ def _schema():
                 {"name": "--voice", "type": "boolean", "required": False,
                  "description": "Auto-arm the microphone on open", "kind": "flag",
                  "default": False},
+                {"name": "--query", "type": "string", "required": False,
+                 "description": "Pre-fill the prompt and submit it immediately",
+                 "kind": "value"},
             ],
-            "example": "cos app agent overlay --voice",
+            "example": "cos app agent overlay --query 'find my budget spreadsheet'",
         },
         "url": {
             "description": "Print the URL of the local cos-agent-bridge",

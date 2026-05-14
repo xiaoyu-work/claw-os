@@ -46,6 +46,10 @@ pub struct Flags {
     /// Auto-arm the microphone on launch (used by the Super+Shift+A
     /// hotkey routing through `cos app agent overlay --voice`).
     pub voice: bool,
+    /// Pre-filled prompt that is also auto-submitted on launch.
+    /// Used by the global launcher's "Ask Claw AI" entry to forward
+    /// the user's natural-language query into the agent overlay.
+    pub query: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -159,7 +163,7 @@ impl Application for App {
             bridge_port,
             bridge_error,
             messages: Vec::new(),
-            input: String::new(),
+            input: flags.query.clone().unwrap_or_default(),
             streaming: false,
             error: None,
             voice: VoiceState::Idle,
@@ -168,7 +172,9 @@ impl Application for App {
         // mic so the user can start speaking immediately. Wrapping in
         // a Task::done lets init() return synchronously and the mic
         // opens on the first frame.
-        let initial = if flags.voice {
+        let initial = if flags.query.is_some() {
+            cosmic::Task::done(cosmic::Action::App(Message::Submit))
+        } else if flags.voice {
             cosmic::Task::done(cosmic::Action::App(Message::ToggleMic))
         } else {
             Task::none()
@@ -695,13 +701,21 @@ fn is_dark() -> bool {
 
 fn parse_flags() -> Flags {
     let mut flags = Flags::default();
-    for arg in env::args().skip(1) {
+    let mut args = env::args().skip(1);
+    while let Some(arg) = args.next() {
         match arg.as_str() {
             "--overlay" => flags.overlay = true,
             "--voice" => flags.voice = true,
+            "--query" => {
+                if let Some(value) = args.next() {
+                    flags.query = Some(value);
+                } else {
+                    eprintln!("warning: --query requires an argument");
+                }
+            }
             "-h" | "--help" => {
                 eprintln!(
-                    "cos-agent-ui [--overlay] [--voice]\n  --overlay   compact, Esc-to-close mode for global summon\n  --voice     auto-arm the microphone on launch"
+                    "cos-agent-ui [--overlay] [--voice] [--query <text>]\n  --overlay         compact, Esc-to-close mode for global summon\n  --voice           auto-arm the microphone on launch\n  --query <text>    pre-fill the prompt and submit it immediately"
                 );
                 std::process::exit(0);
             }

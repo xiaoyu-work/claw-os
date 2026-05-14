@@ -169,6 +169,7 @@ pub enum Message {
     TabPress,
     CompleteFocusedId(Id),
     Activate(Option<usize>),
+    AskAi,
     Context(usize),
     MenuButton(u32, u32),
     CloseContextMenu,
@@ -403,6 +404,17 @@ impl cosmic::Application for CosmicLauncher {
                 } else {
                     return self.hide();
                 }
+            }
+            Message::AskAi => {
+                let query = self.input_value.trim().to_string();
+                if !query.is_empty() {
+                    let mut cmd = std::process::Command::new("cos");
+                    cmd.args(["app", "agent", "overlay", "--query", &query]);
+                    if let Err(err) = cmd.spawn() {
+                        error!("failed to launch cos app agent overlay: {err}");
+                    }
+                }
+                return self.hide();
             }
             Message::Context(i) => {
                 if self.menu.take().is_some() {
@@ -1001,6 +1013,38 @@ impl cosmic::Application for CosmicLauncher {
                 );
             } else if !buttons.is_empty() {
                 content = content.push(components::list::column(buttons));
+            }
+
+            // "Ask Claw AI" footer — always offered when the user has typed
+            // something, regardless of how many launcher results came back.
+            // Routes the raw query into the agent overlay via:
+            //   cos app agent overlay --query <text>
+            if !self.alt_tab && !self.input_value.trim().is_empty() {
+                let q = self.input_value.trim().to_string();
+                let ai_row = row![
+                    container(
+                        text::body(fl!("ask-claw-ai", query = q.clone()))
+                            .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
+                            .align_x(Horizontal::Left)
+                            .align_y(Vertical::Center),
+                    )
+                    .width(Length::FillPortion(5)),
+                    container(
+                        text::caption(fl!("ask-claw-ai-hint"))
+                            .align_x(Horizontal::Right)
+                            .align_y(Vertical::Center),
+                    )
+                    .width(Length::FillPortion(2)),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center);
+                let ai_button = cosmic::widget::button::custom(ai_row)
+                    .width(Length::Fill)
+                    .on_press(Message::AskAi)
+                    .padding([8, 24])
+                    .class(Button::Suggested);
+                content = content.push(divider::horizontal::light());
+                content = content.push(ai_button);
             }
 
             let window = Column::new()
