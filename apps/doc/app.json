@@ -9,6 +9,15 @@
   },
   "icon": "📄",
   "runtime": "python",
+  "ai": {
+    "budget": {
+      "monthly_units": 200000,
+      "monthly_usd": 2.00
+    },
+    "models": ["claude-*", "gpt-4o*", "mock-model"],
+    "safety": "strict",
+    "origins": ["external-content"]
+  },
   "operations": {
     "read": {
       "label": { "en": "Read document content (PDF, DOCX, XLSX, PPTX, CSV, etc.)" },
@@ -52,6 +61,27 @@
           "verb": "fs.write",
           "scope": { "kind": "wild" },
           "why": { "en": "Write the converted document to disk." }
+        }
+      ]
+    },
+    "summarize": {
+      "label": { "en": "Summarize a document into 5 short bullet lines via the AI gate" },
+      "args": [
+        { "name": "file", "kind": "path", "required": true }
+      ],
+      "needs": [
+        {
+          "verb": "fs.read",
+          "scope": { "kind": "from-arg", "arg": "file" },
+          "why": { "en": "Read the document so its contents can be summarised." }
+        },
+        {
+          "verb": "ai.chat.untrusted",
+          "scope": {
+            "kind": "fixed",
+            "scope": { "kind": "name", "value": "claude-*" }
+          },
+          "why": { "en": "Send the document text to a model so it can be summarised for you." }
         }
       ]
     }

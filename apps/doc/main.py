@@ -8,7 +8,12 @@ import io
 import json
 import os
 
-from _lib import policy
+from _lib import ai, policy
+
+
+_SUMMARIZE_SYSTEM = (
+    "Summarize the document into exactly 5 short bullet lines."
+)
 
 
 def _read_txt(path):
@@ -233,6 +238,81 @@ def cmd_info(args):
     }
 
 
+def cmd_summarize(args):
+    """Read a document and pipe its text through the AI gate."""
+    file_path = None
+    i = 0
+    while i < len(args):
+        if args[i] == "--file" and i + 1 < len(args):
+            file_path = args[i + 1]
+            i += 2
+        else:
+            i += 1
+
+    if not file_path:
+        return {"error": "usage: cos doc summarize --file <path>"}
+
+    if not os.path.isfile(file_path):
+        return {"error": "file not found"}
+
+    # Coarse-grained capability check — fail fast on a denied agent.
+    policy.require("ai.chat.untrusted", name="claude-*")
+
+    # Re-use the existing reader so we honour every format doc supports
+    # and pick up the fs.read policy check for free.
+    read_result = cmd_read([file_path])
+    if isinstance(read_result, dict) and "error" in read_result:
+        return read_result
+
+    text = read_result.get("content", "") if isinstance(read_result, dict) else ""
+    if not text.strip():
+        return {"error": "document produced no extractable text", "source": file_path}
+
+    try:
+        response = ai.chat(
+            prompt=text,
+            origin="external-content",
+            verb="ai.chat.untrusted",
+            system=_SUMMARIZE_SYSTEM,
+            max_units=6000,
+        )
+    except ai.AiBudgetExceeded as exc:
+        return {"error": "AI budget exceeded for this app", "detail": exc.payload}
+    except ai.AiModelNotAllowed as exc:
+        return {"error": "model not allowed", "detail": exc.payload}
+    except ai.AiSafetyViolation as exc:
+        return {"error": "safety violation", "detail": exc.payload}
+    except ai.AiDenied as exc:
+        return {"error": "AI call denied", "detail": exc.payload}
+    except ai.AiUnavailable as exc:
+        return {"error": f"AI unavailable: {exc}"}
+    except ai.AiError as exc:
+        return {"error": str(exc)}
+
+    return {
+        "summary": response.text,
+        "source": file_path,
+        "source_chars": len(text),
+        "model": response.model,
+        "provider": response.provider,
+        "usage": {
+            "input_tokens": response.usage.input_tokens,
+            "output_tokens": response.usage.output_tokens,
+            "units": response.usage.units,
+            "usd": response.usage.usd,
+        },
+        "budget": {
+            "period": response.budget.period,
+            "units_used": response.budget.units_used,
+            "units_cap": response.budget.units_cap,
+        },
+        "review": {
+            "safety": response.review.safety,
+            "prompt_redacted": response.review.prompt_redacted,
+        },
+    }
+
+
 def cmd_convert(args):
     if not args:
         return {"error": "usage: cos doc convert <path> --to <format>"}
@@ -320,6 +400,13 @@ def _schema():
             ],
             "example": "cos app doc convert /workspace/data.json --to csv",
         },
+        "summarize": {
+            "description": "Summarize a document into 5 short bullet lines via the AI gate.",
+            "parameters": [
+                {"name": "--file", "type": "string", "required": True, "description": "Path to the document to summarise", "kind": "flag"},
+            ],
+            "example": "cos app doc summarize --file /workspace/report.pdf",
+        },
     }
 
 
@@ -331,6 +418,7 @@ def run(command, args):
         "read": cmd_read,
         "info": cmd_info,
         "convert": cmd_convert,
+        "summarize": cmd_summarize,
     }
     handler = commands.get(command)
     if not handler:
