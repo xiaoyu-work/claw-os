@@ -153,6 +153,18 @@ pub struct AiPolicy {
     /// external content.
     #[serde(default = "default_origins")]
     pub origins: Vec<PromptOrigin>,
+
+    /// Allowlist of catalog tool names the app may expose to a model
+    /// via `cos ai chat --tools`. Each entry must be a known tool in
+    /// `crate::ai::tools::CATALOG`; unknown names are rejected at
+    /// install time so a typo can never reach the gate.
+    ///
+    /// The kernel still gates each actual tool call on the underlying
+    /// `caps.needs[]` (e.g. `fs.read`) — this list only controls
+    /// which tools the model is *told about*. An empty list (the
+    /// default) means the app cannot request any tools.
+    #[serde(default)]
+    pub tools: Vec<String>,
 }
 
 /// Per-period AI token cap. Zero disables enforcement.
@@ -391,6 +403,13 @@ pub enum ManifestError {
     AiBypassNotAllowedForApps {
         field: &'static str,
     },
+    #[error(
+        "manifest `ai.tools[]`: unknown tool `{name}` — not in the kernel \
+         catalog. Run `cos ai tools` to list known tools."
+    )]
+    AiUnknownTool { name: String },
+    #[error("manifest `ai.tools[]`: tool `{name}` declared twice")]
+    AiDuplicateTool { name: String },
 }
 
 impl Manifest {
@@ -399,6 +418,28 @@ impl Manifest {
         let m: Manifest = serde_json::from_str(s)?;
         m.validate()?;
         Ok(m)
+    }
+
+    /// Verify every entry in `ai.tools[]` exists in the kernel
+    /// catalog. The caller passes the catalog (typically
+    /// `crate::ai::tools::list_names()`) so this module stays free
+    /// of the `ai` dependency. No-op if the manifest has no `ai`
+    /// block or an empty allowlist.
+    pub fn validate_tools_against_catalog(
+        &self,
+        catalog: &[&str],
+    ) -> Result<(), ManifestError> {
+        let Some(policy) = self.ai.as_ref() else {
+            return Ok(());
+        };
+        for name in &policy.tools {
+            if !catalog.iter().any(|c| *c == name.as_str()) {
+                return Err(ManifestError::AiUnknownTool {
+                    name: name.clone(),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Validate the manifest's invariants. Called automatically by
@@ -415,6 +456,17 @@ impl Manifest {
         if let Some(policy) = &self.ai {
             if policy.origins.is_empty() {
                 return Err(ManifestError::AiPolicyNoOrigins);
+            }
+            // Shape-only dup check. Catalog membership is verified
+            // by `validate_tools_against_catalog` (callers wire that
+            // in to avoid a cycle between `caps` and `ai`).
+            let mut seen = std::collections::BTreeSet::new();
+            for name in &policy.tools {
+                if !seen.insert(name.as_str()) {
+                    return Err(ManifestError::AiDuplicateTool {
+                        name: name.clone(),
+                    });
+                }
             }
         }
 
@@ -993,5 +1045,99 @@ mod tests {
         .unwrap();
         let policy = m.ai.as_ref().unwrap();
         assert_eq!(policy.origins, vec![PromptOrigin::Trusted]);
+    }
+
+    #[test]
+    fn ai_tools_default_to_empty_list() {
+        let m = Manifest::from_json(
+            r#"{
+              "id": "summarize",
+              "version": "0.1",
+              "name": "Summarize",
+              "ai": {
+                "budget": {"monthly_units": 1},
+                "safety": "strict",
+                "origins": ["trusted"]
+              }
+            }"#,
+        )
+        .unwrap();
+        let policy = m.ai.as_ref().unwrap();
+        assert!(policy.tools.is_empty());
+    }
+
+    #[test]
+    fn ai_tools_duplicate_entry_rejected() {
+        let err = Manifest::from_json(
+            r#"{
+              "id": "summarize",
+              "version": "0.1",
+              "name": "Summarize",
+              "ai": {
+                "budget": {"monthly_units": 1},
+                "safety": "strict",
+                "origins": ["trusted"],
+                "tools": ["fs.read_text", "kv.get", "fs.read_text"]
+              }
+            }"#,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ManifestError::AiDuplicateTool { ref name } if name == "fs.read_text"));
+    }
+
+    #[test]
+    fn ai_tools_unknown_name_rejected_against_catalog() {
+        let m = Manifest::from_json(
+            r#"{
+              "id": "summarize",
+              "version": "0.1",
+              "name": "Summarize",
+              "ai": {
+                "budget": {"monthly_units": 1},
+                "safety": "strict",
+                "origins": ["trusted"],
+                "tools": ["fs.read_text", "fs.unicorn"]
+              }
+            }"#,
+        )
+        .unwrap();
+        let err = m
+            .validate_tools_against_catalog(&["fs.read_text", "kv.get"])
+            .unwrap_err();
+        assert!(matches!(err, ManifestError::AiUnknownTool { ref name } if name == "fs.unicorn"));
+    }
+
+    #[test]
+    fn ai_tools_known_names_pass_catalog_check() {
+        let m = Manifest::from_json(
+            r#"{
+              "id": "summarize",
+              "version": "0.1",
+              "name": "Summarize",
+              "ai": {
+                "budget": {"monthly_units": 1},
+                "safety": "strict",
+                "origins": ["trusted"],
+                "tools": ["fs.read_text", "kv.get"]
+              }
+            }"#,
+        )
+        .unwrap();
+        assert!(m
+            .validate_tools_against_catalog(&["fs.read_text", "fs.list", "kv.get"])
+            .is_ok());
+    }
+
+    #[test]
+    fn manifest_without_ai_block_skips_tool_catalog_check() {
+        let m = Manifest::from_json(
+            r#"{
+              "id": "calc",
+              "version": "0.1",
+              "name": "Calc"
+            }"#,
+        )
+        .unwrap();
+        assert!(m.validate_tools_against_catalog(&[]).is_ok());
     }
 }

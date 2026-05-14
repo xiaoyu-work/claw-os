@@ -256,6 +256,7 @@ mod tests {
             budget: AiBudget { monthly_units: units },
             safety,
             origins,
+            tools: Vec::new(),
         }
     }
 

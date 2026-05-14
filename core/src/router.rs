@@ -1991,6 +1991,7 @@ mod tests {
                 budget: AiBudget { monthly_units: 1000 },
                 safety: AiSafety::Standard,
                 origins: vec![PromptOrigin::Trusted],
+                tools: Vec::new(),
             }),
             dependencies: serde_json::Value::Null,
         };
