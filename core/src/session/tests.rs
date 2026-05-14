@@ -536,3 +536,128 @@ fn archived_zip_contains_meta_and_turns() {
     .unwrap();
     assert!(meta_buf.contains("trace-me"), "meta.json content: {meta_buf}");
 }
+
+// ---------------------------------------------------------------------------
+// Lease (Phase 2)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn try_acquire_returns_not_found_for_unknown_session() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    let bogus: SessionId = "ses_018f4ae0c2300_a1b2c3d4e5f6".parse().unwrap();
+    match try_acquire(&bogus) {
+        Err(AcquireError::NotFound(s)) => assert_eq!(s, "ses_018f4ae0c2300_a1b2c3d4e5f6"),
+        other => panic!("expected NotFound, got {other:?}"),
+    }
+}
+
+#[test]
+fn try_acquire_succeeds_on_fresh_session_and_writes_lease_json() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    let sid = create("lease-me").expect("create");
+    assert!(current_lease(&sid).unwrap().is_none(), "no holder yet");
+
+    let guard = try_acquire(&sid).expect("acquire");
+    assert_eq!(guard.sid(), &sid);
+    assert_eq!(guard.pid(), std::process::id());
+
+    let lease = current_lease(&sid).expect("read").expect("present");
+    assert_eq!(lease.pid, std::process::id());
+    assert!(!lease.started_at.is_empty());
+    assert!(!lease.heartbeat_at.is_empty());
+
+    drop(guard);
+
+    // After drop, lease.json is gone.
+    assert!(
+        current_lease(&sid).unwrap().is_none(),
+        "lease.json should be removed on drop"
+    );
+}
+
+#[test]
+fn try_acquire_blocks_while_another_holder_lives() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    let sid = create("contended").expect("create");
+    let first = try_acquire(&sid).expect("first acquire");
+
+    // Second attempt in the same process must fail with Held, because
+    // flock is per-fd: a new fd opened on the same file by the same
+    // process is still treated as a competing locker.
+    match try_acquire(&sid) {
+        Err(AcquireError::Held { held_by }) => {
+            assert_eq!(held_by.pid, std::process::id());
+        }
+        other => panic!("expected Held, got {other:?}"),
+    }
+
+    drop(first);
+
+    // Once the first guard is dropped, another acquire succeeds.
+    let second = try_acquire(&sid).expect("re-acquire after release");
+    assert_eq!(second.pid(), std::process::id());
+}
+
+#[test]
+fn heartbeat_updates_only_heartbeat_at() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    let sid = create("hb").expect("create");
+    let guard = try_acquire(&sid).expect("acquire");
+
+    let before = current_lease(&sid).unwrap().unwrap();
+    // Wait long enough that the second-resolution RFC3339 stamp differs.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    guard.heartbeat().expect("heartbeat");
+    let after = current_lease(&sid).unwrap().unwrap();
+
+    assert_eq!(before.pid, after.pid, "pid unchanged");
+    assert_eq!(before.started_at, after.started_at, "started_at unchanged");
+    assert!(
+        after.heartbeat_at >= before.heartbeat_at,
+        "heartbeat_at moved forward: {} -> {}",
+        before.heartbeat_at,
+        after.heartbeat_at,
+    );
+}
+
+#[test]
+fn dropping_guard_lets_next_acquire_overwrite_holder_identity() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    let sid = create("rotate").expect("create");
+
+    // First "tenant".
+    let g1 = try_acquire(&sid).unwrap();
+    let l1 = current_lease(&sid).unwrap().unwrap();
+    drop(g1);
+
+    // Second "tenant" — same process so same pid, but started_at must
+    // bump to a fresh timestamp (or at least the lease json reappears
+    // after Drop removed it).
+    assert!(current_lease(&sid).unwrap().is_none());
+    let _g2 = try_acquire(&sid).unwrap();
+    let l2 = current_lease(&sid).unwrap().unwrap();
+    assert_eq!(l1.pid, l2.pid);
+    assert!(
+        l2.started_at >= l1.started_at,
+        "second acquire stamps a fresh started_at"
+    );
+}
+
+#[test]
+fn current_lease_is_none_when_session_never_acquired() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    let sid = create("idle").unwrap();
+    assert!(current_lease(&sid).unwrap().is_none());
+}

@@ -49,6 +49,7 @@
 
 mod gc;
 mod id;
+mod lease;
 mod meta;
 mod mutation;
 mod store;
@@ -59,6 +60,7 @@ mod tests;
 
 pub use gc::{archive_path, archive_root, gc_archive, is_archived, GcStats};
 pub use id::{InvalidSessionId, SessionId};
+pub use lease::{current as current_lease, try_acquire, AcquireError, LeaseGuard};
 pub use meta::{Budget, Lease, SessionMeta, Status};
 pub use mutation::{Mutation, MutationRecord};
 pub use store::{
