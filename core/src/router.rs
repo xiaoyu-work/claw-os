@@ -519,6 +519,17 @@ fn builtin_apps() -> Vec<(
             ("status", "Show current session tier, elevation, and allowed operations"),
             ("check", "Check if a specific operation (read/write/exec/net/system) is allowed"),
         ]),
+        ("perms", "Capability permissions — check caps, undo gated changes, approve/deny live requests", vec![
+            ("check", "Check whether the current session has a capability: cos perms check <verb> [--path P|--host H|--name N|--wild]"),
+            ("trash", "List snapshots fs/* operations have stashed for this session (--session ID)"),
+            ("undo", "Reverse-replay every snapshot for a session (--session ID [--dry-run])"),
+            ("gc", "Garbage-collect old per-session trash dirs (--older-than-days N)"),
+            ("ask", "Submit an approval request and optionally block on it (--verb V --reason TEXT [--path P|--host H|--name N|--wild] [--wait SECS])"),
+            ("pending", "Render every outstanding approval request (TTY: card view; pipe: JSON)"),
+            ("approve", "Approve a pending request: cos perms approve <id> [--duration once|session|forever] [--note TEXT]"),
+            ("deny", "Deny a pending request: cos perms deny <id> [--note TEXT]"),
+            ("recent", "Show recently decided approvals (--limit N)"),
+        ]),
         ("cron", "Agent-native job scheduler — cron with execution context, result capture, and overlap protection", vec![
             ("add", "Register a cron job (--schedule, --command, --tier, --scope, --credentials, --overlap, --timeout)"),
             ("remove", "Remove a cron job by ID"),
