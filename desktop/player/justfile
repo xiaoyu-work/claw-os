@@ -78,7 +78,7 @@ install:
     install -Dm0644 {{metainfo-src}} {{metainfo-dst}}
     install -Dm0644 {{thumbnailer-src}} {{thumbnailer-dst}}
     for size in `ls {{icons-src}}`; do \
-        install -Dm0644 "{{icons-src}}/$size/apps/{{APPID}}.svg" "{{icons-dst}}/$size/apps/{{APPID}}.svg"; \
+        install -Dm0644 "{{icons-src}}/$size/apps/{{APPID}}.png" "{{icons-dst}}/$size/apps/{{APPID}}.png"; \
     done
 
 # Uninstalls installed files
@@ -88,7 +88,7 @@ uninstall:
     rm -f {{metainfo-dst}}
     rm -f {{thumbnailer-dst}}
     for size in `ls {{icons-src}}`; do \
-        rm -f "{{icons-dst}}/$size/apps/{{APPID}}.svg"; \
+        rm -f "{{icons-dst}}/$size/apps/{{APPID}}.png"; \
     done
 
 # Vendor dependencies locally
