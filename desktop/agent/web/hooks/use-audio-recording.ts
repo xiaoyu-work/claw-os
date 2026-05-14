@@ -8,24 +8,7 @@ interface TranscribeResponse {
   text?: string;
   error?: string;
   details?: string;
-}
-
-function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener("loadend", () => {
-      const result = reader.result as string;
-      // Remove the data URL prefix (e.g., "data:audio/webm;base64,")
-      const base64 = result.split(",")[1];
-      if (base64) {
-        resolve(base64);
-      } else {
-        reject(new Error("Failed to convert blob to base64"));
-      }
-    });
-    reader.addEventListener("error", () => reject(reader.error));
-    reader.readAsDataURL(blob);
-  });
+  placeholder?: boolean;
 }
 
 function getSupportedMimeType(): string {
@@ -109,15 +92,13 @@ export function useAudioRecording() {
         });
 
         try {
-          const base64Audio = await blobToBase64(audioBlob);
-
-          const response = await fetch("/api/transcribe", {
+          // POST the raw blob to cos-agent-bridge; Content-Type
+          // carries the mime so the bridge can hand it to the STT
+          // backend unchanged. No base64 = no 33% size blow-up.
+          const response = await fetch("/api/voice/upload", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              audio: base64Audio,
-              mimeType,
-            }),
+            headers: { "Content-Type": mimeType },
+            body: audioBlob,
           });
 
           const data = (await response.json()) as TranscribeResponse;

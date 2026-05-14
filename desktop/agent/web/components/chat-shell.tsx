@@ -7,11 +7,12 @@ import {
   useRef,
   useState,
 } from "react";
-import { Send } from "lucide-react";
+import { Mic, Send } from "lucide-react";
 
 import { BrandSymbol } from "@/components/brand";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { useAudioRecording } from "@/hooks/use-audio-recording";
 
 type ChatRole = "user" | "assistant";
 
@@ -59,10 +60,13 @@ function parseSseChunk(
   return { events, remainder };
 }
 
-function readOverlayMode(): boolean {
-  if (typeof window === "undefined") return false;
+function readOverlayMode(): { overlay: boolean; voice: boolean } {
+  if (typeof window === "undefined") return { overlay: false, voice: false };
   const params = new URLSearchParams(window.location.search);
-  return params.get("overlay") === "1";
+  return {
+    overlay: params.get("overlay") === "1",
+    voice: params.get("voice") === "1",
+  };
 }
 
 export function ChatShell() {
@@ -72,10 +76,28 @@ export function ChatShell() {
   const [isOverlay, setIsOverlay] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const armedVoiceRef = useRef(false);
+  const {
+    state: recState,
+    error: recError,
+    clearError: clearRecError,
+    toggleRecording,
+    startRecording,
+    isRecording,
+    isProcessing: isTranscribing,
+  } = useAudioRecording();
 
   useEffect(() => {
-    setIsOverlay(readOverlayMode());
-  }, []);
+    const mode = readOverlayMode();
+    setIsOverlay(mode.overlay);
+    // Voice-armed mode (Super+Shift+A): start recording as soon as
+    // the user grants the microphone permission prompt. Guarded by a
+    // ref so React StrictMode's double-invoke doesn't double-arm.
+    if (mode.voice && !armedVoiceRef.current) {
+      armedVoiceRef.current = true;
+      void startRecording();
+    }
+  }, [startRecording]);
 
   useEffect(() => {
     if (!isOverlay) return;
@@ -176,6 +198,24 @@ export function ChatShell() {
     }
   }, []);
 
+  const handleMicClick = useCallback(async () => {
+    if (recError) clearRecError();
+    const transcript = await toggleRecording();
+    if (transcript) {
+      setInput((prev) => (prev ? `${prev} ${transcript}` : transcript));
+      // After the transcript lands, focus the input so the user can
+      // edit or press Enter to send.
+      inputRef.current?.focus();
+    }
+  }, [recError, clearRecError, toggleRecording]);
+
+  const micButtonLabel =
+    recState === "recording"
+      ? "Stop recording"
+      : recState === "processing"
+        ? "Transcribing…"
+        : "Voice input";
+
   const handleSubmit = useCallback(
     (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
@@ -243,6 +283,18 @@ export function ChatShell() {
               }
             }}
           />
+          <Button
+            type="button"
+            size="icon"
+            variant={isRecording ? "destructive" : "ghost"}
+            onClick={handleMicClick}
+            disabled={isTranscribing}
+            aria-label={micButtonLabel}
+            title={micButtonLabel}
+            className={isRecording ? "animate-pulse" : undefined}
+          >
+            <Mic className="size-3.5" />
+          </Button>
           <Button
             type="submit"
             size="icon"
@@ -323,6 +375,18 @@ export function ChatShell() {
               }
             }}
           />
+          <Button
+            type="button"
+            size="icon"
+            variant={isRecording ? "destructive" : "ghost"}
+            onClick={handleMicClick}
+            disabled={isTranscribing}
+            aria-label={micButtonLabel}
+            title={micButtonLabel}
+            className={isRecording ? "animate-pulse" : undefined}
+          >
+            <Mic className="size-4" />
+          </Button>
           <Button
             type="submit"
             size="icon"
