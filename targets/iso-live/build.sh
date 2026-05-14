@@ -49,7 +49,18 @@ done
 # 1. Build the rootfs.
 #    apt-source pre-configures the Claw OS apt repo so users who later
 #    install the system (via M8 installer) get apt upgrade out of the box.
-"$PROJECT_DIR/rootfs/build.sh" --features base,cos-core,systemd,kernel,live,apt-source
+#
+#    FEATURES is overridable so callers can add `desktop` (and any other
+#    optional feature) without forking this script. Example, build a live
+#    ISO that boots straight into the COSMIC desktop:
+#       FEATURES=base,cos-core,systemd,kernel,desktop,live,apt-source \
+#           ./targets/iso-live/build.sh
+#    Note: rootfs/features/live/install.sh detects whether `desktop` was
+#    already applied and, if so, layers a greetd [initial_session] block
+#    for autologin into a Wayland session.
+FEATURES="${FEATURES:-base,cos-core,systemd,kernel,live,apt-source}"
+echo ":: features: $FEATURES"
+"$PROJECT_DIR/rootfs/build.sh" --features "$FEATURES"
 
 # 2. Apply iso-live overlay if any.
 if [ -d "$SCRIPT_DIR/overlay" ]; then

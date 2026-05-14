@@ -50,7 +50,13 @@ fi
 # 1. Build the rootfs.
 #    apt-source pre-configures the Claw OS apt repo so users can run
 #    `sudo apt update && sudo apt upgrade` to pull newer claw-os-* packages.
-"$PROJECT_DIR/rootfs/build.sh" --features base,cos-core,systemd,kernel,grub-disk,vm,apt-source
+#
+#    FEATURES is overridable. Example, build a desktop VM image:
+#       FEATURES=base,cos-core,systemd,kernel,desktop,grub-disk,vm,apt-source \
+#       SIZE=16G FORMATS=vhdx ./targets/vm/build.sh
+FEATURES="${FEATURES:-base,cos-core,systemd,kernel,grub-disk,vm,apt-source}"
+echo ":: features: $FEATURES"
+"$PROJECT_DIR/rootfs/build.sh" --features "$FEATURES"
 
 # 2. Reset previous build artefacts.
 rm -f "$RAW"

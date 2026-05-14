@@ -63,14 +63,30 @@ done
 # ---------------------------------------------------------------------------
 # 2. Build the desktop inside the chroot so binaries link against rootfs
 #    glibc, not the host's.
+#
+#    Several desktop/* crates have `path = "../../crates/<x>"` dependencies
+#    pointing at the top-level repo `crates/` directory (claw-bridge,
+#    cos-mcp-serve, …). Bind-mount that too so the relative path resolves
+#    inside the chroot (../../crates from /build/desktop-src/<x> →
+#    /build/crates).
 # ---------------------------------------------------------------------------
 CHROOT_SRC="$ROOTFS/build/desktop-src"
+CHROOT_CRATES="$ROOTFS/build/crates"
+PROJECT_CRATES="$PROJECT_DIR/crates"
 mkdir -p "$CHROOT_SRC"
 if ! mountpoint -q "$CHROOT_SRC"; then
     mount --bind "$DESKTOP_SRC" "$CHROOT_SRC"
 fi
+if [ -d "$PROJECT_CRATES" ]; then
+    mkdir -p "$CHROOT_CRATES"
+    if ! mountpoint -q "$CHROOT_CRATES"; then
+        mount --bind "$PROJECT_CRATES" "$CHROOT_CRATES"
+    fi
+fi
 
 cleanup() {
+    umount "$CHROOT_CRATES" 2>/dev/null || true
+    rmdir "$CHROOT_CRATES" 2>/dev/null || true
     umount "$CHROOT_SRC" 2>/dev/null || true
     rmdir "$CHROOT_SRC" 2>/dev/null || true
     rmdir "$ROOTFS/build" 2>/dev/null || true
@@ -82,7 +98,9 @@ trap cleanup EXIT
 echo "  :: ensuring rustup toolchain in chroot"
 chroot "$ROOTFS" bash -c '
     set -e
-    if ! rustup show active-toolchain >/dev/null 2>&1; then
+    # rustup show active-toolchain exits 0 even when nothing is configured,
+    # so check `rustup default` instead. Output is empty when no default set.
+    if [ -z "$(rustup default 2>/dev/null)" ]; then
         rustup toolchain install stable --profile minimal
         rustup default stable
     fi
