@@ -67,7 +67,7 @@
     "summarize": {
       "label": { "en": "Summarize a document into 5 short bullet lines via the AI gate" },
       "args": [
-        { "name": "file", "kind": "path", "required": true }
+        { "name": "file", "kind": "path", "required": false }
       ],
       "needs": [
         {
@@ -82,6 +82,49 @@
             "scope": { "kind": "name", "value": "claude-*" }
           },
           "why": { "en": "Send the document text to a model so it can be summarised for you." }
+        }
+      ]
+    },
+    "explain": {
+      "label": { "en": "Explain the supplied content in plain prose via the AI gate" },
+      "args": [
+        { "name": "file", "kind": "path", "required": false }
+      ],
+      "needs": [
+        {
+          "verb": "fs.read",
+          "scope": { "kind": "from-arg", "arg": "file" },
+          "why": { "en": "Read the document so it can be explained." }
+        },
+        {
+          "verb": "ai.chat.untrusted",
+          "scope": {
+            "kind": "fixed",
+            "scope": { "kind": "name", "value": "claude-*" }
+          },
+          "why": { "en": "Send the content to a model so it can be explained for you." }
+        }
+      ]
+    },
+    "rewrite": {
+      "label": { "en": "Rewrite the supplied content following an instruction" },
+      "args": [
+        { "name": "file", "kind": "path", "required": false },
+        { "name": "instruction", "kind": "name", "required": false }
+      ],
+      "needs": [
+        {
+          "verb": "fs.read",
+          "scope": { "kind": "from-arg", "arg": "file" },
+          "why": { "en": "Read the document so it can be rewritten." }
+        },
+        {
+          "verb": "ai.chat.untrusted",
+          "scope": {
+            "kind": "fixed",
+            "scope": { "kind": "name", "value": "claude-*" }
+          },
+          "why": { "en": "Send the content to a model to be rewritten per your instruction." }
         }
       ]
     }

@@ -7,6 +7,7 @@ import csv
 import io
 import json
 import os
+import sys
 
 from _lib import ai, policy
 
@@ -14,6 +15,113 @@ from _lib import ai, policy
 _SUMMARIZE_SYSTEM = (
     "Summarize the document into exactly 5 short bullet lines."
 )
+_EXPLAIN_SYSTEM = (
+    "You are a senior engineer. Explain the supplied content to a curious "
+    "user. Keep it under 200 words. Use plain prose, no markdown headings."
+)
+_REWRITE_SYSTEM = (
+    "Rewrite the supplied text following the user's instruction. Return "
+    "ONLY the rewritten text — no preamble, no markdown fence, no "
+    "commentary. Preserve the language of the input."
+)
+
+
+_MAX_INPUT_CHARS = 100_000
+
+
+def _read_stdin_or_file(args):
+    """Pull text from `--file PATH` or stdin. Used by AI verbs.
+
+    Returns a 3-tuple ``(text, source, instruction_or_err)`` where:
+      - On success: ``text`` is a non-empty string, ``source`` describes
+        where it came from, ``instruction_or_err`` is the optional
+        ``--instruction`` string (or ``None``).
+      - On failure: ``text`` is ``None``, ``source`` is ``None``,
+        ``instruction_or_err`` is an error ``dict``.
+    """
+    file_path = None
+    instruction = None
+    rest = []
+    i = 0
+    while i < len(args):
+        if args[i] == "--file" and i + 1 < len(args):
+            file_path = args[i + 1]
+            i += 2
+        elif args[i] == "--instruction" and i + 1 < len(args):
+            instruction = args[i + 1]
+            i += 2
+        else:
+            rest.append(args[i])
+            i += 1
+
+    if file_path:
+        if not os.path.isfile(file_path):
+            return None, None, {"error": "file not found", "source": file_path}
+        read_result = cmd_read([file_path])
+        if isinstance(read_result, dict) and "error" in read_result:
+            return None, None, read_result
+        text = read_result.get("content", "") if isinstance(read_result, dict) else ""
+        return text, file_path, instruction
+    # Fall back to stdin (used by Edit / Term piping a buffer).
+    if not sys.stdin.isatty():
+        return sys.stdin.read(), "<stdin>", instruction
+    if rest:
+        return " ".join(rest), None, instruction
+    return None, None, {"error": "no input — supply --file PATH or pipe text on stdin"}
+
+
+def _ai_call(*, text, source, system, max_units, verb="ai.chat.untrusted"):
+    """Shared helper for summarize/explain/rewrite — gate → JSON."""
+    if not text or not text.strip():
+        return {"error": "document produced no extractable text", "source": source}
+    if len(text) > _MAX_INPUT_CHARS:
+        text = text[:_MAX_INPUT_CHARS]
+
+    policy.require(verb, name="claude-*")
+
+    try:
+        response = ai.chat(
+            prompt=text,
+            origin="external-content",
+            verb=verb,
+            system=system,
+            max_units=max_units,
+        )
+    except ai.AiBudgetExceeded as exc:
+        return {"error": "AI budget exceeded for this app", "detail": exc.payload}
+    except ai.AiModelNotAllowed as exc:
+        return {"error": "model not allowed", "detail": exc.payload}
+    except ai.AiSafetyViolation as exc:
+        return {"error": "safety violation", "detail": exc.payload}
+    except ai.AiDenied as exc:
+        return {"error": "AI call denied", "detail": exc.payload}
+    except ai.AiUnavailable as exc:
+        return {"error": f"AI unavailable: {exc}"}
+    except ai.AiError as exc:
+        return {"error": str(exc)}
+
+    return {
+        "text": response.text,
+        "source": source,
+        "source_chars": len(text),
+        "model": response.model,
+        "provider": response.provider,
+        "usage": {
+            "input_tokens": response.usage.input_tokens,
+            "output_tokens": response.usage.output_tokens,
+            "units": response.usage.units,
+            "usd": response.usage.usd,
+        },
+        "budget": {
+            "period": response.budget.period,
+            "units_used": response.budget.units_used,
+            "units_cap": response.budget.units_cap,
+        },
+        "review": {
+            "safety": response.review.safety,
+            "prompt_redacted": response.review.prompt_redacted,
+        },
+    }
 
 
 def _read_txt(path):
@@ -240,77 +348,51 @@ def cmd_info(args):
 
 def cmd_summarize(args):
     """Read a document and pipe its text through the AI gate."""
-    file_path = None
-    i = 0
-    while i < len(args):
-        if args[i] == "--file" and i + 1 < len(args):
-            file_path = args[i + 1]
-            i += 2
-        else:
-            i += 1
+    text, source, extra = _read_stdin_or_file(args)
+    if text is None:
+        return extra if isinstance(extra, dict) else {"error": "no input"}
 
-    if not file_path:
-        return {"error": "usage: cos doc summarize --file <path>"}
+    result = _ai_call(
+        text=text,
+        source=source,
+        system=_SUMMARIZE_SYSTEM,
+        max_units=6000,
+    )
+    if "error" in result:
+        return result
+    out = dict(result)
+    # Preserve legacy field name "summary" for backwards compatibility.
+    out["summary"] = out.pop("text")
+    return out
 
-    if not os.path.isfile(file_path):
-        return {"error": "file not found"}
 
-    # Coarse-grained capability check — fail fast on a denied agent.
-    policy.require("ai.chat.untrusted", name="claude-*")
+def cmd_explain(args):
+    """Explain the supplied content (via stdin or --file) in plain prose."""
+    text, source, extra = _read_stdin_or_file(args)
+    if text is None:
+        return extra if isinstance(extra, dict) else {"error": "no input"}
+    return _ai_call(
+        text=text,
+        source=source,
+        system=_EXPLAIN_SYSTEM,
+        max_units=4000,
+    )
 
-    # Re-use the existing reader so we honour every format doc supports
-    # and pick up the fs.read policy check for free.
-    read_result = cmd_read([file_path])
-    if isinstance(read_result, dict) and "error" in read_result:
-        return read_result
 
-    text = read_result.get("content", "") if isinstance(read_result, dict) else ""
-    if not text.strip():
-        return {"error": "document produced no extractable text", "source": file_path}
-
-    try:
-        response = ai.chat(
-            prompt=text,
-            origin="external-content",
-            verb="ai.chat.untrusted",
-            system=_SUMMARIZE_SYSTEM,
-            max_units=6000,
-        )
-    except ai.AiBudgetExceeded as exc:
-        return {"error": "AI budget exceeded for this app", "detail": exc.payload}
-    except ai.AiModelNotAllowed as exc:
-        return {"error": "model not allowed", "detail": exc.payload}
-    except ai.AiSafetyViolation as exc:
-        return {"error": "safety violation", "detail": exc.payload}
-    except ai.AiDenied as exc:
-        return {"error": "AI call denied", "detail": exc.payload}
-    except ai.AiUnavailable as exc:
-        return {"error": f"AI unavailable: {exc}"}
-    except ai.AiError as exc:
-        return {"error": str(exc)}
-
-    return {
-        "summary": response.text,
-        "source": file_path,
-        "source_chars": len(text),
-        "model": response.model,
-        "provider": response.provider,
-        "usage": {
-            "input_tokens": response.usage.input_tokens,
-            "output_tokens": response.usage.output_tokens,
-            "units": response.usage.units,
-            "usd": response.usage.usd,
-        },
-        "budget": {
-            "period": response.budget.period,
-            "units_used": response.budget.units_used,
-            "units_cap": response.budget.units_cap,
-        },
-        "review": {
-            "safety": response.review.safety,
-            "prompt_redacted": response.review.prompt_redacted,
-        },
-    }
+def cmd_rewrite(args):
+    """Rewrite the supplied content following an `--instruction`."""
+    text, source, instruction = _read_stdin_or_file(args)
+    if text is None:
+        return instruction if isinstance(instruction, dict) else {"error": "no input"}
+    if not instruction:
+        instruction = "Improve clarity, fix grammar, keep the original meaning."
+    system = _REWRITE_SYSTEM + "\n\nInstruction: " + instruction
+    return _ai_call(
+        text=text,
+        source=source,
+        system=system,
+        max_units=8000,
+    )
 
 
 def cmd_convert(args):
@@ -401,11 +483,26 @@ def _schema():
             "example": "cos app doc convert /workspace/data.json --to csv",
         },
         "summarize": {
-            "description": "Summarize a document into 5 short bullet lines via the AI gate.",
+            "description": "Summarize a document into 5 short bullet lines via the AI gate. Reads from --file or stdin.",
             "parameters": [
-                {"name": "--file", "type": "string", "required": True, "description": "Path to the document to summarise", "kind": "flag"},
+                {"name": "--file", "type": "string", "required": False, "description": "Path to the document to summarise (or omit and pipe via stdin)", "kind": "flag"},
             ],
             "example": "cos app doc summarize --file /workspace/report.pdf",
+        },
+        "explain": {
+            "description": "Explain the supplied content (via --file or stdin) in plain prose under 200 words.",
+            "parameters": [
+                {"name": "--file", "type": "string", "required": False, "description": "Path to the document to explain (or pipe via stdin)", "kind": "flag"},
+            ],
+            "example": "echo 'fn foo()...' | cos app doc explain",
+        },
+        "rewrite": {
+            "description": "Rewrite the supplied content per --instruction. Returns rewritten text only.",
+            "parameters": [
+                {"name": "--file", "type": "string", "required": False, "description": "Path to read (or pipe via stdin)", "kind": "flag"},
+                {"name": "--instruction", "type": "string", "required": False, "description": "Rewrite instruction (e.g. 'make it more formal')", "kind": "flag"},
+            ],
+            "example": "cos app doc rewrite --file note.md --instruction 'translate to English'",
         },
     }
 
@@ -419,6 +516,8 @@ def run(command, args):
         "info": cmd_info,
         "convert": cmd_convert,
         "summarize": cmd_summarize,
+        "explain": cmd_explain,
+        "rewrite": cmd_rewrite,
     }
     handler = commands.get(command)
     if not handler:
