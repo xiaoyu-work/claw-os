@@ -31,9 +31,9 @@ A minimum-viable manifest is:
 ```json
 {
   "schema": "claw.agent-api/v1",
-  "id": "org.tesseract",
-  "name": "tesseract",
-  "title": { "en": "Tesseract OCR" },
+  "id": "org.qpdf",
+  "name": "pdf",
+  "title": { "en": "qpdf PDF toolkit" },
   "vendor": "claw-adapter",
   "license": "Apache-2.0",
   "transport": "mcp+stdio",
@@ -85,7 +85,7 @@ bootstrap.
 Every `tools/call` invocation that arrives via this MCP path is logged
 to `ai.jsonl` and gated by the registered tool's caps (per the
 kernel's existing `ToolRegistry` + `ApprovalGate`). User-initiated GUI
-or CLI invocations of the upstream tool — `tesseract image.png out`
+or CLI invocations of the upstream tool — `qpdf --pages a 1-3 -- a.pdf out.pdf`
 typed in a terminal, for example — are **not** logged: only the
 adapter surface is audited, because that's the surface the agent uses.
 
