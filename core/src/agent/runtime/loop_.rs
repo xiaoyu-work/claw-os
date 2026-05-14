@@ -613,6 +613,7 @@ pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
     let cfg = &crate::config::get().agent;
     let provider = llm::registry::build(&cfg.provider, &cfg.model, cfg)
         .map_err(|e| AgentError::ProviderUnavailable(e.to_string()))?;
+    let provider = crate::ai::gate::wrap_for_system(provider);
     let mut tools = default_registry();
     tools.set_guardrails(guardrails_from_cfg(cfg));
     tools.set_approval(approval_from_cfg(cfg));
@@ -774,6 +775,7 @@ pub fn auxiliary_from_cfg(
         })?;
     let provider = llm::registry::build(provider_name, model, cfg)
         .map_err(|e| AgentError::Internal(format!("auxiliary provider build: {e}")))?;
+    let provider = crate::ai::gate::wrap_for_system(provider);
     let mut acfg =
         AuxiliaryConfig::new(provider_name, model).with_max_tokens(cfg.auxiliary_max_tokens);
     if let Some(t) = cfg.auxiliary_temperature {

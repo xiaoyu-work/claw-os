@@ -242,6 +242,7 @@ async fn run_delegate(
             ));
         }
     };
+    let provider = crate::ai::gate::wrap_for_system(provider);
 
     let tools = build_child_registry(factory(), &input.allowed_tools);
 

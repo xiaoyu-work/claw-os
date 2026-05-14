@@ -811,6 +811,7 @@ async fn run_one_job(job: &Job) -> FinishOutcome {
         Ok(p) => p,
         Err(e) => return FinishOutcome::Error(format!("provider unavailable: {e}")),
     };
+    let provider = crate::ai::gate::wrap_for_system(provider);
     let mut tools = crate::agent::tools::registry::default_registry();
     tools.set_guardrails(loop_::guardrails_from_cfg(&cfg));
     tools.set_approval(loop_::approval_from_cfg(&cfg));
