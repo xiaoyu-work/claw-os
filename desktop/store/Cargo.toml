@@ -13,7 +13,6 @@ async-trait = "0.1"
 base64 = "0.22"
 chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
-cos-mcp-serve = { path = "../../crates/cos-mcp-serve" }
 env_logger = "0.11"
 freedesktop_entry_parser = "2"
 futures = "0.3"

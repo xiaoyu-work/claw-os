@@ -79,8 +79,6 @@ mod terminal_theme;
 
 mod dnd;
 
-mod mcp;
-
 use clap_lex::RawArgs;
 
 static ICON_CACHE: LazyLock<Mutex<IconCache>> = LazyLock::new(|| Mutex::new(IconCache::new()));
@@ -93,12 +91,6 @@ pub fn icon_cache_get(name: &'static str, size: u16) -> widget::icon::Icon {
 /// Runs application with these settings
 #[rustfmt::skip]
 fn main() -> Result<(), Box<dyn Error>> {
-    // MCP server mode: kernel agent spawned us headless. Run only the
-    // command-execution tool surface; skip libcosmic, PTY init, etc.
-    if std::env::var("COS_MCP_SERVER").as_deref() == Ok("1") {
-        return mcp::run();
-    }
-
     let raw_args = RawArgs::from_args();
     let mut cursor = raw_args.cursor();
 

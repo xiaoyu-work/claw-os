@@ -13,7 +13,6 @@ alacritty_terminal = "0.25.1"
 anyhow = "1"
 async-trait = "0.1"
 claw-bridge = { path = "../../crates/claw-bridge" }
-cos-mcp-serve = { path = "../../crates/cos-mcp-serve" }
 hex_color = { version = "3", features = ["serde"] }
 indexmap = "2"
 log = "0.4"

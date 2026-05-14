@@ -10,7 +10,6 @@ rust-version = "1.90"
 anyhow = "1"
 async-trait = "0.1"
 claw-bridge = { path = "../../crates/claw-bridge" }
-cos-mcp-serve = { path = "../../crates/cos-mcp-serve" }
 dirs = "6"
 env_logger = "0.11.8"
 grep = "0.3.2"

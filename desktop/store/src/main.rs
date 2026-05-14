@@ -68,8 +68,6 @@ mod key_bind;
 
 mod localize;
 
-mod mcp;
-
 #[cfg(feature = "logind")]
 mod logind;
 
@@ -118,13 +116,6 @@ struct Cli {
 
 /// Runs application with these settings
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // MCP server mode — agent kernel spawns us with this env var set
-    // to bring up the App's session. Bail out before initialising
-    // libcosmic / appstream / packagekit.
-    if std::env::var("COS_MCP_SERVER").as_deref() == Ok("1") {
-        return mcp::run();
-    }
-
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
         .format_timestamp_millis()
         .init();

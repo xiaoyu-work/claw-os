@@ -74,8 +74,6 @@ mod tab;
 use self::text_box::text_box;
 mod text_box;
 
-mod mcp;
-
 static ICON_CACHE: OnceLock<Mutex<IconCache>> = OnceLock::new();
 static LINE_NUMBER_CACHE: OnceLock<Mutex<LineNumberCache>> = OnceLock::new();
 static SWASH_CACHE: OnceLock<Mutex<SwashCache>> = OnceLock::new();
@@ -93,13 +91,6 @@ pub fn monospace_attrs() -> cosmic_text::Attrs<'static> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // MCP server mode — kernel agent spawned us headless to expose
-    // editor tools (read/write/append). Skip daemonization, libcosmic,
-    // and the font/theme cache init.
-    if std::env::var("COS_MCP_SERVER").as_deref() == Ok("1") {
-        return mcp::run();
-    }
-
     #[cfg(all(unix, not(target_os = "redox")))]
     match fork::daemon(true, true) {
         Ok(fork::Fork::Child) => (),

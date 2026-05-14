@@ -1393,6 +1393,7 @@ name = "cosmic-files"
 version = "1.0.13"
 dependencies = [
  "anyhow",
+ "async-trait",
  "atomic_float",
  "bstr",
  "bzip2",
@@ -1436,6 +1437,7 @@ dependencies = [
  "rust-embed",
  "rustc-hash 2.1.2",
  "serde",
+ "serde_json",
  "shlex",
  "slotmap",
  "tar",

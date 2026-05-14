@@ -987,6 +987,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "claw-bridge"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "clipboard-win"
 version = "5.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1373,6 +1383,9 @@ dependencies = [
 name = "cosmic-edit"
 version = "1.0.13"
 dependencies = [
+ "anyhow",
+ "async-trait",
+ "claw-bridge",
  "cosmic-files",
  "cosmic-syntax-theme",
  "cosmic-text",
@@ -1393,6 +1406,7 @@ dependencies = [
  "regex",
  "rust-embed",
  "serde",
+ "serde_json",
  "syntect",
  "tokio",
  "two-face",
