@@ -28,6 +28,7 @@
 
 pub mod memory;
 pub mod recall;
+pub mod recall_semantic;
 
 use std::sync::Arc;
 
@@ -319,6 +320,17 @@ pub fn register_recall(
     db: crate::agent::memory::sqlite_fts::MemoryDb,
 ) {
     registry.register(Arc::new(recall::CosRecallTool::new(db)));
+}
+
+/// Register the `cos_recall_semantic` similarity-search tool against
+/// an explicit semantic store. The runtime opens the default-path
+/// store (when `[embed]` is configured) and passes it in; tests use
+/// an in-memory store.
+pub fn register_recall_semantic(
+    registry: &mut ToolRegistry,
+    store: std::sync::Arc<crate::agent::memory::semantic::SemanticStore>,
+) {
+    registry.register(Arc::new(recall_semantic::CosRecallSemanticTool::new(store)));
 }
 
 /// Number of cos primitive tools shipped, *not* counting the higher-level

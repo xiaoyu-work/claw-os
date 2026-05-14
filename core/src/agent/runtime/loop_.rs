@@ -17,9 +17,11 @@ use crate::agent::llm::accumulate::StreamSink;
 use crate::agent::llm::{self, Message, Provider};
 use crate::agent::memory::sqlite_fts::{self, MemoryDb};
 use crate::agent::prompt;
+use crate::agent::runtime::auto_curator::AutoCurator;
 use crate::agent::runtime::hooks;
 use crate::agent::runtime::hooks_config;
 use crate::agent::runtime::interrupt;
+use crate::agent::runtime::semantic_indexer::SemanticIndexer;
 use crate::agent::safety::redact::Redactor;
 use crate::agent::tools::registry::{default_registry, ToolRegistry};
 use crate::config::AgentConfig;
@@ -141,13 +143,32 @@ async fn ask_inner(
         None
     };
 
+    // Semantic auto-indexer: opt-in via `[embed]` config. Mirrors
+    // every recorded message into the semantic store so the LLM can
+    // do similarity search via `cos_recall_semantic`. `None` when
+    // embedding is disabled — every spawn_index call is then a no-op.
+    let semantic_indexer = if recorder.is_some() {
+        SemanticIndexer::from_default_logged()
+    } else {
+        None
+    };
+    // Auto-curator: opt-in via `[agent] auxiliary_*` config. After
+    // each final answer, fires `curate_session` in the background to
+    // extract durable user facts and append them to MEMORY.md.
+    let auto_curator = recorder.and_then(|(db, _)| AutoCurator::from_cfg_logged(cfg, db));
+
     if let Some((db, sid)) = recorder {
         let to_record = redactor
             .as_ref()
             .map(|r| r.redact(user_prompt))
             .unwrap_or_else(|| user_prompt.to_string());
-        if let Err(e) = db.record_message(sid, "user", &to_record) {
-            tracing::warn!("memory: failed to record user prompt: {e}");
+        match db.record_message(sid, "user", &to_record) {
+            Ok(msg_id) => {
+                if let Some(ix) = &semantic_indexer {
+                    ix.spawn_index(sid.to_string(), "user", msg_id, to_record);
+                }
+            }
+            Err(e) => tracing::warn!("memory: failed to record user prompt: {e}"),
         }
     }
 
@@ -325,8 +346,15 @@ async fn ask_inner(
                     .as_ref()
                     .map(|r| r.redact(&content))
                     .unwrap_or(content);
-                if let Err(e) = db.record_message(sid, role, &to_record) {
-                    tracing::warn!("memory: failed to record {role} message: {e}");
+                match db.record_message(sid, role, &to_record) {
+                    Ok(msg_id) => {
+                        if let Some(ix) = &semantic_indexer {
+                            ix.spawn_index(sid.to_string(), role, msg_id, to_record);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("memory: failed to record {role} message: {e}");
+                    }
                 }
             }
         }
@@ -354,6 +382,13 @@ async fn ask_inner(
                         tracing::warn!("title: failed to record session title: {e}");
                     }
                 }
+            }
+            // Fire-and-forget memory curation. The curator itself
+            // short-circuits when no new messages exist since the
+            // last pass, so calling on every final-answer turn is
+            // cheap. Only fires when [agent] auxiliary_* is set.
+            if let Some(c) = &auto_curator {
+                c.spawn_curate(session_id.clone());
             }
             return Ok(AskResult {
                 answer,
@@ -387,13 +422,27 @@ async fn ask_inner_streaming(
         None
     };
 
+    // Streaming twins of ask_inner's auto-memory plumbing. See
+    // `ask_inner` for the per-field rationale.
+    let semantic_indexer = if recorder.is_some() {
+        SemanticIndexer::from_default_logged()
+    } else {
+        None
+    };
+    let auto_curator = recorder.and_then(|(db, _)| AutoCurator::from_cfg_logged(cfg, db));
+
     if let Some((db, sid)) = recorder {
         let to_record = redactor
             .as_ref()
             .map(|r| r.redact(user_prompt))
             .unwrap_or_else(|| user_prompt.to_string());
-        if let Err(e) = db.record_message(sid, "user", &to_record) {
-            tracing::warn!("memory: failed to record user prompt: {e}");
+        match db.record_message(sid, "user", &to_record) {
+            Ok(msg_id) => {
+                if let Some(ix) = &semantic_indexer {
+                    ix.spawn_index(sid.to_string(), "user", msg_id, to_record);
+                }
+            }
+            Err(e) => tracing::warn!("memory: failed to record user prompt: {e}"),
         }
     }
 
@@ -537,8 +586,15 @@ async fn ask_inner_streaming(
                     .as_ref()
                     .map(|r| r.redact(&content))
                     .unwrap_or(content);
-                if let Err(e) = db.record_message(sid, role, &to_record) {
-                    tracing::warn!("memory: failed to record {role} message: {e}");
+                match db.record_message(sid, role, &to_record) {
+                    Ok(msg_id) => {
+                        if let Some(ix) = &semantic_indexer {
+                            ix.spawn_index(sid.to_string(), role, msg_id, to_record);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("memory: failed to record {role} message: {e}");
+                    }
                 }
             }
         }
@@ -559,6 +615,9 @@ async fn ask_inner_streaming(
                         tracing::warn!("title: failed to record session title: {e}");
                     }
                 }
+            }
+            if let Some(c) = &auto_curator {
+                c.spawn_curate(session_id.clone());
             }
             return Ok(AskResult {
                 answer,

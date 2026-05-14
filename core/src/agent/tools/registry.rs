@@ -145,6 +145,20 @@ pub fn default_registry() -> ToolRegistry {
         Ok(db) => super::cos_proxy::register_recall(&mut r, db),
         Err(e) => tracing::warn!("cos_recall: failed to open default memory DB: {e}"),
     }
+    // Best-effort: open the default semantic store; only registered
+    // when `[embed]` is configured. When disabled the tool silently
+    // doesn't exist (the LLM falls back to cos_recall keyword search).
+    match crate::agent::memory::semantic::SemanticStore::open_default() {
+        Ok(Some(store)) => {
+            super::cos_proxy::register_recall_semantic(&mut r, std::sync::Arc::new(store))
+        }
+        Ok(None) => {
+            tracing::debug!("cos_recall_semantic: [embed] disabled — tool not registered")
+        }
+        Err(e) => tracing::warn!(
+            "cos_recall_semantic: failed to open default semantic DB: {e}"
+        ),
+    }
     r
 }
 
