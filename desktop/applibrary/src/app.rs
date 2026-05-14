@@ -35,7 +35,7 @@ use cosmic::{
     iced::{
         core::{
             Border, Padding, Rectangle, Shadow,
-            alignment::Vertical,
+            alignment::{Horizontal, Vertical},
             event::{
                 PlatformSpecific,
                 wayland::{self, LayerEvent},
@@ -393,6 +393,7 @@ impl CosmicAppLibrary {
 #[derive(Clone, Debug)]
 enum Message {
     Activate,
+    AskAi,
     UpdateFocused(Option<widget::Id>),
     InputChanged(String),
     KeyboardNav(keyboard_nav::Action),
@@ -754,6 +755,17 @@ impl cosmic::Application for CosmicAppLibrary {
                 _ => {}
             },
             Message::Hide => {
+                return self.hide();
+            }
+            Message::AskAi => {
+                let query = self.search_value.trim().to_string();
+                if !query.is_empty() {
+                    let mut cmd = std::process::Command::new("cos");
+                    cmd.args(["app", "agent", "overlay", "--query", &query]);
+                    if let Err(err) = cmd.spawn() {
+                        error!("failed to launch cos app agent overlay: {err}");
+                    }
+                }
                 return self.hide();
             }
             Message::ActivateApp(i, gpu_idx) => {
@@ -1569,15 +1581,56 @@ impl cosmic::Application for CosmicAppLibrary {
         let group_rows =
             Column::with_children(group_rows.into_iter().map(|r| r.into()).collect_vec());
 
-        let content = column![
-            top_row,
-            app_scrollable,
-            container(horizontal_rule(1))
-                .padding([space_none, space_xxl])
-                .width(Length::Fill),
-            group_rows
-        ]
-        .align_x(Alignment::Center);
+        let content = if !self.search_value.trim().is_empty() && self.cur_group == 0 {
+            let q = self.search_value.trim().to_string();
+            let ai_button = button::custom(
+                row![
+                    container(
+                        text::body(fl!("ask-claw-ai", query = q.clone()))
+                            .align_x(Horizontal::Left)
+                            .align_y(Vertical::Center),
+                    )
+                    .width(Length::FillPortion(5))
+                    .padding([0, space_xxs]),
+                    container(
+                        text::caption(fl!("ask-claw-ai-hint"))
+                            .align_x(Horizontal::Right)
+                            .align_y(Vertical::Center),
+                    )
+                    .width(Length::FillPortion(2))
+                    .padding([0, space_xxs]),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+            )
+            .width(Length::Fixed(600.0))
+            .on_press(Message::AskAi)
+            .padding([space_xs, space_s])
+            .class(Button::Suggested);
+            let ai_row = container(ai_button)
+                .center_x(Length::Fill)
+                .padding([0, space_xxl, space_xxs, space_xxl]);
+            column![
+                top_row,
+                ai_row,
+                app_scrollable,
+                container(horizontal_rule(1))
+                    .padding([space_none, space_xxl])
+                    .width(Length::Fill),
+                group_rows
+            ]
+            .align_x(Alignment::Center)
+        } else {
+            column![
+                top_row,
+                app_scrollable,
+                container(horizontal_rule(1))
+                    .padding([space_none, space_xxl])
+                    .width(Length::Fill),
+                group_rows
+            ]
+            .align_x(Alignment::Center)
+        };
 
         let window = container(content)
             .height(Length::Fixed(690.))

@@ -26,3 +26,6 @@ snap = Snap
 system = 系统
 local = 本地
 nix = Nix
+
+ask-claw-ai = 询问 Claw AI：{ $query }
+ask-claw-ai-hint = 转交给 AI Agent

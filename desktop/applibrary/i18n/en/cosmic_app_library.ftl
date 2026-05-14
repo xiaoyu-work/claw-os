@@ -26,3 +26,6 @@ snap = Snap
 system = System
 local = Local
 nix = Nix
+
+ask-claw-ai = Ask Claw AI: { $query }
+ask-claw-ai-hint = Forward to the AI agent
