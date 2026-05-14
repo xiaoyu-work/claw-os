@@ -4123,7 +4123,7 @@ impl Application for App {
                 let final_path = copy_unique_path(&base_path, &to);
 
                 // Write text data to file
-                match crate::claw_glue::write_bytes(&final_path, &contents.data) {
+                match crate::claw_glue::write_bytes(&final_path, contents.data.as_bytes()) {
                     Ok(_) => {
                         log::info!("Pasted text saved to {:?}", final_path);
                     }
