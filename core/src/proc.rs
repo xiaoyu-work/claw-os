@@ -39,6 +39,16 @@ pub struct SessionInfo {
     pub scope: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<String>,
+    /// Capability set the session may exercise. Populated by `--role`
+    /// or `--caps` on `cos proc spawn`. The kernel caps gate (see
+    /// `caps::require`) consults this field to authorise gated
+    /// operations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caps: Option<crate::caps::CapSet>,
+    /// Role label used to generate `caps`, kept for audit / display.
+    /// Has no enforcement effect — `caps` is the source of truth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -110,6 +120,11 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     let mut scope: Option<String> = None;
     let mut priority: Option<String> = None;
     let mut isolated_workspace = false;
+    let mut role_name: Option<String> = None;
+    let mut caps_arg: Option<String> = None;
+    let mut scope_path: Option<String> = None;
+    let mut scope_host: Option<String> = None;
+    let mut scope_name: Option<String> = None;
     let mut cmd_start = 0;
 
     let mut i = 0;
@@ -141,6 +156,26 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
                         .parse::<u8>()
                         .map_err(|_| "tier must be 0-3".to_string())?,
                 );
+                i += 2;
+            }
+            "--role" if i + 1 < args.len() => {
+                role_name = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--caps" if i + 1 < args.len() => {
+                caps_arg = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--scope-path" if i + 1 < args.len() => {
+                scope_path = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--scope-host" if i + 1 < args.len() => {
+                scope_host = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--scope-name" if i + 1 < args.len() => {
+                scope_name = Some(args[i + 1].clone());
                 i += 2;
             }
             "--scope" if i + 1 < args.len() => {
@@ -179,6 +214,55 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         }
     }
 
+    // Resolve --role / --caps into a CapSet. The kernel caps gate
+    // (`caps::require`) consults this field; `--tier` is retained
+    // alongside it for back-compat with the legacy tier API.
+    let cap_set: Option<crate::caps::CapSet> = match (role_name.as_deref(), caps_arg.as_deref()) {
+        (Some(_), Some(_)) => {
+            return Err("--role and --caps are mutually exclusive".into());
+        }
+        (Some(name), None) => {
+            let role = crate::caps::Role::parse(name).ok_or_else(|| {
+                format!(
+                    "unknown role `{name}`; valid: observer, worker, curator, connector, automator, agent-host, admin"
+                )
+            })?;
+            let path_s = scope_path.as_deref().map(crate::caps::Scope::path);
+            let host_s = scope_host.as_deref().map(crate::caps::Scope::host);
+            let name_s = scope_name.as_deref().map(crate::caps::Scope::name);
+            Some(role.caps_with_scopes(path_s, host_s, name_s))
+        }
+        (None, Some(list)) => {
+            let mut set = crate::caps::CapSet::new();
+            for tok in list.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                let verb = crate::caps::Verb::parse(tok)
+                    .ok_or_else(|| format!("unknown verb `{tok}` in --caps list"))?;
+                let scope = crate::caps::catalog::lookup(verb)
+                    .map(|m| m.scope_kind)
+                    .map(|k| match k {
+                        crate::caps::scope::ScopeKind::Path => scope_path
+                            .as_deref()
+                            .map(crate::caps::Scope::path)
+                            .unwrap_or(crate::caps::Scope::Wild),
+                        crate::caps::scope::ScopeKind::Host => scope_host
+                            .as_deref()
+                            .map(crate::caps::Scope::host)
+                            .unwrap_or(crate::caps::Scope::Wild),
+                        crate::caps::scope::ScopeKind::Name
+                        | crate::caps::scope::ScopeKind::SelfRef => scope_name
+                            .as_deref()
+                            .map(crate::caps::Scope::name)
+                            .unwrap_or(crate::caps::Scope::Wild),
+                        _ => crate::caps::Scope::Wild,
+                    })
+                    .unwrap_or(crate::caps::Scope::Wild);
+                set.insert(crate::caps::Cap::new(verb, scope));
+            }
+            Some(set)
+        }
+        (None, None) => None,
+    };
+
     // Enforce inheritance rules when parent is set
     if let Some(ref parent_sid) = parent {
         let reg = load_registry();
@@ -210,8 +294,36 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
             if parent_info.scope.is_some() && scope.is_none() {
                 scope = parent_info.scope.clone();
             }
+
+            // CapSet inheritance: child caps must be a subset of parent caps.
+            // If parent has caps but the child requested none, the child
+            // inherits the parent's full set (the most-restricted thing we
+            // can do without breaking the chain).
+            if let (Some(parent_caps), Some(ref child_caps)) =
+                (parent_info.caps.as_ref(), cap_set.as_ref())
+            {
+                if !parent_caps.covers_all(child_caps) {
+                    return Err(format!(
+                        "cannot widen caps: parent '{}' does not cover every cap the child requested",
+                        parent_sid
+                    ));
+                }
+            }
         }
     }
+
+    let cap_set = match (cap_set, parent.as_ref()) {
+        (Some(c), _) => Some(c),
+        (None, Some(parent_sid)) => {
+            // Inherit parent caps verbatim if child didn't specify.
+            let reg = load_registry();
+            reg.sessions
+                .iter()
+                .find(|s| &s.session_id == parent_sid)
+                .and_then(|p| p.caps.clone())
+        }
+        (None, None) => None,
+    };
 
     // Guardrails: check for rapid respawn and destructive commands
     let reg_check = load_registry();
@@ -314,6 +426,8 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         tier,
         scope: scope.clone(),
         priority: priority.clone(),
+        caps: cap_set.clone(),
+        role: role_name.clone(),
     };
 
     let mut reg = load_registry();
@@ -346,6 +460,12 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     }
     if let Some(ref pr) = priority {
         result["priority"] = json!(pr);
+    }
+    if let Some(ref r) = role_name {
+        result["role"] = json!(r);
+    }
+    if let Some(ref c) = cap_set {
+        result["caps"] = json!(c);
     }
     let mut warnings = Vec::new();
     if let Some(w) = rapid_warning {

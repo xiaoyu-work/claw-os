@@ -435,7 +435,7 @@ fn builtin_apps() -> Vec<(
             ("list", "List all active sandboxes"),
         ]),
         ("proc", "Process session manager — spawn, track, control, and monitor processes", vec![
-            ("spawn", "Start a process (--session ID, --group NAME, --priority low|normal|high|realtime, --tier N, --scope PATH)"),
+            ("spawn", "Start a process (--session ID, --group NAME, --priority low|normal|high|realtime, --role NAME, --caps verb,..., --scope-path P, --scope-host H, --scope-name N; --tier N is deprecated)"),
             ("status", "Check if a session's process is still running"),
             ("output", "Read buffered stdout/stderr (--tail N, --follow, --since-offset BYTES)"),
             ("kill", "Terminate a session's process or an entire --group"),
@@ -801,8 +801,23 @@ fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandSchema>)> {
                     params: vec![
                         Param::flag("--session", "string", false, "Custom session ID"),
                         Param::flag("--group", "string", false, "Named group for bulk ops"),
-                        Param::flag("--tier", "integer", false, "Permission tier 0-3"),
-                        Param::flag("--scope", "string", false, "Path restriction"),
+                        Param::flag(
+                            "--role",
+                            "string",
+                            false,
+                            "Capability role: observer, worker, curator, connector, automator, agent-host, admin",
+                        ),
+                        Param::flag(
+                            "--caps",
+                            "string",
+                            false,
+                            "Comma-separated verb list (alternative to --role)",
+                        ),
+                        Param::flag("--scope-path", "string", false, "Restrict path-scoped caps"),
+                        Param::flag("--scope-host", "string", false, "Restrict host-scoped caps"),
+                        Param::flag("--scope-name", "string", false, "Restrict name-scoped caps"),
+                        Param::flag("--tier", "integer", false, "Permission tier 0-3 (deprecated; use --role)"),
+                        Param::flag("--scope", "string", false, "Path restriction (legacy)"),
                         Param::flag(
                             "--priority",
                             "enum:low|normal|high|realtime",
@@ -816,7 +831,7 @@ fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandSchema>)> {
                             "Command to run (after --)",
                         ),
                     ],
-                    example: "cos proc spawn --session build-1 --group ci --tier 1 -- cargo build",
+                    example: "cos proc spawn --session build-1 --group ci --role worker --scope-path /work -- cargo build",
                 },
                 CommandSchema {
                     command: "status",
