@@ -140,9 +140,13 @@ pub struct AgentConfig {
     /// `compress_trigger_tokens`, the head of the message list is
     /// summarised by the same provider and replaced with a single
     /// `[CONTEXT SUMMARY]` user message; the tail is kept verbatim.
-    /// Defaults to `false` so behaviour is unchanged for existing users
-    /// — opt in once your sessions get long.
-    #[serde(default)]
+    /// Defaults to `true` — long-running sessions on a system-level
+    /// agent OS are the norm, not the exception, and a runaway context
+    /// is the difference between "agent that quietly keeps working"
+    /// and "agent that hits the provider's context limit and dies
+    /// mid-task". Set to `false` only if you have a reason to want the
+    /// raw transcript on every turn (e.g. eval / regression harnesses).
+    #[serde(default = "default_compress_enabled")]
     pub compress_enabled: bool,
 
     /// Target total context budget in tokens. Used as the upper bound
@@ -621,6 +625,9 @@ fn default_compress_keep_tail() -> u32 {
 fn default_compress_summary_max() -> u32 {
     crate::agent::context::compressor::DEFAULT_SUMMARY_MAX_TOKENS
 }
+fn default_compress_enabled() -> bool {
+    true
+}
 fn default_think_scrub_enabled() -> bool {
     true
 }
@@ -811,7 +818,7 @@ impl Default for AgentConfig {
             base_url: None,
             extra_headers: std::collections::HashMap::new(),
             request_timeout: default_agent_request_timeout(),
-            compress_enabled: false,
+            compress_enabled: default_compress_enabled(),
             compress_target_tokens: default_compress_target(),
             compress_trigger_tokens: default_compress_trigger(),
             compress_keep_tail_tokens: default_compress_keep_tail(),
