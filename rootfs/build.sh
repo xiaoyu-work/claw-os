@@ -99,6 +99,34 @@ debootstrap --extractor=ar "$SUITE" "$ROOTFS"
 echo ":: applying global overlay"
 cp -a "$SCRIPT_DIR/overlay/." "$ROOTFS/"
 
+# 2b. Bind-mount kernel pseudofs and propagate resolv.conf into the chroot.
+# Needed by chroot operations more involved than a plain `apt-get install`:
+# - systemctl enable (wants /proc/1/comm to detect systemd)
+# - plymouth-set-default-theme (reads /proc/cmdline)
+# - rustup/cargo (read /proc/self/exe, /proc/cpuinfo; spawn child procs)
+# - any package's postinst that runs `update-initramfs`, `ldconfig`, etc.
+# debootstrap leaves /etc/resolv.conf empty; copy the host's so apt + curl
+# can resolve names inside the chroot.
+echo ":: setting up chroot bind mounts"
+mkdir -p "$ROOTFS/proc" "$ROOTFS/sys" "$ROOTFS/dev" "$ROOTFS/dev/pts" "$ROOTFS/run"
+mount --bind /proc "$ROOTFS/proc"
+mount --bind /sys "$ROOTFS/sys"
+mount --bind /dev "$ROOTFS/dev"
+mount --bind /dev/pts "$ROOTFS/dev/pts"
+if [ -e /etc/resolv.conf ]; then
+    cp -L /etc/resolv.conf "$ROOTFS/etc/resolv.conf"
+fi
+
+cleanup_chroot_mounts() {
+    # Unmount in reverse order, lazy fallback for stray references.
+    for mp in "$ROOTFS/dev/pts" "$ROOTFS/dev" "$ROOTFS/sys" "$ROOTFS/proc"; do
+        if mountpoint -q "$mp"; then
+            umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
+        fi
+    done
+}
+trap cleanup_chroot_mounts EXIT
+
 # 3. Apply each feature in order.
 for f in "${FEATURE_LIST[@]}"; do
     feature_dir="$SCRIPT_DIR/features/$f"
