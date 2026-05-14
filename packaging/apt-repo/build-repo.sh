@@ -9,12 +9,18 @@
 #   │   ├── InRelease           (signed Release, omitted if no GPG key)
 #   │   ├── Release             (always)
 #   │   ├── Release.gpg         (detached signature, omitted if no GPG key)
-#   │   └── main/binary-amd64/
-#   │       ├── Packages
-#   │       └── Packages.gz
-#   └── pool/main/c/claw-os-base/claw-os-base_<v>_amd64.deb
-#       pool/main/c/claw-os-browser/claw-os-browser_<v>_amd64.deb
+#   │   └── main/
+#   │       ├── binary-amd64/Packages{,.gz}    (if amd64 .debs present)
+#   │       ├── binary-arm64/Packages{,.gz}    (if arm64 .debs present)
+#   │       └── binary-all/Packages{,.gz}      (always — Architecture: all)
+#   └── pool/main/c/claw-os-base/claw-os-base_<v>_<arch>.deb
+#       pool/main/c/claw-os-browser/claw-os-browser_<v>_<arch>.deb
 #       pool/main/c/claw-os-systemd/claw-os-systemd_<v>_all.deb
+#
+# Dual-arch: the script auto-discovers every Architecture: in build/debs/
+# and emits one binary-<arch>/ tree per architecture, so an admin can run
+# build-debs.sh twice (once on an amd64 host, once on an arm64 host)
+# into the same build/debs/ directory and produce a single multi-arch repo.
 #
 # The repo is unsigned by default. Set GPG_KEY_ID to enable signing.
 
@@ -27,7 +33,6 @@ DEBS_DIR="$PROJECT_DIR/build/debs"
 REPO_DIR="$PROJECT_DIR/build/apt-repo"
 SUITE="${SUITE:-trixie}"
 COMPONENT="main"
-ARCH="amd64"
 GPG_KEY_ID="${GPG_KEY_ID:-}"
 
 if [ ! -d "$DEBS_DIR" ] || [ -z "$(ls "$DEBS_DIR"/*.deb 2>/dev/null)" ]; then
@@ -40,9 +45,36 @@ if ! command -v apt-ftparchive >/dev/null 2>&1; then
     exit 1
 fi
 
+# Discover every Architecture: in the .deb filenames. Conventional Debian
+# filename is `<pkg>_<version>_<arch>.deb`. We extract the final field.
+declare -a binary_arches=()
+arch_seen=""
+for deb in "$DEBS_DIR"/*.deb; do
+    name="$(basename "$deb")"
+    # claw-os-base_0.1.0_amd64.deb -> amd64
+    deb_arch="${name##*_}"
+    deb_arch="${deb_arch%.deb}"
+    # Architecture: all packages are surfaced under every binary-<arch>
+    # tree by apt's resolver, so we only iterate over real arches here.
+    [ "$deb_arch" = "all" ] && continue
+    case " $arch_seen " in
+        *" $deb_arch "*) ;;
+        *) binary_arches+=("$deb_arch"); arch_seen="$arch_seen $deb_arch" ;;
+    esac
+done
+
+if [ ${#binary_arches[@]} -eq 0 ]; then
+    echo "error: no architecture-specific .debs found in $DEBS_DIR" >&2
+    exit 1
+fi
+
 echo ":: building apt repo at $REPO_DIR"
+echo ":: arches: ${binary_arches[*]}"
+
 rm -rf "$REPO_DIR"
-mkdir -p "$REPO_DIR/dists/$SUITE/$COMPONENT/binary-$ARCH"
+for a in "${binary_arches[@]}"; do
+    mkdir -p "$REPO_DIR/dists/$SUITE/$COMPONENT/binary-$a"
+done
 mkdir -p "$REPO_DIR/dists/$SUITE/$COMPONENT/binary-all"
 
 # Move each .deb into pool/main/c/<package-name>/.
@@ -56,28 +88,34 @@ for deb in "$DEBS_DIR"/*.deb; do
     echo "  :: pool/$COMPONENT/c/$pkg/$name"
 done
 
-# Generate Packages file for binary-amd64 (covers Architecture: amd64 and all).
+# Generate Packages files. apt-ftparchive packages walks the pool and
+# extracts the Architecture field from each .deb's control. The same
+# pool feeds every binary-<arch>/ index; apt's client filters by arch
+# at install time.
 cd "$REPO_DIR"
-echo ":: generating Packages.gz"
-apt-ftparchive packages "pool/$COMPONENT" \
-    > "dists/$SUITE/$COMPONENT/binary-$ARCH/Packages"
-gzip -fk9 "dists/$SUITE/$COMPONENT/binary-$ARCH/Packages"
+echo ":: generating Packages indexes"
+for a in "${binary_arches[@]}"; do
+    apt-ftparchive --arch "$a" packages "pool/$COMPONENT" \
+        > "dists/$SUITE/$COMPONENT/binary-$a/Packages"
+    gzip -fk9 "dists/$SUITE/$COMPONENT/binary-$a/Packages"
+done
 
-# Architecture: all packages also need to appear under binary-all, but apt
-# resolves them via binary-amd64 too as long as Packages includes them.
-# Per Debian policy we mirror the file so older apt clients can find them.
-cp "dists/$SUITE/$COMPONENT/binary-$ARCH/Packages" \
-   "dists/$SUITE/$COMPONENT/binary-all/Packages"
+# Architecture: all packages need an explicit binary-all index. We pass
+# `--arch all` so apt-ftparchive only picks up Architecture: all .debs.
+apt-ftparchive --arch all packages "pool/$COMPONENT" \
+    > "dists/$SUITE/$COMPONENT/binary-all/Packages"
 gzip -fk9 "dists/$SUITE/$COMPONENT/binary-all/Packages"
 
-# Generate the Release file.
+# Generate the Release file. The Architectures: list determines which
+# binary-<arch>/ trees apt will fetch.
 echo ":: generating Release"
+arch_list="${binary_arches[*]} all"
 cat > "$REPO_DIR/apt-ftparchive-release.conf" <<EOF
 APT::FTPArchive::Release::Origin "Claw OS";
 APT::FTPArchive::Release::Label "Claw OS";
 APT::FTPArchive::Release::Suite "$SUITE";
 APT::FTPArchive::Release::Codename "$SUITE";
-APT::FTPArchive::Release::Architectures "$ARCH all";
+APT::FTPArchive::Release::Architectures "$arch_list";
 APT::FTPArchive::Release::Components "$COMPONENT";
 APT::FTPArchive::Release::Description "Claw OS apt repository";
 EOF
@@ -101,8 +139,10 @@ else
     echo "  :: GPG_KEY_ID not set — repo is unsigned (use [trusted=yes])"
 fi
 
-# Index page for GitHub Pages.
-cat > "$REPO_DIR/index.html" <<EOF
+# Index page for GitHub Pages. We list every binary-<arch>/Packages file
+# so visitors can confirm at a glance which arches the repo covers.
+{
+    cat <<EOF
 <!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Claw OS apt repo</title></head>
 <body>
@@ -114,11 +154,19 @@ echo "deb [trusted=yes] https://xiaoyu-work.github.io/claw-os $SUITE $COMPONENT"
 sudo apt update
 sudo apt install claw-os-base
 </pre>
-<p>Available packages: <a href="dists/$SUITE/$COMPONENT/binary-$ARCH/Packages">Packages</a></p>
+<p>Available indexes:</p>
+<ul>
+EOF
+    for a in "${binary_arches[@]}" all; do
+        echo "  <li><a href=\"dists/$SUITE/$COMPONENT/binary-$a/Packages\">binary-$a / Packages</a></li>"
+    done
+    cat <<EOF
+</ul>
 <p>Source: <a href="https://github.com/xiaoyu-work/claw-os">github.com/xiaoyu-work/claw-os</a></p>
 </body></html>
 EOF
+} > "$REPO_DIR/index.html"
 
 echo ""
 echo ":: apt repo ready at $REPO_DIR"
-echo "   suite=$SUITE component=$COMPONENT arch=$ARCH"
+echo "   suite=$SUITE component=$COMPONENT arches=$arch_list"

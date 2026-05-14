@@ -20,6 +20,10 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 ROOTFS="$PROJECT_DIR/build/claw-os-rootfs"
 SUITE="trixie"
 
+# Architecture mapping ($ARCH, $DEB_ARCH, $KERNEL_PKG, …). Defaults to host
+# arch when $ARCH is unset.
+source "$PROJECT_DIR/scripts/lib/arch.sh"
+
 DEFAULT_FEATURES="base,cos-core,browser"
 FEATURES="$DEFAULT_FEATURES"
 
@@ -86,14 +90,15 @@ fi
 # Read version from Cargo.toml (single source of truth).
 COS_VERSION=$(grep '^version' "$PROJECT_DIR/core/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
 
-export ROOTFS PROJECT_DIR SCRIPT_DIR SUITE COS_VERSION
+export ROOTFS PROJECT_DIR SCRIPT_DIR SUITE COS_VERSION ARCH DEB_ARCH KERNEL_PKG
 
 echo ":: features: ${FEATURE_LIST[*]}"
+echo ":: arch:     $ARCH (deb=$DEB_ARCH, kernel=$KERNEL_PKG)"
 
 # 1. Bootstrap minimal Debian rootfs.
-echo ":: debootstrap $SUITE -> $ROOTFS"
+echo ":: debootstrap --arch=$DEB_ARCH $SUITE -> $ROOTFS"
 mkdir -p "$ROOTFS"
-debootstrap --extractor=ar "$SUITE" "$ROOTFS"
+debootstrap --extractor=ar --arch="$DEB_ARCH" "$SUITE" "$ROOTFS"
 
 # 2. Apply global overlay (config files, cos-init, etc.).
 echo ":: applying global overlay"
@@ -137,9 +142,24 @@ for f in "${FEATURE_LIST[@]}"; do
         # Strip comments and blank lines. Guard with `|| true` so a
         # packages.txt that is entirely comments (e.g. apt-source) does
         # not return exit 1 from grep and trip `set -o pipefail`.
-        pkgs=$( { grep -vE '^\s*(#|$)' "$feature_dir/packages.txt" || true; } | tr '\n' ' ')
-        if [ -n "$pkgs" ]; then
-            echo "  :: apt install $pkgs"
+        # Expand ${VAR} references (KERNEL_PKG, DEB_ARCH, …) against the
+        # exported env so a single packages.txt can name an arch-specific
+        # kernel package. packages.txt is a repo file (trusted), and
+        # we wrap the line in double quotes so eval only expands ${…}
+        # / $… and does not run command substitution / globbing on
+        # plain package names.
+        pkgs=""
+        while IFS= read -r _line; do
+            case "$_line" in ''|\#*) continue ;; esac
+            eval "_expanded=\"$_line\""
+            # An empty expansion (e.g. ${GRUB_BIOS_PKG} on arm64) means
+            # "no package needed on this arch" — skip silently.
+            # shellcheck disable=SC2154  # _expanded is assigned by eval above
+            [ -z "$_expanded" ] && continue
+            pkgs="$pkgs $_expanded"
+        done < <(grep -vE '^\s*(#|$)' "$feature_dir/packages.txt" || true)
+        if [ -n "${pkgs// /}" ]; then
+            echo "  :: apt install$pkgs"
             chroot "$ROOTFS" apt-get update -qq
             chroot "$ROOTFS" apt-get install -y --no-install-recommends $pkgs
             chroot "$ROOTFS" apt-get clean

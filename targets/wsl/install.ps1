@@ -6,6 +6,11 @@
 #   .\install.ps1 -InstallPath D:\WSL\claw-os                # custom location
 #   .\install.ps1 -Tarball .\claw-os-wsl-amd64.tar.gz        # explicit tarball
 #
+# By default the tarball name is selected from the host CPU architecture
+# ($env:PROCESSOR_ARCHITECTURE → amd64 or arm64) so the same script
+# works on Windows-on-ARM (Surface Pro X, Snapdragon X, Apple Silicon
+# Mac via Parallels) without changes.
+#
 # Requirements:
 #   - Windows 10 21H2+ or Windows 11
 #   - WSL2 enabled (`wsl --install` if not yet)
@@ -14,10 +19,15 @@
 param(
     [string]$DistroName  = "claw-os",
     [string]$InstallPath = "$env:LOCALAPPDATA\WSL\claw-os",
-    [string]$Tarball     = "$PSScriptRoot\..\..\build\claw-os-wsl-amd64.tar.gz"
+    [string]$Tarball     = ""
 )
 
 $ErrorActionPreference = "Stop"
+
+if (-not $Tarball) {
+    $archSuffix = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
+    $Tarball    = "$PSScriptRoot\..\..\build\claw-os-wsl-$archSuffix.tar.gz"
+}
 
 if (-not (Test-Path $Tarball)) {
     Write-Error "Tarball not found at $Tarball. Build it first: sudo ./build.sh wsl"

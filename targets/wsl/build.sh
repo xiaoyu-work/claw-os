@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # targets/wsl/build.sh — Build a WSL2 importable rootfs tarball.
 #
-# Output:  build/claw-os-wsl-amd64.tar.gz
+# Output:  build/claw-os-wsl-<arch>.tar.gz  (arch from $ARCH).
 #
 # Usage:   sudo ./build.sh wsl
 #
@@ -11,13 +11,21 @@
 #   2. Apply the WSL-specific overlay (wsl.conf).
 #   3. Create a default 'cos' user (uid 1000, passwordless sudo).
 #   4. Tar the rootfs into a tarball that `wsl --import` can consume.
+#
+# Note: WSL2 supports arm64 on Windows-on-ARM hosts (e.g. Surface Pro X,
+# Snapdragon X, Apple Silicon Mac via Parallels). The arm64 tarball is
+# imported the same way as amd64 — Windows picks the right tarball based
+# on the host arch.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ROOTFS="$PROJECT_DIR/build/claw-os-rootfs"
-OUTPUT="$PROJECT_DIR/build/claw-os-wsl-amd64.tar.gz"
+
+source "$PROJECT_DIR/scripts/lib/arch.sh"
+
+OUTPUT="$PROJECT_DIR/build/claw-os-wsl-${ARCH_SUFFIX}.tar.gz"
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "error: must run as root (debootstrap, chroot and tarball creation need it)" >&2

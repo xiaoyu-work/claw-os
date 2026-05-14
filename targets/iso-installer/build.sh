@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# targets/iso-installer/build.sh — Build a hybrid BIOS+UEFI installable ISO.
+# targets/iso-installer/build.sh — Build an installable ISO.
 #
-# Output: build/claw-os-installer-amd64.iso
+# Output: build/claw-os-installer-<arch>.iso  (arch from $ARCH).
 #
 # Differs from iso-live in three ways:
 #  1. Adds `installer` feature → Calamares + minimal X + autostart-on-login.
@@ -12,9 +12,14 @@
 # Calamares writes a fresh /etc/fstab and grub.cfg, then reboots — the
 # new system is a permanent disk install.
 #
+# Boot modes:
+#   amd64 → hybrid BIOS+UEFI
+#   arm64 → UEFI-only
+#
 # Host requirements (Debian/Ubuntu):
-#   apt install squashfs-tools xorriso mtools \
-#               grub-pc-bin grub-efi-amd64-bin grub-common
+#   apt install squashfs-tools xorriso mtools grub-common
+#   apt install grub-efi-<arch>-bin       # /usr/lib/grub/<arch>-efi modules
+#   apt install grub-pc-bin               # amd64 only — BIOS modules
 
 set -euo pipefail
 
@@ -22,7 +27,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ROOTFS="$PROJECT_DIR/build/claw-os-rootfs"
 ISO_BUILD="$PROJECT_DIR/build/iso-installer-build"
-OUTPUT="$PROJECT_DIR/build/claw-os-installer-amd64.iso"
+
+source "$PROJECT_DIR/scripts/lib/arch.sh"
+
+OUTPUT="$PROJECT_DIR/build/claw-os-installer-${ARCH_SUFFIX}.iso"
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "error: must run as root" >&2
@@ -36,14 +44,17 @@ for tool in mksquashfs xorriso grub-mkrescue mformat; do
 done
 if [ -n "$missing" ]; then
     echo "error: missing host tools:$missing" >&2
-    echo "install: apt install squashfs-tools xorriso grub-pc-bin grub-efi-amd64-bin mtools grub-common" >&2
+    echo "install: apt install squashfs-tools xorriso $GRUB_EFI_PKG ${GRUB_BIOS_PKG:-} mtools grub-common" >&2
     exit 1
 fi
 
-# grub-mkrescue uses these at build time.
-for moddir in /usr/lib/grub/i386-pc /usr/lib/grub/x86_64-efi; do
+# grub-mkrescue uses these at build time. arm64 has no BIOS path so we
+# only require the UEFI module dir there.
+required_grub_dirs=("/usr/lib/grub/$GRUB_EFI_TARGET")
+[ -n "$GRUB_BIOS_TARGET" ] && required_grub_dirs+=("/usr/lib/grub/$GRUB_BIOS_TARGET")
+for moddir in "${required_grub_dirs[@]}"; do
     if [ ! -d "$moddir" ]; then
-        echo "error: $moddir is missing — apt install grub-pc-bin grub-efi-amd64-bin" >&2
+        echo "error: $moddir is missing — apt install $GRUB_EFI_PKG${GRUB_BIOS_PKG:+ $GRUB_BIOS_PKG}" >&2
         exit 1
     fi
 done
@@ -118,8 +129,8 @@ for f in live/filesystem.squashfs live/vmlinuz live/initrd.img boot/grub/grub.cf
     fi
 done
 
-# 8. Build hybrid ISO.
-echo ":: building hybrid ISO via grub-mkrescue"
+# 8. Build ISO.
+echo ":: building $ARCH ISO via grub-mkrescue"
 grub-mkrescue \
     --output="$OUTPUT" \
     --product-name="Claw OS Installer" \
@@ -130,15 +141,25 @@ grub-mkrescue \
 SIZE=$(du -h "$OUTPUT" | cut -f1)
 echo ":: done — $OUTPUT ($SIZE)"
 echo
-echo "Test (BIOS, with an attached blank disk to install into):"
-echo "  qemu-img create -f qcow2 build/claw-os-target.qcow2 16G"
-echo "  qemu-system-x86_64 -m 4G \\"
-echo "      -cdrom $OUTPUT \\"
-echo "      -drive file=build/claw-os-target.qcow2,format=qcow2,if=virtio \\"
-echo "      -boot d"
-echo
-echo "Test (UEFI, requires ovmf):"
-echo "  qemu-system-x86_64 -m 4G \\"
-echo "      -bios /usr/share/ovmf/OVMF.fd \\"
-echo "      -cdrom $OUTPUT \\"
-echo "      -drive file=build/claw-os-target.qcow2,format=qcow2,if=virtio"
+if [ "$ARCH" = "amd64" ]; then
+    echo "Test (BIOS, with an attached blank disk to install into):"
+    echo "  qemu-img create -f qcow2 build/claw-os-target.qcow2 16G"
+    echo "  qemu-system-x86_64 -m 4G \\"
+    echo "      -cdrom $OUTPUT \\"
+    echo "      -drive file=build/claw-os-target.qcow2,format=qcow2,if=virtio \\"
+    echo "      -boot d"
+    echo
+    echo "Test (UEFI, requires ovmf):"
+    echo "  qemu-system-x86_64 -m 4G \\"
+    echo "      -bios /usr/share/ovmf/OVMF.fd \\"
+    echo "      -cdrom $OUTPUT \\"
+    echo "      -drive file=build/claw-os-target.qcow2,format=qcow2,if=virtio"
+else
+    echo "Test (UEFI, requires AAVMF):"
+    echo "  qemu-img create -f qcow2 build/claw-os-target.qcow2 16G"
+    echo "  qemu-system-aarch64 -M virt -cpu max -m 4G \\"
+    echo "      -bios /usr/share/AAVMF/AAVMF_CODE.fd \\"
+    echo "      -cdrom $OUTPUT \\"
+    echo "      -drive file=build/claw-os-target.qcow2,format=qcow2,if=virtio \\"
+    echo "      -nographic"
+fi

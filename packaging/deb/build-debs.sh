@@ -8,16 +8,22 @@
 # Optional:       gzip, find, install, sed.
 #
 # Inputs:
-#   target/x86_64-unknown-linux-musl/release/cos          (built by cargo)
-#   target/x86_64-unknown-linux-gnu/release/cos-browser   (built by cargo)
+#   target/<RUST_TARGET>/release/cos          (built by cargo for $ARCH)
+#   target/<RUST_TARGET>/release/cos-browser  (built by cargo for $ARCH)
 #   apps/, plugins/, skills/                              (source tree)
 #   rootfs/overlay/etc/cos/*, rootfs/overlay/usr/...      (source tree)
 #   rootfs/features/systemd/overlay/usr/lib/systemd/...   (source tree)
+#
+# Architecture: $ARCH (default = host). Switches both the Rust target
+# triple searched for binaries and the `Architecture:` field in the
+# emitted .deb. Native-only — see scripts/lib/arch.sh.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+source "$PROJECT_DIR/scripts/lib/arch.sh"
 
 OUT_DIR="$PROJECT_DIR/build/debs"
 STAGE_DIR="$PROJECT_DIR/build/deb-staging"
@@ -44,24 +50,29 @@ else
     FAKEROOT=""
 fi
 
-echo ":: claw-os deb build — version $VERSION"
+echo ":: claw-os deb build — version $VERSION arch $DEB_ARCH"
 
 rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR" "$OUT_DIR"
 
 ###############################################################################
 # Helper: locate a built binary across known target dirs.
+#
+# Order: prefer the $ARCH-specific Rust target (musl, then gnu, then plain
+# release/), then unsuffixed release/ as a final fallback (when cargo was
+# invoked without --target on a native build).
 ###############################################################################
 find_bin() {
     local name="$1"
+    local gnu_target="${RUST_TARGET/-musl/-gnu}"
     local candidate
     for candidate in \
-        "$PROJECT_DIR/target/x86_64-unknown-linux-musl/release/$name" \
-        "$PROJECT_DIR/target/x86_64-unknown-linux-gnu/release/$name" \
+        "$PROJECT_DIR/target/$RUST_TARGET/release/$name" \
+        "$PROJECT_DIR/target/$gnu_target/release/$name" \
         "$PROJECT_DIR/target/release/$name" \
-        "$PROJECT_DIR/core/target/x86_64-unknown-linux-musl/release/$name" \
+        "$PROJECT_DIR/core/target/$RUST_TARGET/release/$name" \
         "$PROJECT_DIR/core/target/release/$name" \
-        "$PROJECT_DIR/desktop/agent/target/x86_64-unknown-linux-musl/release/$name" \
+        "$PROJECT_DIR/desktop/agent/target/$RUST_TARGET/release/$name" \
         "$PROJECT_DIR/desktop/agent/target/release/$name"; do
         if [ -f "$candidate" ]; then
             echo "$candidate"
@@ -72,12 +83,12 @@ find_bin() {
 }
 
 ###############################################################################
-# Helper: render control file with __VERSION__ substituted.
+# Helper: render control file with __VERSION__ and __ARCH__ substituted.
 ###############################################################################
 render_control() {
     local src="$1"
     local dst="$2"
-    sed "s/__VERSION__/$VERSION/g" "$src" > "$dst"
+    sed -e "s/__VERSION__/$VERSION/g" -e "s/__ARCH__/$DEB_ARCH/g" "$src" > "$dst"
 }
 
 ###############################################################################
@@ -185,7 +196,7 @@ fi
 # Build the .deb.
 echo "  :: dpkg-deb --build claw-os-base"
 $FAKEROOT $DPKG_DEB --root-owner-group --build "$BASE_STAGE" \
-    "$OUT_DIR/claw-os-base_${VERSION}_amd64.deb" >/dev/null
+    "$OUT_DIR/claw-os-base_${VERSION}_${DEB_ARCH}.deb" >/dev/null
 
 ###############################################################################
 # 2. claw-os-browser
@@ -214,7 +225,7 @@ install -m 644 "$PROJECT_DIR/rootfs/overlay/usr/lib/cos/services/browser/service
 
 echo "  :: dpkg-deb --build claw-os-browser"
 $FAKEROOT $DPKG_DEB --root-owner-group --build "$BROWSER_STAGE" \
-    "$OUT_DIR/claw-os-browser_${VERSION}_amd64.deb" >/dev/null
+    "$OUT_DIR/claw-os-browser_${VERSION}_${DEB_ARCH}.deb" >/dev/null
 
 ###############################################################################
 # 3. claw-os-systemd (arch all)

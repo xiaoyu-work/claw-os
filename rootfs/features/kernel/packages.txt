@@ -1,3 +1,3 @@
-linux-image-amd64
+${KERNEL_PKG}
 firmware-linux-free
 initramfs-tools

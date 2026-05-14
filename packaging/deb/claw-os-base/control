@@ -2,7 +2,7 @@ Package: claw-os-base
 Version: __VERSION__
 Section: admin
 Priority: optional
-Architecture: amd64
+Architecture: __ARCH__
 Maintainer: Claw OS <noreply@github.com>
 Homepage: https://github.com/xiaoyu-work/claw-os
 Depends: bash, coreutils, ca-certificates

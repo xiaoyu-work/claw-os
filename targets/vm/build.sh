@@ -1,22 +1,32 @@
 #!/usr/bin/env bash
 # targets/vm/build.sh — Build a persistent VM disk image.
 #
-# Output: build/claw-os-vm.<fmt>  for each fmt in $FORMATS (default qcow2)
+# Output: build/claw-os-vm-<arch>.<fmt>  for each fmt in $FORMATS
+#         (default fmt: qcow2; arch: amd64 or arm64, host-detected).
 #
 # Environment:
+#   ARCH     amd64 (default on x86_64 hosts) | arm64 (default on aarch64).
+#            See scripts/lib/arch.sh for the full architecture mapping.
+#            claw-os builds natively only — $ARCH must match the host arch.
 #   FORMATS  Space-separated output formats. Default: "qcow2".
 #            Supported: qcow2, vmdk, vhdx, raw
 #   SIZE     Virtual disk size. Default: "8G". Image is sparse, so the
 #            actual file is much smaller (qcow2 typically ~2 GB for an
 #            8 GB disk with stock claw-os contents).
 #
-# Disk layout (GPT, hybrid BIOS+UEFI bootable):
-#   1MiB-2MiB     bios_grub          (raw, no fs)
-#   2MiB-258MiB   ESP                (fat32, /boot/efi)
-#   258MiB-100%   root               (ext4, /)
+# Disk layout (GPT):
+#   amd64 (hybrid BIOS+UEFI bootable):
+#     1MiB-2MiB     bios_grub          (raw, no fs)
+#     2MiB-258MiB   ESP                (fat32, /boot/efi)
+#     258MiB-100%   root               (ext4, /)
+#   arm64 (UEFI-only; ARM has no legacy BIOS path):
+#     1MiB-257MiB   ESP                (fat32, /boot/efi)
+#     257MiB-100%   root               (ext4, /)
 #
 # Host requirements (Debian/Ubuntu):
 #   apt install qemu-utils parted dosfstools rsync util-linux
+#   apt install grub-efi-<arch>-bin    # arch-specific UEFI grub modules
+#   apt install grub-pc-bin            # amd64 only — BIOS grub modules
 #   (mkfs.ext4 is in e2fsprogs which is always installed)
 
 set -euo pipefail
@@ -25,7 +35,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ROOTFS="$PROJECT_DIR/build/claw-os-rootfs"
 BUILD_DIR="$PROJECT_DIR/build"
-RAW="$BUILD_DIR/claw-os-vm.raw"
+
+# Architecture mapping ($ARCH, $DEB_ARCH, $GRUB_EFI_TARGET, …). Defaults
+# to host arch when $ARCH is unset.
+source "$PROJECT_DIR/scripts/lib/arch.sh"
+
+# Output filenames are arch-suffixed so amd64 + arm64 builds coexist in
+# build/. The intermediate raw image is also suffixed to avoid races.
+RAW="$BUILD_DIR/claw-os-vm-${ARCH_SUFFIX}.raw"
 MNT="$BUILD_DIR/vm-mnt"
 
 FORMATS="${FORMATS:-qcow2}"
@@ -47,7 +64,7 @@ if [ -n "$missing" ]; then
     exit 1
 fi
 
-# 1. Build the rootfs.
+# 1. Build the rootfs (ARCH propagates via env).
 #    apt-source pre-configures the Claw OS apt repo so users can run
 #    `sudo apt update && sudo apt upgrade` to pull newer claw-os-* packages.
 #
@@ -64,23 +81,44 @@ rm -rf "$MNT"
 mkdir -p "$MNT"
 
 # 3. Create raw disk + partition table.
-echo ":: creating $SIZE raw image"
+#
+#    Layout depends on $ARCH:
+#      amd64  → bios_grub (1-2MiB) + ESP (2-258MiB) + root (258MiB-100%)
+#               so the same image boots on legacy BIOS *and* UEFI.
+#      arm64  → ESP (1-257MiB) + root (257MiB-100%).  ARM has no BIOS
+#               path; bios_grub would just waste a partition slot.
+echo ":: creating $SIZE raw image ($ARCH)"
 qemu-img create -f raw "$RAW" "$SIZE"
 
-echo ":: partitioning (GPT: bios_grub + ESP + root)"
-parted -s "$RAW" \
-    mklabel gpt \
-    mkpart bios_grub 1MiB 2MiB \
-    set 1 bios_grub on \
-    mkpart ESP fat32 2MiB 258MiB \
-    set 2 esp on \
-    mkpart root ext4 258MiB 100%
+if [ -n "$GRUB_BIOS_TARGET" ]; then
+    echo ":: partitioning (GPT: bios_grub + ESP + root)"
+    parted -s "$RAW" \
+        mklabel gpt \
+        mkpart bios_grub 1MiB 2MiB \
+        set 1 bios_grub on \
+        mkpart ESP fat32 2MiB 258MiB \
+        set 2 esp on \
+        mkpart root ext4 258MiB 100%
+    ESP_PART=2
+    ROOT_PART=3
+else
+    echo ":: partitioning (GPT: ESP + root — UEFI-only, no BIOS path on $ARCH)"
+    parted -s "$RAW" \
+        mklabel gpt \
+        mkpart ESP fat32 1MiB 257MiB \
+        set 1 esp on \
+        mkpart root ext4 257MiB 100%
+    ESP_PART=1
+    ROOT_PART=2
+fi
 
-# 4. Attach as loop device with partition scanning so /dev/loopXp{1,2,3}
+# 4. Attach as loop device with partition scanning so /dev/loopXpN
 #    appear automatically. -P is essential — without it grub-probe inside
 #    the chroot will fail to find the partition layout.
 LOOP=$(losetup -Pf --show "$RAW")
-echo ":: attached $RAW at $LOOP (with -P partitions: ${LOOP}p1 ${LOOP}p2 ${LOOP}p3)"
+ESP_DEV="${LOOP}p${ESP_PART}"
+ROOT_DEV="${LOOP}p${ROOT_PART}"
+echo ":: attached $RAW at $LOOP (ESP=$ESP_DEV root=$ROOT_DEV)"
 
 # Set up cleanup early so any failure unmounts and detaches.
 cleanup() {
@@ -92,24 +130,24 @@ trap cleanup EXIT
 
 # Wait briefly for udev to settle (partition device nodes can lag).
 for _ in 1 2 3 4 5; do
-    [ -b "${LOOP}p2" ] && [ -b "${LOOP}p3" ] && break
+    [ -b "$ESP_DEV" ] && [ -b "$ROOT_DEV" ] && break
     sleep 1
 done
-if [ ! -b "${LOOP}p3" ]; then
-    echo "error: partition device ${LOOP}p3 not present — losetup -P likely failed" >&2
+if [ ! -b "$ROOT_DEV" ]; then
+    echo "error: partition device $ROOT_DEV not present — losetup -P likely failed" >&2
     exit 1
 fi
 
 # 5. Format.
-echo ":: mkfs.vfat (ESP) on ${LOOP}p2"
-mkfs.vfat -F32 -n ESP "${LOOP}p2"
-echo ":: mkfs.ext4 (root) on ${LOOP}p3"
-mkfs.ext4 -L ROOT -F "${LOOP}p3"
+echo ":: mkfs.vfat (ESP) on $ESP_DEV"
+mkfs.vfat -F32 -n ESP "$ESP_DEV"
+echo ":: mkfs.ext4 (root) on $ROOT_DEV"
+mkfs.ext4 -L ROOT -F "$ROOT_DEV"
 
 # 6. Mount target.
-mount "${LOOP}p3" "$MNT"
+mount "$ROOT_DEV" "$MNT"
 mkdir -p "$MNT/boot/efi"
-mount "${LOOP}p2" "$MNT/boot/efi"
+mount "$ESP_DEV" "$MNT/boot/efi"
 
 # 7. Copy rootfs (preserve hardlinks, ACLs, xattrs; --numeric-ids keeps
 #    file ownership stable across host UID schemes).
@@ -117,8 +155,8 @@ echo ":: rsync rootfs -> mounted image"
 rsync -aHAX --numeric-ids "$ROOTFS/" "$MNT/"
 
 # 8. Write /etc/fstab from blkid UUIDs (preserved through qemu-img convert).
-ROOT_UUID=$(blkid -o value -s UUID "${LOOP}p3")
-ESP_UUID=$(blkid -o value -s UUID "${LOOP}p2")
+ROOT_UUID=$(blkid -o value -s UUID "$ROOT_DEV")
+ESP_UUID=$(blkid -o value -s UUID "$ESP_DEV")
 cat > "$MNT/etc/fstab" <<EOF
 # /etc/fstab — generated by targets/vm/build.sh
 UUID=$ROOT_UUID  /          ext4  defaults,errors=remount-ro  0  1
@@ -131,16 +169,21 @@ mount --rbind /dev  "$MNT/dev"
 mount --rbind /sys  "$MNT/sys"
 mount -t proc proc  "$MNT/proc"
 
-# 10. Install GRUB for both BIOS and UEFI.
-echo ":: grub-install --target=i386-pc $LOOP (BIOS)"
-chroot "$MNT" grub-install --target=i386-pc "$LOOP"
+# 10. Install GRUB.
+#     amd64 → BIOS + UEFI (hybrid). The bios_grub partition makes the
+#             same image bootable on legacy firmware.
+#     arm64 → UEFI only (--removable writes /EFI/BOOT/BOOTAA64.EFI).
+if [ -n "$GRUB_BIOS_TARGET" ]; then
+    echo ":: grub-install --target=$GRUB_BIOS_TARGET $LOOP (BIOS)"
+    chroot "$MNT" grub-install --target="$GRUB_BIOS_TARGET" "$LOOP"
+fi
 
-echo ":: grub-install --target=x86_64-efi --removable --no-nvram (UEFI fallback path)"
-# --removable writes to /EFI/BOOT/BOOTX64.EFI (the UEFI fallback that
-# every firmware tries). --no-nvram skips efibootmgr — essential when
+echo ":: grub-install --target=$GRUB_EFI_TARGET --removable --no-nvram (UEFI fallback path)"
+# --removable writes the EFI fallback binary (BOOTX64.EFI / BOOTAA64.EFI)
+# that every firmware tries. --no-nvram skips efibootmgr — essential when
 # building on a BIOS host or in a chroot without /sys/firmware/efi.
 chroot "$MNT" grub-install \
-    --target=x86_64-efi \
+    --target="$GRUB_EFI_TARGET" \
     --efi-directory=/boot/efi \
     --bootloader-id=claw-os \
     --removable \
@@ -159,15 +202,17 @@ rmdir "$MNT"
 
 # 12. Convert raw -> requested formats. qemu-img convert preserves
 #     filesystem UUIDs (block-level copy), so fstab UUID= entries stay
-#     valid in every output. qcow2 is auto-sparse.
+#     valid in every output. qcow2 is auto-sparse. All outputs include
+#     the arch suffix so amd64 + arm64 builds coexist in build/.
 for fmt in $FORMATS; do
     case "$fmt" in
         raw)
-            cp -a "$RAW" "$BUILD_DIR/claw-os-vm.raw.final"
-            mv "$BUILD_DIR/claw-os-vm.raw.final" "$BUILD_DIR/claw-os-vm.raw"
+            # $RAW already lives at the canonical arch-suffixed name; nothing
+            # to do, just ensure we don't unlink it below.
+            :
             ;;
         qcow2|vmdk|vhdx)
-            OUT="$BUILD_DIR/claw-os-vm.$fmt"
+            OUT="$BUILD_DIR/claw-os-vm-${ARCH_SUFFIX}.$fmt"
             echo ":: qemu-img convert -f raw -O $fmt -> $OUT"
             qemu-img convert -f raw -O "$fmt" -S 65536 "$RAW" "$OUT"
             ;;
@@ -184,18 +229,19 @@ case " $FORMATS " in
 esac
 
 echo
-echo ":: done"
-ls -lh "$BUILD_DIR"/claw-os-vm.* 2>/dev/null
+echo ":: done ($ARCH)"
+ls -lh "$BUILD_DIR"/claw-os-vm-${ARCH_SUFFIX}.* 2>/dev/null
 
-cat <<'EOF'
+if [ "$ARCH" = "amd64" ]; then
+    cat <<'EOF'
 
 Test in QEMU (BIOS, default):
   qemu-system-x86_64 -m 2G -nographic \
-      -drive file=build/claw-os-vm.qcow2,format=qcow2,if=virtio
+      -drive file=build/claw-os-vm-amd64.qcow2,format=qcow2,if=virtio
 
 Test in QEMU (UEFI, requires ovmf):
   qemu-system-x86_64 -m 2G -bios /usr/share/ovmf/OVMF.fd \
-      -drive file=build/claw-os-vm.qcow2,format=qcow2,if=virtio
+      -drive file=build/claw-os-vm-amd64.qcow2,format=qcow2,if=virtio
 
 Hyper-V Gen 2 note:
   Gen 2 enables Secure Boot by default. Disable it before first boot:
@@ -204,5 +250,23 @@ Hyper-V Gen 2 note:
 
 VMware:
   Create a new VM, choose "I will install the OS later", point the
-  existing virtual disk at build/claw-os-vm.vmdk.
+  existing virtual disk at build/claw-os-vm-amd64.vmdk.
 EOF
+else
+    cat <<'EOF'
+
+Test in QEMU (UEFI, requires AAVMF):
+  qemu-system-aarch64 -M virt -cpu max -m 2G \
+      -bios /usr/share/AAVMF/AAVMF_CODE.fd \
+      -drive file=build/claw-os-vm-arm64.qcow2,format=qcow2,if=virtio \
+      -nographic
+
+UTM (Apple Silicon):
+  New → Virtualize → Linux → "Import VHD/QCOW2/IMG/RAW image" →
+  point at build/claw-os-vm-arm64.qcow2. Architecture: ARM64.
+  Use UEFI boot (default).
+
+Parallels / VMware Fusion (Apple Silicon):
+  Create a new ARM Linux VM, attach the .vmdk as the existing disk.
+EOF
+fi
