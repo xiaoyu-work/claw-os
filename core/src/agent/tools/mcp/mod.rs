@@ -21,6 +21,7 @@
 //!   `crate::credential`. Out of scope for this scaffold.
 
 pub mod client;
+pub mod discover;
 pub mod integration;
 pub mod protocol;
 pub mod server;

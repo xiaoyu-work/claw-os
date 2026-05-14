@@ -1,0 +1,21 @@
+{
+  "schema": "claw.agent-api/v1",
+  "id": "example.template",
+  "name": "template",
+  "title": { "en": "Adapter Template" },
+  "summary": { "en": "Skeleton for a new agent-API adapter." },
+  "vendor": "claw-adapter",
+  "license": "MIT",
+  "transport": "mcp+stdio",
+  "command": "python3",
+  "args": ["${manifest_dir}/main.py"],
+  "env": {},
+  "timeout_secs": 30,
+  "enabled": false,
+  "ai": {
+    "callable_by_ai": true,
+    "uses_ai_internally": false,
+    "safety": "standard",
+    "origins": ["external-content"]
+  }
+}
