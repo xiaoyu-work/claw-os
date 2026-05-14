@@ -550,7 +550,7 @@ fn builtin_apps() -> Vec<(
             ("list", "List all traces (--status, --limit)"),
         ]),
         ("agent", "OS-native agent subsystem — runtime, memory, skills, LLM providers, tools, FS job queue", vec![
-            ("setup", "Per-modality config wizard: cos agent setup [llm|tts|stt|imagegen|embed|all] [--status|--reset|--verify-only|--no-verify]. Bare `cos agent setup` = llm."),
+            ("setup", "Per-modality config wizard: cos agent setup <llm|tts|stt|imagegen|embed|all> [--status|--reset|--verify-only|--no-verify]. Bare `cos agent setup` opens an interactive modality picker."),
             ("ask", "Single-shot prompt with full tool/memory loop: cos agent ask \"<prompt>\" [--stream] — without --stream waits for the full response; with --stream tokens are written live to stderr while the JSON envelope still lands on stdout."),
             ("chat", "Interactive multi-turn REPL: cos agent chat [--session <id>] [--no-stream] [--no-memory] [--show-tools] [--max-turns N]. Slash commands: /quit /help /session /clear /history [N] /tools."),
             ("status", "Short live verdict: provider/model/key source, ready/not-ready, most-recent session. Use `cos agent doctor` for the full provider matrix, tool list, skills, usage."),
@@ -1615,14 +1615,17 @@ fn dispatch_agent(args: &[String]) -> Result<Option<String>, String> {
         let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
         if interactive {
             let cfg = &crate::config::get().agent;
-            let landing = if agent::setup::is_ready(cfg).is_ok() {
-                "chat"
-            } else {
-                "setup"
-            };
-            let mut rewritten: Vec<String> = Vec::with_capacity(2);
+            let mut rewritten: Vec<String> = Vec::with_capacity(3);
             rewritten.push(args[0].clone());
-            rewritten.push(landing.to_string());
+            if agent::setup::is_ready(cfg).is_ok() {
+                rewritten.push("chat".into());
+            } else {
+                // Land directly on the LLM wizard rather than the
+                // modality picker — `cos agent` not being ready almost
+                // always means the conversational LLM isn't configured.
+                rewritten.push("setup".into());
+                rewritten.push("llm".into());
+            }
             return dispatch_builtin(&rewritten, "agent", agent::run);
         }
     }

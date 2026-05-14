@@ -1,43 +1,99 @@
-//! `cos agent setup` — interactive first-run wizard.
+//! `cos agent setup` — per-modality config wizard.
 //!
-//! Replaces the previous `cos agent onboarding` family. Prompts the
-//! user for an LLM provider, a default model, and an API key, then
-//! writes them to the credential store and `/etc/cos/config.json` (or
-//! `$COS_CONFIG_PATH`) so `cos agent chat` / `ask` work immediately.
+//! Replaces the previous `cos agent onboarding` family. Pick a
+//! modality (llm / tts / stt / imagegen / embed / all), then walk
+//! through provider → model → API key → persist → optional probe.
+//! Each modality writes to its own `/etc/cos/config.json` block
+//! (`[agent]`, `[tts]`, `[stt]`, `[imagegen]`, `[embed]`) and stores
+//! credentials in the `agent` namespace of the credential store.
 //!
 //! Subcommands:
-//!   * (no args)  Run the interactive wizard. Requires a TTY.
-//!   * `--status` Read-only: is the agent configured to talk to a real
-//!                provider and is its credential resolvable?
-//!   * `--reset`  Revert the agent block to the built-in mock defaults.
+//!   * `<modality>`     Run the wizard for one modality. Requires a TTY.
+//!   * `all`            Walk every modality, asking before each.
+//!   * `(no args)`      Interactive modality picker on TTY; help on non-TTY.
+//!   * `--status`       Read-only: is the picked modality configured and
+//!                      its credential resolvable? Defaults to `all` if
+//!                      no modality is given.
+//!   * `--reset`        Revert the picked modality's config block to its
+//!                      built-in defaults. Defaults to `all` if no
+//!                      modality is given.
+//!   * `--verify-only`  Probe an already-persisted config without
+//!                      re-running the wizard.
 //!
-//! The source of truth for "is the agent ready?" is the live config +
-//! credential store (`is_ready`), never a separate state file.
+//! The source of truth for "is X ready?" is always the live config +
+//! credential store (`is_ready` for LLM, `status_for` for any modality),
+//! never a separate state file.
 
 use serde_json::{json, Value};
-use std::io::{IsTerminal, Write};
+use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::agent::llm;
 
 pub fn run(args: &[String]) -> Result<Value, String> {
-    // Parse: optional --no-verify / --verify-only / --status / --reset / --help
-    // plus a leading positional modality: llm | tts | stt | imagegen |
-    // embed | all. The bare wizard with no positional defaults to `llm`
-    // since that's the modality the agent itself can't function without.
+    // Parse: optional --no-verify / --verify-only / --status / --reset /
+    // --providers / --help, plus a required leading positional modality:
+    //   llm | tts | stt | imagegen | embed | all
+    //
+    // Two extra non-interactive subcommands take per-modality flags:
+    //   apply  --provider X --model Y [--api-key K | --api-key-stdin | --api-key-env E]
+    //   test   (alias for --verify-only)
+    //
+    // Bare `cos agent setup` (no positional, no flags) opens an
+    // interactive modality picker on a TTY and prints help otherwise —
+    // we deliberately do NOT auto-pick `llm` for the user.
     let mut verify_after = true;
     let mut explicit_verify = false;
     let mut sub: Option<&str> = None;
     let mut modality: Option<Modality> = None;
+    let mut apply_provider: Option<String> = None;
+    let mut apply_model: Option<String> = None;
+    let mut apply_api_key: Option<String> = None;
+    let mut apply_api_key_stdin = false;
+    let mut apply_api_key_env: Option<String> = None;
 
-    for a in args {
-        match a.as_str() {
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        match a {
             "--no-verify" => verify_after = false,
             "--verify" => verify_after = true,
             "--verify-only" => explicit_verify = true,
             "--status" | "status" if sub.is_none() => sub = Some("status"),
             "--reset" | "reset" if sub.is_none() => sub = Some("reset"),
+            "--providers" | "providers" if sub.is_none() => sub = Some("providers"),
+            "apply" if sub.is_none() => sub = Some("apply"),
+            "test" if sub.is_none() => sub = Some("test"),
             "-h" | "--help" if sub.is_none() => sub = Some("help"),
+            "--provider" => {
+                i += 1;
+                if i >= args.len() {
+                    return Err("--provider requires a value".into());
+                }
+                apply_provider = Some(args[i].clone());
+            }
+            "--model" => {
+                i += 1;
+                if i >= args.len() {
+                    return Err("--model requires a value".into());
+                }
+                apply_model = Some(args[i].clone());
+            }
+            "--api-key" => {
+                i += 1;
+                if i >= args.len() {
+                    return Err("--api-key requires a value".into());
+                }
+                apply_api_key = Some(args[i].clone());
+            }
+            "--api-key-stdin" => apply_api_key_stdin = true,
+            "--api-key-env" => {
+                i += 1;
+                if i >= args.len() {
+                    return Err("--api-key-env requires a value".into());
+                }
+                apply_api_key_env = Some(args[i].clone());
+            }
             other => {
                 if let Some(m) = Modality::parse(other) {
                     if modality.is_some() {
@@ -49,35 +105,126 @@ pub fn run(args: &[String]) -> Result<Value, String> {
                     modality = Some(m);
                 } else if other.starts_with('-') {
                     return Err(format!(
-                        "unknown setup flag: {other}. try: --no-verify | --verify-only | --status | --reset"
+                        "unknown setup flag: {other}. try: --no-verify | --verify-only | --status | --reset | --providers"
                     ));
                 } else if sub.is_none() {
                     return Err(format!(
-                        "unknown setup subcommand: {other}. try: (no args for llm wizard) | llm | tts | stt | imagegen | embed | all | --status | --reset | --verify-only"
+                        "unknown setup modality/subcommand: {other}. try: llm | tts | stt | imagegen | embed | all | apply | test | --status | --reset | --providers | --verify-only"
                     ));
                 }
             }
         }
+        i += 1;
     }
 
-    let modality = modality.unwrap_or(Modality::Llm);
+    let apply_flags_set = apply_provider.is_some()
+        || apply_model.is_some()
+        || apply_api_key.is_some()
+        || apply_api_key_stdin
+        || apply_api_key_env.is_some();
+    if apply_flags_set && sub != Some("apply") {
+        return Err(
+            "--provider / --model / --api-key{,-stdin,-env} are only valid with the `apply` subcommand"
+                .into(),
+        );
+    }
+
+    let Some(modality) = modality else {
+        // No positional given. For sub-only invocations (--status /
+        // --reset / --verify-only / --providers / --help) treat that as
+        // "all" so the user gets a uniform multi-modality view. For the
+        // bare wizard we refuse to guess.
+        if sub == Some("help") {
+            return Ok(help_doc());
+        }
+        if explicit_verify {
+            return verify_cmd(Modality::All);
+        }
+        return match sub {
+            Some("status") => status_cmd(Modality::All),
+            Some("reset") => reset_cmd(Modality::All),
+            Some("providers") => providers_cmd(Modality::All),
+            Some("apply") => Err(
+                "`apply` requires a modality: cos agent setup <llm|tts|stt|imagegen|embed> apply ..."
+                    .into(),
+            ),
+            Some("test") => verify_cmd(Modality::All),
+            _ => {
+                if std::io::stdin().is_terminal() {
+                    let picked = pick_modality_interactively()?;
+                    dispatch_wizard(picked, verify_after)
+                } else {
+                    Err(json!({
+                        "error": "cos agent setup requires a modality",
+                        "hint": "pick one of: llm | tts | stt | imagegen | embed | all",
+                        "examples": [
+                            "cos agent setup llm",
+                            "cos agent setup tts",
+                            "cos agent setup all",
+                        ],
+                    })
+                    .to_string())
+                }
+            }
+        };
+    };
 
     if explicit_verify {
         return verify_cmd(modality);
     }
+    let apply_args = ApplyArgs {
+        provider: apply_provider,
+        model: apply_model,
+        api_key: apply_api_key,
+        api_key_stdin: apply_api_key_stdin,
+        api_key_env: apply_api_key_env,
+    };
     match sub {
         Some("status") => status_cmd(modality),
         Some("reset") => reset_cmd(modality),
+        Some("providers") => providers_cmd(modality),
+        Some("apply") => apply_cmd(modality, apply_args),
+        Some("test") => verify_cmd(modality),
         Some("help") => Ok(help_doc()),
-        _ => match modality {
-            Modality::Llm => wizard_llm(verify_after),
-            Modality::Tts => wizard_media(media::tts_spec(), verify_after),
-            Modality::Stt => wizard_media(media::stt_spec(), verify_after),
-            Modality::ImageGen => wizard_media(media::imagegen_spec(), verify_after),
-            Modality::Embed => wizard_media(media::embed_spec(), verify_after),
-            Modality::All => wizard_all(verify_after),
-        },
+        _ => dispatch_wizard(modality, verify_after),
     }
+}
+
+fn dispatch_wizard(modality: Modality, verify_after: bool) -> Result<Value, String> {
+    match modality {
+        Modality::Llm => wizard_llm(verify_after),
+        Modality::Tts => wizard_media(media::tts_spec(), verify_after),
+        Modality::Stt => wizard_media(media::stt_spec(), verify_after),
+        Modality::ImageGen => wizard_media(media::imagegen_spec(), verify_after),
+        Modality::Embed => wizard_media(media::embed_spec(), verify_after),
+        Modality::All => wizard_all(verify_after),
+    }
+}
+
+fn pick_modality_interactively() -> Result<Modality, String> {
+    let stderr = std::io::stderr();
+    let mut e = stderr.lock();
+    let _ = writeln!(e, "cos agent setup — pick a modality to configure");
+    let _ = writeln!(e);
+    let options = [
+        (Modality::Llm,      "llm",      "Conversational LLM (required for ask/chat)"),
+        (Modality::Tts,      "tts",      "Text-to-speech"),
+        (Modality::Stt,      "stt",      "Speech-to-text"),
+        (Modality::ImageGen, "imagegen", "Image generation"),
+        (Modality::Embed,    "embed",    "Text embeddings (semantic memory)"),
+        (Modality::All,      "all",      "Walk every modality, asking before each"),
+    ];
+    for (i, (_, name, label)) in options.iter().enumerate() {
+        let _ = writeln!(e, "  {}. {:8} — {}", i + 1, name, label);
+    }
+    let _ = write!(e, "Pick one (1-{}): ", options.len());
+    let _ = e.flush();
+    let raw = read_line()?.trim().to_string();
+    let idx: usize = raw.parse().map_err(|_| "expected a number".to_string())?;
+    if idx < 1 || idx > options.len() {
+        return Err(format!("out of range: {idx} (expected 1-{})", options.len()));
+    }
+    Ok(options[idx - 1].0)
 }
 
 /// Which model class this invocation of `cos agent setup` targets.
@@ -124,10 +271,9 @@ impl Modality {
 
 fn help_doc() -> Value {
     json!({
-        "command": "cos agent setup [MODALITY]",
+        "command": "cos agent setup <MODALITY> [SUBCOMMAND]",
         "summary": "Per-modality config wizard: pick a provider, a model, store an API key, and verify it works.",
         "modalities": {
-            "(default)": "Same as `llm` — first-time setup almost always means the conversational LLM.",
             "llm":       "Conversational LLM (under [agent]). Required for `cos agent ask`/`chat`.",
             "tts":       "Text-to-speech (under [tts]). Used by voice output / `cos agent voice`.",
             "stt":       "Speech-to-text (under [stt]). Used by voice input / `cos agent transcribe`.",
@@ -135,18 +281,35 @@ fn help_doc() -> Value {
             "embed":     "Text embeddings (under [embed]). Used by semantic memory / `cos agent recall`.",
             "all":       "Walk every modality in order, prompting before each.",
         },
+        "subcommands": {
+            "apply":     "Non-interactive write. Required flags: --provider X --model Y. Credential: one of --api-key K | --api-key-stdin | --api-key-env ENV. `--provider none` clears the modality.",
+            "test":      "Alias for --verify-only: probe the currently configured provider for this modality.",
+            "providers": "Emit JSON catalogue of providers + sample models for the picked modality (or `all`). Used by the cosmic-settings agent page.",
+        },
         "flags": {
-            "--no-verify":   "Skip the live provider probe at the end of the wizard.",
-            "--verify-only": "Skip the wizard; just probe the currently configured provider for the given modality (or `all`).",
-            "--status":      "Show whether the picked modality is configured. With `all`, shows every modality.",
-            "--reset":       "Revert the picked modality's config block to its built-in defaults (`mock`/`none`).",
+            "--no-verify":      "Skip the live provider probe at the end of the wizard.",
+            "--verify-only":    "Skip the wizard; just probe the currently configured provider for the given modality (or all if omitted).",
+            "--status":         "Show whether the picked modality is configured. With no modality (or `all`), shows every modality.",
+            "--reset":          "Revert the picked modality's config block to its built-in defaults (`mock`/`none`). With no modality, resets every modality.",
+            "--providers":      "Same as the `providers` subcommand.",
+            "--provider X":     "(apply only) Provider name. Use `none` to clear the modality.",
+            "--model Y":        "(apply only) Model name.",
+            "--api-key VALUE":  "(apply only) Inline API key. Stored in the agent credential namespace.",
+            "--api-key-stdin":  "(apply only) Read API key from stdin instead of the command line — preferred to keep keys out of shell history.",
+            "--api-key-env E":  "(apply only) Don't store a key; persist a pointer to env var `$E`.",
         },
         "examples": [
-            "cos agent setup                 # wizard for LLM",
-            "cos agent setup tts             # wizard for text-to-speech",
-            "cos agent setup all             # walk every modality, asking before each",
-            "cos agent setup all --status    # report readiness across all modalities",
-            "cos agent setup imagegen --verify-only",
+            "cos agent setup llm                                                  # wizard for LLM",
+            "cos agent setup all                                                  # walk every modality, asking before each",
+            "cos agent setup --status                                             # report readiness across all modalities",
+            "cos agent setup --providers                                          # JSON catalogue of all providers + models",
+            "cos agent setup llm apply --provider openai --model gpt-4o --api-key-stdin  < key.txt",
+            "cos agent setup tts apply --provider edge --model en-US-AriaNeural   # no key needed",
+            "cos agent setup imagegen test                                        # probe configured imagegen provider",
+        ],
+        "notes": [
+            "Bare `cos agent setup` (no args) opens an interactive picker on a TTY; on a non-TTY it errors and lists the modalities.",
+            "All subcommands emit JSON on success; errors are plain strings on stderr.",
         ],
     })
 }
@@ -179,7 +342,7 @@ fn verify_llm() -> Result<Value, String> {
             "ok": false,
             "attempted": false,
             "reason": reason_val,
-            "hint": "run `cos agent setup` to configure a provider first",
+            "hint": "run `cos agent setup llm` to configure a provider first",
         }));
     }
     if !provider_needs_credential(&cfg.provider) {
@@ -222,14 +385,14 @@ fn verify_llm() -> Result<Value, String> {
 /// Whether `cos agent {ask,chat,live,stream}` can usefully run.
 ///
 /// Returns `Err(json)` with a structured payload pointing at
-/// `cos agent setup` when the agent is still on the mock provider or
+/// `cos agent setup llm` when the agent is still on the mock provider or
 /// the configured provider has no resolvable credential.
 pub fn is_ready(cfg: &crate::config::AgentConfig) -> Result<(), String> {
     if cfg.provider == "mock" {
         return Err(json!({
             "error": "agent not configured",
-            "fix": "cos agent setup",
-            "details": "the default provider is `mock` (returns canned answers). Run `cos agent setup` to pick a real LLM provider.",
+            "fix": "cos agent setup llm",
+            "details": "the default provider is `mock` (returns canned answers). Run `cos agent setup llm` to pick a real LLM provider.",
         })
         .to_string());
     }
@@ -242,7 +405,7 @@ pub fn is_ready(cfg: &crate::config::AgentConfig) -> Result<(), String> {
     Err(json!({
         "error": "agent provider configured but no credential found",
         "provider": cfg.provider,
-        "fix": "cos agent setup",
+        "fix": "cos agent setup llm",
         "details": format!(
             "no credential resolvable for provider `{}` (checked credential store namespace `agent` and env vars).",
             cfg.provider
@@ -405,7 +568,7 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
 
     let stderr = std::io::stderr();
     let mut e = stderr.lock();
-    let _ = writeln!(e, "cos agent setup — interactive first-run wizard");
+    let _ = writeln!(e, "cos agent setup llm — conversational LLM wizard");
     let _ = writeln!(e);
 
     // ---- Step 1: provider ------------------------------------------------
@@ -580,7 +743,7 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
                 );
                 let _ = writeln!(
                     e,
-                    "a privileged session (e.g. `sudo COS_CONFIG_PATH=$COS_CONFIG_PATH cos agent setup`)."
+                    "a privileged session (e.g. `sudo COS_CONFIG_PATH=$COS_CONFIG_PATH cos agent setup llm`)."
                 );
                 credential_env = Some(env_name);
             }
@@ -633,7 +796,7 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
         let _ = writeln!(e);
         let _ = writeln!(
             e,
-            "(skipping live probe; re-run with `cos agent setup --verify-only` to confirm later)"
+            "(skipping live probe; re-run with `cos agent setup llm --verify-only` to confirm later)"
         );
     } else if !needs_probe {
         let _ = writeln!(e);
@@ -665,7 +828,7 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
             }
             let _ = writeln!(
                 e,
-                "  hint: fix the credential, then run `cos agent setup --verify-only` to retest (no re-wizard)."
+                "  hint: fix the credential, then run `cos agent setup llm --verify-only` to retest (no re-wizard)."
             );
         }
         probe_ok = Some(ok);
@@ -1351,6 +1514,367 @@ fn default_env_name(provider: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Non-interactive subcommands (used by cosmic-settings and other UIs)
+// ---------------------------------------------------------------------------
+
+/// Args bundle for the `apply` subcommand. Mirrors the wizard's persistence
+/// step but driven entirely from flags, never stdin (except `--api-key-stdin`).
+struct ApplyArgs {
+    provider: Option<String>,
+    model: Option<String>,
+    api_key: Option<String>,
+    api_key_stdin: bool,
+    api_key_env: Option<String>,
+}
+
+/// Emit a JSON catalogue of providers + sample models for one or all
+/// modalities. The cosmic-settings agent page uses this to populate
+/// provider dropdowns, model suggestions, and "needs API key" badges
+/// without hard-coding any of it.
+fn providers_cmd(modality: Modality) -> Result<Value, String> {
+    match modality {
+        Modality::Llm => Ok(providers_llm()),
+        Modality::All => {
+            let mut m = serde_json::Map::new();
+            m.insert("llm".into(), providers_llm());
+            for md in [Modality::Tts, Modality::Stt, Modality::ImageGen, Modality::Embed] {
+                m.insert(md.name().into(), providers_media(md));
+            }
+            Ok(json!({"modalities": m}))
+        }
+        other => Ok(providers_media(other)),
+    }
+}
+
+fn providers_llm() -> Value {
+    let names = llm::available_providers();
+    let providers: Vec<Value> = names
+        .iter()
+        .map(|name| {
+            let models = llm::metadata::list_for_provider(name);
+            let model_list: Vec<Value> = models
+                .iter()
+                .map(|m| {
+                    json!({
+                        "name": m.name,
+                        "context_window": m.context_window,
+                        "max_output_tokens": m.max_output_tokens,
+                        "supports_tools": m.supports_tools,
+                        "supports_vision": m.supports_vision,
+                        "supports_streaming": m.supports_streaming,
+                    })
+                })
+                .collect();
+            json!({
+                "name": name,
+                "label": *name,
+                "needs_credential": provider_needs_credential(name),
+                "default_env": default_env_name(name),
+                "models": model_list,
+                "default_model": models.first().map(|m| m.name.to_string()).unwrap_or_default(),
+            })
+        })
+        .collect();
+    json!({
+        "modality": "llm",
+        "providers": providers,
+    })
+}
+
+fn providers_media(modality: Modality) -> Value {
+    let spec = match modality {
+        Modality::Tts => media::tts_spec(),
+        Modality::Stt => media::stt_spec(),
+        Modality::ImageGen => media::imagegen_spec(),
+        Modality::Embed => media::embed_spec(),
+        _ => return json!({"error": "not a media modality"}),
+    };
+    let provs: Vec<Value> = spec
+        .providers
+        .iter()
+        .map(|p| {
+            let models: Vec<Value> = p
+                .sample_models
+                .iter()
+                .map(|m| json!({ "name": m }))
+                .collect();
+            json!({
+                "name": p.name,
+                "label": p.label,
+                "needs_credential": p.needs_credential,
+                "default_env": p.default_env,
+                "models": models,
+                "default_model": p.default_model,
+            })
+        })
+        .collect();
+    json!({
+        "modality": spec.name,
+        "default_provider": spec.default_provider,
+        "providers": provs,
+    })
+}
+
+/// Non-interactive write. Validates inputs against the same catalogues
+/// the wizard uses, stores credentials in the agent namespace, and
+/// writes the modality's config block atomically. Returns a JSON
+/// envelope the UI can render directly.
+fn apply_cmd(modality: Modality, args: ApplyArgs) -> Result<Value, String> {
+    match modality {
+        Modality::Llm => apply_llm(args),
+        Modality::All => Err(
+            "`apply` requires a single modality (one of: llm | tts | stt | imagegen | embed)"
+                .into(),
+        ),
+        Modality::Tts => apply_media(media::tts_spec(), args),
+        Modality::Stt => apply_media(media::stt_spec(), args),
+        Modality::ImageGen => apply_media(media::imagegen_spec(), args),
+        Modality::Embed => apply_media(media::embed_spec(), args),
+    }
+}
+
+fn apply_llm(args: ApplyArgs) -> Result<Value, String> {
+    let provider = args
+        .provider
+        .as_deref()
+        .ok_or_else(|| "--provider is required for `apply`".to_string())?
+        .trim()
+        .to_string();
+    if provider.is_empty() {
+        return Err("--provider cannot be empty".into());
+    }
+    if provider == "none" {
+        return reset_cmd(Modality::Llm);
+    }
+    let available = llm::available_providers();
+    if !available.iter().any(|p| *p == provider) {
+        return Err(format!(
+            "unknown LLM provider `{provider}`. available providers in this build: {}",
+            available.join(", ")
+        ));
+    }
+
+    let model = args
+        .model
+        .as_deref()
+        .ok_or_else(|| "--model is required for `apply`".to_string())?
+        .trim()
+        .to_string();
+    if model.is_empty() {
+        return Err("--model cannot be empty".into());
+    }
+
+    let needs_cred = provider_needs_credential(&provider);
+    let credential_hint = format!("{provider}_api_key");
+    let (credential_name, credential_env) =
+        resolve_key_args(&args, &provider, &credential_hint, needs_cred)?;
+
+    let path = config_path();
+    let mut cfg = read_config_or_empty(&path)?;
+    if !cfg.is_object() {
+        cfg = json!({});
+    }
+    let root = cfg.as_object_mut().expect("ensured object above");
+    let agent = root
+        .entry("agent".to_string())
+        .or_insert_with(|| json!({}));
+    if !agent.is_object() {
+        *agent = json!({});
+    }
+    let agent = agent.as_object_mut().expect("ensured object above");
+    agent.insert("provider".into(), json!(provider));
+    agent.insert("model".into(), json!(model));
+    apply_credential_to_block(agent, credential_name.as_deref(), credential_env.as_deref());
+    write_config_atomic(&path, &cfg)?;
+
+    Ok(json!({
+        "ok": true,
+        "modality": "llm",
+        "provider": provider,
+        "model": model,
+        "api_key_credential": credential_name,
+        "api_key_env": credential_env,
+        "key_source": key_source_label(credential_name.as_deref(), credential_env.as_deref(), needs_cred),
+        "config_path": path.display().to_string(),
+    }))
+}
+
+fn apply_media(
+    spec: &'static media::ModalitySpec,
+    args: ApplyArgs,
+) -> Result<Value, String> {
+    let provider_name = args
+        .provider
+        .as_deref()
+        .ok_or_else(|| "--provider is required for `apply`".to_string())?
+        .trim()
+        .to_string();
+    if provider_name.is_empty() {
+        return Err("--provider cannot be empty".into());
+    }
+    if provider_name == "none" {
+        return reset_cmd(match spec.name {
+            "tts" => Modality::Tts,
+            "stt" => Modality::Stt,
+            "imagegen" => Modality::ImageGen,
+            "embed" => Modality::Embed,
+            _ => unreachable!("unknown media spec: {}", spec.name),
+        });
+    }
+    let provider = spec.provider_choice(&provider_name).ok_or_else(|| {
+        let known: Vec<&str> = spec.providers.iter().map(|p| p.name).collect();
+        format!(
+            "unknown `{}` provider `{provider_name}`. known: {} (or `none` to clear)",
+            spec.name,
+            known.join(", ")
+        )
+    })?;
+
+    let model = args
+        .model
+        .as_deref()
+        .ok_or_else(|| "--model is required for `apply`".to_string())?
+        .trim()
+        .to_string();
+    if model.is_empty() {
+        return Err("--model cannot be empty".into());
+    }
+
+    let credential_hint = format!("{}_{}_api_key", spec.name, provider.name);
+    let (credential_name, credential_env) = resolve_key_args(
+        &args,
+        provider.name,
+        &credential_hint,
+        provider.needs_credential,
+    )?;
+
+    let path = config_path();
+    let mut cfg = read_config_or_empty(&path)?;
+    if !cfg.is_object() {
+        cfg = json!({});
+    }
+    let root = cfg.as_object_mut().expect("ensured object above");
+    let block = root
+        .entry(spec.config_block.to_string())
+        .or_insert_with(|| json!({}));
+    if !block.is_object() {
+        *block = json!({});
+    }
+    let block = block.as_object_mut().expect("ensured object above");
+    block.insert("provider".into(), json!(provider.name));
+    block.insert("model".into(), json!(model));
+    apply_credential_to_block(block, credential_name.as_deref(), credential_env.as_deref());
+    write_config_atomic(&path, &cfg)?;
+
+    Ok(json!({
+        "ok": true,
+        "modality": spec.name,
+        "provider": provider.name,
+        "model": model,
+        "api_key_credential": credential_name,
+        "api_key_env": credential_env,
+        "key_source": key_source_label(
+            credential_name.as_deref(),
+            credential_env.as_deref(),
+            provider.needs_credential,
+        ),
+        "config_path": path.display().to_string(),
+    }))
+}
+
+/// Resolve the three mutually-exclusive credential flags into a
+/// `(credential_name, env_name)` pair matching the wizard's persistence
+/// shape. Returns `(None, None)` when the provider does not need a key.
+fn resolve_key_args(
+    args: &ApplyArgs,
+    provider_name: &str,
+    credential_hint: &str,
+    needs_credential: bool,
+) -> Result<(Option<String>, Option<String>), String> {
+    let supplied = [
+        args.api_key.is_some(),
+        args.api_key_stdin,
+        args.api_key_env.is_some(),
+    ];
+    let count: u8 = supplied.iter().map(|b| *b as u8).sum();
+    if count > 1 {
+        return Err(
+            "specify at most one of --api-key / --api-key-stdin / --api-key-env".into(),
+        );
+    }
+    if !needs_credential {
+        if count > 0 {
+            return Err(format!(
+                "provider `{provider_name}` does not need an API key; drop --api-key{{,-stdin,-env}}"
+            ));
+        }
+        return Ok((None, None));
+    }
+    if let Some(env) = args.api_key_env.as_deref() {
+        let env = env.trim();
+        if env.is_empty() {
+            return Err("--api-key-env cannot be empty".into());
+        }
+        return Ok((None, Some(env.to_string())));
+    }
+    let key: String = if args.api_key_stdin {
+        let mut s = String::new();
+        std::io::stdin()
+            .read_to_string(&mut s)
+            .map_err(|e| format!("read --api-key-stdin: {e}"))?;
+        s.trim().to_string()
+    } else if let Some(k) = args.api_key.as_deref() {
+        k.trim().to_string()
+    } else {
+        return Err(format!(
+            "provider `{provider_name}` needs a credential; pass --api-key VALUE, --api-key-stdin, or --api-key-env ENV_NAME"
+        ));
+    };
+    if key.is_empty() {
+        return Err("API key cannot be empty".into());
+    }
+    store_credential(credential_hint, &key).map_err(|e| {
+        format!(
+            "store credential `{credential_hint}` in namespace `agent`: {e}\nhint: run under a privileged shell, or use --api-key-env ENV_NAME to point at an env var instead"
+        )
+    })?;
+    Ok((Some(credential_hint.to_string()), None))
+}
+
+fn apply_credential_to_block(
+    block: &mut serde_json::Map<String, Value>,
+    credential_name: Option<&str>,
+    credential_env: Option<&str>,
+) {
+    if let Some(n) = credential_name {
+        block.insert("api_key_credential".into(), json!(n));
+        block.remove("api_key_env");
+    } else if let Some(env) = credential_env {
+        block.insert("api_key_env".into(), json!(env));
+        block.insert("api_key_credential".into(), Value::Null);
+    } else {
+        block.insert("api_key_credential".into(), Value::Null);
+        block.remove("api_key_env");
+    }
+}
+
+fn key_source_label(
+    credential_name: Option<&str>,
+    credential_env: Option<&str>,
+    needs_credential: bool,
+) -> &'static str {
+    if !needs_credential {
+        "not-required"
+    } else if credential_name.is_some() {
+        "credential"
+    } else if credential_env.is_some() {
+        "env"
+    } else {
+        "none"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -1470,7 +1994,45 @@ mod tests {
     #[test]
     fn unknown_subcommand_is_rejected() {
         let err = run(&["bogus".into()]).unwrap_err();
-        assert!(err.contains("unknown setup subcommand"), "got {err}");
+        assert!(err.contains("unknown setup modality/subcommand"), "got {err}");
+    }
+
+    #[test]
+    fn bare_setup_on_non_tty_requires_modality() {
+        // Cargo test may inherit a TTY stdin in interactive shells; in
+        // that case `run` would block on the modality picker. Skip
+        // unless stdin is actually piped (which it is in CI).
+        use std::io::IsTerminal;
+        if std::io::stdin().is_terminal() {
+            eprintln!("(skipping: stdin is a TTY in this test run)");
+            return;
+        }
+        let err = run(&[]).unwrap_err();
+        assert!(err.contains("requires a modality"), "got {err}");
+        // The envelope should also list the valid modalities so callers
+        // can self-correct.
+        for m in ["llm", "tts", "stt", "imagegen", "embed", "all"] {
+            assert!(err.contains(m), "expected `{m}` in envelope; got {err}");
+        }
+    }
+
+    #[test]
+    fn bare_status_defaults_to_all_modalities() {
+        let _g = env_lock();
+        let tmp_dir = std::env::temp_dir().join(format!("cos-setup-test-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+        let cfg_path = tmp_dir.join("config.json");
+        std::env::set_var("COS_CONFIG_PATH", &cfg_path);
+
+        // No positional modality, just --status: should fan out to all.
+        let v = run(&["--status".into()]).expect("status ok");
+        let modalities = v.get("modalities").and_then(|s| s.as_object()).expect("modalities map");
+        for k in ["llm", "tts", "stt", "imagegen", "embed"] {
+            assert!(modalities.contains_key(k), "missing modality `{k}` in bare status");
+        }
+
+        std::env::remove_var("COS_CONFIG_PATH");
+        std::fs::remove_dir_all(&tmp_dir).ok();
     }
 
     #[test]
@@ -1482,9 +2044,10 @@ mod tests {
     #[test]
     fn help_subcommand_lists_modes() {
         let v = run(&["--help".into()]).expect("help ok");
-        assert_eq!(
-            v.get("command").and_then(|s| s.as_str()),
-            Some("cos agent setup [MODALITY]")
+        let cmd = v.get("command").and_then(|s| s.as_str()).unwrap_or("");
+        assert!(
+            cmd.starts_with("cos agent setup <MODALITY>"),
+            "expected help command to start with `cos agent setup <MODALITY>`; got `{cmd}`"
         );
         let modalities = v.get("modalities").and_then(|s| s.as_object());
         assert!(modalities.is_some(), "expected modalities table in help");

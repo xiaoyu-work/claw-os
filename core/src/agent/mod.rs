@@ -81,6 +81,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
                     &cfg_snapshot,
                 )
                 .map_err(|e| format!("provider unavailable: {e}"))?;
+                let provider = crate::ai::gate::wrap_for_system(provider);
                 let runtime = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
@@ -137,7 +138,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
                     let fix = parsed
                         .get("fix")
                         .cloned()
-                        .unwrap_or_else(|| json!("cos agent setup"));
+                        .unwrap_or_else(|| json!("cos agent setup llm"));
                     (false, err, fix)
                 }
             };
@@ -2901,6 +2902,7 @@ fn chat_cmd(args: &[String]) -> Result<Value, String> {
     // mid-REPL wants a different model, they can `/quit` and re-launch.
     let provider = llm::registry::build(&cfg.provider, &cfg.model, cfg)
         .map_err(|e| format!("provider unavailable: {e}"))?;
+    let provider = crate::ai::gate::wrap_for_system(provider);
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -3546,6 +3548,7 @@ fn run_active_provider_probe(
             });
         }
     };
+    let provider = crate::ai::gate::wrap_for_system(provider);
 
     let configured = provider.is_configured();
     let req = ChatRequest {
@@ -5037,6 +5040,7 @@ fn vision_analyze_cmd(args: &[String]) -> Result<Value, String> {
 
     let provider = crate::agent::llm::registry::build(&provider_name, &model_name, &cfg.agent)
         .map_err(|e| format!("build provider {provider_name}: {e}"))?;
+    let provider = crate::ai::gate::wrap_for_system(provider);
 
     let mut req = VisionRequest::new(prompt.clone(), image);
     req.system = system;
@@ -7681,6 +7685,7 @@ fn curator_author_cmd(args: &[String]) -> Result<Value, String> {
         let model = model_override.unwrap_or_else(|| cfg.model.clone());
         let provider = llm::registry::build(&cfg.provider, &model, cfg)
             .map_err(|e| format!("primary provider unavailable: {e}"))?;
+        let provider = crate::ai::gate::wrap_for_system(provider);
         let route = if use_primary {
             "primary"
         } else {
@@ -7694,6 +7699,7 @@ fn curator_author_cmd(args: &[String]) -> Result<Value, String> {
             .unwrap_or_else(|| cfg.auxiliary_model.clone().unwrap_or_default());
         let provider = llm::registry::build(&aux_provider_name, &aux_model, cfg)
             .map_err(|e| format!("auxiliary provider unavailable: {e}"))?;
+        let provider = crate::ai::gate::wrap_for_system(provider);
         (provider, aux_model, "auxiliary")
     };
 
