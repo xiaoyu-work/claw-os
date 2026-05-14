@@ -1,7 +1,7 @@
 //! Memory subsystem.
 //!
 //! Phase 3 layers (decided in Q6):
-//!   - notes (MEMORY.md / USER.md)         — Hermes-equivalent, frozen snapshot
+//!   - notes (MEMORY.md / USER.md)         — frozen snapshot
 //!   - sqlite_fts                          — built-in, FTS5 + trigram
 //!   - semantic                            — fastembed via crate::model::tasks::embed
 //!   - honcho                              — only retained external plugin

@@ -10,9 +10,7 @@
 //! returns a `String` the caller can print, write to a log, or
 //! pipe through a colorizer.
 //!
-//! The Hermes equivalent (`agent/display.py`, ~40KB) does double
-//! duty: format + emit. We split those concerns: this module is
-//! pure-functional formatting; ANSI emission lives in the cli
+//! Pure-functional formatting; ANSI emission lives in the cli
 //! crate so headless tools (gateway / mcp-server) don't pull in a
 //! tty dependency.
 

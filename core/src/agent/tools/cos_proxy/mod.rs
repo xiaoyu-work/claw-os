@@ -14,8 +14,9 @@
 //!
 //! The agent therefore inherits the **full** kernel surface: anything
 //! callable from the cos CLI is callable by the model, with the same
-//! command/args shape. This is the "agent-native OS" promise — Hermes was a
-//! bolt-on; here the agent is a kernel resident with native access.
+//! command/args shape. This is the "agent-native OS" promise: the
+//! agent is a kernel resident with native access, not a bolt-on
+//! layer.
 //!
 //! Beyond the uniform-contract proxies, this module also hosts higher-level
 //! tools backed by agent subsystems (e.g. `cos_memory` over

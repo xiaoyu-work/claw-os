@@ -1,12 +1,11 @@
 //! Skill curator — distil completed conversation traces into
 //! draft skill manifests the user can review and accept.
 //!
-//! Library-only. Hermes' curator (~70KB Python) does both
-//! analysis + LLM-driven authorship. Here we ship the
-//! deterministic analysis half: scan the conversation for the
-//! distinctive shape of a "this is a recurring task worth
-//! capturing" moment and propose a [`SkillDraft`] with title,
-//! description, and the set of tools that were actually used.
+//! Library-only. Ships the deterministic analysis half: scan the
+//! conversation for the distinctive shape of a "this is a
+//! recurring task worth capturing" moment and propose a
+//! [`SkillDraft`] with title, description, and the set of tools
+//! that were actually used.
 //!
 //! Downstream, the runtime can hand the draft to an LLM for body
 //! authorship or surface it to the user verbatim. A full LLM

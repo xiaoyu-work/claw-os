@@ -2,9 +2,7 @@
 //! "if I read this path's bytes, should I treat them as text or as
 //! opaque binary?".
 //!
-//! Mirrors Hermes' `agent/binary_extensions.py` and the smaller
-//! checks scattered through Hermes' file-IO helpers, but keeps the
-//! data-driven core: a maintained allowlist of binary extensions
+//! Data-driven core: a maintained allowlist of binary extensions
 //! (driven by what we see in software-development workflows), with
 //! escape hatches for callers that want to override the default
 //! list (e.g., a den has decided to treat a custom `.bin` payload

@@ -26,9 +26,6 @@
 //! to do with the verdict (e.g. require explicit confirmation for
 //! `Caution`, hard-error on `Deny`). The classifier is case-insensitive on
 //! Windows path components; everywhere else it is case-sensitive.
-//!
-//! Hermes parity: covers the same surface as Hermes' `agent/file_safety.py`
-//! (which guards `file_tools` writes), but Rust-typed and OS-aware.
 
 use std::path::{Component, Path, PathBuf};
 

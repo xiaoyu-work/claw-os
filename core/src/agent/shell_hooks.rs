@@ -4,12 +4,12 @@
 //! terminal?") without scraping `~/.bash_history` or fighting with
 //! per-shell history config.
 //!
-//! Mirrors Hermes' `agent/shell_hooks.py` but stays tiny: only
-//! emits init scripts (zero deps) + appends/reads a JSONL log via
-//! `crate::paths::agent_state_dir()`. No daemon, no IPC, no
-//! per-session correlation. The shell integration calls back into
-//! `cos agent shell-hooks record-pre / record-post`, so the cos
-//! binary is the single source of truth for the schema.
+//! Intentionally tiny: only emits init scripts (zero deps) +
+//! appends/reads a JSONL log via `crate::paths::agent_state_dir()`.
+//! No daemon, no IPC, no per-session correlation. The shell
+//! integration calls back into `cos agent shell-hooks record-pre
+//! / record-post`, so the cos binary is the single source of
+//! truth for the schema.
 //!
 //! Threat model: the log is local-only, written under the cos data
 //! dir. Operators can disable capture entirely by simply not

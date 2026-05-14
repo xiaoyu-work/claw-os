@@ -1,8 +1,7 @@
 //! High-level **context engine** that composes per-turn project context
 //! from the lower-level pure utilities ([`subdir_hints`] + [`references`]).
 //!
-//! Hermes parity: this is the Rust analogue of `agent/context_engine.py`.
-//! It is **pure** — no LLM calls, no I/O beyond the directory scan that
+//! **Pure** — no LLM calls, no I/O beyond the directory scan that
 //! [`subdir_hints`] does. The runtime layer decides what to do with the
 //! returned [`ContextBlock`] (typically prepended to the system prompt
 //! or injected as a leading `developer`/`user` message).
