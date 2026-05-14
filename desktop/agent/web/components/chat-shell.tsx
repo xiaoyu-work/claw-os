@@ -9,7 +9,7 @@ import {
 } from "react";
 import { Mic, Send } from "lucide-react";
 
-import { BrandSymbol } from "@/components/brand";
+import { BrandSymbol, BrandWordmark } from "@/components/brand";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useAudioRecording } from "@/hooks/use-audio-recording";
@@ -233,9 +233,10 @@ export function ChatShell() {
     return (
       <div className="flex h-screen flex-col bg-background/95 text-foreground backdrop-blur-xl">
         <header className="flex items-center gap-2 border-b border-border/60 px-4 py-2">
-          <BrandSymbol size={18} className="text-primary" />
-          <span className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-            Claw OS Agent
+          <BrandSymbol size={18} />
+          <BrandWordmark height={12} className="opacity-80" />
+          <span className="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+            Agent
           </span>
           <span className="ml-auto text-[10px] text-muted-foreground">
             Esc to close
@@ -311,10 +312,11 @@ export function ChatShell() {
     <div className="flex min-h-screen flex-col bg-background text-foreground">
       <header className="border-b border-border px-6 py-4">
         <div className="flex items-center gap-3">
-          <BrandSymbol size={28} className="text-foreground" />
-          <h1 className="text-lg font-semibold tracking-tight">
-            Claw OS Agent
-          </h1>
+          <BrandSymbol size={32} />
+          <BrandWordmark height={20} />
+          <span className="text-xs font-medium tracking-wider text-muted-foreground uppercase">
+            Agent
+          </span>
         </div>
       </header>
 
@@ -322,11 +324,7 @@ export function ChatShell() {
         <div className="flex-1 space-y-4">
           {messages.length === 0 ? (
             <div className="flex h-full min-h-[40vh] flex-col items-center justify-center gap-4 text-center">
-              <BrandSymbol
-                size={56}
-                aria-hidden
-                className="text-foreground"
-              />
+              <BrandSymbol size={72} aria-hidden />
               <div className="space-y-1">
                 <p className="text-foreground text-base font-medium">
                   How can your agent help today?
