@@ -33,7 +33,15 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::agent::llm::{self, types::ChatRequest as LlmChatRequest, types::ContentBlock, types::Message, types::Role};
+use async_trait::async_trait;
+use futures_util::stream::BoxStream;
+
+use crate::agent::llm::{
+    self,
+    types::{ChatRequest as LlmChatRequest, ChatResponse as LlmChatResponse, ContentBlock,
+            EngineInfo, Message, Role, StreamEvent},
+    Provider as LlmProvider, Result as LlmResult,
+};
 use crate::agent::safety::redact::Redactor;
 use crate::apps;
 use crate::caps::{self, Scope, Verb};
@@ -450,6 +458,179 @@ fn build_chat_request(model: &str, user: &str, system: Option<&str>) -> LlmChatR
 // async pathway above.
 #[allow(dead_code)]
 fn _ensure_arc_send<T: ?Sized + Send + Sync>(_: &Arc<T>) {}
+
+// ---------------------------------------------------------------------------
+// System-agent provider wrapper.
+//
+// The kernel-resident agent (everything reachable via `cos agent ask`,
+// `cos agent chat`, the cos-agent-bridge HTTP service, the doctor,
+// the vision/author/delegate paths, …) is NOT an installed app — it
+// has no manifest, no `ai` block, no per-app allowlist. But it still
+// spends real tokens against real providers, so it deserves the same
+// kernel-level oversight that real apps get:
+//
+//   * `caps::require(Verb::AI_CHAT, name(model))` — defence-in-depth
+//     check AND structured audit emission to `caps.jsonl`.
+//   * `budget::reserve/settle` against the stable pseudo-app id
+//     `system.agent`, capped by `agent.system_budget_monthly_{units,
+//     usd}` in `/etc/cos/config.json`.
+//
+// Implemented as a Provider decorator so call sites need only wrap
+// the result of `llm::registry::build(...)`. The wrapper transparently
+// forwards every Provider method to the inner; only `chat()` and
+// `chat_stream()` get the additional caps/budget pipeline.
+// ---------------------------------------------------------------------------
+
+/// Stable pseudo-app id under which the system agent's AI usage is
+/// rolled up. Surfaces alongside real apps in `cos ai budget show`.
+pub const SYSTEM_AGENT_BUCKET: &str = "system.agent";
+
+/// Wrap an LLM provider so the kernel-resident agent reaches the
+/// upstream model through the same caps + budget + audit pipeline
+/// real apps use. The wrapper is cheap (single `Arc` indirection)
+/// and is the only sanctioned way for `core::agent::*` code to talk
+/// to a model — direct `llm::registry::build(...)` consumption
+/// should always be followed by this call.
+pub fn wrap_for_system(inner: Arc<dyn LlmProvider>) -> Arc<dyn LlmProvider> {
+    Arc::new(SystemGatedProvider { inner })
+}
+
+struct SystemGatedProvider {
+    inner: Arc<dyn LlmProvider>,
+}
+
+#[async_trait]
+impl LlmProvider for SystemGatedProvider {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn supported_models(&self) -> Vec<String> {
+        self.inner.supported_models()
+    }
+
+    fn is_configured(&self) -> bool {
+        self.inner.is_configured()
+    }
+
+    fn engine_info(&self) -> Option<EngineInfo> {
+        self.inner.engine_info()
+    }
+
+    fn supports_prompt_cache(&self) -> bool {
+        self.inner.supports_prompt_cache()
+    }
+
+    async fn chat(&self, request: LlmChatRequest) -> LlmResult<LlmChatResponse> {
+        let cfg = &config::get().agent;
+        let model = request.model.clone();
+
+        // 1. Capability check at the kernel boundary. The session that
+        //    spawned the agent loop should hold `ai.chat` already; if
+        //    it somehow doesn't (or the caps system was bypassed), we
+        //    fail closed here. Also emits one structured record per
+        //    call to `caps.jsonl`.
+        caps::require(Verb::AI_CHAT, Scope::name(&model))
+            .map_err(|d| {
+                llm::LlmError::InvalidRequest(format!(
+                    "system-agent caps denied for ai.chat: {}",
+                    d.to_json()
+                ))
+            })?;
+
+        // 2. Reserve budget against the system-agent bucket.
+        let est_units = estimate_request_units(&request);
+        let est_usd = estimate_usd(est_units);
+        let cap_units = cfg.system_budget_monthly_units;
+        let cap_usd = cfg.system_budget_monthly_usd;
+
+        let mut store = Store::open()
+            .map_err(|e| llm::LlmError::Internal(format!("system-agent budget store: {e}")))?;
+        store
+            .reserve(SYSTEM_AGENT_BUCKET, est_units, est_usd, cap_units, cap_usd)
+            .map_err(|e| llm::LlmError::InvalidRequest(format!("system-agent budget: {e}")))?;
+
+        // 3. Delegate to the wrapped provider.
+        let resp = self.inner.chat(request).await?;
+
+        // 4. Settle to actuals. Best-effort: settlement errors are
+        //    logged but never bubbled — the call has already been
+        //    served and refusing to return success here would lie
+        //    to the caller about whether the model was invoked.
+        let actual_units =
+            resp.usage.input_tokens as i64 + resp.usage.output_tokens as i64;
+        let delta_units = actual_units - est_units as i64;
+        let delta_usd = estimate_usd(actual_units.max(0) as u64) - est_usd;
+        if let Err(e) = store.settle(SYSTEM_AGENT_BUCKET, delta_units, delta_usd) {
+            tracing::warn!(
+                target: "ai.gate",
+                "system-agent budget settle failed (delta_units={delta_units}, delta_usd={delta_usd}): {e}",
+            );
+        }
+
+        Ok(resp)
+    }
+
+    async fn chat_stream(
+        &self,
+        request: LlmChatRequest,
+    ) -> LlmResult<BoxStream<'static, LlmResult<StreamEvent>>> {
+        // Streaming path: do the caps check and a best-effort
+        // up-front reservation, then hand the stream through
+        // unmodified. Settlement against streamed actuals is a
+        // future enhancement (would require wrapping the stream
+        // to capture the terminal `StreamEvent::Done { usage }`
+        // and updating the bucket — non-trivial without losing
+        // back-pressure semantics, so deferred).
+        let cfg = &config::get().agent;
+        let model = request.model.clone();
+
+        caps::require(Verb::AI_CHAT, Scope::name(&model))
+            .map_err(|d| {
+                llm::LlmError::InvalidRequest(format!(
+                    "system-agent caps denied for ai.chat: {}",
+                    d.to_json()
+                ))
+            })?;
+
+        let est_units = estimate_request_units(&request);
+        let est_usd = estimate_usd(est_units);
+        if let Ok(mut store) = Store::open() {
+            if let Err(e) = store.reserve(
+                SYSTEM_AGENT_BUCKET,
+                est_units,
+                est_usd,
+                cfg.system_budget_monthly_units,
+                cfg.system_budget_monthly_usd,
+            ) {
+                return Err(llm::LlmError::InvalidRequest(format!(
+                    "system-agent budget: {e}"
+                )));
+            }
+        }
+
+        self.inner.chat_stream(request).await
+    }
+}
+
+/// Approximate tokens a request will cost on the input side, using
+/// the same 4 chars ≈ 1 token rule of thumb as `estimate_units`. Adds
+/// a 256-token output buffer so the reservation isn't blown the
+/// moment a non-trivial response comes back.
+fn estimate_request_units(req: &LlmChatRequest) -> u64 {
+    let mut chars: usize = 0;
+    for m in &req.messages {
+        for block in &m.content {
+            if let ContentBlock::Text { text } = block {
+                chars += text.chars().count();
+            }
+        }
+    }
+    if let Some(s) = req.system.as_deref() {
+        chars += s.chars().count();
+    }
+    (chars as u64 / 4) + 256
+}
 
 // ---------------------------------------------------------------------------
 // Tests
