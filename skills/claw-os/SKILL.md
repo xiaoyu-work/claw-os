@@ -19,7 +19,6 @@ You are running on Claw OS. All commands return structured JSON.
 | `credential` | Encrypted secrets, namespaces, TTL, bundles ([details](credential.md)) |
 | `cron` | Job scheduling with context and overlap protection ([details](cron.md)) |
 | `sys` | System info, resources, processes |
-| `browser` | Browser engine lifecycle |
 
 **Agent-only tools** (call directly via the tool interface, not the shell):
 
@@ -31,6 +30,7 @@ You are running on Claw OS. All commands return structured JSON.
 | `cos_watch` | Event-driven file/process/service watching ([details](watch.md)) |
 | `cos_netfilter` | Outbound firewall and rate limiting ([details](network.md)) |
 | `cos_trace` | Execution tracing — tree-structured observability ([details](trace.md)) |
+| `cos_browser` | Standalone CDP server lifecycle for external Puppeteer/Playwright clients (the `web` app already uses cos-browser per-request and does not need this) |
 
 Permission roles and the `cos perms check` app gate are documented in [permissions.md](permissions.md).
 

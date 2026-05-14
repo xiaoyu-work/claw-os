@@ -8,7 +8,6 @@ use crate::agent;
 use crate::apps;
 use crate::audit;
 use crate::bridge;
-use crate::browser;
 use crate::checkpoint;
 use crate::credential;
 use crate::cron;
@@ -74,7 +73,6 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
     // Built-in OS primitives
     match name.as_str() {
         "sys" => dispatch_builtin(args, "sys", sysinfo::run),
-        "browser" => dispatch_builtin(args, "browser", browser::run),
         "service" => dispatch_builtin(args, "service", service::run),
         "checkpoint" => dispatch_builtin(args, "checkpoint", checkpoint::run),
         "credential" => dispatch_builtin(args, "credential", credential::run),
@@ -487,13 +485,6 @@ fn builtin_apps() -> Vec<(
             ("mounts", "List all mount points with filesystem type and options (structured /proc/mounts)"),
             ("net", "Show network interfaces and TCP connections (structured /proc/net/*)"),
             ("cgroup", "Show cgroup v2 limits and usage — memory, CPU, PIDs (/sys/fs/cgroup/)"),
-        ]),
-        ("browser", "Browser-as-a-service — cos-browser (Rust/V8) lifecycle control with CDP on :9222", vec![
-            ("start", "Start the cos-browser CDP service"),
-            ("stop", "Stop the browser service"),
-            ("restart", "Restart the browser service"),
-            ("status", "Check if browser service is running and healthy"),
-            ("health", "Run health check, auto-restart on failure"),
         ]),
         ("service", "Generic service manager — lifecycle hooks, graceful shutdown, dependency ordering", vec![
             ("start", "Start a service (pre_start hook → credential injection → spawn → health check → post_start)"),
@@ -1678,14 +1669,11 @@ mod tests {
     }
 
     #[test]
-    fn browser_primitive_description_is_not_stale() {
-        let apps = builtin_apps();
-        let browser = apps.iter().find(|(n, _, _)| *n == "browser").unwrap();
-        assert!(
-            !browser.1.contains("Jina"),
-            "browser description still references Jina: {}",
-            browser.1
-        );
-        assert!(browser.1.contains("cos-browser"));
+    fn browser_module_compiles() {
+        // cos browser is no longer a user CLI primitive — it's exposed
+        // only as the `cos_browser` agent tool. Smoke-test that the module
+        // is still wired up by reaching the unknown-command path.
+        let err = crate::browser::run("__nope__", &[]).unwrap_err();
+        assert!(err.contains("unknown"));
     }
 }

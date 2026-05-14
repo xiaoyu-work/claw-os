@@ -556,8 +556,9 @@ def _schema():
         "name": "web",
         "description": "Browser via cos-browser engine (vendored Obscura). "
                        "Returns text/links/JSON instead of Markdown — better for LLM token use. "
-                       "Use --eval for arbitrary JS extraction; CDP server "
-                       "available via `cos browser start` for Puppeteer/Playwright.",
+                       "Use --eval for arbitrary JS extraction. A standalone "
+                       "CDP server is also available via the cos_browser agent tool "
+                       "(start/stop/status) for external Puppeteer/Playwright clients.",
         "commands": {
             "read": {
                 "summary": "Fetch URL with full JS rendering and return {url,title,text,links}.",
