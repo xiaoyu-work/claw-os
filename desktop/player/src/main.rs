@@ -32,6 +32,7 @@ mod argparse;
 mod config;
 mod key_bind;
 mod localize;
+mod mcp;
 mod menu;
 #[cfg(feature = "mpris-server")]
 mod mpris;
@@ -83,6 +84,13 @@ fn get_framerate(video: &Video) -> Option<f64> {
 /// Runs application with these settings
 #[rustfmt::skip]
 fn main() -> Result<(), Box<dyn Error>> {
+    // MCP server mode — agent kernel spawns us with this env var
+    // set to bring up the App session. Don't initialise gstreamer /
+    // libcosmic in this mode.
+    if std::env::var("COS_MCP_SERVER").as_deref() == Ok("1") {
+        return mcp::run();
+    }
+
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
 
     let args = argparse::parse();
