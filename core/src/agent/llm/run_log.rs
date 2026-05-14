@@ -272,6 +272,55 @@ impl LlmRunRecord {
         }
     }
 
+    /// Build a record for a kernel-mediated **Tool** invocation
+    /// (`cos ai tool <name>`). Tools have no model and no provider in
+    /// the LLM sense, but they share the same audit stream so
+    /// operators can grep one file for everything an App did under
+    /// the AI surface.
+    ///
+    /// `provider` is hard-coded `"kernel"` and `model` is set to the
+    /// catalog tool name (prefixed `tool:` to make accidental
+    /// conflation with a real provider impossible). The caps verb
+    /// the gate checked is recorded in `verb` via [`Self::with_verb`].
+    /// `decision` is `"allowed"` on success or `"denied"` on capability
+    /// rejection so existing audit dashboards split correctly.
+    pub fn from_tool_call(
+        tool_name: &str,
+        app_id: &str,
+        verb: &str,
+        decision: &str,
+        denial_reason: Option<&str>,
+        error: Option<&str>,
+        duration_ms: u64,
+        session_id: Option<&str>,
+    ) -> Self {
+        let mut rec = Self {
+            timestamp: now_iso8601(),
+            trace_id: env_var_nonempty("COS_TRACE_ID"),
+            span_id: env_var_nonempty("COS_SPAN_ID"),
+            session_id: nonempty(session_id),
+            provider: "kernel".to_string(),
+            model: format!("tool:{tool_name}"),
+            engine_name: None,
+            engine_version: None,
+            duration_ms,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            finish_reason: decision.to_string(),
+            status: if decision == "allowed" { "ok" } else { "denied" }
+                .to_string(),
+            error: error.map(|e| e.to_string()),
+            decision: decision.to_string(),
+            denial_reason: denial_reason.map(|s| s.to_string()),
+            app_id: nonempty(Some(app_id)),
+            verb: None,
+        };
+        rec = rec.with_verb(verb);
+        rec
+    }
+
     /// Attach an explicit `app_id` to this record. Used by the
     /// App-gated path (`cos ai chat --app <id>`) so allowed calls
     /// are attributed to the requesting app, not just the provider.
@@ -566,5 +615,64 @@ mod tests {
             "content_filter"
         );
         assert_eq!(finish_reason_str(FinishReason::Other), "other");
+    }
+
+    #[test]
+    fn from_tool_call_allowed_records_kernel_provider_and_verb() {
+        let r = LlmRunRecord::from_tool_call(
+            "fs.read_text",
+            "summarize",
+            "fs.read",
+            "allowed",
+            None,
+            None,
+            42,
+            Some("sess-abc"),
+        );
+        assert_eq!(r.provider, "kernel");
+        assert_eq!(r.model, "tool:fs.read_text");
+        assert_eq!(r.app_id.as_deref(), Some("summarize"));
+        assert_eq!(r.verb.as_deref(), Some("fs.read"));
+        assert_eq!(r.decision, "allowed");
+        assert_eq!(r.status, "ok");
+        assert!(r.error.is_none());
+        assert!(r.denial_reason.is_none());
+        assert_eq!(r.duration_ms, 42);
+        assert_eq!(r.session_id.as_deref(), Some("sess-abc"));
+    }
+
+    #[test]
+    fn from_tool_call_denied_records_denial_reason_and_error() {
+        let r = LlmRunRecord::from_tool_call(
+            "fs.read_text",
+            "summarize",
+            "fs.read",
+            "denied",
+            Some("caps_denied"),
+            Some("denied: caps refused fs.read on /etc/passwd"),
+            7,
+            None,
+        );
+        assert_eq!(r.decision, "denied");
+        assert_eq!(r.status, "denied");
+        assert_eq!(r.denial_reason.as_deref(), Some("caps_denied"));
+        assert!(r.error.as_deref().unwrap().contains("denied:"));
+    }
+
+    #[test]
+    fn from_tool_call_unknown_tool_records_empty_verb() {
+        let r = LlmRunRecord::from_tool_call(
+            "fs.unicorn",
+            "summarize",
+            "",
+            "denied",
+            Some("unknown_tool"),
+            Some("unknown tool: fs.unicorn"),
+            1,
+            None,
+        );
+        assert_eq!(r.model, "tool:fs.unicorn");
+        assert!(r.verb.is_none(), "empty verb should not be stored");
+        assert_eq!(r.denial_reason.as_deref(), Some("unknown_tool"));
     }
 }

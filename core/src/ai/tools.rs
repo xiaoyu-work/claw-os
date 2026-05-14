@@ -193,6 +193,69 @@ pub fn execute(
     app_id: &str,
     args: &Value,
 ) -> Result<ToolResult, String> {
+    let started = std::time::Instant::now();
+    let outcome = execute_inner(tool_name, app_id, args);
+    let duration_ms = started.elapsed().as_millis() as u64;
+
+    // Build the audit row. Unknown-tool (no catalog hit) records as
+    // verb="" — we have no verb to attribute. All other paths know
+    // the verb because the catalog gave it to us.
+    let verb_str = lookup(tool_name)
+        .map(|t| t.verb.as_str().to_string())
+        .unwrap_or_default();
+    let session_id = std::env::var("COS_SESSION_ID").ok();
+    let session_ref = session_id.as_deref();
+
+    match &outcome {
+        Ok(_) => {
+            let rec = crate::agent::llm::run_log::LlmRunRecord::from_tool_call(
+                tool_name,
+                app_id,
+                &verb_str,
+                "allowed",
+                None,
+                None,
+                duration_ms,
+                session_ref,
+            );
+            crate::agent::llm::run_log::record(&rec);
+        }
+        Err(msg) => {
+            // Bucket the error: caps denials carry the literal "denied:"
+            // prefix this module added; everything else is a tool-impl
+            // failure (bad args, fs error, ...). Both are auditable.
+            let (decision, denial_reason) = if msg.starts_with("denied:") {
+                ("denied", Some("caps_denied"))
+            } else if tool_name_unknown(tool_name) {
+                ("denied", Some("unknown_tool"))
+            } else {
+                ("error", Some("tool_impl_error"))
+            };
+            let rec = crate::agent::llm::run_log::LlmRunRecord::from_tool_call(
+                tool_name,
+                app_id,
+                &verb_str,
+                decision,
+                denial_reason,
+                Some(msg),
+                duration_ms,
+                session_ref,
+            );
+            crate::agent::llm::run_log::record(&rec);
+        }
+    }
+    outcome
+}
+
+fn tool_name_unknown(name: &str) -> bool {
+    lookup(name).is_none()
+}
+
+fn execute_inner(
+    tool_name: &str,
+    app_id: &str,
+    args: &Value,
+) -> Result<ToolResult, String> {
     let tool = lookup(tool_name)
         .ok_or_else(|| format!("unknown tool: {tool_name}. try one of: {:?}", list_names()))?;
 
