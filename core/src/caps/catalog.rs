@@ -577,6 +577,16 @@ pub const CATALOG: &[CapMeta] = &[
         Risk::Critical,
     ),
 
+    // -- Desktop apps -----------------------------------------------------
+    CapMeta::new(
+        Verb::DESKTOP_LAUNCH,
+        ScopeKind::Name,
+        LocalizedStr::new("Launch a desktop app"),
+        LocalizedStr::new("Open a graphical application installed on this computer. Scope is the freedesktop AppID (`com.clawos.Files`, `org.mozilla.firefox`, …). Granting `*` lets the agent open any installed app, including terminals — narrow the scope when possible."),
+        "🪟",
+        Risk::Medium,
+    ),
+
     // -- Attached browser -------------------------------------------------
     // Gates the user's GUI browser (Chromium with the user's profile)
     // when reached through the Claw agent WebExtension + Native Messaging
