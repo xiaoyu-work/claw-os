@@ -70,5 +70,79 @@
         }
       ]
     }
+  },
+  "session": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "tools": [
+      {
+        "name": "kv.get",
+        "summary": { "en": "Read the value stored under `key`. Returns an empty string if missing." },
+        "args": [
+          { "name": "key", "kind": "name", "required": true }
+        ],
+        "needs": [
+          {
+            "verb": "data.kv.read",
+            "scope": { "kind": "from-arg", "arg": "key" },
+            "why": { "en": "Read the value stored under the named key." }
+          }
+        ]
+      },
+      {
+        "name": "kv.set",
+        "summary": { "en": "Store `value` under `key`, overwriting any prior value." },
+        "args": [
+          { "name": "key",   "kind": "name", "required": true },
+          { "name": "value", "kind": "text", "required": true }
+        ],
+        "needs": [
+          {
+            "verb": "data.kv.write",
+            "scope": { "kind": "from-arg", "arg": "key" },
+            "why": { "en": "Store the value you provided under the named key." }
+          }
+        ]
+      },
+      {
+        "name": "kv.del",
+        "summary": { "en": "Delete `key`. Idempotent; missing keys still succeed." },
+        "args": [
+          { "name": "key", "kind": "name", "required": true }
+        ],
+        "needs": [
+          {
+            "verb": "data.kv.delete",
+            "scope": { "kind": "from-arg", "arg": "key" },
+            "why": { "en": "Remove the named key from the store." }
+          }
+        ]
+      },
+      {
+        "name": "kv.list",
+        "summary": { "en": "List keys matching the glob `pattern`. Returns a sorted name list." },
+        "args": [
+          { "name": "pattern", "kind": "text", "required": false }
+        ],
+        "needs": [
+          {
+            "verb": "data.kv.read",
+            "scope": { "kind": "wild" },
+            "why": { "en": "Scan every key in the store to filter by the pattern." }
+          }
+        ]
+      },
+      {
+        "name": "kv.dump",
+        "summary": { "en": "Return every key/value pair in the store." },
+        "needs": [
+          {
+            "verb": "data.kv.read",
+            "scope": { "kind": "wild" },
+            "why": { "en": "Read every key and value in the store." }
+          }
+        ]
+      }
+    ]
   }
 }
