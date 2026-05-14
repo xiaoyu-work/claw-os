@@ -1,49 +1,29 @@
 # Execution Tracing
 
-Track agent tasks as a tree of traces, spans, and operations.
+Call the `cos_trace` tool — **not the shell** — to record a tree-structured journal of what you did and why. There is no user-facing `cos trace` CLI command.
 
-## Start a Trace
+## Tool shape
 
-```bash
-cos trace start "refactor-task"
-# → sets COS_TRACE_ID=refactor-task
-export COS_TRACE_ID=refactor-task
+`cos_trace` takes `{ "command": "<verb>", "args": [...] }`. Verbs: `start`, `end`, `span`, `span-end`, `show`, `list`.
+
+```json
+{ "command": "start", "args": ["refactor-task"] }
+{ "command": "span",  "args": ["analyze"] }
+// ...do work via other cos_* tools...
+{ "command": "span-end", "args": [] }
+{ "command": "span",  "args": ["verify"] }
+// ...
+{ "command": "span-end", "args": [] }
+{ "command": "end",   "args": ["refactor-task"] }
 ```
 
-After setting COS_TRACE_ID, all subsequent `cos` commands are automatically attached to this trace.
+Once a trace is open, other `cos_*` tool calls in the same session are automatically attached to it — you do not need to thread IDs through every call.
 
-## Create Spans
+## View
 
-```bash
-cos trace span "analyze"
-export COS_SPAN_ID=analyze
-
-cos app fs read main.py               # attached to analyze span
-cos app fs search "def old_func"       # attached to analyze span
-
-cos trace span-end
-export COS_SPAN_ID=
-
-cos trace span "verify"
-export COS_SPAN_ID=verify
-
-cos app exec run "pytest"              # attached to verify span
-
-cos trace span-end
-cos trace end "refactor-task"
+```json
+{ "command": "show", "args": ["refactor-task"] }
+{ "command": "list", "args": ["--status", "active"] }
 ```
 
-## View Trace Tree
-
-```bash
-cos trace show "refactor-task"
-```
-
-Returns complete tree: spans → operations, timing, errors, and summary with `first_error` pointer.
-
-## List Traces
-
-```bash
-cos trace list
-cos trace list --status active
-```
+`show` returns the full tree (spans → operations) with timings, errors, and a `first_error` pointer when something failed.

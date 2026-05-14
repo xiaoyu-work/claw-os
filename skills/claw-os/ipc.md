@@ -1,43 +1,48 @@
 # Inter-Process Communication
 
-Message passing, locks, and barriers for agent coordination:
+Call the `cos_ipc` tool — **not the shell** — for cross-session messaging, locks, barriers, and streaming pipes. There is no user-facing `cos ipc` CLI command.
 
-```bash
-cos ipc send target-session "build complete" --from build-1
-cos ipc recv my-session
-cos ipc recv my-session --timeout 30
-cos ipc recv my-session --peek
-cos ipc list my-session
-cos ipc clear my-session
+## Tool shape
+
+`cos_ipc` takes `{ "command": "<verb>", "args": [...] }`. Verbs: `send`, `recv`, `list`, `clear`, `lock`, `unlock`, `locks`, `barrier`, `pipe`.
+
+```json
+{ "command": "send",
+  "args": ["worker-1", "build complete", "--from", "orchestrator"] }
+```
+
+```json
+{ "command": "recv",
+  "args": ["my-session", "--timeout", "30"] }
 ```
 
 ## Locks
 
-Mutual exclusion for shared resources. Stale locks from dead processes are auto-reclaimed:
+Mutual exclusion. Stale locks from dead processes are auto-reclaimed.
 
-```bash
-cos ipc lock database-write --holder agent-1
-cos ipc unlock database-write --holder agent-1
-cos ipc locks
+```json
+{ "command": "lock",   "args": ["database", "--holder", "agent-1", "--timeout", "10"] }
+{ "command": "unlock", "args": ["database", "--holder", "agent-1"] }
+{ "command": "locks",  "args": [] }
 ```
 
 ## Barriers
 
-Wait until N agents reach a synchronization point:
+Block until N sessions reach a sync point.
 
-```bash
-cos ipc barrier merge-ready --expect 3 --session search-1 --timeout 60
+```json
+{ "command": "barrier",
+  "args": ["merge-ready", "--expect", "3", "--session", "search-1", "--timeout", "60"] }
 ```
 
-## Streaming Pipes
+## Streaming pipes
 
-Named channels for structured message streaming between processes. Unlike message queues (send/recv), pipes support replay, backpressure, and follow mode:
+Named channels with replay, backpressure, and follow mode. `pipe` is itself a verb; its operation goes into `args`.
 
-```bash
-cos ipc pipe create my-events --buffer-size 500
-cos ipc pipe publish my-events '{"type":"progress","value":42}' --from worker-1
-cos ipc pipe subscribe my-events --since 000003 --limit 10
-cos ipc pipe subscribe my-events --follow --timeout 30
-cos ipc pipe list
-cos ipc pipe destroy my-events
+```json
+{ "command": "pipe", "args": ["create",    "my-events", "--buffer-size", "500"] }
+{ "command": "pipe", "args": ["publish",   "my-events", "{\"type\":\"progress\"}"] }
+{ "command": "pipe", "args": ["subscribe", "my-events", "--follow", "--timeout", "30"] }
+{ "command": "pipe", "args": ["list"] }
+{ "command": "pipe", "args": ["destroy",   "my-events"] }
 ```

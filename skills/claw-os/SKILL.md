@@ -10,22 +10,29 @@ You are running on Claw OS. All commands return structured JSON.
 
 ## Quick Reference
 
-**OS primitives** — `cos <name> <command>`:
+**OS primitives** (run with `cos <name> <command>`):
 
 | Primitive | Purpose |
 |---|---|
 | `checkpoint` | Snapshot, diff, rollback workspace ([details](checkpoint.md)) |
-| `proc` | Spawn and manage processes by session ([details](process.md)) |
-| `ipc` | Messages, locks, barriers, streaming pipes ([details](ipc.md)) |
 | `service` | Lifecycle hooks, graceful shutdown ([details](service.md)) |
 | `credential` | Encrypted secrets, namespaces, TTL, bundles ([details](credential.md)) |
 | `cron` | Job scheduling with context and overlap protection ([details](cron.md)) |
-| `watch` | Event-driven file/process/service watching ([details](watch.md)) |
-| `netfilter` | Outbound firewall and rate limiting ([details](network.md)) |
-| `trace` | Execution tracing — tree-structured observability ([details](trace.md)) |
-| `policy` | Permission tiers and scope ([details](permissions.md)) |
 | `sys` | System info, resources, processes |
 | `browser` | Browser engine lifecycle |
+
+**Agent-only tools** (call directly via the tool interface, not the shell):
+
+| Tool | Purpose |
+|---|---|
+| `cos_sandbox` | Run untrusted code in a Linux-namespace sandbox ([details](sandbox.md)) |
+| `cos_proc` | Spawn and manage processes by session ([details](process.md)) |
+| `cos_ipc` | Messages, locks, barriers, streaming pipes ([details](ipc.md)) |
+| `cos_watch` | Event-driven file/process/service watching ([details](watch.md)) |
+| `cos_netfilter` | Outbound firewall and rate limiting ([details](network.md)) |
+| `cos_trace` | Execution tracing — tree-structured observability ([details](trace.md)) |
+
+Permission roles and the `cos perms check` app gate are documented in [permissions.md](permissions.md).
 
 **Apps** — `cos app <name> <command>` ([all apps](apps.md)):
 

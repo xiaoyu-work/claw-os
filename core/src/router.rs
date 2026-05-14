@@ -13,16 +13,11 @@ use crate::checkpoint;
 use crate::credential;
 use crate::cron;
 use crate::engine_pkg;
-use crate::ipc;
 use crate::model;
-use crate::netfilter;
 use crate::caps;
 use crate::perms;
-use crate::proc;
 use crate::service;
 use crate::sysinfo;
-use crate::trace;
-use crate::watch;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -79,17 +74,15 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
     // Built-in OS primitives
     match name.as_str() {
         "sys" => dispatch_builtin(args, "sys", sysinfo::run),
-        "proc" => dispatch_builtin(args, "proc", proc::run),
-        "ipc" => dispatch_builtin(args, "ipc", ipc::run),
         "browser" => dispatch_builtin(args, "browser", browser::run),
         "service" => dispatch_builtin(args, "service", service::run),
-        "watch" => dispatch_builtin(args, "watch", watch::run),
         "checkpoint" => dispatch_builtin(args, "checkpoint", checkpoint::run),
         "credential" => dispatch_builtin(args, "credential", credential::run),
-        "netfilter" => dispatch_builtin(args, "netfilter", netfilter::run),
+        // `perms` is invoked by Python apps (apps/_lib/policy.py shells to
+        // `cos perms check`) and not directly by users — kept dispatchable
+        // but hidden from the user-facing overview list.
         "perms" => dispatch_builtin(args, "perms", perms::run),
         "cron" => dispatch_builtin(args, "cron", cron::run),
-        "trace" => dispatch_builtin(args, "trace", trace::run),
         "agent" => dispatch_agent(args),
         "model" => dispatch_builtin(args, "model", model::run),
         "engine" => dispatch_builtin(args, "engine", engine_pkg::run),
@@ -495,29 +488,6 @@ fn builtin_apps() -> Vec<(
             ("net", "Show network interfaces and TCP connections (structured /proc/net/*)"),
             ("cgroup", "Show cgroup v2 limits and usage — memory, CPU, PIDs (/sys/fs/cgroup/)"),
         ]),
-        ("proc", "Process session manager — spawn, track, control, and monitor processes", vec![
-            ("spawn", "Start a process (--session ID, --group NAME, --priority low|normal|high|realtime, --role NAME, --caps verb,..., --scope-path P, --scope-host H, --scope-name N; --tier N is deprecated)"),
-            ("status", "Check if a session's process is still running"),
-            ("output", "Read buffered stdout/stderr (--tail N, --follow, --since-offset BYTES)"),
-            ("kill", "Terminate a session's process or an entire --group"),
-            ("list", "List all sessions, optionally filter by --group"),
-            ("wait", "Block until a process exits, return exit status and output"),
-            ("signal", "Send a Unix signal (TERM, KILL, HUP, USR1, USR2, STOP, CONT)"),
-            ("result", "Get full exit report with heuristic success detection"),
-            ("stats", "Get resource usage stats — CPU time, memory, I/O bytes, threads (from /proc/<pid>/)"),
-            ("renice", "Change process priority (--priority low|normal|high|realtime)"),
-        ]),
-        ("ipc", "Inter-process communication — messages, locks, barriers", vec![
-            ("send", "Queue a message to a target session"),
-            ("recv", "Dequeue oldest message from a session (--timeout N, --peek)"),
-            ("list", "Show all queued messages for a session"),
-            ("clear", "Delete all messages for a session"),
-            ("lock", "Acquire a named mutex lock (--holder, --timeout)"),
-            ("unlock", "Release a named mutex lock"),
-            ("locks", "List all active locks"),
-            ("barrier", "Wait until N sessions reach a synchronization point (--expect N, --session ID)"),
-            ("pipe", "Streaming named pipes — create, publish, subscribe, list, destroy (structured NDJSON channels with replay and backpressure)"),
-        ]),
         ("browser", "Browser-as-a-service — cos-browser (Rust/V8) lifecycle control with CDP on :9222", vec![
             ("start", "Start the cos-browser CDP service"),
             ("stop", "Stop the browser service"),
@@ -535,14 +505,6 @@ fn builtin_apps() -> Vec<(
             ("list", "List all discovered services with status"),
             ("logs", "View service log output (--tail N)"),
             ("register", "Register a new service (--name, --command, --credentials KEY1,KEY2, --pre-stop, --post-stop, --drain-timeout, --stop-timeout, --checkpoint-cmd)"),
-        ]),
-        ("watch", "Event watcher — inotify-based file watching, multi-source aggregation, event history", vec![
-            ("file", "Watch a file for creation, modification, or deletion (inotify on Linux, polling fallback)"),
-            ("dir", "Watch a directory for any file changes (inotify on Linux, polling fallback)"),
-            ("proc", "Watch a process session for exit (--timeout N)"),
-            ("on", "Subscribe to OS events: proc.exit, fs.change, service.health-fail, checkpoint.created, quota.exceeded, ipc.message, credential.expired"),
-            ("multi", "Watch multiple sources simultaneously — files, dirs, procs, services (returns on first event)"),
-            ("history", "View past watch events (--limit N, --since TIMESTAMP, --source TYPE)"),
         ]),
         ("checkpoint", "OverlayFS checkpoint system — snapshot, diff, rollback, quota, namespaces", vec![
             ("create", "Freeze current changes into a named checkpoint and start fresh"),
@@ -563,36 +525,6 @@ fn builtin_apps() -> Vec<(
             ("load-bundle", "Load all credentials in a bundle as a JSON object"),
             ("oauth-refresh", "Refresh OAuth token (google or microsoft) using stored refresh token"),
         ]),
-        ("netfilter", "Outbound network firewall — domain, method, path, and binary-level rules with rate limiting", vec![
-            ("add", "Add a rule (--allow|--deny <domain> [--port N] [--method GET,POST] [--path /api/**] [--binary /usr/bin/git] [--tls])"),
-            ("remove", "Remove rules for a domain"),
-            ("list", "List all rules and default policy"),
-            ("check", "Check if a request is allowed (--method M --path P --binary B)"),
-            ("reset", "Remove all rules and reset to allow-all"),
-            ("default", "Set default policy (allow-all or deny-all)"),
-            ("export", "Export full ruleset as JSON for proxy consumption"),
-            ("rate-limit", "Set rate limit for a domain (--rpm N, --burst N)"),
-            ("rate-limits", "List all rate limits"),
-            ("rate-limit-remove", "Remove a rate limit for a domain"),
-            ("rate-check", "Check if a request is within rate limits (records the request unless --dry-run)"),
-        ]),
-        ("policy", "Permission system — tier/scope checks, temporary elevation", vec![
-            ("elevate", "Temporarily elevate session tier (--to N --duration SECS --reason TEXT)"),
-            ("drop", "Drop an active elevation"),
-            ("status", "Show current session tier, elevation, and allowed operations"),
-            ("check", "Check if a specific operation (read/write/exec/net/system) is allowed"),
-        ]),
-        ("perms", "Capability permissions — check caps, undo gated changes, approve/deny live requests", vec![
-            ("check", "Check whether the current session has a capability: cos perms check <verb> [--path P|--host H|--name N|--wild]"),
-            ("trash", "List snapshots fs/* operations have stashed for this session (--session ID)"),
-            ("undo", "Reverse-replay every snapshot for a session (--session ID [--dry-run])"),
-            ("gc", "Garbage-collect old per-session trash dirs (--older-than-days N)"),
-            ("ask", "Submit an approval request and optionally block on it (--verb V --reason TEXT [--path P|--host H|--name N|--wild] [--wait SECS])"),
-            ("pending", "Render every outstanding approval request (TTY: card view; pipe: JSON)"),
-            ("approve", "Approve a pending request: cos perms approve <id> [--duration once|session|forever] [--note TEXT]"),
-            ("deny", "Deny a pending request: cos perms deny <id> [--note TEXT]"),
-            ("recent", "Show recently decided approvals (--limit N)"),
-        ]),
         ("cron", "Agent-native job scheduler — cron with execution context, result capture, and overlap protection", vec![
             ("add", "Register a cron job (--schedule, --command, --tier, --scope, --credentials, --overlap, --timeout)"),
             ("remove", "Remove a cron job by ID"),
@@ -603,14 +535,6 @@ fn builtin_apps() -> Vec<(
             ("logs", "View execution history for a job (--limit N)"),
             ("run", "Manually trigger a job immediately"),
             ("tick", "Process all due jobs (called by scheduler every minute)"),
-        ]),
-        ("trace", "Execution tracing — tree-structured observability for agent tasks", vec![
-            ("start", "Start a new trace (returns COS_TRACE_ID to set in environment)"),
-            ("end", "End a trace (--status completed|failed)"),
-            ("span", "Start a named span within the current trace"),
-            ("span-end", "End the current span"),
-            ("show", "Show complete trace tree with operations and timing"),
-            ("list", "List all traces (--status, --limit)"),
         ]),
         ("agent", "OS-native agent subsystem — runtime, memory, skills, LLM providers, tools, FS job queue", vec![
             ("setup", "Per-modality config wizard: cos agent setup <llm|tts|stt|imagegen|embed|all> [--status|--reset|--verify-only|--no-verify]. Bare `cos agent setup` opens an interactive modality picker."),
@@ -860,107 +784,6 @@ fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandSchema>)> {
             ],
         ),
         (
-            "proc",
-            "Process session manager",
-            vec![
-                CommandSchema {
-                    command: "spawn",
-                    description: "Start a process in a tracked session",
-                    params: vec![
-                        Param::flag("--session", "string", false, "Custom session ID"),
-                        Param::flag("--group", "string", false, "Named group for bulk ops"),
-                        Param::flag(
-                            "--role",
-                            "string",
-                            false,
-                            "Capability role: observer, worker, curator, connector, automator, agent-host, admin",
-                        ),
-                        Param::flag(
-                            "--caps",
-                            "string",
-                            false,
-                            "Comma-separated verb list (alternative to --role)",
-                        ),
-                        Param::flag("--scope-path", "string", false, "Restrict path-scoped caps"),
-                        Param::flag("--scope-host", "string", false, "Restrict host-scoped caps"),
-                        Param::flag("--scope-name", "string", false, "Restrict name-scoped caps"),
-                        Param::flag("--tier", "integer", false, "Permission tier 0-3 (deprecated; use --role)"),
-                        Param::flag("--scope", "string", false, "Path restriction (legacy)"),
-                        Param::flag(
-                            "--priority",
-                            "enum:low|normal|high|realtime",
-                            false,
-                            "Process priority",
-                        ),
-                        Param::positional(
-                            "command",
-                            "string[]",
-                            true,
-                            "Command to run (after --)",
-                        ),
-                    ],
-                    example: "cos proc spawn --session build-1 --group ci --role worker --scope-path /work -- cargo build",
-                },
-                CommandSchema {
-                    command: "status",
-                    description: "Check if a session is running",
-                    params: vec![Param::positional(
-                        "session_id",
-                        "string",
-                        true,
-                        "Session ID",
-                    )],
-                    example: "cos proc status build-1",
-                },
-                CommandSchema {
-                    command: "output",
-                    description: "Read buffered stdout/stderr",
-                    params: vec![
-                        Param::positional("session_id", "string", true, "Session ID"),
-                        Param::flag("--tail", "integer", false, "Last N lines"),
-                        Param::flag("--follow", "boolean", false, "Block until exit"),
-                    ],
-                    example: "cos proc output build-1 --tail 50",
-                },
-                CommandSchema {
-                    command: "kill",
-                    description: "Terminate a session or group",
-                    params: vec![
-                        Param::positional("session_id", "string", false, "Session ID"),
-                        Param::flag("--group", "string", false, "Kill entire group"),
-                    ],
-                    example: "cos proc kill build-1",
-                },
-                CommandSchema {
-                    command: "list",
-                    description: "List all sessions",
-                    params: vec![Param::flag("--group", "string", false, "Filter by group")],
-                    example: "cos proc list",
-                },
-                CommandSchema {
-                    command: "wait",
-                    description: "Block until process exits",
-                    params: vec![
-                        Param::positional("session_id", "string", false, "Session ID"),
-                        Param::flag("--group", "string", false, "Wait for group"),
-                        Param::flag("--timeout", "integer", false, "Timeout in seconds"),
-                    ],
-                    example: "cos proc wait build-1 --timeout 300",
-                },
-                CommandSchema {
-                    command: "result",
-                    description: "Get comprehensive exit report",
-                    params: vec![Param::positional(
-                        "session_id",
-                        "string",
-                        true,
-                        "Session ID",
-                    )],
-                    example: "cos proc result build-1",
-                },
-            ],
-        ),
-        (
             "credential",
             "Encrypted credential store",
             vec![
@@ -1058,54 +881,6 @@ fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandSchema>)> {
                         Param::flag("--namespace", "string", false, "Namespace"),
                     ],
                     example: "cos credential oauth-refresh google",
-                },
-            ],
-        ),
-        (
-            "ipc",
-            "Inter-process communication",
-            vec![
-                CommandSchema {
-                    command: "send",
-                    description: "Queue a message to a session",
-                    params: vec![
-                        Param::positional("target", "string", true, "Target session ID"),
-                        Param::positional("message", "string", true, "Message body"),
-                        Param::flag("--from", "string", false, "Sender session ID"),
-                    ],
-                    example:
-                        "cos ipc send worker-1 \"task complete\" --from orchestrator",
-                },
-                CommandSchema {
-                    command: "recv",
-                    description: "Dequeue oldest message",
-                    params: vec![
-                        Param::positional("session_id", "string", true, "Your session ID"),
-                        Param::flag("--timeout", "integer", false, "Wait timeout in seconds"),
-                        Param::flag("--peek", "boolean", false, "Read without removing"),
-                    ],
-                    example: "cos ipc recv my-session --timeout 30",
-                },
-                CommandSchema {
-                    command: "pipe",
-                    description: "Streaming named pipes (create, publish, subscribe, list, destroy)",
-                    params: vec![Param::positional(
-                        "subcommand",
-                        "enum:create|publish|subscribe|list|destroy",
-                        true,
-                        "Pipe operation",
-                    )],
-                    example: "cos ipc pipe create my-events --buffer-size 500",
-                },
-                CommandSchema {
-                    command: "lock",
-                    description: "Acquire a named mutex",
-                    params: vec![
-                        Param::positional("resource", "string", true, "Resource name"),
-                        Param::flag("--holder", "string", false, "Holder session ID"),
-                        Param::flag("--timeout", "integer", false, "Wait timeout"),
-                    ],
-                    example: "cos ipc lock database --holder agent-1 --timeout 10",
                 },
             ],
         ),
@@ -1216,136 +991,6 @@ fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandSchema>)> {
             ],
         ),
         (
-            "watch",
-            "Event-driven watcher",
-            vec![
-                CommandSchema {
-                    command: "file",
-                    description: "Watch a file for changes (inotify on Linux)",
-                    params: vec![
-                        Param::positional("path", "string", true, "File path"),
-                        Param::flag("--timeout", "integer", false, "Timeout in seconds"),
-                    ],
-                    example: "cos watch file $HOME/config.json --timeout 30",
-                },
-                CommandSchema {
-                    command: "multi",
-                    description: "Watch multiple sources simultaneously",
-                    params: vec![
-                        Param::flag("--file", "string", false, "File to watch (repeatable)"),
-                        Param::flag(
-                            "--dir",
-                            "string",
-                            false,
-                            "Directory to watch (repeatable)",
-                        ),
-                        Param::flag(
-                            "--proc",
-                            "string",
-                            false,
-                            "Process session to watch (repeatable)",
-                        ),
-                        Param::flag(
-                            "--service",
-                            "string",
-                            false,
-                            "Service to watch (repeatable)",
-                        ),
-                        Param::flag("--timeout", "integer", false, "Timeout in seconds"),
-                    ],
-                    example: "cos watch multi --file $HOME/main.py --proc worker-1 --service my-api --timeout 60",
-                },
-                CommandSchema {
-                    command: "history",
-                    description: "View past watch events",
-                    params: vec![
-                        Param::flag("--limit", "integer", false, "Max events (default 50)"),
-                        Param::flag("--since", "string", false, "ISO timestamp filter"),
-                        Param::flag(
-                            "--source",
-                            "enum:file|dir|proc|service",
-                            false,
-                            "Source type filter",
-                        ),
-                    ],
-                    example: "cos watch history --limit 20 --source file",
-                },
-            ],
-        ),
-        (
-            "netfilter",
-            "Network firewall with rate limiting",
-            vec![
-                CommandSchema {
-                    command: "add",
-                    description: "Add allow/deny rule",
-                    params: vec![
-                        Param::flag("--allow", "string", false, "Domain to allow"),
-                        Param::flag("--deny", "string", false, "Domain to deny"),
-                        Param::flag("--port", "integer", false, "Port number"),
-                    ],
-                    example: "cos netfilter add --allow api.openai.com --port 443",
-                },
-                CommandSchema {
-                    command: "rate-limit",
-                    description: "Set rate limit for a domain",
-                    params: vec![
-                        Param::positional("domain", "string", true, "Domain"),
-                        Param::flag("--rpm", "integer", true, "Requests per minute"),
-                        Param::flag("--burst", "integer", false, "Burst allowance"),
-                    ],
-                    example: "cos netfilter rate-limit api.openai.com --rpm 60 --burst 10",
-                },
-                CommandSchema {
-                    command: "rate-check",
-                    description: "Check/record a request against rate limits",
-                    params: vec![
-                        Param::positional("domain", "string", true, "Domain to check"),
-                        Param::flag(
-                            "--dry-run",
-                            "boolean",
-                            false,
-                            "Check without recording",
-                        ),
-                    ],
-                    example: "cos netfilter rate-check api.openai.com",
-                },
-            ],
-        ),
-        (
-            "policy",
-            "Permission system",
-            vec![
-                CommandSchema {
-                    command: "status",
-                    description: "Show current tier and allowed operations",
-                    params: vec![],
-                    example: "cos policy status",
-                },
-                CommandSchema {
-                    command: "check",
-                    description: "Test if an operation is allowed",
-                    params: vec![Param::positional(
-                        "operation",
-                        "enum:read|write|delete|exec|net|system",
-                        true,
-                        "Operation to check",
-                    )],
-                    example: "cos policy check exec",
-                },
-                CommandSchema {
-                    command: "elevate",
-                    description: "Temporarily escalate privileges",
-                    params: vec![
-                        Param::flag("--to", "integer", true, "Target tier (0-3)"),
-                        Param::flag("--duration", "integer", true, "Seconds"),
-                        Param::flag("--reason", "string", true, "Reason for elevation"),
-                    ],
-                    example: "cos policy elevate --to 1 --duration 300 --reason \"deployment\"",
-                },
-            ],
-        ),
-        (
             "sys",
             "System information",
             vec![
@@ -1377,84 +1022,6 @@ fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandSchema>)> {
                     description: "All processes with resource usage",
                     params: vec![],
                     example: "cos sys proc",
-                },
-            ],
-        ),
-        (
-            "trace",
-            "Execution tracing",
-            vec![
-                CommandSchema {
-                    command: "start",
-                    description: "Start a new trace",
-                    params: vec![Param::positional(
-                        "trace_id",
-                        "string",
-                        true,
-                        "Unique trace identifier",
-                    )],
-                    example: "cos trace start refactor-task",
-                },
-                CommandSchema {
-                    command: "end",
-                    description: "End a trace",
-                    params: vec![
-                        Param::positional("trace_id", "string", true, "Trace ID"),
-                        Param::flag(
-                            "--status",
-                            "enum:completed|failed",
-                            false,
-                            "Final status (default: completed)",
-                        ),
-                    ],
-                    example: "cos trace end refactor-task",
-                },
-                CommandSchema {
-                    command: "span",
-                    description: "Start a named span (reads COS_TRACE_ID from env)",
-                    params: vec![Param::positional(
-                        "name",
-                        "string",
-                        true,
-                        "Span name",
-                    )],
-                    example: "cos trace span analyze",
-                },
-                CommandSchema {
-                    command: "span-end",
-                    description: "End the current span (reads COS_SPAN_ID from env)",
-                    params: vec![Param::flag(
-                        "--name",
-                        "string",
-                        false,
-                        "Explicit span name to end",
-                    )],
-                    example: "cos trace span-end",
-                },
-                CommandSchema {
-                    command: "show",
-                    description: "Show complete trace tree with operations",
-                    params: vec![Param::positional(
-                        "trace_id",
-                        "string",
-                        true,
-                        "Trace ID",
-                    )],
-                    example: "cos trace show refactor-task",
-                },
-                CommandSchema {
-                    command: "list",
-                    description: "List all traces",
-                    params: vec![
-                        Param::flag(
-                            "--status",
-                            "enum:active|completed|failed",
-                            false,
-                            "Filter by status",
-                        ),
-                        Param::flag("--limit", "integer", false, "Max traces to return"),
-                    ],
-                    example: "cos trace list --status active",
                 },
             ],
         ),
@@ -1929,9 +1496,9 @@ mod tests {
     fn schema_for_known_builtin() {
         let schemas = command_schemas();
         assert!(schemas.iter().any(|(n, _, _)| *n == "checkpoint"));
-        assert!(schemas.iter().any(|(n, _, _)| *n == "proc"));
         assert!(schemas.iter().any(|(n, _, _)| *n == "credential"));
         assert!(schemas.iter().any(|(n, _, _)| *n == "cron"));
+        assert!(schemas.iter().any(|(n, _, _)| *n == "service"));
     }
 
     #[test]
@@ -1947,7 +1514,7 @@ mod tests {
 
     #[test]
     fn show_builtin_schema_returns_all_commands() {
-        let result = show_builtin_schema("proc");
+        let result = show_builtin_schema("credential");
         assert!(result.is_ok());
         let output = result.unwrap().unwrap();
         let v: Value = serde_json::from_str(&output).unwrap();
@@ -1969,7 +1536,7 @@ mod tests {
 
     #[test]
     fn show_command_schema_has_param_details() {
-        let result = show_command_schema("proc", "spawn");
+        let result = show_command_schema("checkpoint", "create");
         let output = result.unwrap().unwrap();
         let v: Value = serde_json::from_str(&output).unwrap();
         let params = v["parameters"].as_array().unwrap();
@@ -1993,14 +1560,9 @@ mod tests {
         // Every primitive that has a schema should produce valid output
         let primitives = [
             "checkpoint",
-            "proc",
             "credential",
-            "ipc",
             "cron",
             "service",
-            "watch",
-            "netfilter",
-            "policy",
             "sys",
         ];
         for name in &primitives {

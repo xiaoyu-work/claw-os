@@ -1,35 +1,43 @@
-# File Watching
+# File / Process / Service Watching
 
-Event-driven watching with inotify (Linux) and multi-source aggregation:
+Call the `cos_watch` tool — **not the shell** — for event-driven watching backed by inotify (Linux). There is no user-facing `cos watch` CLI command.
 
-```bash
-cos watch file /home/cos/output.txt --timeout 30
-cos watch dir /home/cos/results --timeout 60
-cos watch proc build-1 --timeout 300
+## Tool shape
+
+`cos_watch` takes `{ "command": "<verb>", "args": [...] }`. Verbs: `file`, `dir`, `proc`, `on`, `multi`, `history`.
+
+```json
+{ "command": "file", "args": ["/home/cos/output.txt", "--timeout", "30"] }
+{ "command": "dir",  "args": ["/home/cos/results",     "--timeout", "60"] }
+{ "command": "proc", "args": ["build-1",               "--timeout", "300"] }
 ```
 
-## Multi-Source Watching
+## Multi-source watch
 
-Watch files, dirs, processes, and services simultaneously — returns on first event:
+Returns on the first event from any source.
 
-```bash
-cos watch multi --file /home/cos/main.py --dir /home/cos/output/ --proc worker-1 --service my-api --timeout 60
+```json
+{ "command": "multi",
+  "args": [
+    "--file", "/home/cos/main.py",
+    "--dir",  "/home/cos/output/",
+    "--proc", "worker-1",
+    "--service", "my-api",
+    "--timeout", "60"
+  ] }
 ```
 
-## Event History
+## OS events
 
-View past events from the persistent log:
-
-```bash
-cos watch history --limit 20
-cos watch history --since "2026-03-25T10:00:00Z" --source file
+```json
+{ "command": "on", "args": ["proc.exit",          "--session", "build-1", "--timeout", "600"] }
+{ "command": "on", "args": ["service.health-fail", "--name",   "my-api",  "--timeout", "3600"] }
+{ "command": "on", "args": ["ipc.message",         "--session", "worker-1", "--timeout", "30"] }
+{ "command": "on", "args": ["credential.expired",  "--name",   "API_TOKEN", "--timeout", "300"] }
 ```
 
-## OS Events
+## History
 
-```bash
-cos watch on proc.exit --session build-1 --timeout 600
-cos watch on service.health-fail --name my-api --timeout 3600
-cos watch on ipc.message --session worker-1 --timeout 30
-cos watch on credential.expired --name API_TOKEN --timeout 300
+```json
+{ "command": "history", "args": ["--limit", "20", "--source", "file"] }
 ```

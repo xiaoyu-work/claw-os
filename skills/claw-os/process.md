@@ -1,54 +1,37 @@
 # Process Sessions
 
-Spawn background processes tracked by session ID. Output is buffered and queryable:
+Call the `cos_proc` tool — **not the shell** — to spawn, query, and control long-running processes registered with cos. There is no user-facing `cos proc` CLI command.
 
-```bash
-cos proc spawn --session build-1 -- npm run build
-cos proc status build-1
-cos proc output build-1 --tail 50
-cos proc output build-1 --stream stderr
-cos proc kill build-1
-cos proc list
+## Tool shape
+
+`cos_proc` takes `{ "command": "<verb>", "args": [...] }`. Supported verbs: `spawn`, `status`, `output`, `kill`, `list`, `wait`, `signal`, `result`, `stats`, `renice`.
+
+```json
+{
+  "command": "spawn",
+  "args": [
+    "--session", "build-1",
+    "--group", "ci",
+    "--role", "worker",
+    "--scope-path", "/work",
+    "--", "cargo", "build"
+  ]
+}
 ```
 
-## Process Groups and Hierarchy
+## Common verbs
 
-Organize related processes into groups. Child processes inherit parent context:
+| Verb | Purpose |
+|---|---|
+| `spawn` | Start a process. Use `--session <id>`, optional `--group`, `--role`, `--scope-path`, `--priority`. End flags with `--` then the command. |
+| `status <id>` | Is the session running? |
+| `output <id>` | Read buffered stdout/stderr. `--tail N`, `--follow`, `--since-offset N`. |
+| `wait <id>` | Block until exit. `--timeout <secs>` or `--group <name>`. |
+| `result <id>` | One-call summary: status, duration, output tails, `likely_success`. |
+| `signal <id> <SIGNAL>` | Send a signal (e.g. `TERM`, `INT`). |
+| `kill <id>` | Terminate the session, or `--group <name>` for a whole group. |
+| `list` | All sessions. `--group <name>` to filter. |
 
-```bash
-cos proc spawn --group research --session search-1 -- search.py "topic A"
-cos proc spawn --group research --session search-2 -- search.py "topic B"
-cos proc spawn --parent lead --session sub-1 -- worker.py
-cos proc list --group research
-cos proc kill --group research
-```
+## Result envelope
 
-## Wait, Signal, and Result
-
-Wait for processes to finish, send signals, and get one-call result summaries:
-
-```bash
-cos proc wait build-1 --timeout 300
-cos proc wait --group research
-cos proc signal build-1 TERM
-cos proc result build-1
-```
-
-`cos proc result` returns a comprehensive summary: status, duration, output tails, output sizes, and a `likely_success` heuristic — everything an agent needs in one call.
-
-## Output Streaming
-
-Read output incrementally without re-reading old content:
-
-```bash
-cos proc output build-1 --follow
-cos proc output build-1 --since-offset 4096
-```
-
-## Isolated Workspaces
-
-Give each process its own private workspace directory:
-
-```bash
-cos proc spawn --workspace isolated --session task-1 -- agent.py
-```
+Every call returns JSON. `spawn` returns `{session, pid, group?}`; `result` returns the comprehensive summary an agent should consume to decide next steps without making three more calls.
