@@ -460,7 +460,27 @@ fn cmd_rollback(args: &[String]) -> Result<Value, String> {
     let upper = overlay.join("upper");
     let checkpoints_dir = overlay.join("checkpoints");
 
-    // Count pending changes before rollback.
+    // VALIDATE FIRST. The previous order — wipe upper, *then* look up
+    // the checkpoint — meant a user who typoed the checkpoint id
+    // (`cos checkpoint rollback abc` when there is no `abc-…`)
+    // destroyed all their uncommitted changes in `upper/` and then
+    // got an error. Hoist the lookup so a typo is rejected before
+    // anything mutates the filesystem. With no argument the caller
+    // is explicitly resetting to base — that is still allowed and
+    // does wipe `upper/`.
+    let resolved_layer: Option<(String, PathBuf)> = match args.first() {
+        Some(target_id) => {
+            let cp_dir = find_checkpoint_dir(&checkpoints_dir, target_id)?;
+            let layer = cp_dir.join("layer");
+            if !layer.exists() {
+                return Err(format!("checkpoint layer not found: {}", layer.display()));
+            }
+            Some((target_id.clone(), layer))
+        }
+        None => None,
+    };
+
+    // Count pending changes before rollback (purely informational).
     let changes_reverted = count_files_in_upper(&upper);
 
     // 1. Unmount overlay (best-effort).
@@ -471,27 +491,21 @@ fn cmd_rollback(args: &[String]) -> Result<Value, String> {
         fs::remove_dir_all(&upper).map_err(|e| format!("failed to remove upper: {e}"))?;
     }
 
-    // 3. Determine what to restore.
-    let rolled_back_to: String;
-
-    if let Some(target_id) = args.first() {
-        // Find the checkpoint whose id matches.
-        let cp_dir = find_checkpoint_dir(&checkpoints_dir, target_id)?;
-        let layer = cp_dir.join("layer");
-        if !layer.exists() {
-            return Err(format!("checkpoint layer not found: {}", layer.display()));
+    // 3. Restore the validated layer (or leave upper empty for base reset).
+    let rolled_back_to = match resolved_layer {
+        Some((target_id, layer)) => {
+            // Copy (not move) the layer as the new upper so the checkpoint is
+            // preserved for future rollbacks.
+            copy_dir_recursive(&layer, &upper)
+                .map_err(|e| format!("failed to restore checkpoint layer: {e}"))?;
+            target_id
         }
-
-        // Copy (not move) the layer as the new upper so the checkpoint is
-        // preserved for future rollbacks.
-        copy_dir_recursive(&layer, &upper)
-            .map_err(|e| format!("failed to restore checkpoint layer: {e}"))?;
-        rolled_back_to = target_id.clone();
-    } else {
-        // No id → reset to base (empty upper).
-        fs::create_dir_all(&upper).map_err(|e| format!("failed to create empty upper: {e}"))?;
-        rolled_back_to = "base".to_string();
-    }
+        None => {
+            // No id → reset to base (empty upper).
+            fs::create_dir_all(&upper).map_err(|e| format!("failed to create empty upper: {e}"))?;
+            "base".to_string()
+        }
+    };
 
     // 4. Recreate work dir.
     let work = overlay.join("work");
@@ -1457,5 +1471,73 @@ mod tests {
         std::env::remove_var("COS_SESSION");
         let r = create_namespace("bad/name");
         assert!(r.is_err());
+    }
+
+    // -- rollback id validation --
+
+    /// Regression: rollback with an unknown id must reject the
+    /// command BEFORE wiping `upper/`. Pre-fix the function counted
+    /// pending changes, unmounted overlay, and removed upper/ at
+    /// step 2 — long before it tried to resolve the checkpoint id at
+    /// step 3. A user who typoed `cos checkpoint rollback abc`
+    /// destroyed all their uncommitted work and got an error.
+    #[test]
+    fn rollback_invalid_id_does_not_wipe_upper() {
+        perms_init();
+        let _g = cp_setup();
+
+        let overlay = overlay_dir();
+        let upper = overlay.join("upper");
+        let checkpoints = overlay.join("checkpoints");
+        let _ = fs::remove_dir_all(&upper);
+        let _ = fs::remove_dir_all(&checkpoints);
+        fs::create_dir_all(&upper).unwrap();
+        fs::create_dir_all(&checkpoints).unwrap();
+
+        // Seed upper/ with a sentinel file that MUST survive the
+        // failed rollback. This file represents the user's
+        // uncommitted work.
+        let sentinel = upper.join("uncommitted_work.txt");
+        fs::write(&sentinel, b"do not destroy me").unwrap();
+
+        // Seed at least one valid checkpoint so the checkpoints dir
+        // isn't empty (catches a different code path).
+        fs::create_dir_all(checkpoints.join("001-real/layer")).unwrap();
+
+        // Attempt rollback with a bogus id. Must return Err.
+        let res = cmd_rollback(&vec!["this-id-does-not-exist".to_string()]);
+        assert!(res.is_err(), "expected Err for unknown checkpoint id, got {res:?}");
+
+        // The sentinel MUST still exist — proof we validated before
+        // touching upper/. Pre-fix this assertion would fail.
+        assert!(
+            sentinel.exists(),
+            "upper/ was wiped despite invalid id; uncommitted work lost"
+        );
+        let body = fs::read_to_string(&sentinel).unwrap();
+        assert_eq!(body, "do not destroy me");
+    }
+
+    /// Companion case: rollback with NO id is the explicit
+    /// "reset to base" command and IS allowed to wipe `upper/`.
+    /// This must still work after the validation hoist.
+    #[test]
+    fn rollback_no_id_resets_upper_to_base() {
+        perms_init();
+        let _g = cp_setup();
+
+        let overlay = overlay_dir();
+        let upper = overlay.join("upper");
+        let checkpoints = overlay.join("checkpoints");
+        let _ = fs::remove_dir_all(&upper);
+        let _ = fs::remove_dir_all(&checkpoints);
+        fs::create_dir_all(&upper).unwrap();
+        fs::create_dir_all(&checkpoints).unwrap();
+
+        fs::write(upper.join("scratch.txt"), b"x").unwrap();
+        let res = cmd_rollback(&vec![]).unwrap();
+        assert_eq!(res["rolled_back_to"], "base");
+        assert!(upper.exists(), "upper should be re-created empty");
+        assert!(!upper.join("scratch.txt").exists(), "scratch should be gone");
     }
 }
