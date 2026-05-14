@@ -64,6 +64,12 @@ impl SemanticIndexer {
     /// semantic store. Returns immediately; the actual embed + write
     /// runs on a background `tokio` task. Empty / whitespace-only
     /// text is silently dropped (embedding nothing wastes a request).
+    ///
+    /// Routes through [`runtime::background::spawn`] so the one-shot
+    /// `cos agent ask` CLI path can drain pending embeds before the
+    /// runtime drops. Without the registry these tasks would be
+    /// cancelled mid-embed and the last turn's user/assistant
+    /// messages would be missing from semantic search.
     pub fn spawn_index(self: &Arc<Self>, session_id: String, role: &str, msg_id: i64, text: String) {
         if text.trim().is_empty() {
             return;
@@ -72,7 +78,7 @@ impl SemanticIndexer {
         let namespace = format!("session/{session_id}");
         let key = format!("{role}-{msg_id}");
         let role_owned = role.to_string();
-        tokio::spawn(async move {
+        crate::agent::runtime::background::spawn(async move {
             match store.index(&namespace, &key, &text).await {
                 Ok(_) => {
                     tracing::trace!(

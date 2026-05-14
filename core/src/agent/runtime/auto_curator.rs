@@ -80,10 +80,16 @@ impl AutoCurator {
     /// extract durable facts, and appends accepted facts to
     /// `MEMORY.md`. Logs at `info!` on a successful pass that
     /// actually added facts; logs at `warn!` on failure.
+    ///
+    /// Spawned via [`runtime::background::spawn`] so a
+    /// `runtime::background::drain` call (used by the one-shot
+    /// `cos agent ask` CLI path) can await completion before the
+    /// tokio runtime is dropped. Without the registry the curator
+    /// would be cancelled mid-LLM-call by runtime shutdown.
     pub fn spawn_curate(self: &Arc<Self>, session_id: String) {
         let curator = self.curator.clone();
         let db = self.db.clone();
-        tokio::spawn(async move {
+        crate::agent::runtime::background::spawn(async move {
             match curator.curate_session(&db, &session_id, false).await {
                 Ok(outcome) => {
                     if outcome.skipped_no_new_messages {
