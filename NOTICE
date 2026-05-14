@@ -19,6 +19,14 @@ contributors are tracked via the git history of this repository.
 The Claw OS components (everything outside crates/obscura-* and
 crates/cos-browser) remain MIT-licensed; see LICENSE.
 
+This product also includes a vendored fork of the COSMIC Desktop
+Environment by System76, located under desktop/. Each vendored
+component retains its upstream LICENSE file verbatim (a mix of
+GPL-3.0, MPL-2.0, Apache-2.0, MIT, and CC-BY-SA). See
+desktop/PROVENANCE.md for the per-component license matrix, upstream
+repos, and vendored commit SHAs. COSMIC name and logo are trademarks
+of System76; see desktop/TRADEMARK.md.
+
 This product also includes software from Open Agents
 (https://github.com/vercel-labs/open-agents), Copyright (c) 2026 Vercel, Inc.,
 licensed under the MIT License. The Open Agents web UI source has been

@@ -4,8 +4,6 @@ The OS for agents.
 
 Linux, macOS, and Windows were designed for humans — they return pixels, terminal text, and GUI windows. Claw OS was designed for agents — every system call returns structured data, every process is tracked by session, every operation is automatically audited, and an agent (`Claw`) is part of the OS.
 
-Run it headless as an agent runtime, or boot the full desktop (a forked COSMIC environment) and use it like any other Linux distro — with the agent baked into the panel.
-
 ## Beyond Linux
 
 Claw OS provides primitives that traditional operating systems don't:
@@ -62,4 +60,4 @@ On the desktop, **Super+A** opens the Spotlight-style agent overlay; **Super+Shi
 
 ## License
 
-MIT for the kernel and apps. Vendored desktop + browser sources keep their upstream licenses — see [`desktop/PROVENANCE.md`](desktop/PROVENANCE.md) and [`crates/cos-browser/`](crates/cos-browser/).
+MIT for the kernel and apps. See the [`NOTICE`](NOTICE) for vendored sources and their upstream licenses.
