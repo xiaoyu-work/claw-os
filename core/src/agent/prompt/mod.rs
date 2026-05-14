@@ -32,6 +32,7 @@ You operate at two levels:
 
 Tool conventions:
 - Each `cos_*` tool takes `{ \"command\": \"<subcommand>\", \"args\": [\"<positional or flag>\", ...] }`. The `command` value is one of the enum entries listed in the tool's input_schema. The `args` array is exactly what the user would type after `cos <primitive> <command>` on the CLI.
+- To open a graphical application (Files, Editor, Browser, Terminal, Settings, …) use `cos_app_launcher` — call `find` to resolve a user-spoken name to a freedesktop AppID, then `open` to launch. Never spawn GUI binaries through `cos_app_exec`: the launcher path is gated by the `desktop.launch` capability, honours the user's installed `.desktop` entries (including locale and visibility rules), and detaches the window from the agent's session.
 - Destructive operations are gated by the cos `policy` engine at the kernel layer. If a primitive returns a policy denial, surface it to the user — do not try to bypass it.
 - If a tool errors, read the message carefully, decide whether to retry, change approach, or report back. Never silently re-run a failed destructive command.
 
@@ -96,6 +97,29 @@ mod tests {
         assert!(p.contains("ClawOS"));
         assert!(p.contains("You are Claw,"));
         assert!(p.contains("cos_"));
+    }
+
+    #[test]
+    fn scaffold_steers_gui_launches_through_launcher() {
+        // GUI-app launches must route through `cos_app_launcher`
+        // (the cap-gated AppID launcher), not `cos_app_exec`. The
+        // scaffold has to spell this out: without it the model picks
+        // `exec start cosmic-files` for "open the file manager",
+        // bypassing `desktop.launch` and the user's installed
+        // `.desktop` entries.
+        let p = build_system_prompt(None);
+        assert!(
+            p.contains("cos_app_launcher"),
+            "scaffold should mention the launcher tool"
+        );
+        assert!(
+            p.contains("cos_app_exec"),
+            "scaffold should explicitly contrast with cos_app_exec"
+        );
+        assert!(
+            p.contains("desktop.launch"),
+            "scaffold should name the cap that gates the launcher path"
+        );
     }
 
     #[test]
