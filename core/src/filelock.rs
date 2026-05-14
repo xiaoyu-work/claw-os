@@ -103,8 +103,7 @@ pub fn write_locked(path: &Path, data: &str) -> Result<(), String> {
 
 /// Append a line to a file under an exclusive lock.
 /// Used for append-only logs (audit.jsonl, watch history).
-pub fn append_locked(path: &Path, line: &str) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
+pub fn append_locked(path: &Path, line: &str) -> Result<(), String> {    if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
 
@@ -139,6 +138,116 @@ pub fn append_locked(path: &Path, line: &str) -> Result<(), String> {
 
     drop(file);
     Ok(())
+}
+
+/// Error returned by [`update_locked`]. Separates infrastructure
+/// failures (lock acquisition, file I/O) from closure-supplied
+/// errors so callers can pattern-match on their domain error.
+#[derive(Debug)]
+pub enum UpdateLockError<E> {
+    /// Locking or I/O failure outside the user closure.
+    Io(String),
+    /// The user closure returned an error.
+    Transform(E),
+}
+
+impl<E: std::fmt::Display> std::fmt::Display for UpdateLockError<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UpdateLockError::Io(s) => f.write_str(s),
+            UpdateLockError::Transform(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl<E: std::fmt::Display + std::fmt::Debug> std::error::Error for UpdateLockError<E> {}
+
+/// Read-modify-write a file atomically. The closure receives the
+/// current contents (or `None` if the file does not exist) and
+/// returns the new contents to write.
+///
+/// Why this exists separately from `read_locked` + `write_locked`:
+/// chaining them — as several callers used to — releases the
+/// shared lock at the end of the read and re-acquires an exclusive
+/// lock at the start of the write. A concurrent writer can land
+/// between those two operations, so two RMW callers can both read
+/// the same stale value and the last one wins. `update_locked`
+/// holds an exclusive lock for the entire read+modify+write so
+/// concurrent callers serialize correctly.
+///
+/// Lock surface: a sibling `<path>.lock` sentinel rather than the
+/// data file itself. flock(2) attaches to an inode, but our atomic
+/// write replaces the data file's inode (write-tmp + rename), so
+/// any flock held on the original data file becomes useless after
+/// the first writer renames over it. A separate sentinel inode is
+/// never renamed away and stays a valid synchronization point.
+pub fn update_locked<F, E>(path: &Path, transform: F) -> Result<(), UpdateLockError<E>>
+where
+    F: FnOnce(Option<String>) -> std::result::Result<String, E>,
+{
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| UpdateLockError::Io(format!("mkdir {}: {e}", parent.display())))?;
+    }
+
+    let lock_path = lock_sentinel_path(path);
+    let lock_file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(|e| UpdateLockError::Io(format!("open lock {}: {e}", lock_path.display())))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        let ret = unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX) };
+        if ret != 0 {
+            return Err(UpdateLockError::Io(format!(
+                "flock LOCK_EX {}: {}",
+                lock_path.display(),
+                std::io::Error::last_os_error()
+            )));
+        }
+    }
+
+    // From this point we hold an exclusive lock on the sentinel.
+    let existing: Option<String> = if path.is_file() {
+        Some(
+            fs::read_to_string(path)
+                .map_err(|e| UpdateLockError::Io(format!("read {}: {e}", path.display())))?,
+        )
+    } else {
+        None
+    };
+
+    let new_data = transform(existing).map_err(UpdateLockError::Transform)?;
+
+    let tmp_path = path.with_extension("tmp");
+    fs::write(&tmp_path, &new_data)
+        .map_err(|e| UpdateLockError::Io(format!("write {}: {e}", tmp_path.display())))?;
+    fs::rename(&tmp_path, path)
+        .map_err(|e| UpdateLockError::Io(format!("rename {}: {e}", path.display())))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        unsafe {
+            libc::flock(lock_file.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+    drop(lock_file);
+    Ok(())
+}
+
+/// Compute the path of the lock sentinel for `path`. Appending
+/// `.lock` rather than swapping the extension keeps the sentinel
+/// alongside the data file even when `path` already has multiple
+/// dots (e.g. `state.json` -> `state.json.lock`).
+fn lock_sentinel_path(path: &Path) -> std::path::PathBuf {
+    let mut s: std::ffi::OsString = path.as_os_str().to_os_string();
+    s.push(".lock");
+    std::path::PathBuf::from(s)
 }
 
 #[cfg(test)]
@@ -188,5 +297,74 @@ mod tests {
         let data = read_locked(&path).unwrap().unwrap();
         assert_eq!(data, "second");
         assert!(!path.with_extension("tmp").exists());
+    }
+
+    #[test]
+    fn update_locked_creates_when_missing() {
+        let path = test_dir().join("filelock-update-create.txt");
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(lock_sentinel_path(&path));
+        update_locked::<_, std::convert::Infallible>(&path, |cur| {
+            assert!(cur.is_none(), "expected missing file -> None");
+            Ok("created".to_string())
+        })
+        .unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "created");
+    }
+
+    #[test]
+    fn update_locked_serializes_concurrent_rmw() {
+        // Two threads each increment a counter in a JSON file 200 times.
+        // With the pre-fix read_locked -> write_locked pattern these would
+        // race and the final count would be < 400. With update_locked the
+        // RMW is atomic so we must see exactly 400.
+        let path = test_dir().join("filelock-update-rmw.json");
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(lock_sentinel_path(&path));
+        fs::write(&path, "0").unwrap();
+
+        let increments_per_thread = 200;
+        let path_a = path.clone();
+        let path_b = path.clone();
+        let h1 = std::thread::spawn(move || {
+            for _ in 0..increments_per_thread {
+                update_locked::<_, std::convert::Infallible>(&path_a, |cur| {
+                    let n: u64 = cur.as_deref().unwrap_or("0").trim().parse().unwrap();
+                    Ok((n + 1).to_string())
+                })
+                .unwrap();
+            }
+        });
+        let h2 = std::thread::spawn(move || {
+            for _ in 0..increments_per_thread {
+                update_locked::<_, std::convert::Infallible>(&path_b, |cur| {
+                    let n: u64 = cur.as_deref().unwrap_or("0").trim().parse().unwrap();
+                    Ok((n + 1).to_string())
+                })
+                .unwrap();
+            }
+        });
+        h1.join().unwrap();
+        h2.join().unwrap();
+
+        let final_value: u64 = fs::read_to_string(&path).unwrap().trim().parse().unwrap();
+        assert_eq!(
+            final_value,
+            2 * increments_per_thread,
+            "lost updates: concurrent RMW must serialize"
+        );
+    }
+
+    #[test]
+    fn update_locked_propagates_transform_error() {
+        let path = test_dir().join("filelock-update-err.txt");
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(lock_sentinel_path(&path));
+        let err = update_locked::<_, &'static str>(&path, |_| Err("boom"));
+        match err {
+            Err(UpdateLockError::Transform(msg)) => assert_eq!(msg, "boom"),
+            other => panic!("expected Transform error, got {other:?}"),
+        }
+        assert!(!path.exists(), "file must not be created when closure fails");
     }
 }

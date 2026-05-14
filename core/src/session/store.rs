@@ -228,13 +228,28 @@ pub fn get_meta(sid: &SessionId) -> Result<SessionMeta> {
     read_json(&meta_path(sid))
 }
 
-/// Read-modify-write a session's meta under the filelock. The closure
-/// receives a mutable reference; whatever it leaves in the meta gets
-/// persisted atomically.
+/// Read-modify-write a session's meta under a single exclusive
+/// lock. Pre-fix this function did `get_meta` (shared lock,
+/// dropped) followed by `write_json` (exclusive lock, fresh
+/// acquisition). The window between drop and re-acquire allowed
+/// two concurrent updaters to both read the same value and both
+/// write — the last writer's update silently overwrote the first.
+/// `filelock::update_locked` holds the lock for the entire RMW.
 pub fn update_meta<F: FnOnce(&mut SessionMeta)>(sid: &SessionId, f: F) -> Result<()> {
-    let mut meta = get_meta(sid)?;
-    f(&mut meta);
-    write_json(&meta_path(sid), &meta)
+    let path = meta_path(sid);
+    let mut closure = Some(f);
+    filelock::update_locked(&path, |current| {
+        let current = current.ok_or_else(|| SessionError::NotFound(sid.to_string()))?;
+        let mut meta: SessionMeta = serde_json::from_str(&current)
+            .map_err(|e| SessionError::decode(path.clone(), e))?;
+        let f = closure.take().expect("closure called at most once");
+        f(&mut meta);
+        serde_json::to_string_pretty(&meta).map_err(SessionError::Encode)
+    })
+    .map_err(|e| match e {
+        filelock::UpdateLockError::Io(msg) => SessionError::Lock(msg),
+        filelock::UpdateLockError::Transform(inner) => inner,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -281,30 +296,43 @@ pub fn read_state(sid: &SessionId, runtime: &str) -> Result<Value> {
 }
 
 /// Write `value` at key `runtime` in `state.json`, preserving other
-/// runtimes' entries. Read-modify-write under filelock.
+/// runtimes' entries. Read-modify-write under a single exclusive
+/// lock so concurrent writers for different runtimes don't lose
+/// each other's entries.
 pub fn write_state(sid: &SessionId, runtime: &str, value: Value) -> Result<()> {
     if !session_dir(sid).exists() {
         return Err(SessionError::NotFound(sid.to_string()));
     }
     let path = state_path(sid);
-    let mut all = if path.exists() {
-        read_json::<Value>(&path)?
-    } else {
-        Value::Object(serde_json::Map::new())
-    };
-    if !all.is_object() {
-        // If a previous bad writer left a non-object, recover into an
-        // object rather than overwriting other runtimes' (nonexistent)
-        // entries. This is best-effort: we just replace the file.
-        all = Value::Object(serde_json::Map::new());
-    }
-    let obj = all.as_object_mut().expect("ensured object above");
-    if value.is_null() {
-        obj.remove(runtime);
-    } else {
-        obj.insert(runtime.to_string(), value);
-    }
-    write_json(&path, &all)
+    let runtime = runtime.to_string();
+    let value_holder = std::cell::RefCell::new(Some(value));
+    filelock::update_locked(&path, |current| {
+        let mut all: Value = match current {
+            Some(text) if !text.is_empty() => serde_json::from_str(&text)
+                .map_err(|e| SessionError::decode(path.clone(), e))?,
+            _ => Value::Object(serde_json::Map::new()),
+        };
+        if !all.is_object() {
+            // Recover from a malformed prior write rather than
+            // overwrite other runtimes' (now-unknown) entries.
+            all = Value::Object(serde_json::Map::new());
+        }
+        let obj = all.as_object_mut().expect("ensured object above");
+        let v = value_holder
+            .borrow_mut()
+            .take()
+            .expect("transform called at most once");
+        if v.is_null() {
+            obj.remove(&runtime);
+        } else {
+            obj.insert(runtime.clone(), v);
+        }
+        serde_json::to_string_pretty(&all).map_err(SessionError::Encode)
+    })
+    .map_err(|e| match e {
+        filelock::UpdateLockError::Io(msg) => SessionError::Lock(msg),
+        filelock::UpdateLockError::Transform(inner) => inner,
+    })
 }
 
 // ---------------------------------------------------------------------------

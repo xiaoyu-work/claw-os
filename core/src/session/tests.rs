@@ -102,6 +102,100 @@ fn update_meta_persists() {
     assert_eq!(m.budget.mutations, Some(50));
 }
 
+/// Two writers hammering `update_meta` concurrently must not lose
+/// updates. Pre-fix `update_meta` released its shared lock at the
+/// end of `get_meta` and reacquired an exclusive lock for the
+/// write, leaving a window in which a second writer could land
+/// between the two — both writers would read the same starting
+/// value and one update would silently overwrite the other.
+#[test]
+fn update_meta_serializes_concurrent_writers() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    let sid = create("counter").unwrap();
+    // Use `budget.tokens` as a shared counter; it's an Option<u64>
+    // we can drive monotonically.
+    update_meta(&sid, |m| {
+        m.budget = Budget {
+            tokens: Some(0),
+            wall_seconds: None,
+            mutations: None,
+        };
+    })
+    .unwrap();
+
+    let increments_per_thread = 200u64;
+    let sid_a = sid.clone();
+    let sid_b = sid.clone();
+    let h1 = std::thread::spawn(move || {
+        for _ in 0..increments_per_thread {
+            update_meta(&sid_a, |m| {
+                let cur = m.budget.tokens.unwrap_or(0);
+                m.budget.tokens = Some(cur + 1);
+            })
+            .unwrap();
+        }
+    });
+    let h2 = std::thread::spawn(move || {
+        for _ in 0..increments_per_thread {
+            update_meta(&sid_b, |m| {
+                let cur = m.budget.tokens.unwrap_or(0);
+                m.budget.tokens = Some(cur + 1);
+            })
+            .unwrap();
+        }
+    });
+    h1.join().unwrap();
+    h2.join().unwrap();
+
+    let m = get_meta(&sid).unwrap();
+    assert_eq!(
+        m.budget.tokens,
+        Some(2 * increments_per_thread),
+        "concurrent update_meta must not lose updates"
+    );
+}
+
+/// Two writers writing distinct runtime keys to the same
+/// `state.json` concurrently must both end up in the file.
+/// Pre-fix `write_state` did read_json → mutate → write_json
+/// without holding a lock across both halves, so writer B could
+/// land between A's read and A's write and lose A's entry.
+#[test]
+fn write_state_preserves_concurrent_runtime_entries() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    let sid = create("multi-runtime").unwrap();
+    let sid_a = sid.clone();
+    let sid_b = sid.clone();
+    let iterations = 50u64;
+    let h1 = std::thread::spawn(move || {
+        for i in 0..iterations {
+            write_state(&sid_a, "alpha", serde_json::json!({"i": i})).unwrap();
+        }
+    });
+    let h2 = std::thread::spawn(move || {
+        for i in 0..iterations {
+            write_state(&sid_b, "beta", serde_json::json!({"i": i})).unwrap();
+        }
+    });
+    h1.join().unwrap();
+    h2.join().unwrap();
+
+    let alpha = read_state(&sid, "alpha").unwrap();
+    let beta = read_state(&sid, "beta").unwrap();
+    assert!(
+        !alpha.is_null(),
+        "alpha runtime entry lost: concurrent writers raced"
+    );
+    assert!(
+        !beta.is_null(),
+        "beta runtime entry lost: concurrent writers raced"
+    );
+}
+
 #[test]
 fn caps_round_trip_through_disk() {
     let _lock = lock_env();
