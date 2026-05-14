@@ -9,6 +9,7 @@ import sys
 import time
 
 from _lib import policy
+from _lib import snapshot
 
 
 WORKSPACE = "/workspace"
@@ -167,6 +168,7 @@ def cmd_write(args):
     parent = os.path.dirname(path)
     if parent and not os.path.isdir(parent):
         os.makedirs(parent, exist_ok=True)
+    snapshot.snapshot(path, "write")
     with open(path, "w") as f:
         n = f.write(content)
     return {"path": path, "bytes": n}
@@ -179,6 +181,7 @@ def cmd_rm(args):
     policy.require("fs.delete", path=path)
     if not os.path.exists(path):
         return {"error": f"not found: {path}"}
+    snapshot.snapshot(path, "rm")
     if os.path.isdir(path):
         shutil.rmtree(path)
     else:
@@ -332,6 +335,7 @@ def cmd_rename(args):
     parent = os.path.dirname(dst)
     if parent and not os.path.isdir(parent):
         os.makedirs(parent, exist_ok=True)
+    snapshot.snapshot_pair(src, dst, "rename")
     os.rename(src, dst)
     return {"from": src, "to": dst}
 
@@ -361,6 +365,7 @@ def cmd_copy(args):
     parent = os.path.dirname(dst)
     if parent and not os.path.isdir(parent):
         os.makedirs(parent, exist_ok=True)
+    snapshot.snapshot(dst, "copy")
     if os.path.isdir(src):
         shutil.copytree(src, dst, symlinks=True)
         return {"from": src, "to": dst, "kind": "dir"}
@@ -449,6 +454,7 @@ def cmd_write_bytes(args):
     parent = os.path.dirname(path)
     if parent and not os.path.isdir(parent):
         os.makedirs(parent, exist_ok=True)
+    snapshot.snapshot(path, "write_bytes")
     with open(path, "wb") as f:
         n = f.write(data)
     return {"path": path, "bytes": n}
