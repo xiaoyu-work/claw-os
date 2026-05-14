@@ -459,13 +459,15 @@ impl State {
                 self.custom_model.clear();
                 self.last_test = None;
                 self.extra_field_values.clear();
-                if let Some(p) = self.selected_provider() {
-                    self.key_mode = if p.needs_credential {
+                if let Some((needs_credential, default_env)) =
+                    self.selected_provider().map(|p| (p.needs_credential, p.default_env.clone()))
+                {
+                    self.key_mode = if needs_credential {
                         KeyMode::Stored
                     } else {
                         KeyMode::NotRequired
                     };
-                    self.env_var_input = p.default_env.clone();
+                    self.env_var_input = default_env;
                 }
             }
             Message::ModelSelected(idx) => {
@@ -943,7 +945,7 @@ fn status_view(state: &State) -> Element<'_, Message> {
             crate::fl!("agent-status-not-ready")
         };
         let mut row = row::with_capacity(3).spacing(12).align_y(Alignment::Center);
-        row = row.push(text::heading(&badge_label));
+        row = row.push(text::heading(badge_label));
         if !status.provider.is_empty() {
             row = row.push(text::body(format!(
                 "{} / {}",
@@ -1153,11 +1155,11 @@ fn configuration_view(state: &State) -> Element<'_, Message> {
                     .on_input(on_input)
                     .apply(Element::from)
             };
-            let mut item = settings::item::builder(label).flex_control(input);
+            let mut builder = settings::item::builder(label);
             if !field.help.is_empty() {
-                item = item.description(field.help.clone());
+                builder = builder.description(field.help.clone());
             }
-            col = col.push(item);
+            col = col.push(builder.flex_control(input));
         }
     }
 
