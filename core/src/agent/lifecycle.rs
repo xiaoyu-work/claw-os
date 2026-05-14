@@ -294,12 +294,9 @@ fn now_rfc3339() -> String {
 mod tests {
     use super::*;
     use std::env;
-    use std::sync::Mutex;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn lock_env() -> std::sync::MutexGuard<'static, ()> {
-        ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+        crate::test_env::lock_env()
     }
 
     struct DataDirGuard {

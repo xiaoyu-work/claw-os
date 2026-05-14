@@ -27,6 +27,8 @@ mod sandbox;
 mod service;
 mod session;
 mod sysinfo;
+#[cfg(test)]
+mod test_env;
 mod trace;
 mod watch;
 

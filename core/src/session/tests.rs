@@ -4,7 +4,6 @@
 //! crash / concurrency edge cases.
 
 use std::env;
-use std::sync::Mutex;
 
 use serde_json::json;
 use tempfile::TempDir;
@@ -14,15 +13,12 @@ use crate::caps::{Cap, CapSet, Scope, Verb};
 use super::*;
 
 // All tests in this file mutate the global `COS_DATA_DIR` env var,
-// so we serialize them on a single mutex. Per-test tempdirs keep
-// state isolated within the serialized window. We recover from a
-// poisoned mutex (one test panicked while holding it) so a single
-// failure doesn't cascade into N "PoisonError" failures that obscure
-// the real cause.
-static ENV_LOCK: Mutex<()> = Mutex::new(());
+// so we serialize them on the process-wide `crate::test_env::ENV_LOCK`.
+// (Per-module mutexes are not enough: cargo runs every test module
+// in the same binary on a thread pool, so two modules can race.)
 
 fn lock_env() -> std::sync::MutexGuard<'static, ()> {
-    ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    crate::test_env::lock_env()
 }
 
 /// RAII: redirect `COS_DATA_DIR` to a fresh tempdir, restore on drop.
@@ -1536,5 +1532,218 @@ fn python_snapshot_no_mirror_for_ephemeral_session() {
     assert!(
         !sessions_dir.join("mutations.jsonl").exists(),
         "no mirror written for ephemeral CLI session"
+    );
+}
+
+// =====================================================================
+// Phase 6 — cross-runtime handover via the shared `claw_os_session.py`
+// helper. These tests are the "smoking gun" that the file schema is
+// the only thing two runtimes need to agree on. We:
+//   1. Open a session from Rust, append a turn from Rust.
+//   2. Hand off to a Python "fake agent" via `claw_os_session.py` —
+//      it lists sessions, reads the turn we wrote, appends one of
+//      its own (with a different `runtime` label).
+//   3. Hand back to Rust: re-read turns.jsonl, confirm both turns
+//      appear in order with their original runtimes preserved.
+// If this passes, an out-of-tree Python / Node / Go agent can pick up
+// where ours left off without ever shelling out to `cos`.
+// =====================================================================
+
+fn run_python(script: &str) -> std::process::Output {
+    let lib = apps_lib_dir();
+    assert!(
+        lib.join("claw_os_session.py").is_file(),
+        "claw_os_session.py missing at {}",
+        lib.display()
+    );
+    let data_dir = env::var("COS_DATA_DIR").expect("COS_DATA_DIR set");
+    let preamble = format!(
+        "import sys; sys.path.insert(0, {lib:?})\n",
+        lib = lib.to_string_lossy(),
+    );
+    std::process::Command::new("python3")
+        .arg("-c")
+        .arg(format!("{preamble}{script}"))
+        .env("COS_DATA_DIR", &data_dir)
+        .output()
+        .expect("spawn python3")
+}
+
+#[test]
+fn cross_runtime_python_appends_turn_rust_reads_it_back() {
+    if !python3_available() {
+        eprintln!("python3 unavailable; skipping cross-runtime turn handover test");
+        return;
+    }
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    // Rust: create session + write the first turn (the "system agent" run).
+    let sid = create("cross-runtime").unwrap();
+    let mut t1 = Turn::text(TurnRole::User, "list my reports");
+    t1.runtime = Some("cos-agent".into());
+    append_turn(&sid, t1).unwrap();
+
+    // Python: open the session, read the user turn, append an
+    // assistant reply tagged with a *different* runtime label.
+    let script = format!(
+        r#"
+from claw_os_session import Session
+s = Session.open({sid:?})
+turns = s.turns()
+assert len(turns) == 1, f"expected 1 turn, got {{turns}}"
+assert turns[0]["role"] == "user"
+assert turns[0]["content"] == "list my reports"
+assert turns[0]["runtime"] == "cos-agent"
+seq = s.append_turn("assistant", "Sure — opening reports/.", runtime="third-party-bot-py")
+print("py-seq:", seq)
+"#,
+        sid = sid.as_str()
+    );
+    let out = run_python(&script);
+    assert!(
+        out.status.success(),
+        "python helper failed:\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("py-seq: 1"),
+        "python should have been assigned seq=1; got {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+
+    // Rust: re-read both turns. Schema agreement (kebab roles, snake
+    // field names, optional `runtime`) means we deserialize what
+    // Python wrote with no special-casing.
+    let turns = iter_turns(&sid).unwrap();
+    assert_eq!(turns.len(), 2, "got {turns:?}");
+    assert_eq!(turns[0].seq, 0);
+    assert_eq!(turns[0].role, TurnRole::User);
+    assert_eq!(turns[0].runtime.as_deref(), Some("cos-agent"));
+    assert_eq!(turns[1].seq, 1);
+    assert_eq!(turns[1].role, TurnRole::Assistant);
+    assert_eq!(turns[1].content, "Sure — opening reports/.");
+    assert_eq!(turns[1].runtime.as_deref(), Some("third-party-bot-py"));
+}
+
+#[test]
+fn cross_runtime_python_records_mutation_rollback_restores_it() {
+    // The session module's rollback engine doesn't care which runtime
+    // wrote the FsWrite mutation — it operates on the file schema.
+    // Demonstrate by having Python record the mutation and Rust
+    // replay the inverse.
+    if !python3_available() {
+        eprintln!("python3 unavailable; skipping cross-runtime mutation handover test");
+        return;
+    }
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    let sid = create("cross-runtime mutation").unwrap();
+
+    // Set up a real workspace file so the rollback engine has bytes
+    // to compare against.
+    let work = tempfile::tempdir().unwrap();
+    let target = work.path().join("README.md");
+    let original = b"v1: original content\n";
+    std::fs::write(&target, original).unwrap();
+
+    // Pretend the third-party agent edited the file: change its
+    // bytes AND record the inverse via the Python helper. The
+    // helper stashes `original` as a blob and writes the FsWrite
+    // mutation that points at it.
+    let modified = b"v2: modified by third-party agent\n";
+    std::fs::write(&target, modified).unwrap();
+
+    let script = format!(
+        r#"
+from claw_os_session import Session
+s = Session.open({sid:?})
+seq = s.record_fs_write({path:?}, prev_bytes=b"{original}", runtime="third-party-bot-py")
+print("py-mut-seq:", seq)
+"#,
+        sid = sid.as_str(),
+        path = target.to_string_lossy(),
+        original = original.iter().map(|b| format!("\\x{:02x}", b)).collect::<String>(),
+    );
+    let out = run_python(&script);
+    assert!(
+        out.status.success(),
+        "python helper failed:\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+
+    // Rust: confirm the mutation is on disk with the right shape.
+    let muts = iter_mutations(&sid).unwrap();
+    assert_eq!(muts.len(), 1);
+    assert_eq!(muts[0].seq, 0);
+    assert_eq!(muts[0].runtime.as_deref(), Some("third-party-bot-py"));
+    match &muts[0].mutation {
+        Mutation::FsWrite { path, prev_blob } => {
+            assert_eq!(path, &target);
+            assert!(prev_blob.is_some(), "blob id missing");
+        }
+        other => panic!("expected FsWrite, got {other:?}"),
+    }
+
+    // Rust: rollback restores the original bytes.
+    let outcomes = rollback(&sid).unwrap();
+    assert_eq!(outcomes.len(), 1);
+    assert!(matches!(outcomes[0].status, RollbackStatus::Restored));
+    let after = std::fs::read(&target).unwrap();
+    assert_eq!(after, original, "rollback must restore exact bytes");
+}
+
+#[test]
+fn cross_runtime_python_lists_only_durable_sessions() {
+    // Session::list() in the Python helper has to mirror the Rust
+    // list() rules: skip dotfiles, skip non-matching ids, skip dirs
+    // missing meta.json. Otherwise a third-party agent could stumble
+    // over half-created or archived sessions.
+    if !python3_available() {
+        eprintln!("python3 unavailable; skipping cross-runtime list test");
+        return;
+    }
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+
+    let s1 = create("first").unwrap();
+    let _s2 = create("second").unwrap();
+
+    // Add foreign / corrupt entries that should be ignored:
+    let root = sessions_root();
+    std::fs::create_dir_all(root.join(".archive")).unwrap();
+    std::fs::create_dir_all(root.join("not-a-session-id")).unwrap();
+    let half = root.join("ses_0019e25600000_aaaaaaaaaaaa");
+    std::fs::create_dir_all(&half).unwrap();
+    // No meta.json under `half/`.
+
+    let script = format!(
+        r#"
+from claw_os_session import Session
+sids = sorted(s.sid for s in Session.list())
+print("py-listed:", ",".join(sids))
+"#
+    );
+    let out = run_python(&script);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains(s1.as_str()),
+        "first session missing from python list; got {stdout}"
+    );
+    assert!(
+        !stdout.contains("not-a-session-id"),
+        "python list leaked invalid id: {stdout}"
+    );
+    assert!(
+        !stdout.contains(".archive"),
+        "python list leaked archive dir: {stdout}"
+    );
+    assert!(
+        !stdout.contains("ses_0019e25600000_aaaaaaaaaaaa"),
+        "python list returned half-created session: {stdout}"
     );
 }

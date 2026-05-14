@@ -18,6 +18,7 @@ You are running on Claw OS. All commands return structured JSON.
 | `service` | Lifecycle hooks, graceful shutdown ([details](service.md)) |
 | `credential` | Encrypted secrets, namespaces, TTL, bundles ([details](credential.md)) |
 | `cron` | Job scheduling with context and overlap protection ([details](cron.md)) |
+| `agent` | Manage agent tasks: list / show / stop / undo / resume ([details](sessions.md)) |
 | `sys` | System info, resources, processes |
 
 **Agent-only tools** (call directly via the tool interface, not the shell):

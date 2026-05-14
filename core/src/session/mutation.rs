@@ -106,6 +106,13 @@ pub struct MutationRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_seq: Option<u64>,
 
+    /// Optional label for the runtime that recorded this mutation
+    /// (`"cos-agent"`, `"langchain-py"`, …). Mirrors `Turn::runtime`
+    /// so a cross-runtime session's mutation log shows which agent
+    /// owned each change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<String>,
+
     /// The reversible action itself.
     pub mutation: Mutation,
 }
@@ -117,12 +124,18 @@ impl MutationRecord {
             seq: 0,
             at: String::new(),
             turn_seq: None,
+            runtime: None,
             mutation,
         }
     }
 
     pub fn with_turn(mut self, seq: u64) -> Self {
         self.turn_seq = Some(seq);
+        self
+    }
+
+    pub fn with_runtime(mut self, runtime: impl Into<String>) -> Self {
+        self.runtime = Some(runtime.into());
         self
     }
 
