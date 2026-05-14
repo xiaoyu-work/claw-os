@@ -98,6 +98,17 @@ impl McpServerHandle {
     pub fn tool_count(&self) -> usize {
         self.tool_count
     }
+
+    /// Borrow a clone of the underlying MCP client. Callers that want
+    /// to issue arbitrary `tools/call` invocations against this server
+    /// (e.g. the app-session bridge) hold this `Arc` instead of going
+    /// through registered [`McpRemoteTool`]s. The reader task stays
+    /// alive as long as any clone of the client survives, so this is
+    /// safe even after the handle is dropped — though the next call
+    /// will fail once the child is killed.
+    pub fn client(&self) -> Arc<McpClient> {
+        self.client.clone()
+    }
 }
 
 impl Drop for McpServerHandle {

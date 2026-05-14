@@ -138,6 +138,7 @@ pub fn default_registry() -> ToolRegistry {
     r.register(Arc::new(super::clarify::Clarify::new()));
     super::cos_proxy::register_all(&mut r);
     super::cos_apps::register_all(&mut r);
+    super::cos_apps_session::register_all(&mut r);
     super::media::register_default_media_tools(&mut r);
     // Best-effort: open the default memory DB; if it fails (read-only fs,
     // etc.) the agent still works, just without searchable history.
