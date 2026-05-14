@@ -1,0 +1,28 @@
+{
+  "schema": "claw.agent-api/v1",
+  "id": "org.cups",
+  "name": "print",
+  "title": {
+    "en": "CUPS printing",
+    "zh-CN": "CUPS 打印"
+  },
+  "summary": {
+    "en": "List printers, queued jobs, and submit print jobs via CUPS lp/lpstat.",
+    "zh-CN": "通过 CUPS lp/lpstat 查看打印机、队列任务，并提交打印作业。"
+  },
+  "vendor": "claw-adapter",
+  "license": "Apache-2.0",
+  "homepage": "https://www.cups.org/",
+  "transport": "mcp+stdio",
+  "command": "python3",
+  "args": ["${manifest_dir}/main.py"],
+  "env": {},
+  "timeout_secs": 60,
+  "enabled": true,
+  "ai": {
+    "callable_by_ai": true,
+    "uses_ai_internally": false,
+    "safety": "elevated",
+    "origins": ["external-content"]
+  }
+}
