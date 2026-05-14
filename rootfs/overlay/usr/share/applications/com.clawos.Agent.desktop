@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=ClawOS Agent
+GenericName=AI Assistant
+Comment=Chat with the ClawOS system Agent
+Exec=cos app agent open
+Icon=clawos-agent
+Terminal=false
+Categories=Utility;Office;Network;
+StartupNotify=true
+StartupWMClass=ClawOS-Agent
+Keywords=ai;agent;chat;assistant;copilot;
+X-GNOME-UsesNotifications=true

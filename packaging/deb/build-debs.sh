@@ -92,6 +92,7 @@ mkdir -p "$BASE_STAGE/usr/lib/cos/plugins"
 mkdir -p "$BASE_STAGE/usr/lib/cos/skills"
 mkdir -p "$BASE_STAGE/usr/lib/cos/init"
 mkdir -p "$BASE_STAGE/usr/share/cos-agent/web"
+mkdir -p "$BASE_STAGE/usr/share/applications"
 mkdir -p "$BASE_STAGE/etc/cos"
 
 # Control + maintainer scripts.
@@ -167,6 +168,33 @@ if [ -d "$PROJECT_DIR/plugins" ]; then
 fi
 if [ -d "$PROJECT_DIR/skills" ]; then
     cp -a "$PROJECT_DIR/skills/." "$BASE_STAGE/usr/lib/cos/skills/"
+fi
+
+# Desktop launchers for ClawOS-specific apps (e.g. com.clawos.Agent).
+# These live in the rootfs overlay so they ship even on overlay-only
+# rootfs builds; here we mirror them into the deb so apt-based
+# installs (WSL, Docker upgrades) also get them.
+DESKTOP_OVERLAY="$PROJECT_DIR/rootfs/overlay/usr/share/applications"
+if [ -d "$DESKTOP_OVERLAY" ]; then
+    for desktop_file in "$DESKTOP_OVERLAY"/*.desktop; do
+        [ -e "$desktop_file" ] || continue
+        echo "  :: $(basename "$desktop_file")"
+        install -m 644 "$desktop_file" \
+            "$BASE_STAGE/usr/share/applications/$(basename "$desktop_file")"
+    done
+fi
+
+# Hicolor icons for ClawOS-specific apps (clawos-agent.png ladder).
+# Shipped here in the base deb so the .desktop launchers above resolve
+# even without the full claw-os-desktop install.
+ICON_OVERLAY="$PROJECT_DIR/rootfs/features/desktop/overlay/usr/share/icons"
+if [ -d "$ICON_OVERLAY" ]; then
+    for icon_path in "$ICON_OVERLAY"/hicolor/*/apps/clawos-agent.png; do
+        [ -e "$icon_path" ] || continue
+        rel="${icon_path#$ICON_OVERLAY/}"
+        mkdir -p "$BASE_STAGE/usr/share/icons/$(dirname "$rel")"
+        install -m 644 "$icon_path" "$BASE_STAGE/usr/share/icons/$rel"
+    done
 fi
 
 # Build the .deb.

@@ -1,0 +1,32 @@
+{
+  "id": "agent",
+  "version": "0.1.0",
+  "name": {
+    "en": "Agent"
+  },
+  "summary": {
+    "en": "Open the ClawOS Agent desktop window — chat UI for the system-level cos agent."
+  },
+  "icon": "🤖",
+  "runtime": "python",
+  "operations": {
+    "open": {
+      "label": { "en": "Open the Agent window (windowed chromium against cos-agent-bridge)" },
+      "args": [],
+      "needs": []
+    },
+    "url": {
+      "label": { "en": "Print the URL of the local bridge (http://127.0.0.1:PORT/)" },
+      "args": [],
+      "needs": []
+    }
+  },
+  "dependencies": {
+    "binaries": [],
+    "optional_binaries": [
+      "chromium",
+      "chromium-browser",
+      "firefox"
+    ]
+  }
+}
