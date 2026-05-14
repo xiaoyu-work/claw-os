@@ -1,4 +1,3 @@
-use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -65,7 +64,7 @@ if result is not None:
         .unwrap_or("")
         .to_string();
 
-    let mut child = Command::new(python)
+    let child = Command::new(python)
         .arg("-c")
         .arg(&wrapper)
         .stdin(Stdio::inherit())
@@ -86,19 +85,19 @@ if result is not None:
         .spawn()
         .map_err(|e| format!("failed to spawn python3: {e}"))?;
 
-    let status = child
-        .wait()
+    // wait_with_output() drains stdout and stderr in background threads
+    // BEFORE the child can fill the kernel pipe buffer (Linux default
+    // 64KB). The previous pattern of `child.wait()` first and then
+    // reading the streams deadlocks for any verb that emits more than
+    // 64KB to stdout — e.g. fs.read of a multi-MB file, pkg.list, a
+    // wide db.query — because the child blocks on write() while we
+    // block on wait().
+    let output = child
+        .wait_with_output()
         .map_err(|e| format!("python3 wait failed: {e}"))?;
-
-    let mut stdout = String::new();
-    if let Some(mut out) = child.stdout.take() {
-        let _ = out.read_to_string(&mut stdout);
-    }
-
-    let mut stderr = String::new();
-    if let Some(mut err) = child.stderr.take() {
-        let _ = err.read_to_string(&mut stderr);
-    }
+    let status = output.status;
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
 
     if !status.success() {
         // Try to extract a JSON error from stdout first.
@@ -218,7 +217,7 @@ pub fn run_app(
         Runtime::Python => unreachable!("python handled above"),
     };
 
-    let mut child = cmd
+    let child = cmd
         .stdin(Stdio::inherit())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -241,18 +240,16 @@ pub fn run_app(
         .spawn()
         .map_err(|e| format!("failed to spawn {runtime:?} app: {e}"))?;
 
-    let status = child
-        .wait()
+    // wait_with_output() avoids the deadlock that occurs when the
+    // child writes more than ~64KB to stdout / stderr while we wait
+    // — pipe fills, child blocks on write, parent blocks on wait. See
+    // run_python_app above for the same fix.
+    let output = child
+        .wait_with_output()
         .map_err(|e| format!("{runtime:?} app wait failed: {e}"))?;
-
-    let mut stdout = String::new();
-    if let Some(mut out) = child.stdout.take() {
-        let _ = out.read_to_string(&mut stdout);
-    }
-    let mut stderr = String::new();
-    if let Some(mut err) = child.stderr.take() {
-        let _ = err.read_to_string(&mut stderr);
-    }
+    let status = output.status;
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
 
     if !status.success() {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(stdout.trim()) {
@@ -354,6 +351,58 @@ mod tests {
             err.contains("app entry not found"),
             "expected entry-missing error, got: {err}"
         );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Regression: bridge previously did `child.wait()` BEFORE reading
+    /// stdout/stderr. When the child wrote more than the Linux pipe
+    /// buffer (~64KB) to stdout, the child blocked on write() while
+    /// the parent blocked on wait() — `cos` process hung forever. The
+    /// fix routes both run_python_app and run_app through
+    /// `wait_with_output`, which drains the streams in background
+    /// threads.
+    ///
+    /// This test asks a tiny Python app to emit a JSON payload well
+    /// above 64KB. Before the fix this test would never return; we
+    /// add a generous-but-not-infinite outer timeout to make a
+    /// regression a quick CI failure instead of a hang.
+    #[cfg(unix)]
+    #[test]
+    fn run_python_app_handles_stdout_larger_than_pipe_buffer() {
+        // Skip if python3 isn't on PATH (some minimal CI images).
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let tmp = std::env::temp_dir().join("cos-bridge-test-bigstdout");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        // ~256 KB of payload — comfortably over the 64KB pipe buffer.
+        std::fs::write(
+            tmp.join("main.py"),
+            "def run(command, args):\n    return {\"data\": \"x\" * 262144}\n",
+        )
+        .unwrap();
+
+        // Hard timeout: any deadlock regresses this into a 10s failure
+        // rather than a session-killing hang.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let app_dir = tmp.clone();
+        let t = std::thread::spawn(move || {
+            let r = run_python_app(&app_dir, "noop", &[], "/tmp", "/tmp");
+            let _ = tx.send(r);
+        });
+        let result = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("run_python_app deadlocked on >64KB stdout");
+        let _ = t.join();
+        let out = result.expect("run_python_app errored").expect("got json");
+        assert!(out.len() >= 262_144, "payload truncated, got {} bytes", out.len());
+        assert!(out.contains("\"data\""), "json missing data field");
+
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }
