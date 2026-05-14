@@ -6,6 +6,7 @@ import os
 import shutil
 import signal
 import subprocess
+import uuid
 from datetime import datetime, timezone
 
 from _lib import policy
@@ -235,22 +236,45 @@ def cmd_start(args):
 
     os.makedirs(PROC_DIR, exist_ok=True)
 
+    # Use a uuid-scoped intermediate filename (hidden with a `.`
+    # prefix) instead of `os.getpid()`. The parent PID is not a
+    # safe uniqueness token: two concurrent `cmd_start` calls in
+    # the same parent (e.g. the MCP server handling overlapping
+    # requests) would collide on the same intermediate path,
+    # corrupt each other's stdout/stderr files, and then both
+    # rename to their own child PID's final name — losing one
+    # child's early output to the other. uuid4 gives a
+    # collision-free token regardless of concurrency.
+    scratch = uuid.uuid4().hex[:12]
+    stdout_tmp = os.path.join(PROC_DIR, f".stdout.{scratch}")
+    stderr_tmp = os.path.join(PROC_DIR, f".stderr.{scratch}")
+
     try:
-        proc = subprocess.Popen(
-            args,
-            stdout=open(os.path.join(PROC_DIR, f"stdout.{os.getpid()}"), "w"),
-            stderr=open(os.path.join(PROC_DIR, f"stderr.{os.getpid()}"), "w"),
-        )
+        # `with open(...)` closes the parent-side file handles
+        # after Popen has dup'd them into the child. The child
+        # retains its own fds; the parent doesn't need them open.
+        with open(stdout_tmp, "w") as stdout_f, open(stderr_tmp, "w") as stderr_f:
+            proc = subprocess.Popen(args, stdout=stdout_f, stderr=stderr_f)
     except FileNotFoundError:
+        for p in (stdout_tmp, stderr_tmp):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
         return {"error": f"command not found: {args[0]}"}
     except Exception as e:
+        for p in (stdout_tmp, stderr_tmp):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
         return {"error": str(e)}
 
     pid = proc.pid
     stdout_path = os.path.join(PROC_DIR, f"stdout.{pid}")
     stderr_path = os.path.join(PROC_DIR, f"stderr.{pid}")
-    os.rename(os.path.join(PROC_DIR, f"stdout.{os.getpid()}"), stdout_path)
-    os.rename(os.path.join(PROC_DIR, f"stderr.{os.getpid()}"), stderr_path)
+    os.rename(stdout_tmp, stdout_path)
+    os.rename(stderr_tmp, stderr_path)
 
     entry = {
         "pid": pid,
