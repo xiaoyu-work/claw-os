@@ -148,6 +148,12 @@ async fn bring_up_app(
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .env("DEBIAN_FRONTEND", "noninteractive")
         .env("PAGER", "cat")
+        // Trigger the MCP-server mode of `runtime: binary` apps. The
+        // Rust SDK at `crates/cos-mcp-serve` keys off this variable
+        // (and only this variable) so the same desktop GUI binary can
+        // serve both its normal `main()` flow and the agent's tool
+        // surface. Python/Node/Shell apps ignore the var.
+        .env("COS_MCP_SERVER", "1")
         .envs(crate::config::as_env_vars())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
