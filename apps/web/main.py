@@ -24,7 +24,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from _lib import policy
+from _lib import ai, policy
 
 TIMEOUT = int(os.environ.get("COS_WEB_TIMEOUT", "30"))
 DEFAULT_MAX_LENGTH = int(os.environ.get("COS_WEB_MAX_CONTENT_LENGTH", "50000"))
@@ -204,6 +204,16 @@ def _urllib_fallback(url, max_length):
 
 
 # ---------------------------------------------------------------------------
+# AI summarisation prompt
+# ---------------------------------------------------------------------------
+
+_SUMMARIZE_SYSTEM = (
+    "You are a concise summariser. Read the user's text and reply with "
+    "exactly 3 short bullet lines, no preamble."
+)
+
+
+# ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
 
@@ -308,6 +318,71 @@ def _cmd_read(args):
         "text": _truncate(data.get("text", ""), max_length),
         "links": data.get("links", []),
         "engine": "cos-browser",
+    }
+
+
+def _cmd_summarize(args):
+    """Fetch a URL and pipe its extracted text through the AI gate."""
+    if not args:
+        return {"error": "usage: cos web summarize <url>"}
+
+    # Coarse-grained capability check — fail fast before fetching the
+    # page if the agent doesn't actually have AI access.
+    policy.require("ai.chat.untrusted", name="claude-*")
+
+    read_result = _cmd_read(args)
+    if isinstance(read_result, dict) and "error" in read_result:
+        return read_result
+
+    text = read_result.get("text", "") if isinstance(read_result, dict) else ""
+    url = read_result.get("url", args[0]) if isinstance(read_result, dict) else args[0]
+    title = read_result.get("title", "") if isinstance(read_result, dict) else ""
+    if not text.strip():
+        return {"error": "page produced no extractable text", "url": url}
+
+    try:
+        response = ai.chat(
+            prompt=text,
+            origin="external-content",
+            verb="ai.chat.untrusted",
+            system=_SUMMARIZE_SYSTEM,
+            max_units=4000,
+        )
+    except ai.AiBudgetExceeded as exc:
+        return {"error": "AI budget exceeded for this app", "detail": exc.payload}
+    except ai.AiModelNotAllowed as exc:
+        return {"error": "model not allowed", "detail": exc.payload}
+    except ai.AiSafetyViolation as exc:
+        return {"error": "safety violation", "detail": exc.payload}
+    except ai.AiDenied as exc:
+        return {"error": "AI call denied", "detail": exc.payload}
+    except ai.AiUnavailable as exc:
+        return {"error": f"AI unavailable: {exc}"}
+    except ai.AiError as exc:
+        return {"error": str(exc)}
+
+    return {
+        "url": url,
+        "title": title,
+        "summary": response.text,
+        "source_chars": len(text),
+        "model": response.model,
+        "provider": response.provider,
+        "usage": {
+            "input_tokens": response.usage.input_tokens,
+            "output_tokens": response.usage.output_tokens,
+            "units": response.usage.units,
+            "usd": response.usage.usd,
+        },
+        "budget": {
+            "period": response.budget.period,
+            "units_used": response.budget.units_used,
+            "units_cap": response.budget.units_cap,
+        },
+        "review": {
+            "safety": response.review.safety,
+            "prompt_redacted": response.review.prompt_redacted,
+        },
     }
 
 
@@ -525,6 +600,12 @@ def _schema():
                     {"flag": "--method", "value": "POST|PUT|...", "default": "POST"},
                 ],
             },
+            "summarize": {
+                "summary": "Fetch a URL and return a 3-line summary via the AI gate.",
+                "args": [
+                    {"name": "url", "required": True},
+                ],
+            },
         },
     }
 
@@ -542,6 +623,7 @@ def run(command, args):
         "scrape": _cmd_scrape,
         "screenshot": _cmd_screenshot,
         "submit": _cmd_submit,
+        "summarize": _cmd_summarize,
     }
     handler = handlers.get(command)
     if handler is None:
@@ -559,8 +641,8 @@ def main():
 
     if not argv:
         print(json.dumps({
-            "error": "usage: cos app web <read|scrape|screenshot|submit> [args...]",
-            "commands": ["read", "scrape", "screenshot", "submit"],
+            "error": "usage: cos app web <read|scrape|screenshot|submit|summarize> [args...]",
+            "commands": ["read", "scrape", "screenshot", "submit", "summarize"],
         }))
         return
 

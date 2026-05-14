@@ -9,6 +9,15 @@
   },
   "icon": "🧭",
   "runtime": "python",
+  "ai": {
+    "budget": {
+      "monthly_units": 200000,
+      "monthly_usd": 2.00
+    },
+    "models": ["claude-*", "gpt-4o*", "mock-model"],
+    "safety": "strict",
+    "origins": ["external-content"]
+  },
   "operations": {
     "read": {
       "label": { "en": "Fetch URL, return {url, title, text, links} (or raw HTML / arbitrary --eval result)" },
@@ -62,6 +71,27 @@
           "verb": "net.dial",
           "scope": { "kind": "wild" },
           "why": { "en": "POST to the URL you asked to submit data to." }
+        }
+      ]
+    },
+    "summarize": {
+      "label": { "en": "Fetch a URL and return a 3-line AI summary" },
+      "args": [
+        { "name": "url", "kind": "text", "required": true }
+      ],
+      "needs": [
+        {
+          "verb": "net.dial",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Open a network connection to the URL so its text can be fetched." }
+        },
+        {
+          "verb": "ai.chat.untrusted",
+          "scope": {
+            "kind": "fixed",
+            "scope": { "kind": "name", "value": "claude-*" }
+          },
+          "why": { "en": "Send the fetched page text to a model so it can be summarised for you." }
         }
       ]
     }
