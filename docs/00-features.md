@@ -382,7 +382,6 @@ Status: forked, build-able, **not yet rebranded** (binaries still use `cosmic-*`
 Markdown-defined recipes the agent loads on demand. See §4.5 for the runtime side; the directory holds the actual content.
 
 - `skills/claw-os/` — the OS's own skill, a `SKILL.md` manifest plus 13 topic files
-- `skills/hermes/` — Hermes-derived skill collection (see `ATTRIBUTION.md`)
 
 Skills are versioned alongside the rest of the OS, but they can also be installed at runtime via the hub.
 

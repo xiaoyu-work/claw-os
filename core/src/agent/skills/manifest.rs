@@ -198,12 +198,11 @@ fn parse_yaml_subset(input: &str) -> Result<BTreeMap<String, RawValue>, Manifest
         if value_part.is_empty() {
             // Block sequence, nested mapping, or empty.
             //
-            // Real-world SKILL.md files (e.g. the Hermes corpus)
-            // commonly nest a `metadata:` mapping with project-
-            // specific sub-keys under it. The kernel parser
-            // doesn't *interpret* nested structure, but it must
-            // not refuse to load such files. We capture the entire
-            // indented block verbatim as a single Scalar in
+            // Real-world SKILL.md files commonly nest a `metadata:`
+            // mapping with project-specific sub-keys under it. The
+            // kernel parser doesn't *interpret* nested structure, but
+            // it must not refuse to load such files. We capture the
+            // entire indented block verbatim as a single Scalar in
             // `extra` so callers that don't care about the keys
             // simply see an opaque blob and proceed.
             let mut seq: Vec<String> = Vec::new();
@@ -602,16 +601,17 @@ mod tests {
 
     #[test]
     fn nested_mapping_under_empty_key_is_tolerated() {
-        // Hermes-style metadata blocks: parent has empty value, then
-        // an indented sub-mapping. Captured verbatim into `extra`.
+        // Some vendored skill manifests use nested metadata blocks: the
+        // parent key has an empty value followed by an indented
+        // sub-mapping. Captured verbatim into `extra`.
         let s =
-            doc("---\nname: foo\nmetadata:\n  hermes:\n    tags: [a, b]\n    related: [c]\n---\n");
+            doc("---\nname: foo\nmetadata:\n  vendor:\n    tags: [a, b]\n    related: [c]\n---\n");
         let m = s.manifest;
         assert_eq!(m.name, "foo");
         let stored = m.extra.get("metadata").expect("metadata preserved");
         match stored {
             ManifestValue::Scalar(v) => {
-                assert!(v.contains("hermes:"));
+                assert!(v.contains("vendor:"));
                 assert!(v.contains("tags: [a, b]"));
             }
             other => panic!("expected scalar, got {other:?}"),
@@ -691,62 +691,6 @@ mod tests {
     fn single_quoted_escapes_are_literal() {
         let s = doc("---\nname: x\ndescription: 'no \\n escape'\n---\n");
         assert_eq!(s.manifest.description.as_deref(), Some("no \\n escape"));
-    }
-
-    /// Walks the vendored Hermes skill corpus at `<workspace>/skills/hermes`
-    /// and parses every `SKILL.md`. Catches regressions in the frontmatter
-    /// parser against a real, heterogeneous corpus.
-    #[test]
-    fn vendored_hermes_corpus_parses() {
-        use std::fs;
-        use std::path::PathBuf;
-
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let mut corpus = PathBuf::from(manifest_dir);
-        corpus.push("..");
-        corpus.push("skills");
-        corpus.push("hermes");
-        let corpus = match corpus.canonicalize() {
-            Ok(p) => p,
-            Err(_) => return, // corpus not present in this checkout — skip
-        };
-
-        let mut failures: Vec<String> = Vec::new();
-        let mut total = 0usize;
-        let mut stack = vec![corpus.clone()];
-        while let Some(dir) = stack.pop() {
-            let entries = match fs::read_dir(&dir) {
-                Ok(it) => it,
-                Err(_) => continue,
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    stack.push(path);
-                } else if path.file_name().and_then(|s| s.to_str()) == Some("SKILL.md") {
-                    total += 1;
-                    let body = match fs::read_to_string(&path) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            failures.push(format!("{}: read error: {e}", path.display()));
-                            continue;
-                        }
-                    };
-                    if let Err(e) = parse(&body) {
-                        failures.push(format!("{}: {e}", path.display()));
-                    }
-                }
-            }
-        }
-
-        assert!(total > 0, "no SKILL.md files found under {corpus:?}");
-        assert!(
-            failures.is_empty(),
-            "{} of {} vendored skills failed to parse:\n{}",
-            failures.len(),
-            total,
-            failures.join("\n")
-        );
     }
 
     #[test]
