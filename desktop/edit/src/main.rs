@@ -193,10 +193,79 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+async fn run_ai_doc(verb: AiVerb, text: String) -> Result<String, String> {
+    use tokio::io::AsyncWriteExt;
+    let bin = std::env::var("CLAW_COS_BIN").unwrap_or_else(|_| "cos".to_string());
+    let mut cmd = tokio::process::Command::new(bin);
+    cmd.arg("app")
+        .arg("doc")
+        .arg(verb.cli_arg())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("failed to spawn cos: {}", e))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(text.as_bytes())
+            .await
+            .map_err(|e| format!("failed to write stdin: {}", e))?;
+        drop(stdin);
+    }
+    let output = child
+        .wait_with_output()
+        .await
+        .map_err(|e| format!("failed to read output: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(if stderr.is_empty() {
+            format!("cos app doc {} exited with status {}", verb.cli_arg(), output.status)
+        } else {
+            stderr
+        });
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
+        .map_err(|e| format!("invalid response: {}", e))?;
+    if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
+        return Err(err.to_string());
+    }
+    let key = match verb {
+        AiVerb::Summarize => "summary",
+        AiVerb::Explain | AiVerb::Rewrite => "text",
+    };
+    parsed
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| format!("response missing '{}' field", key))
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum AiVerb {
+    Summarize,
+    Explain,
+    Rewrite,
+}
+
+impl AiVerb {
+    fn cli_arg(self) -> &'static str {
+        match self {
+            Self::Summarize => "summarize",
+            Self::Explain => "explain",
+            Self::Rewrite => "rewrite",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum Action {
     Todo,
     About,
+    AiExplain,
+    AiRewrite,
+    AiSummarize,
     CloseFile,
     CloseProject(usize),
     Copy,
@@ -247,6 +316,9 @@ impl Action {
         match self {
             Self::Todo => Message::Todo,
             Self::About => Message::ToggleContextPage(ContextPage::About),
+            Self::AiExplain => Message::AiRun(AiVerb::Explain),
+            Self::AiRewrite => Message::AiRun(AiVerb::Rewrite),
+            Self::AiSummarize => Message::AiRun(AiVerb::Summarize),
             Self::CloseFile => Message::CloseFile,
             Self::CloseProject(project_i) => Message::CloseProject(*project_i),
             Self::Copy => Message::Copy,
@@ -336,6 +408,12 @@ enum NewTab {
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub enum Message {
+    AiInsert(String),
+    AiResult {
+        verb: AiVerb,
+        outcome: Result<String, String>,
+    },
+    AiRun(AiVerb),
     AppTheme(AppTheme),
     AutoScroll(Option<f32>),
     Config(Config),
@@ -430,6 +508,7 @@ pub enum Message {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ContextPage {
     About,
+    Ai,
     DocumentStatistics,
     GitManagement,
     //TODO: Move search to pop-up
@@ -448,6 +527,29 @@ pub enum Find {
     None,
     Find,
     FindAndReplace,
+}
+
+#[derive(Clone, Debug)]
+enum AiStatus {
+    Idle,
+    Loading,
+    Ready(String),
+    Error(String),
+}
+
+#[derive(Clone, Debug)]
+struct AiState {
+    verb: Option<AiVerb>,
+    status: AiStatus,
+}
+
+impl Default for AiState {
+    fn default() -> Self {
+        Self {
+            verb: None,
+            status: AiStatus::Idle,
+        }
+    }
 }
 
 pub struct App {
@@ -488,6 +590,7 @@ pub struct App {
         HashSet<(PathBuf, RecursiveMode)>,
     )>,
     modifiers: Modifiers,
+    ai_state: AiState,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1016,6 +1119,79 @@ impl App {
         .into()
     }
 
+    fn ai_panel(&self) -> Element<'_, Message> {
+        let spacing = self.core().system_theme().cosmic().spacing;
+        let mut col = widget::column::with_capacity(4).spacing(spacing.space_s);
+
+        let mode_label = match self.ai_state.verb {
+            Some(AiVerb::Summarize) => fl!("ai-mode-summarize"),
+            Some(AiVerb::Explain) => fl!("ai-mode-explain"),
+            Some(AiVerb::Rewrite) => fl!("ai-mode-rewrite"),
+            None => fl!("ai-mode-idle"),
+        };
+        col = col.push(widget::text::heading(mode_label));
+
+        match &self.ai_state.status {
+            AiStatus::Idle => {
+                col = col.push(widget::text::body(fl!("ai-idle-hint")));
+            }
+            AiStatus::Loading => {
+                col = col.push(widget::text::body(fl!("ai-loading")));
+            }
+            AiStatus::Ready(text) => {
+                col = col.push(widget::text::body(text.clone()));
+                col = col.push(
+                    widget::button::suggested(fl!("ai-insert"))
+                        .on_press(Message::AiInsert(text.clone())),
+                );
+            }
+            AiStatus::Error(err) => {
+                col = col.push(widget::text::heading(fl!("ai-error")));
+                col = col.push(widget::text::body(err.clone()));
+            }
+        }
+
+        col.into()
+    }
+
+    fn ai_start(&mut self, verb: AiVerb) -> Task<Message> {
+        let Some(Tab::Editor(tab)) = self.active_tab() else {
+            self.ai_state = AiState {
+                verb: Some(verb),
+                status: AiStatus::Error(fl!("ai-empty-buffer")),
+            };
+            self.context_page = ContextPage::Ai;
+            self.core.window.show_context = true;
+            return Task::none();
+        };
+        let text = {
+            let editor = tab.editor.lock().unwrap();
+            tab::editor_text(&editor)
+        };
+        if text.trim().is_empty() {
+            self.ai_state = AiState {
+                verb: Some(verb),
+                status: AiStatus::Error(fl!("ai-empty-buffer")),
+            };
+            self.context_page = ContextPage::Ai;
+            self.core.window.show_context = true;
+            return Task::none();
+        }
+        self.ai_state = AiState {
+            verb: Some(verb),
+            status: AiStatus::Loading,
+        };
+        self.context_page = ContextPage::Ai;
+        self.core.window.show_context = true;
+        Task::perform(
+            async move {
+                let outcome = run_ai_doc(verb, text).await;
+                action::app(Message::AiResult { verb, outcome })
+            },
+            |x| x,
+        )
+    }
+
     fn git_management(&self) -> Element<'_, Message> {
         let spacing = self.core().system_theme().cosmic().spacing;
 
@@ -1501,6 +1677,7 @@ impl Application for App {
             project_search_has_focus: false,
             watcher_opt: None,
             modifiers: Modifiers::empty(),
+            ai_state: AiState::default(),
         };
 
         // Do not show nav bar by default. Will be opened by open_project if needed
@@ -1741,6 +1918,28 @@ impl Application for App {
             };
         }
         match message {
+            Message::AiRun(verb) => {
+                return self.ai_start(verb);
+            }
+            Message::AiResult { verb, outcome } => {
+                if self.ai_state.verb == Some(verb) {
+                    self.ai_state.status = match outcome {
+                        Ok(text) => AiStatus::Ready(text),
+                        Err(err) => AiStatus::Error(err),
+                    };
+                }
+            }
+            Message::AiInsert(text) => {
+                if let Some(Tab::Editor(tab)) = self.active_tab() {
+                    {
+                        let mut editor = tab.editor.lock().unwrap();
+                        editor.start_change();
+                        editor.insert_string(&text, None);
+                        editor.finish_change();
+                    }
+                    return self.update(Message::TabChanged(self.tab_model.active()));
+                }
+            }
             Message::AppTheme(app_theme) => {
                 config_set!(app_theme, app_theme);
                 return self.update_config();
@@ -2983,6 +3182,11 @@ impl Application for App {
                 |s| Message::LaunchUrl(s.to_string()),
                 Message::ToggleContextPage(ContextPage::About),
             ),
+            ContextPage::Ai => context_drawer::context_drawer(
+                self.ai_panel(),
+                Message::ToggleContextPage(ContextPage::Ai),
+            )
+            .title(fl!("ai-panel-title")),
             ContextPage::DocumentStatistics => context_drawer::context_drawer(
                 self.document_statistics(),
                 Message::ToggleContextPage(ContextPage::DocumentStatistics),

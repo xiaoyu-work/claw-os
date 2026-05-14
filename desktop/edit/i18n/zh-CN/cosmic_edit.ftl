@@ -132,3 +132,19 @@ menu-about = 关于 COSMIC 文本编辑器…
 repository = 仓库
 support = 支持
 comment = ClawOS 桌面的文本编辑器
+
+## AI 集成
+ai = AI
+ai-summarize = 总结
+ai-explain = 解释
+ai-rewrite = 改写
+ai-panel-title = Claw AI
+ai-mode-summarize = 总结
+ai-mode-explain = 解释
+ai-mode-rewrite = 改写
+ai-mode-idle = AI
+ai-idle-hint = 从 AI 菜单中选择一项，将当前编辑器内容交给 Claw AI 处理。
+ai-loading = 正在询问 AI…
+ai-error = AI 请求失败。
+ai-empty-buffer = 当前缓冲区为空——没有内容可以发送给 AI。
+ai-insert = 插入到光标位置

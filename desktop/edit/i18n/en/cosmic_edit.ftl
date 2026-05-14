@@ -121,3 +121,19 @@ syntax-highlighting = Syntax highlighting...
 menu-settings = Settings...
 menu-keyboard-shortcuts = Keyboard shortcuts...
 menu-about = About COSMIC Text Editor...
+
+## AI integration
+ai = AI
+ai-summarize = Summarize
+ai-explain = Explain
+ai-rewrite = Rewrite
+ai-panel-title = Claw AI
+ai-mode-summarize = Summary
+ai-mode-explain = Explanation
+ai-mode-rewrite = Rewrite
+ai-mode-idle = AI
+ai-idle-hint = Pick an action from the AI menu to run the buffer through Claw AI.
+ai-loading = Asking the AI…
+ai-error = The AI request failed.
+ai-empty-buffer = The current buffer is empty — nothing to send to the AI.
+ai-insert = Insert at cursor

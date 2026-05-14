@@ -17,7 +17,7 @@ use std::{
 
 use crate::{Config, SYNTAX_SYSTEM, fl, git::GitDiff};
 
-fn editor_text(editor: &ViEditor<'static, 'static>) -> String {
+pub(crate) fn editor_text(editor: &ViEditor<'static, 'static>) -> String {
     editor.with_buffer(|buffer| {
         let mut text = String::new();
         for line in buffer.lines.iter() {
