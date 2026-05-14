@@ -1,0 +1,28 @@
+{
+  "schema": "claw.agent-api/v1",
+  "id": "org.tesseract",
+  "name": "tesseract",
+  "title": {
+    "en": "Tesseract OCR",
+    "zh-CN": "Tesseract OCR 光学字符识别"
+  },
+  "summary": {
+    "en": "Extract text from images using the Tesseract OCR engine.",
+    "zh-CN": "用 Tesseract 引擎从图片中提取文字。"
+  },
+  "vendor": "claw-adapter",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/tesseract-ocr/tesseract",
+  "transport": "mcp+stdio",
+  "command": "python3",
+  "args": ["${manifest_dir}/main.py"],
+  "env": {},
+  "timeout_secs": 60,
+  "enabled": true,
+  "ai": {
+    "callable_by_ai": true,
+    "uses_ai_internally": false,
+    "safety": "standard",
+    "origins": ["external-content"]
+  }
+}
