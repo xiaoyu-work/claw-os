@@ -124,6 +124,15 @@ fn dispatch_app(args: &[String]) -> Result<Option<String>, String> {
         return lint_apps(&discovered, target);
     }
 
+    // Special: `cos app install <source>` — validate a manifest,
+    // install the App tree under apps_dir(), and (unless --no-consent)
+    // walk the operator through the AI consent prompt. Lives in the
+    // `app` namespace because it is an admin operation against the
+    // App layer — no AI gate involved.
+    if app_name == "install" {
+        return install_cmd(&args[1..]);
+    }
+
     // Special: `cos app consent <sub> [<name>] [...]` — review / grant /
     // revoke a user's explicit approval of an App's manifest AI policy.
     // Lives in the `app` namespace because it is an inherently per-app
@@ -287,6 +296,191 @@ fn walk_py(dir: &Path, f: &mut dyn FnMut(&Path, &str)) {
             }
         }
     }
+}
+
+/// `cos app install <source-dir> [--yes] [--no-consent] [--force]`
+///
+/// Validates an App manifest, copies the App tree under `apps_dir()`,
+/// and (unless `--no-consent`) walks the operator through the AI
+/// consent prompt for the App's manifest `ai` block.
+///
+/// Validation:
+///   * `<source>/app.json` must parse via `Manifest::from_json` — same
+///     rules every existing App goes through at discover/launch time.
+///   * `ai.tools[]` must be a subset of the live kernel catalog
+///     (`crate::ai::tools::list_names()`); typoed entries are rejected
+///     before anything is copied to disk.
+///   * The manifest's `id` is the install destination dir name. If the
+///     source's parent dir name differs, that's fine — the manifest is
+///     authoritative.
+///
+/// Disk layout:
+///   * Default destination is `apps_dir()/<id>/`. If the source already
+///     resolves to that exact path (the in-tree dev workflow where
+///     someone runs `cos app install apps/<id>` against the bundled
+///     tree), the copy step is skipped and only validation +
+///     consent run.
+///   * If the destination already exists and `--force` was not passed,
+///     the install fails with a helpful message rather than silently
+///     overwriting an existing App.
+///
+/// Consent:
+///   * Apps without an `ai` block have nothing to consent to and the
+///     install completes after the copy.
+///   * Apps with an `ai` block prompt interactively unless `--yes`
+///     (auto-grant) or `--no-consent` (defer; operator must run
+///     `cos app consent grant <id>` later).
+fn install_cmd(args: &[String]) -> Result<Option<String>, String> {
+    let source_arg = args
+        .iter()
+        .find(|a| !a.starts_with("--"))
+        .cloned()
+        .ok_or_else(|| {
+            "usage: cos app install <source-dir> [--yes] [--no-consent] [--force]"
+                .to_string()
+        })?;
+    let auto_yes = args.iter().any(|a| a == "--yes");
+    let no_consent = args.iter().any(|a| a == "--no-consent");
+    let force = args.iter().any(|a| a == "--force");
+
+    let source = PathBuf::from(&source_arg);
+    if !source.is_dir() {
+        return Err(format!(
+            "install source `{}` is not a directory",
+            source.display()
+        ));
+    }
+    let manifest_path = source.join("app.json");
+    if !manifest_path.is_file() {
+        return Err(format!(
+            "install source `{}` has no app.json",
+            source.display()
+        ));
+    }
+    let body = std::fs::read_to_string(&manifest_path)
+        .map_err(|e| format!("read {}: {e}", manifest_path.display()))?;
+    let manifest = apps::AppManifest::from_json(&body)
+        .map_err(|e| format!("parse {}: {e}", manifest_path.display()))?;
+    let catalog = crate::ai::tools::list_names();
+    manifest
+        .validate_tools_against_catalog(&catalog)
+        .map_err(|e| format!("manifest catalog check: {e}"))?;
+
+    let dest = apps_dir().join(&manifest.id);
+    let copied: bool;
+    let same_path = source
+        .canonicalize()
+        .ok()
+        .zip(dest.canonicalize().ok())
+        .map(|(a, b)| a == b)
+        .unwrap_or(false);
+
+    if same_path {
+        copied = false;
+    } else if dest.exists() {
+        if !force {
+            return Err(format!(
+                "destination `{}` already exists. Re-run with --force to overwrite.",
+                dest.display()
+            ));
+        }
+        std::fs::remove_dir_all(&dest)
+            .map_err(|e| format!("remove existing {}: {e}", dest.display()))?;
+        copy_dir_recursive(&source, &dest)
+            .map_err(|e| format!("copy {} -> {}: {e}", source.display(), dest.display()))?;
+        copied = true;
+    } else {
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("create {}: {e}", parent.display()))?;
+        }
+        copy_dir_recursive(&source, &dest)
+            .map_err(|e| format!("copy {} -> {}: {e}", source.display(), dest.display()))?;
+        copied = true;
+    }
+
+    let mut envelope = json!({
+        "app": manifest.id,
+        "installed": true,
+        "source": source.display().to_string(),
+        "dest": dest.display().to_string(),
+        "copied": copied,
+        "in_place": same_path,
+    });
+
+    let needs_consent = manifest.ai.is_some();
+    if !needs_consent {
+        envelope["consent"] = json!({
+            "needed": false,
+            "reason": "no_ai_block",
+        });
+        return Ok(Some(envelope.to_string()));
+    }
+
+    if no_consent {
+        envelope["consent"] = json!({
+            "needed": true,
+            "granted": false,
+            "deferred": true,
+            "hint": format!("Run `cos app consent grant {}` to approve.", manifest.id),
+        });
+        return Ok(Some(envelope.to_string()));
+    }
+
+    use crate::ai::consent;
+    let policy = manifest.ai.as_ref().unwrap();
+    let review = consent::format_for_review(&manifest.id, policy);
+    if !auto_yes {
+        use std::io::{BufRead, Write};
+        let mut stderr = std::io::stderr().lock();
+        let _ = writeln!(stderr, "{review}");
+        let _ = write!(stderr, "Approve this AI policy? [y/N] ");
+        let _ = stderr.flush();
+        let mut line = String::new();
+        std::io::stdin()
+            .lock()
+            .read_line(&mut line)
+            .map_err(|e| format!("read stdin: {e}"))?;
+        let answer = line.trim().to_ascii_lowercase();
+        if answer != "y" && answer != "yes" {
+            envelope["consent"] = json!({
+                "needed": true,
+                "granted": false,
+                "reason": "user_declined",
+                "hint": format!("Run `cos app consent grant {}` to approve later.", manifest.id),
+            });
+            return Ok(Some(envelope.to_string()));
+        }
+    }
+
+    let record = consent::Consent::approve(policy.clone());
+    consent::save(&manifest.id, &record)?;
+    envelope["consent"] = json!({
+        "needed": true,
+        "granted": true,
+        "approved_at": record.approved_at,
+        "path": consent::consent_path(&manifest.id).display().to_string(),
+    });
+    Ok(Some(envelope.to_string()))
+}
+
+/// Plain recursive directory copy. Symlinks are followed (treated as
+/// regular files) — Apps shipped in this repo don't use symlinks and
+/// the install path is meant for real, copyable trees rather than
+/// development bind mounts.
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if from.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
 }
 
 /// `cos app consent <sub> [...]` — review / grant / revoke the user's
@@ -571,7 +765,7 @@ fn show_apps(
     let output = json!({
         "apps": app_list,
         "total": app_list.len(),
-        "hint": "Run: cos app <name> for app details, cos app <name> <command> [args] to execute.",
+        "hint": "Run: cos app <name> for app details, cos app <name> <command> [args] to execute. Install an App with: cos app install <source-dir>",
     });
     Ok(Some(output.to_string()))
 }
@@ -2036,5 +2230,293 @@ mod tests {
             None => std::env::remove_var("COS_USER_CONFIG_DIR"),
         }
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // -----------------------------------------------------------------
+    // `cos app install` CLI surface — see install_cmd() above.
+    // -----------------------------------------------------------------
+
+    fn write_min_app(dir: &std::path::Path, id: &str, body: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("app.json"), body).unwrap();
+        // A tiny main.py so the copy step has something to move.
+        std::fs::write(
+            dir.join("main.py"),
+            format!("# stub for {id}\n"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn install_requires_source() {
+        let err = install_cmd(&[]).unwrap_err();
+        assert!(err.contains("usage:"), "got: {err}");
+    }
+
+    #[test]
+    fn install_rejects_non_directory_source() {
+        let err = install_cmd(&["/dev/null".into()]).unwrap_err();
+        assert!(err.contains("not a directory"), "got: {err}");
+    }
+
+    #[test]
+    fn install_rejects_missing_manifest() {
+        let tmp = std::env::temp_dir()
+            .join(format!("cos-install-no-manifest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let err = install_cmd(&[tmp.display().to_string()]).unwrap_err();
+        assert!(err.contains("no app.json"), "got: {err}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn install_rejects_unknown_tool_in_manifest() {
+        let pid = std::process::id();
+        let src = std::env::temp_dir().join(format!("cos-install-bad-tool-src-{pid}"));
+        let dst = std::env::temp_dir().join(format!("cos-install-bad-tool-dst-{pid}"));
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
+        write_min_app(
+            &src,
+            "bad",
+            r#"{
+              "id": "bad",
+              "version": "0.0.1",
+              "name": "Bad",
+              "ai": {
+                "budget": {"monthly_units": 1},
+                "safety": "strict",
+                "origins": ["trusted"],
+                "tools": ["fs.unicorn"]
+              }
+            }"#,
+        );
+
+        let prev_apps = std::env::var_os("COS_APPS_DIR");
+        std::env::set_var("COS_APPS_DIR", &dst);
+        let err = install_cmd(&[src.display().to_string()]).unwrap_err();
+        match prev_apps {
+            Some(x) => std::env::set_var("COS_APPS_DIR", x),
+            None => std::env::remove_var("COS_APPS_DIR"),
+        }
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
+
+        assert!(err.contains("manifest catalog check"), "got: {err}");
+        assert!(err.contains("fs.unicorn"), "got: {err}");
+    }
+
+    #[test]
+    fn install_copies_app_without_ai_block_and_skips_consent() {
+        let pid = std::process::id();
+        let src = std::env::temp_dir().join(format!("cos-install-noai-src-{pid}"));
+        let dst = std::env::temp_dir().join(format!("cos-install-noai-dst-{pid}"));
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
+        write_min_app(
+            &src,
+            "calc",
+            r#"{
+              "id": "calc",
+              "version": "0.0.1",
+              "name": "Calc"
+            }"#,
+        );
+
+        let prev_apps = std::env::var_os("COS_APPS_DIR");
+        std::env::set_var("COS_APPS_DIR", &dst);
+        let v = parse(install_cmd(&[src.display().to_string()]).unwrap());
+        match prev_apps {
+            Some(x) => std::env::set_var("COS_APPS_DIR", x),
+            None => std::env::remove_var("COS_APPS_DIR"),
+        }
+
+        assert_eq!(v["installed"], true);
+        assert_eq!(v["app"], "calc");
+        assert_eq!(v["copied"], true);
+        assert_eq!(v["consent"]["needed"], false);
+        assert!(dst.join("calc").join("app.json").is_file());
+        assert!(dst.join("calc").join("main.py").is_file());
+
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
+    }
+
+    #[test]
+    fn install_no_consent_defers_consent_for_ai_app() {
+        let pid = std::process::id();
+        let src = std::env::temp_dir().join(format!("cos-install-defer-src-{pid}"));
+        let dst = std::env::temp_dir().join(format!("cos-install-defer-dst-{pid}"));
+        let cfg = std::env::temp_dir().join(format!("cos-install-defer-cfg-{pid}"));
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
+        let _ = std::fs::remove_dir_all(&cfg);
+        write_min_app(
+            &src,
+            "summ",
+            r#"{
+              "id": "summ",
+              "version": "0.0.1",
+              "name": "Summ",
+              "ai": {
+                "budget": {"monthly_units": 100},
+                "safety": "strict",
+                "origins": ["trusted"],
+                "tools": ["fs.read_text"]
+              }
+            }"#,
+        );
+
+        let prev_apps = std::env::var_os("COS_APPS_DIR");
+        let prev_cfg = std::env::var_os("COS_USER_CONFIG_DIR");
+        std::env::set_var("COS_APPS_DIR", &dst);
+        std::env::set_var("COS_USER_CONFIG_DIR", &cfg);
+        let v = parse(
+            install_cmd(&[src.display().to_string(), "--no-consent".into()])
+                .unwrap(),
+        );
+        match prev_apps {
+            Some(x) => std::env::set_var("COS_APPS_DIR", x),
+            None => std::env::remove_var("COS_APPS_DIR"),
+        }
+        match prev_cfg {
+            Some(x) => std::env::set_var("COS_USER_CONFIG_DIR", x),
+            None => std::env::remove_var("COS_USER_CONFIG_DIR"),
+        }
+
+        assert_eq!(v["installed"], true);
+        assert_eq!(v["consent"]["needed"], true);
+        assert_eq!(v["consent"]["granted"], false);
+        assert_eq!(v["consent"]["deferred"], true);
+        assert!(dst.join("summ").join("app.json").is_file());
+
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn install_yes_grants_consent_for_ai_app() {
+        let pid = std::process::id();
+        let src = std::env::temp_dir().join(format!("cos-install-yes-src-{pid}"));
+        let dst = std::env::temp_dir().join(format!("cos-install-yes-dst-{pid}"));
+        let cfg = std::env::temp_dir().join(format!("cos-install-yes-cfg-{pid}"));
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
+        let _ = std::fs::remove_dir_all(&cfg);
+        write_min_app(
+            &src,
+            "yes",
+            r#"{
+              "id": "yes",
+              "version": "0.0.1",
+              "name": "Yes",
+              "ai": {
+                "budget": {"monthly_units": 100},
+                "safety": "strict",
+                "origins": ["trusted"]
+              }
+            }"#,
+        );
+
+        let prev_apps = std::env::var_os("COS_APPS_DIR");
+        let prev_cfg = std::env::var_os("COS_USER_CONFIG_DIR");
+        std::env::set_var("COS_APPS_DIR", &dst);
+        std::env::set_var("COS_USER_CONFIG_DIR", &cfg);
+        let v = parse(
+            install_cmd(&[src.display().to_string(), "--yes".into()]).unwrap(),
+        );
+        match prev_apps {
+            Some(x) => std::env::set_var("COS_APPS_DIR", x),
+            None => std::env::remove_var("COS_APPS_DIR"),
+        }
+        match prev_cfg {
+            Some(x) => std::env::set_var("COS_USER_CONFIG_DIR", x),
+            None => std::env::remove_var("COS_USER_CONFIG_DIR"),
+        }
+
+        assert_eq!(v["installed"], true);
+        assert_eq!(v["consent"]["needed"], true);
+        assert_eq!(v["consent"]["granted"], true);
+        assert!(v["consent"]["approved_at"].is_string());
+
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn install_refuses_to_overwrite_without_force() {
+        let pid = std::process::id();
+        let src = std::env::temp_dir().join(format!("cos-install-overw-src-{pid}"));
+        let dst = std::env::temp_dir().join(format!("cos-install-overw-dst-{pid}"));
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
+        write_min_app(
+            &src,
+            "twice",
+            r#"{
+              "id": "twice",
+              "version": "0.0.1",
+              "name": "Twice"
+            }"#,
+        );
+        std::fs::create_dir_all(dst.join("twice")).unwrap();
+        std::fs::write(dst.join("twice").join("placeholder"), b"existing").unwrap();
+
+        let prev_apps = std::env::var_os("COS_APPS_DIR");
+        std::env::set_var("COS_APPS_DIR", &dst);
+        let err = install_cmd(&[src.display().to_string()]).unwrap_err();
+        match prev_apps {
+            Some(x) => std::env::set_var("COS_APPS_DIR", x),
+            None => std::env::remove_var("COS_APPS_DIR"),
+        }
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
+
+        assert!(err.contains("already exists"), "got: {err}");
+        assert!(err.contains("--force"), "got: {err}");
+    }
+
+    #[test]
+    fn install_force_replaces_existing_install() {
+        let pid = std::process::id();
+        let src = std::env::temp_dir().join(format!("cos-install-force-src-{pid}"));
+        let dst = std::env::temp_dir().join(format!("cos-install-force-dst-{pid}"));
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
+        write_min_app(
+            &src,
+            "force",
+            r#"{
+              "id": "force",
+              "version": "0.0.1",
+              "name": "Force"
+            }"#,
+        );
+        std::fs::create_dir_all(dst.join("force")).unwrap();
+        std::fs::write(dst.join("force").join("stale"), b"junk").unwrap();
+
+        let prev_apps = std::env::var_os("COS_APPS_DIR");
+        std::env::set_var("COS_APPS_DIR", &dst);
+        let v = parse(
+            install_cmd(&[src.display().to_string(), "--force".into()]).unwrap(),
+        );
+        match prev_apps {
+            Some(x) => std::env::set_var("COS_APPS_DIR", x),
+            None => std::env::remove_var("COS_APPS_DIR"),
+        }
+
+        assert_eq!(v["installed"], true);
+        assert_eq!(v["copied"], true);
+        assert!(dst.join("force").join("app.json").is_file());
+        assert!(
+            !dst.join("force").join("stale").is_file(),
+            "--force must clear the old tree before copying"
+        );
+
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
     }
 }

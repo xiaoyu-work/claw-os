@@ -421,9 +421,11 @@ chat` and `cos ai tool`.
 
 This document is the contract. Concrete work falls into roughly:
 
-1. **App registry & installer.** `cos app install <dir>` — validates
-   the manifest, writes it under `/var/lib/cos/apps/<id>/`, runs the
-   `ai.tools[]` consent UI. Plus `cos app list / show / uninstall`.
+1. **App registry & installer.** ✅ Done. `cos app install <source>`
+   validates the manifest (including `ai.tools[]` against the live
+   catalog), copies the App tree under `apps_dir()/<id>/`, and runs
+   the AI consent prompt. Flags: `--yes` auto-grants consent,
+   `--no-consent` defers it, `--force` overwrites an existing install.
 2. **Multi-runtime bridge.** ✅ Done. `core/src/bridge.rs` dispatches
    on the manifest `runtime` field (`python` / `node` / `binary`) and
    sets `COS_APP_ID` before `exec`.
