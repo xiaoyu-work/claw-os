@@ -47,6 +47,7 @@
 //! Everything here is a library: a future `cos-apid` daemon and the
 //! existing in-process `cos` binary will both call these same functions.
 
+mod gc;
 mod id;
 mod meta;
 mod mutation;
@@ -56,6 +57,7 @@ mod turn;
 #[cfg(test)]
 mod tests;
 
+pub use gc::{archive_path, archive_root, gc_archive, is_archived, GcStats};
 pub use id::{InvalidSessionId, SessionId};
 pub use meta::{Budget, Lease, SessionMeta, Status};
 pub use mutation::{Mutation, MutationRecord};
