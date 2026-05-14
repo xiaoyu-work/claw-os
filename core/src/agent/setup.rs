@@ -1534,7 +1534,17 @@ fn status_media(modality: Modality) -> Value {
         _ => return json!({"error": "not a media modality"}),
     };
     let snap = media::snapshot(spec.config_block);
-    let provider = snap.get("provider").and_then(|s| s.as_str()).unwrap_or("none").to_string();
+    let raw_provider = snap.get("provider").and_then(|s| s.as_str()).unwrap_or("").to_string();
+    // For `embed`, the serde default is `"auto"` (derive the embedder
+    // from the main `[agent]` provider). An empty / missing on-disk
+    // value is therefore equivalent to `"auto"`, not `"none"`.
+    let provider = if matches!(modality, Modality::Embed) && raw_provider.is_empty() {
+        crate::config::get().embed.provider.clone()
+    } else if raw_provider.is_empty() {
+        "none".to_string()
+    } else {
+        raw_provider
+    };
     let model = snap.get("model").and_then(|s| s.as_str()).unwrap_or("").to_string();
     let credential = snap.get("api_key_credential").and_then(|s| s.as_str()).map(|s| s.to_string());
     let env = snap.get("api_key_env").and_then(|s| s.as_str()).map(|s| s.to_string());
@@ -1557,16 +1567,41 @@ fn status_media(modality: Modality) -> Value {
     } else {
         false
     };
-    let ready = provider != "none" && !provider.is_empty() && key_resolvable;
-
-    let reason = if provider == "none" || provider.is_empty() {
-        Some(format!("`{}` not configured (provider=none)", spec.name))
-    } else if !key_resolvable {
-        Some(format!(
-            "provider `{provider}` needs a credential; none resolvable from store or env"
-        ))
+    // `embed` has a special `"auto"` provider that derives the
+    // embedder from the main `[agent]` config. It's ready iff the
+    // derivation actually produces an embedder (the main provider
+    // is OpenAI-shape).
+    let (ready, reason) = if matches!(modality, Modality::Embed) && provider == "auto" {
+        let derived = crate::model::tasks::embed::build_default().ok().flatten();
+        match derived {
+            Some(_) => (
+                true,
+                Some(format!(
+                    "auto-derived from main agent provider `{}`",
+                    crate::config::get().agent.provider
+                )),
+            ),
+            None => (
+                false,
+                Some(format!(
+                    "`embed.provider=auto` but main agent provider `{}` does not support \
+                     auto-derivation — set `[embed]` explicitly to enable",
+                    crate::config::get().agent.provider
+                )),
+            ),
+        }
     } else {
-        None
+        let ready = provider != "none" && !provider.is_empty() && key_resolvable;
+        let reason = if provider == "none" || provider.is_empty() {
+            Some(format!("`{}` not configured (provider=none)", spec.name))
+        } else if !key_resolvable {
+            Some(format!(
+                "provider `{provider}` needs a credential; none resolvable from store or env"
+            ))
+        } else {
+            None
+        };
+        (ready, reason)
     };
 
     json!({

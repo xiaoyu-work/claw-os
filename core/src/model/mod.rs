@@ -396,7 +396,9 @@ fn run_embed(args: &[String]) -> Result<Value, String> {
     let embedder = embed::build_from(&cfg)
         .map_err(|e| format!("embed config: {e}"))?
         .ok_or_else(|| {
-            "embedding provider is disabled (provider=\"none\"). Set [embed] in config.json"
+            "embedding provider is disabled (set [embed] in config.json, \
+             or configure a `[agent].provider` that supports embeddings \
+             so `provider=\"auto\"` can derive one)"
                 .to_string()
         })?;
     if !embedder.is_configured() {

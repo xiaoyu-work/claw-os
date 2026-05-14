@@ -297,7 +297,19 @@ fn check_media_modalities() -> Value {
         let provider = snap.get("provider").and_then(|v| v.as_str()).unwrap_or("none");
         let ready = snap.get("ready").and_then(|v| v.as_bool()).unwrap_or(false);
         let reason = snap.get("reason").cloned().unwrap_or(Value::Null);
-        let state = if provider == "none" || provider.is_empty() {
+        // `embed.provider=auto` (the new default) means "derive from
+        // main agent config when possible". When it can't derive
+        // (mock / anthropic / gemini / bedrock main provider), report
+        // `auto-unavailable` and stay at `ok` rather than warn — the
+        // user hasn't misconfigured anything, the chosen main
+        // provider just doesn't offer embeddings.
+        let state = if matches!(m, Modality::Embed) && provider == "auto" {
+            if ready {
+                "auto-derived"
+            } else {
+                "auto-unavailable"
+            }
+        } else if provider == "none" || provider.is_empty() {
             "unconfigured"
         } else if ready {
             "ready"

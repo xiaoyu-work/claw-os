@@ -7,21 +7,25 @@
 //! has been said — the LLM call only fires when there ARE new
 //! messages to extract facts from.
 //!
-//! Opt-in via `[agent] auxiliary_provider + auxiliary_model`. When
-//! either is unset, [`AutoCurator::from_cfg_logged`] returns `None`
-//! and the runtime simply doesn't auto-curate — the manual
-//! `cos agent dev learn extract --session <sid>` workflow still
-//! works.
+//! On by default. When `[agent].auxiliary_provider` is set the
+//! curator routes through it (cheap subtask path); otherwise it
+//! falls back to the main `[agent].provider + .model` so the
+//! curator works out of the box for every configured agent. The
+//! one exception is `provider = "mock"`: there's no point spending
+//! cycles on a mock LLM, so curation is silently skipped in tests
+//! and on fresh-out-of-the-box installs.
 //!
 //! All errors (LLM down, MEMORY.md unwritable, etc.) are logged but
 //! never propagate — curation is best-effort augmentation.
 
 use std::sync::Arc;
 
+use crate::agent::llm::auxiliary::{AuxiliaryClient, AuxiliaryConfig};
+use crate::agent::llm::registry as llm_registry;
 use crate::agent::memory::curator::{default_log_path, MemoryCurator};
 use crate::agent::memory::notes::NotesStore;
 use crate::agent::memory::sqlite_fts::MemoryDb;
-use crate::agent::runtime::loop_::auxiliary_from_cfg;
+use crate::agent::runtime::loop_::{auxiliary_from_cfg, AgentError};
 use crate::config::AgentConfig;
 
 /// Wraps a [`MemoryCurator`] + [`MemoryDb`] with a fire-and-forget
@@ -34,32 +38,41 @@ pub struct AutoCurator {
 }
 
 impl AutoCurator {
-    /// Build from `[agent] auxiliary_*` config. Returns `None` when
-    /// the auxiliary provider/model are unset (curation needs an LLM
-    /// to extract facts, so without one there's nothing to do).
+    /// Build from `cfg`. Returns `None` only when **both** the
+    /// auxiliary path and the main-provider fallback are unusable —
+    /// i.e. the main provider is `mock` or build fails. Errors are
+    /// logged at `warn!` and downgrade to `None`.
     pub fn from_cfg_logged(cfg: &AgentConfig, db: &MemoryDb) -> Option<Arc<Self>> {
-        match auxiliary_from_cfg(cfg) {
-            Ok(Some(aux)) => {
-                let notes = NotesStore::system_default();
-                let log_path = default_log_path();
-                let curator = MemoryCurator::new(aux, notes, log_path);
-                Some(Arc::new(Self {
-                    curator: Arc::new(curator),
-                    db: db.clone(),
-                }))
-            }
-            Ok(None) => {
-                tracing::debug!(
-                    "curator: auxiliary not configured — auto-curation skipped \
-                     (set agent.auxiliary_provider + auxiliary_model to enable)"
-                );
-                None
-            }
+        let aux = match auxiliary_from_cfg(cfg) {
+            Ok(Some(a)) => a,
+            Ok(None) => match aux_from_main(cfg) {
+                Ok(Some(a)) => a,
+                Ok(None) => {
+                    tracing::debug!(
+                        "curator: main provider is mock — auto-curation skipped"
+                    );
+                    return None;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "curator: main-provider fallback build failed ({e}); \
+                         auto-curation skipped"
+                    );
+                    return None;
+                }
+            },
             Err(e) => {
                 tracing::warn!("curator: aux build failed ({e}); auto-curation skipped");
-                None
+                return None;
             }
-        }
+        };
+        let notes = NotesStore::system_default();
+        let log_path = default_log_path();
+        let curator = MemoryCurator::new(aux, notes, log_path);
+        Some(Arc::new(Self {
+            curator: Arc::new(curator),
+            db: db.clone(),
+        }))
     }
 
     /// Fire-and-forget curation pass over `session_id`. The curator
@@ -98,5 +111,88 @@ impl AutoCurator {
                 }
             }
         });
+    }
+}
+
+/// Build an [`AuxiliaryClient`] from the **main** `[agent]` provider
+/// + model — the default-on fallback used when the auxiliary block
+/// is unset. Returns `Ok(None)` when the main provider is `mock`
+/// (no point curating against canned responses, and tests rely on
+/// this short-circuit). Returns `Err` when the build itself fails
+/// (e.g. credential lookup error).
+fn aux_from_main(cfg: &AgentConfig) -> Result<Option<AuxiliaryClient>, AgentError> {
+    if cfg.provider == "mock" {
+        return Ok(None);
+    }
+    if cfg.model.trim().is_empty() {
+        return Err(AgentError::Internal(
+            "main agent.model is empty — curator fallback cannot build".into(),
+        ));
+    }
+    let provider = llm_registry::build(&cfg.provider, &cfg.model, cfg)
+        .map_err(|e| AgentError::Internal(format!("aux fallback build: {e}")))?;
+    let provider = crate::ai::gate::wrap_for_system(provider);
+    let mut acfg = AuxiliaryConfig::new(&cfg.provider, &cfg.model)
+        .with_max_tokens(cfg.auxiliary_max_tokens);
+    if let Some(t) = cfg.auxiliary_temperature {
+        acfg = acfg.with_temperature(t);
+    }
+    Ok(Some(AuxiliaryClient::new(provider, acfg)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::memory::sqlite_fts::MemoryDb;
+
+    fn mem_db() -> MemoryDb {
+        MemoryDb::open_in_memory().expect("in-memory db")
+    }
+
+    /// Curator stays off when the main provider is `mock` (the
+    /// default for fresh installs and the test environment). Avoids
+    /// spending cycles on canned responses.
+    #[test]
+    fn auto_curator_disabled_when_main_is_mock() {
+        let cfg = AgentConfig::default();
+        assert_eq!(cfg.provider, "mock");
+        assert!(AutoCurator::from_cfg_logged(&cfg, &mem_db()).is_none());
+    }
+
+    /// When `auxiliary_provider` is unset but the main provider is a
+    /// real LLM, the curator falls back to it — that's the
+    /// default-on path the user asked for.
+    #[test]
+    fn auto_curator_falls_back_to_main_when_aux_unset() {
+        let mut cfg = AgentConfig::default();
+        cfg.provider = "openai".into();
+        cfg.model = "gpt-4o-mini".into();
+        cfg.api_key_env = Some("OPENAI_API_KEY".into());
+        assert!(cfg.auxiliary_provider.is_none());
+        assert!(AutoCurator::from_cfg_logged(&cfg, &mem_db()).is_some());
+    }
+
+    /// Explicit `auxiliary_provider` still wins (the fallback is a
+    /// pure default-on path; it does not override an explicit
+    /// setting).
+    #[test]
+    fn auto_curator_respects_explicit_aux() {
+        let mut cfg = AgentConfig::default();
+        cfg.provider = "openai".into();
+        cfg.model = "gpt-4o".into();
+        cfg.auxiliary_provider = Some("openai".into());
+        cfg.auxiliary_model = Some("gpt-4o-mini".into());
+        cfg.api_key_env = Some("OPENAI_API_KEY".into());
+        assert!(AutoCurator::from_cfg_logged(&cfg, &mem_db()).is_some());
+    }
+
+    /// `aux_from_main` errors when the main model is empty — we
+    /// shouldn't silently swallow a malformed config.
+    #[test]
+    fn aux_from_main_errors_when_model_empty() {
+        let mut cfg = AgentConfig::default();
+        cfg.provider = "openai".into();
+        cfg.model = String::new();
+        assert!(aux_from_main(&cfg).is_err());
     }
 }

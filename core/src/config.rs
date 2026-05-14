@@ -418,10 +418,18 @@ pub struct McpServerConfig {
 }
 
 /// Embedding service configuration. Reads from `[embed]` block.
-/// `provider="none"` (the default) means embedding is disabled.
+/// `provider="auto"` (the default) derives the embedder from the
+/// main `[agent]` provider when it speaks an OpenAI-compatible
+/// `/embeddings` shape (openai / azure / xai / deepseek / openrouter
+/// / ollama). `provider="none"` disables embeddings explicitly.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbedConfig {
-    /// `"none"` (disabled) | `"openai"` | `"ollama"` | self-hosted alias.
+    /// `"auto"` (default — derive from `[agent]` when possible) |
+    /// `"none"` (explicit off) | `"openai"` | `"azure"` | `"ollama"` |
+    /// `"qwen3-local"` | other self-hosted alias. When `"auto"` and
+    /// the main agent provider isn't OpenAI-shape (e.g. `mock`,
+    /// `anthropic`, `gemini`, `bedrock`), the embedder is silently
+    /// disabled with a `debug!` log line.
     #[serde(default = "default_embed_provider")]
     pub provider: String,
 
@@ -641,7 +649,7 @@ fn default_mcp_enabled() -> bool {
     true
 }
 fn default_embed_provider() -> String {
-    "none".into()
+    "auto".into()
 }
 fn default_embed_model() -> String {
     "text-embedding-3-small".into()

@@ -79,16 +79,36 @@ pub trait Embedder: Send + Sync {
 // =====================================================================
 
 /// Build the configured embedder, if any. Returns `Ok(None)` when
-/// embedding is disabled (provider="none"). Returns an error if the
-/// config block names a provider that does not exist.
+/// embedding is disabled (`provider="none"`) or when `provider="auto"`
+/// but the main `[agent]` provider isn't OpenAI-shape (so there's
+/// nothing safe to derive from). Returns an error if the config
+/// block names a provider that does not exist.
 pub fn build_default() -> Result<Option<Box<dyn Embedder>>, String> {
     let cfg = &crate::config::get().embed;
     build_from(cfg)
 }
 
 pub fn build_from(cfg: &EmbedConfig) -> Result<Option<Box<dyn Embedder>>, String> {
+    build_from_with_agent(cfg, &crate::config::get().agent)
+}
+
+/// Variant of [`build_from`] that takes the `[agent]` config
+/// explicitly. Lets tests exercise the `provider="auto"` derivation
+/// path without depending on global config state.
+pub fn build_from_with_agent(
+    cfg: &EmbedConfig,
+    agent: &crate::config::AgentConfig,
+) -> Result<Option<Box<dyn Embedder>>, String> {
     match cfg.provider.as_str() {
-        "none" | "" => Ok(None),
+        "none" => Ok(None),
+        // Derive from the user's main agent provider when possible.
+        // No extra setup required — the embedder reuses the chat
+        // credentials + base_url. Azure users may need to create a
+        // separate embedding deployment named `text-embedding-3-small`
+        // (or override `[embed].model`); on a missing deployment the
+        // upstream returns 404 which surfaces as a `warn!` per
+        // attempted index — never fatal.
+        "auto" | "" => derive_from_agent(cfg, agent),
         // Every OpenAI-API-shape backend (OpenAI / Azure / Ollama / vLLM /
         // TGI / LMStudio) shares one impl — switch behaviour via base_url.
         // `azure` differs only in the auth header style (`api-key:` instead
@@ -102,6 +122,56 @@ pub fn build_from(cfg: &EmbedConfig) -> Result<Option<Box<dyn Embedder>>, String
         "qwen3-local" | "local" => Ok(Some(Box::new(super::qwen3_genai::build_from_config(cfg)))),
         other => Err(format!("unknown embed provider: {other}")),
     }
+}
+
+/// Build an embedder by inheriting credentials + base_url from the
+/// main `[agent]` block. Returns `Ok(None)` when the main provider
+/// doesn't speak the OpenAI `/embeddings` shape (mock / anthropic /
+/// gemini / bedrock / etc.). Explicit fields on `cfg` (model,
+/// api_key_credential, api_key_env, base_url) win over the derived
+/// values — so users can keep `provider="auto"` while pointing the
+/// embedder at a separate Azure deployment via `[embed].model`.
+fn derive_from_agent(
+    cfg: &EmbedConfig,
+    agent: &crate::config::AgentConfig,
+) -> Result<Option<Box<dyn Embedder>>, String> {
+    let alias = match agent.provider.as_str() {
+        "openai" | "azure" | "xai" | "deepseek" | "openrouter" | "ollama" => &agent.provider,
+        _ => {
+            tracing::debug!(
+                "embed: [embed].provider=auto and main agent provider={} is not OpenAI-shape — auto-indexing skipped (set [embed].provider explicitly to enable)",
+                agent.provider
+            );
+            return Ok(None);
+        }
+    };
+
+    let mut derived = cfg.clone();
+    derived.provider = alias.to_string();
+    if derived
+        .base_url
+        .as_deref()
+        .map(str::is_empty)
+        .unwrap_or(true)
+    {
+        derived.base_url = agent.base_url.clone();
+    }
+    if derived.api_key_credential.is_none() {
+        derived.api_key_credential = agent.api_key_credential.clone();
+    }
+    if derived.api_key_env.is_none() {
+        derived.api_key_env = agent.api_key_env.clone();
+    }
+    if derived.extra_headers.is_empty() {
+        derived.extra_headers = agent.extra_headers.clone();
+    }
+    // Treat the field-default placeholder as "use the embed default
+    // model" — it's only set explicitly when the user picks a model
+    // in the wizard.
+    if derived.model.trim().is_empty() {
+        derived.model = MODEL_NAME.to_string();
+    }
+    Ok(Some(Box::new(OpenAICompatEmbedder::from_config(&derived))))
 }
 
 // =====================================================================
@@ -183,8 +253,26 @@ impl OpenAICompatEmbedder {
         // (Azure OpenAI requires `?api-version=...`).
         let (base, query) = match self.base_url.split_once('?') {
             Some((b, q)) => (b.trim_end_matches('/'), Some(q)),
-            None => (self.base_url.as_str(), None),
+            None => (self.base_url.trim_end_matches('/'), None),
         };
+        // Azure has two valid base_url shapes:
+        //   (1) deployment URL — `https://acme.openai.azure.com/openai/deployments/<dep>`
+        //       (legacy / explicit; user pasted the full deployment endpoint).
+        //   (2) resource root — `https://acme.openai.azure.com/`
+        //       (matches the chat provider's stored shape; the deployment
+        //       name lives in `self.model`).
+        // When the base lacks `/openai/deployments/`, we assemble it
+        // from `self.model` so the same on-disk URL works for chat
+        // AND embed without duplicating the deployment path.
+        if self.alias == "azure" && !base.contains("/openai/deployments/") {
+            let deployment = self.model.as_str();
+            return match query {
+                Some(q) => {
+                    format!("{base}/openai/deployments/{deployment}/embeddings?{q}")
+                }
+                None => format!("{base}/openai/deployments/{deployment}/embeddings"),
+            };
+        }
         match query {
             Some(q) => format!("{base}/embeddings?{q}"),
             None => format!("{base}/embeddings"),
@@ -368,6 +456,97 @@ mod tests {
         c.base_url = Some("https://api.openai.com/v1".into());
         let e = OpenAICompatEmbedder::from_config(&c);
         assert_eq!(e.endpoint(), "https://api.openai.com/v1/embeddings");
+    }
+
+    /// Auto-derive: `[embed].provider = "auto"` (the default) reads
+    /// the main agent provider and builds an OpenAI-compat embedder
+    /// when the alias is compatible. Inherits base_url + credentials
+    /// from `[agent]`.
+    #[test]
+    fn build_auto_derives_from_openai_main() {
+        let mut embed_cfg = EmbedConfig::default(); // provider == "auto"
+        embed_cfg.model = String::new();
+        let mut agent = crate::config::AgentConfig::default();
+        agent.provider = "openai".into();
+        agent.base_url = Some("https://api.openai.com/v1".into());
+        agent.api_key_env = Some("OPENAI_API_KEY".into());
+
+        let built = build_from_with_agent(&embed_cfg, &agent)
+            .expect("auto-derive ok")
+            .expect("openai main → some");
+        assert_eq!(built.name(), "openai");
+        assert_eq!(built.model(), MODEL_NAME);
+    }
+
+    /// Auto-derive against an Azure agent works: the embedder gets
+    /// the resource-root URL and infers the deployment name from
+    /// `text-embedding-3-small`.
+    #[test]
+    fn build_auto_derives_from_azure_main() {
+        let mut embed_cfg = EmbedConfig::default(); // provider == "auto"
+        embed_cfg.model = String::new();
+        let mut agent = crate::config::AgentConfig::default();
+        agent.provider = "azure".into();
+        agent.base_url =
+            Some("https://acme.openai.azure.com/?api-version=2024-12-01-preview".into());
+        agent.api_key_credential = Some("azure_api_key".into());
+
+        let built = build_from_with_agent(&embed_cfg, &agent)
+            .expect("auto-derive ok")
+            .expect("azure main → some");
+        assert_eq!(built.name(), "azure");
+        assert_eq!(built.model(), MODEL_NAME);
+    }
+
+    /// Auto-derive against a non-OpenAI-shape provider (mock /
+    /// anthropic / gemini / bedrock) silently returns `None` —
+    /// embedding stays off and the runtime continues without
+    /// semantic memory.
+    #[test]
+    fn build_auto_returns_none_for_mock_main() {
+        let embed_cfg = EmbedConfig::default(); // provider == "auto"
+        let agent = crate::config::AgentConfig::default(); // provider == "mock"
+        assert!(build_from_with_agent(&embed_cfg, &agent).unwrap().is_none());
+    }
+
+    /// Auto-derive against an unsupported main provider also returns
+    /// `None` (rather than erroring) so misconfigured users still
+    /// get a working agent.
+    #[test]
+    fn build_auto_returns_none_for_anthropic_main() {
+        let embed_cfg = EmbedConfig::default(); // provider == "auto"
+        let mut agent = crate::config::AgentConfig::default();
+        agent.provider = "anthropic".into();
+        assert!(build_from_with_agent(&embed_cfg, &agent).unwrap().is_none());
+    }
+
+    /// Explicit `provider = "none"` always wins over auto-derive:
+    /// users who want embeddings off get them off.
+    #[test]
+    fn build_explicit_none_still_wins_over_main() {
+        let mut embed_cfg = EmbedConfig::default();
+        embed_cfg.provider = "none".into();
+        let mut agent = crate::config::AgentConfig::default();
+        agent.provider = "openai".into();
+        agent.base_url = Some("https://api.openai.com/v1".into());
+        assert!(build_from_with_agent(&embed_cfg, &agent).unwrap().is_none());
+    }
+
+    /// Auto-derive against an Azure agent assembles the deployment
+    /// path on demand (when base_url is the resource root rather
+    /// than a full deployment URL).
+    #[test]
+    fn azure_endpoint_assembled_from_resource_root() {
+        let mut c = EmbedConfig::default();
+        c.provider = "azure".into();
+        c.model = "text-embedding-3-small".into();
+        c.base_url =
+            Some("https://acme.openai.azure.com/?api-version=2024-12-01-preview".into());
+        let e = OpenAICompatEmbedder::from_config(&c);
+        assert_eq!(
+            e.endpoint(),
+            "https://acme.openai.azure.com/openai/deployments/text-embedding-3-small/embeddings?api-version=2024-12-01-preview"
+        );
     }
 
     #[test]
