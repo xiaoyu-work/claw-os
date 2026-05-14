@@ -31,8 +31,9 @@
 //! model, session id. All filters are AND-combined. The full
 //! aggregator runs when the query is left at default.
 //!
-//! Library-only this commit. No CLI subcommand exposed yet — when
-//! we later add `cos agent usage`, it will wrap this.
+//! Library + CLI wrapper. The CLI surface is `cos agent usage` in
+//! [`crate::agent::mod`], which calls into [`aggregate_path_filtered`]
+//! after parsing scope + flags.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -59,6 +60,13 @@ pub struct UsageQuery {
     pub model: Option<String>,
     /// Session id match (exact). `None` = any.
     pub session_id: Option<String>,
+    /// App id match (exact). `None` = any. App-less records (system
+    /// calls) never match a `Some(_)` filter.
+    pub app_id: Option<String>,
+    /// Derived modality verb match (exact). `None` = any. Records
+    /// without a verb (e.g. older log entries) never match a
+    /// `Some(_)` filter.
+    pub verb: Option<String>,
     /// `Some(true)` = only successful calls, `Some(false)` = only
     /// errored calls, `None` = both.
     pub status_ok: Option<bool>,
@@ -79,6 +87,16 @@ impl UsageQuery {
         }
         if let Some(s) = &self.session_id {
             if rec.session_id.as_deref() != Some(s.as_str()) {
+                return false;
+            }
+        }
+        if let Some(a) = &self.app_id {
+            if rec.app_id.as_deref() != Some(a.as_str()) {
+                return false;
+            }
+        }
+        if let Some(v) = &self.verb {
+            if rec.verb.as_deref() != Some(v.as_str()) {
                 return false;
             }
         }
@@ -188,6 +206,11 @@ pub struct UsageSummary {
     pub by_model: BTreeMap<String, Totals>,
     /// Only includes records that had a `session_id` set.
     pub by_session: BTreeMap<String, Totals>,
+    /// Only includes records that had an `app_id` set (i.e. app-gated
+    /// calls). System calls and untagged records are excluded.
+    pub by_app: BTreeMap<String, Totals>,
+    /// Only includes records that had a derived `verb` set.
+    pub by_verb: BTreeMap<String, Totals>,
     /// Number of malformed log lines encountered.
     pub parse_errors: usize,
 }
@@ -212,6 +235,12 @@ pub fn aggregate_filtered(records: &[LlmRunRecord], query: &UsageQuery) -> Usage
         s.by_model.entry(rec.model.clone()).or_default().add(rec);
         if let Some(sid) = &rec.session_id {
             s.by_session.entry(sid.clone()).or_default().add(rec);
+        }
+        if let Some(aid) = &rec.app_id {
+            s.by_app.entry(aid.clone()).or_default().add(rec);
+        }
+        if let Some(v) = &rec.verb {
+            s.by_verb.entry(v.clone()).or_default().add(rec);
         }
     }
     s
@@ -578,5 +607,81 @@ mod tests {
         r.timestamp = "garbage".into();
         let q = UsageQuery::default();
         assert!(q.matches(&r));
+    }
+
+    #[test]
+    fn aggregates_by_app_and_verb() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("ai.jsonl");
+        let mut a = rec("anthropic", "sonnet", 100, 50, Some("s1"));
+        a = a.with_app("summarize").with_verb("ai.chat");
+        let mut b = rec("anthropic", "sonnet", 200, 80, Some("s1"));
+        b = b.with_app("summarize").with_verb("ai.chat");
+        let mut c = rec("openai_compat", "gpt-image-1", 0, 0, Some("s2"));
+        c = c.with_app("doc").with_verb("ai.image.generate");
+        // System call: no app, no verb — should not appear in by_app
+        // or by_verb but should still count in total.
+        let d = rec("anthropic", "sonnet", 5, 5, None);
+        write(&p, &[a, b, c, d]);
+        let s = aggregate_path(&p);
+        assert_eq!(s.total.calls, 4);
+        assert_eq!(s.by_app.len(), 2);
+        assert_eq!(s.by_app["summarize"].calls, 2);
+        assert_eq!(s.by_app["summarize"].input_tokens, 300);
+        assert_eq!(s.by_app["doc"].calls, 1);
+        assert_eq!(s.by_verb.len(), 2);
+        assert_eq!(s.by_verb["ai.chat"].calls, 2);
+        assert_eq!(s.by_verb["ai.image.generate"].calls, 1);
+    }
+
+    #[test]
+    fn filter_by_app() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("ai.jsonl");
+        let a = rec("anthropic", "sonnet", 10, 10, Some("s1")).with_app("summarize");
+        let b = rec("anthropic", "sonnet", 20, 20, Some("s2")).with_app("doc");
+        write(&p, &[a, b]);
+        let q = UsageQuery {
+            app_id: Some("summarize".into()),
+            ..Default::default()
+        };
+        let s = aggregate_path_filtered(&p, &q);
+        assert_eq!(s.total.calls, 1);
+        assert_eq!(s.total.input_tokens, 10);
+        assert!(s.by_app.contains_key("summarize"));
+        assert!(!s.by_app.contains_key("doc"));
+    }
+
+    #[test]
+    fn filter_by_verb() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("ai.jsonl");
+        let a = rec("anthropic", "sonnet", 10, 10, None).with_verb("ai.chat");
+        let b = rec("anthropic", "sonnet", 20, 20, None).with_verb("ai.image.generate");
+        write(&p, &[a, b]);
+        let q = UsageQuery {
+            verb: Some("ai.image.generate".into()),
+            ..Default::default()
+        };
+        let s = aggregate_path_filtered(&p, &q);
+        assert_eq!(s.total.calls, 1);
+        assert_eq!(s.total.input_tokens, 20);
+    }
+
+    #[test]
+    fn app_filter_excludes_records_without_app() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("ai.jsonl");
+        let a = rec("anthropic", "sonnet", 10, 10, None).with_app("summarize");
+        // No app_id — should be excluded by `app_id: Some(_)`.
+        let b = rec("anthropic", "sonnet", 99, 99, None);
+        write(&p, &[a, b]);
+        let q = UsageQuery {
+            app_id: Some("summarize".into()),
+            ..Default::default()
+        };
+        let s = aggregate_path_filtered(&p, &q);
+        assert_eq!(s.total.calls, 1);
+        assert_eq!(s.total.input_tokens, 10);
     }
 }

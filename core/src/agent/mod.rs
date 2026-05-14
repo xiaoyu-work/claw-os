@@ -7288,18 +7288,15 @@ async fn spawn_mcp_child(
     Ok((transport, child))
 }
 
-/// `cos agent usage [overall|provider <name>|model <name>|session <id>]`
-/// `[--since <ISO>] [--until <ISO>] [--ok|--error]` — filtered
-/// aggregation over `ai.jsonl`. Mirrors `agent insights overall` for
-/// the unfiltered case but adds the AND-combined filter set from
-/// [`crate::agent::llm::usage::UsageQuery`].
+/// `cos agent usage [overall|provider <name>|model <name>|session <id>|app <id>|verb <name>]`
+/// `[--since <ISO>] [--until <ISO>] [--ok|--error] [--app <id>] [--verb <name>]`
+/// — filtered aggregation over `ai.jsonl`. Mirrors `agent insights
+/// overall` for the unfiltered case but adds the AND-combined filter
+/// set from [`crate::agent::llm::usage::UsageQuery`].
 fn usage_cmd(args: &[String]) -> Result<Value, String> {
     use crate::agent::llm::usage::{aggregate_path_filtered, default_log_path, UsageQuery};
     use chrono::DateTime;
     let mut query = UsageQuery::default();
-    // Default scope is "overall" — no positional bucket filter applied
-    // beyond the optional flags. `provider <n>` / `model <n>` /
-    // `session <id>` add a single additional filter.
     let scope = args.first().map(|s| s.as_str()).unwrap_or("overall");
     let mut i = match scope {
         "overall" | "" => 1,
@@ -7330,9 +7327,27 @@ fn usage_cmd(args: &[String]) -> Result<Value, String> {
             );
             2
         }
+        "app" => {
+            query.app_id = Some(
+                args.get(1)
+                    .cloned()
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| "usage: cos agent usage app <id>".to_string())?,
+            );
+            2
+        }
+        "verb" => {
+            query.verb = Some(
+                args.get(1)
+                    .cloned()
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| "usage: cos agent usage verb <name>".to_string())?,
+            );
+            2
+        }
         other => {
             return Err(format!(
-                "unknown usage scope: {other}. try: overall | provider <name> | model <name> | session <id>"
+                "unknown usage scope: {other}. try: overall | provider <name> | model <name> | session <id> | app <id> | verb <name>"
             ))
         }
     };
@@ -7368,6 +7383,24 @@ fn usage_cmd(args: &[String]) -> Result<Value, String> {
                 query.status_ok = Some(false);
                 i += 1;
             }
+            "--app" => {
+                let v = args
+                    .get(i + 1)
+                    .cloned()
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| "--app needs <id>".to_string())?;
+                query.app_id = Some(v);
+                i += 2;
+            }
+            "--verb" => {
+                let v = args
+                    .get(i + 1)
+                    .cloned()
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| "--verb needs <name>".to_string())?;
+                query.verb = Some(v);
+                i += 2;
+            }
             other => return Err(format!("unknown flag: {other}")),
         }
     }
@@ -7380,6 +7413,8 @@ fn usage_cmd(args: &[String]) -> Result<Value, String> {
             "provider": query.provider,
             "model": query.model,
             "session_id": query.session_id,
+            "app_id": query.app_id,
+            "verb": query.verb,
             "since": query.since.map(|d| d.to_rfc3339()),
             "until": query.until.map(|d| d.to_rfc3339()),
             "status_ok": query.status_ok,
@@ -7388,6 +7423,8 @@ fn usage_cmd(args: &[String]) -> Result<Value, String> {
         "by_provider": summary.by_provider,
         "by_model": summary.by_model,
         "by_session": summary.by_session,
+        "by_app": summary.by_app,
+        "by_verb": summary.by_verb,
         "parse_errors": summary.parse_errors,
     }))
 }
@@ -9049,6 +9086,8 @@ mod tests {
         assert!(v.get("by_provider").is_some());
         assert!(v.get("by_model").is_some());
         assert!(v.get("by_session").is_some());
+        assert!(v.get("by_app").is_some());
+        assert!(v.get("by_verb").is_some());
     }
 
     #[test]
@@ -9070,6 +9109,18 @@ mod tests {
     }
 
     #[test]
+    fn usage_app_requires_id() {
+        let err = usage_cmd(&["app".into()]).unwrap_err();
+        assert!(err.to_lowercase().contains("usage"));
+    }
+
+    #[test]
+    fn usage_verb_requires_name() {
+        let err = usage_cmd(&["verb".into()]).unwrap_err();
+        assert!(err.to_lowercase().contains("usage"));
+    }
+
+    #[test]
     fn usage_since_rejects_non_iso_timestamp() {
         let err = usage_cmd(&["overall".into(), "--since".into(), "not-iso".into()]).unwrap_err();
         assert!(err.to_lowercase().contains("since"));
@@ -9081,6 +9132,8 @@ mod tests {
         assert!(err.contains("provider"));
         assert!(err.contains("model"));
         assert!(err.contains("session"));
+        assert!(err.contains("app"));
+        assert!(err.contains("verb"));
     }
 
     #[test]
@@ -9092,6 +9145,56 @@ mod tests {
                 .and_then(|x| x.as_str()),
             Some("anthropic")
         );
+    }
+
+    #[test]
+    fn usage_app_scope_records_app_filter() {
+        let v = usage_cmd(&["app".into(), "summarize".into()]).expect("usage app ok");
+        assert_eq!(v.get("scope").and_then(|x| x.as_str()), Some("app"));
+        assert_eq!(
+            v.get("filter")
+                .and_then(|f| f.get("app_id"))
+                .and_then(|x| x.as_str()),
+            Some("summarize")
+        );
+    }
+
+    #[test]
+    fn usage_verb_scope_records_verb_filter() {
+        let v = usage_cmd(&["verb".into(), "ai.image.generate".into()]).expect("usage verb ok");
+        assert_eq!(v.get("scope").and_then(|x| x.as_str()), Some("verb"));
+        assert_eq!(
+            v.get("filter")
+                .and_then(|f| f.get("verb"))
+                .and_then(|x| x.as_str()),
+            Some("ai.image.generate")
+        );
+    }
+
+    #[test]
+    fn usage_app_flag_combines_with_provider_scope() {
+        let v = usage_cmd(&[
+            "provider".into(),
+            "anthropic".into(),
+            "--app".into(),
+            "summarize".into(),
+        ])
+        .expect("usage provider --app ok");
+        let filter = v.get("filter").unwrap();
+        assert_eq!(filter.get("provider").and_then(|x| x.as_str()), Some("anthropic"));
+        assert_eq!(filter.get("app_id").and_then(|x| x.as_str()), Some("summarize"));
+    }
+
+    #[test]
+    fn usage_app_flag_requires_value() {
+        let err = usage_cmd(&["overall".into(), "--app".into()]).unwrap_err();
+        assert!(err.to_lowercase().contains("--app"));
+    }
+
+    #[test]
+    fn usage_verb_flag_requires_value() {
+        let err = usage_cmd(&["overall".into(), "--verb".into()]).unwrap_err();
+        assert!(err.to_lowercase().contains("--verb"));
     }
 
     #[test]
