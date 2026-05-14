@@ -189,3 +189,161 @@ Suggested implementation order:
 3. **M3** (recall_journal tool) — closes the loop for retrieval.
 4. **M4** (USER.md dedup) — quality-of-life.
 5. **M5** (TTL janitor) — housekeeping, defer until data actually justifies it.
+
+---
+
+## System introspection — making the agent actually live in the OS
+
+### Problem
+
+The agent is supposed to be an OS-resident assistant on Linux/COSMIC,
+but for the first cut it could only answer roughly the same questions
+a shell user with read access to `/proc` could answer manually
+(`info`, `env`, `resources`, `uptime`, `proc`, `mounts`, `net`,
+`cgroup`). Everything else — *"which process is eating CPU right
+now"*, *"how hot is the chip"*, *"what just crashed"*, *"who's on
+port 8080"* — required ad-hoc shell pipelines via `cos_sandbox`,
+which is the LLM equivalent of telling a doctor to bring their own
+stethoscope.
+
+### Cause
+
+`core/src/sysinfo.rs` exposed only the cheapest `/proc` reads.
+Anything that needed (a) two-sample diffing (CPU%, IO/sec), (b)
+shelling out to a system tool (journalctl, systemctl, apt, dmesg,
+coredumpctl, who), or (c) parsing structured `/sys` hierarchies
+(thermal, power_supply, hwmon) was missing entirely.
+
+The `cos agent doctor` command was also CLI-only — even though it
+returns JSON and its `doctor_cmd` already matches the cos primitive
+signature, the LLM had no tool entry for it.
+
+### Done (Linux-only)
+
+`core/src/sysinfo.rs` now ships **24 sub-commands** under the
+`cos_sysinfo` tool:
+
+| Group | Commands |
+|---|---|
+| identity | `info`, `env`, `uptime`, `who`, `desktop` |
+| load / health | `resources`, `loadavg`, `sensors`, `cgroup` |
+| processes | `proc`, `top`, `threads`, `port` |
+| network | `net`, `net_rate` |
+| storage | `mounts`, `disk_io`, `largest_files` |
+| logs | `journal`, `dmesg` |
+| systemd | `services`, `failed_units`, `coredumps` |
+| packages | `pkg_updates` |
+
+Key behaviours:
+
+- **`top`** — two-sample `/proc/<pid>/stat` diff, returns a real
+  `cpu_percent` per process (configurable `--interval`, `--top`,
+  `--by cpu|mem`).
+- **`threads <pid>`** — walks `/proc/<pid>/task/`, returns per-TID
+  state and CPU.
+- **`port <port>`** — cross-references `/proc/net/{tcp,tcp6,udp,udp6}`
+  with `/proc/<pid>/fd/socket:[inode]` to map a port to owning PIDs.
+- **`sensors`** — reads `/sys/class/power_supply/` (battery state,
+  capacity, remaining-runtime estimate, AC adapters),
+  `/sys/class/thermal/` (thermal zones), and `/sys/class/hwmon/`
+  (fans + extra temps). All values in canonical SI / Celsius.
+- **`journal`** — wraps `journalctl -o json` with `--unit`,
+  `--since`, `--lines`, `--priority`, `--kernel`. Returns parsed
+  JSON entries with a stable schema (timestamp / unit / priority /
+  pid / comm / message).
+- **`services`** — wraps `systemctl list-units --output=json` with
+  `--failed-only`, `--type`, `--state`.
+- **`coredumps`** — `coredumpctl list --json=short` with a raw-text
+  fallback for older systemd.
+- **`disk_io` / `net_rate`** — two-sample `/proc/diskstats` and
+  `/proc/net/dev` for kB/s rates.
+- **`largest_files <path> [--top N --min-mb N]`** — bounded-size
+  min-heap walker; stays on one filesystem like `find -xdev`.
+
+Also: **`cos_doctor`** — a new top-level LLM tool that exposes
+`cos agent doctor` to the model. Flags only; the `command` arg is
+ignored (single-shot). Output JSON has the `status: ok|warn|fail`
+rollup the CLI already produces. Wired via the standard
+`PrimitiveSpec` pattern in `core/src/agent/tools/cos_proxy/mod.rs`.
+
+Files touched:
+- `core/src/sysinfo.rs` — +16 commands, +~1100 lines, +tests.
+- `core/src/agent/tools/cos_proxy/mod.rs` — extended `cos_sysinfo`
+  spec; added `cos_doctor` `PrimitiveSpec`.
+- `core/src/agent/doctor_cli.rs` — `doctor_primitive` shim.
+- `core/src/agent/tools/registry.rs` — assert `cos_doctor` is
+  registered.
+
+### Deferred / still open
+
+These are real gaps but are bigger architectural pieces that
+deserve their own PRs:
+
+#### S1 — Full desktop state (windows, displays, clipboard)
+
+`cos_sysinfo desktop` currently only returns XDG env-var hints.
+Real "what window is active / what's on my clipboard / what
+monitors are plugged in" requires:
+
+- A Wayland protocol client (most likely a thin wrapper around
+  `wlr-foreign-toplevel-management-unstable-v1` or COSMIC's
+  equivalent) to enumerate toplevels.
+- A D-Bus client for COSMIC's display config service to enumerate
+  monitors at the protocol layer (not just `cosmic-randr-shell`,
+  which is x86-only).
+- An opt-in clipboard reader (Wayland's `wl_data_device` plus the
+  `clipboard-control` proposal). Must default to **off** with an
+  explicit per-session toggle — clipboard content is sensitive.
+
+Suggested home: a new `core/src/sysinfo/desktop.rs` (split the
+module when this lands).
+
+#### S2 — Event subscriptions (push, not poll)
+
+Today everything in `cos_sysinfo` is request/response: the LLM
+asks, the kernel reads, the answer flows back. There is no way for
+the OS to **wake the agent** when something happens. The natural
+event sources:
+
+- **inotify** for file changes (`apps/notify` already uses this
+  shape for desktop notifications but not for the agent).
+- **udev** for hot-plug events (USB, displays, batteries).
+- **systemd D-Bus signals** — `JobNew`, `JobRemoved`, unit state
+  transitions, `PrepareForSleep`.
+- **journalctl `--follow`** for matching-priority log lines.
+- **`/proc/<pid>` death watches** via `pidfd_open` + epoll.
+
+The right shape is probably an `AgentEventBus` (running inside
+the agent service) that fans these signals into LLM-readable
+inbox entries — similar to how `cos cron` already persists jobs.
+This pairs naturally with the durable-session work in
+`core/src/session/` (Phase 6 handover) so the agent can wake from
+checkpoint and immediately ingest backlog.
+
+#### S3 — Reversible signal log
+
+Today `cos_proc signal/kill` is fire-and-forget. If the LLM kills
+the wrong PID there is no breadcrumb. Proposal:
+
+- New file `$COS_DATA_DIR/agent/signal_log.jsonl`.
+- Every `proc.signal` invocation appends
+  `{ts, pid, signo, comm, cmdline, killer_session}` before sending
+  the signal.
+- New `cos_sysinfo signal_log [--lines N]` to surface recent
+  kills to the agent ("what did I just kill?").
+- Optional: pair with `core/src/checkpoint` so the agent can
+  `restart_last_killed --within 5m` (re-spawn the cmdline). True
+  rollback isn't possible — once a process is gone its in-memory
+  state is gone — but re-spawning the same cmdline is good enough
+  for daemons.
+
+Hook point: `core/src/proc.rs::cmd_signal` and
+`core/src/policy.rs` (where `proc.signal` is gated).
+
+#### S4 — Two-sample everywhere
+
+`top`, `disk_io`, `net_rate` already sample twice. Apply the same
+pattern to CPU usage per-cgroup, per-uid network usage
+(`/proc/net/netstat` + `/proc/net/sockstat`), and per-pid IO
+(`/proc/<pid>/io`). Cheap and high-signal.
+

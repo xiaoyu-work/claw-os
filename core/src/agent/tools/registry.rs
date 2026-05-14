@@ -190,6 +190,7 @@ mod tests {
         assert!(r.get("cos_tts").is_some());
         assert!(r.get("cos_stt").is_some());
         assert!(r.get("cos_imagegen").is_some());
+        assert!(r.get("cos_doctor").is_some());
         // Generic catalog + run are always registered, regardless of
         // whether any typed cos_app_<id> proxies were picked up from
         // $COS_APPS_DIR (which is environment-dependent at test time).

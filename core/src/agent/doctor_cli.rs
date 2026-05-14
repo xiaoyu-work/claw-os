@@ -112,7 +112,6 @@ pub fn doctor_cmd(args: &[String]) -> Result<Value, String> {
             }
         }
     }
-
     // --quick implicitly disables --probe-network (no network in
     // quick mode, period).
     let effective_probe_network = probe_network && !quick;
@@ -631,6 +630,15 @@ fn check_hooks() -> Value {
 #[allow(dead_code)]
 fn _force_tools_use() {
     let _ = tools::registry::default_registry();
+}
+
+/// Shim matching the [`crate::agent::tools::cos_proxy::PrimitiveFn`]
+/// signature so the LLM can call `cos_doctor` directly. The
+/// `command` argument is ignored — `doctor_cmd` is single-shot
+/// and consumes only flags (`--quick`, `--probe-network`,
+/// `--probe-timeout <secs>`).
+pub fn doctor_primitive(_command: &str, args: &[String]) -> Result<Value, String> {
+    doctor_cmd(args)
 }
 
 #[cfg(test)]
