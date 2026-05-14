@@ -35,10 +35,26 @@
 //! same `LlmRunRecord` shape that `cos ai chat` already uses. The
 //! kernel-side identity check (`enforce_identity_for`, see
 //! `core/src/ai/chat.rs`) is shared so impersonation is impossible.
+//!
+//! Allowlist enforcement
+//! ---------------------
+//!
+//! Every call into [`execute`] performs three gates **in order**:
+//!   1. Catalog lookup — unknown names emit `unknown_tool`.
+//!   2. Manifest allowlist — the App's `ai.tools[]` must include
+//!      the name, else `tool_not_in_policy` (or `no_ai_policy` if
+//!      the manifest has no `ai` block at all).
+//!   3. Capability check — `caps::require(verb, scope)` must pass,
+//!      else `caps_denied`.
+//!
+//! The catalog check comes first so a typo always reports as
+//! "unknown tool" rather than "you didn't declare a tool that
+//! doesn't exist".
 
 use serde::Serialize;
 use serde_json::{json, Value};
 
+use crate::apps;
 use crate::caps::{require, Scope, Verb};
 
 /// One entry in the Tool catalog.
@@ -221,11 +237,22 @@ pub fn execute(
             crate::agent::llm::run_log::record(&rec);
         }
         Err(msg) => {
-            // Bucket the error: caps denials carry the literal "denied:"
-            // prefix this module added; everything else is a tool-impl
-            // failure (bad args, fs error, ...). Both are auditable.
+            // Bucket the error. Order matters because some paths emit
+            // structured prefixes the rest of the system also greps on:
+            //
+            //   * `denied: ...`                 — caps::require failed
+            //   * `tool not in ai.tools: ...`   — App's manifest didn't
+            //                                     declare this Tool
+            //   * `no ai policy: ...`           — manifest has no `ai`
+            //                                     block at all
+            //   * unknown-tool path              — catalog lookup missed
+            //   * everything else                — tool-impl failure
             let (decision, denial_reason) = if msg.starts_with("denied:") {
                 ("denied", Some("caps_denied"))
+            } else if msg.starts_with("tool not in ai.tools:") {
+                ("denied", Some("tool_not_in_policy"))
+            } else if msg.starts_with("no ai policy:") {
+                ("denied", Some("no_ai_policy"))
             } else if tool_name_unknown(tool_name) {
                 ("denied", Some("unknown_tool"))
             } else {
@@ -251,6 +278,39 @@ fn tool_name_unknown(name: &str) -> bool {
     lookup(name).is_none()
 }
 
+/// Resolve `app_id` to its installed manifest and require `tool_name`
+/// to appear in the manifest's `ai.tools[]` allowlist. The kernel
+/// uses `COS_APPS_DIR` (default `/usr/lib/cos/apps`) to discover
+/// installed Apps — same convention `cos ai chat` uses.
+///
+/// Error message prefixes are stable: callers of [`execute`] grep on
+/// them to attribute the right `denial_reason` to the audit log, so
+/// **do not** rename them without updating the bucket logic above.
+fn require_tool_in_app_policy(app_id: &str, tool_name: &str) -> Result<(), String> {
+    let apps_dir = std::env::var("COS_APPS_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("/usr/lib/cos/apps"));
+    let discovered = apps::discover(&apps_dir);
+    let app = discovered
+        .get(app_id)
+        .ok_or_else(|| format!("unknown app: {app_id}"))?;
+    let Some(policy) = app.manifest.ai.as_ref() else {
+        return Err(format!(
+            "no ai policy: app `{app_id}` has no `ai` block in its manifest — \
+             it cannot use `cos ai tool`. Add an `ai.tools[]` allowlist and re-install."
+        ));
+    };
+    if !policy.tools.iter().any(|t| t == tool_name) {
+        return Err(format!(
+            "tool not in ai.tools: `{tool_name}` is not in app `{app_id}`'s \
+             manifest `ai.tools[]` allowlist (declared: {:?}). Add it to the \
+             manifest and re-install.",
+            policy.tools
+        ));
+    }
+    Ok(())
+}
+
 fn execute_inner(
     tool_name: &str,
     app_id: &str,
@@ -259,7 +319,13 @@ fn execute_inner(
     let tool = lookup(tool_name)
         .ok_or_else(|| format!("unknown tool: {tool_name}. try one of: {:?}", list_names()))?;
 
+    // Argument shape is checked before the App-policy lookup so bad
+    // calls report as such instead of leaking "your manifest doesn't
+    // declare this tool" for a request that was malformed anyway.
     let scope = derive_scope(tool, args)?;
+
+    require_tool_in_app_policy(app_id, tool.name)?;
+
     require(tool.verb, scope).map_err(|d| format!("denied: {}", d.to_json()))?;
 
     let result = match tool.name {
@@ -463,5 +529,145 @@ mod tests {
         assert_eq!(sanitize_key("a-b_c"), "a-b_c");
         assert_eq!(sanitize_key("a/b"), "a_b");
         assert_eq!(sanitize_key("../etc/passwd"), "___etc_passwd");
+    }
+
+    // ---- ai.tools[] allowlist enforcement -----------------------------
+    //
+    // These tests mutate $COS_APPS_DIR which is process-global, so the
+    // module shares one Mutex with itself (same pattern as
+    // `agent::tools::cos_apps`). We never go through the real
+    // `/usr/lib/cos/apps` filesystem.
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn with_tmp_apps<F: FnOnce()>(label: &str, manifests: &[(&str, &str)], f: F) {
+        let _g = env_lock();
+        let dir = std::env::temp_dir().join(format!(
+            "cos-tools-allow-{}-{}",
+            label,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (id, body) in manifests {
+            let app_dir = dir.join(id);
+            std::fs::create_dir_all(&app_dir).unwrap();
+            std::fs::write(app_dir.join("app.json"), body).unwrap();
+        }
+        let prev = std::env::var("COS_APPS_DIR").ok();
+        std::env::set_var("COS_APPS_DIR", &dir);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        match prev {
+            Some(v) => std::env::set_var("COS_APPS_DIR", v),
+            None => std::env::remove_var("COS_APPS_DIR"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        if let Err(e) = result {
+            std::panic::resume_unwind(e);
+        }
+    }
+
+    fn manifest_with_tools(id: &str, tools: &[&str]) -> String {
+        let tools_json = serde_json::to_string(tools).unwrap();
+        format!(
+            r#"{{
+                "id": "{id}",
+                "version": "0.1.0",
+                "name": {{ "en": "test" }},
+                "summary": {{ "en": "test fixture" }},
+                "runtime": "python",
+                "entry": "main.py",
+                "operations": {{}},
+                "ai": {{
+                    "budget": {{ "monthly_units": 0 }},
+                    "origins": ["trusted"],
+                    "tools": {tools_json}
+                }}
+            }}"#
+        )
+    }
+
+    fn manifest_no_ai(id: &str) -> String {
+        format!(
+            r#"{{
+                "id": "{id}",
+                "version": "0.1.0",
+                "name": {{ "en": "test" }},
+                "summary": {{ "en": "test fixture" }},
+                "runtime": "python",
+                "entry": "main.py",
+                "operations": {{}}
+            }}"#
+        )
+    }
+
+    #[test]
+    fn execute_rejects_tool_not_in_allowlist() {
+        let app = "demo-app";
+        let m = manifest_with_tools(app, &["kv.get"]);
+        // Self-check the fixture parses; if it doesn't, the apps
+        // discovery silently drops it and the assertion below fires
+        // with the cryptic "unknown app" message instead of the
+        // intended allowlist error.
+        crate::caps::manifest::Manifest::from_json(&m)
+            .expect("test fixture manifest must parse");
+        with_tmp_apps("not-in-allowlist", &[(app, &m)], || {
+            // valid path arg so we get past derive_scope; allowlist
+            // check must still trip.
+            let err = execute("fs.read_text", app, &json!({"path": "/tmp/x"}))
+                .unwrap_err();
+            assert!(
+                err.starts_with("tool not in ai.tools:"),
+                "wrong error bucket: {err}"
+            );
+            assert!(err.contains("fs.read_text"), "{err}");
+            assert!(err.contains(app), "{err}");
+        });
+    }
+
+    #[test]
+    fn execute_rejects_app_without_ai_block() {
+        let app = "no-ai-app";
+        let m = manifest_no_ai(app);
+        with_tmp_apps("no-ai-block", &[(app, &m)], || {
+            let err = execute("fs.read_text", app, &json!({"path": "/tmp/x"}))
+                .unwrap_err();
+            assert!(
+                err.starts_with("no ai policy:"),
+                "wrong error bucket: {err}"
+            );
+            assert!(err.contains(app), "{err}");
+        });
+    }
+
+    #[test]
+    fn execute_rejects_unknown_app() {
+        let other = "different-app";
+        let m = manifest_with_tools(other, &["kv.get"]);
+        with_tmp_apps("unknown-app", &[(other, &m)], || {
+            let err = execute("kv.get", "nope", &json!({"key": "x"}))
+                .unwrap_err();
+            assert!(err.starts_with("unknown app:"), "got: {err}");
+        });
+    }
+
+    #[test]
+    fn execute_allowlist_runs_after_arg_shape_check() {
+        // Even when the tool IS in the allowlist, malformed args still
+        // fail with a tool-impl error (not the allowlist message). This
+        // preserves the order baked into execute_inner — bad args
+        // short-circuit before the manifest lookup.
+        let app = "demo-app";
+        let m = manifest_with_tools(app, &["fs.read_text"]);
+        with_tmp_apps("args-shape-first", &[(app, &m)], || {
+            let err = execute("fs.read_text", app, &json!({})).unwrap_err();
+            assert!(err.contains("path"), "expected arg error, got: {err}");
+            assert!(
+                !err.starts_with("tool not in ai.tools:"),
+                "allowlist must not fire on bad args: {err}"
+            );
+        });
     }
 }

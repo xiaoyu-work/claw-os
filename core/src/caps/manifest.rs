@@ -157,11 +157,18 @@ pub struct AiPolicy {
     /// How much the app may spend in a single billing period.
     pub budget: AiBudget,
 
-    /// Safety profile applied to every call. `strict` forces the full
-    /// safety pipeline (redact-in, injection detect, classifier,
-    /// redact-out); `standard` keeps the cheap layers; `minimal`
-    /// disables everything but the audit log. The owner can lower a
-    /// profile per-call with `ai.bypass`; the app cannot.
+    /// Safety profile applied to every call. `strict` and `standard`
+    /// both run prompt-secret redaction (the kernel scrubs obvious
+    /// API keys / tokens / PEM blocks before the prompt reaches the
+    /// provider); `minimal` disables redaction and runs in
+    /// audit-only mode. The owner can lower a profile per-call with
+    /// `ai.bypass`; the app cannot.
+    ///
+    /// Reserved tiers — additional pipeline stages (injection
+    /// detection, response-side redaction, classifier-driven
+    /// human-in-the-loop review) may be added later without
+    /// renaming the variants. Apps should declare the tier they
+    /// *intend*; the kernel decides what runs inside it.
     #[serde(default)]
     pub safety: AiSafety,
 
@@ -198,22 +205,25 @@ pub struct AiBudget {
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum AiSafety {
-    /// Full pipeline: redact in / injection detect / classifier /
-    /// redact out / approval. Default for any app handling external
-    /// content.
+    /// Prompt-secret redaction enabled. Default for any app
+    /// handling external content. Reserved as the home for
+    /// stricter pipeline stages added in future releases.
     #[default]
     Strict,
-    /// Cheaper subset: redact in/out only.
+    /// Prompt-secret redaction enabled. Same scrub set as `strict`
+    /// today; behaves as a distinct tier so future stricter stages
+    /// can land in `strict` without renaming.
     Standard,
-    /// Audit-only. Reserved for fully trusted system apps; user must
-    /// confirm at install time.
+    /// Audit-only. Redaction disabled. Reserved for fully trusted
+    /// system apps; user must confirm at install time.
     Minimal,
 }
 
 /// Where the prompt content originated. Carrying this on every AI
-/// call is the kernel's single hardest defence against prompt
-/// injection: external_content always routes through the strictest
-/// pipeline regardless of the app's declared safety profile.
+/// call gives the kernel a stable signal for downstream policy
+/// decisions (auditing, origin-allowlists in the manifest, and
+/// future safety stages that may treat external content more
+/// strictly than developer-authored prompts).
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum PromptOrigin {
@@ -222,8 +232,8 @@ pub enum PromptOrigin {
     /// Prompt contains text the user typed in this session.
     UserInput,
     /// Prompt contains content fetched from outside (email body, web
-    /// page, file contents, another agent's output). Always routes
-    /// through the strict safety pipeline.
+    /// page, file contents, another agent's output). Apps must opt
+    /// in to receiving this origin via `ai.origins[]`.
     ExternalContent,
 }
 

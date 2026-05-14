@@ -133,9 +133,10 @@ pub struct ChatRequest {
 
     /// Names of App-facing Tools (from `crate::ai::tools::CATALOG`)
     /// that the App wants exposed to the model on this single call.
-    /// The gate filters this against the App's manifest `ai.tools[]`
-    /// allowlist, then rewrites them as provider-format tool specs.
-    /// The model **proposes** calls; the gate returns them as
+    /// Each name MUST appear in the App's manifest `ai.tools[]`
+    /// allowlist; the gate hard-denies any name that isn't, then
+    /// rewrites the survivors as provider-format tool specs. The
+    /// model **proposes** calls; the gate returns them as
     /// `tool_calls[]` and never executes them in-line. Empty by
     /// default — most modalities don't need tools.
     pub tools: Vec<String>,
@@ -423,6 +424,17 @@ pub enum AiError {
     #[error("modality `{0}` is not yet wired to a provider — gate is ready, but no installed model supports it")]
     ModalityNotSupported(&'static str),
 
+    #[error(
+        "tool `{tool}` is not in app `{app}`'s manifest `ai.tools[]` \
+         allowlist (declared: {allowed:?}). Add it to the manifest and \
+         re-install, or drop it from the `--tools` flag."
+    )]
+    ToolNotInPolicy {
+        app: String,
+        tool: String,
+        allowed: Vec<String>,
+    },
+
     #[error("missing required input for `{modality}`: {field}")]
     MissingInput {
         modality: &'static str,
@@ -541,6 +553,7 @@ fn denial_reason_token(err: &AiError) -> &'static str {
         AiError::OriginNotAllowed { .. } => "origin_not_allowed",
         AiError::ModalityConflict(_) => "modality_conflict",
         AiError::ModalityNotSupported(_) => "modality_not_supported",
+        AiError::ToolNotInPolicy { .. } => "tool_not_in_policy",
         AiError::MissingInput { .. } => "missing_input",
         AiError::Denied(_) => "caps_denied",
         AiError::Budget(_) => "budget_exceeded",
@@ -711,16 +724,24 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
             field: "prompt",
         })?;
 
-    // 9b. Resolve any requested Tools against the kernel catalog. The
-    // App-facing manifest allowlist (Phase 8) will further restrict
-    // this list; for now, anything in CATALOG is offered. Unknown
-    // names hard-deny so model-discovered typos never leak through.
+    // 9b. Resolve any requested Tools against (1) the App's manifest
+    // `ai.tools[]` allowlist and (2) the kernel catalog. The
+    // manifest allowlist is the App's declared intent; the catalog
+    // check guards against typos and model hallucinations. Both
+    // must pass before a Tool is exposed to the model.
     let resolved_tools: Vec<crate::agent::llm::types::Tool> =
         if req.tools.is_empty() {
             Vec::new()
         } else {
             let mut out = Vec::with_capacity(req.tools.len());
             for name in &req.tools {
+                if !policy.tools.iter().any(|t| t == name) {
+                    return Err(AiError::ToolNotInPolicy {
+                        app: req.app_id.clone(),
+                        tool: name.clone(),
+                        allowed: policy.tools.clone(),
+                    });
+                }
                 let def = crate::ai::tools::lookup(name).ok_or_else(|| {
                     AiError::Provider(format!(
                         "unknown tool requested: {name} (not in catalog)"
@@ -1331,5 +1352,29 @@ mod tests {
         let (out, changed) = apply_safety(&format!("key={secret}"), AiSafety::Strict);
         assert!(changed);
         assert!(!out.contains(secret));
+    }
+
+    #[test]
+    fn tool_not_in_policy_has_stable_denial_token() {
+        let err = AiError::ToolNotInPolicy {
+            app: "demo".into(),
+            tool: "fs.read_text".into(),
+            allowed: vec!["kv.get".into()],
+        };
+        assert_eq!(denial_reason_token(&err), "tool_not_in_policy");
+    }
+
+    #[test]
+    fn tool_not_in_policy_display_mentions_app_tool_and_allowed() {
+        let err = AiError::ToolNotInPolicy {
+            app: "demo".into(),
+            tool: "fs.read_text".into(),
+            allowed: vec!["kv.get".into()],
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("demo"), "{msg}");
+        assert!(msg.contains("fs.read_text"), "{msg}");
+        assert!(msg.contains("kv.get"), "{msg}");
+        assert!(msg.contains("ai.tools[]"), "{msg}");
     }
 }
