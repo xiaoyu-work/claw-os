@@ -1,0 +1,28 @@
+{
+  "schema": "claw.agent-api/v1",
+  "id": "org.qpdf",
+  "name": "qpdf",
+  "title": {
+    "en": "qpdf PDF toolkit",
+    "zh-CN": "qpdf PDF 工具"
+  },
+  "summary": {
+    "en": "Inspect, split, merge and decrypt PDF files with qpdf.",
+    "zh-CN": "用 qpdf 查看、拆分、合并、解密 PDF。"
+  },
+  "vendor": "claw-adapter",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/qpdf/qpdf",
+  "transport": "mcp+stdio",
+  "command": "python3",
+  "args": ["${manifest_dir}/main.py"],
+  "env": {},
+  "timeout_secs": 120,
+  "enabled": true,
+  "ai": {
+    "callable_by_ai": true,
+    "uses_ai_internally": false,
+    "safety": "standard",
+    "origins": ["external-content"]
+  }
+}
