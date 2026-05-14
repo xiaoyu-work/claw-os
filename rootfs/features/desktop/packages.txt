@@ -137,3 +137,12 @@ plymouth-themes
 # APIs; Thunderbird is the GUI side users open to see their inbox.
 # Bound to x-scheme-handler/mailto in overlay/etc/xdg/mimeapps.list.
 thunderbird
+
+# --- Local document full-text search (apps/docs) ---
+# Recoll provides the Xapian-backed full-text index and the recollq /
+# recollindex / recoll CLIs. apps/docs wraps recollq + recollindex to
+# expose docs.search / docs.index / docs.status / docs.configure to the
+# AI agent. Defaults to indexing ~/Documents ~/Desktop ~/Downloads.
+# Pulls in poppler-utils, antiword, unrtf, etc. as recommends for the
+# PDF / Office / RTF format filters.
+recoll
