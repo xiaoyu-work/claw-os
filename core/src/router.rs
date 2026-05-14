@@ -122,6 +122,14 @@ fn dispatch_app(args: &[String]) -> Result<Option<String>, String> {
         return lint_apps(&discovered, target);
     }
 
+    // Special: `cos app consent <sub> [<name>] [...]` — review / grant /
+    // revoke a user's explicit approval of an App's manifest AI policy.
+    // Lives in the `app` namespace because it is an inherently per-app
+    // user decision.
+    if app_name == "consent" {
+        return consent_cmd(&args[1..], &discovered);
+    }
+
     // Check if it's a known app
     if !discovered.contains_key(app_name.as_str()) {
         let names: Vec<&String> = discovered.keys().collect();
@@ -276,6 +284,187 @@ fn walk_py(dir: &Path, f: &mut dyn FnMut(&Path, &str)) {
                 f(&p, &contents);
             }
         }
+    }
+}
+
+/// `cos app consent <sub> [...]` — review / grant / revoke the user's
+/// explicit approval of an App's manifest AI policy. The gate refuses
+/// every AI call from an App that lacks a fresh consent record; this
+/// CLI is how the user produces, inspects, and revokes those records.
+///
+/// Subcommands:
+///   * `list`                       — every installed AI-using app +
+///                                    its consent status.
+///   * `show <app>`                 — print the stored consent JSON
+///                                    (or `present: false`).
+///   * `path <app>`                 — print the on-disk file path.
+///   * `grant <app> [--yes]`        — review the manifest's AI block
+///                                    and persist the approval.
+///                                    Interactive y/N by default;
+///                                    `--yes` skips the prompt.
+///   * `revoke <app>`               — delete the consent record.
+fn consent_cmd(
+    args: &[String],
+    discovered: &std::collections::BTreeMap<String, apps::App>,
+) -> Result<Option<String>, String> {
+    use crate::ai::consent;
+
+    let sub = args.first().map(String::as_str).unwrap_or("");
+    match sub {
+        "" | "--help" | "-h" | "help" => Ok(Some(
+            json!({
+                "app": "consent",
+                "description": "Approve, inspect, or revoke an App's AI policy.",
+                "subcommands": {
+                    "list":    "cos app consent list",
+                    "show":    "cos app consent show <app>",
+                    "path":    "cos app consent path <app>",
+                    "grant":   "cos app consent grant <app> [--yes]",
+                    "revoke":  "cos app consent revoke <app>",
+                },
+                "hint": "An App with an `ai` block in its manifest cannot make AI calls until you have granted consent.",
+            })
+            .to_string(),
+        )),
+
+        "list" => {
+            let mut rows = Vec::new();
+            for (id, app) in discovered {
+                let policy = match &app.manifest.ai {
+                    Some(p) => p,
+                    None => continue,
+                };
+                let stored = consent::load(id).map_err(|e| e)?;
+                let (status, changed): (&str, Vec<String>) = match &stored {
+                    None => ("missing", Vec::new()),
+                    Some(c) => match consent::freshness(policy, c) {
+                        consent::Freshness::Fresh => ("fresh", Vec::new()),
+                        consent::Freshness::Stale { changed } => ("stale", changed),
+                    },
+                };
+                let mut row = json!({
+                    "app": id,
+                    "status": status,
+                    "path": consent::consent_path(id).display().to_string(),
+                });
+                if let Some(c) = &stored {
+                    row["approved_at"] = json!(c.approved_at);
+                }
+                if !changed.is_empty() {
+                    row["changed"] = json!(changed);
+                }
+                rows.push(row);
+            }
+            Ok(Some(
+                json!({
+                    "ai_apps": rows.len(),
+                    "consents": rows,
+                    "hint": "Run `cos app consent grant <app>` for any 'missing' or 'stale' entry.",
+                })
+                .to_string(),
+            ))
+        }
+
+        "show" => {
+            let app = args
+                .get(1)
+                .ok_or_else(|| "usage: cos app consent show <app>".to_string())?;
+            let stored = consent::load(app).map_err(|e| e)?;
+            Ok(Some(
+                json!({
+                    "app": app,
+                    "path": consent::consent_path(app).display().to_string(),
+                    "present": stored.is_some(),
+                    "consent": stored,
+                })
+                .to_string(),
+            ))
+        }
+
+        "path" => {
+            let app = args
+                .get(1)
+                .ok_or_else(|| "usage: cos app consent path <app>".to_string())?;
+            Ok(Some(
+                json!({
+                    "app": app,
+                    "path": consent::consent_path(app).display().to_string(),
+                })
+                .to_string(),
+            ))
+        }
+
+        "grant" => {
+            let app_id = args
+                .get(1)
+                .ok_or_else(|| "usage: cos app consent grant <app> [--yes]".to_string())?;
+            let auto = args.iter().skip(2).any(|a| a == "--yes");
+
+            let installed = discovered
+                .get(app_id)
+                .ok_or_else(|| format!("unknown app: {app_id}"))?;
+            let policy = installed.manifest.ai.as_ref().ok_or_else(|| {
+                format!("app `{app_id}` has no `ai` block in its manifest — nothing to consent to")
+            })?;
+
+            let review = consent::format_for_review(app_id, policy);
+            if !auto {
+                use std::io::{BufRead, Write};
+                let mut stderr = std::io::stderr().lock();
+                let _ = writeln!(stderr, "{review}");
+                let _ = write!(stderr, "Approve this AI policy? [y/N] ");
+                let _ = stderr.flush();
+                let mut line = String::new();
+                std::io::stdin()
+                    .lock()
+                    .read_line(&mut line)
+                    .map_err(|e| format!("read stdin: {e}"))?;
+                let answer = line.trim().to_ascii_lowercase();
+                if answer != "y" && answer != "yes" {
+                    return Ok(Some(
+                        json!({
+                            "app": app_id,
+                            "granted": false,
+                            "reason": "user_declined",
+                            "path": consent::consent_path(app_id).display().to_string(),
+                        })
+                        .to_string(),
+                    ));
+                }
+            }
+
+            let record = consent::Consent::approve(policy.clone());
+            consent::save(app_id, &record)?;
+            Ok(Some(
+                json!({
+                    "app": app_id,
+                    "granted": true,
+                    "approved_at": record.approved_at,
+                    "path": consent::consent_path(app_id).display().to_string(),
+                    "policy": record.policy,
+                })
+                .to_string(),
+            ))
+        }
+
+        "revoke" => {
+            let app = args
+                .get(1)
+                .ok_or_else(|| "usage: cos app consent revoke <app>".to_string())?;
+            let removed = consent::delete(app)?;
+            Ok(Some(
+                json!({
+                    "app": app,
+                    "revoked": removed,
+                    "path": consent::consent_path(app).display().to_string(),
+                })
+                .to_string(),
+            ))
+        }
+
+        other => Err(format!(
+            "unknown consent subcommand: {other}. try: list | show | path | grant | revoke"
+        )),
     }
 }
 
@@ -1675,5 +1864,169 @@ mod tests {
         // is still wired up by reaching the unknown-command path.
         let err = crate::browser::run("__nope__", &[]).unwrap_err();
         assert!(err.contains("unknown"));
+    }
+
+    // -----------------------------------------------------------------
+    // `cos app consent` CLI surface — see consent_cmd() above.
+    // -----------------------------------------------------------------
+
+    fn empty_apps() -> std::collections::BTreeMap<String, apps::App> {
+        std::collections::BTreeMap::new()
+    }
+
+    #[test]
+    fn consent_help_lists_subcommands() {
+        let v = parse(consent_cmd(&[], &empty_apps()).unwrap());
+        assert_eq!(v["app"], "consent");
+        let subs = v["subcommands"].as_object().unwrap();
+        for k in ["list", "show", "path", "grant", "revoke"] {
+            assert!(subs.contains_key(k), "missing subcommand {k}");
+        }
+    }
+
+    #[test]
+    fn consent_path_returns_user_config_path() {
+        let v = parse(
+            consent_cmd(&["path".into(), "myapp".into()], &empty_apps()).unwrap(),
+        );
+        assert_eq!(v["app"], "myapp");
+        let p = v["path"].as_str().unwrap();
+        assert!(p.contains("consents"));
+        assert!(p.ends_with("myapp.json"));
+    }
+
+    #[test]
+    fn consent_show_missing_file_reports_absent() {
+        let tmp = std::env::temp_dir().join(format!(
+            "cos-consent-router-show-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let prev = std::env::var_os("COS_USER_CONFIG_DIR");
+        std::env::set_var("COS_USER_CONFIG_DIR", &tmp);
+        let v = parse(
+            consent_cmd(
+                &["show".into(), "never-granted".into()],
+                &empty_apps(),
+            )
+            .unwrap(),
+        );
+        match prev {
+            Some(x) => std::env::set_var("COS_USER_CONFIG_DIR", x),
+            None => std::env::remove_var("COS_USER_CONFIG_DIR"),
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+        assert_eq!(v["present"], false);
+        assert!(v["consent"].is_null());
+    }
+
+    #[test]
+    fn consent_grant_unknown_app_errors() {
+        let err = consent_cmd(
+            &["grant".into(), "ghost".into(), "--yes".into()],
+            &empty_apps(),
+        )
+        .unwrap_err();
+        assert!(err.contains("unknown app"));
+        assert!(err.contains("ghost"));
+    }
+
+    #[test]
+    fn consent_revoke_missing_file_is_noop() {
+        let tmp = std::env::temp_dir().join(format!(
+            "cos-consent-router-revoke-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let prev = std::env::var_os("COS_USER_CONFIG_DIR");
+        std::env::set_var("COS_USER_CONFIG_DIR", &tmp);
+        let v = parse(
+            consent_cmd(
+                &["revoke".into(), "never-granted".into()],
+                &empty_apps(),
+            )
+            .unwrap(),
+        );
+        match prev {
+            Some(x) => std::env::set_var("COS_USER_CONFIG_DIR", x),
+            None => std::env::remove_var("COS_USER_CONFIG_DIR"),
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+        assert_eq!(v["revoked"], false);
+    }
+
+    #[test]
+    fn consent_grant_yes_writes_record_and_show_reads_it_back() {
+        use crate::caps::manifest::{
+            AiBudget, AiPolicy, AiSafety, Manifest, PromptOrigin, Runtime,
+        };
+        use crate::i18n::LocalizedText;
+        use std::collections::BTreeMap;
+
+        let tmp = std::env::temp_dir().join(format!(
+            "cos-consent-router-grant-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let prev = std::env::var_os("COS_USER_CONFIG_DIR");
+        std::env::set_var("COS_USER_CONFIG_DIR", &tmp);
+
+        let manifest = Manifest {
+            id: "demo".into(),
+            version: "0.0.1".into(),
+            name: LocalizedText::en("Demo"),
+            summary: LocalizedText::default(),
+            icon: None,
+            runtime: Runtime::default(),
+            entry: None,
+            operations: BTreeMap::new(),
+            ai: Some(AiPolicy {
+                budget: AiBudget { monthly_units: 1000 },
+                safety: AiSafety::Standard,
+                origins: vec![PromptOrigin::Trusted],
+            }),
+            dependencies: serde_json::Value::Null,
+        };
+        let mut discovered = std::collections::BTreeMap::new();
+        discovered.insert(
+            "demo".to_string(),
+            apps::App {
+                manifest,
+                dir: tmp.join("does-not-matter"),
+            },
+        );
+
+        let granted = parse(
+            consent_cmd(
+                &["grant".into(), "demo".into(), "--yes".into()],
+                &discovered,
+            )
+            .unwrap(),
+        );
+        assert_eq!(granted["granted"], true);
+        assert_eq!(granted["app"], "demo");
+
+        let shown = parse(
+            consent_cmd(&["show".into(), "demo".into()], &discovered).unwrap(),
+        );
+        assert_eq!(shown["present"], true);
+        assert_eq!(shown["consent"]["policy"]["budget"]["monthly_units"], 1000);
+
+        let listed = parse(consent_cmd(&["list".into()], &discovered).unwrap());
+        let rows = listed["consents"].as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["app"], "demo");
+        assert_eq!(rows[0]["status"], "fresh");
+
+        let revoked = parse(
+            consent_cmd(&["revoke".into(), "demo".into()], &discovered).unwrap(),
+        );
+        assert_eq!(revoked["revoked"], true);
+
+        match prev {
+            Some(x) => std::env::set_var("COS_USER_CONFIG_DIR", x),
+            None => std::env::remove_var("COS_USER_CONFIG_DIR"),
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

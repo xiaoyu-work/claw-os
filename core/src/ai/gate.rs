@@ -18,6 +18,11 @@
 //!          │                          │      ($HOME/.config/cos/apps/<id>.json)
 //!          │                          │
 //!          │                          ▼
+//!          │                  user consent (snapshot of manifest AI block)
+//!          │                          │   missing  → ConsentRequired
+//!          │                          │   drifted  → ConsentStale
+//!          │                          │   ($HOME/.config/cos/consents/<id>.json)
+//!          │                          ▼
 //!          │                  OS-level model from agent.toml
 //!          │                          │
 //!          │                          ▼
@@ -48,6 +53,15 @@
 //! lower the budget, raise the safety profile, shrink the origin
 //! allowlist, or kill-switch the App entirely. See
 //! [`crate::ai::overrides`] for the merge semantics.
+//!
+//! Above and orthogonal to overrides, the kernel requires a fresh
+//! [`crate::ai::consent`] record — a JSON snapshot of the App's
+//! manifest AI block that the user has explicitly approved (via
+//! `cos app consent grant <id>` or the equivalent UI). A missing
+//! record denies with `consent_required`; a drifted snapshot denies
+//! with `consent_stale`. Consent tracks the manifest, not the
+//! override, so a developer pushing a looser update always forces a
+//! re-prompt regardless of the user's local tightening.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -71,6 +85,7 @@ use crate::caps::manifest::{AiSafety, PromptOrigin};
 use crate::config;
 
 use super::budget::{BudgetError, Store};
+use super::consent;
 use super::overrides;
 
 // ---------------------------------------------------------------------------
@@ -341,6 +356,21 @@ pub enum AiError {
     #[error("user override for app `{app}` is malformed: {detail}")]
     BadOverride { app: String, detail: String },
 
+    #[error(
+        "app `{app}` has not been approved yet — run `cos app consent grant {app}` \
+         to review its AI policy and approve"
+    )]
+    ConsentRequired { app: String },
+
+    #[error(
+        "consent for app `{app}` is stale (changed: {changed:?}) — \
+         run `cos app consent grant {app}` to review the new AI policy and re-approve"
+    )]
+    ConsentStale { app: String, changed: Vec<String> },
+
+    #[error("stored consent for app `{app}` is malformed: {detail}")]
+    BadConsent { app: String, detail: String },
+
     #[error("invalid prompt origin `{0}` — try trusted, user-input, external-content")]
     BadOrigin(String),
 
@@ -463,6 +493,9 @@ fn denial_reason_token(err: &AiError) -> &'static str {
         AiError::NoAiPolicy { .. } => "no_ai_policy",
         AiError::AppDisabled(_) => "app_disabled",
         AiError::BadOverride { .. } => "bad_override",
+        AiError::ConsentRequired { .. } => "consent_required",
+        AiError::ConsentStale { .. } => "consent_stale",
+        AiError::BadConsent { .. } => "bad_consent",
         AiError::BadOrigin(_) => "bad_origin",
         AiError::OriginNotAllowed { .. } => "origin_not_allowed",
         AiError::ModalityConflict(_) => "modality_conflict",
@@ -505,6 +538,27 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
         }
     }
     let policy = overrides::apply_to_policy(&manifest_policy, user_override.as_ref());
+
+    // 1b. Require fresh user consent. The user must have explicitly
+    //     approved the App's AI ask — consent tracks the **manifest**
+    //     policy (not the override), so a developer pushing a looser
+    //     manifest update forces a re-prompt even if the user's
+    //     override keeps the effective policy tight.
+    let stored_consent = consent::load(&req.app_id).map_err(|detail| AiError::BadConsent {
+        app: req.app_id.clone(),
+        detail,
+    })?;
+    let stored_consent = stored_consent.ok_or_else(|| AiError::ConsentRequired {
+        app: req.app_id.clone(),
+    })?;
+    if let consent::Freshness::Stale { changed } =
+        consent::freshness(&manifest_policy, &stored_consent)
+    {
+        return Err(AiError::ConsentStale {
+            app: req.app_id.clone(),
+            changed,
+        });
+    }
 
     // 2. Derive the modality from the request shape. This is the
     //    "what is the caller trying to do" decision; everything below

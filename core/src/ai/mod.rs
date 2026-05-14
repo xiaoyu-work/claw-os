@@ -7,14 +7,21 @@
 //!      (e.g. `ai.chat`) at a `name` scope covering the requested
 //!      model.
 //!   2. Manifest policy — the app's manifest must declare an `ai`
-//!      block; the requested model must match one of its globs, and
-//!      the prompt's declared `origin` must be in its origin list.
-//!   3. Budget — the per-app monthly token cap. Reserved
-//!      pre-call and finalised after the provider returns; over-cap
-//!      requests are hard-denied.
-//!   4. Safety — `Strict` redacts secrets in the prompt before
+//!      block; the prompt's declared `origin` must be in its origin
+//!      list. The kernel-owned model is then layered on top.
+//!   3. User override — a per-app file under `$HOME/.config/cos/apps/`
+//!      may **tighten** (never loosen) the manifest's budget, safety,
+//!      or origin list, or kill-switch the app entirely.
+//!   4. Consent — the user must have approved a snapshot of the
+//!      manifest's AI block (`$HOME/.config/cos/consents/<id>.json`).
+//!      Missing or drifted snapshots deny with `consent_required` /
+//!      `consent_stale`.
+//!   5. Budget — the per-app monthly token cap. Reserved pre-call
+//!      and finalised after the provider returns; over-cap requests
+//!      are hard-denied.
+//!   6. Safety — `Strict` redacts secrets in the prompt before
 //!      sending it upstream. `Minimal` is audit-only.
-//!   5. Audit — every accepted and denied call is logged.
+//!   7. Audit — every accepted and denied call is logged.
 //!
 //! Apps **never** talk to providers directly. The frontend desktop
 //! talks to apps; apps shell out to `cos agent chat --app <id>`;
@@ -35,8 +42,11 @@
 //! There is no `cos ai …` namespace. The user-facing CLI lives under
 //! [`crate::agent`]: `cos agent chat --app <id> --prompt …` for the
 //! one-shot app-gated call, and `cos agent budget …` for the per-app
-//! budget ledger. The helpers below are kernel-internal.
+//! budget ledger. Consent management lives under `cos app consent`
+//! since it is a per-app user decision rather than an agent runtime
+//! concern. The helpers below are kernel-internal.
 
 pub mod budget;
+pub mod consent;
 pub mod gate;
 pub mod overrides;

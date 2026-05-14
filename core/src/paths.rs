@@ -88,6 +88,18 @@ pub fn user_app_override_path(app_id: &str) -> PathBuf {
     user_config_dir().join("apps").join(format!("{app_id}.json"))
 }
 
+/// Per-app user consent file:
+/// `$HOME/.config/cos/consents/<app_id>.json`. Records the user's
+/// explicit approval of an App's declared AI policy, snapshotted at
+/// the moment of approval. Missing means "the user has never seen the
+/// app's AI block", which the gate treats as `consent_required`. See
+/// [`crate::ai::consent`] for the schema and freshness semantics.
+pub fn user_app_consent_path(app_id: &str) -> PathBuf {
+    user_config_dir()
+        .join("consents")
+        .join(format!("{app_id}.json"))
+}
+
 pub fn log_dir() -> PathBuf {
     from_env_or_default("COS_LOG_DIR", "/var/log/cos", "logs")
 }

@@ -134,7 +134,7 @@ pub struct Manifest {
 /// *capability* (which verbs they need), *budget* (how many tokens
 /// they may spend), *safety* profile, and *origin* — never which model
 /// to talk to.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiPolicy {
     /// How much the app may spend in a single billing period.
     pub budget: AiBudget,
@@ -156,7 +156,7 @@ pub struct AiPolicy {
 }
 
 /// Per-period AI token cap. Zero disables enforcement.
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiBudget {
     /// Abstract billing units (1 chat token = 1 unit, 1 image = 1000
     /// units, 1s TTS = 50 units, etc.). The kernel hard-denies any
