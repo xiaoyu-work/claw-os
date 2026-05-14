@@ -9,6 +9,15 @@
   },
   "icon": "✉️",
   "runtime": "python",
+  "ai": {
+    "budget": {
+      "monthly_units": 100000,
+      "monthly_usd": 1.00
+    },
+    "models": ["claude-*", "gpt-4o*", "mock-model"],
+    "safety": "standard",
+    "origins": ["trusted"]
+  },
   "operations": {
     "send": {
       "label": { "en": "Send an email (--to, --subject, --body, --provider smtp|gmail|outlook)" },
@@ -67,6 +76,19 @@
           "verb": "secret.read",
           "scope": { "kind": "wild" },
           "why": { "en": "Read the provider OAuth token needed to authenticate." }
+        }
+      ]
+    },
+    "draft": {
+      "label": { "en": "Draft an email reply via the AI gate (--context, --style formal|casual|short). Does NOT send." },
+      "needs": [
+        {
+          "verb": "ai.chat",
+          "scope": {
+            "kind": "fixed",
+            "scope": { "kind": "name", "value": "claude-*" }
+          },
+          "why": { "en": "Send your context to a model so it can draft an email reply for you." }
         }
       ]
     }

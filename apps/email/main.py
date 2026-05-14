@@ -10,7 +10,7 @@ import urllib.request
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
-from _lib import policy
+from _lib import ai, policy
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +81,36 @@ def _build_read_parser():
     p.add_argument("--id", required=True, dest="message_id")
     p.add_argument("--provider", default=None, choices=["gmail", "outlook"])
     return p
+
+
+def _build_draft_parser():
+    p = argparse.ArgumentParser(prog="cos email draft", add_help=False)
+    p.add_argument("--context", required=True)
+    p.add_argument(
+        "--style",
+        default="formal",
+        choices=["formal", "casual", "short"],
+    )
+    return p
+
+
+_DRAFT_SYSTEMS = {
+    "formal": (
+        "Draft a polite, professional email reply based on the user's context. "
+        "Use a courteous tone, complete sentences, and a clear sign-off. "
+        "Return only the email body — no preamble, no subject line."
+    ),
+    "casual": (
+        "Draft a friendly, conversational email reply based on the user's context. "
+        "Keep it warm and approachable but still clear. "
+        "Return only the email body — no preamble, no subject line."
+    ),
+    "short": (
+        "Draft a very short, to-the-point email reply based on the user's context. "
+        "Aim for 2-3 sentences maximum. "
+        "Return only the email body — no preamble, no subject line."
+    ),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -571,6 +601,66 @@ def cmd_read(args):
         return {"error": f"unknown provider: {provider}"}
 
 
+def cmd_draft(args):
+    """Draft an email reply via the AI gate. Pure text — does NOT send."""
+    parser = _build_draft_parser()
+    try:
+        opts = parser.parse_args(args)
+    except SystemExit:
+        return {"error": "usage: cos email draft --context <text> [--style formal|casual|short]"}
+
+    if not opts.context.strip():
+        return {"error": "--context must be non-empty"}
+
+    # Coarse-grained capability check — fail fast on a denied agent.
+    policy.require("ai.chat", name="claude-*")
+
+    system_prompt = _DRAFT_SYSTEMS.get(opts.style, _DRAFT_SYSTEMS["formal"])
+
+    try:
+        response = ai.chat(
+            prompt=opts.context,
+            origin="trusted",
+            verb="ai.chat",
+            system=system_prompt,
+            max_units=3000,
+        )
+    except ai.AiBudgetExceeded as exc:
+        return {"error": "AI budget exceeded for this app", "detail": exc.payload}
+    except ai.AiModelNotAllowed as exc:
+        return {"error": "model not allowed", "detail": exc.payload}
+    except ai.AiSafetyViolation as exc:
+        return {"error": "safety violation", "detail": exc.payload}
+    except ai.AiDenied as exc:
+        return {"error": "AI call denied", "detail": exc.payload}
+    except ai.AiUnavailable as exc:
+        return {"error": f"AI unavailable: {exc}"}
+    except ai.AiError as exc:
+        return {"error": str(exc)}
+
+    return {
+        "draft": response.text,
+        "style": opts.style,
+        "model": response.model,
+        "provider": response.provider,
+        "usage": {
+            "input_tokens": response.usage.input_tokens,
+            "output_tokens": response.usage.output_tokens,
+            "units": response.usage.units,
+            "usd": response.usage.usd,
+        },
+        "budget": {
+            "period": response.budget.period,
+            "units_used": response.budget.units_used,
+            "units_cap": response.budget.units_cap,
+        },
+        "review": {
+            "safety": response.review.safety,
+            "prompt_redacted": response.review.prompt_redacted,
+        },
+    }
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -614,6 +704,14 @@ def _schema():
             ],
             "example": "cos app email read --id abc123def",
         },
+        "draft": {
+            "description": "Draft an email reply via the AI gate. Pure text generation — does NOT send.",
+            "parameters": [
+                {"name": "--context", "type": "string", "required": True, "description": "The email thread or instruction to base the draft on", "kind": "flag"},
+                {"name": "--style", "type": "string", "required": False, "description": "Tone of the reply: formal, casual, or short", "kind": "flag", "default": "formal"},
+            ],
+            "example": "cos app email draft --context 'Thanks for the update — can you confirm the deadline?' --style formal",
+        },
     }
 
 
@@ -626,6 +724,7 @@ def run(command, args):
         "search": cmd_search,
         "list": cmd_list,
         "read": cmd_read,
+        "draft": cmd_draft,
     }
     handler = handlers.get(command)
     if handler is None:
