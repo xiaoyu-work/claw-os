@@ -21,28 +21,101 @@ use std::path::{Path, PathBuf};
 use crate::agent::llm;
 
 pub fn run(args: &[String]) -> Result<Value, String> {
-    let sub = args.first().map(|s| s.as_str()).unwrap_or("");
+    // Parse: optional --no-verify / --verify-only / --status / --reset / --help.
+    // The wizard is the default (no positional/subcommand).
+    let mut verify_after = true;
+    let mut explicit_verify = false;
+    let mut sub: Option<&str> = None;
+
+    for a in args {
+        match a.as_str() {
+            "--no-verify" => verify_after = false,
+            "--verify" => verify_after = true,
+            "--verify-only" => explicit_verify = true,
+            "--status" | "status" if sub.is_none() => sub = Some("status"),
+            "--reset" | "reset" if sub.is_none() => sub = Some("reset"),
+            "-h" | "--help" if sub.is_none() => sub = Some("help"),
+            other => {
+                if sub.is_none() && !other.starts_with('-') {
+                    return Err(format!(
+                        "unknown setup subcommand: {other}. try: (no args for wizard) | --status | --reset | --verify-only | --no-verify"
+                    ));
+                } else if other.starts_with('-') {
+                    return Err(format!(
+                        "unknown setup flag: {other}. try: --no-verify | --verify-only | --status | --reset"
+                    ));
+                }
+            }
+        }
+    }
+
+    if explicit_verify {
+        return verify_cmd();
+    }
     match sub {
-        "--status" | "status" => status_cmd(),
-        "--reset" | "reset" => reset_cmd(),
-        "-h" | "--help" => Ok(help_doc()),
-        "" => wizard_cmd(),
-        other => Err(format!(
-            "unknown setup subcommand: {other}. try: (no args for wizard) | --status | --reset"
-        )),
+        Some("status") => status_cmd(),
+        Some("reset") => reset_cmd(),
+        Some("help") => Ok(help_doc()),
+        _ => wizard_cmd(verify_after),
     }
 }
 
 fn help_doc() -> Value {
     json!({
         "command": "cos agent setup",
-        "summary": "First-run wizard: pick an LLM provider, a model, and store an API key.",
+        "summary": "First-run wizard: pick an LLM provider, a model, store an API key, and verify it works.",
         "subcommands": {
-            "(no args)": "Run the interactive wizard (requires TTY).",
-            "--status":  "Show whether the agent is configured to talk to a real provider.",
-            "--reset":   "Revert the agent block of the config to the built-in mock defaults.",
+            "(no args)":     "Run the interactive wizard (requires TTY). After saving config, probes the provider to confirm the key actually works.",
+            "--no-verify":   "Skip the live provider probe at the end of the wizard.",
+            "--verify-only": "Skip the wizard; just probe the currently configured provider.",
+            "--status":      "Show whether the agent is configured to talk to a real provider.",
+            "--reset":       "Revert the agent block of the config to the built-in mock defaults.",
         },
     })
+}
+
+/// Probe the currently configured provider without re-running the
+/// wizard. Useful after editing `/etc/cos/config.json` by hand or
+/// rotating an API key.
+fn verify_cmd() -> Result<Value, String> {
+    let cfg = &crate::config::get().agent;
+    if let Err(reason) = is_ready(cfg) {
+        return Ok(json!({
+            "ok": false,
+            "attempted": false,
+            "reason": reason,
+            "hint": "run `cos agent setup` to configure a provider first",
+        }));
+    }
+    if !provider_needs_credential(&cfg.provider) {
+        return Ok(json!({
+            "ok": true,
+            "attempted": false,
+            "reason": format!("provider `{}` does not need credentials; skipping probe", cfg.provider),
+            "provider": cfg.provider,
+            "model": cfg.model,
+        }));
+    }
+    let mut e = std::io::stderr();
+    let _ = writeln!(e, "probing {} ({}) — up to 30s...", cfg.provider, cfg.model);
+    let verdict = super::run_active_provider_probe(&cfg.provider, cfg, 30);
+    let ok = verdict.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+    if ok {
+        let _ = writeln!(e, "✓ probe succeeded");
+    } else {
+        let _ = writeln!(e, "✗ probe failed");
+        if let Some(msg) = verdict.get("error_message").and_then(|v| v.as_str()) {
+            let _ = writeln!(e, "  {msg}");
+        }
+        let _ = writeln!(e, "  hint: re-run `cos agent setup` or fix the credential, then `cos agent setup --verify-only`");
+    }
+    Ok(json!({
+        "ok": ok,
+        "attempted": true,
+        "provider": cfg.provider,
+        "model": cfg.model,
+        "probe": verdict,
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -160,7 +233,7 @@ fn reset_cmd() -> Result<Value, String> {
     }))
 }
 
-fn wizard_cmd() -> Result<Value, String> {
+fn wizard_cmd(verify_after: bool) -> Result<Value, String> {
     if !std::io::stdin().is_terminal() {
         return Err(json!({
             "error": "cos agent setup requires an interactive TTY",
@@ -304,6 +377,59 @@ fn wizard_cmd() -> Result<Value, String> {
 
     let _ = writeln!(e);
     let _ = writeln!(e, "✓ config written to {}", path.display());
+
+    // ---- Step 5: optionally verify the key actually works ---------------
+    //
+    // We re-read the config so the probe sees exactly what was persisted
+    // (env / credential resolution happens through the same code path
+    // every other agent command uses), and we explicitly skip the probe
+    // for providers that don't talk to an upstream over the network.
+    let mut probe_value: Value = Value::Null;
+    let mut probe_ok: Option<bool> = None;
+    let needs_probe = verify_after && provider_needs_credential(&provider);
+    if !verify_after {
+        let _ = writeln!(e);
+        let _ = writeln!(
+            e,
+            "(skipping live probe; re-run with `cos agent setup --verify-only` to confirm later)"
+        );
+    } else if !needs_probe {
+        let _ = writeln!(e);
+        let _ = writeln!(
+            e,
+            "(provider `{provider}` does not need a credential probe)"
+        );
+    } else {
+        let _ = writeln!(e);
+        let _ = writeln!(e, "verifying connectivity to {provider} ({model}) — up to 30s...");
+        // The global config is cached at first access (OnceLock) so it
+        // does not reflect what we just persisted. Construct a probe
+        // config in-memory by cloning the cached one and overriding the
+        // fields the wizard just wrote — this matches exactly what
+        // `cos agent {ask,chat}` will see on next process start.
+        let mut probe_cfg = crate::config::get().agent.clone();
+        probe_cfg.provider = provider.clone();
+        probe_cfg.model = model.clone();
+        probe_cfg.api_key_credential = credential_name.clone();
+        probe_cfg.api_key_env = credential_env.clone();
+        let verdict = super::run_active_provider_probe(&provider, &probe_cfg, 30);
+        let ok = verdict.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+        if ok {
+            let _ = writeln!(e, "✓ provider responded successfully");
+        } else {
+            let _ = writeln!(e, "✗ probe failed");
+            if let Some(msg) = verdict.get("error_message").and_then(|v| v.as_str()) {
+                let _ = writeln!(e, "  {msg}");
+            }
+            let _ = writeln!(
+                e,
+                "  hint: fix the credential, then run `cos agent setup --verify-only` to retest (no re-wizard)."
+            );
+        }
+        probe_ok = Some(ok);
+        probe_value = verdict;
+    }
+
     let _ = writeln!(e);
     let _ = writeln!(e, "Done. Try: cos agent chat");
 
@@ -315,6 +441,8 @@ fn wizard_cmd() -> Result<Value, String> {
         "api_key_env": credential_env,
         "config_path": path.display().to_string(),
         "next": "cos agent chat",
+        "verified": probe_ok,
+        "probe": probe_value,
     }))
 }
 
@@ -441,8 +569,14 @@ mod tests {
 
     #[test]
     fn unknown_subcommand_is_rejected() {
+        let err = run(&["bogus".into()]).unwrap_err();
+        assert!(err.contains("unknown setup subcommand"), "got {err}");
+    }
+
+    #[test]
+    fn unknown_flag_is_rejected() {
         let err = run(&["--bogus".into()]).unwrap_err();
-        assert!(err.contains("unknown setup subcommand"));
+        assert!(err.contains("unknown setup flag"), "got {err}");
     }
 
     #[test]
