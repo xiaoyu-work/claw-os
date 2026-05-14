@@ -52,7 +52,6 @@ def _cmd_run(args):
         response = ai.chat(
             prompt=text,
             origin="external-content",
-            verb="ai.chat.untrusted",
             system=SYSTEM_PROMPT,
             max_units=4000,
         )

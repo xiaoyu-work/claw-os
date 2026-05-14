@@ -377,6 +377,7 @@ mod tests {
             decision: "allowed".to_string(),
             denial_reason: None,
             app_id: None,
+            verb: None,
         });
         assert_eq!(b.average_duration_ms(), Some(200));
         let empty = UsageBucket::default();

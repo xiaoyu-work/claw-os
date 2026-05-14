@@ -553,6 +553,22 @@ pub const CATALOG: &[CapMeta] = &[
         Risk::High,
     ),
     CapMeta::new(
+        Verb::AI_VIDEO_GENERATE,
+        ScopeKind::Name,
+        LocalizedStr::new("Generate videos with AI"),
+        LocalizedStr::new("Create short videos from a text prompt. Subject to budget."),
+        "🎬",
+        Risk::Medium,
+    ),
+    CapMeta::new(
+        Verb::AI_VIDEO_ANALYZE,
+        ScopeKind::Name,
+        LocalizedStr::new("Describe videos with AI"),
+        LocalizedStr::new("Send a video clip to a vision model and read back a description."),
+        "📹",
+        Risk::High,
+    ),
+    CapMeta::new(
         Verb::AI_BYPASS,
         ScopeKind::None,
         LocalizedStr::new("Skip an AI safety check (owner only)"),

@@ -1,13 +1,27 @@
 """AI helper for Claw OS Python apps.
 
 Every Python app that needs to talk to a model (LLM, embedding,
-image-gen, TTS, STT, vision) must go through this helper. The helper
-shells out to ``cos agent chat --app <id>`` (or its sibling commands),
-which is the kernel's authoritative entry point for AI requests. The
-kernel applies capability checks, the app's manifest ``ai`` policy
-(model allowlist, prompt-origin allowlist), per-month budget
-enforcement, the safety pipeline, and audit before letting any model
-see the prompt.
+image-gen, TTS, STT, vision, video) must go through this helper. The
+helper shells out to ``cos agent chat --app <id>`` — the single,
+authoritative entry point for AI requests of every modality. The
+kernel derives the modality (and the underlying caps verb) from the
+shape of the request, then runs capability check, model allowlist,
+prompt-origin allowlist, per-month budget, the safety pipeline, and
+audit before letting any model see the prompt.
+
+Apps **never** name a verb. They describe what they want and the
+gate picks the verb. The helpers here are the supported Python
+surface for each modality:
+
+    ai.chat(prompt, ...)                  → ai.chat / ai.chat.untrusted
+    ai.embed(prompt, ...)                 → ai.embed
+    ai.image_generate(prompt, output=..)  → ai.image.generate
+    ai.image_analyze(image=...)           → ai.image.analyze
+    ai.vision_analyze(prompt, image=..)   → ai.vision.analyze
+    ai.audio_tts(prompt, output=...)      → ai.audio.tts
+    ai.audio_stt(audio=...)               → ai.audio.stt
+    ai.video_generate(prompt, output=...) → ai.video.generate
+    ai.video_analyze(video=..., prompt=)  → ai.video.analyze
 
 Typical usage::
 
@@ -17,7 +31,6 @@ Typical usage::
         result = ai.chat(
             prompt=args["body"],
             origin="external-content",   # text came from outside
-            verb="ai.chat.untrusted",
             max_units=2000,
         )
         return {"summary": result.text, "usage": result.usage}
@@ -43,7 +56,7 @@ import os
 import shutil
 import subprocess
 from dataclasses import dataclass, field
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +130,9 @@ class AiResponse:
     text: str
     model: str
     provider: str
+    verb: str = ""
+    embedding: List[float] = field(default_factory=list)
+    output_path: Optional[str] = None
     usage: Usage = field(default_factory=Usage)
     budget: Budget = field(default_factory=Budget)
     review: Review = field(default_factory=Review)
@@ -132,7 +148,6 @@ def chat(
     prompt: str,
     *,
     origin: str = "trusted",
-    verb: str = "ai.chat",
     model: Optional[str] = None,
     max_units: Optional[int] = None,
     system: Optional[str] = None,
@@ -140,52 +155,203 @@ def chat(
 ) -> AiResponse:
     """Send a single-shot chat completion through the kernel's AI gate.
 
-    Parameters mirror ``cos agent chat --app <id>`` exactly. ``origin``
-    defaults to ``"trusted"`` — apps that feed in third-party text
-    (emails, web pages, file contents, another agent's output) MUST
-    pass ``"external-content"`` and use ``verb="ai.chat.untrusted"``
+    The gate derives the verb (``ai.chat`` or ``ai.chat.untrusted``)
+    from ``origin``: pass ``"external-content"`` for any third-party
+    text (emails, web pages, file contents, another agent's output)
     so the strict safety pipeline kicks in.
 
     Returns an :class:`AiResponse`. Raises :class:`AiBudgetExceeded`,
     :class:`AiModelNotAllowed`, :class:`AiSafetyViolation`,
     :class:`AiDenied`, or :class:`AiUnavailable` on failure.
     """
-    if not prompt.strip():
+    if not prompt or not prompt.strip():
         raise AiError("chat: prompt must be non-empty")
+    return _dispatch(
+        modality="chat",
+        prompt=prompt,
+        origin=origin,
+        model=model,
+        max_units=max_units,
+        system=system,
+        app_id=app_id,
+    )
 
-    app = app_id or os.environ.get("COS_APP_ID")
-    if not app:
-        raise AiError(
-            "chat: app_id is required (pass app_id= or set COS_APP_ID)"
-        )
 
-    cmd = [_cos_binary(), "agent", "chat", "--app", app, "--prompt", prompt,
-           "--origin", origin, "--verb", verb]
-    if model is not None:
-        cmd.extend(["--model", model])
-    if max_units is not None:
-        cmd.extend(["--max-units", str(max_units)])
-    if system is not None:
-        cmd.extend(["--system", system])
+def embed(
+    prompt: str,
+    *,
+    origin: str = "trusted",
+    model: Optional[str] = None,
+    max_units: Optional[int] = None,
+    app_id: Optional[str] = None,
+) -> AiResponse:
+    """Embed text into a vector. Result vector lives at ``response.embedding``."""
+    if not prompt or not prompt.strip():
+        raise AiError("embed: prompt must be non-empty")
+    return _dispatch(
+        modality="embed",
+        prompt=prompt,
+        origin=origin,
+        model=model,
+        max_units=max_units,
+        app_id=app_id,
+        embed=True,
+    )
 
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    payload_text = (proc.stdout or "").strip() or (proc.stderr or "").strip()
-    if not payload_text:
-        raise AiUnavailable(
-            f"cos agent chat returned no output (exit {proc.returncode})"
-        )
 
-    try:
-        envelope = json.loads(payload_text)
-    except json.JSONDecodeError as exc:
-        raise AiUnavailable(
-            f"cos agent chat returned non-JSON output: {payload_text!r}"
-        ) from exc
+def image_generate(
+    prompt: str,
+    *,
+    output: str,
+    origin: str = "trusted",
+    model: Optional[str] = None,
+    max_units: Optional[int] = None,
+    app_id: Optional[str] = None,
+) -> AiResponse:
+    """Generate an image from a prompt; the gate writes it to ``output``."""
+    if not prompt or not prompt.strip():
+        raise AiError("image_generate: prompt must be non-empty")
+    return _dispatch(
+        modality="image.generate",
+        prompt=prompt,
+        origin=origin,
+        model=model,
+        max_units=max_units,
+        app_id=app_id,
+        image_output=output,
+    )
 
-    if proc.returncode != 0 or "error" in envelope:
-        _raise_for_error(envelope)
 
-    return _parse_response(envelope)
+def image_analyze(
+    *,
+    image: str,
+    origin: str = "trusted",
+    model: Optional[str] = None,
+    max_units: Optional[int] = None,
+    app_id: Optional[str] = None,
+) -> AiResponse:
+    """Caption / classify an image with no prompt. Use ``vision_analyze`` for Q&A."""
+    return _dispatch(
+        modality="image.analyze",
+        prompt=None,
+        origin=origin,
+        model=model,
+        max_units=max_units,
+        app_id=app_id,
+        image_input=image,
+    )
+
+
+def vision_analyze(
+    prompt: str,
+    *,
+    image: str,
+    origin: str = "trusted",
+    model: Optional[str] = None,
+    max_units: Optional[int] = None,
+    system: Optional[str] = None,
+    app_id: Optional[str] = None,
+) -> AiResponse:
+    """Answer a textual question about an image."""
+    if not prompt or not prompt.strip():
+        raise AiError("vision_analyze: prompt must be non-empty")
+    return _dispatch(
+        modality="vision.analyze",
+        prompt=prompt,
+        origin=origin,
+        model=model,
+        max_units=max_units,
+        system=system,
+        app_id=app_id,
+        image_input=image,
+    )
+
+
+def audio_tts(
+    prompt: str,
+    *,
+    output: str,
+    origin: str = "trusted",
+    model: Optional[str] = None,
+    max_units: Optional[int] = None,
+    app_id: Optional[str] = None,
+) -> AiResponse:
+    """Synthesize speech from text; the gate writes the audio to ``output``."""
+    if not prompt or not prompt.strip():
+        raise AiError("audio_tts: prompt must be non-empty")
+    return _dispatch(
+        modality="audio.tts",
+        prompt=prompt,
+        origin=origin,
+        model=model,
+        max_units=max_units,
+        app_id=app_id,
+        audio_output=output,
+    )
+
+
+def audio_stt(
+    *,
+    audio: str,
+    origin: str = "trusted",
+    model: Optional[str] = None,
+    max_units: Optional[int] = None,
+    app_id: Optional[str] = None,
+) -> AiResponse:
+    """Transcribe an audio file. Transcript lives at ``response.text``."""
+    return _dispatch(
+        modality="audio.stt",
+        prompt=None,
+        origin=origin,
+        model=model,
+        max_units=max_units,
+        app_id=app_id,
+        audio_input=audio,
+    )
+
+
+def video_generate(
+    prompt: str,
+    *,
+    output: str,
+    origin: str = "trusted",
+    model: Optional[str] = None,
+    max_units: Optional[int] = None,
+    app_id: Optional[str] = None,
+) -> AiResponse:
+    """Generate a video from a prompt; the gate writes it to ``output``."""
+    if not prompt or not prompt.strip():
+        raise AiError("video_generate: prompt must be non-empty")
+    return _dispatch(
+        modality="video.generate",
+        prompt=prompt,
+        origin=origin,
+        model=model,
+        max_units=max_units,
+        app_id=app_id,
+        video_output=output,
+    )
+
+
+def video_analyze(
+    *,
+    video: str,
+    prompt: Optional[str] = None,
+    origin: str = "trusted",
+    model: Optional[str] = None,
+    max_units: Optional[int] = None,
+    app_id: Optional[str] = None,
+) -> AiResponse:
+    """Describe or answer a question about a video file."""
+    return _dispatch(
+        modality="video.analyze",
+        prompt=prompt,
+        origin=origin,
+        model=model,
+        max_units=max_units,
+        app_id=app_id,
+        video_input=video,
+    )
 
 
 def budget(app_id: Optional[str] = None) -> Budget:
@@ -220,14 +386,91 @@ def budget(app_id: Optional[str] = None) -> Budget:
 # ---------------------------------------------------------------------------
 
 
+def _dispatch(
+    *,
+    modality: str,
+    prompt: Optional[str],
+    origin: str,
+    model: Optional[str],
+    max_units: Optional[int],
+    app_id: Optional[str],
+    system: Optional[str] = None,
+    embed: bool = False,
+    image_input: Optional[str] = None,
+    image_output: Optional[str] = None,
+    audio_input: Optional[str] = None,
+    audio_output: Optional[str] = None,
+    video_input: Optional[str] = None,
+    video_output: Optional[str] = None,
+) -> AiResponse:
+    """Build the `cos agent chat` command line and parse the envelope.
+
+    All public helpers funnel through here. The kernel-side gate
+    derives the caps verb from the flag combination — we never name
+    one. ``modality`` is only used for error messages on this side.
+    """
+    app = app_id or os.environ.get("COS_APP_ID")
+    if not app:
+        raise AiError(
+            f"{modality}: app_id is required (pass app_id= or set COS_APP_ID)"
+        )
+
+    cmd = [_cos_binary(), "agent", "chat", "--app", app, "--origin", origin]
+    if prompt is not None:
+        cmd.extend(["--prompt", prompt])
+    if model is not None:
+        cmd.extend(["--model", model])
+    if max_units is not None:
+        cmd.extend(["--max-units", str(max_units)])
+    if system is not None:
+        cmd.extend(["--system", system])
+    if embed:
+        cmd.append("--embed")
+    if image_input is not None:
+        cmd.extend(["--image-input", image_input])
+    if image_output is not None:
+        cmd.extend(["--image-output", image_output])
+    if audio_input is not None:
+        cmd.extend(["--audio-input", audio_input])
+    if audio_output is not None:
+        cmd.extend(["--audio-output", audio_output])
+    if video_input is not None:
+        cmd.extend(["--video-input", video_input])
+    if video_output is not None:
+        cmd.extend(["--video-output", video_output])
+
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    payload_text = (proc.stdout or "").strip() or (proc.stderr or "").strip()
+    if not payload_text:
+        raise AiUnavailable(
+            f"cos agent chat returned no output (exit {proc.returncode})"
+        )
+
+    try:
+        envelope = json.loads(payload_text)
+    except json.JSONDecodeError as exc:
+        raise AiUnavailable(
+            f"cos agent chat returned non-JSON output: {payload_text!r}"
+        ) from exc
+
+    if proc.returncode != 0 or "error" in envelope:
+        _raise_for_error(envelope)
+
+    return _parse_response(envelope)
+
+
 def _parse_response(env: Mapping[str, Any]) -> AiResponse:
     usage = env.get("usage") or {}
     budget_blk = env.get("budget") or {}
     review = env.get("review") or {}
+    embedding_raw = env.get("embedding") or []
     return AiResponse(
         text=env.get("text", ""),
         model=env.get("model", ""),
         provider=env.get("provider", ""),
+        verb=env.get("verb", ""),
+        embedding=[float(x) for x in embedding_raw] if isinstance(embedding_raw, list) else [],
+        output_path=env.get("output_path"),
         usage=Usage(
             input_tokens=int(usage.get("input_tokens", 0) or 0),
             output_tokens=int(usage.get("output_tokens", 0) or 0),

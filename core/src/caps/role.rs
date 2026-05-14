@@ -315,6 +315,8 @@ const AUTOMATOR_VERBS: &[Verb] = &[
     Verb::AI_AUDIO_TTS,
     Verb::AI_AUDIO_STT,
     Verb::AI_VISION_ANALYZE,
+    Verb::AI_VIDEO_GENERATE,
+    Verb::AI_VIDEO_ANALYZE,
 ];
 
 const AGENT_HOST_VERBS: &[Verb] = &[
@@ -355,6 +357,8 @@ const AGENT_HOST_VERBS: &[Verb] = &[
     Verb::AI_AUDIO_TTS,
     Verb::AI_AUDIO_STT,
     Verb::AI_VISION_ANALYZE,
+    Verb::AI_VIDEO_GENERATE,
+    Verb::AI_VIDEO_ANALYZE,
     // agent-host additions ↓
     Verb::AGENT_SPAWN,
     Verb::AGENT_INVOKE,
@@ -400,6 +404,8 @@ const ADMIN_VERBS: &[Verb] = &[
     Verb::AI_AUDIO_TTS,
     Verb::AI_AUDIO_STT,
     Verb::AI_VISION_ANALYZE,
+    Verb::AI_VIDEO_GENERATE,
+    Verb::AI_VIDEO_ANALYZE,
     Verb::AGENT_SPAWN,
     Verb::AGENT_INVOKE,
     Verb::AGENT_DELEGATE,

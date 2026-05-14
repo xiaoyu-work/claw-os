@@ -136,6 +136,14 @@ pub struct LlmRunRecord {
     /// that didn't carry this field.
     #[serde(default)]
     pub app_id: Option<String>,
+
+    /// AI verb the gate derived for this call (`"ai.chat"`,
+    /// `"ai.image.generate"`, etc). Phase-8 multimodal addition;
+    /// older log lines that lacked this field deserialise as `None`.
+    /// System-agent records also leave this `None` because the agent
+    /// always rides `ai.chat`.
+    #[serde(default)]
+    pub verb: Option<String>,
 }
 
 fn default_decision() -> String {
@@ -180,6 +188,7 @@ impl LlmRunRecord {
             decision: "allowed".to_string(),
             denial_reason: None,
             app_id: None,
+            verb: None,
         }
     }
 
@@ -219,6 +228,7 @@ impl LlmRunRecord {
             decision: "allowed".to_string(),
             denial_reason: None,
             app_id: None,
+            verb: None,
         }
     }
 
@@ -258,6 +268,7 @@ impl LlmRunRecord {
             decision: "denied".to_string(),
             denial_reason: Some(denial_reason.to_string()),
             app_id: nonempty(Some(app_id)),
+            verb: None,
         }
     }
 
@@ -266,6 +277,16 @@ impl LlmRunRecord {
     /// are attributed to the requesting app, not just the provider.
     pub fn with_app(mut self, app_id: &str) -> Self {
         self.app_id = nonempty(Some(app_id));
+        self
+    }
+
+    /// Attach the AI verb the gate derived for this call. The gate
+    /// calls this on every record (success / error / denial) so the
+    /// audit stream can be aggregated by modality.
+    pub fn with_verb(mut self, verb: &str) -> Self {
+        if !verb.is_empty() {
+            self.verb = Some(verb.to_string());
+        }
         self
     }
 }

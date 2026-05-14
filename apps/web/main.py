@@ -344,7 +344,6 @@ def _cmd_summarize(args):
         response = ai.chat(
             prompt=text,
             origin="external-content",
-            verb="ai.chat.untrusted",
             system=_SUMMARIZE_SYSTEM,
             max_units=4000,
         )

@@ -29,6 +29,7 @@
 //! even if a session somehow carries an AI verb, the gate still
 //! re-checks the manifest's model + origin allowlist.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -55,27 +56,224 @@ use super::budget::{BudgetError, Store};
 // Public request / response shapes
 // ---------------------------------------------------------------------------
 
-/// One-shot chat request handed in by the CLI / `_lib`.
-#[derive(Debug, Clone)]
+/// One-shot AI request handed in by the CLI / `_lib`. The gate
+/// auto-derives the [`Modality`] (and therefore the caps `Verb` to
+/// require) from the **shape** of this request — callers never pass a
+/// verb directly. See [`Modality::derive`] for the rules.
+#[derive(Debug, Clone, Default)]
 pub struct ChatRequest {
+    /// App id this call is attributed to. The gate looks up the app's
+    /// manifest to honour its `ai` policy (model allowlist, prompt
+    /// origin allowlist, monthly budget, safety profile).
     pub app_id: String,
-    pub verb: String,
-    pub model: Option<String>,
+    /// Where the prompt text originated — `"trusted"`, `"user-input"`,
+    /// or `"external-content"`. `external-content` automatically
+    /// hardens chat into [`Modality::ChatUntrusted`].
     pub origin: String,
-    pub prompt: String,
+    /// Text portion of the request. Required for chat / embed /
+    /// image-generate / audio-tts / video-generate; optional for the
+    /// "analyse this artefact" modalities.
+    pub prompt: Option<String>,
     pub system: Option<String>,
+    pub model: Option<String>,
     pub max_units: Option<u64>,
+
+    // Modality selectors. The gate derives the verb from these — the
+    // caller never supplies a verb directly.
+
+    /// True when the caller wants a vector back instead of text.
+    /// Mutually exclusive with the other modality selectors.
+    pub embed: bool,
+    pub image_input: Option<PathBuf>,
+    pub image_output: Option<PathBuf>,
+    pub audio_input: Option<PathBuf>,
+    pub audio_output: Option<PathBuf>,
+    pub video_input: Option<PathBuf>,
+    pub video_output: Option<PathBuf>,
 }
 
 /// Structured envelope returned to apps. Always JSON-serialisable.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatResult {
+    /// The textual result (for chat / image-analyze / audio-stt /
+    /// vision-analyze / video-analyze) or an empty string (for
+    /// modalities whose primary output is a file or vector).
     pub text: String,
+    /// JSON vector for `ai.embed`. Empty for everything else.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub embedding: Vec<f32>,
+    /// Path the gate wrote the binary output to (image-generate,
+    /// audio-tts, video-generate). `None` for text-only modalities.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_path: Option<PathBuf>,
     pub model: String,
     pub provider: String,
+    /// The caps verb the gate derived for this call. Surfaces in the
+    /// JSON envelope so app developers can confirm the gate picked the
+    /// modality they intended.
+    pub verb: String,
     pub usage: Usage,
     pub budget: BudgetReport,
     pub review: ReviewReport,
+}
+
+// ---------------------------------------------------------------------------
+// Modality
+// ---------------------------------------------------------------------------
+
+/// What the gate is being asked to do. The CLI / `_lib` never names
+/// this directly — the gate derives it from the request shape (which
+/// of `prompt` / `image_input` / `audio_output` / … are set) and then
+/// requires the corresponding caps verb.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Modality {
+    /// Text in, text out. Origin is `trusted` or `user-input`.
+    Chat,
+    /// Text in (origin = `external-content`), text out. Same as
+    /// [`Chat`](Modality::Chat) but enforces the hardened verb
+    /// `ai.chat.untrusted` so cap grants can scope it separately.
+    ChatUntrusted,
+    /// Text in, vector out. The text is what the caller wants
+    /// embedded; the response carries an `embedding` array.
+    Embed,
+    /// Text in, image file out.
+    ImageGenerate,
+    /// Image in, text out (no prompt).
+    ImageAnalyze,
+    /// Image in + text prompt in, text out.
+    VisionAnalyze,
+    /// Text in, audio file out.
+    AudioTts,
+    /// Audio in, text out.
+    AudioStt,
+    /// Text in, video file out.
+    VideoGenerate,
+    /// Video in, text out.
+    VideoAnalyze,
+}
+
+impl Modality {
+    /// Infer the modality from the request shape.
+    ///
+    /// Precedence (first match wins):
+    ///
+    ///   1. `embed=true`                            → [`Embed`]
+    ///   2. `image_output.is_some()`                → [`ImageGenerate`]
+    ///   3. `audio_output.is_some()`                → [`AudioTts`]
+    ///   4. `video_output.is_some()`                → [`VideoGenerate`]
+    ///   5. `image_input.is_some()` + prompt        → [`VisionAnalyze`]
+    ///   6. `image_input.is_some()` (no prompt)     → [`ImageAnalyze`]
+    ///   7. `audio_input.is_some()`                 → [`AudioStt`]
+    ///   8. `video_input.is_some()`                 → [`VideoAnalyze`]
+    ///   9. origin = `external-content`             → [`ChatUntrusted`]
+    ///  10. otherwise                               → [`Chat`]
+    ///
+    /// Returns [`AiError::ModalityConflict`] if more than one modality
+    /// selector is set (e.g. `image_input` + `audio_input` together).
+    pub fn derive(req: &ChatRequest) -> Result<Modality, AiError> {
+        // Reject obviously-incoherent combinations up front so apps
+        // get a sharp error instead of silent wrong-verb selection.
+        let selectors = [
+            req.embed,
+            req.image_input.is_some(),
+            req.image_output.is_some(),
+            req.audio_input.is_some(),
+            req.audio_output.is_some(),
+            req.video_input.is_some(),
+            req.video_output.is_some(),
+        ];
+        let on = selectors.iter().filter(|b| **b).count();
+        if on > 1 {
+            return Err(AiError::ModalityConflict(
+                "multiple modality selectors set; pass at most one of \
+                 --embed / --image-input / --image-output / \
+                 --audio-input / --audio-output / \
+                 --video-input / --video-output"
+                    .to_string(),
+            ));
+        }
+
+        if req.embed {
+            return Ok(Modality::Embed);
+        }
+        if req.image_output.is_some() {
+            return Ok(Modality::ImageGenerate);
+        }
+        if req.audio_output.is_some() {
+            return Ok(Modality::AudioTts);
+        }
+        if req.video_output.is_some() {
+            return Ok(Modality::VideoGenerate);
+        }
+        if req.image_input.is_some() {
+            return Ok(if has_prompt(req) {
+                Modality::VisionAnalyze
+            } else {
+                Modality::ImageAnalyze
+            });
+        }
+        if req.audio_input.is_some() {
+            return Ok(Modality::AudioStt);
+        }
+        if req.video_input.is_some() {
+            return Ok(Modality::VideoAnalyze);
+        }
+
+        // Pure text path. Origin decides hardened-or-not.
+        let origin = parse_origin(&req.origin)?;
+        Ok(match origin {
+            PromptOrigin::ExternalContent => Modality::ChatUntrusted,
+            _ => Modality::Chat,
+        })
+    }
+
+    /// Caps verb required for this modality.
+    pub fn verb(self) -> Verb {
+        match self {
+            Modality::Chat => Verb::AI_CHAT,
+            Modality::ChatUntrusted => Verb::AI_CHAT_UNTRUSTED,
+            Modality::Embed => Verb::AI_EMBED,
+            Modality::ImageGenerate => Verb::AI_IMAGE_GENERATE,
+            Modality::ImageAnalyze => Verb::AI_IMAGE_ANALYZE,
+            Modality::VisionAnalyze => Verb::AI_VISION_ANALYZE,
+            Modality::AudioTts => Verb::AI_AUDIO_TTS,
+            Modality::AudioStt => Verb::AI_AUDIO_STT,
+            Modality::VideoGenerate => Verb::AI_VIDEO_GENERATE,
+            Modality::VideoAnalyze => Verb::AI_VIDEO_ANALYZE,
+        }
+    }
+
+    /// Lower-snake-case label, used for audit and error messages.
+    pub fn label(self) -> &'static str {
+        match self {
+            Modality::Chat => "chat",
+            Modality::ChatUntrusted => "chat_untrusted",
+            Modality::Embed => "embed",
+            Modality::ImageGenerate => "image_generate",
+            Modality::ImageAnalyze => "image_analyze",
+            Modality::VisionAnalyze => "vision_analyze",
+            Modality::AudioTts => "audio_tts",
+            Modality::AudioStt => "audio_stt",
+            Modality::VideoGenerate => "video_generate",
+            Modality::VideoAnalyze => "video_analyze",
+        }
+    }
+
+    /// True for modalities the provider trait already supports today
+    /// (`provider.chat(...)`). Everything else is gated through the
+    /// same caps + budget + audit pipeline but errors out at the
+    /// provider step with [`AiError::ModalityNotSupported`] until the
+    /// provider trait grows the relevant entry points.
+    fn is_chat_like(self) -> bool {
+        matches!(self, Modality::Chat | Modality::ChatUntrusted)
+    }
+}
+
+fn has_prompt(req: &ChatRequest) -> bool {
+    req.prompt
+        .as_deref()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,9 +314,6 @@ pub enum AiError {
     #[error("app `{app}` has no `ai` block in its manifest — AI is disabled for it")]
     NoAiPolicy { app: String },
 
-    #[error("unknown AI verb `{0}` — try ai.chat, ai.chat.untrusted, ai.embed, ai.image.generate, ai.image.analyze, ai.audio.tts, ai.audio.stt, ai.vision.analyze")]
-    UnknownVerb(String),
-
     #[error("invalid prompt origin `{0}` — try trusted, user-input, external-content")]
     BadOrigin(String),
 
@@ -142,8 +337,17 @@ pub enum AiError {
     #[error("app `{0}` declared no AI models — cannot resolve a default")]
     NoDefaultModel(String),
 
-    #[error("origin `external-content` requires the `ai.chat.untrusted` verb, not `{verb}`")]
-    UntrustedVerbRequired { verb: String },
+    #[error("invalid request: {0}")]
+    ModalityConflict(String),
+
+    #[error("modality `{0}` is not yet wired to a provider — gate is ready, but no installed model supports it")]
+    ModalityNotSupported(&'static str),
+
+    #[error("missing required input for `{modality}`: {field}")]
+    MissingInput {
+        modality: &'static str,
+        field: &'static str,
+    },
 
     #[error("capability denied: {0}")]
     Denied(serde_json::Value),
@@ -182,12 +386,20 @@ pub fn chat_blocking(req: ChatRequest) -> Result<ChatResult, AiError> {
 /// denied (status=denied with a stable `denial_reason` token).
 pub async fn chat(req: ChatRequest) -> Result<ChatResult, AiError> {
     let started = std::time::Instant::now();
+    // Best-effort verb derivation up-front so audit records carry it
+    // even on denial paths. `Modality::derive` runs again inside
+    // `chat_inner`; the duplication is cheap and lets the audit
+    // attribute denials caused by *non-derivation* errors to the
+    // correct verb.
+    let verb_label: Option<String> = Modality::derive(&req)
+        .ok()
+        .map(|m| m.verb().as_str().to_string());
     let result = chat_inner(&req).await;
     let duration_ms = started.elapsed().as_millis() as u64;
 
     match &result {
         Ok(ok) => {
-            let rec = LlmRunRecord::from_success(
+            let mut rec = LlmRunRecord::from_success(
                 &ok.provider,
                 &ok.model,
                 None,
@@ -201,10 +413,13 @@ pub async fn chat(req: ChatRequest) -> Result<ChatResult, AiError> {
                 None,
             )
             .with_app(&req.app_id);
+            if !ok.verb.is_empty() {
+                rec = rec.with_verb(&ok.verb);
+            }
             run_log::record(&rec);
         }
         Err(err) => {
-            let rec = LlmRunRecord::from_denial(
+            let mut rec = LlmRunRecord::from_denial(
                 &req.app_id,
                 req.model.as_deref().unwrap_or(""),
                 denial_reason_token(err),
@@ -212,6 +427,9 @@ pub async fn chat(req: ChatRequest) -> Result<ChatResult, AiError> {
                 duration_ms,
                 None,
             );
+            if let Some(v) = &verb_label {
+                rec = rec.with_verb(v);
+            }
             run_log::record(&rec);
         }
     }
@@ -227,12 +445,13 @@ fn denial_reason_token(err: &AiError) -> &'static str {
     match err {
         AiError::UnknownApp(_) => "unknown_app",
         AiError::NoAiPolicy { .. } => "no_ai_policy",
-        AiError::UnknownVerb(_) => "unknown_verb",
         AiError::BadOrigin(_) => "bad_origin",
         AiError::OriginNotAllowed { .. } => "origin_not_allowed",
-        AiError::UntrustedVerbRequired { .. } => "untrusted_verb_required",
         AiError::ModelNotAllowed { .. } => "model_not_allowed",
         AiError::NoDefaultModel(_) => "no_default_model",
+        AiError::ModalityConflict(_) => "modality_conflict",
+        AiError::ModalityNotSupported(_) => "modality_not_supported",
+        AiError::MissingInput { .. } => "missing_input",
         AiError::Denied(_) => "caps_denied",
         AiError::Budget(_) => "budget_exceeded",
         AiError::Provider(_) => "provider_error",
@@ -256,10 +475,16 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
         })?
         .clone();
 
-    // 2. Parse and validate the requested verb.
-    let verb = parse_verb(&req.verb)?;
+    // 2. Derive the modality from the request shape. This is the
+    //    "what is the caller trying to do" decision; everything below
+    //    flows from it.
+    let modality = Modality::derive(req)?;
+    let verb = modality.verb();
 
     // 3. Parse and validate origin against the manifest's allowlist.
+    //    Even non-chat modalities have an origin field — e.g. an app
+    //    that summarises external pages might also caption the images
+    //    on those pages, and the origin classification still matters.
     let origin = parse_origin(&req.origin)?;
     if !policy.origins.contains(&origin) {
         return Err(AiError::OriginNotAllowed {
@@ -272,14 +497,11 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
         });
     }
 
-    // Hardened verb rule: external-content must use `ai.chat.untrusted`.
-    if origin == PromptOrigin::ExternalContent && verb == Verb::AI_CHAT {
-        return Err(AiError::UntrustedVerbRequired {
-            verb: req.verb.clone(),
-        });
-    }
+    // 4. Per-modality input validation. The "analyze" verbs require
+    //    an input file; the "generate" verbs require a text prompt.
+    validate_inputs(req, modality)?;
 
-    // 4. Resolve the model. The app can omit it (then we use the
+    // 5. Resolve the model. The app can omit it (then we use the
     //    first declared glob's literal form if any) — otherwise the
     //    requested model must match one of the manifest globs.
     let model = match &req.model {
@@ -295,13 +517,18 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
         None => default_model_from_globs(&policy.models, &req.app_id)?,
     };
 
-    // 5. Capability check at the kernel boundary.
+    // 6. Capability check at the kernel boundary.
     caps::require(verb, Scope::name(&model))
         .map_err(|d| AiError::Denied(d.to_json()))?;
 
-    // 6. Reserve budget. We have no way to know the exact upstream
-    //    cost ahead of time; estimate from the prompt length.
-    let estimated_units = estimate_units(&req.prompt, req.max_units);
+    // 7. Reserve budget. The estimate depends on modality — token
+    //    proxies for chat / embed, flat rates for image / audio /
+    //    video (refined when prices.yaml lands in the next phase).
+    let estimated_units = units_for_modality(req, modality);
+    let estimated_units = match req.max_units {
+        Some(cap) => estimated_units.min(cap.max(1)),
+        None => estimated_units,
+    };
     let estimated_usd = estimate_usd(estimated_units);
     let mut store = Store::open().map_err(AiError::Internal)?;
     let _reserved = store.reserve(
@@ -312,22 +539,44 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
         policy.budget.monthly_usd,
     )?;
 
-    // 7. Apply safety pipeline.
-    let (prompt_for_provider, prompt_redacted) = apply_safety(&req.prompt, policy.safety);
+    // 8. Apply safety pipeline to the prompt (when present).
+    let (prompt_for_provider, prompt_redacted) = match req.prompt.as_deref() {
+        Some(p) if !p.is_empty() => {
+            let (out, changed) = apply_safety(p, policy.safety);
+            (Some(out), changed)
+        }
+        _ => (None, false),
+    };
 
-    // 8. Build the provider request. We use the agent's currently
-    //    configured provider; routing per-model is Phase 8 work.
+    // 9. Dispatch by modality. Only chat-like modalities are wired
+    //    through to a Provider today; everything else short-circuits
+    //    with `ModalityNotSupported` AFTER the caps/budget/safety/
+    //    audit machinery has run, so the abuse-detection story works
+    //    even before providers grow new entry points.
+    if !modality.is_chat_like() {
+        // Refund the reservation since we never reached the provider.
+        let _ = store.settle(&req.app_id, -(estimated_units as i64), -estimated_usd);
+        return Err(AiError::ModalityNotSupported(modality.label()));
+    }
+
+    let prompt = prompt_for_provider
+        .ok_or(AiError::MissingInput {
+            modality: modality.label(),
+            field: "prompt",
+        })?;
+
+    // 10. Build the provider request.
     let cfg = &config::get().agent;
     let provider = llm::registry::build(&cfg.provider, &model, cfg)
         .map_err(|e| AiError::Provider(e.to_string()))?;
 
-    let llm_req = build_chat_request(&model, &prompt_for_provider, req.system.as_deref());
+    let llm_req = build_chat_request(&model, &prompt, req.system.as_deref());
     let llm_resp = provider
         .chat(llm_req)
         .await
         .map_err(|e| AiError::Provider(e.to_string()))?;
 
-    // 9. Extract the text body.
+    // 11. Extract the text body.
     let text = llm_resp
         .content
         .iter()
@@ -338,7 +587,7 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
         .collect::<Vec<_>>()
         .join("\n");
 
-    // 10. Settle the budget against actuals.
+    // 12. Settle the budget against actuals.
     let actual_units =
         llm_resp.usage.input_tokens as i64 + llm_resp.usage.output_tokens as i64;
     let delta_units = actual_units - estimated_units as i64;
@@ -349,8 +598,11 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
 
     Ok(ChatResult {
         text,
+        embedding: Vec::new(),
+        output_path: None,
         model,
         provider: provider.name().to_string(),
+        verb: verb.as_str().to_string(),
         usage: Usage {
             input_tokens: llm_resp.usage.input_tokens,
             output_tokens: llm_resp.usage.output_tokens,
@@ -371,6 +623,76 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
     })
 }
 
+/// Per-modality required-input check. Runs after origin validation so
+/// the "missing prompt" error doesn't mask an earlier policy denial.
+fn validate_inputs(req: &ChatRequest, m: Modality) -> Result<(), AiError> {
+    use Modality::*;
+    let label = m.label();
+    let need_prompt = matches!(
+        m,
+        Chat | ChatUntrusted | Embed | ImageGenerate | AudioTts | VideoGenerate
+    );
+    if need_prompt && !has_prompt(req) {
+        return Err(AiError::MissingInput {
+            modality: label,
+            field: "prompt",
+        });
+    }
+    let need_input_file = match m {
+        ImageAnalyze | VisionAnalyze => req.image_input.is_none(),
+        AudioStt => req.audio_input.is_none(),
+        VideoAnalyze => req.video_input.is_none(),
+        _ => false,
+    };
+    if need_input_file {
+        return Err(AiError::MissingInput {
+            modality: label,
+            field: "input_file",
+        });
+    }
+    let need_output_file = match m {
+        ImageGenerate => req.image_output.is_none(),
+        AudioTts => req.audio_output.is_none(),
+        VideoGenerate => req.video_output.is_none(),
+        _ => false,
+    };
+    if need_output_file {
+        return Err(AiError::MissingInput {
+            modality: label,
+            field: "output_file",
+        });
+    }
+    Ok(())
+}
+
+/// Estimate units the request will charge against the budget. Today
+/// this is per-modality stub pricing; the next phase
+/// (`prices-loader`) replaces it with `/etc/cos/ai/prices.yaml`.
+fn units_for_modality(req: &ChatRequest, m: Modality) -> u64 {
+    use Modality::*;
+    let prompt_units = req
+        .prompt
+        .as_deref()
+        .map(|p| (p.chars().count() as u64 / 4) + 128)
+        .unwrap_or(128);
+    match m {
+        Chat | ChatUntrusted => prompt_units,
+        // Embeddings: input-only, no big response buffer.
+        Embed => (req.prompt.as_deref().map(|p| p.chars().count()).unwrap_or(0)
+            as u64
+            / 4)
+            .max(1),
+        // Flat rates for binary modalities until prices.yaml lands.
+        ImageGenerate => 1_000,
+        ImageAnalyze | VisionAnalyze => 100 + prompt_units,
+        AudioTts => 10 * req.prompt.as_deref().map(|p| p.chars().count() as u64).unwrap_or(0),
+        AudioStt => 100,
+        VideoGenerate => 10_000,
+        VideoAnalyze => 1_000 + prompt_units,
+    }
+}
+
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -384,21 +706,6 @@ fn lookup_app(app_id: &str) -> Result<apps::App, AiError> {
         .get(app_id)
         .cloned()
         .ok_or_else(|| AiError::UnknownApp(app_id.to_string()))
-}
-
-fn parse_verb(s: &str) -> Result<Verb, AiError> {
-    match s {
-        "ai.chat" => Ok(Verb::AI_CHAT),
-        "ai.chat.untrusted" => Ok(Verb::AI_CHAT_UNTRUSTED),
-        "ai.embed" => Ok(Verb::AI_EMBED),
-        "ai.image.generate" => Ok(Verb::AI_IMAGE_GENERATE),
-        "ai.image.analyze" => Ok(Verb::AI_IMAGE_ANALYZE),
-        "ai.audio.tts" => Ok(Verb::AI_AUDIO_TTS),
-        "ai.audio.stt" => Ok(Verb::AI_AUDIO_STT),
-        "ai.vision.analyze" => Ok(Verb::AI_VISION_ANALYZE),
-        // ai.bypass is owner-only and not callable via this path.
-        other => Err(AiError::UnknownVerb(other.to_string())),
-    }
 }
 
 fn parse_origin(s: &str) -> Result<PromptOrigin, AiError> {
@@ -474,19 +781,9 @@ fn default_model_from_globs(globs: &[String], app_id: &str) -> Result<String, Ai
         .ok_or_else(|| AiError::NoDefaultModel(app_id.to_string()))
 }
 
-fn estimate_units(prompt: &str, max_units: Option<u64>) -> u64 {
-    // Cheap: 1 unit ≈ 1 token ≈ 4 chars input + a 128-token reply
-    // buffer. The settle step replaces this with the real value.
-    let approx = (prompt.chars().count() as u64 / 4) + 128;
-    match max_units {
-        Some(cap) => approx.min(cap.max(1)),
-        None => approx,
-    }
-}
-
 fn estimate_usd(units: u64) -> f64 {
     // Placeholder pricing: $0.000003 per unit. Real per-model prices
-    // arrive in Phase 8 from /etc/cos/ai/prices.yaml.
+    // arrive in the next phase from /etc/cos/ai/prices.yaml.
     (units as f64) * 3e-6
 }
 
@@ -746,21 +1043,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_verb_known() {
-        assert_eq!(parse_verb("ai.chat").unwrap(), Verb::AI_CHAT);
-        assert_eq!(
-            parse_verb("ai.chat.untrusted").unwrap(),
-            Verb::AI_CHAT_UNTRUSTED
-        );
-    }
-
-    #[test]
-    fn parse_verb_rejects_bypass() {
-        let err = parse_verb("ai.bypass").unwrap_err();
-        assert!(matches!(err, AiError::UnknownVerb(_)));
-    }
-
-    #[test]
     fn parse_origin_known() {
         assert_eq!(parse_origin("trusted").unwrap(), PromptOrigin::Trusted);
         assert_eq!(
@@ -770,9 +1052,173 @@ mod tests {
     }
 
     #[test]
-    fn estimate_units_respects_cap() {
-        let cap = 50;
-        assert_eq!(estimate_units("a".repeat(4000).as_str(), Some(cap)), cap);
+    fn modality_derive_chat_default() {
+        let req = ChatRequest {
+            app_id: "x".into(),
+            origin: "trusted".into(),
+            prompt: Some("hi".into()),
+            ..Default::default()
+        };
+        assert_eq!(Modality::derive(&req).unwrap(), Modality::Chat);
+    }
+
+    #[test]
+    fn modality_derive_chat_untrusted_from_external_origin() {
+        let req = ChatRequest {
+            app_id: "x".into(),
+            origin: "external-content".into(),
+            prompt: Some("hi".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            Modality::derive(&req).unwrap(),
+            Modality::ChatUntrusted
+        );
+    }
+
+    #[test]
+    fn modality_derive_embed() {
+        let req = ChatRequest {
+            app_id: "x".into(),
+            origin: "trusted".into(),
+            prompt: Some("hi".into()),
+            embed: true,
+            ..Default::default()
+        };
+        assert_eq!(Modality::derive(&req).unwrap(), Modality::Embed);
+    }
+
+    #[test]
+    fn modality_derive_image_generate_from_image_output() {
+        let req = ChatRequest {
+            app_id: "x".into(),
+            origin: "trusted".into(),
+            prompt: Some("a cat".into()),
+            image_output: Some(PathBuf::from("/tmp/out.png")),
+            ..Default::default()
+        };
+        assert_eq!(
+            Modality::derive(&req).unwrap(),
+            Modality::ImageGenerate
+        );
+    }
+
+    #[test]
+    fn modality_derive_image_analyze_no_prompt() {
+        let req = ChatRequest {
+            app_id: "x".into(),
+            origin: "trusted".into(),
+            image_input: Some(PathBuf::from("/tmp/in.png")),
+            ..Default::default()
+        };
+        assert_eq!(
+            Modality::derive(&req).unwrap(),
+            Modality::ImageAnalyze
+        );
+    }
+
+    #[test]
+    fn modality_derive_vision_analyze_with_prompt() {
+        let req = ChatRequest {
+            app_id: "x".into(),
+            origin: "trusted".into(),
+            prompt: Some("describe this".into()),
+            image_input: Some(PathBuf::from("/tmp/in.png")),
+            ..Default::default()
+        };
+        assert_eq!(
+            Modality::derive(&req).unwrap(),
+            Modality::VisionAnalyze
+        );
+    }
+
+    #[test]
+    fn modality_derive_audio_tts() {
+        let req = ChatRequest {
+            app_id: "x".into(),
+            origin: "trusted".into(),
+            prompt: Some("hello world".into()),
+            audio_output: Some(PathBuf::from("/tmp/out.wav")),
+            ..Default::default()
+        };
+        assert_eq!(Modality::derive(&req).unwrap(), Modality::AudioTts);
+    }
+
+    #[test]
+    fn modality_derive_audio_stt() {
+        let req = ChatRequest {
+            app_id: "x".into(),
+            origin: "trusted".into(),
+            audio_input: Some(PathBuf::from("/tmp/in.wav")),
+            ..Default::default()
+        };
+        assert_eq!(Modality::derive(&req).unwrap(), Modality::AudioStt);
+    }
+
+    #[test]
+    fn modality_derive_video_generate() {
+        let req = ChatRequest {
+            app_id: "x".into(),
+            origin: "trusted".into(),
+            prompt: Some("a sunrise".into()),
+            video_output: Some(PathBuf::from("/tmp/out.mp4")),
+            ..Default::default()
+        };
+        assert_eq!(
+            Modality::derive(&req).unwrap(),
+            Modality::VideoGenerate
+        );
+    }
+
+    #[test]
+    fn modality_derive_video_analyze() {
+        let req = ChatRequest {
+            app_id: "x".into(),
+            origin: "trusted".into(),
+            video_input: Some(PathBuf::from("/tmp/in.mp4")),
+            ..Default::default()
+        };
+        assert_eq!(
+            Modality::derive(&req).unwrap(),
+            Modality::VideoAnalyze
+        );
+    }
+
+    #[test]
+    fn modality_derive_rejects_conflicting_selectors() {
+        let req = ChatRequest {
+            app_id: "x".into(),
+            origin: "trusted".into(),
+            image_input: Some(PathBuf::from("/tmp/i.png")),
+            audio_input: Some(PathBuf::from("/tmp/a.wav")),
+            ..Default::default()
+        };
+        let err = Modality::derive(&req).unwrap_err();
+        assert!(matches!(err, AiError::ModalityConflict(_)));
+    }
+
+    #[test]
+    fn modality_verbs_cover_every_variant() {
+        // Sanity: every variant has a corresponding caps verb. If a
+        // future modality is added without wiring caps, this matches
+        // statement will fail at compile time.
+        let all = [
+            Modality::Chat,
+            Modality::ChatUntrusted,
+            Modality::Embed,
+            Modality::ImageGenerate,
+            Modality::ImageAnalyze,
+            Modality::VisionAnalyze,
+            Modality::AudioTts,
+            Modality::AudioStt,
+            Modality::VideoGenerate,
+            Modality::VideoAnalyze,
+        ];
+        for m in all {
+            // verb() always returns; label() always returns. Cover both.
+            let _ = m.verb();
+            assert!(!m.label().is_empty());
+        }
     }
 
     #[test]

@@ -154,6 +154,8 @@ impl Verb {
     pub const AI_AUDIO_TTS: Verb = Verb::new("ai.audio.tts");
     pub const AI_AUDIO_STT: Verb = Verb::new("ai.audio.stt");
     pub const AI_VISION_ANALYZE: Verb = Verb::new("ai.vision.analyze");
+    pub const AI_VIDEO_GENERATE: Verb = Verb::new("ai.video.generate");
+    pub const AI_VIDEO_ANALYZE: Verb = Verb::new("ai.video.analyze");
     /// User-only verb: lets the owner skip a safety / budget gate for a
     /// single call, app, or session. Apps must never be granted this.
     pub const AI_BYPASS: Verb = Verb::new("ai.bypass");
@@ -220,6 +222,8 @@ pub const ALL_VERBS: &[Verb] = &[
     Verb::AI_AUDIO_TTS,
     Verb::AI_AUDIO_STT,
     Verb::AI_VISION_ANALYZE,
+    Verb::AI_VIDEO_GENERATE,
+    Verb::AI_VIDEO_ANALYZE,
     Verb::AI_BYPASS,
 ];
 

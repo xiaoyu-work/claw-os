@@ -70,20 +70,19 @@ def _read_stdin_or_file(args):
     return None, None, {"error": "no input — supply --file PATH or pipe text on stdin"}
 
 
-def _ai_call(*, text, source, system, max_units, verb="ai.chat.untrusted"):
+def _ai_call(*, text, source, system, max_units):
     """Shared helper for summarize/explain/rewrite — gate → JSON."""
     if not text or not text.strip():
         return {"error": "document produced no extractable text", "source": source}
     if len(text) > _MAX_INPUT_CHARS:
         text = text[:_MAX_INPUT_CHARS]
 
-    policy.require(verb, name="claude-*")
+    policy.require("ai.chat.untrusted", name="claude-*")
 
     try:
         response = ai.chat(
             prompt=text,
             origin="external-content",
-            verb=verb,
             system=system,
             max_units=max_units,
         )

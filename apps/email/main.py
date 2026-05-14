@@ -621,7 +621,6 @@ def cmd_draft(args):
         response = ai.chat(
             prompt=opts.context,
             origin="trusted",
-            verb="ai.chat",
             system=system_prompt,
             max_units=3000,
         )

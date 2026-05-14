@@ -2934,27 +2934,44 @@ fn chat_cmd(args: &[String]) -> Result<Value, String> {
     ))
 }
 
-/// `cos agent chat --app <id>` — single-shot text completion routed
-/// through the App–AI Gate.
+/// `cos agent chat --app <id>` — single-shot AI call routed through
+/// the App–AI Gate.
 ///
 /// This is the kernel's only sanctioned entry point for an installed
-/// app to reach a model. The gate enforces, in order: capability
-/// (`ai.chat` / `ai.chat.untrusted`), manifest model glob + prompt
-/// origin allowlist, per-app monthly budget, safety profile, audit.
+/// app to reach a model. The gate enforces, in order: modality
+/// derivation, capability check, manifest model glob + prompt origin
+/// allowlist, per-app monthly budget, safety profile, audit.
 ///
-/// Flags (all but `--app`/`--prompt`/`--prompt-file` optional):
-///   --app <id>         App requesting the call (required).
-///   --prompt <text>    User prompt (required, unless --prompt-file).
-///   --prompt-file <p>  Read prompt body from a file.
-///   --model <name>     Model name to use (default: app's first
-///                      glob, resolved against installed providers).
-///   --origin <kind>    trusted | user-input | external-content
-///                      (default: trusted).
-///   --verb <name>      AI verb to require (default: ai.chat). Use
-///                      `ai.chat.untrusted` when origin is external.
-///   --max-units <N>    Cap units for this call (default: budget
-///                      remaining).
-///   --system <text>    Optional system prompt.
+/// The **modality** (and therefore the caps verb required) is derived
+/// from the request shape — apps never pass a verb directly:
+///
+///   - `--prompt` (text only)                       → `ai.chat`
+///   - `--prompt` + `--origin external-content`     → `ai.chat.untrusted`
+///   - `--embed --prompt <text>`                    → `ai.embed`
+///   - `--prompt <text> --image-output <path>`      → `ai.image.generate`
+///   - `--image-input <path>`                       → `ai.image.analyze`
+///   - `--image-input <p> --prompt <q>`             → `ai.vision.analyze`
+///   - `--prompt <text> --audio-output <path>`      → `ai.audio.tts`
+///   - `--audio-input <path>`                       → `ai.audio.stt`
+///   - `--prompt <text> --video-output <path>`      → `ai.video.generate`
+///   - `--video-input <path>`                       → `ai.video.analyze`
+///
+/// Flags:
+///   --app <id>           App requesting the call (required).
+///   --prompt <text>      Text portion of the request (modality-dependent).
+///   --prompt-file <p>    Read prompt body from a file.
+///   --model <name>       Model name to use (default: app's first
+///                        concrete manifest glob).
+///   --origin <kind>      trusted | user-input | external-content (default: trusted).
+///   --max-units <N>      Cap units for this call.
+///   --system <text>      Optional system prompt.
+///   --embed              Request an embedding (vector) instead of text.
+///   --image-input <p>    Image to analyse.
+///   --image-output <p>   Path the gate writes the generated image to.
+///   --audio-input <p>    Audio to transcribe.
+///   --audio-output <p>   Path the gate writes synthesised speech to.
+///   --video-input <p>    Video to analyse.
+///   --video-output <p>   Path the gate writes the generated video to.
 fn chat_cmd_app_gated(args: &[String]) -> Result<Value, String> {
     use crate::ai::gate;
 
@@ -2963,9 +2980,22 @@ fn chat_cmd_app_gated(args: &[String]) -> Result<Value, String> {
     let mut prompt_file: Option<String> = None;
     let mut model: Option<String> = None;
     let mut origin = "trusted".to_string();
-    let mut verb = "ai.chat".to_string();
     let mut max_units: Option<u64> = None;
     let mut system: Option<String> = None;
+    let mut embed = false;
+    let mut image_input: Option<std::path::PathBuf> = None;
+    let mut image_output: Option<std::path::PathBuf> = None;
+    let mut audio_input: Option<std::path::PathBuf> = None;
+    let mut audio_output: Option<std::path::PathBuf> = None;
+    let mut video_input: Option<std::path::PathBuf> = None;
+    let mut video_output: Option<std::path::PathBuf> = None;
+
+    fn take_path(args: &[String], i: usize, flag: &str) -> Result<std::path::PathBuf, String> {
+        args.get(i + 1)
+            .cloned()
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| format!("missing path for {flag}"))
+    }
 
     let mut i = 0;
     while i < args.len() {
@@ -2993,13 +3023,6 @@ fn chat_cmd_app_gated(args: &[String]) -> Result<Value, String> {
                     .ok_or_else(|| "missing value for --origin".to_string())?;
                 i += 2;
             }
-            "--verb" => {
-                verb = args
-                    .get(i + 1)
-                    .cloned()
-                    .ok_or_else(|| "missing value for --verb".to_string())?;
-                i += 2;
-            }
             "--max-units" => {
                 max_units = Some(
                     args.get(i + 1)
@@ -3012,29 +3035,63 @@ fn chat_cmd_app_gated(args: &[String]) -> Result<Value, String> {
                 system = args.get(i + 1).cloned();
                 i += 2;
             }
+            "--embed" => {
+                embed = true;
+                i += 1;
+            }
+            "--image-input" => {
+                image_input = Some(take_path(args, i, "--image-input")?);
+                i += 2;
+            }
+            "--image-output" => {
+                image_output = Some(take_path(args, i, "--image-output")?);
+                i += 2;
+            }
+            "--audio-input" => {
+                audio_input = Some(take_path(args, i, "--audio-input")?);
+                i += 2;
+            }
+            "--audio-output" => {
+                audio_output = Some(take_path(args, i, "--audio-output")?);
+                i += 2;
+            }
+            "--video-input" => {
+                video_input = Some(take_path(args, i, "--video-input")?);
+                i += 2;
+            }
+            "--video-output" => {
+                video_output = Some(take_path(args, i, "--video-output")?);
+                i += 2;
+            }
             other => return Err(format!("unknown flag for app-gated chat: {other}")),
         }
     }
 
     let app = app.ok_or_else(|| "--app is required".to_string())?;
 
-    let prompt_text = match (prompt, prompt_file) {
-        (Some(p), _) => p,
-        (None, Some(path)) => std::fs::read_to_string(&path)
-            .map_err(|e| format!("--prompt-file {path}: {e}"))?,
-        (None, None) => {
-            return Err("either --prompt or --prompt-file is required".to_string())
-        }
+    let prompt_text: Option<String> = match (prompt, prompt_file) {
+        (Some(p), _) => Some(p),
+        (None, Some(path)) => Some(
+            std::fs::read_to_string(&path)
+                .map_err(|e| format!("--prompt-file {path}: {e}"))?,
+        ),
+        (None, None) => None,
     };
 
     let req = gate::ChatRequest {
         app_id: app,
-        verb,
-        model,
         origin,
         prompt: prompt_text,
         system,
+        model,
         max_units,
+        embed,
+        image_input,
+        image_output,
+        audio_input,
+        audio_output,
+        video_input,
+        video_output,
     };
 
     match gate::chat_blocking(req) {
