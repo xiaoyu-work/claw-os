@@ -68,7 +68,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         "perms" => dispatch_builtin(args, "perms", perms::run),
         "cron" => dispatch_builtin(args, "cron", cron::run),
         "trace" => dispatch_builtin(args, "trace", trace::run),
-        "agent" => dispatch_builtin(args, "agent", agent::run),
+        "agent" => dispatch_agent(args),
         "ai" => dispatch_builtin(args, "ai", ai::run),
         "model" => dispatch_builtin(args, "model", model::run),
         "engine" => dispatch_builtin(args, "engine", engine_pkg::run),
@@ -1587,6 +1587,35 @@ fn show_app_schema(app_name: &str, app: &apps::App) -> Result<Option<String>, St
         "commands": commands,
     });
     Ok(Some(output.to_string()))
+}
+
+/// Special-case dispatcher for `cos agent` that turns a bare
+/// invocation (no subcommand) on an interactive TTY into either
+/// `setup` (when the agent has not been configured yet) or `chat`
+/// (when it has). Falls through to the standard help-table behavior
+/// for non-TTY callers — scripts piping `cos agent | jq` still see
+/// the machine-readable command list — and for explicit `--help`.
+fn dispatch_agent(args: &[String]) -> Result<Option<String>, String> {
+    // Explicit help should not be hijacked.
+    let explicit_help = args.len() >= 2
+        && matches!(args[1].as_str(), "--help" | "-h" | "help" | "--schema");
+    if !explicit_help && args.len() == 1 {
+        use std::io::IsTerminal;
+        let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+        if interactive {
+            let cfg = &crate::config::get().agent;
+            let landing = if agent::setup::is_ready(cfg).is_ok() {
+                "chat"
+            } else {
+                "setup"
+            };
+            let mut rewritten: Vec<String> = Vec::with_capacity(2);
+            rewritten.push(args[0].clone());
+            rewritten.push(landing.to_string());
+            return dispatch_builtin(&rewritten, "agent", agent::run);
+        }
+    }
+    dispatch_builtin(args, "agent", agent::run)
 }
 
 fn dispatch_builtin(
