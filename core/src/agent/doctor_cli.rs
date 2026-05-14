@@ -318,11 +318,35 @@ fn check_memory() -> Value {
                 "stats": stats_block,
             })
         }
-        Err(e) => json!({
-            "status": "fail",
-            "path": paths::agent_memory_db_path().display().to_string(),
-            "error": e.to_string(),
-        }),
+        Err(e) => {
+            let err_str = e.to_string();
+            let path = paths::agent_memory_db_path();
+            let parent = path.parent().map(|p| p.display().to_string()).unwrap_or_default();
+            let fix = if err_str.to_lowercase().contains("permission denied")
+                || err_str.to_lowercase().contains("eperm")
+            {
+                Some(format!(
+                    "ensure `{parent}` is writable by the user running cos, e.g.: sudo install -d -m 0755 -o $USER {parent}"
+                ))
+            } else if err_str.to_lowercase().contains("no such file")
+                || err_str.to_lowercase().contains("enoent")
+            {
+                Some(format!(
+                    "create the parent dir: sudo install -d -m 0755 -o $USER {parent}"
+                ))
+            } else {
+                None
+            };
+            let mut entry = json!({
+                "status": "fail",
+                "path": path.display().to_string(),
+                "error": err_str,
+            });
+            if let Some(f) = fix {
+                entry["fix"] = json!(f);
+            }
+            entry
+        }
     };
 
     // Semantic store is opt-in (needs an embedder configured). When
@@ -337,6 +361,7 @@ fn check_memory() -> Value {
             "status": "warn",
             "configured": false,
             "reason": "no embedder configured",
+            "fix": "set `agent.semantic_embedder` in /etc/cos/config.json (or COS_CONFIG_PATH) — semantic memory is opt-in",
         }),
         Err(e) => json!({
             "status": "fail",
@@ -379,11 +404,17 @@ fn check_memory() -> Value {
 
 fn check_log_file(path: &Path, label: &str) -> Value {
     if !path.exists() {
+        // Demoted from "warn" to "ok": an empty/absent log on a fresh
+        // install just means the user hasn't run agent commands yet,
+        // which isn't actionable and was the most common false-alarm
+        // in `cos agent doctor` output.
         return json!({
-            "status": "warn",
+            "status": "ok",
             "label": label,
             "path": path.display().to_string(),
-            "reason": "log file not yet created",
+            "lines": 0,
+            "bytes": 0,
+            "note": "log file not yet created (no agent activity recorded yet)",
         });
     }
     let lines = match std::fs::read_to_string(path) {
@@ -713,12 +744,22 @@ mod tests {
     }
 
     #[test]
-    fn check_log_file_warns_when_missing() {
+    fn check_log_file_reports_ok_with_note_when_missing() {
         let tmp = tempfile::tempdir().unwrap();
         let p = tmp.path().join("does-not-exist.jsonl");
         let v = check_log_file(&p, "test");
-        assert_eq!(v["status"], json!("warn"));
+        // Missing log files are normal on fresh installs; doctor
+        // should not warn (which would be alarmist) but should
+        // explain why lines/bytes are zero.
+        assert_eq!(v["status"], json!("ok"));
         assert_eq!(v["label"], json!("test"));
+        assert_eq!(v["lines"], json!(0));
+        assert_eq!(v["bytes"], json!(0));
+        assert!(
+            v["note"].as_str().unwrap_or("").contains("not yet created"),
+            "expected note about not-yet-created log, got {:?}",
+            v["note"]
+        );
     }
 
     #[test]

@@ -1,6 +1,7 @@
 mod agent;
 mod ai;
 mod apps;
+mod approvals;
 mod audit;
 mod bridge;
 mod browser;
@@ -42,7 +43,16 @@ fn main() {
         }
         Ok(None) => {}
         Err(e) => {
-            let err = serde_json::json!({"error": e.to_string()});
+            // If a primitive returned a structured JSON error envelope as
+            // its Err string (e.g. `{"error":"agent not configured",
+            // "fix":"cos agent setup"}`), surface it as-is instead of
+            // re-wrapping it in another `{"error":"..."}` layer. That
+            // double-encoding made the structured fields invisible to
+            // both humans and `jq` consumers.
+            let err = match serde_json::from_str::<serde_json::Value>(&e) {
+                Ok(v) if v.is_object() => v,
+                _ => serde_json::json!({"error": e.to_string()}),
+            };
             println!("{}", err);
             process::exit(1);
         }
