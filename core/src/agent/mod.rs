@@ -3548,7 +3548,15 @@ fn run_active_provider_probe(
             });
         }
     };
-    let provider = crate::ai::gate::wrap_for_system(provider);
+    // NOTE: we deliberately do NOT wrap with `ai::gate::wrap_for_system`
+    // here. The probe is an OS-internal diagnostic — it's the kernel
+    // calling its own LLM stack to confirm the user's freshly-typed
+    // configuration works. It is NOT an app-→AI call, so it should
+    // not consume the system-agent budget bucket and it must not be
+    // gated by the caps system (`cos agent setup` is typically run
+    // from a user TTY with no upstream session, so requiring
+    // `COS_SESSION` here would make the post-setup probe always fail
+    // with "Permission denied (no active session)").
 
     let configured = provider.is_configured();
     let req = ChatRequest {
