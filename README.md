@@ -1,10 +1,10 @@
 # Claw OS
 
-The operating system for [OpenClaw](https://github.com/openclaw/openclaw).
+The OS for agents.
 
-Linux, macOS, and Windows were designed for humans — they return pixels, terminal text, and GUI windows. Claw OS was designed for agents — every system call returns structured data, every process is tracked by session, and every operation is automatically audited.
+Linux, macOS, and Windows were designed for humans — they return pixels, terminal text, and GUI windows. Claw OS was designed for agents — every system call returns structured data, every process is tracked by session, every operation is automatically audited, and an agent (`Claw`) is part of the OS.
 
-OpenClaw runs on your devices, in your channels, with your rules. Claw OS is where it lives.
+Run it headless as an agent runtime, or boot the full desktop (a forked COSMIC environment) and use it like any other Linux distro — with the agent baked into the panel.
 
 ## Beyond Linux
 
@@ -12,75 +12,54 @@ Claw OS provides primitives that traditional operating systems don't:
 
 | Capability | Linux | Claw OS |
 |---|---|---|
+| **Built-in agent** | None | `cos agent ask/chat/setup` — local-first, LLM-pluggable, Spotlight-style overlay (Super+A), voice input (Super+Shift+A) |
 | **Structured I/O** | Text stdout | JSON from every command |
 | **Checkpoint / Rollback** | None | OverlayFS — snapshot, diff, undo any file changes |
-| **Permission Model** | uid/rwx (for humans) | Tier + Scope (for agents: 4 levels, path-scoped) |
-| **Process Coordination** | Raw pipes, signals | IPC messages, locks, barriers, **streaming named pipes** |
-| **Process Hierarchy** | PIDs, process groups | Session IDs, named groups, parent-child with context inheritance |
+| **Permission Model** | uid/rwx (for humans) | Capability system — verb + scope (file/host/app/...) with risk-tiered roles |
+| **Interactive Consent** | sudo (binary yes/no) | Approval queue — gated ops surface to a panel applet and `cos perms approve/deny/ask` |
+| **Process Coordination** | Raw pipes, signals | IPC messages, locks, barriers, streaming named pipes |
+| **Process Hierarchy** | PIDs, process groups | Session IDs, named groups, parent-child context inheritance |
 | **Error Recovery** | "Permission denied" | Structured JSON with recovery commands to try |
-| **Guardrails** | None | Rapid respawn detection, destructive command warnings |
 | **Service Management** | systemd (complex) | Lifecycle hooks, graceful drain, dependency-ordered shutdown |
-| **Browser** | Not included | Built-in Chromium engine, URL → Markdown in one call |
+| **Browser** | Not included | Built-in Chromium engine — URL → Markdown in one call |
 | **Audit** | Optional, complex | Every operation logged automatically |
 | **Credential Management** | env vars, plaintext files | AES-256-GCM encrypted store with namespaces, TTL, and bundles |
 | **Job Scheduling** | crond (no context) | Agent-native cron with tier/scope/credential context, overlap protection |
-| **Event System** | inotify (raw events) | Multi-source aggregation (file+proc+service), event history |
-
-## Architecture
-
-```
-cos (Rust binary, ~5800 LOC)
-│
-├── OS Primitives (cos <name> <command>)
-│   ├── sys         System info, /proc, cgroup
-│   ├── proc        Process sessions, groups, hierarchy
-│   ├── checkpoint  OverlayFS snapshot, diff, rollback
-│   ├── sandbox     Namespace isolation, cgroup v2, seccomp
-│   ├── ipc         Messages, locks, barriers, streaming pipes
-│   ├── watch       inotify, multi-source aggregation, event history
-│   ├── service     Lifecycle hooks, graceful shutdown
-│   ├── credential  AES-256-GCM encrypted store, namespaces, TTL
-│   ├── cron        Agent-native job scheduler
-│   ├── netfilter   Outbound firewall with rate limiting
-│   ├── policy      Tier + Scope permissions, elevation
-│   └── browser     cos-browser (Obscura) CDP server lifecycle
-│
-└── Apps (cos app <name> <command>)
-    ├── fs          File operations with metadata and search
-    ├── exec        Command execution with language detection
-    ├── web         URL → text/links/JSON, screenshots (cos-browser + V8)
-    ├── db          SQLite databases
-    ├── doc         PDF, DOCX, XLSX, PPTX, CSV reader
-    ├── net         HTTP client
-    ├── kv          Key-value store
-    ├── log         Audit log search
-    ├── notify      Notifications
-    ├── pkg         Package management
-    ├── search      Web and image search (Google, Brave)
-    ├── email       Send, search, read email (SMTP, Gmail, Outlook)
-    └── calendar    Events and scheduling (local SQLite, Google, Outlook)
-```
+| **Event System** | inotify (raw events) | Multi-source aggregation (file + proc + service), event history |
+| **Skills** | None | Markdown recipes the agent loads on demand; ships kernel-primitive references in `skills/claw-os/` |
+| **Local Inference** | None | `cos model` + `cos engine` manage on-device LLM runtimes (llama.cpp, vllm, …) |
 
 ## Quick Start
+
+### Docker
 
 ```bash
 docker pull ghcr.io/xiaoyu-work/claw-os:latest
 docker run -it --name claw -v ./workspace:/workspace ghcr.io/xiaoyu-work/claw-os
 ```
 
-You're in. Try:
+Other targets — bootable ISO (live + installer), WSL image, and `.deb` + apt repo — are produced from `packaging/`. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+### Drive the OS
 
 ```bash
-cos                                    # see OS primitives
-cos app                                # see available apps
+cos                                    # list primitives
+cos app                                # list built-in apps
 cos sys info                           # system information
-cos app web read https://example.com   # fetch a web page as Markdown
 cos checkpoint create "clean state"    # snapshot the workspace
-cos checkpoint diff                    # see what changed
+cos app web read https://example.com   # fetch a page as Markdown
 ```
 
-See [docs/00-features.md](docs/00-features.md) for the complete feature catalog, or [CONTRIBUTING.md](CONTRIBUTING.md) to build from source.
+### Talk to the agent
+
+```bash
+cos agent setup                                # one-time: pick provider, store key
+cos agent ask "find the largest files and tell me why"
+cos agent chat                                 # interactive REPL
+```
+
+On the desktop, **Super+A** opens the Spotlight-style agent overlay; **Super+Shift+A** arms voice input.
 
 ## License
 
-MIT
+MIT for the kernel and apps. Vendored desktop + browser sources keep their upstream licenses — see [`desktop/PROVENANCE.md`](desktop/PROVENANCE.md) and [`crates/cos-browser/`](crates/cos-browser/).
