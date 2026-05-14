@@ -293,25 +293,106 @@ fn wizard_cmd(verify_after: bool) -> Result<Value, String> {
     let provider = providers[picked - 1].to_string();
 
     // ---- Step 2: model ---------------------------------------------------
+    // The provider trait's `supported_models()` mostly echoes the
+    // configured value — useless for validation. We use the static
+    // `llm::metadata` catalogue instead, which has real names, context
+    // windows, and pricing for the major providers. When the catalogue
+    // is non-empty we let the user pick by number; when it's empty
+    // (e.g. `openai_compat`, `ollama`) we fall back to free-form.
     let known = llm::metadata::list_for_provider(&provider);
     let _ = writeln!(e);
-    if !known.is_empty() {
+    let model = if !known.is_empty() {
         let _ = writeln!(e, "Known models for `{provider}`:");
-        for m in &known {
-            let _ = writeln!(e, "  - {}", m.name);
+        for (i, m) in known.iter().enumerate() {
+            let _ = writeln!(
+                e,
+                "  {:>2}. {:30} ({} ctx)",
+                i + 1,
+                m.name,
+                fmt_ctx_window(m.context_window),
+            );
+        }
+        let _ = write!(
+            e,
+            "Pick a number (1-{}) or type a model name: ",
+            known.len()
+        );
+        let _ = e.flush();
+        let raw = read_line()?.trim().to_string();
+        if raw.is_empty() {
+            return Err("model name cannot be empty".into());
+        }
+        if let Ok(idx) = raw.parse::<usize>() {
+            if idx < 1 || idx > known.len() {
+                return Err(format!(
+                    "out of range: {idx} (expected 1-{})",
+                    known.len()
+                ));
+            }
+            known[idx - 1].name.to_string()
+        } else {
+            // Free-form. If it's not in the known table for ANY provider,
+            // warn and confirm. If it's in the table but for a different
+            // provider, surface that mismatch loudly — picking `gpt-4o`
+            // under provider `anthropic` is almost always a mistake.
+            match llm::metadata::lookup(&raw) {
+                Some(m) if m.provider.eq_ignore_ascii_case(&provider) => raw,
+                Some(m) => {
+                    let _ = writeln!(e);
+                    let _ = writeln!(
+                        e,
+                        "⚠  `{}` is registered as a `{}` model, not `{provider}`.",
+                        raw, m.provider
+                    );
+                    let _ = write!(e, "Use it anyway? (y/N): ");
+                    let _ = e.flush();
+                    let yn = read_line()?.trim().to_ascii_lowercase();
+                    if !matches!(yn.as_str(), "y" | "yes") {
+                        return Err(format!(
+                            "model `{raw}` belongs to provider `{}`, refusing under `{provider}`",
+                            m.provider
+                        ));
+                    }
+                    raw
+                }
+                None => {
+                    let _ = writeln!(e);
+                    let _ = writeln!(
+                        e,
+                        "⚠  `{raw}` is not in the bundled known-models catalogue for `{provider}`."
+                    );
+                    let _ = writeln!(
+                        e,
+                        "   (That just means we have no pricing / context-window metadata —"
+                    );
+                    let _ = writeln!(e, "   the provider may still recognise it.)");
+                    let _ = write!(e, "Use it anyway? (y/N): ");
+                    let _ = e.flush();
+                    let yn = read_line()?.trim().to_ascii_lowercase();
+                    if !matches!(yn.as_str(), "y" | "yes") {
+                        return Err("aborted: unknown model name".into());
+                    }
+                    raw
+                }
+            }
         }
     } else {
         let _ = writeln!(
             e,
-            "No bundled model metadata for `{provider}` — enter a model identifier."
+            "No bundled model catalogue for `{provider}` — enter the model identifier"
         );
-    }
-    let _ = write!(e, "Model name: ");
-    let _ = e.flush();
-    let model = read_line()?.trim().to_string();
-    if model.is_empty() {
-        return Err("model name cannot be empty".into());
-    }
+        let _ = writeln!(
+            e,
+            "exactly as the upstream API expects it (e.g. `llama3.2:3b` for Ollama)."
+        );
+        let _ = write!(e, "Model name: ");
+        let _ = e.flush();
+        let raw = read_line()?.trim().to_string();
+        if raw.is_empty() {
+            return Err("model name cannot be empty".into());
+        }
+        raw
+    };
 
     // ---- Step 3: credential ---------------------------------------------
     let mut credential_name: Option<String> = None;
@@ -469,6 +550,16 @@ fn wizard_cmd(verify_after: bool) -> Result<Value, String> {
         "verified": probe_ok,
         "probe": probe_value,
     }))
+}
+
+fn fmt_ctx_window(tokens: u32) -> String {
+    if tokens >= 1_000_000 {
+        format!("{:.1}M", tokens as f64 / 1_000_000.0)
+    } else if tokens >= 1_000 {
+        format!("{}K", tokens / 1_000)
+    } else {
+        format!("{tokens}")
+    }
 }
 
 fn default_env_name(provider: &str) -> String {
