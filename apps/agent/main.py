@@ -1,9 +1,10 @@
 """Agent — open the ClawOS Agent desktop window.
 
 This app is the GUI face of the system-level Agent kernel
-(`cos agent`). It opens a windowed Chromium (site-specific browser)
-pointed at the local cos-agent-bridge HTTP server, which serves the
-React chat UI and proxies turns to the kernel.
+(`cos agent`). It prefers the native libcosmic UI binary
+(`cos-agent-ui`) when present, falling back to a windowed
+Chromium pointed at the local cos-agent-bridge HTTP server
+when the native binary isn't installed yet.
 
 The bridge is normally auto-started by the cos-agent-bridge.service
 user-scoped systemd unit at login. If the port file is missing we
@@ -66,6 +67,18 @@ def _find_browser():
     return None, None
 
 
+def _find_native_ui():
+    """Return path to `cos-agent-ui` if installed, else None.
+
+    The native libcosmic UI is the preferred surface: same brand, same
+    SSE protocol, no chromium dependency, full GPU rendering through
+    the COSMIC compositor. When it's missing (overlay-only rootfs,
+    pre-cutover images), we fall back to launching chromium against
+    the bridge's static React export.
+    """
+    return shutil.which("cos-agent-ui")
+
+
 def _ensure_port():
     """Get the bridge port, starting the bridge on demand if needed."""
     port = _read_port(timeout=0.5)
@@ -83,8 +96,30 @@ def _cmd_url(_args):
     return {"url": f"http://127.0.0.1:{port}/", "port": port}
 
 
+def _exec_native(extra_args):
+    """Replace this process with the native libcosmic UI binary."""
+    native = _find_native_ui()
+    if not native:
+        return None
+    try:
+        os.execv(native, [native, *extra_args])
+    except OSError as exc:
+        return {"error": f"failed to launch cos-agent-ui: {exc}"}
+    return {"error": "execv returned"}  # unreachable on success
+
+
 def _cmd_open(_args):
-    """Open the Agent window. Replaces this process with the browser."""
+    """Open the Agent window.
+
+    Prefers `cos-agent-ui` (native libcosmic). Falls back to the
+    chromium-backed React app served by the bridge.
+    """
+    # Native path: doesn't need the bridge port up-front — the binary
+    # reads it from the port file itself and shows an in-app error if
+    # the bridge isn't up. Avoids the 5s systemd wait on the happy path.
+    if _find_native_ui():
+        return _exec_native([])
+
     port = _ensure_port()
     if port is None:
         return {
@@ -97,7 +132,7 @@ def _cmd_open(_args):
     if not browser:
         return {
             "error": "no supported windowed browser found",
-            "hint": "apt-get install chromium",
+            "hint": "apt-get install chromium  (or install cos-agent-ui)",
             "url": url,
         }
 
@@ -128,19 +163,23 @@ def _cmd_open(_args):
 def _cmd_overlay(args):
     """Open the Spotlight-style quick-summon overlay.
 
-    Uses a distinct --user-data-dir (and therefore a distinct chromium
-    singleton lock), so:
-      * pressing Super+A while no overlay is open starts a fresh one,
-      * pressing Super+A again brings the existing overlay window to
-        the foreground (chromium's profile-lock behavior).
+    Native path: spawn `cos-agent-ui --overlay`. The window is its own
+    compact Esc-to-close surface; the libcosmic compositor handles the
+    re-summon (focusing an existing instance) for us.
 
-    The React UI reads the `overlay=1` query param to switch to its
-    compact layout and binds Escape to `window.close()` so the user
-    can dismiss without touching the mouse.
+    Chromium fallback: site-specific browser window pointed at the
+    bridge's `/?overlay=1` URL. Uses a distinct --user-data-dir so the
+    React UI's `overlay=1` query param triggers the compact layout.
 
     Optional `--voice` arms the mic on open (used by Super+Shift+A).
+    Currently only honored by the chromium fallback — native `--voice`
+    will land with the cos-agent-ui voice port (Stage 3).
     """
     voice = "--voice" in args
+
+    if _find_native_ui():
+        return _exec_native(["--overlay"])
+
     port = _ensure_port()
     if port is None:
         return {
@@ -157,7 +196,7 @@ def _cmd_overlay(args):
     if not browser:
         return {
             "error": "no supported windowed browser found",
-            "hint": "apt-get install chromium",
+            "hint": "apt-get install chromium  (or install cos-agent-ui)",
             "url": url,
         }
 
@@ -187,7 +226,7 @@ def _cmd_overlay(args):
 def _schema():
     return {
         "open": {
-            "description": "Open the ClawOS Agent window (windowed chromium)",
+            "description": "Open the ClawOS Agent window (native cos-agent-ui, chromium fallback)",
             "parameters": [],
             "example": "cos app agent open",
         },
@@ -195,8 +234,8 @@ def _schema():
             "description": "Open the Spotlight-style Super+A quick-summon overlay",
             "parameters": [
                 {"name": "--voice", "type": "boolean", "required": False,
-                 "description": "Auto-arm the microphone on open", "kind": "flag",
-                 "default": False},
+                 "description": "Auto-arm the microphone on open (chromium fallback only for now)",
+                 "kind": "flag", "default": False},
             ],
             "example": "cos app agent overlay --voice",
         },
@@ -236,7 +275,7 @@ def main():
         return
     cmd, rest = argv[0], argv[1:]
     result = run(cmd, rest)
-    # _cmd_open exec's on success and never returns to here.
+    # _cmd_open / _cmd_overlay exec on the happy path and never return.
     print(json.dumps(result, indent=2, ensure_ascii=False))
     if isinstance(result, dict) and "error" in result:
         sys.exit(1)

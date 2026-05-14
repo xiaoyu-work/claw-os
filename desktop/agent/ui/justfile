@@ -1,0 +1,35 @@
+name := 'cos-agent-ui'
+
+rootdir := ''
+prefix := '/usr'
+
+base-dir := absolute_path(clean(rootdir / prefix))
+
+cargo-target-dir := env('CARGO_TARGET_DIR', '../target')
+bin-src := cargo-target-dir / 'release' / name
+bin-dst := base-dir / 'bin' / name
+
+# Default recipe: build release
+default: build-release
+
+# Compile with debug profile
+build-debug *args:
+    cargo build {{args}}
+
+# Compile with release profile
+build-release *args: (build-debug '--release' args)
+
+# Clippy
+check *args:
+    cargo clippy --all-features {{args}}
+
+# Install just the binary; the .desktop launcher is shared with the
+# legacy React UI under `rootfs/overlay/usr/share/applications/` and
+# points at `cos app agent open`, which routes through `apps/agent`
+# and now prefers `cos-agent-ui` when present.
+install:
+    install -Dm0755 {{bin-src}} {{bin-dst}}
+
+uninstall:
+    rm -f {{bin-dst}}
+

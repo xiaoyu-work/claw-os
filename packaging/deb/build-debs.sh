@@ -116,6 +116,18 @@ else
     echo "  :: WARNING — cos-agent-bridge binary not built; skipping" >&2
 fi
 
+# Binary: cos-agent-ui (native libcosmic chat UI for com.clawos.Agent).
+# Also optional — `cos app agent open` falls back to chromium against
+# the bridge's static React app when this binary isn't present, so
+# rootfs images without it stay functional.
+COS_AGENT_UI_BIN="$(find_bin cos-agent-ui || true)"
+if [ -n "$COS_AGENT_UI_BIN" ] && [ -f "$COS_AGENT_UI_BIN" ]; then
+    echo "  :: cos-agent-ui      <- $COS_AGENT_UI_BIN"
+    install -m 755 "$COS_AGENT_UI_BIN" "$BASE_STAGE/usr/local/bin/cos-agent-ui"
+else
+    echo "  :: WARNING — cos-agent-ui binary not built; chromium fallback active" >&2
+fi
+
 # Agent web SPA: ship whatever Next/Vite export lives at
 # desktop/agent/web/out or .next/standalone. Falls back to a stub
 # index.html so the bridge's static file server has something to

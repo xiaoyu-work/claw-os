@@ -20,7 +20,7 @@ use std::env;
 use cosmic::app::{Core, Settings, Task};
 use cosmic::iced::keyboard::{Key, key::Named};
 use cosmic::iced::{Alignment, Length, Limits, Subscription, event};
-use cosmic::widget::{button, column, container, row, scrollable, text, text_input};
+use cosmic::widget::{button, column, container, markdown, row, scrollable, text, text_input};
 use cosmic::{Application, Element, executor, theme, widget};
 use tracing::warn;
 
@@ -60,6 +60,8 @@ pub enum Message {
     StreamEnded,
     /// User pressed Esc — only meaningful in overlay mode.
     EscapePressed,
+    /// Markdown link clicked in a rendered assistant message.
+    LinkClicked(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -177,6 +179,13 @@ impl Application for App {
             Message::EscapePressed => {
                 if self.flags.overlay {
                     std::process::exit(0);
+                }
+                Task::none()
+            }
+
+            Message::LinkClicked(uri) => {
+                if let Err(e) = open_uri(&uri) {
+                    warn!("failed to open link {uri}: {e:#}");
                 }
                 Task::none()
             }
@@ -450,18 +459,42 @@ fn message_bubble(msg: &ChatMessage, compact: bool) -> Element<Message> {
         ChatRole::Assistant => "Agent",
     };
 
-    let body_text = if msg.content.is_empty() && msg.in_progress {
-        "…".to_string()
-    } else {
-        msg.content.clone()
-    };
-
     let body_size = if compact { 12.0 } else { 14.0 };
 
-    let bubble = container(
+    let body: Element<Message> = if msg.content.is_empty() && msg.in_progress {
+        text("…").size(body_size).into()
+    } else {
+        match msg.role {
+            // The user side never carries markdown — render verbatim so
+            // they see exactly what they typed.
+            ChatRole::User => text(msg.content.clone()).size(body_size).into(),
+            // The agent stream is markdown by convention (the kernel's
+            // system prompt is markdown-friendly, and tool messages get
+            // serialized as fenced code blocks). Parse and render it
+            // through cosmic's catalog-themed markdown widget.
+            ChatRole::Assistant => {
+                let items: Vec<markdown::Item> = markdown::parse(&msg.content).collect();
+                // Cosmic Theme isn't directly assignable to the iced
+                // toolkit's markdown::Style (different `Theme` type), so
+                // we pick a built-in palette by current mode. The
+                // Catalog impl on cosmic::Theme handles surface colors
+                // separately.
+                let palette = if is_dark() {
+                    cosmic::iced::theme::Palette::DARK
+                } else {
+                    cosmic::iced::theme::Palette::LIGHT
+                };
+                let settings = markdown::Settings::with_text_size(body_size, palette);
+                markdown::view(&items, settings)
+                    .map(|uri: markdown::Uri| Message::LinkClicked(uri))
+            }
+        }
+    };
+
+    container(
         column()
             .push(text(role_label).size(11.0))
-            .push(text(body_text).size(body_size))
+            .push(body)
             .spacing(spacing.space_xxs),
     )
     .padding(spacing.space_xs)
@@ -469,9 +502,21 @@ fn message_bubble(msg: &ChatMessage, compact: bool) -> Element<Message> {
         ChatRole::User => theme::Container::Primary,
         ChatRole::Assistant => theme::Container::Card,
     })
-    .width(Length::Fill);
+    .width(Length::Fill)
+    .into()
+}
 
-    bubble.into()
+/// Best-effort URL opener used by the markdown link handler.
+///
+/// We deliberately don't pull in `webbrowser` or `xdg-open` Rust
+/// bindings — both are thin wrappers that just spawn the system
+/// handler. Spawning `xdg-open` directly is one less dependency to
+/// audit and matches what every other COSMIC app does.
+fn open_uri(uri: &str) -> std::io::Result<()> {
+    std::process::Command::new("xdg-open")
+        .arg(uri)
+        .spawn()
+        .map(|_| ())
 }
 
 fn is_dark() -> bool {
