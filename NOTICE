@@ -18,3 +18,14 @@ contributors are tracked via the git history of this repository.
 
 The Claw OS components (everything outside crates/obscura-* and
 crates/cos-browser) remain MIT-licensed; see LICENSE.
+
+This product also includes software from Open Agents
+(https://github.com/vercel-labs/open-agents), Copyright (c) 2026 Vercel, Inc.,
+licensed under the MIT License. The Open Agents web UI source has been
+vendored under desktop/agent/web/ (and its inlined workspace packages under
+desktop/agent/web/packages/). The original MIT license text is preserved
+verbatim at desktop/agent/web/LICENSE. Cloud-coding-agent specific subsystems
+(GitHub integration, sandbox VM orchestration, PR workflow, auth, database)
+have been removed; remaining surface area is chat, sessions, model selector,
+attachments, and voice input UI. Modifications by Claw OS contributors are
+tracked via the git history of this repository.
