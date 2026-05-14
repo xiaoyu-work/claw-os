@@ -1038,3 +1038,59 @@ full-name = Full name
 invalid-username = Invalid username
 password-mismatch = Password and confirmation must match
 save = Save
+
+## Agent
+
+agent = Agent
+    .desc = Configure the language, voice, and embedding providers used by the on-device assistant
+
+agent-llm = Language model
+    .desc = The conversational LLM that powers the chat assistant
+agent-tts = Text to speech
+    .desc = Voice used when the assistant speaks back
+agent-stt = Speech to text
+    .desc = Transcribes the microphone for push-to-talk and dictation
+agent-imagegen = Image generation
+    .desc = Model used by the assistant when asked to draw or render images
+agent-embed = Embeddings
+    .desc = Vector model used for memory, search, and retrieval
+
+agent-status = Status
+agent-configuration = Configuration
+agent-actions = Actions
+
+agent-status-ready = Ready
+agent-status-not-ready = Not configured
+agent-status-loading = Loading current configuration…
+agent-status-load-error = Could not read current configuration
+
+agent-config-path = Config file
+agent-providers-loading = Loading provider list…
+agent-providers-empty = No providers are available in this build.
+
+agent-provider = Provider
+agent-model = Model
+agent-model-custom = Custom model name
+    .desc = Override the catalogue selection with any model the provider accepts
+
+agent-key-mode = API key
+agent-key-mode-stored = Store in the system credential store
+agent-key-mode-env = Read from an environment variable at runtime
+agent-key-mode-none = No credential required
+agent-key-input = New API key
+    .desc = Leave blank to keep the previously stored credential
+agent-key-placeholder = Paste secret here
+agent-key-env = Environment variable name
+    .desc = The kernel will read the secret from this variable when the agent runs
+agent-key-stored-as = Stored as
+agent-key-not-required = This provider does not require an API key.
+agent-key-source = Key source
+
+agent-save = Save
+agent-test = Test connection
+agent-reset = Reset
+
+agent-apply-ok = Saved:
+agent-apply-failed = Save failed
+agent-test-ok = Test succeeded
+agent-test-failed = Test failed

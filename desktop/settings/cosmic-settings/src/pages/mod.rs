@@ -5,6 +5,8 @@ use cosmic_settings_page::Entity;
 
 #[cfg(feature = "page-accessibility")]
 pub mod accessibility;
+#[cfg(feature = "page-agent")]
+pub mod agent;
 pub mod applications;
 #[cfg(feature = "page-bluetooth")]
 pub mod bluetooth;
@@ -35,6 +37,8 @@ pub enum Message {
     AccessibilityShortcuts(input::keyboard::shortcuts::ShortcutMessage),
     #[cfg(feature = "page-about")]
     About(system::about::Message),
+    #[cfg(feature = "page-agent")]
+    Agent(agent::Modality, agent::Message),
     Appearance(desktop::appearance::Message),
     Applications(applications::Message),
     #[cfg(feature = "page-bluetooth")]

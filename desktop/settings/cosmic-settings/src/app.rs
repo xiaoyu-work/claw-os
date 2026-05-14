@@ -5,6 +5,8 @@ use crate::PageCommands;
 use crate::config::Config;
 #[cfg(feature = "page-accessibility")]
 use crate::pages::accessibility;
+#[cfg(feature = "page-agent")]
+use crate::pages::agent;
 use crate::pages::applications;
 #[cfg(feature = "page-bluetooth")]
 use crate::pages::bluetooth;
@@ -84,6 +86,8 @@ impl SettingsApp {
             }
             #[cfg(feature = "page-about")]
             PageCommands::About => self.pages.page_id::<system::about::Page>(),
+            #[cfg(feature = "page-agent")]
+            PageCommands::Agent => self.pages.page_id::<agent::Page>(),
             PageCommands::Appearance { command: _ } => {
                 self.pages.page_id::<desktop::appearance::Page>()
             }
@@ -231,6 +235,8 @@ impl cosmic::Application for SettingsApp {
         #[cfg(feature = "page-input")]
         app.insert_page::<input::Page>();
         app.insert_page::<applications::Page>();
+        #[cfg(feature = "page-agent")]
+        app.insert_page::<agent::Page>();
         app.insert_page::<time::Page>();
         app.insert_page::<system::Page>();
 
@@ -416,6 +422,34 @@ impl cosmic::Application for SettingsApp {
                         return page.update(message).map(Into::into);
                     }
                 }
+                #[cfg(feature = "page-agent")]
+                crate::pages::Message::Agent(modality, message) => match modality {
+                    agent::Modality::Llm => {
+                        if let Some(page) = self.pages.page_mut::<agent::llm::Page>() {
+                            return page.update(message).map(Into::into);
+                        }
+                    }
+                    agent::Modality::Tts => {
+                        if let Some(page) = self.pages.page_mut::<agent::tts::Page>() {
+                            return page.update(message).map(Into::into);
+                        }
+                    }
+                    agent::Modality::Stt => {
+                        if let Some(page) = self.pages.page_mut::<agent::stt::Page>() {
+                            return page.update(message).map(Into::into);
+                        }
+                    }
+                    agent::Modality::Imagegen => {
+                        if let Some(page) = self.pages.page_mut::<agent::imagegen::Page>() {
+                            return page.update(message).map(Into::into);
+                        }
+                    }
+                    agent::Modality::Embed => {
+                        if let Some(page) = self.pages.page_mut::<agent::embed::Page>() {
+                            return page.update(message).map(Into::into);
+                        }
+                    }
+                },
                 #[cfg(feature = "page-accessibility")]
                 crate::pages::Message::AccessibilityMagnifier(message) => {
                     if let Some(page) = self.pages.page_mut::<accessibility::magnifier::Page>() {

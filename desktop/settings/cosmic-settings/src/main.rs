@@ -64,6 +64,9 @@ pub enum PageCommands {
     /// About settings page
     #[cfg(feature = "page-about")]
     About,
+    /// Agent settings page
+    #[cfg(feature = "page-agent")]
+    Agent,
     /// Appearance settings page
     Appearance {
         #[command(subcommand)]

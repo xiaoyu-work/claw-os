@@ -72,6 +72,7 @@ rust-embed = "8.11.0"
 sctk = { workspace = true, optional = true }
 secure-string = "0.3.0"
 serde = { version = "1.0.228", features = ["derive"] }
+serde_json = { version = "1", optional = true }
 slab = "0.4.12"
 slotmap = "1.1.1"
 static_init = "1.0.4"
@@ -122,6 +123,7 @@ linux = [
     "cosmic-comp-config",
     "page-accessibility",
     "page-about",
+    "page-agent",
     "page-bluetooth",
     "page-date",
     "page-default-apps",
@@ -150,6 +152,7 @@ page-accessibility = [
     "dep:cosmic-settings-a11y-manager-subscription",
 ]
 page-about = ["dep:hostname1-zbus", "dep:sysinfo", "dep:zbus"]
+page-agent = ["dep:serde_json"]
 page-bluetooth = [
     "dep:cosmic-settings-bluetooth-subscription",
     "dep:zbus",
