@@ -1,8 +1,8 @@
 [Unit]
 Description=Claw OS — cos browser engine (Obscura)
 Documentation=https://github.com/xiaoyu-work/claw-os
-After=cos-den-setup.service network-online.target
-Wants=cos-den-setup.service network-online.target
+After=cos-home-setup.service network-online.target
+Wants=cos-home-setup.service network-online.target
 
 [Service]
 Type=simple

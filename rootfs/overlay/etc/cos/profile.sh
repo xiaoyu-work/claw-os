@@ -1,7 +1,9 @@
 #!/bin/bash
 # Claw OS shell profile — sourced on agent login.
 export COS_VERSION="0.1.0"
-export DEN="/den"
+# COS_HOME is the agent's writable workspace. Defaults to $HOME so each
+# user gets their own home (Linux-native); admins can override here.
+export COS_HOME="${COS_HOME:-$HOME}"
 export PATH="/usr/local/bin:$PATH"
 
 # Agent-native: suppress all interactive prompts.
@@ -17,4 +19,4 @@ export PYTHONDONTWRITEBYTECODE=1
 export NEEDRESTART_MODE=a
 export APT_LISTCHANGES_FRONTEND=none
 
-cd "$DEN" 2>/dev/null || true
+cd "$COS_HOME" 2>/dev/null || true

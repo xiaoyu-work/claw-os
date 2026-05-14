@@ -28,7 +28,7 @@ echo "  :: installing $(basename "$BASE_DEB")"
 rm -f \
     "$ROOTFS/usr/local/bin/cos-init" \
     "$ROOTFS/usr/local/bin/cos" \
-    "$ROOTFS/usr/lib/cos/init/setup-den.sh" \
+    "$ROOTFS/usr/lib/cos/init/setup-home.sh" \
     "$ROOTFS/etc/cos/config.json" \
     "$ROOTFS/etc/cos/profile.sh"
 rm -rf \

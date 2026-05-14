@@ -617,7 +617,7 @@ fn recovery_hint(error: &str) -> Option<serde_json::Value> {
     if err_lower.contains("no space left") || err_lower.contains("enospc") {
         return Some(json!({
             "hint": "Disk full. Free space before retrying.",
-            "try": ["cos sys resources", "cos app exec run 'du -sh /den/* | sort -rh | head'"],
+            "try": ["cos sys resources", "cos app exec run 'du -sh $HOME/* | sort -rh | head'"],
         }));
     }
     if err_lower.contains("connection refused") || err_lower.contains("econnrefused") {
@@ -1166,7 +1166,7 @@ fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandSchema>)> {
                         Param::positional("path", "string", true, "File path"),
                         Param::flag("--timeout", "integer", false, "Timeout in seconds"),
                     ],
-                    example: "cos watch file /den/config.json --timeout 30",
+                    example: "cos watch file $HOME/config.json --timeout 30",
                 },
                 CommandSchema {
                     command: "multi",
@@ -1193,7 +1193,7 @@ fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandSchema>)> {
                         ),
                         Param::flag("--timeout", "integer", false, "Timeout in seconds"),
                     ],
-                    example: "cos watch multi --file /den/main.py --proc worker-1 --service my-api --timeout 60",
+                    example: "cos watch multi --file $HOME/main.py --proc worker-1 --service my-api --timeout 60",
                 },
                 CommandSchema {
                     command: "history",
@@ -1709,7 +1709,7 @@ mod tests {
 
     #[test]
     fn recovery_hint_permission_denied() {
-        let hint = recovery_hint("Permission denied on /den/file.txt").unwrap();
+        let hint = recovery_hint("Permission denied on /home/cos/file.txt").unwrap();
         assert_eq!(hint["hint"], "Permission denied. Check file permissions.");
         let try_cmds = hint["try"].as_array().unwrap();
         assert!(try_cmds
@@ -1725,7 +1725,7 @@ mod tests {
 
     #[test]
     fn recovery_hint_file_not_found() {
-        let hint = recovery_hint("No such file or directory: /den/missing").unwrap();
+        let hint = recovery_hint("No such file or directory: /home/cos/missing").unwrap();
         assert_eq!(
             hint["hint"],
             "File or command not found. Verify the path exists."

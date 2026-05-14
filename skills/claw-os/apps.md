@@ -59,13 +59,13 @@ Local events stored in SQLite. Add `--provider google` or `--provider outlook` w
 ## File System
 
 ```bash
-cos app fs ls /den
-cos app fs read /den/file.txt
-cos app fs write /den/output.txt    # reads content from stdin
-cos app fs stat /den/file.txt
-cos app fs search "pattern" /den
-cos app fs rm /den/tmp
-cos app fs mkdir /den/new-dir
+cos app fs ls /home/cos
+cos app fs read /home/cos/file.txt
+cos app fs write /home/cos/output.txt    # reads content from stdin
+cos app fs stat /home/cos/file.txt
+cos app fs search "pattern" /home/cos
+cos app fs rm /home/cos/tmp
+cos app fs mkdir /home/cos/new-dir
 ```
 
 ## Documents
@@ -95,7 +95,7 @@ cos app db databases
 ```bash
 cos app net fetch https://api.example.com/data
 cos app net fetch https://api.example.com/data --method POST --data '{"key": "value"}'
-cos app net download https://example.com/file.zip --output /den/file.zip
+cos app net download https://example.com/file.zip --output /home/cos/file.zip
 ```
 
 ## Key-Value Store

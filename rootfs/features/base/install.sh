@@ -42,7 +42,6 @@ sed -i "s/@COS_VERSION@/$COS_VERSION/g" \
     "$ROOTFS/etc/issue.net"
 
 # Runtime directories.
-mkdir -p "$ROOTFS/den"
 mkdir -p "$ROOTFS/var/lib/cos"
 
 # Source COS profile on every interactive login.

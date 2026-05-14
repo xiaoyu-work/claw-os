@@ -102,8 +102,8 @@ The base image starts from `scratch` (no base image):
 ```dockerfile
 FROM scratch
 COPY build/claw-os-rootfs /
-ENV COS_VERSION=0.3.0 NODE_MAJOR=24 DEN=/den
-WORKDIR /den
+ENV COS_VERSION=0.3.0 NODE_MAJOR=24 COS_HOME=/root HOME=/root
+WORKDIR /root
 ENTRYPOINT ["/usr/local/bin/cos-init"]
 CMD ["/bin/bash", "--login"]
 ```
@@ -117,7 +117,7 @@ This means the image contains **exactly** what's in the rootfs — nothing more.
 docker run -it --privileged ghcr.io/xiaoyu-work/claw-os:latest
 
 # With mounted workspace
-docker run -it --privileged -v ./project:/den ghcr.io/xiaoyu-work/claw-os:latest
+docker run -it --privileged -v ./project:/root ghcr.io/xiaoyu-work/claw-os:latest
 
 # Run a specific command
 docker run --privileged ghcr.io/xiaoyu-work/claw-os:latest cos sys info
@@ -249,8 +249,8 @@ Every privilege elevation is:
 cos checkpoint create "before refactor"
 
 # 2. Agent performs risky changes
-cos app fs write /den/src/main.py --content "..."
-cos app fs rm /den/src/legacy.py
+cos app fs write /home/cos/src/main.py --content "..."
+cos app fs rm /home/cos/src/legacy.py
 cos app exec run "python -m pytest"
 
 # 3. Check what changed
@@ -266,9 +266,9 @@ cos checkpoint rollback
 
 ```bash
 # Orchestrator spawns workers with restricted permissions
-cos proc spawn --session worker-1 --group research --tier 2 --scope /den/research -- python search_api.py "topic A"
-cos proc spawn --session worker-2 --group research --tier 2 --scope /den/research -- python search_api.py "topic B"
-cos proc spawn --session worker-3 --group research --tier 2 --scope /den/research -- python search_api.py "topic C"
+cos proc spawn --session worker-1 --group research --tier 2 --scope /home/cos/research -- python search_api.py "topic A"
+cos proc spawn --session worker-2 --group research --tier 2 --scope /home/cos/research -- python search_api.py "topic B"
+cos proc spawn --session worker-3 --group research --tier 2 --scope /home/cos/research -- python search_api.py "topic C"
 
 # Wait for all to finish
 cos proc wait --group research --timeout 300
@@ -293,7 +293,7 @@ cos sandbox exec \
   --pids 50 \
   --seccomp-profile minimal \
   --ro \
-  -- python /den/untrusted_script.py
+  -- python /home/cos/untrusted_script.py
 
 # Result includes exit code, stdout, stderr, and whether it was killed (OOM, timeout)
 ```
@@ -302,7 +302,7 @@ cos sandbox exec \
 
 ```bash
 # Register and start a custom service
-cos service register --name api --command "python /den/api/server.py" --workdir /den/api --health-url http://localhost:8000/health
+cos service register --name api --command "python /home/cos/api/server.py" --workdir /home/cos/api --health-url http://localhost:8000/health
 cos service start api
 
 # Monitor it
@@ -320,7 +320,7 @@ cos service restart api
 cos service register \
   --name onevalet \
   --command "python -m onevalet" \
-  --workdir /den/onevalet \
+  --workdir /home/cos/onevalet \
   --health-url http://localhost:8000/health \
   --pre-start "python -m alembic upgrade head" \
   --pre-stop "python drain.py" \
@@ -340,7 +340,7 @@ cos cron add health-monitor \
 # Watch for multiple failure signals simultaneously
 cos watch multi \
   --service onevalet \
-  --file /den/onevalet/config.yaml \
+  --file /home/cos/onevalet/config.yaml \
   --timeout 3600
 
 # Graceful shutdown with state preservation
@@ -357,7 +357,6 @@ cos service stop onevalet
 ```json
 {
   "version": "0.1.0",
-  "den": "/den",
   "exec": {
     "timeout": 300,
     "shell": "/bin/bash"
@@ -388,7 +387,7 @@ cos service stop onevalet
 | `COS_BROWSER_BIN` | `cos-browser` | Path to the cos-browser binary |
 | `COS_BROWSER_PORT` | `9222` | Default port for `cos browser start` (CDP server) |
 | `COS_CHROMIUM_BIN` | `chromium` | Chromium binary used only by `web screenshot` |
-| `DEN` | `/den` | Agent workspace path |
+| `COS_HOME` | `$HOME` (resolved at runtime) | Agent workspace path (each user gets their own home) |
 
 ---
 
@@ -467,7 +466,7 @@ Error messages in Claw OS are not strings — they are structured data with acti
   "error": "No space left on device",
   "recovery": {
     "hint": "Disk full. Free space before retrying.",
-    "try": ["cos sys resources", "cos app exec run 'du -sh /den/* | sort -rh | head'"]
+    "try": ["cos sys resources", "cos app exec run 'du -sh /home/cos/* | sort -rh | head'"]
   }
 }
 ```

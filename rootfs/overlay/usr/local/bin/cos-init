@@ -1,18 +1,20 @@
 #!/bin/bash
 # cos-init — Claw OS Docker container PID 1 entrypoint.
-# Sources the cos profile, runs the shared /den setup helper (the same
-# one used by cos-den-setup.service on systemd targets), then execs the
-# requested command.
+# Sources the cos profile, runs the shared agent-home setup helper (the
+# same one used by cos-home-setup.service on systemd targets), then execs
+# the requested command.
 
 set -e
 
 # Source COS profile
 [ -f /etc/cos/profile.sh ] && . /etc/cos/profile.sh
 
-# /den OverlayFS setup. Shared with cos-den-setup.service on non-Docker
-# targets; the helper is idempotent and always exits 0 (overlay failure
-# is non-fatal — see the helper for details).
-/usr/lib/cos/init/setup-den.sh
+# Agent-home OverlayFS setup. Shared with cos-home-setup.service on
+# non-Docker targets; the helper is idempotent and always exits 0
+# (overlay failure is non-fatal — see the helper for details). The
+# script resolves its target from $HOME (set by Docker for the running
+# user — typically /root).
+/usr/lib/cos/init/setup-home.sh
 
 # Execute the requested command (default: bash --login)
 exec "${@:-/bin/bash --login}"

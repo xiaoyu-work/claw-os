@@ -145,8 +145,8 @@ fi
 # Shell scripts shared with all targets.
 install -m 755 "$PROJECT_DIR/rootfs/overlay/usr/local/bin/cos-init" \
     "$BASE_STAGE/usr/local/bin/cos-init"
-install -m 755 "$PROJECT_DIR/rootfs/overlay/usr/lib/cos/init/setup-den.sh" \
-    "$BASE_STAGE/usr/lib/cos/init/setup-den.sh"
+install -m 755 "$PROJECT_DIR/rootfs/overlay/usr/lib/cos/init/setup-home.sh" \
+    "$BASE_STAGE/usr/lib/cos/init/setup-home.sh"
 
 # Config files (declared as conffiles above).
 install -m 644 "$PROJECT_DIR/rootfs/overlay/etc/cos/config.json" \
@@ -241,15 +241,22 @@ mkdir -p "$SYSTEMD_STAGE/usr/lib/systemd/system"
 mkdir -p "$SYSTEMD_STAGE/usr/lib/systemd/user"
 
 render_control "$SCRIPT_DIR/claw-os-systemd/control" "$SYSTEMD_STAGE/DEBIAN/control"
+install -m 644 "$SCRIPT_DIR/claw-os-systemd/conffiles" "$SYSTEMD_STAGE/DEBIAN/conffiles"
 install -m 755 "$SCRIPT_DIR/claw-os-systemd/postinst" "$SYSTEMD_STAGE/DEBIAN/postinst"
 install -m 755 "$SCRIPT_DIR/claw-os-systemd/prerm"    "$SYSTEMD_STAGE/DEBIAN/prerm"
 install -m 755 "$SCRIPT_DIR/claw-os-systemd/postrm"   "$SYSTEMD_STAGE/DEBIAN/postrm"
 
 UNITS_SRC="$PROJECT_DIR/rootfs/features/systemd/overlay/usr/lib/systemd/system"
-install -m 644 "$UNITS_SRC/cos-den-setup.service" \
-    "$SYSTEMD_STAGE/usr/lib/systemd/system/cos-den-setup.service"
+install -m 644 "$UNITS_SRC/cos-home-setup.service" \
+    "$SYSTEMD_STAGE/usr/lib/systemd/system/cos-home-setup.service"
 install -m 644 "$UNITS_SRC/cos-browser.service" \
     "$SYSTEMD_STAGE/usr/lib/systemd/system/cos-browser.service"
+
+# Admin-editable default for cos-home-setup.service.
+DEFAULTS_SRC="$PROJECT_DIR/rootfs/features/systemd/overlay/etc/default"
+mkdir -p "$SYSTEMD_STAGE/etc/default"
+install -m 644 "$DEFAULTS_SRC/cos-home" \
+    "$SYSTEMD_STAGE/etc/default/cos-home"
 
 # User-scoped unit: auto-start cos-agent-bridge in every logged-in
 # user's graphical session. Enabled globally by the postinst.

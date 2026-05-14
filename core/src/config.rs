@@ -16,8 +16,8 @@ const DEFAULT_CONFIG_PATH: &str = "/etc/cos/config.json";
 pub struct CosConfig {
     #[serde(default = "default_version")]
     pub version: String,
-    #[serde(default = "default_den")]
-    pub den: String,
+    #[serde(default = "default_home")]
+    pub home: String,
     #[serde(default)]
     pub exec: ExecConfig,
     #[serde(default)]
@@ -555,8 +555,11 @@ pub struct TtsConfig {
 fn default_version() -> String {
     env!("CARGO_PKG_VERSION").into()
 }
-fn default_den() -> String {
-    "/den".into()
+fn default_home() -> String {
+    // Linux-native: resolve $HOME at runtime so each user gets their own
+    // workspace. Falls back to /root when HOME is unset (e.g., minimal
+    // Docker images where the entrypoint hasn't sourced any profile yet).
+    std::env::var("HOME").unwrap_or_else(|_| "/root".into())
 }
 fn default_exec_timeout() -> u64 {
     300
@@ -718,7 +721,7 @@ impl Default for CosConfig {
     fn default() -> Self {
         Self {
             version: default_version(),
-            den: default_den(),
+            home: default_home(),
             exec: ExecConfig::default(),
             net: NetConfig::default(),
             web: WebConfig::default(),
@@ -882,7 +885,7 @@ pub fn as_env_vars() -> Vec<(String, String)> {
             "COS_WEB_MAX_CONTENT_LENGTH".into(),
             cfg.web.max_content_length.to_string(),
         ),
-        ("COS_DEN".into(), cfg.den.clone()),
+        ("COS_HOME".into(), cfg.home.clone()),
     ]
 }
 
@@ -894,7 +897,9 @@ mod tests {
     fn default_config_has_sensible_values() {
         let cfg = CosConfig::default();
         assert_eq!(cfg.version, env!("CARGO_PKG_VERSION"));
-        assert_eq!(cfg.den, "/den");
+        // home defaults to $HOME at runtime, falling back to /root when unset.
+        let expected_home = std::env::var("HOME").unwrap_or_else(|_| "/root".into());
+        assert_eq!(cfg.home, expected_home);
         assert_eq!(cfg.exec.timeout, 300);
         assert_eq!(cfg.exec.shell, "/bin/bash");
         assert_eq!(cfg.net.timeout, 30);
@@ -906,10 +911,10 @@ mod tests {
 
     #[test]
     fn parse_partial_config() {
-        let json = r#"{"version": "1.0.0", "den": "/custom"}"#;
+        let json = r#"{"version": "1.0.0", "home": "/custom"}"#;
         let cfg: CosConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.version, "1.0.0");
-        assert_eq!(cfg.den, "/custom");
+        assert_eq!(cfg.home, "/custom");
         // Defaults for missing sections
         assert_eq!(cfg.exec.timeout, 300);
         assert_eq!(cfg.web.engine, "cos-browser");
@@ -920,7 +925,7 @@ mod tests {
     fn parse_full_config() {
         let json = r#"{
             "version": "0.1.0",
-            "den": "/den",
+            "home": "/home/cos",
             "exec": {"timeout": 600, "shell": "/bin/zsh"},
             "net": {"timeout": 10, "allow_outbound": false},
             "web": {"engine": "cos-browser", "cdp_port": 9333, "timeout": 60, "max_content_length": 100000}
@@ -942,7 +947,7 @@ mod tests {
         assert!(keys.contains(&"COS_NET_TIMEOUT"));
         assert!(keys.contains(&"COS_WEB_ENGINE"));
         assert!(keys.contains(&"COS_BROWSER_PORT"));
-        assert!(keys.contains(&"COS_DEN"));
+        assert!(keys.contains(&"COS_HOME"));
     }
 
     #[test]

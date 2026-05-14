@@ -1,0 +1,7 @@
+# /etc/default/cos-home — admin-editable target for cos-home-setup.service.
+#
+# Sourced by the systemd unit on boot. If unset, the helper script falls
+# through its own resolution chain (positional arg → $COS_HOME → $HOME →
+# /root). The default below matches the conventional agent user created
+# by the WSL and VM targets (uid 1000, login name 'cos').
+COS_HOME=/home/cos

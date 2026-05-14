@@ -21,9 +21,9 @@ packaging/
 
 | Package | Contains | Architecture | Depends |
 |---|---|---|---|
-| `claw-os-base` | `cos`, `cos-init`, apps, plugins, skills, `/etc/cos/*`, `setup-den.sh` | `amd64` | `bash`, `coreutils`, `ca-certificates` |
+| `claw-os-base` | `cos`, `cos-init`, apps, plugins, skills, `/etc/cos/*`, `setup-home.sh` | `amd64` | `bash`, `coreutils`, `ca-certificates` |
 | `claw-os-browser` | `cos-browser`, `cos-browser-worker`, `browser/service.json` | `amd64` | `claw-os-base (= ${binary:Version})`, `chromium` |
-| `claw-os-systemd` | `cos-den-setup.service`, `cos-browser.service` | `all` | `claw-os-base (= ${binary:Version})`, `systemd` |
+| `claw-os-systemd` | `cos-home-setup.service`, `cos-browser.service`, `/etc/default/cos-home` | `all` | `claw-os-base (= ${binary:Version})`, `systemd` |
 
 ## Build
 

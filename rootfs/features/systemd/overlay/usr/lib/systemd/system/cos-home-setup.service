@@ -1,0 +1,22 @@
+[Unit]
+Description=Claw OS — set up agent-home OverlayFS
+Documentation=https://github.com/xiaoyu-work/claw-os
+DefaultDependencies=no
+After=local-fs.target
+Before=multi-user.target shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# The default agent user on WSL/VM targets is `cos` (uid 1000, see
+# targets/wsl/build.sh and rootfs/features/vm/install.sh). The unit
+# reads the target path from /etc/default/cos-home if present, so
+# admins can override without editing the unit; default falls through
+# to the script's own resolution chain ($COS_HOME → $HOME → /root).
+EnvironmentFile=-/etc/default/cos-home
+ExecStart=/usr/lib/cos/init/setup-home.sh ${COS_HOME}
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

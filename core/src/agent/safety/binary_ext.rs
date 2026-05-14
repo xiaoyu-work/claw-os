@@ -5,8 +5,8 @@
 //! Data-driven core: a maintained allowlist of binary extensions
 //! (driven by what we see in software-development workflows), with
 //! escape hatches for callers that want to override the default
-//! list (e.g., a den has decided to treat a custom `.bin` payload
-//! as text-like JSON-lines).
+//! list (e.g., an installation has decided to treat a custom `.bin`
+//! payload as text-like JSON-lines).
 //!
 //! The classifier is intentionally extension-only — it does NOT
 //! probe magic bytes. That's by design:
@@ -247,7 +247,7 @@ impl BinaryExtensions {
         self
     }
 
-    /// Remove extensions (e.g., a den has decided `.bin` is text).
+    /// Remove extensions (e.g., an installation has decided `.bin` is text).
     pub fn without<I, S>(mut self, drop: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -375,7 +375,7 @@ mod tests {
 
     #[test]
     fn without_drops_from_set() {
-        // A den decides .bin is actually their text-based JSONL
+        // An installation decides .bin is actually their text-based JSONL
         // payload format.
         let c = BinaryExtensions::default().without(["bin"]);
         assert!(!c.contains_extension("bin"));

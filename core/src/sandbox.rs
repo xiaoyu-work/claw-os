@@ -83,7 +83,7 @@ fn cmd_exec(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::PROC_SPAWN, Scope::wild()).map_err(|v| v.to_string())?;
     let mut network = true;
     let mut read_only = false;
-    let mut workspace = "/den".to_string();
+    let mut workspace = crate::config::get().home.clone();
     let mut mem_limit: Option<String> = None; // e.g. "512M", "1G"
     let mut cpu_percent: Option<u32> = None; // e.g. 50 = 50%
     let mut pids_max: Option<u32> = None; // e.g. 100
@@ -513,7 +513,7 @@ fn cmd_create(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::PROC_SPAWN, Scope::wild()).map_err(|v| v.to_string())?;
     let mut network = true;
     let mut mode = "rw".to_string();
-    let mut workspace = "/den".to_string();
+    let mut workspace = crate::config::get().home.clone();
 
     let mut i = 0;
     while i < args.len() {

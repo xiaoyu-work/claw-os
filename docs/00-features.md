@@ -108,7 +108,7 @@ File-based, daemon-free coordination primitives.
 
 Aggregate file, process, and service events into one structured stream.
 
-- `cos watch start --path /den --events create,modify,delete`
+- `cos watch start --path /home/cos --events create,modify,delete`
 - Multi-source aggregation (file + proc + service in one watcher)
 - Bounded event history for after-the-fact querying
 

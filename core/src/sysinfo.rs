@@ -48,11 +48,13 @@ fn cmd_env(args: &[String]) -> Result<Value, String> {
 fn cmd_resources() -> Result<Value, String> {
     let mut result = json!({});
 
-    // Disk usage for den
+    // Disk usage for the agent home (writable workspace).
     #[cfg(unix)]
     {
         use std::ffi::CString;
-        let workspace = env::var("DEN").unwrap_or_else(|_| "/den".into());
+        let workspace = env::var("COS_HOME")
+            .or_else(|_| env::var("HOME"))
+            .unwrap_or_else(|_| "/root".into());
         let c_path = CString::new(workspace.as_bytes())
             .map_err(|e| format!("invalid workspace path for CString: {e}"))?;
         unsafe {

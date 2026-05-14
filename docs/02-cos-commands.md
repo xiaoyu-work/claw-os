@@ -56,7 +56,7 @@ cos sys env COS
   "env": {
     "COS_VERSION": "0.3.0",
     "COS_DATA_DIR": "/var/lib/cos",
-    "COS_DEN": "/den"
+    "COS_HOME": "/home/cos"
   },
   "count": 3
 }
@@ -71,7 +71,7 @@ cos sys resources
 ```
 ```json
 {
-  "disk": {"path": "/den", "total_mb": 50000, "used_mb": 1200, "free_mb": 48800},
+  "disk": {"path": "/home/cos", "total_mb": 50000, "used_mb": 1200, "free_mb": 48800},
   "memory": {"total_mb": 8192, "used_mb": 2048, "available_mb": 6144}
 }
 ```
@@ -114,7 +114,7 @@ cos sys mounts
 ```json
 {
   "mounts": [
-    {"device": "overlay", "mount_point": "/den", "filesystem": "overlay", "options": "lowerdir=...,upperdir=..."},
+    {"device": "overlay", "mount_point": "/home/cos", "filesystem": "overlay", "options": "lowerdir=...,upperdir=..."},
     {"device": "/dev/sda1", "mount_point": "/", "filesystem": "ext4", "options": "rw,relatime"}
   ],
   "count": 2
@@ -572,8 +572,8 @@ Event-driven file and process watching with multi-source aggregation and event h
 Watch for file, directory, or process changes. Uses inotify on Linux for instant notification.
 
 ```bash
-cos watch file /den/config.json --timeout 30
-cos watch dir /den/src/ --timeout 60
+cos watch file /home/cos/config.json --timeout 30
+cos watch dir /home/cos/src/ --timeout 60
 cos watch proc <session-id> --timeout 120
 ```
 
@@ -582,15 +582,15 @@ cos watch proc <session-id> --timeout 120
 Watch multiple sources simultaneously — returns when ANY source fires.
 
 ```bash
-cos watch multi --file /den/main.py --dir /den/output/ --proc worker-1 --service my-api --timeout 60
+cos watch multi --file /home/cos/main.py --dir /home/cos/output/ --proc worker-1 --service my-api --timeout 60
 ```
 ```json
 {
   "status": "triggered",
   "source": "file",
-  "path": "/den/main.py",
+  "path": "/home/cos/main.py",
   "event": "modified",
-  "watched": {"files": ["/den/main.py"], "dirs": ["/den/output/"], "procs": ["worker-1"], "services": ["my-api"]}
+  "watched": {"files": ["/home/cos/main.py"], "dirs": ["/home/cos/output/"], "procs": ["worker-1"], "services": ["my-api"]}
 }
 ```
 
@@ -605,7 +605,7 @@ cos watch history --since "2026-03-25T10:00:00Z" --source file
 ```json
 {
   "events": [
-    {"timestamp": "2026-03-25T10:00:01Z", "source": "file", "path": "/den/main.py", "event": "modified"},
+    {"timestamp": "2026-03-25T10:00:01Z", "source": "file", "path": "/home/cos/main.py", "event": "modified"},
     {"timestamp": "2026-03-25T10:00:05Z", "source": "proc", "session": "worker-1", "event": "exited"}
   ],
   "count": 2
@@ -705,7 +705,7 @@ Create a new service with lifecycle hooks.
 cos service register \
   --name my-api \
   --command "python app.py" \
-  --workdir /den/api \
+  --workdir /home/cos/api \
   --health-url http://localhost:8000/health \
   --pre-start "python migrate.py" \
   --pre-stop "python drain.py" \
@@ -882,7 +882,7 @@ Schedule recurring jobs with execution context, structured result capture, and o
 
 ```bash
 cos cron add <id> --schedule "*/5 * * * *" --command "cos app exec run 'python check.py'" \
-    [--description "Health check"] [--tier 2] [--scope /den/project] \
+    [--description "Health check"] [--tier 2] [--scope /home/cos/project] \
     [--credentials OPENAI_KEY,DB_PASS] [--overlap skip|queue|kill|allow] \
     [--timeout 300]
 ```

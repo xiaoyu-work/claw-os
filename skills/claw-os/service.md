@@ -19,7 +19,7 @@ cos service logs my-api --tail 50
 cos service register \
   --name my-api \
   --command "python app.py" \
-  --workdir /den/api \
+  --workdir /home/cos/api \
   --health-url http://localhost:8000/health \
   --credentials OPENAI_KEY,DB_URL \
   --pre-start "python migrate.py" \

@@ -13,7 +13,7 @@
 //! Models, agent state, audit logs, etc. should resolve their paths through
 //! this module rather than hard-coding strings, so a single env var flip can
 //! redirect the entire installation (useful for testing, multi-tenant hosts,
-//! and per-den overlays).
+//! and per-home overlays).
 
 use std::env;
 use std::path::PathBuf;

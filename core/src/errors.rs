@@ -120,9 +120,9 @@ mod tests {
     fn error_with_recovery_includes_all_fields() {
         let e = error_with_recovery(
             IO_FILE_NOT_FOUND,
-            "file not found: /den/missing.txt",
+            "file not found: /home/cos/missing.txt",
             "Check the path exists",
-            &["cos app fs ls /den"],
+            &["cos app fs ls /home/cos"],
         );
         assert_eq!(e["code"], "io.file_not_found");
         assert!(e["recovery"]["hint"].is_string());

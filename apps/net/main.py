@@ -119,7 +119,7 @@ def cmd_download(args):
     output_path = opts.output
     if output_path is None:
         filename = os.path.basename(urllib.parse.urlparse(opts.url).path) or "download"
-        output_path = os.path.join("/den", filename)
+        output_path = os.path.join(os.environ.get("COS_HOME") or os.environ.get("HOME") or "/root", filename)
     output_path = os.path.abspath(output_path)
 
     policy.require("net.dial", host=host)
@@ -160,7 +160,7 @@ def _schema():
             "description": "Download a file from a URL",
             "parameters": [
                 {"name": "url", "type": "string", "required": True, "description": "URL to download from", "kind": "positional"},
-                {"name": "--output", "type": "string", "required": False, "description": "Output file path (defaults to /den/<filename>)", "kind": "flag"},
+                {"name": "--output", "type": "string", "required": False, "description": "Output file path (defaults to $COS_HOME/<filename>)", "kind": "flag"},
             ],
             "example": "cos app net download https://example.com/file.zip --output /workspace/file.zip",
         },

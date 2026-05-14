@@ -19,11 +19,11 @@ Full-featured file management with metadata tracking and content search.
 List directory contents with metadata.
 
 ```bash
-cos app fs ls /den [--all] [--long]
+cos app fs ls /home/cos [--all] [--long]
 ```
 ```json
 {
-  "path": "/den",
+  "path": "/home/cos",
   "entries": [
     {"name": "main.py", "type": "file", "size": 1024, "modified": "2026-03-23T10:00:00Z"},
     {"name": "src", "type": "directory", "modified": "2026-03-23T09:00:00Z"}
@@ -37,11 +37,11 @@ cos app fs ls /den [--all] [--long]
 Read file contents. Supports partial reads for large files.
 
 ```bash
-cos app fs read /den/main.py [--offset N] [--limit N] [--start-line N] [--end-line N]
+cos app fs read /home/cos/main.py [--offset N] [--limit N] [--start-line N] [--end-line N]
 ```
 ```json
 {
-  "path": "/den/main.py",
+  "path": "/home/cos/main.py",
   "content": "import sys\n...",
   "size": 1024,
   "lines": 42,
@@ -56,10 +56,10 @@ Maximum read size: 1MB per call.
 Write content to a file.
 
 ```bash
-cos app fs write /den/output.txt --content "Hello, world!"
+cos app fs write /home/cos/output.txt --content "Hello, world!"
 ```
 ```json
-{"path": "/den/output.txt", "bytes_written": 13}
+{"path": "/home/cos/output.txt", "bytes_written": 13}
 ```
 
 ### fs rm
@@ -67,8 +67,8 @@ cos app fs write /den/output.txt --content "Hello, world!"
 Remove a file or directory.
 
 ```bash
-cos app fs rm /den/temp.txt
-cos app fs rm /den/temp_dir --recursive
+cos app fs rm /home/cos/temp.txt
+cos app fs rm /home/cos/temp_dir --recursive
 ```
 
 ### fs mkdir
@@ -76,7 +76,7 @@ cos app fs rm /den/temp_dir --recursive
 Create a directory (including parents).
 
 ```bash
-cos app fs mkdir /den/src/components
+cos app fs mkdir /home/cos/src/components
 ```
 
 ### fs stat
@@ -84,11 +84,11 @@ cos app fs mkdir /den/src/components
 Get detailed file metadata.
 
 ```bash
-cos app fs stat /den/main.py
+cos app fs stat /home/cos/main.py
 ```
 ```json
 {
-  "path": "/den/main.py",
+  "path": "/home/cos/main.py",
   "type": "file",
   "size": 1024,
   "created": "2026-03-23T08:00:00Z",
@@ -103,13 +103,13 @@ cos app fs stat /den/main.py
 Search file contents (powered by ripgrep) and filenames.
 
 ```bash
-cos app fs search "def main" --path /den/src [--type py] [--max-results 20]
+cos app fs search "def main" --path /home/cos/src [--type py] [--max-results 20]
 ```
 ```json
 {
   "matches": [
-    {"file": "/den/src/main.py", "line": 15, "content": "def main():"},
-    {"file": "/den/src/utils.py", "line": 8, "content": "def main_helper():"}
+    {"file": "/home/cos/src/main.py", "line": 15, "content": "def main():"},
+    {"file": "/home/cos/src/utils.py", "line": 8, "content": "def main_helper():"}
   ],
   "count": 2
 }
@@ -120,8 +120,8 @@ cos app fs search "def main" --path /den/src [--type py] [--max-results 20]
 Add semantic tags to files. Tags are stored in `.cos-meta.json` sidecar files.
 
 ```bash
-cos app fs tag /den/main.py --add entrypoint --add python
-cos app fs tag /den/main.py --remove python
+cos app fs tag /home/cos/main.py --add entrypoint --add python
+cos app fs tag /home/cos/main.py --remove python
 ```
 
 ### fs recent
@@ -129,7 +129,7 @@ cos app fs tag /den/main.py --remove python
 List recently modified files.
 
 ```bash
-cos app fs recent /den --limit 10
+cos app fs recent /home/cos --limit 10
 ```
 
 ---
@@ -143,7 +143,7 @@ Run shell commands and inline scripts with timeout control.
 Execute a shell command.
 
 ```bash
-cos app exec run "ls -la /den" [--shell bash] [--timeout 300]
+cos app exec run "ls -la /home/cos" [--shell bash] [--timeout 300]
 ```
 ```json
 {
@@ -162,7 +162,7 @@ Run an inline script or script file with automatic language detection.
 
 ```bash
 cos app exec script --lang python --content "print(2 + 2)" [--timeout 60]
-cos app exec script --file /den/train.py --lang python
+cos app exec script --file /home/cos/train.py --lang python
 ```
 
 Language detection: `.py` → python3, `.sh` → bash, `.js` → node.
@@ -233,7 +233,7 @@ cos app web scrape https://a.example.com https://b.example.com [--concurrency 4]
 Capture a PNG of a web page. Requires `chromium` on the system (kept in the rootfs for this purpose).
 
 ```bash
-cos app web screenshot "https://example.com" --output /den/screenshot.png [--full-page] [--width 1280] [--height 800]
+cos app web screenshot "https://example.com" --output /home/cos/screenshot.png [--full-page] [--width 1280] [--height 800]
 ```
 
 ### web submit
@@ -268,7 +268,7 @@ Direct SQLite database access for agents.
 Run a SELECT query.
 
 ```bash
-cos app db query "SELECT * FROM users LIMIT 10" --database /den/app.db
+cos app db query "SELECT * FROM users LIMIT 10" --database /home/cos/app.db
 ```
 ```json
 {
@@ -286,7 +286,7 @@ cos app db query "SELECT * FROM users LIMIT 10" --database /den/app.db
 Run DDL/DML statements (CREATE, INSERT, UPDATE, DELETE).
 
 ```bash
-cos app db exec "INSERT INTO users (name, email) VALUES ('Charlie', 'charlie@example.com')" --database /den/app.db
+cos app db exec "INSERT INTO users (name, email) VALUES ('Charlie', 'charlie@example.com')" --database /home/cos/app.db
 ```
 
 ### db tables
@@ -294,7 +294,7 @@ cos app db exec "INSERT INTO users (name, email) VALUES ('Charlie', 'charlie@exa
 List all tables in a database.
 
 ```bash
-cos app db tables --database /den/app.db
+cos app db tables --database /home/cos/app.db
 ```
 
 ### db schema
@@ -302,7 +302,7 @@ cos app db tables --database /den/app.db
 Show table schema.
 
 ```bash
-cos app db schema users --database /den/app.db
+cos app db schema users --database /home/cos/app.db
 ```
 
 ### db databases
@@ -326,13 +326,13 @@ Read PDF, DOCX, XLSX, and CSV files as structured text.
 Extract text content from a document.
 
 ```bash
-cos app doc read /den/report.pdf
-cos app doc read /den/data.xlsx
-cos app doc read /den/document.docx
+cos app doc read /home/cos/report.pdf
+cos app doc read /home/cos/data.xlsx
+cos app doc read /home/cos/document.docx
 ```
 ```json
 {
-  "path": "/den/report.pdf",
+  "path": "/home/cos/report.pdf",
   "format": "pdf",
   "pages": 12,
   "content": "Chapter 1: Introduction\n..."
@@ -352,11 +352,11 @@ cos app doc read /den/document.docx
 Get document metadata without reading full content.
 
 ```bash
-cos app doc info /den/report.pdf
+cos app doc info /home/cos/report.pdf
 ```
 ```json
 {
-  "path": "/den/report.pdf",
+  "path": "/home/cos/report.pdf",
   "format": "pdf",
   "pages": 12,
   "size": 524288,
@@ -391,10 +391,10 @@ cos app net fetch "https://api.example.com/data" [--method POST] [--data '{"key"
 Download a file to disk.
 
 ```bash
-cos app net download "https://example.com/file.zip" --output /den/file.zip
+cos app net download "https://example.com/file.zip" --output /home/cos/file.zip
 ```
 ```json
-{"path": "/den/file.zip", "size": 1048576, "duration_ms": 1200}
+{"path": "/home/cos/file.zip", "size": 1048576, "duration_ms": 1200}
 ```
 
 ---

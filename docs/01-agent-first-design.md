@@ -20,7 +20,7 @@ Every command in Claw OS returns JSON. There are zero exceptions.
 
 **Traditional Linux:**
 ```
-$ ls -la /den
+$ ls -la /home/cos
 total 16
 drwxr-xr-x 3 root root 4096 Mar 23 10:00 .
 drwxr-xr-x 1 root root 4096 Mar 23 09:30 ..
@@ -30,7 +30,7 @@ drwxr-xr-x 1 root root 4096 Mar 23 09:30 ..
 **Claw OS:**
 ```json
 {
-  "path": "/den",
+  "path": "/home/cos",
   "entries": [
     {"name": "main.py", "type": "file", "size": 256, "modified": "2026-03-23T10:00:00Z", "permissions": "rw-r--r--"}
   ],
@@ -95,11 +95,11 @@ Unix permissions (uid/gid/rwx) answer "which **human** can access this file?" Cl
 Combined with **path-based scopes**, this creates a fine-grained capability model:
 
 ```bash
-# Agent spawned with tier 2, scoped to /den/project-a
-cos proc spawn --tier 2 --scope /den/project-a --session worker-1 -- python task.py
+# Agent spawned with tier 2, scoped to /home/cos/project-a
+cos proc spawn --tier 2 --scope /home/cos/project-a --session worker-1 -- python task.py
 
-# worker-1 CAN: read and write files under /den/project-a
-# worker-1 CANNOT: delete files, execute commands, access /den/project-b, or make network requests
+# worker-1 CAN: read and write files under /home/cos/project-a
+# worker-1 CANNOT: delete files, execute commands, access /home/cos/project-b, or make network requests
 ```
 
 **Inheritance rules:**
@@ -180,10 +180,10 @@ The rootfs is bootstrapped via `rootfs/build.sh`:
 
 ### OverlayFS: The Checkpoint Foundation
 
-Claw OS mounts the agent's workspace (`/den`) as an OverlayFS:
+Claw OS mounts the agent's workspace (`/home/cos`) as an OverlayFS:
 
 ```
-/den (merged view — what the agent sees)
+/home/cos (merged view — what the agent sees)
   ├── lower = /var/lib/cos/overlay/base       (read-only original state)
   ├── upper = /var/lib/cos/overlay/upper       (copy-on-write modifications)
   └── work  = /var/lib/cos/overlay/work        (overlayfs internal)
@@ -281,10 +281,10 @@ source /etc/cos/profile.sh
 # Set up OverlayFS workspace (Linux only)
 if [ "$(uname)" = "Linux" ]; then
     mkdir -p /var/lib/cos/overlay/{base,upper,work}
-    cp -a /den/* /var/lib/cos/overlay/base/ 2>/dev/null || true
+    cp -a /home/cos/* /var/lib/cos/overlay/base/ 2>/dev/null || true
     mount -t overlay overlay \
         -o lowerdir=/var/lib/cos/overlay/base,upperdir=/var/lib/cos/overlay/upper,workdir=/var/lib/cos/overlay/work \
-        /den
+        /home/cos
 fi
 
 # Start browser engine service
@@ -296,7 +296,7 @@ exec "$@"
 
 This ensures:
 1. Agent-native environment variables are set
-2. OverlayFS is mounted on `/den` (enables checkpoint/rollback)
+2. OverlayFS is mounted on `/home/cos` (enables checkpoint/rollback)
 3. Browser service is available for web operations
 4. The requested workload runs as PID 1 in the container
 

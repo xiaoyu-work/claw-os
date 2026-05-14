@@ -11,7 +11,7 @@ cos cron add health-check \
 cos cron add nightly-backup \
   --schedule "0 2 * * *" \
   --command "cos app exec run 'python backup.py'" \
-  --tier 1 --scope /den/data \
+  --tier 1 --scope /home/cos/data \
   --credentials DB_URL \
   --timeout 3600
 

@@ -1,12 +1,19 @@
 #!/bin/bash
-# /usr/lib/cos/init/setup-den.sh — Set up OverlayFS on /den.
+# /usr/lib/cos/init/setup-home.sh — Set up OverlayFS on the agent's
+# writable home directory.
 #
 # Used by:
 #   - /usr/local/bin/cos-init                 (Docker PID 1 entrypoint)
-#   - cos-den-setup.service (systemd unit)    (WSL / ISO / VM targets)
+#   - cos-home-setup.service (systemd unit)   (WSL / ISO / VM targets)
+#
+# Target path resolution (Linux-native, no hardcoded /home/<user>):
+#   1. First positional argument, if given.
+#   2. $COS_HOME, if set.
+#   3. $HOME, if set.
+#   4. Fall back to /root (root's standard home).
 #
 # Behaviour:
-#   - Idempotent (no-op if /den is already a mount).
+#   - Idempotent (no-op if the target is already a mount).
 #   - On non-Linux or where mount(8) is missing, exits 0 without doing anything.
 #   - When the backing filesystem is already an overlay (live ISOs ship a
 #     squashfs+overlay rootfs), upper/work move to tmpfs under /run, since
@@ -16,19 +23,23 @@
 
 set -e
 
+TARGET="${1:-${COS_HOME:-${HOME:-/root}}}"
+
 OVERLAY_DIR="/var/lib/cos/overlay"
 BASE="$OVERLAY_DIR/base"
 UPPER="$OVERLAY_DIR/upper"
 WORK="$OVERLAY_DIR/work"
 
-if mountpoint -q /den 2>/dev/null; then
-    echo '{"overlay": "already-mounted", "path": "/den"}'
+if mountpoint -q "$TARGET" 2>/dev/null; then
+    printf '{"overlay": "already-mounted", "path": "%s"}\n' "$TARGET"
     exit 0
 fi
 
 if [ "$(uname)" != "Linux" ] || ! command -v mount >/dev/null 2>&1; then
     exit 0
 fi
+
+mkdir -p "$TARGET"
 
 # Detect overlay-backed rootfs (Debian live media). On those, upper/work
 # must live on a non-overlay filesystem — use tmpfs at /run/cos-overlay.
@@ -41,16 +52,17 @@ fi
 
 mkdir -p "$BASE" "$UPPER" "$WORK"
 
-# First boot: seed the base layer from whatever the image shipped at /den.
-if [ -z "$(ls -A "$BASE" 2>/dev/null)" ] && [ -d /den ]; then
-    cp -a /den/. "$BASE/" 2>/dev/null || true
+# First boot: seed the base layer from whatever the image shipped at the
+# target path (so existing dotfiles / project skeletons survive).
+if [ -z "$(ls -A "$BASE" 2>/dev/null)" ] && [ -d "$TARGET" ]; then
+    cp -a "$TARGET/." "$BASE/" 2>/dev/null || true
 fi
 
 if mount -t overlay overlay \
     -o "lowerdir=$BASE,upperdir=$UPPER,workdir=$WORK" \
-    /den 2>/tmp/cos-overlay-error; then
-    echo '{"overlay": "mounted", "path": "/den", "upper": "'"$UPPER"'"}'
+    "$TARGET" 2>/tmp/cos-overlay-error; then
+    printf '{"overlay": "mounted", "path": "%s", "upper": "%s"}\n' "$TARGET" "$UPPER"
 else
-    echo '{"overlay": "failed", "path": "/den", "error": "'"$(cat /tmp/cos-overlay-error)"'", "warning": "checkpoints disabled — run with --privileged or --cap-add SYS_ADMIN"}'
+    printf '{"overlay": "failed", "path": "%s", "error": "%s", "warning": "checkpoints disabled — run with --privileged or --cap-add SYS_ADMIN"}\n' \
+        "$TARGET" "$(cat /tmp/cos-overlay-error)"
 fi
-

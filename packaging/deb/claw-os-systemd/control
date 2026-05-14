@@ -10,8 +10,8 @@ Description: Claw OS — systemd integration for non-Docker targets
  Installs systemd units for booting Claw OS on WSL, ISO, and VM
  targets. Specifically:
  .
-   * cos-den-setup.service — sets up the /den OverlayFS at boot
-     (enabled by default).
+   * cos-home-setup.service — sets up the agent-home OverlayFS at
+     boot (target path from /etc/default/cos-home; enabled by default).
    * cos-browser.service — runs the cos-browser CDP server on port
      9222 (installed but not enabled; opt-in).
  .

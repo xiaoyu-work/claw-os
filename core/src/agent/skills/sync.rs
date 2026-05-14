@@ -74,7 +74,7 @@ pub fn install_from_archive(archive: &Path, force: bool) -> Result<SyncResult, S
 }
 
 /// Install into an explicit `skills_root`. Used by tests and by
-/// callers that want to install into a per-den tree.
+/// callers that want to install into a per-home tree.
 pub fn install_into(
     archive: &Path,
     skills_root: &Path,

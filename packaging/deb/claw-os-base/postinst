@@ -7,7 +7,7 @@ set -e
 
 case "$1" in
     configure)
-        mkdir -p /den /var/lib/cos /var/log/aos
+        mkdir -p /var/lib/cos /var/log/aos
 
         if [ -f /etc/bash.bashrc ] && \
            ! grep -q 'cos/profile.sh' /etc/bash.bashrc; then

@@ -1374,7 +1374,7 @@ mod tests {
             "--tier".to_string(),
             "1".to_string(),
             "--scope".to_string(),
-            "/den/project".to_string(),
+            "/home/cos/project".to_string(),
             "--overlap".to_string(),
             "allow".to_string(),
             "--timeout".to_string(),
@@ -1386,7 +1386,7 @@ mod tests {
         assert_eq!(result["id"], "status-job");
         assert_eq!(result["schedule"], "30 14 * * *");
         assert_eq!(result["tier"], 1);
-        assert_eq!(result["scope"], "/den/project");
+        assert_eq!(result["scope"], "/home/cos/project");
         assert_eq!(result["overlap_policy"], "Allow");
         assert_eq!(result["timeout_secs"], 300);
     }
@@ -1528,7 +1528,7 @@ mod tests {
             command: "echo hello".to_string(),
             description: "test roundtrip".to_string(),
             tier: Some(1),
-            scope: Some("/den".to_string()),
+            scope: Some("/home/cos".to_string()),
             credentials: vec!["key1".to_string(), "key2".to_string()],
             enabled: true,
             overlap_policy: OverlapPolicy::Queue,

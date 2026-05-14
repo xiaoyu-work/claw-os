@@ -3,8 +3,8 @@
 Event-driven watching with inotify (Linux) and multi-source aggregation:
 
 ```bash
-cos watch file /den/output.txt --timeout 30
-cos watch dir /den/results --timeout 60
+cos watch file /home/cos/output.txt --timeout 30
+cos watch dir /home/cos/results --timeout 60
 cos watch proc build-1 --timeout 300
 ```
 
@@ -13,7 +13,7 @@ cos watch proc build-1 --timeout 300
 Watch files, dirs, processes, and services simultaneously — returns on first event:
 
 ```bash
-cos watch multi --file /den/main.py --dir /den/output/ --proc worker-1 --service my-api --timeout 60
+cos watch multi --file /home/cos/main.py --dir /home/cos/output/ --proc worker-1 --service my-api --timeout 60
 ```
 
 ## Event History
