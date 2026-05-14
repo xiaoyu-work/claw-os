@@ -35,14 +35,33 @@ operations.
 
 See :doc:`docs/07-design-decisions.md` § 3 for why we picked pure
 copy over filesystem-specific snapshotting.
+
+Durable session mirroring
+-------------------------
+
+When ``COS_SESSION`` points at a *durable* session — i.e., a directory
+exists at ``$COS_DATA_DIR/sessions/<sid>/`` with a ``meta.json`` —
+every snapshot is **also** mirrored into the durable session's
+``mutations.jsonl`` log + ``files/inverse/<blob_id>.bin`` blob store.
+This is the cross-runtime contract the Rust kernel reads from
+``cos perms undo`` (which then routes through
+``core/src/session/rollback.rs``) and the future ``cos-apid`` socket.
+
+The Python and Rust sides agree purely through the file format — see
+``core/src/session/{mutation,recorder,inverse}.rs`` for the shapes.
+We do not fork-exec into ``cos`` here: that would multiply the cost
+of every fs.write by an interpreter startup, and it would defeat the
+point of "agents talk through shared files, not RPC".
 """
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import shutil
 import time
+import uuid
 from typing import Iterator, Optional
 
 
@@ -71,6 +90,200 @@ def _next_seq(sid_dir: str) -> str:
     if not existing:
         return "000001"
     return f"{max(int(n) for n in existing) + 1:06d}"
+
+
+# ---------------------------------------------------------------------------
+# Durable session mirroring
+# ---------------------------------------------------------------------------
+
+
+def _durable_session_dir(session_id: str) -> Optional[str]:
+    """Return the absolute path of the durable session directory if
+    ``session_id`` names one, else ``None``. Defined as: a directory
+    at ``$COS_DATA_DIR/sessions/<sid>/`` containing a ``meta.json``.
+    """
+    candidate = os.path.join(_data_root(), "sessions", session_id)
+    if os.path.isfile(os.path.join(candidate, "meta.json")):
+        return candidate
+    return None
+
+
+def _new_blob_id() -> str:
+    """Match ``core/src/session/inverse.rs::new_blob_id``: uuid v4
+    simple hex, 32 lowercase chars, no dashes.
+    """
+    return uuid.uuid4().hex
+
+
+def _write_inverse_blob(session_dir: str, data: bytes) -> str:
+    """Write ``data`` to ``<session_dir>/files/inverse/<id>.bin`` via
+    tmp+rename. Returns the blob id. Mirrors the Rust
+    :func:`session::inverse::write_blob` API and on-disk shape.
+    """
+    inv_dir = os.path.join(session_dir, "files", "inverse")
+    os.makedirs(inv_dir, exist_ok=True)
+    for _ in range(4):
+        blob_id = _new_blob_id()
+        target = os.path.join(inv_dir, f"{blob_id}.bin")
+        if os.path.exists(target):
+            continue
+        tmp = target + ".tmp"
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.rename(tmp, target)
+        return blob_id
+    raise RuntimeError("uuid collision four times in a row — the universe is broken")
+
+
+def _now_rfc3339() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _append_mutation_record(
+    session_dir: str,
+    mutation: dict,
+    *,
+    runtime: Optional[str] = None,
+    turn_seq: Optional[int] = None,
+) -> int:
+    """Append one record to ``<session_dir>/mutations.jsonl`` under an
+    exclusive ``flock`` so a concurrent Rust ``record_mutation`` call
+    can never race us. Returns the seq number assigned to this entry.
+
+    Schema mirrors ``core::session::mutation::MutationRecord``:
+
+    .. code-block:: json
+
+        {
+          "seq": 7,
+          "at": "2026-05-12T12:34:56Z",
+          "mutation": { "kind": "fs-write", "path": "...", "prev_blob": "..." },
+          "runtime": "cos-app-fs",     // optional
+          "turn_seq": 3                // optional
+        }
+
+    The kebab-case ``kind`` discriminator follows
+    ``serde(tag = "kind", rename_all = "kebab-case")`` on the Rust
+    enum.
+    """
+    path = os.path.join(session_dir, "mutations.jsonl")
+    # Open r+ so the same fd both counts and appends; create if absent.
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o644)
+    try:
+        # Exclusive lock — every appender (Rust or Python) takes it.
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        # Count existing lines for the seq. We use a fresh open to read
+        # because the appending fd's position is unspecified after
+        # O_APPEND on some platforms.
+        try:
+            with open(path, "rb") as rf:
+                seq = sum(1 for _ in rf)
+        except FileNotFoundError:  # pragma: no cover — we just created it
+            seq = 0
+        record = {
+            "seq": seq,
+            "at": _now_rfc3339(),
+            "mutation": mutation,
+        }
+        if runtime is not None:
+            record["runtime"] = runtime
+        if turn_seq is not None:
+            record["turn_seq"] = turn_seq
+        line = json.dumps(record, separators=(",", ":")) + "\n"
+        os.write(fd, line.encode("utf-8"))
+        return seq
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:  # pragma: no cover
+            pass
+        os.close(fd)
+
+
+def _mirror_to_durable_session(
+    session_id: str,
+    op: str,
+    abs_path: str,
+    kind: str,
+    *,
+    runtime: Optional[str] = None,
+) -> None:
+    """If ``session_id`` points at a durable session, append the
+    matching ``Mutation::{FsWrite,FsDelete}`` record (and its inverse
+    blob, if needed) so ``cos perms undo`` can replay it via the Rust
+    rollback engine.
+
+    Best-effort: any IO failure is swallowed with a warning printed to
+    stderr. The trash-dir snapshot remains the authoritative undo path
+    for the legacy CLI flow, so a mirror failure does not break the
+    user-visible undo.
+    """
+    session_dir = _durable_session_dir(session_id)
+    if not session_dir:
+        return
+
+    try:
+        if op in ("write", "rename", "move", "copy"):
+            # The gated app is about to write `abs_path`. Snapshot the
+            # current bytes (if the path existed and is a file) into
+            # the inverse store, then record FsWrite.
+            if kind == "file":
+                with open(abs_path, "rb") as f:
+                    blob_id = _write_inverse_blob(session_dir, f.read())
+                mutation = {
+                    "kind": "fs-write",
+                    "path": abs_path,
+                    "prev_blob": blob_id,
+                }
+            elif kind == "absent":
+                mutation = {
+                    "kind": "fs-write",
+                    "path": abs_path,
+                    "prev_blob": None,
+                }
+            else:
+                # kind == "dir": the typed Rust schema doesn't have a
+                # FsWrite-on-directory variant yet. Emit Opaque so the
+                # rollback engine surfaces it as "manual review" rather
+                # than silently losing the snapshot.
+                mutation = {
+                    "kind": "opaque",
+                    "verb": f"fs.{op}.dir",
+                    "forward": {"path": abs_path},
+                    "inverse": {"hint": "directory state was snapshotted to trash"},
+                }
+        elif op == "rm":
+            if kind == "file":
+                with open(abs_path, "rb") as f:
+                    blob_id = _write_inverse_blob(session_dir, f.read())
+                mutation = {
+                    "kind": "fs-delete",
+                    "path": abs_path,
+                    "blob_id": blob_id,
+                }
+            else:
+                mutation = {
+                    "kind": "opaque",
+                    "verb": f"fs.rm.{kind}",
+                    "forward": {"path": abs_path},
+                    "inverse": {"hint": "non-file delete; check trash"},
+                }
+        else:
+            mutation = {
+                "kind": "opaque",
+                "verb": f"fs.{op}",
+                "forward": {"path": abs_path},
+                "inverse": {},
+            }
+
+        _append_mutation_record(session_dir, mutation, runtime=runtime)
+    except Exception as exc:  # pragma: no cover — best-effort mirror
+        import sys
+
+        print(
+            f"snapshot: durable mirror failed for {abs_path}: {exc}",
+            file=sys.stderr,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +339,12 @@ def snapshot(path: str, op: str, *, session_id: Optional[str] = None) -> Optiona
     }
     with open(os.path.join(entry_dir, "meta.json"), "w") as f:
         json.dump(meta, f, indent=2)
+
+    # Also mirror the snapshot into the durable session log if the sid
+    # names one. Best-effort; the trash dir is still authoritative for
+    # the legacy CLI undo path.
+    _mirror_to_durable_session(sid, op, abs_path, kind)
+
     return entry_dir
 
 

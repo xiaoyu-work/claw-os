@@ -47,18 +47,32 @@
 //! Everything here is a library: a future `cos-apid` daemon and the
 //! existing in-process `cos` binary will both call these same functions.
 
+mod gc;
 mod id;
+mod inverse;
+mod lease;
 mod meta;
 mod mutation;
+mod recorder;
+mod rollback;
+mod runtime;
 mod store;
 mod turn;
 
 #[cfg(test)]
 mod tests;
 
+pub use gc::{archive_path, archive_root, gc_archive, is_archived, GcStats};
 pub use id::{InvalidSessionId, SessionId};
+pub use inverse::{blob_path, delete_blob, inverse_root, new_blob_id, read_blob, write_blob};
+pub use lease::{current as current_lease, try_acquire, AcquireError, LeaseGuard};
 pub use meta::{Budget, Lease, SessionMeta, Status};
 pub use mutation::{Mutation, MutationRecord};
+pub use recorder::{record_fs_delete, record_fs_rename, record_fs_write};
+pub use rollback::{rollback, Outcome as RollbackOutcome, Status as RollbackStatus};
+pub use runtime::{
+    pause, promote_to_durable, resume, DurableSession, PromoteError, TransitionError,
+};
 pub use store::{
     append_turn, create, end, get_caps, get_meta, iter_mutations, iter_turns, list, read_state,
     record_mutation, session_dir, sessions_root, set_caps, update_meta, write_state, SessionError,

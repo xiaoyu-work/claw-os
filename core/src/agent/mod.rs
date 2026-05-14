@@ -26,6 +26,7 @@ pub mod curator_drafts;
 pub mod display;
 pub mod doctor_cli;
 pub mod insights;
+pub mod lifecycle;
 pub mod llm;
 pub mod media;
 pub mod memory;
@@ -162,6 +163,11 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "service" => service::cmd(args),
         "recall" => recall_cmd(args),
         "sessions" => sessions_cmd(args),
+        "ls" => lifecycle::ls(args),
+        "show" => lifecycle::show(args),
+        "stop" => lifecycle::stop(args),
+        "undo" => lifecycle::undo(args),
+        "resume" => lifecycle::resume(args),
         "setup" => setup::run(args),
         "notes" => notes_cmd(args),
         "skills" => skills_cmd(args),
@@ -170,7 +176,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "doctor" => doctor_cli::doctor_cmd(args),
         "dev" => dev_dispatch(args),
         other => Err(format!(
-            "unknown command: {other}. try: setup | ask | chat | budget | override | status | sessions | recall | service | notes | skills | todo | mcp | doctor | dev"
+            "unknown command: {other}. try: setup | ask | chat | budget | override | status | sessions | recall | service | notes | skills | todo | mcp | doctor | dev | ls | show | stop | undo | resume"
         )),
     }
 }

@@ -32,6 +32,7 @@ fn main() -> cosmic::iced::Result {
         "cosmic-applet-workspaces" => cosmic_applet_workspaces::run(),
         "cosmic-applet-input-sources" => cosmic_applet_input_sources::run(),
         "cosmic-applet-approval-gate" => cosmic_applet_approval_gate::run(),
+        "cosmic-applet-agent-activity" => cosmic_applet_agent_activity::run(),
         "cosmic-panel-button" => cosmic_panel_button::run(),
         _ => Ok(()),
     }

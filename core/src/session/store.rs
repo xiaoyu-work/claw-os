@@ -86,9 +86,12 @@ fn state_path(sid: &SessionId) -> PathBuf {
     session_dir(sid).join("state.json")
 }
 
-#[allow(dead_code)]
-fn lease_path(sid: &SessionId) -> PathBuf {
+pub(super) fn lease_path(sid: &SessionId) -> PathBuf {
     session_dir(sid).join("lease.json")
+}
+
+pub(super) fn lease_lock_path(sid: &SessionId) -> PathBuf {
+    session_dir(sid).join("lease.lock")
 }
 
 fn files_dir(sid: &SessionId) -> PathBuf {
@@ -129,7 +132,7 @@ pub enum SessionError {
 }
 
 impl SessionError {
-    fn io(path: PathBuf, source: std::io::Error) -> Self {
+    pub(super) fn io(path: PathBuf, source: std::io::Error) -> Self {
         Self::Io { path, source }
     }
     fn decode(path: PathBuf, source: serde_json::Error) -> Self {
@@ -485,20 +488,27 @@ fn read_jsonl<T: DeserializeOwned>(path: &PathBuf, dir: PathBuf) -> Result<Vec<T
     Ok(out)
 }
 
-// `Lease` IO is intentionally unexposed in Phase 1 — Phase 2 owns the
-// acquire / heartbeat / release semantics and will publish them as
-// part of `session::lease`. The struct + path helper exist now so the
-// disk layout is stable, but no callers should write `lease.json`
-// directly until Phase 2 lands.
-#[allow(dead_code)]
-fn write_lease(sid: &SessionId, lease: &Lease) -> Result<()> {
+// `Lease` IO is owned by `session::lease` (Phase 2). This module
+// exposes the disk primitives — atomic JSON read/write — that the
+// lease module composes with `flock` on the sentinel `lease.lock`
+// file to implement cross-process acquire / release / heartbeat.
+pub(super) fn write_lease(sid: &SessionId, lease: &Lease) -> Result<()> {
     write_json(&lease_path(sid), lease)
 }
-#[allow(dead_code)]
-fn read_lease(sid: &SessionId) -> Result<Option<Lease>> {
+
+pub(super) fn read_lease(sid: &SessionId) -> Result<Option<Lease>> {
     let path = lease_path(sid);
     if !path.exists() {
         return Ok(None);
     }
     Ok(Some(read_json(&path)?))
+}
+
+pub(super) fn remove_lease(sid: &SessionId) -> Result<()> {
+    let path = lease_path(sid);
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(SessionError::io(path, e)),
+    }
 }
