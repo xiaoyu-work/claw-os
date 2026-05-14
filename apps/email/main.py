@@ -1,4 +1,16 @@
-"""email — send, search, and manage email via SMTP or Gmail/Outlook providers."""
+"""email — send, search, and manage email via SMTP or Gmail/Outlook providers.
+
+This is the **AI-agent** surface for email. Users who want a GUI inbox
+open Thunderbird (preinstalled, default ``x-scheme-handler/mailto``
+handler). The two surfaces are intentionally independent:
+
+* GUI side  — Thunderbird, IMAP/SMTP/JMAP. Driven by the user.
+* Agent side — this app, Gmail / Outlook HTTPS APIs or plain SMTP.
+  Driven by the AI through ``apps/email``'s operations
+  (send / search / list / read / draft).
+
+Same mailbox, two clients; neither needs to know about the other.
+"""
 
 import argparse
 import base64
