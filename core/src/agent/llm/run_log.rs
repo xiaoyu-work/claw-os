@@ -273,7 +273,7 @@ impl LlmRunRecord {
     }
 
     /// Attach an explicit `app_id` to this record. Used by the
-    /// app-gated paths (`cos agent chat --app <id>`) so allowed calls
+    /// App-gated path (`cos ai chat --app <id>`) so allowed calls
     /// are attributed to the requesting app, not just the provider.
     pub fn with_app(mut self, app_id: &str) -> Self {
         self.app_id = nonempty(Some(app_id));
@@ -471,7 +471,7 @@ mod tests {
     }
 
     /// `with_app` attaches an app id to an otherwise app-agnostic
-    /// success record. Used by the app-gated chat path.
+    /// success record. Used by the `cos ai chat` path.
     #[test]
     fn with_app_attaches_id() {
         let r = LlmRunRecord::from_success(

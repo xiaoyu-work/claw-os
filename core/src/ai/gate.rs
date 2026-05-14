@@ -1,7 +1,7 @@
-//! The App–AI Gate. Single entry point apps use to reach a model.
+//! The App–AI Gate. Single entry point Apps use to reach a model.
 //!
 //! ```text
-//!     cos agent chat --app …    apps/_lib/ai.py
+//!     cos ai chat --app …       apps/_lib/ai.py
 //!          │                          │
 //!          ▼                          ▼
 //!   ai::gate::chat_blocking ─── caps::require(ai.*, name(model))

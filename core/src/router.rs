@@ -5,6 +5,7 @@ use std::time::Instant;
 use serde_json::{json, Value};
 
 use crate::agent;
+use crate::ai;
 use crate::apps;
 use crate::audit;
 use crate::bridge;
@@ -81,6 +82,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         // but hidden from the user-facing overview list.
         "perms" => dispatch_builtin(args, "perms", perms::run),
         "cron" => dispatch_builtin(args, "cron", cron::run),
+        "ai" => dispatch_builtin(args, "ai", ai::run),
         "agent" => dispatch_agent(args),
         "model" => dispatch_builtin(args, "model", model::run),
         "engine" => dispatch_builtin(args, "engine", engine_pkg::run),
@@ -170,7 +172,7 @@ fn dispatch_app(args: &[String]) -> Result<Option<String>, String> {
 /// `cos app lint [<name>]` — refuse apps that smuggle in AI SDKs.
 ///
 /// Apps are required to route every model call through the kernel's
-/// `cos agent chat --app <id>` gate (via `apps/_lib/ai.py`). Importing
+/// `cos ai chat --app <id>` gate (via `apps/_lib/ai.py`). Importing
 /// `openai`, `anthropic`, or `google.generativeai` directly would
 /// bypass budget, safety, and audit — so the linter looks for those
 /// imports in every `*.py` file under each app's directory and reports
@@ -210,7 +212,7 @@ fn lint_apps(
             "results": results,
             "ok": !any_violation,
             "hint": if any_violation {
-                "Apps must import from `_lib.ai` (which shells out to `cos agent chat --app <id>`); \
+                "Apps must import from `_lib.ai` (which shells out to `cos ai chat --app <id>`); \
                  they must not import provider SDKs directly."
             } else {
                 "All apps route their AI calls through the kernel gate."
@@ -716,10 +718,13 @@ fn builtin_apps() -> Vec<(
             ("run", "Manually trigger a job immediately"),
             ("tick", "Process all due jobs (called by scheduler every minute)"),
         ]),
+        ("ai", "App-facing AI gate — single-shot LLM / embedding / image / audio / video calls scoped to one installed App. Distinct from `cos agent`: this is the App-developer-facing primitive, not the kernel Agent product.", vec![
+            ("chat", "One-shot App-gated AI call: cos ai chat --app <id> [--prompt <text>] [--prompt-file <p>] [--origin trusted|user-input|external-content] [--max-units N] [--system <text>] [--embed] [--image-input <p>|--image-output <p>] [--audio-input <p>|--audio-output <p>] [--video-input <p>|--video-output <p>]. Modality (chat/embed/image/audio/vision/video) is auto-derived from the request shape; verbs are never passed at the CLI. Apps do not pick the model — the OS owner configures it in /etc/cos/agent.toml."),
+        ]),
         ("agent", "OS-native agent subsystem — runtime, memory, skills, LLM providers, tools, FS job queue", vec![
             ("setup", "Per-modality config wizard: cos agent setup <llm|tts|stt|imagegen|embed|all> [--status|--reset|--verify-only|--no-verify]. Bare `cos agent setup` opens an interactive modality picker."),
             ("ask", "Single-shot prompt with full tool/memory loop: cos agent ask \"<prompt>\" [--stream] — without --stream waits for the full response; with --stream tokens are written live to stderr while the JSON envelope still lands on stdout."),
-            ("chat", "Two modes — (1) interactive REPL for the system agent: cos agent chat [--session <id>] [--no-stream] [--no-memory] [--show-tools] [--max-turns N] (slash commands: /quit /help /session /clear /history [N] /tools); (2) one-shot app-gated chat for installed apps: cos agent chat --app <id> [--prompt <text>] [--prompt-file <p>] [--model <name>] [--origin trusted|user-input|external-content] [--max-units N] [--system <text>] [--embed] [--image-input <p>|--image-output <p>] [--audio-input <p>|--audio-output <p>] [--video-input <p>|--video-output <p>]. Modality (chat/embed/image/audio/vision/video) is auto-derived from the request shape; verbs are never passed at the CLI. The mode is selected by whether --app is present."),
+            ("chat", "Interactive REPL for the system agent: cos agent chat [--session <id>] [--no-stream] [--no-memory] [--show-tools] [--max-turns N] (slash commands: /quit /help /session /clear /history [N] /tools). For one-shot App-gated calls use `cos ai chat --app <id>` — `cos agent chat` is the kernel Agent's own surface and is not an App entry point."),
             ("budget", "Inspect or reset an app's monthly AI budget: cos agent budget show|reset|history <app>. The system agent reports under the pseudo-app id `system.agent`."),
             ("status", "Short live verdict: provider/model/key source, ready/not-ready, most-recent session. Use `cos agent doctor` for the full provider matrix, tool list, skills, usage."),
             ("sessions", "Inspect / manage conversation sessions in the memory DB: cos agent sessions [list [N] | title <id> | set-title <id> \"<title>\" | count [<id>] | clear <id> --yes]"),

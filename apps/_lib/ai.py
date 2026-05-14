@@ -2,12 +2,18 @@
 
 Every Python app that needs to talk to a model (LLM, embedding,
 image-gen, TTS, STT, vision, video) must go through this helper. The
-helper shells out to ``cos agent chat --app <id>`` — the single,
+helper shells out to ``cos ai chat --app <id>`` — the single,
 authoritative entry point for AI requests of every modality. The
 kernel derives the modality (and the underlying caps verb) from the
 shape of the request, then runs capability check, prompt-origin
 allowlist, per-month budget, the safety pipeline, and audit before
 letting any model see the prompt.
+
+``cos ai chat`` is deliberately separate from ``cos agent chat``.
+``cos agent`` is the kernel's *own* Agent product (REPL, memory,
+skills, hooks, sessions, recall). Apps must not use it. ``cos ai``
+is the App-developer-facing primitive: raw, gated LLM access with
+no loop and no kernel state.
 
 Apps **never** name a verb. They describe what they want and the
 gate picks the verb. The helpers here are the supported Python
@@ -50,7 +56,7 @@ Why a subprocess and not an in-process check?
 Apps are **not** allowed to import provider SDKs (openai, anthropic,
 google.generativeai, ...). The kernel enforces this at install time
 via ``cos app lint``; the AI helper is the *only* sanctioned route to
-a model. Centralising the request in ``cos agent chat`` means the
+a model. Centralising the request in ``cos ai chat`` means the
 kernel — not the app — controls budget, safety, and audit.
 """
 
@@ -81,7 +87,7 @@ class AiDenied(AiError):
     """A gate (capability / origin / budget) refused the call.
 
     The ``payload`` attribute holds the structured envelope
-    ``cos agent chat`` returned (verb, scope, reason, hint, …) —
+    ``cos ai chat`` returned (verb, scope, reason, hint, …) —
     suitable for forwarding back to the agent.
     """
 
@@ -380,7 +386,7 @@ def _dispatch(
     video_input: Optional[str] = None,
     video_output: Optional[str] = None,
 ) -> AiResponse:
-    """Build the `cos agent chat` command line and parse the envelope.
+    """Build the `cos ai chat` command line and parse the envelope.
 
     All public helpers funnel through here. The kernel-side gate
     derives the caps verb from the flag combination — we never name
@@ -392,7 +398,7 @@ def _dispatch(
             f"{modality}: app_id is required (pass app_id= or set COS_APP_ID)"
         )
 
-    cmd = [_cos_binary(), "agent", "chat", "--app", app, "--origin", origin]
+    cmd = [_cos_binary(), "ai", "chat", "--app", app, "--origin", origin]
     if prompt is not None:
         cmd.extend(["--prompt", prompt])
     if max_units is not None:
@@ -418,14 +424,14 @@ def _dispatch(
     payload_text = (proc.stdout or "").strip() or (proc.stderr or "").strip()
     if not payload_text:
         raise AiUnavailable(
-            f"cos agent chat returned no output (exit {proc.returncode})"
+            f"cos ai chat returned no output (exit {proc.returncode})"
         )
 
     try:
         envelope = json.loads(payload_text)
     except json.JSONDecodeError as exc:
         raise AiUnavailable(
-            f"cos agent chat returned non-JSON output: {payload_text!r}"
+            f"cos ai chat returned non-JSON output: {payload_text!r}"
         ) from exc
 
     if proc.returncode != 0 or "error" in envelope:

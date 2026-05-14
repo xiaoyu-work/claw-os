@@ -1,6 +1,6 @@
 //! `cos::ai` — the App–AI Gate (internal kernel module).
 //!
-//! Every app-driven LLM / image / TTS / STT / vision call passes
+//! Every App-driven LLM / image / TTS / STT / vision call passes
 //! through this subsystem. The gate enforces, in order:
 //!
 //!   1. Capability — the calling app's session must hold the AI verb
@@ -27,30 +27,50 @@
 //!   7. Audit — every accepted and denied call is logged.
 //!
 //! Apps **never** talk to providers directly. The frontend desktop
-//! talks to apps; apps shell out to `cos agent chat --app <id>`;
-//! the agent dispatcher then calls into `ai::gate` after every gate
+//! talks to apps; apps shell out to `cos ai chat --app <id>`; the
+//! dispatcher in [`chat`] then calls into [`gate`] after every gate
 //! above has cleared.
 //!
 //! ## What this module does NOT do
 //!
-//! - It does not host the per-turn agent loop. `cos agent ask` / the
-//!   REPL form of `cos agent chat` keep their own kernel-only loops
-//!   with full tool/memory wiring.
+//! - It does not host the per-turn agent loop. `cos agent ask` and
+//!   the REPL form of `cos agent chat` keep their own kernel-only
+//!   loops with full tool/memory wiring — those belong to the
+//!   *kernel Agent product* ([`crate::agent`]), not to Apps.
 //! - It does not classify or detect prompt injection beyond routing
 //!   `external-content` through the strict safety profile. The
 //!   injection detector and classifier remain Phase 8 work.
 //!
 //! ## CLI surface
 //!
-//! There is no `cos ai …` namespace. The user-facing CLI lives under
-//! [`crate::agent`]: `cos agent chat --app <id> --prompt …` for the
-//! one-shot app-gated call, and `cos agent budget …` for the per-app
-//! budget ledger. Consent management lives under `cos app consent`
-//! since it is a per-app user decision rather than an agent runtime
-//! concern. The helpers below are kernel-internal.
+//! - `cos ai chat --app <id> …` — one-shot App-gated call. The only
+//!   sanctioned entry point for installed Apps to reach a model.
+//! - `cos agent budget …` — per-App budget ledger (lives under
+//!   `cos agent` for historical reasons; will likely move under
+//!   `cos ai budget` in a future cleanup).
+//! - `cos app consent …` — per-App user consent, lives under
+//!   `cos app` because it is a per-App user decision.
+//!
+//! `cos agent chat` and `cos agent ask` are *not* App entry points.
+//! They are the kernel Agent's own surface and Apps must not invoke
+//! them.
 
 pub mod budget;
+pub mod chat;
 pub mod consent;
 pub mod gate;
 pub mod overrides;
 pub mod user_budget;
+
+/// Dispatcher for `cos ai <command>`. Currently exposes only `chat`;
+/// `tool` (single-Tool execution) and the App-facing Tool catalog
+/// land in later phases (see `docs/app-ai-integration.md` §11).
+pub fn run(command: &str, args: &[String]) -> Result<serde_json::Value, String> {
+    match command {
+        "chat" => chat::chat_cmd(args),
+        other => Err(format!(
+            "unknown command: cos ai {other}. try: chat"
+        )),
+    }
+}
+

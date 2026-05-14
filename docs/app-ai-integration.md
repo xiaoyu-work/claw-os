@@ -435,9 +435,13 @@ This document is the contract. Concrete work falls into roughly:
    stability tiers.
 5. **`cos ai tool` command.** Single-tool executor; routes through the
    capability layer; emits one audit row per call.
-6. **`cos ai chat` command.** One-shot LLM call that accepts a
-   `--tools` list (filtered against the App's manifest) and returns
-   structured `tool_calls`. No loop, no execution.
+6. **`cos ai chat` command.** ✅ Namespace migration done — the
+   single-shot, gated, modality-derived LLM path lives at
+   `cos ai chat --app <id>` (`core/src/ai/chat.rs`); `cos agent chat`
+   now rejects `--app` and is the kernel Agent's REPL only. Remaining
+   work: accept a `--tools <list>` (filtered against the App's
+   manifest) and return structured `tool_calls` instead of
+   executing them.
 7. **In-process SDK.** Ship `apps/_lib/ai.py` and `apps/_lib/tools.py`
    as thin subprocess wrappers; document the equivalent Node / Rust /
    Go shapes.
