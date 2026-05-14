@@ -284,13 +284,6 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
         ],
     },
     PrimitiveSpec {
-        name: "cos_policy",
-        description: "Inspect or temporarily change the operation-permission \
-                      policy that gates destructive primitive calls.",
-        primitive: crate::policy::run,
-        commands: &["elevate", "drop", "status", "check"],
-    },
-    PrimitiveSpec {
         name: "cos_model",
         description: "Manage local model files (ONNX / GGUF) and the dual-engine \
                       runtime (ort + llama.cpp). User imports model files; \
