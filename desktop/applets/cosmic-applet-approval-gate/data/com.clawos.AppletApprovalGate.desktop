@@ -1,0 +1,15 @@
+[Desktop Entry]
+Name=Approval Gate
+Comment=Approve or deny live capability requests from the panel
+Type=Application
+Exec=cosmic-applet-approval-gate
+Terminal=false
+Categories=COSMIC;
+Keywords=COSMIC;Applet;Approval;Permissions;Capabilities;Security;
+Icon=dialog-question-symbolic
+StartupNotify=true
+NoDisplay=true
+X-CosmicApplet=true
+X-CosmicShrinkable=true
+X-CosmicHoverPopup=Auto
+X-OverflowPriority=10

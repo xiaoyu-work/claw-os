@@ -585,6 +585,16 @@ fn cmd_pending(args: &[String]) -> Result<Value, String> {
     let rows: Vec<Value> = pending
         .iter()
         .map(|r| {
+            let verb = Verb::parse(&r.verb);
+            let meta = verb.and_then(lookup_meta);
+            let meta_obj = meta.map(|m| {
+                json!({
+                    "label": m.label.en(),
+                    "blurb": m.blurb.en(),
+                    "icon": m.icon,
+                    "risk": format!("{:?}", m.risk).to_lowercase(),
+                })
+            });
             json!({
                 "id": r.id,
                 "verb": r.verb,
@@ -593,6 +603,7 @@ fn cmd_pending(args: &[String]) -> Result<Value, String> {
                 "reason": r.reason,
                 "requester": r.requester,
                 "requested_at": r.requested_at,
+                "meta": meta_obj,
             })
         })
         .collect();

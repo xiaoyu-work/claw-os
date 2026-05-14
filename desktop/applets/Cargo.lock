@@ -1108,6 +1108,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "cosmic-applet-approval-gate"
+version = "1.0.2"
+dependencies = [
+ "anyhow",
+ "i18n-embed",
+ "i18n-embed-fl",
+ "libcosmic",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-log",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "cosmic-applet-audio"
 version = "1.0.2"
 dependencies = [
@@ -1346,6 +1363,7 @@ version = "1.0.2"
 dependencies = [
  "cosmic-app-list",
  "cosmic-applet-a11y",
+ "cosmic-applet-approval-gate",
  "cosmic-applet-audio",
  "cosmic-applet-battery",
  "cosmic-applet-bluetooth",

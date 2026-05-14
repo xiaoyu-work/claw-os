@@ -18,6 +18,12 @@ fn main() {
             "cosmic-applet-a11y-keywords",
         ),
         (
+            "com.clawos.AppletApprovalGate",
+            "cosmic-applet-approval-gate",
+            "cosmic-applet-approval-gate-comment",
+            "cosmic-applet-approval-gate-keywords",
+        ),
+        (
             "com.clawos.AppletAudio",
             "cosmic-applet-audio",
             "cosmic-applet-audio-comment",
