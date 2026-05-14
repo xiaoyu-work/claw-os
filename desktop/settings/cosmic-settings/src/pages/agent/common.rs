@@ -136,6 +136,26 @@ pub struct ProviderEntry {
     pub default_model: String,
     #[serde(default)]
     pub models: Vec<ModelEntry>,
+    /// Declarative list of additional inputs the UI should render for
+    /// this provider (e.g. Azure endpoint URL + API version). Empty for
+    /// providers that only need model + credential.
+    #[serde(default)]
+    pub extra_fields: Vec<ExtraField>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ExtraField {
+    pub key: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub placeholder: String,
+    #[serde(default)]
+    pub help: String,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
+    pub secret: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -164,6 +184,17 @@ pub struct Status {
     pub ready: bool,
     #[serde(default)]
     pub reason: Option<ErrorEnvelope>,
+    /// Raw `base_url` value as it lives on disk (may include
+    /// `?api-version=…` for Azure).
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// `base_url` minus its query string, for pre-populating the
+    /// "endpoint" input separately from the "API version" input.
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    /// `api-version` value parsed out of `base_url`'s query string.
+    #[serde(default)]
+    pub api_version: Option<String>,
 }
 
 /// `<modality> apply ...` payload.
@@ -179,6 +210,8 @@ pub struct ApplyResult {
     pub key_source: String,
     #[serde(default)]
     pub config_path: Option<String>,
+    #[serde(default)]
+    pub base_url: Option<String>,
 }
 
 /// `<modality> test` payload.
@@ -254,6 +287,10 @@ pub struct State {
     pub api_key_hidden: bool,
     pub env_var_input: String,
     pub key_mode: KeyMode,
+    /// Live values for the selected provider's `extra_fields`, keyed by
+    /// `ExtraField.key` (e.g. "base_url" → Azure endpoint URL).
+    /// Cleared when the user switches provider.
+    pub extra_field_values: std::collections::HashMap<String, String>,
     pub busy: bool,
     pub last_apply: Option<Result<ApplyResult, String>>,
     pub last_test: Option<Result<TestResult, String>>,
@@ -273,6 +310,7 @@ impl State {
             api_key_hidden: true,
             env_var_input: String::new(),
             key_mode: KeyMode::Stored,
+            extra_field_values: std::collections::HashMap::new(),
             busy: false,
             last_apply: None,
             last_test: None,
@@ -363,6 +401,29 @@ impl State {
                     self.env_var_input = provider.default_env.clone();
                 }
             }
+
+            // Seed any provider-declared extra inputs from the matching
+            // status fields. Currently the only two are `base_url`
+            // (Azure endpoint, sans api-version) and `api_version`,
+            // both produced by the kernel's status command.
+            self.extra_field_values.clear();
+            if let Some(status) = &self.status {
+                for field in &provider.extra_fields {
+                    let value = match field.key.as_str() {
+                        "base_url" => status
+                            .endpoint
+                            .clone()
+                            .or_else(|| status.base_url.clone()),
+                        "api_version" => status.api_version.clone(),
+                        _ => None,
+                    };
+                    if let Some(v) = value {
+                        if !v.is_empty() {
+                            self.extra_field_values.insert(field.key.clone(), v);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -397,6 +458,7 @@ impl State {
                 self.model_idx = None;
                 self.custom_model.clear();
                 self.last_test = None;
+                self.extra_field_values.clear();
                 if let Some(p) = self.selected_provider() {
                     self.key_mode = if p.needs_credential {
                         KeyMode::Stored
@@ -429,6 +491,13 @@ impl State {
                     .is_some_and(|p| p.needs_credential)
                 {
                     self.key_mode = mode;
+                }
+            }
+            Message::ExtraFieldInput(key, value) => {
+                if value.is_empty() {
+                    self.extra_field_values.remove(&key);
+                } else {
+                    self.extra_field_values.insert(key, value);
                 }
             }
             Message::Save => {
@@ -557,10 +626,23 @@ impl State {
             CredentialArg::None
         };
 
+        let mut extras = Vec::with_capacity(provider.extra_fields.len());
+        for field in &provider.extra_fields {
+            let raw = self
+                .extra_field_values
+                .get(&field.key)
+                .map(String::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            extras.push((field.key.clone(), raw));
+        }
+
         Some(ApplyArgs {
             provider: provider.name.clone(),
             model,
             credential,
+            extras,
         })
     }
 }
@@ -579,6 +661,10 @@ pub enum Message {
     TogglePasswordVisibility,
     EnvVarInput(String),
     KeyModeSelected(KeyMode),
+    /// User edited one of the provider-declared `extra_fields` inputs
+    /// (Azure endpoint URL, API version, …). First field is the
+    /// `ExtraField.key` it came from.
+    ExtraFieldInput(String, String),
     Save,
     Saved(Result<ApplyResult, String>),
     Test,
@@ -604,6 +690,10 @@ struct ApplyArgs {
     provider: String,
     model: String,
     credential: CredentialArg,
+    /// Provider-declared extra inputs (key → value), straight from
+    /// `extra_fields`. Empty values are passed through so the kernel
+    /// can clear stored extras.
+    extras: Vec<(String, String)>,
 }
 
 #[derive(Clone, Debug)]
@@ -648,6 +738,15 @@ async fn apply(modality: Modality, args: ApplyArgs) -> Result<ApplyResult, Strin
     if !model.is_empty() {
         argv.push("--model".into());
         argv.push(model);
+    }
+    for (key, value) in &args.extras {
+        // Skip empties: today the kernel has no "clear extras" flag,
+        // and an empty `--base-url` would fail Azure validation.
+        if value.is_empty() {
+            continue;
+        }
+        argv.push(format!("--{}", key.replace('_', "-")));
+        argv.push(value.clone());
     }
     let stdin = match args.credential {
         CredentialArg::None | CredentialArg::KeepExisting => None,
@@ -1016,6 +1115,49 @@ fn configuration_view(state: &State) -> Element<'_, Message> {
                 }
                 KeyMode::NotRequired => {}
             }
+        }
+
+        // Provider-declared extra inputs (e.g. Azure endpoint URL +
+        // API version). Rendered as a plain text input for non-secret
+        // fields and a masked input for secrets. Labels come straight
+        // from the kernel's `--providers` JSON so localizing them is
+        // the kernel's responsibility, not ours.
+        for field in &provider.extra_fields {
+            let value = state
+                .extra_field_values
+                .get(&field.key)
+                .map(String::as_str)
+                .unwrap_or("");
+            let label = if field.label.is_empty() {
+                field.key.clone()
+            } else if field.required {
+                format!("{} *", field.label)
+            } else {
+                field.label.clone()
+            };
+            let key_for_msg = field.key.clone();
+            let on_input = move |v: String| {
+                Message::ExtraFieldInput(key_for_msg.clone(), v)
+            };
+            let input: Element<'_, Message> = if field.secret {
+                widget::text_input::secure_input(
+                    field.placeholder.as_str(),
+                    value,
+                    Some(Message::TogglePasswordVisibility),
+                    state.api_key_hidden,
+                )
+                .on_input(on_input)
+                .apply(Element::from)
+            } else {
+                widget::text_input(field.placeholder.as_str(), value)
+                    .on_input(on_input)
+                    .apply(Element::from)
+            };
+            let mut item = settings::item::builder(label).flex_control(input);
+            if !field.help.is_empty() {
+                item = item.description(field.help.clone());
+            }
+            col = col.push(item);
         }
     }
 
