@@ -445,3 +445,10 @@ context-action-confirm-warning =
        *[other] 项目
     } 上运行。
 context-action = 环境行动
+
+
+## AI 摘要
+ai-summarize = AI 摘要
+ai-summary-title = AI 摘要 — {$name}
+ai-summarizing = 正在让 AI 总结这个文件…
+ai-summary-error = AI 无法总结这个文件。

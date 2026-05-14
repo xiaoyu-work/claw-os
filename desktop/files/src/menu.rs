@@ -219,6 +219,10 @@ pub fn context_menu<'a>(
                 }
                 if selected == 1 {
                     children.push(menu_item(fl!("menu-open-with"), Action::OpenWith).into());
+                    if selected_dir == 0 {
+                        children
+                            .push(menu_item(fl!("ai-summarize"), Action::AiSummarize).into());
+                    }
                     if selected_dir == 1 {
                         children
                             .push(menu_item(fl!("open-in-terminal"), Action::OpenTerminal).into());

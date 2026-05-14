@@ -388,3 +388,10 @@ sort-newest-first = Newest first
 sort-oldest-first = Oldest first
 sort-smallest-to-largest = Smallest to largest
 sort-largest-to-smallest = Largest to smallest
+
+
+## AI summary
+ai-summarize = AI summary
+ai-summary-title = AI summary — {$name}
+ai-summarizing = Asking the AI to summarize this file…
+ai-summary-error = The AI could not summarize this file.

@@ -131,6 +131,7 @@ pub struct Flags {
 pub enum Action {
     About,
     AddToSidebar,
+    AiSummarize,
     Compress,
     Copy,
     CopyPath,
@@ -202,6 +203,7 @@ impl Action {
         match self {
             Self::About => Message::ToggleContextPage(ContextPage::About),
             Self::AddToSidebar => Message::AddToSidebar(entity_opt),
+            Self::AiSummarize => Message::AiSummarize(entity_opt),
             Self::Compress => Message::Compress(entity_opt),
             Self::Copy => Message::Copy(entity_opt),
             Self::CopyPath => Message::CopyPath(entity_opt),
@@ -329,6 +331,11 @@ impl MenuAction for NavMenuAction {
 #[derive(Clone, Debug)]
 pub enum Message {
     AddToSidebar(Option<Entity>),
+    AiSummarize(Option<Entity>),
+    AiSummaryResult {
+        path: PathBuf,
+        outcome: Result<String, String>,
+    },
     AppTheme(AppTheme),
     CloseToast(widget::ToastId),
     Compress(Option<Entity>),
@@ -514,7 +521,18 @@ impl AsRef<str> for ArchiveType {
 }
 
 #[derive(Clone, Debug)]
+pub enum AiSummaryStatus {
+    Loading,
+    Ready(String),
+    Error(String),
+}
+
+#[derive(Clone, Debug)]
 pub enum DialogPage {
+    AiSummary {
+        path: PathBuf,
+        status: AiSummaryStatus,
+    },
     Compress {
         paths: Box<[PathBuf]>,
         to: PathBuf,
@@ -707,6 +725,38 @@ impl Window {
             modifiers: Modifiers::empty(),
         }
     }
+}
+
+/// Invoke `cos app doc summarize --file <path>` and pull the AI
+/// summary out of the JSON response. This runs as a `tokio::process`
+/// child, so it stays off the cosmic UI loop and can be awaited from
+/// inside a `cosmic::Task::future`.
+async fn run_ai_summarize(path: PathBuf) -> Result<String, String> {
+    let bin = std::env::var("CLAW_COS_BIN").unwrap_or_else(|_| "cos".into());
+    let output = tokio::process::Command::new(bin)
+        .args(["app", "doc", "summarize", "--file"])
+        .arg(&path)
+        .output()
+        .await
+        .map_err(|e| format!("failed to invoke cos: {e}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if stdout.trim().is_empty() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "cos produced no output ({})\n{}",
+            output.status, stderr
+        ));
+    }
+    let value: serde_json::Value = serde_json::from_str(stdout.trim())
+        .map_err(|e| format!("bad JSON from cos: {e}\n---\n{stdout}"))?;
+    if let Some(err) = value.get("error").and_then(|v| v.as_str()) {
+        return Err(err.to_string());
+    }
+    value
+        .get("summary")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .ok_or_else(|| "AI response missing 'summary' field".to_string())
 }
 
 // The [`App`] stores application-specific state.
@@ -2925,6 +2975,44 @@ impl Application for App {
             Message::AppTheme(app_theme) => {
                 config_set!(app_theme, app_theme);
                 return self.update_config();
+            }
+            Message::AiSummarize(entity_opt) => {
+                let path = match self.selected_paths(entity_opt).next() {
+                    Some(p) => p,
+                    None => return Task::none(),
+                };
+                let dialog_task = self.push_dialog(
+                    DialogPage::AiSummary {
+                        path: path.clone(),
+                        status: AiSummaryStatus::Loading,
+                    },
+                    None,
+                );
+                let work_path = path.clone();
+                let work = cosmic::Task::future(async move {
+                    let outcome = run_ai_summarize(work_path.clone()).await;
+                    cosmic::action::app(Message::AiSummaryResult {
+                        path: work_path,
+                        outcome,
+                    })
+                });
+                return Task::batch([dialog_task, work]);
+            }
+            Message::AiSummaryResult { path, outcome } => {
+                // Only mutate the dialog if it's still the one we kicked off
+                // (the user may have already closed it).
+                if let Some(DialogPage::AiSummary {
+                    path: cur_path, ..
+                }) = self.dialog_pages.front()
+                    && cur_path == &path
+                {
+                    let status = match outcome {
+                        Ok(text) => AiSummaryStatus::Ready(text),
+                        Err(err) => AiSummaryStatus::Error(err),
+                    };
+                    self.dialog_pages
+                        .update_front(DialogPage::AiSummary { path, status });
+                }
             }
             Message::Compress(entity_opt) => {
                 let paths: Box<[_]> = self.selected_paths(entity_opt).collect();
@@ -6275,6 +6363,39 @@ impl Application for App {
                 .secondary_action(
                     widget::button::standard(fl!("keep")).on_press(Message::DialogCancel),
                 ),
+            DialogPage::AiSummary { path, status } => {
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                let body: Element<Message> = match status {
+                    AiSummaryStatus::Loading => widget::column::with_children(vec![
+                        widget::text::body(fl!("ai-summarizing")).into(),
+                    ])
+                    .spacing(space_xxs)
+                    .into(),
+                    AiSummaryStatus::Ready(text) => widget::scrollable(
+                        widget::text::body(text.clone()).width(Length::Fill),
+                    )
+                    .height(Length::Fixed(320.0))
+                    .into(),
+                    AiSummaryStatus::Error(err) => widget::column::with_children(vec![
+                        widget::text::body(fl!("ai-summary-error")).into(),
+                        widget::text::body(err.clone()).into(),
+                    ])
+                    .spacing(space_xxs)
+                    .into(),
+                };
+                widget::dialog()
+                    .title(fl!("ai-summary-title", name = name))
+                    .icon(icon::from_name("dialog-information").size(48))
+                    .primary_action(
+                        widget::button::suggested(fl!("close"))
+                            .on_press(Message::DialogCancel),
+                    )
+                    .control(body)
+            }
         };
         Some(dialog.into())
     }
