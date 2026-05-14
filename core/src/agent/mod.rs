@@ -102,48 +102,57 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "chat" => chat_cmd(args),
         "status" => {
             let cfg = &crate::config::get().agent;
-            let mut tools = tools::registry::default_registry();
-            tools.set_guardrails(crate::agent::runtime::loop_::guardrails_from_cfg(cfg));
-            tools.set_approval(crate::agent::runtime::loop_::approval_from_cfg(cfg));
-            let registered_total = tools.names_unfiltered().len();
-            let permitted = tools.names();
-            // Best-effort memory DB stats — read-only, never mutates.
-            let memory_stats = match memory::sqlite_fts::MemoryDb::open_default() {
-                Ok(db) => {
-                    let total = db.count_total().unwrap_or(0);
-                    let sessions = db.sessions(1).map(|s| s.len()).unwrap_or(0);
-                    json!({
-                        "status": "ok",
-                        "path": crate::paths::agent_memory_db_path().display().to_string(),
-                        "total_messages": total,
-                        "has_sessions": sessions > 0,
-                    })
-                }
-                Err(e) => json!({ "status": "unavailable", "error": e.to_string() }),
+            let ready = setup::is_ready(cfg);
+            let key_source = setup::resolved_key_source(cfg)
+                .map(|s| s.to_json())
+                .unwrap_or(Value::Null);
+
+            // Most-recent session (best-effort; never fails the call).
+            let last_session = match memory::sqlite_fts::MemoryDb::open_default() {
+                Ok(db) => match db.sessions(1) {
+                    Ok(mut v) if !v.is_empty() => {
+                        let s = v.remove(0);
+                        json!({
+                            "session_id": s.session_id,
+                            "title": s.title,
+                            "last_ts_ms": s.last_ts_ms,
+                            "message_count": s.message_count,
+                        })
+                    }
+                    _ => Value::Null,
+                },
+                Err(_) => Value::Null,
             };
-            let skills_load = skills::loader::load_default();
+
+            let (ready_ok, ready_reason, fix) = match ready {
+                Ok(()) => (true, Value::Null, Value::Null),
+                Err(reason_json) => {
+                    let parsed: Value =
+                        serde_json::from_str(&reason_json).unwrap_or_else(|_| json!(reason_json));
+                    let err = parsed
+                        .get("error")
+                        .and_then(|v| v.as_str())
+                        .map(|s| json!(s))
+                        .unwrap_or(parsed.clone());
+                    let fix = parsed
+                        .get("fix")
+                        .cloned()
+                        .unwrap_or_else(|| json!("cos agent setup"));
+                    (false, err, fix)
+                }
+            };
+
             Ok(json!({
-                "status": "ok",
-                "phase": "3",
+                "ready": ready_ok,
+                "ready_reason": ready_reason,
+                "fix": fix,
                 "provider": cfg.provider,
-                "provider_registered": llm::registry::is_registered(&cfg.provider),
-                "providers": llm::available_providers(),
                 "model": cfg.model,
-                "max_turns": cfg.max_turns,
-                "max_tokens": cfg.max_tokens,
-                "temperature": cfg.temperature,
-                "tools_registered": registered_total,
-                "tools_permitted": permitted.len(),
-                "tools": permitted,
-                "tool_allow": cfg.tool_allow.clone(),
-                "tool_deny": cfg.tool_deny.clone(),
-                "dangerous_tools": cfg.dangerous_tools.clone(),
-                "auto_approve_tools": cfg.auto_approve_tools.clone(),
-                "auto_deny_tools": cfg.auto_deny_tools.clone(),
-                "skills_loaded": skills_load.loaded_count(),
-                "skills_disabled": skills_load.disabled.len(),
-                "skills_errors": skills_load.errors.len(),
-                "memory": memory_stats,
+                "key_source": key_source,
+                "needs_credential": setup::provider_needs_credential(&cfg.provider),
+                "config_path": setup::config_path().display().to_string(),
+                "last_session": last_session,
+                "hint": "for the full provider/tools/skills/usage report, run `cos agent doctor`",
             }))
         }
         "service" => service::cmd(args),

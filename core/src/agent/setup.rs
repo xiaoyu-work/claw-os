@@ -154,40 +154,65 @@ pub fn is_ready(cfg: &crate::config::AgentConfig) -> Result<(), String> {
     .to_string())
 }
 
-fn provider_needs_credential(name: &str) -> bool {
+pub fn provider_needs_credential(name: &str) -> bool {
     !matches!(name, "mock" | "llama_local")
 }
 
 fn credential_present(cfg: &crate::config::AgentConfig) -> bool {
+    resolved_key_source(cfg).is_some()
+}
+
+/// Returns a structured description of which credential/env actually
+/// resolved a non-empty API key for `cfg`, or `None` if no source
+/// resolved. Used by both the readiness gate and `cos agent status`
+/// so they agree on what "key present" means.
+pub fn resolved_key_source(cfg: &crate::config::AgentConfig) -> Option<KeySource> {
     if let Some(name) = cfg.api_key_credential.as_deref() {
         if let Ok(Some(v)) = crate::credential::try_load(name, "agent") {
             if !v.trim().is_empty() {
-                return true;
+                return Some(KeySource::credential(name));
             }
         }
     }
     if let Some(env_name) = cfg.api_key_env.as_deref() {
         if let Ok(v) = std::env::var(env_name) {
             if !v.trim().is_empty() {
-                return true;
+                return Some(KeySource::env(env_name));
             }
         }
     }
     for name in &cfg.api_key_credentials {
         if let Ok(Some(v)) = crate::credential::try_load(name, "agent") {
             if !v.trim().is_empty() {
-                return true;
+                return Some(KeySource::credential(name));
             }
         }
     }
     for env_name in &cfg.api_key_envs {
         if let Ok(v) = std::env::var(env_name) {
             if !v.trim().is_empty() {
-                return true;
+                return Some(KeySource::env(env_name));
             }
         }
     }
-    false
+    None
+}
+
+#[derive(Debug, Clone)]
+pub struct KeySource {
+    pub kind: &'static str,
+    pub name: String,
+}
+impl KeySource {
+    fn credential(name: &str) -> Self {
+        Self { kind: "credential", name: name.to_string() }
+    }
+    fn env(name: &str) -> Self {
+        Self { kind: "env", name: name.to_string() }
+    }
+    pub fn to_json(&self) -> Value {
+        json!({ "kind": self.kind, "name": self.name })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -473,7 +498,7 @@ fn read_line() -> Result<String, String> {
     Ok(line)
 }
 
-fn config_path() -> PathBuf {
+pub fn config_path() -> PathBuf {
     std::env::var("COS_CONFIG_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("/etc/cos/config.json"))

@@ -542,7 +542,7 @@ fn builtin_apps() -> Vec<(
             ("setup", "Interactive first-run wizard: pick provider, model, and store API key. Non-interactive: cos agent setup [--status|--reset]"),
             ("ask", "Single-shot prompt with full tool/memory loop: cos agent ask \"<prompt>\" [--stream] — without --stream waits for the full response; with --stream tokens are written live to stderr while the JSON envelope still lands on stdout."),
             ("chat", "Interactive multi-turn REPL: cos agent chat [--session <id>] [--no-stream] [--no-memory] [--show-tools] [--max-turns N]. Slash commands: /quit /help /session /clear /history [N] /tools."),
-            ("status", "Show agent runtime status — providers, tools, skills, memory db"),
+            ("status", "Short live verdict: provider/model/key source, ready/not-ready, most-recent session. Use `cos agent doctor` for the full provider matrix, tool list, skills, usage."),
             ("sessions", "Inspect / manage conversation sessions in the memory DB: cos agent sessions [list [N] | title <id> | set-title <id> \"<title>\" | count [<id>] | clear <id> --yes]"),
             ("recall", "FTS5 search across recorded conversations: cos agent recall \"<query>\" [limit]"),
             ("service", "Filesystem-based job queue: cos agent service {submit \"<prompt>\" | list | status <id> | result <id> | work | cancel <id> | prune}. Composes with cos cron + cos service for managed background workers."),
