@@ -27,7 +27,10 @@
 //!          │                          │
 //!          │                          ▼
 //!          │                  budget::reserve (hard-deny overcap)
-//!          │                          │
+//!          │                          │   per-app cap from manifest
+//!          │                          │   user cap from
+//!          │                          │   $HOME/.config/cos/ai/budget.json
+//!          │                          │   (0 = unlimited)
 //!          │                          ▼
 //!          │                  safety::redact (Strict / Standard)
 //!          │                          │
@@ -87,6 +90,7 @@ use crate::config;
 use super::budget::{BudgetError, Store};
 use super::consent;
 use super::overrides;
+use super::user_budget;
 
 // ---------------------------------------------------------------------------
 // Public request / response shapes
@@ -401,6 +405,13 @@ pub enum AiError {
     #[error("{0}")]
     Budget(#[from] BudgetError),
 
+    #[error(
+        "user-level AI budget exceeded: {used} of {cap} units used \
+         this period across all apps — raise the cap in Settings → AI \
+         → Budget, or set it to 0 to disable the user-level ceiling"
+    )]
+    UserBudgetExceeded { used: u64, cap: u64 },
+
     #[error("provider error: {0}")]
     Provider(String),
 
@@ -503,6 +514,7 @@ fn denial_reason_token(err: &AiError) -> &'static str {
         AiError::MissingInput { .. } => "missing_input",
         AiError::Denied(_) => "caps_denied",
         AiError::Budget(_) => "budget_exceeded",
+        AiError::UserBudgetExceeded { .. } => "user_budget_exceeded",
         AiError::Provider(_) => "provider_error",
         AiError::Safety(_) => "safety_block",
         AiError::Internal(_) => "internal",
@@ -611,6 +623,32 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
         policy.budget.monthly_units,
     )?;
 
+    // 7b. Reserve against the per-user aggregate ceiling. This is a
+    //     second, independent budget axis: a user who installs many
+    //     apps — each with a small per-app cap — can still exhaust
+    //     their own monthly token volume. The cap lives in
+    //     `$HOME/.config/cos/ai/budget.json` and is opt-in (the file
+    //     is missing or `monthly_units == 0` ⇒ no ceiling). If we
+    //     accept the per-app reserve but reject here, we MUST roll
+    //     back the per-app row so the user isn't billed for a call
+    //     that never ran.
+    let user_cap = user_budget::load()
+        .map_err(AiError::Internal)?
+        .monthly_units;
+    if user_cap > 0 {
+        match store.reserve(user_budget::USER_BUDGET_BUCKET, estimated_units, user_cap) {
+            Ok(_) => {}
+            Err(BudgetError::OverUnitCap { used, cap, .. }) => {
+                let _ = store.settle(&req.app_id, -(estimated_units as i64));
+                return Err(AiError::UserBudgetExceeded { used, cap });
+            }
+            Err(other) => {
+                let _ = store.settle(&req.app_id, -(estimated_units as i64));
+                return Err(AiError::Budget(other));
+            }
+        }
+    }
+
     // 8. Apply safety pipeline to the prompt (when present).
     let (prompt_for_provider, prompt_redacted) = match req.prompt.as_deref() {
         Some(p) if !p.is_empty() => {
@@ -628,6 +666,12 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
     if !modality.is_chat_like() {
         // Refund the reservation since we never reached the provider.
         let _ = store.settle(&req.app_id, -(estimated_units as i64));
+        if user_cap > 0 {
+            let _ = store.settle(
+                user_budget::USER_BUDGET_BUCKET,
+                -(estimated_units as i64),
+            );
+        }
         return Err(AiError::ModalityNotSupported(modality.label()));
     }
 
@@ -665,6 +709,14 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
     let snapshot = store
         .settle(&req.app_id, delta_units)
         .map_err(AiError::Budget)?;
+    // Settle the user-level aggregate row with the same delta so the
+    // two ledgers stay in lockstep. Best-effort: settlement errors
+    // here are post-call audit noise, not user-visible failures.
+    if user_cap > 0 {
+        if let Err(e) = store.settle(user_budget::USER_BUDGET_BUCKET, delta_units) {
+            eprintln!("ai::gate user-budget settle failed (delta={delta_units}): {e}");
+        }
+    }
 
     Ok(ChatResult {
         text,

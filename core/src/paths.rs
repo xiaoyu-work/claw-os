@@ -100,6 +100,17 @@ pub fn user_app_consent_path(app_id: &str) -> PathBuf {
         .join(format!("{app_id}.json"))
 }
 
+/// Per-user aggregate AI budget config:
+/// `$HOME/.config/cos/ai/budget.json`. Holds a single
+/// `monthly_units` field which caps the **total** token spend across
+/// every installed App for the current calendar month. A missing
+/// file (or `monthly_units == 0`) means "no cap" — the user has
+/// opted out of an aggregate ceiling. See [`crate::ai::user_budget`]
+/// for the schema and gate semantics.
+pub fn user_budget_config_path() -> PathBuf {
+    user_config_dir().join("ai").join("budget.json")
+}
+
 pub fn log_dir() -> PathBuf {
     from_env_or_default("COS_LOG_DIR", "/var/log/cos", "logs")
 }

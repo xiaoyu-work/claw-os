@@ -3050,7 +3050,7 @@ fn chat_cmd_app_gated(args: &[String]) -> Result<Value, String> {
 /// The system agent's usage is rolled up under the pseudo-app id
 /// `system.agent`.
 fn budget_cmd(args: &[String]) -> Result<Value, String> {
-    use crate::ai::budget;
+    use crate::ai::{budget, user_budget};
 
     let sub = args.first().map(String::as_str).unwrap_or("");
     match sub {
@@ -3082,7 +3082,51 @@ fn budget_cmd(args: &[String]) -> Result<Value, String> {
             let rows = store.history(app).map_err(|e| e.to_string())?;
             Ok(json!({"app": app, "history": rows}))
         }
-        _ => Err("usage: cos agent budget <show|reset|history> <app>".to_string()),
+        "user" => {
+            // `cos agent budget user <show|path>` — inspect the per-user
+            // aggregate cap. Writes go through the Cosmic Settings UI,
+            // not the CLI; this is read-only.
+            let user_sub = args.get(1).map(String::as_str).unwrap_or("show");
+            match user_sub {
+                "show" | "" => {
+                    let cfg = user_budget::load()?;
+                    let store = budget::Store::open()?;
+                    let snap = store
+                        .current(user_budget::USER_BUDGET_BUCKET)
+                        .map_err(|e| e.to_string())?;
+                    let cap = cfg.monthly_units;
+                    let used = snap.units_used;
+                    let available = if cap == 0 {
+                        None
+                    } else if used >= cap {
+                        Some(0u64)
+                    } else {
+                        Some(cap - used)
+                    };
+                    Ok(json!({
+                        "scope": "user",
+                        "path": user_budget::config_path().display().to_string(),
+                        "period": snap.period,
+                        "units_used": used,
+                        "units_cap": cap,
+                        "unlimited": cap == 0,
+                        "units_available": available,
+                    }))
+                }
+                "path" => Ok(json!({
+                    "scope": "user",
+                    "path": user_budget::config_path().display().to_string(),
+                })),
+                other => Err(format!(
+                    "unknown subcommand: cos agent budget user {other}. try: show | path"
+                )),
+            }
+        }
+        _ => Err(
+            "usage: cos agent budget <show|reset|history> <app>  |  \
+             cos agent budget user <show|path>"
+                .to_string(),
+        ),
     }
 }
 
@@ -8340,6 +8384,55 @@ mod tests {
         }
         assert_eq!(v.get("present").and_then(|x| x.as_bool()), Some(false));
         assert!(v.get("override").is_some_and(|x| x.is_null()));
+    }
+
+    #[test]
+    fn budget_user_path_returns_ai_budget_path() {
+        let v = budget_cmd(&["user".to_string(), "path".to_string()]).expect("path ok");
+        let p = v.get("path").and_then(|x| x.as_str()).expect("path field");
+        assert!(p.contains("ai"));
+        assert!(p.ends_with("budget.json"));
+        assert_eq!(v.get("scope").and_then(|x| x.as_str()), Some("user"));
+    }
+
+    #[test]
+    fn budget_user_show_missing_file_reports_unlimited() {
+        // Empty tmp dirs ⇒ no budget.json (unlimited) and a writable
+        // data dir for the SQLite store (the default /var/lib/cos is
+        // not writable on dev hosts).
+        let tmp = std::env::temp_dir().join(format!(
+            "cos-budget-user-show-{}",
+            std::process::id()
+        ));
+        let cfg_dir = tmp.join("config");
+        let data_dir = tmp.join("data");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let prev_cfg = std::env::var_os("COS_USER_CONFIG_DIR");
+        let prev_data = std::env::var_os("COS_DATA_DIR");
+        std::env::set_var("COS_USER_CONFIG_DIR", &cfg_dir);
+        std::env::set_var("COS_DATA_DIR", &data_dir);
+        let v = budget_cmd(&["user".to_string(), "show".to_string()]).expect("show ok");
+        match prev_cfg {
+            Some(p) => std::env::set_var("COS_USER_CONFIG_DIR", p),
+            None => std::env::remove_var("COS_USER_CONFIG_DIR"),
+        }
+        match prev_data {
+            Some(p) => std::env::set_var("COS_DATA_DIR", p),
+            None => std::env::remove_var("COS_DATA_DIR"),
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+        assert_eq!(v.get("scope").and_then(|x| x.as_str()), Some("user"));
+        assert_eq!(v.get("unlimited").and_then(|x| x.as_bool()), Some(true));
+        assert_eq!(v.get("units_cap").and_then(|x| x.as_u64()), Some(0));
+        assert!(v.get("units_available").is_some_and(|x| x.is_null()));
+    }
+
+    #[test]
+    fn budget_user_unknown_subcommand_errors() {
+        let err = budget_cmd(&["user".to_string(), "bogus".to_string()]).unwrap_err();
+        assert!(err.contains("bogus"));
+        assert!(err.contains("show") || err.contains("path"));
     }
 
     #[test]

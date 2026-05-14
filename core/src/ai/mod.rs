@@ -16,9 +16,12 @@
 //!      manifest's AI block (`$HOME/.config/cos/consents/<id>.json`).
 //!      Missing or drifted snapshots deny with `consent_required` /
 //!      `consent_stale`.
-//!   5. Budget — the per-app monthly token cap. Reserved pre-call
-//!      and finalised after the provider returns; over-cap requests
-//!      are hard-denied.
+//!   5. Budget — two axes, both denominated in tokens:
+//!       * per-app cap from the manifest (`AiBudget::monthly_units`)
+//!       * per-user aggregate cap at `$HOME/.config/cos/ai/budget.json`
+//!         (opt-in: missing file or `monthly_units == 0` ⇒ no cap)
+//!      Reserved pre-call and finalised after the provider returns;
+//!      either ceiling tripping hard-denies the call.
 //!   6. Safety — `Strict` redacts secrets in the prompt before
 //!      sending it upstream. `Minimal` is audit-only.
 //!   7. Audit — every accepted and denied call is logged.
@@ -50,3 +53,4 @@ pub mod budget;
 pub mod consent;
 pub mod gate;
 pub mod overrides;
+pub mod user_budget;
