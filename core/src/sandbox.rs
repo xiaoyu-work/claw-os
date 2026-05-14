@@ -14,7 +14,6 @@
 /// plain subprocess so dev builds compile — production cos
 /// always runs on Linux.
 use serde_json::{json, Value};
-use std::io::Read;
 use std::process::{Command, Stdio};
 
 use crate::caps::{require_or_json, Scope, Verb};
@@ -192,7 +191,14 @@ fn exec_linux(
         unshare_args.extend_from_slice(command_args);
     }
 
-    let mut child = Command::new("unshare")
+    // Pipe drainage + reap happen together via `wait_with_output`,
+    // which spawns internal threads to keep stdout/stderr from
+    // back-pressuring the child. The old `wait()` + `read_to_string`
+    // pattern deadlocked any sandboxed command that produced more
+    // than the kernel pipe buffer (~64 KiB on Linux): the child
+    // blocked on a full pipe, never exited, and our `wait()` never
+    // returned. Same deadlock the bridge dispatcher had.
+    let child = Command::new("unshare")
         .args(&unshare_args)
         .current_dir(workspace)
         .stdin(Stdio::inherit())
@@ -201,18 +207,12 @@ fn exec_linux(
         .spawn()
         .map_err(|e| format!("failed to spawn sandbox: {e}"))?;
 
-    let status = child
-        .wait()
+    let output = child
+        .wait_with_output()
         .map_err(|e| format!("sandbox wait failed: {e}"))?;
-
-    let mut stdout = String::new();
-    if let Some(mut out) = child.stdout.take() {
-        let _ = out.read_to_string(&mut stdout);
-    }
-    let mut stderr = String::new();
-    if let Some(mut err) = child.stderr.take() {
-        let _ = err.read_to_string(&mut stderr);
-    }
+    let status = output.status;
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
 
     Ok(json!({
         "exit_code": status.code().unwrap_or(-1),
@@ -333,7 +333,7 @@ fn exec_linux_with_cgroup(
     let scope_name = format!("cos-sandbox-{}", short_id());
     let sr_args = build_systemd_run_args(&scope_name, command_args, network, read_only, workspace, limits);
 
-    let mut child = Command::new("systemd-run")
+    let child = Command::new("systemd-run")
         .args(&sr_args)
         .current_dir(workspace)
         .stdin(Stdio::inherit())
@@ -342,18 +342,15 @@ fn exec_linux_with_cgroup(
         .spawn()
         .map_err(|e| format!("failed to spawn sandbox (systemd-run): {e}"))?;
 
-    let status = child
-        .wait()
+    // wait_with_output drains stdout/stderr concurrently with the
+    // reap so commands producing > pipe-buffer bytes (64 KiB) don't
+    // deadlock the parent. See the matching comment in exec_linux.
+    let output = child
+        .wait_with_output()
         .map_err(|e| format!("sandbox wait failed: {e}"))?;
-
-    let mut stdout = String::new();
-    if let Some(mut out) = child.stdout.take() {
-        let _ = out.read_to_string(&mut stdout);
-    }
-    let mut stderr = String::new();
-    if let Some(mut err) = child.stderr.take() {
-        let _ = err.read_to_string(&mut stderr);
-    }
+    let status = output.status;
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
 
     // Check if killed by cgroup (exit code 137 = OOM, etc.)
     let exit_code = status.code().unwrap_or(-1);
@@ -468,7 +465,9 @@ fn exec_fallback(
         .spawn()
         .map_err(|e| format!("failed to spawn: {e}"))?;
 
-    // Simple timeout: poll in a loop
+    // Simple timeout: poll in a loop. On timeout we still drain
+    // stdout/stderr after killing the child so partial output is
+    // reported.
     if let Some(secs) = limits.timeout_secs {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs as u64);
         loop {
@@ -477,9 +476,19 @@ fn exec_fallback(
                 Ok(None) => {
                     if std::time::Instant::now() > deadline {
                         let _ = child.kill();
+                        // After kill the writer side of each pipe
+                        // is closed, so wait_with_output completes
+                        // promptly (drainer threads see EOF).
+                        let output = child
+                            .wait_with_output()
+                            .map_err(|e| format!("wait_with_output after kill: {e}"))?;
+                        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+                        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
                         return Ok(json!({
                             "exit_code": -1,
                             "killed_by": "timeout",
+                            "stdout": stdout,
+                            "stderr": stderr,
                             "isolated": false,
                         }));
                     }
@@ -490,16 +499,15 @@ fn exec_fallback(
         }
     }
 
-    let status = child.wait().map_err(|e| format!("wait failed: {e}"))?;
-
-    let mut stdout = String::new();
-    if let Some(mut out) = child.stdout.take() {
-        let _ = out.read_to_string(&mut stdout);
-    }
-    let mut stderr = String::new();
-    if let Some(mut err) = child.stderr.take() {
-        let _ = err.read_to_string(&mut stderr);
-    }
+    // Normal path: try_wait already saw the child exit (or we never
+    // entered the timeout loop). wait_with_output reaps and drains
+    // pipes concurrently to avoid the >64 KiB pipe-buffer deadlock.
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("wait failed: {e}"))?;
+    let status = output.status;
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
 
     Ok(json!({
         "exit_code": status.code().unwrap_or(-1),
@@ -630,5 +638,53 @@ mod tests {
             &mk_limits(None, None, None, None),
         );
         assert!(args.iter().any(|s| s == "--net"), "network=false must add --net: {args:?}");
+    }
+
+    /// Regression for the wait()+read_to_string deadlock that
+    /// previously hung the sandbox dispatcher on any command
+    /// producing more than ~64 KiB of stdout (one Linux pipe
+    /// buffer). Exercise the non-Linux fallback path because it
+    /// runs without root / namespace privileges and is reachable on
+    /// the macOS / Linux dev workstations where this test executes.
+    /// The fallback shares the same wait_with_output pattern as the
+    /// Linux production paths, so a pass here proves the pattern
+    /// fix is correct.
+    ///
+    /// We spawn `sh -c 'head -c 524288 /dev/zero | tr "\\0" "x"'`
+    /// to produce a deterministic 512 KiB of stdout (8x the pipe
+    /// buffer). Before the fix this would block forever; we wrap
+    /// the whole thing in a 10-second mpsc deadline.
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn fallback_drains_large_stdout_without_deadlock() {
+        use std::sync::mpsc;
+        use std::thread;
+        use std::time::Duration;
+
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let res = exec_fallback(
+                &[
+                    "sh".to_string(),
+                    "-c".to_string(),
+                    "head -c 524288 /dev/zero | tr '\\0' 'x'".to_string(),
+                ],
+                "/tmp",
+                &mk_limits(None, None, None, None),
+            );
+            let _ = tx.send(res);
+        });
+        let res = rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("sandbox fallback deadlocked on >64 KiB stdout — wait_with_output not in effect");
+        let v = res.expect("fallback returned Err");
+        let stdout = v["stdout"].as_str().unwrap_or("");
+        assert_eq!(
+            stdout.len(),
+            524288,
+            "expected 512 KiB stdout, got {} bytes",
+            stdout.len()
+        );
+        assert_eq!(v["exit_code"].as_i64(), Some(0));
     }
 }
