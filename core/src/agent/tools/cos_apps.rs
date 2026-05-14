@@ -245,6 +245,375 @@ impl Tool for CosAppTool {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Live catalog + generic runner
+// ---------------------------------------------------------------------------
+//
+// The `APPS` table above ships only the apps the kernel author knew about
+// at build time. To let the agent discover *any* installed app — including
+// third-party packages added after the agent started — we expose two
+// extra tools that re-scan `$COS_APPS_DIR` on every call:
+//
+//   * `cos_app_catalog` — list / search / show installed apps using their
+//     manifest. Read-only; bypasses the `agent.invoke` capability gate
+//     (just like schema introspection on `CosAppTool`).
+//   * `cos_app_run`     — generic dispatch for any verb on any installed
+//     app, guarded by `agent.invoke:name=<app>` exactly like the
+//     hand-rolled `cos_app_<name>` proxies.
+//
+// The hand-rolled proxies are kept for the 10 well-known apps because
+// they advertise a typed `enum` of valid commands which the model picks
+// up more reliably than a free-form `command` string. The two generic
+// tools are the long-tail fallback.
+
+pub struct CosAppCatalog;
+
+#[async_trait]
+impl Tool for CosAppCatalog {
+    fn name(&self) -> &'static str {
+        "cos_app_catalog"
+    }
+
+    fn description(&self) -> &'static str {
+        "Live catalogue of installed Claw OS apps. Re-reads every app's \
+         app.json on each call, so apps installed after the agent \
+         started are immediately discoverable without restart. \
+         `list` enumerates all apps with their one-line summary; \
+         `search <query>` filters apps whose id, name, summary, or \
+         operation labels contain the query (case-insensitive); \
+         `show <app>` returns full manifest detail including every \
+         operation's label, summary, arg list, and capability needs. \
+         Pair with `cos_app_run` to invoke any verb you discover here."
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "enum": ["list", "search", "show"],
+                    "description": "Catalogue action: `list`, `search`, or `show`.",
+                },
+                "args": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "default": [],
+                    "description": "For `search`: the query string. \
+                                    For `show`: the app id to inspect. \
+                                    Ignored for `list`.",
+                },
+            },
+            "required": ["command"],
+            "additionalProperties": false,
+        })
+    }
+
+    async fn exec(&self, input: Value) -> ToolResult {
+        let command = match input.get("command").and_then(|v| v.as_str()) {
+            Some(s) if !s.is_empty() => s.to_string(),
+            _ => return ToolResult::err("missing 'command'; expected list, search, or show"),
+        };
+        let args: Vec<String> = input
+            .get("args")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let apps_dir = apps_root();
+        let apps = match tokio::task::spawn_blocking(move || crate::apps::discover(&apps_dir)).await
+        {
+            Ok(map) => map,
+            Err(join_err) => {
+                return ToolResult::err(format!("apps catalogue scan panicked: {join_err}"));
+            }
+        };
+
+        match command.as_str() {
+            "list" => ToolResult::ok(render_catalog_list(&apps)),
+            "search" => {
+                let query = args.first().cloned().unwrap_or_default();
+                if query.trim().is_empty() {
+                    return ToolResult::err("`search` requires a non-empty query in args[0]");
+                }
+                ToolResult::ok(render_catalog_search(&apps, &query))
+            }
+            "show" => {
+                let Some(name) = args.first() else {
+                    return ToolResult::err("`show` requires the app id in args[0]");
+                };
+                match apps.get(name) {
+                    Some(app) => ToolResult::ok(render_app_detail(app)),
+                    None => ToolResult::err(format!(
+                        "no app named `{name}` installed. Try `cos_app_catalog list`."
+                    )),
+                }
+            }
+            other => ToolResult::err(format!(
+                "unknown catalogue command `{other}`; expected list, search, or show"
+            )),
+        }
+    }
+}
+
+fn render_catalog_list(apps: &std::collections::BTreeMap<String, crate::apps::App>) -> String {
+    if apps.is_empty() {
+        return "(no apps installed)".to_string();
+    }
+    let id_width = apps.keys().map(|s| s.len()).max().unwrap_or(0);
+    let mut out = String::new();
+    out.push_str(&format!("{} installed app(s):\n", apps.len()));
+    for (id, app) in apps {
+        let summary = app.manifest.summary.current();
+        let summary = if summary.is_empty() {
+            app.manifest.name.current()
+        } else {
+            summary
+        };
+        out.push_str(&format!("  {:<width$}  {}\n", id, summary, width = id_width));
+    }
+    out
+}
+
+fn render_catalog_search(
+    apps: &std::collections::BTreeMap<String, crate::apps::App>,
+    query: &str,
+) -> String {
+    let needle = query.to_lowercase();
+    let mut hits: Vec<&crate::apps::App> = Vec::new();
+    for app in apps.values() {
+        let m = &app.manifest;
+        let mut matched = m.id.to_lowercase().contains(&needle)
+            || m.name.current().to_lowercase().contains(&needle)
+            || m.summary.current().to_lowercase().contains(&needle);
+        if !matched {
+            for op in m.operations.values() {
+                if op.label.current().to_lowercase().contains(&needle)
+                    || op.summary.current().to_lowercase().contains(&needle)
+                {
+                    matched = true;
+                    break;
+                }
+            }
+        }
+        if matched {
+            hits.push(app);
+        }
+    }
+    if hits.is_empty() {
+        return format!("no apps match `{query}`");
+    }
+    let id_width = hits.iter().map(|a| a.manifest.id.len()).max().unwrap_or(0);
+    let mut out = format!("{} match(es) for `{query}`:\n", hits.len());
+    for app in hits {
+        let summary = app.manifest.summary.current();
+        let summary = if summary.is_empty() {
+            app.manifest.name.current()
+        } else {
+            summary
+        };
+        out.push_str(&format!(
+            "  {:<width$}  {}\n",
+            app.manifest.id,
+            summary,
+            width = id_width
+        ));
+    }
+    out
+}
+
+fn render_app_detail(app: &crate::apps::App) -> String {
+    let m = &app.manifest;
+    let mut out = String::new();
+    out.push_str(&format!(
+        "{} ({} v{})\n",
+        m.name.current(),
+        m.id,
+        m.version
+    ));
+    let summary = m.summary.current();
+    if !summary.is_empty() {
+        out.push_str(&format!("Summary: {}\n", summary));
+    }
+    out.push_str(&format!("Runtime: {:?}\n", m.runtime));
+    out.push_str(&format!("Directory: {}\n", app.dir.display()));
+
+    if let Some(ai) = &m.ai {
+        out.push_str("AI policy:\n");
+        out.push_str(&format!(
+            "  budget: {} units / month\n",
+            ai.budget.monthly_units
+        ));
+        if !ai.models.is_empty() {
+            out.push_str(&format!("  models: {}\n", ai.models.join(", ")));
+        }
+        if !ai.origins.is_empty() {
+            out.push_str(&format!("  origins: {:?}\n", ai.origins));
+        }
+        out.push_str(&format!("  safety: {:?}\n", ai.safety));
+    }
+
+    if m.operations.is_empty() {
+        out.push_str("\n(no operations declared)\n");
+        return out;
+    }
+
+    out.push_str("\nOperations:\n");
+    for (verb, op) in &m.operations {
+        out.push_str(&format!("  {} — {}\n", verb, op.label.current()));
+        let op_summary = op.summary.current();
+        if !op_summary.is_empty() {
+            out.push_str(&format!("      {}\n", op_summary));
+        }
+        if !op.args.is_empty() {
+            let parts: Vec<String> = op
+                .args
+                .iter()
+                .map(|a| {
+                    let mut s = format!("{}:{:?}", a.name, a.kind);
+                    if a.required {
+                        s.push('!');
+                    }
+                    s
+                })
+                .collect();
+            out.push_str(&format!("      args: {}\n", parts.join(", ")));
+        }
+        if !op.needs.is_empty() {
+            let parts: Vec<String> = op
+                .needs
+                .iter()
+                .map(|n| {
+                    let scope = match &n.scope {
+                        crate::caps::manifest::ScopeBinding::FromArg { arg } => {
+                            format!("from-arg({arg})")
+                        }
+                        crate::caps::manifest::ScopeBinding::Fixed { scope } => scope.to_string(),
+                        crate::caps::manifest::ScopeBinding::Wild => "*".to_string(),
+                    };
+                    format!("{}:{}", n.verb.as_str(), scope)
+                })
+                .collect();
+            out.push_str(&format!("      needs: {}\n", parts.join(", ")));
+        }
+    }
+    out
+}
+
+pub struct CosAppRun;
+
+#[async_trait]
+impl Tool for CosAppRun {
+    fn name(&self) -> &'static str {
+        "cos_app_run"
+    }
+
+    fn description(&self) -> &'static str {
+        "Invoke any verb on any installed Claw OS app. Generic counterpart \
+         to the hand-rolled `cos_app_<name>` proxies — use this when the \
+         target app does not have a dedicated proxy, or when you want to \
+         dispatch dynamically. Discover apps and their verbs via \
+         `cos_app_catalog`. Subject to the same coarse capability gate as \
+         the typed proxies (`agent.invoke:name=<app>`); fine-grained \
+         per-arg checks (`fs.read` on a specific path, etc.) still fire \
+         inside the target app. Pass `command=\"__schema__\"` to read the \
+         app's per-verb parameter schema without invoking anything."
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "app": {
+                    "type": "string",
+                    "description": "Installed app id (matches the directory name under apps/).",
+                },
+                "command": {
+                    "type": "string",
+                    "description": "Verb to invoke. Use `__schema__` to introspect.",
+                },
+                "args": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "default": [],
+                    "description": "Positional / flag args, exactly as typed after `cos app <app> <command>`.",
+                },
+            },
+            "required": ["app", "command"],
+            "additionalProperties": false,
+        })
+    }
+
+    async fn exec(&self, input: Value) -> ToolResult {
+        let app_name = match input.get("app").and_then(|v| v.as_str()) {
+            Some(s) if !s.is_empty() => s.to_string(),
+            _ => return ToolResult::err("missing 'app' field"),
+        };
+        let command = match input.get("command").and_then(|v| v.as_str()) {
+            Some(s) if !s.is_empty() => s.to_string(),
+            _ => return ToolResult::err("missing 'command' field"),
+        };
+        let args: Vec<String> = input
+            .get("args")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if !is_valid_app_id(&app_name) {
+            return ToolResult::err(format!(
+                "invalid app id `{app_name}`; expected lowercase letters, digits, `_`, `-`"
+            ));
+        }
+
+        let app_dir = apps_root().join(&app_name);
+        if !app_dir.join("app.json").is_file() {
+            return ToolResult::err(format!(
+                "no app named `{app_name}` installed. Try `cos_app_catalog list`."
+            ));
+        }
+
+        if command != "__schema__" {
+            if let Err(denial) = crate::caps::require(
+                crate::caps::Verb::AGENT_INVOKE,
+                crate::caps::Scope::name(&app_name),
+            ) {
+                return ToolResult::err(denial.summary());
+            }
+        }
+
+        let data = data_dir();
+        let apps = apps_root().to_string_lossy().to_string();
+        let app_dir_clone = app_dir.clone();
+        let cmd = command.clone();
+        let join = tokio::task::spawn_blocking(move || {
+            crate::bridge::run_python_app(&app_dir_clone, &cmd, &args, &data, &apps)
+        })
+        .await;
+
+        match join {
+            Ok(Ok(Some(text))) => ToolResult::ok(text),
+            Ok(Ok(None)) => ToolResult::ok(String::new()),
+            Ok(Err(message)) => ToolResult::err(message),
+            Err(join_err) => ToolResult::err(format!("cos app bridge panicked: {join_err}")),
+        }
+    }
+}
+
+fn is_valid_app_id(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars().next().map_or(false, |c| c.is_ascii_lowercase())
+        && s.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+}
+
 /// Register every cos app proxy on the supplied registry.
 pub fn register_all(registry: &mut ToolRegistry) {
     for spec in APPS {
@@ -255,6 +624,8 @@ pub fn register_all(registry: &mut ToolRegistry) {
             spec.commands,
         )));
     }
+    registry.register(Arc::new(CosAppCatalog));
+    registry.register(Arc::new(CosAppRun));
 }
 
 /// Number of cos app proxies shipped.
@@ -299,7 +670,8 @@ mod tests {
     fn register_all_adds_all_apps() {
         let mut r = ToolRegistry::new();
         register_all(&mut r);
-        assert_eq!(r.len(), count());
+        // APPS proxies plus the two generic catalog/run tools.
+        assert_eq!(r.len(), count() + 2);
         assert!(r.get("cos_app_fs").is_some());
         assert!(r.get("cos_app_log").is_some());
         assert!(r.get("cos_app_notify").is_some());
@@ -310,6 +682,8 @@ mod tests {
         assert!(r.get("cos_app_search").is_some());
         assert!(r.get("cos_app_web").is_some());
         assert!(r.get("cos_app_pkg").is_some());
+        assert!(r.get("cos_app_catalog").is_some());
+        assert!(r.get("cos_app_run").is_some());
     }
 
     #[test]
@@ -439,5 +813,197 @@ mod tests {
     #[test]
     fn name_prefix_constant() {
         assert_eq!(NAME_PREFIX, "cos_app_");
+    }
+
+    // ----- catalog + run --------------------------------------------------
+
+    fn write_demo_apps_dir() -> tempfile::TempDir {
+        let root = tempfile::tempdir().unwrap();
+        let demo_dir = root.path().join("demo");
+        std::fs::create_dir_all(&demo_dir).unwrap();
+        let manifest = serde_json::json!({
+            "id": "demo",
+            "version": "0.1.0",
+            "name": {"en": "Demo App"},
+            "summary": {"en": "Toy app used by catalog tests."},
+            "operations": {
+                "ping": {
+                    "label": {"en": "Ping"},
+                    "summary": {"en": "Echo a fixed reply."},
+                    "args": [],
+                    "needs": []
+                }
+            }
+        });
+        std::fs::write(demo_dir.join("app.json"), manifest.to_string()).unwrap();
+        root
+    }
+
+    #[tokio::test]
+    async fn catalog_list_includes_installed_apps() {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _g = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+        let tmp = write_demo_apps_dir();
+        let prev_apps = std::env::var("COS_APPS_DIR").ok();
+        std::env::set_var("COS_APPS_DIR", tmp.path());
+
+        let tool = CosAppCatalog;
+        let result = tool.exec(json!({ "command": "list" })).await;
+
+        match prev_apps {
+            Some(v) => std::env::set_var("COS_APPS_DIR", v),
+            None => std::env::remove_var("COS_APPS_DIR"),
+        }
+
+        assert!(!result.is_error, "catalog list unexpectedly errored: {}", result.content);
+        assert!(result.content.contains("demo"), "expected demo app in list, got: {}", result.content);
+        assert!(
+            result.content.contains("Toy app"),
+            "summary should appear, got: {}",
+            result.content
+        );
+    }
+
+    #[tokio::test]
+    async fn catalog_search_matches_on_label() {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _g = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+        let tmp = write_demo_apps_dir();
+        let prev_apps = std::env::var("COS_APPS_DIR").ok();
+        std::env::set_var("COS_APPS_DIR", tmp.path());
+
+        let tool = CosAppCatalog;
+        let hit = tool.exec(json!({ "command": "search", "args": ["ping"] })).await;
+        let miss = tool.exec(json!({ "command": "search", "args": ["zzzz_no_match"] })).await;
+
+        match prev_apps {
+            Some(v) => std::env::set_var("COS_APPS_DIR", v),
+            None => std::env::remove_var("COS_APPS_DIR"),
+        }
+
+        assert!(!hit.is_error);
+        assert!(hit.content.contains("demo"), "expected hit on label 'Ping'");
+        assert!(!miss.is_error);
+        assert!(miss.content.contains("no apps match"));
+    }
+
+    #[tokio::test]
+    async fn catalog_show_dumps_operation_detail() {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _g = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+        let tmp = write_demo_apps_dir();
+        let prev_apps = std::env::var("COS_APPS_DIR").ok();
+        std::env::set_var("COS_APPS_DIR", tmp.path());
+
+        let tool = CosAppCatalog;
+        let result = tool.exec(json!({ "command": "show", "args": ["demo"] })).await;
+        let missing = tool.exec(json!({ "command": "show", "args": ["ghost"] })).await;
+
+        match prev_apps {
+            Some(v) => std::env::set_var("COS_APPS_DIR", v),
+            None => std::env::remove_var("COS_APPS_DIR"),
+        }
+
+        assert!(!result.is_error, "show errored: {}", result.content);
+        assert!(result.content.contains("ping"));
+        assert!(result.content.contains("Ping"));
+        assert!(missing.is_error);
+    }
+
+    #[tokio::test]
+    async fn catalog_bypasses_capability_gate() {
+        // Catalog must work in strict mode without a session, because
+        // it's a read-only manifest inspection — the entire point is
+        // for the agent to discover what *could* be invoked.
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _g = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+        let tmp = write_demo_apps_dir();
+        let prev_mode = std::env::var("COS_PERMS_MODE").ok();
+        let prev_session = std::env::var("COS_SESSION").ok();
+        let prev_apps = std::env::var("COS_APPS_DIR").ok();
+        std::env::set_var("COS_PERMS_MODE", "strict");
+        std::env::remove_var("COS_SESSION");
+        std::env::set_var("COS_APPS_DIR", tmp.path());
+
+        let tool = CosAppCatalog;
+        let result = tool.exec(json!({ "command": "list" })).await;
+
+        match prev_mode {
+            Some(v) => std::env::set_var("COS_PERMS_MODE", v),
+            None => std::env::remove_var("COS_PERMS_MODE"),
+        }
+        if let Some(v) = prev_session {
+            std::env::set_var("COS_SESSION", v);
+        }
+        match prev_apps {
+            Some(v) => std::env::set_var("COS_APPS_DIR", v),
+            None => std::env::remove_var("COS_APPS_DIR"),
+        }
+
+        assert!(!result.is_error, "catalog must bypass caps; got: {}", result.content);
+    }
+
+    #[tokio::test]
+    async fn run_rejects_unknown_app() {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _g = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+        let prev_apps = std::env::var("COS_APPS_DIR").ok();
+        std::env::set_var("COS_APPS_DIR", std::env::temp_dir());
+
+        let tool = CosAppRun;
+        let result = tool
+            .exec(json!({ "app": "definitely-not-installed-xyz", "command": "ls" }))
+            .await;
+
+        match prev_apps {
+            Some(v) => std::env::set_var("COS_APPS_DIR", v),
+            None => std::env::remove_var("COS_APPS_DIR"),
+        }
+
+        assert!(result.is_error);
+        assert!(
+            result.content.contains("no app named")
+                || result.content.contains("definitely-not-installed-xyz"),
+            "expected unknown-app error, got: {}",
+            result.content
+        );
+    }
+
+    #[tokio::test]
+    async fn run_rejects_invalid_app_id() {
+        let tool = CosAppRun;
+        let result = tool
+            .exec(json!({ "app": "Bad/App!", "command": "ls" }))
+            .await;
+        assert!(result.is_error);
+        assert!(result.content.contains("invalid app id"));
+    }
+
+    #[tokio::test]
+    async fn run_requires_app_and_command_fields() {
+        let tool = CosAppRun;
+        let missing_app = tool.exec(json!({ "command": "ls" })).await;
+        let missing_cmd = tool.exec(json!({ "app": "fs" })).await;
+        assert!(missing_app.is_error);
+        assert!(missing_cmd.is_error);
+        assert!(missing_app.content.contains("missing 'app'"));
+        assert!(missing_cmd.content.contains("missing 'command'"));
+    }
+
+    #[test]
+    fn is_valid_app_id_accepts_canonical_and_rejects_garbage() {
+        assert!(is_valid_app_id("fs"));
+        assert!(is_valid_app_id("a"));
+        assert!(is_valid_app_id("my-app_2"));
+        assert!(!is_valid_app_id(""));
+        assert!(!is_valid_app_id("0name"));
+        assert!(!is_valid_app_id("Cap"));
+        assert!(!is_valid_app_id("with space"));
+        assert!(!is_valid_app_id("../etc"));
     }
 }

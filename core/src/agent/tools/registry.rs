@@ -176,10 +176,11 @@ mod tests {
         assert!(r.get("cos_stt").is_some());
         assert!(r.get("cos_imagegen").is_some());
         // 2 builtins + cos_delegate + cos_todo + cos_clarify + every cos_proxy tool
-        // (primitives + cos_memory) + every cos_app tool + 3 media tools,
-        // plus optionally cos_recall (registered iff default DB opens).
+        // (primitives + cos_memory) + every cos_app tool + cos_app_catalog
+        // + cos_app_run + 3 media tools, plus optionally cos_recall (registered
+        // iff default DB opens).
         let expected_min =
-            5 + super::super::cos_proxy::total_count() + super::super::cos_apps::count() + 3;
+            5 + super::super::cos_proxy::total_count() + super::super::cos_apps::count() + 2 + 3;
         let expected_max = expected_min + 1;
         assert!(
             (expected_min..=expected_max).contains(&r.len()),
