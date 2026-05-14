@@ -10,7 +10,7 @@ React UI talk to that CLI.
 
 ```
 desktop/agent/
-├── Cargo.toml              # workspace: bridge + overlay
+├── Cargo.toml              # workspace: bridge + overlay + ui
 ├── bridge/                 # cos-agent-bridge — HTTP+SSE daemon
 │   └── src/
 │       ├── main.rs         # 127.0.0.1 Axum server
@@ -22,15 +22,22 @@ desktop/agent/
 │           └── voice.rs    # POST /api/voice/upload
 ├── overlay/                # cos-agent-overlay — Super+A summon window
 │   └── src/main.rs         # layer-shell quick chat (iced/libcosmic)
-└── web/                    # vendored open-agents Next.js UI (rebranded)
+├── ui/                     # cos-agent-ui — native libcosmic chat
+│   ├── src/                #   (replaces web/ + cos-browser surface)
+│   │   ├── main.rs         #   Application impl, view, subscription
+│   │   ├── bridge.rs       #   port discovery + wire types
+│   │   └── sse.rs          #   reqwest-based SSE consumer
+│   └── assets/             #   brand PNGs baked into binary
+└── web/                    # legacy: vendored open-agents Next.js UI
+                            #   (kept while ui/ is stabilized)
 ```
 
 ## Runtime topology
 
 ```
 ┌─ standalone window ─┐   ┌─ Super+A overlay ─┐
-│  cos-browser loads  │   │  cos-agent-overlay │
-│  http://127.0.0.1/  │   │  (iced layer-shell)│
+│  cos-agent-ui       │   │  cos-agent-ui      │
+│  (native libcosmic) │   │  --overlay         │
 └─────────┬───────────┘   └─────────┬──────────┘
           │                         │
           └────────────┬────────────┘
@@ -48,6 +55,11 @@ desktop/agent/
            │  core::agent::runtime    │
            └──────────────────────────┘
 ```
+
+> Legacy: `cos-browser` loading the static React app under
+> `web/` still works against the same bridge. It will be
+> retired once `cos-agent-ui` reaches feature parity (markdown,
+> tool cards, voice, settings).
 
 ## Port discovery
 

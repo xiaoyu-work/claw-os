@@ -1,0 +1,45 @@
+[package]
+name = "cos-agent-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Claw OS Agent — native libcosmic UI (replaces the React + WebView app)."
+
+[[bin]]
+name = "cos-agent-ui"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls", "json"] }
+futures = "0.3"
+futures-util = "0.3"
+async-stream = "0.3"
+bytes = "1"
+uuid = { version = "1", features = ["v4"] }
+url = "2"
+
+[dependencies.libcosmic]
+git = "https://github.com/pop-os/libcosmic.git"
+default-features = false
+features = [
+    "multi-window",
+    "tokio",
+    "winit",
+    "surface-message",
+    "wgpu",
+    "wayland",
+]
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+opt-level = 3
+strip = true

@@ -1,0 +1,525 @@
+//! `cos-agent-ui` — native libcosmic chat client for the Claw OS agent.
+//!
+//! Replaces the React + WebView app under `desktop/agent/web/`. The
+//! bridge under `desktop/agent/bridge/` stays in place during this
+//! transition and serves as the single contract: this UI POSTs to
+//! `http://127.0.0.1:<port>/api/chat` and consumes the same SSE
+//! stream the React app did.
+//!
+//! Two visual modes mirror the original:
+//!
+//!   * **Standalone** — full window, centered, larger brand.
+//!   * **Overlay**    — compact, anchored, Esc closes (for the
+//!                      global `Super+A` summon hotkey).
+//!
+//! Selected with `--overlay` on the command line. Falls back to
+//! standalone.
+
+use std::env;
+
+use cosmic::app::{Core, Settings, Task};
+use cosmic::iced::keyboard::{Key, key::Named};
+use cosmic::iced::{Alignment, Length, Limits, Subscription, event};
+use cosmic::widget::{button, column, container, row, scrollable, text, text_input};
+use cosmic::{Application, Element, executor, theme, widget};
+use tracing::warn;
+
+mod bridge;
+mod sse;
+
+use crate::bridge::{ChatRequest, StreamEvent, read_bridge_port};
+
+/// Symbol PNGs (square logo) for the header.
+static SYMBOL_LIGHT: &[u8] = include_bytes!("../assets/clawos-symbol.png");
+static SYMBOL_DARK: &[u8] = include_bytes!("../assets/clawos-symbol-dark.png");
+
+/// Wordmark PNGs (logotype) for the standalone header.
+static WORDMARK_LIGHT: &[u8] = include_bytes!("../assets/clawos-wordmark.png");
+static WORDMARK_DARK: &[u8] = include_bytes!("../assets/clawos-wordmark-dark.png");
+
+/// Application-level configuration parsed from argv.
+#[derive(Debug, Clone, Default)]
+pub struct Flags {
+    pub overlay: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum Message {
+    /// User edited the input field.
+    InputChanged(String),
+    /// User pressed Enter or clicked Send. Captures the current input.
+    Submit,
+    /// Token delta from the SSE stream.
+    StreamDelta(String),
+    /// Terminal envelope from the stream — currently unused beyond
+    /// flipping `streaming` off.
+    StreamDone(serde_json::Value),
+    /// Bridge-side or subprocess error during a streamed reply.
+    StreamError(String),
+    /// SSE connection closed (clean or otherwise). Tail of every stream.
+    StreamEnded,
+    /// User pressed Esc — only meaningful in overlay mode.
+    EscapePressed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChatRole {
+    User,
+    Assistant,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChatMessage {
+    pub role: ChatRole,
+    pub content: String,
+    /// True while the assistant is still streaming this message.
+    pub in_progress: bool,
+}
+
+pub struct App {
+    core: Core,
+    flags: Flags,
+    bridge_port: Option<u16>,
+    bridge_error: Option<String>,
+
+    messages: Vec<ChatMessage>,
+    input: String,
+    streaming: bool,
+    error: Option<String>,
+}
+
+impl Application for App {
+    type Executor = executor::Default;
+    type Flags = Flags;
+    type Message = Message;
+    const APP_ID: &'static str = "com.clawos.Agent";
+
+    fn core(&self) -> &Core {
+        &self.core
+    }
+
+    fn core_mut(&mut self) -> &mut Core {
+        &mut self.core
+    }
+
+    fn init(mut core: Core, flags: Flags) -> (Self, Task<Message>) {
+        if flags.overlay {
+            core.window.show_headerbar = false;
+            core.window.show_close = false;
+            core.window.show_maximize = false;
+            core.window.show_minimize = false;
+        }
+
+        let (bridge_port, bridge_error) = match read_bridge_port() {
+            Ok(p) => (Some(p), None),
+            Err(e) => {
+                warn!("cos-agent-bridge unreachable: {e:#}");
+                (None, Some(format!("Bridge unavailable: {e}")))
+            }
+        };
+
+        let app = App {
+            core,
+            flags,
+            bridge_port,
+            bridge_error,
+            messages: Vec::new(),
+            input: String::new(),
+            streaming: false,
+            error: None,
+        };
+        (app, Task::none())
+    }
+
+    fn update(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::InputChanged(s) => {
+                self.input = s;
+                Task::none()
+            }
+
+            Message::Submit => self.submit(),
+
+            Message::StreamDelta(chunk) => {
+                if let Some(last) = self.messages.last_mut()
+                    && last.role == ChatRole::Assistant
+                {
+                    last.content.push_str(&chunk);
+                }
+                Task::none()
+            }
+
+            Message::StreamDone(_envelope) => {
+                if let Some(last) = self.messages.last_mut() {
+                    last.in_progress = false;
+                }
+                self.streaming = false;
+                Task::none()
+            }
+
+            Message::StreamError(msg) => {
+                if let Some(last) = self.messages.last_mut() {
+                    last.in_progress = false;
+                }
+                self.streaming = false;
+                self.error = Some(msg);
+                Task::none()
+            }
+
+            Message::StreamEnded => {
+                if let Some(last) = self.messages.last_mut() {
+                    last.in_progress = false;
+                }
+                self.streaming = false;
+                Task::none()
+            }
+
+            Message::EscapePressed => {
+                if self.flags.overlay {
+                    std::process::exit(0);
+                }
+                Task::none()
+            }
+        }
+    }
+
+    fn view(&self) -> Element<Message> {
+        if self.flags.overlay {
+            self.view_overlay()
+        } else {
+            self.view_standalone()
+        }
+    }
+
+    fn subscription(&self) -> Subscription<Message> {
+        // Overlay mode swallows Esc to close itself.
+        if !self.flags.overlay {
+            return Subscription::none();
+        }
+        event::listen_with(|ev, _status, _id| {
+            if let cosmic::iced::Event::Keyboard(
+                cosmic::iced::keyboard::Event::KeyPressed { key, .. },
+            ) = ev
+                && matches!(key, Key::Named(Named::Escape))
+            {
+                return Some(Message::EscapePressed);
+            }
+            None
+        })
+    }
+}
+
+impl App {
+    fn submit(&mut self) -> Task<Message> {
+        let prompt = self.input.trim().to_string();
+        if prompt.is_empty() || self.streaming {
+            return Task::none();
+        }
+        let Some(port) = self.bridge_port else {
+            self.error = Some(
+                self.bridge_error
+                    .clone()
+                    .unwrap_or_else(|| "Bridge not running".into()),
+            );
+            return Task::none();
+        };
+
+        self.input.clear();
+        self.error = None;
+        self.streaming = true;
+        self.messages.push(ChatMessage {
+            role: ChatRole::User,
+            content: prompt.clone(),
+            in_progress: false,
+        });
+        self.messages.push(ChatMessage {
+            role: ChatRole::Assistant,
+            content: String::new(),
+            in_progress: true,
+        });
+
+        let request = ChatRequest {
+            prompt,
+            session_id: None,
+            model: None,
+        };
+        cosmic::Task::stream(cosmic::iced::stream::channel(
+            16,
+            move |mut tx| async move {
+                use futures::SinkExt;
+                use futures_util::StreamExt;
+                match sse::open_chat_stream(port, request).await {
+                    Ok(stream) => {
+                        let mut stream = std::pin::pin!(stream);
+                        while let Some(item) = stream.next().await {
+                            let msg = match item {
+                                Ok(StreamEvent::Delta(t)) => Message::StreamDelta(t),
+                                Ok(StreamEvent::Done(v)) => Message::StreamDone(v),
+                                Ok(StreamEvent::Error(e)) => Message::StreamError(e),
+                                Err(e) => Message::StreamError(format!("{e:#}")),
+                            };
+                            if tx.send(msg).await.is_err() {
+                                return;
+                            }
+                        }
+                        let _ = tx.send(Message::StreamEnded).await;
+                    }
+                    Err(e) => {
+                        let _ = tx
+                            .send(Message::StreamError(format!("{e:#}")))
+                            .await;
+                    }
+                }
+            },
+        ))
+        .map(cosmic::Action::App)
+    }
+
+    fn view_standalone(&self) -> Element<Message> {
+        let cosmic_theme = theme::active().cosmic().clone();
+        let spacing = cosmic_theme.spacing;
+
+        let header = container(
+            widget::image(if is_dark() {
+                widget::image::Handle::from_bytes(WORDMARK_DARK)
+            } else {
+                widget::image::Handle::from_bytes(WORDMARK_LIGHT)
+            })
+            .height(Length::Fixed(40.0)),
+        )
+        .center_x(Length::Fill)
+        .padding([spacing.space_l, 0u16]);
+
+        let body = if self.messages.is_empty() {
+            empty_state(false)
+        } else {
+            self.message_list(false)
+        };
+
+        let input = self.input_row(false);
+
+        let inner = column()
+            .push(header)
+            .push(
+                container(body)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .padding(spacing.space_m),
+            )
+            .push(container(input).padding([0u16, spacing.space_l, spacing.space_m, spacing.space_l]))
+            .spacing(spacing.space_xs);
+
+        container(inner)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .into()
+    }
+
+    fn view_overlay(&self) -> Element<Message> {
+        let cosmic_theme = theme::active().cosmic().clone();
+        let spacing = cosmic_theme.spacing;
+
+        let header = row()
+            .push(
+                widget::image(if is_dark() {
+                    widget::image::Handle::from_bytes(SYMBOL_DARK)
+                } else {
+                    widget::image::Handle::from_bytes(SYMBOL_LIGHT)
+                })
+                .height(Length::Fixed(20.0))
+                .width(Length::Fixed(20.0)),
+            )
+            .push(text("Claw OS Agent").size(13.0))
+            .push(cosmic::widget::space::horizontal())
+            .push(text("Esc to close").size(11.0))
+            .align_y(Alignment::Center)
+            .spacing(spacing.space_xs);
+
+        let body = if self.messages.is_empty() {
+            empty_state(true)
+        } else {
+            self.message_list(true)
+        };
+
+        let inner = column()
+            .push(container(header).padding(spacing.space_xs))
+            .push(
+                container(body)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .padding([0u16, spacing.space_xs]),
+            )
+            .push(container(self.input_row(true)).padding(spacing.space_xs))
+            .spacing(spacing.space_xs);
+
+        container(inner)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    }
+
+    fn message_list(&self, compact: bool) -> Element<Message> {
+        let cosmic_theme = theme::active().cosmic().clone();
+        let spacing = cosmic_theme.spacing;
+
+        let mut col = column().spacing(spacing.space_s).width(Length::Fill);
+
+        for msg in &self.messages {
+            col = col.push(message_bubble(msg, compact));
+        }
+
+        if let Some(err) = &self.error {
+            col = col.push(
+                container(text(format!("⚠ {err}")).size(12.0))
+                    .padding(spacing.space_xxs)
+                    .class(theme::Container::Card),
+            );
+        }
+
+        scrollable(col).width(Length::Fill).into()
+    }
+
+    fn input_row(&self, compact: bool) -> Element<Message> {
+        let cosmic_theme = theme::active().cosmic().clone();
+        let spacing = cosmic_theme.spacing;
+
+        let placeholder = if compact {
+            "Ask anything…"
+        } else {
+            "Ask the agent anything. Shift+Enter for newline."
+        };
+
+        let send_label = if self.streaming { "…" } else { "Send" };
+
+        let input = text_input(placeholder, &self.input)
+            .on_input(Message::InputChanged)
+            .on_submit(|_| Message::Submit)
+            .padding(spacing.space_xs)
+            .width(Length::Fill);
+
+        let send = {
+            let mut b = button::suggested(send_label);
+            if !self.streaming && !self.input.trim().is_empty() {
+                b = b.on_press(Message::Submit);
+            }
+            b
+        };
+
+        row()
+            .push(input)
+            .push(send)
+            .spacing(spacing.space_xs)
+            .align_y(Alignment::Center)
+            .into()
+    }
+}
+
+fn empty_state(compact: bool) -> Element<'static, Message> {
+    let cosmic_theme = theme::active().cosmic().clone();
+    let spacing = cosmic_theme.spacing;
+
+    let title = if compact {
+        text("Ready when you are.").size(14.0)
+    } else {
+        text("How can I help?").size(22.0)
+    };
+    let hint = if compact {
+        text("Type below or paste anything.").size(11.0)
+    } else {
+        text("Press Super+A from anywhere to summon me.").size(13.0)
+    };
+    container(
+        column()
+            .push(title)
+            .push(hint)
+            .spacing(spacing.space_xxs)
+            .align_x(Alignment::Center),
+    )
+    .center_x(Length::Fill)
+    .center_y(Length::Fill)
+    .into()
+}
+
+fn message_bubble(msg: &ChatMessage, compact: bool) -> Element<Message> {
+    let cosmic_theme = theme::active().cosmic().clone();
+    let spacing = cosmic_theme.spacing;
+
+    let role_label = match msg.role {
+        ChatRole::User => "You",
+        ChatRole::Assistant => "Agent",
+    };
+
+    let body_text = if msg.content.is_empty() && msg.in_progress {
+        "…".to_string()
+    } else {
+        msg.content.clone()
+    };
+
+    let body_size = if compact { 12.0 } else { 14.0 };
+
+    let bubble = container(
+        column()
+            .push(text(role_label).size(11.0))
+            .push(text(body_text).size(body_size))
+            .spacing(spacing.space_xxs),
+    )
+    .padding(spacing.space_xs)
+    .class(match msg.role {
+        ChatRole::User => theme::Container::Primary,
+        ChatRole::Assistant => theme::Container::Card,
+    })
+    .width(Length::Fill);
+
+    bubble.into()
+}
+
+fn is_dark() -> bool {
+    theme::active().theme_type.is_dark()
+}
+
+fn parse_flags() -> Flags {
+    let mut flags = Flags::default();
+    for arg in env::args().skip(1) {
+        match arg.as_str() {
+            "--overlay" => flags.overlay = true,
+            "-h" | "--help" => {
+                eprintln!(
+                    "cos-agent-ui [--overlay]\n  --overlay   compact, Esc-to-close mode for global summon"
+                );
+                std::process::exit(0);
+            }
+            other => {
+                eprintln!("warning: ignoring unknown flag: {other}");
+            }
+        }
+    }
+    flags
+}
+
+fn main() -> cosmic::iced::Result {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .with_writer(std::io::stderr)
+        .try_init();
+
+    let flags = parse_flags();
+
+    let mut settings = Settings::default();
+    if flags.overlay {
+        settings = settings.size_limits(
+            Limits::NONE
+                .min_width(360.0)
+                .min_height(220.0)
+                .max_width(560.0)
+                .max_height(420.0),
+        );
+    } else {
+        settings = settings.size_limits(Limits::NONE.min_width(480.0).min_height(320.0));
+    }
+
+    cosmic::app::run::<App>(settings, flags)
+}
