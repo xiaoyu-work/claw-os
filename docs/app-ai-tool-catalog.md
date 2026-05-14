@@ -31,6 +31,16 @@ For the higher-level architecture and the line between `cos ai`
 (App-facing primitive) and `cos agent` (kernel's own Agent product),
 see [`docs/app-ai-integration.md`](./app-ai-integration.md).
 
+> **App-defined tools live in a separate namespace.** The catalog
+> below is the *kernel-provided* Tool set Apps consume. Apps can also
+> *expose* their own Tools so the kernel agent can hold a stateful
+> Session across multiple Apps — see
+> [§12 in app-ai-integration.md](./app-ai-integration.md#12-app-session-tools-apps-as-mcp-servers).
+> The two surfaces don't overlap: catalog tools are kernel-owned and
+> shared; App-session tools are App-owned, declared in the manifest's
+> `session.tools[]`, and reach the model under registry names like
+> `app_kv__kv_get`.
+
 ---
 
 ## How an App uses the catalog
