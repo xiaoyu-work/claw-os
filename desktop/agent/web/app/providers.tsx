@@ -1,23 +1,17 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import {
-  Suspense,
   createContext,
   useCallback,
   useContext,
   useEffect,
   useMemo,
-  useRef,
   useState,
 } from "react";
 import { Toaster } from "sonner";
 import { SWRConfig } from "swr";
-import { GitHubReconnectGate } from "@/components/github-reconnect-gate";
-import { authClient } from "@/lib/auth/client";
-import { FetchError } from "@/lib/swr";
 
-const THEME_STORAGE_KEY = "open-agents-theme";
+const THEME_STORAGE_KEY = "clawos-agent-theme";
 const DARK_MODE_MEDIA_QUERY = "(prefers-color-scheme: dark)";
 
 export type ThemePreference = "light" | "dark" | "system";
@@ -48,12 +42,12 @@ function applyTheme(resolvedTheme: ResolvedTheme) {
 }
 
 /**
- * Global providers for the app. Wraps children in SWRConfig with a
- * global error handler that detects 401 responses and signs the user out.
+ * Global providers for the app.
+ *
+ * Single-user, local-only — no auth/session handling. We just wire up
+ * SWR + theme + toast notifications.
  */
 export function Providers({ children }: { children: React.ReactNode }) {
-  const router = useRouter();
-  const signingOut = useRef(false);
   const [theme, setThemeState] = useState<ThemePreference>("system");
   const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>("dark");
 
@@ -100,30 +94,6 @@ export function Providers({ children }: { children: React.ReactNode }) {
     [applyThemePreference],
   );
 
-  const handleError = useCallback(
-    (error: Error) => {
-      const isSessionAuthError =
-        error instanceof FetchError &&
-        error.status === 401 &&
-        error.message === "Not authenticated";
-
-      if (isSessionAuthError && !signingOut.current) {
-        signingOut.current = true;
-        authClient
-          .signOut()
-          .catch(() => {
-            // if signout fails, navigate anyway so the user isn't stuck
-          })
-          .finally(() => {
-            signingOut.current = false;
-            router.replace("/");
-            router.refresh();
-          });
-      }
-    },
-    [router],
-  );
-
   const themeContextValue = useMemo(
     () => ({ theme, resolvedTheme, setTheme }),
     [theme, resolvedTheme, setTheme],
@@ -131,12 +101,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   return (
     <ThemeContext.Provider value={themeContextValue}>
-      <SWRConfig value={{ onError: handleError }}>
-        {children}
-        <Suspense fallback={null}>
-          <GitHubReconnectGate />
-        </Suspense>
-      </SWRConfig>
+      <SWRConfig value={{}}>{children}</SWRConfig>
       <Toaster theme={resolvedTheme} />
     </ThemeContext.Provider>
   );

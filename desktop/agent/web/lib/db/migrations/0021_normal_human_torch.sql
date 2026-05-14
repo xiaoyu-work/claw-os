@@ -1,1 +1,0 @@
-ALTER TABLE "sessions" ADD COLUMN "auto_commit_push_override" boolean;

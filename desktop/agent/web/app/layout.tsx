@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import { Analytics } from "@vercel/analytics/next";
 import { Providers } from "./providers";
 import "./globals.css";
 
@@ -16,7 +15,7 @@ const geistMono = Geist_Mono({
 
 const themeInitializationScript = `
 (() => {
-  const storageKey = "open-agents-theme";
+  const storageKey = "clawos-agent-theme";
   const darkModeMediaQuery = "(prefers-color-scheme: dark)";
   const storedTheme = window.localStorage.getItem(storageKey);
 
@@ -36,32 +35,15 @@ const themeInitializationScript = `
 })();
 `;
 
-const isPreviewDeployment = process.env.VERCEL_ENV === "preview";
-const faviconPath = isPreviewDeployment
-  ? "/favicon-preview.svg"
-  : "/favicon.ico";
-const metadataBase =
-  process.env.VERCEL_ENV === "production" &&
-  process.env.VERCEL_PROJECT_PRODUCTION_URL
-    ? new URL(`https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`)
-    : process.env.VERCEL_URL
-      ? new URL(`https://${process.env.VERCEL_URL}`)
-      : new URL("https://open-agents.dev");
-
 export const metadata: Metadata = {
-  metadataBase,
   title: {
-    default: "Open Agents",
-    template: "%s | Open Agents",
+    default: "Claw OS Agent",
+    template: "%s · Claw OS Agent",
   },
-  description:
-    "Spawn coding agents that run infinitely in the cloud. Powered by AI SDK, Gateway, Sandbox, and Workflow SDK.",
+  description: "Your Claw OS system agent.",
   icons: {
-    icon: faviconPath,
-    shortcut: faviconPath,
-  },
-  twitter: {
-    card: "summary_large_image",
+    icon: "/favicon.ico",
+    shortcut: "/favicon.ico",
   },
 };
 
@@ -79,7 +61,6 @@ export default function RootLayout({
           dangerouslySetInnerHTML={{ __html: themeInitializationScript }}
         />
         <Providers>{children}</Providers>
-        <Analytics />
       </body>
     </html>
   );

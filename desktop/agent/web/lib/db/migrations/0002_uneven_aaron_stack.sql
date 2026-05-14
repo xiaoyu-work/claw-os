@@ -1,1 +1,0 @@
-ALTER TABLE "tasks" ADD COLUMN "is_new_branch" boolean DEFAULT false NOT NULL;

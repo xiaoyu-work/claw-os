@@ -1,29 +1,26 @@
-import { filterModelsForSession } from "@/lib/model-access";
-import { fetchAvailableLanguageModelsWithContext } from "@/lib/models-with-context";
-import { getServerSession } from "@/lib/session/get-server-session";
+import { bridgeUrl } from "@/lib/bridge";
 
-const CACHE_CONTROL = "private, no-store";
-
-export async function GET(req: Request) {
+export async function GET() {
+  let url: string;
   try {
-    const [session, models] = await Promise.all([
-      getServerSession(),
-      fetchAvailableLanguageModelsWithContext(),
-    ]);
-
-    return Response.json(
-      { models: filterModelsForSession(models, session, req.url) },
-      {
-        headers: {
-          "Cache-Control": CACHE_CONTROL,
-        },
-      },
-    );
+    url = await bridgeUrl("/api/models");
   } catch (error) {
-    console.error("Failed to fetch available models:", error);
     return Response.json(
-      { error: "Failed to fetch available models" },
-      { status: 500 },
+      {
+        error: "cos-agent-bridge is not reachable",
+        detail: (error as Error).message,
+      },
+      { status: 502 },
     );
   }
+
+  const upstream = await fetch(url, { method: "GET" });
+  const body = await upstream.text();
+  return new Response(body, {
+    status: upstream.status,
+    headers: {
+      "Content-Type": upstream.headers.get("content-type") ?? "application/json",
+      "Cache-Control": "private, no-store",
+    },
+  });
 }

@@ -1,12 +1,8 @@
-import { redirect } from "next/navigation";
-import { getServerSession } from "@/lib/session/get-server-session";
-import { HomePage } from "./home-page";
+import { redirect as _redirect } from "next/navigation";
+import { ChatShell } from "@/components/chat-shell";
 
-export default async function Home() {
-  const session = await getServerSession();
-  if (session?.user) {
-    redirect("/sessions");
-  }
+void _redirect;
 
-  return <HomePage hasSessionCookie={false} lastRepo={null} />;
+export default function Home() {
+  return <ChatShell />;
 }

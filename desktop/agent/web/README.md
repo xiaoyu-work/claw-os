@@ -15,16 +15,19 @@ by the MIT terms.
 
 ```
 desktop/agent/web/
-├── app/                # Next.js App Router
-├── components/         # React components (sidebar, composer, message list, …)
-├── hooks/              # Custom hooks
-├── lib/                # Auth, DB, GitHub, sandbox, AI glue (mostly stripped — see below)
-├── public/             # Static assets (icons, fonts)
+├── app/
+│   ├── api/{chat,sessions,models}/route.ts  # dev-only passthrough to cos-agent-bridge
+│   ├── layout.tsx, providers.tsx
+│   └── page.tsx                              # renders <ChatShell />
+├── components/
+│   ├── chat-shell.tsx                        # main chat surface (fetch + SSE → bridge)
+│   └── ui/                                   # design system (Radix wrappers)
+├── hooks/                                    # generic UI hooks (audio, scroll, mobile…)
+├── lib/                                      # utilities (bridge port discovery, models, …)
 ├── packages/
-│   ├── shared/         # Diff, paste-block, tool-state utilities; reasoning/todo contexts
-│   └── tsconfig/       # Base tsconfig fragments
-├── package.json        # Bun workspace root for this subtree
-└── LICENSE             # Upstream MIT
+│   └── shared/                               # diff, paste-block, tool-state utils
+├── package.json
+└── LICENSE                                   # upstream MIT, preserved verbatim
 ```
 
 ## How it is wired into ClawOS
@@ -35,6 +38,9 @@ desktop/agent/web/
   `http://127.0.0.1:$PORT/`.
 - All `/api/*` calls hit the same bridge process, which proxies them
   to `cos agent` via subprocess.
+- During dev (`next dev`), the route handlers under `app/api/*` proxy
+  to the bridge by reading
+  `$XDG_RUNTIME_DIR/cos-agent-bridge.port` (see `lib/bridge.ts`).
 - No external network egress; no Vercel; no sandbox VM; no GitHub.
 
 ## What was removed from the upstream
@@ -48,8 +54,8 @@ analytics, and the Workflow SDK.
 ## Building
 
 ```
-bun install
-bun run build       # static export
+npm install           # or bun / pnpm
+npm run build         # next build + export
 ```
 
 The result is dropped into `out/` and the bridge serves it from

@@ -1,1 +1,0 @@
-ALTER TABLE "user_preferences" ADD COLUMN "enabled_model_ids" jsonb DEFAULT '[]'::jsonb NOT NULL;
