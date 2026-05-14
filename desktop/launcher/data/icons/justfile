@@ -1,11 +1,15 @@
 appid := env_var('APPID')
 install-dir := env_var('INSTALL_DIR')
 
-scalable-src := appid + '.svg'
-scalable-dst := install-dir / 'icons' / 'hicolor' / 'scalable' / 'apps' / scalable-src
+icons-src := 'hicolor'
+icons-dst := install-dir / 'icons' / 'hicolor'
 
 install:
-    install -Dm0644 {{scalable-src}} {{scalable-dst}}
+    for size in `ls {{icons-src}}`; do \
+        install -Dm0644 "{{icons-src}}/$size/apps/{{appid}}.png" "{{icons-dst}}/$size/apps/{{appid}}.png"; \
+    done
 
 uninstall:
-    rm {{scalable-dst}}
+    for size in `ls {{icons-src}}`; do \
+        rm -f "{{icons-dst}}/$size/apps/{{appid}}.png"; \
+    done
