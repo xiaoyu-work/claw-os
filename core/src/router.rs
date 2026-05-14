@@ -550,7 +550,7 @@ fn builtin_apps() -> Vec<(
             ("list", "List all traces (--status, --limit)"),
         ]),
         ("agent", "OS-native agent subsystem — runtime, memory, skills, LLM providers, tools, FS job queue", vec![
-            ("setup", "Interactive first-run wizard: pick provider, model, and store API key. Non-interactive: cos agent setup [--status|--reset]"),
+            ("setup", "Per-modality config wizard: cos agent setup [llm|tts|stt|imagegen|embed|all] [--status|--reset|--verify-only|--no-verify]. Bare `cos agent setup` = llm."),
             ("ask", "Single-shot prompt with full tool/memory loop: cos agent ask \"<prompt>\" [--stream] — without --stream waits for the full response; with --stream tokens are written live to stderr while the JSON envelope still lands on stdout."),
             ("chat", "Interactive multi-turn REPL: cos agent chat [--session <id>] [--no-stream] [--no-memory] [--show-tools] [--max-turns N]. Slash commands: /quit /help /session /clear /history [N] /tools."),
             ("status", "Short live verdict: provider/model/key source, ready/not-ready, most-recent session. Use `cos agent doctor` for the full provider matrix, tool list, skills, usage."),

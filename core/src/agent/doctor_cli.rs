@@ -144,6 +144,7 @@ pub fn doctor_cmd(args: &[String]) -> Result<Value, String> {
     let skills = check_skills();
     let hooks = check_hooks();
     let honcho = check_honcho();
+    let media = check_media_modalities();
 
     let checks = json!({
         "provider": provider,
@@ -156,6 +157,7 @@ pub fn doctor_cmd(args: &[String]) -> Result<Value, String> {
         "skills": skills,
         "hooks": hooks,
         "honcho": honcho,
+        "media": media,
     });
 
     let mut ok_n = 0u32;
@@ -282,6 +284,45 @@ fn check_engines() -> Value {
         "status": status,
         "linked": linked,
         "count": linked.len(),
+    })
+}
+
+/// One-line readiness summary per media modality. Each entry is
+/// `{provider, ready, reason}`. Overall status is `warn` if any
+/// configured modality (provider != none) fails the credential
+/// check, otherwise `ok`.
+fn check_media_modalities() -> Value {
+    use crate::agent::setup::Modality;
+    let mut entries = serde_json::Map::new();
+    let mut warn = false;
+    for m in [Modality::Tts, Modality::Stt, Modality::ImageGen, Modality::Embed] {
+        let snap = crate::agent::setup::status_for(m);
+        let provider = snap.get("provider").and_then(|v| v.as_str()).unwrap_or("none");
+        let ready = snap.get("ready").and_then(|v| v.as_bool()).unwrap_or(false);
+        let reason = snap.get("reason").cloned().unwrap_or(Value::Null);
+        let state = if provider == "none" || provider.is_empty() {
+            "unconfigured"
+        } else if ready {
+            "ready"
+        } else {
+            warn = true;
+            "configured-but-not-ready"
+        };
+        entries.insert(
+            m.name().into(),
+            json!({
+                "state": state,
+                "provider": provider,
+                "ready": ready,
+                "reason": reason,
+            }),
+        );
+    }
+    let status = if warn { "warn" } else { "ok" };
+    json!({
+        "status": status,
+        "hint": "configure with `cos agent setup [tts|stt|imagegen|embed]` or `cos agent setup all`",
+        "modalities": entries,
     })
 }
 
