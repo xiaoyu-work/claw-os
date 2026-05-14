@@ -15,6 +15,11 @@
       "args": [],
       "needs": []
     },
+    "overlay": {
+      "label": { "en": "Open the Spotlight-style Super+A quick-summon overlay" },
+      "args": [],
+      "needs": []
+    },
     "url": {
       "label": { "en": "Print the URL of the local bridge (http://127.0.0.1:PORT/)" },
       "args": [],

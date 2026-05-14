@@ -125,12 +125,80 @@ def _cmd_open(_args):
     return {"error": "execv returned"}  # unreachable on success
 
 
+def _cmd_overlay(args):
+    """Open the Spotlight-style quick-summon overlay.
+
+    Uses a distinct --user-data-dir (and therefore a distinct chromium
+    singleton lock), so:
+      * pressing Super+A while no overlay is open starts a fresh one,
+      * pressing Super+A again brings the existing overlay window to
+        the foreground (chromium's profile-lock behavior).
+
+    The React UI reads the `overlay=1` query param to switch to its
+    compact layout and binds Escape to `window.close()` so the user
+    can dismiss without touching the mouse.
+
+    Optional `--voice` arms the mic on open (used by Super+Shift+A).
+    """
+    voice = "--voice" in args
+    port = _ensure_port()
+    if port is None:
+        return {
+            "error": "cos-agent-bridge is not running and could not be started",
+            "hint": "systemctl --user start cos-agent-bridge.service",
+        }
+
+    query = "overlay=1"
+    if voice:
+        query += "&voice=1"
+    url = f"http://127.0.0.1:{port}/?{query}"
+
+    name, browser = _find_browser()
+    if not browser:
+        return {
+            "error": "no supported windowed browser found",
+            "hint": "apt-get install chromium",
+            "url": url,
+        }
+
+    if name in ("chromium", "chromium-browser", "google-chrome"):
+        profile = os.path.join(_runtime_dir(), "cos-agent-overlay-profile")
+        # 640×420 centered horizontally near the top of the screen
+        # gives the Spotlight feel without requiring a real layer-shell
+        # window manager hook.
+        cmd = [
+            browser,
+            f"--app={url}",
+            "--class=ClawOS-Agent-Overlay",
+            f"--user-data-dir={profile}",
+            "--window-size=640,420",
+            "--window-position=center,top",
+        ]
+    else:
+        cmd = [browser, "--new-window", url]
+
+    try:
+        os.execv(browser, cmd)
+    except OSError as exc:
+        return {"error": f"failed to launch {browser}: {exc}"}
+    return {"error": "execv returned"}
+
+
 def _schema():
     return {
         "open": {
             "description": "Open the ClawOS Agent window (windowed chromium)",
             "parameters": [],
             "example": "cos app agent open",
+        },
+        "overlay": {
+            "description": "Open the Spotlight-style Super+A quick-summon overlay",
+            "parameters": [
+                {"name": "--voice", "type": "boolean", "required": False,
+                 "description": "Auto-arm the microphone on open", "kind": "flag",
+                 "default": False},
+            ],
+            "example": "cos app agent overlay --voice",
         },
         "url": {
             "description": "Print the URL of the local cos-agent-bridge",
@@ -146,6 +214,7 @@ def run(command, args):
         return _schema()
     handlers = {
         "open": _cmd_open,
+        "overlay": _cmd_overlay,
         "url": _cmd_url,
     }
     handler = handlers.get(command)
@@ -158,8 +227,8 @@ def main():
     argv = sys.argv[1:]
     if not argv:
         print(json.dumps({
-            "error": "usage: cos app agent <open|url>",
-            "commands": ["open", "url"],
+            "error": "usage: cos app agent <open|overlay|url>",
+            "commands": ["open", "overlay", "url"],
         }))
         return
     if argv[0] in ("--schema", "-h", "--help"):

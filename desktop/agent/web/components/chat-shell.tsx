@@ -1,6 +1,12 @@
 "use client";
 
-import { type FormEvent, useCallback, useRef, useState } from "react";
+import {
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { Send } from "lucide-react";
 
 import { BrandSymbol } from "@/components/brand";
@@ -53,11 +59,41 @@ function parseSseChunk(
   return { events, remainder };
 }
 
+function readOverlayMode(): boolean {
+  if (typeof window === "undefined") return false;
+  const params = new URLSearchParams(window.location.search);
+  return params.get("overlay") === "1";
+}
+
 export function ChatShell() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
+  const [isOverlay, setIsOverlay] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    setIsOverlay(readOverlayMode());
+  }, []);
+
+  useEffect(() => {
+    if (!isOverlay) return;
+    // Overlay mode: pressing Escape (anywhere — even when the
+    // textarea has focus) closes the window. chromium --app= windows
+    // accept window.close() for any page they themselves opened.
+    const handler = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        window.close();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    // Autofocus the input so the user can start typing immediately
+    // after Super+A.
+    inputRef.current?.focus();
+    return () => window.removeEventListener("keydown", handler);
+  }, [isOverlay]);
 
   const sendPrompt = useCallback(async (prompt: string) => {
     const userMessage: ChatMessage = {
@@ -153,6 +189,72 @@ export function ChatShell() {
     [input, sendPrompt, streaming],
   );
 
+  if (isOverlay) {
+    return (
+      <div className="flex h-screen flex-col bg-background/95 text-foreground backdrop-blur-xl">
+        <header className="flex items-center gap-2 border-b border-border/60 px-4 py-2">
+          <BrandSymbol size={18} className="text-primary" />
+          <span className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+            Claw OS Agent
+          </span>
+          <span className="ml-auto text-[10px] text-muted-foreground">
+            Esc to close
+          </span>
+        </header>
+
+        <main className="flex flex-1 flex-col gap-2 overflow-y-auto px-4 py-3">
+          {messages.length === 0 ? (
+            <p className="my-auto text-center text-sm text-muted-foreground">
+              What can I help you with?
+            </p>
+          ) : (
+            messages.map((m) => (
+              <div
+                key={m.id}
+                className={
+                  m.role === "user"
+                    ? "ml-auto max-w-[85%] rounded-xl bg-primary px-3 py-1.5 text-sm text-primary-foreground"
+                    : "mr-auto max-w-[85%] rounded-xl bg-muted px-3 py-1.5 text-sm text-foreground"
+                }
+              >
+                <p className="whitespace-pre-wrap leading-snug">
+                  {m.content || (m.role === "assistant" ? "…" : "")}
+                </p>
+              </div>
+            ))
+          )}
+        </main>
+
+        <form
+          onSubmit={handleSubmit}
+          className="flex items-end gap-2 border-t border-border/60 bg-card/80 px-3 py-2"
+        >
+          <Textarea
+            ref={inputRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Ask anything…"
+            rows={1}
+            className="min-h-8 resize-none border-none bg-transparent text-sm shadow-none focus-visible:ring-0"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                (e.currentTarget.form ?? undefined)?.requestSubmit();
+              }
+            }}
+          />
+          <Button
+            type="submit"
+            size="icon"
+            disabled={streaming || input.trim().length === 0}
+          >
+            <Send className="size-3.5" />
+          </Button>
+        </form>
+      </div>
+    );
+  }
+
   return (
     <div className="flex min-h-screen flex-col bg-background text-foreground">
       <header className="border-b border-border px-6 py-4">
@@ -208,6 +310,7 @@ export function ChatShell() {
           className="sticky bottom-6 flex items-end gap-2 rounded-2xl border border-border bg-card p-3 shadow-sm"
         >
           <Textarea
+            ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="Ask Claw OS anything…"
