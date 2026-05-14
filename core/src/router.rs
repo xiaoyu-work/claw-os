@@ -48,6 +48,31 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
 
     let name = &args[0];
 
+    // Top-level help / version flags. Match what every Unix CLI does so
+    // muscle memory works: bare `cos --help` / `cos help` is the same
+    // overview as bare `cos`; `cos help <topic>` drills into one
+    // primitive/app; `cos --version` prints just the version envelope.
+    match name.as_str() {
+        "--help" | "-h" => {
+            if args.len() >= 2 {
+                return show_help_for(&args[1]);
+            }
+            return show_overview();
+        }
+        "help" => {
+            if args.len() >= 2 {
+                return show_help_for(&args[1]);
+            }
+            return show_overview();
+        }
+        "--version" | "-v" | "-V" => {
+            return Ok(Some(
+                json!({"name": "cos", "version": VERSION}).to_string(),
+            ));
+        }
+        _ => {}
+    }
+
     // "app" namespace → route to Python apps
     if name == "app" {
         return dispatch_app(&args[1..]);
@@ -95,8 +120,8 @@ fn dispatch_app(args: &[String]) -> Result<Option<String>, String> {
     let apps_dir = apps_dir();
     let discovered = apps::discover(&apps_dir);
 
-    // "cos app" with no further args → list available apps
-    if args.is_empty() {
+    // "cos app" with no further args (or with --help/help) → list apps.
+    if args.is_empty() || matches!(args[0].as_str(), "--help" | "-h" | "help") {
         return show_apps(&discovered);
     }
 
@@ -116,8 +141,9 @@ fn dispatch_app(args: &[String]) -> Result<Option<String>, String> {
         return Err(format!("unknown app: {app_name}. installed: {names:?}"));
     }
 
-    // "cos app <name>" → show app help
-    if args.len() == 1 {
+    // "cos app <name>" / "cos app <name> --help|-h|help" → show app help.
+    if args.len() == 1 || (args.len() == 2 && matches!(args[1].as_str(), "--help" | "-h" | "help"))
+    {
         return show_app_help(app_name, &discovered[app_name.as_str()]);
     }
 
@@ -293,9 +319,56 @@ fn show_overview() -> Result<Option<String>, String> {
         "primitives": primitives,
         "total_primitives": total_primitives,
         "apps_available": app_count,
-        "hint": "Run: cos <primitive> <command> for OS operations. Run: cos app to see available apps.",
+        "hint": "Run: cos <primitive> <command> for OS operations. cos help <primitive> for one. cos app to see available apps.",
     });
     Ok(Some(output.to_string()))
+}
+
+/// `cos help <topic>` — focused help for one primitive or app. Falls
+/// back to the global overview when the topic is unknown so the user
+/// always sees something useful (and the available names).
+fn show_help_for(topic: &str) -> Result<Option<String>, String> {
+    // Built-in primitives use the same shape as `cos <primitive>`
+    // (no args).
+    if let Some((name, desc, cmds)) = builtin_apps().into_iter().find(|(n, _, _)| *n == topic) {
+        let cmd_map: serde_json::Map<String, Value> = cmds
+            .iter()
+            .map(|(k, v)| (k.to_string(), json!(v)))
+            .collect();
+        return Ok(Some(
+            json!({
+                "app": name,
+                "description": desc,
+                "commands": cmd_map,
+                "hint": format!("Run: cos {name} <command> [args]"),
+            })
+            .to_string(),
+        ));
+    }
+
+    // Apps: render the same help as `cos app <name>`.
+    let discovered = apps::discover(&apps_dir());
+    if let Some(app) = discovered.get(topic) {
+        return show_app_help(topic, app);
+    }
+    // `cos help app` → list all apps.
+    if topic == "app" {
+        return show_apps(&discovered);
+    }
+
+    // Unknown topic: degrade to the overview but include a note so the
+    // caller knows their topic wasn't recognised.
+    let mut overview: Value = match show_overview()? {
+        Some(s) => serde_json::from_str(&s).unwrap_or_else(|_| json!({})),
+        None => json!({}),
+    };
+    if let Some(obj) = overview.as_object_mut() {
+        obj.insert(
+            "note".into(),
+            json!(format!("unknown help topic: {topic}")),
+        );
+    }
+    Ok(Some(overview.to_string()))
 }
 
 fn show_apps(
@@ -455,8 +528,8 @@ fn builtin_apps() -> Vec<(
             ("barrier", "Wait until N sessions reach a synchronization point (--expect N, --session ID)"),
             ("pipe", "Streaming named pipes — create, publish, subscribe, list, destroy (structured NDJSON channels with replay and backpressure)"),
         ]),
-        ("browser", "Browser-as-a-service — Jina Reader lifecycle control", vec![
-            ("start", "Start the Jina Reader browser service"),
+        ("browser", "Browser-as-a-service — cos-browser (Rust/V8) lifecycle control with CDP on :9222", vec![
+            ("start", "Start the cos-browser CDP service"),
             ("stop", "Stop the browser service"),
             ("restart", "Restart the browser service"),
             ("status", "Check if browser service is running and healthy"),
@@ -1637,7 +1710,12 @@ fn dispatch_builtin(
     app_name: &str,
     handler: fn(&str, &[String]) -> Result<Value, String>,
 ) -> Result<Option<String>, String> {
-    if args.len() == 1 {
+    // `cos <primitive>` and `cos <primitive> --help|-h|help` render the
+    // same machine-readable command list. Doing this here means every
+    // primitive picks up help support uniformly.
+    let help_only = args.len() == 1
+        || (args.len() == 2 && matches!(args[1].as_str(), "--help" | "-h" | "help"));
+    if help_only {
         let apps = builtin_apps();
         let app = apps.iter().find(|(n, _, _)| *n == app_name).unwrap();
         let cmds: serde_json::Map<String, Value> = app
@@ -2009,5 +2087,81 @@ mod tests {
             Some(crate::errors::LIMIT_OOM)
         );
         assert_eq!(error_code_from_hint("something random"), None);
+    }
+
+    fn parse(out: Option<String>) -> Value {
+        serde_json::from_str(&out.expect("dispatch returned None")).expect("not JSON")
+    }
+
+    #[test]
+    fn dispatch_help_flag_returns_overview() {
+        let v = parse(dispatch(&["--help".into()]).unwrap());
+        assert_eq!(v["name"], "cos");
+        assert!(v["primitives"].is_array());
+    }
+
+    #[test]
+    fn dispatch_h_short_flag_returns_overview() {
+        let v = parse(dispatch(&["-h".into()]).unwrap());
+        assert_eq!(v["name"], "cos");
+    }
+
+    #[test]
+    fn dispatch_bare_help_returns_overview() {
+        let v = parse(dispatch(&["help".into()]).unwrap());
+        assert!(v["primitives"].is_array());
+    }
+
+    #[test]
+    fn dispatch_help_topic_returns_primitive() {
+        let v = parse(dispatch(&["help".into(), "sys".into()]).unwrap());
+        assert_eq!(v["app"], "sys");
+        assert!(v["commands"].is_object());
+    }
+
+    #[test]
+    fn dispatch_help_unknown_topic_returns_overview_with_note() {
+        let v = parse(dispatch(&["help".into(), "nope".into()]).unwrap());
+        assert!(v["primitives"].is_array());
+        assert!(v["note"].as_str().unwrap().contains("unknown help topic"));
+    }
+
+    #[test]
+    fn dispatch_version_returns_envelope() {
+        for flag in ["--version", "-v", "-V"] {
+            let v = parse(dispatch(&[flag.into()]).unwrap());
+            assert_eq!(v["name"], "cos");
+            assert_eq!(v["version"], VERSION);
+        }
+    }
+
+    #[test]
+    fn dispatch_builtin_help_token_returns_overview() {
+        for flag in ["--help", "-h", "help"] {
+            let v = parse(dispatch(&["sys".into(), flag.into()]).unwrap());
+            assert_eq!(v["app"], "sys", "flag: {flag}");
+            assert!(v["commands"].is_object());
+        }
+    }
+
+    #[test]
+    fn dispatch_agent_help_does_not_hijack() {
+        // `cos agent --help` must return the command list rather than
+        // dropping into the interactive chat/setup shortcut.
+        let v = parse(dispatch(&["agent".into(), "--help".into()]).unwrap());
+        assert_eq!(v["app"], "agent");
+        assert!(v["commands"].is_object());
+    }
+
+    #[test]
+    fn browser_primitive_description_is_not_stale() {
+        let apps = builtin_apps();
+        let browser = apps.iter().find(|(n, _, _)| *n == "browser").unwrap();
+        assert!(
+            !browser.1.contains("Jina"),
+            "browser description still references Jina: {}",
+            browser.1
+        );
+        assert!(browser.1.contains("cos-browser"));
     }
 }
