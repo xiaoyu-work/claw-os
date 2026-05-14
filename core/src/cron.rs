@@ -448,97 +448,126 @@ fn wait_with_timeout(
     start: &chrono::DateTime<chrono::Utc>,
     timeout_secs: u64,
 ) -> CronRunResult {
+    use std::io::Read;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
 
-    loop {
+    // Drain stdout / stderr on background threads while we poll
+    // try_wait. Without this, a job that produces more than the
+    // kernel pipe buffer (~64 KiB on Linux) blocks on write to a
+    // full pipe and never exits, our try_wait perpetually returns
+    // None, and we falsely report "timeout" even though the command
+    // would have completed if anyone had been reading its output.
+    //
+    // Threads exit when read_to_end sees EOF, which happens when
+    // either the child exits naturally OR we kill it on timeout.
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let stdout_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let stderr_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let stdout_thread = stdout.map(|mut s| {
+        let buf = Arc::clone(&stdout_buf);
+        thread::spawn(move || {
+            let mut tmp = Vec::new();
+            let _ = s.read_to_end(&mut tmp);
+            buf.lock().expect("stdout buf").extend_from_slice(&tmp);
+        })
+    });
+    let stderr_thread = stderr.map(|mut s| {
+        let buf = Arc::clone(&stderr_buf);
+        thread::spawn(move || {
+            let mut tmp = Vec::new();
+            let _ = s.read_to_end(&mut tmp);
+            buf.lock().expect("stderr buf").extend_from_slice(&tmp);
+        })
+    });
+
+    // Poll for natural exit; break on exit or on timeout-induced kill.
+    enum Reap {
+        Exited(std::process::ExitStatus),
+        Killed,
+        Errored(String),
+    }
+    let reap = loop {
         match child.try_wait() {
-            Ok(Some(exit_status)) => {
-                // Process exited before timeout
-                let end = chrono::Utc::now();
-                let duration = (end - *start).num_milliseconds().max(0) as u64;
-                let code = exit_status.code();
-                let status = if exit_status.success() {
-                    "success"
-                } else {
-                    "failed"
-                };
-                // Read whatever output is available
-                let (stdout_tail, stderr_tail) = read_child_pipes(&mut child);
-                return CronRunResult {
-                    started_at: started_at.to_string(),
-                    finished_at: Some(format_time(&end)),
-                    exit_code: code,
-                    status: status.to_string(),
-                    stdout_tail,
-                    stderr_tail,
-                    duration_ms: Some(duration),
-                };
-            }
+            Ok(Some(status)) => break Reap::Exited(status),
             Ok(None) => {
-                // Still running
                 if std::time::Instant::now() >= deadline {
-                    // Timeout: kill the child
                     let _ = child.kill();
                     let _ = child.wait(); // reap
-                    let end = chrono::Utc::now();
-                    let duration = (end - *start).num_milliseconds().max(0) as u64;
-                    let (stdout_tail, stderr_tail) = read_child_pipes(&mut child);
-                    return CronRunResult {
-                        started_at: started_at.to_string(),
-                        finished_at: Some(format_time(&end)),
-                        exit_code: None,
-                        status: "timeout".to_string(),
-                        stdout_tail,
-                        stderr_tail: Some(
-                            stderr_tail
-                                .map(|s| format!("{s}\n[killed: timeout after {timeout_secs}s]"))
-                                .unwrap_or_else(|| {
-                                    format!("[killed: timeout after {timeout_secs}s]")
-                                }),
-                        ),
-                        duration_ms: Some(duration),
-                    };
+                    break Reap::Killed;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
-            Err(e) => {
-                let end = chrono::Utc::now();
-                let duration = (end - *start).num_milliseconds().max(0) as u64;
-                return CronRunResult {
-                    started_at: started_at.to_string(),
-                    finished_at: Some(format_time(&end)),
-                    exit_code: None,
-                    status: "failed".to_string(),
-                    stdout_tail: None,
-                    stderr_tail: Some(format!("wait error: {e}")),
-                    duration_ms: Some(duration),
-                };
+            Err(e) => break Reap::Errored(format!("wait error: {e}")),
+        }
+    };
+
+    // Both drainer threads see EOF once the child is gone and exit
+    // promptly. Join to harvest the buffers.
+    if let Some(t) = stdout_thread {
+        let _ = t.join();
+    }
+    if let Some(t) = stderr_thread {
+        let _ = t.join();
+    }
+    let stdout_string =
+        String::from_utf8_lossy(&stdout_buf.lock().expect("stdout buf")).into_owned();
+    let stderr_string =
+        String::from_utf8_lossy(&stderr_buf.lock().expect("stderr buf")).into_owned();
+    let stdout_tail = if stdout_string.is_empty() {
+        None
+    } else {
+        Some(tail_string(&stdout_string))
+    };
+    let stderr_tail_base = if stderr_string.is_empty() {
+        None
+    } else {
+        Some(tail_string(&stderr_string))
+    };
+
+    let end = chrono::Utc::now();
+    let duration = (end - *start).num_milliseconds().max(0) as u64;
+
+    match reap {
+        Reap::Exited(status) => {
+            let code = status.code();
+            let s = if status.success() { "success" } else { "failed" };
+            CronRunResult {
+                started_at: started_at.to_string(),
+                finished_at: Some(format_time(&end)),
+                exit_code: code,
+                status: s.to_string(),
+                stdout_tail,
+                stderr_tail: stderr_tail_base,
+                duration_ms: Some(duration),
             }
         }
+        Reap::Killed => CronRunResult {
+            started_at: started_at.to_string(),
+            finished_at: Some(format_time(&end)),
+            exit_code: None,
+            status: "timeout".to_string(),
+            stdout_tail,
+            stderr_tail: Some(
+                stderr_tail_base
+                    .map(|s| format!("{s}\n[killed: timeout after {timeout_secs}s]"))
+                    .unwrap_or_else(|| format!("[killed: timeout after {timeout_secs}s]")),
+            ),
+            duration_ms: Some(duration),
+        },
+        Reap::Errored(msg) => CronRunResult {
+            started_at: started_at.to_string(),
+            finished_at: Some(format_time(&end)),
+            exit_code: None,
+            status: "failed".to_string(),
+            stdout_tail,
+            stderr_tail: Some(msg),
+            duration_ms: Some(duration),
+        },
     }
-}
-
-fn read_child_pipes(child: &mut std::process::Child) -> (Option<String>, Option<String>) {
-    use std::io::Read;
-    let stdout_tail = child.stdout.take().and_then(|mut r| {
-        let mut buf = String::new();
-        r.read_to_string(&mut buf).ok()?;
-        if buf.is_empty() {
-            None
-        } else {
-            Some(tail_string(&buf))
-        }
-    });
-    let stderr_tail = child.stderr.take().and_then(|mut r| {
-        let mut buf = String::new();
-        r.read_to_string(&mut buf).ok()?;
-        if buf.is_empty() {
-            None
-        } else {
-            Some(tail_string(&buf))
-        }
-    });
-    (stdout_tail, stderr_tail)
 }
 
 // ---------------------------------------------------------------------------
@@ -1589,5 +1618,94 @@ mod tests {
             duration_ms: Some(60000),
         });
         assert!(!is_running(&job));
+    }
+
+    // -- wait_with_timeout deadlock regression --
+
+    /// Spawn a child that produces 512 KiB of stdout (8x the kernel
+    /// pipe buffer on Linux) and finishes within ~1s. Wrap the call
+    /// in wait_with_timeout(timeout_secs=10). Before the drainer-
+    /// thread fix this hangs forever and returns status="timeout".
+    /// After the fix it returns status="success" with full stdout.
+    #[test]
+    fn wait_with_timeout_drains_large_stdout_no_false_timeout() {
+        perms_init();
+        use std::time::Duration;
+
+        let child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("head -c 524288 /dev/zero | tr '\\0' 'x'")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn sh");
+
+        let started_at = format_time(&chrono::Utc::now());
+        let start = chrono::Utc::now();
+
+        // Use mpsc to enforce an OUTER deadline that catches a real
+        // deadlock (the inner timeout_secs is generous on purpose:
+        // if drainer threads work the job finishes in <1s).
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let res = wait_with_timeout(child, &started_at, &start, 10);
+            let _ = tx.send(res);
+        });
+        let res = rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("wait_with_timeout deadlocked — drainer threads not in effect");
+
+        assert_eq!(
+            res.status, "success",
+            "expected success, got status={} (would be 'timeout' before the fix)",
+            res.status
+        );
+        assert_eq!(res.exit_code, Some(0));
+        // tail_string truncates; we don't care about exact length,
+        // only that we received SOMETHING (proves stdout was drained).
+        assert!(
+            res.stdout_tail.is_some(),
+            "stdout_tail must be Some after draining 512 KiB"
+        );
+    }
+
+    /// Companion: a child that ignores SIGTERM and writes to stdout
+    /// every 50ms must still be killed and reported as timeout
+    /// AFTER the timeout elapses, not deadlock the dispatcher.
+    /// We use timeout_secs=1 and an outer 8s deadline.
+    #[test]
+    fn wait_with_timeout_terminates_slow_child_and_reports_timeout() {
+        perms_init();
+        use std::time::Duration;
+
+        let child = std::process::Command::new("sh")
+            .arg("-c")
+            // Print one line every 50ms forever. Will run until killed.
+            .arg("while :; do echo tick; sleep 0.05; done")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn sh");
+
+        let started_at = format_time(&chrono::Utc::now());
+        let start = chrono::Utc::now();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let res = wait_with_timeout(child, &started_at, &start, 1);
+            let _ = tx.send(res);
+        });
+        let res = rx
+            .recv_timeout(Duration::from_secs(8))
+            .expect("wait_with_timeout failed to kill on deadline");
+
+        assert_eq!(res.status, "timeout");
+        // Note about the kill MUST be appended to stderr_tail even
+        // when stderr was empty pre-kill.
+        let stderr_tail = res.stderr_tail.unwrap_or_default();
+        assert!(
+            stderr_tail.contains("killed: timeout after 1s"),
+            "stderr_tail missing kill marker: {stderr_tail:?}"
+        );
     }
 }
