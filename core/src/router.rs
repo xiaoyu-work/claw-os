@@ -124,6 +124,14 @@ fn dispatch_app(args: &[String]) -> Result<Option<String>, String> {
         return lint_apps(&discovered, target);
     }
 
+    // Special: `cos app tool list [<name>]` — list session-exposed
+    // tools (the strict-schema, agent-callable surface) declared by
+    // each app's manifest. Lives next to `lint` so authors can audit
+    // what their app advertises to the kernel agent.
+    if app_name == "tool" {
+        return tool_cmd(&args[1..], &discovered);
+    }
+
     // Special: `cos app install <source>` — validate a manifest,
     // install the App tree under apps_dir(), and (unless --no-consent)
     // walk the operator through the AI consent prompt. Lives in the
@@ -205,7 +213,8 @@ fn lint_apps(
     };
 
     for app in apps_to_check {
-        let violations = scan_app_for_ai_imports(&app.dir);
+        let mut violations = scan_app_for_ai_imports(&app.dir);
+        violations.extend(scan_session_block(app));
         if !violations.is_empty() {
             any_violation = true;
         }
@@ -221,14 +230,126 @@ fn lint_apps(
             "results": results,
             "ok": !any_violation,
             "hint": if any_violation {
-                "Apps must import from `_lib.ai` (which shells out to `cos ai chat --app <id>`); \
-                 they must not import provider SDKs directly."
+                "Lint failed. Apps must (a) route AI calls through `_lib.ai` (not direct provider SDKs) \
+                 and (b) ship every file referenced by their `session.entry` so the kernel agent can spawn \
+                 the MCP server. Run `cos app tool list <app>` to inspect the declared tool surface."
             } else {
-                "All apps route their AI calls through the kernel gate."
+                "All apps route their AI calls through the kernel gate and ship every declared session entry."
             },
         })
         .to_string(),
     ))
+}
+
+/// On-disk lint checks for an app's `session` block. The manifest
+/// parser already enforces structural validity (duplicate tool
+/// names, undeclared scope args, missing English text, etc.) and
+/// `apps::discover` would have skipped the app otherwise. What we
+/// still need to verify here is that the artefacts referenced by the
+/// manifest exist on disk — most importantly the `session.entry`
+/// script, since a missing entry breaks the agent at first call
+/// rather than at install time.
+fn scan_session_block(app: &apps::App) -> Vec<Value> {
+    let Some(session) = app.manifest.session.as_ref() else {
+        return Vec::new();
+    };
+    let entry_rel = session
+        .entry
+        .clone()
+        .unwrap_or_else(|| {
+            app.manifest
+                .runtime
+                .default_session_entry()
+                .to_string()
+        });
+    let entry_abs = app.dir.join(&entry_rel);
+    let mut hits = Vec::new();
+    if !entry_abs.is_file() {
+        hits.push(json!({
+            "kind": "session.entry-missing",
+            "file": entry_abs.display().to_string(),
+            "hint": format!(
+                "Manifest declares a `session` block with {} tool(s) but the entry script \
+                 `{}` is not present on disk. The kernel agent will fail to bring up the MCP \
+                 server on the first call.",
+                session.tools.len(),
+                entry_rel,
+            ),
+        }));
+    }
+    hits
+}
+
+/// `cos app tool <sub>` — discovery surface for App-defined session
+/// tools (the strict-schema, agent-callable surface declared in each
+/// manifest's `session` block).
+///
+/// Currently supports:
+/// * `cos app tool list` — every session tool across every installed app.
+/// * `cos app tool list <app>` — the tools one app exposes.
+///
+/// The CLI just prints what the manifest claims; it does *not* spawn
+/// the App MCP server (that happens inside the agent on first call).
+fn tool_cmd(
+    args: &[String],
+    discovered: &std::collections::BTreeMap<String, apps::App>,
+) -> Result<Option<String>, String> {
+    let sub = args.first().map(String::as_str).unwrap_or("list");
+    match sub {
+        "list" => {
+            let target = args.get(1).map(String::as_str);
+            let apps_to_show: Vec<&apps::App> = match target {
+                Some(name) => match discovered.get(name) {
+                    Some(a) => vec![a],
+                    None => {
+                        let names: Vec<&String> = discovered.keys().collect();
+                        return Err(format!("unknown app: {name}. installed: {names:?}"));
+                    }
+                },
+                None => discovered.values().collect(),
+            };
+
+            let mut apps_json: Vec<Value> = Vec::new();
+            for app in apps_to_show {
+                let tools_json: Vec<Value> = app
+                    .manifest
+                    .session
+                    .as_ref()
+                    .map(|s| {
+                        s.tools
+                            .iter()
+                            .map(|t| {
+                                json!({
+                                    "name": t.name,
+                                    "summary": t.summary.en_str(),
+                                    "args": t.args.iter().map(|a| json!({
+                                        "name": a.name,
+                                        "kind": format!("{:?}", a.kind).to_lowercase(),
+                                        "required": a.required,
+                                    })).collect::<Vec<_>>(),
+                                    "verbs": t.needs.iter()
+                                        .map(|n| n.verb.as_str())
+                                        .collect::<Vec<_>>(),
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                apps_json.push(json!({
+                    "app": app.manifest.id,
+                    "has_session": app.manifest.session.is_some(),
+                    "tools": tools_json,
+                }));
+            }
+            Ok(Some(json!({"apps": apps_json}).to_string()))
+        }
+        "--help" | "-h" | "help" => Ok(Some(
+            "cos app tool list [<app>]  list session-exposed tools".to_string(),
+        )),
+        other => Err(format!(
+            "unknown subcommand: cos app tool {other}. try: cos app tool list [<app>]"
+        )),
+    }
 }
 
 /// Walk an app directory looking for `*.py` files that import one of
@@ -2187,6 +2308,7 @@ mod tests {
                 origins: vec![PromptOrigin::Trusted],
                 tools: Vec::new(),
             }),
+            session: None,
             dependencies: serde_json::Value::Null,
         };
         let mut discovered = std::collections::BTreeMap::new();
