@@ -58,7 +58,109 @@ responsibility, and the OS treats it like any other Unix process.
 The boundary is precisely the two CLI entry points above. Inside them =
 audited AI activity. Outside them = ordinary program behavior.
 
-## 3. The Tool Catalog
+## 3. App Lifecycle & Identity
+
+Before any of the AI machinery is meaningful, the OS must answer one
+question with certainty: **"which App is calling me right now?"** The
+answer determines which Tools are unlocked, which scope is enforced,
+and which row is written to the audit log.
+
+Claw OS answers this through a deliberate restriction:
+
+> **An App's identity is established only when the kernel itself spawns
+> the App process.** A random Linux program cannot become "App X" by
+> passing a flag.
+
+This restriction is foundational to the audit guarantee in §2. The
+sections that follow (Tool catalog, manifest, CLI, audit) all assume
+it.
+
+### 3.1 Lifecycle in one picture
+
+```
+   ┌──────────────────────────────────────────────────────┐
+   │  Author packages an App directory (manifest + code)  │
+   └──────────────────────────────────┬───────────────────┘
+                                      │  cos app install <dir>
+                                      ▼
+   ┌──────────────────────────────────────────────────────┐
+   │  Registered under /var/lib/cos/apps/<id>/            │
+   │  Consent UI runs for ai.tools[] entries              │
+   └──────────────────────────────────┬───────────────────┘
+                                      │  cos app <id> <op>
+                                      ▼
+   ┌──────────────────────────────────────────────────────┐
+   │  Kernel forks the App process                        │
+   │  Sets COS_APP_ID=<id> in the child's env             │
+   └──────────────────────────────────┬───────────────────┘
+                                      │  App code may shell out:
+                                      ▼
+   ┌──────────────────────────────────────────────────────┐
+   │  cos ai chat / cos ai tool                           │
+   │  Inherits COS_APP_ID from parent → identity is fixed │
+   └──────────────────────────────────────────────────────┘
+```
+
+### 3.2 Three invariants
+
+1. **Install is mandatory.** `cos app install <dir>` is the only way to
+   register an App. Until installation, a directory has no identity and
+   no Tools.
+2. **Kernel-spawn is mandatory.** An App process can only be started by
+   `cos app <id> <op>`. The kernel sets `COS_APP_ID` on the child
+   (`core/src/bridge.rs`); any `cos ai chat` / `cos ai tool` call inside
+   that process tree inherits the env var.
+3. **Identity flags are not trusted.** `cos ai chat --app foo.bar` is
+   rejected when the caller's `COS_APP_ID` is unset or does not match.
+   There is no token, no signed payload, nothing the caller can present
+   to claim a different identity.
+
+### 3.3 Runtimes
+
+The kernel forks Apps through `core/src/bridge.rs`. Today only Python
+is supported. As third-party Apps land, the bridge will dispatch on
+the manifest's `runtime` field:
+
+| `runtime`          | How the kernel starts it                     |
+|--------------------|----------------------------------------------|
+| `python` (default) | `python3 -c <wrapper>` — current behaviour   |
+| `node`             | `node <wrapper.js>`                          |
+| `binary`           | `exec /var/lib/cos/apps/<id>/bin/main`       |
+
+In every case, `COS_APP_ID` is set before `exec`. The choice of runtime
+is purely about *how* the kernel spawns the App; it has no effect on
+identity or on which Tools are reachable.
+
+### 3.4 What this rules out (and why)
+
+| Rejected pattern | Why we rejected it |
+|---|---|
+| Per-App token in `$COS_APP_TOKEN`; any process can claim identity by presenting a valid token. | Token leakage = silent identity theft. The audit log loses its single most important guarantee. |
+| Verify caller via executable path / PID ancestry. | Linux-specific, brittle under containers / namespaces / re-exec, and still weaker than a kernel-set env var. |
+| Trust `--app <id>` on faith and audit everything anyway. | Audit becomes "this string showed up", not "this App did X". Defeats the point of having an audit log at all. |
+
+The flexibility cost — "third-party Apps cannot be arbitrary Linux
+daemons that wake themselves up at boot" — is acceptable. AI-using Apps
+are user-launched assistants, not background services. Apps that *are*
+background services do not belong in World B and have no business
+talking to `cos ai`.
+
+### 3.5 What "SDK" means under this model
+
+Because identity flows from kernel-spawn, **the SDK is never a system
+boundary**. It is a convenience library that runs *inside* an
+already-spawned App process and shells out to `cos ai chat` /
+`cos ai tool`. A developer can equivalently:
+
+- Use the bundled `apps/_lib/{ai,tools}.py`.
+- Write a Node / Go / Rust equivalent — roughly 100 lines each.
+- Skip the library and `subprocess.run(["cos", "ai", "chat", …])` by
+  hand.
+
+All three are equivalent. The stable contract is the **CLI plus JSON
+envelope**, not any particular library.
+
+## 4. The Tool Catalog
 
 A **Tool** is "an operation a model is allowed to invoke on this
 computer". The catalog (`core/src/ai/tools.rs::CATALOG`) is the
@@ -89,7 +191,7 @@ What is **not** in the Tool catalog — by design:
   infrastructure used by Claw OS's own Agent. Third-party App AIs do
   not see them.
 
-## 4. Manifest
+## 5. Manifest
 
 An App that uses AI declares it in its `app.json`. The `ai` section is
 the **only** part of the manifest this document specifies; the rest of
@@ -131,9 +233,9 @@ models the App is allowed to invoke.
 
 An App that does **not** use AI omits the `ai` section entirely.
 
-## 5. CLI
+## 6. CLI
 
-### 5.1 `cos ai chat`
+### 6.1 `cos ai chat`
 
 Single inference. Returns the model's message plus any `tool_calls` it
 emitted. Does **not** execute the tool calls.
@@ -164,7 +266,7 @@ The returned envelope:
 `--tools` accepts only names already listed in the App's manifest. Any
 name outside the manifest is rejected before reaching the model.
 
-### 5.2 `cos ai tool`
+### 6.2 `cos ai tool`
 
 Execute one Tool. The kernel validates capability, narrows scope to the
 App's namespace, runs the operation, and emits an audit row.
@@ -186,7 +288,11 @@ or on failure:
   "reason": "scope $APP_DATA does not include /etc/passwd" }
 ```
 
-## 6. SDK (Python)
+## 7. In-Process SDK
+
+This SDK runs *inside* an App process the kernel has already spawned
+(see §3). It is **not** a way for an arbitrary Linux program to obtain
+App identity — that path does not exist by design.
 
 App code uses two helpers, both shipped with Claw OS at `apps/_lib/`.
 
@@ -228,7 +334,7 @@ Equivalent SDKs in Node, Go and Rust are straightforward thin wrappers
 around the same two CLI calls; they need not duplicate the schemas
 (`cos ai catalog --json` dumps the live registry).
 
-## 7. Audit Surface
+## 8. Audit Surface
 
 Every call to `cos ai chat` writes one row:
 
@@ -268,7 +374,7 @@ Every call to `cos ai tool` writes one row:
 Together these two streams fully describe every action AI took on the
 computer through Claw OS, scoped to whichever App initiated it.
 
-## 8. What This Design Does **Not** Audit
+## 9. What This Design Does **Not** Audit
 
 By stated design:
 
@@ -290,7 +396,7 @@ able to do anything we cannot audit" — that is a separate isolation
 problem (process sandboxing, mandatory access control) and is **not**
 addressed by this document.
 
-## 9. Relationship to the Kernel Agent
+## 10. Relationship to the Kernel Agent
 
 Claw OS ships with its own Agent (`cos agent`, see `core/src/agent/`).
 That Agent:
@@ -311,19 +417,36 @@ A third-party App does not, and cannot, invoke `cos agent chat`. That
 namespace is for the system's own Agent. Apps speak only to `cos ai
 chat` and `cos ai tool`.
 
-## 10. Implementation Phases
+## 11. Implementation Phases
 
 This document is the contract. Concrete work falls into roughly:
 
-1. Build `ai_tools::CATALOG` — the shared registry, capabilities, scopes.
-2. Implement `cos ai tool <name> --app <id> --args <json>`.
-3. Implement `cos ai chat --tools …` (extend the existing one-shot path
-   to inject Tool schemas and return `tool_calls`).
-4. Extend `_lib/ai.py` and add `_lib/tools.py`.
-5. Extend manifest validator to accept and verify the `ai.tools[]`
-   section.
-6. Extend installer's consent UI to render `why` text per Tool.
-7. Define audit row shape and wire it into `cos app log`.
-8. Write `docs/app-ai-tool-catalog.md` with the per-Tool reference.
+1. **App registry & installer.** `cos app install <dir>` — validates
+   the manifest, writes it under `/var/lib/cos/apps/<id>/`, runs the
+   `ai.tools[]` consent UI. Plus `cos app list / show / uninstall`.
+2. **Multi-runtime bridge.** Extend `core/src/bridge.rs` to dispatch on
+   the manifest `runtime` field (`python` / `node` / `binary`). Every
+   path must set `COS_APP_ID` before `exec`.
+3. **Identity enforcement.** `cos ai chat` and `cos ai tool` reject any
+   call where `COS_APP_ID` is unset, or where `--app <id>` disagrees
+   with the env value.
+4. **Tool registry.** Build `core/src/ai/tools.rs::CATALOG` — the
+   shared Tool definitions, capability verbs, scope policies,
+   stability tiers.
+5. **`cos ai tool` command.** Single-tool executor; routes through the
+   capability layer; emits one audit row per call.
+6. **`cos ai chat` command.** One-shot LLM call that accepts a
+   `--tools` list (filtered against the App's manifest) and returns
+   structured `tool_calls`. No loop, no execution.
+7. **In-process SDK.** Ship `apps/_lib/ai.py` and `apps/_lib/tools.py`
+   as thin subprocess wrappers; document the equivalent Node / Rust /
+   Go shapes.
+8. **Manifest validator.** Extend `app.json` schema to accept and
+   verify `ai.tools[]` entries against the live catalog at install
+   time.
+9. **Audit rows.** Define `kind: "ai.chat"` and `kind: "ai.tool"` row
+   shapes; wire into `cos app log`.
+10. **Tool reference doc.** `docs/app-ai-tool-catalog.md` — per-Tool
+    reference for App authors.
 
 Each phase is independently shippable.
