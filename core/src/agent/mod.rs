@@ -116,53 +116,84 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
             }))
         }
         "service" => service::cmd(args),
-        "insights" => insights_cmd(args),
         "recall" => recall_cmd(args),
         "sessions" => sessions_cmd(args),
         "setup" => setup::run(args),
         "notes" => notes_cmd(args),
         "skills" => skills_cmd(args),
-        "nudge" => nudge_cmd(args),
         "mcp" => mcp_cmd(args),
-        "usage" => usage_cmd(args),
-        "curator" => curator_cmd(args),
-        "llm" => llm_cmd(args),
-        "redact" => redact_cmd(args),
-        "prompt" => prompt_cmd(args),
-        "think-scrub" => think_scrub_cmd(args),
-        "tokens" => tokens_cmd(args),
-        "providers" => providers_cmd(args),
-        "provider-doctor" => provider_doctor_cmd(args),
-        "title" => title_cmd(args),
-        "summarise" => summarise_cmd(args),
-        "summarize" => summarise_cmd(args),
-        "classify" => classify_cmd(args),
-        "tools" => tools_cmd(args),
-        "guardrails" => guardrails_cmd(args),
-        "approval" => approval_cmd(args),
         "todo" => todo_cmd(args),
-        "compress" => compress_cmd(args),
-        "aux" | "auxiliary" => aux_cmd(args),
-        "retry" => retry_cmd(args),
-        "vision" => vision_cmd(args),
-        "display" => display_cmd(args),
-        "shell-hooks" => shell_hooks_cmd(args),
-        "media" => media_cmd(args),
-        "binary-ext" => binary_ext_cmd(args),
-        "context" => context_cmd(args),
-        "file-safety" => file_safety_cmd(args),
-        "osv" => osv_cmd(args),
-        "semantic" => semantic_cmd(args),
-        "interrupt" => interrupt_cmd(args),
-        "learn" => learn_cmd(args),
-        "hooks" => hooks_cmd(args),
-        "audit" => audit_cli::audit_cmd(args),
         "doctor" => doctor_cli::doctor_cmd(args),
-        "replay" => replay_cli::replay_cmd(args),
-        "run-log" | "run_log" => run_log_cli::run_log_cmd(args),
-        "honcho" => honcho_cli::honcho_cmd(args),
+        "dev" => dev_dispatch(args),
         other => Err(format!(
-            "unknown command: {other}. try: ask | chat | status | setup | service | insights | recall | sessions | notes | skills | nudge | mcp | usage | curator | llm | redact | prompt | think-scrub | tokens | providers | provider-doctor | title | summarise | classify | tools | guardrails | approval | todo | compress | aux | retry | vision | display | shell-hooks | media | binary-ext | context | file-safety | osv | semantic | interrupt | learn | hooks | audit | doctor | replay | run-log | honcho"
+            "unknown command: {other}. try: setup | ask | chat | live | status | sessions | recall | service | notes | skills | todo | mcp | doctor | dev"
+        )),
+    }
+}
+
+/// `cos agent dev <subcmd>` — internal / power-user namespace.
+///
+/// These commands expose internal building blocks (token estimators,
+/// classifiers, scrubbers, diagnostic dumps) that aren't part of the
+/// primary user-facing agent surface but are still useful for
+/// debugging, scripting, and downstream tooling.
+fn dev_dispatch(args: &[String]) -> Result<Value, String> {
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("");
+    let rest: Vec<String> = args.iter().skip(1).cloned().collect();
+    match sub {
+        "" | "list" | "--help" | "-h" => Ok(json!({
+            "namespace": "cos agent dev",
+            "summary": "Internal building blocks and power-user diagnostics. Not part of the stable user-facing surface.",
+            "subcommands": [
+                "stream", "insights", "usage", "audit", "replay", "run-log",
+                "providers", "provider-doctor", "llm",
+                "prompt", "tools", "guardrails", "approval",
+                "redact", "think-scrub", "tokens", "title", "summarise", "classify",
+                "display", "binary-ext", "file-safety", "context",
+                "compress", "aux", "retry", "vision", "osv",
+                "curator", "nudge", "shell-hooks", "media",
+                "semantic", "interrupt", "learn", "hooks", "honcho",
+            ],
+        })),
+        "stream" => stream_cmd(&rest),
+        "insights" => insights_cmd(&rest),
+        "usage" => usage_cmd(&rest),
+        "audit" => audit_cli::audit_cmd(&rest),
+        "replay" => replay_cli::replay_cmd(&rest),
+        "run-log" | "run_log" => run_log_cli::run_log_cmd(&rest),
+        "providers" => providers_cmd(&rest),
+        "provider-doctor" => provider_doctor_cmd(&rest),
+        "llm" => llm_cmd(&rest),
+        "prompt" => prompt_cmd(&rest),
+        "tools" => tools_cmd(&rest),
+        "guardrails" => guardrails_cmd(&rest),
+        "approval" => approval_cmd(&rest),
+        "redact" => redact_cmd(&rest),
+        "think-scrub" => think_scrub_cmd(&rest),
+        "tokens" => tokens_cmd(&rest),
+        "title" => title_cmd(&rest),
+        "summarise" | "summarize" => summarise_cmd(&rest),
+        "classify" => classify_cmd(&rest),
+        "display" => display_cmd(&rest),
+        "binary-ext" => binary_ext_cmd(&rest),
+        "file-safety" => file_safety_cmd(&rest),
+        "context" => context_cmd(&rest),
+        "compress" => compress_cmd(&rest),
+        "aux" | "auxiliary" => aux_cmd(&rest),
+        "retry" => retry_cmd(&rest),
+        "vision" => vision_cmd(&rest),
+        "osv" => osv_cmd(&rest),
+        "curator" => curator_cmd(&rest),
+        "nudge" => nudge_cmd(&rest),
+        "shell-hooks" => shell_hooks_cmd(&rest),
+        "media" => media_cmd(&rest),
+        "semantic" => semantic_cmd(&rest),
+        "interrupt" => interrupt_cmd(&rest),
+        "learn" => learn_cmd(&rest),
+        "hooks" => hooks_cmd(&rest),
+        "honcho" => honcho_cli::honcho_cmd(&rest),
+        other => Err(format!(
+            "unknown dev subcommand: {other}. run `cos agent dev` for the list."
         )),
     }
 }
@@ -7962,9 +7993,9 @@ mod tests {
     fn unknown_command_lists_all_options() {
         let err = run("not-a-command", &[]).unwrap_err();
         assert!(err.contains("ask"));
-        assert!(err.contains("insights"));
-        assert!(err.contains("recall"));
+        assert!(err.contains("setup"));
         assert!(err.contains("sessions"));
+        assert!(err.contains("dev"));
     }
 
     #[test]
@@ -9704,8 +9735,8 @@ mod tests {
 
     #[test]
     fn summarize_alias_dispatches_to_summarise() {
-        // Confirm the US-spelling alias hits the same handler.
-        let v = run("summarize", &["hello.".into()]).expect("summarize ok");
+        // Confirm the US-spelling alias hits the same handler (now under `dev`).
+        let v = run("dev", &["summarize".into(), "hello.".into()]).expect("summarize ok");
         assert_eq!(v.get("summary").and_then(|s| s.as_str()), Some("hello."));
     }
 
@@ -13276,8 +13307,8 @@ mod tests {
 
     #[test]
     fn run_learn_routes_to_learn_cmd() {
-        // dispatcher routing — using `prompt` because it's IO-free.
-        let v = run("learn", &["prompt".into()]).expect("ok");
+        // dispatcher routing through `dev` namespace — using `prompt` because it's IO-free.
+        let v = run("dev", &["learn".into(), "prompt".into()]).expect("ok");
         assert!(v.get("system_prompt").is_some(), "got {v}");
     }
 
@@ -13330,7 +13361,7 @@ mod tests {
     #[test]
     fn run_hooks_routes_to_hooks_cmd() {
         let _dir = isolate_cos_data_dir("hooks-route");
-        let v = run("hooks", &["list".into()]).expect("ok");
+        let v = run("dev", &["hooks".into(), "list".into()]).expect("ok");
         assert!(v.get("count").is_some(), "got {v}");
     }
 
@@ -13560,14 +13591,14 @@ mod tests {
 
     #[test]
     fn run_media_play_routes_through_dispatcher() {
-        // Confirm the cos-agent dispatcher reaches media_play_cmd.
-        let err = run("media", &["play".into()]).unwrap_err();
+        // Confirm the cos-agent dispatcher reaches media_play_cmd via `dev`.
+        let err = run("dev", &["media".into(), "play".into()]).unwrap_err();
         assert!(err.contains("usage"), "got {err}");
     }
 
     #[test]
     fn run_media_playback_status_routes_through_dispatcher() {
-        let v = run("media", &["playback-status".into()]).expect("ok");
+        let v = run("dev", &["media".into(), "playback-status".into()]).expect("ok");
         assert!(v["formats"].is_array(), "got {v}");
     }
 }
