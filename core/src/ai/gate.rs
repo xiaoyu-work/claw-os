@@ -8,6 +8,14 @@
 //!          │                          │
 //!          │                          ▼
 //!          │                  manifest.ai origin allowlist
+//!          │                          │   ▲
+//!          │                          │   │ tighten only:
+//!          │                          │   │   budget = min(M, U)
+//!          │                          │   │   safety = stricter(M, U)
+//!          │                          │   │   origins = M ∩ U
+//!          │                          │   │
+//!          │                          │   └─ user override
+//!          │                          │      ($HOME/.config/cos/apps/<id>.json)
 //!          │                          │
 //!          │                          ▼
 //!          │                  OS-level model from agent.toml
@@ -33,6 +41,13 @@
 //! re-checks the manifest's origin allowlist and uses the OS-owned
 //! provider/model from `/etc/cos/agent.toml`. **Apps never pick the
 //! model** — the machine owner does, once, in agent config.
+//!
+//! On top of the manifest, the kernel reads a per-user override file
+//! at `$HOME/.config/cos/apps/<id>.json` (written by the Cosmic
+//! Settings UI). The override can only **tighten** the manifest:
+//! lower the budget, raise the safety profile, shrink the origin
+//! allowlist, or kill-switch the App entirely. See
+//! [`crate::ai::overrides`] for the merge semantics.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -56,6 +71,7 @@ use crate::caps::manifest::{AiSafety, PromptOrigin};
 use crate::config;
 
 use super::budget::{BudgetError, Store};
+use super::overrides;
 
 // ---------------------------------------------------------------------------
 // Public request / response shapes
@@ -316,6 +332,15 @@ pub enum AiError {
     #[error("app `{app}` has no `ai` block in its manifest — AI is disabled for it")]
     NoAiPolicy { app: String },
 
+    #[error(
+        "app `{0}` is disabled by the user (set `disabled: true` in \
+         $HOME/.config/cos/apps/{0}.json)"
+    )]
+    AppDisabled(String),
+
+    #[error("user override for app `{app}` is malformed: {detail}")]
+    BadOverride { app: String, detail: String },
+
     #[error("invalid prompt origin `{0}` — try trusted, user-input, external-content")]
     BadOrigin(String),
 
@@ -436,6 +461,8 @@ fn denial_reason_token(err: &AiError) -> &'static str {
     match err {
         AiError::UnknownApp(_) => "unknown_app",
         AiError::NoAiPolicy { .. } => "no_ai_policy",
+        AiError::AppDisabled(_) => "app_disabled",
+        AiError::BadOverride { .. } => "bad_override",
         AiError::BadOrigin(_) => "bad_origin",
         AiError::OriginNotAllowed { .. } => "origin_not_allowed",
         AiError::ModalityConflict(_) => "modality_conflict",
@@ -455,7 +482,7 @@ fn denial_reason_token(err: &AiError) -> &'static str {
 async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
     // 1. Locate the app and its AI policy.
     let app = lookup_app(&req.app_id)?;
-    let policy = app
+    let manifest_policy = app
         .manifest
         .ai
         .as_ref()
@@ -463,6 +490,21 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
             app: req.app_id.clone(),
         })?
         .clone();
+
+    // 1a. Layer the per-user override on top. The user can only
+    //     tighten — never loosen — the manifest. A missing override
+    //     file is normal; a malformed file aborts the call so the
+    //     user notices the problem.
+    let user_override = overrides::load(&req.app_id).map_err(|detail| AiError::BadOverride {
+        app: req.app_id.clone(),
+        detail,
+    })?;
+    if let Some(o) = &user_override {
+        if o.disabled {
+            return Err(AiError::AppDisabled(req.app_id.clone()));
+        }
+    }
+    let policy = overrides::apply_to_policy(&manifest_policy, user_override.as_ref());
 
     // 2. Derive the modality from the request shape. This is the
     //    "what is the caller trying to do" decision; everything below

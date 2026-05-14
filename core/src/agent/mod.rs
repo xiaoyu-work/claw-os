@@ -45,6 +45,8 @@ pub mod tools;
 
 use serde_json::{json, Value};
 
+use crate::apps;
+
 /// Dispatch a `cos agent <command>` invocation.
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     match command {
@@ -101,6 +103,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         }
         "chat" => chat_cmd(args),
         "budget" => budget_cmd(args),
+        "override" => override_cmd(args),
         "status" => {
             let cfg = &crate::config::get().agent;
             let ready = setup::is_ready(cfg);
@@ -167,7 +170,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "doctor" => doctor_cli::doctor_cmd(args),
         "dev" => dev_dispatch(args),
         other => Err(format!(
-            "unknown command: {other}. try: setup | ask | chat | budget | status | sessions | recall | service | notes | skills | todo | mcp | doctor | dev"
+            "unknown command: {other}. try: setup | ask | chat | budget | override | status | sessions | recall | service | notes | skills | todo | mcp | doctor | dev"
         )),
     }
 }
@@ -3080,6 +3083,72 @@ fn budget_cmd(args: &[String]) -> Result<Value, String> {
             Ok(json!({"app": app, "history": rows}))
         }
         _ => Err("usage: cos agent budget <show|reset|history> <app>".to_string()),
+    }
+}
+
+/// `cos agent override <show|path|effective> <app>` — read-only
+/// inspection of the per-user override file at
+/// `$HOME/.config/cos/apps/<app>.json`. There is no `set` / `write`
+/// subcommand by design: the Cosmic Settings UI is the sole writer.
+fn override_cmd(args: &[String]) -> Result<Value, String> {
+    use crate::ai::overrides;
+
+    let sub = args.first().map(String::as_str).unwrap_or("");
+    match sub {
+        "show" => {
+            let app = args
+                .get(1)
+                .ok_or_else(|| "usage: cos agent override show <app>".to_string())?;
+            let ovr = overrides::load(app).map_err(|e| e)?;
+            Ok(json!({
+                "app": app,
+                "path": overrides::override_path(app).display().to_string(),
+                "present": ovr.is_some(),
+                "override": ovr,
+            }))
+        }
+        "path" => {
+            let app = args
+                .get(1)
+                .ok_or_else(|| "usage: cos agent override path <app>".to_string())?;
+            Ok(json!({
+                "app": app,
+                "path": overrides::override_path(app).display().to_string(),
+            }))
+        }
+        "effective" => {
+            let app = args
+                .get(1)
+                .ok_or_else(|| "usage: cos agent override effective <app>".to_string())?;
+            let apps_dir = std::env::var("COS_APPS_DIR")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| std::path::PathBuf::from("/usr/lib/cos/apps"));
+            let installed = apps::discover(&apps_dir)
+                .get(app)
+                .cloned()
+                .ok_or_else(|| format!("unknown app `{app}`"))?;
+            let manifest_policy = installed
+                .manifest
+                .ai
+                .as_ref()
+                .ok_or_else(|| {
+                    format!("app `{app}` has no `ai` block — nothing to override")
+                })?;
+            let ovr = overrides::load(app).map_err(|e| e)?;
+            let disabled = ovr.as_ref().map(|o| o.disabled).unwrap_or(false);
+            let effective = overrides::apply_to_policy(manifest_policy, ovr.as_ref());
+            Ok(json!({
+                "app": app,
+                "disabled": disabled,
+                "manifest": manifest_policy,
+                "override": ovr,
+                "effective": effective,
+            }))
+        }
+        _ => Err(
+            "usage: cos agent override <show|path|effective> <app>"
+                .to_string(),
+        ),
     }
 }
 
@@ -8227,7 +8296,50 @@ mod tests {
         assert!(err.contains("ask"));
         assert!(err.contains("setup"));
         assert!(err.contains("sessions"));
+        assert!(err.contains("override"));
         assert!(err.contains("dev"));
+    }
+
+    #[test]
+    fn override_cmd_help_shape() {
+        let err = override_cmd(&[]).unwrap_err();
+        assert!(err.contains("show"));
+        assert!(err.contains("path"));
+        assert!(err.contains("effective"));
+    }
+
+    #[test]
+    fn override_cmd_path_returns_user_config_path() {
+        let v = override_cmd(&[
+            "path".to_string(),
+            "demo-app".to_string(),
+        ])
+        .expect("path ok");
+        let p = v.get("path").and_then(|x| x.as_str()).expect("path field");
+        assert!(p.contains("apps"));
+        assert!(p.ends_with("demo-app.json"));
+    }
+
+    #[test]
+    fn override_cmd_show_missing_file_reports_absent() {
+        // Point user-config at an empty tmp dir so the file definitely doesn't exist.
+        let tmp = std::env::temp_dir().join(format!(
+            "cos-override-cmd-missing-{}",
+            std::process::id()
+        ));
+        let prev = std::env::var_os("COS_USER_CONFIG_DIR");
+        std::env::set_var("COS_USER_CONFIG_DIR", &tmp);
+        let v = override_cmd(&[
+            "show".to_string(),
+            "never-installed".to_string(),
+        ])
+        .expect("show ok");
+        match prev {
+            Some(p) => std::env::set_var("COS_USER_CONFIG_DIR", p),
+            None => std::env::remove_var("COS_USER_CONFIG_DIR"),
+        }
+        assert_eq!(v.get("present").and_then(|x| x.as_bool()), Some(false));
+        assert!(v.get("override").is_some_and(|x| x.is_null()));
     }
 
     #[test]

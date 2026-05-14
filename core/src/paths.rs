@@ -58,6 +58,36 @@ pub fn config_dir() -> PathBuf {
     from_env_or_default("COS_CONFIG_DIR", "/etc/cos", "etc")
 }
 
+/// Per-user config root. System config (`/etc/cos`) belongs to the
+/// machine owner; this is the per-user overlay each `$HOME` writes.
+/// On Linux: `$HOME/.config/cos` (XDG). On Windows: `%APPDATA%\cos`.
+/// Override with `COS_USER_CONFIG_DIR` for tests / multi-tenant setups.
+pub fn user_config_dir() -> PathBuf {
+    if let Some(v) = std::env::var_os("COS_USER_CONFIG_DIR") {
+        return PathBuf::from(v);
+    }
+    #[cfg(windows)]
+    {
+        if let Some(v) = std::env::var_os("APPDATA") {
+            return PathBuf::from(v).join("cos");
+        }
+        return windows_program_data();
+    }
+    #[cfg(not(windows))]
+    {
+        let home = std::env::var_os("HOME").unwrap_or_else(|| "/root".into());
+        PathBuf::from(home).join(".config").join("cos")
+    }
+}
+
+/// Per-app user override file:
+/// `$HOME/.config/cos/apps/<app_id>.json`. Missing is normal and
+/// means "no overrides, inherit the manifest verbatim". See
+/// [`crate::ai::overrides`] for the schema and merge semantics.
+pub fn user_app_override_path(app_id: &str) -> PathBuf {
+    user_config_dir().join("apps").join(format!("{app_id}.json"))
+}
+
 pub fn log_dir() -> PathBuf {
     from_env_or_default("COS_LOG_DIR", "/var/log/cos", "logs")
 }
