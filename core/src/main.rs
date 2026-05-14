@@ -25,6 +25,7 @@ mod proc;
 mod router;
 mod sandbox;
 mod service;
+mod session;
 mod sysinfo;
 mod trace;
 mod watch;
