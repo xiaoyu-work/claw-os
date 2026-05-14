@@ -540,9 +540,8 @@ fn builtin_apps() -> Vec<(
         ]),
         ("agent", "OS-native agent subsystem — runtime, memory, skills, LLM providers, tools, FS job queue", vec![
             ("setup", "Interactive first-run wizard: pick provider, model, and store API key. Non-interactive: cos agent setup [--status|--reset]"),
-            ("ask", "Single-shot prompt with full tool/memory loop: cos agent ask \"<prompt>\""),
+            ("ask", "Single-shot prompt with full tool/memory loop: cos agent ask \"<prompt>\" [--stream] — without --stream waits for the full response; with --stream tokens are written live to stderr while the JSON envelope still lands on stdout."),
             ("chat", "Interactive multi-turn REPL: cos agent chat [--session <id>] [--no-stream] [--no-memory] [--show-tools] [--max-turns N]. Slash commands: /quit /help /session /clear /history [N] /tools."),
-            ("live", "Multi-turn streaming agent: same registry/memory/MCP as `ask` but tokens stream to stderr live as they arrive: cos agent live \"<prompt>\""),
             ("status", "Show agent runtime status — providers, tools, skills, memory db"),
             ("sessions", "Inspect / manage conversation sessions in the memory DB: cos agent sessions [list [N] | title <id> | set-title <id> \"<title>\" | count [<id>] | clear <id> --yes]"),
             ("recall", "FTS5 search across recorded conversations: cos agent recall \"<query>\" [limit]"),

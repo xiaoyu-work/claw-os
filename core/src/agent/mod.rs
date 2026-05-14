@@ -50,24 +50,55 @@ use serde_json::{json, Value};
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     match command {
         "ask" => {
-            let prompt = args.first().cloned().unwrap_or_default();
-            if prompt.is_empty() {
-                return Err("usage: cos agent ask \"<prompt>\"".into());
+            let mut stream = false;
+            let mut positional: Vec<String> = Vec::with_capacity(args.len());
+            for a in args {
+                match a.as_str() {
+                    "--stream" => stream = true,
+                    "--no-stream" => stream = false,
+                    other if other.starts_with("--") => {
+                        return Err(format!(
+                            "unknown ask flag: {other}. supported: --stream | --no-stream"
+                        ));
+                    }
+                    _ => positional.push(a.clone()),
+                }
             }
-            setup::is_ready(&crate::config::get().agent)?;
-            match runtime::loop_::ask_blocking(&prompt) {
-                Ok(result) => Ok(json!({
-                    "answer": result.answer,
-                    "turns": result.turns,
-                    "provider": result.provider,
-                    "model": result.model,
-                    "session_id": result.session_id,
-                })),
-                Err(e) => Err(e.to_string()),
+            let prompt = positional.first().cloned().unwrap_or_default();
+            if prompt.is_empty() {
+                return Err("usage: cos agent ask \"<prompt>\" [--stream]".into());
+            }
+            let cfg_snapshot = crate::config::get().agent.clone();
+            setup::is_ready(&cfg_snapshot)?;
+            if stream {
+                // Multi-turn agent with live tokens streamed to stderr,
+                // final JSON envelope on stdout. Same registry/memory
+                // path as the blocking `ask`, just with a streaming
+                // sink. Replaces the old top-level `cos agent live`.
+                let provider = llm::registry::build(
+                    &cfg_snapshot.provider,
+                    &cfg_snapshot.model,
+                    &cfg_snapshot,
+                )
+                .map_err(|e| format!("provider unavailable: {e}"))?;
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| format!("tokio runtime: {e}"))?;
+                runtime.block_on(live_cmd_async(provider, &cfg_snapshot, &prompt))
+            } else {
+                match runtime::loop_::ask_blocking(&prompt) {
+                    Ok(result) => Ok(json!({
+                        "answer": result.answer,
+                        "turns": result.turns,
+                        "provider": result.provider,
+                        "model": result.model,
+                        "session_id": result.session_id,
+                    })),
+                    Err(e) => Err(e.to_string()),
+                }
             }
         }
-        "stream" => stream_cmd(args),
-        "live" => live_cmd(args),
         "chat" => chat_cmd(args),
         "status" => {
             let cfg = &crate::config::get().agent;
@@ -126,7 +157,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "doctor" => doctor_cli::doctor_cmd(args),
         "dev" => dev_dispatch(args),
         other => Err(format!(
-            "unknown command: {other}. try: setup | ask | chat | live | status | sessions | recall | service | notes | skills | todo | mcp | doctor | dev"
+            "unknown command: {other}. try: setup | ask | chat | status | sessions | recall | service | notes | skills | todo | mcp | doctor | dev"
         )),
     }
 }
@@ -145,7 +176,7 @@ fn dev_dispatch(args: &[String]) -> Result<Value, String> {
             "namespace": "cos agent dev",
             "summary": "Internal building blocks and power-user diagnostics. Not part of the stable user-facing surface.",
             "subcommands": [
-                "stream", "insights", "usage", "audit", "replay", "run-log",
+                "insights", "usage", "audit", "replay", "run-log",
                 "providers", "provider-doctor", "llm",
                 "prompt", "tools", "guardrails", "approval",
                 "redact", "think-scrub", "tokens", "title", "summarise", "classify",
@@ -155,7 +186,6 @@ fn dev_dispatch(args: &[String]) -> Result<Value, String> {
                 "semantic", "interrupt", "learn", "hooks", "honcho",
             ],
         })),
-        "stream" => stream_cmd(&rest),
         "insights" => insights_cmd(&rest),
         "usage" => usage_cmd(&rest),
         "audit" => audit_cli::audit_cmd(&rest),
@@ -2485,41 +2515,12 @@ fn read_text_input(args: &[String], cmd: &str) -> Result<(String, bool), String>
 /// is opt-in because the probe touches `<data_dir>/credentials/`
 /// which can be slow on networked storage; the env-var probe is
 /// always cheap and always on.
-/// Stream a single prompt through the active provider's
-/// `chat_stream()` and surface text deltas live to **stderr** so
-/// the user sees incremental output (when the provider truly
-/// streams — anthropic does today; others fall through to the
-/// non-streaming shim and emit one big chunk).
-///
-/// Stdout is reserved for the final JSON envelope so the command
-/// stays scriptable: `cos agent stream "..." 2>/dev/null | jq` is
-/// equivalent to today's `cos agent ask`. Pipe stderr to a TTY
-/// for the live feed.
-///
-/// Single-turn, no tool dispatch, no memory recording — the goal
-/// is the streaming UX itself, not full agent loop integration.
-/// `cos agent ask` remains the multi-turn tool-using path.
-///
-/// Usage: `cos agent stream "<prompt>"`. Errors propagate as
-/// `Err(String)` so the dispatcher logs them through audit.
-fn stream_cmd(args: &[String]) -> Result<Value, String> {
-    let prompt = args.first().cloned().unwrap_or_default();
-    if prompt.is_empty() {
-        return Err("usage: cos agent stream \"<prompt>\"".into());
-    }
-    let cfg = &crate::config::get().agent;
-    setup::is_ready(cfg)?;
-    let provider = llm::registry::build(&cfg.provider, &cfg.model, cfg)
-        .map_err(|e| format!("provider unavailable: {e}"))?;
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| format!("tokio runtime: {e}"))?;
-
-    runtime.block_on(stream_cmd_async(provider, cfg, &prompt))
-}
-
+/// Internal: single-turn streaming helper. The async core that the
+/// removed `cos agent stream` CLI used to call. Kept as a helper
+/// so the streaming unit tests still exercise text accumulation,
+/// tool-call surfacing, warnings, etc. on the no-tools / no-memory
+/// path. Not reachable from any CLI today — `cos agent ask
+/// --stream` uses `live_cmd_async` (the full agent loop) instead.
 async fn stream_cmd_async(
     provider: std::sync::Arc<dyn llm::Provider>,
     cfg: &crate::config::AgentConfig,
@@ -2649,37 +2650,10 @@ async fn stream_cmd_async(
     }))
 }
 
-/// `cos agent live "<prompt>"` — multi-turn streaming agent with the
-/// full tool registry. Same JSON envelope shape as `cos agent ask`,
-/// but tokens stream live to stderr as they arrive (so the user sees
-/// progress in long tool-driven sessions). Stdout is reserved for the
-/// final JSON envelope so script consumers can `2>/dev/null | jq .`.
-///
-/// Differences from `cos agent stream` (single-shot, no tools, no
-/// memory) and `cos agent ask` (multi-turn, tools, but waits for the
-/// full ChatResponse before printing):
-/// - Like `ask`: builds the full tool registry, opens the default
-///   memory DB if available, runs `max_turns` turns until final.
-/// - Like `stream`: tokens stream to stderr as they arrive; final
-///   answer + per-turn tool dispatch are reflected in the envelope.
-fn live_cmd(args: &[String]) -> Result<Value, String> {
-    let prompt = args.first().cloned().unwrap_or_default();
-    if prompt.is_empty() {
-        return Err("usage: cos agent live \"<prompt>\"".into());
-    }
-    let cfg = &crate::config::get().agent;
-    setup::is_ready(cfg)?;
-    let provider = llm::registry::build(&cfg.provider, &cfg.model, cfg)
-        .map_err(|e| format!("provider unavailable: {e}"))?;
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| format!("tokio runtime: {e}"))?;
-
-    runtime.block_on(live_cmd_async(provider, cfg, &prompt))
-}
-
+/// Internal: full agent loop (tools + memory + MCP) with a streaming
+/// sink that mirrors tokens to stderr as they arrive. Used by
+/// `cos agent ask --stream`. Replaces the old top-level `cos agent
+/// live` (deleted; `ask --stream` is the user-facing surface).
 async fn live_cmd_async(
     provider: std::sync::Arc<dyn llm::Provider>,
     cfg: &crate::config::AgentConfig,
@@ -12827,7 +12801,7 @@ mod tests {
         assert!(err.contains("--bogus"));
     }
 
-    // ---- stream subcommand ----------------------------------------------
+    // ---- stream / live async helpers ------------------------------------
 
     /// Build a mock provider with a scripted text response and run
     /// `stream_cmd_async` against it. Returns the JSON envelope.
@@ -12849,15 +12823,17 @@ mod tests {
     }
 
     #[test]
-    fn stream_cmd_rejects_empty_prompt() {
-        let err = stream_cmd(&[]).unwrap_err();
-        assert!(err.contains("usage"));
+    fn ask_rejects_empty_prompt() {
+        let err = run("ask", &[]).unwrap_err();
+        assert!(err.to_lowercase().contains("usage"), "got {err}");
+        let err2 = run("ask", &["".into()]).unwrap_err();
+        assert!(err2.to_lowercase().contains("usage"), "got {err2}");
     }
 
     #[test]
-    fn stream_cmd_rejects_empty_string_prompt() {
-        let err = stream_cmd(&[String::new()]).unwrap_err();
-        assert!(err.contains("usage"));
+    fn ask_rejects_unknown_flag() {
+        let err = run("ask", &["--bogus".into(), "hi".into()]).unwrap_err();
+        assert!(err.to_lowercase().contains("unknown ask flag"), "got {err}");
     }
 
     #[test]
@@ -13049,14 +13025,6 @@ mod tests {
                 || err.to_lowercase().contains("provider"),
             "want auth/llm/provider in err, got {err}"
         );
-    }
-
-    #[test]
-    fn live_cmd_rejects_empty_prompt() {
-        let err = live_cmd(&[]).unwrap_err();
-        assert!(err.contains("usage"), "got {err}");
-        let err2 = live_cmd(&["".into()]).unwrap_err();
-        assert!(err2.contains("usage"), "got {err2}");
     }
 
     #[test]
