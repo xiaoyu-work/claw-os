@@ -168,18 +168,41 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
     },
     PrimitiveSpec {
         name: "cos_sysinfo",
-        description: "Read system telemetry: info, env, resources (cpu/mem), \
-                      uptime, proc, mounts, net, cgroup.",
+        description: "Read live Linux system telemetry. Commands:\n\
+                      identity: info | env | uptime | who | desktop;\n\
+                      load: resources | loadavg | sensors | cgroup;\n\
+                      processes: proc | top [--top N --by cpu|mem --interval ms] | threads <pid> | port <port>;\n\
+                      network: net | net_rate [--interval ms];\n\
+                      storage: mounts | disk_io [--interval ms] | largest_files <path> [--top N --min-mb N];\n\
+                      logs: journal [--unit X --since X --lines N --priority N --kernel] | dmesg [--lines N];\n\
+                      systemd: services [--failed-only --type X --state X] | failed_units | coredumps [--lines N];\n\
+                      packages: pkg_updates.",
         primitive: crate::sysinfo::run,
         commands: &[
             "info",
             "env",
-            "resources",
             "uptime",
-            "proc",
-            "mounts",
-            "net",
+            "who",
+            "desktop",
+            "resources",
+            "loadavg",
+            "sensors",
             "cgroup",
+            "proc",
+            "top",
+            "threads",
+            "port",
+            "net",
+            "net_rate",
+            "mounts",
+            "disk_io",
+            "largest_files",
+            "journal",
+            "dmesg",
+            "services",
+            "failed_units",
+            "coredumps",
+            "pkg_updates",
         ],
     },
     PrimitiveSpec {
@@ -294,6 +317,19 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
         commands: &[
             "list", "import", "load", "unload", "infer", "status", "bench", "rm",
         ],
+    },
+    PrimitiveSpec {
+        name: "cos_doctor",
+        description: "Holistic self-check of the agent stack — provider \
+                      configuration, engines linked, memory/audit/run-log \
+                      health, recent token usage, hook + skill registration. \
+                      The `command` argument is ignored; flags drive behaviour. \
+                      Flags: --quick (skip log scans + network probe), \
+                      --probe-network (one-shot live ping to active provider), \
+                      --probe-timeout <secs> (default 30). Output always JSON \
+                      with a top-level status of ok | warn | fail.",
+        primitive: crate::agent::doctor_cli::doctor_primitive,
+        commands: &["run"],
     },
 ];
 
