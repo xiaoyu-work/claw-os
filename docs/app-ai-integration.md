@@ -427,9 +427,11 @@ This document is the contract. Concrete work falls into roughly:
 2. **Multi-runtime bridge.** Extend `core/src/bridge.rs` to dispatch on
    the manifest `runtime` field (`python` / `node` / `binary`). Every
    path must set `COS_APP_ID` before `exec`.
-3. **Identity enforcement.** `cos ai chat` and `cos ai tool` reject any
-   call where `COS_APP_ID` is unset, or where `--app <id>` disagrees
-   with the env value.
+3. **Identity enforcement.** ✅ Done for `cos ai chat`. The CLI rejects any
+   call where `COS_APP_ID` is unset (caller not kernel-spawned) or where
+   `--app <id>` disagrees with the env value (cross-App impersonation
+   attempt). Lives in `core/src/ai/chat.rs::enforce_identity`. `cos ai
+   tool` will share the same helper when introduced.
 4. **Tool registry.** Build `core/src/ai/tools.rs::CATALOG` — the
    shared Tool definitions, capability verbs, scope policies,
    stability tiers.

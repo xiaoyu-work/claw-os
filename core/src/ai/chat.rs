@@ -42,6 +42,18 @@
 //! Apps do **not** pick the model — the OS owner configures one
 //! provider/model in `/etc/cos/agent.toml` and the gate uses it for
 //! every App call.
+//!
+//! Identity
+//! --------
+//!
+//! Per `docs/app-ai-integration.md` §3, an App's identity is established
+//! **only** when the kernel itself spawns the App (`cos app <id> <op>`).
+//! `core/src/bridge.rs` injects `COS_APP_ID=<id>` into the child env at
+//! that moment; subprocesses of the App inherit it. We refuse the call
+//! unless `COS_APP_ID` is set in our env **and** matches the `--app`
+//! argument byte-for-byte. The `--app` flag alone is never trusted —
+//! anyone with shell access could pass any string. This makes
+//! cross-App impersonation impossible without the kernel's complicity.
 
 use serde_json::{json, Value};
 
@@ -136,6 +148,7 @@ pub fn chat_cmd(args: &[String]) -> Result<Value, String> {
     }
 
     let app = app.ok_or_else(|| "--app is required".to_string())?;
+    enforce_identity(&app, std::env::var("COS_APP_ID").ok().as_deref())?;
 
     let prompt_text: Option<String> = match (prompt, prompt_file) {
         (Some(p), _) => Some(p),
@@ -167,6 +180,32 @@ pub fn chat_cmd(args: &[String]) -> Result<Value, String> {
     }
 }
 
+/// Verify the caller is the App they claim to be.
+///
+/// `arg_app` is the `--app <id>` value parsed from the CLI; `env_app`
+/// is the current process's `COS_APP_ID` (or `None` if unset). The
+/// only way `COS_APP_ID` reaches a process is via `bridge.rs` when
+/// the kernel spawns an installed App — see the module doc above.
+///
+/// A bare-process invocation (no `COS_APP_ID`) is rejected with a
+/// dev-friendly hint; an env value that disagrees with `--app` is
+/// rejected as cross-App impersonation.
+fn enforce_identity(arg_app: &str, env_app: Option<&str>) -> Result<(), String> {
+    match env_app {
+        None => Err(format!(
+            "`cos ai chat` must be invoked by the kernel via `cos app {arg_app} <op>`. \
+             COS_APP_ID is not set, so the kernel cannot attest the caller's identity. \
+             For local development, set COS_APP_ID={arg_app} before invoking."
+        )),
+        Some(env) if env != arg_app => Err(format!(
+            "identity mismatch: --app={arg_app} but COS_APP_ID={env}. \
+             An App may only request AI calls for itself; the kernel-injected \
+             COS_APP_ID is the source of truth."
+        )),
+        Some(_) => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,5 +225,30 @@ mod tests {
         ])
         .unwrap_err();
         assert!(err.contains("unknown flag"), "got: {err}");
+    }
+
+    #[test]
+    fn identity_rejects_unset_env() {
+        let err = enforce_identity("summarize", None).unwrap_err();
+        assert!(err.contains("COS_APP_ID is not set"), "got: {err}");
+        assert!(err.contains("summarize"), "got: {err}");
+    }
+
+    #[test]
+    fn identity_rejects_mismatch() {
+        let err = enforce_identity("summarize", Some("other-app")).unwrap_err();
+        assert!(err.contains("identity mismatch"), "got: {err}");
+        assert!(err.contains("--app=summarize"), "got: {err}");
+        assert!(err.contains("COS_APP_ID=other-app"), "got: {err}");
+    }
+
+    #[test]
+    fn identity_accepts_exact_match() {
+        assert!(enforce_identity("summarize", Some("summarize")).is_ok());
+    }
+
+    #[test]
+    fn identity_is_case_sensitive() {
+        assert!(enforce_identity("summarize", Some("Summarize")).is_err());
     }
 }
