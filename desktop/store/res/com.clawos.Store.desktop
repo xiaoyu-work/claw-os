@@ -6,6 +6,6 @@ Terminal=false
 Type=Application
 StartupNotify=true
 Icon=com.clawos.Store
-Categories=COSMIC;System;PackageManager;
+Categories=ClawOS;System;PackageManager;
 Keywords=App;Software;Store;Shop;
 MimeType=application/x-debian-package;application/vnd.debian.binary-package;application/vnd.flatpak.ref;x-scheme-handler/appstream;x-scheme-handler/mime;

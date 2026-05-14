@@ -36,7 +36,7 @@ updates = Абнаўленні
 # Explore Pages
 editors-choice = Выбар рэдакцыі
 popular-apps = Папулярныя
-made-for-cosmic = Зроблена для COSMIC
+made-for-cosmic = Зроблена для ClawOS
 new-apps = Новыя
 recently-updated = Апошнія абноўленыя
 development-tools = Інструменты распрацоўкі
@@ -132,5 +132,5 @@ codec-error = Падчас усталёўкі пакета ўзніклі пам
 repository-add-error-title = «Не ўдалося дадаць репазіторый»
 place-applet-desc = Выберыце месца, куды дадаць аплет, перш чым удакладняць яго пазіцыю.
 no-custom-flatpak-sources = Няма карыстальніцкіх крыніц Flatpak
-enable-flathub-cosmic = Каб убачыць даступныя аплеты, уключыце Flathub і COSMIC Flatpak.
+enable-flathub-cosmic = Каб убачыць даступныя аплеты, уключыце Flathub і ClawOS Flatpak.
 no-flatpak = Flatpak не падтрымліваецца

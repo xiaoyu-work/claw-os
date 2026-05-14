@@ -36,7 +36,7 @@ updates = Updates
 # Explore Pages
 editors-choice = Keuze van de redactie
 popular-apps = Populaire apps
-made-for-cosmic = Speciaal gemaakt voor COSMIC
+made-for-cosmic = Speciaal gemaakt voor ClawOS
 new-apps = Nieuwe apps
 recently-updated = Onlangs bijgewerkt
 development-tools = Programmeren en ontwikkelen
@@ -135,7 +135,7 @@ recommended-flatpak-sources = Aanbevolen Flatpak-bronnen
 software-repositories = Softwarebronnen
 manage-repositories = Softwarebronnen beheren
 no-custom-flatpak-sources = Geen persoonlijke Flatpak-bronnen
-enable-flathub-cosmic = Gelieve activeert u Flathub en COSMIC Flatpak om beschikbare applets te zien.
+enable-flathub-cosmic = Gelieve activeert u Flathub en ClawOS Flatpak om beschikbare applets te zien.
 no-flatpak = Geen Flatpak-ondersteuning
 system-package-updates = Updates
 system-packages-summary =

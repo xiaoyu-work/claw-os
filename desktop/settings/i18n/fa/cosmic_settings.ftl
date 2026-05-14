@@ -9,7 +9,7 @@ desktop = میزکار
 ## Desktop: Appearance
 
 appearance = ظاهر
-    .desc = رنگ‌های تاکیدی و تم COSMIC.
+    .desc = رنگ‌های تاکیدی و تم ClawOS.
 
 ## Desktop: Notifications
 

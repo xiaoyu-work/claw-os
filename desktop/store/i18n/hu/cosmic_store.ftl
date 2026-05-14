@@ -70,12 +70,12 @@ updates = Frissítések
 
 ## Applets page
 
-enable-flathub-cosmic = Engedélyezd a Flathubot és a COSMIC Flatpakot, hogy lásd az elérhető kisalkalmazásokat.
+enable-flathub-cosmic = Engedélyezd a Flathubot és a ClawOS Flatpakot, hogy lásd az elérhető kisalkalmazásokat.
 manage-repositories = Tárolók kezelése
 # Explore Pages
 editors-choice = A szerkesztő választása
 popular-apps = Népszerű alkalmazások
-made-for-cosmic = COSMIC-ra tervezve
+made-for-cosmic = ClawOS-ra tervezve
 new-apps = Új alkalmazások
 recently-updated = Nemrég frissített
 development-tools = Fejlesztői eszközök

@@ -36,7 +36,7 @@ updates = Nuashonruithe
 # Explore Pages
 editors-choice = Rogha an eagarthóra
 popular-apps = Aipeanna coitianta
-made-for-cosmic = Déanta do COSMIC
+made-for-cosmic = Déanta do ClawOS
 new-apps = Aipeanna nua
 recently-updated = Nuashonraithe le déanaí
 development-tools = Uirlisí forbartha
@@ -122,7 +122,7 @@ adding = Ag cur leis...
 remove = Bain
 removing = Ag baint...
 applets = Feidhmchláiríní
-enable-flathub-cosmic = Cumasaigh Flathub agus COSMIC Flatpak le go bhfeicfidh tú na feidhmchláiríní atá ar fáil.
+enable-flathub-cosmic = Cumasaigh Flathub agus ClawOS Flatpak le go bhfeicfidh tú na feidhmchláiríní atá ar fáil.
 manage-repositories = Bainistigh stórtha
 recommended-flatpak-sources = Foinsí Flatpak molta
 custom-flatpak-sources = Foinsí Flatpak saincheaptha

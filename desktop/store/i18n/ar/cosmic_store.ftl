@@ -70,12 +70,12 @@ updates = التحديثات
 
 ## Applets page
 
-enable-flathub-cosmic = يرجى تفعيل Flathub و COSMIC Flatpak لرؤية البريمجات المتاحة.
+enable-flathub-cosmic = يرجى تفعيل Flathub و ClawOS Flatpak لرؤية البريمجات المتاحة.
 manage-repositories = أدِر المستودعات
 # Explore Pages
 editors-choice = اختيار المحرِر
 popular-apps = التطبيقات الشائعة
-made-for-cosmic = صنع من أجل COSMIC
+made-for-cosmic = صنع من أجل ClawOS
 new-apps = التطبيقات الجديدة
 recently-updated = المحدثة حديثًا
 development-tools = أدوات التطوير

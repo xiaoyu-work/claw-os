@@ -146,7 +146,7 @@ x-hours =
 ## Desktop: Appearance
 
 appearance = Apariencia
-    .desc = Colores de acento y tema COSMIC.
+    .desc = Colores de acento y tema ClawOS.
 accent-color = Color de acento
 app-background = Fondo de la aplicación o ventana
 auto = Automático
@@ -179,7 +179,7 @@ control-tint = Tono del componente de control
 frosted = Efecto de cristal translúcido en la interfaz del sistema
     .desc = Aplica desenfoque de fondo al panel, el dock, las miniaplicaciones, el lanzador y la biblioteca de aplicaciones.
 enable-export = Aplicar este tema a aplicaciones GNOME.
-    .desc = No todas las herramientas admiten el cambio automático. Es posible que las aplicaciones que no son de COSMIC necesiten reiniciarse después de un cambio de tema.
+    .desc = No todas las herramientas admiten el cambio automático. Es posible que las aplicaciones que no son de ClawOS necesiten reiniciarse después de un cambio de tema.
 icon-theme = Tema de iconos
     .desc = Aplica un conjunto diferente de iconos a las aplicaciones.
 text-tint = Tono de texto de interfaz

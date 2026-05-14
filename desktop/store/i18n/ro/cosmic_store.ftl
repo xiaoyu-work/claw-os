@@ -40,7 +40,7 @@ updates = Actualizări
 # Explore Pages
 editors-choice = Alegerea editorilor
 popular-apps = Aplicații populare
-made-for-cosmic = Create pentru COSMIC
+made-for-cosmic = Create pentru ClawOS
 new-apps = Aplicații noi
 recently-updated = Actualizate recent
 development-tools = Unelte pentru dezvoltare

@@ -7,5 +7,5 @@ Type=Application
 StartupNotify=true
 MimeType=text/plain;
 Icon=com.clawos.Edit
-Categories=COSMIC;Utility;TextEditor;
+Categories=ClawOS;Utility;TextEditor;
 Keywords=Text;Editor;

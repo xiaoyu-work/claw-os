@@ -75,7 +75,7 @@ operations = Operasjoner
 pending = Venter
 failed = Mislykkede
 complete = Ferdige
-made-for-cosmic = Lagd for COSMIC
+made-for-cosmic = Lagd for ClawOS
 new-apps = Nye apper
 recently-updated = Nylig oppdatert
 development-tools = Utviklerverktøy
@@ -94,7 +94,7 @@ repository-remove-body =
         [none] slette
        *[other] fjerne "{ $dependency }" og slette
     } følgende applikasjoner and objekter. De må bli ominstallert om arkivet legges til igjen.
-enable-flathub-cosmic = Slå på Flathub og COSMIC Flatpak for å se tilgjengelige appleter.
+enable-flathub-cosmic = Slå på Flathub og ClawOS Flatpak for å se tilgjengelige appleter.
 manage-repositories = Håndter app-arkiv
 social-networking-apps = Sosiale Nettverksapper
 apps-for-learning = Læringsapper

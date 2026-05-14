@@ -6,6 +6,6 @@ Terminal=false
 Type=Application
 StartupNotify=true
 Icon=com.clawos.Files
-Categories=COSMIC;Utility;FileManager;
+Categories=ClawOS;Utility;FileManager;
 Keywords=Folder;Manager;
 MimeType=inode/directory;

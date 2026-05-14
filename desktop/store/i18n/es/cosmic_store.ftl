@@ -69,12 +69,12 @@ updates = Actualizaciones
 
 ## Applets page
 
-enable-flathub-cosmic = Por favor, habilite Flathub y COSMIC Flatpak para ver los subprogramas disponibles.
+enable-flathub-cosmic = Por favor, habilite Flathub y ClawOS Flatpak para ver los subprogramas disponibles.
 manage-repositories = Gestionar repositorios
 # Explore Pages
 editors-choice = Selección del editor
 popular-apps = Aplicaciones populares
-made-for-cosmic = Hechas para COSMIC
+made-for-cosmic = Hechas para ClawOS
 new-apps = Aplicaciones recientes
 recently-updated = Recién actualizadas
 development-tools = Herramientas de desarrollo

@@ -254,7 +254,7 @@ never = Mai
 ## Desktop: Appearance
 
 appearance = Aspetto
-    .desc = Colore d'accento e tema COSMIC.
+    .desc = Colore d'accento e tema ClawOS.
 accent-color = Colore d'accento
 app-background = Sfondo applicazione o finestra
 auto = Automatico
@@ -287,7 +287,7 @@ control-tint = Tinta per componenti di controllo
 frosted = Effetto "vetro smerigliato" per l'interfaccia
     .desc = Applica un effetto di sfocatura al pannello, la barra delle applicazioni, gli applet, il launcher e la libreria della applicazioni.
 enable-export = Applica questo tema alle app GNOME.
-    .desc = Non tutte le applicazioni supportano l'auto-switch. Le app Non-COSMIC potrebbero dover essere riavviate dopo aver cambiato tema.
+    .desc = Non tutte le applicazioni supportano l'auto-switch. Le app Non-ClawOS potrebbero dover essere riavviate dopo aver cambiato tema.
 icon-theme = Tema icone
     .desc = Applica icone differenti alle applicazioni.
 text-tint = Tinta per il testo dell'interfaccia

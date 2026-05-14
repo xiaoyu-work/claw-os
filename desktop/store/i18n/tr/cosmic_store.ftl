@@ -31,7 +31,7 @@ updates = Güncellemeler
 # Explore Pages
 editors-choice = Editörün seçimi
 popular-apps = Popüler uygulamalar
-made-for-cosmic = COSMIC için üretildi
+made-for-cosmic = ClawOS için üretildi
 new-apps = Yeni uygulamalar
 recently-updated = Son güncellenen uygulamalar
 development-tools = Geliştirici araçları
@@ -112,7 +112,7 @@ adding = Ekleniyor...
 remove = Kaldır
 removing = Kaldırılıyor...
 applets = Eklentiler
-enable-flathub-cosmic = Kullanılabilir eklentileri görmek için lütfen Flathub ve COSMIC Flatpak'ı etkinleştirin.
+enable-flathub-cosmic = Kullanılabilir eklentileri görmek için lütfen Flathub ve ClawOS Flatpak'ı etkinleştirin.
 manage-repositories = Depoları yönet
 cancelled = İptal edildi
 operations = İşlemler

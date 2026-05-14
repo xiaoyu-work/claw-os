@@ -35,7 +35,7 @@ updates = Aktualisierungen
 # Seiten erkunden
 editors-choice = Empfehlung der Redaktion
 popular-apps = Beliebte Apps
-made-for-cosmic = Hergestellt für COSMIC
+made-for-cosmic = Hergestellt für ClawOS
 new-apps = Neue Apps
 recently-updated = Kürzlich aktualisiert
 development-tools = Entwicklungswerkzeuge
@@ -104,7 +104,7 @@ remove = Entfernen
 removing = Wird entfernt...
 place-and-refine = Platzieren und anpassen
 applets = Applets
-enable-flathub-cosmic = Bitte aktiviere Flathub und COSMIC Flatpak, um die verfügbaren Applets anzusehen.
+enable-flathub-cosmic = Bitte aktiviere Flathub und ClawOS Flatpak, um die verfügbaren Applets anzusehen.
 manage-repositories = Repositorien verwalten
 addons = Erweiterungen
 version = Version { $version }

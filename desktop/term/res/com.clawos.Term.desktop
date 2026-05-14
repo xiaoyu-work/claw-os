@@ -6,5 +6,5 @@ Terminal=false
 Type=Application
 StartupNotify=true
 Icon=com.clawos.Term
-Categories=COSMIC;System;TerminalEmulator;
+Categories=ClawOS;System;TerminalEmulator;
 Keywords=Command;Shell;Terminal;CLI;

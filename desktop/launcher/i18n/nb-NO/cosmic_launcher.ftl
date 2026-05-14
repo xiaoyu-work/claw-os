@@ -1,2 +1,2 @@
 type-to-search = Skriv for å søke etter apper eller tast «?» for flere alternativ…
-app-name = Cosmic Appstarter
+app-name = Claw OS Appstarter

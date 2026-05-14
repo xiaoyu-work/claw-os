@@ -40,7 +40,7 @@ updates = การอัปเดต
 # Explore Pages
 editors-choice = ถูกใจบรรณาธิการ
 popular-apps = แอพยอดนิยม
-made-for-cosmic = สำหรับ COSMIC โดยเฉพาะ
+made-for-cosmic = สำหรับ ClawOS โดยเฉพาะ
 new-apps = แอพใหม่
 recently-updated = เพิ่งอัปเดต
 development-tools = เครื่องมือการพัฒนา

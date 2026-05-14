@@ -76,13 +76,13 @@ installed-apps = Installed apps
 updates = Updates
 
 ## Applets page
-enable-flathub-cosmic = Please enable Flathub and COSMIC Flatpak to see available applets.
+enable-flathub-cosmic = Please enable Flathub and ClawOS Flatpak to see available applets.
 manage-repositories = Manage repositories
 
 # Explore Pages
 editors-choice = Editor's choice
 popular-apps = Popular apps
-made-for-cosmic = Made for COSMIC
+made-for-cosmic = Made for ClawOS
 new-apps = New apps
 recently-updated = Recently updated
 development-tools = Development tools

@@ -31,7 +31,7 @@ updates = עדכונים
 # Explore Pages
 editors-choice = בחירת העורכים
 popular-apps = יישומים נפוצים
-made-for-cosmic = נוצר עבור COSMIC
+made-for-cosmic = נוצר עבור ClawOS
 new-apps = יישומים חדשים
 recently-updated = עודכנו לאחרונה
 development-tools = כלי פיתוח
