@@ -15,7 +15,6 @@ RestartSec=3
 # Default port = 0 (kernel-assigned). The bound port is published to
 # $XDG_RUNTIME_DIR/cos-agent-bridge.port for launchers to discover.
 # Override via drop-in if a fixed port is required.
-Environment=COS_AGENT_WEB_ROOT=/usr/share/cos-agent/web
 Environment=COS_BIN=/usr/local/bin/cos
 # Hardening: bridge is local-only, never exec, never write outside its
 # own runtime dir.

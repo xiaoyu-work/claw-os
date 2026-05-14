@@ -91,7 +91,6 @@ mkdir -p "$BASE_STAGE/usr/lib/cos/apps"
 mkdir -p "$BASE_STAGE/usr/lib/cos/plugins"
 mkdir -p "$BASE_STAGE/usr/lib/cos/skills"
 mkdir -p "$BASE_STAGE/usr/lib/cos/init"
-mkdir -p "$BASE_STAGE/usr/share/cos-agent/web"
 mkdir -p "$BASE_STAGE/usr/share/applications"
 mkdir -p "$BASE_STAGE/etc/cos"
 
@@ -117,41 +116,15 @@ else
 fi
 
 # Binary: cos-agent-ui (native libcosmic chat UI for com.clawos.Agent).
-# Also optional — `cos app agent open` falls back to chromium against
-# the bridge's static React app when this binary isn't present, so
-# rootfs images without it stay functional.
+# This is the only UI surface — `cos app agent open` requires it.
+# If the binary is missing the launcher prints an actionable error
+# (see apps/agent/main.py).
 COS_AGENT_UI_BIN="$(find_bin cos-agent-ui || true)"
 if [ -n "$COS_AGENT_UI_BIN" ] && [ -f "$COS_AGENT_UI_BIN" ]; then
     echo "  :: cos-agent-ui      <- $COS_AGENT_UI_BIN"
     install -m 755 "$COS_AGENT_UI_BIN" "$BASE_STAGE/usr/local/bin/cos-agent-ui"
 else
-    echo "  :: WARNING — cos-agent-ui binary not built; chromium fallback active" >&2
-fi
-
-# Agent web SPA: ship whatever Next/Vite export lives at
-# desktop/agent/web/out or .next/standalone. Falls back to a stub
-# index.html so the bridge's static file server has something to
-# return until the UI build is wired into CI.
-AGENT_WEB_SRC=""
-for candidate in \
-    "$PROJECT_DIR/desktop/agent/web/out" \
-    "$PROJECT_DIR/desktop/agent/web/.next/standalone/desktop/agent/web/public"; do
-    if [ -d "$candidate" ] && [ -f "$candidate/index.html" ]; then
-        AGENT_WEB_SRC="$candidate"
-        break
-    fi
-done
-if [ -n "$AGENT_WEB_SRC" ]; then
-    echo "  :: cos-agent web SPA <- $AGENT_WEB_SRC"
-    cp -a "$AGENT_WEB_SRC/." "$BASE_STAGE/usr/share/cos-agent/web/"
-else
-    echo "  :: cos-agent web SPA — no export found, writing placeholder index.html" >&2
-    cat > "$BASE_STAGE/usr/share/cos-agent/web/index.html" <<'PLACEHOLDER'
-<!doctype html>
-<html><head><meta charset="utf-8"><title>ClawOS Agent</title></head>
-<body><pre>ClawOS Agent — web UI not yet built into this image.
-The agent bridge is running on this port; talk to /api/chat directly.</pre></body></html>
-PLACEHOLDER
+    echo "  :: WARNING — cos-agent-ui binary not built; the Agent app will not launch" >&2
 fi
 
 # Shell scripts shared with all targets.

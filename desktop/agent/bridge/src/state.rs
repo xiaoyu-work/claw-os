@@ -1,12 +1,14 @@
 //! Shared application state.
 //!
-//! The bridge holds three things:
+//! The bridge holds two things:
 //! - the configured HTTP port (env override or random)
-//! - the path on disk where the exported web SPA lives
 //! - the path to the `cos` binary that we subprocess for chat turns
 //!
 //! Everything else (sessions, models, credentials) is owned by
-//! `cos agent` itself and reached through subprocess calls.
+//! `cos agent` itself and reached through subprocess calls. The
+//! bridge no longer serves a static SPA — the React frontend was
+//! retired in favour of the native libcosmic UI (`cos-agent-ui`),
+//! which calls only the `/api/*` JSON+SSE endpoints.
 
 use std::path::PathBuf;
 
@@ -15,7 +17,6 @@ use anyhow::Context;
 #[derive(Clone, Debug)]
 pub struct AppState {
     pub port: u16,
-    pub web_root: PathBuf,
     pub cos_bin: PathBuf,
 }
 
@@ -25,23 +26,16 @@ impl AppState {
             .ok()
             .and_then(|s| s.parse::<u16>().ok())
             .unwrap_or(0);
-        let web_root = std::env::var("COS_AGENT_WEB_ROOT")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("/usr/share/cos-agent/web"));
         let cos_bin = std::env::var("COS_BIN")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("/usr/local/bin/cos"));
-        Ok(Self {
-            port,
-            web_root,
-            cos_bin,
-        })
+        Ok(Self { port, cos_bin })
     }
 }
 
 /// Write the bound port to `$XDG_RUNTIME_DIR/cos-agent-bridge.port`
-/// so the overlay + cos-browser launcher can discover the dynamic
-/// port without scanning.
+/// so the native UI (`cos-agent-ui`) can discover the dynamic port
+/// without scanning.
 pub fn write_port_file(port: u16) -> anyhow::Result<()> {
     let dir = std::env::var("XDG_RUNTIME_DIR")
         .ok()

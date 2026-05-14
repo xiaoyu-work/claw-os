@@ -408,7 +408,7 @@ fn parse_session_arg(args: &[String]) -> Result<String, String> {
 // These render in two modes:
 //   - JSON (default for non-TTY pipes — preserves the agent-first contract)
 //   - Terminal-native cards (TTY only — follows the design system at
-//     `desktop/agent/web/docs/design-system.md`: dark surface, emerald
+//     `desktop/agent/docs/design-system.md`: dark surface, emerald
 //     accent, traffic-light dots, monospace, risk-tier colour tokens).
 // ---------------------------------------------------------------------------
 

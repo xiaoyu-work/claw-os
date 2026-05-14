@@ -10,7 +10,7 @@
 //! `cos perms pending` already gives it. Mutations go through
 //! `cos perms approve <id> [--duration ...]` and `cos perms deny
 //! <id>`. The design ethos is dark-terminal + emerald accent (see
-//! `desktop/agent/web/docs/design-system.md`).
+//! `desktop/agent/docs/design-system.md`).
 
 mod app;
 mod localize;

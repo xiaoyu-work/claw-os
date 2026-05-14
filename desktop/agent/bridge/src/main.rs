@@ -5,7 +5,7 @@
 //! The bridge is intentionally thin: it owns no LLM state, holds no
 //! credentials, and persists nothing of its own. Every chat turn is
 //! a subprocess of `cos agent stream` whose streamed output is
-//! re-framed as Server-Sent Events for the React UI.
+//! re-framed as Server-Sent Events for the native UI.
 //!
 //! Bound to `127.0.0.1` only. There is no authentication — the
 //! socket is single-user OS local and trusted by construction.
@@ -27,7 +27,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("cos_agent_bridge=info,tower_http=info")),
+                .unwrap_or_else(|_| EnvFilter::new("cos_agent_bridge=info")),
         )
         .init();
 
@@ -36,7 +36,6 @@ async fn main() -> anyhow::Result<()> {
 
     let app: Router = Router::new()
         .nest("/api", routes::api())
-        .merge(routes::static_files(&state))
         .with_state(state);
 
     let addr: SocketAddr = format!("127.0.0.1:{port}").parse()?;
@@ -46,7 +45,6 @@ async fn main() -> anyhow::Result<()> {
     let bound = listener.local_addr()?;
     info!(%bound, "cos-agent-bridge listening");
 
-    // Drop a port-file so launchers can discover us when port=0.
     state::write_port_file(bound.port())?;
 
     axum::serve(listener, app).await?;
