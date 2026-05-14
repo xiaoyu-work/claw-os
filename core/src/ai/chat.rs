@@ -206,6 +206,13 @@ fn enforce_identity(arg_app: &str, env_app: Option<&str>) -> Result<(), String> 
     }
 }
 
+/// Convenience wrapper used by sibling subcommands (`cos ai tool`)
+/// that want the same identity enforcement as `cos ai chat`. Reads
+/// `COS_APP_ID` from the current process env.
+pub fn enforce_identity_for(arg_app: &str) -> Result<(), String> {
+    enforce_identity(arg_app, std::env::var("COS_APP_ID").ok().as_deref())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

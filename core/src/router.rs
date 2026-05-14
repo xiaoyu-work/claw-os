@@ -720,6 +720,8 @@ fn builtin_apps() -> Vec<(
         ]),
         ("ai", "App-facing AI gate — single-shot LLM / embedding / image / audio / video calls scoped to one installed App. Distinct from `cos agent`: this is the App-developer-facing primitive, not the kernel Agent product.", vec![
             ("chat", "One-shot App-gated AI call: cos ai chat --app <id> [--prompt <text>] [--prompt-file <p>] [--origin trusted|user-input|external-content] [--max-units N] [--system <text>] [--embed] [--image-input <p>|--image-output <p>] [--audio-input <p>|--audio-output <p>] [--video-input <p>|--video-output <p>]. Modality (chat/embed/image/audio/vision/video) is auto-derived from the request shape; verbs are never passed at the CLI. Apps do not pick the model — the OS owner configures it in /etc/cos/agent.toml."),
+            ("tool", "Invoke one App-facing Tool by name: cos ai tool <name> --app <id> [--args <json>|--args-file <p>]. The kernel checks the App's caps grants, runs the Tool, and writes one audit row per call. List tools with `cos ai tools`."),
+            ("tools", "Print the catalog of App-facing Tools (name, summary, verb, stability, JSON-Schema for args and return). Used by App authors and LLM function-call spec generators."),
         ]),
         ("agent", "OS-native agent subsystem — runtime, memory, skills, LLM providers, tools, FS job queue", vec![
             ("setup", "Per-modality config wizard: cos agent setup <llm|tts|stt|imagegen|embed|all> [--status|--reset|--verify-only|--no-verify]. Bare `cos agent setup` opens an interactive modality picker."),
