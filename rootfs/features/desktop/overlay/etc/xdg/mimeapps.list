@@ -1,0 +1,13 @@
+# /etc/xdg/mimeapps.list — system-wide default application bindings.
+#
+# Per XDG MIME-Apps spec, the [Default Applications] group binds a MIME
+# type (or x-scheme-handler/<scheme>) to a .desktop AppID. Entries here
+# are the **vendor defaults**; user choices in cosmic-settings →
+# Default Applications override these by writing to
+# $XDG_CONFIG_HOME/mimeapps.list, which takes priority.
+#
+# This file is dropped by rootfs/features/desktop (overlay) so that a
+# freshly-installed ClawOS already has a sane mail client wired up.
+
+[Default Applications]
+x-scheme-handler/mailto=thunderbird.desktop
