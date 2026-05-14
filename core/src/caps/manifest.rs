@@ -155,19 +155,14 @@ pub struct AiPolicy {
     pub origins: Vec<PromptOrigin>,
 }
 
-/// Per-period AI spending cap. Either limit can be zero to disable
-/// that axis. The kernel hard-denies any call whose pre-charge
-/// estimate would exceed either cap.
+/// Per-period AI token cap. Zero disables enforcement.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct AiBudget {
     /// Abstract billing units (1 chat token = 1 unit, 1 image = 1000
-    /// units, 1s TTS = 50 units, etc — see `/etc/cos/ai/prices.yaml`).
+    /// units, 1s TTS = 50 units, etc.). The kernel hard-denies any
+    /// call whose pre-charge estimate would push usage over the cap.
     #[serde(default)]
     pub monthly_units: u64,
-    /// US dollars cap, two-decimal precision. Useful for budget
-    /// dashboards even when units are imprecise.
-    #[serde(default)]
-    pub monthly_usd: f64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -892,7 +887,7 @@ mod tests {
               "version": "0.1",
               "name": "Summarize",
               "ai": {
-                "budget": {"monthly_units": 100000, "monthly_usd": 1.0},
+                "budget": {"monthly_units": 100000},
                 "models": ["claude-*"],
                 "safety": "strict",
                 "origins": ["external-content"]
@@ -954,7 +949,7 @@ mod tests {
               "version": "0.1",
               "name": "Rogue",
               "ai": {
-                "budget": {"monthly_units": 1, "monthly_usd": 0.0},
+                "budget": {"monthly_units": 1},
                 "models": ["*"],
                 "safety": "minimal",
                 "origins": ["trusted"]
@@ -983,7 +978,7 @@ mod tests {
               "version": "0.1",
               "name": "Summarize",
               "ai": {
-                "budget": {"monthly_units": 1, "monthly_usd": 0.0},
+                "budget": {"monthly_units": 1},
                 "models": [],
                 "safety": "strict",
                 "origins": ["trusted"]
@@ -1002,7 +997,7 @@ mod tests {
               "version": "0.1",
               "name": "Summarize",
               "ai": {
-                "budget": {"monthly_units": 1, "monthly_usd": 0.0},
+                "budget": {"monthly_units": 1},
                 "models": ["*"],
                 "safety": "strict",
                 "origins": []
@@ -1021,7 +1016,7 @@ mod tests {
               "version": "0.1",
               "name": "Summarize",
               "ai": {
-                "budget": {"monthly_units": 1, "monthly_usd": 0.0},
+                "budget": {"monthly_units": 1},
                 "models": ["*"],
                 "safety": "strict"
               }

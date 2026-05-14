@@ -152,9 +152,10 @@ pub fn format_bytes(n: u64) -> String {
 }
 
 /// Format a usage row for `cos agent status`: aligns provider /
-/// model / count / cost columns into a single string.
-pub fn format_usage_row(provider: &str, model: &str, count: u64, cost_usd: f64) -> String {
-    format!("{provider:<12} {model:<32} {count:>6}  ${cost_usd:>8.4}")
+/// model / count columns into a single string. Token-only — the
+/// kernel never measures usage in dollars.
+pub fn format_usage_row(provider: &str, model: &str, count: u64) -> String {
+    format!("{provider:<12} {model:<32} {count:>6}")
 }
 
 fn wrap_line(line: &str, width: usize) -> Vec<String> {
@@ -290,11 +291,10 @@ mod tests {
 
     #[test]
     fn format_usage_row_columns_align() {
-        let s = format_usage_row("openai", "gpt-5", 100, 0.0023);
+        let s = format_usage_row("openai", "gpt-5", 100);
         assert!(s.contains("openai"));
         assert!(s.contains("gpt-5"));
         assert!(s.contains("100"));
-        assert!(s.contains("$"));
     }
 
     #[test]

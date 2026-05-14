@@ -646,7 +646,6 @@ def cmd_draft(args):
             "input_tokens": response.usage.input_tokens,
             "output_tokens": response.usage.output_tokens,
             "units": response.usage.units,
-            "usd": response.usage.usd,
         },
         "budget": {
             "period": response.budget.period,

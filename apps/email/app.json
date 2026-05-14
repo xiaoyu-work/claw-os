@@ -11,8 +11,7 @@
   "runtime": "python",
   "ai": {
     "budget": {
-      "monthly_units": 100000,
-      "monthly_usd": 1.00
+      "monthly_units": 100000
     },
     "models": ["claude-*", "gpt-4o*", "mock-model"],
     "safety": "standard",

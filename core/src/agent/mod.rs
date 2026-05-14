@@ -2115,59 +2115,8 @@ fn llm_cmd(args: &[String]) -> Result<Value, String> {
                 .ok_or_else(|| format!("unknown model: {name}"))?;
             Ok(model_to_json(m))
         }
-        "cost" => {
-            let mut name: Option<String> = None;
-            let mut input: u64 = 0;
-            let mut output: u64 = 0;
-            let mut cache_read: u64 = 0;
-            let mut cache_write: u64 = 0;
-            let mut i = 1usize;
-            while i < args.len() {
-                match args[i].as_str() {
-                    "--input" => {
-                        input = parse_u64_arg(args.get(i + 1), "--input")?;
-                        i += 2;
-                    }
-                    "--output" => {
-                        output = parse_u64_arg(args.get(i + 1), "--output")?;
-                        i += 2;
-                    }
-                    "--cache-read" => {
-                        cache_read = parse_u64_arg(args.get(i + 1), "--cache-read")?;
-                        i += 2;
-                    }
-                    "--cache-write" => {
-                        cache_write = parse_u64_arg(args.get(i + 1), "--cache-write")?;
-                        i += 2;
-                    }
-                    other if !other.starts_with("--") && name.is_none() => {
-                        name = Some(other.to_string());
-                        i += 1;
-                    }
-                    other => {
-                        return Err(format!(
-                            "unknown arg for `llm cost`: {other}. usage: cos agent llm cost <model> --input N --output N [--cache-read N] [--cache-write N]"
-                        ));
-                    }
-                }
-            }
-            let name = name.ok_or_else(|| {
-                "usage: cos agent llm cost <model> --input N --output N [--cache-read N] [--cache-write N]"
-                    .to_string()
-            })?;
-            let cost = metadata::estimate_cost_usd(&name, input, output, cache_read, cache_write)
-                .ok_or_else(|| format!("unknown model: {name}"))?;
-            Ok(json!({
-                "model": name,
-                "input_tokens": input,
-                "output_tokens": output,
-                "cache_read_tokens": cache_read,
-                "cache_write_tokens": cache_write,
-                "estimated_usd": cost,
-            }))
-        }
         other => Err(format!(
-            "unknown llm subcommand: {other}. try: providers | models [--provider X] | model <name> | cost <model> --input N --output N"
+            "unknown llm subcommand: {other}. try: providers | models [--provider X] | model <name>"
         )),
     }
 }
@@ -2181,12 +2130,6 @@ fn model_to_json(m: &crate::agent::llm::metadata::ModelMetadata) -> Value {
         "supports_tools": m.supports_tools,
         "supports_vision": m.supports_vision,
         "supports_streaming": m.supports_streaming,
-        "pricing": {
-            "input_per_mtok_usd": m.pricing.input_per_mtok_usd,
-            "output_per_mtok_usd": m.pricing.output_per_mtok_usd,
-            "cache_read_per_mtok_usd": m.pricing.cache_read_per_mtok_usd,
-            "cache_write_per_mtok_usd": m.pricing.cache_write_per_mtok_usd,
-        },
     })
 }
 
@@ -3124,7 +3067,6 @@ fn budget_cmd(args: &[String]) -> Result<Value, String> {
                 "app": app,
                 "period": snap.period,
                 "units_used": snap.units_used,
-                "usd_used": snap.usd_used,
             }))
         }
         "reset" => {
@@ -8506,64 +8448,6 @@ mod tests {
         assert!(v.get("provider").and_then(|x| x.as_str()).is_some());
         assert!(v.get("context_window").is_some());
         assert!(v.get("supports_tools").is_some());
-        assert!(v
-            .get("pricing")
-            .and_then(|p| p.get("input_per_mtok_usd"))
-            .and_then(|x| x.as_f64())
-            .is_some());
-    }
-
-    #[test]
-    fn llm_cost_requires_model_arg() {
-        let err = llm_cmd(&["cost".into(), "--input".into(), "1000".into()]).unwrap_err();
-        assert!(err.contains("usage:"));
-    }
-
-    #[test]
-    fn llm_cost_unknown_model_errors() {
-        let err = llm_cmd(&[
-            "cost".into(),
-            "definitely-not-a-real-model".into(),
-            "--input".into(),
-            "1000".into(),
-            "--output".into(),
-            "100".into(),
-        ])
-        .unwrap_err();
-        assert!(err.contains("unknown model"));
-    }
-
-    #[test]
-    fn llm_cost_invalid_int_errors() {
-        let providers = llm_cmd(&["providers".into()]).expect("providers ok");
-        let model_name = providers
-            .get("providers")
-            .and_then(|p| p.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|p| p.get("name"))
-            .and_then(|n| n.as_str())
-            .map(|s| s.to_string())
-            .map(|provider| {
-                let models =
-                    llm_cmd(&["models".into(), "--provider".into(), provider]).expect("models ok");
-                models
-                    .get("models")
-                    .and_then(|m| m.as_array())
-                    .and_then(|arr| arr.first())
-                    .and_then(|m| m.get("name"))
-                    .and_then(|n| n.as_str())
-                    .expect("at least one model")
-                    .to_string()
-            })
-            .expect("at least one provider");
-        let err = llm_cmd(&[
-            "cost".into(),
-            model_name,
-            "--input".into(),
-            "not-a-number".into(),
-        ])
-        .unwrap_err();
-        assert!(err.contains("--input"));
     }
 
     #[test]

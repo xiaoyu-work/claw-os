@@ -107,7 +107,6 @@ class Usage:
     input_tokens: int = 0
     output_tokens: int = 0
     units: int = 0
-    usd: float = 0.0
 
 
 @dataclass
@@ -115,8 +114,6 @@ class Budget:
     period: str = ""
     units_used: int = 0
     units_cap: int = 0
-    usd_used: float = 0.0
-    usd_cap: float = 0.0
 
 
 @dataclass
@@ -376,8 +373,6 @@ def budget(app_id: Optional[str] = None) -> Budget:
         period=env.get("period", ""),
         units_used=int(env.get("units_used", 0) or 0),
         units_cap=0,
-        usd_used=float(env.get("usd_used", 0.0) or 0.0),
-        usd_cap=0.0,
     )
 
 
@@ -475,14 +470,11 @@ def _parse_response(env: Mapping[str, Any]) -> AiResponse:
             input_tokens=int(usage.get("input_tokens", 0) or 0),
             output_tokens=int(usage.get("output_tokens", 0) or 0),
             units=int(usage.get("units", 0) or 0),
-            usd=float(usage.get("usd", 0.0) or 0.0),
         ),
         budget=Budget(
             period=budget_blk.get("period", ""),
             units_used=int(budget_blk.get("units_used", 0) or 0),
             units_cap=int(budget_blk.get("units_cap", 0) or 0),
-            usd_used=float(budget_blk.get("usd_used", 0.0) or 0.0),
-            usd_cap=float(budget_blk.get("usd_cap", 0.0) or 0.0),
         ),
         review=Review(
             safety=review.get("safety", "strict"),

@@ -1,9 +1,9 @@
-//! Per-app monthly AI spending ledger.
+//! Per-app monthly AI token ledger.
 //!
-//! Each row records how many abstract billing units and how many US
-//! dollars an app has consumed in a given billing period (a calendar
-//! month UTC, `YYYY-MM`). The gate calls `reserve` before each upstream
-//! call and `charge` after — both are atomic and over-cap reservations
+//! Each row records how many abstract billing units an app has
+//! consumed in a given billing period (a calendar month UTC,
+//! `YYYY-MM`). The gate calls `reserve` before each upstream call
+//! and `settle` after — both are atomic and over-cap reservations
 //! are hard-denied.
 //!
 //! The store lives at `${COS_DATA_DIR}/ai_budget.db`. Writing is
@@ -20,7 +20,6 @@ use serde::Serialize;
 pub struct Snapshot {
     pub period: String,
     pub units_used: u64,
-    pub usd_used: f64,
 }
 
 /// Why a reservation was rejected.
@@ -33,14 +32,6 @@ pub enum BudgetError {
         app: String,
         used: u64,
         cap: u64,
-    },
-    #[error(
-        "budget exceeded: app `{app}` used ${used:.2} of ${cap:.2} this period"
-    )]
-    OverDollarCap {
-        app: String,
-        used: f64,
-        cap: f64,
     },
 }
 
@@ -112,7 +103,6 @@ impl Store {
                 app_id TEXT NOT NULL,
                 period TEXT NOT NULL,
                 units_used INTEGER NOT NULL DEFAULT 0,
-                usd_used  REAL    NOT NULL DEFAULT 0.0,
                 PRIMARY KEY (app_id, period)
             );
             "#,
@@ -124,49 +114,43 @@ impl Store {
     /// Snapshot for the current period (zero-filled if no row yet).
     pub fn current(&self, app: &str) -> Result<Snapshot, BudgetError> {
         let period = current_period_utc();
-        let row: Option<(i64, f64)> = self
+        let row: Option<i64> = self
             .conn
             .query_row(
-                "SELECT units_used, usd_used FROM ai_budget \
+                "SELECT units_used FROM ai_budget \
                  WHERE app_id = ?1 AND period = ?2",
                 params![app, period],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| r.get(0),
             )
             .optional()?;
-        let (units_used, usd_used) = row.unwrap_or((0, 0.0));
+        let units_used = row.unwrap_or(0);
         Ok(Snapshot {
             period,
             units_used: units_used as u64,
-            usd_used,
         })
     }
 
-    /// Reserve capacity. Atomic: returns `OverUnitCap` /
-    /// `OverDollarCap` if the post-reserve total would exceed the
-    /// caps. `cap_units == 0` disables unit checking; `cap_usd == 0.0`
-    /// disables dollar checking — at least one cap should be set in
-    /// practice but enforcement is the caller's responsibility.
+    /// Reserve capacity. Atomic: returns `OverUnitCap` if the
+    /// post-reserve total would exceed the cap. `cap_units == 0`
+    /// disables checking; enforcement is the caller's responsibility.
     pub fn reserve(
         &mut self,
         app: &str,
         units: u64,
-        usd: f64,
         cap_units: u64,
-        cap_usd: f64,
     ) -> Result<Snapshot, BudgetError> {
         let period = current_period_utc();
         let tx = self.conn.transaction()?;
-        let row: Option<(i64, f64)> = tx
+        let row: Option<i64> = tx
             .query_row(
-                "SELECT units_used, usd_used FROM ai_budget \
+                "SELECT units_used FROM ai_budget \
                  WHERE app_id = ?1 AND period = ?2",
                 params![app, period],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| r.get(0),
             )
             .optional()?;
-        let (cur_units, cur_usd) = row.unwrap_or((0, 0.0));
+        let cur_units = row.unwrap_or(0);
         let new_units = cur_units as u64 + units;
-        let new_usd = cur_usd + usd;
         if cap_units > 0 && new_units > cap_units {
             return Err(BudgetError::OverUnitCap {
                 app: app.to_string(),
@@ -174,54 +158,43 @@ impl Store {
                 cap: cap_units,
             });
         }
-        if cap_usd > 0.0 && new_usd > cap_usd {
-            return Err(BudgetError::OverDollarCap {
-                app: app.to_string(),
-                used: new_usd,
-                cap: cap_usd,
-            });
-        }
         tx.execute(
-            "INSERT INTO ai_budget(app_id, period, units_used, usd_used) \
-             VALUES (?1, ?2, ?3, ?4) \
+            "INSERT INTO ai_budget(app_id, period, units_used) \
+             VALUES (?1, ?2, ?3) \
              ON CONFLICT(app_id, period) DO UPDATE SET \
-                 units_used = units_used + excluded.units_used, \
-                 usd_used   = usd_used   + excluded.usd_used",
-            params![app, period, units as i64, usd],
+                 units_used = units_used + excluded.units_used",
+            params![app, period, units as i64],
         )?;
         tx.commit()?;
         Ok(Snapshot {
             period,
             units_used: new_units,
-            usd_used: new_usd,
         })
     }
 
     /// Finalise a reservation by adjusting recorded usage to the
-    /// actuals. Pass `actual_units - reserved_units` (signed) so
+    /// actual. Pass `actual_units - reserved_units` (signed) so
     /// over-estimates roll back. Never errors on bounds — settlement
     /// happens after the call has already been served.
     pub fn settle(
         &mut self,
         app: &str,
         delta_units: i64,
-        delta_usd: f64,
     ) -> Result<Snapshot, BudgetError> {
         let period = current_period_utc();
         // Ensure the row exists. The initial values only matter if it
         // didn't — the on-conflict branch takes precedence otherwise.
         self.conn.execute(
-            "INSERT INTO ai_budget(app_id, period, units_used, usd_used) \
-             VALUES (?1, ?2, 0, 0.0) \
+            "INSERT INTO ai_budget(app_id, period, units_used) \
+             VALUES (?1, ?2, 0) \
              ON CONFLICT(app_id, period) DO NOTHING",
             params![app, period],
         )?;
         self.conn.execute(
             "UPDATE ai_budget SET \
-                 units_used = MAX(0, units_used + ?3), \
-                 usd_used   = MAX(0.0, usd_used + ?4) \
+                 units_used = MAX(0, units_used + ?3) \
              WHERE app_id = ?1 AND period = ?2",
-            params![app, period, delta_units, delta_usd],
+            params![app, period, delta_units],
         )?;
         self.current(app)
     }
@@ -240,7 +213,7 @@ impl Store {
     /// All recorded periods for an app, newest first.
     pub fn history(&self, app: &str) -> Result<Vec<Snapshot>, BudgetError> {
         let mut stmt = self.conn.prepare(
-            "SELECT period, units_used, usd_used FROM ai_budget \
+            "SELECT period, units_used FROM ai_budget \
              WHERE app_id = ?1 ORDER BY period DESC",
         )?;
         let rows = stmt
@@ -248,7 +221,6 @@ impl Store {
                 Ok(Snapshot {
                     period: r.get(0)?,
                     units_used: r.get::<_, i64>(1)? as u64,
-                    usd_used: r.get(2)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -270,7 +242,6 @@ mod tests {
                 app_id TEXT NOT NULL,
                 period TEXT NOT NULL,
                 units_used INTEGER NOT NULL DEFAULT 0,
-                usd_used  REAL    NOT NULL DEFAULT 0.0,
                 PRIMARY KEY (app_id, period)
             );
             "#,
@@ -283,16 +254,15 @@ mod tests {
     #[test]
     fn reserve_within_cap_ok() {
         let mut s = temp_store();
-        let snap = s.reserve("app1", 100, 0.01, 1000, 1.0).unwrap();
+        let snap = s.reserve("app1", 100, 1000).unwrap();
         assert_eq!(snap.units_used, 100);
-        assert!((snap.usd_used - 0.01).abs() < 1e-9);
     }
 
     #[test]
     fn reserve_over_unit_cap_denied() {
         let mut s = temp_store();
-        s.reserve("app1", 800, 0.0, 1000, 0.0).unwrap();
-        let err = s.reserve("app1", 300, 0.0, 1000, 0.0).unwrap_err();
+        s.reserve("app1", 800, 1000).unwrap();
+        let err = s.reserve("app1", 300, 1000).unwrap_err();
         match err {
             BudgetError::OverUnitCap { used, cap, .. } => {
                 assert_eq!(used, 1100);
@@ -303,26 +273,17 @@ mod tests {
     }
 
     #[test]
-    fn reserve_over_dollar_cap_denied() {
-        let mut s = temp_store();
-        s.reserve("app1", 1, 0.9, 0, 1.0).unwrap();
-        let err = s.reserve("app1", 1, 0.2, 0, 1.0).unwrap_err();
-        assert!(matches!(err, BudgetError::OverDollarCap { .. }));
-    }
-
-    #[test]
     fn settle_rolls_back_overestimate() {
         let mut s = temp_store();
-        s.reserve("app1", 100, 0.10, 1000, 1.0).unwrap();
-        let snap = s.settle("app1", -40, -0.04).unwrap();
+        s.reserve("app1", 100, 1000).unwrap();
+        let snap = s.settle("app1", -40).unwrap();
         assert_eq!(snap.units_used, 60);
-        assert!((snap.usd_used - 0.06).abs() < 1e-6);
     }
 
     #[test]
     fn reset_clears_period() {
         let mut s = temp_store();
-        s.reserve("app1", 100, 0.10, 1000, 1.0).unwrap();
+        s.reserve("app1", 100, 1000).unwrap();
         s.reset("app1").unwrap();
         let snap = s.current("app1").unwrap();
         assert_eq!(snap.units_used, 0);

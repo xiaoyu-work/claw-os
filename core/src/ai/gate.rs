@@ -281,7 +281,6 @@ pub struct Usage {
     pub input_tokens: u32,
     pub output_tokens: u32,
     pub units: u64,
-    pub usd: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -289,8 +288,6 @@ pub struct BudgetReport {
     pub period: String,
     pub units_used: u64,
     pub units_cap: u64,
-    pub usd_used: f64,
-    pub usd_cap: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -523,20 +520,17 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
 
     // 7. Reserve budget. The estimate depends on modality — token
     //    proxies for chat / embed, flat rates for image / audio /
-    //    video (refined when prices.yaml lands in the next phase).
+    //    video. Token counting only — no USD axis.
     let estimated_units = units_for_modality(req, modality);
     let estimated_units = match req.max_units {
         Some(cap) => estimated_units.min(cap.max(1)),
         None => estimated_units,
     };
-    let estimated_usd = estimate_usd(estimated_units);
     let mut store = Store::open().map_err(AiError::Internal)?;
     let _reserved = store.reserve(
         &req.app_id,
         estimated_units,
-        estimated_usd,
         policy.budget.monthly_units,
-        policy.budget.monthly_usd,
     )?;
 
     // 8. Apply safety pipeline to the prompt (when present).
@@ -555,7 +549,7 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
     //    even before providers grow new entry points.
     if !modality.is_chat_like() {
         // Refund the reservation since we never reached the provider.
-        let _ = store.settle(&req.app_id, -(estimated_units as i64), -estimated_usd);
+        let _ = store.settle(&req.app_id, -(estimated_units as i64));
         return Err(AiError::ModalityNotSupported(modality.label()));
     }
 
@@ -591,9 +585,8 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
     let actual_units =
         llm_resp.usage.input_tokens as i64 + llm_resp.usage.output_tokens as i64;
     let delta_units = actual_units - estimated_units as i64;
-    let delta_usd = estimate_usd(actual_units.max(0) as u64) - estimated_usd;
     let snapshot = store
-        .settle(&req.app_id, delta_units, delta_usd)
+        .settle(&req.app_id, delta_units)
         .map_err(AiError::Budget)?;
 
     Ok(ChatResult {
@@ -607,14 +600,11 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
             input_tokens: llm_resp.usage.input_tokens,
             output_tokens: llm_resp.usage.output_tokens,
             units: actual_units.max(0) as u64,
-            usd: estimate_usd(actual_units.max(0) as u64),
         },
         budget: BudgetReport {
             period: snapshot.period,
             units_used: snapshot.units_used,
             units_cap: policy.budget.monthly_units,
-            usd_used: snapshot.usd_used,
-            usd_cap: policy.budget.monthly_usd,
         },
         review: ReviewReport {
             safety: safety_label(policy.safety),
@@ -781,12 +771,6 @@ fn default_model_from_globs(globs: &[String], app_id: &str) -> Result<String, Ai
         .ok_or_else(|| AiError::NoDefaultModel(app_id.to_string()))
 }
 
-fn estimate_usd(units: u64) -> f64 {
-    // Placeholder pricing: $0.000003 per unit. Real per-model prices
-    // arrive in the next phase from /etc/cos/ai/prices.yaml.
-    (units as f64) * 3e-6
-}
-
 fn apply_safety(prompt: &str, safety: AiSafety) -> (String, bool) {
     match safety {
         AiSafety::Minimal => (prompt.to_string(), false),
@@ -837,8 +821,8 @@ fn _ensure_arc_send<T: ?Sized + Send + Sync>(_: &Arc<T>) {}
 //   * `caps::require(Verb::AI_CHAT, name(model))` — defence-in-depth
 //     check AND structured audit emission to `caps.jsonl`.
 //   * `budget::reserve/settle` against the stable pseudo-app id
-//     `system.agent`, capped by `agent.system_budget_monthly_{units,
-//     usd}` in `/etc/cos/config.json`.
+//     `system.agent`, capped by `agent.system_budget_monthly_units`
+//     in `/etc/cos/config.json`.
 //
 // Implemented as a Provider decorator so call sites need only wrap
 // the result of `llm::registry::build(...)`. The wrapper transparently
@@ -905,14 +889,12 @@ impl LlmProvider for SystemGatedProvider {
 
         // 2. Reserve budget against the system-agent bucket.
         let est_units = estimate_request_units(&request);
-        let est_usd = estimate_usd(est_units);
         let cap_units = cfg.system_budget_monthly_units;
-        let cap_usd = cfg.system_budget_monthly_usd;
 
         let mut store = Store::open()
             .map_err(|e| llm::LlmError::Internal(format!("system-agent budget store: {e}")))?;
         store
-            .reserve(SYSTEM_AGENT_BUCKET, est_units, est_usd, cap_units, cap_usd)
+            .reserve(SYSTEM_AGENT_BUCKET, est_units, cap_units)
             .map_err(|e| llm::LlmError::InvalidRequest(format!("system-agent budget: {e}")))?;
 
         // 3. Delegate to the wrapped provider.
@@ -925,11 +907,10 @@ impl LlmProvider for SystemGatedProvider {
         let actual_units =
             resp.usage.input_tokens as i64 + resp.usage.output_tokens as i64;
         let delta_units = actual_units - est_units as i64;
-        let delta_usd = estimate_usd(actual_units.max(0) as u64) - est_usd;
-        if let Err(e) = store.settle(SYSTEM_AGENT_BUCKET, delta_units, delta_usd) {
+        if let Err(e) = store.settle(SYSTEM_AGENT_BUCKET, delta_units) {
             tracing::warn!(
                 target: "ai.gate",
-                "system-agent budget settle failed (delta_units={delta_units}, delta_usd={delta_usd}): {e}",
+                "system-agent budget settle failed (delta_units={delta_units}): {e}",
             );
         }
 
@@ -959,14 +940,11 @@ impl LlmProvider for SystemGatedProvider {
             })?;
 
         let est_units = estimate_request_units(&request);
-        let est_usd = estimate_usd(est_units);
         if let Ok(mut store) = Store::open() {
             if let Err(e) = store.reserve(
                 SYSTEM_AGENT_BUCKET,
                 est_units,
-                est_usd,
                 cfg.system_budget_monthly_units,
-                cfg.system_budget_monthly_usd,
             ) {
                 return Err(llm::LlmError::InvalidRequest(format!(
                     "system-agent budget: {e}"

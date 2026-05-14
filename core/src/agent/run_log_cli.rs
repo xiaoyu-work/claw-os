@@ -21,10 +21,6 @@
 //! - `engines` — group records by `(engine_name, engine_version)`
 //!   so the operator can see which local engine versions have
 //!   actually run inference.
-//! - `cost [--session SID]` — total USD cost across known-pricing
-//!   models, plus per-model breakdown. Same math as
-//!   `audit cache-stats` but at call granularity (more accurate when
-//!   a single turn does multiple parallel completions).
 //! - `clear [--force]` — remove the run log. Refuses without
 //!   `--force`.
 //! - `path` — print the resolved run log path.
@@ -52,13 +48,12 @@ pub fn run_log_cmd(args: &[String]) -> Result<Value, String> {
         "summary" => cmd_summary(rest),
         "errors" => cmd_errors(rest),
         "engines" => cmd_engines(rest),
-        "cost" => cmd_cost(rest),
         "clear" => cmd_clear(rest),
         "path" => Ok(json!({
             "path": resolve_path(rest)?.display().to_string(),
         })),
         other => Err(format!(
-            "unknown run-log subcommand: {other}. try: tail | summary | errors | engines | cost | clear | path"
+            "unknown run-log subcommand: {other}. try: tail | summary | errors | engines | clear | path"
         )),
     }
 }
@@ -225,95 +220,6 @@ fn cmd_engines(args: &[String]) -> Result<Value, String> {
     Ok(json!({
         "path": path.display().to_string(),
         "by_engine": by_engine_json,
-    }))
-}
-
-fn cmd_cost(args: &[String]) -> Result<Value, String> {
-    let path = resolve_path(args)?;
-    let session = parse_string_opt(args, "--session");
-    let events = read_events(&path)?;
-    let mut by_model: BTreeMap<String, ModelCostAgg> = BTreeMap::new();
-    #[derive(Default)]
-    struct ModelCostAgg {
-        calls: u64,
-        input: u64,
-        output: u64,
-        cache_read: u64,
-        cache_write: u64,
-        cost_usd: f64,
-        pricing_known: bool,
-    }
-    let mut total_cost: f64 = 0.0;
-    let mut total_calls: u64 = 0;
-    let mut any_pricing_known = false;
-    for e in events
-        .iter()
-        .filter(|e| match_session(e, session.as_deref()))
-        .filter(|e| e.get("status").and_then(|v| v.as_str()) == Some("ok"))
-    {
-        total_calls += 1;
-        let input = e.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-        let output = e.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-        let cache_read = e
-            .get("cache_read_tokens")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-        let cache_write = e
-            .get("cache_write_tokens")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-        let model_name = e
-            .get("model")
-            .and_then(|v| v.as_str())
-            .unwrap_or("<unknown>")
-            .to_string();
-        let agg = by_model.entry(model_name.clone()).or_default();
-        agg.calls += 1;
-        agg.input += input;
-        agg.output += output;
-        agg.cache_read += cache_read;
-        agg.cache_write += cache_write;
-        if let Some(c) = crate::agent::llm::metadata::estimate_cost_usd(
-            &model_name,
-            input,
-            output,
-            cache_read,
-            cache_write,
-        ) {
-            agg.cost_usd += c;
-            agg.pricing_known = true;
-            total_cost += c;
-            any_pricing_known = true;
-        }
-    }
-    let by_model_json: Value = by_model
-        .into_iter()
-        .map(|(k, a)| {
-            (
-                k,
-                json!({
-                    "calls": a.calls,
-                    "input_tokens": a.input,
-                    "output_tokens": a.output,
-                    "cache_read_tokens": a.cache_read,
-                    "cache_write_tokens": a.cache_write,
-                    "cost_usd": if a.pricing_known { json!(a.cost_usd) } else { Value::Null },
-                }),
-            )
-        })
-        .collect::<serde_json::Map<_, _>>()
-        .into();
-    let total_value = if any_pricing_known {
-        json!(total_cost)
-    } else {
-        Value::Null
-    };
-    Ok(json!({
-        "path": path.display().to_string(),
-        "session_filter": session,
-        "calls_observed": total_calls,
-        "cost_total_usd": total_value,
-        "by_model": by_model_json,
     }))
 }
 
@@ -720,67 +626,6 @@ mod tests {
         assert_eq!(by["<cloud>"]["calls"], json!(1));
         // Per-engine model breakdown.
         assert_eq!(by["llama-cpp@b3950"]["models"]["qwen3-7b"], json!(2));
-    }
-
-    // ---- cost ----
-
-    #[test]
-    fn cost_sums_known_model_pricing() {
-        // claude-haiku-4-5: input $1/M, output $5/M.
-        // 1M input + 1M output * 2 successful calls = $12 total.
-        let records = vec![
-            rec(
-                "anthropic",
-                "claude-haiku-4-5",
-                "s1",
-                "ok",
-                0,
-                json!({"input_tokens": 1_000_000_u64, "output_tokens": 1_000_000_u64}),
-            ),
-            rec(
-                "anthropic",
-                "claude-haiku-4-5",
-                "s1",
-                "ok",
-                1,
-                json!({"input_tokens": 1_000_000_u64, "output_tokens": 1_000_000_u64}),
-            ),
-            // Error records are excluded from cost.
-            rec(
-                "anthropic",
-                "claude-haiku-4-5",
-                "s1",
-                "error",
-                2,
-                json!({"input_tokens": 1_000_000_u64, "output_tokens": 1_000_000_u64}),
-            ),
-        ];
-        let (_d, p) = fixture(&records);
-        let v = run_log_cmd(&argv_with_path(&p, &["cost"])).unwrap();
-        assert_eq!(v["calls_observed"], json!(2));
-        let total = v["cost_total_usd"].as_f64().unwrap();
-        assert!((total - 12.0).abs() < 1e-9, "got {total}");
-        let m_cost = v["by_model"]["claude-haiku-4-5"]["cost_usd"]
-            .as_f64()
-            .unwrap();
-        assert!((m_cost - 12.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn cost_total_null_when_no_known_models() {
-        let records = vec![rec(
-            "anthropic",
-            "made-up-9001",
-            "s1",
-            "ok",
-            0,
-            json!({"input_tokens": 1_000_000_u64}),
-        )];
-        let (_d, p) = fixture(&records);
-        let v = run_log_cmd(&argv_with_path(&p, &["cost"])).unwrap();
-        assert_eq!(v["cost_total_usd"], Value::Null);
-        assert_eq!(v["by_model"]["made-up-9001"]["cost_usd"], Value::Null);
-        assert_eq!(v["by_model"]["made-up-9001"]["calls"], json!(1));
     }
 
     // ---- clear ----

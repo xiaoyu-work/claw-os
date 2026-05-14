@@ -16,8 +16,7 @@
 //!   distinct session count, and first/last timestamp.
 //! - `cache-stats [--session SID]` — aggregate prompt-cache token
 //!   counts across `post_turn` events and report a hit-rate
-//!   approximation, plus a per-model breakdown and USD cost
-//!   estimates (when the model has a known pricing entry).
+//!   approximation, plus a per-model token breakdown.
 //! - `checkpoints [--session SID]` — list every
 //!   `pre_tool_checkpoint` event so an operator can see when /
 //!   which tool / what checkpoint id / success or error.
@@ -152,23 +151,8 @@ fn cmd_cache_stats(args: &[String]) -> Result<Value, String> {
         output: u64,
         cache_read: u64,
         cache_write: u64,
-        cost_usd: f64,
-        // True if at least one turn for this model had a known pricing
-        // entry in the metadata table. False when every cost was 0
-        // because the model is unrecognised.
-        pricing_known: bool,
     }
     let mut by_model: BTreeMap<String, ModelAgg> = BTreeMap::new();
-    let mut cost_total_usd: f64 = 0.0;
-    // Counterfactual cost: what we'd have paid if cache_read tokens
-    // had been billed at the regular input rate. The difference is
-    // the dollar-value of the cache.
-    let mut cost_without_cache_total_usd: f64 = 0.0;
-    // True iff at least one post_turn event resolved to a pricing
-    // entry. When false, cost_total_usd is 0 and we expose `null`
-    // instead so the CLI consumer doesn't conflate "no data" with
-    // "free".
-    let mut any_pricing_known = false;
 
     for e in events
         .iter()
@@ -206,31 +190,6 @@ fn cmd_cache_stats(args: &[String]) -> Result<Value, String> {
         entry.output += output;
         entry.cache_read += cache_read;
         entry.cache_write += cache_write;
-
-        if let Some(cost) = crate::agent::llm::metadata::estimate_cost_usd(
-            &model_name,
-            input,
-            output,
-            cache_read,
-            cache_write,
-        ) {
-            entry.cost_usd += cost;
-            entry.pricing_known = true;
-            cost_total_usd += cost;
-            any_pricing_known = true;
-            // Counterfactual: cache_read billed as input, no cache_write.
-            // Wrapping with `unwrap_or(cost)` keeps the math monotonic
-            // when only the alternate path fails for some reason.
-            let counter = crate::agent::llm::metadata::estimate_cost_usd(
-                &model_name,
-                input + cache_read,
-                output,
-                0,
-                0,
-            )
-            .unwrap_or(cost);
-            cost_without_cache_total_usd += counter;
-        }
     }
     // Cache hit rate ≈ cache_read / (cache_read + non-cached input). For
     // providers that don't expose cache tokens, all cache_* will be 0
@@ -244,8 +203,6 @@ fn cmd_cache_stats(args: &[String]) -> Result<Value, String> {
         0.0
     };
 
-    // Render per-model breakdown. cost_usd is null when no entry for
-    // this specific model resolved to known pricing.
     let by_model_json: Value = by_model
         .into_iter()
         .map(|(name, a)| {
@@ -257,23 +214,11 @@ fn cmd_cache_stats(args: &[String]) -> Result<Value, String> {
                     "output_tokens": a.output,
                     "cache_read_tokens": a.cache_read,
                     "cache_write_tokens": a.cache_write,
-                    "cost_usd": if a.pricing_known { json!(a.cost_usd) } else { Value::Null },
                 }),
             )
         })
         .collect::<serde_json::Map<_, _>>()
         .into();
-
-    let cost_savings_usd = if any_pricing_known {
-        json!((cost_without_cache_total_usd - cost_total_usd).max(0.0))
-    } else {
-        Value::Null
-    };
-    let cost_total_value = if any_pricing_known {
-        json!(cost_total_usd)
-    } else {
-        Value::Null
-    };
 
     Ok(json!({
         "path": path.display().to_string(),
@@ -285,8 +230,6 @@ fn cmd_cache_stats(args: &[String]) -> Result<Value, String> {
         "cache_write_tokens_total": cache_write_total,
         "billable_input_tokens": billable_input,
         "cache_hit_rate": hit_rate,
-        "cost_total_usd": cost_total_value,
-        "cost_savings_usd": cost_savings_usd,
         "by_model": by_model_json,
     }))
 }
@@ -704,84 +647,6 @@ mod tests {
     }
 
     #[test]
-    fn cache_stats_costs_null_when_model_unknown() {
-        // Events without a model field bucket under "<unknown>", which
-        // never resolves to pricing. cost_total_usd / cost_savings_usd
-        // must be JSON null (not 0.0) so callers don't conflate
-        // "no data" with "free".
-        let events = vec![ev(
-            "post_turn",
-            "s1",
-            0,
-            json!({"input_tokens": 100, "output_tokens": 50}),
-        )];
-        let (_d, p) = fixture(&events);
-        let v = audit_cmd(&argv_with_path(&p, &["cache-stats"])).unwrap();
-        assert_eq!(v["cost_total_usd"], Value::Null);
-        assert_eq!(v["cost_savings_usd"], Value::Null);
-        let by_model = v["by_model"].as_object().unwrap();
-        assert!(by_model.contains_key("<unknown>"));
-        assert_eq!(by_model["<unknown>"]["cost_usd"], Value::Null);
-        assert_eq!(by_model["<unknown>"]["turns"], json!(1));
-    }
-
-    #[test]
-    fn cache_stats_costs_computed_when_model_known() {
-        // claude-haiku-4-5 has known pricing:
-        //   input  $1.00 / Mtok
-        //   output $5.00 / Mtok
-        //   cache_read  $0.10 / Mtok
-        //   cache_write $1.25 / Mtok
-        // 1_000_000 input + 1_000_000 output tokens = $1 + $5 = $6.
-        let events = vec![ev(
-            "post_turn",
-            "s1",
-            0,
-            json!({
-                "model": "claude-haiku-4-5",
-                "input_tokens": 1_000_000_u64,
-                "output_tokens": 1_000_000_u64,
-                "cache_read_tokens": 0,
-                "cache_write_tokens": 0,
-            }),
-        )];
-        let (_d, p) = fixture(&events);
-        let v = audit_cmd(&argv_with_path(&p, &["cache-stats"])).unwrap();
-        let cost = v["cost_total_usd"].as_f64().unwrap();
-        assert!((cost - 6.0).abs() < 1e-9, "got {cost}");
-        // No cache used → savings is 0 (not null), since pricing was known.
-        assert_eq!(v["cost_savings_usd"].as_f64().unwrap(), 0.0);
-        let by_model = v["by_model"].as_object().unwrap();
-        assert_eq!(by_model["claude-haiku-4-5"]["turns"], json!(1));
-        let m_cost = by_model["claude-haiku-4-5"]["cost_usd"].as_f64().unwrap();
-        assert!((m_cost - 6.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn cache_stats_savings_reflects_cache_read_savings() {
-        // claude-haiku-4-5: input $1.00 vs cache_read $0.10 per Mtok.
-        // 1M cache_read tokens cost: 1M * 0.10/1M = $0.10
-        // Counterfactual (billed as input): 1M * 1.00/1M = $1.00
-        // Savings = $1.00 - $0.10 = $0.90.
-        let events = vec![ev(
-            "post_turn",
-            "s1",
-            0,
-            json!({
-                "model": "claude-haiku-4-5",
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "cache_read_tokens": 1_000_000_u64,
-                "cache_write_tokens": 0,
-            }),
-        )];
-        let (_d, p) = fixture(&events);
-        let v = audit_cmd(&argv_with_path(&p, &["cache-stats"])).unwrap();
-        let savings = v["cost_savings_usd"].as_f64().unwrap();
-        assert!((savings - 0.9).abs() < 1e-9, "got {savings}");
-    }
-
-    #[test]
     fn cache_stats_per_model_breakdown_aggregates_across_turns() {
         // Two turns on claude-haiku-4-5, one on an unknown model.
         let events = vec![
@@ -823,14 +688,11 @@ mod tests {
             by_model["claude-haiku-4-5"]["input_tokens"],
             json!(2_000_000_u64)
         );
-        let haiku_cost = by_model["claude-haiku-4-5"]["cost_usd"].as_f64().unwrap();
-        assert!((haiku_cost - 2.0).abs() < 1e-9, "haiku cost: {haiku_cost}");
-        // Unknown model: counted but cost is null.
         assert_eq!(by_model["made-up-model-9001"]["turns"], json!(1));
-        assert_eq!(by_model["made-up-model-9001"]["cost_usd"], Value::Null);
-        // Total cost reflects only the known-priced turns ($1 + $1).
-        let total = v["cost_total_usd"].as_f64().unwrap();
-        assert!((total - 2.0).abs() < 1e-9, "total: {total}");
+        assert_eq!(
+            by_model["made-up-model-9001"]["input_tokens"],
+            json!(500_000_u64)
+        );
     }
 
     // ---- checkpoints ----

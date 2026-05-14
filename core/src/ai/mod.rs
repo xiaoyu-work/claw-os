@@ -9,7 +9,7 @@
 //!   2. Manifest policy — the app's manifest must declare an `ai`
 //!      block; the requested model must match one of its globs, and
 //!      the prompt's declared `origin` must be in its origin list.
-//!   3. Budget — the per-app monthly cap (units + dollars). Reserved
+//!   3. Budget — the per-app monthly token cap. Reserved
 //!      pre-call and finalised after the provider returns; over-cap
 //!      requests are hard-denied.
 //!   4. Safety — `Strict` redacts secrets in the prompt before

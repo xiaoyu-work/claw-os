@@ -255,11 +255,6 @@ pub struct AgentConfig {
     #[serde(default = "default_system_budget_units")]
     pub system_budget_monthly_units: u64,
 
-    /// Monthly USD budget for the system agent. `0.0` disables the
-    /// dollar cap. Default: $50.00.
-    #[serde(default = "default_system_budget_usd")]
-    pub system_budget_monthly_usd: f64,
-
     /// Hard cap on `max_tokens` for auxiliary calls. Defaults to 1024
     /// — these subtasks are *meant* to be short. Capping at construction
     /// time prevents an accidental flagship-sized request from sneaking
@@ -630,9 +625,6 @@ fn default_auxiliary_max_tokens() -> u32 {
 fn default_system_budget_units() -> u64 {
     10_000_000
 }
-fn default_system_budget_usd() -> f64 {
-    50.0
-}
 fn default_retry_max_attempts() -> u32 {
     3
 }
@@ -824,7 +816,6 @@ impl Default for AgentConfig {
             auto_approve_tools: Vec::new(),
             auto_deny_tools: Vec::new(),
             system_budget_monthly_units: default_system_budget_units(),
-            system_budget_monthly_usd: default_system_budget_usd(),
             auxiliary_provider: None,
             auxiliary_model: None,
             auxiliary_max_tokens: default_auxiliary_max_tokens(),
