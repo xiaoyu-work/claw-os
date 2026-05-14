@@ -28,6 +28,7 @@ pub const REGISTERED: &[&str] = &[
     "deepseek",
     "openrouter",
     "ollama",
+    "azure",
     "anthropic",
     "bedrock",
     "gemini",

@@ -51,6 +51,8 @@ pub fn run(args: &[String]) -> Result<Value, String> {
     let mut apply_api_key: Option<String> = None;
     let mut apply_api_key_stdin = false;
     let mut apply_api_key_env: Option<String> = None;
+    let mut apply_base_url: Option<String> = None;
+    let mut apply_api_version: Option<String> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -94,6 +96,20 @@ pub fn run(args: &[String]) -> Result<Value, String> {
                 }
                 apply_api_key_env = Some(args[i].clone());
             }
+            "--base-url" => {
+                i += 1;
+                if i >= args.len() {
+                    return Err("--base-url requires a value".into());
+                }
+                apply_base_url = Some(args[i].clone());
+            }
+            "--api-version" => {
+                i += 1;
+                if i >= args.len() {
+                    return Err("--api-version requires a value".into());
+                }
+                apply_api_version = Some(args[i].clone());
+            }
             other => {
                 if let Some(m) = Modality::parse(other) {
                     if modality.is_some() {
@@ -121,10 +137,12 @@ pub fn run(args: &[String]) -> Result<Value, String> {
         || apply_model.is_some()
         || apply_api_key.is_some()
         || apply_api_key_stdin
-        || apply_api_key_env.is_some();
+        || apply_api_key_env.is_some()
+        || apply_base_url.is_some()
+        || apply_api_version.is_some();
     if apply_flags_set && sub != Some("apply") {
         return Err(
-            "--provider / --model / --api-key{,-stdin,-env} are only valid with the `apply` subcommand"
+            "--provider / --model / --api-key{,-stdin,-env} / --base-url / --api-version are only valid with the `apply` subcommand"
                 .into(),
         );
     }
@@ -178,6 +196,8 @@ pub fn run(args: &[String]) -> Result<Value, String> {
         api_key: apply_api_key,
         api_key_stdin: apply_api_key_stdin,
         api_key_env: apply_api_key_env,
+        base_url: apply_base_url,
+        api_version: apply_api_version,
     };
     match sub {
         Some("status") => status_cmd(modality),
@@ -297,6 +317,8 @@ fn help_doc() -> Value {
             "--api-key VALUE":  "(apply only) Inline API key. Stored in the agent credential namespace.",
             "--api-key-stdin":  "(apply only) Read API key from stdin instead of the command line — preferred to keep keys out of shell history.",
             "--api-key-env E":  "(apply only) Don't store a key; persist a pointer to env var `$E`.",
+            "--base-url URL":   "(apply only) Override the provider's default API endpoint. REQUIRED when --provider azure (Azure has no universal default — point at https://<resource>.openai.azure.com/openai/deployments/<deployment>). Accepted as an advanced override for openai / xai / deepseek / openrouter / ollama.",
+            "--api-version V":  "(apply only) Azure REST API version, e.g. 2024-12-01-preview. When set and --base-url has no `?`, gets appended as `?api-version=V`.",
         },
         "examples": [
             "cos agent setup llm                                                  # wizard for LLM",
@@ -304,6 +326,9 @@ fn help_doc() -> Value {
             "cos agent setup --status                                             # report readiness across all modalities",
             "cos agent setup --providers                                          # JSON catalogue of all providers + models",
             "cos agent setup llm apply --provider openai --model gpt-4o --api-key-stdin  < key.txt",
+            "cos agent setup llm apply --provider azure --model my-deployment \\",
+            "    --base-url https://acme.openai.azure.com/openai/deployments/my-deployment \\",
+            "    --api-version 2024-12-01-preview --api-key-stdin                # Azure OpenAI",
             "cos agent setup tts apply --provider edge --model en-US-AriaNeural   # no key needed",
             "cos agent setup imagegen test                                        # probe configured imagegen provider",
         ],
@@ -502,6 +527,7 @@ fn status_llm() -> Value {
         Ok(_) => Value::Null,
         Err(s) => serde_json::from_str::<Value>(s).unwrap_or_else(|_| json!(s)),
     };
+    let (base_url, api_version) = split_base_url_and_api_version(cfg.base_url.as_deref());
     json!({
         "modality": "llm",
         "ready": ready.is_ok(),
@@ -509,9 +535,46 @@ fn status_llm() -> Value {
         "model": cfg.model,
         "api_key_credential": cfg.api_key_credential,
         "api_key_env": cfg.api_key_env,
+        "base_url": cfg.base_url,
+        "endpoint": base_url,
+        "api_version": api_version,
         "config_path": config_path().display().to_string(),
         "reason": reason,
     })
+}
+
+/// Split a stored `base_url` into its constituent parts so the UI can
+/// pre-fill separate "endpoint" / "API version" inputs without having
+/// to re-parse query strings itself.
+///
+/// Returns `(endpoint_without_query, api_version_value)`. Either side
+/// may be `None`: a `base_url` of `None` produces `(None, None)`; a
+/// `base_url` without a `?api-version=` returns the original URL as
+/// endpoint and `None` for the version.
+fn split_base_url_and_api_version(base_url: Option<&str>) -> (Option<String>, Option<String>) {
+    let Some(raw) = base_url else {
+        return (None, None);
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return (None, None);
+    }
+    let (head, query) = match trimmed.split_once('?') {
+        Some((h, q)) => (h.to_string(), Some(q)),
+        None => (trimmed.to_string(), None),
+    };
+    let api_version = query.and_then(|q| {
+        q.split('&').find_map(|pair| {
+            let mut it = pair.splitn(2, '=');
+            match (it.next(), it.next()) {
+                (Some(k), Some(v)) if k.eq_ignore_ascii_case("api-version") && !v.is_empty() => {
+                    Some(v.to_string())
+                }
+                _ => None,
+            }
+        })
+    });
+    (Some(head), api_version)
 }
 
 fn reset_cmd(modality: Modality) -> Result<Value, String> {
@@ -590,6 +653,55 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
         return Err(format!("out of range: {picked}"));
     }
     let provider = providers[picked - 1].to_string();
+
+    // ---- Step 1b: Azure-only — endpoint + api version ------------------
+    //
+    // Azure has no universal default base URL — every deployment lives
+    // at `https://<resource>.openai.azure.com/openai/deployments/<dep>`
+    // and the REST API requires `?api-version=<version>`. Prompt up
+    // front so the model picker can advise that the model name should
+    // match the deployment name.
+    let mut azure_base_url: Option<String> = None;
+    let mut azure_api_version: Option<String> = None;
+    if provider == "azure" {
+        let _ = writeln!(e);
+        let _ = writeln!(
+            e,
+            "Azure OpenAI: paste the deployment URL from your Azure resource."
+        );
+        let _ = writeln!(
+            e,
+            "(e.g. https://acme.openai.azure.com/openai/deployments/my-deployment)"
+        );
+        let _ = write!(e, "Endpoint: ");
+        let _ = e.flush();
+        let url = read_line()?.trim().to_string();
+        if url.is_empty() {
+            return Err("azure endpoint cannot be empty".into());
+        }
+        azure_base_url = Some(url);
+
+        let _ = writeln!(e);
+        let _ = writeln!(
+            e,
+            "API version (e.g. 2024-12-01-preview). Press Enter to skip"
+        );
+        let _ = writeln!(
+            e,
+            "if your endpoint URL already includes ?api-version=…"
+        );
+        let _ = write!(e, "Version: ");
+        let _ = e.flush();
+        let v = read_line()?.trim().to_string();
+        if !v.is_empty() {
+            azure_api_version = Some(v);
+        }
+        let _ = writeln!(e);
+        let _ = writeln!(
+            e,
+            "Note: under Azure, the model name should match the deployment name above."
+        );
+    }
 
     // ---- Step 2: model ---------------------------------------------------
     // The provider trait's `supported_models()` mostly echoes the
@@ -778,6 +890,25 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
         agent.insert("api_key_env".into(), json!(env_name));
         agent.insert("api_key_credential".into(), Value::Null);
     }
+
+    // Azure deployment URL (+ optional --api-version glue), normalised
+    // through the same helper the non-interactive `apply` uses so the
+    // on-disk shape is identical no matter which entry point persisted
+    // the config.
+    if provider == "azure" {
+        let resolved = resolve_base_url_args(
+            &provider,
+            azure_base_url.as_deref(),
+            azure_api_version.as_deref(),
+        )?;
+        apply_base_url_to_block(agent, resolved.as_deref());
+    } else {
+        // Non-azure providers keep any previously-set override
+        // untouched here — the wizard doesn't ask about base_url for
+        // them. Users wanting an override should use the `apply`
+        // subcommand or edit the config file directly.
+    }
+
     write_config_atomic(&path, &cfg)?;
 
     let _ = writeln!(e);
@@ -1394,6 +1525,8 @@ fn status_media(modality: Modality) -> Value {
     let model = snap.get("model").and_then(|s| s.as_str()).unwrap_or("").to_string();
     let credential = snap.get("api_key_credential").and_then(|s| s.as_str()).map(|s| s.to_string());
     let env = snap.get("api_key_env").and_then(|s| s.as_str()).map(|s| s.to_string());
+    let base_url_raw = snap.get("base_url").and_then(|s| s.as_str()).map(|s| s.to_string());
+    let (endpoint, api_version) = split_base_url_and_api_version(base_url_raw.as_deref());
 
     // Ready iff (provider != none) AND (provider doesn't need a key OR a key is resolvable).
     let provider_choice = spec.providers.iter().find(|p| p.name == provider);
@@ -1431,6 +1564,9 @@ fn status_media(modality: Modality) -> Value {
         "model": model,
         "api_key_credential": credential,
         "api_key_env": env,
+        "base_url": base_url_raw,
+        "endpoint": endpoint,
+        "api_version": api_version,
         "reason": reason,
     })
 }
@@ -1503,6 +1639,7 @@ fn default_env_name(provider: &str) -> String {
         "anthropic" => "ANTHROPIC_API_KEY".into(),
         "openai" => "OPENAI_API_KEY".into(),
         "openai_compat" => "OPENAI_API_KEY".into(),
+        "azure" => "AZURE_OPENAI_API_KEY".into(),
         "gemini" => "GEMINI_API_KEY".into(),
         "bedrock" => "AWS_BEARER_TOKEN_BEDROCK".into(),
         "xai" => "XAI_API_KEY".into(),
@@ -1525,6 +1662,12 @@ struct ApplyArgs {
     api_key: Option<String>,
     api_key_stdin: bool,
     api_key_env: Option<String>,
+    /// Optional custom endpoint. Required for `azure`; accepted as an
+    /// advanced override for the other `openai_compat`-family aliases.
+    base_url: Option<String>,
+    /// Azure REST API version. When set and `base_url` lacks a query
+    /// string, gets appended as `?api-version=<value>` at persist time.
+    api_version: Option<String>,
 }
 
 /// Emit a JSON catalogue of providers + sample models for one or all
@@ -1572,6 +1715,7 @@ fn providers_llm() -> Value {
                 "default_env": default_env_name(name),
                 "models": model_list,
                 "default_model": models.first().map(|m| m.name.to_string()).unwrap_or_default(),
+                "extra_fields": extra_fields_for(name),
             })
         })
         .collect();
@@ -1605,6 +1749,7 @@ fn providers_media(modality: Modality) -> Value {
                 "default_env": p.default_env,
                 "models": models,
                 "default_model": p.default_model,
+                "extra_fields": extra_fields_for(p.name),
             })
         })
         .collect();
@@ -1613,6 +1758,35 @@ fn providers_media(modality: Modality) -> Value {
         "default_provider": spec.default_provider,
         "providers": provs,
     })
+}
+
+/// Per-provider declarative form schema. Empty for providers that need
+/// only model + credential; non-empty for providers like `azure` that
+/// require additional inputs (endpoint URL, API version, …). UIs walk
+/// this list and render appropriate inputs without hard-coding any
+/// per-provider rules.
+fn extra_fields_for(provider: &str) -> Vec<Value> {
+    match provider {
+        "azure" => vec![
+            json!({
+                "key": "base_url",
+                "label": "Azure endpoint",
+                "placeholder": "https://<resource>.openai.azure.com/openai/deployments/<deployment>",
+                "help": "The deployment URL from your Azure OpenAI resource. The model name above must match the deployment name.",
+                "required": true,
+                "secret": false,
+            }),
+            json!({
+                "key": "api_version",
+                "label": "API version",
+                "placeholder": "2024-12-01-preview",
+                "help": "Azure REST API version. Find current versions in the Azure OpenAI docs.",
+                "required": false,
+                "secret": false,
+            }),
+        ],
+        _ => Vec::new(),
+    }
 }
 
 /// Non-interactive write. Validates inputs against the same catalogues
@@ -1664,6 +1838,9 @@ fn apply_llm(args: ApplyArgs) -> Result<Value, String> {
         return Err("--model cannot be empty".into());
     }
 
+    let resolved_base_url =
+        resolve_base_url_args(&provider, args.base_url.as_deref(), args.api_version.as_deref())?;
+
     let needs_cred = provider_needs_credential(&provider);
     let credential_hint = format!("{provider}_api_key");
     let (credential_name, credential_env) =
@@ -1685,6 +1862,7 @@ fn apply_llm(args: ApplyArgs) -> Result<Value, String> {
     agent.insert("provider".into(), json!(provider));
     agent.insert("model".into(), json!(model));
     apply_credential_to_block(agent, credential_name.as_deref(), credential_env.as_deref());
+    apply_base_url_to_block(agent, resolved_base_url.as_deref());
     write_config_atomic(&path, &cfg)?;
 
     Ok(json!({
@@ -1695,6 +1873,7 @@ fn apply_llm(args: ApplyArgs) -> Result<Value, String> {
         "api_key_credential": credential_name,
         "api_key_env": credential_env,
         "key_source": key_source_label(credential_name.as_deref(), credential_env.as_deref(), needs_cred),
+        "base_url": resolved_base_url,
         "config_path": path.display().to_string(),
     }))
 }
@@ -1740,6 +1919,12 @@ fn apply_media(
         return Err("--model cannot be empty".into());
     }
 
+    let resolved_base_url = resolve_base_url_args(
+        provider.name,
+        args.base_url.as_deref(),
+        args.api_version.as_deref(),
+    )?;
+
     let credential_hint = format!("{}_{}_api_key", spec.name, provider.name);
     let (credential_name, credential_env) = resolve_key_args(
         &args,
@@ -1764,6 +1949,7 @@ fn apply_media(
     block.insert("provider".into(), json!(provider.name));
     block.insert("model".into(), json!(model));
     apply_credential_to_block(block, credential_name.as_deref(), credential_env.as_deref());
+    apply_base_url_to_block(block, resolved_base_url.as_deref());
     write_config_atomic(&path, &cfg)?;
 
     Ok(json!({
@@ -1778,6 +1964,7 @@ fn apply_media(
             credential_env.as_deref(),
             provider.needs_credential,
         ),
+        "base_url": resolved_base_url,
         "config_path": path.display().to_string(),
     }))
 }
@@ -1855,6 +2042,65 @@ fn apply_credential_to_block(
     } else {
         block.insert("api_key_credential".into(), Value::Null);
         block.remove("api_key_env");
+    }
+}
+
+/// Validate `--base-url` / `--api-version` for `apply` and return the
+/// final string that should land in `block["base_url"]`. Returns
+/// `Ok(None)` when neither flag was supplied for a non-azure provider
+/// (preserving the prior config entry untouched is the caller's job).
+///
+/// Rules:
+/// - Provider `azure` always requires `--base-url`.
+/// - `--api-version` is only meaningful for `azure`; we accept it on
+///   other providers as a passthrough convenience and append it the same
+///   way, but most users won't ever need it.
+/// - If `--base-url` already contains a `?`, we leave the query alone
+///   and ignore `--api-version` (with a soft warning baked into the
+///   eventual error path — for now we just respect the explicit value).
+fn resolve_base_url_args(
+    provider_name: &str,
+    base_url: Option<&str>,
+    api_version: Option<&str>,
+) -> Result<Option<String>, String> {
+    let trimmed = base_url.map(str::trim).filter(|s| !s.is_empty());
+    if provider_name == "azure" && trimmed.is_none() {
+        return Err(
+            "provider `azure` requires --base-url <DEPLOYMENT_URL> \
+             (e.g. https://<resource>.openai.azure.com/openai/deployments/<deployment>)"
+                .into(),
+        );
+    }
+    let Some(base) = trimmed else {
+        return Ok(None);
+    };
+    let av = api_version.map(str::trim).filter(|s| !s.is_empty());
+    let already_has_query = base.contains('?');
+    let final_url = match av {
+        Some(v) if !already_has_query => format!("{base}?api-version={v}"),
+        Some(_) | None => base.to_string(),
+    };
+    Ok(Some(final_url))
+}
+
+/// Persist `--base-url` decisions into the modality block. Always
+/// produces a deterministic shape so a re-apply can clear a previously
+/// stored value: explicitly setting `null` when the caller decided not
+/// to override and the provider doesn't require it.
+fn apply_base_url_to_block(
+    block: &mut serde_json::Map<String, Value>,
+    base_url: Option<&str>,
+) {
+    match base_url {
+        Some(url) => {
+            block.insert("base_url".into(), json!(url));
+        }
+        None => {
+            // Drop any stale override so subsequent runs fall back to
+            // the alias's default. Use `remove` rather than null so the
+            // on-disk config stays minimal.
+            block.remove("base_url");
+        }
     }
 }
 
@@ -2153,6 +2399,239 @@ mod tests {
         for k in ["llm", "tts", "stt", "imagegen", "embed"] {
             assert!(modalities.contains_key(k), "missing modality `{k}` in status");
         }
+
+        std::env::remove_var("COS_CONFIG_PATH");
+        std::fs::remove_dir_all(&tmp_dir).ok();
+    }
+
+    // ---- Azure first-class support --------------------------------------
+
+    #[test]
+    fn resolve_base_url_appends_api_version_when_missing_query() {
+        let got = resolve_base_url_args(
+            "azure",
+            Some("https://acme.openai.azure.com/openai/deployments/dep"),
+            Some("2024-12-01-preview"),
+        )
+        .unwrap();
+        assert_eq!(
+            got.as_deref(),
+            Some("https://acme.openai.azure.com/openai/deployments/dep?api-version=2024-12-01-preview")
+        );
+    }
+
+    #[test]
+    fn resolve_base_url_preserves_existing_query() {
+        let got = resolve_base_url_args(
+            "azure",
+            Some("https://acme.openai.azure.com/openai/deployments/dep?api-version=2024-12-01-preview&foo=bar"),
+            Some("ignored-because-base-already-has-query"),
+        )
+        .unwrap();
+        assert_eq!(
+            got.as_deref(),
+            Some("https://acme.openai.azure.com/openai/deployments/dep?api-version=2024-12-01-preview&foo=bar")
+        );
+    }
+
+    #[test]
+    fn resolve_base_url_azure_requires_base_url() {
+        let err = resolve_base_url_args("azure", None, Some("2024-12-01-preview")).unwrap_err();
+        assert!(err.contains("azure"), "{err}");
+        assert!(err.contains("--base-url"), "{err}");
+    }
+
+    #[test]
+    fn resolve_base_url_non_azure_accepts_no_override() {
+        let got = resolve_base_url_args("openai", None, None).unwrap();
+        assert!(got.is_none());
+    }
+
+    #[test]
+    fn resolve_base_url_non_azure_accepts_override() {
+        let got = resolve_base_url_args("openai", Some("https://my.proxy/v1"), None).unwrap();
+        assert_eq!(got.as_deref(), Some("https://my.proxy/v1"));
+    }
+
+    #[test]
+    fn split_base_url_parses_api_version_query() {
+        let (endpoint, version) = split_base_url_and_api_version(Some(
+            "https://acme.openai.azure.com/openai/deployments/dep?api-version=2024-12-01-preview",
+        ));
+        assert_eq!(
+            endpoint.as_deref(),
+            Some("https://acme.openai.azure.com/openai/deployments/dep")
+        );
+        assert_eq!(version.as_deref(), Some("2024-12-01-preview"));
+    }
+
+    #[test]
+    fn split_base_url_handles_no_query() {
+        let (endpoint, version) =
+            split_base_url_and_api_version(Some("https://api.openai.com/v1"));
+        assert_eq!(endpoint.as_deref(), Some("https://api.openai.com/v1"));
+        assert!(version.is_none());
+    }
+
+    #[test]
+    fn split_base_url_handles_none() {
+        let (endpoint, version) = split_base_url_and_api_version(None);
+        assert!(endpoint.is_none());
+        assert!(version.is_none());
+    }
+
+    #[test]
+    fn split_base_url_handles_empty_string() {
+        let (endpoint, version) = split_base_url_and_api_version(Some(""));
+        assert!(endpoint.is_none());
+        assert!(version.is_none());
+    }
+
+    #[test]
+    fn split_base_url_handles_query_without_api_version() {
+        let (endpoint, version) =
+            split_base_url_and_api_version(Some("https://api.openai.com/v1?foo=bar"));
+        assert_eq!(endpoint.as_deref(), Some("https://api.openai.com/v1"));
+        assert!(version.is_none());
+    }
+
+    #[test]
+    fn extra_fields_for_azure_lists_endpoint_and_api_version() {
+        let fields = extra_fields_for("azure");
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0]["key"].as_str(), Some("base_url"));
+        assert_eq!(fields[0]["required"].as_bool(), Some(true));
+        assert_eq!(fields[1]["key"].as_str(), Some("api_version"));
+        assert_eq!(fields[1]["required"].as_bool(), Some(false));
+    }
+
+    #[test]
+    fn extra_fields_for_non_azure_is_empty() {
+        assert!(extra_fields_for("openai").is_empty());
+        assert!(extra_fields_for("anthropic").is_empty());
+        assert!(extra_fields_for("mock").is_empty());
+    }
+
+    #[test]
+    fn providers_cmd_llm_includes_azure_with_extra_fields() {
+        let v = providers_cmd(Modality::Llm).expect("providers ok");
+        let providers = v.get("providers").and_then(|p| p.as_array()).expect("providers list");
+        let azure = providers
+            .iter()
+            .find(|p| p["name"] == "azure")
+            .expect("azure provider entry");
+        let extras = azure["extra_fields"].as_array().expect("extra_fields array");
+        assert_eq!(extras.len(), 2);
+        assert_eq!(extras[0]["key"], "base_url");
+        assert_eq!(extras[1]["key"], "api_version");
+        // Non-azure provider: extra_fields present but empty.
+        let openai = providers
+            .iter()
+            .find(|p| p["name"] == "openai")
+            .expect("openai provider entry");
+        assert!(openai["extra_fields"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn azure_apply_without_base_url_errors() {
+        let _g = env_lock();
+        let tmp_dir = std::env::temp_dir().join(format!("cos-setup-test-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+        let cfg_path = tmp_dir.join("config.json");
+        std::env::set_var("COS_CONFIG_PATH", &cfg_path);
+
+        let err = run(&[
+            "llm".into(),
+            "apply".into(),
+            "--provider".into(),
+            "azure".into(),
+            "--model".into(),
+            "my-deployment".into(),
+            "--api-key-env".into(),
+            "__AZURE_TEST_KEY__".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("azure"), "{err}");
+        assert!(err.contains("--base-url"), "{err}");
+
+        std::env::remove_var("COS_CONFIG_PATH");
+        std::fs::remove_dir_all(&tmp_dir).ok();
+    }
+
+    #[test]
+    fn azure_apply_persists_base_url_with_api_version() {
+        let _g = env_lock();
+        let tmp_dir = std::env::temp_dir().join(format!("cos-setup-test-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+        let cfg_path = tmp_dir.join("config.json");
+        std::env::set_var("COS_CONFIG_PATH", &cfg_path);
+
+        let v = run(&[
+            "llm".into(),
+            "apply".into(),
+            "--provider".into(),
+            "azure".into(),
+            "--model".into(),
+            "my-deployment".into(),
+            "--base-url".into(),
+            "https://acme.openai.azure.com/openai/deployments/my-deployment".into(),
+            "--api-version".into(),
+            "2024-12-01-preview".into(),
+            "--api-key-env".into(),
+            "__AZURE_TEST_KEY__".into(),
+        ])
+        .expect("apply ok");
+
+        assert_eq!(v["ok"].as_bool(), Some(true));
+        assert_eq!(v["provider"].as_str(), Some("azure"));
+        assert_eq!(
+            v["base_url"].as_str(),
+            Some("https://acme.openai.azure.com/openai/deployments/my-deployment?api-version=2024-12-01-preview")
+        );
+
+        let text = std::fs::read_to_string(&cfg_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(parsed["agent"]["provider"].as_str(), Some("azure"));
+        assert_eq!(parsed["agent"]["model"].as_str(), Some("my-deployment"));
+        assert_eq!(
+            parsed["agent"]["base_url"].as_str(),
+            Some("https://acme.openai.azure.com/openai/deployments/my-deployment?api-version=2024-12-01-preview")
+        );
+
+        std::env::remove_var("COS_CONFIG_PATH");
+        std::fs::remove_dir_all(&tmp_dir).ok();
+    }
+
+    #[test]
+    fn status_media_reports_base_url_and_api_version_split() {
+        // status_media reads fresh from disk per call (unlike
+        // status_llm which uses the OnceLock-cached config), so we can
+        // exercise the new endpoint/api_version fields here without
+        // racing the global config. Azure isn't a media provider in
+        // the spec catalogue, so simulate the same persisted shape on
+        // a TTS block (the parser is provider-agnostic).
+        let _g = env_lock();
+        let tmp_dir = std::env::temp_dir().join(format!("cos-setup-test-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+        let cfg_path = tmp_dir.join("config.json");
+        std::env::set_var("COS_CONFIG_PATH", &cfg_path);
+        std::fs::write(
+            &cfg_path,
+            r#"{"tts":{"provider":"openai","model":"tts-1","base_url":"https://acme.example.com/v1?api-version=2024-12-01-preview","api_key_env":"__TTS_TEST_KEY__"}}"#,
+        )
+        .unwrap();
+
+        let v = status_cmd(Modality::Tts).expect("status ok");
+        assert_eq!(v["provider"].as_str(), Some("openai"));
+        assert_eq!(
+            v["base_url"].as_str(),
+            Some("https://acme.example.com/v1?api-version=2024-12-01-preview")
+        );
+        assert_eq!(
+            v["endpoint"].as_str(),
+            Some("https://acme.example.com/v1")
+        );
+        assert_eq!(v["api_version"].as_str(), Some("2024-12-01-preview"));
 
         std::env::remove_var("COS_CONFIG_PATH");
         std::fs::remove_dir_all(&tmp_dir).ok();

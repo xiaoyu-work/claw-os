@@ -42,13 +42,19 @@ pub const PROVIDER_NAME: &str = "openai";
 /// Names this provider answers to in the registry. Adding an alias here
 /// only changes the `name()` returned and the default base URL — the
 /// wire format is identical.
-pub const PROVIDER_ALIASES: &[&str] = &["openai", "xai", "deepseek", "openrouter", "ollama"];
+pub const PROVIDER_ALIASES: &[&str] =
+    &["openai", "xai", "deepseek", "openrouter", "ollama", "azure"];
 
 const DEFAULT_OPENAI_BASE: &str = "https://api.openai.com/v1";
 const DEFAULT_XAI_BASE: &str = "https://api.x.ai/v1";
 const DEFAULT_DEEPSEEK_BASE: &str = "https://api.deepseek.com/v1";
 const DEFAULT_OPENROUTER_BASE: &str = "https://openrouter.ai/api/v1";
 const DEFAULT_OLLAMA_BASE: &str = "http://localhost:11434/v1";
+// Azure has no universal default — every deployment lives at
+// `https://<resource>.openai.azure.com/openai/deployments/<deployment>`.
+// We return "" so empty-base callers fall through to a clear
+// configuration error rather than silently 401'ing against api.openai.com.
+const DEFAULT_AZURE_BASE: &str = "";
 
 /// Resolve the default base URL for one of [`PROVIDER_ALIASES`]. Falls
 /// back to OpenAI's URL if the alias is unknown.
@@ -58,8 +64,15 @@ pub fn default_base_url_for(alias: &str) -> &'static str {
         "deepseek" => DEFAULT_DEEPSEEK_BASE,
         "openrouter" => DEFAULT_OPENROUTER_BASE,
         "ollama" => DEFAULT_OLLAMA_BASE,
+        "azure" => DEFAULT_AZURE_BASE,
         _ => DEFAULT_OPENAI_BASE,
     }
+}
+
+/// Whether the alias authenticates via Azure's `api-key:` header
+/// instead of the standard `Authorization: Bearer …`.
+fn alias_uses_api_key_header(alias: &str) -> bool {
+    matches!(alias, "azure")
 }
 
 /// Whether the alias's default base URL is local-only (no API key
@@ -233,12 +246,25 @@ impl Provider for OpenAICompatProvider {
     }
 
     fn is_configured(&self) -> bool {
+        // Azure requires both a key and the deployment URL — no
+        // sensible default base.
+        if self.cfg.alias == "azure" && self.cfg.base_url.is_empty() {
+            return false;
+        }
         self.cfg.api_key.is_some()
             || self.cfg.pool.as_ref().is_some_and(|p| !p.is_empty())
             || alias_is_local_default(&self.cfg.alias)
     }
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
+        if self.cfg.alias == "azure" && self.cfg.base_url.is_empty() {
+            return Err(LlmError::NotConfigured(
+                "azure provider needs `agent.base_url` set to the deployment URL \
+                 (e.g. https://<resource>.openai.azure.com/openai/deployments/<deployment>?api-version=2024-12-01-preview). \
+                 Run `cos agent setup llm apply --provider azure --base-url <URL> --model <DEPLOYMENT> --api-key-stdin`."
+                    .into(),
+            ));
+        }
         let body = wire::build_request_body(&request, &self.cfg.model, false);
 
         // Acquire a key for this call. Pool path takes priority; on
@@ -266,7 +292,11 @@ impl Provider for OpenAICompatProvider {
             .json(&body);
 
         if let Some(key) = bearer {
-            http = http.bearer_auth(key);
+            if alias_uses_api_key_header(&self.cfg.alias) {
+                http = http.header("api-key", key);
+            } else {
+                http = http.bearer_auth(key);
+            }
         }
         for (k, v) in &self.cfg.extra_headers {
             http = http.header(k.as_str(), v.as_str());
@@ -776,7 +806,46 @@ mod tests {
         assert!(default_base_url_for("deepseek").starts_with("https://api.deepseek.com"));
         assert!(default_base_url_for("openrouter").starts_with("https://openrouter.ai"));
         assert!(default_base_url_for("ollama").contains("localhost:11434"));
+        // Azure has no universal default — we return empty so the
+        // wizard/apply layer can refuse the apply with a clear error.
+        assert_eq!(default_base_url_for("azure"), "");
         assert!(default_base_url_for("__unknown__").starts_with("https://api.openai.com"));
+    }
+
+    #[test]
+    fn azure_is_registered_alias() {
+        assert!(is_alias("azure"));
+        assert!(PROVIDER_ALIASES.contains(&"azure"));
+    }
+
+    #[test]
+    fn azure_uses_api_key_header() {
+        assert!(alias_uses_api_key_header("azure"));
+        assert!(!alias_uses_api_key_header("openai"));
+        assert!(!alias_uses_api_key_header("xai"));
+    }
+
+    #[test]
+    fn azure_provider_not_configured_without_base_url() {
+        let mut c = cfg();
+        c.api_key_env = Some("DOES_NOT_EXIST_AZURE_KEY".into());
+        // base_url not set → falls back to default_base_url_for("azure") = ""
+        let provider = OpenAICompatProvider::from_agent_config("azure", "my-deployment", &c);
+        assert!(!provider.is_configured());
+    }
+
+    #[tokio::test]
+    async fn azure_chat_rejects_missing_base_url() {
+        let c = cfg();
+        let provider = OpenAICompatProvider::from_agent_config("azure", "my-deployment", &c);
+        let err = provider.chat(req_text("hi")).await.unwrap_err();
+        match err {
+            LlmError::NotConfigured(msg) => {
+                assert!(msg.contains("azure"), "msg: {msg}");
+                assert!(msg.contains("base_url"), "msg: {msg}");
+            }
+            other => panic!("expected NotConfigured, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1235,6 +1304,72 @@ mod tests {
 
         let _ = handle.await;
         std::env::remove_var("COS_TEST_BAD_KEY");
+    }
+
+    #[tokio::test]
+    async fn azure_alias_sends_api_key_header_not_bearer() {
+        let response_body = r#"{
+            "id":"x","object":"chat.completion","created":1,
+            "model":"my-deployment",
+            "choices":[{"index":0,"finish_reason":"stop",
+                "message":{"role":"assistant","content":"hi"}}],
+            "usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}
+        }"#;
+        let (base_url, handle) = spawn_one_shot_mock("HTTP/1.1 200 OK", response_body).await;
+        // base_url ends in `/v1` from the mock helper — for the
+        // assertion that matters (which header is sent) the exact
+        // path doesn't matter, just that the request goes out.
+
+        let mut c = AgentConfig::default();
+        c.base_url = Some(base_url);
+        c.api_key_env = Some("COS_TEST_AZURE_KEY".into());
+        c.request_timeout = 5;
+        std::env::set_var("COS_TEST_AZURE_KEY", "az-secret-123");
+
+        let provider = OpenAICompatProvider::from_agent_config("azure", "my-deployment", &c);
+        let _ = provider.chat(req_text("hi")).await;
+
+        let request_bytes = handle.await.unwrap();
+        let request = String::from_utf8_lossy(&request_bytes);
+        let lower = request.to_lowercase();
+        assert!(
+            lower.contains("api-key: az-secret-123"),
+            "expected Azure api-key header, got headers:\n{}",
+            request
+        );
+        assert!(
+            !lower.contains("authorization: bearer"),
+            "Azure should not send Authorization: Bearer, got headers:\n{}",
+            request
+        );
+
+        std::env::remove_var("COS_TEST_AZURE_KEY");
+    }
+
+    #[tokio::test]
+    async fn openai_alias_still_sends_bearer_not_api_key() {
+        let response_body = r#"{
+            "id":"x","object":"chat.completion","created":1,
+            "model":"gpt-4o-mini",
+            "choices":[{"index":0,"finish_reason":"stop",
+                "message":{"role":"assistant","content":"hi"}}]
+        }"#;
+        let (base_url, handle) = spawn_one_shot_mock("HTTP/1.1 200 OK", response_body).await;
+
+        let mut c = AgentConfig::default();
+        c.base_url = Some(base_url);
+        c.api_key_env = Some("COS_TEST_OPENAI_BEARER_KEY".into());
+        c.request_timeout = 5;
+        std::env::set_var("COS_TEST_OPENAI_BEARER_KEY", "sk-openai");
+
+        let provider = OpenAICompatProvider::from_agent_config("openai", "gpt-4o-mini", &c);
+        let _ = provider.chat(req_text("hi")).await;
+
+        let request = String::from_utf8_lossy(&handle.await.unwrap()).to_lowercase();
+        assert!(request.contains("authorization: bearer sk-openai"));
+        assert!(!request.contains("api-key: "));
+
+        std::env::remove_var("COS_TEST_OPENAI_BEARER_KEY");
     }
 
     #[tokio::test]
