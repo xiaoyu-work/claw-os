@@ -18,6 +18,14 @@ Execute implementation plans by dispatching fresh subagents per task with system
 
 **Core principle:** Fresh subagent per task + two-stage review (spec then quality) = high quality, fast iteration.
 
+> **Runtime note (ClawOS):** The `delegate_task(...)` calls shown below are the
+> upstream Hermes primitive. ClawOS does not yet expose a kernel-level
+> `delegate_task` tool. Until it does, treat the code blocks as the *contract*
+> the agent should follow when delegation is wired up: same context-isolation
+> principle, same 2-stage review. If you need to execute this skill today, run
+> the implementer + reviewer phases sequentially in your own context, taking
+> care to discard intermediate scratch between tasks.
+
 ## When to Use
 
 Use this skill when:

@@ -4,10 +4,12 @@ Base URL: `https://api.github.com`
 
 All requests need: `-H "Authorization: token $GITHUB_TOKEN"`
 
-Use the `gh-env.sh` helper to set `$GITHUB_TOKEN`, `$GH_OWNER`, `$GH_REPO` automatically:
+Use the kernel KV store to populate `$GITHUB_TOKEN` for `curl` calls
+(capability-gated under `data.kv.read`):
 ```bash
-source "${HERMES_HOME:-$HOME/.hermes}/skills/github/github-auth/scripts/gh-env.sh"
+GITHUB_TOKEN=$(cos kv get github_token)
 ```
+Owner/repo can be derived from the current git remote (`git remote get-url origin`).
 
 ## Repositories
 

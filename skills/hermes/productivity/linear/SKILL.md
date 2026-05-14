@@ -19,7 +19,14 @@ Manage Linear issues, projects, and teams directly via the GraphQL API using `cu
 ## Setup
 
 1. Get a personal API key from **Linear Settings > API > Personal API keys**
-2. Set `LINEAR_API_KEY` in your environment (via `hermes setup` or your env config)
+2. Store it via the kernel KV store (capability-gated under `data.kv.write`):
+   ```
+   cos kv set linear_api_key lin_api_your_key_here
+   ```
+   then expose it for curl with:
+   ```
+   export LINEAR_API_KEY=$(cos kv get linear_api_key)
+   ```
 
 ## API Basics
 
