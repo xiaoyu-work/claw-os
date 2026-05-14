@@ -487,7 +487,9 @@ pub(crate) mod wire {
             messages.push(serde_json::json!({ "role": "system", "content": sys }));
         }
         for m in &request.messages {
-            messages.push(message_to_json(m));
+            for v in message_to_json_many(m) {
+                messages.push(v);
+            }
         }
 
         let tools: Vec<serde_json::Value> = request.tools.iter().map(tool_to_json).collect();
@@ -554,26 +556,59 @@ pub(crate) mod wire {
     }
 
     fn message_to_json(m: &crate::agent::llm::Message) -> serde_json::Value {
+        // Back-compat single-output wrapper for tests that pre-date
+        // the multi-tool-result fan-out. Returns the first emitted
+        // wire message; the request path uses `message_to_json_many`
+        // directly so multi-result messages are handled correctly.
+        let mut all = message_to_json_many(m);
+        if all.is_empty() {
+            serde_json::json!({"role": role_to_str(m.role), "content": ""})
+        } else {
+            all.remove(0)
+        }
+    }
+
+    /// Translate one runtime Message into one or more OpenAI-style
+    /// wire messages.
+    ///
+    /// OpenAI's schema requires that each tool result is its own
+    /// message with `role=tool` + `tool_call_id`. The runtime
+    /// aggregates all tool results for a given assistant turn into a
+    /// single `User` message holding `Vec<ContentBlock::ToolResult>`
+    /// (see `runtime/turn.rs`). Translating that to a single wire
+    /// message would silently drop the second+ ToolResult, leaving
+    /// the conversation history malformed (assistant.tool_calls with
+    /// no matching tool messages) — which Azure rejects with a 400.
+    ///
+    /// We fan out: a User message that consists *only* of
+    /// ToolResult blocks becomes N separate `role=tool` messages
+    /// preserving their order. All other messages map 1:1.
+    fn message_to_json_many(m: &crate::agent::llm::Message) -> Vec<serde_json::Value> {
         let role = role_to_str(m.role);
 
-        // Tool result: each ToolResult block becomes its own message with
-        // `role=tool` + tool_call_id. OpenAI's schema requires one tool
-        // message per tool call. We collapse to a single message here when
-        // the input has only one ToolResult; otherwise the caller must
-        // pre-split (the runtime already does).
-        if let Some(ContentBlock::ToolResult {
-            tool_use_id,
-            content,
-            ..
-        }) = m.content.first()
+        // Multi-tool-result fan-out: any message whose blocks are
+        // *all* ToolResult is split into N tool messages.
+        if !m.content.is_empty()
+            && m.content
+                .iter()
+                .all(|b| matches!(b, ContentBlock::ToolResult { .. }))
         {
-            if m.content.len() == 1 {
-                return serde_json::json!({
-                    "role": "tool",
-                    "tool_call_id": tool_use_id,
-                    "content": content,
-                });
-            }
+            return m
+                .content
+                .iter()
+                .filter_map(|b| match b {
+                    ContentBlock::ToolResult {
+                        tool_use_id,
+                        content,
+                        ..
+                    } => Some(serde_json::json!({
+                        "role": "tool",
+                        "tool_call_id": tool_use_id,
+                        "content": content,
+                    })),
+                    _ => None,
+                })
+                .collect();
         }
 
         let mut text_parts: Vec<String> = Vec::new();
@@ -592,12 +627,16 @@ pub(crate) mod wire {
                     }));
                 }
                 ContentBlock::ToolResult { .. } => {
-                    // Already handled above for the single-block case.
+                    // Pure-tool-result messages were fanned out above.
+                    // A mixed message containing a ToolResult would
+                    // be malformed input; we drop the result here
+                    // rather than silently emit a broken user
+                    // message. (Should not happen with the current
+                    // runtime.)
                 }
                 ContentBlock::Image { media_type, data } => {
-                    // OpenAI vision: send as content list with image_url.
                     text_parts.push(format!("[image {} base64 attached]", media_type));
-                    let _ = data; // future: emit as { type: image_url } block
+                    let _ = data;
                 }
             }
         }
@@ -612,7 +651,7 @@ pub(crate) mod wire {
         if !tool_calls.is_empty() {
             obj.insert("tool_calls".into(), serde_json::Value::Array(tool_calls));
         }
-        serde_json::Value::Object(obj)
+        vec![serde_json::Value::Object(obj)]
     }
 
     fn tool_to_json(t: &Tool) -> serde_json::Value {
@@ -1137,6 +1176,62 @@ mod tests {
         assert_eq!(tool_msg["role"], "tool");
         assert_eq!(tool_msg["tool_call_id"], "call_1");
         assert_eq!(tool_msg["content"], "{\"ok\":true}");
+    }
+
+    #[test]
+    fn body_fans_out_multiple_tool_results_into_separate_tool_messages() {
+        // Regression for Azure 400 "tool_call_ids did not have
+        // response messages" when the assistant calls multiple
+        // tools in one turn. The runtime aggregates all tool
+        // results into a single User message containing several
+        // ToolResult blocks; the wire serializer must emit each
+        // one as its own `role=tool` message with the matching
+        // tool_call_id, otherwise the conversation history is
+        // malformed.
+        let mut r = req_text("inventory");
+        r.messages.push(crate::agent::llm::Message {
+            role: Role::Assistant,
+            content: vec![
+                ContentBlock::ToolUse {
+                    id: "call_A".into(),
+                    name: "mounts".into(),
+                    input: serde_json::json!({}),
+                },
+                ContentBlock::ToolUse {
+                    id: "call_B".into(),
+                    name: "recent".into(),
+                    input: serde_json::json!({"limit": 50}),
+                },
+            ],
+        });
+        r.messages.push(crate::agent::llm::Message {
+            role: Role::User,
+            content: vec![
+                ContentBlock::ToolResult {
+                    tool_use_id: "call_A".into(),
+                    is_error: false,
+                    content: "{\"mounts\":[]}".into(),
+                },
+                ContentBlock::ToolResult {
+                    tool_use_id: "call_B".into(),
+                    is_error: false,
+                    content: "{\"files\":[]}".into(),
+                },
+            ],
+        });
+        let body = wire::build_request_body(&r, "m", false);
+        let msgs = body["messages"].as_array().expect("messages array");
+        // system + user "inventory" + assistant with two tool_calls
+        // + two role=tool messages = 5 total.
+        assert_eq!(msgs.len(), 5, "got: {msgs:?}");
+        let tool_a = &msgs[3];
+        let tool_b = &msgs[4];
+        assert_eq!(tool_a["role"], "tool");
+        assert_eq!(tool_a["tool_call_id"], "call_A");
+        assert_eq!(tool_a["content"], "{\"mounts\":[]}");
+        assert_eq!(tool_b["role"], "tool");
+        assert_eq!(tool_b["tool_call_id"], "call_B");
+        assert_eq!(tool_b["content"], "{\"files\":[]}");
     }
 
     #[test]
