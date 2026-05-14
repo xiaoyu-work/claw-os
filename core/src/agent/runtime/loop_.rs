@@ -676,18 +676,50 @@ pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
     }
 }
 
-/// Translate `cfg.mcp_servers` into [`McpServerSpec`]s and attach each
-/// enabled entry. Returns the live handles (drop terminates).
+/// Translate `cfg.mcp_servers` into [`McpServerSpec`]s, optionally
+/// merge in specs discovered from XDG `claw/agent-api/*.json`
+/// manifests, and attach each enabled entry. Returns the live handles
+/// (drop terminates the children).
+///
+/// Merge policy: configured servers take precedence on `name`
+/// collisions. Discovered manifests sharing a `name` with a
+/// configured server (or with each other) are skipped with a
+/// `tracing::warn!`.
 async fn attach_mcp_servers(
     tools: &mut ToolRegistry,
     cfg: &AgentConfig,
 ) -> Vec<crate::agent::tools::mcp::integration::McpServerHandle> {
-    use crate::agent::tools::mcp::integration::{attach_all, McpServerSpec};
-    if cfg.mcp_servers.is_empty() {
+    use crate::agent::tools::mcp::discover;
+    use crate::agent::tools::mcp::integration::attach_all;
+    use std::path::PathBuf;
+
+    let configured = configured_specs(cfg);
+
+    let discovered = if cfg.agent_api_discovery_enabled {
+        let paths: Option<Vec<PathBuf>> = if cfg.agent_api_paths.is_empty() {
+            None
+        } else {
+            Some(cfg.agent_api_paths.iter().map(PathBuf::from).collect())
+        };
+        discover::discover(paths.as_deref())
+    } else {
+        Vec::new()
+    };
+
+    let specs = merge_mcp_specs(configured, discovered);
+    if specs.is_empty() {
         return Vec::new();
     }
-    let specs: Vec<McpServerSpec> = cfg
-        .mcp_servers
+    attach_all(&specs, tools).await
+}
+
+/// Build [`McpServerSpec`]s from the `[[agent.mcp_servers]]` config
+/// block, skipping disabled entries.
+fn configured_specs(
+    cfg: &AgentConfig,
+) -> Vec<crate::agent::tools::mcp::integration::McpServerSpec> {
+    use crate::agent::tools::mcp::integration::McpServerSpec;
+    cfg.mcp_servers
         .iter()
         .filter(|s| s.enabled)
         .map(|s| McpServerSpec {
@@ -698,11 +730,31 @@ async fn attach_mcp_servers(
             cwd: s.cwd.clone(),
             timeout_secs: s.timeout_secs,
         })
-        .collect();
-    if specs.is_empty() {
-        return Vec::new();
+        .collect()
+}
+
+/// Merge configured + discovered specs into a single attach list.
+/// Configured wins on `name` collisions; discovered duplicates among
+/// themselves are dropped with a warning so two adapter packages
+/// racing for the same prefix don't silently clobber each other.
+fn merge_mcp_specs(
+    mut configured: Vec<crate::agent::tools::mcp::integration::McpServerSpec>,
+    discovered: Vec<crate::agent::tools::mcp::integration::McpServerSpec>,
+) -> Vec<crate::agent::tools::mcp::integration::McpServerSpec> {
+    use std::collections::HashSet;
+    let mut taken: HashSet<String> = configured.iter().map(|s| s.name.clone()).collect();
+    for s in discovered {
+        if taken.contains(&s.name) {
+            tracing::warn!(
+                "agent-api: skipping discovered server `{}` (name already used)",
+                s.name
+            );
+            continue;
+        }
+        taken.insert(s.name.clone());
+        configured.push(s);
     }
-    attach_all(&specs, tools).await
+    configured
 }
 
 /// Crate-public re-export of [`attach_mcp_servers`] so the
@@ -2396,5 +2448,81 @@ mod tests {
         if let Some(v) = prev {
             std::env::set_var("COS_AGENT_BACKGROUND_DRAIN_SECS", v);
         }
+    }
+
+    fn spec(name: &str, cmd: &str) -> crate::agent::tools::mcp::integration::McpServerSpec {
+        crate::agent::tools::mcp::integration::McpServerSpec {
+            name: name.into(),
+            command: cmd.into(),
+            args: Vec::new(),
+            env: std::collections::HashMap::new(),
+            cwd: None,
+            timeout_secs: 30,
+        }
+    }
+
+    #[test]
+    fn merge_specs_keeps_both_when_no_collision() {
+        let merged = merge_mcp_specs(vec![spec("a", "/bin/a")], vec![spec("b", "/bin/b")]);
+        let names: Vec<&str> = merged.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn merge_specs_configured_wins_on_collision() {
+        let merged = merge_mcp_specs(
+            vec![spec("dup", "/bin/configured")],
+            vec![spec("dup", "/bin/discovered")],
+        );
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].command, "/bin/configured");
+    }
+
+    #[test]
+    fn merge_specs_drops_discovered_duplicates_among_themselves() {
+        let merged = merge_mcp_specs(
+            vec![],
+            vec![spec("x", "/first"), spec("x", "/second")],
+        );
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].command, "/first");
+    }
+
+    #[test]
+    fn merge_specs_preserves_relative_order_configured_then_discovered() {
+        let merged = merge_mcp_specs(
+            vec![spec("c1", "/bin/c1"), spec("c2", "/bin/c2")],
+            vec![spec("d1", "/bin/d1"), spec("d2", "/bin/d2")],
+        );
+        let names: Vec<&str> = merged.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["c1", "c2", "d1", "d2"]);
+    }
+
+    #[test]
+    fn configured_specs_skips_disabled() {
+        let mut cfg = AgentConfig::default();
+        cfg.mcp_servers = vec![
+            crate::config::McpServerConfig {
+                name: "on".into(),
+                command: "/bin/on".into(),
+                args: vec![],
+                env: std::collections::HashMap::new(),
+                cwd: None,
+                enabled: true,
+                timeout_secs: 30,
+            },
+            crate::config::McpServerConfig {
+                name: "off".into(),
+                command: "/bin/off".into(),
+                args: vec![],
+                env: std::collections::HashMap::new(),
+                cwd: None,
+                enabled: false,
+                timeout_secs: 30,
+            },
+        ];
+        let got = configured_specs(&cfg);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].name, "on");
     }
 }

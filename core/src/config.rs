@@ -323,6 +323,23 @@ pub struct AgentConfig {
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
 
+    /// Whether to scan XDG directories for `claw.agent-api/v1` manifests
+    /// and attach them alongside `mcp_servers` at startup. Defaults to
+    /// `true` so an adapter package dropped under
+    /// `/usr/share/claw/agent-api/` Just Works without an extra config
+    /// edit. Set to `false` to lock the agent down to only the
+    /// servers explicitly listed in `mcp_servers`.
+    #[serde(default = "default_true")]
+    pub agent_api_discovery_enabled: bool,
+
+    /// Override the discovery search dirs. Empty / unset falls back
+    /// to the standard XDG lookup (`$XDG_DATA_HOME/claw/agent-api/`
+    /// + each `$XDG_DATA_DIRS/claw/agent-api/`). Used by tests and
+    /// for in-repo development where adapters live next to the source.
+    #[serde(default)]
+    pub agent_api_paths: Vec<String>,
+
+
     // -- AWS Bedrock credentials -----------------------------------------
     //
     // These fields are only consumed by the `bedrock` provider. They
@@ -842,6 +859,8 @@ impl Default for AgentConfig {
             pool_strategy: default_pool_strategy(),
             pool_cooldown_secs: default_pool_cooldown_secs(),
             mcp_servers: Vec::new(),
+            agent_api_discovery_enabled: true,
+            agent_api_paths: Vec::new(),
             aws_region: None,
             aws_access_key_credential: None,
             aws_access_key_env: None,
