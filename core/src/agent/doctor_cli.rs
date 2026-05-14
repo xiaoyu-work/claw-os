@@ -129,7 +129,7 @@ pub fn doctor_cmd(args: &[String]) -> Result<Value, String> {
     let run_log = if quick {
         json!({"status": "skipped", "reason": "--quick"})
     } else {
-        check_log_file(&paths::llm_run_log_path(), "run_log")
+        check_log_file(&paths::ai_run_log_path(), "run_log")
     };
     let usage = if quick {
         json!({"status": "skipped", "reason": "--quick"})

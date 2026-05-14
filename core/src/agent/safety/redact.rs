@@ -16,7 +16,7 @@
 //!      next chat request, they ship to the cloud provider.
 //!   2. **Run logs / audit trails** persisted to disk. If the model
 //!      ever reasoned about a secret out loud, the secret ends up in
-//!      `llm.jsonl`.
+//!      `ai.jsonl`.
 //!   3. **Memory FTS** — secrets land in `memory.db` and become
 //!      searchable forever.
 //!

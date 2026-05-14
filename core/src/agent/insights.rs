@@ -2,7 +2,7 @@
 //! human-readable summaries for `cos agent status`, periodic
 //! reports, and budget enforcement decisions.
 //!
-//! Reads from `paths::llm_run_log_path()` (or any path the caller
+//! Reads from `paths::ai_run_log_path()` (or any path the caller
 //! supplies). All aggregation is in-memory and dependency-free
 //! beyond `serde_json`. The log file is opened read-only; this
 //! module never mutates it.
@@ -129,7 +129,7 @@ impl InsightsReport {
 
     /// Convenience: read the default cos run-log path.
     pub fn from_default() -> Self {
-        Self::from_path(&crate::paths::llm_run_log_path())
+        Self::from_path(&crate::paths::ai_run_log_path())
     }
 
     /// Per-session aggregation (records with `session_id == None`
@@ -374,6 +374,9 @@ mod tests {
             finish_reason: "stop".to_string(),
             status: "ok".to_string(),
             error: None,
+            decision: "allowed".to_string(),
+            denial_reason: None,
+            app_id: None,
         });
         assert_eq!(b.average_duration_ms(), Some(200));
         let empty = UsageBucket::default();

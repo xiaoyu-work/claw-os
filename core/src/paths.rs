@@ -215,13 +215,16 @@ pub fn agent_runtime_socket() -> PathBuf {
     runtime_dir().join("agent.sock")
 }
 
-/// Append-only JSONL stream of per-LLM-call run records (Phase 2.4).
-/// Each line captures provider/model/engine_name/engine_version/
-/// duration/usage/finish_reason for reproducibility and debugging.
-/// Distinct from `audit.rs` which logs the parent `cos <app> <cmd>`
+/// Append-only JSONL stream of per-AI-call run records (Phase 2.4,
+/// generalised in Phase 8 to cover every modality — chat, embed,
+/// image, audio, vision). Each line captures provider/model/
+/// engine_name/engine_version/duration/usage/finish_reason plus a
+/// `decision` ("allowed"|"denied") + `denial_reason` so the gate's
+/// rejection attempts show up alongside successful calls. Distinct
+/// from `audit.rs` which logs the parent `cos <app> <cmd>`
 /// invocation; one CLI call may produce many run-record lines.
-pub fn llm_run_log_path() -> PathBuf {
-    log_dir().join("llm.jsonl")
+pub fn ai_run_log_path() -> PathBuf {
+    log_dir().join("ai.jsonl")
 }
 
 #[cfg(test)]

@@ -1,12 +1,13 @@
-//! `cos agent run-log` — query the per-LLM-call run log.
+//! `cos agent run-log` — query the per-AI-call run log.
 //!
 //! [`crate::agent::llm::run_log`] writes one JSONL record per
-//! `provider.chat(...)` invocation to `<log_dir>/llm.jsonl`. That's a
-//! finer-grained stream than the turn-level audit log queried by
-//! [`super::audit_cli`] (one `cos agent ask` invocation produces N
-//! turns, and each turn is exactly one LLM call). For diagnosing bad
-//! answers and reproducing them on a specific engine version, the
-//! per-call stream is what you want.
+//! `provider.chat(...)` invocation (and per gate denial) to
+//! `<log_dir>/ai.jsonl`. That's a finer-grained stream than the
+//! turn-level audit log queried by [`super::audit_cli`] (one
+//! `cos agent ask` invocation produces N turns, and each turn is
+//! exactly one AI call). For diagnosing bad answers and reproducing
+//! them on a specific engine version, the per-call stream is what
+//! you want.
 //!
 //! Subcommands (all output JSON to stdout):
 //!
@@ -344,7 +345,7 @@ fn resolve_path(args: &[String]) -> Result<PathBuf, String> {
     if let Some(p) = parse_string_opt(args, "--path") {
         Ok(PathBuf::from(p))
     } else {
-        Ok(crate::paths::llm_run_log_path())
+        Ok(crate::paths::ai_run_log_path())
     }
 }
 
@@ -417,7 +418,7 @@ mod tests {
 
     fn fixture(records: &[Value]) -> (TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("llm.jsonl");
+        let path = dir.path().join("ai.jsonl");
         let mut f = fs::File::create(&path).unwrap();
         for r in records {
             writeln!(f, "{}", serde_json::to_string(r).unwrap()).unwrap();
@@ -478,7 +479,7 @@ mod tests {
     #[test]
     fn empty_args_default_to_summary() {
         let v = run_log_cmd(&[]).unwrap();
-        // The default summary returns the canonical llm.jsonl path
+        // The default summary returns the canonical ai.jsonl path
         // — we don't assert on the path because it depends on env.
         assert!(v.get("path").is_some());
         assert!(v.get("calls").is_some());
@@ -605,7 +606,7 @@ mod tests {
     #[test]
     fn summary_skips_malformed_lines() {
         let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("llm.jsonl");
+        let p = dir.path().join("ai.jsonl");
         let mut f = fs::File::create(&p).unwrap();
         writeln!(
             f,

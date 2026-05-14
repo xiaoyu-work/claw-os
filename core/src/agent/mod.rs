@@ -912,7 +912,7 @@ fn insights_cmd(args: &[String]) -> Result<Value, String> {
     use insights::InsightsFilter;
 
     let sub = args.first().map(|s| s.as_str()).unwrap_or("overall");
-    let path = crate::paths::llm_run_log_path();
+    let path = crate::paths::ai_run_log_path();
 
     // Parse trailing flags shared across all three sub-verbs.
     // For "recent" the optional N positional must come first
@@ -7256,7 +7256,7 @@ async fn spawn_mcp_child(
 
 /// `cos agent usage [overall|provider <name>|model <name>|session <id>]`
 /// `[--since <ISO>] [--until <ISO>] [--ok|--error]` — filtered
-/// aggregation over `llm.jsonl`. Mirrors `agent insights overall` for
+/// aggregation over `ai.jsonl`. Mirrors `agent insights overall` for
 /// the unfiltered case but adds the AND-combined filter set from
 /// [`crate::agent::llm::usage::UsageQuery`].
 fn usage_cmd(args: &[String]) -> Result<Value, String> {

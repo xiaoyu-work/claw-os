@@ -38,8 +38,9 @@ use futures_util::stream::BoxStream;
 
 use crate::agent::llm::{
     self,
+    run_log::{self, LlmRunRecord},
     types::{ChatRequest as LlmChatRequest, ChatResponse as LlmChatResponse, ContentBlock,
-            EngineInfo, Message, Role, StreamEvent},
+            EngineInfo, FinishReason, Message, Role, StreamEvent},
     Provider as LlmProvider, Result as LlmResult,
 };
 use crate::agent::safety::redact::Redactor;
@@ -175,8 +176,75 @@ pub fn chat_blocking(req: ChatRequest) -> Result<ChatResult, AiError> {
     rt.block_on(chat(req))
 }
 
-/// Async entry point. Performs the full gate sequence.
+/// Async entry point. Performs the full gate sequence and emits a
+/// per-call record to `<log_dir>/ai.jsonl` for **every** outcome —
+/// allowed (status=ok or status=error after the provider runs) and
+/// denied (status=denied with a stable `denial_reason` token).
 pub async fn chat(req: ChatRequest) -> Result<ChatResult, AiError> {
+    let started = std::time::Instant::now();
+    let result = chat_inner(&req).await;
+    let duration_ms = started.elapsed().as_millis() as u64;
+
+    match &result {
+        Ok(ok) => {
+            let rec = LlmRunRecord::from_success(
+                &ok.provider,
+                &ok.model,
+                None,
+                FinishReason::Stop,
+                &llm::types::Usage {
+                    input_tokens: ok.usage.input_tokens,
+                    output_tokens: ok.usage.output_tokens,
+                    ..Default::default()
+                },
+                duration_ms,
+                None,
+            )
+            .with_app(&req.app_id);
+            run_log::record(&rec);
+        }
+        Err(err) => {
+            let rec = LlmRunRecord::from_denial(
+                &req.app_id,
+                req.model.as_deref().unwrap_or(""),
+                denial_reason_token(err),
+                &err.to_string(),
+                duration_ms,
+                None,
+            );
+            run_log::record(&rec);
+        }
+    }
+
+    result
+}
+
+/// Stable, lower-cased machine token classifying a gate denial. Kept
+/// in lockstep with the [`AiError`] variants — operators and tests
+/// rely on the exact spellings, so don't rename without updating the
+/// grep'able doc on [`LlmRunRecord::denial_reason`].
+fn denial_reason_token(err: &AiError) -> &'static str {
+    match err {
+        AiError::UnknownApp(_) => "unknown_app",
+        AiError::NoAiPolicy { .. } => "no_ai_policy",
+        AiError::UnknownVerb(_) => "unknown_verb",
+        AiError::BadOrigin(_) => "bad_origin",
+        AiError::OriginNotAllowed { .. } => "origin_not_allowed",
+        AiError::UntrustedVerbRequired { .. } => "untrusted_verb_required",
+        AiError::ModelNotAllowed { .. } => "model_not_allowed",
+        AiError::NoDefaultModel(_) => "no_default_model",
+        AiError::Denied(_) => "caps_denied",
+        AiError::Budget(_) => "budget_exceeded",
+        AiError::Provider(_) => "provider_error",
+        AiError::Safety(_) => "safety_block",
+        AiError::Internal(_) => "internal",
+    }
+}
+
+/// Inner gate sequence. Returns the structured error variants so
+/// [`chat`] can map them to a stable `denial_reason` for the audit
+/// stream before the caller sees them.
+async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
     // 1. Locate the app and its AI policy.
     let app = lookup_app(&req.app_id)?;
     let policy = app

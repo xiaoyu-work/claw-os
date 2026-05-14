@@ -1,27 +1,32 @@
-//! Per-LLM-call run record — Phase 2.4 audit trail.
+//! Per-AI-call run record — Phase 2.4 audit trail, generalised in
+//! Phase 8 to cover all modalities (chat, embed, image, audio,
+//! vision).
 //!
-//! Every successful or failed `provider.chat(...)` call appends a JSON
-//! line to `<log_dir>/llm.jsonl` capturing:
+//! Every successful, errored, **or denied** AI call appends a JSON
+//! line to `<log_dir>/ai.jsonl` capturing:
 //!
 //!   - timestamp / trace_id / session_id
 //!   - provider name + model id
 //!   - engine_name + engine_version (for local engines; cloud → null)
 //!   - latency, token usage, finish_reason, error
+//!   - decision (`"allowed"` | `"denied"`) + denial_reason
 //!
 //! ## Why a separate stream from `audit.rs`?
 //!
 //! `audit.rs` logs ONE record per `cos <app> <cmd>` invocation. A
-//! single `cos agent ask` invocation can produce many LLM calls (one
+//! single `cos agent ask` invocation can produce many AI calls (one
 //! per turn). Operators need granular per-call records to diagnose
 //! "this answer was bad" issues — knowing the exact engine version
 //! that produced any given answer is essential for reproducibility.
+//! The gate also emits a record for every **denied** call so abuse
+//! attempts are visible, not just successful invocations.
 //!
 //! ## Test isolation
 //!
 //! In `#[cfg(test)]` builds, [`record`] is a no-op. Existing
 //! `agent::runtime::*` tests use mock providers that exercise
 //! `run_turn`; without this guard they'd start writing to the host's
-//! `<log_dir>/llm.jsonl`. To unit-test the actual write path, use
+//! `<log_dir>/ai.jsonl`. To unit-test the actual write path, use
 //! [`record_to_path`] which takes an explicit destination.
 //!
 //! ## Best-effort writes
@@ -37,7 +42,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{EngineInfo, FinishReason, Usage};
 
-/// Schema for one line of `<log_dir>/llm.jsonl`.
+/// Schema for one line of `<log_dir>/ai.jsonl`.
 ///
 /// Fields use `Option` for "not applicable" (e.g. cloud providers
 /// don't emit `engine_name`/`engine_version`). `serde(default)` keeps
@@ -96,19 +101,50 @@ pub struct LlmRunRecord {
     #[serde(default)]
     pub cache_write_tokens: u32,
 
-    /// `"stop" | "length" | "tool_use" | "refusal" | "content_filter" | "other"`.
+    /// `"stop" | "length" | "tool_use" | "refusal" | "content_filter" | "other"`
+    /// for allowed calls. `"denied"` when the gate refused.
     pub finish_reason: String,
 
-    /// `"ok" | "error"`.
+    /// `"ok" | "error" | "denied"`. `"ok"` is the only fully
+    /// successful state; `"error"` covers post-gate provider errors;
+    /// `"denied"` matches `decision = "denied"`.
     pub status: String,
 
     /// Error message when `status == "error"`.
     #[serde(default)]
     pub error: Option<String>,
+
+    /// `"allowed"` if the App–AI gate let the request through (regardless
+    /// of whether the provider then succeeded); `"denied"` if the gate
+    /// rejected it before the provider was contacted. Defaults to
+    /// `"allowed"` so log lines written before this field existed
+    /// continue to parse as successful gate-pass calls.
+    #[serde(default = "default_decision")]
+    pub decision: String,
+
+    /// Short stable token describing **why** the gate denied
+    /// (`"no_ai_policy" | "unknown_verb" | "bad_origin" |
+    /// "origin_not_allowed" | "untrusted_verb_required" |
+    /// "model_not_allowed" | "no_default_model" | "caps_denied" |
+    /// "budget_exceeded" | "safety_block" | "unknown_app" |
+    /// "internal"`). `None` when `decision == "allowed"`.
+    #[serde(default)]
+    pub denial_reason: Option<String>,
+
+    /// App id this call was attributed to. `None` for the system
+    /// agent (which uses `system.agent`) and for legacy log lines
+    /// that didn't carry this field.
+    #[serde(default)]
+    pub app_id: Option<String>,
+}
+
+fn default_decision() -> String {
+    "allowed".to_string()
 }
 
 impl LlmRunRecord {
-    /// Build a record for a successful chat completion.
+    /// Build a record for a successful chat completion that passed
+    /// the gate.
     pub fn from_success(
         provider: &str,
         model: &str,
@@ -141,10 +177,14 @@ impl LlmRunRecord {
             finish_reason: finish_reason_str(finish_reason).to_string(),
             status: "ok".to_string(),
             error: None,
+            decision: "allowed".to_string(),
+            denial_reason: None,
+            app_id: None,
         }
     }
 
-    /// Build a record for a failed chat call.
+    /// Build a record for a chat call that passed the gate but failed
+    /// at the provider (network error, 5xx, malformed response, ...).
     pub fn from_error(
         provider: &str,
         model: &str,
@@ -176,11 +216,61 @@ impl LlmRunRecord {
             finish_reason: "error".to_string(),
             status: "error".to_string(),
             error: Some(error.to_string()),
+            decision: "allowed".to_string(),
+            denial_reason: None,
+            app_id: None,
         }
+    }
+
+    /// Build a record for a call the App–AI gate refused.
+    ///
+    /// `denial_reason` is the stable token (see the field doc above);
+    /// `error` is the human-readable explanation. The provider name
+    /// is `"gate"` to make it obvious in `cos agent run-log` reports
+    /// that the line was emitted by the gate, not by a real upstream.
+    /// `model` is the model the caller asked for (or `""` if the call
+    /// was rejected before model resolution).
+    pub fn from_denial(
+        app_id: &str,
+        model: &str,
+        denial_reason: &str,
+        error: &str,
+        duration_ms: u64,
+        session_id: Option<&str>,
+    ) -> Self {
+        Self {
+            timestamp: now_iso8601(),
+            trace_id: env_var_nonempty("COS_TRACE_ID"),
+            span_id: env_var_nonempty("COS_SPAN_ID"),
+            session_id: nonempty(session_id),
+            provider: "gate".to_string(),
+            model: model.to_string(),
+            engine_name: None,
+            engine_version: None,
+            duration_ms,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            finish_reason: "denied".to_string(),
+            status: "denied".to_string(),
+            error: Some(error.to_string()),
+            decision: "denied".to_string(),
+            denial_reason: Some(denial_reason.to_string()),
+            app_id: nonempty(Some(app_id)),
+        }
+    }
+
+    /// Attach an explicit `app_id` to this record. Used by the
+    /// app-gated paths (`cos agent chat --app <id>`) so allowed calls
+    /// are attributed to the requesting app, not just the provider.
+    pub fn with_app(mut self, app_id: &str) -> Self {
+        self.app_id = nonempty(Some(app_id));
+        self
     }
 }
 
-/// Append a record to `<log_dir>/llm.jsonl`. Best-effort:
+/// Append a record to `<log_dir>/ai.jsonl`. Best-effort:
 /// io errors are logged via `tracing::warn!` and swallowed.
 ///
 /// In `#[cfg(test)]` builds this is a no-op. Use [`record_to_path`]
@@ -189,14 +279,14 @@ pub fn record(rec: &LlmRunRecord) {
     if cfg!(test) {
         return;
     }
-    let path = crate::paths::llm_run_log_path();
+    let path = crate::paths::ai_run_log_path();
     if let Err(e) = record_to_path(rec, &path) {
-        tracing::warn!("run_log: failed to record llm call: {e}");
+        tracing::warn!("run_log: failed to record ai call: {e}");
     }
 }
 
 /// Append a record to a specific path. Used by:
-///   - production [`record`] (which routes through `paths::llm_run_log_path`).
+///   - production [`record`] (which routes through `paths::ai_run_log_path`).
 ///   - unit tests that need to assert on the on-disk format without
 ///     polluting the host's log dir.
 pub fn record_to_path(rec: &LlmRunRecord, path: &Path) -> Result<(), String> {
@@ -204,10 +294,10 @@ pub fn record_to_path(rec: &LlmRunRecord, path: &Path) -> Result<(), String> {
     crate::filelock::append_locked(path, &line)
 }
 
-/// `<log_dir>/llm.jsonl`. Re-exported for callers that want the path
+/// `<log_dir>/ai.jsonl`. Re-exported for callers that want the path
 /// without going through `paths::*`.
 pub fn run_log_path() -> PathBuf {
-    crate::paths::llm_run_log_path()
+    crate::paths::ai_run_log_path()
 }
 
 // ------------------------------------------------------------------
@@ -278,6 +368,9 @@ mod tests {
         assert_eq!(r.status, "ok");
         assert!(r.error.is_none());
         assert_eq!(r.session_id.as_deref(), Some("sess-123"));
+        assert_eq!(r.decision, "allowed");
+        assert!(r.denial_reason.is_none());
+        assert!(r.app_id.is_none());
     }
 
     #[test]
@@ -330,6 +423,67 @@ mod tests {
         assert_eq!(r.engine_version.as_deref(), Some("b4001"));
         assert_eq!(r.input_tokens, 0);
         assert_eq!(r.output_tokens, 0);
+        assert_eq!(r.decision, "allowed");
+        assert!(r.denial_reason.is_none());
+    }
+
+    /// Denials must surface as a distinct status + decision, carry the
+    /// stable reason token, and attribute to the calling app.
+    #[test]
+    fn from_denial_sets_decision_and_reason() {
+        let r = LlmRunRecord::from_denial(
+            "summarize",
+            "claude-sonnet-4",
+            "budget_exceeded",
+            "monthly unit cap reached (1000000/1000000)",
+            3,
+            Some("s-1"),
+        );
+        assert_eq!(r.provider, "gate");
+        assert_eq!(r.status, "denied");
+        assert_eq!(r.decision, "denied");
+        assert_eq!(r.finish_reason, "denied");
+        assert_eq!(r.denial_reason.as_deref(), Some("budget_exceeded"));
+        assert_eq!(r.app_id.as_deref(), Some("summarize"));
+        assert!(r.error.as_deref().unwrap().contains("monthly unit cap"));
+        assert!(r.engine_name.is_none());
+    }
+
+    /// `with_app` attaches an app id to an otherwise app-agnostic
+    /// success record. Used by the app-gated chat path.
+    #[test]
+    fn with_app_attaches_id() {
+        let r = LlmRunRecord::from_success(
+            "openai_compat",
+            "gpt-4o",
+            None,
+            FinishReason::Stop,
+            &sample_usage(),
+            10,
+            None,
+        )
+        .with_app("summarize");
+        assert_eq!(r.app_id.as_deref(), Some("summarize"));
+        assert_eq!(r.decision, "allowed");
+    }
+
+    /// A log line missing the new `decision` / `denial_reason` /
+    /// `app_id` fields (pre-Phase-8 format) must still deserialise as
+    /// an "allowed" record.
+    #[test]
+    fn legacy_jsonl_lines_default_to_allowed() {
+        let legacy = r#"{
+            "timestamp": "2026-04-01T00:00:00.000Z",
+            "provider": "mock",
+            "model": "mock-model",
+            "duration_ms": 5,
+            "finish_reason": "stop",
+            "status": "ok"
+        }"#;
+        let r: LlmRunRecord = serde_json::from_str(legacy).expect("valid legacy line");
+        assert_eq!(r.decision, "allowed");
+        assert!(r.denial_reason.is_none());
+        assert!(r.app_id.is_none());
     }
 
     /// `record_to_path` is what runs in tests because the public `record()`
@@ -338,7 +492,7 @@ mod tests {
     #[test]
     fn record_to_path_round_trips_through_jsonl() {
         let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("llm.jsonl");
+        let p = dir.path().join("ai.jsonl");
         let r = LlmRunRecord::from_success(
             "mock",
             "mock-model",
@@ -358,6 +512,7 @@ mod tests {
         assert_eq!(parsed.provider, "mock");
         assert_eq!(parsed.model, "mock-model");
         assert_eq!(parsed.input_tokens, 12);
+        assert_eq!(parsed.decision, "allowed");
     }
 
     /// Public `record()` MUST be a no-op in test builds — verifying by

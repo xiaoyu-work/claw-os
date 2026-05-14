@@ -1,8 +1,9 @@
-//! Usage aggregator over the `llm.jsonl` run-log stream.
+//! Usage aggregator over the `ai.jsonl` run-log stream.
 //!
 //! The audit trail [`crate::agent::llm::run_log`] writes one JSON
-//! line per LLM call. This module reads that stream and produces
-//! summary breakdowns: totals, per-provider, per-model, per-session.
+//! line per AI call (chat, embed, image, audio, vision — plus every
+//! gate denial). This module reads that stream and produces summary
+//! breakdowns: totals, per-provider, per-model, per-session.
 //!
 //! ## Why a separate module
 //!
@@ -216,7 +217,7 @@ pub fn aggregate_filtered(records: &[LlmRunRecord], query: &UsageQuery) -> Usage
     s
 }
 
-/// Read + aggregate the default `llm.jsonl`. Convenience wrapper.
+/// Read + aggregate the default `ai.jsonl`. Convenience wrapper.
 pub fn aggregate_default() -> UsageSummary {
     let path = run_log_path();
     let read = read_records(&path);
@@ -304,7 +305,7 @@ mod tests {
     #[test]
     fn aggregates_totals() {
         let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("llm.jsonl");
+        let p = dir.path().join("ai.jsonl");
         write(
             &p,
             &[
@@ -324,7 +325,7 @@ mod tests {
     #[test]
     fn breaks_down_by_provider_model_session() {
         let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("llm.jsonl");
+        let p = dir.path().join("ai.jsonl");
         write(
             &p,
             &[
@@ -351,7 +352,7 @@ mod tests {
     #[test]
     fn separates_success_and_error_counts() {
         let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("llm.jsonl");
+        let p = dir.path().join("ai.jsonl");
         let mut err =
             LlmRunRecord::from_error("anthropic", "sonnet", None, "529 overloaded", 5, Some("s1"));
         err.timestamp = "2026-01-01T00:00:00.000Z".into();
@@ -365,7 +366,7 @@ mod tests {
     #[test]
     fn skips_malformed_lines_and_counts_them() {
         let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("llm.jsonl");
+        let p = dir.path().join("ai.jsonl");
         let r = rec("anthropic", "sonnet", 1, 1, None);
         record_to_path(&r, &p).unwrap();
         // Append a couple of bad lines.
@@ -380,7 +381,7 @@ mod tests {
     #[test]
     fn skips_blank_lines() {
         let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("llm.jsonl");
+        let p = dir.path().join("ai.jsonl");
         let r = rec("anthropic", "sonnet", 1, 1, None);
         record_to_path(&r, &p).unwrap();
         let mut body = std::fs::read_to_string(&p).unwrap();
@@ -394,7 +395,7 @@ mod tests {
     #[test]
     fn filter_by_provider() {
         let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("llm.jsonl");
+        let p = dir.path().join("ai.jsonl");
         write(
             &p,
             &[
@@ -415,7 +416,7 @@ mod tests {
     #[test]
     fn filter_by_session() {
         let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("llm.jsonl");
+        let p = dir.path().join("ai.jsonl");
         write(
             &p,
             &[
@@ -435,7 +436,7 @@ mod tests {
     #[test]
     fn filter_by_status() {
         let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("llm.jsonl");
+        let p = dir.path().join("ai.jsonl");
         let mut err = LlmRunRecord::from_error("a", "b", None, "x", 5, None);
         err.timestamp = "2026-01-01T00:00:00.000Z".into();
         write(&p, &[rec("a", "b", 10, 10, None), err]);
@@ -454,7 +455,7 @@ mod tests {
     #[test]
     fn filter_by_time_range_inclusive_lower_exclusive_upper() {
         let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("llm.jsonl");
+        let p = dir.path().join("ai.jsonl");
         let mut a = rec("x", "y", 1, 1, None);
         a.timestamp = "2026-01-01T00:00:00.000Z".into();
         let mut b = rec("x", "y", 2, 2, None);
@@ -476,7 +477,7 @@ mod tests {
     #[test]
     fn cache_tokens_aggregated() {
         let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("llm.jsonl");
+        let p = dir.path().join("ai.jsonl");
         let mut r = LlmRunRecord::from_success(
             "anthropic",
             "sonnet",
@@ -504,7 +505,7 @@ mod tests {
         // Simulate a log line written before p4-usage added cache fields.
         // The old shape: no cache_read_tokens / cache_write_tokens fields.
         let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("llm.jsonl");
+        let p = dir.path().join("ai.jsonl");
         let line = serde_json::json!({
             "timestamp": "2026-01-01T00:00:00.000Z",
             "provider": "anthropic",
@@ -525,7 +526,7 @@ mod tests {
     #[test]
     fn duration_ms_summed() {
         let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("llm.jsonl");
+        let p = dir.path().join("ai.jsonl");
         let mut a = rec("x", "y", 1, 1, None);
         a.duration_ms = 100;
         let mut b = rec("x", "y", 1, 1, None);
