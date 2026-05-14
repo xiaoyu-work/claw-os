@@ -3,11 +3,20 @@ name = "cosmic-screenshot"
 version = "0.1.0"
 edition = "2024"
 
+[workspace]
+# Opt out of the repo-root cargo workspace at /Cargo.toml so this
+# crate builds standalone via `just screenshot/build-release` from
+# inside `desktop/`. Sibling apps (files, notifications, term, …)
+# do the same.
+
 [dependencies]
 claw-bridge = { path = "../../crates/claw-bridge" }
+cos-mcp-serve = { path = "../../crates/cos-mcp-serve" }
 ashpd = { version = "0.12", default-features = false, features = ["tokio"] }
+async-trait = "0.1"
 jiff = "0.2"
 dirs = "6"
+serde_json = "1"
 tokio = { version = "1.52.1", default-features = false, features = ["macros"] }
 clap = { version = "4.6.1", features = ["derive"] }
 zbus = { version = "5", default-features = false }

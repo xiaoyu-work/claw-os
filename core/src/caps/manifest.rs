@@ -63,6 +63,17 @@
 //! - `runtime` ∈ {python, node, shell, binary}.
 //! - Authors must declare a scope explicitly. There is no implicit
 //!   wildcard; `wild` is a separate variant authors opt into knowingly.
+//!
+//! ## Session tools (Phase 11)
+//!
+//! An app may additionally expose a long-lived MCP server through a
+//! `session` block. Each tool inside it has the same `args` + `needs`
+//! shape as an operation, so capability gating and audit are identical
+//! to the one-shot CLI path. The kernel spawns the server (via the
+//! runtime, using `Session.entry` or the runtime's default
+//! `server.<ext>`), runs the MCP handshake, and registers each tool
+//! with the agent's [`ToolRegistry`]. See `docs/app-ai-integration.md`
+//! §12.
 
 use std::collections::BTreeMap;
 
@@ -111,6 +122,13 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ai: Option<AiPolicy>,
 
+    /// Optional MCP server the app exposes for stateful, agent-driven
+    /// tool calls. Absent means the app is one-shot only (the agent can
+    /// still call its operations through `cos_app_<id>`). See
+    /// [`Session`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<Session>,
+
     /// Free-form dependency declarations. Preserved for forward
     /// compatibility — the bridge's package resolver consumes this.
     #[serde(default)]
@@ -153,6 +171,18 @@ pub struct AiPolicy {
     /// external content.
     #[serde(default = "default_origins")]
     pub origins: Vec<PromptOrigin>,
+
+    /// Allowlist of catalog tool names the app may expose to a model
+    /// via `cos ai chat --tools`. Each entry must be a known tool in
+    /// `crate::ai::tools::CATALOG`; unknown names are rejected at
+    /// install time so a typo can never reach the gate.
+    ///
+    /// The kernel still gates each actual tool call on the underlying
+    /// `caps.needs[]` (e.g. `fs.read`) — this list only controls
+    /// which tools the model is *told about*. An empty list (the
+    /// default) means the app cannot request any tools.
+    #[serde(default)]
+    pub tools: Vec<String>,
 }
 
 /// Per-period AI token cap. Zero disables enforcement.
@@ -235,6 +265,30 @@ impl Runtime {
             }
         }
     }
+
+    /// Default entry file for an app's long-lived MCP session server.
+    /// Lives alongside `default_entry()` (the one-shot CLI entry) so an
+    /// app can ship both surfaces without naming them by hand.
+    pub fn default_session_entry(self) -> &'static str {
+        match self {
+            Runtime::Python => "server.py",
+            Runtime::Node => "server.js",
+            Runtime::Shell => {
+                if cfg!(windows) {
+                    "server.bat"
+                } else {
+                    "server.sh"
+                }
+            }
+            Runtime::Binary => {
+                if cfg!(windows) {
+                    "server.exe"
+                } else {
+                    "server"
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -294,6 +348,80 @@ impl ArgKind {
     pub fn binds_to_scope(self) -> bool {
         matches!(self, ArgKind::Path | ArgKind::Host | ArgKind::Name)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Session (MCP) — long-lived agent-driven tools
+// ---------------------------------------------------------------------------
+
+/// Declares a long-lived MCP server the app launches when an agent
+/// session needs cross-call state. The agent attaches to this server
+/// through the kernel's MCP bridge; every `tools/call` it makes is
+/// caps-gated using the manifest's per-tool `needs[]` and audited the
+/// same way `cos ai chat` is.
+///
+/// Authors who want a stateless one-shot integration should keep using
+/// `operations` (the kernel auto-wraps each op as a `cos_app_<id>`
+/// agent tool). `Session` is for when the app holds in-memory state
+/// across calls or kicks off background work.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Session {
+    /// Path to the MCP server entry file, relative to the app
+    /// directory. If absent, the kernel uses
+    /// [`Runtime::default_session_entry`].
+    #[serde(default)]
+    pub entry: Option<String>,
+
+    /// Wire protocol. Only `stdio` is supported today (matches the
+    /// kernel's [`mcp::transport::StdioTransport`]).
+    #[serde(default)]
+    pub transport: SessionTransport,
+
+    /// Tools the app advertises through this session. The list is
+    /// authoritative: the kernel only forwards `tools/call` requests
+    /// for names that appear here, and runs the declared `needs[]` as
+    /// the cap gate before forwarding.
+    #[serde(default)]
+    pub tools: Vec<SessionTool>,
+}
+
+/// Wire protocol for [`Session`]. Stdio is the de-facto MCP default
+/// and the one our integration already implements.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum SessionTransport {
+    #[default]
+    Stdio,
+}
+
+/// One MCP-callable tool the app exposes through its [`Session`].
+///
+/// Mirrors [`Operation`] field-for-field on purpose: `args` + `needs`
+/// drive both the agent's view (auto-generated JSON Schema for the
+/// model) and the kernel's enforcement (cap resolution at call time).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SessionTool {
+    /// Globally unique tool name. Convention: `<app_id>.<verb>`
+    /// (e.g. `kv.get`). Must match `[a-z][a-z0-9._-]*` and be unique
+    /// within the session.
+    pub name: String,
+
+    /// One-line description surfaced to the model and to
+    /// `cos app tool list`.
+    pub summary: LocalizedText,
+
+    /// Declared input parameters. Same semantics as
+    /// [`Operation::args`]: the order is significant for the UI, names
+    /// must be unique, and any [`Need::scope`] with
+    /// [`ScopeBinding::FromArg`] must reference one of these by name.
+    #[serde(default)]
+    pub args: Vec<Arg>,
+
+    /// Capability requirements the kernel checks before forwarding the
+    /// MCP `tools/call` to the app. Empty means the call is purely
+    /// local (kernel still emits an audit row).
+    #[serde(default)]
+    pub needs: Vec<Need>,
 }
 
 // ---------------------------------------------------------------------------
@@ -391,6 +519,53 @@ pub enum ManifestError {
     AiBypassNotAllowedForApps {
         field: &'static str,
     },
+    #[error(
+        "manifest `ai.tools[]`: unknown tool `{name}` — not in the kernel \
+         catalog. Run `cos ai tools` to list known tools."
+    )]
+    AiUnknownTool { name: String },
+    #[error("manifest `ai.tools[]`: tool `{name}` declared twice")]
+    AiDuplicateTool { name: String },
+    #[error("session tool `{tool}`: name must match [a-z][a-z0-9._-]* — got `{tool}`")]
+    SessionToolInvalidName { tool: String },
+    #[error("session tool `{name}` declared twice")]
+    SessionDuplicateTool { name: String },
+    #[error("session tool `{tool}`: arg `{arg}` declared twice")]
+    SessionDuplicateArg { tool: String, arg: String },
+    #[error("session tool `{tool}`: need #{idx} references undeclared arg `{arg}`")]
+    SessionNeedRefsUndeclaredArg { tool: String, idx: usize, arg: String },
+    #[error(
+        "session tool `{tool}`: need #{idx} (verb `{verb}`) binds to arg `{arg}` of \
+         kind `{kind:?}` which cannot populate a scope (expected path/host/name)"
+    )]
+    SessionNeedArgKindMismatch {
+        tool: String,
+        idx: usize,
+        verb: String,
+        arg: String,
+        kind: ArgKind,
+    },
+    #[error("session tool `{tool}`: need #{idx}: {detail}")]
+    SessionNeedInvalid {
+        tool: String,
+        idx: usize,
+        detail: String,
+    },
+    #[error("session tool `{tool}`: {field}: {detail}")]
+    SessionLocalizedTextInvalid {
+        tool: String,
+        field: &'static str,
+        detail: String,
+    },
+    #[error(
+        "session tool `{tool}`: need #{idx} (verb `{verb}`) is an AI verb but the \
+         manifest has no `ai` block — declare one with budget, safety, and origins"
+    )]
+    SessionAiNeedMissingPolicy {
+        tool: String,
+        idx: usize,
+        verb: String,
+    },
 }
 
 impl Manifest {
@@ -399,6 +574,28 @@ impl Manifest {
         let m: Manifest = serde_json::from_str(s)?;
         m.validate()?;
         Ok(m)
+    }
+
+    /// Verify every entry in `ai.tools[]` exists in the kernel
+    /// catalog. The caller passes the catalog (typically
+    /// `crate::ai::tools::list_names()`) so this module stays free
+    /// of the `ai` dependency. No-op if the manifest has no `ai`
+    /// block or an empty allowlist.
+    pub fn validate_tools_against_catalog(
+        &self,
+        catalog: &[&str],
+    ) -> Result<(), ManifestError> {
+        let Some(policy) = self.ai.as_ref() else {
+            return Ok(());
+        };
+        for name in &policy.tools {
+            if !catalog.iter().any(|c| *c == name.as_str()) {
+                return Err(ManifestError::AiUnknownTool {
+                    name: name.clone(),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Validate the manifest's invariants. Called automatically by
@@ -415,6 +612,17 @@ impl Manifest {
         if let Some(policy) = &self.ai {
             if policy.origins.is_empty() {
                 return Err(ManifestError::AiPolicyNoOrigins);
+            }
+            // Shape-only dup check. Catalog membership is verified
+            // by `validate_tools_against_catalog` (callers wire that
+            // in to avoid a cycle between `caps` and `ai`).
+            let mut seen = std::collections::BTreeSet::new();
+            for name in &policy.tools {
+                if !seen.insert(name.as_str()) {
+                    return Err(ManifestError::AiDuplicateTool {
+                        name: name.clone(),
+                    });
+                }
             }
         }
 
@@ -486,6 +694,86 @@ impl Manifest {
                 }
             }
         }
+
+        if let Some(session) = &self.session {
+            let mut seen_tools: std::collections::BTreeSet<&str> =
+                std::collections::BTreeSet::new();
+            for tool in &session.tools {
+                if !is_valid_session_tool_name(&tool.name) {
+                    return Err(ManifestError::SessionToolInvalidName {
+                        tool: tool.name.clone(),
+                    });
+                }
+                if !seen_tools.insert(tool.name.as_str()) {
+                    return Err(ManifestError::SessionDuplicateTool {
+                        name: tool.name.clone(),
+                    });
+                }
+                tool.summary.validate().map_err(|d| {
+                    ManifestError::SessionLocalizedTextInvalid {
+                        tool: tool.name.clone(),
+                        field: "summary",
+                        detail: d,
+                    }
+                })?;
+
+                let mut seen_args: BTreeMap<&str, &Arg> = BTreeMap::new();
+                for arg in &tool.args {
+                    if seen_args.insert(arg.name.as_str(), arg).is_some() {
+                        return Err(ManifestError::SessionDuplicateArg {
+                            tool: tool.name.clone(),
+                            arg: arg.name.clone(),
+                        });
+                    }
+                }
+                for (idx, need) in tool.needs.iter().enumerate() {
+                    need.why.validate().map_err(|d| {
+                        ManifestError::SessionNeedInvalid {
+                            tool: tool.name.clone(),
+                            idx,
+                            detail: format!("why: {d}"),
+                        }
+                    })?;
+
+                    let verb_str = need.verb.as_str();
+                    if verb_str == Verb::AI_BYPASS.as_str() {
+                        return Err(ManifestError::AiBypassNotAllowedForApps {
+                            field: "session.tools[].needs[].verb",
+                        });
+                    }
+                    if verb_str.starts_with("ai.") && self.ai.is_none() {
+                        return Err(ManifestError::SessionAiNeedMissingPolicy {
+                            tool: tool.name.clone(),
+                            idx,
+                            verb: verb_str.to_string(),
+                        });
+                    }
+
+                    match &need.scope {
+                        ScopeBinding::FromArg { arg } => {
+                            let a = seen_args.get(arg.as_str()).ok_or_else(|| {
+                                ManifestError::SessionNeedRefsUndeclaredArg {
+                                    tool: tool.name.clone(),
+                                    idx,
+                                    arg: arg.clone(),
+                                }
+                            })?;
+                            if !a.kind.binds_to_scope() {
+                                return Err(ManifestError::SessionNeedArgKindMismatch {
+                                    tool: tool.name.clone(),
+                                    idx,
+                                    verb: need.verb.as_str().to_string(),
+                                    arg: arg.clone(),
+                                    kind: a.kind,
+                                });
+                            }
+                        }
+                        ScopeBinding::Fixed { scope: _ } => {}
+                        ScopeBinding::Wild => {}
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
@@ -546,6 +834,82 @@ impl Manifest {
         }
         Ok(out)
     }
+    /// Resolve a session tool's needs into concrete [`Cap`](super::cap::Cap)s
+    /// for a specific MCP `tools/call` invocation. Mirrors
+    /// [`resolve_needs`](Self::resolve_needs) but reads from the
+    /// `session.tools[]` table instead of `operations`. Returns
+    /// `NeedInvalid` if the manifest has no session block or the tool
+    /// name is unknown.
+    pub fn resolve_session_tool_needs(
+        &self,
+        tool_name: &str,
+        args: &BTreeMap<String, serde_json::Value>,
+    ) -> Result<Vec<super::cap::Cap>, ManifestError> {
+        let session = self.session.as_ref().ok_or_else(|| {
+            ManifestError::SessionNeedInvalid {
+                tool: tool_name.to_string(),
+                idx: 0,
+                detail: "manifest has no `session` block".into(),
+            }
+        })?;
+        let tool = session
+            .tools
+            .iter()
+            .find(|t| t.name == tool_name)
+            .ok_or_else(|| ManifestError::SessionNeedInvalid {
+                tool: tool_name.to_string(),
+                idx: 0,
+                detail: "unknown session tool".into(),
+            })?;
+        let mut out = Vec::with_capacity(tool.needs.len());
+        for (idx, need) in tool.needs.iter().enumerate() {
+            let scope = match &need.scope {
+                ScopeBinding::FromArg { arg } => {
+                    let val = args.get(arg).ok_or_else(|| {
+                        ManifestError::SessionNeedInvalid {
+                            tool: tool_name.to_string(),
+                            idx,
+                            detail: format!("arg `{arg}` not supplied at call time"),
+                        }
+                    })?;
+                    let arg_decl = tool
+                        .args
+                        .iter()
+                        .find(|a| a.name == *arg)
+                        .ok_or_else(|| ManifestError::SessionNeedRefsUndeclaredArg {
+                            tool: tool_name.to_string(),
+                            idx,
+                            arg: arg.clone(),
+                        })?;
+                    scope_from_arg_value(arg_decl.kind, val).ok_or_else(|| {
+                        ManifestError::SessionNeedInvalid {
+                            tool: tool_name.to_string(),
+                            idx,
+                            detail: format!(
+                                "arg `{arg}` value is not a {kind:?}",
+                                kind = arg_decl.kind
+                            ),
+                        }
+                    })?
+                }
+                ScopeBinding::Fixed { scope } => scope.clone(),
+                ScopeBinding::Wild => Scope::Wild,
+            };
+            out.push(super::cap::Cap::new(need.verb, scope));
+        }
+        Ok(out)
+    }
+}
+
+fn is_valid_session_tool_name(s: &str) -> bool {
+    let mut bytes = s.bytes();
+    match bytes.next() {
+        Some(b) if b.is_ascii_lowercase() => {}
+        _ => return false,
+    }
+    bytes.all(|b| {
+        b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-' || b == b'.'
+    })
 }
 
 fn scope_from_arg_value(kind: ArgKind, value: &serde_json::Value) -> Option<Scope> {
@@ -993,5 +1357,328 @@ mod tests {
         .unwrap();
         let policy = m.ai.as_ref().unwrap();
         assert_eq!(policy.origins, vec![PromptOrigin::Trusted]);
+    }
+
+    #[test]
+    fn ai_tools_default_to_empty_list() {
+        let m = Manifest::from_json(
+            r#"{
+              "id": "summarize",
+              "version": "0.1",
+              "name": "Summarize",
+              "ai": {
+                "budget": {"monthly_units": 1},
+                "safety": "strict",
+                "origins": ["trusted"]
+              }
+            }"#,
+        )
+        .unwrap();
+        let policy = m.ai.as_ref().unwrap();
+        assert!(policy.tools.is_empty());
+    }
+
+    #[test]
+    fn ai_tools_duplicate_entry_rejected() {
+        let err = Manifest::from_json(
+            r#"{
+              "id": "summarize",
+              "version": "0.1",
+              "name": "Summarize",
+              "ai": {
+                "budget": {"monthly_units": 1},
+                "safety": "strict",
+                "origins": ["trusted"],
+                "tools": ["fs.read_text", "kv.get", "fs.read_text"]
+              }
+            }"#,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ManifestError::AiDuplicateTool { ref name } if name == "fs.read_text"));
+    }
+
+    #[test]
+    fn ai_tools_unknown_name_rejected_against_catalog() {
+        let m = Manifest::from_json(
+            r#"{
+              "id": "summarize",
+              "version": "0.1",
+              "name": "Summarize",
+              "ai": {
+                "budget": {"monthly_units": 1},
+                "safety": "strict",
+                "origins": ["trusted"],
+                "tools": ["fs.read_text", "fs.unicorn"]
+              }
+            }"#,
+        )
+        .unwrap();
+        let err = m
+            .validate_tools_against_catalog(&["fs.read_text", "kv.get"])
+            .unwrap_err();
+        assert!(matches!(err, ManifestError::AiUnknownTool { ref name } if name == "fs.unicorn"));
+    }
+
+    #[test]
+    fn ai_tools_known_names_pass_catalog_check() {
+        let m = Manifest::from_json(
+            r#"{
+              "id": "summarize",
+              "version": "0.1",
+              "name": "Summarize",
+              "ai": {
+                "budget": {"monthly_units": 1},
+                "safety": "strict",
+                "origins": ["trusted"],
+                "tools": ["fs.read_text", "kv.get"]
+              }
+            }"#,
+        )
+        .unwrap();
+        assert!(m
+            .validate_tools_against_catalog(&["fs.read_text", "fs.list", "kv.get"])
+            .is_ok());
+    }
+
+    #[test]
+    fn manifest_without_ai_block_skips_tool_catalog_check() {
+        let m = Manifest::from_json(
+            r#"{
+              "id": "calc",
+              "version": "0.1",
+              "name": "Calc"
+            }"#,
+        )
+        .unwrap();
+        assert!(m.validate_tools_against_catalog(&[]).is_ok());
+    }
+
+    // -----------------------------------------------------------------
+    // Session block tests (Phase 11)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn session_block_parses_with_minimal_tool() {
+        let m = parse(
+            r#"{
+              "id": "kv",
+              "version": "0.1",
+              "name": "KV",
+              "session": {
+                "entry": "server.py",
+                "tools": [
+                  {
+                    "name": "kv.list",
+                    "summary": "List keys.",
+                    "needs": [
+                      {"verb": "data.kv.read",
+                       "scope": {"kind":"wild"},
+                       "why": "Scan every key."}
+                    ]
+                  }
+                ]
+              }
+            }"#,
+        );
+        let session = m.session.expect("session block parsed");
+        assert_eq!(session.entry.as_deref(), Some("server.py"));
+        assert_eq!(session.transport, SessionTransport::Stdio);
+        assert_eq!(session.tools.len(), 1);
+        assert_eq!(session.tools[0].name, "kv.list");
+    }
+
+    #[test]
+    fn session_tool_default_entry_per_runtime() {
+        assert_eq!(Runtime::Python.default_session_entry(), "server.py");
+        assert_eq!(Runtime::Node.default_session_entry(), "server.js");
+    }
+
+    #[test]
+    fn session_tool_resolve_needs_from_arg() {
+        let m = parse(
+            r#"{
+              "id": "kv",
+              "version": "0.1",
+              "name": "KV",
+              "session": {
+                "tools": [
+                  {
+                    "name": "kv.get",
+                    "summary": "Get a value.",
+                    "args": [{"name":"key","kind":"name","required":true}],
+                    "needs": [
+                      {"verb": "data.kv.read",
+                       "scope": {"kind":"from-arg","arg":"key"},
+                       "why": "Read the value at the named key."}
+                    ]
+                  }
+                ]
+              }
+            }"#,
+        );
+        let mut args = BTreeMap::new();
+        args.insert("key".to_string(), serde_json::json!("user/jay"));
+        let caps = m.resolve_session_tool_needs("kv.get", &args).unwrap();
+        assert_eq!(caps.len(), 1);
+        assert_eq!(caps[0].verb, Verb::DATA_KV_READ);
+        assert_eq!(caps[0].scope, Scope::name("user/jay"));
+    }
+
+    #[test]
+    fn session_tool_resolve_needs_unknown_tool_errors() {
+        let m = parse(
+            r#"{
+              "id": "kv",
+              "version": "0.1",
+              "name": "KV",
+              "session": { "tools": [] }
+            }"#,
+        );
+        let err = m
+            .resolve_session_tool_needs("kv.ghost", &BTreeMap::new())
+            .unwrap_err();
+        assert!(matches!(err, ManifestError::SessionNeedInvalid { .. }));
+    }
+
+    #[test]
+    fn session_tool_resolve_needs_no_session_errors() {
+        let m = parse(
+            r#"{"id":"kv","version":"0","name":"KV"}"#,
+        );
+        let err = m
+            .resolve_session_tool_needs("kv.get", &BTreeMap::new())
+            .unwrap_err();
+        match err {
+            ManifestError::SessionNeedInvalid { detail, .. } => {
+                assert!(detail.contains("no `session` block"));
+            }
+            other => panic!("expected SessionNeedInvalid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn session_tool_invalid_name_rejected() {
+        let err = Manifest::from_json(
+            r#"{
+              "id": "kv",
+              "version": "0.1",
+              "name": "KV",
+              "session": {
+                "tools": [
+                  {"name": "KV.Get", "summary": "Get"}
+                ]
+              }
+            }"#,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ManifestError::SessionToolInvalidName { .. }));
+    }
+
+    #[test]
+    fn session_duplicate_tool_name_rejected() {
+        let err = Manifest::from_json(
+            r#"{
+              "id": "kv",
+              "version": "0.1",
+              "name": "KV",
+              "session": {
+                "tools": [
+                  {"name": "kv.get", "summary": "Get"},
+                  {"name": "kv.get", "summary": "Get again"}
+                ]
+              }
+            }"#,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ManifestError::SessionDuplicateTool { .. }));
+    }
+
+    #[test]
+    fn session_need_refs_undeclared_arg_rejected() {
+        let err = Manifest::from_json(
+            r#"{
+              "id": "kv",
+              "version": "0.1",
+              "name": "KV",
+              "session": {
+                "tools": [
+                  {
+                    "name": "kv.get",
+                    "summary": "Get",
+                    "args": [],
+                    "needs": [
+                      {"verb": "data.kv.read",
+                       "scope": {"kind":"from-arg","arg":"key"},
+                       "why": "Read."}
+                    ]
+                  }
+                ]
+              }
+            }"#,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ManifestError::SessionNeedRefsUndeclaredArg { .. }
+        ));
+    }
+
+    #[test]
+    fn session_need_binding_to_text_arg_rejected() {
+        let err = Manifest::from_json(
+            r#"{
+              "id": "kv",
+              "version": "0.1",
+              "name": "KV",
+              "session": {
+                "tools": [
+                  {
+                    "name": "kv.get",
+                    "summary": "Get",
+                    "args": [{"name":"key","kind":"text"}],
+                    "needs": [
+                      {"verb": "data.kv.read",
+                       "scope": {"kind":"from-arg","arg":"key"},
+                       "why": "Read."}
+                    ]
+                  }
+                ]
+              }
+            }"#,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ManifestError::SessionNeedArgKindMismatch { .. }
+        ));
+    }
+
+    #[test]
+    fn session_ai_verb_without_policy_rejected() {
+        let err = Manifest::from_json(
+            r#"{
+              "id": "summarize",
+              "version": "0.1",
+              "name": "Summarize",
+              "session": {
+                "tools": [
+                  {
+                    "name": "summarize.run",
+                    "summary": "Summarize text.",
+                    "needs": [
+                      {"verb": "ai.chat",
+                       "scope": {"kind":"wild"},
+                       "why": "Call the model."}
+                    ]
+                  }
+                ]
+              }
+            }"#,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ManifestError::SessionAiNeedMissingPolicy { .. }
+        ));
     }
 }

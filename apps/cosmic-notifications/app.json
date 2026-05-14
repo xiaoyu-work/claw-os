@@ -1,0 +1,101 @@
+{
+  "id": "cosmic-notifications",
+  "version": "0.1.0",
+  "name": {
+    "en": "Notifications"
+  },
+  "summary": {
+    "en": "Post and dismiss freedesktop notifications via the session D-Bus."
+  },
+  "icon": "🔔",
+  "runtime": "binary",
+  "operations": {},
+  "session": {
+    "entry": "/usr/bin/cosmic-notifications",
+    "transport": "stdio",
+    "tools": [
+      {
+        "name": "notify.post",
+        "summary": {
+          "en": "Show a freedesktop notification. Returns the assigned notification ID, which can be used with notify.close."
+        },
+        "args": [
+          {
+            "name": "summary",
+            "kind": "text",
+            "required": true,
+            "label": {
+              "en": "Single-line headline shown by the notification daemon."
+            }
+          },
+          {
+            "name": "body",
+            "kind": "text",
+            "required": false,
+            "label": {
+              "en": "Optional body text shown below the summary."
+            }
+          },
+          {
+            "name": "app_name",
+            "kind": "text",
+            "required": false,
+            "label": {
+              "en": "Sender name shown in the notification (defaults to \"Claw OS Agent\")."
+            }
+          },
+          {
+            "name": "icon",
+            "kind": "text",
+            "required": false,
+            "label": {
+              "en": "Icon name (freedesktop icon spec, e.g. \"dialog-information\")."
+            }
+          },
+          {
+            "name": "expire_ms",
+            "kind": "number",
+            "required": false,
+            "label": {
+              "en": "Timeout in milliseconds before auto-dismiss (-1 = daemon default, 0 = never)."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "ui.notify",
+            "scope": { "kind": "wild" },
+            "why": {
+              "en": "Send a desktop notification to the user."
+            }
+          }
+        ]
+      },
+      {
+        "name": "notify.close",
+        "summary": {
+          "en": "Dismiss a previously posted notification by ID."
+        },
+        "args": [
+          {
+            "name": "id",
+            "kind": "number",
+            "required": true,
+            "label": {
+              "en": "The notification ID returned by notify.post."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "ui.notify",
+            "scope": { "kind": "wild" },
+            "why": {
+              "en": "Close a notification previously posted by the agent."
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

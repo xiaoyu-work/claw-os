@@ -9,9 +9,11 @@ rust-version = "1.90"
 # gate + audit log instead of hitting std::fs / Command::new directly.
 # Backed by the `cos app <name> <verb>` dispatcher.
 claw-bridge = { path = "../../crates/claw-bridge" }
+async-trait = "0.1"
 base64 = "0.22"
 chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
+cos-mcp-serve = { path = "../../crates/cos-mcp-serve" }
 env_logger = "0.11"
 freedesktop_entry_parser = "2"
 futures = "0.3"
@@ -22,8 +24,9 @@ rayon = "1"
 regex = "1"
 reqwest = "0.13"
 serde = { version = "1", features = ["rc", "serde_derive"] }
+serde_json = "1"
 spdx = { git = "https://github.com/jackpot51/spdx.git" }
-tokio = { version = "1", features = ["sync"] }
+tokio = { version = "1", features = ["sync", "rt", "macros", "process", "io-std", "io-util"] }
 xdg = "3"
 # Internationalization
 i18n-embed = { version = "0.16", features = [

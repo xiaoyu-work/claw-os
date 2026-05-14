@@ -157,6 +157,15 @@ pub fn run_app(
             .map_err(|e| format!("read {}: {}", manifest_path.display(), e))?;
         let manifest = crate::apps::AppManifest::from_json(&body)
             .map_err(|e| format!("parse {}: {}", manifest_path.display(), e))?;
+        // Reject app launches whose `ai.tools[]` references a tool
+        // the kernel doesn't know. Catches typoed allowlists before
+        // the model ever sees a tool definition. The catalog is
+        // passed in so the caps crate stays free of an `ai`
+        // dependency (would create a cycle).
+        let catalog = crate::ai::tools::list_names();
+        manifest
+            .validate_tools_against_catalog(&catalog)
+            .map_err(|e| format!("parse {}: {}", manifest_path.display(), e))?;
         let rt = manifest.runtime;
         let entry = manifest
             .entry

@@ -1,0 +1,149 @@
+{
+  "id": "cosmic-term",
+  "version": "0.1.0",
+  "name": {
+    "en": "Terminal"
+  },
+  "summary": {
+    "en": "Run short-lived shell commands and capture their output."
+  },
+  "icon": "💻",
+  "runtime": "binary",
+  "operations": {},
+  "session": {
+    "entry": "/usr/bin/cosmic-term",
+    "transport": "stdio",
+    "tools": [
+      {
+        "name": "term.run",
+        "summary": {
+          "en": "Run `command` with `args` (no shell expansion) and return {exit_code, stdout, stderr}. Bounded by timeout_secs and max_bytes per stream."
+        },
+        "args": [
+          {
+            "name": "command",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "Executable to run (looked up via PATH, or absolute path)."
+            }
+          },
+          {
+            "name": "args",
+            "kind": "text",
+            "required": false,
+            "label": {
+              "en": "JSON array of arguments to pass to the command."
+            }
+          },
+          {
+            "name": "cwd",
+            "kind": "path",
+            "required": false,
+            "label": {
+              "en": "Working directory (defaults to current)."
+            }
+          },
+          {
+            "name": "timeout_secs",
+            "kind": "number",
+            "required": false,
+            "label": {
+              "en": "Per-call timeout in seconds (default 30, max 600)."
+            }
+          },
+          {
+            "name": "max_bytes",
+            "kind": "number",
+            "required": false,
+            "label": {
+              "en": "Per-stream capture limit (default 65536, max 1048576)."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "proc.spawn",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "command"
+            },
+            "why": {
+              "en": "Spawn the requested executable."
+            }
+          },
+          {
+            "verb": "fs.exec",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "command"
+            },
+            "why": {
+              "en": "Execute the resolved binary."
+            }
+          }
+        ]
+      },
+      {
+        "name": "term.shell",
+        "summary": {
+          "en": "Run `script` through `/bin/sh -c`. Useful for pipelines and globs; subject to the same timeout / byte caps as term.run."
+        },
+        "args": [
+          {
+            "name": "script",
+            "kind": "text",
+            "required": true,
+            "label": {
+              "en": "Shell script body passed to `sh -c`."
+            }
+          },
+          {
+            "name": "cwd",
+            "kind": "path",
+            "required": false,
+            "label": {
+              "en": "Working directory."
+            }
+          },
+          {
+            "name": "timeout_secs",
+            "kind": "number",
+            "required": false,
+            "label": {
+              "en": "Per-call timeout in seconds (default 30, max 600)."
+            }
+          },
+          {
+            "name": "max_bytes",
+            "kind": "number",
+            "required": false,
+            "label": {
+              "en": "Per-stream capture limit (default 65536, max 1048576)."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "proc.spawn",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Spawn /bin/sh for shell pipelines."
+            }
+          },
+          {
+            "verb": "fs.exec",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Execute /bin/sh and any commands it invokes."
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

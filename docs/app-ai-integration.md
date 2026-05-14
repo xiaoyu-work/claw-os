@@ -421,32 +421,244 @@ chat` and `cos ai tool`.
 
 This document is the contract. Concrete work falls into roughly:
 
-1. **App registry & installer.** `cos app install <dir>` — validates
-   the manifest, writes it under `/var/lib/cos/apps/<id>/`, runs the
-   `ai.tools[]` consent UI. Plus `cos app list / show / uninstall`.
-2. **Multi-runtime bridge.** Extend `core/src/bridge.rs` to dispatch on
-   the manifest `runtime` field (`python` / `node` / `binary`). Every
-   path must set `COS_APP_ID` before `exec`.
-3. **Identity enforcement.** `cos ai chat` and `cos ai tool` reject any
-   call where `COS_APP_ID` is unset, or where `--app <id>` disagrees
-   with the env value.
-4. **Tool registry.** Build `core/src/ai/tools.rs::CATALOG` — the
+1. **App registry & installer.** ✅ Done. `cos app install <source>`
+   validates the manifest (including `ai.tools[]` against the live
+   catalog), copies the App tree under `apps_dir()/<id>/`, and runs
+   the AI consent prompt. Flags: `--yes` auto-grants consent,
+   `--no-consent` defers it, `--force` overwrites an existing install.
+2. **Multi-runtime bridge.** ✅ Done. `core/src/bridge.rs` dispatches
+   on the manifest `runtime` field (`python` / `node` / `binary`) and
+   sets `COS_APP_ID` before `exec`.
+3. **Identity enforcement.** ✅ Done for `cos ai chat`. The CLI rejects any
+   call where `COS_APP_ID` is unset (caller not kernel-spawned) or where
+   `--app <id>` disagrees with the env value (cross-App impersonation
+   attempt). Lives in `core/src/ai/chat.rs::enforce_identity`.
+   `cos ai tool` shares the same helper via `enforce_identity_for`.
+4. **Tool registry.** ✅ Done. `core/src/ai/tools.rs::CATALOG` —
    shared Tool definitions, capability verbs, scope policies,
-   stability tiers.
-5. **`cos ai tool` command.** Single-tool executor; routes through the
-   capability layer; emits one audit row per call.
-6. **`cos ai chat` command.** One-shot LLM call that accepts a
-   `--tools` list (filtered against the App's manifest) and returns
-   structured `tool_calls`. No loop, no execution.
-7. **In-process SDK.** Ship `apps/_lib/ai.py` and `apps/_lib/tools.py`
-   as thin subprocess wrappers; document the equivalent Node / Rust /
-   Go shapes.
-8. **Manifest validator.** Extend `app.json` schema to accept and
-   verify `ai.tools[]` entries against the live catalog at install
-   time.
-9. **Audit rows.** Define `kind: "ai.chat"` and `kind: "ai.tool"` row
-   shapes; wire into `cos app log`.
-10. **Tool reference doc.** `docs/app-ai-tool-catalog.md` — per-Tool
-    reference for App authors.
+   stability tiers. Starter set: `fs.read_text`, `fs.list`, `kv.get`.
+5. **`cos ai tool` command.** ✅ Done. Single-tool executor; routes
+   through the capability layer; emits one audit row per call. Plus
+   `cos ai tools` to print the catalog.
+6. **`cos ai chat` command.** ✅ Done. Namespace migration plus
+   `--tools <comma-list>` flag: each name is resolved against the
+   kernel catalog and exposed to the model as a callable. The gate
+   **never** executes the proposed calls — it surfaces them in
+   `tool_calls[]` and lets the App fulfil whichever it chooses via
+   `cos ai tool <name>`.
+7. **In-process SDK.** ✅ Done for Python. `apps/_lib/ai.py` exposes
+   `ai.chat(..., tools=[...])` and an `AiResponse.tool_calls` field;
+   `apps/_lib/tools.py` exposes `tools.call`, `tools.catalog`, and
+   `tools.for_chat`. Node / Rust / Go shapes are described in §7
+   above.
+8. **Manifest validator.** ✅ Done. `app.json` schema accepts an
+   `ai.tools[]` allowlist; duplicate entries are rejected by the
+   shape-only `validate()` and unknown names are rejected by
+   `validate_tools_against_catalog(&[&str])`. `bridge.rs` runs the
+   catalog check at App launch so a typo'd allowlist fails fast.
+9. **Audit rows.** ✅ Done. Both `cos ai chat` and `cos ai tool`
+   write to the same `<log_dir>/ai.jsonl` stream via
+   `LlmRunRecord`. Tool rows use `provider="kernel"`,
+   `model="tool:<name>"`, and the derived caps verb so dashboards
+   that group by `verb` continue to work. See `core/src/agent/llm/run_log.rs`
+   for the row shape.
+10. **Tool reference doc.** ✅ Done. See
+    [`docs/app-ai-tool-catalog.md`](./app-ai-tool-catalog.md) for the
+    per-Tool reference and the "How to add a new Tool" appendix.
 
 Each phase is independently shippable.
+
+## 12. App Session Tools (Apps as MCP Servers)
+
+§§1–11 describe how an App **consumes** AI. This section describes the
+inverse: how an App **exposes** AI-callable Tools that the kernel agent
+can hold a stateful Session with, alongside its built-in tools.
+
+### 12.1 Why a second surface
+
+`cos_app_<id>` (§4 + §10) gives the kernel agent a one-shot proxy into
+an App's CLI verbs. Every call is a fresh `bridge::run_python_app`
+spawn; the App has no way to keep state between calls or to run a
+background task while the agent does something else.
+
+For a real multi-step task — "scan the calendar, then for every busy
+day pull the doc, then summarise" — the agent needs:
+
+1. tools with **strict input schemas** the model can introspect,
+2. **session state** across calls (cached parses, in-flight tasks,
+   prefetched data),
+3. the ability to **span multiple Apps in one conversation**, with each
+   App contributing tools the kernel can interleave freely.
+
+We get all three by wrapping every App as an [MCP][mcp] server. The
+kernel already speaks MCP (`core/src/agent/tools/mcp/`); the App side
+needs only a thin SDK.
+
+[mcp]: https://modelcontextprotocol.io/
+
+### 12.2 Manifest: the `session` block
+
+App authors declare their session surface in `app.json` next to
+`operations`:
+
+```jsonc
+{
+  "id": "kv",
+  "version": "0.1.0",
+  // ...existing operations...
+  "session": {
+    "transport": "stdio",                       // default
+    "entry": "server.py",                       // default per runtime
+    "tools": [
+      {
+        "name": "kv.get",
+        "summary": {"en": "Read a value."},
+        "args": [
+          {"name": "key", "kind": "name", "required": true}
+        ],
+        "needs": [
+          {
+            "verb": "data.kv.read",
+            "scope": {"kind": "from-arg", "arg": "key"},
+            "why": {"en": "Read by key."}
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+The same `needs[]` grammar from §5 applies. Every `from-arg` scope must
+reference a declared `arg`; the manifest parser rejects mismatches at
+install time.
+
+### 12.3 Python SDK: `apps/_lib/serve.py`
+
+App authors write:
+
+```python
+from _lib.serve import App
+
+app = App()
+
+@app.tool("kv.get", args={"key": "string"}, required=["key"])
+def kv_get(key: str) -> str:
+    return _load().get(key, "")
+
+app.serve()  # blocking; reads MCP frames on stdin, writes on stdout
+```
+
+The SDK is stdlib-only. It speaks the MCP `initialize` / `tools/list`
+/ `tools/call` triplet and handles `notifications/initialized` plus
+`ping`. Return values are stringified (`str` / `dict` / `list` →
+`text` content); raised exceptions become `isError: true` responses
+the model can react to.
+
+### 12.4 Kernel bring-up: `core/src/agent/tools/cos_apps_session.rs`
+
+At agent boot the kernel walks `$COS_APPS_DIR`, reads every
+`app.json`, and for each `session.tools[]` registers one
+[`AppSessionTool`](../core/src/agent/tools/cos_apps_session.rs) in the
+agent's `ToolRegistry`. Registry names are
+`app_<id>__<tool_with_dots_to_underscores>` (e.g.
+`app_kv__kv_get`).
+
+The MCP server itself is **not** started here. The first time any of
+its tools is called — or the agent explicitly invokes
+`cos_app_session_open` — `bring_up_app` spawns the server, runs the
+MCP handshake, and stores the live handle in a process-wide
+`SessionManager`. Subsequent calls reuse it; `cos_app_session_close`
+drops the handle and the child gets SIGTERM. **Hybrid attach.**
+
+Per-call flow inside `AppSessionTool::exec`:
+
+1. `Manifest::resolve_session_tool_needs(tool_name, args)` turns
+   manifest `needs[]` into concrete `Cap`s using the call's actual
+   arguments.
+2. `crate::caps::require(verb, scope)` checks each. A denial
+   short-circuits the call — the App's server never sees the request.
+3. `client.call_tool(name, args)` forwards over MCP stdio.
+4. One `LlmRunRecord` row is appended to `ai.jsonl` with
+   `provider="app:<id>"` and `model="tool:<name>"`, distinguishing
+   App-session calls from kernel-catalog calls.
+
+The App MCP server, therefore, can trust every call its `tool_call`
+handler receives — the kernel has already authorised it. Defensive
+re-checks inside the App are still allowed but never required.
+
+### 12.5 Meta-tools the model sees
+
+Two extra tools live alongside every registered App tool:
+
+| Name | Purpose |
+| --- | --- |
+| `cos_app_session_open` | Bring an App's session server up. Idempotent. Returns the list of registered tools so the model knows which names to use next. |
+| `cos_app_session_close` | SIGTERM an App's session server. In-memory state is lost; persistent state on disk is preserved. The next call to any of its tools transparently re-opens the server. |
+
+Combined with `cos_app_catalog` (the existing one-shot discovery
+surface), the model can: discover what's installed → open the ones it
+needs → call interleaved tools across multiple Apps → close.
+
+### 12.6 CLI surface
+
+- `cos app tool list` — print every session tool every installed App
+  declares. Useful for sanity-checking what the agent will see.
+- `cos app tool list <app>` — same, scoped to one App.
+- `cos app lint [<app>]` — now also reports
+  `session.entry-missing` if the manifest declares a `session` block
+  whose entry script isn't on disk.
+
+### 12.7 Relationship to existing surfaces
+
+| Surface | Stateful? | Strict schema? | Authored in |
+| --- | --- | --- | --- |
+| `cos_app_<id>` (§4) | No — fresh spawn per call | No — CLI string args | App `main.py` `operations[]` |
+| `cos_app_run` (§4) | No | No | Generic |
+| `app_<id>__<tool>` (§12) | Yes — long-lived server | Yes — JSON Schema | App `server.py` (Python) or the App's own binary (Rust) + manifest `session.tools[]` |
+
+The old `cos_app_<id>` proxies stay. Session tools are additive — Apps
+can ship either, both, or neither.
+
+### 12.8 Rust SDK: `crates/cos-mcp-serve`
+
+Desktop Apps that ship as native `libcosmic` GUI binaries (under
+`desktop/*`) cannot exec a Python `server.py` — they already own a
+running event loop. Instead, the **same binary** flips into MCP
+server mode when launched with `COS_MCP_SERVER=1` in the environment
+(the kernel agent sets it automatically; see `bring_up_app`).
+
+`crates/cos-mcp-serve` is the Rust counterpart to `apps/_lib/serve.py`.
+It exposes a tiny builder API:
+
+```rust
+use cos_mcp_serve::{Server, Tool, ToolResult};
+use std::sync::Arc;
+
+if std::env::var("COS_MCP_SERVER").as_deref() == Ok("1") {
+    Server::new("my-app", env!("CARGO_PKG_VERSION"))
+        .tool(Arc::new(MyTool))
+        .serve_stdio().await?;
+    return;
+}
+// ... normal GUI main() below ...
+```
+
+The wire format and method surface are identical to the Python SDK
+(`initialize` / `tools/list` / `tools/call` / `ping`); the kernel's
+MCP client cannot tell which one is on the other end.
+
+The manifest for a binary-runtime App sets `runtime: "binary"` and
+points `session.entry` at the **installed** absolute path of the
+binary (e.g. `/usr/bin/cosmic-screenshot`), since `Command::new`
+runs it directly with no interpreter. See
+`apps/cosmic-screenshot/app.json` for the canonical example.
+
+### 12.9 Out of scope (this iteration)
+
+- MCP progress notifications for long-running tools. Apps that need
+  background work should use the `start_task` / `poll` pattern (one
+  tool kicks off work and returns a handle; another polls).
+- Confidentiality between Apps in a shared agent session. The agent is
+  the orchestrator and sees every value crossing the boundary.
+

@@ -17,11 +17,14 @@ libcosmic = { git = "https://github.com/pop-os/libcosmic", default-features = fa
     "dbus-config",
 ] }
 anyhow = "1.0"
+async-trait = "0.1"
 color-backtrace = "0.7.2"
+cos-mcp-serve = { path = "../../crates/cos-mcp-serve" }
 cosmic-notifications-util = { path = "./cosmic-notifications-util" }
 cosmic-notifications-config = { path = "./cosmic-notifications-config" }
 cosmic-panel-config = { git = "https://github.com/pop-os/cosmic-panel" }
 rustix = "1.1.4"
+serde_json = "1"
 tokio = { version = "1.52.1", features = [
     "sync",
     "rt",
@@ -29,6 +32,7 @@ tokio = { version = "1.52.1", features = [
     "macros",
     "net",
     "io-util",
+    "io-std",
 ] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3.23", features = ["std", "env-filter"] }

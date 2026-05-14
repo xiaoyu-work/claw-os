@@ -1,0 +1,102 @@
+{
+  "id": "cosmic-store",
+  "version": "0.1.0",
+  "name": {
+    "en": "App Store"
+  },
+  "summary": {
+    "en": "Query installed Debian packages and search apt's package index."
+  },
+  "icon": "🛍️",
+  "runtime": "binary",
+  "operations": {},
+  "session": {
+    "entry": "/usr/bin/cosmic-store",
+    "transport": "stdio",
+    "tools": [
+      {
+        "name": "store.list_installed",
+        "summary": {
+          "en": "List installed Debian packages with version and short description (via dpkg-query)."
+        },
+        "args": [
+          {
+            "name": "limit",
+            "kind": "number",
+            "required": false,
+            "label": {
+              "en": "Maximum number of packages to return (default 200, max 5000)."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.package",
+            "scope": { "kind": "wild" },
+            "why": {
+              "en": "Read the list of installed system packages."
+            }
+          }
+        ]
+      },
+      {
+        "name": "store.search",
+        "summary": {
+          "en": "Search apt's package index by substring (via apt-cache search)."
+        },
+        "args": [
+          {
+            "name": "query",
+            "kind": "text",
+            "required": true,
+            "label": {
+              "en": "Substring to match against package names and short descriptions."
+            }
+          },
+          {
+            "name": "limit",
+            "kind": "number",
+            "required": false,
+            "label": {
+              "en": "Maximum number of matches to return (default 50, max 500)."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.package",
+            "scope": { "kind": "wild" },
+            "why": {
+              "en": "Read the system package index."
+            }
+          }
+        ]
+      },
+      {
+        "name": "store.show",
+        "summary": {
+          "en": "Show full apt metadata for a single package (via apt-cache show)."
+        },
+        "args": [
+          {
+            "name": "package",
+            "kind": "text",
+            "required": true,
+            "label": {
+              "en": "Exact package name."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.package",
+            "scope": { "kind": "wild" },
+            "why": {
+              "en": "Read package metadata."
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

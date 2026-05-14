@@ -1,9 +1,10 @@
 use ashpd::desktop::screenshot::Screenshot;
 use clap::{ArgAction, Parser};
-use std::{collections::HashMap, fs, os::unix::fs::MetadataExt, path::PathBuf};
+use std::{collections::HashMap, fs, os::unix::fs::MetadataExt, path::PathBuf, sync::Arc};
 use zbus::{Connection, proxy, zvariant::Value};
 
 mod localize;
+mod mcp;
 
 #[derive(Parser, Default, Debug, Clone, PartialEq, Eq)]
 #[command(version, about, long_about = None)]
@@ -35,6 +36,9 @@ struct Args {
     /// The directory to save the screenshot to, if not performing an interactive screenshot
     #[clap(short, long)]
     save_dir: Option<PathBuf>,
+    /// Run as an MCP stdio server (also triggered by COS_MCP_SERVER=1).
+    #[clap(long, hide = true)]
+    mcp_server: bool,
 }
 
 #[proxy(assume_defaults = true)]
@@ -54,34 +58,70 @@ trait Notifications {
     ) -> zbus::Result<u32>;
 }
 
-//TODO: better error handling
-#[tokio::main(flavor = "current_thread")]
-async fn main() {
-    crate::localize::localize();
+/// Options that drive a single screenshot capture, shared by CLI and
+/// MCP entry points so both flows take the same code path.
+#[derive(Debug, Clone)]
+pub(crate) struct CaptureOptions {
+    pub interactive: bool,
+    pub modal: bool,
+    pub save_dir: Option<PathBuf>,
+}
 
-    let args = Args::parse();
-    let picture_dir = (!args.interactive).then(|| {
-        args.save_dir
+/// Outcome of a successful capture. `path` is empty when the portal
+/// chose to put the image on the clipboard instead of writing a file.
+#[derive(Debug, Clone)]
+pub(crate) struct CaptureOutcome {
+    pub path: String,
+    pub cancelled: bool,
+}
+
+#[derive(Debug)]
+pub(crate) enum CaptureError {
+    /// The portal returned an error other than "user cancelled".
+    Portal(String),
+    /// We couldn't move/rename the temp file to `save_dir`.
+    Io(String),
+    /// Anything else (URI scheme we don't model, etc.).
+    Other(String),
+}
+
+impl std::fmt::Display for CaptureError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CaptureError::Portal(s) | CaptureError::Io(s) | CaptureError::Other(s) => {
+                f.write_str(s)
+            }
+        }
+    }
+}
+
+pub(crate) async fn capture(opts: CaptureOptions) -> Result<CaptureOutcome, CaptureError> {
+    let picture_dir = (!opts.interactive).then(|| {
+        opts.save_dir
+            .clone()
             .filter(|dir| dir.is_dir())
             .unwrap_or_else(|| dirs::picture_dir().expect("failed to locate picture directory"))
     });
 
     let response = Screenshot::request()
-        .interactive(args.interactive)
-        .modal(args.modal)
+        .interactive(opts.interactive)
+        .modal(opts.modal)
         .send()
         .await
-        .expect("failed to send screenshot request")
+        .map_err(|e| CaptureError::Portal(format!("failed to send screenshot request: {e}")))?
         .response();
 
     let response = match response {
         Err(err) => {
             if err.to_string().contains("Cancelled") {
-                println!("Screenshot cancelled by user");
-                std::process::exit(0);
+                return Ok(CaptureOutcome {
+                    path: String::new(),
+                    cancelled: true,
+                });
             }
-            eprintln!("Error taking screenshot: {}", err);
-            std::process::exit(1);
+            return Err(CaptureError::Portal(format!(
+                "error taking screenshot: {err}"
+            )));
         }
         Ok(response) => response,
     };
@@ -89,78 +129,123 @@ async fn main() {
     let uri = response.uri();
     let path = match uri.scheme() {
         "file" => {
-            let response_path = uri
-                .to_file_path()
-                .unwrap_or_else(|_| panic!("unsupported response URI '{uri}'"));
+            let response_path = uri.to_file_path().map_err(|_| {
+                CaptureError::Other(format!("unsupported response URI '{uri}'"))
+            })?;
             if let Some(picture_dir) = picture_dir {
                 let date = jiff::Zoned::now();
                 let filename = format!("Screenshot_{}.png", date.strftime("%Y-%m-%d_%H-%M-%S"));
                 let path = picture_dir.join(filename);
-                if fs::metadata(&picture_dir)
-                    .expect("Failed to get medatata on filesystem for screenshot destination")
-                    .dev()
-                    != fs::metadata(&response_path)
-                        .expect("Failed to get metadata on filesystem for temporary path")
-                        .dev()
-                {
-                    // copy file instead
-                    let src = response_path
-                        .to_str()
-                        .expect("screenshot source path is not valid UTF-8");
-                    let dst = path
-                        .to_str()
-                        .expect("screenshot destination path is not valid UTF-8");
+                let dst_meta = fs::metadata(&picture_dir)
+                    .map_err(|e| CaptureError::Io(format!("stat dest: {e}")))?;
+                let src_meta = fs::metadata(&response_path)
+                    .map_err(|e| CaptureError::Io(format!("stat src: {e}")))?;
+                let src = response_path
+                    .to_str()
+                    .ok_or_else(|| CaptureError::Io("source path not valid UTF-8".into()))?;
+                let dst = path
+                    .to_str()
+                    .ok_or_else(|| CaptureError::Io("destination path not valid UTF-8".into()))?;
+                if dst_meta.dev() != src_meta.dev() {
                     claw_bridge::fs::copy(src, dst)
-                        .expect("failed to move screenshot");
+                        .map_err(|e| CaptureError::Io(format!("copy: {e}")))?;
                     claw_bridge::fs::rm(src)
-                        .expect("failed to remove temporary screenshot");
+                        .map_err(|e| CaptureError::Io(format!("rm temp: {e}")))?;
                 } else {
-                    let src = response_path
-                        .to_str()
-                        .expect("screenshot source path is not valid UTF-8");
-                    let dst = path
-                        .to_str()
-                        .expect("screenshot destination path is not valid UTF-8");
                     claw_bridge::fs::rename(src, dst)
-                        .expect("failed to move screenshot");
+                        .map_err(|e| CaptureError::Io(format!("rename: {e}")))?;
                 }
-
                 path.to_string_lossy().to_string()
             } else {
                 response_path.to_string_lossy().to_string()
             }
         }
         "clipboard" => String::new(),
-        scheme => panic!("unsupported scheme '{}'", scheme),
+        scheme => {
+            return Err(CaptureError::Other(format!("unsupported scheme '{scheme}'")));
+        }
     };
 
-    println!("{path}");
+    Ok(CaptureOutcome {
+        path,
+        cancelled: false,
+    })
+}
+
+async fn send_notification(path: &str) {
+    let connection = Connection::session()
+        .await
+        .expect("failed to connect to session bus");
+
+    let message = if path.is_empty() {
+        fl!("screenshot-saved-to-clipboard")
+    } else {
+        fl!("screenshot-saved-to")
+    };
+    let proxy = NotificationsProxy::new(&connection)
+        .await
+        .expect("failed to create proxy");
+    _ = proxy
+        .notify(
+            &fl!("cosmic-screenshot"),
+            0,
+            "com.clawos.Screenshot",
+            &message,
+            path,
+            &[],
+            HashMap::from([("transient", &Value::Bool(true))]),
+            5000,
+        )
+        .await
+        .expect("failed to send notification");
+}
+
+//TODO: better error handling
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    crate::localize::localize();
+
+    // The kernel agent spawns this binary with `COS_MCP_SERVER=1` so
+    // the same executable can be reused as an MCP tool provider. The
+    // flag form `--mcp-server` is supported for manual testing only;
+    // production callers always go through the env var.
+    let mcp_mode = std::env::var("COS_MCP_SERVER").as_deref() == Ok("1")
+        || std::env::args().any(|a| a == "--mcp-server");
+
+    if mcp_mode {
+        let server = cos_mcp_serve::Server::new("cosmic-screenshot", env!("CARGO_PKG_VERSION"))
+            .tool(Arc::new(mcp::CaptureTool));
+        if let Err(e) = server.serve_stdio().await {
+            eprintln!("cosmic-screenshot MCP server exited: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    let args = Args::parse();
+
+    let outcome = match capture(CaptureOptions {
+        interactive: args.interactive,
+        modal: args.modal,
+        save_dir: args.save_dir.clone(),
+    })
+    .await
+    {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+
+    if outcome.cancelled {
+        println!("Screenshot cancelled by user");
+        std::process::exit(0);
+    }
+
+    println!("{}", outcome.path);
 
     if args.notify {
-        let connection = Connection::session()
-            .await
-            .expect("failed to connect to session bus");
-
-        let message = if path.is_empty() {
-            fl!("screenshot-saved-to-clipboard")
-        } else {
-            fl!("screenshot-saved-to")
-        };
-        let proxy = NotificationsProxy::new(&connection)
-            .await
-            .expect("failed to create proxy");
-        _ = proxy
-            .notify(
-                &fl!("cosmic-screenshot"),
-                0,
-                "com.clawos.Screenshot",
-                &message,
-                &path,
-                &[],
-                HashMap::from([("transient", &Value::Bool(true))]),
-                5000,
-            )
-            .await
-            .expect("failed to send notification");
+        send_notification(&outcome.path).await;
     }
 }

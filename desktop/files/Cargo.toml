@@ -8,7 +8,9 @@ rust-version = "1.93"
 
 [dependencies]
 anyhow = "1"
+async-trait = "0.1"
 claw-bridge = { path = "../../crates/claw-bridge" }
+cos-mcp-serve = { path = "../../crates/cos-mcp-serve" }
 jiff = "0.2"
 jiff-icu = "0.2"
 icu = { version = "2.2.0", features = ["compiled_data"] }
@@ -34,7 +36,7 @@ serde_json = "1"
 shlex = { version = "1.3" }
 tempfile = "3"
 tikv-jemallocator = { version = "0.6", optional = true }
-tokio = { version = "1", features = ["process", "sync"] }
+tokio = { version = "1", features = ["process", "sync", "rt", "macros", "io-std", "io-util"] }
 trash = { git = "https://github.com/jackpot51/trash-rs.git", branch = "cosmic" }
 url = "2.5"
 walkdir = "2.5.0"

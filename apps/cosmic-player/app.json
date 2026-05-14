@@ -1,0 +1,63 @@
+{
+  "id": "cosmic-player",
+  "version": "0.1.0",
+  "name": {
+    "en": "Media Player"
+  },
+  "summary": {
+    "en": "Control whichever MPRIS2-compatible media player is on the session bus."
+  },
+  "icon": "🎵",
+  "runtime": "binary",
+  "operations": {},
+  "session": {
+    "entry": "/usr/bin/cosmic-player",
+    "transport": "stdio",
+    "tools": [
+      {
+        "name": "player.play",
+        "summary": { "en": "Resume playback on the active MPRIS player." },
+        "args": [],
+        "needs": []
+      },
+      {
+        "name": "player.pause",
+        "summary": { "en": "Pause the active MPRIS player." },
+        "args": [],
+        "needs": []
+      },
+      {
+        "name": "player.stop",
+        "summary": { "en": "Stop playback on the active MPRIS player." },
+        "args": [],
+        "needs": []
+      },
+      {
+        "name": "player.next",
+        "summary": { "en": "Skip to the next track." },
+        "args": [],
+        "needs": []
+      },
+      {
+        "name": "player.previous",
+        "summary": { "en": "Skip to the previous track." },
+        "args": [],
+        "needs": []
+      },
+      {
+        "name": "player.toggle",
+        "summary": { "en": "Toggle play/pause on the active MPRIS player." },
+        "args": [],
+        "needs": []
+      },
+      {
+        "name": "player.status",
+        "summary": {
+          "en": "Return the active MPRIS player's identity, playback status, and current track metadata."
+        },
+        "args": [],
+        "needs": []
+      }
+    ]
+  }
+}

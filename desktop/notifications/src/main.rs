@@ -1,5 +1,6 @@
 mod app;
 mod config;
+mod mcp;
 mod subscriptions;
 
 use config::APP_ID;
@@ -9,6 +10,13 @@ use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 use crate::config::VERSION;
 
 fn main() -> anyhow::Result<()> {
+    // MCP server mode — kernel agent spawns us with this env var
+    // set when bringing up the App's session. We can't initialise
+    // libcosmic in this mode (we'd open a window we don't want).
+    if std::env::var("COS_MCP_SERVER").as_deref() == Ok("1") {
+        return mcp::run();
+    }
+
     color_backtrace::install();
     let trace = tracing_subscriber::registry();
 
