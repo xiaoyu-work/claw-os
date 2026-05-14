@@ -130,6 +130,21 @@ class Review:
 
 
 @dataclass
+class ProposedToolCall:
+    """A tool call the model proposed but the gate did **not** execute.
+
+    The kernel surfaces these in ``AiResponse.tool_calls``. Apps
+    decide whether to fulfil any of them by calling
+    :func:`_lib.tools.call` with the same ``name`` and ``input``.
+    The ``id`` echoes back to the provider on the next turn.
+    """
+
+    id: str
+    name: str
+    input: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class AiResponse:
     text: str
     model: str
@@ -140,6 +155,7 @@ class AiResponse:
     usage: Usage = field(default_factory=Usage)
     budget: Budget = field(default_factory=Budget)
     review: Review = field(default_factory=Review)
+    tool_calls: List[ProposedToolCall] = field(default_factory=list)
     raw: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -155,6 +171,7 @@ def chat(
     max_units: Optional[int] = None,
     system: Optional[str] = None,
     app_id: Optional[str] = None,
+    tools: Optional[List[str]] = None,
 ) -> AiResponse:
     """Send a single-shot chat completion through the kernel's AI gate.
 
@@ -162,6 +179,13 @@ def chat(
     from ``origin``: pass ``"external-content"`` for any third-party
     text (emails, web pages, file contents, another agent's output)
     so the strict safety pipeline kicks in.
+
+    ``tools`` is a list of catalog tool names (e.g.
+    ``["fs.read_text", "kv.get"]``) the model may *propose* calling.
+    The gate **never** executes them — proposed calls come back in
+    :attr:`AiResponse.tool_calls`. Apps inspect them and re-call the
+    kernel via :func:`_lib.tools.call` for whichever they choose.
+    Use :mod:`_lib.tools` to look up the catalog at runtime.
 
     Returns an :class:`AiResponse`. Raises :class:`AiBudgetExceeded`,
     :class:`AiSafetyViolation`, :class:`AiDenied`, or
@@ -176,6 +200,7 @@ def chat(
         max_units=max_units,
         system=system,
         app_id=app_id,
+        tools=tools,
     )
 
 
@@ -385,6 +410,7 @@ def _dispatch(
     audio_output: Optional[str] = None,
     video_input: Optional[str] = None,
     video_output: Optional[str] = None,
+    tools: Optional[List[str]] = None,
 ) -> AiResponse:
     """Build the `cos ai chat` command line and parse the envelope.
 
@@ -419,6 +445,8 @@ def _dispatch(
         cmd.extend(["--video-input", video_input])
     if video_output is not None:
         cmd.extend(["--video-output", video_output])
+    if tools:
+        cmd.extend(["--tools", ",".join(tools)])
 
     proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
     payload_text = (proc.stdout or "").strip() or (proc.stderr or "").strip()
@@ -445,6 +473,19 @@ def _parse_response(env: Mapping[str, Any]) -> AiResponse:
     budget_blk = env.get("budget") or {}
     review = env.get("review") or {}
     embedding_raw = env.get("embedding") or []
+    raw_calls = env.get("tool_calls") or []
+    parsed_calls: List[ProposedToolCall] = []
+    if isinstance(raw_calls, list):
+        for tc in raw_calls:
+            if not isinstance(tc, Mapping):
+                continue
+            parsed_calls.append(
+                ProposedToolCall(
+                    id=str(tc.get("id", "")),
+                    name=str(tc.get("name", "")),
+                    input=dict(tc.get("input") or {}),
+                )
+            )
     return AiResponse(
         text=env.get("text", ""),
         model=env.get("model", ""),
@@ -466,6 +507,7 @@ def _parse_response(env: Mapping[str, Any]) -> AiResponse:
             safety=review.get("safety", "strict"),
             prompt_redacted=bool(review.get("prompt_redacted", False)),
         ),
+        tool_calls=parsed_calls,
         raw=dict(env),
     )
 
