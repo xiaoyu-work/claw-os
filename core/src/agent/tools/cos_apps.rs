@@ -1,23 +1,28 @@
 //! cos *apps* proxy tools — bridge cos's Python apps into the
 //! agent's tool registry.
 //!
-//! Each cos app (`fs`, `log`, `notify`, `kv`, `db`, `email`,
-//! `calendar`, `search`, `web`) ships its own `main.py` with a
-//! `run(command, args)` entry point; the kernel calls them via
-//! `bridge::run_python_app`. This module reuses the same bridge
-//! so the agent inherits the apps without re-implementing them.
+//! Every directory under `$COS_APPS_DIR` (default `/usr/lib/cos/apps`)
+//! that holds a valid `app.json` becomes one tool named
+//! `cos_app_<id>`. The manifest is the single source of truth: the
+//! tool's description is built from `name + summary + operation
+//! labels`, and the `command` enum is the list of declared
+//! operation keys. **No app list is hardcoded** — installing a new
+//! app and restarting the agent is enough to expose it.
 //!
-//! Naming: the LLM-facing tool is `cos_app_<name>` (e.g.
+//! Naming: the LLM-facing tool is `cos_app_<id>` (e.g.
 //! `cos_app_fs`) so the namespace stays distinct from the
 //! `cos_<primitive>` proxies that wrap built-in Rust kernel
 //! primitives. Apps and primitives are dispatched through
 //! different code paths and have different policy semantics —
 //! the name prefix makes the source obvious.
 //!
-//! The schema of every app tool is the same as the primitive
-//! proxies: `{ command: enum, args: array<string> }` so the
-//! invocation grammar matches what the model already knows from
-//! `cos_proxy::CosPrimitiveTool`.
+//! The schema is the same as the primitive proxies:
+//! `{ command: enum, args: array<string> }` so the invocation
+//! grammar matches `cos_proxy::CosPrimitiveTool`.
+//!
+//! For *fully dynamic* discovery (no restart), see also
+//! [`CosAppCatalog`] and [`CosAppRun`] at the bottom of this file:
+//! they re-scan the apps dir on every call and dispatch by name.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -25,98 +30,16 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
+use crate::caps::manifest::Manifest;
+
 use super::registry::ToolRegistry;
 use super::{Tool, ToolResult};
 
-/// Tool descriptor for one cos Python app.
-struct AppSpec {
-    /// Tool name surfaced to the LLM. Always `cos_app_<app>`.
-    name: &'static str,
-    /// Bare app name (matches the directory under apps/).
-    app: &'static str,
-    description: &'static str,
-    commands: &'static [&'static str],
-}
-
-const APPS: &[AppSpec] = &[
-    AppSpec {
-        name: "cos_app_fs",
-        app: "fs",
-        description: "Agent-native file system. Read/write files with metadata sidecars, \
-                      list directories, search content, tag files, query recently changed.",
-        commands: &[
-            "ls", "read", "write", "rm", "mkdir", "stat", "search", "tag", "recent",
-        ],
-    },
-    AppSpec {
-        name: "cos_app_log",
-        app: "log",
-        description: "Structured kernel log. Write entries (info/warn/error), tail recent, \
-                      read filtered by app/status, FTS-style search across history.",
-        commands: &["write", "read", "tail", "search"],
-    },
-    AppSpec {
-        name: "cos_app_notify",
-        app: "notify",
-        description: "Send desktop notifications and list recent notification history.",
-        commands: &["send", "list"],
-    },
-    AppSpec {
-        name: "cos_app_kv",
-        app: "kv",
-        description: "Local key-value store. set/get/del/list/dump. Persists across \
-                      sessions in cos data dir.",
-        commands: &["set", "get", "del", "list", "dump"],
-    },
-    AppSpec {
-        name: "cos_app_db",
-        app: "db",
-        description: "SQLite databases under cos data dir. Run read-only `query`, \
-                      mutating `exec`, list `tables`/`schema`/`databases`.",
-        commands: &["query", "exec", "tables", "schema", "databases"],
-    },
-    AppSpec {
-        name: "cos_app_email",
-        app: "email",
-        description: "Send / search / list / read email via configured IMAP+SMTP \
-                      credentials.",
-        commands: &["send", "search", "list", "read"],
-    },
-    AppSpec {
-        name: "cos_app_calendar",
-        app: "calendar",
-        description: "Calendar events: list, today, create, update, delete. Backed by \
-                      configured CalDAV / Google Calendar / iCloud credentials.",
-        commands: &["list", "today", "create", "update", "delete"],
-    },
-    AppSpec {
-        name: "cos_app_search",
-        app: "search",
-        description: "Web and image search via configured search providers.",
-        commands: &["web", "image"],
-    },
-    AppSpec {
-        name: "cos_app_web",
-        app: "web",
-        description: "Read / scrape / screenshot / submit forms on web pages via \
-                      cos-browser. Use for any HTTP fetch where you need content, \
-                      DOM-rendered output, or visual capture.",
-        commands: &["read", "scrape", "screenshot", "submit"],
-    },
-    AppSpec {
-        name: "cos_app_pkg",
-        app: "pkg",
-        description: "System package manager. `search <query>` browses the apt \
-                      catalog when the user asks \"what software can do X?\" — \
-                      returns name + one-line summary. `show <name>` returns \
-                      full metadata (version, description, homepage, depends). \
-                      `has <name>` checks whether a package or command is \
-                      installed; `need <name>...` installs anything missing; \
-                      `list` enumerates installed packages.",
-        commands: &["need", "has", "list", "search", "show"],
-    },
-];
-
+/// One LLM-visible proxy bound to a single cos app. All fields are
+/// `&'static str` to satisfy the [`Tool`] trait; for manifest-built
+/// instances, the strings are allocated with `Box::leak` once at
+/// registration time and live for the agent process lifetime (a
+/// bounded one-shot leak per app).
 pub struct CosAppTool {
     name: &'static str,
     app: &'static str,
@@ -137,6 +60,79 @@ impl CosAppTool {
             description,
             commands,
         }
+    }
+
+    /// Build a proxy from a discovered manifest. The strings the
+    /// [`Tool`] trait exposes outlive the manifest, so we leak them
+    /// — see the type doc for why this is safe.
+    fn from_manifest(manifest: &Manifest) -> Self {
+        let name: &'static str =
+            Box::leak(format!("cos_app_{}", manifest.id).into_boxed_str());
+        let app: &'static str = Box::leak(manifest.id.clone().into_boxed_str());
+        let description: &'static str = Box::leak(build_description(manifest).into_boxed_str());
+
+        let cmds: Vec<&'static str> = manifest
+            .operations
+            .keys()
+            .map(|k| -> &'static str { Box::leak(k.clone().into_boxed_str()) })
+            .collect();
+        let commands: &'static [&'static str] = Box::leak(cmds.into_boxed_slice());
+
+        Self {
+            name,
+            app,
+            description,
+            commands,
+        }
+    }
+}
+
+/// Compose a single-line description for the LLM out of the
+/// manifest's `name`, `summary`, and operation `label`s.
+///
+/// Format: `"<name>. <summary> Verbs: <op1 label>, <op2 label>, …"`.
+/// Falls back gracefully when summary or labels are missing.
+fn build_description(manifest: &Manifest) -> String {
+    let mut out = String::new();
+    let name = manifest.name.current().trim();
+    if !name.is_empty() {
+        out.push_str(name);
+        out.push('.');
+    }
+    let summary = manifest.summary.current().trim();
+    if !summary.is_empty() {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(summary);
+        if !summary.ends_with('.') && !summary.ends_with('!') && !summary.ends_with('?') {
+            out.push('.');
+        }
+    }
+    if !manifest.operations.is_empty() {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        let labels: Vec<String> = manifest
+            .operations
+            .iter()
+            .map(|(verb, op)| {
+                let label = op.label.current().trim();
+                if label.is_empty() {
+                    verb.clone()
+                } else {
+                    format!("{} ({})", verb, label)
+                }
+            })
+            .collect();
+        out.push_str("Verbs: ");
+        out.push_str(&labels.join(", "));
+        out.push('.');
+    }
+    if out.is_empty() {
+        format!("cos app `{}` (no description provided).", manifest.id)
+    } else {
+        out
     }
 }
 
@@ -614,23 +610,21 @@ fn is_valid_app_id(s: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
 }
 
-/// Register every cos app proxy on the supplied registry.
+/// Register one [`CosAppTool`] per app discovered under `$COS_APPS_DIR`,
+/// plus the always-on [`CosAppCatalog`] / [`CosAppRun`] generics.
+///
+/// Discovery happens *here*, at registry construction time, so the
+/// set of typed `cos_app_<id>` tools reflects what was on disk when
+/// the agent started. For apps installed after that point — and for
+/// long-tail apps the LLM might want to introspect — the dynamic
+/// `cos_app_catalog` / `cos_app_run` pair re-scans on every call.
 pub fn register_all(registry: &mut ToolRegistry) {
-    for spec in APPS {
-        registry.register(Arc::new(CosAppTool::new(
-            spec.name,
-            spec.app,
-            spec.description,
-            spec.commands,
-        )));
+    let apps = crate::apps::discover(&apps_root());
+    for app in apps.values() {
+        registry.register(Arc::new(CosAppTool::from_manifest(&app.manifest)));
     }
     registry.register(Arc::new(CosAppCatalog));
     registry.register(Arc::new(CosAppRun));
-}
-
-/// Number of cos app proxies shipped.
-pub const fn count() -> usize {
-    APPS.len()
 }
 
 /// Tool name prefix: every app proxy starts with this.
@@ -640,71 +634,157 @@ pub const NAME_PREFIX: &str = "cos_app_";
 mod tests {
     use super::*;
 
-    #[test]
-    fn every_app_has_at_least_one_command() {
-        for spec in APPS {
-            assert!(
-                !spec.commands.is_empty(),
-                "app {} has empty command list",
-                spec.app
-            );
+    /// Build a small tempdir holding two synthetic apps so the
+    /// dynamic registration path can be exercised without depending
+    /// on what's installed on the host.
+    fn write_two_demo_apps() -> tempfile::TempDir {
+        let root = tempfile::tempdir().unwrap();
+        let fs_dir = root.path().join("fs");
+        std::fs::create_dir_all(&fs_dir).unwrap();
+        std::fs::write(
+            fs_dir.join("app.json"),
+            serde_json::json!({
+                "id": "fs",
+                "version": "0.1.0",
+                "name": {"en": "Files"},
+                "summary": {"en": "Agent-native file system."},
+                "operations": {
+                    "ls":   {"label": {"en": "List files"}, "args": [], "needs": []},
+                    "read": {"label": {"en": "Read a file"}, "args": [], "needs": []}
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let notify_dir = root.path().join("notify");
+        std::fs::create_dir_all(&notify_dir).unwrap();
+        std::fs::write(
+            notify_dir.join("app.json"),
+            serde_json::json!({
+                "id": "notify",
+                "version": "0.1.0",
+                "name": {"en": "Notifications"},
+                "summary": {"en": "Send desktop notifications."},
+                "operations": {
+                    "send": {"label": {"en": "Send a notification"}, "args": [], "needs": []}
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        root
+    }
+
+    /// Serialised env mutation: several tests set $COS_APPS_DIR in
+    /// parallel — share one lock so they don't fight.
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn with_apps_dir<R>(tmp: &tempfile::TempDir, f: impl FnOnce() -> R) -> R {
+        let prev = std::env::var("COS_APPS_DIR").ok();
+        std::env::set_var("COS_APPS_DIR", tmp.path());
+        let r = f();
+        match prev {
+            Some(v) => std::env::set_var("COS_APPS_DIR", v),
+            None => std::env::remove_var("COS_APPS_DIR"),
         }
+        r
     }
 
     #[test]
-    fn names_are_unique_and_prefixed() {
-        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        for spec in APPS {
-            assert!(seen.insert(spec.name), "duplicate name {}", spec.name);
-            assert!(
-                spec.name.starts_with(NAME_PREFIX),
-                "name {} should start with {}",
-                spec.name,
-                NAME_PREFIX
-            );
-            assert_eq!(spec.name, format!("{}{}", NAME_PREFIX, spec.app));
-        }
+    fn register_all_picks_up_every_manifest_on_disk() {
+        let _g = env_lock();
+        let tmp = write_two_demo_apps();
+        with_apps_dir(&tmp, || {
+            let mut r = ToolRegistry::new();
+            register_all(&mut r);
+            // 2 typed proxies + catalog + run.
+            assert_eq!(r.len(), 4);
+            assert!(r.get("cos_app_fs").is_some());
+            assert!(r.get("cos_app_notify").is_some());
+            assert!(r.get("cos_app_catalog").is_some());
+            assert!(r.get("cos_app_run").is_some());
+        });
     }
 
     #[test]
-    fn register_all_adds_all_apps() {
+    fn register_all_yields_no_typed_proxies_when_apps_dir_empty() {
+        let _g = env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::var("COS_APPS_DIR").ok();
+        std::env::set_var("COS_APPS_DIR", tmp.path());
         let mut r = ToolRegistry::new();
         register_all(&mut r);
-        // APPS proxies plus the two generic catalog/run tools.
-        assert_eq!(r.len(), count() + 2);
-        assert!(r.get("cos_app_fs").is_some());
-        assert!(r.get("cos_app_log").is_some());
-        assert!(r.get("cos_app_notify").is_some());
-        assert!(r.get("cos_app_kv").is_some());
-        assert!(r.get("cos_app_db").is_some());
-        assert!(r.get("cos_app_email").is_some());
-        assert!(r.get("cos_app_calendar").is_some());
-        assert!(r.get("cos_app_search").is_some());
-        assert!(r.get("cos_app_web").is_some());
-        assert!(r.get("cos_app_pkg").is_some());
+        match prev {
+            Some(v) => std::env::set_var("COS_APPS_DIR", v),
+            None => std::env::remove_var("COS_APPS_DIR"),
+        }
+        // Only catalog + run survive when no manifests exist.
+        assert_eq!(r.len(), 2);
         assert!(r.get("cos_app_catalog").is_some());
         assert!(r.get("cos_app_run").is_some());
     }
 
     #[test]
-    fn schema_includes_command_enum() {
-        let mut r = ToolRegistry::new();
-        register_all(&mut r);
-        let tool = r.get("cos_app_fs").unwrap();
-        let schema = tool.input_schema();
-        let enum_vals = schema
-            .pointer("/properties/command/enum")
-            .and_then(Value::as_array)
-            .expect("enum must be present");
-        let names: Vec<&str> = enum_vals.iter().filter_map(|v| v.as_str()).collect();
-        for expected in [
-            "ls", "read", "write", "rm", "mkdir", "stat", "search", "tag", "recent",
-        ] {
+    fn manifest_drives_command_enum() {
+        let _g = env_lock();
+        let tmp = write_two_demo_apps();
+        with_apps_dir(&tmp, || {
+            let mut r = ToolRegistry::new();
+            register_all(&mut r);
+            let tool = r.get("cos_app_fs").expect("fs must be registered");
+            let schema = tool.input_schema();
+            let enum_vals = schema
+                .pointer("/properties/command/enum")
+                .and_then(Value::as_array)
+                .expect("enum must be present");
+            let names: std::collections::HashSet<&str> =
+                enum_vals.iter().filter_map(|v| v.as_str()).collect();
+            assert!(names.contains("ls"), "got {names:?}");
+            assert!(names.contains("read"), "got {names:?}");
+            assert_eq!(names.len(), 2, "extra commands appeared: {names:?}");
+        });
+    }
+
+    #[test]
+    fn description_includes_name_summary_and_verb_labels() {
+        let _g = env_lock();
+        let tmp = write_two_demo_apps();
+        with_apps_dir(&tmp, || {
+            let mut r = ToolRegistry::new();
+            register_all(&mut r);
+            let tool = r.get("cos_app_fs").unwrap();
+            let desc = tool.description();
+            assert!(desc.contains("Files"), "want app name in description: {desc}");
             assert!(
-                names.contains(&expected),
-                "fs schema enum should contain {expected}, got {names:?}"
+                desc.contains("Agent-native file system"),
+                "want summary in description: {desc}"
             );
-        }
+            assert!(
+                desc.contains("List files") && desc.contains("Read a file"),
+                "want verb labels in description: {desc}"
+            );
+        });
+    }
+
+    #[test]
+    fn registered_tool_names_are_unique_and_prefixed() {
+        let _g = env_lock();
+        let tmp = write_two_demo_apps();
+        with_apps_dir(&tmp, || {
+            let mut r = ToolRegistry::new();
+            register_all(&mut r);
+            let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+            for name in r.names() {
+                if let Some(rest) = name.strip_prefix(NAME_PREFIX) {
+                    assert!(seen.insert(name), "duplicate {name}");
+                    assert!(!rest.is_empty(), "tool {name} has empty suffix");
+                }
+            }
+            assert_eq!(NAME_PREFIX, "cos_app_");
+        });
     }
 
     #[tokio::test]
@@ -802,12 +882,6 @@ mod tests {
                 result.content
             );
         }
-    }
-
-    #[test]
-    fn count_constant_matches_table() {
-        assert_eq!(count(), APPS.len());
-        assert_eq!(count(), 10);
     }
 
     #[test]
