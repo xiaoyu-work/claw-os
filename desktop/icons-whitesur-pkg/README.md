@@ -1,8 +1,8 @@
 # claw-icons-whitesur
 
 Vendors [vinceliuice/WhiteSur-icon-theme](https://github.com/vinceliuice/WhiteSur-icon-theme)
-(GPL-3.0-or-later) as a git submodule under `../icons-whitesur/` and wraps
-its `install.sh` in a justfile + debian/ packaging so it can be built as a
+(GPL-3.0-or-later) directly under `../icons-whitesur/` and wraps its
+`install.sh` in a justfile + debian/ packaging so it can be built as a
 `.deb` alongside `cosmic-icons`.
 
 ## Why
@@ -19,12 +19,11 @@ per-app code changes.
 
 ## Layout
 
-    desktop/icons-whitesur/         submodule (upstream sources, ~60 MB)
+    desktop/icons-whitesur/         vendored upstream sources (~67 MB)
     desktop/icons-whitesur-pkg/     this wrapper (justfile + debian/)
 
-The submodule is *not* fetched by default. Initialise once after cloning:
-
-    git submodule update --init desktop/icons-whitesur
+`desktop/icons-whitesur/UPSTREAM_COMMIT` records the exact upstream SHA
+this snapshot was taken from.
 
 ## Build
 
@@ -39,16 +38,20 @@ which installs the default blue variant in light + dark to:
 
 ## Updating
 
-Bump the submodule pointer:
+Refresh from upstream by re-vendoring:
 
-    cd desktop/icons-whitesur
-    git fetch && git checkout <new-sha>
-    cd ../..
+    rm -rf desktop/icons-whitesur
+    git clone --depth 1 https://github.com/vinceliuice/WhiteSur-icon-theme \
+        desktop/icons-whitesur
+    UPSTREAM_SHA=$(git -C desktop/icons-whitesur rev-parse HEAD)
+    echo "$UPSTREAM_SHA" > desktop/icons-whitesur/UPSTREAM_COMMIT
+    rm -rf desktop/icons-whitesur/.git
     git add desktop/icons-whitesur
-    git commit -m "icons-whitesur: bump to <new-sha>"
+    git commit -m "icons-whitesur: bump to $UPSTREAM_SHA"
 
 Then bump `debian/changelog` in this directory.
 
 ## License
 
 GPL-3.0-or-later (matches upstream). See `debian/copyright`.
+
