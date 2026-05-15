@@ -1,0 +1,49 @@
+/* Compose popup. */
+
+.compose-popup     { width: 480px; }
+.panel             { padding-top: 10px; }
+
+.suggestion {
+  background: var(--claw-panel);
+  border: 1px solid var(--claw-border);
+  border-radius: var(--claw-radius);
+  padding: 10px 12px;
+  margin: 8px 0;
+}
+.suggestion .style-tag {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  color: var(--claw-muted);
+  margin-bottom: 4px;
+}
+.suggestion .body {
+  white-space: pre-wrap;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.suggestion .actions {
+  margin-top: 8px;
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.compose-output {
+  background: var(--claw-panel);
+  border: 1px solid var(--claw-border);
+  border-radius: var(--claw-radius);
+  padding: 10px 12px;
+  margin: 10px 0 0 0;
+  white-space: pre-wrap;
+}
+.compose-subject {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.compose-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}

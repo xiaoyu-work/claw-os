@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# rootfs/features/claw-mail-ai/install.sh — wire the Claw Mail AI
+# Thunderbird MailExtension and its Python Native Messaging host into
+# the rootfs.
+#
+# Lay-down:
+#   /usr/lib/cos/mail-ai/                    — python host + verb impls + _lib copy
+#   /usr/lib/cos/claw-mail-ai-host           — shell launcher (NM `path`)
+#   /etc/thunderbird/native-messaging-hosts/os.claw.mail_ai.json
+#                                            — NM host manifest
+#   /usr/lib/thunderbird/distribution/extensions/claw-mail-ai@claw.os.xpi
+#                                            — packed extension, distribution-installed
+#   /etc/thunderbird/policies/policies.json  — pin/lock + privacy defaults
+#
+# Inherited: $ROOTFS, $PROJECT_DIR, $SCRIPT_DIR (features/), $COS_VERSION.
+
+set -euo pipefail
+
+EXT_SRC="$PROJECT_DIR/extensions/claw-mail-ai"
+APP_SRC="$PROJECT_DIR/apps/mail-ai"
+LIB_SRC="$PROJECT_DIR/apps/_lib"
+FEATURE_DIR="$SCRIPT_DIR/features/claw-mail-ai"
+
+EXT_ID="claw-mail-ai@claw.os"
+
+# ---------------------------------------------------------------------------
+# 0. Sanity — make sure the source trees we expect exist.
+# ---------------------------------------------------------------------------
+for d in "$EXT_SRC" "$APP_SRC" "$LIB_SRC"; do
+    if [ ! -d "$d" ]; then
+        echo "  error: required source dir missing: $d" >&2
+        exit 1
+    fi
+done
+if [ ! -f "$EXT_SRC/manifest.json" ]; then
+    echo "  error: $EXT_SRC/manifest.json not found" >&2
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# 1. Apply static overlay (NM manifest, policies, host launcher).
+# ---------------------------------------------------------------------------
+if [ -d "$FEATURE_DIR/overlay" ] && [ -n "$(ls -A "$FEATURE_DIR/overlay" 2>/dev/null)" ]; then
+    echo "  :: applying claw-mail-ai overlay"
+    cp -a "$FEATURE_DIR/overlay/." "$ROOTFS/"
+    # Make sure the launcher we drop in is executable.
+    if [ -f "$ROOTFS/usr/lib/cos/claw-mail-ai-host" ]; then
+        chmod 0755 "$ROOTFS/usr/lib/cos/claw-mail-ai-host"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# 2. Copy the Python host + verb impls + _lib into /usr/lib/cos/mail-ai/.
+#    This is self-contained: native_host.py adds its dir + parent to
+#    sys.path, so `import _lib.ai` etc. work without any global
+#    PYTHONPATH munging.
+# ---------------------------------------------------------------------------
+APP_DEST="$ROOTFS/usr/lib/cos/mail-ai"
+echo "  :: installing Python host  → /usr/lib/cos/mail-ai"
+install -d -m 0755 "$APP_DEST"
+cp -a "$APP_SRC/." "$APP_DEST/"
+# Drop test files from the system copy — they're not needed at runtime.
+rm -f "$APP_DEST/test_main.py"
+# _lib lives one directory up at /usr/lib/cos/_lib so the relative
+# import path `from _lib.ai import chat` (used by main.py) resolves.
+LIB_DEST="$ROOTFS/usr/lib/cos/_lib"
+if [ ! -d "$LIB_DEST" ]; then
+    echo "  :: installing apps/_lib → /usr/lib/cos/_lib"
+    install -d -m 0755 "$LIB_DEST"
+    cp -a "$LIB_SRC/." "$LIB_DEST/"
+fi
+chmod 0755 "$APP_DEST/native_host.py" 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+# 3. Pack the WebExtension as an XPI and drop it into Thunderbird's
+#    distribution/extensions directory, where Thunderbird auto-installs
+#    it for every profile on first launch.
+#
+#    The XPI is just a zip of the extension's contents with the .xpi
+#    suffix. The filename **must** match the gecko id from manifest.json.
+# ---------------------------------------------------------------------------
+XPI_NAME="${EXT_ID}.xpi"
+XPI_DEST_DIR="$ROOTFS/usr/lib/thunderbird/distribution/extensions"
+echo "  :: packaging extension     → $XPI_DEST_DIR/$XPI_NAME"
+install -d -m 0755 "$XPI_DEST_DIR"
+
+# Build the .xpi inside the chroot so we use the chroot's `zip` binary
+# (host may not have it). Mount the source dir read-only into the chroot
+# via a bind mount over /tmp/claw-mail-ai-src.
+SRC_MOUNT="$ROOTFS/tmp/claw-mail-ai-src"
+mkdir -p "$SRC_MOUNT"
+mount --bind "$EXT_SRC" "$SRC_MOUNT"
+trap 'umount "$SRC_MOUNT" 2>/dev/null || true; rmdir "$SRC_MOUNT" 2>/dev/null || true' EXIT
+
+chroot "$ROOTFS" /bin/sh -ec "
+    cd /tmp/claw-mail-ai-src
+    rm -f /usr/lib/thunderbird/distribution/extensions/${XPI_NAME}
+    # The manifest must be at the root of the zip — that's why we cd into
+    # the extension dir first. -X strips uid/gid/atime, -r recurses.
+    zip -X -r -q /usr/lib/thunderbird/distribution/extensions/${XPI_NAME} . \\
+        -x '*.git*' '*.DS_Store' 'test_*.py' '*.swp' '*.bak'
+"
+chmod 0644 "$XPI_DEST_DIR/$XPI_NAME"
+
+umount "$SRC_MOUNT" 2>/dev/null || true
+rmdir "$SRC_MOUNT" 2>/dev/null || true
+trap - EXIT
+
+# ---------------------------------------------------------------------------
+# 4. Drop a marker README so admins can find the extension source on disk.
+# ---------------------------------------------------------------------------
+README_DEST="$ROOTFS/usr/share/doc/claw-mail-ai"
+install -d -m 0755 "$README_DEST"
+cp "$EXT_SRC/README.md" "$README_DEST/README.md"
+
+echo "  :: claw-mail-ai feature applied"

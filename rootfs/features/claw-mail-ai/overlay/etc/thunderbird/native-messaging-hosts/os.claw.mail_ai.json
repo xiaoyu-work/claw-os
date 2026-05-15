@@ -1,0 +1,7 @@
+{
+  "name": "os.claw.mail_ai",
+  "description": "Claw Mail AI — Native Messaging bridge between Thunderbird and apps/mail-ai",
+  "path": "/usr/lib/cos/claw-mail-ai-host",
+  "type": "stdio",
+  "allowed_extensions": ["claw-mail-ai@claw.os"]
+}

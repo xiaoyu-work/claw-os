@@ -1,0 +1,90 @@
+{
+  "extension_name":            { "message": "Claw Mail AI" },
+  "extension_description":     { "message": "On-device AI assistant for Thunderbird, routed through claw-os." },
+
+  "action_title":              { "message": "Claw AI Assistant" },
+  "summarize_title":           { "message": "Summary" },
+  "compose_title":             { "message": "AI Compose" },
+  "translate_title":           { "message": "Translate" },
+  "assistant_title":           { "message": "Mail Assistant" },
+  "options_title":             { "message": "Claw Mail AI" },
+
+  "tab_smart_reply":           { "message": "Smart Reply" },
+  "tab_smart_compose":         { "message": "Smart Compose" },
+
+  "ctx_summarize":             { "message": "Summarize with Claw AI" },
+  "ctx_translate":             { "message": "Translate with Claw AI" },
+  "ctx_smart_reply":           { "message": "Smart Reply with Claw AI" },
+
+  "label_summary":             { "message": "Summary" },
+  "label_key_points":          { "message": "Key points" },
+  "label_action_items":        { "message": "Action items" },
+  "label_intent":              { "message": "Optional hint (what you want to say)" },
+  "label_intent_compose":      { "message": "What do you want to say?" },
+  "label_style":               { "message": "Style" },
+  "label_target_language":     { "message": "Target language" },
+  "label_source_text":         { "message": "Source" },
+
+  "style_formal":              { "message": "Formal" },
+  "style_casual":              { "message": "Casual" },
+  "style_short":               { "message": "Short" },
+
+  "action_refresh":            { "message": "Refresh" },
+  "action_copy":               { "message": "Copy" },
+  "action_open_assistant":     { "message": "Open Assistant" },
+  "action_suggest":            { "message": "Suggest replies" },
+  "action_generate":           { "message": "Generate" },
+  "action_insert":             { "message": "Insert" },
+  "action_replace":            { "message": "Replace draft" },
+  "action_translate":          { "message": "Translate" },
+  "action_send":               { "message": "Send" },
+  "action_clear_history":      { "message": "Clear history" },
+  "action_options":            { "message": "Options" },
+  "action_save":               { "message": "Save" },
+
+  "copied":                    { "message": "Copied!" },
+  "inserted":                  { "message": "Inserted!" },
+  "saved":                     { "message": "Saved" },
+  "busy":                      { "message": "Working…" },
+  "error":                     { "message": "Error" },
+
+  "err_no_message":            { "message": "No message selected." },
+  "err_fetch_body":            { "message": "Could not fetch the message body." },
+  "err_empty_body":            { "message": "The message body is empty." },
+  "err_no_compose_tab":        { "message": "Not inside a compose window." },
+  "err_nothing_to_reply":      { "message": "No thread to reply to. Use Smart Compose instead." },
+  "err_no_intent":             { "message": "Tell me what you want to say." },
+  "err_empty_source":          { "message": "Source is empty." },
+  "err_no_target":             { "message": "Pick a target language." },
+
+  "ph_reply_intent":           { "message": "e.g. decline politely" },
+  "ph_compose_intent":         { "message": "e.g. confirm Friday's meeting at 3pm and ask for the agenda" },
+  "ph_source":                 { "message": "Text to translate" },
+  "ph_assistant_input":        { "message": "Ask about your inbox… (Ctrl+Enter to send)" },
+
+  "assistant_welcome":         { "message": "Hi! Ask me about your inbox. I can summarize threads, find emails, and draft replies." },
+  "assistant_disabled":        { "message": "Assistant disabled in options." },
+
+  "opt_features":              { "message": "Features" },
+  "opt_features_help":         { "message": "Toggle which AI tools are available." },
+  "opt_triage":                { "message": "Triage rules" },
+  "opt_triage_help":           { "message": "When auto-triage is on, new messages get a category tag and an importance score." },
+  "opt_compose":               { "message": "Compose defaults" },
+  "opt_translate":             { "message": "Translate defaults" },
+  "opt_about":                 { "message": "About" },
+  "about_body":                { "message": "All AI calls route through the host's cos ai chat, gated by the cos permission system. No model keys are stored in Thunderbird." },
+
+  "feat_summarize":            { "message": "Summarize thread" },
+  "feat_smartReply":           { "message": "Smart reply" },
+  "feat_smartCompose":         { "message": "Smart compose" },
+  "feat_translate":            { "message": "Translate selection / message" },
+  "feat_triage":               { "message": "Auto-triage new mail (experimental)" },
+  "feat_assistant":            { "message": "Show Mail Assistant in Spaces" },
+
+  "triage_autoTag":            { "message": "Tag with category (claw/work, …)" },
+  "triage_autoMoveImportant":  { "message": "Star messages scored ≥ 4" },
+  "triage_autoMoveNewsletter": { "message": "Mark newsletters as read" },
+  "triage_tagPrefix":          { "message": "Tag prefix" },
+
+  "hint_open_compose_popup":   { "message": "Click the Claw AI button in the compose toolbar to open Smart Reply." }
+}

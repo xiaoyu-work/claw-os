@@ -1,0 +1,16 @@
+{
+  "policies": {
+    "ExtensionSettings": {
+      "claw-mail-ai@claw.os": {
+        "installation_mode": "force_installed",
+        "install_url": "file:///usr/lib/thunderbird/distribution/extensions/claw-mail-ai@claw.os.xpi",
+        "default_area": "navbar"
+      }
+    },
+    "DisableTelemetry": true,
+    "DisableAppUpdate": false,
+    "BlockAboutConfig": false,
+    "BackgroundAppUpdate": true,
+    "AppAutoUpdate": false
+  }
+}

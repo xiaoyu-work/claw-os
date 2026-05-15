@@ -1,0 +1,98 @@
+{
+  "id": "mail-ai",
+  "version": "0.1.0",
+  "name": {
+    "en": "Mail AI",
+    "zh_CN": "邮件 AI"
+  },
+  "summary": {
+    "en": "AI helpers (summarize, smart-reply, smart-compose, translate, triage, chat) for the Thunderbird MailExtension `claw-mail-ai`.",
+    "zh_CN": "为 Thunderbird claw-mail-ai 扩展提供的 AI 助手(摘要、智能回复、智能撰写、翻译、分类、邮箱对话)。"
+  },
+  "icon": "🦅",
+  "runtime": "python",
+  "ai": {
+    "budget": {
+      "monthly_units": 500000
+    },
+    "safety": "strict",
+    "origins": ["external-content"]
+  },
+  "operations": {
+    "summarize": {
+      "label": {
+        "en": "Summarize an email body into a one-line summary, key points, and action items"
+      },
+      "needs": [
+        {
+          "verb": "ai.chat",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Send the email body to a model and get back a structured summary." }
+        }
+      ]
+    },
+    "smart_reply": {
+      "label": {
+        "en": "Generate three reply suggestions (formal / casual / short) for an email thread"
+      },
+      "needs": [
+        {
+          "verb": "ai.chat",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Send the thread context to a model and get back three reply drafts." }
+        }
+      ]
+    },
+    "smart_compose": {
+      "label": {
+        "en": "Continue or complete a draft from a brief intent (e.g. 'decline politely')"
+      },
+      "needs": [
+        {
+          "verb": "ai.chat",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Send the intent and current draft to a model and get back a completion." }
+        }
+      ]
+    },
+    "translate": {
+      "label": {
+        "en": "Translate email text into a target language"
+      },
+      "needs": [
+        {
+          "verb": "ai.chat",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Send the source text and target language to a model for translation." }
+        }
+      ]
+    },
+    "triage": {
+      "label": {
+        "en": "Classify an incoming email into a category and propose tags"
+      },
+      "needs": [
+        {
+          "verb": "ai.chat",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Send the sender / subject / snippet to a model and get back a category + tags." }
+        }
+      ]
+    },
+    "chat": {
+      "label": {
+        "en": "Answer a question grounded in supplied email context ('chat with your mailbox')"
+      },
+      "needs": [
+        {
+          "verb": "ai.chat",
+          "scope": { "kind": "wild" },
+          "why": { "en": "Send the question and surrounding messages to a model for a grounded answer." }
+        }
+      ]
+    }
+  },
+  "dependencies": {
+    "binaries": ["thunderbird"]
+  }
+}

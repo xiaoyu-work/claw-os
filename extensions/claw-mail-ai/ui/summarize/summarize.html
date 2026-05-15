@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="../../lib/ui.css">
+  <link rel="stylesheet" href="summarize.css">
+  <title data-i18n="summarize_title">Summarize</title>
+</head>
+<body class="summarize-popup">
+
+  <div class="row" style="margin-bottom: 8px;">
+    <h1 style="margin:0;" data-i18n="summarize_title">Summarize</h1>
+    <div class="grow"></div>
+    <button class="ghost" id="btn-refresh" data-i18n-title="action_refresh" title="Re-run">↻</button>
+  </div>
+
+  <div id="meta" class="muted mono"></div>
+
+  <div id="out"></div>
+
+  <div class="footer-row">
+    <button class="ghost" id="btn-copy" data-i18n="action_copy">Copy</button>
+    <button class="ghost" id="btn-open-assistant" data-i18n="action_open_assistant">Open Assistant</button>
+  </div>
+
+  <div id="usage" class="usage-line"></div>
+
+  <script src="../../lib/ui.js"></script>
+  <script src="../../lib/messages.js"></script>
+  <script src="summarize.js"></script>
+</body>
+</html>
