@@ -9,7 +9,7 @@
 //! anything outside what the JSON envelope returned by
 //! `cos agent ls` and `cos agent show <id>` already gives it.
 //! Mutations go through `cos agent stop|undo|resume <id>`. The
-//! design ethos is dark-terminal + emerald accent (see
+//! design ethos is dark-terminal + brand-blue accent (see
 //! `desktop/agent/docs/design-system.md`).
 
 mod app;

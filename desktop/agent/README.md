@@ -12,7 +12,7 @@ brokers a streaming JSON+SSE protocol between the UI and the CLI.
 desktop/agent/
 ├── Cargo.toml              # workspace: bridge + ui
 ├── docs/
-│   └── design-system.md    # shared dark-surface / emerald-accent system
+│   └── design-system.md    # shared dark-surface / brand-blue accent system
 ├── bridge/                 # cos-agent-bridge — HTTP+SSE daemon
 │   └── src/
 │       ├── main.rs         # 127.0.0.1 Axum server (/api only)
