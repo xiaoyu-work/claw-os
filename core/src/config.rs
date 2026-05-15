@@ -72,14 +72,18 @@ pub struct WebConfig {
 /// can run without explicit configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
-    /// Name of the LLM provider to use (must be registered, e.g. "mock",
-    /// "anthropic", "openai", "ollama"). Defaults to "mock" so the agent
-    /// is functional out of the box for testing.
+    /// Name of the LLM provider to use (must be registered, e.g.
+    /// "anthropic", "openai", "ollama"). Default is empty string,
+    /// meaning **not configured** — every AI call will fail with
+    /// `LlmError::NotConfigured` until the operator runs
+    /// `cos agent setup llm apply ...` (or the desktop initial-setup
+    /// AI page). The "mock" provider is registered for tests but is
+    /// never picked up automatically.
     #[serde(default = "default_agent_provider")]
     pub provider: String,
 
     /// Model identifier passed to the provider (e.g. "claude-sonnet-4.6",
-    /// "gpt-4.1", "llama3.2:3b").
+    /// "gpt-4.1", "llama3.2:3b"). Empty when `provider` is empty.
     #[serde(default = "default_agent_model")]
     pub model: String,
 
@@ -613,10 +617,10 @@ fn default_max_content_length() -> usize {
     50000
 }
 fn default_agent_provider() -> String {
-    "mock".into()
+    String::new()
 }
 fn default_agent_model() -> String {
-    "mock-model".into()
+    String::new()
 }
 fn default_agent_max_turns() -> u32 {
     10

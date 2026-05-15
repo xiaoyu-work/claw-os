@@ -3651,6 +3651,11 @@ fn provider_doctor_cmd(args: &[String]) -> Result<Value, String> {
             "attempted": false,
             "reason": "static check only — pass --probe-network to issue a one-shot live ping",
         })
+    } else if active_name.is_empty() {
+        json!({
+            "attempted": false,
+            "reason": "no LLM provider configured — run `cos agent setup llm` first (probe needs an active provider)",
+        })
     } else if !active_in_scope {
         json!({
             "attempted": false,
@@ -9483,11 +9488,27 @@ mod tests {
             .iter()
             .filter(|e| e.get("active") == Some(&serde_json::Value::Bool(true)))
             .collect();
-        assert_eq!(active_entries.len(), 1, "exactly one active provider");
-        assert_eq!(
-            active_entries[0].get("name").and_then(|n| n.as_str()),
-            Some(active.as_str())
-        );
+        if active.is_empty() {
+            // Fresh-install default: no provider configured, so no entry
+            // is marked active. The CLI output is the source of truth
+            // here — it reports `active: ""` and zero active entries.
+            assert_eq!(
+                active_entries.len(),
+                0,
+                "no entry should be active when provider is unconfigured"
+            );
+            assert_eq!(
+                v.get("active").and_then(|a| a.as_str()),
+                Some(""),
+                "active field should be the empty string"
+            );
+        } else {
+            assert_eq!(active_entries.len(), 1, "exactly one active provider");
+            assert_eq!(
+                active_entries[0].get("name").and_then(|n| n.as_str()),
+                Some(active.as_str())
+            );
+        }
     }
 
     #[test]
@@ -9820,8 +9841,8 @@ mod tests {
     }
 
     #[test]
-    fn provider_doctor_skips_probe_for_mock_provider() {
-        // The default test config provider is "mock" (see config.rs Default).
+    fn provider_doctor_skips_probe_for_unconfigured_provider() {
+        // The default test config now has provider="" (not configured).
         // Verify --probe-network is gracefully skipped without spinning a
         // tokio runtime or hitting the network.
         let v = provider_doctor_cmd(&["--probe-network".into()]).expect("doctor ok");
@@ -9829,12 +9850,11 @@ mod tests {
             .get("doctor")
             .and_then(|d| d.get("active_probe"))
             .expect("probe");
-        // Active default in test cfg is "mock".
         assert_eq!(
             v.get("doctor")
                 .and_then(|d| d.get("active"))
                 .and_then(|a| a.as_str()),
-            Some("mock")
+            Some("")
         );
         assert_eq!(
             probe.get("attempted"),
@@ -9842,14 +9862,18 @@ mod tests {
         );
         let reason = probe.get("reason").and_then(|r| r.as_str()).unwrap_or("");
         assert!(
-            reason.contains("mock") || reason.contains("meaningless"),
-            "expected mock-skip reason, got {reason:?}"
+            reason.contains("no LLM provider configured"),
+            "expected unconfigured-skip reason, got {reason:?}"
         );
     }
 
     #[test]
     fn provider_doctor_filter_excluding_active_marks_out_of_scope() {
-        // Active is "mock" in test config; filter to "openai" only.
+        // Active provider is "" in test config (fresh-install default).
+        // Filtering to "openai" leaves the active filter out-of-scope.
+        // The probe-skip reason can be either "filter excluded the active
+        // provider" or "no LLM configured" depending on which check fires
+        // first; both are honest UX.
         let v = provider_doctor_cmd(&["--probe-network".into(), "--names".into(), "openai".into()])
             .expect("doctor ok");
         let doctor = v.get("doctor").unwrap();
@@ -9863,7 +9887,12 @@ mod tests {
             Some(&serde_json::Value::Bool(false))
         );
         let reason = probe.get("reason").and_then(|r| r.as_str()).unwrap_or("");
-        assert!(reason.contains("filtered out") || reason.contains("--names"));
+        assert!(
+            reason.contains("filtered out")
+                || reason.contains("--names")
+                || reason.contains("no LLM provider configured"),
+            "expected filter or unconfigured reason, got {reason:?}"
+        );
     }
 
     #[test]
