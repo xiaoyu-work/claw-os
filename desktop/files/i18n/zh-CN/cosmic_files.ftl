@@ -336,6 +336,8 @@ show-path-bar = 显示路径栏
 show-status-bar = 显示状态栏
 status-bar-items = { $count } 项
 status-bar-selected = 已选 { $count } 项
+status-bar-available = 可用 { $size }
+finder-toolbar-search = 搜索
 
 ## Settings
 
