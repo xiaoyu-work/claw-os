@@ -71,6 +71,20 @@ workflow-page = Workspaces for your workflow
 launcher-page = Fast and efficient
     .description = Press the Super (or Windows) key to activate the Launcher. Search and press Enter to open an app or switch to it. You can also jump to settings or system functions like suspend. Type “?” to learn about the Launcher's advanced features.
 
+# AiPage — pick the system-wide LLM provider/model during initial setup.
+# Skippable: the system can run fine without an LLM (every AI call just
+# fails with "not configured").
+ai-page = Configure AI
+    .description = ClawOS ships with an AI agent that runs locally and shells out to the LLM provider you pick here. You can skip this and configure it later with `cos agent setup llm`.
+    .provider = Provider
+    .provider-description = Where to send chat requests.
+    .model = Model
+    .model-description = Provider-specific model identifier (e.g. `claude-sonnet-4-5`, `gpt-4o-mini`, `llama3.2:3b`).
+    .api-key = API key
+    .api-key-description = Optional — leave blank and add it later via `cos agent setup llm apply --api-key-stdin`.
+    .apply-ok = Saved
+    .apply-failed = Could not save
+
 # WirelessPage
 
 wireless-page = Get connected

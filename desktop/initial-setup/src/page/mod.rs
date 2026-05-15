@@ -4,6 +4,7 @@ use indexmap::IndexMap;
 use std::any::{Any, TypeId};
 
 pub mod a11y;
+pub mod ai;
 pub mod appearance;
 pub mod keyboard;
 pub mod language;
@@ -42,6 +43,11 @@ pub fn pages(mode: AppMode) -> IndexMap<TypeId, Box<dyn Page>> {
             TypeId::of::<keyboard::Page>(),
             Box::new(keyboard::Page::new()),
         );
+
+        // AI page sits after keyboard so the user picks input
+        // language/layout first, then the LLM. NewInstall only —
+        // GnomeTransition assumes the existing config is keepable.
+        pages.insert(TypeId::of::<ai::Page>(), Box::new(ai::Page::new()));
 
         if create_user {
             pages.insert(TypeId::of::<user::Page>(), Box::new(user::Page::default()));
@@ -93,6 +99,8 @@ pub fn pages(mode: AppMode) -> IndexMap<TypeId, Box<dyn Page>> {
 
 #[derive(Clone, Debug)]
 pub enum Message {
+    A11y(a11y::Message),
+    Ai(ai::Message),
     Appearance(appearance::Message),
     Keyboard(keyboard::Message),
     Language(language::Message),
@@ -100,7 +108,6 @@ pub enum Message {
     Location(location::Message),
     SetTheme(cosmic::Theme),
     User(user::Message),
-    A11y(a11y::Message),
     WiFi(wifi::Message),
 }
 
