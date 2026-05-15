@@ -728,35 +728,15 @@ impl Window {
 }
 
 /// Invoke `cos app doc summarize --file <path>` and pull the AI
-/// summary out of the JSON response. This runs as a `tokio::process`
-/// child, so it stays off the cosmic UI loop and can be awaited from
-/// inside a `cosmic::Task::future`.
+/// summary out of the JSON response.
+///
+/// Thin wrapper that preserves the historical call site shape — the
+/// real implementation lives in `claw_glue::ai`, which is where every
+/// new AI-touching surface (explain / rewrite / search / similar / …)
+/// is being added so they can share `cos app` invocation, JSON
+/// decoding and error normalisation.
 async fn run_ai_summarize(path: PathBuf) -> Result<String, String> {
-    let bin = std::env::var("CLAW_COS_BIN").unwrap_or_else(|_| "cos".into());
-    let output = tokio::process::Command::new(bin)
-        .args(["app", "doc", "summarize", "--file"])
-        .arg(&path)
-        .output()
-        .await
-        .map_err(|e| format!("failed to invoke cos: {e}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    if stdout.trim().is_empty() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!(
-            "cos produced no output ({})\n{}",
-            output.status, stderr
-        ));
-    }
-    let value: serde_json::Value = serde_json::from_str(stdout.trim())
-        .map_err(|e| format!("bad JSON from cos: {e}\n---\n{stdout}"))?;
-    if let Some(err) = value.get("error").and_then(|v| v.as_str()) {
-        return Err(err.to_string());
-    }
-    value
-        .get("summary")
-        .and_then(|v| v.as_str())
-        .map(str::to_string)
-        .ok_or_else(|| "AI response missing 'summary' field".to_string())
+    crate::claw_glue::ai::summarize(path).await
 }
 
 // The [`App`] stores application-specific state.
