@@ -331,6 +331,12 @@ item-modified = 修改于：{ $modified }
 item-accessed = 访问于：{ $accessed }
 calculating = 计算中…
 
+## Finder bars
+show-path-bar = 显示路径栏
+show-status-bar = 显示状态栏
+status-bar-items = { $count } 项
+status-bar-selected = 已选 { $count } 项
+
 ## Settings
 
 settings = 设置

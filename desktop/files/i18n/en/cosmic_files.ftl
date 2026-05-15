@@ -304,6 +304,12 @@ item-modified = Modified: {$modified}
 item-accessed = Accessed: {$accessed}
 calculating = Calculating...
 
+## Finder bars
+show-path-bar = Show Path Bar
+show-status-bar = Show Status Bar
+status-bar-items = {$count} items
+status-bar-selected = {$count} selected
+
 ## Settings
 settings = Settings
 single-click = Single click to open

@@ -727,6 +727,18 @@ pub fn menu_bar<'a>(
                             Action::ToggleFoldersFirst,
                         ),
                         menu::Item::CheckBox(
+                            fl!("show-path-bar"),
+                            None,
+                            config.show_path_bar,
+                            Action::ToggleShowPathBar,
+                        ),
+                        menu::Item::CheckBox(
+                            fl!("show-status-bar"),
+                            None,
+                            config.show_status_bar,
+                            Action::ToggleShowStatusBar,
+                        ),
+                        menu::Item::CheckBox(
                             fl!("show-details"),
                             None,
                             config.show_details,

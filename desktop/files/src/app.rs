@@ -190,6 +190,8 @@ pub enum Action {
     TabViewList,
     ToggleFoldersFirst,
     ToggleShowHidden,
+    ToggleShowPathBar,
+    ToggleShowStatusBar,
     ToggleSort(HeadingOptions),
     WindowClose,
     WindowNew,
@@ -269,6 +271,8 @@ impl Action {
             Self::TabViewList => Message::TabView(entity_opt, tab::View::List),
             Self::ToggleFoldersFirst => Message::ToggleFoldersFirst,
             Self::ToggleShowHidden => Message::ToggleShowHidden,
+            Self::ToggleShowPathBar => Message::ToggleShowPathBar,
+            Self::ToggleShowStatusBar => Message::ToggleShowStatusBar,
             Self::ToggleSort(sort) => {
                 Message::TabMessage(entity_opt, tab::Message::ToggleSort(*sort))
             }
@@ -465,6 +469,8 @@ pub enum Message {
     ToggleContextPage(ContextPage),
     ToggleFoldersFirst,
     ToggleShowHidden,
+    ToggleShowPathBar,
+    ToggleShowStatusBar,
     Undo(usize),
     UndoTrash(widget::ToastId, Arc<[PathBuf]>),
     UndoTrashStart(Vec<TrashItem>),
@@ -4572,6 +4578,16 @@ impl Application for App {
                 config.show_hidden = !config.show_hidden;
                 return self.update(Message::TabConfig(config));
             }
+            Message::ToggleShowPathBar => {
+                let show_path_bar = !self.config.show_path_bar;
+                config_set!(show_path_bar, show_path_bar);
+                return self.update_config();
+            }
+            Message::ToggleShowStatusBar => {
+                let show_status_bar = !self.config.show_status_bar;
+                config_set!(show_status_bar, show_status_bar);
+                return self.update_config();
+            }
             Message::TabMessage(entity_opt, tab_message) => {
                 let entity = entity_opt.unwrap_or_else(|| self.tab_model.active());
 
@@ -6464,7 +6480,10 @@ impl Application for App {
     }
 
     fn footer(&self) -> Option<Element<'_, Message>> {
-        if self.progress_operations.is_empty() {
+        let has_ops = !self.progress_operations.is_empty();
+        let path_bar = if has_ops { None } else { self.finder_path_bar() };
+        let status_bar = if has_ops { None } else { self.finder_status_bar() };
+        if !has_ops && path_bar.is_none() && status_bar.is_none() {
             return None;
         }
 
@@ -6472,109 +6491,207 @@ impl Application for App {
             space_xs, space_s, ..
         } = theme::spacing();
 
-        let mut title = String::new();
-        let mut total_progress = 0.0;
-        let mut count = 0;
-        let mut all_paused = true;
-        for (op, controller) in self.pending_operations.values() {
-            if !controller.is_paused() {
-                all_paused = false;
-            }
-            if op.show_progress_notification() {
-                let progress = controller.progress();
-                if title.is_empty() {
-                    title = op.pending_text(progress, controller.state());
+        let mut rows: Vec<Element<'_, Message>> = Vec::new();
+
+        if has_ops {
+            let mut title = String::new();
+            let mut total_progress = 0.0;
+            let mut count = 0;
+            let mut all_paused = true;
+            for (op, controller) in self.pending_operations.values() {
+                if !controller.is_paused() {
+                    all_paused = false;
                 }
-                total_progress += progress;
-                count += 1;
+                if op.show_progress_notification() {
+                    let progress = controller.progress();
+                    if title.is_empty() {
+                        title = op.pending_text(progress, controller.state());
+                    }
+                    total_progress += progress;
+                    count += 1;
+                }
             }
-        }
-        let running = count;
-        // Adjust the progress bar so it does not jump around when operations finish
-        for id in &self.progress_operations {
-            if self.complete_operations.contains_key(id) {
-                total_progress += 1.0;
-                count += 1;
+            let running = count;
+            // Adjust the progress bar so it does not jump around when operations finish
+            for id in &self.progress_operations {
+                if self.complete_operations.contains_key(id) {
+                    total_progress += 1.0;
+                    count += 1;
+                }
             }
-        }
-        let finished = count - running;
-        total_progress /= count as f32;
-        if running >= 1 && (running > 1 || finished > 0) {
-            if finished > 0 {
-                title = fl!(
-                    "operations-running-finished",
-                    running = running,
-                    finished = finished,
-                    percent = ((total_progress * 100.0) as i32)
-                );
-            } else {
-                title = fl!(
-                    "operations-running",
-                    running = running,
-                    percent = ((total_progress * 100.0) as i32)
-                );
-            }
-        }
-
-        //TODO: get height from theme?
-        let progress_bar_height = Length::Fixed(4.0);
-        let progress_bar = widget::determinate_linear(total_progress)
-            .width(Length::Fill)
-            .girth(progress_bar_height);
-
-        let container = widget::layer_container(widget::column::with_children([
-            widget::row::with_children([
-                progress_bar.into(),
-                if all_paused {
-                    widget::tooltip(
-                        widget::button::icon(icon::from_name("media-playback-start-symbolic"))
-                            .on_press(Message::PendingPauseAll(false))
-                            .padding(8),
-                        widget::text::body(fl!("resume")),
-                        widget::tooltip::Position::Top,
-                    )
-                    .into()
+            let finished = count - running;
+            total_progress /= count as f32;
+            if running >= 1 && (running > 1 || finished > 0) {
+                if finished > 0 {
+                    title = fl!(
+                        "operations-running-finished",
+                        running = running,
+                        finished = finished,
+                        percent = ((total_progress * 100.0) as i32)
+                    );
                 } else {
+                    title = fl!(
+                        "operations-running",
+                        running = running,
+                        percent = ((total_progress * 100.0) as i32)
+                    );
+                }
+            }
+
+            //TODO: get height from theme?
+            let progress_bar_height = Length::Fixed(4.0);
+            let progress_bar = widget::determinate_linear(total_progress)
+                .width(Length::Fill)
+                .girth(progress_bar_height);
+
+            rows.push(
+                widget::row::with_children([
+                    progress_bar.into(),
+                    if all_paused {
+                        widget::tooltip(
+                            widget::button::icon(icon::from_name("media-playback-start-symbolic"))
+                                .on_press(Message::PendingPauseAll(false))
+                                .padding(8),
+                            widget::text::body(fl!("resume")),
+                            widget::tooltip::Position::Top,
+                        )
+                        .into()
+                    } else {
+                        widget::tooltip(
+                            widget::button::icon(icon::from_name("media-playback-pause-symbolic"))
+                                .on_press(Message::PendingPauseAll(true))
+                                .padding(8),
+                            widget::text::body(fl!("pause")),
+                            widget::tooltip::Position::Top,
+                        )
+                        .into()
+                    },
                     widget::tooltip(
-                        widget::button::icon(icon::from_name("media-playback-pause-symbolic"))
-                            .on_press(Message::PendingPauseAll(true))
+                        widget::button::icon(icon::from_name("window-close-symbolic"))
+                            .on_press(Message::PendingCancelAll)
                             .padding(8),
-                        widget::text::body(fl!("pause")),
+                        widget::text::body(fl!("cancel")),
                         widget::tooltip::Position::Top,
                     )
-                    .into()
-                },
-                widget::tooltip(
-                    widget::button::icon(icon::from_name("window-close-symbolic"))
-                        .on_press(Message::PendingCancelAll)
-                        .padding(8),
-                    widget::text::body(fl!("cancel")),
-                    widget::tooltip::Position::Top,
-                )
+                    .into(),
+                ])
+                .align_y(Alignment::Center)
                 .into(),
-            ])
-            .align_y(Alignment::Center)
-            .into(),
-            widget::text::body(title).into(),
-            widget::space::vertical().height(space_s).into(),
-            widget::row::with_children([
-                widget::button::link(fl!("details"))
-                    .on_press(Message::ToggleContextPage(ContextPage::EditHistory))
-                    .padding(0)
-                    .trailing_icon(true)
-                    .into(),
-                widget::space::horizontal().into(),
-                widget::button::standard(fl!("dismiss"))
-                    .on_press(Message::PendingDismiss)
-                    .into(),
-            ])
-            .align_y(Alignment::Center)
-            .into(),
-        ]))
-        .padding([8, space_xs])
-        .layer(cosmic_theme::Layer::Primary);
+            );
+            rows.push(widget::text::body(title).into());
+            rows.push(widget::space::vertical().height(space_s).into());
+            rows.push(
+                widget::row::with_children([
+                    widget::button::link(fl!("details"))
+                        .on_press(Message::ToggleContextPage(ContextPage::EditHistory))
+                        .padding(0)
+                        .trailing_icon(true)
+                        .into(),
+                    widget::space::horizontal().into(),
+                    widget::button::standard(fl!("dismiss"))
+                        .on_press(Message::PendingDismiss)
+                        .into(),
+                ])
+                .align_y(Alignment::Center)
+                .into(),
+            );
+        } else {
+            if let Some(bar) = path_bar {
+                rows.push(bar);
+            }
+            if let Some(bar) = status_bar {
+                rows.push(bar);
+            }
+        }
+
+        let container = widget::layer_container(widget::column::with_children(rows))
+            .padding([8, space_xs])
+            .layer(cosmic_theme::Layer::Primary);
 
         Some(container.into())
+    }
+
+    fn finder_path_bar(&self) -> Option<Element<'_, Message>> {
+        if !self.config.show_path_bar {
+            return None;
+        }
+        let tab = self.tab_model.active_data::<Tab>()?;
+        let path = tab.location.path_opt()?.clone();
+        let location = tab.location.clone();
+
+        let mut segments: Vec<PathBuf> = path
+            .ancestors()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(|p| p.to_path_buf())
+            .collect();
+        segments.reverse();
+
+        let cosmic_theme::Spacing { space_xxs, .. } = theme::spacing();
+        let mut children: Vec<Element<'_, Message>> = Vec::new();
+        let last_index = segments.len().saturating_sub(1);
+        for (idx, segment) in segments.into_iter().enumerate() {
+            let label = if segment.parent().is_none() {
+                "/".to_string()
+            } else {
+                segment
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| segment.to_string_lossy().into_owned())
+            };
+            if idx == last_index {
+                children.push(widget::text::body(label).into());
+            } else {
+                let target = location.with_path(segment);
+                children.push(
+                    widget::button::link(label)
+                        .on_press(Message::TabMessage(
+                            None,
+                            tab::Message::Location(target),
+                        ))
+                        .padding(0)
+                        .into(),
+                );
+                children.push(widget::text::body("›").into());
+            }
+        }
+
+        Some(
+            widget::row::with_children(children)
+                .spacing(space_xxs)
+                .align_y(Alignment::Center)
+                .into(),
+        )
+    }
+
+    fn finder_status_bar(&self) -> Option<Element<'_, Message>> {
+        if !self.config.show_status_bar {
+            return None;
+        }
+        let tab = self.tab_model.active_data::<Tab>()?;
+        let items = tab.items_opt()?;
+        let total = items.len();
+        let selected = items.iter().filter(|i| i.selected).count();
+
+        let total_text = fl!("status-bar-items", count = total);
+        let label = if selected > 0 {
+            format!(
+                "{}  ·  {}",
+                total_text,
+                fl!("status-bar-selected", count = selected)
+            )
+        } else {
+            total_text
+        };
+
+        Some(
+            widget::row::with_children(vec![
+                widget::space::horizontal().into(),
+                widget::text::body(label).into(),
+                widget::space::horizontal().into(),
+            ])
+            .align_y(Alignment::Center)
+            .into(),
+        )
     }
 
     fn header_start(&self) -> Vec<Element<'_, Self::Message>> {
