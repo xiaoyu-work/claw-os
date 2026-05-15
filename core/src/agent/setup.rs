@@ -1746,9 +1746,18 @@ fn providers_cmd(modality: Modality) -> Result<Value, String> {
 }
 
 fn providers_llm() -> Value {
+    // `available_providers()` returns every name that the registry can
+    // build — including `mock` (test-only) and `llama_local` (managed
+    // via `cos model load`, not via the standard credential flow).
+    // Neither should appear in the GUI catalogue consumed by
+    // cosmic-settings and cosmic-initial-setup, so we filter them out
+    // here at the single source of truth. Power users who actually
+    // need them can still set them directly in /etc/cos/config.json
+    // or via `cos agent setup llm apply --provider mock ...`.
     let names = llm::available_providers();
     let providers: Vec<Value> = names
         .iter()
+        .filter(|name| !matches!(**name, "mock" | "llama_local"))
         .map(|name| {
             let models = llm::metadata::list_for_provider(name);
             let model_list: Vec<Value> = models
@@ -2648,6 +2657,31 @@ mod tests {
             .find(|p| p["name"] == "openai")
             .expect("openai provider entry");
         assert!(openai["extra_fields"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn providers_cmd_llm_hides_mock_and_llama_local() {
+        // The GUI catalogue consumed by cosmic-settings and
+        // cosmic-initial-setup must not expose `mock` (test-only) or
+        // `llama_local` (managed via `cos model load`). Both remain
+        // buildable through the registry for power users / tests.
+        let v = providers_cmd(Modality::Llm).expect("providers ok");
+        let providers = v.get("providers").and_then(|p| p.as_array()).expect("providers list");
+        let names: Vec<&str> = providers
+            .iter()
+            .filter_map(|p| p["name"].as_str())
+            .collect();
+        assert!(
+            !names.iter().any(|n| *n == "mock"),
+            "mock leaked into GUI catalogue: {names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| *n == "llama_local"),
+            "llama_local leaked into GUI catalogue: {names:?}"
+        );
+        // Sanity: real providers are still there.
+        assert!(names.contains(&"openai"));
+        assert!(names.contains(&"anthropic"));
     }
 
     #[test]
