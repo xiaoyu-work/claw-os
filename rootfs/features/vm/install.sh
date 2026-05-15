@@ -19,20 +19,14 @@
 #  - Generate /boot/grub/grub.cfg (build.sh runs update-grub in chroot).
 #  - Install cloud-init (out of M6 scope; intended for local hypervisors).
 #
-# Inherited from environment: ROOTFS.
+# Inherited from environment: ROOTFS, PROJECT_DIR.
 
 set -euo pipefail
 
-# 1. Create 'cos' user.
-chroot "$ROOTFS" /bin/bash -c '
-    set -e
-    if ! id cos >/dev/null 2>&1; then
-        useradd -m -u 1000 -s /bin/bash -G sudo cos
-        mkdir -p /etc/sudoers.d
-        echo "cos ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/cos
-        chmod 0440 /etc/sudoers.d/cos
-    fi
-'
+source "$PROJECT_DIR/scripts/lib/add-cos-user.sh"
+
+# 1. Create 'cos' user (shared helper — also used by WSL and Docker targets).
+add_cos_user "$ROOTFS"
 
 # 2. /etc/default/grub for serial-friendly boot.
 #    sed is in-place; the package ships a default file from grub-common.

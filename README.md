@@ -31,9 +31,14 @@ Claw OS provides primitives that traditional operating systems don't:
 
 ### Docker
 
+The Docker image is the **terminal-version of Claw OS** — same surface as the
+WSL distribution (full `cos` CLI, all built-in apps, bundled Chromium, the
+agent), wrapped for one-command containerised use. The default user is `cos`
+(uid 1000, NOPASSWD sudo).
+
 ```bash
 docker pull ghcr.io/xiaoyu-work/claw-os:latest
-docker run -it --name claw -v ./workspace:/workspace ghcr.io/xiaoyu-work/claw-os
+docker run -it --name claw -v ./workspace:/home/cos/workspace ghcr.io/xiaoyu-work/claw-os
 ```
 
 Other targets — bootable ISO (live + installer), WSL image, and `.deb` + apt repo — are produced from `packaging/`. See [CONTRIBUTING.md](CONTRIBUTING.md).
