@@ -49,6 +49,14 @@ xwayland
 greetd
 libpam0g-dev
 gnome-keyring
+# pam_gnome_keyring.so lives in this separate package; without it the
+# `-session optional pam_gnome_keyring.so auto_start` line in
+# /etc/pam.d/greetd silently no-ops (the `-` prefix means "ignore if
+# the module is missing"). When that happens the keyring daemon is
+# never primed with the user's password at login, so libsecret-using
+# apps (Chromium, GNOME apps, etc.) prompt for a master password on
+# first launch.
+libpam-gnome-keyring
 polkitd
 udev
 xdg-user-dirs
