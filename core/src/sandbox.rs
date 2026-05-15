@@ -7,7 +7,7 @@
 /// + seccomp.
 ///
 /// Only one operation is supported: `exec`. Persistent sandboxes
-/// (create/destroy/list) were OpenClaw-era surface area; they
+/// (create/destroy/list) were a legacy surface area; they
 /// never spawned a real init process and have been removed.
 ///
 /// On non-Linux platforms the implementation falls back to a

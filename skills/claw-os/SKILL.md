@@ -1,7 +1,6 @@
 ---
 name: claw-os
 description: "Claw OS — agent-native operating system. Run cos for OS primitives, cos app for apps. Read child docs in skills/claw-os/ for detailed usage."
-metadata: { "openclaw": { "emoji": "🦀", "requires": { "bins": ["cos"] } } }
 ---
 
 # Claw OS

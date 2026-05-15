@@ -33,7 +33,6 @@ rm -f \
     "$ROOTFS/etc/cos/profile.sh"
 rm -rf \
     "$ROOTFS/usr/lib/cos/apps" \
-    "$ROOTFS/usr/lib/cos/plugins" \
     "$ROOTFS/usr/lib/cos/skills"
 
 # Stage the .deb inside the chroot, install via apt so Recommends pull in.
