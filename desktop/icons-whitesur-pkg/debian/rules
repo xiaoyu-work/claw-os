@@ -1,0 +1,9 @@
+#!/usr/bin/make -f
+
+DESTDIR = debian/claw-icons-whitesur
+
+%:
+	dh $@
+
+override_dh_install:
+	just rootdir=$(DESTDIR) install

@@ -1,0 +1,19 @@
+Source: claw-icons-whitesur
+Section: admin
+Priority: optional
+Maintainer: claw-os <dev@clawos.example>
+Build-Depends:
+  debhelper (>= 11),
+  debhelper-compat (= 11),
+  just,
+Standards-Version: 4.3.0
+Homepage: https://github.com/vinceliuice/WhiteSur-icon-theme
+
+Package: claw-icons-whitesur
+Architecture: all
+Depends: hicolor-icon-theme
+Description: macOS Big Sur style icon theme (WhiteSur) for claw-os
+ Vendored copy of vinceliuice/WhiteSur-icon-theme. Installed under
+ /usr/share/icons/WhiteSur{,-light,-dark}. cosmic-icons inherits from
+ WhiteSur so folder, mime and action icons used by claw-os apps adopt
+ the macOS look automatically.
