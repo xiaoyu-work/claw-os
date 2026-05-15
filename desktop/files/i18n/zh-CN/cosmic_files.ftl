@@ -478,3 +478,16 @@ ai-assist-loading = 正在搜索…
 ai-assist-empty = 在上方输入查询，或选择一个文件操作。
 ai-assist-empty-results = 没有匹配项。
 ai-assist-error = AI 搜索失败。
+
+## AI 改写
+ai-rewrite = AI 改写
+ai-rewrite-title = AI 改写 — {$name}
+ai-rewrite-instruction = 希望 AI 如何改写这个文件？
+ai-rewrite-placeholder = 例如：翻译成英文、精简为 3 条要点、改为正式语气…
+ai-rewrite-submit = 改写
+ai-rewriting = 正在让 AI 改写这个文件…
+ai-rewrite-error = AI 无法改写这个文件。
+ai-rewrite-copy = 复制
+
+## AI 查找相似
+ai-find-similar = AI 查找相似

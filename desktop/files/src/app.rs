@@ -134,6 +134,8 @@ pub enum Action {
     AiSummarize,
     AiExplain,
     AiAssist,
+    AiRewrite,
+    AiFindSimilar,
     Compress,
     Copy,
     CopyPath,
@@ -210,6 +212,8 @@ impl Action {
             Self::AiSummarize => Message::AiSummarize(entity_opt),
             Self::AiExplain => Message::AiExplain(entity_opt),
             Self::AiAssist => Message::ToggleContextPage(ContextPage::AiAssist),
+            Self::AiRewrite => Message::AiRewrite(entity_opt),
+            Self::AiFindSimilar => Message::AiFindSimilar(entity_opt),
             Self::Compress => Message::Compress(entity_opt),
             Self::Copy => Message::Copy(entity_opt),
             Self::CopyPath => Message::CopyPath(entity_opt),
@@ -353,6 +357,15 @@ pub enum Message {
     AiAssistSubmit,
     AiAssistSearchResult(Result<Vec<crate::claw_glue::ai::SearchHit>, String>),
     AiAssistFindSimilar,
+    AiRewrite(Option<Entity>),
+    AiRewriteInput(String),
+    AiRewriteSubmit,
+    AiRewriteResult {
+        path: PathBuf,
+        outcome: Result<String, String>,
+    },
+    AiRewriteCopy,
+    AiFindSimilar(Option<Entity>),
     AppTheme(AppTheme),
     CloseToast(widget::ToastId),
     Compress(Option<Entity>),
@@ -557,6 +570,14 @@ pub enum AiAssistStatus {
 }
 
 #[derive(Clone, Debug)]
+pub enum AiRewriteStage {
+    Editing,
+    Loading,
+    Ready(String),
+    Error(String),
+}
+
+#[derive(Clone, Debug)]
 pub enum DialogPage {
     AiSummary {
         path: PathBuf,
@@ -565,6 +586,11 @@ pub enum DialogPage {
     AiExplain {
         path: PathBuf,
         status: AiSummaryStatus,
+    },
+    AiRewrite {
+        path: PathBuf,
+        instruction: String,
+        stage: AiRewriteStage,
     },
     Compress {
         paths: Box<[PathBuf]>,
@@ -3199,6 +3225,101 @@ impl Application for App {
                     Err(err) => AiAssistStatus::Error(err),
                 };
             }
+            Message::AiRewrite(entity_opt) => {
+                let path = match self.selected_paths(entity_opt).next() {
+                    Some(p) => p,
+                    None => return Task::none(),
+                };
+                return self.push_dialog(
+                    DialogPage::AiRewrite {
+                        path,
+                        instruction: String::new(),
+                        stage: AiRewriteStage::Editing,
+                    },
+                    Some(self.dialog_text_input.clone()),
+                );
+            }
+            Message::AiRewriteInput(value) => {
+                if let Some(DialogPage::AiRewrite { path, stage, .. }) =
+                    self.dialog_pages.front().cloned()
+                {
+                    self.dialog_pages.update_front(DialogPage::AiRewrite {
+                        path,
+                        instruction: value,
+                        stage,
+                    });
+                }
+            }
+            Message::AiRewriteSubmit => {
+                let (path, instruction) = match self.dialog_pages.front().cloned() {
+                    Some(DialogPage::AiRewrite {
+                        path,
+                        instruction,
+                        stage: AiRewriteStage::Editing,
+                    }) => (path, instruction.trim().to_string()),
+                    _ => return Task::none(),
+                };
+                if instruction.is_empty() {
+                    return Task::none();
+                }
+                self.dialog_pages.update_front(DialogPage::AiRewrite {
+                    path: path.clone(),
+                    instruction: instruction.clone(),
+                    stage: AiRewriteStage::Loading,
+                });
+                let work_path = path.clone();
+                let work_instruction = instruction;
+                return cosmic::Task::future(async move {
+                    let outcome =
+                        crate::claw_glue::ai::rewrite(work_path.clone(), work_instruction).await;
+                    cosmic::action::app(Message::AiRewriteResult {
+                        path: work_path,
+                        outcome,
+                    })
+                });
+            }
+            Message::AiRewriteResult { path, outcome } => {
+                if let Some(DialogPage::AiRewrite {
+                    path: cur_path,
+                    instruction,
+                    ..
+                }) = self.dialog_pages.front().cloned()
+                    && cur_path == path
+                {
+                    let stage = match outcome {
+                        Ok(text) => AiRewriteStage::Ready(text),
+                        Err(err) => AiRewriteStage::Error(err),
+                    };
+                    self.dialog_pages.update_front(DialogPage::AiRewrite {
+                        path: cur_path,
+                        instruction,
+                        stage,
+                    });
+                }
+            }
+            Message::AiRewriteCopy => {
+                if let Some(DialogPage::AiRewrite {
+                    stage: AiRewriteStage::Ready(text),
+                    ..
+                }) = self.dialog_pages.front()
+                {
+                    return clipboard::write(text.clone());
+                }
+            }
+            Message::AiFindSimilar(entity_opt) => {
+                let path = match self.selected_paths(entity_opt).next() {
+                    Some(p) => p,
+                    None => return Task::none(),
+                };
+                self.context_page = ContextPage::AiAssist;
+                self.set_show_context(true);
+                self.ai_assist_input.clear();
+                self.ai_assist_status = AiAssistStatus::Loading;
+                return cosmic::Task::future(async move {
+                    let outcome = crate::claw_glue::ai::find_similar(path, 50).await;
+                    cosmic::action::app(Message::AiAssistSearchResult(outcome))
+                });
+            }
             Message::Compress(entity_opt) => {
                 let paths: Box<[_]> = self.selected_paths(entity_opt).collect();
                 if let Some(current_path) = paths.first()
@@ -3415,6 +3536,7 @@ impl Application for App {
                     match dialog_page {
                         DialogPage::AiSummary { .. } => {}
                         DialogPage::AiExplain { .. } => {}
+                        DialogPage::AiRewrite { .. } => {}
                         DialogPage::Compress {
                             paths,
                             to,
@@ -6643,6 +6765,94 @@ impl Application for App {
                             .on_press(Message::DialogCancel),
                     )
                     .control(body)
+            }
+            DialogPage::AiRewrite {
+                path,
+                instruction,
+                stage,
+            } => {
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                match stage {
+                    AiRewriteStage::Editing => {
+                        let complete_maybe = if instruction.trim().is_empty() {
+                            None
+                        } else {
+                            Some(Message::AiRewriteSubmit)
+                        };
+                        widget::dialog()
+                            .title(fl!("ai-rewrite-title", name = name))
+                            .icon(icon::from_name("dialog-information").size(48))
+                            .control(
+                                widget::column::with_children([
+                                    widget::text::body(fl!("ai-rewrite-instruction")).into(),
+                                    widget::text_input(
+                                        fl!("ai-rewrite-placeholder"),
+                                        instruction.as_str(),
+                                    )
+                                    .id(self.dialog_text_input.clone())
+                                    .on_input(Message::AiRewriteInput)
+                                    .on_submit_maybe(
+                                        complete_maybe
+                                            .clone()
+                                            .map(|m| move |_| m.clone()),
+                                    )
+                                    .into(),
+                                ])
+                                .spacing(space_xxs),
+                            )
+                            .primary_action(
+                                widget::button::suggested(fl!("ai-rewrite-submit"))
+                                    .on_press_maybe(complete_maybe),
+                            )
+                            .secondary_action(
+                                widget::button::standard(fl!("cancel"))
+                                    .on_press(Message::DialogCancel),
+                            )
+                    }
+                    AiRewriteStage::Loading => widget::dialog()
+                        .title(fl!("ai-rewrite-title", name = name))
+                        .icon(icon::from_name("dialog-information").size(48))
+                        .control(widget::text::body(fl!("ai-rewriting")))
+                        .primary_action(
+                            widget::button::standard(fl!("cancel"))
+                                .on_press(Message::DialogCancel),
+                        ),
+                    AiRewriteStage::Ready(text) => widget::dialog()
+                        .title(fl!("ai-rewrite-title", name = name))
+                        .icon(icon::from_name("dialog-information").size(48))
+                        .control(
+                            widget::scrollable(
+                                widget::text::body(text.clone()).width(Length::Fill),
+                            )
+                            .height(Length::Fixed(320.0)),
+                        )
+                        .primary_action(
+                            widget::button::suggested(fl!("ai-rewrite-copy"))
+                                .on_press(Message::AiRewriteCopy),
+                        )
+                        .secondary_action(
+                            widget::button::standard(fl!("close"))
+                                .on_press(Message::DialogCancel),
+                        ),
+                    AiRewriteStage::Error(err) => widget::dialog()
+                        .title(fl!("ai-rewrite-title", name = name))
+                        .icon(icon::from_name("dialog-error").size(48))
+                        .control(
+                            widget::column::with_children(vec![
+                                widget::text::body(fl!("ai-rewrite-error")).into(),
+                                widget::text::body(err.clone()).into(),
+                            ])
+                            .spacing(space_xxs),
+                        )
+                        .primary_action(
+                            widget::button::suggested(fl!("close"))
+                                .on_press(Message::DialogCancel),
+                        ),
+                }
             }
         };
         Some(dialog.into())

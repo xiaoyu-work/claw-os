@@ -224,6 +224,11 @@ pub fn context_menu<'a>(
                             .push(menu_item(fl!("ai-summarize"), Action::AiSummarize).into());
                         children
                             .push(menu_item(fl!("ai-explain"), Action::AiExplain).into());
+                        children
+                            .push(menu_item(fl!("ai-rewrite"), Action::AiRewrite).into());
+                        children.push(
+                            menu_item(fl!("ai-find-similar"), Action::AiFindSimilar).into(),
+                        );
                     }
                     if selected_dir == 1 {
                         children
