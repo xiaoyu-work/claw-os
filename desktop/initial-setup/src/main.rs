@@ -246,6 +246,18 @@ impl Application for App {
                     }
                 }
 
+                page::Message::Ai(message) => {
+                    if let Some(page) = self.pages.get_mut(&TypeId::of::<page::ai::Page>()) {
+                        return page
+                            .as_any()
+                            .downcast_mut::<page::ai::Page>()
+                            .unwrap()
+                            .update(message)
+                            .map(Message::PageMessage)
+                            .map(cosmic::Action::App);
+                    }
+                }
+
                 page::Message::WiFi(message) => {
                     if let Some(page) = self.pages.get_mut(&TypeId::of::<page::wifi::Page>()) {
                         return page
