@@ -422,4 +422,17 @@ ai-assist-empty = Type a query above, or pick a file action.
 ai-assist-empty-results = No matches found.
 ai-assist-error = AI search failed.
 
+## AI rewrite
+ai-rewrite = AI rewrite
+ai-rewrite-title = AI rewrite — {$name}
+ai-rewrite-instruction = How should the AI rewrite this file?
+ai-rewrite-placeholder = e.g. translate to English, shorten to 3 bullets, make it formal…
+ai-rewrite-submit = Rewrite
+ai-rewriting = Asking the AI to rewrite this file…
+ai-rewrite-error = The AI could not rewrite this file.
+ai-rewrite-copy = Copy
+
+## AI find similar
+ai-find-similar = AI find similar
+
 close = Close

@@ -124,7 +124,6 @@ pub async fn explain(path: PathBuf) -> Result<String, String> {
 /// Returns the rewritten body (in the `text` field; see [`explain`]).
 /// Callers are responsible for showing it for review and applying
 /// the change — Files never auto-writes back.
-#[allow(dead_code)]
 pub async fn rewrite(path: PathBuf, instruction: String) -> Result<String, String> {
     let p = path_arg(&path)?;
     let value = invoke_app(
