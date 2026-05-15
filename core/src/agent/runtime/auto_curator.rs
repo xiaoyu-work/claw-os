@@ -127,7 +127,11 @@ impl AutoCurator {
 /// this short-circuit). Returns `Err` when the build itself fails
 /// (e.g. credential lookup error).
 fn aux_from_main(cfg: &AgentConfig) -> Result<Option<AuxiliaryClient>, AgentError> {
-    if cfg.provider == "mock" {
+    if cfg.provider == "mock" || cfg.provider.is_empty() {
+        // No auxiliary curator when there's no real LLM behind the main
+        // provider — either it's the canned-response `mock` or the OS
+        // owner has not yet picked one. Curating against either is
+        // pointless and just spends cycles.
         return Ok(None);
     }
     if cfg.model.trim().is_empty() {
@@ -155,13 +159,21 @@ mod tests {
         MemoryDb::open_in_memory().expect("in-memory db")
     }
 
-    /// Curator stays off when the main provider is `mock` (the
-    /// default for fresh installs and the test environment). Avoids
-    /// spending cycles on canned responses.
+    /// Curator stays off when the main provider is unconfigured (empty
+    /// — the default for fresh installs) or `mock`. Avoids spending
+    /// cycles on canned/non-existent responses.
+    #[test]
+    fn auto_curator_disabled_when_main_is_unconfigured() {
+        let cfg = AgentConfig::default();
+        assert!(cfg.provider.is_empty());
+        assert!(AutoCurator::from_cfg_logged(&cfg, &mem_db()).is_none());
+    }
+
     #[test]
     fn auto_curator_disabled_when_main_is_mock() {
-        let cfg = AgentConfig::default();
-        assert_eq!(cfg.provider, "mock");
+        let mut cfg = AgentConfig::default();
+        cfg.provider = "mock".into();
+        cfg.model = "mock-model".into();
         assert!(AutoCurator::from_cfg_logged(&cfg, &mem_db()).is_none());
     }
 

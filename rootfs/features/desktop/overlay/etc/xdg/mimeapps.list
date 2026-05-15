@@ -7,7 +7,14 @@
 # $XDG_CONFIG_HOME/mimeapps.list, which takes priority.
 #
 # This file is dropped by rootfs/features/desktop (overlay) so that a
-# freshly-installed ClawOS already has a sane mail client wired up.
+# freshly-installed ClawOS already has a sane browser + mail client
+# wired up.
 
 [Default Applications]
+x-scheme-handler/http=chromium.desktop
+x-scheme-handler/https=chromium.desktop
+x-scheme-handler/about=chromium.desktop
+x-scheme-handler/unknown=chromium.desktop
+text/html=chromium.desktop
+application/xhtml+xml=chromium.desktop
 x-scheme-handler/mailto=thunderbird.desktop

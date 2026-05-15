@@ -131,7 +131,16 @@ spice-vdagent
 plymouth
 plymouth-themes
 
-# --- Default user-facing GUI apps (light-office preset) ---
+# --- Default user-facing GUI apps ---
+# Chromium is the default GUI web browser. It is also the engine the
+# `claw-agent-browser` MV3 extension + apps/browser-attached bridge
+# attach to when the AI agent needs the user's logged-in session
+# (Browser Mode B). Bound to x-scheme-handler/{http,https} and
+# text/html in overlay/etc/xdg/mimeapps.list. The headless cos-browser
+# CLI (`rootfs/features/browser`) is a separate, AI-only surface and
+# does not provide a desktop launcher.
+chromium
+
 # Thunderbird is the default mail / news / calendar client. The AI
 # Agent's apps/email continues to drive Gmail/Outlook via their HTTPS
 # APIs; Thunderbird is the GUI side users open to see their inbox.

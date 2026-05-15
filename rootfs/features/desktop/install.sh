@@ -123,7 +123,29 @@ chroot "$ROOTFS" env \
     export PATH="$CARGO_HOME/bin:$PATH"
     cd /build/desktop-src
     just build
-    just install rootdir="" prefix=/usr
+    # NB: pass rootdir and prefix as POSITIONAL args. `just install rootdir=""`
+    # would set rootdir to the literal string "rootdir=" (the entire token is
+    # the value of positional param 1), producing nonsense install paths like
+    # `/build/desktop-src/rootdir=/prefix=/usr/bin/cosmic-greeter`. The
+    # cosmic-* binaries then never reach /usr/bin and the resulting image has
+    # no working desktop. See desktop/justfile recipe `install rootdir="" prefix="/usr/local"`.
+    just install "" /usr
+
+    # ----------------------------------------------------------------------
+    # ClawOS Agent UI + bridge — separate workspace (no justfile) under
+    # desktop/agent/. com.clawos.Agent.desktop expects /usr/local/bin/cos-agent-ui
+    # via `cos app agent open`; the cos-agent-bridge.service user unit
+    # invokes /usr/local/bin/cos-agent-bridge. Both binaries must be
+    # produced here or the desktop agent app fails to launch with
+    #   {"error":"cos-agent-ui is not installed"}.
+    # ----------------------------------------------------------------------
+    if [ -f /build/desktop-src/agent/Cargo.toml ]; then
+        echo "  :: building cos-agent-ui + cos-agent-bridge"
+        cd /build/desktop-src/agent
+        cargo build --release --workspace
+        install -Dm0755 target/release/cos-agent-ui     /usr/local/bin/cos-agent-ui
+        install -Dm0755 target/release/cos-agent-bridge /usr/local/bin/cos-agent-bridge
+    fi
 '
 
 # ---------------------------------------------------------------------------
@@ -199,6 +221,17 @@ for unit in pipewire.service wireplumber.service; do
         ln -sf "/usr/lib/systemd/user/$unit" \
             "$ROOTFS/etc/systemd/user/default.target.wants/$unit"
 done
+
+# cos-agent-bridge.service is shipped by rootfs/features/systemd/overlay/
+# at /usr/lib/systemd/user/. It declares WantedBy=graphical-session.target
+# but `systemctl --user enable` only runs in the user's session, which
+# means a fresh user (no prior login) never gets the symlink. Wire it
+# globally so the bridge starts as soon as cosmic-session reaches
+# graphical-session.target.
+mkdir -p "$ROOTFS/etc/systemd/user/graphical-session.target.wants"
+[ -e "$ROOTFS/usr/lib/systemd/user/cos-agent-bridge.service" ] && \
+    ln -sf "/usr/lib/systemd/user/cos-agent-bridge.service" \
+        "$ROOTFS/etc/systemd/user/graphical-session.target.wants/cos-agent-bridge.service"
 
 # Plymouth boot splash — the overlay shipped the "claw" theme files
 # (claw.plymouth, claw.script, watermark.png, dot.png). Activate it as the

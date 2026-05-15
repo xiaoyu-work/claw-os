@@ -413,11 +413,19 @@ fn verify_llm() -> Result<Value, String> {
 /// `cos agent setup llm` when the agent is still on the mock provider or
 /// the configured provider has no resolvable credential.
 pub fn is_ready(cfg: &crate::config::AgentConfig) -> Result<(), String> {
+    if cfg.provider.is_empty() {
+        return Err(json!({
+            "error": "agent not configured",
+            "fix": "cos agent setup llm",
+            "details": "no LLM provider is configured. Run `cos agent setup llm` to pick one (or use the desktop initial-setup AI page).",
+        })
+        .to_string());
+    }
     if cfg.provider == "mock" {
         return Err(json!({
             "error": "agent not configured",
             "fix": "cos agent setup llm",
-            "details": "the default provider is `mock` (returns canned answers). Run `cos agent setup llm` to pick a real LLM provider.",
+            "details": "the `mock` provider returns canned answers. Run `cos agent setup llm` to pick a real LLM provider.",
         })
         .to_string());
     }
@@ -1738,9 +1746,18 @@ fn providers_cmd(modality: Modality) -> Result<Value, String> {
 }
 
 fn providers_llm() -> Value {
+    // `available_providers()` returns every name that the registry can
+    // build — including `mock` (test-only) and `llama_local` (managed
+    // via `cos model load`, not via the standard credential flow).
+    // Neither should appear in the GUI catalogue consumed by
+    // cosmic-settings and cosmic-initial-setup, so we filter them out
+    // here at the single source of truth. Power users who actually
+    // need them can still set them directly in /etc/cos/config.json
+    // or via `cos agent setup llm apply --provider mock ...`.
     let names = llm::available_providers();
     let providers: Vec<Value> = names
         .iter()
+        .filter(|name| !matches!(**name, "mock" | "llama_local"))
         .map(|name| {
             let models = llm::metadata::list_for_provider(name);
             let model_list: Vec<Value> = models
@@ -2251,6 +2268,16 @@ mod tests {
     use super::*;
 
     fn mock_cfg() -> crate::config::AgentConfig {
+        // AgentConfig::default() now leaves provider empty ("not configured").
+        // Tests in this module that want to exercise mock-provider behaviour
+        // (legacy "default") must opt in explicitly.
+        let mut cfg = crate::config::AgentConfig::default();
+        cfg.provider = "mock".into();
+        cfg.model = "mock-model".into();
+        cfg
+    }
+
+    fn unconfigured_cfg() -> crate::config::AgentConfig {
         crate::config::AgentConfig::default()
     }
 
@@ -2269,6 +2296,17 @@ mod tests {
     fn is_ready_blocks_on_mock_provider() {
         let err = is_ready(&mock_cfg()).unwrap_err();
         assert!(err.contains("agent not configured"));
+        assert!(err.contains("mock"));
+        assert!(err.contains("cos agent setup"));
+    }
+
+    #[test]
+    fn is_ready_blocks_on_unconfigured_default() {
+        // AgentConfig::default() leaves provider empty so an out-of-the-box
+        // install can never accidentally run AI calls against `mock`.
+        let err = is_ready(&unconfigured_cfg()).unwrap_err();
+        assert!(err.contains("agent not configured"));
+        assert!(err.contains("no LLM provider"));
         assert!(err.contains("cos agent setup"));
     }
 
@@ -2619,6 +2657,31 @@ mod tests {
             .find(|p| p["name"] == "openai")
             .expect("openai provider entry");
         assert!(openai["extra_fields"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn providers_cmd_llm_hides_mock_and_llama_local() {
+        // The GUI catalogue consumed by cosmic-settings and
+        // cosmic-initial-setup must not expose `mock` (test-only) or
+        // `llama_local` (managed via `cos model load`). Both remain
+        // buildable through the registry for power users / tests.
+        let v = providers_cmd(Modality::Llm).expect("providers ok");
+        let providers = v.get("providers").and_then(|p| p.as_array()).expect("providers list");
+        let names: Vec<&str> = providers
+            .iter()
+            .filter_map(|p| p["name"].as_str())
+            .collect();
+        assert!(
+            !names.iter().any(|n| *n == "mock"),
+            "mock leaked into GUI catalogue: {names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| *n == "llama_local"),
+            "llama_local leaked into GUI catalogue: {names:?}"
+        );
+        // Sanity: real providers are still there.
+        assert!(names.contains(&"openai"));
+        assert!(names.contains(&"anthropic"));
     }
 
     #[test]
