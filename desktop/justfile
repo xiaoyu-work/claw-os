@@ -56,7 +56,7 @@ install rootdir="" prefix="/usr/local": build
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} term/install
     {{ make }} -C wallpapers install DESTDIR={{rootdir}} prefix={{prefix}}
     {{ make }} -C workspaces install DESTDIR={{rootdir}} prefix={{prefix}}
-    {{ just }} rootdir={{rootdir}} launcher-backend/install
+    {{ just }} rootdir={{rootdir}} prefix={{prefix}} launcher-backend/install
     {{ make }} -C xdg-desktop-portal install DESTDIR={{rootdir}} prefix={{prefix}}
 
 _mkdir dir:
