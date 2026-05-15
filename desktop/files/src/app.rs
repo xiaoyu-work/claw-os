@@ -2087,7 +2087,7 @@ impl App {
                     let parent_dir = hit.path.parent().map(|p| p.to_path_buf());
                     let mut col = widget::column::with_capacity(3)
                         .spacing(space_xxs);
-                    col = col.push(if let Some(parent) = parent_dir {
+                    let header: Element<'_, Message> = if let Some(parent) = parent_dir {
                         widget::button::link(name)
                             .on_press(Message::TabMessage(
                                 None,
@@ -2098,7 +2098,8 @@ impl App {
                             .into()
                     } else {
                         widget::text::body(name).into()
-                    });
+                    };
+                    col = col.push(header);
                     let snippet = hit.snippet.trim();
                     if !snippet.is_empty() {
                         col = col.push(widget::text::caption(snippet.to_string()));
@@ -2545,6 +2546,89 @@ impl App {
         }
 
         false
+    }
+
+    fn finder_path_bar(&self) -> Option<Element<'_, Message>> {
+        if !self.config.show_path_bar {
+            return None;
+        }
+        let tab = self.tab_model.active_data::<Tab>()?;
+        let path = tab.location.path_opt()?.clone();
+        let location = tab.location.clone();
+
+        let mut segments: Vec<PathBuf> = path
+            .ancestors()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(|p| p.to_path_buf())
+            .collect();
+        segments.reverse();
+
+        let cosmic_theme::Spacing { space_xxs, .. } = theme::spacing();
+        let mut children: Vec<Element<'_, Message>> = Vec::new();
+        let last_index = segments.len().saturating_sub(1);
+        for (idx, segment) in segments.into_iter().enumerate() {
+            let label = if segment.parent().is_none() {
+                "/".to_string()
+            } else {
+                segment
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| segment.to_string_lossy().into_owned())
+            };
+            if idx == last_index {
+                children.push(widget::text::body(label).into());
+            } else {
+                let target = location.with_path(segment);
+                children.push(
+                    widget::button::link(label)
+                        .on_press(Message::TabMessage(
+                            None,
+                            tab::Message::Location(target),
+                        ))
+                        .padding(0)
+                        .into(),
+                );
+                children.push(widget::text::body("›").into());
+            }
+        }
+
+        Some(
+            widget::row::with_children(children)
+                .spacing(space_xxs)
+                .align_y(Alignment::Center)
+                .into(),
+        )
+    }
+
+    fn finder_status_bar(&self) -> Option<Element<'_, Message>> {
+        if !self.config.show_status_bar {
+            return None;
+        }
+        let tab = self.tab_model.active_data::<Tab>()?;
+        let items = tab.items_opt()?;
+        let total = items.len();
+        let selected = items.iter().filter(|i| i.selected).count();
+
+        let total_text = fl!("status-bar-items", count = total);
+        let label = if selected > 0 {
+            format!(
+                "{}  ·  {}",
+                total_text,
+                fl!("status-bar-selected", count = selected)
+            )
+        } else {
+            total_text
+        };
+
+        Some(
+            widget::row::with_children(vec![
+                widget::space::horizontal().into(),
+                widget::text::body(label).into(),
+                widget::space::horizontal().into(),
+            ])
+            .align_y(Alignment::Center)
+            .into(),
+        )
     }
 }
 
@@ -6988,89 +7072,6 @@ impl Application for App {
             .layer(cosmic_theme::Layer::Primary);
 
         Some(container.into())
-    }
-
-    fn finder_path_bar(&self) -> Option<Element<'_, Message>> {
-        if !self.config.show_path_bar {
-            return None;
-        }
-        let tab = self.tab_model.active_data::<Tab>()?;
-        let path = tab.location.path_opt()?.clone();
-        let location = tab.location.clone();
-
-        let mut segments: Vec<PathBuf> = path
-            .ancestors()
-            .filter(|p| !p.as_os_str().is_empty())
-            .map(|p| p.to_path_buf())
-            .collect();
-        segments.reverse();
-
-        let cosmic_theme::Spacing { space_xxs, .. } = theme::spacing();
-        let mut children: Vec<Element<'_, Message>> = Vec::new();
-        let last_index = segments.len().saturating_sub(1);
-        for (idx, segment) in segments.into_iter().enumerate() {
-            let label = if segment.parent().is_none() {
-                "/".to_string()
-            } else {
-                segment
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| segment.to_string_lossy().into_owned())
-            };
-            if idx == last_index {
-                children.push(widget::text::body(label).into());
-            } else {
-                let target = location.with_path(segment);
-                children.push(
-                    widget::button::link(label)
-                        .on_press(Message::TabMessage(
-                            None,
-                            tab::Message::Location(target),
-                        ))
-                        .padding(0)
-                        .into(),
-                );
-                children.push(widget::text::body("›").into());
-            }
-        }
-
-        Some(
-            widget::row::with_children(children)
-                .spacing(space_xxs)
-                .align_y(Alignment::Center)
-                .into(),
-        )
-    }
-
-    fn finder_status_bar(&self) -> Option<Element<'_, Message>> {
-        if !self.config.show_status_bar {
-            return None;
-        }
-        let tab = self.tab_model.active_data::<Tab>()?;
-        let items = tab.items_opt()?;
-        let total = items.len();
-        let selected = items.iter().filter(|i| i.selected).count();
-
-        let total_text = fl!("status-bar-items", count = total);
-        let label = if selected > 0 {
-            format!(
-                "{}  ·  {}",
-                total_text,
-                fl!("status-bar-selected", count = selected)
-            )
-        } else {
-            total_text
-        };
-
-        Some(
-            widget::row::with_children(vec![
-                widget::space::horizontal().into(),
-                widget::text::body(label).into(),
-                widget::space::horizontal().into(),
-            ])
-            .align_y(Alignment::Center)
-            .into(),
-        )
     }
 
     fn header_start(&self) -> Vec<Element<'_, Self::Message>> {
