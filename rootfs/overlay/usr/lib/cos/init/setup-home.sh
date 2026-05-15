@@ -41,6 +41,14 @@ fi
 
 mkdir -p "$TARGET"
 
+# Capture the target's existing ownership (e.g. cos:cos created by
+# useradd) — once we mount the overlay on top, the mount point's
+# metadata is taken from upperdir, so upper must match or the target
+# user can't write to their own home. Falls back to root:root if the
+# target wasn't pre-created (e.g. /root on a fresh image).
+target_uid=$(stat -c '%u' "$TARGET" 2>/dev/null || echo 0)
+target_gid=$(stat -c '%g' "$TARGET" 2>/dev/null || echo 0)
+
 # Detect overlay-backed rootfs (Debian live media). On those, upper/work
 # must live on a non-overlay filesystem — use tmpfs at /run/cos-overlay.
 mkdir -p "$OVERLAY_DIR"
@@ -51,6 +59,12 @@ if [ "$backing_fs" = "overlay" ] || [ "$backing_fs" = "overlayfs" ]; then
 fi
 
 mkdir -p "$BASE" "$UPPER" "$WORK"
+
+# upper becomes the visible owner of $TARGET after mount; base holds the
+# seeded content and must be readable as the same user. work is overlay
+# internal — kept root-owned, mode 0700 enforced by the kernel.
+chown "$target_uid:$target_gid" "$BASE" "$UPPER"
+chmod 0700 "$BASE" "$UPPER"
 
 # First boot: seed the base layer from whatever the image shipped at the
 # target path (so existing dotfiles / project skeletons survive).
