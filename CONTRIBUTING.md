@@ -23,13 +23,10 @@ cargo build --release
 # Bootstrap Debian rootfs, install Node.js 24, apps, browser engine
 sudo ./rootfs/build.sh
 
-# Build the Docker image (base profile)
+# Build the Docker image
 ./build.sh docker
 
-# Build a profile variant (openclaw, deerflow, ironclaw)
-PROFILE=openclaw ./build.sh docker
-
-# Or via cos-ctl (equivalent to base profile)
+# Or via cos-ctl
 ./cli/cos-ctl build
 ```
 

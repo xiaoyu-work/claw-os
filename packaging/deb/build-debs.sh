@@ -10,7 +10,7 @@
 # Inputs:
 #   target/<RUST_TARGET>/release/cos          (built by cargo for $ARCH)
 #   target/<RUST_TARGET>/release/cos-browser  (built by cargo for $ARCH)
-#   apps/, plugins/, skills/                              (source tree)
+#   apps/, skills/                                        (source tree)
 #   rootfs/overlay/etc/cos/*, rootfs/overlay/usr/...      (source tree)
 #   rootfs/features/systemd/overlay/usr/lib/systemd/...   (source tree)
 #
@@ -99,7 +99,6 @@ BASE_STAGE="$STAGE_DIR/claw-os-base"
 mkdir -p "$BASE_STAGE/DEBIAN"
 mkdir -p "$BASE_STAGE/usr/local/bin"
 mkdir -p "$BASE_STAGE/usr/lib/cos/apps"
-mkdir -p "$BASE_STAGE/usr/lib/cos/plugins"
 mkdir -p "$BASE_STAGE/usr/lib/cos/skills"
 mkdir -p "$BASE_STAGE/usr/lib/cos/init"
 mkdir -p "$BASE_STAGE/usr/share/applications"
@@ -155,12 +154,9 @@ install -m 644 "$PROJECT_DIR/rootfs/overlay/etc/cos/profile.sh" \
 sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" "$BASE_STAGE/etc/cos/config.json"
 sed -i "s/COS_VERSION=\".*\"/COS_VERSION=\"$VERSION\"/" "$BASE_STAGE/etc/cos/profile.sh"
 
-# Apps, plugins, skills.
+# Apps, skills.
 if [ -d "$PROJECT_DIR/apps" ]; then
     cp -a "$PROJECT_DIR/apps/." "$BASE_STAGE/usr/lib/cos/apps/"
-fi
-if [ -d "$PROJECT_DIR/plugins" ]; then
-    cp -a "$PROJECT_DIR/plugins/." "$BASE_STAGE/usr/lib/cos/plugins/"
 fi
 if [ -d "$PROJECT_DIR/skills" ]; then
     cp -a "$PROJECT_DIR/skills/." "$BASE_STAGE/usr/lib/cos/skills/"

@@ -25,7 +25,7 @@ Presentation {
     Slide {
         Text {
             anchors.centerIn: parent
-            text: "Claw OS is an agent-native operating system.\n\nThe `cos` supervisor is a single Rust binary that orchestrates apps, plugins, skills, and a built-in browser engine."
+            text: "Claw OS is an agent-native operating system.\n\nThe `cos` supervisor is a single Rust binary that orchestrates apps, skills, and a built-in browser engine."
             wrapMode: Text.WordWrap
             width: parent.width
             horizontalAlignment: Text.Center

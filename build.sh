@@ -31,8 +31,10 @@ EOF
     cat <<EOF
 
 Examples:
-  ./build.sh docker                          # base image
-  PROFILE=openclaw ./build.sh docker         # OpenClaw variant
+  ./build.sh docker                          # docker image
+  sudo ./build.sh vm                         # qcow2 / vmdk / vhdx
+  sudo ./build.sh iso-live                   # live ISO
+  sudo ./build.sh wsl                        # WSL tarball
 EOF
 }
 

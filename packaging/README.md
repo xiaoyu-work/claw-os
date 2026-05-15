@@ -10,7 +10,7 @@ to newer versions.
 packaging/
 ├── deb/                       Debian package definitions
 │   ├── build-debs.sh          Build all .debs into build/debs/
-│   ├── claw-os-base/          The cos binary + apps/plugins/skills
+│   ├── claw-os-base/          The cos binary + apps/skills
 │   ├── claw-os-browser/       cos-browser (Obscura) + service config
 │   └── claw-os-systemd/       systemd unit files for non-Docker targets
 └── apt-repo/
@@ -21,7 +21,7 @@ packaging/
 
 | Package | Contains | Architecture | Depends |
 |---|---|---|---|
-| `claw-os-base` | `cos`, `cos-init`, apps, plugins, skills, `/etc/cos/*`, `setup-home.sh` | `amd64` | `bash`, `coreutils`, `ca-certificates` |
+| `claw-os-base` | `cos`, `cos-init`, apps, skills, `/etc/cos/*`, `setup-home.sh` | `amd64` | `bash`, `coreutils`, `ca-certificates` |
 | `claw-os-browser` | `cos-browser`, `cos-browser-worker`, `browser/service.json` | `amd64` | `claw-os-base (= ${binary:Version})`, `chromium` |
 | `claw-os-systemd` | `cos-home-setup.service`, `cos-browser.service`, `/etc/default/cos-home` | `all` | `claw-os-base (= ${binary:Version})`, `systemd` |
 

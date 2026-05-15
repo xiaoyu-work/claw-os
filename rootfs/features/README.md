@@ -16,7 +16,7 @@ Both are optional. `packages.txt` runs first, then `install.sh`.
 | Feature | What it adds |
 |---|---|
 | `base` | Core CLI tools, Node.js 24 (+ pnpm/typescript/tsx), Python apt packages, runtime dirs, `/etc/cos/profile.sh` sourcing, version injection |
-| `cos-core` | The `cos` binary, `apps/`, `plugins/`, `skills/` |
+| `cos-core` | The `cos` binary, `apps/`, `skills/` |
 | `browser` | Chromium runtime libs, the `cos-browser` and (optional) `cos-browser-worker` binaries |
 | `desktop` | Wayland desktop stack (cosmic-comp + greeter + panel + launcher + settings + apps) built from the vendored monorepo at `<repo>/desktop/`. Wires `cosmic-greeter` as the display manager and sets `graphical.target` as default. Set `DESKTOP_SKIP=1` to install runtime deps only (skip the ~30–60 min cargo build). |
 

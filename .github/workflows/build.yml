@@ -57,9 +57,9 @@ jobs:
   # The rootfs is built once with the feature set shared by the Docker image
   # and the WSL tarball (`base,cos-core,browser,systemd,apt-source`). Down-
   # stream steps in this job then package that one rootfs into:
-  #   - 4 Docker images (base + openclaw + deerflow + ironclaw) → GHCR
-  #   - 1 WSL tarball                                            → GitHub Release
-  #   - .deb packages + apt repo                                 → GH Pages
+  #   - 1 Docker image                  → GHCR
+  #   - 1 WSL tarball                   → GitHub Release
+  #   - .deb packages + apt repo        → GH Pages
   #
   # Previously this work was split between `build` (Docker + .deb) and a
   # separate `release-wsl` job that re-debootstrapped and re-built the cos
@@ -166,66 +166,6 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-
-      # Build OpenClaw variant (OS + OpenClaw pre-installed)
-      - name: Extract metadata (OpenClaw)
-        id: meta-openclaw
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=openclaw,enable={{is_default_branch}}
-            type=raw,value=openclaw-{{sha}},enable={{is_default_branch}}
-
-      - name: Build and push (OpenClaw)
-        if: github.event_name != 'pull_request'
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: targets/docker/Dockerfile.openclaw
-          push: true
-          tags: ${{ steps.meta-openclaw.outputs.tags }}
-          labels: ${{ steps.meta-openclaw.outputs.labels }}
-
-      # Build DeerFlow variant (OS + DeerFlow pre-installed)
-      - name: Extract metadata (DeerFlow)
-        id: meta-deerflow
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=deerflow,enable={{is_default_branch}}
-            type=raw,value=deerflow-{{sha}},enable={{is_default_branch}}
-
-      - name: Build and push (DeerFlow)
-        if: github.event_name != 'pull_request'
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: targets/docker/Dockerfile.deerflow
-          push: true
-          tags: ${{ steps.meta-deerflow.outputs.tags }}
-          labels: ${{ steps.meta-deerflow.outputs.labels }}
-
-      # Build IronClaw variant (OS + IronClaw pre-installed)
-      - name: Extract metadata (IronClaw)
-        id: meta-ironclaw
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=ironclaw,enable={{is_default_branch}}
-            type=raw,value=ironclaw-{{sha}},enable={{is_default_branch}}
-
-      - name: Build and push (IronClaw)
-        if: github.event_name != 'pull_request'
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: targets/docker/Dockerfile.ironclaw
-          push: true
-          tags: ${{ steps.meta-ironclaw.outputs.tags }}
-          labels: ${{ steps.meta-ironclaw.outputs.labels }}
 
       # WSL packaging — same rootfs we just shipped to Docker, plus the
       # WSL-specific overlay (/etc/wsl.conf). targets/wsl/build.sh detects

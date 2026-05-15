@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-# Install Node.js 24 (required by cos apps and OpenClaw).
+# Install Node.js 24 (required by cos apps).
 NODE_MAJOR=24
 echo "  :: installing Node.js $NODE_MAJOR"
 chroot "$ROOTFS" bash -c "
