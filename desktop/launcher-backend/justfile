@@ -2,21 +2,22 @@ ID := 'pop-launcher'
 plugins := 'calc desktop_entries docs files find pop_shell pulse recent scripts terminal web cosmic_toplevel'
 
 rootdir := ''
+prefix := '/usr'
 debug := '0'
 
 target-dir := if debug == '1' { 'target/debug' } else { 'target/release' }
 
-base-dir := if rootdir == '' {
-    env_var('HOME') / '.local'
-} else {
-    rootdir / 'usr'
-}
-
-lib-dir := if rootdir == '' {
-    base-dir / 'share'
-} else {
-    base-dir / 'lib'
-}
+# Install paths follow the same convention as every other crate in
+# `desktop/justfile` — `rootdir / prefix` so that `rootdir=""` yields a
+# direct in-place install under `prefix` (e.g. /usr), and a non-empty
+# `rootdir` stages files under `${rootdir}${prefix}` for packaging.
+# Upstream pop-os/launcher special-cased `rootdir == ''` as a user
+# install to $HOME/.local; that produced /root/.local/bin/pop-launcher
+# inside the rootfs chroot, which the desktop user could not find on
+# PATH, so cosmic-launcher's IPC client failed silently and the dock
+# launcher button did nothing.
+base-dir := absolute_path(clean(rootdir / prefix))
+lib-dir := base-dir / 'lib'
 
 bin-dir := base-dir / 'bin'
 bin-path := bin-dir / ID
