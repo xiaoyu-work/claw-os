@@ -18,6 +18,12 @@ fn main() {
             "cosmic-applet-a11y-keywords",
         ),
         (
+            "com.clawos.AppletAgentActivity",
+            "cosmic-applet-agent-activity",
+            "cosmic-applet-agent-activity-comment",
+            "cosmic-applet-agent-activity-keywords",
+        ),
+        (
             "com.clawos.AppletApprovalGate",
             "cosmic-applet-approval-gate",
             "cosmic-applet-approval-gate-comment",
