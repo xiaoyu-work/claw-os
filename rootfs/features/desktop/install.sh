@@ -123,7 +123,13 @@ chroot "$ROOTFS" env \
     export PATH="$CARGO_HOME/bin:$PATH"
     cd /build/desktop-src
     just build
-    just install rootdir="" prefix=/usr
+    # NB: pass rootdir and prefix as POSITIONAL args. `just install rootdir=""`
+    # would set rootdir to the literal string "rootdir=" (the entire token is
+    # the value of positional param 1), producing nonsense install paths like
+    # `/build/desktop-src/rootdir=/prefix=/usr/bin/cosmic-greeter`. The
+    # cosmic-* binaries then never reach /usr/bin and the resulting image has
+    # no working desktop. See desktop/justfile recipe `install rootdir="" prefix="/usr/local"`.
+    just install "" /usr
 '
 
 # ---------------------------------------------------------------------------
