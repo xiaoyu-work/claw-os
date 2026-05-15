@@ -23,6 +23,13 @@
 //! "denied", ..}` into `io::Error::PermissionDenied` so existing
 //! error-display paths surface a coherent message ("Permission
 //! denied") rather than a generic IO failure.
+//!
+//! AI surfaces (summarise / explain / rewrite / search / …) live in
+//! the [`ai`] submodule; they route through the same `cos app`
+//! boundary but the public API is async + `Result<_, String>` shaped
+//! for the dialog/sidebar layers that consume them.
+
+pub mod ai;
 
 use std::io;
 use std::path::Path;
