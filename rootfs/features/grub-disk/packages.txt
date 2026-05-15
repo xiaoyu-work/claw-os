@@ -1,3 +1,4 @@
 ${GRUB_EFI_PKG}
 ${GRUB_BIOS_PKG}
 grub-common
+grub2-common
