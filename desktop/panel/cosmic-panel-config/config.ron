@@ -53,11 +53,10 @@
                 "com.clawos.PanelWorkspacesButton",
                 "com.clawos.PanelAppButton",
                 "com.clawos.AppList",
-                "com.clawos.AppletMinimize",
             ]),
             plugins_wings: None,
             expand_to_edges: false,
-            padding: 0,
+            padding: 16,
             spacing: 4,
             exclusive_zone: false,
             autohide: Some((

@@ -190,7 +190,6 @@ impl Default for CosmicPanelContainerConfig {
                         "com.clawos.PanelWorkspacesButton".to_string(),
                         "com.clawos.PanelAppButton".to_string(),
                         "com.clawos.AppList".to_string(),
-                        "com.clawos.AppletMinimize".to_string(),
                     ]),
                     size_wings: None,
                     size_center: None,
