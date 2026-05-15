@@ -2688,7 +2688,7 @@ impl App {
         let label = match tab
             .location
             .path_opt()
-            .and_then(finder_free_space)
+            .and_then(|p| finder_free_space(p.as_path()))
         {
             Some(bytes) => format!(
                 "{}  ·  {}",
