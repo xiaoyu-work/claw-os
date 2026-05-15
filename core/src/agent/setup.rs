@@ -643,7 +643,7 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
     let _ = writeln!(e);
 
     // ---- Step 1: provider ------------------------------------------------
-    let providers = llm::available_providers();
+    let providers = user_facing_providers();
     if providers.is_empty() {
         return Err("no LLM providers linked into this build".into());
     }
@@ -1745,19 +1745,24 @@ fn providers_cmd(modality: Modality) -> Result<Value, String> {
     }
 }
 
+/// Providers shown in user-facing pickers (`cos agent setup llm` wizard,
+/// the desktop catalogue consumed by cosmic-settings, the initial-setup
+/// AI page). Filters out `mock` (test-only) and `llama_local` (managed
+/// via `cos model load`, not the standard credential flow). Power users
+/// can still address these by name via `cos agent setup llm apply
+/// --provider mock ...` or by editing /etc/cos/config.json directly —
+/// only the lists are hidden, not the registry.
+fn user_facing_providers() -> Vec<&'static str> {
+    llm::available_providers()
+        .into_iter()
+        .filter(|name| !matches!(*name, "mock" | "llama_local"))
+        .collect()
+}
+
 fn providers_llm() -> Value {
-    // `available_providers()` returns every name that the registry can
-    // build — including `mock` (test-only) and `llama_local` (managed
-    // via `cos model load`, not via the standard credential flow).
-    // Neither should appear in the GUI catalogue consumed by
-    // cosmic-settings and cosmic-initial-setup, so we filter them out
-    // here at the single source of truth. Power users who actually
-    // need them can still set them directly in /etc/cos/config.json
-    // or via `cos agent setup llm apply --provider mock ...`.
-    let names = llm::available_providers();
+    let names = user_facing_providers();
     let providers: Vec<Value> = names
         .iter()
-        .filter(|name| !matches!(**name, "mock" | "llama_local"))
         .map(|name| {
             let models = llm::metadata::list_for_provider(name);
             let model_list: Vec<Value> = models
@@ -2680,6 +2685,24 @@ mod tests {
             "llama_local leaked into GUI catalogue: {names:?}"
         );
         // Sanity: real providers are still there.
+        assert!(names.contains(&"openai"));
+        assert!(names.contains(&"anthropic"));
+    }
+
+    #[test]
+    fn user_facing_providers_hides_mock_and_llama_local() {
+        // Same contract as the GUI catalogue, but for the interactive
+        // `cos agent setup llm` wizard's provider picker — it consumes
+        // `user_facing_providers()` instead of `available_providers()`
+        // so neither test-only `mock` nor `llama_local` (managed via
+        // `cos model load`) show up in the numbered list. Power users
+        // can still set them via `apply --provider mock ...`.
+        let names = user_facing_providers();
+        assert!(!names.iter().any(|n| *n == "mock"), "mock leaked: {names:?}");
+        assert!(
+            !names.iter().any(|n| *n == "llama_local"),
+            "llama_local leaked: {names:?}"
+        );
         assert!(names.contains(&"openai"));
         assert!(names.contains(&"anthropic"));
     }
