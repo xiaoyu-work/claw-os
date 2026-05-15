@@ -2087,7 +2087,7 @@ impl App {
                     let parent_dir = hit.path.parent().map(|p| p.to_path_buf());
                     let mut col = widget::column::with_capacity(3)
                         .spacing(space_xxs);
-                    col = col.push(if let Some(parent) = parent_dir {
+                    let header: Element<'_, Message> = if let Some(parent) = parent_dir {
                         widget::button::link(name)
                             .on_press(Message::TabMessage(
                                 None,
@@ -2098,7 +2098,8 @@ impl App {
                             .into()
                     } else {
                         widget::text::body(name).into()
-                    });
+                    };
+                    col = col.push(header);
                     let snippet = hit.snippet.trim();
                     if !snippet.is_empty() {
                         col = col.push(widget::text::caption(snippet.to_string()));
