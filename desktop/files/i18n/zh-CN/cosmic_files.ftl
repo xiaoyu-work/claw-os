@@ -464,3 +464,17 @@ ai-explain = AI 讲解
 ai-explain-title = AI 讲解 — {$name}
 ai-explaining = 正在让 AI 讲解这个文件…
 ai-explain-error = AI 无法讲解这个文件。
+
+## AI 助手（侧边栏）
+ai-assist-title = AI 助手
+ai-assist-description = 搜索本地文档，并对当前选中的文件执行 AI 操作。
+ai-assist-search-placeholder = 搜索文档…
+ai-assist-search = 搜索
+ai-assist-no-selection = 在当前标签中选择一个文件以启用文件操作。
+ai-assist-action-summarize = 摘要
+ai-assist-action-explain = 讲解
+ai-assist-action-find-similar = 查找相似
+ai-assist-loading = 正在搜索…
+ai-assist-empty = 在上方输入查询，或选择一个文件操作。
+ai-assist-empty-results = 没有匹配项。
+ai-assist-error = AI 搜索失败。

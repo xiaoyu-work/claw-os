@@ -408,4 +408,18 @@ ai-explain-title = AI explanation — {$name}
 ai-explaining = Asking the AI to explain this file…
 ai-explain-error = The AI could not explain this file.
 
+## AI Assist (sidebar)
+ai-assist-title = AI Assist
+ai-assist-description = Search local documents and run AI actions on the selected file.
+ai-assist-search-placeholder = Search documents…
+ai-assist-search = Search
+ai-assist-no-selection = Select a single file in the current tab to enable file actions.
+ai-assist-action-summarize = Summarize
+ai-assist-action-explain = Explain
+ai-assist-action-find-similar = Find similar
+ai-assist-loading = Searching…
+ai-assist-empty = Type a query above, or pick a file action.
+ai-assist-empty-results = No matches found.
+ai-assist-error = AI search failed.
+
 close = Close

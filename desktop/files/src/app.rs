@@ -133,6 +133,7 @@ pub enum Action {
     AddToSidebar,
     AiSummarize,
     AiExplain,
+    AiAssist,
     Compress,
     Copy,
     CopyPath,
@@ -208,6 +209,7 @@ impl Action {
             Self::AddToSidebar => Message::AddToSidebar(entity_opt),
             Self::AiSummarize => Message::AiSummarize(entity_opt),
             Self::AiExplain => Message::AiExplain(entity_opt),
+            Self::AiAssist => Message::ToggleContextPage(ContextPage::AiAssist),
             Self::Compress => Message::Compress(entity_opt),
             Self::Copy => Message::Copy(entity_opt),
             Self::CopyPath => Message::CopyPath(entity_opt),
@@ -347,6 +349,10 @@ pub enum Message {
         path: PathBuf,
         outcome: Result<String, String>,
     },
+    AiAssistInput(String),
+    AiAssistSubmit,
+    AiAssistSearchResult(Result<Vec<crate::claw_glue::ai::SearchHit>, String>),
+    AiAssistFindSimilar,
     AppTheme(AppTheme),
     CloseToast(widget::ToastId),
     Compress(Option<Entity>),
@@ -501,6 +507,7 @@ pub enum Message {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ContextPage {
     About,
+    AiAssist,
     EditHistory,
     NetworkDrive,
     Preview(Option<Entity>, PreviewKind),
@@ -537,6 +544,15 @@ impl AsRef<str> for ArchiveType {
 pub enum AiSummaryStatus {
     Loading,
     Ready(String),
+    Error(String),
+}
+
+#[derive(Clone, Debug, Default)]
+pub enum AiAssistStatus {
+    #[default]
+    Idle,
+    Loading,
+    Ready(Vec<crate::claw_glue::ai::SearchHit>),
     Error(String),
 }
 
@@ -781,6 +797,8 @@ pub struct App {
     must_save_sort_names: bool,
     network_drive_connecting: Option<(MounterKey, String)>,
     network_drive_input: String,
+    ai_assist_input: String,
+    ai_assist_status: AiAssistStatus,
     #[cfg(feature = "notify")]
     notification_opt: Option<Arc<Mutex<notify_rust::NotificationHandle>>>,
     #[cfg(all(feature = "wayland", feature = "desktop-applet"))]
@@ -1982,6 +2000,106 @@ impl App {
         Task::none()
     }
 
+    fn ai_assist(&self) -> Element<'_, Message> {
+        let cosmic_theme::Spacing {
+            space_xxs,
+            space_xs,
+            space_s,
+            ..
+        } = theme::spacing();
+
+        let selection_count = self.selected_paths(None).count();
+        let mut actions = widget::row::with_capacity(4)
+            .spacing(space_xs)
+            .align_y(Alignment::Center);
+
+        let summarize_btn = widget::button::standard(fl!("ai-assist-action-summarize"));
+        let explain_btn = widget::button::standard(fl!("ai-assist-action-explain"));
+        let similar_btn = widget::button::standard(fl!("ai-assist-action-find-similar"));
+        actions = if selection_count >= 1 {
+            actions
+                .push(summarize_btn.on_press(Message::AiSummarize(None)))
+                .push(explain_btn.on_press(Message::AiExplain(None)))
+                .push(similar_btn.on_press(Message::AiAssistFindSimilar))
+        } else {
+            actions
+                .push(summarize_btn)
+                .push(explain_btn)
+                .push(similar_btn)
+        };
+
+        let hint: Option<Element<'_, Message>> = if selection_count == 0 {
+            Some(widget::text::caption(fl!("ai-assist-no-selection")).into())
+        } else {
+            None
+        };
+
+        let body: Element<'_, Message> = match &self.ai_assist_status {
+            AiAssistStatus::Idle => {
+                widget::text::body(fl!("ai-assist-empty")).into()
+            }
+            AiAssistStatus::Loading => {
+                widget::text::body(fl!("ai-assist-loading")).into()
+            }
+            AiAssistStatus::Error(err) => widget::column::with_children(vec![
+                widget::text::body(fl!("ai-assist-error")).into(),
+                widget::text::caption(err.clone()).into(),
+            ])
+            .spacing(space_xxs)
+            .into(),
+            AiAssistStatus::Ready(hits) if hits.is_empty() => {
+                widget::text::body(fl!("ai-assist-empty-results")).into()
+            }
+            AiAssistStatus::Ready(hits) => {
+                let mut list = widget::column::with_capacity(hits.len()).spacing(space_xs);
+                for hit in hits {
+                    let name = hit
+                        .path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| hit.path.to_string_lossy().into_owned());
+                    let parent_dir = hit.path.parent().map(|p| p.to_path_buf());
+                    let mut col = widget::column::with_capacity(3)
+                        .spacing(space_xxs);
+                    col = col.push(if let Some(parent) = parent_dir {
+                        widget::button::link(name)
+                            .on_press(Message::TabMessage(
+                                None,
+                                tab::Message::Location(Location::Path(parent)),
+                            ))
+                            .padding(0)
+                            .trailing_icon(true)
+                            .into()
+                    } else {
+                        widget::text::body(name).into()
+                    });
+                    let snippet = hit.snippet.trim();
+                    if !snippet.is_empty() {
+                        col = col.push(widget::text::caption(snippet.to_string()));
+                    }
+                    col = col.push(widget::text::caption(
+                        hit.path.display().to_string(),
+                    ));
+                    list = list.push(col);
+                }
+                widget::scrollable(list).height(Length::Fill).into()
+            }
+        };
+
+        let mut children: Vec<Element<'_, Message>> = Vec::with_capacity(5);
+        children.push(widget::text::caption(fl!("ai-assist-description")).into());
+        children.push(actions.into());
+        if let Some(hint) = hint {
+            children.push(hint);
+        }
+        children.push(widget::divider::horizontal::light().into());
+        children.push(body);
+
+        widget::column::with_children(children)
+            .spacing(space_s)
+            .into()
+    }
+
     fn network_drive(&self) -> Element<'_, Message> {
         let cosmic_theme::Spacing {
             space_xxs, space_m, ..
@@ -2508,6 +2626,8 @@ impl Application for App {
             must_save_sort_names: false,
             network_drive_connecting: None,
             network_drive_input: String::new(),
+            ai_assist_input: String::new(),
+            ai_assist_status: AiAssistStatus::Idle,
             #[cfg(feature = "notify")]
             notification_opt: None,
             #[cfg(all(feature = "wayland", feature = "desktop-applet"))]
@@ -3047,6 +3167,37 @@ impl Application for App {
                     self.dialog_pages
                         .update_front(DialogPage::AiExplain { path, status });
                 }
+            }
+            Message::AiAssistInput(value) => {
+                self.ai_assist_input = value;
+            }
+            Message::AiAssistSubmit => {
+                let query = self.ai_assist_input.trim().to_string();
+                if query.is_empty() {
+                    return Task::none();
+                }
+                self.ai_assist_status = AiAssistStatus::Loading;
+                return cosmic::Task::future(async move {
+                    let outcome = crate::claw_glue::ai::search(query, 50).await;
+                    cosmic::action::app(Message::AiAssistSearchResult(outcome))
+                });
+            }
+            Message::AiAssistFindSimilar => {
+                let path = match self.selected_paths(None).next() {
+                    Some(p) => p,
+                    None => return Task::none(),
+                };
+                self.ai_assist_status = AiAssistStatus::Loading;
+                return cosmic::Task::future(async move {
+                    let outcome = crate::claw_glue::ai::find_similar(path, 50).await;
+                    cosmic::action::app(Message::AiAssistSearchResult(outcome))
+                });
+            }
+            Message::AiAssistSearchResult(outcome) => {
+                self.ai_assist_status = match outcome {
+                    Ok(hits) => AiAssistStatus::Ready(hits),
+                    Err(err) => AiAssistStatus::Error(err),
+                };
             }
             Message::Compress(entity_opt) => {
                 let paths: Box<[_]> = self.selected_paths(entity_opt).collect();
@@ -5582,6 +5733,24 @@ impl Application for App {
                 |url| Message::LaunchUrl(url.to_string()),
                 Message::ToggleContextPage(ContextPage::About),
             ),
+            ContextPage::AiAssist => {
+                let text_input =
+                    widget::text_input(fl!("ai-assist-search-placeholder"), &self.ai_assist_input)
+                        .on_input(Message::AiAssistInput)
+                        .on_submit(|_| Message::AiAssistSubmit);
+                context_drawer::context_drawer(
+                    self.ai_assist(),
+                    Message::ToggleContextPage(ContextPage::AiAssist),
+                )
+                .title(fl!("ai-assist-title"))
+                .header(text_input)
+                .footer(widget::row::with_children([
+                    widget::space::horizontal().into(),
+                    widget::button::standard(fl!("ai-assist-search"))
+                        .on_press(Message::AiAssistSubmit)
+                        .into(),
+                ]))
+            }
             ContextPage::EditHistory => context_drawer::context_drawer(
                 self.edit_history(),
                 Message::ToggleContextPage(ContextPage::EditHistory),

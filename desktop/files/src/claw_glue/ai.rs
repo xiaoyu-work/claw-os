@@ -140,7 +140,6 @@ pub async fn rewrite(path: PathBuf, instruction: String) -> Result<String, Strin
 /// through `cos app docs search --query <q> --max-results <n>`
 /// (Recoll, see `apps/docs`). `max_results` is clamped by the app
 /// itself to a sane upper bound, so we pass it through unchanged.
-#[allow(dead_code)]
 pub async fn search(query: String, max_results: usize) -> Result<Vec<SearchHit>, String> {
     let max = max_results.to_string();
     let value = invoke_app(
@@ -159,7 +158,6 @@ pub async fn search(query: String, max_results: usize) -> Result<Vec<SearchHit>,
 /// When Recoll's true `qopts.minrelevance` API is wired through
 /// `apps/docs`, this implementation can switch over without changing
 /// the call sites.
-#[allow(dead_code)]
 pub async fn find_similar(path: PathBuf, max_results: usize) -> Result<Vec<SearchHit>, String> {
     let stem = path
         .file_stem()
