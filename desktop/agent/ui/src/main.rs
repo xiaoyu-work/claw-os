@@ -20,7 +20,9 @@ use std::env;
 use cosmic::app::{Core, Settings, Task};
 use cosmic::iced::keyboard::{Key, key::Named};
 use cosmic::iced::{Alignment, Length, Limits, Subscription, event};
-use cosmic::widget::{button, column, container, markdown, row, scrollable, text, text_input};
+use cosmic::widget::{
+    Column, Row, button, container, scrollable, text, text_input,
+};
 use cosmic::{Application, Element, executor, theme, widget};
 use tracing::warn;
 
@@ -335,7 +337,7 @@ impl App {
         };
         cosmic::Task::stream(cosmic::iced::stream::channel(
             16,
-            move |mut tx| async move {
+            move |mut tx: cosmic::iced::futures::channel::mpsc::Sender<Message>| async move {
                 use futures::SinkExt;
                 use futures_util::StreamExt;
                 match sse::open_chat_stream(port, request).await {
@@ -388,7 +390,7 @@ impl App {
 
         let input = self.input_row(false);
 
-        let inner = column()
+        let inner = Column::new()
             .push(header)
             .push(
                 container(body)
@@ -410,7 +412,7 @@ impl App {
         let cosmic_theme = theme::active().cosmic().clone();
         let spacing = cosmic_theme.spacing;
 
-        let header = row()
+        let header = Row::new()
             .push(
                 widget::image(if is_dark() {
                     widget::image::Handle::from_bytes(SYMBOL_DARK)
@@ -432,7 +434,7 @@ impl App {
             self.message_list(true)
         };
 
-        let inner = column()
+        let inner = Column::new()
             .push(container(header).padding(spacing.space_xs))
             .push(
                 container(body)
@@ -453,7 +455,7 @@ impl App {
         let cosmic_theme = theme::active().cosmic().clone();
         let spacing = cosmic_theme.spacing;
 
-        let mut col = column().spacing(spacing.space_s).width(Length::Fill);
+        let mut col = Column::new().spacing(spacing.space_s).width(Length::Fill);
 
         for msg in &self.messages {
             col = col.push(message_bubble(msg, compact));
@@ -526,7 +528,7 @@ impl App {
             b
         };
 
-        row()
+        Row::new()
             .push(input)
             .push(mic)
             .push(send)
@@ -615,7 +617,7 @@ fn empty_state(compact: bool) -> Element<'static, Message> {
         text("Press Super+A from anywhere to summon me.").size(13.0)
     };
     container(
-        column()
+        Column::new()
             .push(title)
             .push(hint)
             .spacing(spacing.space_xxs)
@@ -644,31 +646,21 @@ fn message_bubble(msg: &ChatMessage, compact: bool) -> Element<Message> {
             // The user side never carries markdown — render verbatim so
             // they see exactly what they typed.
             ChatRole::User => text(msg.content.clone()).size(body_size).into(),
-            // The agent stream is markdown by convention (the kernel's
-            // system prompt is markdown-friendly, and tool messages get
-            // serialized as fenced code blocks). Parse and render it
-            // through cosmic's catalog-themed markdown widget.
-            ChatRole::Assistant => {
-                let items: Vec<markdown::Item> = markdown::parse(&msg.content).collect();
-                // Cosmic Theme isn't directly assignable to the iced
-                // toolkit's markdown::Style (different `Theme` type), so
-                // we pick a built-in palette by current mode. The
-                // Catalog impl on cosmic::Theme handles surface colors
-                // separately.
-                let palette = if is_dark() {
-                    cosmic::iced::theme::Palette::DARK
-                } else {
-                    cosmic::iced::theme::Palette::LIGHT
-                };
-                let settings = markdown::Settings::with_text_size(body_size, palette);
-                markdown::view(&items, settings)
-                    .map(|uri: markdown::Uri| Message::LinkClicked(uri))
-            }
+            // TODO(markdown): the iced markdown widget borrows the
+            // parsed Item list for the lifetime of the returned
+            // Element, so rendering it from a freshly-parsed local
+            // Vec produces E0515 ("returns a value referencing data
+            // owned by the current function"). To re-enable markdown
+            // rendering, parse once into `ChatMessage::markdown_items`
+            // when a chunk arrives and pass `&self.messages[i].items`
+            // into `markdown::view`. Plain text is fine for now —
+            // tool/code fenced blocks still read cleanly.
+            ChatRole::Assistant => text(msg.content.clone()).size(body_size).into(),
         }
     };
 
     container(
-        column()
+        Column::new()
             .push(text(role_label).size(11.0))
             .push(body)
             .spacing(spacing.space_xxs),
