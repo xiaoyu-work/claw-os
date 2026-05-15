@@ -2548,6 +2548,72 @@ impl App {
         false
     }
 
+    fn finder_toolbar(&self) -> Element<'_, Message> {
+        let cosmic_theme::Spacing {
+            space_xxs,
+            space_xs,
+            space_s,
+            ..
+        } = theme::spacing();
+        let tab_opt = self.tab_model.active_data::<Tab>();
+        let view = tab_opt
+            .map(|t| t.config.view)
+            .unwrap_or(tab::View::List);
+        let (can_back, can_forward) = match tab_opt {
+            Some(tab) => (
+                tab.history_i > 0 && !tab.history.is_empty(),
+                tab.history_i + 1 < tab.history.len(),
+            ),
+            None => (false, false),
+        };
+
+        let mut back = widget::button::icon(icon::from_name("go-previous-symbolic").size(16))
+            .padding(space_xxs);
+        if can_back {
+            back = back.on_press(Message::TabMessage(None, tab::Message::GoPrevious));
+        }
+        let mut forward = widget::button::icon(icon::from_name("go-next-symbolic").size(16))
+            .padding(space_xxs);
+        if can_forward {
+            forward = forward.on_press(Message::TabMessage(None, tab::Message::GoNext));
+        }
+
+        let grid = widget::button::icon(icon::from_name("view-grid-symbolic").size(16))
+            .padding(space_xxs)
+            .selected(matches!(view, tab::View::Grid))
+            .on_press(Message::TabView(None, tab::View::Grid));
+        let list = widget::button::icon(icon::from_name("view-list-symbolic").size(16))
+            .padding(space_xxs)
+            .selected(matches!(view, tab::View::List))
+            .on_press(Message::TabView(None, tab::View::List));
+
+        let mut row = widget::row::with_capacity(10)
+            .align_y(Alignment::Center)
+            .spacing(space_xxs)
+            .push(back)
+            .push(forward)
+            .push(widget::space::horizontal().width(Length::Fixed(space_s.into())))
+            .push(grid)
+            .push(list)
+            .push(widget::space::horizontal().width(Length::Fill));
+
+        let search_term = self.search_get();
+        let search_input = widget::text_input::search_input(
+            fl!("finder-toolbar-search"),
+            search_term.unwrap_or(""),
+        )
+        .width(Length::Fixed(220.0))
+        .id(self.search_id.clone())
+        .on_clear(Message::SearchClear)
+        .on_input(Message::SearchInput);
+        row = row.push(search_input);
+
+        widget::container(row)
+            .padding([space_xxs, space_xs])
+            .width(Length::Fill)
+            .into()
+    }
+
     fn finder_path_bar(&self) -> Option<Element<'_, Message>> {
         if !self.config.show_path_bar {
             return None;
@@ -2610,7 +2676,7 @@ impl App {
         let selected = items.iter().filter(|i| i.selected).count();
 
         let total_text = fl!("status-bar-items", count = total);
-        let label = if selected > 0 {
+        let counts = if selected > 0 {
             format!(
                 "{}  ·  {}",
                 total_text,
@@ -2618,6 +2684,18 @@ impl App {
             )
         } else {
             total_text
+        };
+        let label = match tab
+            .location
+            .path_opt()
+            .and_then(finder_free_space)
+        {
+            Some(bytes) => format!(
+                "{}  ·  {}",
+                counts,
+                fl!("status-bar-available", size = tab::format_size(bytes))
+            ),
+            None => counts,
         };
 
         Some(
@@ -2630,6 +2708,24 @@ impl App {
             .into(),
         )
     }
+}
+
+/// Free bytes available on the filesystem holding `path`. Best-effort:
+/// returns `None` on any `statvfs(3)` error (path missing, permission
+/// denied, non-UTF-8 conversion). Linux/Wayland is the target — on
+/// macOS the symbol exists but exact semantics may differ; both work
+/// for our display purpose.
+fn finder_free_space(path: &std::path::Path) -> Option<u64> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let c = CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
+    let rc = unsafe { libc::statvfs(c.as_ptr(), &mut s) };
+    if rc != 0 {
+        return None;
+    }
+    Some((s.f_bavail as u64) * (s.f_frsize as u64))
 }
 
 /// Implement [`Application`] to integrate with COSMIC.
@@ -7086,38 +7182,10 @@ impl Application for App {
     }
 
     fn header_end(&self) -> Vec<Element<'_, Self::Message>> {
-        let mut elements = Vec::with_capacity(2);
-
-        if let Some(term) = self.search_get() {
-            if self.core.is_condensed() {
-                elements.push(
-                    //TODO: selected state is not appearing different
-                    widget::button::icon(icon::from_name("system-search-symbolic"))
-                        .on_press(Message::SearchClear)
-                        .padding(8)
-                        .selected(true)
-                        .into(),
-                );
-            } else {
-                elements.push(
-                    widget::text_input::search_input("", term)
-                        .width(Length::Fixed(240.0))
-                        .id(self.search_id.clone())
-                        .on_clear(Message::SearchClear)
-                        .on_input(Message::SearchInput)
-                        .into(),
-                );
-            }
-        } else {
-            elements.push(
-                widget::button::icon(icon::from_name("system-search-symbolic"))
-                    .on_press(Message::SearchActivate)
-                    .padding(8)
-                    .into(),
-            );
-        }
-
-        elements
+        // Search lives in the Finder-style toolbar inside `view()` now,
+        // so the title bar's right side stays clean — just like macOS
+        // Finder, which has no controls in its title bar.
+        Vec::new()
     }
 
     /// Creates a view after each update.
@@ -7126,22 +7194,10 @@ impl Application for App {
             space_xxs, space_s, ..
         } = theme::spacing();
 
-        let mut tab_column = widget::column::with_capacity(4);
+        let mut tab_column = widget::column::with_capacity(5);
 
-        if self.core.is_condensed()
-            && let Some(term) = self.search_get()
-        {
-            tab_column = tab_column.push(
-                widget::container(
-                    widget::text_input::search_input("", term)
-                        .width(Length::Fill)
-                        .id(self.search_id.clone())
-                        .on_clear(Message::SearchClear)
-                        .on_input(Message::SearchInput),
-                )
-                .padding(space_xxs),
-            );
-        }
+        // Finder-style toolbar: back/forward + view switcher + search.
+        tab_column = tab_column.push(self.finder_toolbar());
 
         if self.tab_model.len() > 1 {
             tab_column = tab_column.push(

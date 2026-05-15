@@ -309,6 +309,8 @@ show-path-bar = Show Path Bar
 show-status-bar = Show Status Bar
 status-bar-items = {$count} items
 status-bar-selected = {$count} selected
+status-bar-available = {$size} available
+finder-toolbar-search = Search
 
 ## Settings
 settings = Settings
