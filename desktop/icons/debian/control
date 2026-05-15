@@ -11,5 +11,5 @@ Homepage: https://github.com/pop-os/cosmic-icons
 
 Package: cosmic-icons
 Architecture: amd64 arm64
-Depends: pop-icon-theme
+Depends: pop-icon-theme, claw-icons-whitesur (>= 2025.12)
 Description: Cosmic Icons

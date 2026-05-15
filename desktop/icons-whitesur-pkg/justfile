@@ -1,0 +1,31 @@
+set export
+
+# Wraps upstream WhiteSur-icon-theme install.sh into our packaging layout.
+# Source tree lives at ../icons-whitesur (git submodule, vinceliuice/WhiteSur-icon-theme).
+# We install only the default blue variant in light+dark to keep the package
+# under ~120 MB. Folder icons + symbolic actions get inherited by `cosmic-icons`
+# via `Inherits=WhiteSur,...` in ../icons/index.theme.
+
+rootdir := ''
+prefix := '/usr'
+base-dir := absolute_path(clean(rootdir / prefix))
+icons-dir := base-dir / 'share' / 'icons'
+src-dir := justfile_directory() / '..' / 'icons-whitesur'
+
+default:
+    @just --list
+
+# Install default + light + dark variants of the blue theme.
+install:
+    @test -f "{{src-dir}}/install.sh" || { \
+        echo "error: submodule desktop/icons-whitesur not initialised."; \
+        echo "       run: git submodule update --init desktop/icons-whitesur"; \
+        exit 1; \
+    }
+    install -d {{icons-dir}}
+    bash {{src-dir}}/install.sh --dest {{icons-dir}} --name WhiteSur
+
+uninstall:
+    rm -rf {{icons-dir}}/WhiteSur \
+           {{icons-dir}}/WhiteSur-light \
+           {{icons-dir}}/WhiteSur-dark

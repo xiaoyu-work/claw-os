@@ -1,0 +1,8 @@
+claw-icons-whitesur (2025.12.27) UNRELEASED; urgency=medium
+
+  * Vendor WhiteSur-icon-theme (vinceliuice) as a git submodule so
+    folder, mime and action icons across claw-os adopt the macOS Big
+    Sur look. cosmic-icons now inherits from WhiteSur in its theme
+    chain.
+
+ -- claw-os <dev@clawos.example>  Thu, 14 May 2026 10:00:00 -0700
