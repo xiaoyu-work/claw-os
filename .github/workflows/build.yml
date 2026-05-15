@@ -114,27 +114,6 @@ jobs:
       - name: Fix rootfs permissions for Docker build
         run: sudo chmod -R a+rX build/claw-os-rootfs
 
-      # Surface the .debs that cos-core's install.sh built as a side effect
-      # of the rootfs build, plus assemble the apt repo.
-      - name: Fix .deb permissions and build apt repo
-        run: |
-          sudo chown -R "$(id -u):$(id -g)" build/debs build/deb-staging || true
-          sudo apt-get install -y -qq apt-utils
-          ./packaging/apt-repo/build-repo.sh
-
-      - name: Upload .deb artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: claw-os-debs
-          path: build/debs/*.deb
-          if-no-files-found: error
-
-      - name: Upload apt repo as Pages artifact
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: build/apt-repo
-
       # Docker-specific prep on the shared rootfs:
       #   - Add the default `cos` user (uid 1000, NOPASSWD sudo).
       #   - Pre-create /var/lib/cos/overlay/{base,upper,work} chowned to cos
@@ -257,6 +236,13 @@ jobs:
       - name: Fix build/ ownership for non-sudo steps
         run: sudo chown -R "$(id -u):$(id -g)" build
 
+      - name: Upload .deb artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: claw-os-debs
+          path: build/debs/*.deb
+          if-no-files-found: error
+
       - name: Compute SHA-256 and rename for release
         id: artifact
         run: |
@@ -341,6 +327,25 @@ jobs:
           files: |
             build/claw-os-wsl-amd64.tar.gz
             build/claw-os-wsl-amd64.tar.gz.sha256
+
+      # apt repo build is the LAST step in this job. By design, a failure
+      # here must not block the Docker image push or the WSL release — both
+      # have already happened above. The .debs themselves were uploaded as
+      # a workflow artifact earlier, so apt repo failure only loses the
+      # Pages-served `deb https://…/claw-os` URL, not the .deb files.
+      #
+      # By this point build/ is fully runner-owned (see "Fix build/
+      # ownership" above), so `mkdir build/apt-repo` works without sudo.
+      - name: Build apt repo from .debs
+        run: |
+          sudo apt-get install -y -qq apt-utils
+          ./packaging/apt-repo/build-repo.sh
+
+      - name: Upload apt repo as Pages artifact
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/apt-repo
 
   # Publish the apt repo (build/apt-repo) to GitHub Pages.
   # Repo settings → Pages → Source must be set to "GitHub Actions" for the
