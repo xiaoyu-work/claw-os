@@ -15,11 +15,22 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-# Add apps/ to sys.path so `from _lib import …` works inside main.
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir))
+# Add the SDK src dir to sys.path so `from claw_os_sdk import …` works
+# inside main.
+sys.path.insert(
+    0,
+    os.path.join(
+        os.path.dirname(__file__),
+        os.pardir,
+        os.pardir,
+        "claw-os-sdk",
+        "python",
+        "src",
+    ),
+)
 
 import main  # noqa: E402
-from _lib import ai  # noqa: E402
+from claw_os_sdk import ai  # noqa: E402
 
 
 # ---------------------------------------------------------------------------

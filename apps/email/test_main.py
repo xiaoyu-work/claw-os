@@ -8,6 +8,13 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(
+    0,
+    os.path.join(
+        os.path.dirname(__file__), os.pardir, os.pardir,
+        "claw-os-sdk", "python", "src",
+    ),
+)  # for `from claw_os_sdk import …`
 
 from main import (
     _detect_provider,

@@ -106,7 +106,7 @@ impl Page {
 
                     tokio::spawn(async move {
                         let bridge_res = tokio::task::spawn_blocking(move || {
-                            claw_bridge::exec::run(
+                            claw_os_sdk::exec::run(
                                 &["timedatectl", "set-timezone", &timezone],
                                 None,
                             )
@@ -116,7 +116,7 @@ impl Page {
                             if why.is_denied() {
                                 tracing::warn!(
                                     ?why,
-                                    "exec.run timedatectl set-timezone denied by claw-bridge"
+                                    "exec.run timedatectl set-timezone denied by claw-os-sdk"
                                 );
                             } else {
                                 tracing::error!(?why, "exec.run timedatectl set-timezone failed");

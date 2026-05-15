@@ -9,6 +9,13 @@ from unittest import mock
 
 # Ensure the app directory is importable.
 sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(
+    0,
+    os.path.join(
+        os.path.dirname(__file__), os.pardir, os.pardir,
+        "claw-os-sdk", "python", "src",
+    ),
+)  # for `from claw_os_sdk import …`
 
 from main import run  # noqa: E402
 

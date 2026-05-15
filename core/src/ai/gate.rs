@@ -1,7 +1,7 @@
 //! The App–AI Gate. Single entry point Apps use to reach a model.
 //!
 //! ```text
-//!     cos ai chat --app …       apps/_lib/ai.py
+//!     cos ai chat --app …       claw-os-sdk/python/src/claw_os_sdk/ai.py
 //!          │                          │
 //!          ▼                          ▼
 //!   ai::gate::chat_blocking ─── caps::require(ai.*, name(model))
@@ -96,7 +96,7 @@ use super::user_budget;
 // Public request / response shapes
 // ---------------------------------------------------------------------------
 
-/// One-shot AI request handed in by the CLI / `_lib`. The gate
+/// One-shot AI request handed in by the CLI / `claw_os_sdk`. The gate
 /// auto-derives the [`Modality`] (and therefore the caps `Verb` to
 /// require) from the **shape** of this request — callers never pass a
 /// verb directly. See [`Modality::derive`] for the rules.
@@ -192,7 +192,7 @@ pub struct ProposedToolCall {
 // Modality
 // ---------------------------------------------------------------------------
 
-/// What the gate is being asked to do. The CLI / `_lib` never names
+/// What the gate is being asked to do. The CLI / `claw_os_sdk` never names
 /// this directly — the gate derives it from the request shape (which
 /// of `prompt` / `image_input` / `audio_output` / … are set) and then
 /// requires the corresponding caps verb.

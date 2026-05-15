@@ -5,13 +5,18 @@ import os
 import tempfile
 import unittest
 
-# Adjust path so we can import the module. We add both the app dir
-# (so `import main` works) and the apps root (so `from _lib import
-# policy` inside main.py works).
+# Adjust path so we can import the module. We add the app dir (so
+# `import main` works) and the SDK src dir (so `from claw_os_sdk
+# import policy` inside main.py works).
 import sys
 _THIS_DIR = os.path.dirname(__file__)
 sys.path.insert(0, _THIS_DIR)
-sys.path.insert(0, os.path.dirname(_THIS_DIR))
+sys.path.insert(
+    0,
+    os.path.join(
+        os.path.dirname(_THIS_DIR), os.pardir, "claw-os-sdk", "python", "src"
+    ),
+)
 
 # Tests run outside a Claw session, so the policy helper would
 # normally fail strict cap checks. Flip to permissive so the verbs

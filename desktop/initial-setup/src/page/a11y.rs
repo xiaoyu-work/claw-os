@@ -361,7 +361,7 @@ impl Page {
 
                 tracing::debug!(
                     %scale_arg, %refresh_arg, %name_arg, %w_arg, %h_arg,
-                    "routing cosmic-randr through claw-bridge"
+                    "routing cosmic-randr through claw-os-sdk"
                 );
 
                 let command_fut = async move {
@@ -378,7 +378,7 @@ impl Page {
                     ];
                     let bridge_res = tokio::task::spawn_blocking(move || {
                         let argv_refs: Vec<&str> = argv.iter().map(String::as_str).collect();
-                        claw_bridge::exec::run(&argv_refs, None)
+                        claw_os_sdk::exec::run(&argv_refs, None)
                     })
                     .await;
 
@@ -389,7 +389,7 @@ impl Page {
                             if why.is_denied() {
                                 tracing::warn!(
                                     ?why,
-                                    "exec.run cosmic-randr denied by claw-bridge"
+                                    "exec.run cosmic-randr denied by claw-os-sdk"
                                 );
                             }
                             ScaleAdjustResult::SpawnFailure(Arc::new(std::io::Error::other(

@@ -3,10 +3,10 @@
 This is the kernel-blessed way for an app to participate in an
 **agent session** — the OS Agent attaches to the app's server,
 discovers its tools, and calls them as part of a larger task. It's the
-symmetric counterpart to `_lib.ai`:
+symmetric counterpart to `claw_os_sdk.ai`:
 
-  * `_lib.ai`     — the *app calls AI*; kernel mediates LLM access.
-  * `_lib.serve`  — *AI calls the app*; kernel mediates tool calls.
+  * `claw_os_sdk.ai`     — the *app calls AI*; kernel mediates LLM access.
+  * `claw_os_sdk.serve`  — *AI calls the app*; kernel mediates tool calls.
 
 Both surfaces share the same caps gate (declared in `app.json`), the
 same audit log (`ai.jsonl`), and the same app identity (`COS_APP_ID`).
@@ -28,7 +28,7 @@ stdout is *only* JSON-RPC frames.
 
 ## Author surface
 
-    from _lib.serve import App
+    from claw_os_sdk.serve import App
 
     app = App()  # name auto-detected from $COS_APP_ID
 

@@ -94,7 +94,7 @@ For local dev, see `tools/install-mail-ai.sh`.
 
 App developers never see provider SDKs, model names, or API keys.
 The machine owner configures one provider in `/etc/cos/agent.toml`;
-every app's call uses that. `_lib.ai.chat()` is the only sanctioned
+every app's call uses that. `claw_os_sdk.ai.chat()` is the only sanctioned
 path, and `cos app lint` enforces it at install time.
 
 This means the same extension code runs against Claude, GPT-4o, a

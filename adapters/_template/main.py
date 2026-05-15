@@ -12,22 +12,23 @@ import os
 import pathlib
 import sys
 
-# Bootstrap import path for ``_lib.serve``. Order: explicit env override
+# Bootstrap import path for ``claw_os_sdk.serve``. Order: explicit env override
 # (used by tests + packaging), then repo layout, then common install
 # layouts. First hit wins.
 _HERE = pathlib.Path(__file__).resolve().parent
 _CANDIDATES = [
     pathlib.Path(os.environ["CLAW_PYTHON_LIB"]) if os.environ.get("CLAW_PYTHON_LIB") else None,
-    _HERE.parent.parent / "apps",
+    _HERE.parent.parent / "claw-os-sdk" / "python" / "src",
     pathlib.Path("/opt/claw/python"),
+    pathlib.Path("/usr/lib/cos/python"),
     pathlib.Path("/usr/lib/claw/python"),
 ]
 for cand in _CANDIDATES:
-    if cand and (cand / "_lib").is_dir():
+    if cand and (cand / "claw_os_sdk").is_dir():
         sys.path.insert(0, str(cand))
         break
 
-from _lib.serve import App  # noqa: E402  — sys.path bootstrap above.
+from claw_os_sdk.serve import App  # noqa: E402  — sys.path bootstrap above.
 
 
 app = App()

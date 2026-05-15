@@ -6,7 +6,7 @@ license = "Apache-2.0"
 repository = "https://github.com/xiaoyu-work/claw-os"
 description = "Embeddable MCP (Model Context Protocol) stdio server for Claw OS native Apps"
 
-# This crate is the Rust counterpart to apps/_lib/serve.py: it lets
+# This crate is the Rust counterpart to claw-os-sdk/python/src/claw_os_sdk/serve.py: it lets
 # any Rust binary (typically a libcosmic GUI App) flip into MCP-server
 # mode and expose strict-schema, agent-callable tools backed by its
 # own internal logic. The kernel agent spawns the binary with

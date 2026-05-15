@@ -278,7 +278,7 @@ pub fn export() {
         };
 
         let path = format!("color-schemes/{name}.ron");
-        match claw_bridge::fs::write(&path, &ron) {
+        match claw_os_sdk::fs::write(&path, &ron) {
             Ok(_) => {
                 log::info!("exported {path:?}");
             }

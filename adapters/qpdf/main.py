@@ -17,16 +17,17 @@ import sys
 _HERE = pathlib.Path(__file__).resolve().parent
 _CANDIDATES = [
     pathlib.Path(os.environ["CLAW_PYTHON_LIB"]) if os.environ.get("CLAW_PYTHON_LIB") else None,
-    _HERE.parent.parent / "apps",
+    _HERE.parent.parent / "claw-os-sdk" / "python" / "src",
     pathlib.Path("/opt/claw/python"),
+    pathlib.Path("/usr/lib/cos/python"),
     pathlib.Path("/usr/lib/claw/python"),
 ]
 for _cand in _CANDIDATES:
-    if _cand and (_cand / "_lib").is_dir():
+    if _cand and (_cand / "claw_os_sdk").is_dir():
         sys.path.insert(0, str(_cand))
         break
 
-from _lib.serve import App  # noqa: E402
+from claw_os_sdk.serve import App  # noqa: E402
 
 
 def _qpdf_bin() -> str:

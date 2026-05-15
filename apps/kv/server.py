@@ -18,7 +18,7 @@ import json
 import os
 from typing import Dict, Optional
 
-from _lib.serve import App
+from claw_os_sdk.serve import App
 
 DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 STORE_PATH = os.path.join(DATA_DIR, "kv.json")

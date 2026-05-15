@@ -9,7 +9,7 @@ import json
 import os
 import sys
 
-from _lib import ai, policy
+from claw_os_sdk import ai, policy
 
 
 _SUMMARIZE_SYSTEM = (

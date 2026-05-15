@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //
-// Thin sync adapter over `claw-bridge` for cosmic-edit.
+// Thin sync adapter over `claw-os-sdk` for cosmic-edit.
 //
 // Each function turns a `BridgeError` into a plain `io::Error` so call
 // sites can keep their `match … { Ok / Err(io::Error) }` shape. A
@@ -11,7 +11,7 @@
 use std::io;
 use std::path::Path;
 
-use claw_bridge::{exec, fs, BridgeError};
+use claw_os_sdk::{exec, fs, BridgeError};
 
 fn map_err(err: BridgeError) -> io::Error {
     let kind = if err.is_denied() {
@@ -26,7 +26,7 @@ fn path_str(path: &Path) -> io::Result<&str> {
     path.to_str().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
-            "path is not valid UTF-8 (claw-bridge requires UTF-8 paths)",
+            "path is not valid UTF-8 (claw-os-sdk requires UTF-8 paths)",
         )
     })
 }
@@ -45,7 +45,7 @@ pub fn read_to_string(path: &Path) -> io::Result<String> {
 ///
 /// Returns `io::ErrorKind::PermissionDenied` on a kernel denial — the
 /// caller may then prompt the user for elevation (pkexec) exactly as
-/// it did before claw-bridge existed.
+/// it did before claw-os-sdk existed.
 pub fn write_text(path: &Path, contents: &str) -> io::Result<()> {
     let p = path_str(path)?;
     fs::write(p, contents).map(|_| ()).map_err(map_err)

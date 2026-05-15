@@ -36,7 +36,7 @@ artifact arguments — never a ``model`` argument.
 
 Typical usage::
 
-    from _lib import ai
+    from claw_os_sdk import ai
 
     def handle_summarize(args):
         result = ai.chat(
@@ -135,7 +135,7 @@ class ProposedToolCall:
 
     The kernel surfaces these in ``AiResponse.tool_calls``. Apps
     decide whether to fulfil any of them by calling
-    :func:`_lib.tools.call` with the same ``name`` and ``input``.
+    :func:`claw_os_sdk.tools.call` with the same ``name`` and ``input``.
     The ``id`` echoes back to the provider on the next turn.
     """
 
@@ -184,8 +184,8 @@ def chat(
     ``["fs.read_text", "kv.get"]``) the model may *propose* calling.
     The gate **never** executes them — proposed calls come back in
     :attr:`AiResponse.tool_calls`. Apps inspect them and re-call the
-    kernel via :func:`_lib.tools.call` for whichever they choose.
-    Use :mod:`_lib.tools` to look up the catalog at runtime.
+    kernel via :func:`claw_os_sdk.tools.call` for whichever they choose.
+    Use :mod:`claw_os_sdk.tools` to look up the catalog at runtime.
 
     Returns an :class:`AiResponse`. Raises :class:`AiBudgetExceeded`,
     :class:`AiSafetyViolation`, :class:`AiDenied`, or

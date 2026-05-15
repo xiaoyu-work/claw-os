@@ -18,7 +18,7 @@
 //!
 //! ## Why typed helpers and not "snapshot any path you like"
 //!
-//! The Python `apps/_lib/snapshot.py` module already does the
+//! The Python `claw-os-sdk/python/src/claw_os_sdk/snapshot.py` module already does the
 //! "copy whatever you point at" pattern via `<COS_DATA_DIR>/trash/`.
 //! That works for a CLI undo, but we want the durable session log to
 //! be self-describing: a future GUI showing "this session deleted 3

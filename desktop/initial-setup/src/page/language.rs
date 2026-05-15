@@ -204,7 +204,7 @@ impl super::Page for Page {
 
             // Use 'locale -a' instead of 'localectl list-locales' for OpenRC compatibility
             let output_result = tokio::task::spawn_blocking(|| {
-                claw_bridge::exec::run(&["locale", "-a"], None)
+                claw_os_sdk::exec::run(&["locale", "-a"], None)
             })
             .await;
 
@@ -212,7 +212,7 @@ impl super::Page for Page {
                 Ok(Ok(result)) => parse_locale_output(&result.stdout),
                 Ok(Err(why)) => {
                     if why.is_denied() {
-                        tracing::warn!(?why, "exec.run locale -a denied by claw-bridge");
+                        tracing::warn!(?why, "exec.run locale -a denied by claw-os-sdk");
                     } else {
                         tracing::error!(?why, "failed to list available locales using 'locale -a'");
                     }

@@ -52,7 +52,7 @@ import subprocess
 import sys
 import time
 
-from _lib import policy
+from claw_os_sdk import policy
 
 
 HOME = pathlib.Path(os.path.expanduser("~"))

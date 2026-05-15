@@ -46,7 +46,7 @@ see [`docs/app-ai-integration.md`](./app-ai-integration.md).
 ## How an App uses the catalog
 
 ```python
-from _lib import ai, tools
+from claw_os_sdk import ai, tools
 
 proposal = ai.chat(
     prompt="Summarise the file at /etc/hostname.",

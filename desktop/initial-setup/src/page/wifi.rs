@@ -949,7 +949,7 @@ async fn nm_connection_editor(args: &[&str]) -> Result<(), String> {
 
     let join = tokio::task::spawn_blocking(move || {
         let argv_refs: Vec<&str> = argv.iter().map(String::as_str).collect();
-        claw_bridge::exec::start(&argv_refs)
+        claw_os_sdk::exec::start(&argv_refs)
     })
     .await
     .map_err(|why| why.to_string())?;
@@ -958,7 +958,7 @@ async fn nm_connection_editor(args: &[&str]) -> Result<(), String> {
         Ok(_) => Ok(()),
         Err(why) => {
             if why.is_denied() {
-                tracing::warn!(?why, "exec.start nm-connection-editor denied by claw-bridge");
+                tracing::warn!(?why, "exec.start nm-connection-editor denied by claw-os-sdk");
             }
             Err(why.to_string())
         }

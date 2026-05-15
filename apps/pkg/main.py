@@ -6,7 +6,7 @@ Say what you need, not how to install it.
 import shutil
 import subprocess
 
-from _lib import policy
+from claw_os_sdk import policy
 
 
 DEFAULT_SEARCH_LIMIT = 25

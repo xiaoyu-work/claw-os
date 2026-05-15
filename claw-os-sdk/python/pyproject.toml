@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claw-os-sdk"
+version = "0.1.0"
+description = "Official Python SDK for Claw OS — typed bindings to the AI, capability, and system-app surface exposed by the `cos` kernel CLI. Wire protocol v1."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Xiaoyu Z", email = "zxiaoyu.work@gmail.com" },
+]
+keywords = ["claw-os", "sdk", "ai", "capability"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/xiaoyu-work/claw-os/tree/main/claw-os-sdk"
+Documentation = "https://github.com/xiaoyu-work/claw-os/tree/main/claw-os-sdk/python"
+Repository = "https://github.com/xiaoyu-work/claw-os"
+Issues = "https://github.com/xiaoyu-work/claw-os/issues"
+
+[project.optional-dependencies]
+dev = []
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["claw_os_sdk*"]
+
+[tool.setuptools.package-data]
+claw_os_sdk = ["py.typed"]

@@ -9,7 +9,7 @@ import json
 import os
 from datetime import datetime, timezone
 
-from _lib import policy
+from claw_os_sdk import policy
 
 DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 LOG_DIR = os.path.join(DATA_DIR, "logs")

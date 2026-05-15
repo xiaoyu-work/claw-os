@@ -13,7 +13,7 @@
 //     return here via `cos agent setup llm apply ...` at any time.
 //
 //   * Applying writes to `/etc/cos/config.json` by invoking the
-//     existing `cos agent setup llm apply` CLI through claw-bridge
+//     existing `cos agent setup llm apply` CLI through claw-os-sdk
 //     exec.run. The bridge runs as the same unprivileged user as the
 //     desktop session; if the user can't write `/etc/cos/`, the
 //     command exits non-zero and we surface the bridge's denial in
@@ -21,7 +21,7 @@
 //     location.rs and `cosmic-randr` in a11y.rs).
 //
 //   * The api-key is passed inline via `--api-key` rather than
-//     `--api-key-stdin`. claw-bridge's exec verb doesn't carry stdin
+//     `--api-key-stdin`. claw-os-sdk's exec verb doesn't carry stdin
 //     to the spawned child today. The key is visible in `ps` for the
 //     duration of the call — initial-setup runs once, on a freshly
 //     installed system, so the leak window is acceptable; users who
@@ -255,7 +255,7 @@ impl page::Page for Page {
     }
 
     /// Persist the picked provider/model/api-key by invoking
-    /// `cos agent setup llm apply` through claw-bridge. Runs on
+    /// `cos agent setup llm apply` through claw-os-sdk. Runs on
     /// `Finish` (see main.rs Message::Finish), same as every other
     /// page's `apply_settings`. Failure is logged AND surfaced into
     /// the page state so the next render shows a redacted reason.
@@ -291,7 +291,7 @@ impl page::Page for Page {
 }
 
 /// Synchronous worker — runs on a blocking pool because
-/// `claw_bridge::exec::run` is itself blocking. Returns a verdict
+/// `claw_os_sdk::exec::run` is itself blocking. Returns a verdict
 /// suitable for the UI; tracing log lines mirror the structure used
 /// by other pages (location.rs, a11y.rs).
 fn apply_blocking(provider: &str, model: &str, api_key: &str) -> ApplyOutcome {
@@ -310,12 +310,12 @@ fn apply_blocking(provider: &str, model: &str, api_key: &str) -> ApplyOutcome {
         argv.push("--api-key");
         argv.push(api_key);
     }
-    match claw_bridge::exec::run(&argv, Some(30)) {
+    match claw_os_sdk::exec::run(&argv, Some(30)) {
         Ok(r) if r.exit_code == 0 => {
             tracing::info!(
                 provider,
                 model,
-                "cos agent setup llm apply succeeded via claw-bridge"
+                "cos agent setup llm apply succeeded via claw-os-sdk"
             );
             ApplyOutcome::Ok
         }
@@ -341,7 +341,7 @@ fn apply_blocking(provider: &str, model: &str, api_key: &str) -> ApplyOutcome {
         }
         Err(why) => {
             if why.is_denied() {
-                tracing::warn!(?why, "exec.run cos agent setup llm apply denied by claw-bridge");
+                tracing::warn!(?why, "exec.run cos agent setup llm apply denied by claw-os-sdk");
             } else {
                 tracing::error!(?why, "exec.run cos agent setup llm apply failed");
             }

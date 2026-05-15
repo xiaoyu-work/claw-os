@@ -9,7 +9,7 @@ rust-version = "1.93"
 [dependencies]
 anyhow = "1"
 async-trait = "0.1"
-claw-bridge = { path = "../../crates/claw-bridge" }
+claw-os-sdk = { path = "../../claw-os-sdk/rust" }
 jiff = "0.2"
 jiff-icu = "0.2"
 icu = { version = "2.2.0", features = ["compiled_data"] }

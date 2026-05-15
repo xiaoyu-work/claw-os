@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://claw-os.dev/wire/v1/tool.schema.json",
+  "title": "Catalog tool invocation reply",
+  "description": "Shape returned by `cos ai tool <name> --app <id> --args '<json>'`. Catalog tools are reusable functions exposed in the AI tool catalog. They differ from app verbs in that the AI plans them automatically.",
+  "type": "object",
+  "required": ["tool"],
+  "additionalProperties": true,
+  "properties": {
+    "tool":   { "type": "string", "description": "Catalog tool name, e.g. \"fs.read\"." },
+    "result": { "description": "Tool's domain-specific output. May be any JSON value." },
+    "audit_id": { "type": "string" }
+  }
+}

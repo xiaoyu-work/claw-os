@@ -14,7 +14,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-from _lib import policy
+from claw_os_sdk import policy
 
 DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 

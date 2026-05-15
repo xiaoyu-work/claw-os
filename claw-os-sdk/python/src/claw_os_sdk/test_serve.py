@@ -1,4 +1,4 @@
-"""Unit tests for the MCP server SDK in `_lib/serve`."""
+"""Unit tests for the MCP server SDK in `claw_os_sdk.serve`."""
 
 import io
 import json
@@ -7,9 +7,9 @@ import sys
 import unittest
 
 _THIS_DIR = os.path.dirname(__file__)
-sys.path.insert(0, os.path.dirname(_THIS_DIR))  # so `from _lib import serve` works
+sys.path.insert(0, os.path.dirname(_THIS_DIR))  # so `from claw_os_sdk import serve` works
 
-from _lib import serve  # noqa: E402
+from claw_os_sdk import serve  # noqa: E402
 
 
 def _drive(app: serve.App, *frames: dict) -> list[dict]:

@@ -9,7 +9,7 @@ import subprocess
 import uuid
 from datetime import datetime, timezone
 
-from _lib import policy
+from claw_os_sdk import policy
 
 DEFAULT_TIMEOUT = int(os.environ.get("COS_EXEC_TIMEOUT", "300"))
 MAX_OUTPUT_BYTES = 1_000_000  # 1 MB output limit for stdout/stderr

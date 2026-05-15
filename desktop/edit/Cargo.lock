@@ -987,7 +987,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "claw-bridge"
+name = "claw-os-sdk"
 version = "0.1.0"
 dependencies = [
  "base64",
@@ -1385,7 +1385,7 @@ version = "1.0.13"
 dependencies = [
  "anyhow",
  "async-trait",
- "claw-bridge",
+ "claw-os-sdk",
  "cosmic-files",
  "cosmic-syntax-theme",
  "cosmic-text",

@@ -1,7 +1,7 @@
 //! Embeddable MCP (Model Context Protocol) stdio server for Claw OS
 //! native Apps.
 //!
-//! This crate is the Rust counterpart to `apps/_lib/serve.py`. It lets
+//! This crate is the Rust counterpart to `claw-os-sdk/python/src/claw_os_sdk/serve.py`. It lets
 //! any Rust binary (typically a libcosmic GUI App) opt into a second
 //! mode in which it speaks MCP JSON-RPC over stdio so the kernel
 //! agent can invoke its tools.

@@ -28,12 +28,28 @@ pub fn run_python_app(
 import importlib.util, json, sys, os
 os.environ.setdefault("COS_DATA_DIR", {data_dir})
 os.environ.setdefault("COS_APPS_DIR", {apps_dir})
-# Make the apps/_lib helper package importable from every app, so
-# Python apps can `from _lib import policy` for capability checks
-# without bundling the helper into each app's own tree.
-_apps_root = os.environ["COS_APPS_DIR"]
-if _apps_root and _apps_root not in sys.path:
-    sys.path.insert(0, _apps_root)
+# Make the claw_os_sdk package importable from every app, so Python
+# apps can `from claw_os_sdk import policy` for capability checks
+# without bundling the SDK into each app's own tree. Honour an
+# explicit override; otherwise fall back to the common production
+# install path and the in-repo dev-checkout path.
+_sdk_override = os.environ.get("COS_SDK_PYTHON_DIR")
+_sdk_candidates = []
+if _sdk_override:
+    _sdk_candidates.append(_sdk_override)
+_sdk_candidates.append("/usr/lib/cos/python")
+_apps_root = os.environ.get("COS_APPS_DIR") or ""
+if _apps_root:
+    _sdk_candidates.append(
+        os.path.normpath(
+            os.path.join(_apps_root, os.pardir, "claw-os-sdk", "python", "src")
+        )
+    )
+for _cand in _sdk_candidates:
+    if _cand and os.path.isdir(os.path.join(_cand, "claw_os_sdk")):
+        if _cand not in sys.path:
+            sys.path.insert(0, _cand)
+        break
 spec = importlib.util.spec_from_file_location("app", {main_py})
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)

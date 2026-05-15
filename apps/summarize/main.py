@@ -2,7 +2,7 @@
 
 This is the canonical demo app for the App–AI Gate (Phase 7). It does
 *not* import any provider SDK (openai, anthropic, …); the only way it
-can reach a model is through ``_lib.ai.chat``, which shells out to
+can reach a model is through ``claw_os_sdk.ai.chat``, which shells out to
 ``cos ai chat --app summarize``. The kernel applies the capability
 check, budget enforcement, safety pipeline, and audit before the
 prompt ever leaves the box.
@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import sys
 
-from _lib import ai, policy
+from claw_os_sdk import ai, policy
 
 
 SYSTEM_PROMPT = (

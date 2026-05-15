@@ -7,7 +7,16 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(__file__))
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # for `from _lib import policy`
+sys.path.insert(
+    0,
+    os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        os.pardir,
+        "claw-os-sdk",
+        "python",
+        "src",
+    ),
+)  # for `from claw_os_sdk import policy`
 
 # We can't import main directly on Windows due to fcntl, so test the
 # truncation logic in isolation by importing the constants and simulating.

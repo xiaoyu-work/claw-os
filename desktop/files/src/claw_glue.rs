@@ -1,4 +1,4 @@
-//! Thin adapters that route fs/exec mutations through `claw-bridge`
+//! Thin adapters that route fs/exec mutations through `claw-os-sdk`
 //! while preserving the existing call sites' `Result<_, io::Error>`
 //! shape.
 //!
@@ -34,7 +34,7 @@ pub mod ai;
 use std::io;
 use std::path::Path;
 
-use claw_bridge::BridgeError;
+use claw_os_sdk::BridgeError;
 
 /// Convert a `BridgeError` to an `io::Error`, preserving the
 /// "denied" signal as `ErrorKind::PermissionDenied`. Anything else
@@ -59,28 +59,28 @@ fn path_str(p: &Path) -> io::Result<&str> {
 /// `std::fs::write(path, &[u8])`.
 pub fn write_bytes(path: &Path, content: &[u8]) -> io::Result<()> {
     let s = path_str(path)?;
-    claw_bridge::fs::write_bytes(s, content).map(|_| ()).map_err(to_io)
+    claw_os_sdk::fs::write_bytes(s, content).map(|_| ()).map_err(to_io)
 }
 
 /// Write UTF-8 text to `path` via `apps/fs write`. Mirrors
 /// `std::fs::write(path, &str)`.
 pub fn write_text(path: &Path, content: &str) -> io::Result<()> {
     let s = path_str(path)?;
-    claw_bridge::fs::write(s, content).map(|_| ()).map_err(to_io)
+    claw_os_sdk::fs::write(s, content).map(|_| ()).map_err(to_io)
 }
 
 /// Create `path` (and any missing parents). Mirrors
 /// `std::fs::create_dir_all`.
 pub fn mkdir_all(path: &Path) -> io::Result<()> {
     let s = path_str(path)?;
-    claw_bridge::fs::mkdir(s).map(|_| ()).map_err(to_io)
+    claw_os_sdk::fs::mkdir(s).map(|_| ()).map_err(to_io)
 }
 
 /// Rename / move `src` to `dst`. Mirrors `std::fs::rename`.
 pub fn rename(src: &Path, dst: &Path) -> io::Result<()> {
     let s = path_str(src)?;
     let d = path_str(dst)?;
-    claw_bridge::fs::rename(s, d).map(|_| ()).map_err(to_io)
+    claw_os_sdk::fs::rename(s, d).map(|_| ()).map_err(to_io)
 }
 
 /// Copy `src` to `dst`. Handles both files (single copy) and
@@ -89,7 +89,7 @@ pub fn rename(src: &Path, dst: &Path) -> io::Result<()> {
 pub fn copy(src: &Path, dst: &Path) -> io::Result<()> {
     let s = path_str(src)?;
     let d = path_str(dst)?;
-    claw_bridge::fs::copy(s, d).map(|_| ()).map_err(to_io)
+    claw_os_sdk::fs::copy(s, d).map(|_| ()).map_err(to_io)
 }
 
 /// Remove `path`. Handles files and directories. Mirrors a final
@@ -97,7 +97,7 @@ pub fn copy(src: &Path, dst: &Path) -> io::Result<()> {
 /// shift-delete).
 pub fn remove(path: &Path) -> io::Result<()> {
     let s = path_str(path)?;
-    claw_bridge::fs::rm(s).map(|_| ()).map_err(to_io)
+    claw_os_sdk::fs::rm(s).map(|_| ()).map_err(to_io)
 }
 
 /// Spawn a detached process via `apps/exec start`. The previous
@@ -110,7 +110,7 @@ pub fn start_detached<S: AsRef<str>>(program: &str, args: &[S]) -> io::Result<()
     for a in args {
         argv.push(a.as_ref());
     }
-    claw_bridge::exec::start(&argv).map(|_| ()).map_err(to_io)
+    claw_os_sdk::exec::start(&argv).map(|_| ()).map_err(to_io)
 }
 
 /// Same as [`start_detached`] but with the program in a `Path` (the

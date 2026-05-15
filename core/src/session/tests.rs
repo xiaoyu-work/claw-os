@@ -1422,7 +1422,7 @@ fn rollback_on_empty_session_is_empty_vec() {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 3b — Python `apps/_lib/snapshot.py` mirrors into mutations.jsonl
+// Phase 3b — Python `claw-os-sdk/python/src/claw_os_sdk/snapshot.py` mirrors into mutations.jsonl
 // ---------------------------------------------------------------------------
 //
 // These tests prove that the Python helper and the Rust kernel agree
@@ -1443,14 +1443,16 @@ fn python3_available() -> bool {
 }
 
 fn apps_lib_dir() -> std::path::PathBuf {
-    // tests run from the package dir (`core/`); apps/_lib is two
-    // levels up.
+    // tests run from the package dir (`core/`); the SDK lives at
+    // `<repo>/claw-os-sdk/python/src/claw_os_sdk`, two levels up.
     let manifest = env!("CARGO_MANIFEST_DIR");
     std::path::PathBuf::from(manifest)
         .parent()
         .unwrap()
-        .join("apps")
-        .join("_lib")
+        .join("claw-os-sdk")
+        .join("python")
+        .join("src")
+        .join("claw_os_sdk")
 }
 
 fn run_python_snapshot(sid: &SessionId, path: &std::path::Path, op: &str) {
