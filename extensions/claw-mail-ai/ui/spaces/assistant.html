@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="../../lib/ui.css">
+  <link rel="stylesheet" href="assistant.css">
+  <title data-i18n="assistant_title">Mail Assistant</title>
+</head>
+<body class="assistant-page">
+
+  <header class="assistant-header">
+    <h1 data-i18n="assistant_title">Mail Assistant</h1>
+    <div class="grow"></div>
+    <button class="ghost" id="btn-clear" data-i18n="action_clear_history">Clear history</button>
+    <button class="ghost" id="btn-options" data-i18n="action_options">Options</button>
+  </header>
+
+  <main id="messages" class="messages"></main>
+
+  <footer class="composer">
+    <textarea id="input" rows="2" data-i18n-placeholder="ph_assistant_input"></textarea>
+    <button class="primary" id="btn-send" data-i18n="action_send">Send</button>
+  </footer>
+
+  <div id="usage" class="usage-line"></div>
+
+  <script src="../../lib/ui.js"></script>
+  <script src="../../lib/messages.js"></script>
+  <script src="assistant.js"></script>
+</body>
+</html>

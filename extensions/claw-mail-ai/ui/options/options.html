@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="../../lib/ui.css">
+  <link rel="stylesheet" href="options.css">
+  <title data-i18n="options_title">Mail AI Options</title>
+</head>
+<body class="options-page">
+
+  <h1 data-i18n="options_title">Mail AI Options</h1>
+
+  <section class="opt-card">
+    <h2 data-i18n="opt_features">Features</h2>
+    <p class="muted" data-i18n="opt_features_help">Toggle which AI tools are available.</p>
+
+    <label class="opt-row">
+      <input type="checkbox" id="feat-summarize" data-feature="summarize">
+      <span data-i18n="feat_summarize">Summarize thread</span>
+    </label>
+    <label class="opt-row">
+      <input type="checkbox" id="feat-smartReply" data-feature="smartReply">
+      <span data-i18n="feat_smartReply">Smart reply</span>
+    </label>
+    <label class="opt-row">
+      <input type="checkbox" id="feat-smartCompose" data-feature="smartCompose">
+      <span data-i18n="feat_smartCompose">Smart compose</span>
+    </label>
+    <label class="opt-row">
+      <input type="checkbox" id="feat-translate" data-feature="translate">
+      <span data-i18n="feat_translate">Translate selection / message</span>
+    </label>
+    <label class="opt-row">
+      <input type="checkbox" id="feat-triage" data-feature="triage">
+      <span data-i18n="feat_triage">Auto-triage new mail (experimental)</span>
+    </label>
+    <label class="opt-row">
+      <input type="checkbox" id="feat-assistant" data-feature="assistant">
+      <span data-i18n="feat_assistant">Show "AI Assistant" in Spaces</span>
+    </label>
+  </section>
+
+  <section class="opt-card">
+    <h2 data-i18n="opt_triage">Triage rules</h2>
+    <p class="muted" data-i18n="opt_triage_help">When auto-triage is on, new messages get a category tag (work, personal, finance, travel, newsletter, social, promotions, automated, other) plus an importance score.</p>
+
+    <label class="opt-row">
+      <input type="checkbox" id="triage-autoTag">
+      <span data-i18n="triage_autoTag">Tag with category (claw/work, …)</span>
+    </label>
+    <label class="opt-row">
+      <input type="checkbox" id="triage-autoMoveImportant">
+      <span data-i18n="triage_autoMoveImportant">Star messages scored ≥ 4</span>
+    </label>
+    <label class="opt-row">
+      <input type="checkbox" id="triage-autoMoveNewsletter">
+      <span data-i18n="triage_autoMoveNewsletter">Mark newsletters as read</span>
+    </label>
+
+    <label data-i18n="triage_tagPrefix" style="margin-top: 8px;">Tag prefix</label>
+    <input type="text" id="triage-tagPrefix" value="claw/">
+  </section>
+
+  <section class="opt-card">
+    <h2 data-i18n="opt_compose">Compose defaults</h2>
+
+    <label data-i18n="label_style">Default style</label>
+    <select id="compose-defaultStyle">
+      <option value="formal" data-i18n="style_formal">Formal</option>
+      <option value="casual" data-i18n="style_casual">Casual</option>
+      <option value="short"  data-i18n="style_short">Short</option>
+    </select>
+  </section>
+
+  <section class="opt-card">
+    <h2 data-i18n="opt_translate">Translate defaults</h2>
+
+    <label data-i18n="label_target_language">Default target language</label>
+    <input type="text" id="translate-defaultTarget" value="English">
+  </section>
+
+  <section class="opt-card">
+    <h2 data-i18n="opt_about">About</h2>
+    <p class="muted">
+      <span data-i18n="about_body">All AI calls route through the host's <code>cos ai chat</code>, gated by the cos permission system. No model keys are stored in Thunderbird.</span>
+    </p>
+    <p class="mono muted" id="status-line"></p>
+  </section>
+
+  <div class="save-bar">
+    <span class="muted" id="save-status"></span>
+    <button class="primary" id="btn-save" data-i18n="action_save">Save</button>
+  </div>
+
+  <script src="../../lib/ui.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

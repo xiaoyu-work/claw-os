@@ -1,0 +1,90 @@
+{
+  "extension_name":            { "message": "Claw 邮件 AI" },
+  "extension_description":     { "message": "为 Thunderbird 接入 claw-os 本地 AI 的辅助插件。" },
+
+  "action_title":              { "message": "Claw AI 助手" },
+  "summarize_title":           { "message": "摘要" },
+  "compose_title":             { "message": "AI 写信" },
+  "translate_title":           { "message": "翻译" },
+  "assistant_title":           { "message": "邮件助手" },
+  "options_title":             { "message": "Claw 邮件 AI 设置" },
+
+  "tab_smart_reply":           { "message": "智能回复" },
+  "tab_smart_compose":         { "message": "智能写信" },
+
+  "ctx_summarize":             { "message": "用 Claw AI 总结" },
+  "ctx_translate":             { "message": "用 Claw AI 翻译" },
+  "ctx_smart_reply":           { "message": "用 Claw AI 起草回复" },
+
+  "label_summary":             { "message": "摘要" },
+  "label_key_points":          { "message": "要点" },
+  "label_action_items":        { "message": "待办事项" },
+  "label_intent":              { "message": "可选：你想表达什么" },
+  "label_intent_compose":      { "message": "你想写什么？" },
+  "label_style":               { "message": "风格" },
+  "label_target_language":     { "message": "目标语言" },
+  "label_source_text":         { "message": "原文" },
+
+  "style_formal":              { "message": "正式" },
+  "style_casual":              { "message": "随意" },
+  "style_short":               { "message": "简短" },
+
+  "action_refresh":            { "message": "刷新" },
+  "action_copy":               { "message": "复制" },
+  "action_open_assistant":     { "message": "打开助手" },
+  "action_suggest":            { "message": "生成回复" },
+  "action_generate":           { "message": "生成" },
+  "action_insert":             { "message": "插入" },
+  "action_replace":            { "message": "替换草稿" },
+  "action_translate":          { "message": "翻译" },
+  "action_send":               { "message": "发送" },
+  "action_clear_history":      { "message": "清空对话" },
+  "action_options":            { "message": "设置" },
+  "action_save":               { "message": "保存" },
+
+  "copied":                    { "message": "已复制" },
+  "inserted":                  { "message": "已插入" },
+  "saved":                     { "message": "已保存" },
+  "busy":                      { "message": "处理中…" },
+  "error":                     { "message": "出错了" },
+
+  "err_no_message":            { "message": "未选择邮件。" },
+  "err_fetch_body":            { "message": "无法获取邮件正文。" },
+  "err_empty_body":            { "message": "邮件正文为空。" },
+  "err_no_compose_tab":        { "message": "不在写信窗口里。" },
+  "err_nothing_to_reply":      { "message": "没有可回复的会话，请改用智能写信。" },
+  "err_no_intent":             { "message": "请告诉我你想写什么。" },
+  "err_empty_source":          { "message": "原文为空。" },
+  "err_no_target":             { "message": "请选择目标语言。" },
+
+  "ph_reply_intent":           { "message": "比如：婉拒" },
+  "ph_compose_intent":         { "message": "比如：确认周五 3 点的会议并询问议程" },
+  "ph_source":                 { "message": "需要翻译的文本" },
+  "ph_assistant_input":        { "message": "向我提问关于收件箱的问题…（Ctrl+Enter 发送）" },
+
+  "assistant_welcome":         { "message": "你好！我可以帮你总结邮件、搜索收件箱、起草回复。" },
+  "assistant_disabled":        { "message": "助手在设置里已关闭。" },
+
+  "opt_features":              { "message": "功能" },
+  "opt_features_help":         { "message": "开关各项 AI 功能。" },
+  "opt_triage":                { "message": "自动分类" },
+  "opt_triage_help":           { "message": "开启后，新邮件会自动加上分类标签和重要度评分。" },
+  "opt_compose":               { "message": "写信默认值" },
+  "opt_translate":             { "message": "翻译默认值" },
+  "opt_about":                 { "message": "关于" },
+  "about_body":                { "message": "所有 AI 请求都通过 cos ai chat 走 cos 权限系统调度，Thunderbird 内不保存任何模型密钥。" },
+
+  "feat_summarize":            { "message": "邮件总结" },
+  "feat_smartReply":           { "message": "智能回复" },
+  "feat_smartCompose":         { "message": "智能写信" },
+  "feat_translate":            { "message": "翻译选中/邮件" },
+  "feat_triage":               { "message": "自动分类新邮件（实验性）" },
+  "feat_assistant":            { "message": "在 Spaces 中显示邮件助手" },
+
+  "triage_autoTag":            { "message": "按类别打标签（claw/work …）" },
+  "triage_autoMoveImportant":  { "message": "重要度 ≥4 的邮件加星标" },
+  "triage_autoMoveNewsletter": { "message": "订阅类邮件标为已读" },
+  "triage_tagPrefix":          { "message": "标签前缀" },
+
+  "hint_open_compose_popup":   { "message": "请点击写信工具栏的 Claw AI 按钮打开智能回复。" }
+}

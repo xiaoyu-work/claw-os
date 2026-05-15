@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="../../lib/ui.css">
+  <link rel="stylesheet" href="translate.css">
+  <title data-i18n="translate_title">Translate</title>
+</head>
+<body class="translate-popup">
+
+  <div class="row" style="margin-bottom: 8px;">
+    <h1 style="margin:0;" data-i18n="translate_title">Translate</h1>
+    <div class="grow"></div>
+    <button class="ghost" id="btn-refresh" title="Re-run">↻</button>
+  </div>
+
+  <label data-i18n="label_target_language">Target language</label>
+  <div class="row">
+    <select id="target" class="grow">
+      <option>English</option>
+      <option>简体中文</option>
+      <option>繁體中文</option>
+      <option>Español</option>
+      <option>Français</option>
+      <option>Deutsch</option>
+      <option>日本語</option>
+      <option>한국어</option>
+      <option>Português</option>
+      <option>Русский</option>
+      <option>العربية</option>
+      <option>Italiano</option>
+      <option>Nederlands</option>
+      <option>Polski</option>
+      <option>हिन्दी</option>
+    </select>
+    <button class="primary" id="btn-translate" data-i18n="action_translate">Translate</button>
+  </div>
+
+  <label data-i18n="label_source_text" style="margin-top: 8px;">Source</label>
+  <textarea id="source" rows="6" data-i18n-placeholder="ph_source"></textarea>
+
+  <div id="out"></div>
+
+  <div id="usage" class="usage-line"></div>
+
+  <script src="../../lib/ui.js"></script>
+  <script src="../../lib/messages.js"></script>
+  <script src="translate.js"></script>
+</body>
+</html>

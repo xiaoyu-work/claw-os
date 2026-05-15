@@ -1,0 +1,192 @@
+/* claw-mail-ai — shared popup / page styles.
+ * Loaded by every HTML surface in the extension. Aim: visual coherence
+ * with the cos perms emerald / amber / red palette (see
+ * desktop/agent/web/docs/design-system.md). */
+
+:root {
+  --claw-bg:         #0b0f13;
+  --claw-panel:      #131922;
+  --claw-panel-2:    #1b2330;
+  --claw-text:       #e6edf3;
+  --claw-muted:      #94a3b8;
+  --claw-border:     #2a3340;
+  --claw-emerald:    #10b981;
+  --claw-emerald-2:  #059669;
+  --claw-amber:      #f59e0b;
+  --claw-red:        #ef4444;
+  --claw-blue:       #3b82f6;
+  --claw-purple:     #a855f7;
+  --claw-radius:     8px;
+  --claw-shadow:     0 4px 18px rgba(0, 0, 0, .35);
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --claw-bg:         #fafafa;
+    --claw-panel:      #ffffff;
+    --claw-panel-2:    #f3f4f6;
+    --claw-text:       #111827;
+    --claw-muted:      #6b7280;
+    --claw-border:     #e5e7eb;
+    --claw-shadow:     0 4px 18px rgba(0, 0, 0, .08);
+  }
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+               "Helvetica Neue", Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  background: var(--claw-bg);
+  color: var(--claw-text);
+}
+
+body {
+  min-width: 360px;
+  padding: 14px;
+}
+
+h1, h2, h3 { margin: 0 0 10px 0; font-weight: 600; }
+h1 { font-size: 16px; }
+h2 { font-size: 14px; color: var(--claw-muted); }
+h3 { font-size: 13px; }
+
+p { margin: 4px 0; }
+
+button {
+  background: var(--claw-panel);
+  color: var(--claw-text);
+  border: 1px solid var(--claw-border);
+  border-radius: var(--claw-radius);
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background .12s ease, border-color .12s ease;
+}
+button:hover           { background: var(--claw-panel-2); }
+button:disabled        { opacity: .5; cursor: not-allowed; }
+button.primary         {
+  background: var(--claw-emerald);
+  border-color: var(--claw-emerald-2);
+  color: white;
+}
+button.primary:hover   { background: var(--claw-emerald-2); }
+button.ghost           { background: transparent; }
+button.ghost:hover     { background: var(--claw-panel-2); }
+
+select, input[type=text], input[type=search], textarea {
+  background: var(--claw-panel);
+  color: var(--claw-text);
+  border: 1px solid var(--claw-border);
+  border-radius: var(--claw-radius);
+  padding: 6px 8px;
+  font-size: 13px;
+  font-family: inherit;
+  width: 100%;
+  box-sizing: border-box;
+}
+textarea { resize: vertical; min-height: 80px; }
+
+label {
+  display: block;
+  font-size: 12px;
+  color: var(--claw-muted);
+  margin: 8px 0 4px 0;
+}
+
+hr {
+  border: none;
+  border-top: 1px solid var(--claw-border);
+  margin: 12px 0;
+}
+
+.row { display: flex; gap: 8px; align-items: center; }
+.row > * { flex: 0 0 auto; }
+.row .grow { flex: 1 1 auto; }
+
+.card {
+  background: var(--claw-panel);
+  border: 1px solid var(--claw-border);
+  border-radius: var(--claw-radius);
+  padding: 10px 12px;
+  margin: 8px 0;
+}
+
+.bullet-list { margin: 4px 0 0 16px; padding: 0; }
+.bullet-list li { margin: 2px 0; }
+
+.tag {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: var(--claw-panel-2);
+  border: 1px solid var(--claw-border);
+  margin-right: 4px;
+}
+.tag.emerald { background: rgba(16,185,129,.15);  border-color: var(--claw-emerald); color: var(--claw-emerald); }
+.tag.amber   { background: rgba(245,158,11,.15);  border-color: var(--claw-amber);   color: var(--claw-amber); }
+.tag.red     { background: rgba(239,68,68,.15);   border-color: var(--claw-red);     color: var(--claw-red); }
+.tag.blue    { background: rgba(59,130,246,.15);  border-color: var(--claw-blue);    color: var(--claw-blue); }
+.tag.purple  { background: rgba(168,85,247,.15);  border-color: var(--claw-purple);  color: var(--claw-purple); }
+.tag.muted   { color: var(--claw-muted); }
+
+.muted { color: var(--claw-muted); font-size: 12px; }
+.mono  { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+
+.busy { display: flex; align-items: center; gap: 8px; padding: 14px; }
+.busy-label { color: var(--claw-muted); }
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--claw-border);
+  border-top-color: var(--claw-emerald);
+  border-radius: 50%;
+  animation: claw-spin .8s linear infinite;
+}
+@keyframes claw-spin { to { transform: rotate(360deg); } }
+
+.error {
+  background: rgba(239,68,68,.08);
+  border: 1px solid rgba(239,68,68,.4);
+  border-radius: var(--claw-radius);
+  padding: 10px 12px;
+}
+.error pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 6px 0 0 0;
+  font-size: 11px;
+  color: var(--claw-muted);
+}
+
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--claw-border); }
+.tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: var(--claw-muted);
+  padding: 6px 10px;
+}
+.tab.active {
+  color: var(--claw-text);
+  border-bottom-color: var(--claw-emerald);
+}
+
+.footer-row {
+  margin-top: 12px;
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.usage-line {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--claw-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}

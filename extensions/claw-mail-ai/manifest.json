@@ -1,0 +1,79 @@
+{
+  "manifest_version": 3,
+  "name": "Claw Mail AI",
+  "short_name": "claw-mail-ai",
+  "version": "0.1.0",
+  "description": "AI helpers for Thunderbird: summarise, smart reply, smart compose, translate, triage, and chat with your mailbox. Bridged to the cos kernel via Native Messaging.",
+  "default_locale": "en",
+
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "claw-mail-ai@claw.os",
+      "strict_min_version": "115.0"
+    }
+  },
+
+  "permissions": [
+    "nativeMessaging",
+    "storage",
+    "alarms",
+    "menus",
+    "notifications",
+    "tabs",
+    "messagesRead",
+    "messagesModify",
+    "messagesMove",
+    "messagesTags",
+    "accountsRead",
+    "compose",
+    "compose.save"
+  ],
+
+  "background": {
+    "scripts": ["background.js"]
+  },
+
+  "action": {
+    "default_title": "__MSG_action_title__",
+    "default_icon": {
+      "16": "icons/icon.svg",
+      "32": "icons/icon.svg"
+    }
+  },
+
+  "message_display_action": {
+    "default_title": "__MSG_summarize_title__",
+    "default_popup": "ui/summarize/summarize.html",
+    "default_icon": {
+      "16": "icons/icon.svg",
+      "32": "icons/icon.svg"
+    }
+  },
+
+  "compose_action": {
+    "default_title": "__MSG_compose_title__",
+    "default_popup": "ui/compose/composeAction.html",
+    "default_icon": {
+      "16": "icons/icon.svg",
+      "32": "icons/icon.svg"
+    }
+  },
+
+  "compose_scripts": [
+    {
+      "js": ["ui/compose/composeScript.js"]
+    }
+  ],
+
+  "options_ui": {
+    "page": "ui/options/options.html",
+    "open_in_tab": true
+  },
+
+  "icons": {
+    "16": "icons/icon.svg",
+    "32": "icons/icon.svg",
+    "48": "icons/icon.svg",
+    "96": "icons/icon.svg"
+  }
+}

@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# /usr/lib/cos/claw-mail-ai-host — Native Messaging launcher.
+#
+# Thunderbird spawns this script with the calling extension's id as
+# argv[1]. We just forward to the Python entrypoint; native_host.py
+# uses stdio framing per the Chromium NM spec.
+set -eu
+exec /usr/bin/python3 /usr/lib/cos/mail-ai/native_host.py "$@"

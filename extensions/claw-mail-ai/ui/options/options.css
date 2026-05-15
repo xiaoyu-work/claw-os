@@ -1,0 +1,39 @@
+body.options-page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 24px;
+}
+.options-page h1 { margin-top: 0; }
+
+.opt-card {
+  background: var(--claw-panel);
+  border: 1px solid var(--claw-border);
+  border-radius: var(--claw-radius);
+  padding: 14px 16px;
+  margin: 12px 0;
+}
+.opt-card h2 {
+  margin: 0 0 4px 0;
+  font-size: 14px;
+}
+.opt-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+  font-size: 13px;
+}
+
+.save-bar {
+  position: sticky;
+  bottom: 0;
+  background: var(--claw-bg);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0;
+  border-top: 1px solid var(--claw-border);
+  justify-content: flex-end;
+}
+
+#status-line { white-space: pre-wrap; }
