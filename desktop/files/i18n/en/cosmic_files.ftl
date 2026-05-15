@@ -395,4 +395,11 @@ ai-summarize = AI summary
 ai-summary-title = AI summary — {$name}
 ai-summarizing = Asking the AI to summarize this file…
 ai-summary-error = The AI could not summarize this file.
+
+## AI explanation
+ai-explain = AI explain
+ai-explain-title = AI explanation — {$name}
+ai-explaining = Asking the AI to explain this file…
+ai-explain-error = The AI could not explain this file.
+
 close = Close

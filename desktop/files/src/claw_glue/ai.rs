@@ -24,19 +24,22 @@ use serde::Deserialize;
 use serde_json::Value;
 
 /// One hit returned by `docs.search` (Recoll). Matches the JSON
-/// shape emitted by `apps/docs/main.py`. Fields kept optional because
-/// Recoll's output is best-effort — corrupt PDFs, deleted files since
-/// last index, and oddball MIME types all show up in the wild.
+/// shape emitted by `apps/docs/main.py::_parse_recollq_line` — each
+/// hit carries the file path, MIME type, Recoll's mtime string
+/// (recollq prints it as a string, not an integer), and the abstract
+/// snippet around the match. All fields are optional because Recoll's
+/// output is best-effort — corrupt PDFs, deleted files since last
+/// index and oddball MIME types all show up in the wild.
 #[derive(Clone, Debug, Deserialize)]
 pub struct SearchHit {
     #[serde(default)]
     pub path: PathBuf,
     #[serde(default)]
-    pub mtype: String,
+    pub mime: String,
     #[serde(default)]
-    pub mtime: Option<i64>,
-    #[serde(default, rename = "abstract")]
-    pub abstract_text: String,
+    pub mtime: String,
+    #[serde(default)]
+    pub snippet: String,
 }
 
 /// Look up the `cos` binary. `CLAW_COS_BIN` lets the test harness
@@ -107,19 +110,20 @@ pub async fn summarize(path: PathBuf) -> Result<String, String> {
 
 /// Explain the contents of a file in plain language. Wraps
 /// `cos app doc explain --file <path>`. The kernel's `apps/doc`
-/// returns `{"explanation": "..."}`.
-#[allow(dead_code)]
+/// returns the generated prose in the `text` field (it shares
+/// `_ai_call` with summarise/rewrite, which all key the result on
+/// `text`; summarise then aliases it to `summary` for legacy callers).
 pub async fn explain(path: PathBuf) -> Result<String, String> {
     let p = path_arg(&path)?;
     let value = invoke_app("doc", "explain", &["--file", p]).await?;
-    extract_string_field(&value, "explanation")
+    extract_string_field(&value, "text")
 }
 
 /// Rewrite a document according to a natural-language instruction.
 /// Wraps `cos app doc rewrite --file <path> --instruction <text>`.
-/// Returns the rewritten body as a single string; callers are
-/// responsible for showing it for review and applying the change
-/// (Files never auto-writes back).
+/// Returns the rewritten body (in the `text` field; see [`explain`]).
+/// Callers are responsible for showing it for review and applying
+/// the change — Files never auto-writes back.
 #[allow(dead_code)]
 pub async fn rewrite(path: PathBuf, instruction: String) -> Result<String, String> {
     let p = path_arg(&path)?;
@@ -129,7 +133,7 @@ pub async fn rewrite(path: PathBuf, instruction: String) -> Result<String, Strin
         &["--file", p, "--instruction", &instruction],
     )
     .await?;
-    extract_string_field(&value, "rewritten")
+    extract_string_field(&value, "text")
 }
 
 /// Indexed full-text search across the user's documents. Routes
@@ -171,9 +175,9 @@ pub async fn find_similar(path: PathBuf, max_results: usize) -> Result<Vec<Searc
 
 fn parse_search_hits(value: &Value) -> Result<Vec<SearchHit>, String> {
     let arr = value
-        .get("hits")
+        .get("results")
         .and_then(|v| v.as_array())
-        .ok_or_else(|| "AI response missing 'hits' array".to_string())?;
+        .ok_or_else(|| "AI response missing 'results' array".to_string())?;
     let mut out = Vec::with_capacity(arr.len());
     for entry in arr {
         let hit: SearchHit = serde_json::from_value(entry.clone())
@@ -191,44 +195,44 @@ mod tests {
     #[test]
     fn parse_search_hits_handles_well_formed_payload() {
         let payload = json!({
-            "hits": [
+            "results": [
                 {
                     "path": "/home/u/Documents/q3.pdf",
-                    "mtype": "application/pdf",
-                    "mtime": 1_700_000_000_i64,
-                    "abstract": "Quarterly revenue summary…"
+                    "mime": "application/pdf",
+                    "mtime": "1700000000",
+                    "snippet": "Quarterly revenue summary…"
                 },
                 {
                     "path": "/home/u/Documents/q3-notes.md",
-                    "mtype": "text/markdown",
-                    "mtime": 1_700_100_000_i64,
-                    "abstract": ""
+                    "mime": "text/markdown",
+                    "mtime": "1700100000",
+                    "snippet": ""
                 }
             ]
         });
         let hits = parse_search_hits(&payload).expect("parse");
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0].path, PathBuf::from("/home/u/Documents/q3.pdf"));
-        assert_eq!(hits[0].mtype, "application/pdf");
-        assert_eq!(hits[0].mtime, Some(1_700_000_000));
-        assert!(hits[0].abstract_text.starts_with("Quarterly"));
-        assert_eq!(hits[1].abstract_text, "");
+        assert_eq!(hits[0].mime, "application/pdf");
+        assert_eq!(hits[0].mtime, "1700000000");
+        assert!(hits[0].snippet.starts_with("Quarterly"));
+        assert_eq!(hits[1].snippet, "");
     }
 
     #[test]
     fn parse_search_hits_tolerates_partial_fields() {
-        let payload = json!({ "hits": [ { "path": "/x" } ] });
+        let payload = json!({ "results": [ { "path": "/x" } ] });
         let hits = parse_search_hits(&payload).expect("parse");
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].mtype, "");
-        assert_eq!(hits[0].mtime, None);
+        assert_eq!(hits[0].mime, "");
+        assert_eq!(hits[0].mtime, "");
     }
 
     #[test]
-    fn parse_search_hits_rejects_missing_hits_key() {
-        let payload = json!({ "results": [] });
+    fn parse_search_hits_rejects_missing_results_key() {
+        let payload = json!({ "hits": [] });
         let err = parse_search_hits(&payload).expect_err("missing key must error");
-        assert!(err.contains("'hits'"));
+        assert!(err.contains("'results'"));
     }
 
     #[test]

@@ -132,6 +132,7 @@ pub enum Action {
     About,
     AddToSidebar,
     AiSummarize,
+    AiExplain,
     Compress,
     Copy,
     CopyPath,
@@ -204,6 +205,7 @@ impl Action {
             Self::About => Message::ToggleContextPage(ContextPage::About),
             Self::AddToSidebar => Message::AddToSidebar(entity_opt),
             Self::AiSummarize => Message::AiSummarize(entity_opt),
+            Self::AiExplain => Message::AiExplain(entity_opt),
             Self::Compress => Message::Compress(entity_opt),
             Self::Copy => Message::Copy(entity_opt),
             Self::CopyPath => Message::CopyPath(entity_opt),
@@ -333,6 +335,11 @@ pub enum Message {
     AddToSidebar(Option<Entity>),
     AiSummarize(Option<Entity>),
     AiSummaryResult {
+        path: PathBuf,
+        outcome: Result<String, String>,
+    },
+    AiExplain(Option<Entity>),
+    AiExplainResult {
         path: PathBuf,
         outcome: Result<String, String>,
     },
@@ -530,6 +537,10 @@ pub enum AiSummaryStatus {
 #[derive(Clone, Debug)]
 pub enum DialogPage {
     AiSummary {
+        path: PathBuf,
+        status: AiSummaryStatus,
+    },
+    AiExplain {
         path: PathBuf,
         status: AiSummaryStatus,
     },
@@ -2994,6 +3005,43 @@ impl Application for App {
                         .update_front(DialogPage::AiSummary { path, status });
                 }
             }
+            Message::AiExplain(entity_opt) => {
+                let path = match self.selected_paths(entity_opt).next() {
+                    Some(p) => p,
+                    None => return Task::none(),
+                };
+                let dialog_task = self.push_dialog(
+                    DialogPage::AiExplain {
+                        path: path.clone(),
+                        status: AiSummaryStatus::Loading,
+                    },
+                    None,
+                );
+                let work_path = path.clone();
+                let work = cosmic::Task::future(async move {
+                    let outcome = crate::claw_glue::ai::explain(work_path.clone()).await;
+                    cosmic::action::app(Message::AiExplainResult {
+                        path: work_path,
+                        outcome,
+                    })
+                });
+                return Task::batch([dialog_task, work]);
+            }
+            Message::AiExplainResult { path, outcome } => {
+                // Same "is this still our dialog?" guard as AiSummaryResult.
+                if let Some(DialogPage::AiExplain {
+                    path: cur_path, ..
+                }) = self.dialog_pages.front()
+                    && cur_path == &path
+                {
+                    let status = match outcome {
+                        Ok(text) => AiSummaryStatus::Ready(text),
+                        Err(err) => AiSummaryStatus::Error(err),
+                    };
+                    self.dialog_pages
+                        .update_front(DialogPage::AiExplain { path, status });
+                }
+            }
             Message::Compress(entity_opt) => {
                 let paths: Box<[_]> = self.selected_paths(entity_opt).collect();
                 if let Some(current_path) = paths.first()
@@ -3209,6 +3257,7 @@ impl Application for App {
                     let mut tasks = vec![task];
                     match dialog_page {
                         DialogPage::AiSummary { .. } => {}
+                        DialogPage::AiExplain { .. } => {}
                         DialogPage::Compress {
                             paths,
                             to,
@@ -6370,6 +6419,39 @@ impl Application for App {
                 };
                 widget::dialog()
                     .title(fl!("ai-summary-title", name = name))
+                    .icon(icon::from_name("dialog-information").size(48))
+                    .primary_action(
+                        widget::button::suggested(fl!("close"))
+                            .on_press(Message::DialogCancel),
+                    )
+                    .control(body)
+            }
+            DialogPage::AiExplain { path, status } => {
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                let body: Element<Message> = match status {
+                    AiSummaryStatus::Loading => widget::column::with_children(vec![
+                        widget::text::body(fl!("ai-explaining")).into(),
+                    ])
+                    .spacing(space_xxs)
+                    .into(),
+                    AiSummaryStatus::Ready(text) => widget::scrollable(
+                        widget::text::body(text.clone()).width(Length::Fill),
+                    )
+                    .height(Length::Fixed(320.0))
+                    .into(),
+                    AiSummaryStatus::Error(err) => widget::column::with_children(vec![
+                        widget::text::body(fl!("ai-explain-error")).into(),
+                        widget::text::body(err.clone()).into(),
+                    ])
+                    .spacing(space_xxs)
+                    .into(),
+                };
+                widget::dialog()
+                    .title(fl!("ai-explain-title", name = name))
                     .icon(icon::from_name("dialog-information").size(48))
                     .primary_action(
                         widget::button::suggested(fl!("close"))
