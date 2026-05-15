@@ -42,10 +42,11 @@ The design follows a **dark terminal aesthetic** that reflects the developer-foc
 
 | Token | Value | Usage |
 |-------|-------|-------|
-| `accent-emerald` | `emerald-400` / `emerald-500` | Success, terminal prompts, status indicators |
-| `accent-blue` | `blue-400` / `blue-500` | Links, secondary highlights |
+| `accent-brand` | `#005CFE` | Primary brand colour (matches the logo dot). Terminal prompts, status indicators, primary CTAs, success highlights. |
 | `accent-violet` | `violet-400` / `violet-500` | Tertiary accents |
 | `accent-amber` | `amber-400` | Warnings |
+
+> The brand blue comes from `desktop/initial-setup/res/icon.svg` (the dot on the three black claws). It is also used in every claw-os app icon. Use the exact hex `#005CFE` rather than the closest Tailwind blue shade so the marketing site, app icons, and CLI accents all match.
 
 ### macOS Window Chrome
 
@@ -62,11 +63,11 @@ The design follows a **dark terminal aesthetic** that reflects the developer-foc
 Large, blurred gradient orbs that create depth and atmosphere:
 
 ```tsx
-{/* Primary glow - top center */}
-<div className="absolute left-1/2 top-0 h-[600px] w-[1000px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-emerald-500/[0.07] blur-[150px]" />
+{/* Primary glow - top center (brand blue) */}
+<div className="absolute left-1/2 top-0 h-[600px] w-[1000px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#005CFE]/[0.07] blur-[150px]" />
 
 {/* Secondary glow - bottom right */}
-<div className="absolute bottom-0 right-0 h-[400px] w-[600px] translate-x-1/4 translate-y-1/4 rounded-full bg-blue-500/[0.05] blur-[120px]" />
+<div className="absolute bottom-0 right-0 h-[400px] w-[600px] translate-x-1/4 translate-y-1/4 rounded-full bg-violet-500/[0.05] blur-[120px]" />
 
 {/* Tertiary glow - left */}
 <div className="absolute bottom-1/3 left-0 h-[300px] w-[400px] -translate-x-1/2 rounded-full bg-violet-500/[0.04] blur-[100px]" />
@@ -133,9 +134,9 @@ Animated terminal prompt with blinking cursor:
 ```tsx
 <div className="font-mono text-sm">
   <div className="flex items-center gap-2 text-white/40">
-    <span className="text-emerald-400">$</span>
+    <span className="text-[#005CFE]">$</span>
     <span>openharness auth login</span>
-    <span className="inline-block h-4 w-2 animate-pulse bg-emerald-400/80" />
+    <span className="inline-block h-4 w-2 animate-pulse bg-[#005CFE]/80" />
   </div>
   <div className="mt-2 text-white/30">
     <span className="text-amber-400/80">!</span> Authentication required
@@ -170,9 +171,9 @@ Pill-shaped badge with animated indicators:
 ```tsx
 <div className="inline-flex items-center gap-2 rounded-full border border-white/[0.06] bg-white/[0.02] px-4 py-2 backdrop-blur">
   <div className="flex items-center gap-1">
-    <div className="h-1.5 w-1.5 rounded-full bg-emerald-400/80" />
-    <div className="h-1.5 w-1.5 rounded-full bg-emerald-400/60 animate-pulse" />
-    <div className="h-1.5 w-1.5 rounded-full bg-emerald-400/40" />
+    <div className="h-1.5 w-1.5 rounded-full bg-[#005CFE]/80" />
+    <div className="h-1.5 w-1.5 rounded-full bg-[#005CFE]/60 animate-pulse" />
+    <div className="h-1.5 w-1.5 rounded-full bg-[#005CFE]/40" />
   </div>
   <span className="text-xs text-white/40">Status text</span>
 </div>
@@ -256,7 +257,7 @@ Use inline SVGs for consistency. Common icons:
 ## Usage Guidelines
 
 1. **Consistency**: Use the terminal window card for all prominent UI containers on marketing pages
-2. **Hierarchy**: Use ambient glows sparingly - one primary (emerald), one or two secondary (blue/violet)
+2. **Hierarchy**: Use ambient glows sparingly — one primary (brand blue `#005CFE`), one or two secondary (violet/amber)
 3. **Text contrast**: Ensure sufficient contrast - primary text at `white`, body at `white/50` minimum
 4. **Interactivity**: All interactive elements should have visible hover states
 5. **Responsiveness**: Use `sm:` breakpoint modifiers for mobile adaptations

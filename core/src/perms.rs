@@ -493,8 +493,9 @@ fn parse_session_arg(args: &[String]) -> Result<String, String> {
 // These render in two modes:
 //   - JSON (default for non-TTY pipes — preserves the agent-first contract)
 //   - Terminal-native cards (TTY only — follows the design system at
-//     `desktop/agent/docs/design-system.md`: dark surface, emerald
-//     accent, traffic-light dots, monospace, risk-tier colour tokens).
+//     `desktop/agent/docs/design-system.md`: dark surface, brand blue
+//     accent (`#005CFE`), traffic-light dots, monospace, risk-tier
+//     colour tokens).
 // ---------------------------------------------------------------------------
 
 fn use_pretty() -> bool {
@@ -507,7 +508,12 @@ fn use_pretty() -> bool {
 // ANSI tokens — pulled straight from the design-system doc.
 const C_RESET: &str = "\x1b[0m";
 const C_DIM: &str = "\x1b[2m\x1b[37m";
-const C_EMERALD: &str = "\x1b[38;5;78m";
+// Brand blue (`#005CFE`) rendered via 24-bit truecolor so the CLI accent
+// matches the logo dot and app-icon highlights exactly. Modern terminals
+// (iTerm2, Terminal.app, gnome-terminal, kitty, alacritty, wezterm,
+// foot, …) all support truecolor; older terminals will degrade to the
+// nearest 8-bit blue, which is still on-brand.
+const C_BRAND: &str = "\x1b[38;2;0;92;254m";
 const C_AMBER: &str = "\x1b[33m";
 const C_RED: &str = "\x1b[91m";
 const C_GREEN: &str = "\x1b[92m";
@@ -572,7 +578,7 @@ fn render_card(req: &approvals::Request) -> String {
         ylw = C_YELLOW_DOT,
         grn = C_GREEN,
         dim = C_DIM,
-        em = C_EMERALD,
+        em = C_BRAND,
         reset = C_RESET,
         id = req.id,
     );
@@ -580,7 +586,7 @@ fn render_card(req: &approvals::Request) -> String {
     body.push_str(&format!(
         "  {dim}what{reset}      {em}{verb}{reset}  {rc}[{rl}]{reset}\n",
         dim = C_DIM,
-        em = C_EMERALD,
+        em = C_BRAND,
         reset = C_RESET,
         verb = req.verb,
         rc = rc,
@@ -637,7 +643,7 @@ fn render_card(req: &approvals::Request) -> String {
 
     let footer = format!(
         "  {em}${reset} cos perms approve {id}   {dim}|{reset}   {em}${reset} cos perms deny {id}",
-        em = C_EMERALD,
+        em = C_BRAND,
         reset = C_RESET,
         dim = C_DIM,
         id = req.id,
@@ -731,7 +737,7 @@ fn typed_confirm_for_critical(req: &approvals::Request) -> Result<(), String> {
     eprintln!(
         "{red}⚠ critical capability{reset} — type the session id ({em}{sid}{reset}) to confirm:",
         red = C_RED,
-        em = C_EMERALD,
+        em = C_BRAND,
         reset = C_RESET,
         sid = req.session,
     );
@@ -770,7 +776,7 @@ fn cmd_approve(args: &[String]) -> Result<Value, String> {
     if use_pretty() {
         println!(
             "{em}✓ approved{reset} {id} {dim}({dur:?}){reset}",
-            em = C_EMERALD,
+            em = C_BRAND,
             dim = C_DIM,
             reset = C_RESET,
             id = id,
@@ -837,7 +843,7 @@ fn cmd_ask(args: &[String]) -> Result<Value, String> {
     if use_pretty() {
         println!(
             "{em}?{reset} submitted approval request {dim}id={reset}{id}",
-            em = C_EMERALD,
+            em = C_BRAND,
             dim = C_DIM,
             reset = C_RESET,
             id = id,
@@ -872,7 +878,7 @@ fn cmd_recent(args: &[String]) -> Result<Value, String> {
         } else {
             for r in &rows {
                 let mark = match r.decision.outcome {
-                    approvals::Outcome::Approved => format!("{}✓{}", C_EMERALD, C_RESET),
+                    approvals::Outcome::Approved => format!("{}✓{}", C_BRAND, C_RESET),
                     approvals::Outcome::Denied => format!("{}✗{}", C_RED, C_RESET),
                 };
                 println!(
