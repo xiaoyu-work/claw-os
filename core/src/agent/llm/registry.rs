@@ -35,7 +35,22 @@ pub const REGISTERED: &[&str] = &[
 ];
 
 /// Construct a provider by name.
+///
+/// An empty `name` is treated as "not configured" and returns a clear
+/// error rather than falling through to the "unknown provider" branch
+/// (which would print the misleading message `unknown provider ''`).
+/// This is the default state on a fresh install — `AgentConfig::default()`
+/// leaves `provider` empty so the OS owner is forced to pick one via
+/// `cos agent setup llm apply ...` or the desktop initial-setup AI page.
 pub fn build(name: &str, model: &str, agent_cfg: &AgentConfig) -> Result<Arc<dyn Provider>> {
+    if name.is_empty() {
+        return Err(LlmError::NotConfigured(
+            "no LLM provider configured. Run `cos agent setup llm apply \
+             --provider <name> --model <id> [--api-key <key>]` or open the \
+             desktop initial-setup AI page to pick one."
+                .into(),
+        ));
+    }
     if providers::openai_compat::is_alias(name) {
         return Ok(providers::openai_compat::build_provider(
             name, model, agent_cfg,
