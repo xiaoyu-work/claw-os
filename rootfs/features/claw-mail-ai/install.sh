@@ -4,7 +4,7 @@
 # the rootfs.
 #
 # Lay-down:
-#   /usr/lib/cos/mail-ai/                    — python host + verb impls + _lib copy
+#   /usr/lib/cos/mail-ai/                    — python host + verb impls
 #   /usr/lib/cos/claw-mail-ai-host           — shell launcher (NM `path`)
 #   /etc/thunderbird/native-messaging-hosts/os.claw.mail_ai.json
 #                                            — NM host manifest
@@ -18,7 +18,7 @@ set -euo pipefail
 
 EXT_SRC="$PROJECT_DIR/extensions/claw-mail-ai"
 APP_SRC="$PROJECT_DIR/apps/mail-ai"
-LIB_SRC="$PROJECT_DIR/apps/_lib"
+SDK_PY_SRC="$PROJECT_DIR/claw-os-sdk/python/src/claw_os_sdk"
 FEATURE_DIR="$SCRIPT_DIR/features/claw-mail-ai"
 
 EXT_ID="claw-mail-ai@claw.os"
@@ -26,7 +26,7 @@ EXT_ID="claw-mail-ai@claw.os"
 # ---------------------------------------------------------------------------
 # 0. Sanity — make sure the source trees we expect exist.
 # ---------------------------------------------------------------------------
-for d in "$EXT_SRC" "$APP_SRC" "$LIB_SRC"; do
+for d in "$EXT_SRC" "$APP_SRC" "$SDK_PY_SRC"; do
     if [ ! -d "$d" ]; then
         echo "  error: required source dir missing: $d" >&2
         exit 1
@@ -50,9 +50,10 @@ if [ -d "$FEATURE_DIR/overlay" ] && [ -n "$(ls -A "$FEATURE_DIR/overlay" 2>/dev/
 fi
 
 # ---------------------------------------------------------------------------
-# 2. Copy the Python host + verb impls + _lib into /usr/lib/cos/mail-ai/.
-#    This is self-contained: native_host.py adds its dir + parent to
-#    sys.path, so `import _lib.ai` etc. work without any global
+# 2. Copy the Python host + verb impls + the Python SDK into
+#    /usr/lib/cos/mail-ai/ and /usr/lib/cos/python/. The host adds its
+#    own dir and /usr/lib/cos/python to sys.path so `from claw_os_sdk
+#    import ai` (used by main.py) resolves without any global
 #    PYTHONPATH munging.
 # ---------------------------------------------------------------------------
 APP_DEST="$ROOTFS/usr/lib/cos/mail-ai"
@@ -61,13 +62,15 @@ install -d -m 0755 "$APP_DEST"
 cp -a "$APP_SRC/." "$APP_DEST/"
 # Drop test files from the system copy — they're not needed at runtime.
 rm -f "$APP_DEST/test_main.py"
-# _lib lives one directory up at /usr/lib/cos/_lib so the relative
-# import path `from _lib.ai import chat` (used by main.py) resolves.
-LIB_DEST="$ROOTFS/usr/lib/cos/_lib"
-if [ ! -d "$LIB_DEST" ]; then
-    echo "  :: installing apps/_lib → /usr/lib/cos/_lib"
-    install -d -m 0755 "$LIB_DEST"
-    cp -a "$LIB_SRC/." "$LIB_DEST/"
+# claw_os_sdk lives in a system-wide location so every app on the
+# device can import it. We drop it under /usr/lib/cos/python/ so
+# `from claw_os_sdk import ai` resolves once sys.path contains that
+# directory (native_host.py adds it on startup).
+SDK_DEST="$ROOTFS/usr/lib/cos/python/claw_os_sdk"
+if [ ! -d "$SDK_DEST" ]; then
+    echo "  :: installing claw-os-sdk → /usr/lib/cos/python/claw_os_sdk"
+    install -d -m 0755 "$SDK_DEST"
+    cp -a "$SDK_PY_SRC/." "$SDK_DEST/"
 fi
 chmod 0755 "$APP_DEST/native_host.py" 2>/dev/null || true
 

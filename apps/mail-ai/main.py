@@ -3,7 +3,7 @@
 This is the **agent-side** verb surface that the MailExtension talks to
 over a Native Messaging port (see ``native_host.py``). Like every other
 ``apps/`` Python app, it routes every model call through the kernel's
-AI gate via ``_lib.ai`` — keys, budgets, safety, audit all happen there.
+AI gate via ``claw_os_sdk.ai`` — keys, budgets, safety, audit all happen there.
 
 The MailExtension is the **user-driven** surface: the user clicks a
 button, the extension hands us the email body, we hand back a summary
@@ -29,7 +29,7 @@ import argparse
 import json
 import re
 
-from _lib import ai, policy
+from claw_os_sdk import ai, policy
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,21 @@
+[package]
+name = "claw-os-sdk"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Official Rust SDK for Claw OS. Lets apps and desktop binaries call the kernel's `cos` CLI for every fs / exec / pkg / notify / ai / tool / policy operation, so capability gating, audit, and session checkpointing apply uniformly to terminal and GUI callers."
+repository = "https://github.com/xiaoyu-work/claw-os"
+homepage = "https://github.com/xiaoyu-work/claw-os/tree/main/claw-os-sdk"
+documentation = "https://docs.rs/claw-os-sdk"
+readme = "README.md"
+keywords = ["claw-os", "sdk", "rpc", "policy", "agent"]
+categories = ["api-bindings", "os"]
+
+[dependencies]
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"

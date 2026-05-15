@@ -112,7 +112,10 @@ class DocsAppTests(unittest.TestCase):
 
         # Fresh import so module-level HOME picks up our fake $HOME
         sys.path.insert(0, str(_HERE))
-        sys.path.insert(0, str(_HERE.parent))  # apps/
+        sys.path.insert(
+            0,
+            str(_HERE.parent.parent / "claw-os-sdk" / "python" / "src"),
+        )  # for `from claw_os_sdk import …`
         if "main" in sys.modules:
             del sys.modules["main"]
         self.main = importlib.import_module("main")
@@ -124,7 +127,10 @@ class DocsAppTests(unittest.TestCase):
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
-        for p in (str(_HERE), str(_HERE.parent)):
+        for p in (
+            str(_HERE),
+            str(_HERE.parent.parent / "claw-os-sdk" / "python" / "src"),
+        ):
             try:
                 sys.path.remove(p)
             except ValueError:

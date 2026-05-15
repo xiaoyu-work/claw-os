@@ -288,12 +288,12 @@ impl Application for App {
                     let marker = home.join(COSMIC_SETUP_DONE_PATH);
                     let marker_str = marker.to_string_lossy().into_owned();
                     let bridge_res = tokio::task::spawn_blocking(move || {
-                        claw_bridge::fs::write(&marker_str, "")
+                        claw_os_sdk::fs::write(&marker_str, "")
                     })
                     .await;
                     if let Ok(Err(why)) = bridge_res {
                         if why.is_denied() {
-                            tracing::warn!(?why, "fs.write setup-done marker denied by claw-bridge");
+                            tracing::warn!(?why, "fs.write setup-done marker denied by claw-os-sdk");
                         } else {
                             tracing::error!(?why, "fs.write setup-done marker failed");
                         }
@@ -320,7 +320,7 @@ impl Application for App {
                     tasks = tasks.chain(
                         cosmic::Task::future(async {
                             let bridge_res = tokio::task::spawn_blocking(|| {
-                                claw_bridge::exec::run(
+                                claw_os_sdk::exec::run(
                                     &["loginctl", "terminate-user", "cosmic-initial-setup"],
                                     None,
                                 )
@@ -330,7 +330,7 @@ impl Application for App {
                                 if why.is_denied() {
                                     tracing::warn!(
                                         ?why,
-                                        "exec.run loginctl terminate-user denied by claw-bridge"
+                                        "exec.run loginctl terminate-user denied by claw-os-sdk"
                                     );
                                 } else {
                                     tracing::error!(?why, "exec.run loginctl terminate-user failed");

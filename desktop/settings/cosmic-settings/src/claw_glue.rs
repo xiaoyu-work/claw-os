@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //
-// Thin sync adapter over `claw-bridge` for cosmic-settings.
+// Thin sync adapter over `claw-os-sdk` for cosmic-settings.
 //
 // User-intent mutations (write configs, rename connection profiles,
 // remove desktop entries) and user-intent process spawns
 // (`nm-connection-editor`, `gnome-language-selector`, `update-desktop-database`)
-// are funnelled through `claw_bridge::{fs, exec}` so the kernel
+// are funnelled through `claw_os_sdk::{fs, exec}` so the kernel
 // capability gate, the structured audit log (`caps.jsonl`), and
 // checkpoint snapshots all apply uniformly.
 //
@@ -24,7 +24,7 @@ use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::process::{ExitStatus, Output};
 
-use claw_bridge::{BridgeError, exec, fs};
+use claw_os_sdk::{BridgeError, exec, fs};
 
 fn map_err(err: BridgeError) -> io::Error {
     if err.is_denied() {

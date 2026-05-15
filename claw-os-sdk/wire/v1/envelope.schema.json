@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://claw-os.dev/wire/v1/envelope.schema.json",
+  "title": "Envelope",
+  "description": "Common wrapper around every wire v1 reply. Forward-compatible target shape — the current kernel still emits flat per-command shapes that SDKs adapt to this envelope.",
+  "type": "object",
+  "required": ["ok", "wire_version"],
+  "additionalProperties": false,
+  "properties": {
+    "ok": { "type": "boolean", "description": "true iff the kernel accepted and dispatched the call." },
+    "wire_version": { "type": "integer", "const": 1 },
+    "audit_id": { "type": "string", "description": "Audit log entry id (ULID)." },
+    "data": { "description": "Request-specific success payload. See the per-family schema for shape.", "type": "object" },
+    "error": { "type": "string", "description": "Human-readable error summary. Present when ok is false." },
+    "code": { "type": "string", "description": "Stable error code from wire/v1/error_codes.md." },
+    "detail": { "type": "object", "description": "Request-specific error payload." }
+  }
+}

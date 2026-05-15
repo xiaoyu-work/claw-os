@@ -5,7 +5,7 @@
 //! the rest is in the master plan doc (perms list / show / revoke /
 //! audit / undo).
 //!
-//! The Python helper at `apps/_lib/policy.py` shells out to
+//! The Python helper at `claw-os-sdk/python/src/claw_os_sdk/policy.py` shells out to
 //! `cos perms check <verb> --<scope-kind> <value>` to gate operations
 //! inside Python apps. The JSON envelope here is therefore part of a
 //! stable contract — keep the shape backwards compatible.
@@ -113,7 +113,7 @@ fn cmd_check(args: &[String]) -> Result<Value, String> {
 
 // ---------------------------------------------------------------------------
 // perms trash / undo / gc  ―  reverse-replay the snapshots that the
-// `apps/_lib/snapshot.py` helper wrote before every gated fs mutation.
+// `claw-os-sdk/python/src/claw_os_sdk/snapshot.py` helper wrote before every gated fs mutation.
 // The on-disk layout (`$COS_DATA_DIR/trash/<sid>/<seq>/{meta.json,blob}`)
 // is the contract documented in that module and in
 // `docs/07-design-decisions.md` § 3.

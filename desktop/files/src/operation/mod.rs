@@ -1028,10 +1028,10 @@ impl Operation {
                         .await
                         .map_err(|s| OperationError::from_state(s, &controller))?;
                     // FIXME(claw): inside compio runtime, can't easily
-                    // call the sync claw_bridge here. The user-action
+                    // call the sync claw_os_sdk here. The user-action
                     // New Folder still hits caps indirectly through
                     // the file system, but not yet through the bridge.
-                    // Follow-up: add async wrappers in claw-bridge or
+                    // Follow-up: add async wrappers in claw-os-sdk or
                     // dispatch to a tokio handle.
                     compio::fs::create_dir(&path)
                         .await
@@ -1106,8 +1106,8 @@ impl Operation {
                         .await
                         .map_err(|s| OperationError::from_state(s, &controller))?;
                     // FIXME(claw): inside compio runtime, can't easily
-                    // call the sync claw_bridge here. Follow-up: add
-                    // async wrappers in claw-bridge or dispatch to a
+                    // call the sync claw_os_sdk here. Follow-up: add
+                    // async wrappers in claw-os-sdk or dispatch to a
                     // tokio handle so user-rename hits the caps gate.
                     compio::fs::rename(&from, &to)
                         .await

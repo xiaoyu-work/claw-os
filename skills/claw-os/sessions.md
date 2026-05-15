@@ -156,7 +156,7 @@ agent can attach to a session our `cos agent` runtime started, read its
 turns, and append new ones — without ever shelling out to `cos`.**
 
 The contract is exactly the file format above. We ship a reference
-implementation at [`apps/_lib/claw_os_session.py`](../../apps/_lib/claw_os_session.py)
+implementation at [`claw-os-sdk/python/src/claw_os_sdk/claw_os_session.py`](../../claw-os-sdk/python/src/claw_os_sdk/claw_os_session.py)
 (~330 lines, no third-party deps) that:
 
 - lists durable sessions (skipping `.archive`, half-written, or

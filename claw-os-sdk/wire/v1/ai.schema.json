@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://claw-os.dev/wire/v1/ai.schema.json",
+  "title": "AI request / reply",
+  "description": "Shape of the data payload returned by `cos ai chat|embed|image-generate`. Apps call this via SDK helpers (claw_os_sdk.ai.chat / ai.embed / ai.image_generate). The kernel emits the same fields whether the call was synchronous or streamed (terminating reply).",
+  "type": "object",
+  "required": ["verb"],
+  "additionalProperties": true,
+  "properties": {
+    "verb":     { "type": "string", "enum": ["ai.chat", "ai.embed", "ai.image_generate", "ai.tool"], "description": "Which AI verb produced this reply." },
+    "text":     { "type": "string", "description": "Assistant text (ai.chat only)." },
+    "model":    { "type": "string", "description": "Provider model id actually used (e.g. \"gpt-4o-mini\")." },
+    "provider": { "type": "string", "description": "Provider name (e.g. \"openai\", \"anthropic\")." },
+    "embedding": {
+      "type": "array",
+      "items": { "type": "number" },
+      "description": "Single embedding vector (ai.embed). For batch input, kernel returns an array of arrays under `embeddings`."
+    },
+    "embeddings": { "type": "array", "items": { "type": "array", "items": { "type": "number" } } },
+    "output_path": { "type": "string", "description": "Filesystem path where the kernel wrote the generated artifact (image generation)." },
+    "usage": {
+      "type": "object",
+      "description": "Token / unit accounting for this single call.",
+      "properties": {
+        "input_tokens":  { "type": "integer", "minimum": 0 },
+        "output_tokens": { "type": "integer", "minimum": 0 },
+        "units":         { "type": "number",  "description": "Provider-agnostic cost units, billed against the app budget." }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "description": "Snapshot of the app's budget *after* this call.",
+      "properties": {
+        "period":     { "type": "string", "description": "Reset window, e.g. \"monthly\"." },
+        "units_used": { "type": "number" },
+        "units_cap":  { "type": "number" }
+      }
+    },
+    "review": {
+      "type": "object",
+      "description": "Safety / review metadata.",
+      "properties": {
+        "safety":           { "type": "string", "enum": ["strict", "balanced", "off"] },
+        "prompt_redacted":  { "type": "boolean" },
+        "response_blocked": { "type": "boolean" }
+      }
+    },
+    "tool_calls": {
+      "type": "array",
+      "description": "Catalog tool invocations the model requested in this turn. Each entry includes name, args, result (if executed kernel-side).",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name":   { "type": "string" },
+          "args":   { "type": "object" },
+          "result": {}
+        }
+      }
+    },
+    "raw": { "description": "Provider-native response object, included only when env var COS_AI_RAW=1." }
+  }
+}

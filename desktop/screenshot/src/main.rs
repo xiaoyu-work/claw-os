@@ -147,12 +147,12 @@ pub(crate) async fn capture(opts: CaptureOptions) -> Result<CaptureOutcome, Capt
                     .to_str()
                     .ok_or_else(|| CaptureError::Io("destination path not valid UTF-8".into()))?;
                 if dst_meta.dev() != src_meta.dev() {
-                    claw_bridge::fs::copy(src, dst)
+                    claw_os_sdk::fs::copy(src, dst)
                         .map_err(|e| CaptureError::Io(format!("copy: {e}")))?;
-                    claw_bridge::fs::rm(src)
+                    claw_os_sdk::fs::rm(src)
                         .map_err(|e| CaptureError::Io(format!("rm temp: {e}")))?;
                 } else {
-                    claw_bridge::fs::rename(src, dst)
+                    claw_os_sdk::fs::rename(src, dst)
                         .map_err(|e| CaptureError::Io(format!("rename: {e}")))?;
                 }
                 path.to_string_lossy().to_string()

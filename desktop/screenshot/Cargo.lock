@@ -213,7 +213,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
-name = "claw-bridge"
+name = "claw-os-sdk"
 version = "0.1.0"
 dependencies = [
  "base64",
@@ -255,7 +255,7 @@ dependencies = [
  "ashpd",
  "async-trait",
  "clap",
- "claw-bridge",
+ "claw-os-sdk",
  "cos-mcp-serve",
  "dirs",
  "i18n-embed",

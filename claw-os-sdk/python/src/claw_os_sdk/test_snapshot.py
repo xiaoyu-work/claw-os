@@ -1,4 +1,4 @@
-"""Regression tests for `_lib.snapshot._allocate_seq_dir`.
+"""Regression tests for `claw_os_sdk.snapshot._allocate_seq_dir`.
 
 Pre-fix `_take_snapshot` chose the next sequence directory via a
 TOCTOU pattern: scan `listdir`, take `max + 1`, then `os.makedirs(
@@ -15,9 +15,9 @@ import threading
 import unittest
 
 _THIS_DIR = os.path.dirname(__file__)
-sys.path.insert(0, os.path.dirname(_THIS_DIR))  # so `from _lib import snapshot` works
+sys.path.insert(0, os.path.dirname(_THIS_DIR))  # so `from claw_os_sdk import snapshot` works
 
-from _lib import snapshot  # noqa: E402
+from claw_os_sdk import snapshot  # noqa: E402
 
 
 class AllocateSeqDirTests(unittest.TestCase):

@@ -8,8 +8,8 @@ import subprocess
 import sys
 import time
 
-from _lib import policy
-from _lib import snapshot
+from claw_os_sdk import policy
+from claw_os_sdk import snapshot
 
 
 WORKSPACE = "/workspace"

@@ -15,7 +15,7 @@ MailExtension itself. The extension is the user-driven half; the
 Python verbs are pure compute.
 
 Capability / budget / safety enforcement all happen inside
-``main._ai_call()`` via ``_lib.policy`` and ``_lib.ai``, so this host
+``main._ai_call()`` via ``claw_os_sdk.policy`` and ``claw_os_sdk.ai``, so this host
 does not need its own gate.
 """
 
@@ -33,24 +33,49 @@ MAX_FRAME = 64 * 1024 * 1024  # 64 MiB — Mozilla's documented ceiling
 
 
 # ---------------------------------------------------------------------------
-# Make `from _lib import …` resolve when running as a system script.
+# Make `from claw_os_sdk import …` resolve when running as a system script.
 # ---------------------------------------------------------------------------
 # Layout when shipped via the rootfs feature:
-#     /usr/lib/cos/mail-ai/native_host.py     (this file)
-#     /usr/lib/cos/mail-ai/main.py            (copy of apps/mail-ai/main.py)
-#     /usr/lib/cos/mail-ai/_lib/              (copy of apps/_lib/)
+#     /usr/lib/cos/mail-ai/native_host.py            (this file)
+#     /usr/lib/cos/mail-ai/main.py                   (copy of apps/mail-ai/main.py)
+#     /usr/lib/cos/python/claw_os_sdk/               (system copy of the Python SDK)
 # Layout when running from a source checkout (dev / tests):
 #     <repo>/apps/mail-ai/native_host.py
 #     <repo>/apps/mail-ai/main.py
-#     <repo>/apps/_lib/
-# In both cases we want main.py importable as `main` and the _lib
-# package importable as `_lib`. Prepend the script's own directory
-# AND its parent (so dev checkouts can find ../apps/_lib).
+#     <repo>/claw-os-sdk/python/src/claw_os_sdk/
+# In both cases we want ``main.py`` importable as ``main`` and
+# ``claw_os_sdk`` importable as a package. Prepend the script's own
+# directory and walk up looking for a sibling ``claw-os-sdk/python/src``
+# (dev) or a system-wide ``/usr/lib/cos/python`` (rootfs).
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_PARENT = os.path.dirname(_HERE)
-for _p in (_HERE, _PARENT):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+
+def _bootstrap_sdk_path() -> None:
+    candidates = []
+    env_override = os.environ.get("CLAW_PYTHON_LIB")
+    if env_override:
+        candidates.append(env_override)
+    # Walk up from this file looking for the source-checkout SDK path.
+    cur = _HERE
+    for _ in range(6):
+        cur = os.path.dirname(cur)
+        candidates.append(os.path.join(cur, "claw-os-sdk", "python", "src"))
+    # System install paths.
+    candidates.extend([
+        "/usr/lib/cos/python",
+        "/opt/claw/python",
+        "/usr/lib/claw/python",
+    ])
+    for cand in candidates:
+        if cand and os.path.isdir(os.path.join(cand, "claw_os_sdk")):
+            if cand not in sys.path:
+                sys.path.insert(0, cand)
+            return
+
+
+_bootstrap_sdk_path()
 
 import main as mail_ai  # noqa: E402  — sys.path was just rewired
 

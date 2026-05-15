@@ -6,7 +6,7 @@ out through this helper to ``cos ai tool <name> --app <id> --args
 <json>``. The kernel runs the catalog implementation under the App's
 own capabilities, audits the call, and returns a structured result.
 
-Why separate from :mod:`_lib.ai`?
+Why separate from :mod:`claw_os_sdk.ai`?
 ---------------------------------
 
 ``ai.chat`` is the **only** path to a language model. Tools are the
@@ -33,7 +33,7 @@ Typical usage
 
 ::
 
-    from _lib import ai, tools
+    from claw_os_sdk import ai, tools
 
     proposal = ai.chat(
         prompt="Summarise the file at /etc/hostname",
@@ -241,7 +241,7 @@ def catalog() -> List[CatalogEntry]:
 
 
 def for_chat(*names: str) -> List[str]:
-    """Return tool names ready for :func:`_lib.ai.chat`'s ``tools=`` kwarg.
+    """Return tool names ready for :func:`claw_os_sdk.ai.chat`'s ``tools=`` kwarg.
 
     Whitespace is trimmed and empty entries are dropped so
     ``tools.for_chat("fs.read_text", " kv.get ", "")`` collapses to

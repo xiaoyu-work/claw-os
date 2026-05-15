@@ -77,7 +77,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         "service" => dispatch_builtin(args, "service", service::run),
         "checkpoint" => dispatch_builtin(args, "checkpoint", checkpoint::run),
         "credential" => dispatch_builtin(args, "credential", credential::run),
-        // `perms` is invoked by Python apps (apps/_lib/policy.py shells to
+        // `perms` is invoked by Python apps (claw-os-sdk/python/src/claw_os_sdk/policy.py shells to
         // `cos perms check`) and not directly by users — kept dispatchable
         // but hidden from the user-facing overview list.
         "perms" => dispatch_builtin(args, "perms", perms::run),
@@ -189,7 +189,7 @@ fn dispatch_app(args: &[String]) -> Result<Option<String>, String> {
 /// `cos app lint [<name>]` — refuse apps that smuggle in AI SDKs.
 ///
 /// Apps are required to route every model call through the kernel's
-/// `cos ai chat --app <id>` gate (via `apps/_lib/ai.py`). Importing
+/// `cos ai chat --app <id>` gate (via `claw-os-sdk/python/src/claw_os_sdk/ai.py`). Importing
 /// `openai`, `anthropic`, or `google.generativeai` directly would
 /// bypass budget, safety, and audit — so the linter looks for those
 /// imports in every `*.py` file under each app's directory and reports
@@ -230,7 +230,7 @@ fn lint_apps(
             "results": results,
             "ok": !any_violation,
             "hint": if any_violation {
-                "Lint failed. Apps must (a) route AI calls through `_lib.ai` (not direct provider SDKs) \
+                "Lint failed. Apps must (a) route AI calls through `claw_os_sdk.ai` (not direct provider SDKs) \
                  and (b) ship every file referenced by their `session.entry` so the kernel agent can spawn \
                  the MCP server. Run `cos app tool list <app>` to inspect the declared tool surface."
             } else {

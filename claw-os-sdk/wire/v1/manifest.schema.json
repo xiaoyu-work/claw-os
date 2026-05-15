@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://claw-os.dev/wire/v1/manifest.schema.json",
+  "title": "App manifest (app.json)",
+  "description": "The manifest every app under COS_APPS_DIR must provide. The kernel validates and uses this to derive declared verbs, runtime, and capability requirements.",
+  "type": "object",
+  "required": ["id", "name", "runtime", "verbs"],
+  "additionalProperties": true,
+  "properties": {
+    "id":      { "type": "string", "pattern": "^[a-z][a-z0-9-]*$", "description": "Stable app identifier; matches the directory name under COS_APPS_DIR." },
+    "name":    { "type": "string", "description": "Human-friendly display name." },
+    "version": { "type": "string", "description": "Semantic version of the app." },
+    "runtime": { "type": "string", "enum": ["python", "binary", "node", "go"], "description": "Which runtime the kernel uses to invoke the entry point." },
+    "entry":   { "type": "string", "description": "Path relative to the app dir; python ⇒ <name>.py, binary ⇒ executable." },
+    "verbs": {
+      "type": "array",
+      "description": "Verbs this app exposes to AI / system callers.",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "additionalProperties": true,
+        "properties": {
+          "name":        { "type": "string", "description": "Dotted verb name (e.g. \"fs.read\")." },
+          "summary":     { "type": "string" },
+          "args":        { "type": "array", "items": { "$ref": "#/$defs/arg" }, "description": "Declared input args." },
+          "needs":       { "type": "array", "items": { "$ref": "#/$defs/capRequest" }, "description": "Caps this verb requires before dispatch." },
+          "side_effects": { "type": "boolean", "description": "Whether this verb mutates user-visible state — drives the kernel's mutation log decision." }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "arg": {
+      "type": "object",
+      "required": ["name", "kind"],
+      "additionalProperties": true,
+      "properties": {
+        "name":    { "type": "string" },
+        "kind":    { "type": "string", "enum": ["path", "host", "name", "text"] },
+        "required": { "type": "boolean" }
+      }
+    },
+    "capRequest": {
+      "type": "object",
+      "required": ["verb"],
+      "additionalProperties": true,
+      "properties": {
+        "verb":  { "type": "string", "description": "Capability verb the call needs (e.g. \"fs.read\")." },
+        "scope": { "description": "Either an inline literal scope, or { \"from-arg\": \"<argname>\" } to bind dynamically." }
+      }
+    }
+  }
+}

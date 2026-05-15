@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://claw-os.dev/wire/v1/perms.schema.json",
+  "title": "Permissions request / reply",
+  "description": "Shape of the success-path data field returned by `cos perms check`. Apps call this via SDK helpers (e.g. claw_os_sdk.policy.check).",
+  "type": "object",
+  "required": ["decision", "verb"],
+  "additionalProperties": true,
+  "properties": {
+    "decision": { "type": "string", "enum": ["allow", "deny", "prompt"], "description": "Whether the call would be permitted right now." },
+    "verb":     { "type": "string", "description": "Verb being checked, e.g. \"fs.read\"." },
+    "scope":    { "description": "Scope object: shape depends on the verb (path/host/name/wild). Present when supplied by caller.", "oneOf": [ { "type": "object" }, { "type": "string" }, { "type": "null" } ] },
+    "reason":   { "type": "string", "description": "Short human-readable reason for the decision." },
+    "hint":     { "type": "string", "description": "If denied, what the user should do (e.g. \"open Settings → Permissions and grant fs.read\")." },
+    "granted":  { "type": "boolean", "description": "Convenience boolean equal to decision == \"allow\"." }
+  }
+}

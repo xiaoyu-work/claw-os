@@ -152,7 +152,8 @@ boundary**. It is a convenience library that runs *inside* an
 already-spawned App process and shells out to `cos ai chat` /
 `cos ai tool`. A developer can equivalently:
 
-- Use the bundled `apps/_lib/{ai,tools}.py`.
+- Use the bundled `claw_os_sdk` Python package (`from claw_os_sdk
+  import ai, tools`).
 - Write a Node / Go / Rust equivalent — roughly 100 lines each.
 - Skip the library and `subprocess.run(["cos", "ai", "chat", …])` by
   hand.
@@ -294,10 +295,13 @@ This SDK runs *inside* an App process the kernel has already spawned
 (see §3). It is **not** a way for an arbitrary Linux program to obtain
 App identity — that path does not exist by design.
 
-App code uses two helpers, both shipped with Claw OS at `apps/_lib/`.
+App code uses two helpers, both shipped with Claw OS as the
+`claw_os_sdk` Python package (lives at
+`claw-os-sdk/python/src/claw_os_sdk/` in-repo, installed to
+`/usr/lib/cos/python/claw_os_sdk/`).
 
 ```python
-from _lib import ai, tools
+from claw_os_sdk import ai, tools
 
 messages = [{"role": "user", "content": "Summarise the latest notes."}]
 
@@ -446,9 +450,9 @@ This document is the contract. Concrete work falls into roughly:
    **never** executes the proposed calls — it surfaces them in
    `tool_calls[]` and lets the App fulfil whichever it chooses via
    `cos ai tool <name>`.
-7. **In-process SDK.** ✅ Done for Python. `apps/_lib/ai.py` exposes
+7. **In-process SDK.** ✅ Done for Python. `claw_os_sdk.ai` exposes
    `ai.chat(..., tools=[...])` and an `AiResponse.tool_calls` field;
-   `apps/_lib/tools.py` exposes `tools.call`, `tools.catalog`, and
+   `claw_os_sdk.tools` exposes `tools.call`, `tools.catalog`, and
    `tools.for_chat`. Node / Rust / Go shapes are described in §7
    above.
 8. **Manifest validator.** ✅ Done. `app.json` schema accepts an
@@ -533,12 +537,12 @@ The same `needs[]` grammar from §5 applies. Every `from-arg` scope must
 reference a declared `arg`; the manifest parser rejects mismatches at
 install time.
 
-### 12.3 Python SDK: `apps/_lib/serve.py`
+### 12.3 Python SDK: `claw_os_sdk.serve`
 
 App authors write:
 
 ```python
-from _lib.serve import App
+from claw_os_sdk.serve import App
 
 app = App()
 
@@ -628,8 +632,9 @@ running event loop. Instead, the **same binary** flips into MCP
 server mode when launched with `COS_MCP_SERVER=1` in the environment
 (the kernel agent sets it automatically; see `bring_up_app`).
 
-`crates/cos-mcp-serve` is the Rust counterpart to `apps/_lib/serve.py`.
-It exposes a tiny builder API:
+`crates/cos-mcp-serve` is the Rust counterpart to `claw_os_sdk.serve`
+(`claw-os-sdk/python/src/claw_os_sdk/serve.py`). It exposes a tiny
+builder API:
 
 ```rust
 use cos_mcp_serve::{Server, Tool, ToolResult};

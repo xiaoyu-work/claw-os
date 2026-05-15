@@ -6,6 +6,13 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(
+    0,
+    os.path.join(
+        os.path.dirname(__file__), os.pardir, os.pardir,
+        "claw-os-sdk", "python", "src",
+    ),
+)  # for `from claw_os_sdk import …`
 
 from main import run
 

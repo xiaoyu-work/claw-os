@@ -8,7 +8,7 @@
 #   - Thunderbird policies      → /etc/thunderbird/policies/policies.json
 #   - Thunderbird NM manifest   → /etc/thunderbird/native-messaging-hosts/os.claw.mail_ai.json
 #   - Native host launcher      → /usr/lib/cos/claw-mail-ai-host
-#   - Python host + deps        → /usr/lib/cos/mail-ai/, /usr/lib/cos/_lib/
+#   - Python host + deps        → /usr/lib/cos/mail-ai/, /usr/lib/cos/python/claw_os_sdk/
 #
 # Run as root. Re-run is idempotent (overwrites).
 #
@@ -25,12 +25,12 @@ fi
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EXT_SRC="${REPO_ROOT}/extensions/claw-mail-ai"
 APP_SRC="${REPO_ROOT}/apps/mail-ai"
-LIB_SRC="${REPO_ROOT}/apps/_lib"
+SDK_PY_SRC="${REPO_ROOT}/claw-os-sdk/python/src/claw_os_sdk"
 
 EXT_ID="claw-mail-ai@claw.os"
 EXT_DEST="/usr/share/claw/extensions/claw-mail-ai"
 APP_DEST="/usr/lib/cos/mail-ai"
-LIB_DEST="/usr/lib/cos/_lib"
+SDK_DEST="/usr/lib/cos/python/claw_os_sdk"
 HOST_LAUNCHER="/usr/lib/cos/claw-mail-ai-host"
 NM_MANIFEST="/etc/thunderbird/native-messaging-hosts/os.claw.mail_ai.json"
 POLICY_FILE="/etc/thunderbird/policies/policies.json"
@@ -38,7 +38,7 @@ XPI_DEST_DIR="/usr/lib/thunderbird/distribution/extensions"
 XPI_DEST="${XPI_DEST_DIR}/${EXT_ID}.xpi"
 
 # Sanity checks.
-for d in "${EXT_SRC}" "${APP_SRC}" "${LIB_SRC}"; do
+for d in "${EXT_SRC}" "${APP_SRC}" "${SDK_PY_SRC}"; do
   if [[ ! -d "$d" ]]; then
     echo "error: source dir missing: $d" >&2
     exit 1
@@ -76,10 +76,10 @@ cp -a "${APP_SRC}/." "${APP_DEST}/"
 rm -f "${APP_DEST}/test_main.py"     # don't ship tests
 chmod 0755 "${APP_DEST}/native_host.py"
 
-if [[ ! -d "${LIB_DEST}" ]]; then
-  echo "[claw-mail-ai] installing apps/_lib  → ${LIB_DEST}"
-  install -d -m 0755 "${LIB_DEST}"
-  cp -a "${LIB_SRC}/." "${LIB_DEST}/"
+if [[ ! -d "${SDK_DEST}" ]]; then
+  echo "[claw-mail-ai] installing claw-os-sdk → ${SDK_DEST}"
+  install -d -m 0755 "${SDK_DEST}"
+  cp -a "${SDK_PY_SRC}/." "${SDK_DEST}/"
 fi
 
 # ---------------------------------------------------------------------------

@@ -16,8 +16,15 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(
-    0, os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-)  # for `from _lib import policy`
+    0,
+    os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        os.pardir,
+        "claw-os-sdk",
+        "python",
+        "src",
+    ),
+)  # for `from claw_os_sdk import policy`
 
 import main  # noqa: E402
 

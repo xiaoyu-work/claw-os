@@ -9,7 +9,7 @@ publish = false
 xdgen = "0.1"
 
 [dependencies]
-claw-bridge = { path = "../../../crates/claw-bridge" }
+claw-os-sdk = { path = "../../../claw-os-sdk/rust" }
 accounts-zbus = { git = "https://github.com/pop-os/dbus-settings-bindings", optional = true }
 anyhow = "1.0"
 ashpd = { version = "0.12", default-features = false, features = [

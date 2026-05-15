@@ -139,12 +139,23 @@ async fn bring_up_app(
     let apps_dir_str = apps_dir.to_string_lossy().to_string();
     let data_dir = data_dir_string();
 
+    // Resolve the directory containing the `claw_os_sdk` Python
+    // package so `runtime: python` MCP-session apps can `from
+    // claw_os_sdk import …`. Honour an explicit override; otherwise
+    // try the production install path and the in-repo dev path
+    // (`<repo>/claw-os-sdk/python/src`).
+    let sdk_python_dir = resolve_sdk_python_dir(&apps_dir);
+    let pythonpath = match &sdk_python_dir {
+        Some(sdk) => format!("{}{}{}", sdk.to_string_lossy(), pathsep(), apps_dir_str),
+        None => apps_dir_str.clone(),
+    };
+
     let mut command = build_command(manifest.runtime, &entry_abs);
     command
         .env("COS_APP_ID", app_id)
         .env("COS_DATA_DIR", &data_dir)
         .env("COS_APPS_DIR", &apps_dir_str)
-        .env("PYTHONPATH", &apps_dir_str)
+        .env("PYTHONPATH", &pythonpath)
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .env("DEBIAN_FRONTEND", "noninteractive")
         .env("PAGER", "cat")
@@ -320,6 +331,37 @@ fn apps_root() -> PathBuf {
 
 fn data_dir_string() -> String {
     std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into())
+}
+
+/// Locate the directory containing the `claw_os_sdk` Python package.
+///
+/// Honours `COS_SDK_PYTHON_DIR` first, then falls back to the
+/// production install path (`/usr/lib/cos/python`), and finally to
+/// the in-repo dev-checkout path at a fixed offset from
+/// `$COS_APPS_DIR`. Returns the first directory that actually
+/// contains a `claw_os_sdk/` subdirectory.
+fn resolve_sdk_python_dir(apps_dir: &std::path::Path) -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(v) = std::env::var("COS_SDK_PYTHON_DIR") {
+        if !v.is_empty() {
+            candidates.push(PathBuf::from(v));
+        }
+    }
+    candidates.push(PathBuf::from("/usr/lib/cos/python"));
+    if let Some(parent) = apps_dir.parent() {
+        candidates.push(parent.join("claw-os-sdk").join("python").join("src"));
+    }
+    candidates
+        .into_iter()
+        .find(|c| c.join("claw_os_sdk").is_dir())
+}
+
+fn pathsep() -> &'static str {
+    if cfg!(windows) {
+        ";"
+    } else {
+        ":"
+    }
 }
 
 // ---------------------------------------------------------------------------

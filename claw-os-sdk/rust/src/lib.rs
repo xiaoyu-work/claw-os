@@ -1,50 +1,56 @@
-//! Claw OS bridge library — the single seam every desktop GUI uses
-//! to call the system apps.
+//! # claw-os-sdk
 //!
-//! ## Why it exists
+//! Official Rust SDK for [Claw OS](https://github.com/xiaoyu-work/claw-os).
+//! This crate is the typed, language-idiomatic surface every Rust app
+//! (or external integration) uses to talk to the `cos` kernel CLI.
 //!
-//! Claw OS ships two front-ends to the same application backends
-//! under `apps/<name>/main.py`:
+//! See [the SDK README](https://github.com/xiaoyu-work/claw-os/tree/main/claw-os-sdk)
+//! and `wire/v1/README.md` for the protocol specification this crate
+//! implements.
 //!
-//! * The terminal binary `cos`, via `cos app fs read /etc/hosts` etc.
-//! * The desktop apps (`desktop/files`, `desktop/edit`, `desktop/store`,
-//!   …), which were forked from COSMIC.
+//! ## What's in here
 //!
-//! Without this crate the desktop apps would (and did) talk to the
-//! kernel directly — `std::fs::read`, `Command::new("apt")` — bypassing
-//! the capability check, the audit log, and the snapshot/checkpoint
-//! pipeline. `claw_bridge::*` puts every such call through
-//! `cos app <name> <verb>` so the GUI and the terminal share one
-//! enforcement path.
+//! The crate is organised by capability family — each family is a
+//! thin client over one [wire protocol](../../../wire/v1/README.md)
+//! request type:
 //!
-//! ## API shape
+//! | Module        | Wire family | Equivalent CLI                  |
+//! |---------------|-------------|---------------------------------|
+//! | [`ai`]        | `ai`        | `cos ai chat / embed / ...`     |
+//! | [`policy`]    | `perms`     | `cos perms check / grant`       |
+//! | [`tools`]     | `tool`      | `cos ai tool <name> --app <id>` |
+//! | [`fs`]        | `app`       | `cos app fs ...`                |
+//! | [`exec`]      | `app`       | `cos app exec ...`              |
+//! | [`pkg`]       | `app`       | `cos app pkg ...`               |
+//! | [`notify`]    | `app`       | `cos app notify ...`            |
+//! | [`net`]       | `app`       | `cos app net ...`               |
+//! | [`envelope`]  | shared      | the common reply envelope       |
+//! | [`generated`] | shared      | typed structs codegen'd from `wire/v1/*.schema.json` |
 //!
-//! Each module mirrors one of the apps in `apps/`:
+//! Everything except `generated` is hand-written. `generated.rs` is
+//! recomputed by `claw-os-sdk/wire/codegen.py` whenever the schemas
+//! change.
 //!
-//! * [`fs`]      — `apps/fs`
-//! * [`exec`]    — `apps/exec`
-//! * [`pkg`]     — `apps/pkg`
-//! * [`notify`]  — `apps/notify`
-//! * [`net`]     — `apps/net`
+//! ## Transport
 //!
-//! For the small set of verbs we currently use from the desktop, the
-//! module exposes a typed function (`fs::read`, `fs::ls`, …) that
-//! returns deserialised structs. Calls that aren't yet wrapped can
-//! fall back to [`call`] which returns raw JSON.
-//!
-//! ## Resolving the `cos` binary
-//!
-//! By default we spawn the binary named `cos` from `$PATH`. Set
-//! `CLAW_COS_BIN` to override (used by tests + dev setups).
+//! Every call shells out to the `cos` binary on `$PATH`. The
+//! subprocess model is intentional — identity, audit, and session
+//! context come from process ancestry. Set `CLAW_COS_BIN` to override
+//! the resolved binary (used by tests + dev setups).
 //!
 //! ## Performance
 //!
-//! The first cut is subprocess-per-call. A file manager listing a
-//! 5 000-entry directory will pay 5 000 × (~50 ms python boot) which
-//! is not acceptable in the long run. A follow-up commit will add a
-//! warm daemon and an in-process Rust fast path for the read-only
-//! verbs (`fs.ls`, `fs.stat`, `fs.read`). The contract surfaced here
-//! is stable across that migration.
+//! The first cut is subprocess-per-call (~50 ms per call). A wire v2
+//! socket transport will replace this without changing the surface
+//! you see here. See `wire/v2-design.md` for the plan.
+//!
+//! ## History
+//!
+//! This crate is the renamed-and-extended successor to the internal
+//! `claw-bridge` crate that lived under `crates/claw-bridge`. Old call
+//! sites used `use claw_bridge::*` — new code uses `use claw_os_sdk::*`.
+//! There is no compatibility shim — claw-os is pre-1.0 and breaking
+//! changes are allowed.
 
 use std::ffi::OsStr;
 use std::io::Write;
@@ -52,11 +58,16 @@ use std::process::{Command, Stdio};
 
 use serde::de::DeserializeOwned;
 
+pub mod ai;
+pub mod envelope;
 pub mod exec;
 pub mod fs;
+pub mod generated;
 pub mod net;
 pub mod notify;
 pub mod pkg;
+pub mod policy;
+pub mod tools;
 
 /// Errors returned by every bridge call.
 #[derive(Debug, thiserror::Error)]
@@ -112,6 +123,12 @@ impl BridgeError {
         )
     }
 }
+
+/// Idiomatic alias preferred by external SDK consumers. New code
+/// should `use claw_os_sdk::Error;` rather than the historical
+/// `BridgeError` name (kept as an alias to avoid churn inside the
+/// crate's own modules).
+pub type Error = BridgeError;
 
 // ---------------------------------------------------------------------------
 // Raw call — every typed wrapper funnels through here.
@@ -230,6 +247,79 @@ where
         verb: verb.to_string(),
         message: format!("type mismatch ({e}): {v}"),
     })
+}
+
+// ---------------------------------------------------------------------------
+// Raw cos-CLI call — used by ai/policy/tools modules whose request
+// surface lives outside `cos app <id> <verb>`. The `family` and
+// `verb` strings are propagated into [`BridgeError`] for diagnostics.
+// ---------------------------------------------------------------------------
+
+/// Invoke any `cos` sub-command and parse stdout (or stderr fall-back)
+/// as JSON. Used by [`ai`], [`policy`], and [`tools`] for their
+/// `cos ai ...`, `cos perms ...` etc. paths.
+///
+/// `family` and `verb` are surfaced in [`BridgeError`] variants when
+/// the call fails — pass any human-meaningful strings.
+pub(crate) fn cos_call_json<A>(
+    family: &str,
+    verb: &str,
+    args: A,
+) -> Result<serde_json::Value, BridgeError>
+where
+    A: IntoIterator,
+    A::Item: AsRef<OsStr>,
+{
+    let bin = std::env::var("CLAW_COS_BIN").unwrap_or_else(|_| "cos".into());
+    let mut cmd = Command::new(bin);
+    for a in args {
+        cmd.arg(a);
+    }
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    let child = cmd
+        .spawn()
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => BridgeError::BinaryNotFound(e),
+            _ => BridgeError::Io(e),
+        })?;
+
+    let out = child.wait_with_output()?;
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    let candidate = if !stdout.trim().is_empty() {
+        stdout.trim().to_string()
+    } else if !stderr.trim().is_empty() {
+        stderr.trim().to_string()
+    } else {
+        return Err(BridgeError::NonZeroExit {
+            app: family.to_string(),
+            verb: verb.to_string(),
+            status: out.status.code().unwrap_or(-1),
+            stderr,
+        });
+    };
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&candidate).map_err(|e| BridgeError::Decode {
+            app: family.to_string(),
+            verb: verb.to_string(),
+            message: format!("not JSON ({e}): {candidate}"),
+        })?;
+
+    if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
+        return Err(BridgeError::AppError {
+            app: family.to_string(),
+            verb: verb.to_string(),
+            message: err.to_string(),
+            code: parsed
+                .get("code")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+        });
+    }
+
+    Ok(parsed)
 }
 
 #[cfg(test)]
