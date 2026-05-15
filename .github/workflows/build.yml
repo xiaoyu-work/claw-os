@@ -52,23 +52,39 @@ jobs:
       - name: Run cos-browser tests
         run: cargo test -p cos-browser
 
+  # Single rootfs, multiple distribution channels.
+  #
+  # The rootfs is built once with the feature set shared by the Docker image
+  # and the WSL tarball (`base,cos-core,browser,systemd,apt-source`). Down-
+  # stream steps in this job then package that one rootfs into:
+  #   - 4 Docker images (base + openclaw + deerflow + ironclaw) → GHCR
+  #   - 1 WSL tarball                                            → GitHub Release
+  #   - .deb packages + apt repo                                 → GH Pages
+  #
+  # Previously this work was split between `build` (Docker + .deb) and a
+  # separate `release-wsl` job that re-debootstrapped and re-built the cos
+  # binaries. That duplicated ~15min of CI work and meant the two channels
+  # could drift if the feature lists fell out of sync. Consolidating means
+  # the WSL artifact now requires `test` to pass (acceptable trade-off).
   build:
     needs: test
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      packages: write
+      contents: write  # WSL release publishing
+      packages: write  # Docker push to GHCR
 
     steps:
       - uses: actions/checkout@v5
 
-      # Install Rust for building cos (musl, static) and cos-browser (gnu, V8 needs glibc)
+      # cos (musl, static) and cos-browser (gnu, V8 needs glibc).
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-musl,x86_64-unknown-linux-gnu
 
-      - name: Install musl tools
-        run: sudo apt-get update -qq && sudo apt-get install -y musl-tools
+      - name: Install host build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y musl-tools debootstrap
 
       - name: Cache cargo registry & target
         uses: actions/cache@v4
@@ -90,12 +106,10 @@ jobs:
       - name: Build cos-agent-bridge binary (musl)
         run: cd desktop/agent && cargo build --release -p cos-agent-bridge --target x86_64-unknown-linux-musl
 
-      # Build the rootfs from scratch using debootstrap
-      - name: Install debootstrap
-        run: sudo apt-get update -qq && sudo apt-get install -y debootstrap
-
-      - name: Build rootfs
-        run: sudo ./rootfs/build.sh
+      # Build the rootfs ONCE with the WSL feature set. The Docker image and
+      # WSL tarball both consume this same tree.
+      - name: Build rootfs (shared with Docker + WSL)
+        run: sudo ./rootfs/build.sh --features base,cos-core,browser,systemd,apt-source
 
       - name: Fix rootfs permissions for Docker build
         run: sudo chmod -R a+rX build/claw-os-rootfs
@@ -120,6 +134,27 @@ jobs:
         uses: actions/upload-pages-artifact@v3
         with:
           path: build/apt-repo
+
+      # Docker-specific prep on the shared rootfs:
+      #   - Add the default `cos` user (uid 1000, NOPASSWD sudo).
+      #   - Pre-create /var/lib/cos/overlay/{base,upper,work} chowned to cos
+      #     so cos-init (PID 1) can run as non-root inside the container.
+      # Both steps are idempotent; targets/wsl/build.sh below re-runs the
+      # user add as a no-op when it sees the user already exists.
+      - name: Prep rootfs for Docker (cos user + overlay scratch dirs)
+        run: |
+          sudo bash -c '
+            set -euo pipefail
+            export ROOTFS="$PWD/build/claw-os-rootfs"
+            export PROJECT_DIR="$PWD"
+            source "$PROJECT_DIR/scripts/lib/add-cos-user.sh"
+            add_cos_user "$ROOTFS"
+            chroot "$ROOTFS" /bin/bash -c "
+              set -e
+              mkdir -p /var/lib/cos/overlay/base /var/lib/cos/overlay/upper /var/lib/cos/overlay/work
+              chown -R cos:cos /var/lib/cos/overlay
+            "
+          '
 
       # Docker build (FROM scratch — no base image)
       - name: Set up Docker Buildx
@@ -213,54 +248,11 @@ jobs:
           tags: ${{ steps.meta-ironclaw.outputs.tags }}
           labels: ${{ steps.meta-ironclaw.outputs.labels }}
 
-  # Build the WSL2 importable rootfs tarball and publish it as both a
-  # workflow artifact (every run) and a GitHub Release asset:
-  #   - push to main          → rolling pre-release tagged `wsl-latest`
-  #   - push of a `v*` tag    → versioned release tagged with that tag
-  # Pull requests still get the artifact for inspection but no release.
-  #
-  # Intentionally does NOT `needs: test` — we want the WSL artifact to be
-  # produced even while unrelated tests are red, since the artifact value
-  # (a bootable rootfs) is independent of test status.
-  release-wsl:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write  # needed to create/update GitHub Releases
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-musl,x86_64-unknown-linux-gnu
-
-      - name: Install host build tools
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y musl-tools debootstrap
-
-      - name: Cache cargo registry & target
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-wsl-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-build-
-            ${{ runner.os }}-cargo-wsl-
-
-      - name: Build cos binary (musl)
-        run: cargo build --release -p cos --target x86_64-unknown-linux-musl
-
-      - name: Build cos-browser binary (gnu)
-        run: cargo build --release -p cos-browser --target x86_64-unknown-linux-gnu
-
-      - name: Build cos-agent-bridge binary (musl)
-        run: cd desktop/agent && cargo build --release -p cos-agent-bridge --target x86_64-unknown-linux-musl
-
-      - name: Build WSL rootfs tarball
-        run: sudo ./build.sh wsl
+      # WSL packaging — same rootfs we just shipped to Docker, plus the
+      # WSL-specific overlay (/etc/wsl.conf). targets/wsl/build.sh detects
+      # the existing rootfs and skips the rootfs rebuild.
+      - name: Package WSL rootfs tarball
+        run: sudo ./targets/wsl/build.sh
 
       - name: Fix build/ ownership for non-sudo steps
         run: sudo chown -R "$(id -u):$(id -g)" build

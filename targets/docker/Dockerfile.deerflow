@@ -1,5 +1,7 @@
 FROM ghcr.io/xiaoyu-work/claw-os:latest
 
+USER root
+
 # DeerFlow requires Python 3.12+ (Debian Bookworm ships 3.11)
 RUN apt-get update -qq \
     && apt-get install -y --no-install-recommends \
@@ -15,15 +17,18 @@ RUN apt-get update -qq \
 RUN pip3 install --break-system-packages uv \
     && npm install -g pnpm
 
-# Install DeerFlow
+# Install DeerFlow. /opt/deer-flow is owned by cos so the runtime can write
+# (npm/uv caches, build outputs, etc.) without root.
 RUN git clone --depth 1 https://github.com/bytedance/deer-flow.git /opt/deer-flow \
     && cd /opt/deer-flow/backend && uv sync \
-    && cd /opt/deer-flow/frontend && pnpm install && pnpm build
+    && cd /opt/deer-flow/frontend && pnpm install && pnpm build \
+    && chown -R cos:cos /opt/deer-flow
 
 # Copy Claw OS skill into DeerFlow's custom skills
-COPY skills/claw-os /opt/deer-flow/skills/custom/claw-os
+COPY --chown=cos:cos skills/claw-os /opt/deer-flow/skills/custom/claw-os
 
 WORKDIR /opt/deer-flow
+USER cos
 
 ENTRYPOINT ["/usr/local/bin/cos-init"]
 CMD ["make", "start"]

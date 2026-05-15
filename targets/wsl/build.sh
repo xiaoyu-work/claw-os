@@ -24,6 +24,7 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ROOTFS="$PROJECT_DIR/build/claw-os-rootfs"
 
 source "$PROJECT_DIR/scripts/lib/arch.sh"
+source "$PROJECT_DIR/scripts/lib/add-cos-user.sh"
 
 OUTPUT="$PROJECT_DIR/build/claw-os-wsl-${ARCH_SUFFIX}.tar.gz"
 
@@ -32,10 +33,18 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-# 1. Build the rootfs with the WSL feature set.
+# 1. Build the rootfs with the WSL feature set (if not already present).
 #    apt-source pre-configures the Claw OS apt repo so users can later run
 #    `sudo apt update && sudo apt upgrade` to pull newer claw-os-* packages.
-"$PROJECT_DIR/rootfs/build.sh" --features base,cos-core,browser,systemd,apt-source
+#    This same feature set is shared with the Docker target so the WSL
+#    tarball and the Docker image expose an identical terminal-version
+#    surface; CI exploits this to build the rootfs once and run both target
+#    scripts against it (the second invocation sees the rootfs and skips).
+if [ ! -d "$ROOTFS" ]; then
+    "$PROJECT_DIR/rootfs/build.sh" --features base,cos-core,browser,systemd,apt-source
+else
+    echo ":: using existing rootfs at $ROOTFS"
+fi
 
 # 2. Apply WSL-specific overlay (wsl.conf, etc.).
 if [ -d "$SCRIPT_DIR/overlay" ]; then
@@ -45,20 +54,10 @@ fi
 
 # 3. Create the default 'cos' user.
 #    UID 1000 is conventional for the first non-system user; matches the
-#    'default=cos' line in /etc/wsl.conf.
+#    'default=cos' line in /etc/wsl.conf. Shared with the VM and Docker
+#    targets via scripts/lib/add-cos-user.sh.
 echo ":: creating default 'cos' user"
-chroot "$ROOTFS" /bin/bash -c '
-    set -e
-    if ! id cos >/dev/null 2>&1; then
-        useradd -m -u 1000 -s /bin/bash -G sudo cos
-        # Passwordless sudo. WSL has no install-time password prompt, so
-        # this is the standard convention. Users can tighten later via
-        # `sudo passwd cos` and editing /etc/sudoers.d/cos.
-        mkdir -p /etc/sudoers.d
-        echo "cos ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/cos
-        chmod 0440 /etc/sudoers.d/cos
-    fi
-'
+add_cos_user "$ROOTFS"
 
 # 4. Tar up the rootfs. /proc, /sys and /dev are populated by WSL at boot;
 #    excluding them keeps the tarball smaller and avoids permission issues.
