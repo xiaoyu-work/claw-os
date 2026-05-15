@@ -222,6 +222,8 @@ pub fn context_menu<'a>(
                     if selected_dir == 0 {
                         children
                             .push(menu_item(fl!("ai-summarize"), Action::AiSummarize).into());
+                        children
+                            .push(menu_item(fl!("ai-explain"), Action::AiExplain).into());
                     }
                     if selected_dir == 1 {
                         children

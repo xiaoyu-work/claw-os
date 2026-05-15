@@ -452,3 +452,9 @@ ai-summarize = AI 摘要
 ai-summary-title = AI 摘要 — {$name}
 ai-summarizing = 正在让 AI 总结这个文件…
 ai-summary-error = AI 无法总结这个文件。
+
+## AI 讲解
+ai-explain = AI 讲解
+ai-explain-title = AI 讲解 — {$name}
+ai-explaining = 正在让 AI 讲解这个文件…
+ai-explain-error = AI 无法讲解这个文件。
