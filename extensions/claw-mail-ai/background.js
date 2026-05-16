@@ -19,8 +19,11 @@
 //   - browser.menus                 (context):      Summarize / Translate / Smart Reply
 //   - browser.messages.onNewMailReceived           : optional auto-triage
 //   - browser.runtime.onMessage                    : popup → background bridge
-
-importScripts("lib/native.js");
+//
+// `lib/native.js` is loaded by the manifest (background.scripts) *before*
+// this file so the global ClawNative namespace is already available. We
+// can no longer use importScripts() here because Thunderbird's MV3
+// background is an event page, not a service worker.
 
 const ASSISTANT_SPACE_NAME = "claw_assistant";
 const ASSISTANT_PAGE = browser.runtime.getURL("ui/spaces/assistant.html");
@@ -306,21 +309,33 @@ function extractPlainText(part) {
 }
 
 function stripHtml(s) {
-  return s
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/p>/gi, "\n\n")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  if (!s) return "";
+  // Use DOMParser — handles every HTML entity (named, numeric, hex) and
+  // structural collapsing correctly. The regex-based stripper we used to
+  // ship missed entities like &mdash;, &rsquo;, &#8211;, &#x27;, etc.
+  try {
+    const doc = new DOMParser().parseFromString(s, "text/html");
+    // Drop script/style/template content entirely.
+    for (const el of doc.querySelectorAll("script,style,noscript,template")) {
+      el.remove();
+    }
+    // Promote <br> and block-end markers to plain newlines so the result
+    // looks like the message was authored as plain text.
+    for (const br of doc.querySelectorAll("br")) {
+      br.replaceWith("\n");
+    }
+    for (const p of doc.querySelectorAll("p,div,li,tr")) {
+      p.appendChild(doc.createTextNode("\n"));
+    }
+    const text = (doc.body?.textContent || "").replace(/\r\n?/g, "\n");
+    return text
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  } catch (_) {
+    // Fallback: never throw out of a triage codepath.
+    return s.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  }
 }
 
 function hasRealAttachments(part) {
@@ -440,6 +455,8 @@ browser.runtime.onMessage.addListener((msg, _sender) => {
 });
 
 async function getThreadText(messageId) {
+  const MAX_THREAD_MESSAGES = 50;
+  const FETCH_CONCURRENCY = 8;
   try {
     const header = await browser.messages.get(messageId);
     let thread;
@@ -448,26 +465,49 @@ async function getThreadText(messageId) {
     } catch (_) {
       thread = { messages: [header] };
     }
-    const messages = (thread?.messages || [header]).sort(
+    let messages = (thread?.messages || [header]).sort(
       (a, b) => new Date(a.date) - new Date(b.date)
     );
-
-    const blocks = [];
-    for (const m of messages) {
-      try {
-        const full = await browser.messages.getFull(m.id);
-        const body = extractPlainText(full);
-        blocks.push(
-          `From: ${m.author || "(unknown)"}\n` +
-          `Date: ${m.date?.toISOString?.() || m.date || ""}\n` +
-          `Subject: ${m.subject || ""}\n\n${body}`
-        );
-      } catch (_) { /* skip */ }
+    let truncated = false;
+    if (messages.length > MAX_THREAD_MESSAGES) {
+      truncated = true;
+      // Prefer the most recent messages — the head of long threads is
+      // usually less useful for replies/summaries than the tail.
+      messages = messages.slice(messages.length - MAX_THREAD_MESSAGES);
     }
+
+    // Bounded-concurrency parallel fetch. Preserve original ordering.
+    const fetched = new Array(messages.length);
+    let next = 0;
+    async function worker() {
+      while (true) {
+        const i = next++;
+        if (i >= messages.length) return;
+        const m = messages[i];
+        try {
+          const full = await browser.messages.getFull(m.id);
+          const body = extractPlainText(full);
+          fetched[i] =
+            `From: ${m.author || "(unknown)"}\n` +
+            `Date: ${m.date?.toISOString?.() || m.date || ""}\n` +
+            `Subject: ${m.subject || ""}\n\n${body}`;
+        } catch (_) {
+          fetched[i] = null;
+        }
+      }
+    }
+    const workers = [];
+    for (let w = 0; w < Math.min(FETCH_CONCURRENCY, messages.length); w++) {
+      workers.push(worker());
+    }
+    await Promise.all(workers);
+    const blocks = fetched.filter((b) => b != null);
     return {
       subject: header.subject || "",
       lastFrom: messages[messages.length - 1]?.author || "",
       text: blocks.join("\n\n--- next message ---\n\n"),
+      truncated,
+      message_count: messages.length,
     };
   } catch (e) {
     return { error: String(e) };

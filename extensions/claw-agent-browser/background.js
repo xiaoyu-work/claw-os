@@ -13,9 +13,19 @@
 
 const HOST_NAME = "com.clawos.browser";
 const RECONNECT_BACKOFF_MS = [500, 1000, 2000, 5000, 10000];
+// A connection is considered "stable" — and the backoff index reset — only
+// after STABLE_MS without a disconnect, OR after at least one successful
+// message round-trip. This stops a retry storm when the host accepts the
+// connectNative handshake but then immediately drops us.
+const STABLE_MS = 5000;
+// Defense-in-depth limits for the `eval` verb (see HANDLERS["eval"]).
+const EVAL_MAX_BYTES = 64 * 1024;
+const EVAL_FORBIDDEN = /\bimport\s*\(|\bchrome\.|\bbrowser\.|__proto__/;
 
 let port = null;
 let reconnectIdx = 0;
+let stableTimer = null;
+let seenRoundTrip = false;
 let state = "idle"; // idle | acting | waiting-approval | error
 let acting_tab_id = null;
 
@@ -43,12 +53,21 @@ function connect() {
     scheduleReconnect();
     return;
   }
-  reconnectIdx = 0;
+  // Do NOT reset reconnectIdx here — the host may disconnect immediately
+  // after the handshake, which would otherwise cause a 500 ms retry storm.
+  // Reset only after a stable interval or a successful round-trip.
+  seenRoundTrip = false;
+  if (stableTimer) clearTimeout(stableTimer);
+  stableTimer = setTimeout(() => {
+    if (port) reconnectIdx = 0;
+    stableTimer = null;
+  }, STABLE_MS);
   port.onMessage.addListener(onHostMessage);
   port.onDisconnect.addListener(() => {
     const err = chrome.runtime.lastError;
     console.warn("[claw-agent] host disconnected:", err && err.message);
     port = null;
+    if (stableTimer) { clearTimeout(stableTimer); stableTimer = null; }
     setState("error");
     scheduleReconnect();
   });
@@ -81,6 +100,13 @@ async function onHostMessage(msg) {
     reply(id, false, null, e && e.message ? e.message : String(e));
   } finally {
     setState("idle");
+    // First successful (or even handled-with-error) round-trip from the
+    // host means the channel is functioning. Reset reconnect backoff so
+    // the *next* disconnect starts from the shortest delay again.
+    if (!seenRoundTrip) {
+      seenRoundTrip = true;
+      reconnectIdx = 0;
+    }
   }
 }
 
@@ -101,10 +127,13 @@ function reply(id, ok, result, error) {
 // ---------------------------------------------------------------------------
 
 const HANDLERS = {
-  "tabs.list": async () => {
+  "tabs.list": async ({ include_incognito } = {}) => {
     const tabs = await chrome.tabs.query({});
+    const filtered = include_incognito
+      ? tabs
+      : tabs.filter((t) => !t.incognito);
     return {
-      tabs: tabs.map((t) => ({
+      tabs: filtered.map((t) => ({
         id: t.id,
         windowId: t.windowId,
         title: t.title || "",
@@ -112,6 +141,7 @@ const HANDLERS = {
         active: !!t.active,
         audible: !!t.audible,
         pinned: !!t.pinned,
+        incognito: !!t.incognito,
       })),
     };
   },
@@ -178,7 +208,33 @@ const HANDLERS = {
     return { png_base64: b64 };
   },
 
-  "eval": async ({ id, expr }) => {
+  "eval": async ({ id, expr, allow_eval }) => {
+    // Defense in depth: even if the host is trusted, refuse to evaluate
+    // arbitrary JS unless the caller explicitly opts in *and* the code
+    // passes a few sanity filters. The actual evaluation still runs in
+    // the page's MAIN world via chrome.scripting.executeScript, which
+    // is already process-isolated from the extension.
+    if (!allow_eval) {
+      throw new Error(
+        "eval requires { allow_eval: true } cap — the caller must " +
+        "explicitly opt in (see browser-agent --allow-eval policy)."
+      );
+    }
+    if (typeof expr !== "string") {
+      throw new Error("eval: expr must be a string");
+    }
+    // UTF-8 byte length (not character count) so the limit is meaningful.
+    const byteLen = new TextEncoder().encode(expr).length;
+    if (byteLen > EVAL_MAX_BYTES) {
+      throw new Error(
+        `eval: expr too large (${byteLen} bytes > ${EVAL_MAX_BYTES})`
+      );
+    }
+    if (EVAL_FORBIDDEN.test(expr)) {
+      throw new Error(
+        "eval: expr contains forbidden token (import(, chrome., browser., __proto__)"
+      );
+    }
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId: id },
       world: "MAIN",

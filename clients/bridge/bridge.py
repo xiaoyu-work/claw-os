@@ -61,15 +61,37 @@ class Executor:
             parts = parts[1:]
 
         if self.container_id:
-            cmd = ["docker", "exec", self.container_id, "cos"] + parts
+            # Build an explicit, minimal env for the container side via
+            # `docker exec -e KEY=VALUE`. Inheriting the host's full
+            # environment used to leak credentials (AWS_*, GH_TOKEN,
+            # ANTHROPIC_API_KEY, ...) into the container.
+            docker_env_args = []
+            if self.apps_dir:
+                docker_env_args += ["-e", f"COS_APPS_DIR={self.apps_dir}"]
+            if self.data_dir:
+                docker_env_args += ["-e", f"COS_DATA_DIR={self.data_dir}"]
+            cmd = ["docker", "exec"] + docker_env_args + [self.container_id, "cos"] + parts
+            # Run `docker exec` itself with a minimal env — just enough
+            # for the client to find the docker CLI and talk to the
+            # daemon. We deliberately do NOT copy os.environ.
+            env = {
+                "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                "HOME": os.environ.get("HOME", "/"),
+            }
+            for k in ("DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH"):
+                if k in os.environ:
+                    env[k] = os.environ[k]
         else:
             cmd = [self._cos_path()] + parts
-
-        env = os.environ.copy()
-        if self.apps_dir:
-            env["COS_APPS_DIR"] = self.apps_dir
-        if self.data_dir:
-            env["COS_DATA_DIR"] = self.data_dir
+            # Local mode runs in this process's user context, so it's
+            # safe to inherit env — but only pass through the cos-
+            # specific knobs explicitly (the rest of the parent env is
+            # already visible to the child process by default).
+            env = os.environ.copy()
+            if self.apps_dir:
+                env["COS_APPS_DIR"] = self.apps_dir
+            if self.data_dir:
+                env["COS_DATA_DIR"] = self.data_dir
 
         try:
             result = subprocess.run(
@@ -100,17 +122,23 @@ class Executor:
 # Command extraction — pull ``$ cos …`` lines from LLM text
 # ---------------------------------------------------------------------------
 
-def extract_commands(text):
+def extract_commands(text, max_commands=1024):
     """Return command strings found in the LLM's output.
 
     Only lines that begin with ``$ `` are treated as commands.
     The ``$ `` prefix is stripped before returning.
+
+    ``max_commands`` is a hard cap: a response that emits more than
+    this many ``$`` lines is truncated so a hallucinating model can't
+    run thousands of commands in a single turn.
     """
     commands = []
     for line in text.splitlines():
         stripped = line.strip()
         if stripped.startswith("$ "):
             commands.append(stripped[2:])
+            if len(commands) >= max_commands:
+                break
     return commands
 
 
@@ -151,6 +179,14 @@ def run_agent(model="claude-sonnet-4-6", container_id=None, system_prompt=None):
     messages = []
     print("Claw OS — Type your request (Ctrl+C to exit)\n")
 
+    # Hard ceiling on how many command-extract / re-prompt round-trips
+    # a single user turn may trigger. Without this an LLM that emits
+    # one ``$`` line every response will spin forever.
+    MAX_INNER_ITERATIONS = 1024
+    # Per-response cap on extracted commands (defense-in-depth: even
+    # one response shouldn't spawn an unbounded subprocess fan-out).
+    MAX_COMMANDS_PER_RESPONSE = 1024
+
     while True:
         try:
             user_input = input("you> ").strip()
@@ -163,7 +199,7 @@ def run_agent(model="claude-sonnet-4-6", container_id=None, system_prompt=None):
         messages.append({"role": "user", "content": user_input})
 
         # Keep looping until the LLM stops issuing commands.
-        while True:
+        for iteration in range(MAX_INNER_ITERATIONS):
             response = client.messages.create(
                 model=model,
                 max_tokens=4096,
@@ -177,7 +213,9 @@ def run_agent(model="claude-sonnet-4-6", container_id=None, system_prompt=None):
             )
             messages.append({"role": "assistant", "content": assistant_text})
 
-            commands = extract_commands(assistant_text)
+            commands = extract_commands(
+                assistant_text, max_commands=MAX_COMMANDS_PER_RESPONSE
+            )
             if not commands:
                 # No commands — print the final response and wait for
                 # the next human message.
@@ -194,6 +232,12 @@ def run_agent(model="claude-sonnet-4-6", container_id=None, system_prompt=None):
             # Feed the results back as a follow-up user message so the
             # LLM can inspect them and decide what to do next.
             messages.append({"role": "user", "content": format_results(results)})
+        else:
+            # Loop exhausted without a command-free response.
+            print(
+                f"\nagent> (stopped: inner loop hit "
+                f"{MAX_INNER_ITERATIONS}-iteration cap)\n"
+            )
 
 
 # ---------------------------------------------------------------------------

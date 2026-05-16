@@ -5,7 +5,8 @@
 // host, or { ok:false, error } on any failure (host disconnected, timeout,
 // host crashed). The port auto-reconnects with capped exponential backoff.
 //
-// This module is loaded into the background event page via importScripts
+// This module is loaded into the background event page via the
+// `background.scripts` manifest list (it runs *before* background.js)
 // and intentionally exposes a single namespace `ClawNative`.
 
 (function () {
@@ -13,6 +14,11 @@
 
   const RECONNECT_BACKOFF_MS = [500, 1000, 2000, 5000, 10000, 30000];
   const REQUEST_TIMEOUT_MS = 90_000;
+  // Connection is "stable" — and the backoff index reset — only after
+  // STABLE_MS of uptime OR after the first successful response. Without
+  // this guard, a host that accepts the handshake then dies immediately
+  // would cause a retry storm at the 500 ms floor.
+  const STABLE_MS = 5_000;
 
   const pending = new Map();           // id → { resolve, reject, timer }
   let port = null;
@@ -20,6 +26,8 @@
   let hostName = null;
   let listeners = new Set();           // status listeners: ({status,error?}) ⇒ void
   let lastStatus = { status: "idle" };
+  let stableTimer = null;
+  let seenRoundTrip = false;
 
   function uuid() {
     // Service worker-safe; crypto.randomUUID is widely available.
@@ -44,7 +52,16 @@
       scheduleReconnect();
       return;
     }
-    reconnectIdx = 0;
+    // Do NOT reset reconnectIdx synchronously here — a host that
+    // accepts the handshake then drops us immediately would otherwise
+    // be hammered at the shortest backoff. Reset only after STABLE_MS
+    // or after a successful round-trip (see onMessage below).
+    seenRoundTrip = false;
+    if (stableTimer) clearTimeout(stableTimer);
+    stableTimer = setTimeout(() => {
+      if (port) reconnectIdx = 0;
+      stableTimer = null;
+    }, STABLE_MS);
     fireStatus({ status: "connected" });
 
     port.onMessage.addListener(onMessage);
@@ -53,6 +70,7 @@
       const msg = err?.message || "host disconnected";
       console.warn("[claw-mail-ai] NM port disconnected:", msg);
       port = null;
+      if (stableTimer) { clearTimeout(stableTimer); stableTimer = null; }
       // Fail every in-flight request.
       for (const [id, entry] of pending.entries()) {
         clearTimeout(entry.timer);
@@ -81,6 +99,13 @@
     if (!entry) return;
     clearTimeout(entry.timer);
     pending.delete(id);
+    // First completed round-trip ⇒ channel is healthy; reset the
+    // reconnect backoff so the *next* disconnect starts at the
+    // shortest delay again.
+    if (!seenRoundTrip) {
+      seenRoundTrip = true;
+      reconnectIdx = 0;
+    }
     entry.resolve(msg);
   }
 

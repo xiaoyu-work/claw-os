@@ -78,16 +78,19 @@ cp -a "${APP_SRC}/." "${APP_DEST}/"
 rm -f "${APP_DEST}/test_main.py"     # don't ship tests
 chmod 0755 "${APP_DEST}/native_host.py"
 
-if [[ ! -d "${SDK_DEST}" ]]; then
-  echo "[claw-mail-ai] installing claw-os-sdk → ${SDK_DEST}"
-  install -d -m 0755 "${SDK_DEST}"
-  cp -a "${SDK_PY_SRC}/." "${SDK_DEST}/"
-fi
-if [[ ! -d "${RUNTIME_DEST}" ]]; then
-  echo "[claw-mail-ai] installing cos-runtime → ${RUNTIME_DEST}"
-  install -d -m 0755 "${RUNTIME_DEST}"
-  cp -a "${RUNTIME_PY_SRC}/." "${RUNTIME_DEST}/"
-fi
+# Always refresh the SDK/runtime trees so re-runs propagate fixes. The
+# previous `[[ ! -d "${SDK_DEST}" ]]` guard meant the first install
+# pinned a snapshot of the SDK forever and subsequent script runs
+# silently shipped stale code.
+echo "[claw-mail-ai] installing claw-os-sdk → ${SDK_DEST}"
+install -d -m 0755 "${SDK_DEST}"
+cp -af "${SDK_PY_SRC}/." "${SDK_DEST}/"
+chmod -R a+rX "${SDK_DEST}"
+
+echo "[claw-mail-ai] installing cos-runtime → ${RUNTIME_DEST}"
+install -d -m 0755 "${RUNTIME_DEST}"
+cp -af "${RUNTIME_PY_SRC}/." "${RUNTIME_DEST}/"
+chmod -R a+rX "${RUNTIME_DEST}"
 
 # ---------------------------------------------------------------------------
 # 4. Native Messaging launcher + manifest.
@@ -117,10 +120,16 @@ chmod 0644 "${NM_MANIFEST}"
 
 # ---------------------------------------------------------------------------
 # 5. Thunderbird policy — force-install the extension.
+#
+# We MERGE into any existing policies.json instead of clobbering it. The
+# previous behavior overwrote site-admin or distro-supplied policy keys
+# (DownloadDirectory, AppUpdateURL, …) every time the script ran. Now we
+# read what's there, layer our keys on top, and write the union.
 # ---------------------------------------------------------------------------
 echo "[claw-mail-ai] installing policy      → ${POLICY_FILE}"
 install -d -m 0755 "$(dirname "${POLICY_FILE}")"
-cat > "${POLICY_FILE}" <<EOF
+
+OUR_POLICY=$(cat <<EOF
 {
   "policies": {
     "ExtensionSettings": {
@@ -136,6 +145,46 @@ cat > "${POLICY_FILE}" <<EOF
   }
 }
 EOF
+)
+
+merge_policy() {
+  local existing="$1"
+  local ours="$2"
+  if command -v jq >/dev/null 2>&1; then
+    # Deep-merge: ours wins on collisions, but keys we don't touch
+    # (e.g. existing site policies) are preserved.
+    jq -s '.[0] * .[1]' <(printf '%s' "$existing") <(printf '%s' "$ours")
+  else
+    /usr/bin/env python3 - "$existing" "$ours" <<'PY'
+import json, sys
+def deep_merge(a, b):
+    if isinstance(a, dict) and isinstance(b, dict):
+        out = dict(a)
+        for k, v in b.items():
+            out[k] = deep_merge(a.get(k), v) if k in a else v
+        return out
+    return b
+existing = json.loads(sys.argv[1]) if sys.argv[1].strip() else {}
+ours = json.loads(sys.argv[2])
+print(json.dumps(deep_merge(existing, ours), indent=2))
+PY
+  fi
+}
+
+EXISTING_POLICY="{}"
+if [[ -f "${POLICY_FILE}" ]]; then
+  # If the file is unparseable, back it up and start from {} — we never
+  # want a broken policies.json to brick Thunderbird on the next launch.
+  if /usr/bin/env python3 -c "import json,sys; json.load(open(sys.argv[1]))" "${POLICY_FILE}" 2>/dev/null; then
+    EXISTING_POLICY="$(cat "${POLICY_FILE}")"
+  else
+    echo "warning: ${POLICY_FILE} is not valid JSON — backing up to ${POLICY_FILE}.bak" >&2
+    cp -a "${POLICY_FILE}" "${POLICY_FILE}.bak"
+  fi
+fi
+
+MERGED_POLICY="$(merge_policy "${EXISTING_POLICY}" "${OUR_POLICY}")"
+printf '%s\n' "${MERGED_POLICY}" > "${POLICY_FILE}"
 chmod 0644 "${POLICY_FILE}"
 
 cat <<MSG
