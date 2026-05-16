@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ClawOS Agent — symbolic launcher icon.
+
+  The trailing "-symbolic" suffix in the filename signals to libcosmic /
+  GTK that every fill in this SVG should be re-tinted to the current
+  theme foreground colour at render time (see
+  desktop/applibrary/src/icon_cache.rs `symbolic($name.ends_with("-symbolic"))`).
+
+  This is what lets the same icon appear dark on a light panel and light
+  on a dark panel without us shipping two raster variants.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <g fill="#232323" stroke="#232323" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Three diagonal "claw" strokes, descending in length L→R, leaning right. -->
+    <line x1="22"   y1="9"  x2="13"   y2="56" stroke-width="6.5" />
+    <line x1="35.5" y1="20" x2="29"   y2="56" stroke-width="6"   />
+    <line x1="47.5" y1="32" x2="43.5" y2="56" stroke-width="5.5" />
+    <!-- Accent dot below / right of the third claw. -->
+    <circle cx="55" cy="56" r="3.5" stroke="none" />
+  </g>
+</svg>
