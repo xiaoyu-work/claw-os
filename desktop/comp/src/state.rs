@@ -3,7 +3,7 @@
 use crate::{
     backend::{
         kms::{KmsGuard, KmsState},
-        render::{GlMultiError, RendererRef},
+        render::{GlMultiError, RendererRef, blur::BlurStates},
         winit::WinitState,
         x11::X11State,
     },
@@ -294,6 +294,11 @@ pub struct Common {
     pub xwayland_state: Option<XWaylandState>,
     pub xwayland_shell_state: XWaylandShellState,
     pub pointer_focus_state: Option<PointerFocusState>,
+
+    /// Per-output dual-Kawase blur scratch space.
+    /// Empty unless `config.appearance.experimental_blur` is set; lazily
+    /// allocated on first frame that hits a blur region.
+    pub blur_states: BlurStates,
 
     #[cfg(feature = "systemd")]
     pub inhibit_lid_fd: Option<OwnedFd>,
@@ -802,6 +807,8 @@ impl State {
                 xwayland_state: None,
                 xwayland_shell_state,
                 pointer_focus_state: None,
+
+                blur_states: BlurStates::default(),
 
                 #[cfg(feature = "systemd")]
                 inhibit_lid_fd: None,

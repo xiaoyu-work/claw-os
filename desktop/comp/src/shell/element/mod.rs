@@ -48,6 +48,7 @@ use std::{
 pub mod surface;
 use self::stack::MoveResult;
 pub use self::surface::CosmicSurface;
+pub mod animation;
 pub mod stack;
 pub use self::stack::CosmicStack;
 pub mod window;
@@ -104,6 +105,13 @@ pub struct CosmicMapped {
     pub floating_tiled: Arc<Mutex<Option<TiledCorners>>>,
     //sticky
     pub previous_layer: Arc<Mutex<Option<ManagedLayer>>>,
+
+    /// One-shot scale+alpha animation currently playing on this
+    /// window (open animation today; close animation reserved).
+    /// `None` once the spring has come to rest. Driven by
+    /// `Shell::update_animations` / consumed by the render path.
+    /// Gated behind `AppearanceConfig::experimental_window_animations`.
+    pub window_animation: Arc<Mutex<Option<animation::WindowAnimation>>>,
 
     #[cfg(feature = "debug")]
     debug: Arc<Mutex<Option<smithay_egui::EguiState>>>,
@@ -179,6 +187,49 @@ impl Hash for CosmicMapped {
 }
 
 impl CosmicMapped {
+    /// Begin the OPEN spring animation if `enable` is true and there
+    /// isn't already an animation in flight. Idempotent.
+    ///
+    /// Call this from `Shell::map_window` after the surface is in the
+    /// space layer. The renderer picks the animation state up on the
+    /// next frame via [`Self::current_animation`].
+    pub fn start_open_animation(&self, enable: bool) {
+        if !enable {
+            return;
+        }
+        let mut slot = self.window_animation.lock().unwrap();
+        if slot.is_some() {
+            return;
+        }
+        *slot = Some(animation::WindowAnimation::open(std::time::Instant::now()));
+    }
+
+    /// Returns `Some` if an open/close animation is currently driving
+    /// this window's render. Clears the slot once the animation has
+    /// reached its rest position so subsequent frames skip the
+    /// rescale + alpha multiplication entirely.
+    pub fn current_animation(&self) -> Option<animation::WindowAnimation> {
+        let mut slot = self.window_animation.lock().unwrap();
+        let now = std::time::Instant::now();
+        if let Some(anim) = *slot {
+            if anim.is_done(now) {
+                *slot = None;
+                return None;
+            }
+            return Some(anim);
+        }
+        None
+    }
+
+    /// True if any animation is currently in flight on this window.
+    /// Used by the render loop to schedule another frame.
+    pub fn has_running_animation(&self) -> bool {
+        let slot = self.window_animation.lock().unwrap();
+        slot.as_ref()
+            .map(|a| !a.is_done(std::time::Instant::now()))
+            .unwrap_or(false)
+    }
+
     pub fn windows(&self) -> impl Iterator<Item = (CosmicSurface, Point<i32, Logical>)> + '_ {
         match &self.element {
             CosmicMappedInternal::Stack(stack) => {
@@ -659,6 +710,20 @@ impl CosmicMapped {
         CosmicMappedRenderElement<R>: RenderElement<R>,
         C: From<CosmicMappedRenderElement<R>>,
     {
+        // If a window open / close spring is currently driving this
+        // window, fold its alpha multiplier into the incoming alpha
+        // so the rest of the pipeline doesn't need to know about
+        // animation state. (Scale is intentionally NOT applied here
+        // — see `animation.rs` for the surface-lifetime concern that
+        // prevents us from cleanly wrapping each render element in
+        // an extra `RescaleRenderElement`. Alpha alone still gives
+        // the perceptual "fade-in" that's the dominant cue when a
+        // window appears.)
+        let alpha = if let Some(anim) = self.current_animation() {
+            alpha * anim.alpha_at(std::time::Instant::now())
+        } else {
+            alpha
+        };
         #[cfg(feature = "debug")]
         let mut elements = if let Some(debug) = self.debug.lock().unwrap().as_mut() {
             let window = self.active_window();
@@ -1044,6 +1109,7 @@ impl From<CosmicWindow> for CosmicMapped {
             moved_since_mapped: Arc::new(AtomicBool::new(false)),
             floating_tiled: Arc::new(Mutex::new(None)),
             previous_layer: Arc::new(Mutex::new(None)),
+            window_animation: Arc::new(Mutex::new(None)),
             #[cfg(feature = "debug")]
             debug: Arc::new(Mutex::new(None)),
         }
@@ -1061,6 +1127,7 @@ impl From<CosmicStack> for CosmicMapped {
             moved_since_mapped: Arc::new(AtomicBool::new(false)),
             floating_tiled: Arc::new(Mutex::new(None)),
             previous_layer: Arc::new(Mutex::new(None)),
+            window_animation: Arc::new(Mutex::new(None)),
             #[cfg(feature = "debug")]
             debug: Arc::new(Mutex::new(None)),
         }
