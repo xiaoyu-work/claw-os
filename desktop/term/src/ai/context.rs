@@ -12,9 +12,10 @@ use alacritty_terminal::Term;
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
 use serde::Serialize;
-use std::fs;
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
+
+use super::{bridge_to_io, path_str};
 
 /// JSON payload written to `$COS_AI_TMP/ac-<id>.json` for the shell function to
 /// pass to copilot. Mirrors aterm's `contextData` shape (aiMiddleware.ts:288-302).
@@ -71,21 +72,22 @@ pub fn capture_context<T: EventListener>(
 
 /// Write a [`ContextSnapshot`] to disk at the location expected by the shell
 /// function — `<dir>/ac-<id>.json`.
+///
+/// Goes through `cos_runtime::fs::write` so the write lands in the same
+/// audit + snapshot pipeline as every other gated filesystem mutation
+/// originating from cosmic-term. `cos_runtime::fs::write` creates missing
+/// parents, so we don't need a separate `mkdir`.
 pub fn write_snapshot(dir: &Path, id: &str, snapshot: &ContextSnapshot) -> io::Result<PathBuf> {
-    fs::create_dir_all(dir)?;
     let path = dir.join(format!("ac-{id}.json"));
-    let mut f = fs::File::create(&path)?;
     let json = serde_json::to_string(snapshot)
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-    f.write_all(json.as_bytes())?;
+    cos_runtime::fs::write(path_str(&path), &json).map_err(bridge_to_io)?;
     Ok(path)
 }
 
 /// Write the captured prompt text to `<dir>/aq-<id>.txt`.
 pub fn write_query(dir: &Path, id: &str, query: &str) -> io::Result<PathBuf> {
-    fs::create_dir_all(dir)?;
     let path = dir.join(format!("aq-{id}.txt"));
-    let mut f = fs::File::create(&path)?;
-    f.write_all(query.as_bytes())?;
+    cos_runtime::fs::write(path_str(&path), query).map_err(bridge_to_io)?;
     Ok(path)
 }

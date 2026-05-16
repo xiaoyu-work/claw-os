@@ -41,8 +41,26 @@ pub use middleware::{AiAction, AiMiddleware};
 pub use shell_integration::{IntegrationDirs, ensure_integration_dirs};
 
 use alacritty_terminal::tty;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+/// Convert a `cos_runtime::BridgeError` to an `io::Error` so the AI module
+/// can keep a simple `io::Result` signature on its public surface.
+///
+/// We deliberately swallow `BridgeError::BinaryNotFound` here without a
+/// special variant — the upstream caller (`build_runtime`) logs a warning
+/// and disables AI, which is the right behaviour for dev / pre-install
+/// environments where `cos` isn't on `$PATH` yet.
+pub(crate) fn bridge_to_io(e: cos_runtime::BridgeError) -> io::Error {
+    io::Error::new(io::ErrorKind::Other, e.to_string())
+}
+
+/// Path → owned `String` suitable for `cos_runtime::fs::*` (which take
+/// `impl AsRef<str>`). Falls back to the lossy form for non-UTF-8 paths.
+pub(crate) fn path_str(p: &Path) -> String {
+    p.to_string_lossy().into_owned()
+}
 
 /// Build the per-process AI runtime: write shell integration scripts to a cache
 /// directory and create a tmp directory for `aq-*`/`ac-*` files.
@@ -69,7 +87,7 @@ pub fn build_runtime(config: &AiConfig) -> Option<crate::terminal::AiRuntime> {
         }
     };
     let tmp_dir = tmp_dir();
-    if let Err(err) = std::fs::create_dir_all(&tmp_dir) {
+    if let Err(err) = cos_runtime::fs::mkdir(path_str(&tmp_dir)) {
         log::warn!("ai: failed to create tmp dir {}: {err}", tmp_dir.display());
         return None;
     }
