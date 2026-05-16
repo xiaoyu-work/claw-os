@@ -23,9 +23,10 @@
 //! For login shells we accept that the integration is sourced *after* the
 //! user's profile, which is what aterm does too.
 
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+
+use super::{bridge_to_io, path_str};
 
 /// Paths to integration scripts on disk.
 #[derive(Clone, Debug)]
@@ -69,23 +70,32 @@ pub fn ensure_integration_dirs(
     model: &str,
 ) -> io::Result<IntegrationDirs> {
     let root = cache_dir.join("cos-ai");
-    fs::create_dir_all(&root)?;
+    // `cos_runtime::fs::write` auto-creates parents, but we mkdir the root
+    // up-front so a permission failure surfaces here (rather than partway
+    // through the per-shell writes below) with a clear path in the error.
+    cos_runtime::fs::mkdir(path_str(&root)).map_err(bridge_to_io)?;
     let dirs = IntegrationDirs::under(root);
 
     let copilot_flags = build_copilot_flags(allow_all_tools, model, extra_args);
 
-    fs::write(&dirs.bash_init, BASH_RCFILE_WRAPPER)?;
-    fs::write(&dirs.bash_integration, bash_integration(&copilot_flags, copilot_bin))?;
+    write_text(&dirs.bash_init, BASH_RCFILE_WRAPPER)?;
+    write_text(&dirs.bash_integration, &bash_integration(&copilot_flags, copilot_bin))?;
 
-    fs::create_dir_all(&dirs.zsh_dotdir)?;
-    fs::write(dirs.zsh_dotdir.join(".zshrc"), ZSH_DOTDIR_WRAPPER)?;
-    fs::write(&dirs.zsh_integration, zsh_integration(&copilot_flags, copilot_bin))?;
+    cos_runtime::fs::mkdir(path_str(&dirs.zsh_dotdir)).map_err(bridge_to_io)?;
+    write_text(&dirs.zsh_dotdir.join(".zshrc"), ZSH_DOTDIR_WRAPPER)?;
+    write_text(&dirs.zsh_integration, &zsh_integration(&copilot_flags, copilot_bin))?;
 
-    fs::write(&dirs.fish_integration, fish_integration(&copilot_flags, copilot_bin))?;
-    fs::write(&dirs.pwsh_integration, pwsh_integration(&copilot_flags, copilot_bin))?;
-    fs::write(&dirs.cmd_stub, CMD_STUB)?;
+    write_text(&dirs.fish_integration, &fish_integration(&copilot_flags, copilot_bin))?;
+    write_text(&dirs.pwsh_integration, &pwsh_integration(&copilot_flags, copilot_bin))?;
+    write_text(&dirs.cmd_stub, CMD_STUB)?;
 
     Ok(dirs)
+}
+
+fn write_text(path: &Path, content: &str) -> io::Result<()> {
+    cos_runtime::fs::write(path_str(path), content)
+        .map(|_| ())
+        .map_err(bridge_to_io)
 }
 
 fn build_copilot_flags(allow_all_tools: bool, model: &str, extra_args: &str) -> String {

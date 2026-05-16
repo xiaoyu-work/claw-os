@@ -69,10 +69,18 @@ done
 #    cos-mcp-serve, …). Bind-mount that too so the relative path resolves
 #    inside the chroot (../../crates from /build/desktop-src/<x> →
 #    /build/crates).
+#
+#    Likewise desktop/{term,edit,files,launcher}/Cargo.toml depend on
+#    `path = "../../cos-runtime/rust"` for the internal SDK that wraps
+#    every `cos app <id> <verb>` call (audit + caps + snapshot). Without
+#    this mount cargo cannot resolve cos-runtime inside the chroot and
+#    the desktop build fails before producing a single binary.
 # ---------------------------------------------------------------------------
 CHROOT_SRC="$ROOTFS/build/desktop-src"
 CHROOT_CRATES="$ROOTFS/build/crates"
+CHROOT_RUNTIME="$ROOTFS/build/cos-runtime"
 PROJECT_CRATES="$PROJECT_DIR/crates"
+PROJECT_RUNTIME="$PROJECT_DIR/cos-runtime"
 mkdir -p "$CHROOT_SRC"
 if ! mountpoint -q "$CHROOT_SRC"; then
     mount --bind "$DESKTOP_SRC" "$CHROOT_SRC"
@@ -83,8 +91,16 @@ if [ -d "$PROJECT_CRATES" ]; then
         mount --bind "$PROJECT_CRATES" "$CHROOT_CRATES"
     fi
 fi
+if [ -d "$PROJECT_RUNTIME" ]; then
+    mkdir -p "$CHROOT_RUNTIME"
+    if ! mountpoint -q "$CHROOT_RUNTIME"; then
+        mount --bind "$PROJECT_RUNTIME" "$CHROOT_RUNTIME"
+    fi
+fi
 
 cleanup() {
+    umount "$CHROOT_RUNTIME" 2>/dev/null || true
+    rmdir "$CHROOT_RUNTIME" 2>/dev/null || true
     umount "$CHROOT_CRATES" 2>/dev/null || true
     rmdir "$CHROOT_CRATES" 2>/dev/null || true
     umount "$CHROOT_SRC" 2>/dev/null || true
