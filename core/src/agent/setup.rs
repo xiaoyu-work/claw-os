@@ -1580,35 +1580,51 @@ fn status_media(modality: Modality) -> Value {
     // embedder from the main `[agent]` config. It's ready iff the
     // derivation actually produces an embedder (the main provider
     // is OpenAI-shape).
-    let (ready, reason) = if matches!(modality, Modality::Embed) && provider == "auto" {
+    //
+    // `reason` is emitted as a structured envelope (`error` /
+    // `details` / `fix`) matching the shape the cosmic-settings UI
+    // expects in [`ErrorEnvelope`]. `status_llm` (line 568) emits the
+    // same shape via `is_ready`; emitting a plain string here used to
+    // make every media settings page fail with "invalid status JSON:
+    // invalid type: string, expected struct ErrorEnvelope".
+    let (ready, reason): (bool, Value) = if matches!(modality, Modality::Embed)
+        && provider == "auto"
+    {
         let derived = crate::model::tasks::embed::build_default().ok().flatten();
         match derived {
-            Some(_) => (
-                true,
-                Some(format!(
-                    "auto-derived from main agent provider `{}`",
-                    crate::config::get().agent.provider
-                )),
-            ),
+            Some(_) => (true, Value::Null),
             None => (
                 false,
-                Some(format!(
-                    "`embed.provider=auto` but main agent provider `{}` does not support \
-                     auto-derivation — set `[embed]` explicitly to enable",
-                    crate::config::get().agent.provider
-                )),
+                json!({
+                    "error": "auto-derivation not supported",
+                    "details": format!(
+                        "`embed.provider=auto` but main agent provider `{}` is not \
+                         OpenAI-compatible — auto-derivation skipped.",
+                        crate::config::get().agent.provider
+                    ),
+                    "fix": format!("cos agent setup {}", spec.name),
+                }),
             ),
         }
     } else {
         let ready = provider != "none" && !provider.is_empty() && key_resolvable;
         let reason = if provider == "none" || provider.is_empty() {
-            Some(format!("`{}` not configured (provider=none)", spec.name))
+            json!({
+                "error": format!("{} not configured", spec.name),
+                "details": "provider is set to `none`.",
+                "fix": format!("cos agent setup {}", spec.name),
+            })
         } else if !key_resolvable {
-            Some(format!(
-                "provider `{provider}` needs a credential; none resolvable from store or env"
-            ))
+            json!({
+                "error": "credential missing",
+                "details": format!(
+                    "provider `{provider}` needs a credential; none resolvable from \
+                     store or env."
+                ),
+                "fix": format!("cos agent setup {}", spec.name),
+            })
         } else {
-            None
+            Value::Null
         };
         (ready, reason)
     };
@@ -2872,6 +2888,72 @@ mod tests {
             Some("https://acme.example.com/v1")
         );
         assert_eq!(v["api_version"].as_str(), Some("2024-12-01-preview"));
+
+        std::env::remove_var("COS_CONFIG_PATH");
+        std::fs::remove_dir_all(&tmp_dir).ok();
+    }
+
+    #[test]
+    fn status_media_reason_is_envelope_shape_when_not_ready() {
+        // Regression: status_media used to emit `reason` as a plain
+        // string (e.g. `"`tts` not configured (provider=none)"`). The
+        // cosmic-settings UI deserialises `reason` into `ErrorEnvelope
+        // { error, details, fix }`, so a bare string made every media
+        // settings page fail with "invalid status JSON: invalid type:
+        // string, expected struct ErrorEnvelope". Now mirror the
+        // envelope shape `status_llm` already emits via `is_ready`.
+        //
+        // Each modality is explicitly pinned to `provider=none` so we
+        // deterministically exercise the "not configured" envelope
+        // branch without depending on `config::get()` (a OnceLock that
+        // gets seeded by whichever test ran first).
+        let _g = env_lock();
+        let tmp_dir = std::env::temp_dir()
+            .join(format!("cos-setup-test-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+        let cfg_path = tmp_dir.join("config.json");
+        std::env::set_var("COS_CONFIG_PATH", &cfg_path);
+        std::fs::write(
+            &cfg_path,
+            r#"{
+                "tts":{"provider":"none"},
+                "stt":{"provider":"none"},
+                "imagegen":{"provider":"none"},
+                "embed":{"provider":"none"}
+            }"#,
+        )
+        .unwrap();
+
+        for m in [
+            Modality::Tts,
+            Modality::Stt,
+            Modality::ImageGen,
+            Modality::Embed,
+        ] {
+            let v = status_cmd(m).expect("status ok");
+            assert_eq!(
+                v["ready"],
+                json!(false),
+                "{}: provider=none should not be ready",
+                m.name()
+            );
+            let reason = v.get("reason").expect("reason key");
+            assert!(
+                reason.is_object(),
+                "{}: reason must be a JSON envelope, got {reason}",
+                m.name()
+            );
+            assert!(
+                reason["error"].as_str().is_some_and(|s| !s.is_empty()),
+                "{}: envelope.error must be a non-empty string",
+                m.name()
+            );
+            assert!(
+                reason["details"].as_str().is_some_and(|s| !s.is_empty()),
+                "{}: envelope.details must be a non-empty string",
+                m.name()
+            );
+        }
 
         std::env::remove_var("COS_CONFIG_PATH");
         std::fs::remove_dir_all(&tmp_dir).ok();
