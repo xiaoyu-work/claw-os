@@ -986,7 +986,7 @@ where
                     _ => None,
                 };
                 if let Some(escape_code) = escape_code {
-                    terminal.input_scroll(escape_code);
+                    terminal.input_via_ai(escape_code, None);
                     shell.capture_event();
 
                     return;
@@ -999,11 +999,11 @@ where
                 match named {
                     Named::Backspace => {
                         let code = if modifiers.control() { "\x08" } else { "\x7f" };
-                        terminal.input_scroll(format!("{alt_prefix}{code}").into_bytes());
+                        terminal.input_via_ai(format!("{alt_prefix}{code}").into_bytes(), None);
                         shell.capture_event();
                     }
                     Named::Enter => {
-                        terminal.input_scroll(format!("{}{}", alt_prefix, "\x0D").into_bytes());
+                        terminal.input_via_ai(format!("{}{}", alt_prefix, "\x0D").into_bytes(), None);
                         shell.capture_event();
                     }
                     Named::Escape => {
@@ -1015,14 +1015,14 @@ where
                         if had_selection {
                             terminal.update();
                         } else {
-                            terminal.input_scroll(format!("{}{}", alt_prefix, "\x1B").into_bytes());
+                            terminal.input_via_ai(format!("{}{}", alt_prefix, "\x1B").into_bytes(), None);
                         }
                         shell.capture_event();
                     }
 
                     Named::Tab => {
                         let code = if modifiers.shift() { "\x1b[Z" } else { "\x09" };
-                        terminal.input_scroll(format!("{alt_prefix}{code}").into_bytes());
+                        terminal.input_via_ai(format!("{alt_prefix}{code}").into_bytes(), None);
                         shell.capture_event();
                     }
                     _ => {}
@@ -1072,9 +1072,9 @@ where
 
                 if modifiers.control() {
                     // Send NUL character (\x00) for Ctrl + Space
-                    terminal.input_scroll(b"\x00".to_vec());
+                    terminal.input_via_ai(b"\x00".to_vec(), None);
                 } else {
-                    terminal.input_scroll(format!("{}{}", alt_prefix, character).into_bytes());
+                    terminal.input_via_ai(format!("{}{}", alt_prefix, character).into_bytes(), None);
                 }
                 shell.capture_event();
             }
@@ -1114,7 +1114,7 @@ where
                                 let str = character.encode_utf8(&mut buf[1..]);
                                 str.len() + 1
                             };
-                            terminal.input_scroll(buf[..len].to_vec());
+                            terminal.input_via_ai(buf[..len].to_vec(), None);
                             shell.capture_event();
                         }
                     }
@@ -1123,7 +1123,7 @@ where
                         if character.is_control() {
                             let mut buf = [0, 0, 0, 0];
                             let str = character.encode_utf8(&mut buf);
-                            terminal.input_scroll(str.as_bytes().to_vec());
+                            terminal.input_via_ai(str.as_bytes().to_vec(), None);
                             shell.capture_event();
                         }
                     }
@@ -1133,7 +1133,7 @@ where
                         //Ctrl+Underline instead, like xterm and
                         //gnome-terminal
                         if *key == Key::Character("_".into()) {
-                            terminal.input_scroll(b"\x1F".as_slice());
+                            terminal.input_via_ai(b"\x1F".as_slice(), None);
                             shell.capture_event();
                         }
                     }
@@ -1145,7 +1145,7 @@ where
                                 let str = character.encode_utf8(&mut buf[1..]);
                                 str.len() + 1
                             };
-                            terminal.input_scroll(buf[..len].to_vec());
+                            terminal.input_via_ai(buf[..len].to_vec(), None);
                             shell.capture_event();
                         }
                     }
@@ -1154,7 +1154,7 @@ where
                         if !character.is_control() {
                             let mut buf = [0, 0, 0, 0];
                             let str = character.encode_utf8(&mut buf);
-                            terminal.input_scroll(str.as_bytes().to_vec());
+                            terminal.input_via_ai(str.as_bytes().to_vec(), None);
                             shell.capture_event();
                         }
                     }

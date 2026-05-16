@@ -41,6 +41,7 @@ use tokio::sync::mpsc;
 pub use alacritty_terminal::grid::Scroll as TerminalScroll;
 
 use crate::{
+    ai::{self, AiAction, AiConfig, AiMiddleware, IntegrationDirs},
     config::{ColorSchemeKind, Config as AppConfig, ProfileId},
     menu::MenuState,
     mouse_reporter::MouseReporter,
@@ -237,6 +238,19 @@ impl Metadata {
     }
 }
 
+/// Runtime parameters passed to [`Terminal::new`] to enable AI integration on a
+/// per-PTY basis. The `tmp_dir` is shared across all tabs (process-wide) and is
+/// where `aq-*.txt` / `ac-*.json` files are written for the shell function to
+/// pick up. `integration_dirs` is also process-shared and used by `main` to
+/// inject shell args / env vars at PTY spawn — Terminal itself only needs the
+/// tmp dir + config.
+#[derive(Clone)]
+pub struct AiRuntime {
+    pub config: AiConfig,
+    pub tmp_dir: PathBuf,
+    pub integration_dirs: Arc<IntegrationDirs>,
+}
+
 pub struct Terminal {
     pub context_menu: Option<MenuState>,
     pub metadata_set: IndexSet<Metadata>,
@@ -262,6 +276,9 @@ pub struct Terminal {
     size: Size,
     use_bright_bold: bool,
     zoom_adj: i8,
+    ai_state: Option<Mutex<AiMiddleware>>,
+    ai_tmp_dir: Option<PathBuf>,
+    ai_max_context_lines: usize,
 }
 
 impl Terminal {
@@ -277,6 +294,7 @@ impl Terminal {
         colors: Colors,
         profile_id_opt: Option<ProfileId>,
         tab_title_override: Option<String>,
+        ai_runtime: Option<AiRuntime>,
     ) -> Result<Self, io::Error> {
         let font_stretch = app_config.typed_font_stretch();
         let font_weight = app_config.font_weight;
@@ -366,6 +384,15 @@ impl Terminal {
             use_bright_bold,
             zoom_adj: Default::default(),
             is_focused: true,
+            ai_state: ai_runtime
+                .as_ref()
+                .filter(|r| r.config.enabled)
+                .map(|r| Mutex::new(AiMiddleware::new(r.config.clone()))),
+            ai_tmp_dir: ai_runtime.as_ref().map(|r| r.tmp_dir.clone()),
+            ai_max_context_lines: ai_runtime
+                .as_ref()
+                .map(|r| r.config.max_context_lines)
+                .unwrap_or(100),
         })
     }
 
@@ -434,7 +461,123 @@ impl Terminal {
         self.scroll(TerminalScroll::Bottom);
     }
 
+    /// True if AI middleware is active for this terminal.
+    pub fn ai_enabled(&self) -> bool {
+        self.ai_state.is_some()
+    }
+
+    /// True if AI middleware is currently capturing a `@`-prompt.
+    pub fn ai_is_capturing(&self) -> bool {
+        match &self.ai_state {
+            Some(state) => state.lock().map(|s| s.is_capturing()).unwrap_or(false),
+            None => false,
+        }
+    }
+
+    /// Update AI middleware config (e.g. on settings change).
+    pub fn ai_update_config(&self, config: AiConfig) {
+        if let Some(state) = &self.ai_state {
+            if let Ok(mut s) = state.lock() {
+                s.set_config(config);
+            }
+        }
+    }
+
+    /// Reset AI middleware state (e.g. on terminal reset).
+    pub fn ai_reset(&self) {
+        if let Some(state) = &self.ai_state {
+            if let Ok(mut s) = state.lock() {
+                s.reset();
+            }
+        }
+    }
+
+    /// Entry point for user input — routes through the AI middleware if active,
+    /// then forwards to the PTY based on the resulting [`AiAction`]. Returns
+    /// `true` if the input was at least partially absorbed (caller may skip
+    /// further default handling such as scroll-to-bottom on keypress).
+    pub fn input_via_ai<I: Into<Cow<'static, [u8]>>>(
+        &self,
+        input: I,
+        clipboard: Option<&str>,
+    ) -> bool {
+        let input = input.into();
+        let Some(ai_state) = self.ai_state.as_ref() else {
+            self.input_scroll(input);
+            return false;
+        };
+
+        let action = {
+            let mut ai = match ai_state.lock() {
+                Ok(g) => g,
+                Err(_) => {
+                    self.input_scroll(input);
+                    return false;
+                }
+            };
+            let mut term = self.term.lock();
+            ai.feed_input(input.as_ref(), &mut term, clipboard)
+        };
+
+        match action {
+            AiAction::Absorb => {
+                self.scroll(TerminalScroll::Bottom);
+                true
+            }
+            AiAction::Forward(bytes) => {
+                self.input_scroll(bytes);
+                false
+            }
+            AiAction::Submit { id, prompt } => {
+                self.submit_ai(&id, &prompt);
+                true
+            }
+        }
+    }
+
+    /// Notify the AI middleware that PTY output bytes were observed — used to
+    /// keep `input_length` in sync (newlines reset to line-start).
+    pub fn ai_observe_output(&self, data: &[u8]) {
+        if let Some(state) = &self.ai_state {
+            if let Ok(mut s) = state.lock() {
+                s.observe_output(data);
+            }
+        }
+    }
+
+    fn submit_ai(&self, id: &str, prompt: &str) {
+        let Some(tmp_dir) = self.ai_tmp_dir.as_ref() else {
+            log::warn!("ai submit without tmp dir; dropping");
+            return;
+        };
+        let cwd = self.working_directory();
+        let snapshot = {
+            let term = self.term.lock();
+            ai::capture_context(&term, cwd.as_deref(), self.ai_max_context_lines)
+        };
+        if let Err(err) = ai::context::write_snapshot(tmp_dir, id, &snapshot) {
+            log::warn!("ai: failed to write context: {err}");
+        }
+        if let Err(err) = ai::context::write_query(tmp_dir, id, prompt) {
+            log::warn!("ai: failed to write query: {err}");
+            return;
+        }
+        // Leading space → `HISTCONTROL=ignorespace` / `HIST_IGNORE_SPACE` skips it.
+        let cmd = format!(" __cos_ai {id}\r");
+        self.input_scroll(cmd.into_bytes());
+    }
+
     pub fn paste(&self, value: String) {
+        // If AI middleware is capturing, fold the paste through it (so big
+        // pastes become `[Pasted Text: N lines #N]` placeholders).
+        if self.ai_is_capturing() {
+            let mut framed = Vec::with_capacity(value.len() + 12);
+            framed.extend_from_slice(b"\x1b[200~");
+            framed.extend(value.replace('\x1b', "").into_bytes());
+            framed.extend_from_slice(b"\x1b[201~");
+            self.input_via_ai(framed, None);
+            return;
+        }
         // This code is ported from alacritty
         let bracketed_paste = {
             let term = self.term.lock();
