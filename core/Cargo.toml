@@ -33,6 +33,13 @@ regex = "1"
 bytes = "1"
 crc32fast = "1"
 
+# Phase 7 (skill bundle signatures): ed25519 verification for skill
+# manifests so a `Vendor`/`Hub` install can be authenticated against a
+# release key. Default features off — we only need verification, not
+# signing/PEM/PKCS#8 import.
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+hex = "0.4"
+
 # Phase 5.5 (Edge TTS): WebSocket client. Aligned with workspace 0.26 + rustls
 # to match `reqwest`'s `rustls-tls` feature already in use here, so the binary
 # carries one TLS stack (rustls) instead of two.

@@ -25,10 +25,11 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 use super::loader::LoadedSkill;
-use super::manifest::SkillManifest;
+use super::manifest::{canonical_signing_input, ManifestSignature, SkillManifest};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -262,6 +263,209 @@ impl Guard {
 
 fn manifest_allowed_tools_empty(m: &SkillManifest) -> bool {
     m.allowed_tools.is_empty()
+}
+
+// --------------- ed25519 signature verification ---------------
+
+/// Environment variable controlling whether unsigned manifests are
+/// rejected at install time. Anything other than `0`/`false`/empty
+/// switches signature enforcement *on*.
+pub const ENV_REQUIRE_SIGNATURE: &str = "COS_SKILLS_REQUIRE_SIGNATURE";
+/// Colon-separated list of hex-encoded ed25519 verifying keys (32
+/// bytes / 64 hex chars each). When set, a manifest's
+/// `signature.public_key` must appear in the list to be accepted.
+pub const ENV_TRUSTED_KEYS: &str = "COS_SKILLS_TRUSTED_KEYS";
+
+#[derive(Debug, thiserror::Error)]
+pub enum SignatureError {
+    #[error("signature required but manifest is unsigned")]
+    Required,
+    #[error("unsupported signature algorithm: {0} (only `ed25519` is accepted)")]
+    UnsupportedAlgorithm(String),
+    #[error("signature field `{field}` is not valid hex: {reason}")]
+    InvalidHex { field: &'static str, reason: String },
+    #[error("signature field `{field}` has wrong length: expected {expected} bytes, got {actual}")]
+    WrongLength {
+        field: &'static str,
+        expected: usize,
+        actual: usize,
+    },
+    #[error("ed25519 verifying key is invalid: {0}")]
+    InvalidVerifyingKey(String),
+    #[error("signature verification failed: {0}")]
+    BadSignature(String),
+    #[error(
+        "signature was made with key {public_key} which is not in the trusted-keys allow-list"
+    )]
+    UntrustedKey { public_key: String },
+}
+
+/// Outcome of attempting to verify a skill's signature.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SignatureCheck {
+    /// Manifest carried a well-formed signature and it verified
+    /// (and matched the trusted-keys list if one was configured).
+    /// `public_key_hex` is the lower-case hex of the verifying
+    /// key that signed the manifest.
+    Verified { public_key_hex: String },
+    /// Manifest carried no signature block and the policy allowed
+    /// it. Callers should log a warning so the operator can spot
+    /// unsigned installs in audit logs.
+    Unsigned,
+}
+
+/// Policy knobs for [`verify_signature`]. Construct via
+/// [`SignatureVerifyConfig::from_env`] to pick up env-var driven
+/// production defaults.
+#[derive(Debug, Clone, Default)]
+pub struct SignatureVerifyConfig {
+    /// When `true`, an unsigned manifest is rejected. When `false`,
+    /// unsigned manifests pass through (with [`SignatureCheck::Unsigned`])
+    /// so existing skills keep installing during rollout.
+    pub require_signature: bool,
+    /// When `Some`, the signature's `public_key` must be one of the
+    /// supplied 32-byte ed25519 keys. When `None`, any well-formed
+    /// signature with a valid key passes (trust-on-first-use).
+    pub trusted_keys: Option<Vec<[u8; 32]>>,
+}
+
+impl SignatureVerifyConfig {
+    /// Resolve the active config from process environment.
+    ///
+    /// * `COS_SKILLS_REQUIRE_SIGNATURE` truthy → `require_signature = true`.
+    /// * `COS_SKILLS_TRUSTED_KEYS` set       → parse colon-separated
+    ///   hex keys; any unparseable entry causes the env var to be
+    ///   ignored *and* the config to flip to `require_signature = true`
+    ///   so we don't silently widen trust on a typo.
+    pub fn from_env() -> Self {
+        let require = match std::env::var(ENV_REQUIRE_SIGNATURE) {
+            Ok(v) => matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"),
+            Err(_) => false,
+        };
+        let trusted_keys = match std::env::var(ENV_TRUSTED_KEYS) {
+            Ok(v) if !v.trim().is_empty() => parse_trusted_keys(&v).ok(),
+            _ => None,
+        };
+        Self {
+            require_signature: require,
+            trusted_keys,
+        }
+    }
+}
+
+fn parse_trusted_keys(raw: &str) -> Result<Vec<[u8; 32]>, SignatureError> {
+    let mut out = Vec::new();
+    for entry in raw.split(':') {
+        let s = entry.trim();
+        if s.is_empty() {
+            continue;
+        }
+        let bytes = hex::decode(s).map_err(|e| SignatureError::InvalidHex {
+            field: "trusted_keys",
+            reason: e.to_string(),
+        })?;
+        let arr: [u8; 32] = bytes.as_slice().try_into().map_err(|_| {
+            SignatureError::WrongLength {
+                field: "trusted_keys",
+                expected: 32,
+                actual: bytes.len(),
+            }
+        })?;
+        out.push(arr);
+    }
+    Ok(out)
+}
+
+/// Verify a skill manifest's optional ed25519 signature against the
+/// supplied policy.
+///
+/// On success returns one of:
+///   * [`SignatureCheck::Verified`] — manifest was signed and the
+///     signature checked out (and was in the trusted-keys list if
+///     one was configured).
+///   * [`SignatureCheck::Unsigned`] — manifest is unsigned and the
+///     policy doesn't require a signature.
+///
+/// On any verification failure returns [`SignatureError`]; callers
+/// (notably [`crate::agent::skills::sync`]) must treat these as
+/// hard install failures.
+pub fn verify_signature(
+    manifest: &SkillManifest,
+    config: &SignatureVerifyConfig,
+) -> Result<SignatureCheck, SignatureError> {
+    let Some(sig) = manifest.signature.as_ref() else {
+        if config.require_signature {
+            return Err(SignatureError::Required);
+        }
+        return Ok(SignatureCheck::Unsigned);
+    };
+    verify_signature_block(manifest, sig, config)
+}
+
+fn verify_signature_block(
+    manifest: &SkillManifest,
+    sig: &ManifestSignature,
+    config: &SignatureVerifyConfig,
+) -> Result<SignatureCheck, SignatureError> {
+    if !sig.algorithm.eq_ignore_ascii_case("ed25519") {
+        return Err(SignatureError::UnsupportedAlgorithm(sig.algorithm.clone()));
+    }
+
+    let pk_bytes = hex::decode(sig.public_key.trim()).map_err(|e| SignatureError::InvalidHex {
+        field: "public_key",
+        reason: e.to_string(),
+    })?;
+    let pk_arr: [u8; 32] = pk_bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| SignatureError::WrongLength {
+            field: "public_key",
+            expected: 32,
+            actual: pk_bytes.len(),
+        })?;
+
+    if let Some(trusted) = &config.trusted_keys {
+        if !trusted.iter().any(|k| k == &pk_arr) {
+            return Err(SignatureError::UntrustedKey {
+                public_key: hex::encode(pk_arr),
+            });
+        }
+    }
+
+    let sig_bytes = hex::decode(sig.value.trim()).map_err(|e| SignatureError::InvalidHex {
+        field: "value",
+        reason: e.to_string(),
+    })?;
+    let sig_arr: [u8; 64] =
+        sig_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| SignatureError::WrongLength {
+                field: "value",
+                expected: 64,
+                actual: sig_bytes.len(),
+            })?;
+
+    let vk = VerifyingKey::from_bytes(&pk_arr)
+        .map_err(|e| SignatureError::InvalidVerifyingKey(e.to_string()))?;
+    let signature = Signature::from_bytes(&sig_arr);
+
+    // Match the signing scheme described on `canonical_signing_input`:
+    // signer commits to SHA-256(canonical bytes), not the raw bytes,
+    // so the verifier hashes too before handing the digest to
+    // ed25519. Using the in-tree SHA-256 stream avoids adding a
+    // second hash dep just for this code path.
+    let canonical = canonical_signing_input(manifest);
+    let mut hasher = crate::crypto::Sha256Stream::new();
+    hasher.update(&canonical);
+    let digest = hasher.finalize_bytes();
+
+    vk.verify_strict(&digest, &signature)
+        .map_err(|e| SignatureError::BadSignature(e.to_string()))?;
+
+    Ok(SignatureCheck::Verified {
+        public_key_hex: hex::encode(pk_arr),
+    })
 }
 
 /// Walk the skill dir recursively (bounded by [`MAX_GUARD_WALK_FILES`]
@@ -548,5 +752,117 @@ mod tests {
         assert_eq!(Provenance::User.as_str(), "user");
         assert_eq!(Provenance::Local.as_str(), "local");
         assert_eq!(Provenance::Unknown.as_str(), "unknown");
+    }
+
+    // ----- signature verification helpers -----
+
+    #[test]
+    fn parse_trusted_keys_accepts_colon_separated_hex() {
+        let raw = format!("{a}:{b}", a = "aa".repeat(32), b = "bb".repeat(32));
+        let keys = parse_trusted_keys(&raw).unwrap();
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0], [0xaa; 32]);
+        assert_eq!(keys[1], [0xbb; 32]);
+    }
+
+    #[test]
+    fn parse_trusted_keys_skips_blank_entries() {
+        let raw = format!(":{a}:: ", a = "11".repeat(32));
+        let keys = parse_trusted_keys(&raw).unwrap();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0], [0x11; 32]);
+    }
+
+    #[test]
+    fn parse_trusted_keys_rejects_wrong_length() {
+        let err = parse_trusted_keys("aabb").unwrap_err();
+        assert!(matches!(err, SignatureError::WrongLength { .. }));
+    }
+
+    #[test]
+    fn parse_trusted_keys_rejects_non_hex() {
+        let err = parse_trusted_keys("not-hex").unwrap_err();
+        assert!(matches!(err, SignatureError::InvalidHex { .. }));
+    }
+
+    #[test]
+    fn verify_signature_passes_for_valid_block_and_canonical_input() {
+        use ed25519_dalek::{Signer, SigningKey};
+        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+        let vk = signing_key.verifying_key();
+        let mut manifest = SkillManifest {
+            name: "sig-ok".into(),
+            ..Default::default()
+        };
+        // Compute signature input WITHOUT a signature block attached
+        // (so the signer and verifier compute the same bytes), then
+        // attach the signature.
+        let canonical = super::super::manifest::canonical_signing_input(&manifest);
+        let mut hasher = crate::crypto::Sha256Stream::new();
+        hasher.update(&canonical);
+        let digest = hasher.finalize_bytes();
+        let sig = signing_key.sign(&digest);
+        manifest.signature = Some(super::super::manifest::ManifestSignature {
+            algorithm: "ed25519".into(),
+            public_key: hex::encode(vk.to_bytes()),
+            value: hex::encode(sig.to_bytes()),
+        });
+        let res = verify_signature(&manifest, &SignatureVerifyConfig::default()).unwrap();
+        match res {
+            SignatureCheck::Verified { public_key_hex } => {
+                assert_eq!(public_key_hex, hex::encode(vk.to_bytes()));
+            }
+            other => panic!("expected Verified, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verify_signature_rejects_wrong_key_length() {
+        let mut manifest = SkillManifest {
+            name: "x".into(),
+            ..Default::default()
+        };
+        manifest.signature = Some(super::super::manifest::ManifestSignature {
+            algorithm: "ed25519".into(),
+            public_key: "aa".into(), // 1 byte, not 32
+            value: "bb".repeat(64),
+        });
+        let err = verify_signature(&manifest, &SignatureVerifyConfig::default()).unwrap_err();
+        assert!(matches!(err, SignatureError::WrongLength { field: "public_key", .. }));
+    }
+
+    #[test]
+    fn verify_signature_rejects_unsupported_algorithm() {
+        let mut manifest = SkillManifest {
+            name: "x".into(),
+            ..Default::default()
+        };
+        manifest.signature = Some(super::super::manifest::ManifestSignature {
+            algorithm: "rsa-sha256".into(),
+            public_key: "aa".repeat(32),
+            value: "bb".repeat(64),
+        });
+        let err = verify_signature(&manifest, &SignatureVerifyConfig::default()).unwrap_err();
+        assert!(matches!(err, SignatureError::UnsupportedAlgorithm(_)));
+    }
+
+    #[test]
+    fn verify_signature_unsigned_passes_by_default_but_fails_when_required() {
+        let manifest = SkillManifest {
+            name: "x".into(),
+            ..Default::default()
+        };
+        assert!(matches!(
+            verify_signature(&manifest, &SignatureVerifyConfig::default()).unwrap(),
+            SignatureCheck::Unsigned
+        ));
+        let strict = SignatureVerifyConfig {
+            require_signature: true,
+            trusted_keys: None,
+        };
+        assert!(matches!(
+            verify_signature(&manifest, &strict).unwrap_err(),
+            SignatureError::Required
+        ));
     }
 }
