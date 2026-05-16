@@ -78,7 +78,11 @@ fn one_shot_ask(cos_bin: &str, prompt: Vec<String>) -> Result<()> {
     if prompt.trim().is_empty() {
         return Err(anyhow!("ask requires a non-empty prompt"));
     }
-    forward(cos_bin, &["agent", "ask", &prompt])
+    // Pass `--` so prompts that start with a dash (e.g. `--help` or
+    // `-foo`) are not interpreted as flags by `cos agent ask`. Without
+    // the separator, `cos cli ask -- --version` and similar inputs
+    // would be parsed as version requests instead of prompts.
+    forward(cos_bin, &["agent", "ask", "--", &prompt])
 }
 
 fn forward(cos_bin: &str, args: &[&str]) -> Result<()> {
@@ -127,7 +131,10 @@ fn repl(cos_bin: &str) -> Result<()> {
                 eprintln!("unknown slash command: {other}");
             }
             prompt => {
-                let _ = forward(cos_bin, &["agent", "ask", prompt]);
+                // Same `--` separator as `one_shot_ask`: keep
+                // REPL-typed prompts that happen to start with `-`
+                // from being parsed as flags by `cos agent ask`.
+                let _ = forward(cos_bin, &["agent", "ask", "--", prompt]);
             }
         }
     }

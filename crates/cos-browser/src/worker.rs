@@ -5,6 +5,12 @@ use obscura_browser::{BrowserContext, Page};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
+// Same shared SSRF policy as `main.rs`. cos-browser has no library
+// target, so each binary includes the file independently.
+#[path = "url_safety.rs"]
+mod url_safety;
+use url_safety::validate_navigable_url;
+
 #[derive(Debug, Deserialize)]
 #[serde(tag = "cmd")]
 enum WorkerCommand {
@@ -85,6 +91,26 @@ async fn main() {
 
         let resp = match cmd {
             WorkerCommand::Navigate { url } => {
+                // Re-validate inside the worker: even though the
+                // parent already filtered, a worker that's been
+                // re-used across requests or invoked directly (e.g.
+                // by a future cos-cli command) must still apply the
+                // same SSRF policy. Belt-and-braces beats relying
+                // on every caller to remember.
+                match validate_navigable_url(&url) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        let resp = WorkerResponse::error(format!(
+                            "navigation rejected by SSRF policy: {}",
+                            e
+                        ));
+                        let mut out = serde_json::to_string(&resp).unwrap();
+                        out.push('\n');
+                        let _ = stdout.write_all(out.as_bytes()).await;
+                        let _ = stdout.flush().await;
+                        continue;
+                    }
+                }
                 match page.navigate(&url).await {
                     Ok(()) => WorkerResponse::success(serde_json::json!({
                         "title": page.title,

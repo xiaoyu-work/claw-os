@@ -60,6 +60,22 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional
 
 
+# Subprocess timeout — covers every shell-out to the `cos` binary so a
+# wedged child never blocks the calling app forever.
+_DEFAULT_TIMEOUT_S = 60
+
+
+def _truncate(value: Any, limit: int = 200) -> str:
+    """Redact a payload (tool args, kernel response) for inclusion in
+    exception messages. Tool envelopes routinely carry the model's
+    proposed arguments — those flow into logs if echoed verbatim.
+    """
+    s = repr(value) if not isinstance(value, str) else value
+    if len(s) <= limit:
+        return s
+    return s[:limit] + f"... [{len(s) - limit} more bytes elided]"
+
+
 # ---------------------------------------------------------------------------
 # Exceptions
 # ---------------------------------------------------------------------------
@@ -163,7 +179,7 @@ def call(
         args_payload,
     ]
 
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    proc = _run_with_timeout(cmd, f"cos ai tool {name}")
     text = (proc.stdout or "").strip() or (proc.stderr or "").strip()
     if not text:
         raise ToolUnavailable(
@@ -173,7 +189,7 @@ def call(
         envelope = json.loads(text)
     except json.JSONDecodeError as exc:
         raise ToolUnavailable(
-            f"cos ai tool {name} returned non-JSON output: {text!r}"
+            f"cos ai tool {name} returned non-JSON output: {_truncate(text)}"
         ) from exc
 
     if proc.returncode != 0 or "error" in envelope:
@@ -196,7 +212,7 @@ def catalog() -> List[CatalogEntry]:
     deprecated or renamed between releases.
     """
     cmd = [_cos_binary(), "ai", "tools"]
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    proc = _run_with_timeout(cmd, "cos ai tools")
     text = (proc.stdout or "").strip() or (proc.stderr or "").strip()
     if not text:
         raise ToolUnavailable(
@@ -206,7 +222,7 @@ def catalog() -> List[CatalogEntry]:
         envelope = json.loads(text)
     except json.JSONDecodeError as exc:
         raise ToolUnavailable(
-            f"cos ai tools returned non-JSON output: {text!r}"
+            f"cos ai tools returned non-JSON output: {_truncate(text)}"
         ) from exc
 
     if proc.returncode != 0 or (
@@ -261,6 +277,25 @@ def for_chat(*names: str) -> List[str]:
 # ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
+
+
+def _run_with_timeout(cmd: List[str], label: str) -> subprocess.CompletedProcess:
+    """Run a `cos` subprocess with the bridge's default timeout. Raise
+    :class:`ToolUnavailable` (not ``TimeoutExpired``) on timeout so
+    callers can treat hangs uniformly with other transport failures.
+    """
+    try:
+        return subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_DEFAULT_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ToolUnavailable(
+            f"{label} timed out after {_DEFAULT_TIMEOUT_S}s"
+        ) from exc
 
 
 def _maybe_schema(blob: Any) -> Optional[Dict[str, Any]]:

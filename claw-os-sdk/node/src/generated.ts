@@ -4,6 +4,8 @@
 
 /* eslint-disable */
 
+export const EXPECTED_WIRE_VERSION = 1 as const;
+
 
 /**
  * AI request / reply.

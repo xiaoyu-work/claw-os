@@ -342,14 +342,41 @@ fn parse_response(value: serde_json::Value, modality: Modality) -> Result<AiResp
         return Err(classify_ai_error(err, &value));
     }
     // Map raw envelope onto AiResponse using strongly-typed deser
-    // where possible; fall back to a hand-walked object.
-    let mut resp: AiResponse = serde_json::from_value(value.clone()).unwrap_or_default();
+    // where possible. Surfacing a decode error here matters: the
+    // previous `unwrap_or_default()` silently substituted an empty
+    // AiResponse, masking schema drift (e.g. the kernel renaming
+    // `embedding` to `vector`) as "the call succeeded but somehow
+    // returned nothing". Make the failure mode loud instead.
+    let mut resp: AiResponse =
+        serde_json::from_value(value.clone()).map_err(|e| {
+            AiError::Unavailable(format!("ai response decode failed: {e}"))
+        })?;
     // Preserve raw for callers that want provider-native fields back.
     resp.raw = value;
     // ai.embed's prompt-vector lives at `embedding`; ai.chat puts the
     // text at `text`. Modality name is informational.
     let _ = modality;
     Ok(resp)
+}
+
+/// Best-effort redaction of an AI request/response payload for use in
+/// error messages and Debug output. Replaces the bulky text /
+/// embedding / image-bytes fields with their byte counts so the
+/// surrounding diagnostic stays useful without leaking content.
+fn redact_payload(value: &serde_json::Value) -> serde_json::Value {
+    let mut redacted = value.clone();
+    if let Some(obj) = redacted.as_object_mut() {
+        for key in ["text", "prompt", "messages", "embedding", "embeddings", "data", "raw"] {
+            if let Some(v) = obj.get_mut(key) {
+                let bytes = serde_json::to_string(v).map(|s| s.len()).unwrap_or(0);
+                *v = serde_json::json!({
+                    "redacted": true,
+                    "approx_bytes": bytes,
+                });
+            }
+        }
+    }
+    redacted
 }
 
 fn classify_ai_error(message: &str, payload: &serde_json::Value) -> AiError {
@@ -374,7 +401,12 @@ fn classify_ai_error(message: &str, payload: &serde_json::Value) -> AiError {
     AiError::Denied {
         message: message.to_string(),
         code,
-        payload: payload.clone(),
+        // Never embed the raw kernel reply here: AI calls routinely
+        // include user text, embedding vectors, or image bytes that
+        // logs or error toasts would happily render. Redact to byte
+        // counts so the structural diagnostic survives without the
+        // payload.
+        payload: redact_payload(payload),
     }
 }
 

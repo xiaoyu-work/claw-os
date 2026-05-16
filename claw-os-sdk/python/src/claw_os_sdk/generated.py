@@ -5,7 +5,28 @@ Run `python3 wire/codegen.py` from the SDK root to regenerate.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, TypedDict
+from typing import Any, Dict, List, Mapping, TypedDict
+
+# Wire-version value the kernel must advertise. See
+# wire/v1/envelope.schema.json.
+EXPECTED_WIRE_VERSION = 1
+
+
+def check_wire_version(envelope: Mapping[str, object]) -> None:
+    """Raise :class:`ValueError` if the envelope advertises a wire
+    version this SDK does not understand. Returns ``None`` on
+    success; callers that prefer non-raising semantics can wrap
+    this in ``try``.
+
+    Mirrors the Rust ``generated::check_wire_version`` helper so
+    a future wire/v2 kernel never gets silently downgraded by a
+    wire/v1 SDK.
+    """
+    seen = envelope.get("wire_version")
+    if seen != EXPECTED_WIRE_VERSION:
+        raise ValueError(
+            f"unsupported wire_version: got {seen!r}, expected {EXPECTED_WIRE_VERSION}"
+        )
 
 
 class Ai(TypedDict, total=False):
@@ -148,4 +169,32 @@ class Tool(TypedDict, total=False):
     tool: str  # required
     result: Any
     audit_id: str
+
+def validate_ai_verb(value: str) -> None:
+    """Raise ValueError if value is not in the ai.verb
+    enum. Mirrors generated::validate_ai_verb."""
+    allowed = ['ai.chat', 'ai.embed', 'ai.image_generate', 'ai.tool']
+    if value not in allowed:
+        raise ValueError(f"invalid ai.verb value: {value!r}")
+
+def validate_ai_review_safety(value: str) -> None:
+    """Raise ValueError if value is not in the ai_review.safety
+    enum. Mirrors generated::validate_ai_review_safety."""
+    allowed = ['strict', 'balanced', 'off']
+    if value not in allowed:
+        raise ValueError(f"invalid ai_review.safety value: {value!r}")
+
+def validate_manifest_runtime(value: str) -> None:
+    """Raise ValueError if value is not in the manifest.runtime
+    enum. Mirrors generated::validate_manifest_runtime."""
+    allowed = ['python', 'binary', 'node', 'go']
+    if value not in allowed:
+        raise ValueError(f"invalid manifest.runtime value: {value!r}")
+
+def validate_perms_decision(value: str) -> None:
+    """Raise ValueError if value is not in the perms.decision
+    enum. Mirrors generated::validate_perms_decision."""
+    allowed = ['allow', 'deny', 'prompt']
+    if value not in allowed:
+        raise ValueError(f"invalid perms.decision value: {value!r}")
 

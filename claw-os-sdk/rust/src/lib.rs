@@ -112,6 +112,29 @@ impl BridgeError {
     }
 }
 
+/// Truncate a diagnostic string to ``limit`` bytes, appending a marker
+/// for the number of bytes elided. Used to keep `Decode` /
+/// `AppError` messages from leaking large request/response payloads
+/// (e.g. AI prompt text, embedding vectors, file contents) into log
+/// streams that may be world-readable.
+fn truncate_diag(s: &str, limit: usize) -> String {
+    if s.len() <= limit {
+        return s.to_string();
+    }
+    let mut cut = limit;
+    // Don't slice mid-codepoint — UTF-8 safe rewind.
+    while cut > 0 && !s.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!(
+        "{}… [{} more bytes elided]",
+        &s[..cut],
+        s.len() - cut
+    )
+}
+
+const DIAG_LIMIT: usize = 256;
+
 /// Idiomatic alias preferred by external SDK consumers. New code
 /// should `use claw_os_sdk::Error;` rather than the historical
 /// `BridgeError` name (kept as an alias to avoid churn inside the
@@ -171,6 +194,12 @@ where
     if let Some(bytes) = stdin {
         if let Some(mut s) = child.stdin.take() {
             s.write_all(bytes)?;
+            // Explicitly drop the stdin handle so the subprocess sees
+            // EOF and can shut down its read side. Without this drop
+            // `wait_with_output` below would deadlock on subprocesses
+            // that read all of stdin before producing any output
+            // (which is exactly what the Python apps do).
+            drop(s);
         }
     }
 
@@ -187,7 +216,10 @@ where
             serde_json::from_str(stdout.trim()).map_err(|e| BridgeError::Decode {
                 app: app.to_string(),
                 verb: verb.to_string(),
-                message: format!("not JSON ({e}): {stdout}"),
+                message: format!(
+                    "not JSON ({e}): {}",
+                    truncate_diag(&stdout, DIAG_LIMIT)
+                ),
             })?;
 
         if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
@@ -202,6 +234,21 @@ where
             });
         }
 
+        // Even if stdout parsed cleanly, a non-zero exit means the
+        // app actually failed (e.g. the wrapper crashed *after*
+        // printing a partial result, or the JSON didn't include an
+        // `error` field but the process still aborted). Surface that
+        // as a hard failure so callers don't see a "success" payload
+        // that contradicts the kernel's audit log.
+        if !out.status.success() {
+            return Err(BridgeError::NonZeroExit {
+                app: app.to_string(),
+                verb: verb.to_string(),
+                status: out.status.code().unwrap_or(-1),
+                stderr: truncate_diag(&stderr, DIAG_LIMIT),
+            });
+        }
+
         return Ok(parsed);
     }
 
@@ -211,7 +258,7 @@ where
         app: app.to_string(),
         verb: verb.to_string(),
         status: out.status.code().unwrap_or(-1),
-        stderr,
+        stderr: truncate_diag(&stderr, DIAG_LIMIT),
     })
 }
 
@@ -235,7 +282,10 @@ where
     serde_json::from_value(v.clone()).map_err(|e| BridgeError::Decode {
         app: app.to_string(),
         verb: verb.to_string(),
-        message: format!("type mismatch ({e}): {v}"),
+        message: format!(
+            "type mismatch ({e}): {}",
+            truncate_diag(&v.to_string(), DIAG_LIMIT)
+        ),
     })
 }
 
@@ -287,7 +337,7 @@ where
             app: family.to_string(),
             verb: verb.to_string(),
             status: out.status.code().unwrap_or(-1),
-            stderr,
+            stderr: truncate_diag(&stderr, DIAG_LIMIT),
         });
     };
 
@@ -295,7 +345,10 @@ where
         serde_json::from_str(&candidate).map_err(|e| BridgeError::Decode {
             app: family.to_string(),
             verb: verb.to_string(),
-            message: format!("not JSON ({e}): {candidate}"),
+            message: format!(
+                "not JSON ({e}): {}",
+                truncate_diag(&candidate, DIAG_LIMIT)
+            ),
         })?;
 
     if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
@@ -307,6 +360,20 @@ where
                 .get("code")
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
+        });
+    }
+
+    // Same correctness fix as `call`: a clean-shaped JSON object on
+    // stdout with no `error` field is not enough to call this a
+    // success when the subprocess actually crashed. Audit log will
+    // record the failure either way; surfacing it here keeps callers
+    // from acting on a phantom-success.
+    if !out.status.success() {
+        return Err(BridgeError::NonZeroExit {
+            app: family.to_string(),
+            verb: verb.to_string(),
+            status: out.status.code().unwrap_or(-1),
+            stderr: truncate_diag(&stderr, DIAG_LIMIT),
         });
     }
 

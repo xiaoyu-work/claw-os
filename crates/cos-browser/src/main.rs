@@ -8,6 +8,13 @@ use tokio::process::Command as TokioCommand;
 use tokio::time::{timeout, Duration};
 use url::Url;
 
+// Shared SSRF policy. Lives in `url_safety.rs` so the worker binary
+// can include it too — cos-browser has two `[[bin]]` targets and no
+// library, so we share via `#[path]` instead of `use crate::…`.
+#[path = "url_safety.rs"]
+mod url_safety;
+use url_safety::{recheck_no_rebind, validate_navigable_url};
+
 #[derive(Parser)]
 #[command(name = "cos-browser", about = "cos-browser - Agent-first headless browser for Claw OS (vendored from Obscura)")]
 struct Args {
@@ -219,7 +226,20 @@ async fn run_multi_worker_serve(
     let mut children = Vec::new();
 
     for i in 0..workers {
-        let worker_port = port + 1 + i;
+        // `port + 1 + i` would overflow u16 silently for any
+        // `port` close to 65535 (and any non-trivial worker count).
+        // Use checked arithmetic so the spawn fails loudly instead
+        // of binding workers on wrapped-around port numbers.
+        let worker_port = port
+            .checked_add(1)
+            .and_then(|p| p.checked_add(i))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "worker port {} + 1 + {} overflows u16",
+                    port,
+                    i
+                )
+            })?;
         let mut cmd = std::process::Command::new(&exe);
         cmd.arg("serve").arg("--port").arg(worker_port.to_string());
         if let Some(ref p) = proxy {
@@ -249,15 +269,49 @@ async fn run_multi_worker_serve(
 
     loop {
         let (client_stream, peer_addr) = listener.accept().await?;
-        let worker_port = port + 1 + (next_worker % workers);
+        // Same overflow guard as the worker-spawn loop: a `port`
+        // close to 65535 plus `(next_worker % workers)` would wrap
+        // silently and route to the wrong process.
+        let worker_offset = next_worker % workers;
+        let worker_port = port
+            .checked_add(1)
+            .and_then(|p| p.checked_add(worker_offset))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "worker port {} + 1 + {} overflows u16",
+                    port,
+                    worker_offset
+                )
+            })?;
         next_worker = next_worker.wrapping_add(1);
 
         tracing::debug!("Routing {} to worker port {}", peer_addr, worker_port);
 
+        // The original code called `peek(&mut buf)` once and treated
+        // the result as if it always filled the buffer. peek() is
+        // free to return fewer bytes than requested (and routinely
+        // does when the TCP segment hasn't been fully assembled yet),
+        // so we'd compare a partial prefix against `b"GET "` and
+        // route the connection as if it weren't HTTP. Loop until we
+        // either see four bytes or the peer half-closes.
         let mut peek_buf = [0u8; 4];
-        client_stream.peek(&mut peek_buf).await?;
+        let mut got = 0usize;
+        while got < peek_buf.len() {
+            let n = client_stream.peek(&mut peek_buf[got..]).await?;
+            if n == 0 {
+                break;
+            }
+            // peek() returns the *cumulative* count including any
+            // earlier bytes that were already in the kernel buffer —
+            // just take what it gave us and try again if short.
+            got = n.max(got);
+            if n >= peek_buf.len() {
+                break;
+            }
+        }
+        let peek_ready = &peek_buf[..got];
 
-        if &peek_buf == b"GET " {
+        if peek_ready == b"GET " {
             let mut full_peek = [0u8; 256];
             let n = client_stream.peek(&mut full_peek).await?;
             let request_line = String::from_utf8_lossy(&full_peek[..n]);
@@ -344,6 +398,13 @@ async fn run_fetch(
     eval: Option<String>,
     quiet: bool,
 ) -> anyhow::Result<()> {
+    // Reject internal, file://, and DNS-resolved private IPs before
+    // we hand the URL to obscura. Keeps every SSRF gadget that lives
+    // behind a public hostname (e.g. `nip.io` → 127.0.0.1, CNAME to
+    // a metadata service IP) from reaching the network stack.
+    let (validated_url, resolved_before) = validate_navigable_url(url_str)?;
+    let _ = validated_url; // navigation uses the original string
+
     let context = Arc::new(BrowserContext::with_options("fetch".to_string(), None, stealth));
     let mut page = Page::new("fetch-page".to_string(), context);
 
@@ -364,6 +425,15 @@ async fn run_fetch(
             url_str,
             timeout_secs
         ),
+    }
+
+    // DNS-rebinding check: after navigation, re-resolve the host and
+    // confirm the IP set didn't suddenly include a private address.
+    if let Err(e) = recheck_no_rebind(
+        &Url::parse(url_str).unwrap_or_else(|_| Url::parse("about:blank").unwrap()),
+        &resolved_before,
+    ) {
+        anyhow::bail!("post-fetch validation failed: {}", e);
     }
 
     if !quiet {
@@ -512,6 +582,17 @@ async fn run_parallel_scrape(
         anyhow::bail!("No URLs provided. Pass at least one URL to scrape.");
     }
 
+    // Validate every URL up-front. Catches typos and SSRF gadgets
+    // before we burn time spawning workers for them. A single bad
+    // URL fails the whole batch — easier than reporting per-URL
+    // validation errors mixed in with real fetch failures. The
+    // workers re-validate independently (so a rebinding peer can't
+    // serve a different IP after this gate); we only do the
+    // pre-flight here to fail fast on plainly-internal URLs.
+    for u in &urls {
+        let _ = validate_navigable_url(u)?;
+    }
+
     eprintln!(
         "Scraping {} URLs with {} concurrent workers (per-worker timeout: {}s)...",
         total, concurrency, timeout_secs
@@ -544,7 +625,22 @@ async fn run_parallel_scrape(
         let worker_path = worker_path.clone();
 
         let handle = tokio::spawn(async move {
-            let _permit = sem.acquire().await.unwrap();
+            // Semaphore::acquire returns Err only when the Semaphore
+            // has been closed — that doesn't happen anywhere in
+            // this binary, but unwrap()ing on the Err arm would
+            // panic the worker task and leave the parent waiting
+            // forever for the JoinHandle. Convert to a graceful
+            // failure result instead.
+            let _permit = match sem.acquire().await {
+                Ok(p) => p,
+                Err(_) => {
+                    return serde_json::json!({
+                        "url": url,
+                        "error": "semaphore closed",
+                        "time_ms": 0,
+                    });
+                }
+            };
             let task_start = Instant::now();
 
             let mut child = match TokioCommand::new(worker_path.as_ref())
@@ -605,8 +701,18 @@ async fn run_parallel_scrape(
                     Err(_) => return Err("timeout".to_string()),
                 };
 
-                let nav_resp: serde_json::Value =
-                    serde_json::from_str(resp_line.trim()).unwrap_or(serde_json::json!({"ok": false}));
+                let nav_resp: serde_json::Value = match serde_json::from_str(resp_line.trim()) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return Err(format!(
+                            "worker emitted non-JSON navigate response: {} (raw: {:?})",
+                            e,
+                            // Truncate to keep this off-log of any
+                            // sensitive content the worker echoed.
+                            resp_line.chars().take(120).collect::<String>(),
+                        ));
+                    }
+                };
 
                 if !nav_resp["ok"].as_bool().unwrap_or(false) {
                     return Err(
@@ -636,8 +742,16 @@ async fn run_parallel_scrape(
                     let mut resp_line = String::new();
                     match timeout(read_timeout, reader.read_line(&mut resp_line)).await {
                         Ok(Ok(bytes)) if bytes > 0 => {
-                            let resp: serde_json::Value = serde_json::from_str(resp_line.trim())
-                                .unwrap_or(serde_json::json!({"ok": false}));
+                            let resp: serde_json::Value = match serde_json::from_str(resp_line.trim()) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    return Err(format!(
+                                        "worker emitted non-JSON eval response: {} (raw: {:?})",
+                                        e,
+                                        resp_line.chars().take(120).collect::<String>(),
+                                    ));
+                                }
+                            };
                             resp["result"].clone()
                         }
                         Ok(Ok(_)) | Ok(Err(_)) => return Err("Read failed".to_string()),
@@ -695,11 +809,20 @@ async fn run_parallel_scrape(
     let total_time = start.elapsed();
 
     if format == "json" {
+        let avg_ms = if total > 0 {
+            total_time.as_millis() as f64 / total as f64
+        } else {
+            // Belt-and-braces: the early bail on `total == 0` should
+            // prevent us getting here, but keep the math defensible
+            // so a future refactor that drops the bail can't trip
+            // a div-by-zero on the metrics path.
+            0.0
+        };
         let output = serde_json::json!({
             "total_urls": total,
             "concurrency": concurrency,
             "total_time_ms": total_time.as_millis(),
-            "avg_time_ms": total_time.as_millis() as f64 / total as f64,
+            "avg_time_ms": avg_ms,
             "results": results,
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
@@ -760,35 +883,8 @@ fn dump_links(page: &Page) {
 // URL policy + screenshot subcommand (Claw OS additions)
 // ---------------------------------------------------------------------------
 
-/// Reject schemes other than http/https and obviously-internal hostnames.
-///
-/// obscura-net's validate_url() also blocks private IPv4/IPv6 ranges, but it
-/// allows the file:// scheme. For cos-browser (which is invoked by agents on
-/// behalf of users) we reject file:// outright and reject the literal hosts
-/// "localhost" / "ip6-localhost" so we don't depend on DNS resolution to
-/// catch the trivial cases. Sub-resource fetches still flow through
-/// obscura-net which enforces the IP-range rules.
-fn validate_navigable_url(input: &str) -> anyhow::Result<Url> {
-    let url = Url::parse(input)
-        .map_err(|e| anyhow::anyhow!("invalid URL '{}': {}", input, e))?;
-    let scheme = url.scheme();
-    if scheme != "http" && scheme != "https" {
-        anyhow::bail!(
-            "scheme '{}' is not allowed (only http/https)",
-            scheme
-        );
-    }
-    match url.host_str() {
-        None => anyhow::bail!("URL has no host: {}", input),
-        Some(h) => {
-            let h_lower = h.to_ascii_lowercase();
-            if h_lower == "localhost" || h_lower == "ip6-localhost" {
-                anyhow::bail!("access to {} is not allowed", h);
-            }
-        }
-    }
-    Ok(url)
-}
+// `validate_navigable_url`, `reject_private_ip`, and `recheck_no_rebind`
+// now live in `url_safety.rs` so the worker binary can share them.
 
 async fn run_screenshot(
     url_str: &str,
@@ -798,7 +894,7 @@ async fn run_screenshot(
     full_page: bool,
     timeout_secs: u64,
 ) -> anyhow::Result<()> {
-    let _validated = validate_navigable_url(url_str)?;
+    let (validated_url, resolved_before) = validate_navigable_url(url_str)?;
 
     // Resolve a height: if --full-page, ask Obscura for document.scrollHeight
     // first so chromium captures the full document instead of just the
@@ -843,6 +939,10 @@ async fn run_screenshot(
         "--disable-dev-shm-usage",
         &screenshot_arg,
         &window_size_arg,
+        // `--` terminates chromium's option parsing so a URL that
+        // starts with `--` (e.g. an attacker-crafted argv injection)
+        // can't be reinterpreted as a chromium flag.
+        "--",
         url_str,
     ];
 
@@ -855,6 +955,15 @@ async fn run_screenshot(
 
     match result {
         Ok(Ok(out)) if out.status.success() => {
+            // After the navigation finishes, re-resolve the host so a
+            // DNS-rebinding peer (returning a public IP for our
+            // pre-flight check, then a private IP for chromium's
+            // real fetch) can't slip past us. Failures here are
+            // logged but don't tear down a successful screenshot —
+            // recheck_no_rebind only bails on a confirmed rebind.
+            if let Err(e) = recheck_no_rebind(&validated_url, &resolved_before) {
+                anyhow::bail!("post-fetch validation failed: {}", e);
+            }
             // Chromium writes screenshot to abs_output; verify and report.
             let exists = std::fs::metadata(&abs_output)
                 .map(|m| m.is_file())

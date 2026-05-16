@@ -70,6 +70,24 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional
 
 
+# Subprocess timeout — covers every shell-out to the `cos` binary. The
+# default is long enough for slow providers but bounded so a hung child
+# never blocks the calling app forever.
+_DEFAULT_TIMEOUT_S = 60
+
+
+def _truncate(value: Any, limit: int = 200) -> str:
+    """Return ``str(value)`` truncated to ``limit`` chars with an ellipsis
+    marker. Used to keep large response payloads — which routinely
+    contain the user's prompt and the model's reply — out of exception
+    strings that flow into logs.
+    """
+    s = repr(value) if not isinstance(value, str) else value
+    if len(s) <= limit:
+        return s
+    return s[:limit] + f"... [{len(s) - limit} more bytes elided]"
+
+
 # ---------------------------------------------------------------------------
 # Exceptions
 # ---------------------------------------------------------------------------
@@ -371,7 +389,18 @@ def budget(app_id: Optional[str] = None) -> Budget:
     if not app:
         raise AiError("budget: app_id is required")
     cmd = [_cos_binary(), "agent", "budget", "show", app]
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_DEFAULT_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise AiUnavailable(
+            f"cos agent budget show timed out after {_DEFAULT_TIMEOUT_S}s"
+        ) from exc
     text = (proc.stdout or "").strip() or (proc.stderr or "").strip()
     if not text:
         raise AiUnavailable(
@@ -381,12 +410,18 @@ def budget(app_id: Optional[str] = None) -> Budget:
         env = json.loads(text)
     except json.JSONDecodeError as exc:
         raise AiUnavailable(
-            f"cos agent budget show returned non-JSON output: {text!r}"
+            f"cos agent budget show returned non-JSON output: {_truncate(text)}"
         ) from exc
+    if proc.returncode != 0:
+        # A non-zero exit always means failure, even if stdout happened
+        # to be valid JSON — the body may be a partial frame.
+        raise AiUnavailable(
+            f"cos agent budget show exited {proc.returncode}: {_truncate(text)}"
+        )
     return Budget(
         period=env.get("period", ""),
         units_used=int(env.get("units_used", 0) or 0),
-        units_cap=0,
+        units_cap=int(env.get("units_cap", 0) or 0),
     )
 
 
@@ -448,7 +483,18 @@ def _dispatch(
     if tools:
         cmd.extend(["--tools", ",".join(tools)])
 
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_DEFAULT_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise AiUnavailable(
+            f"cos ai {modality} timed out after {_DEFAULT_TIMEOUT_S}s"
+        ) from exc
     payload_text = (proc.stdout or "").strip() or (proc.stderr or "").strip()
     if not payload_text:
         raise AiUnavailable(
@@ -459,7 +505,7 @@ def _dispatch(
         envelope = json.loads(payload_text)
     except json.JSONDecodeError as exc:
         raise AiUnavailable(
-            f"cos ai chat returned non-JSON output: {payload_text!r}"
+            f"cos ai chat returned non-JSON output: {_truncate(payload_text)}"
         ) from exc
 
     if proc.returncode != 0 or "error" in envelope:

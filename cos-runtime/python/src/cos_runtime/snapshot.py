@@ -60,6 +60,7 @@ import fcntl
 import json
 import os
 import shutil
+import stat
 import time
 import uuid
 from typing import Iterator, Optional, Tuple
@@ -177,7 +178,18 @@ def _write_inverse_blob(session_dir: str, data: bytes) -> str:
 
 
 def _now_rfc3339() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    # Include nanoseconds so concurrent snapshots in the same second
+    # still get distinct timestamps. The `Z` suffix keeps the string
+    # compatible with `serde(format = "rfc3339")` on the Rust side.
+    now = time.time()
+    secs = int(now)
+    nanos = int(round((now - secs) * 1_000_000_000))
+    # Clamp in case rounding pushed us into the next second.
+    if nanos >= 1_000_000_000:
+        secs += 1
+        nanos -= 1_000_000_000
+    base = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(secs))
+    return f"{base}.{nanos:09d}Z"
 
 
 def _append_mutation_record(
@@ -325,6 +337,33 @@ def _mirror_to_durable_session(
             f"snapshot: durable mirror failed for {abs_path}: {exc}",
             file=sys.stderr,
         )
+        # Leave a marker in the session dir so a later validator
+        # (or `cos perms undo`) can surface the inconsistency
+        # instead of silently lying about the rollback path.
+        try:
+            sd = _durable_session_dir(session_id)
+            if sd:
+                marker_dir = os.path.join(sd, "mirror-errors")
+                os.makedirs(marker_dir, exist_ok=True)
+                marker = os.path.join(
+                    marker_dir,
+                    f"{int(time.time())}-{uuid.uuid4().hex[:8]}.json",
+                )
+                with open(marker, "w") as mf:
+                    json.dump(
+                        {
+                            "at": _now_rfc3339(),
+                            "op": op,
+                            "path": abs_path,
+                            "kind": kind,
+                            "error": str(exc),
+                        },
+                        mf,
+                    )
+        except Exception:
+            # If even the marker write fails there's nothing more
+            # we can do without crashing the gated op.
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -356,16 +395,32 @@ def snapshot(path: str, op: str, *, session_id: Optional[str] = None) -> Optiona
     seq, entry_dir = _allocate_seq_dir(sid_dir)
 
     abs_path = os.path.abspath(path)
-    if os.path.isdir(abs_path) and not os.path.islink(abs_path):
+    # Classify the snapshot kind without ever following the final
+    # symlink: an attacker who plants a symlink at a sensitive
+    # absolute path (e.g. /etc/shadow) and then triggers a gated
+    # write would otherwise dereference the link and snapshot the
+    # symlink's *target* contents (or in `replay_reverse`, restore
+    # those target contents over the link). Using `os.lstat` keeps
+    # symlinks opaque to snapshotting.
+    try:
+        st = os.lstat(abs_path)
+    except FileNotFoundError:
+        st = None
+
+    if st is None:
+        kind = "absent"
+    elif stat.S_ISLNK(st.st_mode):
+        # Symlink at the leaf: snapshot the link itself.
+        kind = "file"
+        shutil.copy2(abs_path, os.path.join(entry_dir, "blob"), follow_symlinks=False)
+    elif stat.S_ISDIR(st.st_mode):
         kind = "dir"
         shutil.copytree(abs_path, os.path.join(entry_dir, "blob"), symlinks=True)
-    elif os.path.exists(abs_path) or os.path.islink(abs_path):
+    else:
         kind = "file"
         # copy2 preserves stat metadata; works for regular files +
         # symlinks (follow_symlinks=False keeps the link intact)
         shutil.copy2(abs_path, os.path.join(entry_dir, "blob"), follow_symlinks=False)
-    else:
-        kind = "absent"
 
     meta = {
         "op": op,
@@ -422,26 +477,87 @@ def iter_entries(session_id: str) -> Iterator[dict]:
         yield meta
 
 
+def _safe_to_delete_root(target: str) -> bool:
+    """Return True iff ``target`` is inside a root we're willing to
+    delete on undo. Used by :func:`replay_reverse` for ``kind == 'absent'``:
+    if the gated op originally created a path at ``target``, undo
+    should remove whatever is there now — but only if it's somewhere
+    we have a legitimate claim to. The allowlist is intentionally
+    narrow: the user's home dir, the data dir, the workspace dir, and
+    anything explicitly opted-in via ``$COS_UNDO_DELETE_ROOTS`` (colon
+    list).
+    """
+    target_abs = os.path.realpath(target)
+    roots: list[str] = []
+    home = os.environ.get("HOME")
+    if home:
+        roots.append(os.path.realpath(home))
+    roots.append(os.path.realpath(_data_root()))
+    workspace = os.environ.get("COS_WORKSPACE")
+    if workspace:
+        roots.append(os.path.realpath(workspace))
+    extra = os.environ.get("COS_UNDO_DELETE_ROOTS", "")
+    for r in extra.split(":"):
+        r = r.strip()
+        if r:
+            roots.append(os.path.realpath(r))
+    # Reject targets outside of every allowlisted root.
+    for root in roots:
+        if not root:
+            continue
+        # Make sure we don't accidentally allowlist "/" via an empty
+        # env var.
+        if root in ("/", ""):
+            continue
+        try:
+            rel = os.path.relpath(target_abs, root)
+        except ValueError:
+            continue
+        if not rel.startswith(".."):
+            return True
+    return False
+
+
 def replay_reverse(session_id: str) -> list[dict]:
     """Walk snapshot entries newest-first and restore each. Returns a
     list of per-entry ``{seq, path, action, ok, error?}`` records the
     caller can render.
+
+    If any individual entry fails we record the failure but continue
+    with the remaining entries so the caller can see the full report.
+    On any failure we also stash a marker file under
+    ``<trash_dir>/.replay-failure-<timestamp>.json`` so a follow-up
+    operator can find a half-restored tree and resume manually rather
+    than silently move on. ``kind == "absent"`` entries require the
+    target path to live inside an allowlisted root
+    (see :func:`_safe_to_delete_root`); deletions of foreign-looking
+    trees are skipped with a `denied` status.
     """
     entries = list(iter_entries(session_id))
-    report = []
+    report: list[dict] = []
+    any_failure = False
     for meta in reversed(entries):
         rec = {"seq": meta.get("seq"), "path": meta.get("path"), "op": meta.get("op")}
         target = meta.get("path")
         kind = meta.get("kind")
         try:
             if kind == "absent":
-                # The original state was "nothing here" — wipe whatever
-                # the gated op put there.
-                if os.path.isdir(target) and not os.path.islink(target):
-                    shutil.rmtree(target)
-                elif os.path.exists(target) or os.path.islink(target):
-                    os.remove(target)
-                rec["action"] = "removed"
+                if not target or not _safe_to_delete_root(target):
+                    rec["action"] = "skipped"
+                    rec["ok"] = False
+                    rec["error"] = (
+                        "refusing to delete outside allowlisted roots; "
+                        "set $COS_UNDO_DELETE_ROOTS to opt in"
+                    )
+                else:
+                    # The original state was "nothing here" — wipe
+                    # whatever the gated op put there.
+                    if os.path.isdir(target) and not os.path.islink(target):
+                        shutil.rmtree(target)
+                    elif os.path.lexists(target):
+                        os.remove(target)
+                    rec["action"] = "removed"
+                    rec["ok"] = True
             elif kind == "file":
                 # Restore the file (overwrite whatever exists now).
                 if os.path.isdir(target) and not os.path.islink(target):
@@ -453,8 +569,9 @@ def replay_reverse(session_id: str) -> list[dict]:
                     os.path.join(meta["_dir"], "blob"), target, follow_symlinks=False
                 )
                 rec["action"] = "restored"
+                rec["ok"] = True
             elif kind == "dir":
-                if os.path.exists(target):
+                if os.path.lexists(target):
                     if os.path.isdir(target) and not os.path.islink(target):
                         shutil.rmtree(target)
                     else:
@@ -463,14 +580,31 @@ def replay_reverse(session_id: str) -> list[dict]:
                     os.path.join(meta["_dir"], "blob"), target, symlinks=True
                 )
                 rec["action"] = "restored"
+                rec["ok"] = True
             else:
                 rec["action"] = "skipped"
+                rec["ok"] = False
                 rec["error"] = f"unknown kind: {kind}"
-            rec["ok"] = "error" not in rec
         except Exception as exc:  # pragma: no cover — defensive
             rec["ok"] = False
             rec["error"] = str(exc)
+        if rec.get("ok") is False:
+            any_failure = True
         report.append(rec)
+    if any_failure:
+        # Best-effort marker so a follow-up validator / human can find
+        # the half-restored state.
+        try:
+            sid_dir = trash_dir(session_id)
+            marker_path = os.path.join(
+                sid_dir,
+                f".replay-failure-{int(time.time())}-{uuid.uuid4().hex[:8]}.json",
+            )
+            os.makedirs(sid_dir, exist_ok=True)
+            with open(marker_path, "w") as mf:
+                json.dump({"at": _now_rfc3339(), "report": report}, mf)
+        except Exception:
+            pass
     return report
 
 

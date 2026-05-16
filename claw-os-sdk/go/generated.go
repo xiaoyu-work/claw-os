@@ -4,6 +4,22 @@
 
 package clawossdk
 
+import "fmt"
+
+// ExpectedWireVersion is the wire-protocol version the kernel must
+// advertise on every envelope. Mirrors generated.rs's
+// EXPECTED_WIRE_VERSION.
+const ExpectedWireVersion = 1
+
+// CheckWireVersion reports an error when the envelope's
+// wire_version does not match what this SDK supports.
+func CheckWireVersion(seen int) error {
+	if seen != ExpectedWireVersion {
+		return fmt.Errorf("unsupported wire_version: got %d, expected %d", seen, ExpectedWireVersion)
+	}
+	return nil
+}
+
 // Ai — AI request / reply.
 // Shape of the data payload returned by `cos ai chat|embed|image-generate`. Apps
 // call this via SDK helpers (claw_os_sdk.ai.chat / ai.embed /
@@ -17,11 +33,11 @@ type Ai struct {
 	Embedding []float64 `json:"embedding,omitempty"`
 	Embeddings [][]float64 `json:"embeddings,omitempty"`
 	OutputPath string `json:"output_path,omitempty"`
-	Usage AiUsage `json:"usage,omitempty"`
-	Budget AiBudget `json:"budget,omitempty"`
-	Review AiReview `json:"review,omitempty"`
+	Usage *AiUsage `json:"usage,omitempty"`
+	Budget *AiBudget `json:"budget,omitempty"`
+	Review *AiReview `json:"review,omitempty"`
 	ToolCalls []AiToolCalls `json:"tool_calls,omitempty"`
-	Raw interface{} `json:"raw,omitempty"`
+	Raw *interface{} `json:"raw,omitempty"`
 }
 
 // AiUsage — ai_usage.
@@ -52,7 +68,7 @@ type AiReview struct {
 type AiToolCalls struct {
 	Name string `json:"name"`
 	Args map[string]interface{} `json:"args,omitempty"`
-	Result interface{} `json:"result,omitempty"`
+	Result *interface{} `json:"result,omitempty"`
 }
 
 // App — App-verb invocation reply.
@@ -110,7 +126,7 @@ type Arg struct {
 // Caprequest — capRequest.
 type Caprequest struct {
 	Verb string `json:"verb"`
-	Scope interface{} `json:"scope,omitempty"`
+	Scope *interface{} `json:"scope,omitempty"`
 }
 
 // Perms — Permissions request / reply.
@@ -131,6 +147,42 @@ type Perms struct {
 // app verbs in that the AI plans them automatically.
 type Tool struct {
 	Tool string `json:"tool"`
-	Result interface{} `json:"result,omitempty"`
+	Result *interface{} `json:"result,omitempty"`
 	AuditId string `json:"audit_id,omitempty"`
+}
+
+// ValidateAiVerb reports an error if value is not in the ai.verb enum.
+func ValidateAiVerb(value string) error {
+	switch value {
+	case "ai.chat", "ai.embed", "ai.image_generate", "ai.tool":
+		return nil
+	}
+	return fmt.Errorf("invalid ai.verb value: %q", value)
+}
+
+// ValidateAiReviewSafety reports an error if value is not in the ai_review.safety enum.
+func ValidateAiReviewSafety(value string) error {
+	switch value {
+	case "strict", "balanced", "off":
+		return nil
+	}
+	return fmt.Errorf("invalid ai_review.safety value: %q", value)
+}
+
+// ValidateManifestRuntime reports an error if value is not in the manifest.runtime enum.
+func ValidateManifestRuntime(value string) error {
+	switch value {
+	case "python", "binary", "node", "go":
+		return nil
+	}
+	return fmt.Errorf("invalid manifest.runtime value: %q", value)
+}
+
+// ValidatePermsDecision reports an error if value is not in the perms.decision enum.
+func ValidatePermsDecision(value string) error {
+	switch value {
+	case "allow", "deny", "prompt":
+		return nil
+	}
+	return fmt.Errorf("invalid perms.decision value: %q", value)
 }
