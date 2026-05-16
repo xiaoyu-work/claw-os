@@ -176,6 +176,18 @@ pub struct BlurState {
     pub offset: f32,
 }
 
+impl std::fmt::Debug for BlurState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BlurState")
+            .field("mips_len", &self.mips.len())
+            .field("size", &self.size)
+            .field("format", &self.format)
+            .field("passes", &self.passes)
+            .field("offset", &self.offset)
+            .finish()
+    }
+}
+
 impl Default for BlurState {
     fn default() -> Self {
         Self {
@@ -199,7 +211,7 @@ impl BlurState {
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct BlurStates {
     inner: HashMap<Output, BlurState>,
 }
@@ -350,7 +362,13 @@ impl Element for BlurRenderElement {
     }
 
     fn src(&self) -> Rectangle<f64, Buffer> {
-        Rectangle::from_size(self.geometry.size.to_f64().to_buffer(1.0, Transform::Normal))
+        Rectangle::from_size(
+            self.geometry
+                .size
+                .to_logical(1)
+                .to_buffer(1, Transform::Normal)
+                .to_f64(),
+        )
     }
 
     fn geometry(&self, _scale: Scale<f64>) -> Rectangle<i32, Physical> {
