@@ -73,11 +73,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         page::AppMode::NewInstall { create_user: pwd::Passwd::current_user().is_some_and(|current_user| current_user.name == "cosmic-initial-setup") }
     };
 
-    // Allow the wizard window to fill whatever output cosmic-comp gives us
-    // (typically the entire screen in kiosk mode). The old 900x650 cap left
-    // a large cosmic-comp black backdrop around the window, which made the
-    // wallpaper appear "framed" instead of edge-to-edge.
-    let settings = Settings::default();
+    // Request a huge initial window size — cosmic-comp clamps it to the actual
+    // output dimensions, which gives us full-screen coverage without needing
+    // set_mode(Fullscreen) to win the race against the surface configure event.
+    // Combined with no size_limits, the wallpaper image inside view() (which
+    // already has Length::Fill) covers the entire screen edge-to-edge.
+    let settings = Settings::default().size(cosmic::iced::Size::new(7680.0, 4320.0));
 
     cosmic::app::run::<App>(settings, mode)?;
 
