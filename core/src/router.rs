@@ -959,7 +959,12 @@ fn run_app_command(
         }
         Err(e) => {
             audit::log_entry(&audit, app_name, command, args, start, "error", Some(&e));
-            // Enrich error with recovery hints for agents
+            // Enrich error with recovery hints for agents. The envelope
+            // is returned as `Err` (not `Ok`) so the exit code stays
+            // non-zero — main.rs already re-parses Err strings that
+            // happen to be JSON objects and surfaces their fields
+            // verbatim, so downstream JSON consumers still get the
+            // recovery payload.
             if let Some(recovery) = recovery_hint(&e) {
                 let mut err_output = json!({
                     "error": e,
@@ -968,7 +973,7 @@ fn run_app_command(
                 if let Some(code) = error_code_from_hint(&e) {
                     err_output["code"] = json!(code);
                 }
-                Ok(Some(err_output.to_string()))
+                Err(err_output.to_string())
             } else {
                 Err(e)
             }
@@ -1802,15 +1807,20 @@ fn dispatch_builtin(
                 "error",
                 Some(e),
             );
-            // Enrich error with recovery hints for agents
+            // Same shape as `dispatch_app` above: failures stay failures
+            // (exit code 1) even when we attach a recovery envelope.
+            // main.rs parses Err strings that are JSON objects and
+            // surfaces them as-is, so consumers still get the structured
+            // recovery payload.
             if let Some(recovery) = recovery_hint(e) {
-                Ok(Some(
-                    json!({
-                        "error": e.to_string(),
-                        "recovery": recovery,
-                    })
-                    .to_string(),
-                ))
+                let mut err_output = json!({
+                    "error": e.to_string(),
+                    "recovery": recovery,
+                });
+                if let Some(code) = error_code_from_hint(e) {
+                    err_output["code"] = json!(code);
+                }
+                Err(err_output.to_string())
             } else {
                 Err(e.clone())
             }
@@ -2155,6 +2165,34 @@ mod tests {
         let v = parse(dispatch(&["help".into(), "nope".into()]).unwrap());
         assert!(v["primitives"].is_array());
         assert!(v["note"].as_str().unwrap().contains("unknown help topic"));
+    }
+
+    #[test]
+    fn dispatch_builtin_recovery_envelope_propagates_failure() {
+        // Regression: a builtin handler that returns Err with a string
+        // matching a `recovery_hint` pattern (e.g. "Permission denied"
+        // when writing /etc/cos/config.json as a non-root user) used to
+        // be re-wrapped in `Ok(Some(envelope))`. That zeroed out the CLI
+        // exit code, so callers like cosmic-settings' agent page parsed
+        // the failure as a default-valued success and silently flipped
+        // the provider back to openai. The wrapper must keep failures
+        // failing while still attaching the recovery hints.
+        fn boom(_command: &str, _args: &[String]) -> Result<Value, String> {
+            Err("write /etc/cos/config.json.tmp: Permission denied (os error 13)".into())
+        }
+        let result = dispatch_builtin(&["agent".into(), "boom".into()], "agent", boom);
+        let err = result.expect_err("dispatch_builtin must propagate Err for failed primitives");
+        let v: Value = serde_json::from_str(&err).expect("recovery envelope must be JSON");
+        assert!(
+            v["error"].as_str().unwrap().contains("Permission denied"),
+            "error preserved: {v}"
+        );
+        assert!(v["recovery"].is_object(), "recovery attached: {v}");
+        assert_eq!(
+            v["code"].as_str(),
+            Some(crate::errors::IO_PERMISSION_DENIED),
+            "structured error code attached: {v}"
+        );
     }
 
     #[test]
