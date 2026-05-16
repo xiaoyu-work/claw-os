@@ -81,6 +81,7 @@ use smithay::{
 use smithay_egui::EguiState;
 
 pub mod animations;
+pub mod blur;
 pub mod clipped_surface;
 pub mod cursor;
 pub mod element;
@@ -440,6 +441,12 @@ pub fn init_shaders(renderer: &mut GlesRenderer) -> Result<(), GlesError> {
             UniformName::new("window_corner_radius", UniformType::_4f),
         ],
     )?;
+
+    // Experimental: dual-Kawase backdrop blur. Errors are logged-and-
+    // swallowed inside `init_blur_shaders` so a quirky driver rejecting
+    // the niri-derived GLSL doesn't gate compositor boot. The feature
+    // itself is gated behind `AppearanceConfig::experimental_blur`.
+    blur::init_blur_shaders(renderer);
 
     let egl_context = renderer.egl_context();
     egl_context

@@ -2787,6 +2787,13 @@ impl Shell {
             self.theme.clone(),
             self.appearance_conf,
         ));
+        // Kick off the open spring animation if the user has the
+        // experimental flag on. No-op otherwise. Must run BEFORE the
+        // workspace's `map(mapped.clone(), ...)` so that the very
+        // first frame the renderer sees this surface, it sees it
+        // mid-animation.
+        mapped.start_open_animation(self.appearance_conf.experimental_window_animations);
+
         #[cfg(feature = "debug")]
         {
             mapped.set_debug(self.debug_active);

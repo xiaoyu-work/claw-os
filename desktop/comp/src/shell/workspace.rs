@@ -515,6 +515,11 @@ impl Workspace {
                 .as_ref()
                 .is_some_and(|f| f.start_at.is_some() || f.ended_at.is_some())
             || self.dirty.swap(false, Ordering::SeqCst)
+            // Window open/close spring animations also need frames
+            // scheduled until they settle. Cheap traversal — most
+            // workspaces hold <20 windows and `has_running_animation`
+            // is one Mutex lock + Instant comparison.
+            || self.mapped().any(|m| m.has_running_animation())
     }
 
     pub fn update_animations(&mut self) -> HashMap<ClientId, Client> {
