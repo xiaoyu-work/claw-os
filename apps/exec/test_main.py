@@ -234,5 +234,108 @@ class TestCmdStartScratchNaming(unittest.TestCase):
         )
 
 
+class TestShellScope(unittest.TestCase):
+    """Regression coverage for CR-2 (``cos exec run --shell`` scope).
+
+    The old code passed ``name=/bin/bash`` (or ``/bin/sh``) to
+    ``policy.require("proc.spawn", ...)`` whenever the caller used
+    ``--shell``. That meant a single ``proc.spawn name=/bin/bash``
+    grant let the agent execute *any* shell command via
+    ``--shell``, defeating per-binary scoping.
+
+    The fix parses the first real command token out of the shell
+    string and uses *that* as the spawn name (with ``wild=True`` as a
+    last resort when the parse yields nothing). These tests assert
+    the policy check sees the user-visible command, not the shell.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["COS_DATA_DIR"] = self.tmp.name
+        sys.modules.pop("main", None)
+        import main  # type: ignore[import-not-found]
+
+        self.main = main
+
+    def tearDown(self) -> None:
+        sys.modules.pop("main", None)
+        os.environ.pop("COS_DATA_DIR", None)
+        self.tmp.cleanup()
+
+    def _capture(self):
+        captured: list[dict] = []
+
+        def spy(verb, **kwargs):
+            captured.append({"verb": verb, **kwargs})
+            return None
+
+        return captured, spy
+
+    def _fake_run(self, *args, **kwargs):
+        class FakeProc:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return FakeProc()
+
+    def test_shell_run_scopes_to_first_real_binary(self):
+        """``--shell 'echo hi'`` must require ``proc.spawn name=echo``,
+        **not** ``proc.spawn name=/bin/bash``.
+        """
+        captured, spy = self._capture()
+        # Bypass the bounded-Popen drain path with a stub that mimics
+        # its successful return so we never spawn a real shell here.
+        with mock.patch.object(self.main.policy, "require", side_effect=spy), mock.patch(
+            "main._run_bounded",
+            return_value=(0, "hi\n", "", False, False, None),
+        ):
+            self.main.cmd_run(["--shell", "echo hi"])
+
+        spawns = [c for c in captured if c["verb"] == "proc.spawn"]
+        self.assertTrue(spawns, "cmd_run --shell never reached proc.spawn check")
+        names = [c.get("name") for c in spawns]
+        self.assertNotIn(
+            "/bin/bash",
+            names,
+            "CR-2 regression: --shell scoped to /bin/bash, granting wild shell access",
+        )
+        self.assertNotIn("/bin/sh", names)
+        self.assertIn("echo", names, f"expected proc.spawn name=echo, got {names}")
+
+    def test_shell_run_skips_env_var_assignment(self):
+        """``--shell 'FOO=bar python3 script.py'`` must scope to ``python3``."""
+        captured, spy = self._capture()
+        with mock.patch.object(self.main.policy, "require", side_effect=spy), mock.patch(
+            "main._run_bounded",
+            return_value=(0, "", "", False, False, None),
+        ):
+            self.main.cmd_run(["--shell", "FOO=bar python3 -c 'print(1)'"])
+
+        spawns = [c for c in captured if c["verb"] == "proc.spawn"]
+        names = [c.get("name") for c in spawns]
+        self.assertIn(
+            "python3",
+            names,
+            f"shell scope should skip VAR=val prefix and pick python3, got {names}",
+        )
+
+    def test_shell_run_falls_back_to_wild_for_unparseable(self):
+        """Pure shell builtins / empty command — fall back to ``wild=True``
+        so the policy check still happens but is honest about scope.
+        """
+        captured, spy = self._capture()
+        with mock.patch.object(self.main.policy, "require", side_effect=spy), mock.patch(
+            "main._run_bounded",
+            return_value=(0, "", "", False, False, None),
+        ):
+            self.main.cmd_run(["--shell", ""])
+
+        spawns = [c for c in captured if c["verb"] == "proc.spawn"]
+        self.assertTrue(spawns)
+        # No specific binary => wild=True (caller must hold the wild grant)
+        self.assertTrue(any(c.get("wild") is True for c in spawns))
+
+
 if __name__ == "__main__":
     unittest.main()

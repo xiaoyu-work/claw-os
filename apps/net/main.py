@@ -3,7 +3,6 @@
 import argparse
 import json
 import os
-import shutil
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -12,7 +11,42 @@ from cos_runtime import policy
 
 USER_AGENT = "cos/" + os.environ.get("COS_VERSION", "0.1.0")
 DEFAULT_TIMEOUT = int(os.environ.get("COS_NET_TIMEOUT", "30"))
-MAX_RESPONSE_BYTES = 5_000_000  # 5 MB response body limit
+MAX_RESPONSE_BYTES = 5_000_000  # 5 MB response body limit for fetch
+MAX_DOWNLOAD_BYTES = int(os.environ.get("COS_NET_DOWNLOAD_MAX", str(512 * 1024 * 1024)))
+_READ_CHUNK = 64 * 1024
+
+
+def _read_bounded(resp, limit):
+    """Read at most ``limit`` bytes from ``resp`` and report whether
+    the response was truncated.
+
+    ``resp.read()`` without an argument will happily read multi-GiB
+    bodies into memory; this helper streams in 64 KiB chunks and stops
+    as soon as the cap is hit, so a malicious / misconfigured server
+    can't OOM the agent.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    truncated = False
+    while True:
+        # +1 so we can detect that *more* bytes were available beyond
+        # the limit (and therefore the response was truncated).
+        want = min(_READ_CHUNK, limit + 1 - total)
+        if want <= 0:
+            truncated = True
+            break
+        chunk = resp.read(want)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > limit:
+            truncated = True
+            break
+    raw = b"".join(chunks)
+    if truncated:
+        raw = raw[:limit]
+    return raw, truncated
 
 
 def _build_fetch_parser():
@@ -80,11 +114,8 @@ def cmd_fetch(args):
 
     try:
         with urllib.request.urlopen(req, timeout=opts.timeout) as resp:
-            raw = resp.read()
+            raw, truncated = _read_bounded(resp, MAX_RESPONSE_BYTES)
             resp_headers = dict(resp.getheaders())
-            truncated = len(raw) > MAX_RESPONSE_BYTES
-            if truncated:
-                raw = raw[:MAX_RESPONSE_BYTES]
             body = raw.decode("utf-8", errors="replace")
             result = {
                 "url": opts.url,
@@ -120,7 +151,11 @@ def cmd_download(args):
     if output_path is None:
         filename = os.path.basename(urllib.parse.urlparse(opts.url).path) or "download"
         output_path = os.path.join(os.environ.get("COS_HOME") or os.environ.get("HOME") or "/root", filename)
-    output_path = os.path.abspath(output_path)
+    # ``realpath`` so the kernel's fs.write check sees the actual
+    # destination after symlink resolution; ``abspath`` alone would
+    # let a symlink in the output dir redirect the write to a path
+    # the caller doesn't have fs.write on.
+    output_path = os.path.realpath(output_path)
 
     policy.require("net.dial", host=host)
     policy.require("fs.write", path=output_path)
@@ -130,11 +165,31 @@ def cmd_download(args):
 
     try:
         with urllib.request.urlopen(req, timeout=DEFAULT_TIMEOUT) as resp:
-            os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+            parent = os.path.dirname(output_path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            # Bounded streaming copy so an unbounded-length response
+            # can't fill the disk. ``COS_NET_DOWNLOAD_MAX`` overrides
+            # the default 512 MiB limit.
+            total = 0
+            truncated = False
             with open(output_path, "wb") as f:
-                shutil.copyfileobj(resp, f)
-            size = os.path.getsize(output_path)
-            return {"url": opts.url, "path": output_path, "bytes": size}
+                while True:
+                    chunk = resp.read(_READ_CHUNK)
+                    if not chunk:
+                        break
+                    if total + len(chunk) > MAX_DOWNLOAD_BYTES:
+                        f.write(chunk[: MAX_DOWNLOAD_BYTES - total])
+                        total = MAX_DOWNLOAD_BYTES
+                        truncated = True
+                        break
+                    f.write(chunk)
+                    total += len(chunk)
+            result = {"url": opts.url, "path": output_path, "bytes": total}
+            if truncated:
+                result["truncated"] = True
+                result["limit"] = MAX_DOWNLOAD_BYTES
+            return result
     except urllib.error.HTTPError as e:
         return {"error": str(e), "status": e.code}
     except urllib.error.URLError as e:

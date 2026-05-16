@@ -70,5 +70,65 @@ class TestCmdQueryTruncation(unittest.TestCase):
         self.assertIn("error", result)
 
 
+class TestNameTraversal(unittest.TestCase):
+    """Regression coverage for CR-3 (db name path-traversal).
+
+    Database names used to be plumbed straight through
+    ``os.path.join(DB_DIR, f"{name}.db")``. A name like
+    ``"../../../etc/passwd"`` therefore happily walked above
+    ``DB_DIR`` — and because the verbs only ever opened the file
+    via sqlite, the agent could ``cos db tables ../../../etc/foo``
+    to ``stat`` arbitrary fs paths.
+
+    The fix validates the name against a strict character set
+    (``[A-Za-z0-9_.-]``), refuses names with ``..`` / leading
+    ``.`` / path separators, and verifies the resolved path's
+    parent equals ``realpath(DB_DIR)``.
+    """
+
+    def test_parent_directory_traversal_rejected(self):
+        for bad in (
+            "../etc/passwd",
+            "../../etc/passwd",
+            "../shadow",
+        ):
+            result = cmd_query([bad, "SELECT 1"])
+            self.assertIn(
+                "error",
+                result,
+                f"CR-3 regression: traversal name {bad!r} was accepted",
+            )
+
+    def test_absolute_path_rejected(self):
+        for bad in ("/etc/passwd", "/tmp/x", "/"):
+            result = cmd_query([bad, "SELECT 1"])
+            self.assertIn("error", result, f"absolute name {bad!r} was accepted")
+
+    def test_separator_in_name_rejected(self):
+        for bad in ("foo/bar", "foo\\bar", "sub/dir/db"):
+            result = cmd_query([bad, "SELECT 1"])
+            self.assertIn("error", result, f"name with separator {bad!r} was accepted")
+
+    def test_leading_dot_rejected(self):
+        for bad in (".hidden", "..parent", "."):
+            result = cmd_query([bad, "SELECT 1"])
+            self.assertIn("error", result, f"hidden-style name {bad!r} was accepted")
+
+    def test_null_byte_rejected(self):
+        result = cmd_query(["foo\x00bar", "SELECT 1"])
+        self.assertIn("error", result)
+
+    def test_empty_name_rejected(self):
+        result = cmd_query(["", "SELECT 1"])
+        self.assertIn("error", result)
+
+    def test_valid_names_resolve_under_db_dir(self):
+        """Sanity: a legal name still works after validation."""
+        path = db_main._db_path("safe_name-1.test")
+        real_parent = os.path.realpath(os.path.dirname(path))
+        real_db_dir = os.path.realpath(db_main.DB_DIR)
+        self.assertEqual(real_parent, real_db_dir)
+
+
 if __name__ == "__main__":
     unittest.main()

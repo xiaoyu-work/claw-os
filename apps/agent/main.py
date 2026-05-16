@@ -47,13 +47,18 @@ def _start_bridge():
     if not systemctl:
         return False
     try:
+        # ``stdin=DEVNULL`` so a confused systemctl can't block on a
+        # password prompt; we'd rather fail fast and report it.
         subprocess.run(
             [systemctl, "--user", "start", "cos-agent-bridge.service"],
             timeout=5,
             check=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
         return True
-    except Exception:
+    except (subprocess.TimeoutExpired, OSError):
         return False
 
 

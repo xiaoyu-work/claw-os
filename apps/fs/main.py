@@ -6,36 +6,75 @@ import os
 import shutil
 import subprocess
 import sys
-import time
 
-from cos_runtime import policy
-from cos_runtime import snapshot
+# Import the shared helper package living at ``apps/_shared``. Each app
+# runs as its own Python process so we splice the parent of this app
+# directory onto sys.path before the import.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _shared.atomic import atomic_write_bytes, atomic_write_json  # noqa: E402,F401
+from _shared.env_scrub import scrub_env  # noqa: E402
+
+from cos_runtime import policy  # noqa: E402
+from cos_runtime import snapshot  # noqa: E402
 
 
 WORKSPACE = "/workspace"
 META_FILENAME = ".cos-meta.json"
 MAX_READ_BYTES = 1_000_000  # 1 MB output limit for file reads
+SEARCH_TIMEOUT = 30  # seconds
+COPY_TIMEOUT = 120  # bounded for the rare shutil-uses-subprocess path
+
+# Cap on how many bytes a single line-range read may return.
+MAX_LINE_RANGE_BYTES = 16 * 1024 * 1024  # 16 MiB
 
 
 def _abs(path):
-    """Return absolute path."""
-    return os.path.abspath(path)
+    """Resolve ``path`` to its real, symlink-followed absolute form.
+
+    SECURITY: every path that flows to ``policy.require`` MUST be
+    realpath-resolved here first, otherwise a symlink like
+    ``/workspace/escape -> /etc/shadow`` would pass an
+    ``fs.read /workspace/escape`` capability check and then leak
+    ``/etc/shadow`` on ``open()``. ``os.path.realpath`` resolves the
+    final filename component too, closing the TOCTOU window between
+    the cap check and the open.
+
+    For paths that do not yet exist (write / mkdir / rename
+    destinations), ``realpath`` resolves whichever leading components
+    do exist and leaves the tail alone, which is exactly what we
+    want.
+    """
+    return os.path.realpath(path)
+
+
+def _open_nofollow(path, flags, mode=0o644):
+    """``os.open`` with ``O_NOFOLLOW`` so a symlink swapped in after
+    the cap check fails the open instead of silently following.
+
+    ``O_NOFOLLOW`` only affects the *final* component; we rely on
+    :func:`_abs` to have resolved every intermediate dir. The pair
+    is the standard defence against symlink-race sandbox escapes.
+    """
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    return os.open(path, flags | nofollow, mode)
 
 
 def _load_meta(directory):
     """Load the .cos-meta.json sidecar from a directory."""
     meta_path = os.path.join(directory, META_FILENAME)
     if os.path.isfile(meta_path):
-        with open(meta_path) as f:
-            return json.load(f)
+        try:
+            with open(meta_path) as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError, ValueError):
+            return {}
     return {}
 
 
 def _save_meta(directory, meta):
-    """Save the .cos-meta.json sidecar to a directory."""
+    """Save the .cos-meta.json sidecar to a directory atomically."""
     meta_path = os.path.join(directory, META_FILENAME)
-    with open(meta_path, "w") as f:
-        json.dump(meta, f, indent=2)
+    atomic_write_json(meta_path, meta)
 
 
 # ── Command handlers ─────────────────────────────────────────────
@@ -99,41 +138,78 @@ def cmd_read(args):
 
     # Line range mode: --start N [--end M]
     if start_line is not None:
-        with open(path, "r", errors="replace") as f:
-            lines = f.readlines()
-        total_lines = len(lines)
-        # 1-indexed, inclusive
-        s = max(0, start_line - 1)
-        e = end_line if end_line is not None else total_lines
-        selected = lines[s:e]
-        content = "".join(selected)
-        if len(content) > MAX_READ_BYTES:
-            content = content[:MAX_READ_BYTES]
+        # SECURITY/OOM: stream line-by-line and only collect the
+        # requested range, capped by MAX_LINE_RANGE_BYTES so we never
+        # hand the agent a 4GB blob even if start/end span a huge
+        # file. The old code did ``f.readlines()`` which materialised
+        # the whole file in memory before slicing.
+        s = max(1, start_line)
+        e = end_line if end_line is not None else None
+        if e is not None and e < s:
             return {
                 "path": path,
-                "content": content,
+                "content": "",
                 "start_line": start_line,
                 "end_line": e,
-                "total_lines": total_lines,
-                "truncated": True,
+                "total_lines": 0,
+                "lines_returned": 0,
             }
-        return {
+        selected_chunks = []
+        selected_count = 0
+        total_lines = 0
+        truncated = False
+        size = 0
+        try:
+            with open(path, "r", errors="replace") as f:
+                for total_lines, line in enumerate(f, start=1):
+                    if total_lines < s:
+                        continue
+                    if e is not None and total_lines > e:
+                        # Still need to keep counting to report total_lines accurately.
+                        continue
+                    if not truncated:
+                        new_size = size + len(line)
+                        if new_size > MAX_LINE_RANGE_BYTES:
+                            room = MAX_LINE_RANGE_BYTES - size
+                            if room > 0:
+                                selected_chunks.append(line[:room])
+                                size = MAX_LINE_RANGE_BYTES
+                                selected_count += 1
+                            truncated = True
+                        else:
+                            selected_chunks.append(line)
+                            size = new_size
+                            selected_count += 1
+        except OSError as exc:
+            return {"error": f"could not read {path}: {exc}"}
+        content = "".join(selected_chunks)
+        result = {
             "path": path,
             "content": content,
             "start_line": start_line,
-            "end_line": e,
+            "end_line": e if e is not None else total_lines,
             "total_lines": total_lines,
-            "lines_returned": len(selected),
+            "lines_returned": selected_count,
         }
+        if truncated:
+            result["truncated"] = True
+        return result
 
     # Byte offset mode (original behavior)
     total_size = os.path.getsize(path)
     effective_limit = min(limit, MAX_READ_BYTES)
 
-    with open(path, "rb") as f:
-        if offset > 0:
-            f.seek(offset)
-        raw = f.read(effective_limit + 1)
+    try:
+        fd = _open_nofollow(path, os.O_RDONLY)
+    except OSError as exc:
+        return {"error": f"could not open {path}: {exc}"}
+    try:
+        with os.fdopen(fd, "rb", closefd=True) as f:
+            if offset > 0:
+                f.seek(offset)
+            raw = f.read(effective_limit + 1)
+    except OSError as exc:
+        return {"error": f"could not read {path}: {exc}"}
 
     truncated = len(raw) > effective_limit
     if truncated:
@@ -169,9 +245,12 @@ def cmd_write(args):
     if parent and not os.path.isdir(parent):
         os.makedirs(parent, exist_ok=True)
     snapshot.snapshot(path, "write")
-    with open(path, "w") as f:
-        n = f.write(content)
-    return {"path": path, "bytes": n}
+    # Atomic write — tmp + fsync + replace + fsync(parent). Prevents a
+    # concurrent reader from seeing a half-written file and keeps the
+    # original on the disk on crash.
+    data = content.encode("utf-8") if isinstance(content, str) else bytes(content)
+    atomic_write_bytes(path, data)
+    return {"path": path, "bytes": len(data)}
 
 
 def cmd_rm(args):
@@ -233,28 +312,38 @@ def cmd_search(args):
     if not os.path.exists(search_path):
         return {"error": f"path not found: {search_path}"}
     matches = []
-    # Use ripgrep for content search
+    # Use ripgrep with --json so we don't have to guess at separator
+    # parsing on filenames that happen to contain `:` (URLs, Windows
+    # drive letters mounted into the sandbox, etc.).
     try:
         result = subprocess.run(
-            ["rg", "--no-heading", "--line-number", "--color", "never", query, search_path],
+            ["rg", "--json", "--color", "never", query, search_path],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=SEARCH_TIMEOUT,
+            stdin=subprocess.DEVNULL,
+            env=scrub_env(),
+            check=False,
         )
         for line in result.stdout.splitlines():
-            # rg output: path:line_number:content
-            parts = line.split(":", 2)
-            if len(parts) >= 3:
-                matches.append({
-                    "path": parts[0],
-                    "line": int(parts[1]),
-                    "text": parts[2],
-                })
-            elif len(parts) == 2:
-                matches.append({
-                    "path": parts[0],
-                    "line": int(parts[1]),
-                })
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if record.get("type") != "match":
+                continue
+            data = record.get("data") or {}
+            path_field = (data.get("path") or {}).get("text") or ""
+            line_no = data.get("line_number") or 0
+            line_text = (data.get("lines") or {}).get("text") or ""
+            matches.append({
+                "path": path_field,
+                "line": int(line_no),
+                "text": line_text.rstrip("\n"),
+            })
     except FileNotFoundError:
         # rg not installed, fall back to filename search only
         pass
@@ -367,7 +456,47 @@ def cmd_copy(args):
         os.makedirs(parent, exist_ok=True)
     snapshot.snapshot(dst, "copy")
     if os.path.isdir(src):
-        shutil.copytree(src, dst, symlinks=True)
+        # SECURITY: pass ``symlinks=False`` so copytree follows symlinks
+        # rather than preserving them. ``ignore_dangling_symlinks=True``
+        # ensures a dangling symlink in the tree does not abort the
+        # whole copy. After the copy, walk the destination and verify
+        # every entry's realpath stays inside ``dst`` — refuses to leak
+        # a symlink target outside the destination root.
+        try:
+            shutil.copytree(
+                src,
+                dst,
+                symlinks=False,
+                ignore_dangling_symlinks=True,
+            )
+        except shutil.Error as exc:
+            return {"error": f"copy failed: {exc}"}
+        dst_root = os.path.realpath(dst)
+        leaked = []
+        for dirpath, dirnames, filenames in os.walk(dst, followlinks=False):
+            for name in dirnames + filenames:
+                full = os.path.join(dirpath, name)
+                try:
+                    real = os.path.realpath(full)
+                except OSError:
+                    continue
+                try:
+                    common = os.path.commonpath([dst_root, real])
+                except ValueError:
+                    common = ""
+                if common != dst_root:
+                    leaked.append(full)
+        if leaked:
+            # Refuse the copy: tear down the destination so the agent
+            # can't read through an escape link.
+            try:
+                shutil.rmtree(dst)
+            except OSError:
+                pass
+            return {
+                "error": "refused: destination contained symlinks pointing outside scope",
+                "leaked": leaked,
+            }
         return {"from": src, "to": dst, "kind": "dir"}
     shutil.copy2(src, dst)
     return {"from": src, "to": dst, "kind": "file"}
@@ -407,10 +536,17 @@ def cmd_read_bytes(args):
         return {"error": f"file not found: {path}"}
     total_size = os.path.getsize(path)
     effective_limit = min(limit, MAX_READ_BYTES_BINARY)
-    with open(path, "rb") as f:
-        if offset > 0:
-            f.seek(offset)
-        raw = f.read(effective_limit + 1)
+    try:
+        fd = _open_nofollow(path, os.O_RDONLY)
+    except OSError as exc:
+        return {"error": f"could not open {path}: {exc}"}
+    try:
+        with os.fdopen(fd, "rb", closefd=True) as f:
+            if offset > 0:
+                f.seek(offset)
+            raw = f.read(effective_limit + 1)
+    except OSError as exc:
+        return {"error": f"could not read {path}: {exc}"}
     truncated = len(raw) > effective_limit
     if truncated:
         raw = raw[:effective_limit]
@@ -455,9 +591,8 @@ def cmd_write_bytes(args):
     if parent and not os.path.isdir(parent):
         os.makedirs(parent, exist_ok=True)
     snapshot.snapshot(path, "write_bytes")
-    with open(path, "wb") as f:
-        n = f.write(data)
-    return {"path": path, "bytes": n}
+    atomic_write_bytes(path, data)
+    return {"path": path, "bytes": len(data)}
 
 
 # ── Dispatch ──────────────────────────────────────────────────────

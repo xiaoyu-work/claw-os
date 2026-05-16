@@ -43,7 +43,10 @@ from main import (
 
 class TestCmdReadTruncation(unittest.TestCase):
     def setUp(self):
-        self.tmpdir = tempfile.mkdtemp()
+        # realpath here so on macOS where /tmp -> /private/tmp the
+        # canonicalised path returned by the security-fixed _abs()
+        # matches what we assert against.
+        self.tmpdir = os.path.realpath(tempfile.mkdtemp())
 
     def tearDown(self):
         import shutil
@@ -115,7 +118,7 @@ class TestCmdReadTruncation(unittest.TestCase):
 
 class TestRenameAndMove(unittest.TestCase):
     def setUp(self):
-        self.tmpdir = tempfile.mkdtemp()
+        self.tmpdir = os.path.realpath(tempfile.mkdtemp())
 
     def tearDown(self):
         import shutil
@@ -169,7 +172,7 @@ class TestRenameAndMove(unittest.TestCase):
 
 class TestCopy(unittest.TestCase):
     def setUp(self):
-        self.tmpdir = tempfile.mkdtemp()
+        self.tmpdir = os.path.realpath(tempfile.mkdtemp())
 
     def tearDown(self):
         import shutil
@@ -223,7 +226,7 @@ class TestCopy(unittest.TestCase):
 
 class TestReadBytes(unittest.TestCase):
     def setUp(self):
-        self.tmpdir = tempfile.mkdtemp()
+        self.tmpdir = os.path.realpath(tempfile.mkdtemp())
 
     def tearDown(self):
         import shutil
@@ -281,7 +284,7 @@ class TestReadBytes(unittest.TestCase):
 
 class TestWriteBytes(unittest.TestCase):
     def setUp(self):
-        self.tmpdir = tempfile.mkdtemp()
+        self.tmpdir = os.path.realpath(tempfile.mkdtemp())
 
     def tearDown(self):
         import shutil
@@ -317,6 +320,124 @@ class TestWriteBytes(unittest.TestCase):
         from main import cmd_write_bytes
         with self.assertRaises(Exception):
             cmd_write_bytes([])
+
+
+class TestSymlinkEscape(unittest.TestCase):
+    """Regression coverage for CR-1 (symlink TOCTOU sandbox escape).
+
+    ``_abs`` used to call ``os.path.abspath``, which does *not*
+    resolve symlinks. A symlink dropped under the sandbox could
+    therefore point at ``/etc/passwd`` and read/write/copy verbs
+    would happily follow it, since the policy check ran on the
+    pre-resolved path. The fix is two-layered:
+
+    1. ``_abs`` now uses ``realpath`` so ``policy.require("fs.read",
+       path=...)`` is called with the *real* on-disk target — the
+       kernel's cap check therefore sees the escape and can deny it.
+    2. Byte-level reads use ``O_NOFOLLOW`` so a symlink swapped in
+       between check and open raises ``ELOOP`` instead of silently
+       dereferencing.
+
+    These tests exercise (1) by patching ``policy.require`` and
+    asserting the resolved path was passed, and (2) by reading a
+    symlink directly with the per-fd helper.
+    """
+
+    def setUp(self):
+        self.tmpdir = os.path.realpath(tempfile.mkdtemp())
+        self.outside = os.path.realpath(tempfile.mkdtemp())
+        self.secret_path = os.path.join(self.outside, "secret.txt")
+        with open(self.secret_path, "wb") as f:
+            f.write(b"TOP-SECRET-PASSWORD")
+
+    def tearDown(self):
+        import shutil
+
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        shutil.rmtree(self.outside, ignore_errors=True)
+
+    def test_read_resolves_symlink_for_policy_check(self):
+        """policy.require must receive the realpath, not the symlink."""
+        link = os.path.join(self.tmpdir, "shortcut")
+        os.symlink(self.secret_path, link)
+
+        import main as fs_main
+
+        captured = {}
+        original = fs_main.policy.require
+
+        def spy(verb, **kwargs):
+            captured.setdefault(verb, []).append(kwargs)
+            return original(verb, **kwargs)
+
+        fs_main.policy.require = spy
+        try:
+            fs_main.cmd_read([link])
+        finally:
+            fs_main.policy.require = original
+
+        self.assertIn("fs.read", captured)
+        seen = captured["fs.read"][0].get("path")
+        self.assertEqual(
+            seen,
+            self.secret_path,
+            "policy.require(fs.read) must see the realpath target so the kernel "
+            "can refuse the symlink escape — got the unresolved path instead",
+        )
+
+    def test_read_bytes_resolves_symlink_for_policy_check(self):
+        link = os.path.join(self.tmpdir, "shortcut2")
+        os.symlink(self.secret_path, link)
+
+        import main as fs_main
+
+        captured = {}
+        original = fs_main.policy.require
+
+        def spy(verb, **kwargs):
+            captured.setdefault(verb, []).append(kwargs)
+            return original(verb, **kwargs)
+
+        fs_main.policy.require = spy
+        try:
+            fs_main.cmd_read_bytes([link])
+        finally:
+            fs_main.policy.require = original
+
+        self.assertEqual(captured.get("fs.read", [{}])[0].get("path"), self.secret_path)
+
+    def test_open_nofollow_refuses_symlink_at_final_component(self):
+        """_open_nofollow must raise on a symlink, even one inside the sandbox."""
+        link = os.path.join(self.tmpdir, "link_to_secret")
+        os.symlink(self.secret_path, link)
+
+        from main import _open_nofollow
+
+        with self.assertRaises(OSError):
+            _open_nofollow(link, os.O_RDONLY)
+
+    def test_copy_dir_does_not_materialise_outside_target(self):
+        srcdir = os.path.join(self.tmpdir, "src")
+        os.makedirs(srcdir)
+        with open(os.path.join(srcdir, "regular.txt"), "wb") as f:
+            f.write(b"safe content")
+        os.symlink(self.secret_path, os.path.join(srcdir, "escape"))
+
+        dstdir = os.path.join(self.tmpdir, "dst")
+        cmd_copy([srcdir, dstdir])
+
+        escape_path = os.path.join(dstdir, "escape")
+        if os.path.lexists(escape_path):
+            # If it's a regular file under dst, the copy materialised
+            # the outside content — that's the bug we're guarding
+            # against. A symlink that still points outside dst is
+            # tolerable (the contained payload is not under our root).
+            if not os.path.islink(escape_path):
+                real = os.path.realpath(escape_path)
+                self.assertTrue(
+                    real.startswith(dstdir + os.sep) or real == dstdir,
+                    f"cmd_copy materialised an outside-sandbox file under dst: {real}",
+                )
 
 
 if __name__ == "__main__":

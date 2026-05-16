@@ -16,17 +16,30 @@ import fcntl
 import fnmatch
 import json
 import os
+import sys
 from typing import Dict, Optional
 
-from claw_os_sdk.serve import App
+# Use the shared atomic-write helper so both kv entry points (this
+# session server + the one-shot main.py) commit to disk under the
+# same lock-then-replace discipline.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _shared.atomic import atomic_write_bytes  # noqa: E402
+
+from claw_os_sdk.serve import App  # noqa: E402
 
 DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 STORE_PATH = os.path.join(DATA_DIR, "kv.json")
+LOCK_PATH = STORE_PATH + ".lock"
 
 app = App()
 
 
 _cache: Optional[Dict[str, str]] = None
+
+
+def _lock_path() -> str:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    return LOCK_PATH
 
 
 def _load() -> Dict[str, str]:
@@ -42,27 +55,36 @@ def _load() -> Dict[str, str]:
     if not os.path.isfile(STORE_PATH):
         _cache = {}
         return _cache
-    with open(STORE_PATH, "r") as f:
-        fcntl.flock(f, fcntl.LOCK_SH)
+    lock = _lock_path()
+    with open(lock, "a+") as lock_fd:
+        fcntl.flock(lock_fd, fcntl.LOCK_SH)
         try:
             try:
-                data = json.load(f)
-            except (json.JSONDecodeError, ValueError):
+                with open(STORE_PATH, "r") as f:
+                    data = json.load(f)
+            except (OSError, json.JSONDecodeError, ValueError):
                 data = {}
         finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
     _cache = data if isinstance(data, dict) else {}
     return _cache
 
 
 def _save(data: Dict[str, str]) -> None:
+    """Persist ``data`` atomically: acquire the exclusive lock, then
+    write via ``atomic_write_bytes`` so a concurrent reader never sees
+    a truncated store. The old code opened the file in ``"w"`` mode,
+    which truncates *before* the flock could be acquired.
+    """
     os.makedirs(DATA_DIR, exist_ok=True)
-    with open(STORE_PATH, "w") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
+    lock = _lock_path()
+    with open(lock, "a+") as lock_fd:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
         try:
-            json.dump(data, f)
+            payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
+            atomic_write_bytes(STORE_PATH, payload)
         finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
 
 
 @app.tool(

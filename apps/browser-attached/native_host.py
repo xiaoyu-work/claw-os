@@ -36,11 +36,43 @@ import time
 import uuid
 
 
-SOCK_PATH = os.environ.get(
-    "CLAW_BROWSER_SOCK",
-    os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "claw-browser.sock"),
-)
-MAX_FRAME = 64 * 1024 * 1024
+def _resolve_sock_path() -> str:
+    """Resolve the bridge socket path, refusing to fall back to /tmp.
+
+    SECURITY: prior versions silently fell back to
+    ``/tmp/claw-browser.sock`` when ``XDG_RUNTIME_DIR`` was unset.
+    ``/tmp`` is world-writable, opening the bridge to local-user
+    spoofing attacks (another user pre-creates the path as a
+    symlink they control, then races our ``os.unlink`` /
+    ``socket.bind`` to land the socket under their tree).
+    """
+    override = os.environ.get("CLAW_BROWSER_SOCK")
+    if override:
+        return override
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if not runtime:
+        raise RuntimeError(
+            "$XDG_RUNTIME_DIR is not set and CLAW_BROWSER_SOCK is not "
+            "overridden — refusing to fall back to /tmp. Start the "
+            "host inside a user session (loginctl ensures XDG_RUNTIME_DIR)."
+        )
+    return os.path.join(runtime, "claw-browser.sock")
+
+
+# Resolved lazily: import-time errors would break ``--probe`` paths
+# in dev. Callers that need the value should call _resolve_sock_path()
+# directly so the failure surfaces at the use site.
+try:
+    SOCK_PATH = _resolve_sock_path()
+except RuntimeError:
+    SOCK_PATH = ""
+
+# Drop the per-frame ceiling from 64 MiB to 8 MiB. Browser-bridge
+# traffic is small JSON RPC: tab metadata, click/fill requests, a
+# truncated DOM snapshot, etc. The largest legitimate frame is a
+# page screenshot, which the extension chunks. 64 MiB was an
+# allocation grenade waiting for a single bogus length header.
+MAX_FRAME = 8 * 1024 * 1024
 
 
 # ---------------------------------------------------------------------------
@@ -83,17 +115,23 @@ class Bridge:
         self._ext_stdin = sys.stdin.buffer
         self._ext_stdout = sys.stdout.buffer
         self._ext_lock = threading.Lock()
+        self._extension_alive = True
 
     def submit(self, request: dict, timeout: float) -> dict:
         rid = request.get("id") or uuid.uuid4().hex
         request["id"] = rid
         q: queue.Queue = queue.Queue(maxsize=1)
         with self._lock:
+            if not self._extension_alive:
+                return {"id": rid, "ok": False, "error": "extension is not connected"}
             self._pending[rid] = q
 
         try:
-            with self._ext_lock:
-                _nm_write(self._ext_stdout, request)
+            try:
+                with self._ext_lock:
+                    _nm_write(self._ext_stdout, request)
+            except OSError as exc:
+                return {"id": rid, "ok": False, "error": f"failed to send to extension: {exc}"}
             try:
                 return q.get(timeout=timeout)
             except queue.Empty:
@@ -116,6 +154,25 @@ class Bridge:
             return False
         return True
 
+    def fail_all_pending(self, reason: str) -> None:
+        """Mark the extension as dead and wake every blocked caller.
+
+        Called when the extension reader thread observes the stdio
+        port has closed. Without this, in-flight ``submit`` calls
+        would each wait the full ``timeout`` window before returning
+        "extension did not respond" — wasting up to 45s per stuck
+        request.
+        """
+        with self._lock:
+            self._extension_alive = False
+            pending = list(self._pending.items())
+            self._pending.clear()
+        for rid, q in pending:
+            try:
+                q.put_nowait({"id": rid, "ok": False, "error": reason})
+            except queue.Full:
+                pass
+
 
 # ---------------------------------------------------------------------------
 # Threads
@@ -135,22 +192,51 @@ def extension_reader(bridge: Bridge, shutdown: threading.Event) -> None:
             # Unsolicited / late event from the extension.  Nothing to do for
             # MVP — a future version may broadcast to subscribers.
             continue
+    # Extension stdio closed: wake every blocked socket caller so they
+    # don't sit on their 45 s timeout window pointlessly.
+    bridge.fail_all_pending("extension disconnected")
     shutdown.set()
 
 
 def serve_socket(bridge: Bridge, shutdown: threading.Event) -> None:
     """Accept Unix-socket connections from cos app browser-attached callers."""
     try:
-        os.unlink(SOCK_PATH)
-    except FileNotFoundError:
-        pass
+        sock_path = _resolve_sock_path()
+    except RuntimeError as exc:
+        sys.stderr.write(f"native_host: refusing to bind socket: {exc}\n")
+        shutdown.set()
+        return
 
-    parent = os.path.dirname(SOCK_PATH) or "."
+    # If a previous instance left a socket behind, only remove it
+    # after confirming it's dead — never unconditionally ``os.unlink``
+    # a path that could have been swapped in by another user.
+    if os.path.exists(sock_path):
+        if _socket_alive(sock_path):
+            sys.stderr.write(
+                f"native_host: socket {sock_path} is alive; refusing to start a second host\n"
+            )
+            shutdown.set()
+            return
+        try:
+            os.unlink(sock_path)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            sys.stderr.write(f"native_host: cannot clean stale socket {sock_path}: {exc}\n")
+            shutdown.set()
+            return
+
+    parent = os.path.dirname(sock_path) or "."
     os.makedirs(parent, exist_ok=True)
 
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    srv.bind(SOCK_PATH)
-    os.chmod(SOCK_PATH, stat.S_IRUSR | stat.S_IWUSR)
+    try:
+        srv.bind(sock_path)
+    except OSError as exc:
+        sys.stderr.write(f"native_host: bind({sock_path}) failed: {exc}\n")
+        shutdown.set()
+        return
+    os.chmod(sock_path, stat.S_IRUSR | stat.S_IWUSR)
     srv.listen(8)
     srv.settimeout(0.5)
 
@@ -173,8 +259,39 @@ def serve_socket(bridge: Bridge, shutdown: threading.Event) -> None:
         except OSError:
             pass
         try:
-            os.unlink(SOCK_PATH)
+            os.unlink(sock_path)
         except FileNotFoundError:
+            pass
+
+
+def _socket_alive(path: str) -> bool:
+    """Best-effort liveness probe for an existing socket file.
+
+    Tries a non-blocking connect; if it succeeds the socket has a
+    process bound to it and we must not unlink it. If the connect
+    fails with ECONNREFUSED / FileNotFoundError we treat it as
+    stale and safe to remove.
+    """
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    except OSError:
+        return False
+    try:
+        s.settimeout(0.2)
+        try:
+            s.connect(path)
+            return True
+        except (ConnectionRefusedError, FileNotFoundError):
+            return False
+        except OSError:
+            # Any other error: assume alive and refuse to unlink. Safer
+            # to fail to start than to risk hijacking another user's
+            # socket.
+            return True
+    finally:
+        try:
+            s.close()
+        except OSError:
             pass
 
 

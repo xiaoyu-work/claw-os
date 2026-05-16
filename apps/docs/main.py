@@ -52,7 +52,12 @@ import subprocess
 import sys
 import time
 
-from cos_runtime import policy
+# Pull in scrub_env so recollq / recollindex children don't inherit
+# provider API keys.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _shared.env_scrub import scrub_env  # noqa: E402
+
+from cos_runtime import policy  # noqa: E402
 
 
 HOME = pathlib.Path(os.path.expanduser("~"))
@@ -64,6 +69,7 @@ DEFAULT_TOPDIRS = ["~/Documents", "~/Desktop", "~/Downloads"]
 DEFAULT_MAX_RESULTS = 20
 MAX_MAX_RESULTS = 200
 INDEX_TIMEOUT_SECS = 1800  # 30 minutes; recollindex on first run can be slow
+QUERY_TIMEOUT_SECS = 60  # recollq should be instant; cap it so a wedged child can't hang the agent
 
 
 # ---------------------------------------------------------------------------
@@ -149,20 +155,26 @@ def cmd_search(args):
         }
 
     bin_ = _recoll_bin("recollq", "CLAW_RECOLLQ_BIN")
-    proc = subprocess.run(
-        [
-            bin_,
-            "-t",
-            "-n",
-            f"{max_results}:0",
-            "-F",
-            "url mtype mtime abstract",
-            opts.query,
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        proc = subprocess.run(
+            [
+                bin_,
+                "-t",
+                "-n",
+                f"{max_results}:0",
+                "-F",
+                "url mtype mtime abstract",
+                opts.query,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=QUERY_TIMEOUT_SECS,
+            stdin=subprocess.DEVNULL,
+            env=scrub_env(),
+        )
+    except subprocess.TimeoutExpired:
+        return {"error": f"recollq exceeded {QUERY_TIMEOUT_SECS}s"}
     if proc.returncode != 0:
         err = (proc.stderr or proc.stdout or "").strip() or "recollq failed"
         return {"error": f"recollq (exit {proc.returncode}): {err}"}
@@ -201,13 +213,22 @@ def cmd_index(args):
         }
 
     started = time.time()
-    proc = subprocess.run(
-        [bin_],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=INDEX_TIMEOUT_SECS,
-    )
+    try:
+        proc = subprocess.run(
+            [bin_],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=INDEX_TIMEOUT_SECS,
+            stdin=subprocess.DEVNULL,
+            env=scrub_env(),
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "error": f"recollindex exceeded {INDEX_TIMEOUT_SECS}s",
+            "elapsed_secs": round(time.time() - started, 2),
+        }
     elapsed = time.time() - started
     ok = proc.returncode == 0
     return {
