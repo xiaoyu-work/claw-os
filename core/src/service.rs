@@ -142,16 +142,58 @@ fn log_path(name: &str) -> PathBuf {
 // PID helpers
 // ---------------------------------------------------------------------------
 
-fn read_pid(name: &str) -> Option<u32> {
-    fs::read_to_string(pid_path(name)).ok()?.trim().parse().ok()
+/// Read the PID file written by [`write_pid`].
+///
+/// Backward-compatible format: the file is either
+/// ```text
+/// 12345          # legacy (cos < this commit)
+/// 12345:6789012  # pid plus /proc/<pid>/stat starttime ticks
+/// ```
+/// On legacy files the second tuple element is `None` — the caller
+/// will then fall through to the basic `kill(pid, 0)` aliveness
+/// check, which preserves the prior behaviour.
+fn read_pid(name: &str) -> Option<(u32, Option<u64>)> {
+    let raw = fs::read_to_string(pid_path(name)).ok()?;
+    parse_pid_file_contents(&raw)
 }
 
+/// Parse a pid-file body into `(pid, optional starttime)`. Split out
+/// of [`read_pid`] so it is unit-testable without poking the
+/// filesystem (and without depending on the `COS_DATA_DIR` env var,
+/// which is mutated by other tests in this crate).
+fn parse_pid_file_contents(raw: &str) -> Option<(u32, Option<u64>)> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if let Some((pid_s, st_s)) = s.split_once(':') {
+        let pid: u32 = pid_s.parse().ok()?;
+        let st: Option<u64> = st_s.parse().ok();
+        Some((pid, st))
+    } else {
+        Some((s.parse().ok()?, None))
+    }
+}
+
+/// Persist the running service's identity. We embed the kernel's
+/// `starttime` (clock ticks since boot, field 22 of
+/// `/proc/<pid>/stat`) alongside the pid so a later `cos service
+/// stop` can detect pid-recycling: if the file says
+/// `12345:6789012` but the pid currently has a different starttime,
+/// some unrelated process now owns 12345 and we must NOT signal it.
+///
+/// On non-Linux the starttime probe returns `None` and we fall back
+/// to writing just the pid — same as the legacy format.
 fn write_pid(name: &str, pid: u32) {
     let path = pid_path(name);
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    let _ = fs::write(&path, pid.to_string());
+    let body = match crate::proc::read_start_time_ticks_pub(pid) {
+        Some(st) => format!("{pid}:{st}"),
+        None => pid.to_string(),
+    };
+    let _ = fs::write(&path, body);
 }
 
 fn clear_pid(name: &str) {
@@ -171,6 +213,103 @@ fn is_alive(pid: u32) -> bool {
             .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()))
             .unwrap_or(false)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Command line parsing
+// ---------------------------------------------------------------------------
+
+/// Parse a service definition's `command` field into argv.
+///
+/// Supports a POSIX-ish subset that covers the realistic ServiceDef
+/// authoring surface without pulling in a full shell:
+///
+///   * whitespace separates tokens
+///   * `'…'` single quotes: literal text, NO escape processing
+///   * `"…"` double quotes: literal text, with `\"`, `\\`, `\$` and
+///     `\\n`-style escapes — anything else after `\` inside `"…"` is
+///     left as-is to match POSIX (backslash is only special before
+///     `"`, `\`, `$`, `` ` `` and newline)
+///   * `\<char>` outside quotes: literal `<char>` (e.g. `\ ` → space)
+///   * unmatched quotes / a trailing backslash are reported as Err
+///
+/// Variable expansion, command substitution and globbing are NOT
+/// performed — the kernel intentionally does not run service
+/// commands through a shell, and a service author who needs those
+/// should write a wrapper script.
+fn parse_command(input: &str) -> Result<Vec<String>, String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut in_token = false;
+    let mut chars = input.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        match c {
+            ' ' | '\t' | '\n' | '\r' => {
+                if in_token {
+                    out.push(std::mem::take(&mut cur));
+                    in_token = false;
+                }
+            }
+            '\'' => {
+                in_token = true;
+                loop {
+                    match chars.next() {
+                        Some('\'') => break,
+                        Some(ch) => cur.push(ch),
+                        None => return Err("unterminated single quote".to_string()),
+                    }
+                }
+            }
+            '"' => {
+                in_token = true;
+                loop {
+                    match chars.next() {
+                        Some('"') => break,
+                        Some('\\') => match chars.next() {
+                            Some(esc @ ('"' | '\\' | '$' | '`')) => cur.push(esc),
+                            Some('\n') => {
+                                // line continuation: drop both chars
+                            }
+                            Some(ch) => {
+                                // POSIX: backslash is literal inside
+                                // dquotes when it precedes anything
+                                // other than the set above.
+                                cur.push('\\');
+                                cur.push(ch);
+                            }
+                            None => return Err("trailing backslash inside double quotes".to_string()),
+                        },
+                        Some(ch) => cur.push(ch),
+                        None => return Err("unterminated double quote".to_string()),
+                    }
+                }
+            }
+            '\\' => {
+                match chars.next() {
+                    Some('\n') => {
+                        // line continuation: drop both chars, no
+                        // token break.
+                    }
+                    Some(ch) => {
+                        in_token = true;
+                        cur.push(ch);
+                    }
+                    None => return Err("trailing backslash".to_string()),
+                }
+            }
+            _ => {
+                in_token = true;
+                cur.push(c);
+            }
+        }
+    }
+
+    if in_token {
+        out.push(cur);
+    }
+
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -457,9 +596,12 @@ fn cmd_start(args: &[String]) -> Result<Value, String> {
     let name = args.first().ok_or("usage: cos service start <name>")?;
     let def = find_service(name)?;
 
-    // Check if already running
-    if let Some(pid) = read_pid(name) {
-        if is_alive(pid) {
+    // Check if already running. Use the start-time-qualified
+    // identity check so a recycled pid (pid file from a crashed
+    // service that exited and had its pid reused) doesn't masquerade
+    // as "already running".
+    if let Some((pid, start_time)) = read_pid(name) {
+        if crate::proc::is_alive_with_start_time(pid, start_time) {
             let healthy = check_service_health(&def);
             return Ok(json!({
                 "name": name,
@@ -499,13 +641,20 @@ fn cmd_start(args: &[String]) -> Result<Value, String> {
         .try_clone()
         .map_err(|e| format!("failed to clone log file: {e}"))?;
 
-    // Parse command — split on whitespace
-    let parts: Vec<&str> = def.command.split_whitespace().collect();
+    // Parse command — quote-aware splitter so service definitions can
+    // express arguments containing spaces / shell metacharacters.
+    // E.g.:
+    //   "node server.js --root /api/v1 --message \"hello world\""
+    // The previous `split_whitespace()` would treat `\"hello` and
+    // `world\"` as two args, breaking ANY service whose argv carried
+    // a quoted token. See `parse_command` for the supported syntax.
+    let parts: Vec<String> = parse_command(&def.command)
+        .map_err(|e| format!("service {name}: invalid command syntax: {e}"))?;
     if parts.is_empty() {
         return Err(format!("service {name} has empty command"));
     }
 
-    let mut cmd = Command::new(parts[0]);
+    let mut cmd = Command::new(&parts[0]);
     if parts.len() > 1 {
         cmd.args(&parts[1..]);
     }
@@ -636,12 +785,43 @@ fn cmd_start(args: &[String]) -> Result<Value, String> {
 
 /// Graceful stop a service by name.
 /// Sequence: checkpoint → pre_stop → drain → SIGTERM → wait → SIGKILL → post_stop → clear PID
+///
+/// **PID-recycle safety:** before issuing any signal we verify the
+/// pid on file still identifies the process we originally spawned by
+/// comparing the recorded `starttime` (clock ticks) against
+/// `/proc/<pid>/stat` field 22. If the pid has been recycled into an
+/// unrelated process — anything from a system daemon to another
+/// user's editor — we refuse to send SIGTERM/SIGKILL, clear the
+/// stale pid file, and return an explicit `"pid_recycled"` status
+/// instead. Legacy pid files written by older cos (no embedded
+/// starttime) fall back to the basic `kill(pid, 0)` aliveness check,
+/// preserving prior behaviour.
 fn cmd_stop(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::SYS_SERVICE, Scope::wild()).map_err(|v| v.to_string())?;
     let name = args.first().ok_or("usage: cos service stop <name>")?;
 
-    let pid =
-        read_pid(name).ok_or_else(|| format!("service {name} is not running (no PID file)"))?;
+    let (pid, recorded_start) = read_pid(name)
+        .ok_or_else(|| format!("service {name} is not running (no PID file)"))?;
+
+    // Identity-qualified aliveness. If false, EITHER the process
+    // exited (stale pid file) OR a recycled pid now belongs to
+    // someone else — both must short-circuit before any kill().
+    if !crate::proc::is_alive_with_start_time(pid, recorded_start) {
+        clear_pid(name);
+        let reason = if is_alive(pid) {
+            // PID is alive but starttime mismatches → recycled.
+            "pid_recycled"
+        } else {
+            // Genuinely dead, pid file was just stale.
+            "stale_pid_file"
+        };
+        return Ok(json!({
+            "name": name,
+            "status": reason,
+            "pid": pid,
+            "note": "no signal was sent; stale PID file cleared",
+        }));
+    }
 
     let def = find_service(name).ok();
     let hooks = def.as_ref().and_then(|d| d.lifecycle.as_ref());
@@ -747,10 +927,15 @@ fn cmd_stop_all(_args: &[String]) -> Result<Value, String> {
     // Build the shutdown order: reverse dependency (dependents first, then dependencies).
     let order = reverse_dependency_order(&services);
 
-    // Filter to only running services
+    // Filter to only running services. Use the identity-qualified
+    // aliveness check so recycled pids are not treated as live.
     let running: Vec<String> = order
         .into_iter()
-        .filter(|name| read_pid(name).map(|p| is_alive(p)).unwrap_or(false))
+        .filter(|name| {
+            read_pid(name)
+                .map(|(pid, st)| crate::proc::is_alive_with_start_time(pid, st))
+                .unwrap_or(false)
+        })
         .collect();
 
     let mut results: Vec<Value> = Vec::new();
@@ -818,8 +1003,10 @@ fn cmd_status(args: &[String]) -> Result<Value, String> {
     let name = args.first().ok_or("usage: cos service status <name>")?;
     let def = find_service(name)?;
 
-    let pid = read_pid(name);
-    let alive = pid.map(|p| is_alive(p)).unwrap_or(false);
+    let pid_pair = read_pid(name);
+    let alive = pid_pair
+        .map(|(p, st)| crate::proc::is_alive_with_start_time(p, st))
+        .unwrap_or(false);
     let healthy = if alive {
         check_service_health(&def)
     } else {
@@ -833,7 +1020,7 @@ fn cmd_status(args: &[String]) -> Result<Value, String> {
         "healthy": healthy,
     });
 
-    if let Some(p) = pid {
+    if let Some((p, _st)) = pid_pair {
         result["pid"] = json!(p);
     }
 
@@ -889,8 +1076,10 @@ fn cmd_list(_args: &[String]) -> Result<Value, String> {
     let list: Vec<Value> = services
         .values()
         .map(|def| {
-            let pid = read_pid(&def.name);
-            let alive = pid.map(|p| is_alive(p)).unwrap_or(false);
+            let pid_pair = read_pid(&def.name);
+            let alive = pid_pair
+                .map(|(p, st)| crate::proc::is_alive_with_start_time(p, st))
+                .unwrap_or(false);
             let healthy = if alive {
                 check_service_health(def)
             } else {
@@ -902,7 +1091,7 @@ fn cmd_list(_args: &[String]) -> Result<Value, String> {
                 "description": def.description,
                 "running": alive,
             });
-            if let Some(p) = pid {
+            if let Some((p, _st)) = pid_pair {
                 entry["pid"] = json!(p);
             }
             if let Some(h) = healthy {
@@ -1562,5 +1751,161 @@ mod tests {
         let json = r#"{"name": "test", "command": "echo hi"}"#;
         let def: ServiceDef = serde_json::from_str(json).unwrap();
         assert!(def.credentials.is_empty());
+    }
+
+    // -----------------------------------------------------------------
+    // parse_command (shlex-style)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn parse_command_simple_whitespace() {
+        perms_init();
+        let argv = parse_command("echo hello world").unwrap();
+        assert_eq!(argv, vec!["echo", "hello", "world"]);
+    }
+
+    #[test]
+    fn parse_command_collapses_runs_of_whitespace() {
+        perms_init();
+        let argv = parse_command("  a    b\tc \n d ").unwrap();
+        assert_eq!(argv, vec!["a", "b", "c", "d"]);
+    }
+
+    #[test]
+    fn parse_command_double_quoted_string_is_one_arg() {
+        perms_init();
+        let argv = parse_command(r#"node server.js --msg "hello world""#).unwrap();
+        assert_eq!(argv, vec!["node", "server.js", "--msg", "hello world"]);
+    }
+
+    #[test]
+    fn parse_command_single_quoted_string_is_literal() {
+        perms_init();
+        // Single quotes do NOT process escapes — \n inside '…'
+        // stays as a literal backslash + n.
+        let argv = parse_command(r#"echo 'a\nb $HOME "still literal"'"#).unwrap();
+        assert_eq!(
+            argv,
+            vec!["echo", r#"a\nb $HOME "still literal""#]
+        );
+    }
+
+    #[test]
+    fn parse_command_double_quote_escapes() {
+        perms_init();
+        // Inside dquotes only \", \\, \$, \` are special escapes; the
+        // backslash is preserved before anything else.
+        let argv = parse_command(r#"x "a\"b" "c\\d" "e\nf""#).unwrap();
+        assert_eq!(argv, vec!["x", "a\"b", r"c\d", r"e\nf"]);
+    }
+
+    #[test]
+    fn parse_command_backslash_outside_quotes_escapes_one_char() {
+        perms_init();
+        let argv = parse_command(r"echo a\ b c").unwrap();
+        // `\ ` should produce a literal space inside the arg.
+        assert_eq!(argv, vec!["echo", "a b", "c"]);
+    }
+
+    #[test]
+    fn parse_command_rejects_unterminated_single_quote() {
+        perms_init();
+        let err = parse_command("echo 'unterminated").unwrap_err();
+        assert!(err.contains("single quote"), "{err}");
+    }
+
+    #[test]
+    fn parse_command_rejects_unterminated_double_quote() {
+        perms_init();
+        let err = parse_command(r#"echo "unterminated"#).unwrap_err();
+        assert!(err.contains("double quote"), "{err}");
+    }
+
+    #[test]
+    fn parse_command_rejects_trailing_backslash() {
+        perms_init();
+        let err = parse_command("echo hi \\").unwrap_err();
+        assert!(err.contains("trailing backslash"), "{err}");
+    }
+
+    #[test]
+    fn parse_command_empty_input_yields_empty_argv() {
+        perms_init();
+        assert_eq!(parse_command("").unwrap(), Vec::<String>::new());
+        assert_eq!(parse_command("   \t\n  ").unwrap(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn parse_command_flag_value_with_quoted_path() {
+        perms_init();
+        // Regression: the audit's example
+        //   --root-path "/api/v1 of things"
+        // should yield argv=["--root-path", "/api/v1 of things"],
+        // not 4 separate tokens.
+        let argv = parse_command(r#"app --root-path "/api/v1 of things" --port 8080"#).unwrap();
+        assert_eq!(
+            argv,
+            vec!["app", "--root-path", "/api/v1 of things", "--port", "8080"]
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // PID-identity: read_pid format + recycle detection
+    // -----------------------------------------------------------------
+
+    /// Parser regression for the new `pid:starttime` format.
+    /// Verifies both forms round-trip without depending on the
+    /// `COS_DATA_DIR` env var (which is concurrently mutated by
+    /// other tests in this crate and races with file-IO setup).
+    #[test]
+    fn parse_pid_file_contents_handles_both_formats() {
+        perms_init();
+        // New format with starttime.
+        let parsed = parse_pid_file_contents("12345:6789012\n").unwrap();
+        assert_eq!(parsed, (12345, Some(6789012)));
+
+        // Legacy format: pid only.
+        let parsed = parse_pid_file_contents("42\n").unwrap();
+        assert_eq!(parsed, (42, None));
+
+        // Surrounding whitespace tolerated.
+        let parsed = parse_pid_file_contents("  4242:99 \t\n").unwrap();
+        assert_eq!(parsed, (4242, Some(99)));
+
+        // Empty / blank file → None.
+        assert!(parse_pid_file_contents("").is_none());
+        assert!(parse_pid_file_contents("   \n").is_none());
+
+        // Malformed pid → None (don't panic, don't return garbage).
+        assert!(parse_pid_file_contents("not-a-pid").is_none());
+        assert!(parse_pid_file_contents("not-a-pid:42").is_none());
+
+        // Malformed starttime → pid is still returned, starttime is None.
+        let parsed = parse_pid_file_contents("123:not-a-starttime").unwrap();
+        assert_eq!(parsed, (123, None));
+    }
+
+    /// Recycle regression: if the pid file records pid+starttime and
+    /// the pid is currently alive but with a DIFFERENT starttime,
+    /// `is_alive_with_start_time` must report exited. cmd_stop then
+    /// shortcircuits with status="pid_recycled" instead of
+    /// signalling.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn recycled_pid_must_not_be_treated_as_alive() {
+        perms_init();
+        let me = std::process::id();
+        let real_start = crate::proc::read_start_time_ticks_pub(me)
+            .expect("test must run on Linux with /proc readable");
+        // Sanity: matching starttime passes.
+        assert!(crate::proc::is_alive_with_start_time(me, Some(real_start)));
+        // Recycled: starttime mismatch fails.
+        assert!(
+            !crate::proc::is_alive_with_start_time(me, Some(real_start.wrapping_add(1_000_000))),
+            "mismatched starttime must be treated as exited"
+        );
+        // Legacy file (None): falls back to basic kill(pid,0) check
+        // and reports alive for our own pid.
+        assert!(crate::proc::is_alive_with_start_time(me, None));
     }
 }

@@ -225,6 +225,36 @@ fn is_alive_for_info(info: &SessionInfo) -> bool {
     }
 }
 
+/// Crate-internal: read field 22 (`starttime`) of `/proc/<pid>/stat`.
+/// Other kernel-core modules (e.g. `service`) use this to stamp pid
+/// files at spawn time so they can later detect a recycled pid.
+/// Returns `None` on non-Linux or when /proc can't be read.
+pub(crate) fn read_start_time_ticks_pub(pid: u32) -> Option<u64> {
+    read_start_time_ticks(pid)
+}
+
+/// Crate-internal: aliveness qualified by a previously recorded
+/// `starttime` (clock ticks). When `expected` is `None`, behaves like
+/// the basic `kill(pid, 0)` aliveness check (legacy pid file with no
+/// starttime). When `expected` is `Some`, additionally verifies the
+/// current pid's `/proc/<pid>/stat` field 22 still matches — if it
+/// doesn't, the pid was recycled into a different process and we
+/// must NOT treat it as our session/service.
+pub(crate) fn is_alive_with_start_time(pid: u32, expected: Option<u64>) -> bool {
+    if !is_alive(pid) {
+        return false;
+    }
+    match expected {
+        Some(want) => match read_start_time_ticks(pid) {
+            Some(now) => now == want,
+            // Couldn't read starttime (non-Linux or perm denied).
+            // Fall back to the basic aliveness verdict above.
+            None => true,
+        },
+        None => true,
+    }
+}
+
 /// Result of [`pgrp_uid_scope_check`]: list of `(pid, uid)` pairs for
 /// processes in the target process group whose UID does NOT match the
 /// caller's UID. An empty Vec means the entire pgrp is owned by the
