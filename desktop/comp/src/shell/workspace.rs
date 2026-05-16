@@ -1809,11 +1809,11 @@ impl Workspace {
                 .loc
                 .as_logical()
                 .to_physical_precise_round(output_scale);
-            let phys_size = cw
+            let phys_size: Size<i32, Physical> = cw
                 .geometry
                 .size
                 .as_logical()
-                .to_physical_precise_round::<i32, _>(output_scale);
+                .to_physical_precise_round(output_scale);
             let pivot = Point::<i32, Physical>::from((
                 render_loc.x + phys_size.w / 2,
                 render_loc.y + phys_size.h / 2,

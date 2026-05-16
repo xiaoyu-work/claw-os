@@ -887,7 +887,7 @@ where
                 // ext_background_effect_v1 and the compositor has
                 // experimental_blur enabled, append a blur element
                 // BEHIND the layer surface.
-                if shell.appearance_conf.experimental_blur {
+                if shell.appearance_config().experimental_blur {
                     let has_blur = with_states(layer.wl_surface(), |states| {
                         states
                             .cached_state
