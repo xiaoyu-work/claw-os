@@ -1,5 +1,6 @@
 cosmic-app-list = 應用程式匣盤
-pin = 釘選至應用程式匣盤
+pin = 釘選至 Dock
+unpin = 從 Dock 移除
 quit = 退出
 quit-all = 全部退出
 new-window = 新建視窗
