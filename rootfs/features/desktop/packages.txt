@@ -75,6 +75,12 @@ pipewire-alsa
 wireplumber
 libpulse0
 alsa-utils
+# libasound2-dev provides alsa.pc — required at build time by the
+# `alsa-sys` crate (a transitive dep of several cosmic crates that
+# pull in gstreamer/rodio audio backends). Without it the desktop
+# workspace cargo build panics with "Package alsa was not found in
+# the pkg-config search path".
+libasound2-dev
 
 # --- Network ---
 network-manager
