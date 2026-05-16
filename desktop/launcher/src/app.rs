@@ -1053,24 +1053,26 @@ impl cosmic::Application for CosmicLauncher {
                     container(id_container(content, MAIN_ID.clone()))
                         .width(Length::Shrink)
                         .height(Length::Shrink)
-                        .class(Container::Custom(Box::new(|theme| {
-                            let t = theme.cosmic();
-                            let radii = t.radius_s().map(|x| if x < 4.0 { x } else { x + 4.0 });
-
+                        .class(Container::Custom(Box::new(|_theme| {
+                            // Transparent backdrop — the search pill (and result
+                            // rows when present) carry their own visuals, so the
+                            // launcher floats on the wallpaper like macOS
+                            // Spotlight instead of sitting inside an opaque
+                            // dark rectangle.
                             container::Style {
-                                text_color: Some(t.on_bg_color().into()),
-                                icon_color: Some(t.on_bg_color().into()),
-                                background: Some(Color::from(t.background.base).into()),
+                                text_color: None,
+                                icon_color: None,
+                                background: None,
                                 border: Border {
-                                    radius: radii.into(),
-                                    width: 1.0,
-                                    color: t.bg_divider().into(),
+                                    radius: 0.0.into(),
+                                    width: 0.0,
+                                    color: Color::TRANSPARENT,
                                 },
                                 shadow: Shadow::default(),
                                 snap: true,
                             }
                         })))
-                        .padding([24, 32]),
+                        .padding(0),
                 );
 
             let autosize = autosize::autosize(
