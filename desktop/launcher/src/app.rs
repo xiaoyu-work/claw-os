@@ -1050,29 +1050,18 @@ impl cosmic::Application for CosmicLauncher {
             let window = Column::new()
                 .push(vertical_space().height(Length::Fixed(self.margin + 16.)))
                 .push(
+                    // Use the built-in `Container::Transparent` variant
+                    // (the default of `theme::Container`) so the launcher
+                    // surface has no background / border / padding of its
+                    // own. The `search_input` widget (TextInput::Search)
+                    // already renders as a pill with its own dark fill and
+                    // accent border; result rows below it carry their own
+                    // visuals. Together this floats on the wallpaper like
+                    // macOS Spotlight.
                     container(id_container(content, MAIN_ID.clone()))
                         .width(Length::Shrink)
                         .height(Length::Shrink)
-                        .class(Container::Custom(Box::new(|_theme| {
-                            // Transparent backdrop — the search pill (and result
-                            // rows when present) carry their own visuals, so the
-                            // launcher floats on the wallpaper like macOS
-                            // Spotlight instead of sitting inside an opaque
-                            // dark rectangle.
-                            container::Style {
-                                text_color: None,
-                                icon_color: None,
-                                background: None,
-                                border: Border {
-                                    radius: 0.0.into(),
-                                    width: 0.0,
-                                    color: Color::TRANSPARENT,
-                                },
-                                shadow: Shadow::default(),
-                                snap: true,
-                            }
-                        })))
-                        .padding(0),
+                        .class(Container::Transparent),
                 );
 
             let autosize = autosize::autosize(
