@@ -129,41 +129,30 @@ impl fmt::Display for Scope {
 // Path matching
 // ---------------------------------------------------------------------------
 
-/// Expand `~` and `$VAR` references in a path. `~` expands to the
-/// current `$HOME`; `$NAME` expands to the env var `NAME` (empty if
-/// unset, matching shell behaviour).
+/// Expand `~` in a path. `~` and `~/foo` expand to `$HOME` /
+/// `$HOME/foo`. Environment-variable references (`$VAR`) are
+/// intentionally **not** expanded — the previous implementation
+/// invited a confused-deputy attack where a hostile environment
+/// could substitute its own value into a session's path scope at
+/// match time and quietly broaden coverage (e.g. `$WORKSPACE/**`
+/// becoming `/**` when `WORKSPACE` is unset, or worse, becoming
+/// `/etc/**` when `WORKSPACE` is set to `/etc`). Patterns are now
+/// matched as literal strings (modulo `~`); set the absolute path
+/// you mean.
 fn expand_path(p: &str) -> String {
-    let mut out = String::with_capacity(p.len());
-    let bytes = p.as_bytes();
-    let mut i = 0;
-    if p.starts_with("~/") || p == "~" {
+    if p == "~" {
+        return std::env::var("HOME").unwrap_or_else(|_| "~".to_string());
+    }
+    if let Some(rest) = p.strip_prefix("~/") {
         if let Ok(home) = std::env::var("HOME") {
+            let mut out = String::with_capacity(home.len() + 1 + rest.len());
             out.push_str(&home);
-            i = 1;
+            out.push('/');
+            out.push_str(rest);
+            return out;
         }
     }
-    while i < bytes.len() {
-        let c = bytes[i] as char;
-        if c == '$' && i + 1 < bytes.len() {
-            let mut j = i + 1;
-            while j < bytes.len()
-                && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_')
-            {
-                j += 1;
-            }
-            if j > i + 1 {
-                let name = &p[i + 1..j];
-                if let Ok(val) = std::env::var(name) {
-                    out.push_str(&val);
-                } // empty if unset, matching `set -u` off
-                i = j;
-                continue;
-            }
-        }
-        out.push(c);
-        i += 1;
-    }
-    out
+    p.to_string()
 }
 
 /// Normalize a path: resolve `.` and `..`, collapse duplicate `/`,
@@ -196,9 +185,30 @@ fn normalize_path(p: &str) -> String {
 ///
 /// `*` matches one path segment; `**` matches any number of segments
 /// (including zero). All other characters match literally.
+///
+/// **Symlink-safe matching.** Pure string normalization (collapse
+/// `.`, `..`, duplicate `/`) is *not* enough to keep an attacker
+/// from escaping their granted scope — a session that holds
+/// `path:/workspace/**` would, without canonicalization, match a
+/// request for `/workspace/escape` even if `escape` is a symlink to
+/// `/etc/shadow`. We therefore canonicalize the *target* against
+/// the live filesystem (resolving symlinks) before comparing, and
+/// fall back to the lexically-normalized path if the target does
+/// not yet exist (e.g. the caller is about to create a new file).
+/// Patterns themselves are normalized lexically only — we wouldn't
+/// want a glob like `~/**` to require `$HOME` to exist as a
+/// canonicalizable target.
 fn path_match(pat: &str, target: &str) -> bool {
     let pat = normalize_path(&expand_path(pat));
-    let target = normalize_path(&expand_path(target));
+    let target_expanded = expand_path(target);
+    let target = canonicalize_for_match(&target_expanded);
+    // Also canonicalize the *literal* prefix of the pattern (the
+    // portion up to the first segment that contains a glob). Without
+    // this, platform-level symlinks like `/home` ⇒
+    // `/System/Volumes/Data/home` on macOS (or `/tmp` ⇒ `/private/tmp`)
+    // would canonicalize the target but not the pattern, leaving an
+    // unconditional mismatch.
+    let pat = canonicalize_pattern_prefix(&pat);
 
     // Fast path: identical strings.
     if pat == target {
@@ -208,6 +218,87 @@ fn path_match(pat: &str, target: &str) -> bool {
     let pat_segs: Vec<&str> = pat.split('/').filter(|s| !s.is_empty()).collect();
     let tgt_segs: Vec<&str> = target.split('/').filter(|s| !s.is_empty()).collect();
     glob_segs(&pat_segs, &tgt_segs)
+}
+
+/// Canonicalize the literal prefix of a glob pattern (everything up
+/// to the first segment containing `*`), then re-append the glob
+/// tail unchanged. This is the pattern-side analogue of
+/// [`canonicalize_for_match`]: it ensures that a pattern like
+/// `path:/home/jay/**` and a target like `/home/jay/docs/x` agree
+/// on platform-symlink resolution (e.g. macOS auto-mounts) so the
+/// match is decided on real filesystem identity, not on raw prefix
+/// strings.
+fn canonicalize_pattern_prefix(pat: &str) -> String {
+    let segs: Vec<&str> = pat.split('/').collect();
+    let split_at = segs
+        .iter()
+        .position(|s| s.contains('*'))
+        .unwrap_or(segs.len());
+
+    let prefix_str: String = if split_at == 0 {
+        "/".into()
+    } else {
+        segs[..split_at].join("/")
+    };
+    // If the prefix is empty after splitting on the very first slash
+    // (e.g. the pattern starts with `*`), there's nothing to
+    // canonicalize.
+    if prefix_str.is_empty() || prefix_str == "/" {
+        return pat.to_string();
+    }
+
+    let prefix_canon = canonicalize_for_match(&prefix_str);
+
+    if split_at >= segs.len() {
+        return prefix_canon;
+    }
+    let suffix = segs[split_at..].join("/");
+    if prefix_canon.ends_with('/') {
+        format!("{prefix_canon}{suffix}")
+    } else {
+        format!("{prefix_canon}/{suffix}")
+    }
+}
+
+/// Canonicalize `target` against the live filesystem. Symlinks are
+/// resolved. If the leaf does not exist (the caller is about to
+/// create it), walk up until we hit an existing ancestor,
+/// canonicalize *that*, then rejoin the missing tail. This way a
+/// symlink in the existing portion of the path still gets resolved
+/// before we make the access decision.
+fn canonicalize_for_match(target: &str) -> String {
+    let normalized = normalize_path(target);
+    let p = std::path::Path::new(&normalized);
+    if let Ok(canon) = p.canonicalize() {
+        return canon.to_string_lossy().to_string();
+    }
+    // Path doesn't fully exist yet. Find the deepest existing
+    // ancestor, canonicalize it, then re-append the missing tail.
+    let mut anc = p;
+    let mut tail: Vec<&std::ffi::OsStr> = Vec::new();
+    loop {
+        if anc.exists() {
+            break;
+        }
+        match anc.file_name() {
+            Some(name) => {
+                tail.push(name);
+                anc = match anc.parent() {
+                    Some(parent) => parent,
+                    None => return normalized,
+                };
+            }
+            None => return normalized,
+        }
+    }
+    let mut out = match anc.canonicalize() {
+        Ok(c) => c,
+        Err(_) => return normalized,
+    };
+    for seg in tail.iter().rev() {
+        out.push(seg);
+    }
+    out.to_string_lossy().to_string()
 }
 
 /// Segment-wise glob matcher with `*` (one segment) and `**` (zero+).
@@ -290,8 +381,14 @@ fn split_host_port(s: &str) -> (&str, Option<&str>) {
 }
 
 fn host_match(pat: &str, target: &str) -> bool {
-    let (ph, pp) = split_host_port(pat);
-    let (th, tp) = split_host_port(target);
+    // DNS labels are case-insensitive (RFC 4343). A scope granted as
+    // `host:Example.com` must match a request for `example.com` —
+    // refusing it on case grounds is just a bug, not a security win,
+    // and would push users to lowercase by hand and forget.
+    let pat = pat.to_ascii_lowercase();
+    let target = target.to_ascii_lowercase();
+    let (ph, pp) = split_host_port(&pat);
+    let (th, tp) = split_host_port(&target);
 
     // Port: if granted has none, any target port matches; else must equal.
     if let Some(pp) = pp {
@@ -437,10 +534,58 @@ mod tests {
     }
 
     #[test]
-    fn env_var_expansion() {
+    fn env_vars_are_not_expanded() {
+        // We deliberately removed `$VAR` expansion from `Scope::path`
+        // (audit: caps/scope.rs HIGH) because untrusted manifest /
+        // SDK callers shouldn't be able to read process env. The
+        // literal `$COS_TEST_PFX` segment must be matched as-is.
         std::env::set_var("COS_TEST_PFX", "/var/tmp/cos-test");
         let granted = Scope::path("$COS_TEST_PFX/**");
-        assert!(granted.covers(&Scope::path("/var/tmp/cos-test/file.txt")));
+        assert!(!granted.covers(&Scope::path("/var/tmp/cos-test/file.txt")));
+        // It DOES still match a literal `$COS_TEST_PFX` directory.
+        assert!(granted.covers(&Scope::path("$COS_TEST_PFX/file.txt")));
         std::env::remove_var("COS_TEST_PFX");
+    }
+
+    /// Audit fix (caps/scope.rs HIGH "path scope rejects symlink
+    /// outside"): a request whose path resolves — via symlink — to
+    /// somewhere outside the granted prefix must be denied. Before
+    /// the fix, `Scope::path("/safe/**").covers(&Scope::path(s))`
+    /// did string-prefix comparison on the *unresolved* path, so a
+    /// symlink `/safe/back -> /etc` granted read access to
+    /// `/etc/passwd` via the path `/safe/back/passwd`.
+    #[test]
+    #[cfg(unix)]
+    fn path_scope_rejects_symlink_outside() {
+        use std::os::unix::fs::symlink;
+        let root = std::env::temp_dir().join(format!(
+            "cos-scope-symlink-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let safe = root.join("safe");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&safe).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let secret = outside.join("secret.txt");
+        std::fs::write(&secret, b"top secret").unwrap();
+        let backdoor = safe.join("back");
+        // Plant `safe/back -> outside` symlink.
+        let _ = std::fs::remove_file(&backdoor);
+        symlink(&outside, &backdoor).unwrap();
+
+        let granted = Scope::path(&format!("{}/**", safe.display()));
+        let attack = Scope::path(&format!("{}/secret.txt", backdoor.display()));
+
+        assert!(
+            !granted.covers(&attack),
+            "scope `{granted:?}` must NOT cover `{attack:?}` — symlink escapes the granted prefix",
+        );
+
+        // Cleanup.
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

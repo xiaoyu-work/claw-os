@@ -165,11 +165,24 @@ fn derive_from_agent(
     if derived.extra_headers.is_empty() {
         derived.extra_headers = agent.extra_headers.clone();
     }
-    // Treat the field-default placeholder as "use the embed default
-    // model" — it's only set explicitly when the user picks a model
-    // in the wizard.
+    // The embed model must be explicitly chosen for non-OpenAI
+    // providers — falling back to `MODEL_NAME` silently picks
+    // `text-embedding-3-small`, which only exists on plain OpenAI.
+    // For Azure / OpenRouter / xAI / DeepSeek / Ollama the same
+    // name routes to nothing and the user sees a confusing 404 from
+    // the provider instead of a clear configuration error here. Plain
+    // OpenAI keeps the MODEL_NAME default because the name is canonical
+    // there.
     if derived.model.trim().is_empty() {
-        derived.model = MODEL_NAME.to_string();
+        if alias == "openai" {
+            derived.model = MODEL_NAME.to_string();
+        } else {
+            return Err(format!(
+                "embed: [embed].model is required when [embed].provider=auto \
+                 (provider={alias}); set `model = \"<embedding model name>\"` \
+                 explicitly under [embed]"
+            ));
+        }
     }
     Ok(Some(Box::new(OpenAICompatEmbedder::from_config(&derived))))
 }
@@ -478,9 +491,12 @@ mod tests {
         assert_eq!(built.model(), MODEL_NAME);
     }
 
-    /// Auto-derive against an Azure agent works: the embedder gets
-    /// the resource-root URL and infers the deployment name from
-    /// `text-embedding-3-small`.
+    /// Auto-derive against an Azure agent without an explicit
+    /// `[embed].model` is now an explicit error (audit fix): the
+    /// OpenAI canonical name `text-embedding-3-small` does not exist
+    /// as an Azure deployment, so silently substituting it would
+    /// produce a confusing 404 at runtime rather than a clear
+    /// configuration error.
     #[test]
     fn build_auto_derives_from_azure_main() {
         let mut embed_cfg = EmbedConfig::default(); // provider == "auto"
@@ -491,11 +507,22 @@ mod tests {
             Some("https://acme.openai.azure.com/?api-version=2024-12-01-preview".into());
         agent.api_key_credential = Some("azure_api_key".into());
 
+        let err = match build_from_with_agent(&embed_cfg, &agent) {
+            Err(e) => e,
+            Ok(_) => panic!("azure without explicit [embed].model must error"),
+        };
+        assert!(
+            err.contains("[embed].model is required"),
+            "unexpected error message: {err}",
+        );
+
+        // Setting an explicit model name resolves the error.
+        embed_cfg.model = "my-azure-embed-deployment".into();
         let built = build_from_with_agent(&embed_cfg, &agent)
-            .expect("auto-derive ok")
+            .expect("with explicit model: ok")
             .expect("azure main → some");
         assert_eq!(built.name(), "azure");
-        assert_eq!(built.model(), MODEL_NAME);
+        assert_eq!(built.model(), "my-azure-embed-deployment");
     }
 
     /// Auto-derive against a non-OpenAI-shape provider (mock /

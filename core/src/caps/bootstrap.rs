@@ -29,13 +29,16 @@
 //!    `cos proc list` GCs stale entries via `is_alive(pid)`, so this
 //!    self-heals over time.
 //!
-//! ## Fallback
+//! ## Failure handling (fail-closed)
 //!
-//! If the registry write fails (e.g. the data dir is read-only or
-//! does not yet exist and cannot be created), the bootstrap silently
-//! falls back to setting `COS_PERMS_MODE=permissive`. That preserves
-//! the user experience — gated calls succeed — at the cost of the
-//! strict-mode audit trail for this one process.
+//! Earlier revisions of this module silently demoted the process to
+//! `COS_PERMS_MODE=permissive` if the registry write failed. That is
+//! the wrong default for a security-oriented kernel: a corrupted data
+//! dir would invisibly turn every gated call into a yes. We now
+//! return an error from the bootstrap and let `main()` surface it to
+//! the user, who can decide whether to retry, fix permissions, or
+//! explicitly run with `COS_PERMS_MODE=permissive` set in the
+//! environment.
 
 use std::env;
 
@@ -61,6 +64,9 @@ impl Drop for SessionGuard {
 /// holding the registered session id, or `None` if no work was done
 /// (because `COS_SESSION` was already set by an upstream caller).
 ///
+/// On registry-write failure this function returns `None` and **does
+/// not** demote to permissive mode — see the module docs.
+///
 /// Idempotent: if invoked twice the second call no-ops.
 pub fn bootstrap_user_cli_session() -> Option<SessionGuard> {
     if env::var_os("COS_SESSION").is_some_and(|v| !v.is_empty()) {
@@ -68,7 +74,7 @@ pub fn bootstrap_user_cli_session() -> Option<SessionGuard> {
     }
 
     let pid = std::process::id();
-    let session_id = format!("cli-{}-{}", pid, short_random_suffix());
+    let session_id = format!("cli-{}-{}", pid, fresh_session_suffix());
 
     let caps = Role::Admin.caps_with_scopes(
         Some(Scope::Wild),
@@ -103,28 +109,33 @@ pub fn bootstrap_user_cli_session() -> Option<SessionGuard> {
             env::set_var("COS_SESSION", &session_id);
             Some(SessionGuard { session_id })
         }
-        Err(_) => {
-            // Registry write failed (e.g. read-only data dir). Fall
-            // back to permissive mode so the user still gets a
-            // working CLI. The strict-mode audit trail is lost for
-            // this one process; that is the explicit trade-off.
-            env::set_var("COS_PERMS_MODE", "permissive");
+        Err(e) => {
+            // Fail closed. We deliberately do **not** demote to
+            // permissive mode here. Surfacing the failure means the
+            // user sees "Permission denied (no active session)" on
+            // gated calls — the *correct* signal that something is
+            // wrong with the kernel state, rather than the silent
+            // open-door we used to have.
+            tracing::error!(
+                target: "cos::caps::bootstrap",
+                error = %e,
+                "failed to register CLI session in proc registry; \
+                 gated calls will deny in strict mode"
+            );
             None
         }
     }
 }
 
-fn short_random_suffix() -> String {
-    // 8 hex chars from the system clock + pid mixed in. Not
-    // cryptographically random; we just need to avoid id collisions
-    // when two cos processes start in the same second.
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
-    let pid = std::process::id();
-    format!("{:08x}", nanos ^ pid)
+/// Generate a fresh, collision-resistant suffix for the CLI session
+/// id. We previously used a 32-bit `(nanos ^ pid)` value that easily
+/// collided when two `cos` invocations fired in the same nanosecond
+/// or when a forked child reused its parent's pid. UUIDv4 gives us
+/// 122 bits of entropy from the OS RNG, which is comfortably above
+/// the collision-resistance threshold even if a script kicks off
+/// thousands of CLI invocations per second.
+fn fresh_session_suffix() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
 }
 
 fn now_rfc3339() -> String {

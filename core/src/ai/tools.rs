@@ -366,6 +366,7 @@ fn derive_scope(tool: &ToolDef, args: &Value) -> Result<Scope, String> {
 }
 
 fn impl_fs_read_text(args: &Value) -> Result<Value, String> {
+    use std::io::Read;
     let path = args
         .get("path")
         .and_then(Value::as_str)
@@ -375,7 +376,15 @@ fn impl_fs_read_text(args: &Value) -> Result<Value, String> {
         .and_then(Value::as_u64)
         .unwrap_or(1_048_576) as usize;
 
-    let body = std::fs::read(path).map_err(|e| format!("read {path}: {e}"))?;
+    // Stream up to `max_bytes + 1` from the file so a multi-gigabyte
+    // file can't first balloon the process heap. We read one byte
+    // past the cap and use that as the "truncated" signal.
+    let f = std::fs::File::open(path).map_err(|e| format!("read {path}: {e}"))?;
+    let take_cap = max_bytes.saturating_add(1);
+    let mut body = Vec::with_capacity(max_bytes.min(64 * 1024));
+    f.take(take_cap as u64)
+        .read_to_end(&mut body)
+        .map_err(|e| format!("read {path}: {e}"))?;
     let truncated = body.len() > max_bytes;
     let slice = if truncated { &body[..max_bytes] } else { &body[..] };
     let content = String::from_utf8(slice.to_vec())
@@ -449,10 +458,31 @@ fn impl_kv_get(app_id: &str, args: &Value) -> Result<Value, String> {
     Ok(json!({ "key": key, "value": value }))
 }
 
+/// Build a filesystem-safe stable identifier from an arbitrary
+/// caller-supplied key. The previous version mapped every
+/// non-`[A-Za-z0-9_-]` byte to `_`, which silently collided values
+/// such as `"foo/bar"` and `"foo:bar"` and `"foo bar"` to the same
+/// on-disk file — a stored secret under one key would be returned
+/// for another. We now anchor the filename with a 16-hex prefix of
+/// SHA-256(key) and append a human-readable suffix for debuggability.
+/// The hash makes collisions cryptographically improbable; the suffix
+/// is purely cosmetic and never compared.
 fn sanitize_key(k: &str) -> String {
-    k.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
-        .collect()
+    use crate::crypto::Sha256Stream;
+    let mut h = Sha256Stream::new();
+    h.update(k.as_bytes());
+    let digest = h.finalize_hex();
+    let prefix: String = digest.chars().take(16).collect();
+    let suffix: String = k
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .take(32)
+        .collect();
+    if suffix.is_empty() {
+        prefix
+    } else {
+        format!("{prefix}.{suffix}")
+    }
 }
 
 #[cfg(test)]
@@ -526,9 +556,30 @@ mod tests {
 
     #[test]
     fn sanitize_key_replaces_special_chars() {
-        assert_eq!(sanitize_key("a-b_c"), "a-b_c");
-        assert_eq!(sanitize_key("a/b"), "a_b");
-        assert_eq!(sanitize_key("../etc/passwd"), "___etc_passwd");
+        // sanitize_key now anchors the on-disk name with a 16-hex
+        // SHA-256 prefix so visually-similar keys ("a/b" vs "a:b")
+        // get distinct files. The human-readable suffix only
+        // contains [A-Za-z0-9_-] and is informational. We check both
+        // shape and uniqueness.
+        let a = sanitize_key("a-b_c");
+        let b = sanitize_key("a/b");
+        let c = sanitize_key("../etc/passwd");
+        // 16 hex chars + `.` + suffix (or just 16 hex chars when the
+        // suffix is empty).
+        for k in [&a, &b, &c] {
+            let prefix: String = k.chars().take(16).collect();
+            assert_eq!(prefix.len(), 16);
+            assert!(prefix.chars().all(|c| c.is_ascii_hexdigit()));
+            assert!(
+                k.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_'),
+                "unexpected non-alphanumeric byte in sanitized key {k:?}",
+            );
+        }
+        // Visually-similar but semantically distinct keys must NOT
+        // collide on disk.
+        assert_ne!(sanitize_key("a/b"), sanitize_key("a:b"));
+        assert_ne!(sanitize_key("foo bar"), sanitize_key("foo_bar"));
     }
 
     // ---- ai.tools[] allowlist enforcement -----------------------------

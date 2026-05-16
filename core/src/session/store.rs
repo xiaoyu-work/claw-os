@@ -472,6 +472,16 @@ where
     // the current end-of-file regardless of where we seeked above.
     writeln!(&mut file, "{}", line).map_err(|e| SessionError::io(path.clone(), e))?;
     file.flush().map_err(|e| SessionError::io(path.clone(), e))?;
+    // Persist the new line to disk *before* releasing the lock.
+    // Without `sync_data()` a `cos agent undo` started by the next
+    // process can read a turn from the page cache that the kernel
+    // hasn't yet committed; a crash after the next process exits
+    // would then lose the entry our caller already considers
+    // persisted. `sync_data` is cheaper than `sync_all` and enough
+    // here because we don't care about journaling the directory
+    // entry — the file already exists.
+    file.sync_data()
+        .map_err(|e| SessionError::io(path.clone(), e))?;
 
     #[cfg(unix)]
     {
@@ -484,9 +494,16 @@ where
     Ok(count)
 }
 
-/// Read a JSONL log into a Vec, skipping lines that fail to parse.
-/// `session_dir` is passed in so we can raise `NotFound` for a missing
-/// session (vs. an empty log inside a real session).
+/// Read a JSONL log into a Vec.
+///
+/// IO errors *are* propagated — earlier revisions silently dropped
+/// them via `map_while(Result::ok)`, which masked truncation and
+/// partial-write recovery problems. Lines that parse as JSON but
+/// don't deserialize to `T` are still skipped (best-effort recovery
+/// from a crash mid-line is by design).
+///
+/// `session_dir` is passed in so we can raise `NotFound` for a
+/// missing session (vs. an empty log inside a real session).
 fn read_jsonl<T: DeserializeOwned>(path: &PathBuf, dir: PathBuf) -> Result<Vec<T>> {
     if !path.exists() {
         if dir.exists() {
@@ -502,13 +519,15 @@ fn read_jsonl<T: DeserializeOwned>(path: &PathBuf, dir: PathBuf) -> Result<Vec<T
     let file = fs::File::open(path).map_err(|e| SessionError::io(path.clone(), e))?;
     let reader = BufReader::new(file);
     let mut out = Vec::new();
-    for line in reader.lines().map_while(std::result::Result::ok) {
+    for line in reader.lines() {
+        let line = line.map_err(|e| SessionError::io(path.clone(), e))?;
         if line.is_empty() {
             continue;
         }
         // A crash mid-write can leave one trailing partial line.
-        // Skip it (and any other malformed line) rather than failing
-        // the whole iteration — readers want best-effort recovery.
+        // Skip lines that fail to deserialize — readers want
+        // best-effort recovery — but do **not** swallow the IO
+        // error that produced an empty line in the first place.
         if let Ok(v) = serde_json::from_str::<T>(&line) {
             out.push(v);
         }

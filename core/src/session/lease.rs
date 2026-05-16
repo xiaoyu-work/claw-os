@@ -54,6 +54,7 @@
 //! ```
 
 use std::fs::{File, OpenOptions};
+#[cfg(unix)]
 use std::os::unix::io::AsRawFd;
 
 use super::id::SessionId;
@@ -167,25 +168,42 @@ pub fn try_acquire(sid: &SessionId) -> Result<LeaseGuard, AcquireError> {
         .map_err(|e| AcquireError::Io(format!("open {}: {e}", lock_path.display())))?;
 
     // SAFETY: lock_file is a valid open fd, libc::flock is async-signal-safe.
-    let rc = unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    if rc != 0 {
-        let err = std::io::Error::last_os_error();
-        if err.raw_os_error() == Some(libc::EWOULDBLOCK) {
-            // Someone else holds it. Try to report who.
-            let held = store::read_lease(sid)
-                .ok()
-                .flatten()
-                .unwrap_or_else(|| Lease {
-                    pid: 0,
-                    started_at: String::new(),
-                    heartbeat_at: String::new(),
-                    runtime: None,
-                });
-            return Err(AcquireError::Held { held_by: held });
+    #[cfg(unix)]
+    {
+        let rc = unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if rc != 0 {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::EWOULDBLOCK) {
+                // Someone else holds it. Try to report who.
+                let held = store::read_lease(sid)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| Lease {
+                        pid: 0,
+                        started_at: String::new(),
+                        heartbeat_at: String::new(),
+                        runtime: None,
+                    });
+                return Err(AcquireError::Held { held_by: held });
+            }
+            return Err(AcquireError::Io(format!(
+                "flock {}: {err}",
+                lock_path.display()
+            )));
         }
+    }
+
+    // Non-Unix platforms (Windows): we don't have a portable cross-
+    // process advisory lock primitive available in `std`. Refuse to
+    // acquire — better to fail closed than pretend we have mutual
+    // exclusion we can't enforce. Windows support would route this
+    // through `LockFileEx` on the open `HANDLE`; until that exists,
+    // multi-process sessions on Windows are unsupported.
+    #[cfg(not(unix))]
+    {
         return Err(AcquireError::Io(format!(
-            "flock {}: {err}",
-            lock_path.display()
+            "session leases require flock(2); not implemented on this platform ({})",
+            std::env::consts::OS
         )));
     }
 

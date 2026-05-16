@@ -184,20 +184,41 @@ fn require_impl(
 
     // PID-ancestry check: the caller must live in the session's process
     // tree. This is the OS-level defence against COS_SESSION spoofing.
-    #[cfg(target_os = "linux")]
-    {
-        let caller_pid = std::process::id();
-        if session.pid != 0 && !is_pid_descendant_of(caller_pid, session.pid) {
-            return Err(Denial::pid_ancestry_mismatch(
-                verb,
-                scope,
-                caller_pid,
-                session.pid,
-            )
-            .with_hint(
-                "the COS_SESSION env var does not match the process tree; \
-                 do not set it manually",
-            ));
+    // We perform this check on every platform where we know how to
+    // walk the process tree. On unsupported platforms we **fail
+    // closed** in strict mode rather than silently skipping the
+    // check — a stolen `COS_SESSION` should not become "free admin"
+    // just because the user is on a less-tested OS.
+    let caller_pid = std::process::id();
+    if session.pid != 0 && caller_pid != session.pid {
+        match pid_ancestry::is_descendant_of(caller_pid, session.pid) {
+            AncestryResult::Yes => {}
+            AncestryResult::No => {
+                return Err(Denial::pid_ancestry_mismatch(
+                    verb,
+                    scope,
+                    caller_pid,
+                    session.pid,
+                )
+                .with_hint(
+                    "the COS_SESSION env var does not match the process tree; \
+                     do not set it manually",
+                ));
+            }
+            AncestryResult::Unsupported => {
+                if matches!(mode, Mode::Strict) {
+                    return Err(Denial::pid_ancestry_mismatch(
+                        verb,
+                        scope,
+                        caller_pid,
+                        session.pid,
+                    )
+                    .with_hint(
+                        "pid-ancestry checking is not implemented on this platform; \
+                         strict-mode caps refuse to skip the check",
+                    ));
+                }
+            }
         }
     }
 
@@ -281,38 +302,148 @@ pub fn require_or_json(verb: Verb, scope: Scope) -> Result<(), serde_json::Value
 }
 
 // ---------------------------------------------------------------------------
-// PID ancestry (Linux)
+// PID ancestry (cross-platform)
 // ---------------------------------------------------------------------------
 
-#[cfg(target_os = "linux")]
-fn is_pid_descendant_of(child_pid: u32, ancestor_pid: u32) -> bool {
-    let mut current = child_pid;
-    for _ in 0..64 {
-        if current == ancestor_pid {
-            return true;
-        }
-        if current <= 1 {
-            return false;
-        }
-        match read_ppid(current) {
-            Some(ppid) => current = ppid,
-            None => return false,
-        }
+mod pid_ancestry {
+    /// Outcome of a single descendancy check. Distinguishing
+    /// `Unsupported` from `No` matters because the caller chooses to
+    /// fail-closed in strict mode on `Unsupported` while still
+    /// allowing other paths (e.g. permissive testing) to proceed.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum AncestryResult {
+        Yes,
+        No,
+        Unsupported,
     }
-    false
+
+    pub fn is_descendant_of(child: u32, ancestor: u32) -> AncestryResult {
+        let mut current = child;
+        for _ in 0..64 {
+            if current == ancestor {
+                return AncestryResult::Yes;
+            }
+            if current <= 1 {
+                return AncestryResult::No;
+            }
+            match read_ppid(current) {
+                Some(ppid) => current = ppid,
+                None if PPID_SUPPORTED => return AncestryResult::No,
+                None => return AncestryResult::Unsupported,
+            }
+        }
+        AncestryResult::No
+    }
+
+    #[cfg(target_os = "linux")]
+    const PPID_SUPPORTED: bool = true;
+    #[cfg(target_os = "linux")]
+    fn read_ppid(pid: u32) -> Option<u32> {
+        let path = format!("/proc/{pid}/status");
+        let content = std::fs::read_to_string(path).ok()?;
+        for line in content.lines() {
+            if let Some(val) = line.strip_prefix("PPid:") {
+                return val.trim().parse().ok();
+            }
+        }
+        None
+    }
+
+    /// macOS: sysctl KERN_PROC for PPID. We invoke `libc::sysctl`
+    /// rather than depend on a third-party crate. The MIB layout is
+    /// stable across macOS releases (documented in
+    /// `man 3 sysctl`).
+    #[cfg(target_os = "macos")]
+    const PPID_SUPPORTED: bool = true;
+    #[cfg(target_os = "macos")]
+    fn read_ppid(pid: u32) -> Option<u32> {
+        // CTL_KERN, KERN_PROC, KERN_PROC_PID, <pid>
+        const CTL_KERN: libc::c_int = 1;
+        const KERN_PROC: libc::c_int = 14;
+        const KERN_PROC_PID: libc::c_int = 1;
+        let mut mib: [libc::c_int; 4] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid as libc::c_int];
+
+        // kinfo_proc is large (~648 bytes) and its layout is private
+        // to <sys/sysctl.h>; we read into an opaque buffer and use
+        // the documented byte offset of kp_eproc.e_ppid. The pid
+        // lives at offset 8 inside the embedded extern_proc, then
+        // e_ppid is the first field of kp_eproc. To keep this
+        // resilient, ask the kernel for the buffer size first.
+        let mut size: libc::size_t = 0;
+        // SAFETY: mib is a valid 4-element array; passing null
+        // oldp/oldlenp to sysctl asks for the required size.
+        let rc = unsafe {
+            libc::sysctl(
+                mib.as_mut_ptr(),
+                4,
+                std::ptr::null_mut(),
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if rc != 0 || size == 0 {
+            return None;
+        }
+        let mut buf = vec![0u8; size];
+        // SAFETY: buf is sized to `size` as told by the kernel.
+        let rc = unsafe {
+            libc::sysctl(
+                mib.as_mut_ptr(),
+                4,
+                buf.as_mut_ptr() as *mut libc::c_void,
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if rc != 0 {
+            return None;
+        }
+        // kinfo_proc layout (from <sys/sysctl.h> kp_eproc.e_ppid):
+        //   struct extern_proc kp_proc;   // sizeof = 296 on x86_64,
+        //                                 // sizeof = 296 on arm64
+        //   struct eproc        kp_eproc; // first field is struct proc * e_paddr
+        // The ppid (e_ppid) is at offset 24 inside kp_eproc, which
+        // itself starts at offset 296 inside kinfo_proc:
+        //   296 + 24 = 320 (x86_64)
+        //   296 + 24 = 320 (arm64)
+        const EPROC_PPID_OFFSET: usize = 320;
+        if size < EPROC_PPID_OFFSET + 4 {
+            return None;
+        }
+        let ppid_bytes: [u8; 4] = buf[EPROC_PPID_OFFSET..EPROC_PPID_OFFSET + 4]
+            .try_into()
+            .ok()?;
+        let ppid = u32::from_ne_bytes(ppid_bytes);
+        Some(ppid)
+    }
+
+    /// Other Unix targets (BSDs, illumos, etc.): we don't currently
+    /// know how to walk the process tree without pulling extra
+    /// crates. Report `Unsupported` so strict mode fails closed.
+    #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+    const PPID_SUPPORTED: bool = false;
+    #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+    fn read_ppid(_pid: u32) -> Option<u32> {
+        None
+    }
+
+    /// Windows: walk the process tree via `Process32First` /
+    /// `Process32Next` over the toolhelp snapshot. Implementation is
+    /// gated behind a `windows-sys`-shaped cfg so the rest of the
+    /// kernel stays portable; until that dependency lands we report
+    /// `Unsupported`, which forces strict mode to deny rather than
+    /// silently allow.
+    #[cfg(target_os = "windows")]
+    const PPID_SUPPORTED: bool = false;
+    #[cfg(target_os = "windows")]
+    fn read_ppid(_pid: u32) -> Option<u32> {
+        None
+    }
 }
 
-#[cfg(target_os = "linux")]
-fn read_ppid(pid: u32) -> Option<u32> {
-    let path = format!("/proc/{pid}/status");
-    let content = std::fs::read_to_string(path).ok()?;
-    for line in content.lines() {
-        if let Some(val) = line.strip_prefix("PPid:") {
-            return val.trim().parse().ok();
-        }
-    }
-    None
-}
+use pid_ancestry::AncestryResult;
 
 // ---------------------------------------------------------------------------
 // Tests

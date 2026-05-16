@@ -28,8 +28,44 @@ pub fn model_cache_dir(name: &str) -> PathBuf {
 }
 
 /// True iff `path` lies within the configured models dir (sandbox guard).
+///
+/// Both sides are canonicalized before comparison so a symlink
+/// pointing out of the models dir (or a `..` segment) can't smuggle
+/// access to an unrelated tree. If either path fails to canonicalize
+/// — e.g. because `path` doesn't exist yet — we walk up to the
+/// deepest existing ancestor, canonicalize that, and re-append the
+/// missing tail. This keeps the guard usable for not-yet-created
+/// targets (model import, version-dir creation) while still
+/// resolving every existing symlink along the way.
 pub fn is_within_models_dir(path: &Path) -> bool {
-    path.starts_with(models_dir())
+    let needle = canonicalize_partial(path);
+    let haystack = canonicalize_partial(&models_dir());
+    needle.starts_with(&haystack)
+}
+
+/// Canonicalize as much of `p` as exists, then re-append any missing
+/// tail components verbatim. Returns `p` unchanged if no prefix
+/// resolves (extremely rare — usually means the cwd itself is gone).
+fn canonicalize_partial(p: &Path) -> PathBuf {
+    if let Ok(c) = std::fs::canonicalize(p) {
+        return c;
+    }
+    let mut tail: Vec<&std::ffi::OsStr> = Vec::new();
+    let mut cur = p;
+    while let Some(parent) = cur.parent() {
+        if let Some(name) = cur.file_name() {
+            tail.push(name);
+        }
+        if let Ok(c) = std::fs::canonicalize(parent) {
+            let mut out = c;
+            for seg in tail.iter().rev() {
+                out.push(seg);
+            }
+            return out;
+        }
+        cur = parent;
+    }
+    p.to_path_buf()
 }
 
 #[cfg(test)]
