@@ -141,6 +141,19 @@ pub struct ProviderEntry {
     /// providers that only need model + credential.
     #[serde(default)]
     pub extra_fields: Vec<ExtraField>,
+    /// Non-default authentication kinds. Today only `Some("oauth_device")`
+    /// (GitHub Copilot) is recognised — the credential pane renders a
+    /// sign-in flow instead of an API-key textbox. Absent for providers
+    /// that use a plain API key, which keeps the existing UI untouched.
+    #[serde(default)]
+    pub auth_kind: Option<String>,
+}
+
+impl ProviderEntry {
+    /// Cheap convenience — keeps view-time match arms readable.
+    pub fn is_oauth_device(&self) -> bool {
+        self.auth_kind.as_deref() == Some("oauth_device")
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -291,6 +304,21 @@ pub struct State {
     /// `ExtraField.key` (e.g. "base_url" → Azure endpoint URL).
     /// Cleared when the user switches provider.
     pub extra_field_values: std::collections::HashMap<String, String>,
+    /// Outstanding device-authorization flow (only set while the user is
+    /// in the middle of signing in with a `oauth_device` provider).
+    /// Cleared after success / failure / cancel.
+    pub oauth_device: Option<DeviceCodeView>,
+    /// True between `oauth-start` returning and the final terminal poll.
+    /// Drives the spinner + disables the sign-in button.
+    pub oauth_polling: bool,
+    /// Surfaces oauth-specific errors (denied, expired, network) so they
+    /// don't get conflated with the global `last_apply` error.
+    pub oauth_error: Option<String>,
+    /// Live-fetched Copilot model names (populated after sign-in via the
+    /// `models` subcommand). Takes precedence over the static
+    /// `provider.models` list when non-empty. Cleared on provider
+    /// switch and on sign-out.
+    pub live_models: Vec<String>,
     pub busy: bool,
     pub last_apply: Option<Result<ApplyResult, String>>,
     pub last_test: Option<Result<TestResult, String>>,
@@ -301,6 +329,28 @@ pub struct State {
     provider_labels: Vec<String>,
     model_labels: Vec<String>,
     mode_labels: Vec<String>,
+}
+
+/// Subset of the kernel's `oauth-start` payload the UI cares about.
+/// Stored in `State.oauth_device` for the lifetime of one sign-in flow.
+#[derive(Clone, Debug)]
+pub struct DeviceCodeView {
+    pub user_code: String,
+    pub verification_uri: String,
+    pub device_code: String,
+    /// Seconds between polls. Bumped by the kernel when GitHub returns
+    /// `slow_down`. Clamped to a sane floor below.
+    pub interval: u64,
+}
+
+/// Terminal state of a single `oauth-poll` invocation.
+#[derive(Clone, Debug)]
+pub enum PollStatus {
+    Pending,
+    SlowDown { interval: u64 },
+    Authorized { credential: String },
+    Expired,
+    Denied,
 }
 
 impl State {
@@ -317,6 +367,10 @@ impl State {
             env_var_input: String::new(),
             key_mode: KeyMode::Stored,
             extra_field_values: std::collections::HashMap::new(),
+            oauth_device: None,
+            oauth_polling: false,
+            oauth_error: None,
+            live_models: Vec::new(),
             busy: false,
             last_apply: None,
             last_test: None,
@@ -353,15 +407,34 @@ impl State {
             })
             .unwrap_or_default();
 
-        self.model_labels = self
-            .selected_provider()
-            .map(|p| p.models.iter().map(|m| m.name.clone()).collect())
-            .unwrap_or_default();
+        // For OAuth providers the static `models` list is intentionally
+        // empty (live-fetched after sign-in). We populate the dropdown
+        // labels from `live_models` so the user picks against the same
+        // catalogue Copilot would route to. Static-catalogue providers
+        // keep their existing behaviour.
+        self.model_labels = if let Some(p) = self.selected_provider() {
+            if p.is_oauth_device() && !self.live_models.is_empty() {
+                self.live_models.clone()
+            } else {
+                p.models.iter().map(|m| m.name.clone()).collect()
+            }
+        } else {
+            Vec::new()
+        };
     }
 
     pub fn selected_model_name(&self) -> String {
         if let Some(provider) = self.selected_provider() {
-            if !provider.models.is_empty() {
+            if provider.is_oauth_device() && !self.live_models.is_empty() {
+                if let Some(idx) = self.model_idx {
+                    if let Some(name) = self.live_models.get(idx) {
+                        return name.clone();
+                    }
+                }
+                if !self.custom_model.is_empty() {
+                    return self.custom_model.clone();
+                }
+            } else if !provider.models.is_empty() {
                 if let Some(idx) = self.model_idx {
                     if let Some(model) = provider.models.get(idx) {
                         return model.name.clone();
@@ -490,6 +563,24 @@ impl State {
                 }
                 self.seed_from_loaded();
                 self.busy = false;
+                // If the user is already signed in to an oauth_device
+                // provider and we have no live models yet, kick off the
+                // discovery request — the dropdown should be populated
+                // the first time the user lands on this page.
+                if let Some(provider) = self.selected_provider() {
+                    if provider.is_oauth_device()
+                        && self.is_signed_in_to_selected_provider()
+                        && self.live_models.is_empty()
+                    {
+                        let provider_name = provider.name.clone();
+                        let wrap2 = wrap.clone();
+                        return Task::future(async move {
+                            wrap2(Message::OauthModelsFetched(
+                                fetch_oauth_models(&provider_name).await,
+                            ))
+                        });
+                    }
+                }
             }
             Message::ProviderSelected(idx) => {
                 self.provider_idx = Some(idx);
@@ -497,6 +588,10 @@ impl State {
                 self.custom_model.clear();
                 self.last_test = None;
                 self.extra_field_values.clear();
+                self.oauth_device = None;
+                self.oauth_polling = false;
+                self.oauth_error = None;
+                self.live_models.clear();
                 if let Some((needs_credential, default_env)) =
                     self.selected_provider().map(|p| (p.needs_credential, p.default_env.clone()))
                 {
@@ -508,6 +603,21 @@ impl State {
                     self.env_var_input = default_env;
                 }
                 self.refresh_labels();
+                // Pull the live model list if we just selected an
+                // already-signed-in OAuth provider.
+                if let Some(provider) = self.selected_provider() {
+                    if provider.is_oauth_device()
+                        && self.is_signed_in_to_selected_provider()
+                    {
+                        let provider_name = provider.name.clone();
+                        let wrap2 = wrap.clone();
+                        return Task::future(async move {
+                            wrap2(Message::OauthModelsFetched(
+                                fetch_oauth_models(&provider_name).await,
+                            ))
+                        });
+                    }
+                }
             }
             Message::ModelSelected(idx) => {
                 self.model_idx = Some(idx);
@@ -627,6 +737,193 @@ impl State {
                     wrap2(Message::LoadDone(load(modality).await))
                 });
             }
+            Message::OauthSignIn => {
+                // Don't start a second flow while one is still in flight.
+                if self.oauth_polling || self.oauth_device.is_some() {
+                    return Task::none();
+                }
+                let provider_name = match self.selected_provider() {
+                    Some(p) if p.is_oauth_device() => p.name.clone(),
+                    _ => return Task::none(),
+                };
+                self.oauth_polling = true;
+                self.oauth_error = None;
+                let wrap2 = wrap.clone();
+                return Task::future(async move {
+                    wrap2(Message::OauthStartDone(oauth_start(&provider_name).await))
+                });
+            }
+            Message::OauthStartDone(result) => {
+                match result {
+                    Ok(device) => {
+                        let interval = device.interval.max(MIN_OAUTH_POLL_SECS);
+                        let provider_name = self
+                            .selected_provider()
+                            .map(|p| p.name.clone())
+                            .unwrap_or_default();
+                        let code = device.device_code.clone();
+                        self.oauth_device = Some(device);
+                        // First poll fires after `interval` — gives the
+                        // user time to open the URL and type the code.
+                        let wrap2 = wrap.clone();
+                        return Task::future(async move {
+                            sleep_secs(interval).await;
+                            wrap2(Message::OauthPollTick(provider_name, code))
+                        });
+                    }
+                    Err(e) => {
+                        self.oauth_polling = false;
+                        self.oauth_device = None;
+                        self.oauth_error = Some(e);
+                    }
+                }
+            }
+            Message::OauthPollTick(provider_name, device_code) => {
+                // Guard against stale ticks after a sign-out / cancel.
+                let still_relevant = self.oauth_polling
+                    && self
+                        .oauth_device
+                        .as_ref()
+                        .map(|d| d.device_code == device_code)
+                        .unwrap_or(false);
+                if !still_relevant {
+                    return Task::none();
+                }
+                let wrap2 = wrap.clone();
+                let provider = provider_name.clone();
+                let code = device_code.clone();
+                return Task::future(async move {
+                    wrap2(Message::OauthPollDone(
+                        provider,
+                        code,
+                        oauth_poll(&provider_name, &device_code).await,
+                    ))
+                });
+            }
+            Message::OauthPollDone(provider_name, device_code, result) => {
+                let still_relevant = self
+                    .oauth_device
+                    .as_ref()
+                    .map(|d| d.device_code == device_code)
+                    .unwrap_or(false);
+                if !still_relevant {
+                    return Task::none();
+                }
+                match result {
+                    Ok(PollStatus::Pending) => {
+                        let interval = self
+                            .oauth_device
+                            .as_ref()
+                            .map(|d| d.interval)
+                            .unwrap_or(MIN_OAUTH_POLL_SECS)
+                            .max(MIN_OAUTH_POLL_SECS);
+                        let wrap2 = wrap.clone();
+                        return Task::future(async move {
+                            sleep_secs(interval).await;
+                            wrap2(Message::OauthPollTick(provider_name, device_code))
+                        });
+                    }
+                    Ok(PollStatus::SlowDown { interval }) => {
+                        let interval = interval.max(MIN_OAUTH_POLL_SECS);
+                        if let Some(device) = self.oauth_device.as_mut() {
+                            device.interval = interval;
+                        }
+                        let wrap2 = wrap.clone();
+                        return Task::future(async move {
+                            sleep_secs(interval).await;
+                            wrap2(Message::OauthPollTick(provider_name, device_code))
+                        });
+                    }
+                    Ok(PollStatus::Authorized { credential: _ }) => {
+                        self.oauth_polling = false;
+                        self.oauth_device = None;
+                        self.oauth_error = None;
+                        // The kernel stored the long-lived token under
+                        // the credential name baked into auth_kind=
+                        // oauth_device flows; we now refresh status
+                        // (so the UI re-renders the "signed in" branch)
+                        // and kick off the live model fetch.
+                        let modality = self.modality;
+                        let wrap_for_load = wrap.clone();
+                        let wrap_for_models = wrap.clone();
+                        let provider_for_models = provider_name.clone();
+                        return Task::batch(vec![
+                            Task::future(async move {
+                                wrap_for_load(Message::LoadDone(load(modality).await))
+                            }),
+                            Task::future(async move {
+                                wrap_for_models(Message::OauthModelsFetched(
+                                    fetch_oauth_models(&provider_for_models).await,
+                                ))
+                            }),
+                        ]);
+                    }
+                    Ok(PollStatus::Expired) => {
+                        self.oauth_polling = false;
+                        self.oauth_device = None;
+                        self.oauth_error = Some(crate::fl!("agent-oauth-expired"));
+                    }
+                    Ok(PollStatus::Denied) => {
+                        self.oauth_polling = false;
+                        self.oauth_device = None;
+                        self.oauth_error = Some(crate::fl!("agent-oauth-denied"));
+                    }
+                    Err(e) => {
+                        self.oauth_polling = false;
+                        self.oauth_device = None;
+                        self.oauth_error = Some(e);
+                    }
+                }
+            }
+            Message::OauthCancel => {
+                // The kernel has no "abort device flow" endpoint —
+                // expired codes are GC'd server-side. Locally we just
+                // drop the in-flight state so polling stops.
+                self.oauth_polling = false;
+                self.oauth_device = None;
+                self.oauth_error = None;
+            }
+            Message::OauthSignOut => {
+                // Clearing the modality on the kernel side is the
+                // safest revoke: the next request will see no
+                // credential and error out cleanly. The token blob
+                // itself is left in the credential store so the user
+                // can sign back in without re-doing the device flow
+                // unless they explicitly revoke from github.com.
+                if self.busy {
+                    return Task::none();
+                }
+                self.busy = true;
+                self.oauth_device = None;
+                self.oauth_polling = false;
+                self.oauth_error = None;
+                self.live_models.clear();
+                let modality = self.modality;
+                let wrap2 = wrap.clone();
+                return Task::future(async move {
+                    wrap2(Message::ResetDone(reset(modality).await))
+                });
+            }
+            Message::OauthModelsFetched(result) => {
+                match result {
+                    Ok(models) => {
+                        self.live_models = models;
+                        self.refresh_labels();
+                    }
+                    Err(e) => {
+                        // Don't blow away `oauth_error` if it was set
+                        // by something more important. Models fetch is
+                        // best-effort: the user can still type a name
+                        // in the custom-model textbox.
+                        if self.oauth_error.is_none() {
+                            self.oauth_error = Some(format!(
+                                "{}: {e}",
+                                crate::fl!("agent-oauth-models-failed")
+                            ));
+                        }
+                    }
+                }
+            }
         }
         Task::none()
     }
@@ -646,7 +943,12 @@ impl State {
     fn build_apply_args(&self) -> Option<ApplyArgs> {
         let provider = self.selected_provider()?;
         let model = self.selected_model_name();
-        let credential = if provider.needs_credential {
+        let credential = if provider.is_oauth_device() {
+            // OAuth providers establish their credential out-of-band via
+            // `oauth-poll`. The kernel re-reads it on `apply` so the
+            // form has nothing left to do here.
+            CredentialArg::None
+        } else if provider.needs_credential {
             match self.key_mode {
                 KeyMode::Stored => {
                     if self.api_key_input.is_empty() {
@@ -686,6 +988,28 @@ impl State {
             extras,
         })
     }
+
+    /// Whether the currently selected provider is `auth_kind=oauth_device`
+    /// and the kernel reports a stored credential under that provider's
+    /// expected name. Drives the sign-in / signed-in branch in the view.
+    pub fn is_signed_in_to_selected_provider(&self) -> bool {
+        let Some(provider) = self.selected_provider() else {
+            return false;
+        };
+        if !provider.is_oauth_device() {
+            return false;
+        }
+        // We rely on the kernel's `--status` reporting the provider's
+        // currently-configured credential name. Any non-empty value
+        // counts as "signed in" — we don't hard-code the name on the
+        // UI side so a future second OAuth provider doesn't need a
+        // matching client-side edit.
+        self.status
+            .as_ref()
+            .and_then(|s| s.api_key_credential.as_deref())
+            .map(|n| !n.is_empty())
+            .unwrap_or(false)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -713,6 +1037,28 @@ pub enum Message {
     Reset,
     ResetDone(Result<(), String>),
     Refresh,
+    /// User clicked the "Sign in with GitHub" button on an
+    /// `auth_kind=oauth_device` provider.
+    OauthSignIn,
+    /// Result of the initial `oauth-start` shell-out.
+    OauthStartDone(Result<DeviceCodeView, String>),
+    /// Timer-driven poll. Carries the provider + device_code that the
+    /// tick belongs to so stale ticks (from a cancelled flow) can be
+    /// detected and dropped.
+    OauthPollTick(String, String),
+    /// Result of a single `oauth-poll` invocation. Carries provider +
+    /// device_code for the same staleness check, plus the parsed
+    /// status enum.
+    OauthPollDone(String, String, Result<PollStatus, String>),
+    /// User clicked the "Cancel" button while the device flow was
+    /// still in flight. Stops polling; no kernel call.
+    OauthCancel,
+    /// User clicked "Sign out" on an already-signed-in OAuth
+    /// provider. Triggers a kernel `--reset` for this modality.
+    OauthSignOut,
+    /// Result of the `models --provider <name>` shell-out fired after
+    /// a successful sign-in (or on page entry if already signed in).
+    OauthModelsFetched(Result<Vec<String>, String>),
 }
 
 /// Combined `--providers` + `--status` payload for a single load round-trip.
@@ -815,6 +1161,109 @@ async fn reset(modality: Modality) -> Result<(), String> {
     cos_setup(&[modality.as_arg(), "--reset"], None)
         .await
         .map(|_| ())
+}
+
+// ---------------------------------------------------------------------------
+// OAuth-device shell-outs (currently only Copilot)
+// ---------------------------------------------------------------------------
+
+/// Floor on the polling interval honoured by the UI. Protects us from
+/// the kernel (or a misbehaving fixture) returning `interval=0`, which
+/// would spin the executor.
+const MIN_OAUTH_POLL_SECS: u64 = 5;
+
+async fn oauth_start(provider: &str) -> Result<DeviceCodeView, String> {
+    let stdout = cos_setup(&["llm", "oauth-start", "--provider", provider], None).await?;
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout).map_err(|e| format!("invalid oauth-start JSON: {e}"))?;
+    let user_code = v
+        .get("user_code")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| "oauth-start: missing user_code".to_string())?
+        .to_string();
+    let verification_uri = v
+        .get("verification_uri")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| "oauth-start: missing verification_uri".to_string())?
+        .to_string();
+    let device_code = v
+        .get("device_code")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| "oauth-start: missing device_code".to_string())?
+        .to_string();
+    let interval = v
+        .get("interval")
+        .and_then(|x| x.as_u64())
+        .unwrap_or(MIN_OAUTH_POLL_SECS);
+    Ok(DeviceCodeView {
+        user_code,
+        verification_uri,
+        device_code,
+        interval,
+    })
+}
+
+async fn oauth_poll(provider: &str, device_code: &str) -> Result<PollStatus, String> {
+    let stdout = cos_setup(
+        &[
+            "llm",
+            "oauth-poll",
+            "--provider",
+            provider,
+            "--device-code",
+            device_code,
+        ],
+        None,
+    )
+    .await?;
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout).map_err(|e| format!("invalid oauth-poll JSON: {e}"))?;
+    let status = v
+        .get("status")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| "oauth-poll: missing status".to_string())?;
+    match status {
+        "pending" => Ok(PollStatus::Pending),
+        "slow_down" => Ok(PollStatus::SlowDown {
+            interval: v
+                .get("interval")
+                .and_then(|x| x.as_u64())
+                .unwrap_or(MIN_OAUTH_POLL_SECS),
+        }),
+        "ok" => Ok(PollStatus::Authorized {
+            credential: v
+                .get("credential")
+                .and_then(|x| x.as_str())
+                .unwrap_or_default()
+                .to_string(),
+        }),
+        "expired" => Ok(PollStatus::Expired),
+        "denied" => Ok(PollStatus::Denied),
+        other => Err(format!("oauth-poll: unexpected status `{other}`")),
+    }
+}
+
+async fn fetch_oauth_models(provider: &str) -> Result<Vec<String>, String> {
+    let stdout = cos_setup(&["llm", "models", "--provider", provider], None).await?;
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout).map_err(|e| format!("invalid models JSON: {e}"))?;
+    let arr = v
+        .get("models")
+        .and_then(|x| x.as_array())
+        .ok_or_else(|| "models: missing `models` array".to_string())?;
+    let mut out = Vec::with_capacity(arr.len());
+    for entry in arr {
+        if let Some(name) = entry.get("name").and_then(|x| x.as_str()) {
+            if !name.is_empty() {
+                out.push(name.to_string());
+            }
+        }
+    }
+    Ok(out)
+}
+
+async fn sleep_secs(secs: u64) {
+    tokio::time::sleep(std::time::Duration::from_secs(secs.max(MIN_OAUTH_POLL_SECS))).await;
 }
 
 /// Invoke `cos agent setup <argv...>`, optionally piping a secret via stdin.
@@ -1047,8 +1496,16 @@ fn configuration_view(state: &State) -> Element<'_, Message> {
 
     if let Some(provider) = state.selected_provider() {
         // Model picker. If we have a curated list, render a dropdown; the
-        // text input is always available so users can override.
-        if !provider.models.is_empty() {
+        // text input is always available so users can override. For
+        // OAuth providers the dropdown is populated from `live_models`
+        // (fetched post-sign-in); when empty it's hidden, leaving only
+        // the free-form textbox until the user signs in.
+        let dropdown_visible = if provider.is_oauth_device() {
+            !state.live_models.is_empty()
+        } else {
+            !provider.models.is_empty()
+        };
+        if dropdown_visible {
             let model_dropdown = dropdown(
                 &state.model_labels,
                 state.model_idx,
@@ -1065,14 +1522,22 @@ fn configuration_view(state: &State) -> Element<'_, Message> {
         } else {
             provider.default_model.clone()
         };
-        let custom_value = if !state.custom_model.is_empty() {
+        let custom_value: &str = if !state.custom_model.is_empty() {
             state.custom_model.as_str()
         } else if let Some(idx) = state.model_idx {
-            provider
-                .models
-                .get(idx)
-                .map(|m| m.name.as_str())
-                .unwrap_or("")
+            if provider.is_oauth_device() {
+                state
+                    .live_models
+                    .get(idx)
+                    .map(String::as_str)
+                    .unwrap_or("")
+            } else {
+                provider
+                    .models
+                    .get(idx)
+                    .map(|m| m.name.as_str())
+                    .unwrap_or("")
+            }
         } else {
             ""
         };
@@ -1085,7 +1550,9 @@ fn configuration_view(state: &State) -> Element<'_, Message> {
         );
 
         // Credential section.
-        if !provider.needs_credential {
+        if provider.is_oauth_device() {
+            col = col.push(oauth_credential_view(state));
+        } else if !provider.needs_credential {
             col = col.push(
                 container(text::body(crate::fl!("agent-key-not-required")))
                     .padding(8)
@@ -1190,6 +1657,82 @@ fn configuration_view(state: &State) -> Element<'_, Message> {
     }
 
     col.into()
+}
+
+/// Render the credential pane for providers whose `auth_kind` is
+/// `oauth_device`. Three states: (1) signed in — show the stored
+/// credential name + Sign out button; (2) device-flow in progress —
+/// show user code, verification URL, and a Cancel button; (3) idle —
+/// show a Sign in button. Errors from previous attempts (denied /
+/// expired / network) are surfaced inline so the user knows why
+/// nothing happened.
+fn oauth_credential_view(state: &State) -> Element<'_, Message> {
+    let mut inner = column::with_capacity(4).spacing(12);
+
+    if state.is_signed_in_to_selected_provider() {
+        let credential = state
+            .status
+            .as_ref()
+            .and_then(|s| s.api_key_credential.as_deref())
+            .unwrap_or("");
+        let signed_in_label = if credential.is_empty() {
+            crate::fl!("agent-oauth-signed-in")
+        } else {
+            format!("{} ({credential})", crate::fl!("agent-oauth-signed-in"))
+        };
+        let sign_out_btn = if state.busy {
+            button::standard(crate::fl!("agent-oauth-sign-out"))
+        } else {
+            button::standard(crate::fl!("agent-oauth-sign-out"))
+                .on_press(Message::OauthSignOut)
+        };
+        let pane = row::with_capacity(2)
+            .spacing(12)
+            .align_y(Alignment::Center)
+            .push(text::body(signed_in_label))
+            .push(sign_out_btn);
+        inner = inner.push(
+            settings::item::builder(crate::fl!("agent-key-mode"))
+                .flex_control(Element::from(pane)),
+        );
+    } else if let Some(device) = &state.oauth_device {
+        let cancel_btn = button::destructive(crate::fl!("agent-oauth-cancel"))
+            .on_press(Message::OauthCancel);
+        let instructions = crate::fl!(
+            "agent-oauth-instructions",
+            url = device.verification_uri.as_str()
+        );
+        let body = column::with_capacity(4)
+            .spacing(8)
+            .push(text::body(instructions))
+            .push(text::heading(device.user_code.clone()))
+            .push(text::caption(crate::fl!("agent-oauth-waiting")))
+            .push(cancel_btn);
+        inner = inner.push(
+            settings::item::builder(crate::fl!("agent-oauth-user-code"))
+                .flex_control(Element::from(body)),
+        );
+    } else {
+        let sign_in_btn = if state.busy || state.oauth_polling {
+            button::suggested(crate::fl!("agent-oauth-sign-in"))
+        } else {
+            button::suggested(crate::fl!("agent-oauth-sign-in"))
+                .on_press(Message::OauthSignIn)
+        };
+        inner = inner.push(
+            settings::item::builder(crate::fl!("agent-key-mode"))
+                .flex_control(Element::from(sign_in_btn)),
+        );
+    }
+
+    if let Some(err) = &state.oauth_error {
+        inner = inner.push(text::caption(format!(
+            "{}: {err}",
+            crate::fl!("agent-oauth-failed")
+        )));
+    }
+
+    inner.into()
 }
 
 fn actions_view(state: &State) -> Element<'_, Message> {

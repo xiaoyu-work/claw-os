@@ -8,6 +8,7 @@
 
 pub mod anthropic;
 pub mod bedrock;
+pub mod copilot_auth;
 pub mod gemini;
 pub mod llama_local;
 pub mod mock;

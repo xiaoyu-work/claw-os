@@ -42,8 +42,15 @@ pub const PROVIDER_NAME: &str = "openai";
 /// Names this provider answers to in the registry. Adding an alias here
 /// only changes the `name()` returned and the default base URL — the
 /// wire format is identical.
-pub const PROVIDER_ALIASES: &[&str] =
-    &["openai", "xai", "deepseek", "openrouter", "ollama", "azure"];
+pub const PROVIDER_ALIASES: &[&str] = &[
+    "openai",
+    "xai",
+    "deepseek",
+    "openrouter",
+    "ollama",
+    "azure",
+    "copilot",
+];
 
 const DEFAULT_OPENAI_BASE: &str = "https://api.openai.com/v1";
 const DEFAULT_XAI_BASE: &str = "https://api.x.ai/v1";
@@ -55,6 +62,12 @@ const DEFAULT_OLLAMA_BASE: &str = "http://localhost:11434/v1";
 // We return "" so empty-base callers fall through to a clear
 // configuration error rather than silently 401'ing against api.openai.com.
 const DEFAULT_AZURE_BASE: &str = "";
+// GitHub Copilot's chat-completions endpoint. The Copilot API token
+// embeds a `proxy-ep=` parameter that lets us route to per-tenant
+// hosts (individual / business / enterprise) — see
+// `super::copilot_auth::derive_base_url_from_token`. This constant is
+// the fallback when no proxy-ep is present.
+const DEFAULT_COPILOT_BASE: &str = "https://api.individual.githubcopilot.com";
 
 /// Resolve the default base URL for one of [`PROVIDER_ALIASES`]. Falls
 /// back to OpenAI's URL if the alias is unknown.
@@ -65,6 +78,7 @@ pub fn default_base_url_for(alias: &str) -> &'static str {
         "openrouter" => DEFAULT_OPENROUTER_BASE,
         "ollama" => DEFAULT_OLLAMA_BASE,
         "azure" => DEFAULT_AZURE_BASE,
+        "copilot" => DEFAULT_COPILOT_BASE,
         _ => DEFAULT_OPENAI_BASE,
     }
 }
@@ -80,6 +94,16 @@ fn alias_uses_api_key_header(alias: &str) -> bool {
 /// stored key.
 fn alias_is_local_default(alias: &str) -> bool {
     matches!(alias, "ollama")
+}
+
+/// Whether the alias treats the stored credential as a GitHub OAuth
+/// token that must be exchanged for a short-lived Copilot API token on
+/// every request (with in-process caching — see
+/// `super::copilot_auth::ensure_copilot_token`). Aliases in this set
+/// also inject Copilot's editor-identification headers and derive
+/// their base URL from the exchanged token.
+fn alias_is_copilot(alias: &str) -> bool {
+    matches!(alias, "copilot")
 }
 
 /// Resolve an API key from the credential store, then env var, then None.
@@ -247,14 +271,21 @@ impl OpenAICompatProvider {
         // the API version path (e.g. `/v1`), so we just append
         // `/chat/completions` plus any trailing query string the
         // user may have configured for a proxy.
-        let (base, query) = match self.cfg.base_url.split_once('?') {
-            Some((b, q)) => (b.trim_end_matches('/'), Some(q)),
-            None => (self.cfg.base_url.as_str(), None),
-        };
-        match query {
-            Some(q) => format!("{base}/chat/completions?{q}"),
-            None => format!("{base}/chat/completions"),
-        }
+        endpoint_from_base(&self.cfg.base_url)
+    }
+}
+
+/// Build the `/chat/completions` URL from a generic openai-compat base
+/// URL, preserving any trailing `?…` query string the user may have
+/// configured (proxy auth tokens, region selectors, …).
+fn endpoint_from_base(base_url: &str) -> String {
+    let (base, query) = match base_url.split_once('?') {
+        Some((b, q)) => (b.trim_end_matches('/'), Some(q)),
+        None => (base_url.trim_end_matches('/'), None),
+    };
+    match query {
+        Some(q) => format!("{base}/chat/completions?{q}"),
+        None => format!("{base}/chat/completions"),
     }
 }
 
@@ -308,26 +339,67 @@ impl Provider for OpenAICompatProvider {
             None
         };
 
-        let bearer: Option<&str> = match &lease {
-            Some(l) => Some(l.value()),
-            None => self.cfg.api_key.as_deref(),
+        // For Copilot, the stored credential is a long-lived GitHub
+        // OAuth token; we exchange it (cached, ~30 min TTL) for a
+        // short-lived Copilot API token, then dial the per-tenant
+        // host the token's `proxy-ep` field points at. For every
+        // other alias, the stored credential is the bearer directly
+        // and the endpoint comes from `self.endpoint()`.
+        let (bearer_owned, endpoint_url) = if alias_is_copilot(&self.cfg.alias) {
+            let github_token = match &lease {
+                Some(l) => l.value().to_string(),
+                None => match self.cfg.api_key.as_deref() {
+                    Some(k) => k.to_string(),
+                    None => {
+                        return Err(LlmError::NotConfigured(
+                            "GitHub Copilot is not signed in. Run \
+                             `cos agent setup llm oauth-start --provider copilot` \
+                             or use the desktop AI settings page to sign in with GitHub."
+                                .into(),
+                        ));
+                    }
+                },
+            };
+            let resolved = match super::copilot_auth::ensure_copilot_token(&github_token).await {
+                Ok(t) => t,
+                Err(e) => return Err(LlmError::NotConfigured(format!("copilot auth: {e}"))),
+            };
+            (Some(resolved.bearer), endpoint_from_base(&resolved.base_url))
+        } else {
+            let bearer = match &lease {
+                Some(l) => Some(l.value().to_string()),
+                None => self.cfg.api_key.clone(),
+            };
+            (bearer, self.endpoint())
         };
 
         let mut http = self
             .client
-            .post(self.endpoint())
+            .post(&endpoint_url)
             .header("Content-Type", "application/json")
             .json(&body);
 
-        if let Some(key) = bearer {
+        if let Some(key) = bearer_owned.as_deref() {
             if alias_uses_api_key_header(&self.cfg.alias) {
                 http = http.header("api-key", key);
             } else {
                 http = http.bearer_auth(key);
             }
         }
+        // Copilot's API rejects requests without these two headers
+        // (and uses them for telemetry + entitlement gating). They
+        // must come AFTER `extra_headers` is applied so a user's
+        // `agent.extra_headers` cannot accidentally clobber them.
         for (k, v) in &self.cfg.extra_headers {
             http = http.header(k.as_str(), v.as_str());
+        }
+        if alias_is_copilot(&self.cfg.alias) {
+            http = http
+                .header("Editor-Version", super::copilot_auth::EDITOR_VERSION)
+                .header(
+                    "Copilot-Integration-Id",
+                    super::copilot_auth::COPILOT_INTEGRATION_ID,
+                );
         }
 
         let send_result = http.send().await;

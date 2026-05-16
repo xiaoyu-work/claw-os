@@ -18,8 +18,9 @@ use crate::config::AgentConfig;
 
 /// Names of every provider linked into this binary. The OpenAI-compatible
 /// provider is registered under multiple aliases (`openai`, `xai`,
-/// `deepseek`, `openrouter`, `ollama`) — they all share one impl but get
-/// different default base URLs.
+/// `deepseek`, `openrouter`, `ollama`, `copilot`) — they all share one
+/// impl but get different default base URLs and per-alias auth/header
+/// handling.
 pub const REGISTERED: &[&str] = &[
     "mock",
     "llama_local",
@@ -32,6 +33,7 @@ pub const REGISTERED: &[&str] = &[
     "anthropic",
     "bedrock",
     "gemini",
+    "copilot",
 ];
 
 /// Construct a provider by name.

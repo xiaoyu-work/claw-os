@@ -1094,3 +1094,15 @@ agent-apply-ok = Saved:
 agent-apply-failed = Save failed
 agent-test-ok = Test succeeded
 agent-test-failed = Test failed
+
+agent-oauth-sign-in = Sign in with GitHub
+agent-oauth-sign-out = Sign out
+agent-oauth-cancel = Cancel sign-in
+agent-oauth-signed-in = Signed in.
+agent-oauth-instructions = Open { $url } in a browser and enter the code below to grant access.
+agent-oauth-user-code = User code
+agent-oauth-waiting = Waiting for GitHub authorization…
+agent-oauth-failed = Sign in failed
+agent-oauth-expired = The code expired. Click "Sign in with GitHub" to try again.
+agent-oauth-denied = Authorization was denied on GitHub.
+agent-oauth-models-failed = Could not fetch the live model list

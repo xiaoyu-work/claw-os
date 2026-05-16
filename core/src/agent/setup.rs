@@ -36,9 +36,12 @@ pub fn run(args: &[String]) -> Result<Value, String> {
     // --providers / --help, plus a required leading positional modality:
     //   llm | tts | stt | imagegen | embed | all
     //
-    // Two extra non-interactive subcommands take per-modality flags:
-    //   apply  --provider X --model Y [--api-key K | --api-key-stdin | --api-key-env E]
-    //   test   (alias for --verify-only)
+    // Extra non-interactive subcommands take per-modality flags:
+    //   apply       --provider X --model Y [--api-key K | --api-key-stdin | --api-key-env E]
+    //   test        (alias for --verify-only)
+    //   oauth-start --provider copilot
+    //   oauth-poll  --provider copilot --device-code <code>
+    //   models      --provider copilot
     //
     // Bare `cos agent setup` (no positional, no flags) opens an
     // interactive modality picker on a TTY and prints help otherwise —
@@ -54,6 +57,7 @@ pub fn run(args: &[String]) -> Result<Value, String> {
     let mut apply_api_key_env: Option<String> = None;
     let mut apply_base_url: Option<String> = None;
     let mut apply_api_version: Option<String> = None;
+    let mut oauth_device_code: Option<String> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -67,6 +71,9 @@ pub fn run(args: &[String]) -> Result<Value, String> {
             "--providers" | "providers" if sub.is_none() => sub = Some("providers"),
             "apply" if sub.is_none() => sub = Some("apply"),
             "test" if sub.is_none() => sub = Some("test"),
+            "oauth-start" if sub.is_none() => sub = Some("oauth-start"),
+            "oauth-poll" if sub.is_none() => sub = Some("oauth-poll"),
+            "models" if sub.is_none() => sub = Some("models"),
             "-h" | "--help" if sub.is_none() => sub = Some("help"),
             "--provider" => {
                 i += 1;
@@ -111,6 +118,13 @@ pub fn run(args: &[String]) -> Result<Value, String> {
                 }
                 apply_api_version = Some(args[i].clone());
             }
+            "--device-code" => {
+                i += 1;
+                if i >= args.len() {
+                    return Err("--device-code requires a value".into());
+                }
+                oauth_device_code = Some(args[i].clone());
+            }
             other => {
                 if let Some(m) = Modality::parse(other) {
                     if modality.is_some() {
@@ -122,11 +136,11 @@ pub fn run(args: &[String]) -> Result<Value, String> {
                     modality = Some(m);
                 } else if other.starts_with('-') {
                     return Err(format!(
-                        "unknown setup flag: {other}. try: --no-verify | --verify-only | --status | --reset | --providers"
+                        "unknown setup flag: {other}. try: --no-verify | --verify-only | --status | --reset | --providers | --device-code"
                     ));
                 } else if sub.is_none() {
                     return Err(format!(
-                        "unknown setup modality/subcommand: {other}. try: llm | tts | stt | imagegen | embed | all | apply | test | --status | --reset | --providers | --verify-only"
+                        "unknown setup modality/subcommand: {other}. try: llm | tts | stt | imagegen | embed | all | apply | test | oauth-start | oauth-poll | models | --status | --reset | --providers | --verify-only"
                     ));
                 }
             }
@@ -141,11 +155,15 @@ pub fn run(args: &[String]) -> Result<Value, String> {
         || apply_api_key_env.is_some()
         || apply_base_url.is_some()
         || apply_api_version.is_some();
-    if apply_flags_set && sub != Some("apply") {
+    let oauth_subcommand = matches!(sub, Some("oauth-start") | Some("oauth-poll") | Some("models"));
+    if apply_flags_set && sub != Some("apply") && !oauth_subcommand {
         return Err(
-            "--provider / --model / --api-key{,-stdin,-env} / --base-url / --api-version are only valid with the `apply` subcommand"
+            "--provider / --model / --api-key{,-stdin,-env} / --base-url / --api-version are only valid with the `apply` / `oauth-*` subcommands"
                 .into(),
         );
+    }
+    if oauth_device_code.is_some() && sub != Some("oauth-poll") {
+        return Err("--device-code is only valid with the `oauth-poll` subcommand".into());
     }
 
     let Some(modality) = modality else {
@@ -168,6 +186,11 @@ pub fn run(args: &[String]) -> Result<Value, String> {
                     .into(),
             ),
             Some("test") => verify_cmd(Modality::All),
+            Some("oauth-start") => oauth_start_cmd(apply_provider.as_deref()),
+            Some("oauth-poll") => {
+                oauth_poll_cmd(apply_provider.as_deref(), oauth_device_code.as_deref())
+            }
+            Some("models") => models_cmd(apply_provider.as_deref()),
             _ => {
                 if std::io::stdin().is_terminal() {
                     let picked = pick_modality_interactively()?;
@@ -192,7 +215,7 @@ pub fn run(args: &[String]) -> Result<Value, String> {
         return verify_cmd(modality);
     }
     let apply_args = ApplyArgs {
-        provider: apply_provider,
+        provider: apply_provider.clone(),
         model: apply_model,
         api_key: apply_api_key,
         api_key_stdin: apply_api_key_stdin,
@@ -207,6 +230,11 @@ pub fn run(args: &[String]) -> Result<Value, String> {
         Some("apply") => apply_cmd(modality, apply_args),
         Some("test") => verify_cmd(modality),
         Some("help") => Ok(help_doc()),
+        Some("oauth-start") => oauth_start_cmd(apply_provider.as_deref()),
+        Some("oauth-poll") => {
+            oauth_poll_cmd(apply_provider.as_deref(), oauth_device_code.as_deref())
+        }
+        Some("models") => models_cmd(apply_provider.as_deref()),
         _ => dispatch_wizard(modality, verify_after),
     }
 }
@@ -303,9 +331,12 @@ fn help_doc() -> Value {
             "all":       "Walk every modality in order, prompting before each.",
         },
         "subcommands": {
-            "apply":     "Non-interactive write. Required flags: --provider X --model Y. Credential: one of --api-key K | --api-key-stdin | --api-key-env ENV. `--provider none` clears the modality.",
-            "test":      "Alias for --verify-only: probe the currently configured provider for this modality.",
-            "providers": "Emit JSON catalogue of providers + sample models for the picked modality (or `all`). Used by the cosmic-settings agent page.",
+            "apply":       "Non-interactive write. Required flags: --provider X --model Y. Credential: one of --api-key K | --api-key-stdin | --api-key-env ENV. `--provider none` clears the modality.",
+            "test":        "Alias for --verify-only: probe the currently configured provider for this modality.",
+            "providers":   "Emit JSON catalogue of providers + sample models for the picked modality (or `all`). Used by the cosmic-settings agent page.",
+            "oauth-start": "Begin a device-authorization flow for a provider whose `auth_kind` is `oauth_device` (currently only `copilot`). Requires --provider X. Emits the user code + verification URL the UI should display, plus the device_code the UI passes to `oauth-poll`.",
+            "oauth-poll":  "One-shot poll for an in-flight OAuth flow. Requires --provider X --device-code Z. Emits a `status` of pending | slow_down | ok | expired | denied | error. On `ok` the long-lived credential is stored automatically; the UI then refreshes its model list via `models`.",
+            "models":      "Fetch the live model catalogue for providers whose `auth_kind` is `oauth_device` (currently only `copilot`). Requires --provider X. Returns `{ models: [{name}, …] }`. Errors if the user is not signed in.",
         },
         "flags": {
             "--no-verify":      "Skip the live provider probe at the end of the wizard.",
@@ -320,6 +351,7 @@ fn help_doc() -> Value {
             "--api-key-env E":  "(apply only) Don't store a key; persist a pointer to env var `$E`.",
             "--base-url URL":   "(apply only) Override the provider's default API endpoint. REQUIRED when --provider azure (Azure has no universal default — point at https://<resource>.openai.azure.com/openai/deployments/<deployment>). Accepted as an advanced override for openai / xai / deepseek / openrouter / ollama.",
             "--api-version V":  "(apply only) Azure REST API version, e.g. 2024-12-01-preview. When set and --base-url has no `?`, gets appended as `?api-version=V`.",
+            "--device-code C":  "(oauth-poll only) The opaque device_code returned by `oauth-start`. The UI keeps it private and only forwards it to the kernel.",
         },
         "examples": [
             "cos agent setup llm                                                  # wizard for LLM",
@@ -332,6 +364,10 @@ fn help_doc() -> Value {
             "    --api-version 2024-12-01-preview --api-key-stdin                # Azure OpenAI",
             "cos agent setup tts apply --provider edge --model en-US-AriaNeural   # no key needed",
             "cos agent setup imagegen test                                        # probe configured imagegen provider",
+            "cos agent setup llm oauth-start --provider copilot                   # GitHub Copilot device-flow start",
+            "cos agent setup llm oauth-poll  --provider copilot --device-code D   # poll until status=ok",
+            "cos agent setup llm apply       --provider copilot --model gpt-4o    # reuse stored token (no --api-key)",
+            "cos agent setup llm models      --provider copilot                   # refresh Copilot model list",
         ],
         "notes": [
             "Bare `cos agent setup` (no args) opens an interactive picker on a TTY; on a non-TTY it errors and lists the modalities.",
@@ -1795,15 +1831,25 @@ fn providers_llm() -> Value {
                     })
                 })
                 .collect();
-            json!({
+            let default_model = default_model_name(name).unwrap_or_else(|| {
+                models.first().map(|m| m.name.to_string()).unwrap_or_default()
+            });
+            let mut entry = json!({
                 "name": name,
                 "label": *name,
                 "needs_credential": provider_needs_credential(name),
                 "default_env": default_env_name(name),
                 "models": model_list,
-                "default_model": models.first().map(|m| m.name.to_string()).unwrap_or_default(),
+                "default_model": default_model,
                 "extra_fields": extra_fields_for(name),
-            })
+            });
+            if let Some(kind) = auth_kind_for(name) {
+                entry
+                    .as_object_mut()
+                    .expect("entry is object")
+                    .insert("auth_kind".into(), json!(kind));
+            }
+            entry
         })
         .collect();
     json!({
@@ -1876,6 +1922,255 @@ fn extra_fields_for(provider: &str) -> Vec<Value> {
     }
 }
 
+/// Authentication kind exposed to UIs that can render something other
+/// than a paste-an-API-key form. Currently the only non-default value
+/// is `"oauth_device"` for GitHub Copilot, which expects the UI to
+/// drive the device-authorization dance via the `oauth-start` and
+/// `oauth-poll` subcommands. Returning `None` means the standard
+/// API-key form is correct.
+fn auth_kind_for(provider: &str) -> Option<&'static str> {
+    match provider {
+        "copilot" => Some("oauth_device"),
+        _ => None,
+    }
+}
+
+/// Default model the picker should pre-select for providers whose
+/// `llm::metadata` catalogue is intentionally empty (because the
+/// real model list is fetched live post-sign-in). Returns `None`
+/// for providers backed by the static catalogue — those keep using
+/// the first metadata entry as their default.
+fn default_model_name(provider: &str) -> Option<String> {
+    match provider {
+        "copilot" => Some("gpt-4o".into()),
+        _ => None,
+    }
+}
+
+/// Credential name the OAuth-device path stores the long-lived GitHub
+/// token under in the `agent` namespace. Centralised so the kernel
+/// readers (apply, providers catalog, openai_compat) and the writer
+/// (oauth-poll) agree on a single string.
+const COPILOT_GITHUB_TOKEN_CREDENTIAL: &str = "copilot_github_token";
+
+// ---------------------------------------------------------------------------
+// OAuth + model-discovery subcommands (Copilot)
+// ---------------------------------------------------------------------------
+
+fn require_provider(provider: Option<&str>, sub: &str) -> Result<String, String> {
+    match provider {
+        Some(p) if !p.trim().is_empty() => Ok(p.trim().to_string()),
+        _ => Err(format!(
+            "`{sub}` requires --provider <name>. Only `copilot` is supported today."
+        )),
+    }
+}
+
+fn ensure_oauth_provider(provider: &str) -> Result<(), String> {
+    match auth_kind_for(provider) {
+        Some(_) => Ok(()),
+        None => Err(format!(
+            "provider `{provider}` does not use OAuth device flow. \
+             Use `apply --api-key{{,-stdin,-env}}` instead."
+        )),
+    }
+}
+
+fn block_on<F, T>(fut: F) -> Result<T, String>
+where
+    F: std::future::Future<Output = T>,
+{
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("tokio runtime: {e}"))?;
+    Ok(rt.block_on(fut))
+}
+
+/// `cos agent setup oauth-start --provider copilot` → emits the
+/// device-authorization codes the UI shows the user.
+fn oauth_start_cmd(provider: Option<&str>) -> Result<Value, String> {
+    let provider = require_provider(provider, "oauth-start")?;
+    ensure_oauth_provider(&provider)?;
+    // Only Copilot for now — keep the dispatch explicit so adding a
+    // second OAuth provider is a visible diff.
+    if provider != "copilot" {
+        return Err(format!("oauth-start: unsupported provider `{provider}`"));
+    }
+    let dc = block_on(llm::providers::copilot_auth::start_device_flow())?
+        .map_err(|e| format!("oauth-start: {e}"))?;
+    Ok(json!({
+        "provider": provider,
+        "device_code": dc.device_code,
+        "user_code": dc.user_code,
+        "verification_uri": dc.verification_uri,
+        "expires_in": dc.expires_in,
+        "interval": dc.interval,
+    }))
+}
+
+/// `cos agent setup oauth-poll --provider copilot --device-code <code>`
+/// → single poll. The UI loops on its own schedule and stops when this
+/// command emits `status: "ok"` (token stored) or a terminal failure.
+fn oauth_poll_cmd(provider: Option<&str>, device_code: Option<&str>) -> Result<Value, String> {
+    let provider = require_provider(provider, "oauth-poll")?;
+    ensure_oauth_provider(&provider)?;
+    if provider != "copilot" {
+        return Err(format!("oauth-poll: unsupported provider `{provider}`"));
+    }
+    let code = device_code
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "oauth-poll requires --device-code <code>".to_string())?;
+    let outcome = block_on(llm::providers::copilot_auth::poll_device_flow(code))?
+        .map_err(|e| format!("oauth-poll: {e}"))?;
+    use llm::providers::copilot_auth::PollOutcome;
+    match outcome {
+        PollOutcome::Pending => Ok(json!({"status": "pending"})),
+        PollOutcome::SlowDown { interval } => {
+            Ok(json!({"status": "slow_down", "interval": interval}))
+        }
+        PollOutcome::Expired => Ok(json!({"status": "expired"})),
+        PollOutcome::Denied => Ok(json!({"status": "denied"})),
+        PollOutcome::Authorized { github_token, .. } => {
+            // Persist the long-lived GitHub token so subsequent `apply`
+            // + chat traffic can exchange it for short-lived Copilot
+            // tokens on demand. We store under a fixed credential name
+            // so a re-sign-in cleanly overwrites the prior token.
+            store_credential(COPILOT_GITHUB_TOKEN_CREDENTIAL, &github_token).map_err(|e| {
+                format!(
+                    "oauth-poll: stored token rejected by credential store: {e}\n\
+                     hint: rerun as a user with write access to the agent credential namespace."
+                )
+            })?;
+            Ok(json!({
+                "status": "ok",
+                "provider": provider,
+                "credential": COPILOT_GITHUB_TOKEN_CREDENTIAL,
+            }))
+        }
+    }
+}
+
+/// `cos agent setup models --provider copilot` → fetch the live model
+/// catalogue from Copilot's `/models` endpoint using the stored token.
+/// Returns the same shape as the static `providers_llm` model list so
+/// UIs can drop the response straight into their model dropdown.
+fn models_cmd(provider: Option<&str>) -> Result<Value, String> {
+    let provider = require_provider(provider, "models")?;
+    if provider != "copilot" {
+        return Err(format!(
+            "models: live discovery is only supported for `copilot` today; \
+             other providers expose their model lists via `--providers`"
+        ));
+    }
+    let github_token = crate::credential::try_load(COPILOT_GITHUB_TOKEN_CREDENTIAL, "agent")
+        .map_err(|e| format!("read credential `{COPILOT_GITHUB_TOKEN_CREDENTIAL}`: {e}"))?
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| {
+            "GitHub Copilot is not signed in. Run `oauth-start` + `oauth-poll` first \
+             (or use the desktop AI settings page)."
+                .to_string()
+        })?;
+
+    let models = block_on(fetch_copilot_models(&github_token))??;
+    Ok(json!({
+        "provider": provider,
+        "models": models,
+    }))
+}
+
+async fn fetch_copilot_models(
+    github_token: &str,
+) -> Result<Result<Vec<Value>, String>, String> {
+    let copilot = match llm::providers::copilot_auth::ensure_copilot_token(github_token).await {
+        Ok(t) => t,
+        Err(e) => return Ok(Err(format!("copilot auth: {e}"))),
+    };
+    let url = format!("{}/models", copilot.base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("http client: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Accept", "application/json")
+        .header(
+            "Editor-Version",
+            llm::providers::copilot_auth::EDITOR_VERSION,
+        )
+        .header(
+            "Copilot-Integration-Id",
+            llm::providers::copilot_auth::COPILOT_INTEGRATION_ID,
+        )
+        .bearer_auth(&copilot.bearer)
+        .send()
+        .await
+        .map_err(|e| format!("GET {url}: {e}"))?;
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("read body from {url}: {e}"))?;
+    if !status.is_success() {
+        return Ok(Err(format!(
+            "Copilot /models returned HTTP {}: {}",
+            status.as_u16(),
+            truncate_for_log(&text, 240)
+        )));
+    }
+    // Copilot's models endpoint shape: { "data": [ { "id": "gpt-4o", ... }, ... ] }.
+    // We tolerate either {"data": [...]} or {"models": [...]} and reduce
+    // each entry to {name: <id>} for the UI.
+    let parsed: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(e) => {
+            return Ok(Err(format!(
+                "parse /models response: {e}: {}",
+                truncate_for_log(&text, 240)
+            )));
+        }
+    };
+    let array = parsed
+        .get("data")
+        .or_else(|| parsed.get("models"))
+        .and_then(|v| v.as_array());
+    let Some(entries) = array else {
+        return Ok(Err(format!(
+            "unexpected /models response shape: {}",
+            truncate_for_log(&text, 240)
+        )));
+    };
+    let mut out = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let id = entry
+            .get("id")
+            .and_then(|v| v.as_str())
+            .or_else(|| entry.get("name").and_then(|v| v.as_str()));
+        if let Some(id) = id {
+            if !id.is_empty() {
+                out.push(json!({ "name": id }));
+            }
+        }
+    }
+    out.sort_by(|a, b| {
+        a.get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .cmp(b.get("name").and_then(|v| v.as_str()).unwrap_or(""))
+    });
+    Ok(Ok(out))
+}
+
+fn truncate_for_log(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..max])
+    }
+}
+
 /// Non-interactive write. Validates inputs against the same catalogues
 /// the wizard uses, stores credentials in the agent namespace, and
 /// writes the modality's config block atomically. Returns a JSON
@@ -1930,8 +2225,11 @@ fn apply_llm(args: ApplyArgs) -> Result<Value, String> {
 
     let needs_cred = provider_needs_credential(&provider);
     let credential_hint = format!("{provider}_api_key");
-    let (credential_name, credential_env) =
-        resolve_key_args(&args, &provider, &credential_hint, needs_cred)?;
+    let (credential_name, credential_env) = if auth_kind_for(&provider) == Some("oauth_device") {
+        resolve_oauth_credential(&args, &provider)?
+    } else {
+        resolve_key_args(&args, &provider, &credential_hint, needs_cred)?
+    };
 
     let path = config_path();
     let mut cfg = read_config_or_empty(&path)?;
@@ -2113,6 +2411,51 @@ fn resolve_key_args(
         )
     })?;
     Ok((Some(credential_hint.to_string()), None))
+}
+
+/// Resolver for OAuth-device providers (currently only `copilot`).
+/// The credential is established out-of-band by `oauth-poll`, so
+/// `apply` either reuses the stored token name or accepts an explicit
+/// env override for users who want to inject a GitHub token from CI.
+fn resolve_oauth_credential(
+    args: &ApplyArgs,
+    provider_name: &str,
+) -> Result<(Option<String>, Option<String>), String> {
+    if args.api_key.is_some() || args.api_key_stdin {
+        return Err(format!(
+            "provider `{provider_name}` uses OAuth device flow; \
+             use `cos agent setup llm oauth-start` instead of --api-key/--api-key-stdin. \
+             (--api-key-env is still accepted for non-interactive overrides.)"
+        ));
+    }
+    if let Some(env) = args.api_key_env.as_deref() {
+        let env = env.trim();
+        if env.is_empty() {
+            return Err("--api-key-env cannot be empty".into());
+        }
+        return Ok((None, Some(env.to_string())));
+    }
+    let credential_name = match provider_name {
+        "copilot" => COPILOT_GITHUB_TOKEN_CREDENTIAL,
+        other => {
+            return Err(format!(
+                "internal: provider `{other}` advertises auth_kind=oauth_device but no credential mapping is defined"
+            ));
+        }
+    };
+    let exists = crate::credential::try_load(credential_name, "agent")
+        .map_err(|e| format!("read credential `{credential_name}`: {e}"))?
+        .filter(|s| !s.trim().is_empty())
+        .is_some();
+    if !exists {
+        return Err(format!(
+            "provider `{provider_name}` is not signed in yet. \
+             Run `cos agent setup llm oauth-start --provider {provider_name}` first \
+             (or use the desktop AI settings page), or pass --api-key-env <ENV> to use \
+             a GitHub token from the environment."
+        ));
+    }
+    Ok((Some(credential_name.to_string()), None))
 }
 
 fn apply_credential_to_block(
@@ -2736,6 +3079,82 @@ mod tests {
         // Sanity: real providers are still there.
         assert!(names.contains(&"openai"));
         assert!(names.contains(&"anthropic"));
+    }
+
+    #[test]
+    fn providers_cmd_llm_marks_copilot_as_oauth_device_and_no_one_else() {
+        // The catalog is the contract between kernel and UI: only OAuth
+        // providers carry the `auth_kind` field. Adding a second OAuth
+        // provider should require a deliberate edit to this test.
+        let v = providers_cmd(Modality::Llm).expect("providers ok");
+        let providers = v
+            .get("providers")
+            .and_then(|p| p.as_array())
+            .expect("providers list");
+        let copilot = providers
+            .iter()
+            .find(|p| p["name"] == "copilot")
+            .expect("copilot entry must be exposed to UIs");
+        assert_eq!(
+            copilot.get("auth_kind").and_then(|v| v.as_str()),
+            Some("oauth_device"),
+            "copilot must advertise auth_kind=oauth_device for the UI to render the sign-in branch"
+        );
+        // Live-fetched: static catalog list must be empty so the UI knows
+        // to call `models --provider copilot` after sign-in.
+        assert!(
+            copilot["models"].as_array().map(|a| a.is_empty()).unwrap_or(false),
+            "copilot model list must be empty in the static catalog (live-fetched post-sign-in)"
+        );
+        assert_eq!(
+            copilot.get("default_model").and_then(|v| v.as_str()),
+            Some("gpt-4o"),
+            "copilot default_model is a placeholder until live discovery succeeds"
+        );
+        // Nobody else should look like an OAuth provider.
+        for p in providers {
+            if p["name"] == "copilot" {
+                continue;
+            }
+            assert!(
+                p.get("auth_kind").is_none(),
+                "non-copilot provider `{}` must not advertise auth_kind",
+                p["name"]
+            );
+        }
+    }
+
+    #[test]
+    fn oauth_subcommands_reject_non_copilot_provider() {
+        // The error surface is the UI's safety net: typos in --provider
+        // must surface as actionable errors, not crashes.
+        let err = oauth_start_cmd(Some("openai")).expect_err("non-copilot provider rejected");
+        assert!(err.contains("does not use OAuth device flow"), "{err}");
+        let err = oauth_poll_cmd(Some("openai"), Some("xxx"))
+            .expect_err("non-copilot provider rejected");
+        assert!(err.contains("does not use OAuth device flow"), "{err}");
+        let err = models_cmd(Some("openai")).expect_err("models only supports copilot today");
+        assert!(err.contains("only supported for `copilot`"), "{err}");
+    }
+
+    #[test]
+    fn oauth_poll_requires_device_code() {
+        let err = oauth_poll_cmd(Some("copilot"), None).expect_err("missing device-code rejected");
+        assert!(err.contains("--device-code"), "{err}");
+        let err =
+            oauth_poll_cmd(Some("copilot"), Some("  ")).expect_err("blank device-code rejected");
+        assert!(err.contains("--device-code"), "{err}");
+    }
+
+    #[test]
+    fn require_provider_rejects_empty_and_missing() {
+        assert!(require_provider(None, "oauth-start").is_err());
+        assert!(require_provider(Some(""), "oauth-start").is_err());
+        assert!(require_provider(Some("   "), "oauth-start").is_err());
+        assert_eq!(
+            require_provider(Some(" copilot "), "oauth-start").unwrap(),
+            "copilot"
+        );
     }
 
     #[test]
