@@ -75,11 +75,20 @@ pub fn build_system_prompt(extra_path: Option<&Path>) -> String {
 
     // Explicit override file (e.g., per-session preface).
     if let Some(p) = extra_path {
-        if let Ok(extra) = fs::read_to_string(p) {
-            let trimmed = extra.trim_end();
-            if !trimmed.is_empty() {
-                out.push_str("\n\n---\n\n");
-                out.push_str(trimmed);
+        // Cap how much we read so a stray multi-GB file pointed at by
+        // a misconfigured `--system-extra` flag can't OOM the agent.
+        // 256 KiB comfortably exceeds any realistic prompt template
+        // while keeping the worst case bounded.
+        const MAX_PROMPT_EXTRA_BYTES: u64 = 256 * 1024;
+        let meta = fs::metadata(p).ok();
+        let len_ok = meta.as_ref().map(|m| m.len() <= MAX_PROMPT_EXTRA_BYTES).unwrap_or(false);
+        if len_ok {
+            if let Ok(extra) = fs::read_to_string(p) {
+                let trimmed = extra.trim_end();
+                if !trimmed.is_empty() {
+                    out.push_str("\n\n---\n\n");
+                    out.push_str(trimmed);
+                }
             }
         }
     }

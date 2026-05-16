@@ -471,10 +471,13 @@ fn walk(base: &Path, cur: &Path, depth: usize, max_depth: usize, out: &mut BTree
     let mut subs: Vec<PathBuf> = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
-        let Ok(meta) = entry.file_type() else {
+        // `file_type()` reports the *entry's* type (link, file, dir)
+        // without following — exactly what we want. Skip symlinks so
+        // we don't escape the project root via `vendor/x -> /tmp`.
+        let Ok(ft) = entry.file_type() else {
             continue;
         };
-        if !meta.is_dir() {
+        if ft.is_symlink() || !ft.is_dir() {
             continue;
         }
         let name = match path.file_name().and_then(|n| n.to_str()) {
@@ -496,8 +499,22 @@ fn walk(base: &Path, cur: &Path, depth: usize, max_depth: usize, out: &mut BTree
 fn scan_one(base: &Path, cur: &Path, out: &mut BTreeMap<String, Hint>) {
     for marker in MARKERS {
         let candidate = cur.join(marker.name);
-        let exists_kind = match fs::metadata(&candidate) {
-            Ok(m) => Some(m.is_dir()),
+        // Use `symlink_metadata` so a symlink to a directory (or
+        // file) outside the project tree is not silently followed —
+        // a marker file like `.git` that's actually a symlink to
+        // `/etc/passwd` would otherwise let an attacker manipulate
+        // the hint surface.
+        let exists_kind = match fs::symlink_metadata(&candidate) {
+            Ok(m) => {
+                if m.file_type().is_symlink() {
+                    // Skip symlinks entirely — we never want a
+                    // marker to come from a link target. The user
+                    // can place a real `.git` directory if they
+                    // want it picked up.
+                    continue;
+                }
+                Some(m.is_dir())
+            }
             Err(_) => None,
         };
         let Some(is_dir_actual) = exists_kind else {
@@ -524,15 +541,19 @@ fn scan_one(base: &Path, cur: &Path, out: &mut BTreeMap<String, Hint>) {
 
 fn relative_to(base: &Path, full: &Path) -> Option<String> {
     let rel = full.strip_prefix(base).ok()?;
-    let s = rel
-        .components()
-        .filter_map(|c| c.as_os_str().to_str())
-        .collect::<Vec<_>>()
-        .join("/");
-    if s.is_empty() {
+    let mut parts: Vec<String> = Vec::new();
+    for c in rel.components() {
+        // `to_string_lossy` replaces non-UTF-8 bytes with U+FFFD so
+        // we surface a debuggable path instead of silently dropping
+        // it — the prior `filter_map(to_str)` produced empty hints
+        // on Linux/Windows filesystems with non-UTF-8 names, which
+        // then collided in the dedup `BTreeMap`.
+        parts.push(c.as_os_str().to_string_lossy().into_owned());
+    }
+    if parts.is_empty() {
         None
     } else {
-        Some(s)
+        Some(parts.join("/"))
     }
 }
 

@@ -69,11 +69,13 @@ impl NotesStore {
     /// error — missing memory just means no memory yet).
     pub fn read(&self, name: &str) -> Result<Option<String>, String> {
         let p = self.path_of(name)?;
-        match filelock::read_locked(&p) {
-            Ok(opt) => Ok(opt),
-            Err(e) if is_not_found(&e) => Ok(None),
-            Err(e) => Err(e),
-        }
+        // `filelock::read_locked` already short-circuits to
+        // `Ok(None)` via `path.is_file()` when the path doesn't
+        // exist; we don't need a redundant string-match against the
+        // OS error message (which used to misclassify e.g. a
+        // permission-denied error as "not found" on locales where
+        // the message contains "no such file" in translation).
+        filelock::read_locked(&p)
     }
 
     /// Replace a note's contents atomically.
@@ -192,19 +194,36 @@ fn validate_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("note name must not be empty".into());
     }
-    if name.contains('/') || name.contains('\\') || name.contains("..") {
+    // Reject path separators outright but only the *exact* `..`
+    // component, not any substring containing `..`. The old
+    // substring check rejected legitimate names like "foo..bar.md"
+    // even though they're single-component filenames.
+    if name.contains('/') || name.contains('\\') {
         return Err(format!(
-            "note name '{name}' must not contain path separators or '..'"
+            "note name '{name}' must not contain path separators"
         ));
+    }
+    if name == ".." || name == "." || name.starts_with("../") || name.starts_with("./") {
+        return Err(format!(
+            "note name '{name}' must not be a path-traversal component"
+        ));
+    }
+    // Path::Component sanity check — handles platform-specific
+    // surprises like backslash on Windows we missed above.
+    for c in std::path::Path::new(name).components() {
+        match c {
+            std::path::Component::Normal(_) => {}
+            _ => {
+                return Err(format!(
+                    "note name '{name}' must be a single filename component"
+                ));
+            }
+        }
     }
     if !name.ends_with(".md") {
         return Err(format!("note name '{name}' must end with .md"));
     }
     Ok(())
-}
-
-fn is_not_found(err: &str) -> bool {
-    err.contains("(os error 2)") || err.to_ascii_lowercase().contains("not found")
 }
 
 #[cfg(test)]

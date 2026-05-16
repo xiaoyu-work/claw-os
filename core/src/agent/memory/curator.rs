@@ -490,9 +490,15 @@ pub fn looks_secret(text: &str) -> bool {
         return true;
     }
     // Heuristic: long base64-ish runs (≥ 24 chars) suggest tokens.
+    // We deliberately treat `/` as a *separator* (not part of the
+    // alphabet) so that legitimate filesystem paths like
+    // `/Users/alice/.config/something-very-long` no longer false-
+    // positive as secrets. Real base64-ish tokens — JWTs, API keys —
+    // never embed `/` inside the secret material at this length;
+    // even base64-url uses `_` / `-` rather than `/`.
     let mut run = 0usize;
     for c in text.chars() {
-        if c.is_ascii_alphanumeric() || c == '/' || c == '+' || c == '_' || c == '-' {
+        if c.is_ascii_alphanumeric() || c == '+' || c == '_' || c == '-' || c == '=' {
             run += 1;
             if run >= 24 {
                 return true;

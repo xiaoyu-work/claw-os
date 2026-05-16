@@ -253,10 +253,12 @@ impl TtsProvider for GeminiTts {
             .await
             .map_err(|e| MediaError::Transport(e.to_string()))?;
         let status = resp.status();
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| MediaError::Transport(e.to_string()))?;
+        let bytes = super::util::read_bytes_capped(
+            resp,
+            super::util::MAX_BINARY_BODY_BYTES,
+            "tts_gemini",
+        )
+        .await?;
 
         if !status.is_success() {
             return Err(MediaError::Provider {
@@ -360,11 +362,7 @@ pub fn decode_base64(s: &str) -> Result<Vec<u8>, String> {
 
 fn preview(bytes: &[u8]) -> String {
     let text = String::from_utf8_lossy(bytes);
-    if text.len() > 512 {
-        format!("{}…", &text[..512])
-    } else {
-        text.into_owned()
-    }
+    super::util::preview(&text, 512)
 }
 
 #[cfg(test)]

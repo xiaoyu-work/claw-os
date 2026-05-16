@@ -243,7 +243,13 @@ fn current_unix_seconds() -> u64 {
 /// Mismatched timestamp shapes used to work, but recent server builds
 /// 400 anything that doesn't look JS-shaped.
 fn utc_now_js_style(unix_secs: u64) -> String {
-    let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(unix_secs as i64, 0)
+    // `unix_secs` is a u64 and will not realistically exceed i64::MAX
+    // in this century, but `as i64` would still silently wrap on a
+    // hypothetical clock-skew incident. Use `try_into` and fall back
+    // to "now" on overflow rather than producing a timestamp from
+    // the negative pre-epoch range.
+    let ts = i64::try_from(unix_secs).unwrap_or(i64::MAX);
+    let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0)
         .unwrap_or_else(chrono::Utc::now);
     dt.format("%a %b %d %Y %H:%M:%S GMT+0000 (Coordinated Universal Time)")
         .to_string()

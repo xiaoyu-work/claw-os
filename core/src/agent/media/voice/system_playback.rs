@@ -40,10 +40,107 @@
 //! `PlaySoundW` is the canonical Win32 API, ships in every Windows
 //! since 95, blocks until completion, and supports nothing but WAV
 //! — which is exactly what we want for a stopgap.
+//!
+//! ## Subprocess timeouts and cancellation
+//!
+//! All CLI-backed playback paths (afplay / paplay / ffplay / mpg123 /
+//! aplay / `COS_AUDIO_PLAYER`) hand the file to a child process via
+//! `Command::spawn`, then poll with a timeout. If the timeout fires
+//! the child is killed and `PlayerTimedOut` is returned; if the
+//! caller drops the future / panics during a blocking wait, a
+//! `ChildGuard` ensures the child is also killed so we don't leak
+//! orphan audio processes that keep speaking after the agent has
+//! moved on.
 
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+/// Hard upper bound on a single playback subprocess. Real-world
+/// utterances are < 60 s; the agent runs many short cycles, so
+/// capping the worst case at 5 minutes prevents a misconfigured
+/// player from blocking the whole agent loop on a 10-hour file.
+pub const PLAYER_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+/// Polling interval for the child-wait loop. 100 ms keeps CPU near
+/// zero while still letting us cancel within a perceptual blink.
+const PLAYER_POLL: Duration = Duration::from_millis(100);
+
+/// Drop guard around a spawned `Child`. Ensures any pending child is
+/// killed and reaped if the calling function panics or exits via
+/// `?` before we call `into_inner` to disarm the guard.
+struct ChildGuard {
+    inner: Option<std::process::Child>,
+}
+
+impl ChildGuard {
+    fn new(child: std::process::Child) -> Self {
+        Self { inner: Some(child) }
+    }
+    fn child_mut(&mut self) -> &mut std::process::Child {
+        self.inner.as_mut().expect("child still present")
+    }
+    fn disarm(mut self) -> std::process::Child {
+        self.inner.take().expect("child still present")
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        if let Some(mut c) = self.inner.take() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
+}
+
+/// Spawn `cmd`, wait up to [`PLAYER_TIMEOUT`] for it to exit, and
+/// return its captured stdout/stderr. Kills the child on timeout
+/// or on early return through the [`ChildGuard`].
+#[cfg(any(target_os = "macos", all(unix, not(target_os = "macos"))))]
+fn run_player_command(
+    player_display: String,
+    mut cmd: std::process::Command,
+) -> Result<(), SystemPlaybackError> {
+    use std::process::Stdio;
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let child = cmd.spawn().map_err(|e| {
+        SystemPlaybackError::ConfiguredPlayerUnavailable {
+            player: PathBuf::from(&player_display),
+            source: e,
+        }
+    })?;
+    let mut guard = ChildGuard::new(child);
+    let started = Instant::now();
+    let status = loop {
+        match guard.child_mut().try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) => {
+                if started.elapsed() >= PLAYER_TIMEOUT {
+                    // ChildGuard's Drop will kill+reap as we
+                    // return — that's exactly the semantics we want.
+                    return Err(SystemPlaybackError::PlayerTimedOut {
+                        player: player_display.clone(),
+                        after: PLAYER_TIMEOUT,
+                    });
+                }
+                std::thread::sleep(PLAYER_POLL);
+            }
+            Err(e) => return Err(SystemPlaybackError::Io(e)),
+        }
+    };
+    // Disarm so the kill doesn't fire on already-exited child.
+    let child = guard.disarm();
+    let out = child.wait_with_output().map_err(SystemPlaybackError::Io)?;
+    if !status.success() {
+        return Err(SystemPlaybackError::PlayerFailed {
+            player: player_display,
+            code: status.code(),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        });
+    }
+    Ok(())
+}
 
 // =====================================================================
 // Public types
@@ -115,6 +212,11 @@ pub enum SystemPlaybackError {
     /// the OS doesn't surface a richer code through this API.
     WinmmPlayFailed { path: PathBuf },
 
+    /// The spawned player did not exit within the configured timeout
+    /// and was killed. Indicates a hung player or an audio file far
+    /// larger than expected.
+    PlayerTimedOut { player: String, after: Duration },
+
     /// Anything else that happens during dispatch.
     Io(io::Error),
 }
@@ -157,6 +259,11 @@ impl fmt::Display for SystemPlaybackError {
                 f,
                 "winmm PlaySoundW failed for '{}' (path may be too long, file invalid, or device unavailable)",
                 path.display()
+            ),
+            Self::PlayerTimedOut { player, after } => write!(
+                f,
+                "audio player '{player}' did not exit within {} s and was killed",
+                after.as_secs()
             ),
             Self::Io(e) => write!(f, "io error during playback: {e}"),
         }
@@ -344,20 +451,9 @@ mod backend {
     }
 
     fn run_simple(player: &str, args: &[&std::ffi::OsStr]) -> Result<(), SystemPlaybackError> {
-        let output = Command::new(player).args(args).output().map_err(|e| {
-            SystemPlaybackError::ConfiguredPlayerUnavailable {
-                player: PathBuf::from(player),
-                source: e,
-            }
-        })?;
-        if !output.status.success() {
-            return Err(SystemPlaybackError::PlayerFailed {
-                player: player.to_string(),
-                code: output.status.code(),
-                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            });
-        }
-        Ok(())
+        let mut cmd = Command::new(player);
+        cmd.args(args);
+        super::run_player_command(player.to_string(), cmd)
     }
 }
 
@@ -429,21 +525,9 @@ mod backend {
             .unwrap_or("?")
             .to_string();
         let args: &[&OsStr] = &[target.as_os_str()];
-        let output = Command::new(&player_path)
-            .args(args)
-            .output()
-            .map_err(|e| SystemPlaybackError::ConfiguredPlayerUnavailable {
-                player: player_path.clone(),
-                source: e,
-            })?;
-        if !output.status.success() {
-            return Err(SystemPlaybackError::PlayerFailed {
-                player: bin_name,
-                code: output.status.code(),
-                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            });
-        }
-        Ok(())
+        let mut cmd = Command::new(&player_path);
+        cmd.args(args);
+        super::run_player_command(bin_name, cmd)
     }
 
     fn run_chain_player(
@@ -463,18 +547,9 @@ mod backend {
         } else {
             vec![target.as_os_str()]
         };
-        let output = Command::new(bin)
-            .args(&args_owned)
-            .output()
-            .map_err(SystemPlaybackError::Io)?;
-        if !output.status.success() {
-            return Err(SystemPlaybackError::PlayerFailed {
-                player: bin.to_string(),
-                code: output.status.code(),
-                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            });
-        }
-        Ok(())
+        let mut cmd = Command::new(bin);
+        cmd.args(&args_owned);
+        super::run_player_command(bin.to_string(), cmd)
     }
 
     fn which(bin: &str) -> bool {

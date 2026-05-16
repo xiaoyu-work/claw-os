@@ -67,9 +67,9 @@ impl VisionRequest {
                         "vision: image url must be non-empty".to_string(),
                     ));
                 }
-                if !(u.starts_with("http://") || u.starts_with("https://")) {
+                if !u.starts_with("https://") {
                     return Err(MediaError::InvalidRequest(format!(
-                        "vision: image url must be http(s): {u}"
+                        "vision: image url must be https: {u}"
                     )));
                 }
             }
@@ -152,7 +152,15 @@ pub fn build_user_message(prompt: &str, mime: ImageMime, base64_data: &str) -> M
 }
 
 /// Download a remote image and return (bytes, sniffed_mime).
+///
+/// SSRF-hardened: rejects non-public targets (loopback / RFC1918 /
+/// link-local / IPv6 unique-local) and caps the response body so a
+/// hostile content server can't OOM the agent by streaming an
+/// unbounded payload. Forces HTTPS — agent vision is an opt-in
+/// outbound surface and there's no legitimate reason to allow
+/// cleartext image fetches.
 pub async fn fetch_image(url: &str, timeout: Duration) -> Result<(Vec<u8>, ImageMime), MediaError> {
+    super::super::util::assert_safe_outbound(url, true)?;
     let mut builder =
         reqwest::Client::builder().user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")));
     if timeout > Duration::from_secs(0) {
@@ -172,17 +180,15 @@ pub async fn fetch_image(url: &str, timeout: Duration) -> Result<(Vec<u8>, Image
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|h| h.to_str().ok())
         .map(|s| ImageMime::from_str(s));
-    let bytes = resp
-        .bytes()
-        .await
-        .map_err(|e| MediaError::Transport(e.to_string()))?;
+    let bytes = super::super::util::read_bytes_capped(
+        resp,
+        super::super::util::MAX_BINARY_BODY_BYTES,
+        "vision::fetch_image",
+    )
+    .await?;
     if !status.is_success() {
         let preview = String::from_utf8_lossy(&bytes);
-        let preview = if preview.len() > 256 {
-            format!("{}…", &preview[..256])
-        } else {
-            preview.into_owned()
-        };
+        let preview = super::super::util::preview(&preview, 256);
         return Err(MediaError::Provider {
             status: status.as_u16(),
             message: preview,
@@ -345,6 +351,42 @@ mod tests {
         );
         let err = req.validate().unwrap_err();
         assert!(matches!(err, MediaError::InvalidRequest(_)));
+    }
+
+    #[test]
+    fn validate_rejects_plain_http_url() {
+        // After the SSRF fix vision now refuses cleartext fetches so
+        // a downgrade attack on a redirected provider response can't
+        // pull a cleartext URL through this surface.
+        let req = VisionRequest::new(
+            "describe",
+            ImageInput::Url("http://example.com/x.png".to_string()),
+        );
+        let err = req.validate().unwrap_err();
+        assert!(matches!(err, MediaError::InvalidRequest(_)));
+    }
+
+    #[tokio::test]
+    async fn ssrf_blocked() {
+        // fetch_image must refuse loopback / RFC1918 / link-local /
+        // private-v6 targets even when the URL passes the simple
+        // scheme check. We hit each rejection class through the
+        // real fetch entry point so any future refactor that
+        // bypasses `assert_safe_outbound` fails this test.
+        let timeout = std::time::Duration::from_secs(1);
+        for url in &[
+            "https://127.0.0.1/x.png",
+            "https://10.0.0.1/x.png",
+            "https://192.168.1.1/x.png",
+            "https://169.254.169.254/latest/meta-data/",
+            "https://[::1]/x.png",
+        ] {
+            let err = fetch_image(url, timeout).await.unwrap_err();
+            assert!(
+                matches!(err, MediaError::InvalidRequest(_)),
+                "url={url} err={err:?}"
+            );
+        }
     }
 
     #[test]

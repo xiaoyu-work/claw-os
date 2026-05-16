@@ -108,6 +108,12 @@ PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
 PRAGMA busy_timeout = 5000;
 PRAGMA foreign_keys = ON;
+-- Auto-checkpoint the WAL every 1000 frames so a long-running
+-- agent doesn't accumulate an unbounded WAL on disk between
+-- explicit checkpoints. 1000 frames ≈ 4 MiB at the default 4 KiB
+-- page size, which is small enough not to stall writers and large
+-- enough to avoid checkpointing every transaction.
+PRAGMA wal_autocheckpoint = 1000;
 
 CREATE TABLE IF NOT EXISTS messages (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -215,10 +221,22 @@ impl MemoryDb {
         content: &str,
         ts_ms: i64,
     ) -> Result<i64, MemoryError> {
+        // Cap stored message bodies. A run-away tool that streams a
+        // multi-MB blob into the conversation log would otherwise
+        // bloat the FTS index for every full-text search forever.
+        // Truncate at a character boundary so multi-byte UTF-8 is
+        // preserved.
+        const MAX_CONTENT_CHARS: usize = 64 * 1024;
+        let stored: std::borrow::Cow<'_, str> = if content.chars().count() > MAX_CONTENT_CHARS {
+            let truncated: String = content.chars().take(MAX_CONTENT_CHARS).collect();
+            std::borrow::Cow::Owned(truncated + "\n…[truncated]")
+        } else {
+            std::borrow::Cow::Borrowed(content)
+        };
         let conn = self.lock_conn()?;
         conn.execute(
             "INSERT INTO messages (session_id, role, content, ts_ms) VALUES (?, ?, ?, ?)",
-            params![session_id, role, content, ts_ms],
+            params![session_id, role, &*stored, ts_ms],
         )?;
         Ok(conn.last_insert_rowid())
     }
@@ -341,20 +359,23 @@ impl MemoryDb {
     /// `session_titles` (titles for sessions whose every message was
     /// purged) are also removed.
     pub fn purge_older_than_ms(&self, cutoff_ts_ms: i64) -> Result<PurgeStats, MemoryError> {
-        let conn = self.lock_conn()?;
-        // Count distinct sessions that will be fully emptied so we
-        // can report it before the DELETE wipes the rows.
-        let sessions_before: usize = conn
+        let mut conn = self.lock_conn()?;
+        // Wrap the COUNT → DELETE → DELETE-orphans sequence in a
+        // single immediate transaction so a concurrent writer can't
+        // race the title-cleanup step into deleting an entry whose
+        // backing messages were just inserted.
+        let tx = conn.transaction()?;
+        let sessions_before: usize = tx
             .query_row("SELECT COUNT(DISTINCT session_id) FROM messages", [], |r| {
                 r.get::<_, i64>(0)
             })
             .map(|n| n as usize)
             .unwrap_or(0);
-        let messages_deleted = conn.execute(
+        let messages_deleted = tx.execute(
             "DELETE FROM messages WHERE ts_ms < ?",
             params![cutoff_ts_ms],
         )?;
-        let sessions_after: usize = conn
+        let sessions_after: usize = tx
             .query_row("SELECT COUNT(DISTINCT session_id) FROM messages", [], |r| {
                 r.get::<_, i64>(0)
             })
@@ -362,11 +383,12 @@ impl MemoryDb {
             .unwrap_or(0);
         let sessions_emptied = sessions_before.saturating_sub(sessions_after);
         // Drop titles for sessions that no longer have messages.
-        let titles_deleted = conn.execute(
+        let titles_deleted = tx.execute(
             "DELETE FROM session_titles
              WHERE session_id NOT IN (SELECT DISTINCT session_id FROM messages)",
             [],
         )?;
+        tx.commit()?;
         Ok(PurgeStats {
             messages_deleted,
             sessions_emptied,

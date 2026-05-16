@@ -243,10 +243,12 @@ impl ImageGenProvider for FalImageGenProvider {
             .await
             .map_err(|e| MediaError::Transport(e.to_string()))?;
         let status = resp.status();
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| MediaError::Transport(e.to_string()))?;
+        let bytes = super::util::read_bytes_capped(
+            resp,
+            super::util::MAX_TEXT_BODY_BYTES,
+            "fal::predict",
+        )
+        .await?;
 
         if !status.is_success() {
             let preview = body_preview(&bytes);
@@ -259,6 +261,10 @@ impl ImageGenProvider for FalImageGenProvider {
         let envelope = parse_envelope(&bytes)?;
         let mut out_images = Vec::with_capacity(envelope.images.len());
         for img in envelope.images {
+            // SSRF guard: the FAL response controls this URL. Without
+            // the check, a compromised or malicious provider could
+            // redirect us at link-local / loopback / RFC1918 hosts.
+            super::util::assert_safe_outbound(&img.url, false)?;
             let r = self
                 .client
                 .get(&img.url)
@@ -271,10 +277,12 @@ impl ImageGenProvider for FalImageGenProvider {
                     message: format!("fal asset {} returned {}", img.url, r.status()),
                 });
             }
-            let asset = r
-                .bytes()
-                .await
-                .map_err(|e| MediaError::Transport(format!("fal asset read: {e}")))?;
+            let asset = super::util::read_bytes_capped(
+                r,
+                super::util::MAX_BINARY_BODY_BYTES,
+                "fal::asset",
+            )
+            .await?;
             out_images.push(GeneratedImage {
                 bytes: asset.to_vec(),
                 format: img.format,
@@ -293,11 +301,7 @@ impl ImageGenProvider for FalImageGenProvider {
 
 fn body_preview(bytes: &[u8]) -> String {
     let text = String::from_utf8_lossy(bytes);
-    if text.len() > 512 {
-        format!("{}…", &text[..512])
-    } else {
-        text.into_owned()
-    }
+    super::util::preview(&text, 512)
 }
 
 #[cfg(test)]

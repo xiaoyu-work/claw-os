@@ -99,11 +99,27 @@ pub enum ManifestError {
     MalformedYaml { line: usize, reason: String },
     #[error("unsupported YAML construct at line {line}: {reason}")]
     UnsupportedYaml { line: usize, reason: String },
+    #[error("manifest input is {len} bytes; exceeds parser cap {cap} bytes")]
+    TooLarge { len: usize, cap: usize },
 }
+
+/// Hard cap on raw manifest input size — protects the parser from
+/// pathological inputs that could exhaust memory or CPU while
+/// scanning for delimiters. `loader::LoadOptions::max_manifest_bytes`
+/// is the per-call source-of-truth cap; this is a parser-internal
+/// fallback that kicks in when the parser is reached via a path
+/// that didn't pre-check (e.g. unit tests, downstream callers).
+pub const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 
 /// Parse a SKILL.md document. Returns the typed manifest plus the
 /// markdown body that followed the frontmatter.
 pub fn parse(input: &str) -> Result<SkillDocument, ManifestError> {
+    if input.len() > MAX_MANIFEST_BYTES {
+        return Err(ManifestError::TooLarge {
+            len: input.len(),
+            cap: MAX_MANIFEST_BYTES,
+        });
+    }
     let (frontmatter, body) = split_frontmatter(input)?;
     let raw = parse_yaml_subset(frontmatter)?;
     let manifest = build_manifest(raw)?;
