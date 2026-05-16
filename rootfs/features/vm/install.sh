@@ -26,7 +26,17 @@ set -euo pipefail
 source "$PROJECT_DIR/scripts/lib/add-cos-user.sh"
 
 # 1. Create 'cos' user (shared helper — also used by WSL and Docker targets).
-add_cos_user "$ROOTFS"
+#    EXCEPT: skip when the desktop feature has wired up the first-boot
+#    wizard (cosmic-initial-setup). On a graphical VM image the wizard
+#    will create the *real* user; pre-creating a passwordless-locked
+#    `cos` would just clutter cosmic-greeter's user list and confuse
+#    everyone. Headless VM builds (no desktop feature) still get `cos`.
+if [ -f "$ROOTFS/etc/greetd/cosmic-greeter.toml" ] \
+        && grep -q '^\[initial_session\]' "$ROOTFS/etc/greetd/cosmic-greeter.toml" 2>/dev/null; then
+    echo "  :: desktop first-boot wizard present — skipping default 'cos' user"
+else
+    add_cos_user "$ROOTFS"
+fi
 
 # 2. /etc/default/grub for serial-friendly boot.
 #    sed is in-place; the package ships a default file from grub-common.
