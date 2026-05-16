@@ -14,8 +14,15 @@
 //!     [`assert_safe_outbound`] before we issue a GET — otherwise
 //!     a malicious response can redirect us at link-local /
 //!     loopback / RFC1918 hosts and bypass the network capability.
+//!   * **DNS rebinding mitigation.** Once we've decided a URL is
+//!     safe, [`build_safe_client`] pins the host's DNS lookup to a
+//!     single vetted public IP so the *actual* TCP connect can't
+//!     race a second DNS lookup that returns an internal address.
+//!     Every outbound `reqwest::Client` constructed for media or
+//!     skill traffic goes through this helper.
 
-use std::net::{IpAddr, ToSocketAddrs};
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
+use std::time::Duration;
 
 use bytes::Bytes;
 use futures_util::StreamExt;
@@ -182,6 +189,102 @@ fn is_private_ip(ip: IpAddr) -> bool {
     }
 }
 
+/// Build a `reqwest::Client` that is hardened against DNS rebinding
+/// for the given URL.
+///
+/// Background. [`assert_safe_outbound`] resolves the hostname *once*
+/// and verifies that the resulting IPs are public. But a default
+/// `reqwest::Client` performs its own DNS lookup at connect time,
+/// and a hostile or attacker-controlled resolver can return a
+/// public IP for the first (validation) query and an internal IP
+/// for the second (connect) query — classic DNS rebinding. The
+/// validated IP and the IP we actually open a socket to differ.
+///
+/// To close the gap, this helper:
+///   1. resolves the host via `tokio::net::lookup_host` exactly
+///      once,
+///   2. drops any address that fails [`is_private_ip`],
+///   3. constructs a client with
+///      [`reqwest::ClientBuilder::resolve_to_addrs`] pinning the
+///      hostname to the surviving public address(es) for the
+///      lifetime of every request issued through it.
+///
+/// Reqwest still does its connection-pool / TLS handshake against
+/// the pinned address, so the validated IP IS the connected-to IP
+/// — DNS rebinding is structurally impossible.
+///
+/// `timeout` is applied with [`reqwest::ClientBuilder::timeout`]
+/// when greater than zero (callers that already enforce a
+/// `tokio::time::timeout` on the future may pass [`Duration::ZERO`]).
+pub(crate) async fn build_safe_client(
+    url: &reqwest::Url,
+    timeout: Duration,
+) -> Result<reqwest::Client, MediaError> {
+    match url.scheme() {
+        "http" | "https" => {}
+        other => {
+            return Err(MediaError::InvalidRequest(format!(
+                "unsupported url scheme: {other}"
+            )));
+        }
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| MediaError::InvalidRequest("url has no host".to_string()))?
+        .to_string();
+    let port = url.port_or_known_default().ok_or_else(|| {
+        MediaError::InvalidRequest(format!("url has no port and no scheme default: {url}"))
+    })?;
+
+    // Use the async resolver tokio drives so the lookup honours
+    // proxy / overlay resolvers configured by the runtime. We
+    // resolve once and reuse the answer for the actual connect via
+    // resolve_to_addrs.
+    let target = format!("{host}:{port}");
+    let mut public_addrs: Vec<SocketAddr> = Vec::new();
+    let lookups = tokio::net::lookup_host(target.as_str())
+        .await
+        .map_err(|e| {
+            MediaError::InvalidRequest(format!("dns lookup failed for {host}: {e}"))
+        })?;
+    for sa in lookups {
+        if is_private_ip(sa.ip()) {
+            return Err(MediaError::InvalidRequest(format!(
+                "refusing to fetch from non-public address {ip} (host={host})",
+                ip = sa.ip()
+            )));
+        }
+        public_addrs.push(sa);
+    }
+    if public_addrs.is_empty() {
+        return Err(MediaError::InvalidRequest(format!(
+            "dns lookup for {host} returned no addresses"
+        )));
+    }
+
+    let mut builder = reqwest::Client::builder()
+        .user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")))
+        .resolve_to_addrs(&host, &public_addrs);
+    if timeout > Duration::ZERO {
+        builder = builder.timeout(timeout);
+    }
+    builder
+        .build()
+        .map_err(|e| MediaError::Internal(format!("safe client build: {e}")))
+}
+
+/// Convenience: parse `raw_url` and route through
+/// [`build_safe_client`]. Saves call sites from juggling
+/// `reqwest::Url::parse` twice.
+pub(crate) async fn build_safe_client_for_str(
+    raw_url: &str,
+    timeout: Duration,
+) -> Result<reqwest::Client, MediaError> {
+    let url = reqwest::Url::parse(raw_url)
+        .map_err(|e| MediaError::InvalidRequest(format!("invalid url: {e}")))?;
+    build_safe_client(&url, timeout).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,6 +347,44 @@ mod tests {
     fn ssrf_requires_https_when_asked() {
         // http rejected when require_https.
         let err = assert_safe_outbound("http://example.com/x", true).unwrap_err();
+        assert!(matches!(err, MediaError::InvalidRequest(_)));
+    }
+
+    #[tokio::test]
+    async fn build_safe_client_rejects_loopback_host() {
+        // `localhost` resolves to a loopback IP — must be refused.
+        let err = build_safe_client_for_str("http://localhost/x", Duration::ZERO)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, MediaError::InvalidRequest(_)));
+    }
+
+    #[tokio::test]
+    async fn build_safe_client_rejects_loopback_ip_literal() {
+        let err = build_safe_client_for_str("http://127.0.0.1/x", Duration::ZERO)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, MediaError::InvalidRequest(_)));
+        let err = build_safe_client_for_str("http://[::1]/x", Duration::ZERO)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, MediaError::InvalidRequest(_)));
+    }
+
+    #[tokio::test]
+    async fn build_safe_client_rejects_link_local_imds() {
+        // AWS IMDS link-local — must be refused.
+        let err = build_safe_client_for_str("http://169.254.169.254/x", Duration::ZERO)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, MediaError::InvalidRequest(_)));
+    }
+
+    #[tokio::test]
+    async fn build_safe_client_rejects_unsupported_scheme() {
+        let err = build_safe_client_for_str("file:///etc/passwd", Duration::ZERO)
+            .await
+            .unwrap_err();
         assert!(matches!(err, MediaError::InvalidRequest(_)));
     }
 }

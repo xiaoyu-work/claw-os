@@ -71,18 +71,12 @@ impl Default for ElevenLabsConfig {
 
 pub struct ElevenLabsProvider {
     cfg: ElevenLabsConfig,
-    client: reqwest::Client,
 }
 
 impl ElevenLabsProvider {
     pub fn new(cfg: ElevenLabsConfig) -> Self {
-        let mut builder =
-            reqwest::Client::builder().user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")));
-        if cfg.request_timeout > Duration::from_secs(0) {
-            builder = builder.timeout(cfg.request_timeout);
-        }
-        let client = builder.build().unwrap_or_else(|_| reqwest::Client::new());
-        Self { cfg, client }
+        // Per-request safe client; see `media/util.rs`.
+        Self { cfg }
     }
 
     fn endpoint(&self, voice_id: &str) -> String {
@@ -185,9 +179,11 @@ impl TtsProvider for ElevenLabsProvider {
         };
 
         let url = self.endpoint(voice_id);
-        let mut http = self
-            .client
-            .post(&url)
+        let parsed_url = reqwest::Url::parse(&url)
+            .map_err(|e| MediaError::InvalidRequest(format!("invalid endpoint url: {e}")))?;
+        let client = super::util::build_safe_client(&parsed_url, self.cfg.request_timeout).await?;
+        let mut http = client
+            .post(parsed_url)
             .query(&[("output_format", out_fmt)])
             .header("Content-Type", "application/json")
             .json(&body);

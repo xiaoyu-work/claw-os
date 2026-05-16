@@ -76,18 +76,18 @@ impl FalImageGenConfig {
 
 pub struct FalImageGenProvider {
     cfg: FalImageGenConfig,
-    client: reqwest::Client,
 }
 
 impl FalImageGenProvider {
     pub fn new(cfg: FalImageGenConfig) -> Self {
-        let mut builder =
-            reqwest::Client::builder().user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")));
-        if cfg.request_timeout > Duration::from_secs(0) {
-            builder = builder.timeout(cfg.request_timeout);
-        }
-        let client = builder.build().unwrap_or_else(|_| reqwest::Client::new());
-        Self { cfg, client }
+        // No long-lived client: each request builds a fresh client
+        // through `util::build_safe_client` so the host (whether
+        // FAL's API or a downloaded asset URL the provider returns)
+        // is DNS-pinned to a vetted public IP. The asset-URL fetch
+        // is the SSRF-critical path; rebinding the FAL host wouldn't
+        // give an attacker anything they couldn't get from
+        // `extra_headers` anyway.
+        Self { cfg }
     }
 
     fn endpoint(&self) -> String {
@@ -226,9 +226,13 @@ impl ImageGenProvider for FalImageGenProvider {
             }
         }
 
-        let mut http = self
-            .client
-            .post(self.endpoint())
+        let endpoint = self.endpoint();
+        let url = reqwest::Url::parse(&endpoint)
+            .map_err(|e| MediaError::InvalidRequest(format!("invalid endpoint url: {e}")))?;
+        let predict_client =
+            super::util::build_safe_client(&url, self.cfg.request_timeout).await?;
+        let mut http = predict_client
+            .post(url)
             .header("Content-Type", "application/json")
             .json(&body_value);
         if let Some(key) = &self.cfg.api_key {
@@ -261,13 +265,21 @@ impl ImageGenProvider for FalImageGenProvider {
         let envelope = parse_envelope(&bytes)?;
         let mut out_images = Vec::with_capacity(envelope.images.len());
         for img in envelope.images {
-            // SSRF guard: the FAL response controls this URL. Without
-            // the check, a compromised or malicious provider could
-            // redirect us at link-local / loopback / RFC1918 hosts.
+            // SSRF guard + DNS-rebinding guard: validate the URL is
+            // public, then build a per-asset client pinned to that
+            // address. Both checks are required — the
+            // assert_safe_outbound call is a cheap pre-flight that
+            // surfaces a clear `InvalidRequest` for obviously bad
+            // URLs; build_safe_client repeats the IP check under a
+            // single DNS lookup so the connect path can't race a
+            // second resolution.
             super::util::assert_safe_outbound(&img.url, false)?;
-            let r = self
-                .client
-                .get(&img.url)
+            let img_url = reqwest::Url::parse(&img.url)
+                .map_err(|e| MediaError::InvalidRequest(format!("invalid asset url: {e}")))?;
+            let asset_client =
+                super::util::build_safe_client(&img_url, self.cfg.request_timeout).await?;
+            let r = asset_client
+                .get(img_url)
                 .send()
                 .await
                 .map_err(|e| MediaError::Transport(format!("fal asset fetch: {e}")))?;

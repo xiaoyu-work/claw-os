@@ -161,16 +161,11 @@ pub fn build_user_message(prompt: &str, mime: ImageMime, base64_data: &str) -> M
 /// cleartext image fetches.
 pub async fn fetch_image(url: &str, timeout: Duration) -> Result<(Vec<u8>, ImageMime), MediaError> {
     super::super::util::assert_safe_outbound(url, true)?;
-    let mut builder =
-        reqwest::Client::builder().user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")));
-    if timeout > Duration::from_secs(0) {
-        builder = builder.timeout(timeout);
-    }
-    let client = builder
-        .build()
-        .map_err(|e| MediaError::Internal(e.to_string()))?;
+    let parsed_url = reqwest::Url::parse(url)
+        .map_err(|e| MediaError::InvalidRequest(format!("invalid image url: {e}")))?;
+    let client = super::super::util::build_safe_client(&parsed_url, timeout).await?;
     let resp = client
-        .get(url)
+        .get(parsed_url)
         .send()
         .await
         .map_err(|e| MediaError::Transport(e.to_string()))?;

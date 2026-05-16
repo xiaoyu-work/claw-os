@@ -73,18 +73,15 @@ impl CloudTtsConfig {
 
 pub struct CloudTtsProvider {
     cfg: CloudTtsConfig,
-    client: reqwest::Client,
 }
 
 impl CloudTtsProvider {
     pub fn new(cfg: CloudTtsConfig) -> Self {
-        let mut builder =
-            reqwest::Client::builder().user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")));
-        if cfg.request_timeout > Duration::from_secs(0) {
-            builder = builder.timeout(cfg.request_timeout);
-        }
-        let client = builder.build().unwrap_or_else(|_| reqwest::Client::new());
-        Self { cfg, client }
+        // No long-lived `reqwest::Client` here: each request builds a
+        // fresh client via `util::build_safe_client` so the host is
+        // DNS-pinned to a single vetted public IP and rebinding can't
+        // race the connect. See `media/util.rs`.
+        Self { cfg }
     }
 
     fn endpoint(&self) -> String {
@@ -147,9 +144,12 @@ impl TtsProvider for CloudTtsProvider {
             speed: request.speed,
         };
 
-        let mut http = self
-            .client
-            .post(self.endpoint())
+        let endpoint = self.endpoint();
+        let url = reqwest::Url::parse(&endpoint)
+            .map_err(|e| MediaError::InvalidRequest(format!("invalid endpoint url: {e}")))?;
+        let client = super::util::build_safe_client(&url, self.cfg.request_timeout).await?;
+        let mut http = client
+            .post(url)
             .header("Content-Type", "application/json")
             .json(&body);
         if let Some(key) = &self.cfg.api_key {
