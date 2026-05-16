@@ -17,7 +17,8 @@
 //! histogram, and average / median duration.
 
 use std::collections::BTreeMap;
-use std::fs;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
@@ -86,10 +87,19 @@ impl InsightsReport {
     }
 
     pub fn from_path_filtered(path: &Path, filter: &InsightsFilter) -> Self {
-        let Ok(text) = fs::read_to_string(path) else {
+        // Stream the JSONL log line-by-line so a multi-GB run log
+        // doesn't blow the heap during `cos agent status` or budget
+        // enforcement. A missing file yields an empty report.
+        let Ok(file) = File::open(path) else {
             return Self::default();
         };
-        Self::from_lines_filtered(text.lines(), filter)
+        let reader = BufReader::new(file);
+        let mut report = Self::default();
+        for line in reader.lines() {
+            let Ok(line) = line else { continue };
+            Self::fold_one(&mut report, &line, filter);
+        }
+        report
     }
 
     pub fn from_lines<'a, I: IntoIterator<Item = &'a str>>(lines: I) -> Self {
@@ -102,29 +112,33 @@ impl InsightsReport {
     ) -> Self {
         let mut report = Self::default();
         for line in lines {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-            let Ok(rec) = serde_json::from_str::<LlmRunRecord>(line) else {
-                continue;
-            };
-            if !filter.matches(&rec) {
-                continue;
-            }
-            report.overall.fold(&rec);
-            report
-                .per_provider
-                .entry(rec.provider.clone())
-                .or_default()
-                .fold(&rec);
-            report
-                .per_model
-                .entry(rec.model.clone())
-                .or_default()
-                .fold(&rec);
+            Self::fold_one(&mut report, line, filter);
         }
         report
+    }
+
+    fn fold_one(report: &mut Self, line: &str, filter: &InsightsFilter) {
+        let line = line.trim();
+        if line.is_empty() {
+            return;
+        }
+        let Ok(rec) = serde_json::from_str::<LlmRunRecord>(line) else {
+            return;
+        };
+        if !filter.matches(&rec) {
+            return;
+        }
+        report.overall.fold(&rec);
+        report
+            .per_provider
+            .entry(rec.provider.clone())
+            .or_default()
+            .fold(&rec);
+        report
+            .per_model
+            .entry(rec.model.clone())
+            .or_default()
+            .fold(&rec);
     }
 
     /// Convenience: read the default cos run-log path.
@@ -142,12 +156,14 @@ impl InsightsReport {
         path: &Path,
         filter: &InsightsFilter,
     ) -> BTreeMap<String, UsageBucket> {
-        let Ok(text) = fs::read_to_string(path) else {
+        let Ok(file) = File::open(path) else {
             return BTreeMap::new();
         };
+        let reader = BufReader::new(file);
         let mut out: BTreeMap<String, UsageBucket> = BTreeMap::new();
-        for line in text.lines() {
-            let Ok(rec) = serde_json::from_str::<LlmRunRecord>(line) else {
+        for line in reader.lines() {
+            let Ok(line) = line else { continue };
+            let Ok(rec) = serde_json::from_str::<LlmRunRecord>(&line) else {
                 continue;
             };
             if !filter.matches(&rec) {
@@ -166,17 +182,36 @@ impl InsightsReport {
     }
 
     pub fn recent_filtered(path: &Path, n: usize, filter: &InsightsFilter) -> Vec<LlmRunRecord> {
-        let Ok(text) = fs::read_to_string(path) else {
+        let Ok(file) = File::open(path) else {
             return Vec::new();
         };
-        let mut all: Vec<LlmRunRecord> = text
-            .lines()
-            .filter_map(|line| serde_json::from_str::<LlmRunRecord>(line.trim()).ok())
-            .filter(|rec| filter.matches(rec))
-            .collect();
-        let take_from = all.len().saturating_sub(n);
-        all.drain(0..take_from);
-        all
+        let reader = BufReader::new(file);
+        // Bounded ring-buffer: keep at most `n` filtered records.
+        // Avoids buffering an entire multi-GB run log just to drop
+        // all but the trailing window.
+        let mut ring: std::collections::VecDeque<LlmRunRecord> =
+            std::collections::VecDeque::with_capacity(n.min(1024));
+        for line in reader.lines() {
+            let Ok(line) = line else { continue };
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let Ok(rec) = serde_json::from_str::<LlmRunRecord>(line) else {
+                continue;
+            };
+            if !filter.matches(&rec) {
+                continue;
+            }
+            if n == 0 {
+                continue;
+            }
+            if ring.len() == n {
+                ring.pop_front();
+            }
+            ring.push_back(rec);
+        }
+        ring.into_iter().collect()
     }
 }
 

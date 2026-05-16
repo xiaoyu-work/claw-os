@@ -2167,7 +2167,10 @@ fn truncate_for_log(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
     } else {
-        format!("{}…", &s[..max])
+        // `&s[..max]` would panic if `max` lands inside a multi-byte
+        // UTF-8 codepoint (provider error bodies routinely include
+        // non-ASCII text). Walk back to the nearest char boundary.
+        format!("{}…", crate::agent::util::char_safe_truncate(s, max))
     }
 }
 
@@ -2600,17 +2603,28 @@ fn read_config_or_empty(path: &Path) -> Result<Value, String> {
 }
 
 fn write_config_atomic(path: &Path, cfg: &Value) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("create {}: {e}", parent.display()))?;
-    }
     let json_text =
         serde_json::to_string_pretty(cfg).map_err(|e| format!("serialize config: {e}"))?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json_text)
-        .map_err(|e| format!("write {}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, path)
-        .map_err(|e| format!("rename {} -> {}: {e}", tmp.display(), path.display()))?;
+    // Crash-safe: shared helper writes a per-process tmp file, fsyncs
+    // both the tmp and the parent dir, then renames into place. This
+    // replaces an earlier `fs::write(<single>.tmp) + fs::rename` which
+    // (a) skipped fsync entirely so a power loss between write and
+    // rename could surface a torn or empty file at recovery time, and
+    // (b) used a shared tmp filename so two concurrent setup wizards
+    // for different modalities could clobber each other's tmp data.
+    crate::agent::util::atomic_write_with_fsync(path, json_text.as_bytes())
+        .map_err(|e| format!("write {}: {e}", path.display()))?;
+    // Best-effort: tighten permissions on POSIX since the file may
+    // carry API keys when the wizard isn't using a credential store.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(path) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o600);
+            let _ = std::fs::set_permissions(path, perms);
+        }
+    }
     Ok(())
 }
 
@@ -2663,6 +2677,43 @@ mod tests {
         assert!(err.contains("agent not configured"));
         assert!(err.contains("mock"));
         assert!(err.contains("cos agent setup"));
+    }
+
+    #[test]
+    fn truncate_for_log_handles_non_ascii() {
+        // Regression: `&s[..max]` panics if `max` lands inside a
+        // multi-byte UTF-8 codepoint. Provider error bodies routinely
+        // include localised text — Anthropic, Bedrock, and Vertex all
+        // surface non-ASCII in their /models error envelopes — so the
+        // wizard's "couldn't list models" path must never panic on
+        // bytes-vs-chars.
+        // ASCII unchanged.
+        assert_eq!(truncate_for_log("hello", 100), "hello");
+        // Long ASCII gets truncated to exactly `max` chars + ellipsis.
+        let long_ascii = "x".repeat(300);
+        let out = truncate_for_log(&long_ascii, 10);
+        assert!(out.starts_with("xxxxxxxxxx"));
+        assert!(out.ends_with('…'));
+        // Multi-byte input: every byte budget that lands mid-codepoint
+        // must yield a clean string, never a panic, and the result
+        // must be valid UTF-8 ending on a char boundary.
+        for max in 1..200 {
+            let s = "漢字".repeat(50); // 300 bytes, 100 chars
+            let out = truncate_for_log(&s, max);
+            // Round-tripping confirms validity: invalid UTF-8 would
+            // refuse to construct a &str.
+            assert!(out.is_char_boundary(0));
+            for (i, _) in out.char_indices() {
+                assert!(out.is_char_boundary(i));
+            }
+        }
+        // Emoji at the boundary.
+        let s = "abc🌍def";
+        // max=4 lands inside the emoji (bytes 0..3 = "abc", emoji starts at 3,
+        // 4 bytes wide). Truncate must walk back to byte 3.
+        let out = truncate_for_log(s, 4);
+        assert!(out.contains("abc"));
+        assert!(out.ends_with('…'));
     }
 
     #[test]

@@ -466,8 +466,15 @@ fn check_log_file(path: &Path, label: &str) -> Value {
             "note": "log file not yet created (no agent activity recorded yet)",
         });
     }
-    let lines = match std::fs::read_to_string(path) {
-        Ok(s) => s.lines().count() as u64,
+    // Stream the line count instead of slurping the whole log.
+    // The audit / run log can grow to hundreds of MB on long-lived
+    // installs; a `read_to_string` here is enough to OOM a small
+    // container running `cos agent doctor`.
+    let lines = match std::fs::File::open(path) {
+        Ok(f) => {
+            use std::io::BufRead;
+            std::io::BufReader::new(f).lines().count() as u64
+        }
         Err(e) => {
             return json!({
                 "status": "fail",

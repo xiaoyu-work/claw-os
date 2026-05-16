@@ -43,10 +43,24 @@ pub mod skills;
 pub mod summarise;
 pub mod title;
 pub mod tools;
+pub mod util;
 
 use serde_json::{json, Value};
 
 use crate::apps;
+
+/// Recover from a poisoned [`std::sync::Mutex`] by taking the inner
+/// data. Poisoning means a previous holder panicked, but for the
+/// `LiveSink` / `ChatSink` aggregators that's strictly informational
+/// — none of the data they hold becomes corrupted by a panic in
+/// another tool-call thread, so silently dropping the poison flag
+/// keeps the rest of the run going instead of aborting it. Callers
+/// that need to surface partial state to JSON / stderr would
+/// otherwise inherit a cascade of `.unwrap()` panics.
+#[inline]
+fn mlock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|p| p.into_inner())
+}
 
 /// Dispatch a `cos agent <command>` invocation.
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
@@ -2671,7 +2685,7 @@ async fn live_cmd_async(
                         "\n[tool_use id={} name={}] {}",
                         call.id, call.name, call.input
                     );
-                    self.tool_calls.lock().unwrap().push(serde_json::json!({
+                    mlock(&self.tool_calls).push(serde_json::json!({
                         "id": call.id,
                         "name": call.name,
                         "input": call.input,
@@ -2689,7 +2703,7 @@ async fn live_cmd_async(
                             "\n[tool_use id={} name={}] {}",
                             call.id, call.name, call.input
                         );
-                        self.tool_calls.lock().unwrap().push(serde_json::json!({
+                        mlock(&self.tool_calls).push(serde_json::json!({
                             "id": call.id,
                             "name": call.name,
                             "input": call.input,
@@ -2699,12 +2713,12 @@ async fn live_cmd_async(
                 }
                 StreamEvent::Done { finish, usage } => {
                     let _ = writeln!(err_lock, "\n[turn done finish={finish:?}]");
-                    *self.last_usage.lock().unwrap() = Some(usage.clone());
-                    *self.last_finish.lock().unwrap() = Some(*finish);
+                    *mlock(&self.last_usage) = Some(usage.clone());
+                    *mlock(&self.last_finish) = Some(*finish);
                 }
                 StreamEvent::Warning { message } => {
                     let _ = writeln!(err_lock, "\n[warning] {message}");
-                    self.warnings.lock().unwrap().push(message.clone());
+                    mlock(&self.warnings).push(message.clone());
                 }
             }
         }
@@ -2744,21 +2758,16 @@ async fn live_cmd_async(
 
     match result {
         Ok(ask_result) => {
-            let usage = sink_obj
-                .last_usage
-                .lock()
-                .unwrap()
-                .clone()
-                .unwrap_or_default();
-            let finish = sink_obj.last_finish.lock().unwrap().take();
+            let usage = mlock(&sink_obj.last_usage).clone().unwrap_or_default();
+            let finish = mlock(&sink_obj.last_finish).take();
             Ok(json!({
                 "answer": ask_result.answer,
                 "turns": ask_result.turns,
                 "provider": ask_result.provider,
                 "model": ask_result.model,
                 "session_id": ask_result.session_id,
-                "tool_calls": *sink_obj.tool_calls.lock().unwrap(),
-                "warnings": *sink_obj.warnings.lock().unwrap(),
+                "tool_calls": *mlock(&sink_obj.tool_calls),
+                "warnings": *mlock(&sink_obj.warnings),
                 "finish": finish.map(|f| format!("{f:?}")),
                 "usage": {
                     "input_tokens": usage.input_tokens,
@@ -3164,10 +3173,10 @@ async fn chat_cmd_async(
             }
         }
         fn reset(&self) {
-            self.tool_calls.lock().unwrap().clear();
-            self.warnings.lock().unwrap().clear();
-            *self.last_usage.lock().unwrap() = None;
-            *self.last_finish.lock().unwrap() = None;
+            mlock(&self.tool_calls).clear();
+            mlock(&self.warnings).clear();
+            *mlock(&self.last_usage) = None;
+            *mlock(&self.last_finish) = None;
         }
     }
     impl StreamSink for ChatSink {
@@ -3192,7 +3201,7 @@ async fn chat_cmd_async(
                         "\n[tool_use id={} name={}] {}",
                         call.id, call.name, call.input
                     );
-                    self.tool_calls.lock().unwrap().push(serde_json::json!({
+                    mlock(&self.tool_calls).push(serde_json::json!({
                         "id": call.id,
                         "name": call.name,
                         "input": call.input,
@@ -3210,7 +3219,7 @@ async fn chat_cmd_async(
                             "\n[tool_use id={} name={}] {}",
                             call.id, call.name, call.input
                         );
-                        self.tool_calls.lock().unwrap().push(serde_json::json!({
+                        mlock(&self.tool_calls).push(serde_json::json!({
                             "id": call.id,
                             "name": call.name,
                             "input": call.input,
@@ -3227,12 +3236,12 @@ async fn chat_cmd_async(
                         // assistant's last token.
                         let _ = writeln!(e);
                     }
-                    *self.last_usage.lock().unwrap() = Some(usage.clone());
-                    *self.last_finish.lock().unwrap() = Some(*finish);
+                    *mlock(&self.last_usage) = Some(usage.clone());
+                    *mlock(&self.last_finish) = Some(*finish);
                 }
                 StreamEvent::Warning { message } => {
                     let _ = writeln!(e, "\n[warning] {message}");
-                    self.warnings.lock().unwrap().push(message.clone());
+                    mlock(&self.warnings).push(message.clone());
                 }
             }
         }
@@ -6521,15 +6530,43 @@ fn osv_check_cmd(args: &[String]) -> Result<Value, String> {
         .enable_all()
         .build()
         .map_err(|e| format!("osv: build runtime: {e}"))?;
+    // Sequential per-package querying was the dominant cost here.
+    // A typical Cargo.lock contains hundreds of crates; at ~300 ms
+    // round-trip per OSV.dev call that's a 30+ s `cos agent osv
+    // check`. Fan out to a small worker pool — capped at 8 to stay
+    // under OSV.dev's polite-client guidance and to keep memory
+    // bounded — and merge results in the original order so the
+    // emitted JSON remains stable.
+    use futures_util::stream::{self, StreamExt};
+    const CONCURRENCY: usize = 8;
+    let scored: Vec<(usize, Vec<crate::agent::safety::osv::OsvVulnerability>)> = rt.block_on(async {
+        stream::iter(pkgs.iter().enumerate())
+            .map(|(idx, pkg)| async move {
+                let vulns = crate::agent::safety::osv::query(pkg).await.unwrap_or_else(|e| {
+                    tracing::warn!(
+                        "osv: {} {} {}: {}",
+                        pkg.ecosystem,
+                        pkg.name,
+                        pkg.version,
+                        e
+                    );
+                    Vec::new()
+                });
+                (idx, vulns)
+            })
+            .buffer_unordered(CONCURRENCY)
+            .collect()
+            .await
+    });
+    let mut by_idx: Vec<Vec<crate::agent::safety::osv::OsvVulnerability>> = (0..pkgs.len())
+        .map(|_| Vec::new())
+        .collect();
+    for (idx, v) in scored {
+        by_idx[idx] = v;
+    }
     let mut total_vulns = 0u64;
-    let mut results = Vec::with_capacity(pkgs.len());
-    for pkg in &pkgs {
-        let vulns = rt
-            .block_on(crate::agent::safety::osv::query(pkg))
-            .unwrap_or_else(|e| {
-                tracing::warn!("osv: {} {} {}: {}", pkg.ecosystem, pkg.name, pkg.version, e);
-                Vec::new()
-            });
+    let mut results = Vec::new();
+    for (pkg, vulns) in pkgs.iter().zip(by_idx.into_iter()) {
         total_vulns += vulns.len() as u64;
         if !vulns.is_empty() {
             results.push(json!({
@@ -8230,6 +8267,9 @@ mod tests {
 
     #[test]
     fn override_cmd_show_missing_file_reports_absent() {
+        // Mutates process-wide env; serialize with the crate-wide
+        // env lock so we don't race with other env-touching tests.
+        let _env_lock = crate::test_env::lock_env();
         // Point user-config at an empty tmp dir so the file definitely doesn't exist.
         let tmp = std::env::temp_dir().join(format!(
             "cos-override-cmd-missing-{}",
@@ -8261,6 +8301,9 @@ mod tests {
 
     #[test]
     fn budget_user_show_missing_file_reports_unlimited() {
+        // Mutates process-wide env; serialize with the crate-wide
+        // env lock so we don't race with other env-touching tests.
+        let _env_lock = crate::test_env::lock_env();
         // Empty tmp dirs ⇒ no budget.json (unlimited) and a writable
         // data dir for the SQLite store (the default /var/lib/cos is
         // not writable on dev hosts).
@@ -13487,8 +13530,32 @@ mod tests {
 
     /// Pin the curator default log under a per-test temp dir so we
     /// don't trample the real machine's `%ProgramData%\cos\` state.
-    /// Returns the temp dir so the caller can clean it up.
-    fn isolate_cos_data_dir(tag: &str) -> std::path::PathBuf {
+    /// Returns a guard that holds the crate-wide env lock for the
+    /// test's lifetime: each call mutates `COS_DATA_DIR`, and two
+    /// tests running in parallel would otherwise observe each
+    /// other's data directory (cargo test runs many threads).
+    /// The guard derefs to `&Path` so existing `dir.join(...)`
+    /// callers keep working without changes.
+    struct LearnDataDir {
+        path: std::path::PathBuf,
+        _env: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl std::ops::Deref for LearnDataDir {
+        type Target = std::path::Path;
+        fn deref(&self) -> &Self::Target {
+            &self.path
+        }
+    }
+
+    impl LearnDataDir {
+        fn join(&self, p: impl AsRef<std::path::Path>) -> std::path::PathBuf {
+            self.path.join(p)
+        }
+    }
+
+    fn isolate_cos_data_dir(tag: &str) -> LearnDataDir {
+        let env = crate::test_env::lock_env();
         let dir = std::env::temp_dir().join(format!(
             "cos-learn-cli-{tag}-{}-{}",
             std::process::id(),
@@ -13499,7 +13566,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         std::env::set_var("COS_DATA_DIR", &dir);
-        dir
+        LearnDataDir { path: dir, _env: env }
     }
 
     #[test]

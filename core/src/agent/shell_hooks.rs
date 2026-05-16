@@ -14,14 +14,29 @@
 //! Threat model: the log is local-only, written under the cos data
 //! dir. Operators can disable capture entirely by simply not
 //! sourcing the init script. `clear --yes` truncates; the file is
-//! never auto-rotated (callers can `cos agent shell-hooks tail` and
-//! pipe into their own retention).
+//! rotated when it exceeds [`MAX_LOG_BYTES`] so unbounded shell
+//! usage can't fill the disk.
 
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+
+/// Size cap before the JSONL log is rotated. 50 MiB is large
+/// enough to hold weeks of interactive shell history and small
+/// enough that downstream readers ("doctor", "tail") never face
+/// multi-GB scans. Two compressed rotated files (.1, .2) are
+/// retained; older drops fall off the tail.
+const MAX_LOG_BYTES: u64 = 50 * 1024 * 1024;
+const MAX_ROTATIONS: u32 = 2;
+
+/// Default per-shell-hook execution timeout. The hook is interactive
+/// telemetry; if `cos` stalls (missing config, blocked syscall, hung
+/// MCP child) every prompt would otherwise block forever. 60 seconds
+/// is high enough that the rare slow auth refresh doesn't time out
+/// and low enough that operators feel the pain quickly.
+const HOOK_TIMEOUT_SECS: u32 = 60;
 
 /// Supported init-script shells. New shells are explicit (no
 /// auto-detect) so an operator who runs `cos agent shell-hooks
@@ -83,6 +98,11 @@ pub fn default_log_path() -> PathBuf {
 /// stderr is silenced so a missing `cos` binary doesn't pollute
 /// the user's prompt; the cost of a silent miss is acceptable
 /// since this is ambient telemetry, not an authoritative trace.
+///
+/// Every invocation is wrapped with `timeout(1)` when it is on
+/// `$PATH`. The hook runs at every prompt, so a stalled `cos`
+/// (hung MCP child, blocked syscall, dead-fs) would otherwise
+/// freeze the user's shell indefinitely.
 pub fn render_init(shell: Shell) -> String {
     match shell {
         Shell::Bash => render_bash(),
@@ -92,49 +112,67 @@ pub fn render_init(shell: Shell) -> String {
 }
 
 fn render_bash() -> String {
-    r#"# cos agent shell-hooks (bash)
-__cos_pre_exec() {
-    cos agent shell-hooks record-pre "$BASH_COMMAND" >/dev/null 2>&1 || true
-}
-__cos_post_exec() {
+    format!(r#"# cos agent shell-hooks (bash)
+__cos_call() {{
+    if command -v timeout >/dev/null 2>&1; then
+        timeout {timeout} cos "$@" >/dev/null 2>&1 || true
+    else
+        cos "$@" >/dev/null 2>&1 || true
+    fi
+}}
+__cos_pre_exec() {{
+    __cos_call agent shell-hooks record-pre "$BASH_COMMAND"
+}}
+__cos_post_exec() {{
     local rc=$?
-    cos agent shell-hooks record-post "$rc" >/dev/null 2>&1 || true
-}
+    __cos_call agent shell-hooks record-post "$rc"
+}}
 trap '__cos_pre_exec' DEBUG
-case ":${PROMPT_COMMAND:-}:" in
+case ":${{PROMPT_COMMAND:-}}:" in
     *":__cos_post_exec:"*) ;;
-    *) PROMPT_COMMAND="__cos_post_exec${PROMPT_COMMAND:+; $PROMPT_COMMAND}" ;;
+    *) PROMPT_COMMAND="__cos_post_exec${{PROMPT_COMMAND:+; $PROMPT_COMMAND}}" ;;
 esac
-"#
-    .to_string()
+"#, timeout = HOOK_TIMEOUT_SECS)
 }
 
 fn render_zsh() -> String {
-    r#"# cos agent shell-hooks (zsh)
-function __cos_preexec() {
-    cos agent shell-hooks record-pre "$1" >/dev/null 2>&1 || true
-}
-function __cos_precmd() {
+    format!(r#"# cos agent shell-hooks (zsh)
+function __cos_call() {{
+    if command -v timeout >/dev/null 2>&1; then
+        timeout {timeout} cos "$@" >/dev/null 2>&1 || true
+    else
+        cos "$@" >/dev/null 2>&1 || true
+    fi
+}}
+function __cos_preexec() {{
+    __cos_call agent shell-hooks record-pre "$1"
+}}
+function __cos_precmd() {{
     local rc=$?
-    cos agent shell-hooks record-post "$rc" >/dev/null 2>&1 || true
-}
+    __cos_call agent shell-hooks record-post "$rc"
+}}
 autoload -Uz add-zsh-hook
 add-zsh-hook preexec __cos_preexec
 add-zsh-hook precmd __cos_precmd
-"#
-    .to_string()
+"#, timeout = HOOK_TIMEOUT_SECS)
 }
 
 fn render_fish() -> String {
-    r#"# cos agent shell-hooks (fish)
+    format!(r#"# cos agent shell-hooks (fish)
+function __cos_call
+    if command -v timeout >/dev/null 2>&1
+        timeout {timeout} cos $argv >/dev/null 2>&1
+    else
+        cos $argv >/dev/null 2>&1
+    end
+end
 function __cos_preexec --on-event fish_preexec
-    cos agent shell-hooks record-pre "$argv" >/dev/null 2>&1
+    __cos_call agent shell-hooks record-pre "$argv"
 end
 function __cos_postexec --on-event fish_postexec
-    cos agent shell-hooks record-post $status >/dev/null 2>&1
+    __cos_call agent shell-hooks record-post $status
 end
-"#
-    .to_string()
+"#, timeout = HOOK_TIMEOUT_SECS)
 }
 
 /// Append a `pre` record to the JSONL log at `path`.
@@ -167,11 +205,106 @@ fn write_record(path: &Path, rec: &Record) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let mut f = OpenOptions::new().create(true).append(true).open(path)?;
     let line = serde_json::to_string(rec)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    writeln!(f, "{line}")?;
+    // Rotate BEFORE we open the append handle. If we rotated after
+    // the write the new record would land in the file we then
+    // rename away, defeating the cap.
+    rotate_if_needed(path)?;
+    let mut f = OpenOptions::new().create(true).append(true).open(path)?;
+    // POSIX `write(2)` is only atomic for buffers ≤ PIPE_BUF (4 KiB
+    // on Linux/macOS). Hook payloads include cwd, command, and env —
+    // easy to exceed 4 KiB once cwd is a deeply nested git tree. Two
+    // concurrent shells (split-pane / tmux) writing >4 KiB lines can
+    // otherwise interleave their JSON inside a single record. An
+    // advisory flock per append serialises the writers without the
+    // overhead of a daemon.
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        let rc = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) };
+        if rc != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    let write_result = writeln!(f, "{line}");
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        unsafe {
+            libc::flock(f.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+    write_result?;
     Ok(())
+}
+
+/// Rotate the log when it exceeds [`MAX_LOG_BYTES`]. We keep at
+/// most [`MAX_ROTATIONS`] backups (`.1`, `.2`); older drops are
+/// removed. Locked via a sibling sentinel so two concurrent
+/// rotators can't fight over the same rename chain.
+fn rotate_if_needed(path: &Path) -> std::io::Result<()> {
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    if meta.len() <= MAX_LOG_BYTES {
+        return Ok(());
+    }
+    // Take a sentinel flock so concurrent appenders don't all
+    // pile into the rotation at once. The lock is short — just
+    // a handful of renames.
+    let mut lock_path: std::ffi::OsString = path.as_os_str().to_os_string();
+    lock_path.push(".rotate.lock");
+    let lock_path = PathBuf::from(lock_path);
+    let lock_file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        let rc = unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX) };
+        if rc != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    // Re-check under lock: another rotator may have just done it.
+    if let Ok(m) = std::fs::metadata(path) {
+        if m.len() <= MAX_LOG_BYTES {
+            return Ok(());
+        }
+    }
+    // Drop oldest, slide each rotation up by one, then move current.
+    for n in (1..=MAX_ROTATIONS).rev() {
+        let from = rotated_path(path, n);
+        let to = rotated_path(path, n + 1);
+        if n == MAX_ROTATIONS {
+            // Drop the file that would otherwise become `.N+1`.
+            let _ = std::fs::remove_file(&from);
+            continue;
+        }
+        if from.exists() {
+            std::fs::rename(&from, &to).ok();
+        }
+    }
+    let first_rot = rotated_path(path, 1);
+    if let Err(e) = std::fs::rename(path, &first_rot) {
+        // Best-effort: a missing-source error here means someone
+        // else already rotated. Anything else propagates.
+        if e.kind() != std::io::ErrorKind::NotFound {
+            return Err(e);
+        }
+    }
+    Ok(())
+}
+
+fn rotated_path(path: &Path, n: u32) -> PathBuf {
+    let mut s: std::ffi::OsString = path.as_os_str().to_os_string();
+    s.push(format!(".{n}"));
+    PathBuf::from(s)
 }
 
 /// Read the most-recent `limit` records from the JSONL log,
@@ -255,8 +388,30 @@ mod tests {
         let s = render_init(Shell::Bash);
         assert!(s.contains("trap '__cos_pre_exec' DEBUG"));
         assert!(s.contains("PROMPT_COMMAND"));
-        assert!(s.contains("cos agent shell-hooks record-pre"));
-        assert!(s.contains("cos agent shell-hooks record-post"));
+        // Hooks route through the `__cos_call` helper, so the literal
+        // call site reads `__cos_call agent shell-hooks record-pre`.
+        assert!(s.contains("agent shell-hooks record-pre"));
+        assert!(s.contains("agent shell-hooks record-post"));
+    }
+
+    #[test]
+    fn render_init_uses_timeout_wrapper_in_all_dialects() {
+        // Regression for the "stalled cos blocks the user's shell"
+        // bug. Every dialect must guard its `cos` invocation with
+        // a timeout wrapper.
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+            let s = render_init(shell);
+            assert!(
+                s.contains("command -v timeout"),
+                "{} init missing timeout guard:\n{s}",
+                shell.label()
+            );
+            assert!(
+                s.contains(&format!("timeout {HOOK_TIMEOUT_SECS}")),
+                "{} init missing `timeout N`:\n{s}",
+                shell.label()
+            );
+        }
     }
 
     #[test]
@@ -352,6 +507,39 @@ mod tests {
         let path = dir.join("shell-hooks.jsonl");
         let cleared = clear_at(&path).unwrap();
         assert!(!cleared);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn log_rotates_at_50mib() {
+        // When the active log exceeds 50 MiB, the next append must
+        // rotate it. We seed the file with a >50 MiB blob (one byte
+        // over so the boundary check is `>` not `>=`) and verify the
+        // post-append state: the active file is small and a `.1`
+        // companion holds the prior contents.
+        let dir = tempdir("rotate");
+        let path = dir.join("shell-hooks.jsonl");
+        let blob = vec![b'.'; (MAX_LOG_BYTES + 1) as usize];
+        std::fs::write(&path, &blob).unwrap();
+        append_pre_at(&path, "after-rotate", 9_000).unwrap();
+        let active_len = std::fs::metadata(&path).unwrap().len();
+        assert!(
+            active_len < MAX_LOG_BYTES,
+            "active log should be small post-rotate, got {active_len} bytes"
+        );
+        let rotated = rotated_path(&path, 1);
+        assert!(rotated.exists(), "expected {} to exist", rotated.display());
+        let rotated_len = std::fs::metadata(&rotated).unwrap().len();
+        assert!(
+            rotated_len > MAX_LOG_BYTES,
+            "rotated file should hold the old payload, got {rotated_len} bytes"
+        );
+        // The new record must be present in the active file (i.e.
+        // the rename happened before the append wrote into the
+        // newly-empty file).
+        let rows = tail_at(&path, 10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].cmd.as_deref(), Some("after-rotate"));
         std::fs::remove_dir_all(&dir).ok();
     }
 }

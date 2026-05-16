@@ -41,6 +41,8 @@
 use std::fs;
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -164,7 +166,11 @@ impl Store {
     }
 
     pub fn with_root(root: PathBuf) -> io::Result<Self> {
-        for sub in ["pending", "running", "done"] {
+        // The bucket dirs (pending/running/done) and a sibling
+        // `locks/` dir hold the per-job flock sentinels. Pre-creating
+        // them keeps the hot path (claim_one / cancel_pending /
+        // submit) lock-free at start-up.
+        for sub in ["pending", "running", "done", "locks"] {
             fs::create_dir_all(root.join(sub))?;
         }
         Ok(Self { root })
@@ -293,6 +299,22 @@ impl Store {
                 Some(s) => s.to_string(),
                 None => continue,
             };
+            // Per-id exclusive lock: serialise claim_one and
+            // cancel_pending so they can't both succeed for the same
+            // job. Without this, claim's rename(pending→running) and
+            // cancel's rename(pending→done) race on POSIX (rename(2)
+            // is atomic but not mutually exclusive across different
+            // destinations), letting a cancelled job still receive
+            // a real response from a worker that won the race.
+            let _lock = match self.lock_for_id(&id) {
+                Ok(l) => l,
+                Err(_) => continue, // best-effort: never block forever on lock failure
+            };
+            // Re-check existence after taking the lock — cancel may have
+            // already moved the file while we were waiting.
+            if !src.exists() {
+                continue;
+            }
             let dst = self.path_for(JobStatus::Running, &id);
             match fs::rename(&src, &dst) {
                 Ok(()) => {
@@ -347,6 +369,13 @@ impl Store {
     ///   - `Ok(None)` if the job was already running, already done, or
     ///     missing entirely
     pub fn cancel_pending(&self, id: &str) -> io::Result<Option<Job>> {
+        // Per-id exclusive lock prevents claim_one and cancel_pending
+        // from both succeeding for the same id. Without it, a worker
+        // could claim_one the file while we still read it from
+        // pending/, then we'd write the cancelled record to a path
+        // that no longer existed (and the worker would post a real
+        // response anyway).
+        let _lock = self.lock_for_id(id)?;
         let src = self.path_for(JobStatus::Pending, id);
         let dst = self.path_for(JobStatus::Ok, id);
         match fs::read_to_string(&src) {
@@ -405,6 +434,50 @@ impl Store {
         let d = count_json(&self.bucket_dir(JobStatus::Ok))?;
         Ok((p, r, d))
     }
+
+    /// Acquire an exclusive flock keyed on `id`. Used by claim_one
+    /// and cancel_pending to serialise per-job state transitions:
+    /// without this, two workers (or worker+canceller) can both win
+    /// their independent `fs::rename(2)` calls because the kernel
+    /// only guarantees atomicity per-rename, not mutual exclusion
+    /// across two different destinations. The sentinel inode is
+    /// stable across rename storms.
+    fn lock_for_id(&self, id: &str) -> io::Result<JobLock> {
+        let lock_dir = self.root.join("locks");
+        fs::create_dir_all(&lock_dir)?;
+        let lock_path = lock_dir.join(format!("{id}.lock"));
+        let f = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            let rc = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) };
+            if rc != 0 {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        Ok(JobLock { file: f })
+    }
+}
+
+/// RAII guard for per-job flock taken by `Store::lock_for_id`.
+struct JobLock {
+    file: fs::File,
+}
+
+impl Drop for JobLock {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            unsafe {
+                libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+            }
+        }
+    }
 }
 
 /// Outcome of a worker run, fed into [`Store::finish`].
@@ -443,13 +516,13 @@ fn count_json(dir: &Path) -> io::Result<usize> {
 }
 
 fn write_json_atomic<T: Serialize>(target: &Path, value: &T) -> io::Result<()> {
-    if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let tmp = target.with_extension("json.tmp");
     let bytes = serde_json::to_vec_pretty(value).map_err(io_other)?;
-    fs::write(&tmp, &bytes)?;
-    fs::rename(&tmp, target)
+    // Crash-safe: shared helper writes a per-process tmp file,
+    // sync_all's it, renames into place, then fsyncs the parent dir.
+    // Replaces an earlier `fs::write + fs::rename` which skipped
+    // fsync entirely, so a power loss between write and rename could
+    // expose a torn job file at recovery time.
+    crate::agent::util::atomic_write_with_fsync(target, &bytes)
 }
 
 fn io_other<E: std::fmt::Display>(e: E) -> io::Error {
@@ -759,9 +832,22 @@ fn cmd_work(args: &[String]) -> Result<Value, String> {
         .enable_all()
         .build()
         .map_err(|e| format!("tokio runtime: {e}"))?;
+    // Shared "graceful shutdown requested" flag, flipped by a tokio
+    // signal listener for SIGTERM / SIGINT (and ctrl_c on Windows).
+    // Without this, systemctl stop / pkill -TERM would tear the
+    // worker down mid-LLM-call and leave the request stuck in
+    // claimed/ with no response and no cancellation marker. With
+    // this flag the worker finishes the in-flight job, then exits
+    // before claiming a new one.
+    let shutdown = Arc::new(AtomicBool::new(false));
+    runtime.spawn(install_shutdown_listener(shutdown.clone()));
     let mut processed: u32 = 0;
     let mut summaries: Vec<Value> = Vec::new();
     loop {
+        if shutdown.load(Ordering::SeqCst) {
+            tracing::info!("agent service worker: shutdown signal received, draining");
+            break;
+        }
         match store.claim_one().map_err(|e| e.to_string())? {
             Some(job) => {
                 let outcome = runtime.block_on(run_one_job(&job));
@@ -788,14 +874,70 @@ fn cmd_work(args: &[String]) -> Result<Value, String> {
                 if once {
                     break;
                 }
-                std::thread::sleep(Duration::from_millis(poll_ms));
+                // Sleep in short slices so a shutdown signal can
+                // interrupt long poll intervals without waiting out
+                // the full duration.
+                let total = Duration::from_millis(poll_ms);
+                let slice = Duration::from_millis(100.min(poll_ms));
+                let start = Instant::now();
+                while start.elapsed() < total {
+                    if shutdown.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    std::thread::sleep(slice);
+                }
             }
         }
     }
     Ok(json!({
         "processed": processed,
         "results": summaries,
+        "shutdown": shutdown.load(Ordering::SeqCst),
     }))
+}
+
+/// Install a tokio signal handler that flips `shutdown` to `true` on
+/// the first SIGTERM/SIGINT (or ctrl_c on Windows). Subsequent signals
+/// are ignored — operators can `kill -KILL` if they really want a hard
+/// stop. Running as a future spawned on the worker's current_thread
+/// runtime means it shares the OS signal handler with `block_on` calls
+/// from `run_one_job`.
+async fn install_shutdown_listener(shutdown: Arc<AtomicBool>) {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut term = match signal(SignalKind::terminate()) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("agent service: SIGTERM listener unavailable: {e}");
+                return;
+            }
+        };
+        let mut intr = match signal(SignalKind::interrupt()) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("agent service: SIGINT listener unavailable: {e}");
+                return;
+            }
+        };
+        tokio::select! {
+            _ = term.recv() => {
+                tracing::info!("agent service: SIGTERM");
+            }
+            _ = intr.recv() => {
+                tracing::info!("agent service: SIGINT");
+            }
+        }
+        shutdown.store(true, Ordering::SeqCst);
+    }
+    #[cfg(not(unix))]
+    {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            tracing::warn!("agent service: ctrl_c listener failed: {e}");
+            return;
+        }
+        shutdown.store(true, Ordering::SeqCst);
+    }
 }
 
 async fn run_one_job(job: &Job) -> FinishOutcome {
@@ -865,12 +1007,17 @@ mod tests {
 
     struct EnvGuard {
         prev: Option<String>,
+        // Serialise env mutation across the test process. Without
+        // this, two concurrent tests both call `set_var(...)` and
+        // each other's `cmd()` call observes the wrong root.
+        _lock: std::sync::MutexGuard<'static, ()>,
     }
     impl EnvGuard {
         fn set(dir: &Path) -> Self {
+            let _lock = crate::test_env::lock_env();
             let prev = std::env::var("COS_DATA_DIR").ok();
             std::env::set_var("COS_DATA_DIR", dir);
-            Self { prev }
+            Self { prev, _lock }
         }
     }
     impl Drop for EnvGuard {
@@ -1039,6 +1186,93 @@ mod tests {
         // The job is now in running/, not pending/ — cancel is a noop.
         let c = store.cancel_pending("nonexistent").unwrap();
         assert!(c.is_none());
+    }
+
+    #[test]
+    fn cancel_and_claim_no_silent_loss() {
+        // Race claim_one() against cancel_pending() across many job
+        // ids in parallel threads. The expected invariant is: for
+        // every submitted id, exactly one of {claim_one, cancel}
+        // succeeds — never both, never neither. Before the lock-based
+        // fix, the second rename(pending→{running,done}) could
+        // silently lose a state transition: claim would post a real
+        // response for a request the user thought they cancelled.
+        use std::sync::Arc;
+        use std::sync::Mutex;
+
+        let dir = fresh_root();
+        let store = Arc::new(Store::with_root(dir.path().to_path_buf()).unwrap());
+        let n_jobs = 64usize;
+        let ids: Vec<String> = (0..n_jobs)
+            .map(|i| {
+                store
+                    .submit(format!("job-{i}"), None, None)
+                    .unwrap()
+                    .id
+            })
+            .collect();
+
+        // Outcomes per id: count of successful claims and successful
+        // cancellations. We assert exactly one of each per id.
+        let claimed: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let cancelled: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+
+        // One thread tries to cancel every id; another claims as many
+        // as it can. They interleave on the per-id flock, so for each
+        // id at most one wins.
+        let s1 = store.clone();
+        let ids1 = ids.clone();
+        let cancelled1 = cancelled.clone();
+        let h_cancel = std::thread::spawn(move || {
+            for id in &ids1 {
+                if let Ok(Some(j)) = s1.cancel_pending(id) {
+                    cancelled1.lock().unwrap().push(j.id);
+                }
+            }
+        });
+        let s2 = store.clone();
+        let claimed2 = claimed.clone();
+        let h_claim = std::thread::spawn(move || {
+            // Loop until pending is empty. Each successful claim is
+            // mutually exclusive with any concurrent cancel of the
+            // same id.
+            loop {
+                match s2.claim_one() {
+                    Ok(Some(j)) => claimed2.lock().unwrap().push(j.id),
+                    Ok(None) => break,
+                    Err(_) => break,
+                }
+            }
+        });
+        h_cancel.join().unwrap();
+        h_claim.join().unwrap();
+
+        let claimed = claimed.lock().unwrap().clone();
+        let cancelled = cancelled.lock().unwrap().clone();
+        // Sanity: never more than one outcome per id.
+        let mut seen = std::collections::HashSet::new();
+        for id in claimed.iter().chain(cancelled.iter()) {
+            assert!(
+                seen.insert(id.clone()),
+                "id {id} reported both claimed and cancelled — silent loss of cancel"
+            );
+        }
+        // The claim loop runs to exhaustion, so every id that wasn't
+        // cancelled must have been claimed. Total covered == n_jobs.
+        assert_eq!(
+            claimed.len() + cancelled.len(),
+            n_jobs,
+            "missing transitions: claimed={} cancelled={}",
+            claimed.len(),
+            cancelled.len()
+        );
+        // Confirm filesystem state agrees: no pending leftovers.
+        let pending_count = fs::read_dir(dir.path().join("pending"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("json"))
+            .count();
+        assert_eq!(pending_count, 0, "every job must have transitioned");
     }
 
     #[test]

@@ -82,7 +82,15 @@ pub fn render_message(role: Role, content: &str, cfg: &DisplayConfig) -> String 
     if cfg.wrap_at == 0 {
         return format!("{prefix}{truncated}");
     }
-    let avail = cfg.wrap_at.saturating_sub(prefix.len()).max(20);
+    // `wrap_at` is a character budget, so the prefix subtraction must
+    // also be in characters — `.len()` is bytes and silently
+    // under-budgets continuation lines as soon as a non-ASCII glyph
+    // appears in the role prefix (a localised label, a translated
+    // glyph, etc.).
+    let avail = cfg
+        .wrap_at
+        .saturating_sub(prefix.chars().count())
+        .max(20);
     let mut out = String::new();
     let mut first = true;
     for paragraph in truncated.split('\n') {
