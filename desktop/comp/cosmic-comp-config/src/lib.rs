@@ -61,7 +61,7 @@ impl Default for AppearanceConfig {
         AppearanceConfig {
             clip_floating_windows: true,
             clip_tiled_windows: true,
-            shadow_tiled_windows: false,
+            shadow_tiled_windows: true,
         }
     }
 }
