@@ -858,7 +858,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "claw-bridge"
+name = "claw-os-sdk"
 version = "0.1.0"
 dependencies = [
  "base64",
@@ -1075,6 +1075,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cos-runtime"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "claw-os-sdk",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "cosmic-comp-config"
 version = "1.0.0"
 source = "git+https://github.com/pop-os/cosmic-comp#ce5ac893a44225de209282d0e9e6ef022f8a60b8"
@@ -1154,7 +1165,7 @@ name = "cosmic-initial-setup"
 version = "1.0.0"
 dependencies = [
  "accounts-zbus",
- "claw-bridge",
+ "cos-runtime",
  "cosmic-comp-config",
  "cosmic-protocols",
  "cosmic-randr-shell",
