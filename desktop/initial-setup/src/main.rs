@@ -450,7 +450,7 @@ impl Application for App {
         let content = page
             .view()
             .map(Message::PageMessage)
-            .apply(widget::container)
+            .apply(widget::scrollable)
             .height(Length::Fill);
 
         // The wizard content column — title, page body, navigation buttons.

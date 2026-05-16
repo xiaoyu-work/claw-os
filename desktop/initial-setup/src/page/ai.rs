@@ -26,6 +26,15 @@
 //     need stronger handling can leave the field blank here and run
 //     `sudo cos agent setup llm apply --api-key-stdin <key.txt` from
 //     a terminal afterwards.
+//
+//   * Per-provider extras (Azure endpoint + API version, today) are
+//     mirrored from `core::agent::setup::extra_fields_for` so the
+//     wizard surfaces the same fields cosmic-settings does. Hard-coded
+//     rather than fetched via `--providers` because the wizard runs
+//     before `cos` is necessarily on PATH and we want zero spawning
+//     until the user clicks Finish.
+
+use std::collections::HashMap;
 
 use cosmic::iced::{Alignment, Length};
 use cosmic::{Element, Task, cosmic_theme, theme, widget};
@@ -80,12 +89,50 @@ const DEFAULT_MODELS: &[&str] = &[
     "anthropic.claude-3-5-sonnet-20241022-v2:0",
 ];
 
+/// One per-provider input rendered below the standard model + API key
+/// rows. `cli_flag` is the long flag understood by `cos agent setup
+/// llm apply` (e.g. `--base-url`, `--api-version`). `key` mirrors the
+/// `extra_fields[].key` value emitted by `cos agent setup --providers`
+/// for cross-checking against the kernel.
+struct ExtraFieldSpec {
+    key: &'static str,
+    cli_flag: &'static str,
+    label_attr: &'static str,
+    required: bool,
+}
+
+/// Provider-keyed extra-field tables. Must stay in sync with
+/// `core::agent::setup::extra_fields_for`. Today only Azure declares
+/// extras; everything else falls back to the empty slice.
+const AZURE_EXTRAS: &[ExtraFieldSpec] = &[
+    ExtraFieldSpec {
+        key: "base_url",
+        cli_flag: "--base-url",
+        label_attr: "azure-endpoint",
+        required: true,
+    },
+    ExtraFieldSpec {
+        key: "api_version",
+        cli_flag: "--api-version",
+        label_attr: "azure-api-version",
+        required: false,
+    },
+];
+
+fn extras_for(provider: &str) -> &'static [ExtraFieldSpec] {
+    match provider {
+        "azure" => AZURE_EXTRAS,
+        _ => &[],
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Message {
     SelectProvider(usize),
     EditModel(String),
     EditApiKey(String),
     ToggleApiKeyVisibility,
+    EditExtra(&'static str, String),
     AppliedResult(ApplyOutcome),
 }
 
@@ -114,6 +161,11 @@ pub struct Page {
     model: String,
     api_key: String,
     api_key_hidden: bool,
+    /// Per-provider extra field values, keyed by `ExtraFieldSpec.key`
+    /// (e.g. `base_url`, `api_version`). Preserved across provider
+    /// changes so a user that toggles azure → openai → azure doesn't
+    /// lose their typed endpoint.
+    extras: HashMap<&'static str, String>,
     /// Last outcome of `apply_settings`, surfaced inline in the view.
     /// `None` until the user hits Finish.
     last_outcome: Option<ApplyOutcome>,
@@ -126,6 +178,7 @@ impl Default for Page {
             model: String::new(),
             api_key: String::new(),
             api_key_hidden: true,
+            extras: HashMap::new(),
             last_outcome: None,
         }
     }
@@ -158,6 +211,13 @@ impl Page {
             Message::ToggleApiKeyVisibility => {
                 self.api_key_hidden = !self.api_key_hidden;
             }
+            Message::EditExtra(key, value) => {
+                if value.is_empty() {
+                    self.extras.remove(key);
+                } else {
+                    self.extras.insert(key, value);
+                }
+            }
             Message::AppliedResult(outcome) => {
                 self.last_outcome = Some(outcome);
             }
@@ -183,15 +243,32 @@ impl page::Page for Page {
         true
     }
 
-    /// Completed only when the user picked a provider and entered a
-    /// non-empty model id. With both empty we let the user move on
-    /// (page is optional) and the system stays "not configured" —
-    /// which is the honest default for a fresh install.
+    fn width(&self) -> f32 {
+        800.0
+    }
+
+    /// Completed only when the user picked a provider, entered a
+    /// non-empty model id, and filled every `required` extra field
+    /// declared by the picked provider (today: Azure endpoint).
     fn completed(&self) -> bool {
-        self.selected
-            .map(|i| i < PROVIDER_KEYS.len())
-            .unwrap_or(false)
-            && !self.model.trim().is_empty()
+        let Some(idx) = self.selected else {
+            return false;
+        };
+        let Some(provider) = PROVIDER_KEYS.get(idx) else {
+            return false;
+        };
+        if self.model.trim().is_empty() {
+            return false;
+        }
+        for field in extras_for(provider) {
+            if field.required {
+                match self.extras.get(field.key) {
+                    Some(v) if !v.trim().is_empty() => {}
+                    _ => return false,
+                }
+            }
+        }
+        true
     }
 
     fn view(&self) -> Element<'_, page::Message> {
@@ -229,6 +306,33 @@ impl page::Page for Page {
             .add(provider_dropdown)
             .add(model_input)
             .add(api_key_input);
+
+        if let Some(idx) = self.selected
+            && let Some(provider) = PROVIDER_KEYS.get(idx)
+        {
+            for field in extras_for(provider) {
+                let value = self.extras.get(field.key).cloned().unwrap_or_default();
+                let key = field.key;
+                let (label, description) = match field.label_attr {
+                    "azure-endpoint" => (
+                        fl!("ai-page", "azure-endpoint"),
+                        fl!("ai-page", "azure-endpoint-description"),
+                    ),
+                    "azure-api-version" => (
+                        fl!("ai-page", "azure-api-version"),
+                        fl!("ai-page", "azure-api-version-description"),
+                    ),
+                    other => (other.to_string(), String::new()),
+                };
+                let item = widget::settings::item::builder(label)
+                    .description(description)
+                    .control(
+                        widget::text_input("", value)
+                            .on_input(move |v| Message::EditExtra(key, v).into()),
+                    );
+                section = section.add(item);
+            }
+        }
 
         if let Some(outcome) = &self.last_outcome {
             let line = match outcome {
@@ -274,9 +378,21 @@ impl page::Page for Page {
         // a copy hanging around in the UI struct after apply.
         let api_key = std::mem::take(&mut self.api_key);
 
+        // Snapshot only the extras the picked provider declares —
+        // ignore any leftover values from a previously-selected
+        // provider so we never pass `--base-url` to e.g. openai.
+        let extras: Vec<(&'static str, String)> = extras_for(&provider)
+            .iter()
+            .filter_map(|f| {
+                self.extras.get(f.key).map(|v| v.trim().to_string()).and_then(|v| {
+                    if v.is_empty() { None } else { Some((f.cli_flag, v)) }
+                })
+            })
+            .collect();
+
         let fut = async move {
             let outcome = tokio::task::spawn_blocking(move || {
-                apply_blocking(&provider, &model, &api_key)
+                apply_blocking(&provider, &model, &api_key, &extras)
             })
             .await
             .unwrap_or_else(|join_err| {
@@ -292,7 +408,12 @@ impl page::Page for Page {
 /// `cos_runtime::exec::run` is itself blocking. Returns a verdict
 /// suitable for the UI; tracing log lines mirror the structure used
 /// by other pages (location.rs, a11y.rs).
-fn apply_blocking(provider: &str, model: &str, api_key: &str) -> ApplyOutcome {
+fn apply_blocking(
+    provider: &str,
+    model: &str,
+    api_key: &str,
+    extras: &[(&'static str, String)],
+) -> ApplyOutcome {
     let mut argv: Vec<&str> = vec![
         "cos",
         "agent",
@@ -304,6 +425,10 @@ fn apply_blocking(provider: &str, model: &str, api_key: &str) -> ApplyOutcome {
         "--model",
         model,
     ];
+    for (flag, value) in extras {
+        argv.push(flag);
+        argv.push(value);
+    }
     if !api_key.is_empty() {
         argv.push("--api-key");
         argv.push(api_key);
