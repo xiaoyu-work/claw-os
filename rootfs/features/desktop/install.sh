@@ -207,6 +207,11 @@ required_files=(
     "$ROOTFS/usr/share/cosmic/com.clawos.Theme.Dark/v1/name"
     "$ROOTFS/usr/share/cosmic/com.clawos.Theme.Light/v1/name"
     "$ROOTFS/usr/share/cosmic/com.clawos.Theme.Mode/v1/is_dark"
+    # Icon theme — WhiteSur is installed via just install
+    # icons-whitesur-pkg/install in desktop/justfile. If it's missing
+    # the toolkit default icon_theme="WhiteSur-dark" falls back to
+    # adwaita and the system loses its macOS-ish look.
+    "$ROOTFS/usr/share/icons/WhiteSur-dark/index.theme"
 )
 missing=0
 for f in "${required_files[@]}"; do

@@ -127,11 +127,27 @@ flatpak
 libclang-dev
 
 # --- Fonts and icons ---
+# Inter is the default UI font (com.clawos.Tk interface_font = "Inter").
+# JetBrains Mono is the default monospace (monospace_font = "JetBrains Mono"),
+# used by cos-term, cos-edit and any libcosmic monospace context.
+# Noto Sans CJK provides Chinese/Japanese/Korean fallback;
+# Noto Color Emoji handles emoji.
+# WhiteSur is installed by desktop/justfile (icons-whitesur-pkg/install)
+# and selected as default via the toolkit's default icon_theme = "WhiteSur-dark".
+# adwaita-icon-theme remains as the safety-net fallback for any icon name
+# WhiteSur does not provide.
+fonts-inter
+fonts-jetbrains-mono
 fonts-noto-core
 fonts-noto-cjk
 fonts-noto-color-emoji
 adwaita-icon-theme
 hicolor-icon-theme
+
+# --- Cursor theme ---
+# Bibata is a modern, sharp-edged cursor set with multiple variants.
+# Selected as default via overlay/etc/environment XCURSOR_THEME=Bibata-Modern-Classic.
+bibata-cursor-theme
 
 # --- Keyboard / locale ---
 xkb-data

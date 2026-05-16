@@ -1,0 +1,11 @@
+# /etc/environment — system-wide environment variables, read by PAM
+# (and therefore inherited by every greetd / cosmic-greeter login).
+#
+# Lines must be plain KEY=VALUE assignments; this file is NOT a shell
+# script (no $expansion, no `export`, no comments mid-line).
+#
+# Cursor theme: cosmic-comp reads XCURSOR_THEME at startup
+# (desktop/comp/src/backend/render/cursor.rs:222). Bibata-Modern-Classic
+# is the default; users can change it from Settings → Appearance.
+XCURSOR_THEME=Bibata-Modern-Classic
+XCURSOR_SIZE=24
