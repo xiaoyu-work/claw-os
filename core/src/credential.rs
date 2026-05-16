@@ -4,10 +4,16 @@
 /// store for secrets (API keys, tokens, passwords) that are accessible only
 /// to sessions with sufficient privilege tier.
 ///
-/// Credentials are encrypted with AES-256-GCM keyed on a SHA-256 hash of the
-/// machine ID. Legacy credentials using XOR obfuscation are detected (by the
-/// absence of a `nonce_b64` field) and still decrypted for backward
-/// compatibility.
+/// Credentials are encrypted with AES-256-GCM. The 32-byte key is derived
+/// per host in this order:
+///   1. Kernel session keyring cache (Linux).
+///   2. `/etc/machine-id` hashed with SHA-256 (Linux).
+///   3. A persistent random 32-byte key written to
+///      `${COS_STATE_DIR}/credential-root.key` (mode 0600) the first time the
+///      store is used on a host without a machine-id. Generated from the OS
+///      CSPRNG — there is no hard-coded literal fallback. Legacy credentials
+///      using XOR obfuscation are detected (by the absence of a `nonce_b64`
+///      field) and still decrypted for backward compatibility.
 ///
 /// Features:
 ///   - **Namespace isolation**: credentials live under `<namespace>/` subdirs.
@@ -31,7 +37,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::caps::{require_or_json, Scope, Verb};
 use crate::policy;
@@ -634,50 +640,225 @@ fn to_b64(data: &[u8]) -> String {
 }
 
 fn from_b64(s: &str) -> Result<Vec<u8>, String> {
-    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut result = Vec::new();
-    let bytes: Vec<u8> = s.bytes().filter(|&b| b != b'\n' && b != b'\r').collect();
-    for chunk in bytes.chunks(4) {
-        if chunk.len() < 2 {
-            break;
-        }
-        let val = |c: u8| -> u32 {
-            if c == b'=' {
-                0
-            } else {
-                CHARS.iter().position(|&x| x == c).unwrap_or(0) as u32
-            }
-        };
-        let b0 = val(chunk[0]);
-        let b1 = val(chunk[1]);
-        let b2 = if chunk.len() > 2 { val(chunk[2]) } else { 0 };
-        let b3 = if chunk.len() > 3 { val(chunk[3]) } else { 0 };
-        let n = (b0 << 18) | (b1 << 12) | (b2 << 6) | b3;
-        result.push(((n >> 16) & 0xFF) as u8);
-        if chunk.len() > 2 && chunk[2] != b'=' {
-            result.push(((n >> 8) & 0xFF) as u8);
-        }
-        if chunk.len() > 3 && chunk[3] != b'=' {
-            result.push((n & 0xFF) as u8);
-        }
-    }
-    Ok(result)
+    // Strict base64 decode: rejects non-alphabet bytes (no silent zero-mapping),
+    // requires correct padding, and tolerates leading/trailing ASCII whitespace
+    // only (newlines from `to_b64` line wrapping callers, if any). Garbage in
+    // ciphertext now surfaces as `CredentialError::Malformed("base64: ...")`
+    // instead of an opaque AEAD authentication failure further down.
+    use base64::engine::{general_purpose::STANDARD, Engine};
+    let trimmed: String = s
+        .chars()
+        .filter(|c| !matches!(*c, '\n' | '\r' | ' ' | '\t'))
+        .collect();
+    STANDARD
+        .decode(trimmed.as_bytes())
+        .map_err(|e| format!("malformed base64: {e}"))
 }
 
 // ===========================================================================
 // Key derivation and nonce generation
 // ===========================================================================
 
-/// Derive a 256-bit encryption key from the machine identity.
-/// Uses SHA-256(machine-id) so the result is always exactly 32 bytes.
+/// Path to the on-disk persistent root key. Used as a last-resort source of
+/// keying material when neither the kernel keyring (Linux) nor
+/// `/etc/machine-id` are available — e.g. inside chroots, minimal containers,
+/// non-Linux dev boxes, or test harnesses. Override the file location with
+/// `COS_CREDENTIAL_ROOT_KEY_PATH` (used by tests).
 ///
-/// On Linux, the derived key is stored in the kernel keyring via `keyctl`
-/// so it stays in kernel memory (not swappable). Subsequent calls retrieve
-/// the cached key from the keyring instead of re-deriving.
+/// Lives next to the rest of the per-install state under `$COS_STATE_DIR`
+/// (aliased to `$COS_DATA_DIR` in this codebase via [`crate::paths::data_dir`]).
+fn credential_root_key_path() -> PathBuf {
+    if let Some(v) = std::env::var_os("COS_CREDENTIAL_ROOT_KEY_PATH") {
+        return PathBuf::from(v);
+    }
+    crate::paths::data_dir().join("credential-root.key")
+}
+
+/// Path the code consults for the machine identity. Tests override this with
+/// `COS_MACHINE_ID_PATH` to simulate "no machine-id" environments without
+/// touching `/etc/machine-id`.
+#[cfg(target_os = "linux")]
+fn machine_id_path() -> PathBuf {
+    if let Some(v) = std::env::var_os("COS_MACHINE_ID_PATH") {
+        return PathBuf::from(v);
+    }
+    PathBuf::from("/etc/machine-id")
+}
+
+/// Fill `buf` with cryptographically secure random bytes from the OS CSPRNG.
+/// Returns the underlying syscall error on failure.
+///
+///   * Linux:   `getrandom(2)`
+///   * macOS / BSD: `getentropy(3)` (limited to 256 bytes per call)
+///   * Other Unix: `/dev/urandom` blocking read
+fn os_random_bytes(buf: &mut [u8]) -> Result<(), std::io::Error> {
+    #[cfg(target_os = "linux")]
+    {
+        let ret =
+            unsafe { libc::getrandom(buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0) };
+        if ret as isize == buf.len() as isize {
+            return Ok(());
+        }
+        return Err(std::io::Error::last_os_error());
+    }
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd"
+    ))]
+    {
+        for chunk in buf.chunks_mut(256) {
+            let ret =
+                unsafe { libc::getentropy(chunk.as_mut_ptr() as *mut libc::c_void, chunk.len()) };
+            if ret != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+        return Ok(());
+    }
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd"
+    )))]
+    {
+        use std::io::Read;
+        let mut f = std::fs::File::open("/dev/urandom")?;
+        f.read_exact(buf)?;
+        Ok(())
+    }
+}
+
+/// Fill `buf` with cryptographically secure random bytes or panic.
+///
+/// Panicking is the deliberate failure mode for `OsRng` here: the alternative
+/// (silently falling back to a deterministic source) would be catastrophic for
+/// AES-GCM nonces and root key generation alike — see the audit notes on
+/// "predictable AES-GCM nonce". Any caller that needs randomness for crypto
+/// must not continue without it.
+fn os_random_bytes_or_panic(buf: &mut [u8]) {
+    if let Err(e) = os_random_bytes(buf) {
+        panic!("OsRng failed: {e}; refusing to fall back to a predictable source");
+    }
+}
+
+/// Read the persistent on-disk root key, returning its bytes if present and
+/// well-formed (exactly 32 bytes). Returns `None` for any read / size error.
+fn load_persistent_root_key() -> Option<[u8; 32]> {
+    load_persistent_root_key_at(&credential_root_key_path())
+}
+
+/// Inner of [`load_persistent_root_key`] — same logic but reads from a
+/// caller-supplied path. Exists so unit tests can exercise the persistence
+/// helpers against a per-test scratch path without mutating process-global
+/// env vars (which races other tests).
+fn load_persistent_root_key_at(path: &Path) -> Option<[u8; 32]> {
+    let bytes = fs::read(path).ok()?;
+    if bytes.len() != 32 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&bytes);
+    Some(out)
+}
+
+/// Generate a fresh 32-byte root key from the OS CSPRNG and persist it to
+/// `credential_root_key_path()` with mode `0600`, fsync the file, then fsync
+/// the parent directory.
+///
+/// Atomicity / TOCTOU: opens with `O_CREAT|O_EXCL` and `mode=0o600` so the
+/// file exists with restrictive permissions from the very first byte written
+/// (no post-write `chmod` race). If a sibling process raced us to create the
+/// file, we honor whatever they wrote and return that instead.
+fn generate_and_persist_root_key() -> [u8; 32] {
+    generate_and_persist_root_key_at(&credential_root_key_path())
+}
+
+/// Inner of [`generate_and_persist_root_key`] — writes to a caller-supplied
+/// path. Exists so unit tests can exercise the generator without mutating
+/// process-global env vars.
+fn generate_and_persist_root_key_at(path: &Path) -> [u8; 32] {
+    if let Some(parent) = path.parent() {
+        // Best-effort dir creation; the open() below surfaces real errors.
+        let _ = fs::create_dir_all(parent);
+    }
+
+    let mut key = [0u8; 32];
+    os_random_bytes_or_panic(&mut key);
+
+    // Atomic: O_CREAT|O_EXCL with mode 0o600 *at create time*.
+    #[cfg(unix)]
+    let open_result = {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+    };
+    #[cfg(not(unix))]
+    let open_result = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path);
+
+    match open_result {
+        Ok(mut f) => {
+            use std::io::Write;
+            if let Err(e) = f.write_all(&key) {
+                panic!("failed to write credential-root.key: {e}");
+            }
+            if let Err(e) = f.sync_all() {
+                panic!("failed to fsync credential-root.key: {e}");
+            }
+            // fsync parent dir so the create is durable.
+            if let Some(parent) = path.parent() {
+                if let Ok(dir) = std::fs::File::open(parent) {
+                    let _ = dir.sync_all();
+                }
+            }
+            key
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            // Race: another process wrote the key. Read what they wrote.
+            if let Some(k) = load_persistent_root_key_at(path) {
+                k
+            } else {
+                panic!("credential-root.key exists but cannot be read");
+            }
+        }
+        Err(e) => {
+            panic!(
+                "failed to create credential-root.key at {}: {}",
+                path.display(),
+                e
+            );
+        }
+    }
+}
+
+/// Derive a 256-bit encryption key.
+///
+/// Resolution order:
+///   1. Kernel session keyring (Linux only — fast in-memory cache).
+///   2. `/etc/machine-id` (Linux only — stable per-install identifier).
+///   3. Persistent on-disk root key at `${COS_STATE_DIR}/credential-root.key`,
+///      generated from the OS CSPRNG on first use, mode `0600`.
+///
+/// The previous behaviour of falling back to `sha256("claw-os-credential-store-key-v1")`
+/// when `/etc/machine-id` was unreadable has been removed — that constant was a
+/// universally known key that decrypted every credential store offline. We
+/// either find / derive a per-install secret or we generate a fresh random one
+/// and persist it. Panics on OsRng failure (audit: predictable nonce / key).
 fn derive_key() -> [u8; 32] {
     #[cfg(target_os = "linux")]
     {
-        // Try to read the key from kernel keyring first.
+        // 1. Kernel keyring cache (zero-cost when populated).
         if let Some(key) = keyring_read(b"cos-credential-key") {
             if key.len() == 32 {
                 let mut out = [0u8; 32];
@@ -686,46 +867,36 @@ fn derive_key() -> [u8; 32] {
             }
         }
 
-        // Derive from machine-id.
-        let derived = if let Ok(id) = fs::read_to_string("/etc/machine-id") {
-            sha256::hash(id.trim().as_bytes())
-        } else {
-            sha256::hash(b"claw-os-credential-store-key-v1")
-        };
-
-        // Store in kernel keyring for future use.
-        keyring_store(b"cos-credential-key", &derived);
-
-        return derived;
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    sha256::hash(b"claw-os-credential-store-key-v1")
-}
-
-/// Generate a random 12-byte nonce using getrandom(2) syscall.
-///
-/// getrandom(2) reads from the kernel's CSPRNG directly — no file descriptor
-/// needed, no /dev/urandom open, no TOCTOU race.
-fn generate_nonce() -> [u8; 12] {
-    let mut nonce = [0u8; 12];
-
-    #[cfg(target_os = "linux")]
-    {
-        let ret = unsafe { libc::getrandom(nonce.as_mut_ptr() as *mut libc::c_void, 12, 0) };
-        if ret == 12 {
-            return nonce;
+        // 2. Machine-id (per-install identifier).
+        if let Ok(id) = fs::read_to_string(machine_id_path()) {
+            let trimmed = id.trim();
+            if !trimmed.is_empty() {
+                let derived = sha256::hash(trimmed.as_bytes());
+                keyring_store(b"cos-credential-key", &derived);
+                return derived;
+            }
         }
     }
 
-    // Fallback: timestamp + counter (non-Linux or getrandom unavailable).
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    nonce[..8].copy_from_slice(&now.as_nanos().to_le_bytes()[..8]);
-    static CTR: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-    let c = CTR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    nonce[8..12].copy_from_slice(&c.to_le_bytes());
+    // 3. Persistent on-disk root key (any platform).
+    let key = load_persistent_root_key().unwrap_or_else(generate_and_persist_root_key);
+
+    #[cfg(target_os = "linux")]
+    keyring_store(b"cos-credential-key", &key);
+
+    key
+}
+
+/// Generate a random 12-byte nonce using the OS CSPRNG.
+///
+/// **Panics** if the CSPRNG syscall fails — there is no safe fallback. AES-GCM
+/// catastrophically loses confidentiality and authenticity if a (key, nonce)
+/// pair is reused, and the legacy fallback path (`now_nanos || counter`)
+/// trivially collided across process restarts and across cooperating
+/// processes. Failing loudly is the correct behaviour.
+fn generate_nonce() -> [u8; 12] {
+    let mut nonce = [0u8; 12];
+    os_random_bytes_or_panic(&mut nonce);
     nonce
 }
 
@@ -810,14 +981,30 @@ fn keyring_read(description: &[u8]) -> Option<Vec<u8>> {
 // ===========================================================================
 
 /// Key used by the legacy XOR obfuscation scheme.
+///
+/// Historically this fell back to the literal string
+/// `"claw-os-credential-store-key-v1"` when `/etc/machine-id` was unreadable,
+/// which meant any attacker could trivially decrypt legacy XOR credentials on
+/// any host without a machine-id (containers, chroots, non-Linux). That
+/// hard-coded fallback has been removed: callers now derive the same per-
+/// install secret used by AES-GCM, so the legacy XOR scheme is at least no
+/// weaker than `derive_key()` itself.
 fn legacy_obfuscation_key() -> Vec<u8> {
     #[cfg(target_os = "linux")]
     {
-        if let Ok(id) = fs::read_to_string("/etc/machine-id") {
-            return id.trim().as_bytes().to_vec();
+        if let Ok(id) = fs::read_to_string(machine_id_path()) {
+            let trimmed = id.trim();
+            if !trimmed.is_empty() {
+                return trimmed.as_bytes().to_vec();
+            }
         }
     }
-    b"claw-os-credential-store-key-v1".to_vec()
+    // No machine-id: fall through to the per-install random root key. Note
+    // that legacy-XOR credentials predating this codebase were created with
+    // the machine-id key, so on machines without machine-id (which never had
+    // a working legacy key to begin with) decryption will simply fail loudly
+    // rather than succeed with the universal hard-coded literal.
+    derive_key().to_vec()
 }
 
 /// XOR-based deobfuscation (symmetric — same function encrypts and decrypts).
@@ -833,7 +1020,7 @@ fn legacy_xor(data: &[u8]) -> Vec<u8> {
 // Credential and bundle data structures
 // ===========================================================================
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct StoredCredential {
     name: String,
     /// Namespace this credential belongs to.
@@ -855,6 +1042,33 @@ struct StoredCredential {
     /// The command should output a new value to stdout.
     #[serde(default)]
     refresh_cmd: Option<String>,
+}
+
+// Manual Debug: never include the encrypted blob or nonce so accidental
+// `tracing::debug!(?cred)` / `dbg!(&cred)` calls cannot regress into leaking
+// ciphertext or correlatable metadata into logs. The encrypted value would
+// only be useful if the operator also leaked the root key, but defense in
+// depth is cheap and the audit explicitly called this out.
+impl std::fmt::Debug for StoredCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StoredCredential")
+            .field("name", &self.name)
+            .field("namespace", &self.namespace)
+            .field("value_b64", &"***")
+            .field("nonce_b64", &self.nonce_b64.as_ref().map(|_| "***"))
+            .field("min_tier", &self.min_tier)
+            .field("stored_at", &self.stored_at)
+            .field("stored_by", &self.stored_by)
+            .field("expires_at", &self.expires_at)
+            .field("refresh_cmd", &self.refresh_cmd)
+            .finish()
+    }
+}
+
+impl std::fmt::Display for StoredCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "credential({}/{})", self.namespace, self.name)
+    }
 }
 
 /// A bundle manifest — a named group of credential keys.
@@ -959,6 +1173,226 @@ fn is_expired(expires_at: &Option<String>) -> bool {
         }
     }
     false
+}
+
+// ===========================================================================
+// Tier comparison
+// ===========================================================================
+
+/// Returns `true` iff a session running at `session_tier` has *enough*
+/// privilege to access a credential whose minimum tier is `min_tier`.
+///
+/// **Tier semantics, easy to misread:** lower number = MORE privileged.
+///   * 0 = ROOT      (strongest)
+///   * 1 = OPERATE
+///   * 2 = APP
+///   * 3 = SANDBOX   (weakest)
+///
+/// Therefore a session is "strong enough" exactly when its number is
+/// less-than-or-equal-to the credential's `min_tier`.
+fn tier_grants_access(session_tier: u8, min_tier: u8) -> bool {
+    session_tier <= min_tier
+}
+
+/// Resolve the *effective* tier for the current request, fail-closed.
+///
+/// Previous behaviour was `policy::current_tier().unwrap_or(0)` which silently
+/// granted ROOT whenever the policy registry could not be loaded — a clear
+/// fail-open default for a privilege check. We now distinguish:
+///
+///   * No `COS_SESSION` env var at all → direct interactive CLI, tier 0
+///     (matches historical UX where a human at a shell is treated as root on
+///     their own machine).
+///   * `COS_SESSION` set but the registry lookup fails or returns no tier →
+///     `u8::MAX`, i.e. the weakest possible tier. This causes
+///     [`tier_grants_access`] to deny everything except `min_tier == u8::MAX`
+///     credentials (none exist in practice), so a missing/corrupt registry can
+///     never silently elevate.
+fn effective_session_tier() -> u8 {
+    match std::env::var("COS_SESSION") {
+        Err(_) => 0,
+        Ok(_) => policy::current_tier().unwrap_or(u8::MAX),
+    }
+}
+
+// ===========================================================================
+// Atomic, 0600-from-the-start credential file writes
+// ===========================================================================
+
+/// Path of the per-credential atomic-write lock sentinel:
+/// `<path>.lock`. Held briefly by [`write_credential_atomic`] to serialize
+/// concurrent tmp+rename writers against the same data file.
+fn lock_sentinel_path(path: &Path) -> PathBuf {
+    let mut s: std::ffi::OsString = path.as_os_str().to_os_string();
+    s.push(".lock");
+    PathBuf::from(s)
+}
+
+/// Path of the per-credential **refresh** lock sentinel:
+/// `<path>.refresh.lock`. Held for the duration of an auto-refresh attempt
+/// (executing the OAuth round-trip, re-checking expiry, writing the rotated
+/// token). Distinct from [`lock_sentinel_path`] so that the OAuth refresh
+/// command — which itself shells out to `cos credential store` in a child
+/// process and therefore needs the *write* lock — cannot deadlock against the
+/// parent's *refresh* lock. See the HIGH "refresh-token cannibalisation race"
+/// audit finding.
+fn refresh_sentinel_path(path: &Path) -> PathBuf {
+    let mut s: std::ffi::OsString = path.as_os_str().to_os_string();
+    s.push(".refresh.lock");
+    PathBuf::from(s)
+}
+
+/// Run `f` while holding an exclusive `flock(2)` on the per-credential
+/// refresh sentinel (`<path>.refresh.lock`). Cleans up the lock on success or
+/// failure (the OS releases it automatically when `lock_file` is dropped).
+///
+/// Used to serialize auto-refresh attempts for a credential, ensuring only
+/// one OAuth round-trip runs at a time per credential id.
+fn with_refresh_lock<F, T>(path: &Path, f: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String>,
+{
+    use std::fs::OpenOptions;
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+    }
+    let lock_path = refresh_sentinel_path(path);
+    let lock_file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(|e| format!("open credential refresh lock {}: {e}", lock_path.display()))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        let ret = unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX) };
+        if ret != 0 {
+            return Err(format!(
+                "flock LOCK_EX {}: {}",
+                lock_path.display(),
+                std::io::Error::last_os_error()
+            ));
+        }
+    }
+
+    let result = f();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        unsafe {
+            libc::flock(lock_file.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+    drop(lock_file);
+    result
+}
+
+/// Run `f` while holding an exclusive `flock(2)` on the per-credential
+/// atomic-write sentinel (`<path>.lock`). Brief; used only by
+/// [`write_credential_atomic`] to serialize tmp+rename writers.
+fn with_write_lock<F, T>(path: &Path, f: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String>,
+{
+    use std::fs::OpenOptions;
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+    }
+    let lock_path = lock_sentinel_path(path);
+    let lock_file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(|e| format!("open credential write lock {}: {e}", lock_path.display()))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        let ret = unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX) };
+        if ret != 0 {
+            return Err(format!(
+                "flock LOCK_EX {}: {}",
+                lock_path.display(),
+                std::io::Error::last_os_error()
+            ));
+        }
+    }
+
+    let result = f();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        unsafe {
+            libc::flock(lock_file.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+    drop(lock_file);
+    result
+}
+
+/// Atomically write a credential JSON file with mode `0600` set *at creation
+/// time* — there is no post-write `chmod` window during which a same-uid
+/// reader could open the file with default umask permissions (the MEDIUM
+/// "credential file perms applied AFTER write" finding).
+///
+/// Sequence (Unix):
+///   1. Acquire `flock(LOCK_EX)` on the sibling `.lock` sentinel.
+///   2. Remove any stale `<path>.tmp` left by a previous crash.
+///   3. `open(O_WRONLY|O_CREAT|O_EXCL, 0600)` the tmp file.
+///   4. Write payload, then `fsync` the tmp file.
+///   5. `rename(tmp, path)` — atomic on same filesystem.
+///   6. `fsync` the parent directory so the rename hits disk.
+fn write_credential_atomic(path: &Path, data: &str) -> Result<(), String> {
+    with_write_lock(path, || write_credential_atomic_unlocked(path, data))
+}
+
+/// Inner of [`write_credential_atomic`] — does the tmp+rename+fsync dance but
+/// does NOT acquire the per-credential write lock. Caller is responsible for
+/// synchronization.
+fn write_credential_atomic_unlocked(path: &Path, data: &str) -> Result<(), String> {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("credential path has no parent: {}", path.display()))?;
+    fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+
+    let tmp_path = path.with_extension("tmp");
+    let _ = fs::remove_file(&tmp_path);
+
+    let mut opts = OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut tmp_file = opts
+        .open(&tmp_path)
+        .map_err(|e| format!("open {}: {e}", tmp_path.display()))?;
+
+    tmp_file
+        .write_all(data.as_bytes())
+        .map_err(|e| format!("write {}: {e}", tmp_path.display()))?;
+    tmp_file
+        .sync_all()
+        .map_err(|e| format!("fsync {}: {e}", tmp_path.display()))?;
+    drop(tmp_file);
+
+    fs::rename(&tmp_path, path).map_err(|e| format!("rename {}: {e}", path.display()))?;
+
+    if let Ok(dir) = std::fs::File::open(parent) {
+        let _ = dir.sync_all();
+    }
+    Ok(())
 }
 
 // ===========================================================================
@@ -1079,15 +1513,9 @@ fn cmd_store(args: &[String]) -> Result<Value, String> {
     let path = dir.join(format!("{name}.json"));
     let data =
         serde_json::to_string_pretty(&cred).map_err(|e| format!("failed to serialize: {e}"))?;
-    crate::filelock::write_locked(&path, &data)
+    // Atomic write with mode 0600 from creation time + fsync of tmp & parent.
+    write_credential_atomic(&path, &data)
         .map_err(|e| format!("failed to write credential: {e}"))?;
-
-    // Set restrictive file permissions on Unix
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
-    }
 
     let mut result = json!({
         "stored": name,
@@ -1103,14 +1531,44 @@ fn cmd_store(args: &[String]) -> Result<Value, String> {
 
 /// Load a credential value.
 ///
-/// Usage: cos credential load <name> [--namespace NS]
+/// Usage: cos credential load <name> [--namespace NS] [--fd N]
+///
+/// `--fd N` writes the raw plaintext bytes to file descriptor `N` (no
+/// trailing newline) and omits the `"value"` field from the returned JSON,
+/// so callers can capture secrets without ever piping them through
+/// stdout / shell history / IPC log sinks. See the audit's MEDIUM "secret
+/// values returned in JSON cross IPC boundary" finding.
 fn cmd_load(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::SECRET_READ, Scope::wild()).map_err(|v| v.to_string())?;
 
     let (ns_opt, rest) = parse_namespace_flag(args);
     let namespace = ns_opt.unwrap_or_else(|| "default".into());
 
-    let name = rest.first().ok_or("usage: cos credential load <name>")?;
+    // Parse --fd N (positional name otherwise).
+    let mut fd_target: Option<i32> = None;
+    let mut positional: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i].as_str() {
+            "--fd" if i + 1 < rest.len() => {
+                fd_target = Some(
+                    rest[i + 1]
+                        .parse::<i32>()
+                        .map_err(|_| "--fd must be a non-negative integer".to_string())?,
+                );
+                if fd_target.unwrap() < 0 {
+                    return Err("--fd must be a non-negative integer".into());
+                }
+                i += 2;
+            }
+            _ => {
+                positional.push(rest[i].clone());
+                i += 1;
+            }
+        }
+    }
+
+    let name = positional.first().ok_or("usage: cos credential load <name>")?;
     let path = namespace_dir(&namespace).join(format!("{name}.json"));
 
     if !path.is_file() {
@@ -1123,67 +1581,96 @@ fn cmd_load(args: &[String]) -> Result<Value, String> {
     let cred: StoredCredential =
         serde_json::from_str(&data).map_err(|e| format!("failed to parse credential: {e}"))?;
 
-    // Check tier requirement
-    let current_tier = policy::current_tier().unwrap_or(0);
-    if current_tier > cred.min_tier {
+    // Tier check (named helper makes the direction obvious; fail-closed on
+    // missing/corrupt policy registry).
+    let current_tier = effective_session_tier();
+    if !tier_grants_access(current_tier, cred.min_tier) {
         return Err(format!(
-            "insufficient tier: credential '{}' requires tier {} or higher, current session has tier {}",
+            "insufficient tier: credential '{}' requires tier {} or stronger (lower number), current session has tier {}",
             name, cred.min_tier, current_tier
         ));
     }
 
-    // Check expiry
+    // Check expiry.
     if is_expired(&cred.expires_at) {
-        // Try auto-refresh if refresh_cmd is configured
         if let Some(ref refresh_cmd) = cred.refresh_cmd {
-            match execute_refresh(refresh_cmd) {
-                Ok(new_value) => {
-                    // Re-store the credential with new value and new expiry
-                    let ttl = compute_original_ttl(&cred);
-                    let (new_value_b64, new_nonce_b64) = encrypt_value(new_value.trim().as_bytes());
-                    let now = chrono::Utc::now();
-                    let new_expires = ttl.map(|secs| {
-                        let exp = now + chrono::Duration::seconds(secs);
-                        exp.format("%Y-%m-%dT%H:%M:%SZ").to_string()
-                    });
+            // Serialize concurrent auto-refresh attempts per credential id so
+            // we don't cannibalise a rotating refresh token (audit HIGH
+            // "refresh-token cannibalisation race"). Inside the refresh lock
+            // we re-read the credential and re-check expiry; if a sibling
+            // refresh landed while we were waiting, we use its result.
+            //
+            // The refresh sentinel is a SEPARATE file from the atomic-write
+            // sentinel so that the OAuth refresh sub-process — which itself
+            // calls `cos credential store` and therefore needs the write lock
+            // — does not deadlock against this lock.
+            return with_refresh_lock(&path, || {
+                let fresh_data = crate::filelock::read_locked(&path)
+                    .map_err(|e| format!("failed to re-read credential: {e}"))?
+                    .ok_or_else(|| {
+                        format!("credential '{name}' disappeared during refresh")
+                    })?;
+                let fresh_cred: StoredCredential = serde_json::from_str(&fresh_data)
+                    .map_err(|e| format!("failed to parse credential: {e}"))?;
 
-                    let updated_cred = StoredCredential {
-                        name: cred.name.clone(),
-                        namespace: cred.namespace.clone(),
-                        value_b64: new_value_b64,
-                        nonce_b64: Some(new_nonce_b64),
-                        min_tier: cred.min_tier,
-                        stored_at: cred.stored_at.clone(),
-                        stored_by: cred.stored_by.clone(),
-                        expires_at: new_expires.clone(),
-                        refresh_cmd: cred.refresh_cmd.clone(),
-                    };
-
-                    // Write updated credential back
-                    let data = serde_json::to_string_pretty(&updated_cred)
-                        .map_err(|e| format!("failed to serialize: {e}"))?;
-                    crate::filelock::write_locked(&path, &data)
-                        .map_err(|e| format!("failed to write refreshed credential: {e}"))?;
-
-                    return Ok(json!({
-                        "name": name,
-                        "namespace": namespace,
-                        "value": new_value.trim(),
-                        "min_tier": cred.min_tier,
-                        "refreshed": true,
-                        "expires_at": new_expires,
-                    }));
+                if !is_expired(&fresh_cred.expires_at) {
+                    // Another caller already refreshed under the lock.
+                    let value_bytes = decrypt_value(&fresh_cred)?;
+                    let value = String::from_utf8(value_bytes)
+                        .map_err(|e| format!("credential is not valid UTF-8: {e}"))?;
+                    return Ok(build_load_result(
+                        name,
+                        &fresh_cred,
+                        value,
+                        Some(false),
+                        fd_target,
+                    )?);
                 }
-                Err(e) => {
-                    return Err(format!(
-                        "credential '{}' expired and auto-refresh failed: {}",
-                        name, e
-                    ));
-                }
-            }
+
+                let refresh_cmd_owned = fresh_cred
+                    .refresh_cmd
+                    .clone()
+                    .unwrap_or_else(|| refresh_cmd.clone());
+                let new_value = execute_refresh(&refresh_cmd_owned).map_err(|e| {
+                    format!("credential '{name}' expired and auto-refresh failed: {e}")
+                })?;
+
+                let ttl = compute_original_ttl(&fresh_cred);
+                let (new_value_b64, new_nonce_b64) =
+                    encrypt_value(new_value.trim().as_bytes());
+                let now = chrono::Utc::now();
+                let new_expires = ttl.map(|secs| {
+                    let exp = now + chrono::Duration::seconds(secs);
+                    exp.format("%Y-%m-%dT%H:%M:%SZ").to_string()
+                });
+
+                let updated_cred = StoredCredential {
+                    name: fresh_cred.name.clone(),
+                    namespace: fresh_cred.namespace.clone(),
+                    value_b64: new_value_b64,
+                    nonce_b64: Some(new_nonce_b64),
+                    min_tier: fresh_cred.min_tier,
+                    stored_at: fresh_cred.stored_at.clone(),
+                    stored_by: fresh_cred.stored_by.clone(),
+                    expires_at: new_expires.clone(),
+                    refresh_cmd: fresh_cred.refresh_cmd.clone(),
+                };
+
+                let serialized = serde_json::to_string_pretty(&updated_cred)
+                    .map_err(|e| format!("failed to serialize: {e}"))?;
+                // Atomic 0600 write + fsync. The atomic-write lock is a
+                // distinct sentinel from the refresh lock we hold, so this
+                // call acquires its own (uncontended) lock and does not
+                // deadlock with the surrounding `with_refresh_lock`.
+                write_credential_atomic(&path, &serialized)
+                    .map_err(|e| format!("failed to write refreshed credential: {e}"))?;
+
+                let trimmed = new_value.trim().to_string();
+                build_load_result(name, &updated_cred, trimmed, Some(true), fd_target)
+            });
         }
 
-        // No refresh_cmd — return expired error (existing behavior)
+        // No refresh_cmd — return expired error (existing behavior).
         return Err(serde_json::to_string(&json!({
             "error": format!("credential '{}' has expired", name),
             "expired": true,
@@ -1197,12 +1684,80 @@ fn cmd_load(args: &[String]) -> Result<Value, String> {
     let value = String::from_utf8(value_bytes)
         .map_err(|e| format!("credential is not valid UTF-8: {e}"))?;
 
-    Ok(json!({
+    build_load_result(name, &cred, value, None, fd_target)
+}
+
+/// Build the JSON response for `cmd_load` (or its auto-refresh path).
+///
+/// If `fd_target` is `Some(n)`, the plaintext is written raw (no trailing
+/// newline) to file descriptor `n` and the `"value"` key is replaced by
+/// `"value_fd": n` so the secret never crosses the IPC / stdout boundary.
+/// Otherwise the value is embedded in the JSON as before.
+fn build_load_result(
+    name: &str,
+    cred: &StoredCredential,
+    value: String,
+    refreshed: Option<bool>,
+    fd_target: Option<i32>,
+) -> Result<Value, String> {
+    let mut result = json!({
         "name": name,
         "namespace": cred.namespace,
-        "value": value,
         "min_tier": cred.min_tier,
-    }))
+    });
+
+    if let Some(refreshed_flag) = refreshed {
+        result["refreshed"] = json!(refreshed_flag);
+        if let Some(ref exp) = cred.expires_at {
+            result["expires_at"] = json!(exp);
+        }
+    }
+
+    match fd_target {
+        Some(fd) => {
+            write_value_to_fd(fd, value.as_bytes())?;
+            result["value_fd"] = json!(fd);
+        }
+        None => {
+            result["value"] = json!(value);
+        }
+    }
+    Ok(result)
+}
+
+/// Write `bytes` raw (no newline) to file descriptor `fd`. Used by the
+/// `--fd N` mode of `cmd_load` so secrets can be handed off to a caller
+/// via an out-of-band fd that the caller has set up specifically for the
+/// transfer — never via stdout (where shell history / pipes / audit sinks
+/// can capture them).
+#[cfg(unix)]
+fn write_value_to_fd(fd: i32, bytes: &[u8]) -> Result<(), String> {
+    let mut remaining = bytes;
+    while !remaining.is_empty() {
+        let n = unsafe {
+            libc::write(
+                fd,
+                remaining.as_ptr() as *const libc::c_void,
+                remaining.len(),
+            )
+        };
+        if n < 0 {
+            return Err(format!(
+                "failed to write to fd {fd}: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        if n == 0 {
+            return Err(format!("write to fd {fd} returned 0 bytes"));
+        }
+        remaining = &remaining[(n as usize)..];
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn write_value_to_fd(_fd: i32, _bytes: &[u8]) -> Result<(), String> {
+    Err("--fd is only supported on Unix".into())
 }
 
 /// Revoke (delete) a credential.
@@ -1719,32 +2274,61 @@ fn oauth_refresh_microsoft(namespace: &str) -> Result<Value, String> {
 // HTTP and encoding helpers
 // ===========================================================================
 
-/// Simple URL-encoded POST using stdlib only.
-fn http_post(url: &str, body: &str, content_type: &str) -> Result<String, String> {
-    use std::process::{Command, Stdio};
+/// Build the `curl` `Command` for an OAuth token POST.
+///
+/// Notably this builder does **not** accept the request body and does not put
+/// any secret into argv. The body is supplied later via stdin
+/// (`--data-binary @-`) so that `client_secret`, `refresh_token`, etc. cannot
+/// be read by any same-uid process via `/proc/<pid>/cmdline` (the HIGH
+/// "OAuth client_secret / refresh_token leak via argv" audit finding).
+fn build_curl_post(url: &str, content_type: &str) -> std::process::Command {
+    let mut cmd = std::process::Command::new("curl");
+    cmd.args([
+        "-s",
+        "-S",
+        "-X",
+        "POST",
+        "-H",
+        &format!("Content-Type: {content_type}"),
+        "--data-binary",
+        "@-", // read body from stdin
+        "--connect-timeout",
+        "10",
+        "--max-time",
+        "30",
+        url,
+    ]);
+    cmd
+}
 
-    // Use curl since we can't do HTTP from Rust without dependencies
-    let output = Command::new("curl")
-        .args([
-            "-s",
-            "-S",
-            "-X",
-            "POST",
-            "-H",
-            &format!("Content-Type: {content_type}"),
-            "-d",
-            body,
-            "--connect-timeout",
-            "10",
-            "--max-time",
-            "30",
-            url,
-        ])
-        .stdin(Stdio::null())
+/// Simple URL-encoded POST. Body is piped to `curl` on stdin so the secret
+/// never appears in argv.
+fn http_post(url: &str, body: &str, content_type: &str) -> Result<String, String> {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut cmd = build_curl_post(url, content_type);
+    cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|e| format!("failed to execute curl: {e}"))?;
+        .stderr(Stdio::piped());
+
+    let mut child = cmd.spawn().map_err(|e| format!("failed to execute curl: {e}"))?;
+
+    // Write body to stdin, then close it so curl knows the body is complete.
+    {
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| "failed to open curl stdin".to_string())?;
+        stdin
+            .write_all(body.as_bytes())
+            .map_err(|e| format!("failed to write request body to curl stdin: {e}"))?;
+    }
+    drop(child.stdin.take());
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("failed to wait for curl: {e}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2402,5 +2986,319 @@ mod tests {
         let r = cmd_oauth_refresh(&[]);
         assert!(r.is_err());
         assert!(r.unwrap_err().contains("usage"));
+    }
+
+    // ---- Persistent root key (CRITICAL audit fix) -------------------------
+
+    /// Verifies the CRITICAL fix: when `/etc/machine-id` is unreadable AND no
+    /// `credential-root.key` exists yet, the store must generate a random
+    /// 32-byte key via the OS CSPRNG, persist it with mode 0600, and reuse it
+    /// on subsequent calls. The previous behaviour was to silently fall back
+    /// to `sha256("claw-os-credential-store-key-v1")` — a universally-known
+    /// key that decrypts every credential store offline.
+    #[test]
+    fn test_machine_id_missing_falls_back_to_persistent_random_key() {
+        perms_init();
+        setup();
+
+        // Use a per-test scratch dir + the `*_at` helpers so this test does
+        // NOT mutate any process-global env vars (which would race the other
+        // ~80 credential tests).
+        let dir = std::env::temp_dir().join(format!(
+            "cos-cred-rootkey-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let key_path = dir.join("credential-root.key");
+        let _ = fs::remove_file(&key_path);
+
+        // 1. No persistent key yet.
+        assert!(
+            load_persistent_root_key_at(&key_path).is_none(),
+            "key file must not exist before first generate call"
+        );
+
+        // 2. Generate + persist (this is what `derive_key` calls when neither
+        //    the keyring nor machine-id are available).
+        let key1 = generate_and_persist_root_key_at(&key_path);
+        assert_eq!(key1.len(), 32, "root key must be exactly 32 bytes");
+        assert!(
+            key1.iter().any(|&b| b != 0),
+            "generated key must not be all zeros (CSPRNG sanity)"
+        );
+
+        // 3. The on-disk file matches: 32 bytes exactly, mode 0o600.
+        let bytes = fs::read(&key_path).expect("key file must exist");
+        assert_eq!(bytes.len(), 32, "persisted key must be 32 bytes");
+        assert_eq!(bytes, &key1[..], "on-disk bytes must equal returned key");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let meta = fs::metadata(&key_path).unwrap();
+            let mode = meta.permissions().mode() & 0o777;
+            assert_eq!(
+                mode, 0o600,
+                "persisted key must be mode 0600 from creation (no chmod race)"
+            );
+        }
+
+        // 4. Second call returns the SAME key from disk.
+        let key2 = load_persistent_root_key_at(&key_path).expect("key should load after generate");
+        assert_eq!(key1, key2, "persisted key must round-trip");
+
+        // 5. A redundant `generate_and_persist_root_key_at()` call (e.g. from
+        //    a racing process) MUST NOT overwrite the existing key — it must
+        //    fall back to reading whatever is already there.
+        let key3 = generate_and_persist_root_key_at(&key_path);
+        assert_eq!(
+            key1, key3,
+            "repeated generate must not overwrite an existing on-disk key"
+        );
+
+        let _ = fs::remove_file(&key_path);
+        let _ = fs::remove_dir(&dir);
+    }
+
+    // ---- Refresh serialization (HIGH audit fix) ---------------------------
+
+    /// Verifies the HIGH fix: concurrent auto-refresh attempts on the same
+    /// credential must be serialized via a per-credential flock so that two
+    /// callers cannot both call the OAuth endpoint and cannibalise each
+    /// other's rotated refresh token.
+    ///
+    /// We exercise the primitive (`with_refresh_lock`) directly with N
+    /// threads, asserting that the maximum observed concurrency inside the
+    /// critical section is exactly 1.
+    #[test]
+    fn test_concurrent_refresh_serialized() {
+        perms_init();
+        setup();
+
+        let name = unique_name("refresh-serialized");
+        let path = namespace_dir("default").join(format!("{name}.json"));
+        let _ = fs::create_dir_all(path.parent().unwrap());
+        let _ = fs::remove_file(refresh_sentinel_path(&path));
+
+        use std::sync::atomic::AtomicI64;
+        use std::sync::Arc;
+        let in_flight = Arc::new(AtomicI64::new(0));
+        let max_in_flight = Arc::new(AtomicI64::new(0));
+        let calls = Arc::new(AtomicU32::new(0));
+
+        let n_threads = 8usize;
+        let mut handles = Vec::with_capacity(n_threads);
+        for _ in 0..n_threads {
+            let in_flight = in_flight.clone();
+            let max_in_flight = max_in_flight.clone();
+            let calls = calls.clone();
+            let p = path.clone();
+            handles.push(std::thread::spawn(move || {
+                with_refresh_lock(&p, || {
+                    let cur = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                    let mut prev = max_in_flight.load(Ordering::SeqCst);
+                    while cur > prev {
+                        match max_in_flight.compare_exchange(
+                            prev,
+                            cur,
+                            Ordering::SeqCst,
+                            Ordering::SeqCst,
+                        ) {
+                            Ok(_) => break,
+                            Err(p) => prev = p,
+                        }
+                    }
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    // Hold the critical section long enough that any race
+                    // would surface as concurrent observed > 1.
+                    std::thread::sleep(std::time::Duration::from_millis(30));
+                    in_flight.fetch_sub(1, Ordering::SeqCst);
+                    Ok::<(), String>(())
+                })
+                .unwrap();
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            n_threads as u32,
+            "every thread must enter the critical section exactly once"
+        );
+        assert_eq!(
+            max_in_flight.load(Ordering::SeqCst),
+            1,
+            "with_refresh_lock must serialize: max concurrent must be 1"
+        );
+
+        let _ = fs::remove_file(refresh_sentinel_path(&path));
+    }
+
+    // ---- OAuth argv leak (HIGH audit fix) ---------------------------------
+
+    /// Verifies the HIGH fix: the curl command used for OAuth refresh must
+    /// NOT receive the request body (containing `client_secret` and
+    /// `refresh_token`) on its argv, where any same-uid process could read it
+    /// from `/proc/<pid>/cmdline`. The body must come from stdin via
+    /// `--data-binary @-`.
+    #[test]
+    fn test_oauth_refresh_no_argv_leak() {
+        perms_init();
+        let secret = "super-secret-refresh-token-DO-NOT-LEAK-ME";
+        // The builder, by design, accepts only URL + content type — there is
+        // no parameter through which the body could reach argv. We verify
+        // both the design (no body parameter) and the observable contract
+        // (no -d / --data, body via stdin only).
+        let cmd = build_curl_post(
+            "https://oauth2.googleapis.com/token",
+            "application/x-www-form-urlencoded",
+        );
+        let argv: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let argv_joined = argv.join(" ");
+
+        assert!(
+            !argv_joined.contains(secret),
+            "argv must never contain a secret; argv = {argv_joined}"
+        );
+        assert!(
+            !argv.iter().any(|a| a == "-d"),
+            "argv must not use `-d` (puts body in argv); argv = {argv:?}"
+        );
+        assert!(
+            !argv.iter().any(|a| a == "--data"),
+            "argv must not use `--data` (puts body in argv); argv = {argv:?}"
+        );
+        let stdin_pair = argv.windows(2).find(|w| w[0] == "--data-binary");
+        assert_eq!(
+            stdin_pair.map(|w| w[1].as_str()),
+            Some("@-"),
+            "argv must use `--data-binary @-` (body read from stdin); argv = {argv:?}"
+        );
+    }
+
+    // ---- Debug masking (MEDIUM audit fix) --------------------------------
+
+    /// Verifies the MEDIUM fix: Debug / Display impls for `StoredCredential`
+    /// must never echo the encrypted blob or its nonce, so an accidental
+    /// `tracing::debug!(?cred)` cannot regress into leaking credential
+    /// material through log sinks.
+    #[test]
+    fn stored_credential_debug_display_masks_secret() {
+        perms_init();
+        let cred = StoredCredential {
+            name: "api-key".into(),
+            namespace: "default".into(),
+            value_b64: "VERY-SECRET-CIPHERTEXT-NEVER-LOG-ME".into(),
+            nonce_b64: Some("very-secret-nonce".into()),
+            min_tier: 0,
+            stored_at: "2026-01-01T00:00:00Z".into(),
+            stored_by: None,
+            expires_at: None,
+            refresh_cmd: None,
+        };
+        let dbg = format!("{cred:?}");
+        assert!(
+            !dbg.contains("VERY-SECRET-CIPHERTEXT"),
+            "Debug must mask value_b64: {dbg}"
+        );
+        assert!(
+            !dbg.contains("very-secret-nonce"),
+            "Debug must mask nonce_b64: {dbg}"
+        );
+        assert!(dbg.contains("***"), "Debug must show masking marker: {dbg}");
+        let disp = format!("{cred}");
+        assert!(
+            !disp.contains("VERY-SECRET-CIPHERTEXT"),
+            "Display must not echo ciphertext: {disp}"
+        );
+        assert_eq!(disp, "credential(default/api-key)");
+    }
+
+    // ---- Tier comparison semantics (HIGH audit fix) ----------------------
+
+    /// Pins the semantic of the renamed tier comparator. Lower number ==
+    /// more privileged. ROOT (0) accesses everything; SANDBOX (3) accesses
+    /// only what's explicitly tier-3-allowed.
+    #[test]
+    fn tier_grants_access_semantics_pinned() {
+        perms_init();
+        // Same-tier always grants.
+        assert!(tier_grants_access(0, 0));
+        assert!(tier_grants_access(1, 1));
+        assert!(tier_grants_access(2, 2));
+        assert!(tier_grants_access(3, 3));
+        // Stronger session (lower number) accesses weaker-tier creds.
+        assert!(tier_grants_access(0, 1));
+        assert!(tier_grants_access(0, 3));
+        assert!(tier_grants_access(2, 3));
+        // Weaker session (higher number) CANNOT access stronger-tier creds.
+        assert!(!tier_grants_access(1, 0));
+        assert!(!tier_grants_access(2, 0));
+        assert!(!tier_grants_access(3, 0));
+        assert!(!tier_grants_access(3, 2));
+        // u8::MAX (fail-closed "weakest possible") accesses nothing
+        // except a (non-existent) u8::MAX cred.
+        assert!(!tier_grants_access(u8::MAX, 0));
+        assert!(!tier_grants_access(u8::MAX, 3));
+    }
+
+    // ---- from_b64 strictness (LOW audit fix) -----------------------------
+
+    /// Verifies the LOW fix: `from_b64` now rejects garbage instead of
+    /// silently mapping non-alphabet bytes to 'A' (which surfaced later as
+    /// an opaque AES-GCM authentication failure).
+    #[test]
+    fn from_b64_rejects_garbage() {
+        perms_init();
+        assert!(from_b64("###@@@").is_err(), "non-alphabet bytes must error");
+        assert!(
+            from_b64("AAAA!!!!").is_err(),
+            "embedded junk must be rejected"
+        );
+        // Valid base64 still round-trips.
+        let round_trip = from_b64(&to_b64(b"hello world")).unwrap();
+        assert_eq!(round_trip, b"hello world");
+    }
+
+    // ---- --fd N out-of-band value (MEDIUM audit fix) ---------------------
+
+    /// Verifies the MEDIUM fix: `cmd_load --fd N` writes the plaintext to
+    /// the specified file descriptor and omits the `"value"` field from the
+    /// JSON return, so logging the response payload cannot leak the secret.
+    #[cfg(unix)]
+    #[test]
+    fn cmd_load_fd_writes_value_to_fd_and_omits_from_json() {
+        perms_init();
+        setup();
+        let name = unique_name("load-fd");
+        cmd_store(&[name.clone(), "fd-secret-xyz".into()]).unwrap();
+
+        // pipe(2) gives us a reader/writer pair we control completely.
+        let mut fds = [0i32; 2];
+        let r = unsafe { libc::pipe(fds.as_mut_ptr()) };
+        assert_eq!(r, 0, "pipe(2) failed");
+        let rfd = fds[0];
+        let wfd = fds[1];
+
+        let result = cmd_load(&[name.clone(), "--fd".into(), wfd.to_string()]).unwrap();
+        unsafe { libc::close(wfd) };
+
+        assert!(
+            result.get("value").is_none(),
+            "value must not be in JSON when --fd is used: {result}"
+        );
+        assert_eq!(result["value_fd"], wfd);
+
+        let mut buf = vec![0u8; 64];
+        let n = unsafe { libc::read(rfd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+        unsafe { libc::close(rfd) };
+        assert!(n > 0, "expected bytes on the fd, got {n}");
+        buf.truncate(n as usize);
+        assert_eq!(buf, b"fd-secret-xyz");
     }
 }
