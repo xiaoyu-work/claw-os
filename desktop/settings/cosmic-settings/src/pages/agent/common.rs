@@ -1405,14 +1405,15 @@ where
 {
     Section::default()
         .title(crate::fl!("agent-actions"))
-        .view::<P>(move |_, page, section| {
+        .view::<P>(move |_, page, _section| {
+            // Actions render without the `settings::section()` card
+            // background — three buttons + a status caption don't need
+            // the visual weight of a framed container, and the page
+            // already renders the "Actions" heading above this view.
             let state = state_of(page);
             let view: Element<'_, Message> = actions_view(state);
             let wrap = wrap.clone();
-            settings::section()
-                .title(&section.title)
-                .add(view.map(move |m| wrap(m)))
-                .into()
+            view.map(move |m| wrap(m))
         })
 }
 

@@ -111,7 +111,7 @@ if [ "$DO_BUILD" = 1 ]; then
     IFS='|' read -r cargo_dir bin _ <<<"$(target_spec "$t")"
     build_script+="echo '== build $bin ($cargo_dir) =='; (cd '$cargo_dir' && cargo build --release --bin '$bin') || exit 1; "
   done
-  orb -m "$ORB_VM" bash -lc "set -e; cd /Users/jay/workspace/claw-os; $build_script"
+  orb -m "$ORB_VM" bash -lc "set -e; cd '$REPO_ROOT'; $build_script"
 fi
 
 echo ">> injecting binaries into qcow2 ($QCOW)"
@@ -123,7 +123,7 @@ for t in "${TARGETS[@]}"; do
   upload_args+=" --upload '$src:$install'"
   chmod_args+=" --run-command 'chmod 0755 $install'"
 done
-orb -m "$ORB_VM" bash -lc "set -e; cd /Users/jay/workspace/claw-os; \
+orb -m "$ORB_VM" bash -lc "set -e; cd '$REPO_ROOT'; \
   virt-customize -a '${QCOW#$REPO_ROOT/}' $upload_args $chmod_args"
 
 if [ "$DO_CONVERT" = 1 ] && [ -f "$VMDK" ]; then
