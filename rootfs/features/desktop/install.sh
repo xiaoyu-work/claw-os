@@ -75,12 +75,20 @@ done
 #    every `cos app <id> <verb>` call (audit + caps + snapshot). Without
 #    this mount cargo cannot resolve cos-runtime inside the chroot and
 #    the desktop build fails before producing a single binary.
+#
+#    And cos-runtime itself pulls in `claw-os-sdk = { path =
+#    "../../claw-os-sdk/rust" }` (the public app-developer SDK that
+#    cos-runtime layers audit/caps on top of). Bind-mount that one too
+#    or cargo dies in the desktop crates with "failed to read
+#    /build/claw-os-sdk/rust/Cargo.toml".
 # ---------------------------------------------------------------------------
 CHROOT_SRC="$ROOTFS/build/desktop-src"
 CHROOT_CRATES="$ROOTFS/build/crates"
 CHROOT_RUNTIME="$ROOTFS/build/cos-runtime"
+CHROOT_SDK="$ROOTFS/build/claw-os-sdk"
 PROJECT_CRATES="$PROJECT_DIR/crates"
 PROJECT_RUNTIME="$PROJECT_DIR/cos-runtime"
+PROJECT_SDK="$PROJECT_DIR/claw-os-sdk"
 mkdir -p "$CHROOT_SRC"
 if ! mountpoint -q "$CHROOT_SRC"; then
     mount --bind "$DESKTOP_SRC" "$CHROOT_SRC"
@@ -97,8 +105,16 @@ if [ -d "$PROJECT_RUNTIME" ]; then
         mount --bind "$PROJECT_RUNTIME" "$CHROOT_RUNTIME"
     fi
 fi
+if [ -d "$PROJECT_SDK" ]; then
+    mkdir -p "$CHROOT_SDK"
+    if ! mountpoint -q "$CHROOT_SDK"; then
+        mount --bind "$PROJECT_SDK" "$CHROOT_SDK"
+    fi
+fi
 
 cleanup() {
+    umount "$CHROOT_SDK" 2>/dev/null || true
+    rmdir "$CHROOT_SDK" 2>/dev/null || true
     umount "$CHROOT_RUNTIME" 2>/dev/null || true
     rmdir "$CHROOT_RUNTIME" 2>/dev/null || true
     umount "$CHROOT_CRATES" 2>/dev/null || true
