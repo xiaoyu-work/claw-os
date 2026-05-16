@@ -6,20 +6,36 @@
 //! `http://127.0.0.1:<port>/api/chat` and consumes the same SSE
 //! stream the React app did.
 //!
-//! Two visual modes mirror the original:
+//! Two visual modes:
 //!
-//!   * **Standalone** — full window, centered, larger brand.
+//!   * **Standalone** — full window with a sidebar of local
+//!                       sessions, a breadcrumb headerbar, and a
+//!                       large card composer. Mirrors the look of
+//!                       contemporary "agent workbench" desktop UIs.
 //!   * **Overlay**    — compact, anchored, Esc closes (for the
-//!                      global `Super+A` summon hotkey).
+//!                       global `Super+A` summon hotkey).
 //!
 //! Selected with `--overlay` on the command line. Falls back to
 //! standalone.
+//!
+//! ### Session sidebar
+//!
+//! The bridge does not yet expose multi-session resumption (see
+//! `bridge/src/routes/sessions.rs`). The sidebar therefore tracks
+//! conversations purely client-side: each `LocalSession` owns its own
+//! message vector + a `started_at` timestamp used to render the
+//! short "Xm / Xh / Xd" duration label. Switching tabs only swaps
+//! the visible history; a fresh POST to `/api/chat` always starts a
+//! new agent process.
 
 use std::env;
+use std::time::Instant;
 
 use cosmic::app::{Core, Settings, Task};
 use cosmic::iced::keyboard::{Key, key::Named};
-use cosmic::iced::{Alignment, Length, Limits, Subscription, event};
+use cosmic::iced::{
+    Alignment, Background, Border, Color, Length, Limits, Shadow, Subscription, event,
+};
 use cosmic::widget::{
     Column, Row, button, container, scrollable, text, text_input,
 };
@@ -33,13 +49,17 @@ mod sse;
 use crate::bridge::{ChatRequest, StreamEvent, read_bridge_port};
 use crate::recorder::Recorder;
 
-/// Symbol PNGs (square logo) for the header.
+/// Square symbol used both in the breadcrumb and the overlay header.
 static SYMBOL_LIGHT: &[u8] = include_bytes!("../assets/clawos-symbol.png");
 static SYMBOL_DARK: &[u8] = include_bytes!("../assets/clawos-symbol-dark.png");
 
-/// Wordmark PNGs (logotype) for the standalone header.
+/// Wordmark — only used by the standalone empty-state hero card now
+/// that the breadcrumb has taken over the previous top-of-window
+/// branding slot.
 static WORDMARK_LIGHT: &[u8] = include_bytes!("../assets/clawos-wordmark.png");
 static WORDMARK_DARK: &[u8] = include_bytes!("../assets/clawos-wordmark-dark.png");
+
+const SIDEBAR_WIDTH: f32 = 220.0;
 
 /// Application-level configuration parsed from argv.
 #[derive(Debug, Clone, Default)]
@@ -79,6 +99,10 @@ pub enum Message {
     VoiceTranscribed { text: String, placeholder: bool },
     /// Mic open / encode / upload failed.
     VoiceError(String),
+    /// Sidebar: switch which local session is visible.
+    SelectSession(usize),
+    /// Sidebar "+" button: start a new local session.
+    NewSession,
 }
 
 /// Microphone capture state. Mirrors the React `useAudioRecording`
@@ -116,13 +140,68 @@ pub struct ChatMessage {
     pub in_progress: bool,
 }
 
+/// A purely client-side conversation tab.
+///
+/// The bridge today only knows about the single agent subprocess it
+/// just spawned, so the sidebar's "switch session" UI is local: each
+/// entry remembers its own message history and a `started_at` used
+/// for the "3m / 2h / 1d" duration label.
+#[derive(Debug, Clone)]
+pub struct LocalSession {
+    pub id: String,
+    /// Display label — populated lazily from the first user prompt
+    /// so that fresh sessions show "New session" until something is
+    /// actually said.
+    pub title: String,
+    pub started_at: Instant,
+    pub messages: Vec<ChatMessage>,
+}
+
+impl LocalSession {
+    fn new(id: String) -> Self {
+        Self {
+            id,
+            title: String::new(),
+            started_at: Instant::now(),
+            messages: Vec::new(),
+        }
+    }
+
+    fn display_title(&self) -> &str {
+        if self.title.trim().is_empty() {
+            "New session"
+        } else {
+            self.title.as_str()
+        }
+    }
+
+    fn duration_label(&self) -> String {
+        let secs = self.started_at.elapsed().as_secs();
+        if secs < 60 {
+            "<1m".into()
+        } else if secs < 60 * 60 {
+            format!("{}m", secs / 60)
+        } else if secs < 60 * 60 * 24 {
+            format!("{}h", secs / 3_600)
+        } else {
+            format!("{}d", secs / (60 * 60 * 24))
+        }
+    }
+}
+
 pub struct App {
     core: Core,
     flags: Flags,
     bridge_port: Option<u16>,
     bridge_error: Option<String>,
 
-    messages: Vec<ChatMessage>,
+    sessions: Vec<LocalSession>,
+    active: usize,
+    /// Which session the in-flight stream is appending to. We track
+    /// this separately from `active` so the user can switch tabs
+    /// mid-stream without breaking the delta accumulator.
+    streaming_session: Option<usize>,
+
     input: String,
     streaming: bool,
     error: Option<String>,
@@ -159,21 +238,25 @@ impl Application for App {
             }
         };
 
-        let app = App {
+        let mut app = App {
             core,
             flags: flags.clone(),
             bridge_port,
             bridge_error,
-            messages: Vec::new(),
+            sessions: Vec::new(),
+            active: 0,
+            streaming_session: None,
             input: flags.query.clone().unwrap_or_default(),
             streaming: false,
             error: None,
             voice: VoiceState::Idle,
         };
-        // When launched with --voice (Super+Shift+A path), pre-arm the
-        // mic so the user can start speaking immediately. Wrapping in
-        // a Task::done lets init() return synchronously and the mic
-        // opens on the first frame.
+        // Always have at least one session so the sidebar renders a
+        // meaningful row immediately. Without this the first launch
+        // shows an empty sidebar which looks like a regression of
+        // the new layout.
+        app.sessions.push(LocalSession::new("session-1".into()));
+
         let initial = if flags.query.is_some() {
             cosmic::Task::done(cosmic::Action::App(Message::Submit))
         } else if flags.voice {
@@ -182,6 +265,20 @@ impl Application for App {
             Task::none()
         };
         (app, initial)
+    }
+
+    fn header_start(&self) -> Vec<Element<'_, Self::Message>> {
+        if self.flags.overlay {
+            return Vec::new();
+        }
+        vec![self.breadcrumb()]
+    }
+
+    fn header_end(&self) -> Vec<Element<'_, Self::Message>> {
+        if self.flags.overlay || !self.streaming {
+            return Vec::new();
+        }
+        vec![active_pill()]
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -194,7 +291,9 @@ impl Application for App {
             Message::Submit => self.submit(),
 
             Message::StreamDelta(chunk) => {
-                if let Some(last) = self.messages.last_mut()
+                if let Some(idx) = self.streaming_session
+                    && let Some(sess) = self.sessions.get_mut(idx)
+                    && let Some(last) = sess.messages.last_mut()
                     && last.role == ChatRole::Assistant
                 {
                     last.content.push_str(&chunk);
@@ -203,27 +302,18 @@ impl Application for App {
             }
 
             Message::StreamDone(_envelope) => {
-                if let Some(last) = self.messages.last_mut() {
-                    last.in_progress = false;
-                }
-                self.streaming = false;
+                self.finalize_stream();
                 Task::none()
             }
 
             Message::StreamError(msg) => {
-                if let Some(last) = self.messages.last_mut() {
-                    last.in_progress = false;
-                }
-                self.streaming = false;
+                self.finalize_stream();
                 self.error = Some(msg);
                 Task::none()
             }
 
             Message::StreamEnded => {
-                if let Some(last) = self.messages.last_mut() {
-                    last.in_progress = false;
-                }
-                self.streaming = false;
+                self.finalize_stream();
                 Task::none()
             }
 
@@ -246,11 +336,6 @@ impl Application for App {
             Message::VoiceTranscribed { text, placeholder } => {
                 self.voice = VoiceState::Idle;
                 if placeholder {
-                    // Surface as an error/tip rather than dropping the
-                    // stub string into the user's input. Once the
-                    // bridge wires a real STT backend this branch goes
-                    // away — `placeholder=false` will populate input
-                    // verbatim like the React app did.
                     self.error = Some(
                         "Voice transcription isn't enabled on this system yet.".into(),
                     );
@@ -258,8 +343,6 @@ impl Application for App {
                     if self.input.is_empty() {
                         self.input = text;
                     } else {
-                        // Append with a space so users can chain
-                        // dictation onto a partial draft.
                         self.input.push(' ');
                         self.input.push_str(&text);
                     }
@@ -272,10 +355,34 @@ impl Application for App {
                 self.error = Some(msg);
                 Task::none()
             }
+
+            Message::SelectSession(idx) => {
+                // Disallow switching while a reply is still streaming —
+                // the stream targets `streaming_session` so we wouldn't
+                // *lose* deltas, but switching mid-stream creates the
+                // confusing illusion of a paused agent in the tab the
+                // user actually wants to read.
+                if !self.streaming && idx < self.sessions.len() {
+                    self.active = idx;
+                    self.error = None;
+                }
+                Task::none()
+            }
+
+            Message::NewSession => {
+                if !self.streaming {
+                    let id = format!("session-{}", self.sessions.len() + 1);
+                    self.sessions.push(LocalSession::new(id));
+                    self.active = self.sessions.len() - 1;
+                    self.input.clear();
+                    self.error = None;
+                }
+                Task::none()
+            }
         }
     }
 
-    fn view(&self) -> Element<Message> {
+    fn view(&self) -> Element<'_, Message> {
         if self.flags.overlay {
             self.view_overlay()
         } else {
@@ -302,6 +409,28 @@ impl Application for App {
 }
 
 impl App {
+    // ------------------------------------------------------------------
+    // State helpers
+    // ------------------------------------------------------------------
+
+    fn active_session(&self) -> Option<&LocalSession> {
+        self.sessions.get(self.active)
+    }
+
+    fn active_session_mut(&mut self) -> Option<&mut LocalSession> {
+        self.sessions.get_mut(self.active)
+    }
+
+    fn finalize_stream(&mut self) {
+        if let Some(idx) = self.streaming_session.take()
+            && let Some(sess) = self.sessions.get_mut(idx)
+            && let Some(last) = sess.messages.last_mut()
+        {
+            last.in_progress = false;
+        }
+        self.streaming = false;
+    }
+
     fn submit(&mut self) -> Task<Message> {
         let prompt = self.input.trim().to_string();
         if prompt.is_empty() || self.streaming {
@@ -319,16 +448,23 @@ impl App {
         self.input.clear();
         self.error = None;
         self.streaming = true;
-        self.messages.push(ChatMessage {
-            role: ChatRole::User,
-            content: prompt.clone(),
-            in_progress: false,
-        });
-        self.messages.push(ChatMessage {
-            role: ChatRole::Assistant,
-            content: String::new(),
-            in_progress: true,
-        });
+        self.streaming_session = Some(self.active);
+
+        if let Some(sess) = self.active_session_mut() {
+            if sess.title.trim().is_empty() {
+                sess.title = title_from_prompt(&prompt);
+            }
+            sess.messages.push(ChatMessage {
+                role: ChatRole::User,
+                content: prompt.clone(),
+                in_progress: false,
+            });
+            sess.messages.push(ChatMessage {
+                role: ChatRole::Assistant,
+                content: String::new(),
+                in_progress: true,
+            });
+        }
 
         let request = ChatRequest {
             prompt,
@@ -367,50 +503,235 @@ impl App {
         .map(cosmic::Action::App)
     }
 
-    fn view_standalone(&self) -> Element<Message> {
-        let cosmic_theme = theme::active().cosmic().clone();
-        let spacing = cosmic_theme.spacing;
+    // ------------------------------------------------------------------
+    // Standalone layout
+    // ------------------------------------------------------------------
 
-        let header = container(
-            widget::image(if is_dark() {
-                widget::image::Handle::from_bytes(WORDMARK_DARK)
-            } else {
-                widget::image::Handle::from_bytes(WORDMARK_LIGHT)
-            })
-            .height(Length::Fixed(40.0)),
-        )
-        .center_x(Length::Fill)
-        .padding([spacing.space_l, 0u16]);
+    fn view_standalone(&self) -> Element<'_, Message> {
+        let spacing = theme::active().cosmic().spacing;
 
-        let body = if self.messages.is_empty() {
-            empty_state(false)
-        } else {
-            self.message_list(false)
+        let chat_body: Element<Message> = match self.active_session() {
+            Some(sess) if !sess.messages.is_empty() => self.message_list(sess, false),
+            _ => empty_state(false),
         };
 
-        let input = self.input_row(false);
-
-        let inner = Column::new()
-            .push(header)
-            .push(
-                container(body)
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .padding(spacing.space_m),
-            )
-            .push(container(input).padding([0u16, spacing.space_l, spacing.space_m, spacing.space_l]))
-            .spacing(spacing.space_xs);
-
-        container(inner)
+        let chat_area = container(chat_body)
             .width(Length::Fill)
             .height(Length::Fill)
-            .center_x(Length::Fill)
+            .padding([spacing.space_m, spacing.space_l]);
+
+        let main_column = Column::new()
+            .push(chat_area)
+            .push(
+                container(self.input_card(false))
+                    .padding([
+                        0u16,
+                        spacing.space_l,
+                        spacing.space_l,
+                        spacing.space_l,
+                    ]),
+            );
+
+        let body_row = Row::new()
+            .push(
+                container(self.sidebar_view())
+                    .width(Length::Fixed(SIDEBAR_WIDTH))
+                    .height(Length::Fill)
+                    .padding([spacing.space_m, spacing.space_s])
+                    .class(theme::Container::custom(sidebar_style)),
+            )
+            .push(container(main_column).width(Length::Fill).height(Length::Fill));
+
+        container(body_row)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .class(theme::Container::custom(page_style))
             .into()
     }
 
-    fn view_overlay(&self) -> Element<Message> {
-        let cosmic_theme = theme::active().cosmic().clone();
-        let spacing = cosmic_theme.spacing;
+    fn breadcrumb(&self) -> Element<'_, Message> {
+        let spacing = theme::active().cosmic().spacing;
+        let title = self
+            .active_session()
+            .map(|s| s.display_title().to_string())
+            .unwrap_or_else(|| "New session".into());
+
+        let symbol = widget::image(if is_dark() {
+            widget::image::Handle::from_bytes(SYMBOL_DARK)
+        } else {
+            widget::image::Handle::from_bytes(SYMBOL_LIGHT)
+        })
+        .height(Length::Fixed(16.0))
+        .width(Length::Fixed(16.0));
+
+        Row::new()
+            .push(symbol)
+            .push(text("clawOS").size(13.0))
+            .push(separator())
+            .push(text("Agent").size(13.0))
+            .push(separator())
+            .push(text(title).size(13.0))
+            .push(status_dot(self.streaming))
+            .spacing(spacing.space_xxs)
+            .align_y(Alignment::Center)
+            .into()
+    }
+
+    fn sidebar_view(&self) -> Element<'_, Message> {
+        let spacing = theme::active().cosmic().spacing;
+
+        let header = Row::new()
+            .push(text("SESSIONS").size(11.0))
+            .push(widget::space::horizontal())
+            .push(
+                button::text("+")
+                    .on_press(Message::NewSession)
+                    .padding([0u16, spacing.space_xs]),
+            )
+            .align_y(Alignment::Center);
+
+        let mut list = Column::new().spacing(2);
+        for (idx, sess) in self.sessions.iter().enumerate() {
+            list = list.push(session_row(sess, idx == self.active, idx, self.streaming));
+        }
+
+        Column::new()
+            .push(
+                container(header).padding([
+                    0u16,
+                    spacing.space_xs,
+                    spacing.space_xs,
+                    spacing.space_xs,
+                ]),
+            )
+            .push(scrollable(list).width(Length::Fill).height(Length::Fill))
+            .spacing(spacing.space_xs)
+            .into()
+    }
+
+    fn message_list<'a>(
+        &'a self,
+        sess: &'a LocalSession,
+        compact: bool,
+    ) -> Element<'a, Message> {
+        let spacing = theme::active().cosmic().spacing;
+
+        let mut col = Column::new().spacing(spacing.space_s).width(Length::Fill);
+        for msg in &sess.messages {
+            col = col.push(message_bubble(msg, compact));
+        }
+        if let Some(err) = &self.error {
+            col = col.push(
+                container(text(format!("⚠ {err}")).size(12.0))
+                    .padding(spacing.space_xxs)
+                    .class(theme::Container::Card),
+            );
+        }
+        scrollable(col).width(Length::Fill).height(Length::Fill).into()
+    }
+
+    fn input_card(&self, compact: bool) -> Element<'_, Message> {
+        let spacing = theme::active().cosmic().spacing;
+
+        let recording = self.voice.is_recording();
+        let processing = self.voice.is_processing();
+
+        let placeholder = if recording {
+            "Listening…"
+        } else if processing {
+            "Transcribing…"
+        } else if compact {
+            "Ask anything…"
+        } else if self
+            .active_session()
+            .map_or(true, |s| s.messages.is_empty())
+        {
+            "Ask the agent anything."
+        } else {
+            "Request changes or ask a question…"
+        };
+
+        let input = text_input(placeholder, &self.input)
+            .on_input(Message::InputChanged)
+            .on_submit(|_| Message::Submit)
+            .padding(spacing.space_xs)
+            .width(Length::Fill);
+
+        let model_caption = match self.bridge_port {
+            Some(port) => format!("Bridge :{port}"),
+            None => "Bridge offline".into(),
+        };
+
+        let mic = self.mic_button();
+        let send = self.send_button(compact);
+
+        let bottom = Row::new()
+            .push(text(model_caption).size(11.0))
+            .push(widget::space::horizontal())
+            .push(mic)
+            .push(send)
+            .spacing(spacing.space_xs)
+            .align_y(Alignment::Center);
+
+        let card = Column::new()
+            .push(input)
+            .push(bottom)
+            .spacing(spacing.space_xs);
+
+        container(card)
+            .padding(spacing.space_s)
+            .class(theme::Container::custom(input_card_style))
+            .into()
+    }
+
+    fn mic_button(&self) -> Element<'_, Message> {
+        let recording = self.voice.is_recording();
+        let processing = self.voice.is_processing();
+
+        let label = if recording {
+            "⏺"
+        } else if processing {
+            "⌛"
+        } else {
+            "🎙"
+        };
+        let mut b = if recording {
+            button::destructive(label)
+        } else {
+            button::standard(label)
+        };
+        if !processing && !self.streaming {
+            b = b.on_press(Message::ToggleMic);
+        }
+        b.into()
+    }
+
+    fn send_button(&self, compact: bool) -> Element<'_, Message> {
+        let label_text = if self.streaming {
+            "…"
+        } else if compact {
+            "Send"
+        } else {
+            "↑"
+        };
+        // `button::suggested` only accepts `Into<Cow<str>>` — for a
+        // bespoke text size we wrap the styled `text` in a custom
+        // button instead and re-apply the Suggested theme variant.
+        let mut b = button::custom(text(label_text).size(14.0))
+            .class(cosmic::theme::Button::Suggested);
+        if !self.streaming && !self.input.trim().is_empty() {
+            b = b.on_press(Message::Submit);
+        }
+        b.into()
+    }
+
+    // ------------------------------------------------------------------
+    // Overlay layout — intentionally kept compact and unchanged in
+    // spirit; the redesign is for the long-lived standalone window.
+    // ------------------------------------------------------------------
+
+    fn view_overlay(&self) -> Element<'_, Message> {
+        let spacing = theme::active().cosmic().spacing;
 
         let header = Row::new()
             .push(
@@ -423,15 +744,14 @@ impl App {
                 .width(Length::Fixed(20.0)),
             )
             .push(text("Claw OS Agent").size(13.0))
-            .push(cosmic::widget::space::horizontal())
+            .push(widget::space::horizontal())
             .push(text("Esc to close").size(11.0))
             .align_y(Alignment::Center)
             .spacing(spacing.space_xs);
 
-        let body = if self.messages.is_empty() {
-            empty_state(true)
-        } else {
-            self.message_list(true)
+        let body: Element<Message> = match self.active_session() {
+            Some(sess) if !sess.messages.is_empty() => self.message_list(sess, true),
+            _ => empty_state(true),
         };
 
         let inner = Column::new()
@@ -442,98 +762,12 @@ impl App {
                     .height(Length::Fill)
                     .padding([0u16, spacing.space_xs]),
             )
-            .push(container(self.input_row(true)).padding(spacing.space_xs))
+            .push(container(self.input_card(true)).padding(spacing.space_xs))
             .spacing(spacing.space_xs);
 
         container(inner)
             .width(Length::Fill)
             .height(Length::Fill)
-            .into()
-    }
-
-    fn message_list(&self, compact: bool) -> Element<Message> {
-        let cosmic_theme = theme::active().cosmic().clone();
-        let spacing = cosmic_theme.spacing;
-
-        let mut col = Column::new().spacing(spacing.space_s).width(Length::Fill);
-
-        for msg in &self.messages {
-            col = col.push(message_bubble(msg, compact));
-        }
-
-        if let Some(err) = &self.error {
-            col = col.push(
-                container(text(format!("⚠ {err}")).size(12.0))
-                    .padding(spacing.space_xxs)
-                    .class(theme::Container::Card),
-            );
-        }
-
-        scrollable(col).width(Length::Fill).into()
-    }
-
-    fn input_row(&self, compact: bool) -> Element<Message> {
-        let cosmic_theme = theme::active().cosmic().clone();
-        let spacing = cosmic_theme.spacing;
-
-        let recording = self.voice.is_recording();
-        let processing = self.voice.is_processing();
-
-        let placeholder = if recording {
-            "Listening…"
-        } else if processing {
-            "Transcribing…"
-        } else if compact {
-            "Ask anything…"
-        } else {
-            "Ask the agent anything."
-        };
-
-        let send_label = if self.streaming { "…" } else { "Send" };
-
-        let input = text_input(placeholder, &self.input)
-            .on_input(Message::InputChanged)
-            .on_submit(|_| Message::Submit)
-            .padding(spacing.space_xs)
-            .width(Length::Fill);
-
-        // Mic toggle. Mirrors the React composer button:
-        //   idle       → 🎙 (start)
-        //   recording  → ⏺ (stop, with red accent via destructive variant)
-        //   processing → ⌛ disabled
-        let mic = {
-            let label = if recording {
-                "⏺ Stop"
-            } else if processing {
-                "⌛"
-            } else {
-                "🎙"
-            };
-            let mut b = if recording {
-                button::destructive(label)
-            } else {
-                button::standard(label)
-            };
-            if !processing && !self.streaming {
-                b = b.on_press(Message::ToggleMic);
-            }
-            b
-        };
-
-        let send = {
-            let mut b = button::suggested(send_label);
-            if !self.streaming && !self.input.trim().is_empty() {
-                b = b.on_press(Message::Submit);
-            }
-            b
-        };
-
-        Row::new()
-            .push(input)
-            .push(mic)
-            .push(send)
-            .spacing(spacing.space_xs)
-            .align_y(Alignment::Center)
             .into()
     }
 
@@ -566,9 +800,6 @@ impl App {
                 };
                 cosmic::Task::perform(
                     async move {
-                        // Encoding + the thread-join are blocking, so
-                        // hop to a blocking pool to keep the UI loop
-                        // responsive. The upload itself is async.
                         let wav = match tokio::task::spawn_blocking(move || rec.stop())
                             .await
                         {
@@ -592,8 +823,6 @@ impl App {
                 )
                 .map(cosmic::Action::App)
             }
-            // Mid-processing clicks are ignored — the UI button is
-            // disabled during processing so this is defensive.
             VoiceState::Processing => {
                 self.voice = VoiceState::Processing;
                 Task::none()
@@ -602,9 +831,79 @@ impl App {
     }
 }
 
+// ----------------------------------------------------------------------
+// View helpers (pure functions / borrowless widgets)
+// ----------------------------------------------------------------------
+
+fn separator() -> Element<'static, Message> {
+    text("/").size(13.0).into()
+}
+
+fn status_dot(active: bool) -> Element<'static, Message> {
+    let class = if active {
+        theme::Container::custom(green_dot_style)
+    } else {
+        theme::Container::custom(idle_dot_style)
+    };
+    container(
+        widget::Space::new()
+            .width(Length::Fixed(8.0))
+            .height(Length::Fixed(8.0)),
+    )
+    .class(class)
+    .into()
+}
+
+fn active_pill() -> Element<'static, Message> {
+    let spacing = theme::active().cosmic().spacing;
+    container(text("active").size(11.0))
+        .padding([0u16, spacing.space_s])
+        .class(theme::Container::custom(active_pill_style))
+        .into()
+}
+
+fn session_row<'a>(
+    sess: &'a LocalSession,
+    is_active: bool,
+    idx: usize,
+    streaming: bool,
+) -> Element<'a, Message> {
+    let spacing = theme::active().cosmic().spacing;
+
+    let title_text = text(sess.display_title()).size(13.0).width(Length::Fill);
+    let dur_text = text(sess.duration_label()).size(11.0);
+
+    let row_content = Row::new()
+        .push(title_text)
+        .push(dur_text)
+        .spacing(spacing.space_xxs)
+        .align_y(Alignment::Center);
+
+    // ListItem gives us the COSMIC-styled hover background + matching
+    // corner radius without needing a fully-custom style.
+    let class = if is_active {
+        cosmic::theme::Button::Custom {
+            active: Box::new(|_focused, _theme| selected_session_active_style()),
+            disabled: Box::new(|_theme| selected_session_active_style()),
+            hovered: Box::new(|_focused, _theme| selected_session_active_style()),
+            pressed: Box::new(|_focused, _theme| selected_session_active_style()),
+        }
+    } else {
+        cosmic::theme::Button::MenuItem
+    };
+
+    let mut b = button::custom(row_content)
+        .width(Length::Fill)
+        .padding([spacing.space_xxs, spacing.space_xs])
+        .class(class);
+    if !streaming {
+        b = b.on_press(Message::SelectSession(idx));
+    }
+    b.into()
+}
+
 fn empty_state(compact: bool) -> Element<'static, Message> {
-    let cosmic_theme = theme::active().cosmic().clone();
-    let spacing = cosmic_theme.spacing;
+    let spacing = theme::active().cosmic().spacing;
 
     let title = if compact {
         text("Ready when you are.").size(14.0)
@@ -616,70 +915,211 @@ fn empty_state(compact: bool) -> Element<'static, Message> {
     } else {
         text("Press Super+A from anywhere to summon me.").size(13.0)
     };
-    container(
-        Column::new()
-            .push(title)
-            .push(hint)
-            .spacing(spacing.space_xxs)
-            .align_x(Alignment::Center),
-    )
-    .center_x(Length::Fill)
-    .center_y(Length::Fill)
-    .into()
+
+    let mut col = Column::new().spacing(spacing.space_xxs).align_x(Alignment::Center);
+    if !compact {
+        col = col.push(
+            widget::image(if is_dark() {
+                widget::image::Handle::from_bytes(WORDMARK_DARK)
+            } else {
+                widget::image::Handle::from_bytes(WORDMARK_LIGHT)
+            })
+            .height(Length::Fixed(36.0)),
+        );
+    }
+    col = col.push(title).push(hint);
+
+    container(col)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .into()
 }
 
-fn message_bubble(msg: &ChatMessage, compact: bool) -> Element<Message> {
-    let cosmic_theme = theme::active().cosmic().clone();
-    let spacing = cosmic_theme.spacing;
-
-    let role_label = match msg.role {
-        ChatRole::User => "You",
-        ChatRole::Assistant => "Agent",
-    };
-
+fn message_bubble(msg: &ChatMessage, compact: bool) -> Element<'_, Message> {
+    let spacing = theme::active().cosmic().spacing;
     let body_size = if compact { 12.0 } else { 14.0 };
 
-    let body: Element<Message> = if msg.content.is_empty() && msg.in_progress {
-        text("…").size(body_size).into()
-    } else {
-        match msg.role {
-            // The user side never carries markdown — render verbatim so
-            // they see exactly what they typed.
-            ChatRole::User => text(msg.content.clone()).size(body_size).into(),
-            // TODO(markdown): the iced markdown widget borrows the
-            // parsed Item list for the lifetime of the returned
-            // Element, so rendering it from a freshly-parsed local
-            // Vec produces E0515 ("returns a value referencing data
-            // owned by the current function"). To re-enable markdown
-            // rendering, parse once into `ChatMessage::markdown_items`
-            // when a chunk arrives and pass `&self.messages[i].items`
-            // into `markdown::view`. Plain text is fine for now —
-            // tool/code fenced blocks still read cleanly.
-            ChatRole::Assistant => text(msg.content.clone()).size(body_size).into(),
+    match msg.role {
+        ChatRole::User => {
+            // Right-aligned gray pill. The COSMIC `Button::Suggested`
+            // would tint with the accent color, so we use a custom
+            // neutral surface to match the reference look.
+            let body = text(msg.content.clone()).size(body_size);
+            let pill = container(body)
+                .padding([spacing.space_xs, spacing.space_s])
+                .class(theme::Container::custom(user_pill_style));
+            container(pill)
+                .width(Length::Fill)
+                .align_x(Alignment::End)
+                .into()
         }
-    };
+        ChatRole::Assistant => {
+            // Left-aligned plain text; the reference draws no bubble
+            // around assistant turns so structure (paragraphs, code,
+            // …) reads naturally.
+            //
+            // TODO(markdown): re-enable rendering via the iced
+            // markdown widget once we can borrow a long-lived parsed
+            // `Vec<Item>` from the session (E0515 today).
+            let body: Element<Message> = if msg.content.is_empty() && msg.in_progress {
+                text("…").size(body_size).into()
+            } else {
+                text(msg.content.clone()).size(body_size).into()
+            };
+            container(body).width(Length::Fill).into()
+        }
+    }
+}
 
-    container(
-        Column::new()
-            .push(text(role_label).size(11.0))
-            .push(body)
-            .spacing(spacing.space_xxs),
-    )
-    .padding(spacing.space_xs)
-    .class(match msg.role {
-        ChatRole::User => theme::Container::Primary,
-        ChatRole::Assistant => theme::Container::Card,
-    })
-    .width(Length::Fill)
-    .into()
+// ----------------------------------------------------------------------
+// Container styles — written by hand because the COSMIC palette
+// variants don't include "page off-white" / "raised card with a soft
+// border" / "small green status dot" out of the box.
+// ----------------------------------------------------------------------
+
+fn page_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
+    let cosmic = theme.cosmic();
+    cosmic::widget::container::Style {
+        text_color: Some(cosmic.background.on.into()),
+        background: Some(Background::Color(Color::from(cosmic.background.base))),
+        border: Border::default(),
+        shadow: Shadow::default(),
+        icon_color: Some(cosmic.background.on.into()),
+        snap: true,
+    }
+}
+
+fn sidebar_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
+    let cosmic = theme.cosmic();
+    cosmic::widget::container::Style {
+        text_color: Some(cosmic.primary.on.into()),
+        background: Some(Background::Color(Color::from(cosmic.primary.base))),
+        border: Border {
+            radius: 0.0.into(),
+            width: 0.0,
+            color: cosmic.primary.divider.into(),
+        },
+        shadow: Shadow::default(),
+        icon_color: Some(cosmic.primary.on.into()),
+        snap: true,
+    }
+}
+
+fn input_card_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
+    let cosmic = theme.cosmic();
+    let radius = cosmic.corner_radii.radius_l;
+    cosmic::widget::container::Style {
+        text_color: Some(cosmic.background.component.on.into()),
+        background: Some(Background::Color(Color::from(cosmic.background.component.base))),
+        border: Border {
+            radius: radius.into(),
+            width: 1.0,
+            color: cosmic.background.divider.into(),
+        },
+        shadow: Shadow::default(),
+        icon_color: Some(cosmic.background.component.on.into()),
+        snap: true,
+    }
+}
+
+fn user_pill_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
+    let cosmic = theme.cosmic();
+    // A "fully rounded" pill: use a large radius value the renderer
+    // will clamp to half the height. radius_xl is the largest token
+    // exposed by the COSMIC palette.
+    let radius = cosmic.corner_radii.radius_xl;
+    cosmic::widget::container::Style {
+        text_color: Some(cosmic.primary.component.on.into()),
+        background: Some(Background::Color(Color::from(cosmic.primary.component.base))),
+        border: Border {
+            radius: radius.into(),
+            width: 0.0,
+            color: Color::TRANSPARENT,
+        },
+        shadow: Shadow::default(),
+        icon_color: Some(cosmic.primary.component.on.into()),
+        snap: true,
+    }
+}
+
+fn active_pill_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
+    let cosmic = theme.cosmic();
+    let radius = cosmic.corner_radii.radius_xl;
+    cosmic::widget::container::Style {
+        text_color: Some(cosmic.background.component.on.into()),
+        background: Some(Background::Color(Color::from(cosmic.background.component.base))),
+        border: Border {
+            radius: radius.into(),
+            width: 1.0,
+            color: cosmic.background.divider.into(),
+        },
+        shadow: Shadow::default(),
+        icon_color: Some(cosmic.background.component.on.into()),
+        snap: true,
+    }
+}
+
+fn selected_session_active_style() -> cosmic::widget::button::Style {
+    let cosmic = theme::active().cosmic().clone();
+    let radius = cosmic.corner_radii.radius_s;
+    cosmic::widget::button::Style {
+        background: Some(Background::Color(Color::from(cosmic.primary.component.base))),
+        border_radius: radius.into(),
+        border_color: Color::TRANSPARENT,
+        border_width: 0.0,
+        outline_color: Color::TRANSPARENT,
+        outline_width: 0.0,
+        icon_color: Some(cosmic.primary.component.on.into()),
+        text_color: Some(cosmic.primary.component.on.into()),
+        overlay: None,
+        shadow_offset: cosmic::iced::Vector::new(0.0, 0.0),
+    }
+}
+
+fn green_dot_style(_theme: &cosmic::Theme) -> cosmic::widget::container::Style {
+    cosmic::widget::container::Style {
+        text_color: None,
+        // Solid green — matches the "session active" cue in the
+        // reference design. We intentionally don't use the COSMIC
+        // accent color because that one tracks the user's chosen
+        // theme accent (could be blue / purple / etc.) and would
+        // muddy the "this thing is currently running" signal.
+        background: Some(Background::Color(Color::from_rgb(0.22, 0.78, 0.36))),
+        border: Border {
+            radius: 4.0.into(),
+            width: 0.0,
+            color: Color::TRANSPARENT,
+        },
+        shadow: Shadow::default(),
+        icon_color: None,
+        snap: true,
+    }
+}
+
+fn idle_dot_style(_theme: &cosmic::Theme) -> cosmic::widget::container::Style {
+    cosmic::widget::container::Style {
+        text_color: None,
+        background: None,
+        border: Border::default(),
+        shadow: Shadow::default(),
+        icon_color: None,
+        snap: true,
+    }
+}
+
+fn title_from_prompt(prompt: &str) -> String {
+    let first_line = prompt.lines().next().unwrap_or("").trim();
+    let mut title: String = first_line.chars().take(40).collect();
+    if first_line.chars().count() > 40 {
+        title.push('…');
+    }
+    if title.is_empty() {
+        title = "New session".into();
+    }
+    title
 }
 
 /// Best-effort URL opener used by the markdown link handler.
-///
-/// We deliberately don't pull in `webbrowser` or `xdg-open` Rust
-/// bindings — both are thin wrappers that just spawn the system
-/// handler. Spawning `xdg-open` directly is one less dependency to
-/// audit and matches what every other COSMIC app does.
 fn open_uri(uri: &str) -> std::io::Result<()> {
     std::process::Command::new("xdg-open")
         .arg(uri)
@@ -740,7 +1180,7 @@ fn main() -> cosmic::iced::Result {
                 .max_height(420.0),
         );
     } else {
-        settings = settings.size_limits(Limits::NONE.min_width(480.0).min_height(320.0));
+        settings = settings.size_limits(Limits::NONE.min_width(640.0).min_height(420.0));
     }
 
     cosmic::app::run::<App>(settings, flags)
