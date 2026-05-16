@@ -16,20 +16,20 @@
 // Gated behind `AppearanceConfig::experimental_window_animations`,
 // default `false`.
 //
-// Implementation status (intentional, documented):
+// Implementation status:
 //
 //   * OPEN animation: fully wired up. When a new window is mapped
 //     and the config flag is on, we install a [`WindowAnimation`]
 //     on the `CosmicMapped`. The render path multiplies its alpha
 //     and wraps it in a `RescaleRenderElement` until the spring
 //     comes to rest.
-//   * CLOSE animation: NOT YET WIRED. Reverse-playing a close
-//     animation requires holding the surface alive after the client
-//     has issued its `xdg_toplevel.destroy` request — Smithay-wise
-//     that means a pending-destroy queue on `Shell` plus a tick
-//     hook in the render loop. Writing that without a Linux test
-//     loop is too easy to get use-after-free. Tracked as a TODO at
-//     the `toplevel_destroyed` handler.
+//   * CLOSE animation: wired via `Workspace::closing_windows`.
+//     `XdgShellHandler::toplevel_destroyed` calls
+//     `Shell::begin_close_animation` BEFORE unmapping the surface,
+//     which parks a clone of the `CosmicMapped` on the workspace
+//     so the WlSurface stays alive (its last committed buffer
+//     remains renderable) for the duration of the fade-out spring.
+//     `Workspace::update_animations` reaps finished entries.
 
 use std::time::{Duration, Instant};
 
@@ -39,8 +39,6 @@ use crate::backend::render::animations::spring::{Spring, SpringParams};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowAnimationKind {
     Open,
-    /// Reserved — see module docs.
-    #[allow(dead_code)]
     Close,
 }
 
@@ -89,8 +87,10 @@ impl WindowAnimation {
         }
     }
 
-    /// Build a CLOSE animation. Not currently dispatched — see module
-    /// docs for the surface-lifetime concern.
+    /// Build a CLOSE animation. Played when `xdg_toplevel.destroy`
+    /// arrives if `experimental_window_animations` is on. See
+    /// `Workspace::closing_windows` for the parking mechanism that
+    /// keeps the surface alive while this runs.
     pub fn close(now: Instant) -> Self {
         let params = SpringParams::new(0.85, 800.0, 0.0001);
         let spring = Spring {

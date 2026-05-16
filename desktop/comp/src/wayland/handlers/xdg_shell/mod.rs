@@ -329,6 +329,13 @@ impl XdgShellHandler for State {
             let output = shell
                 .visible_output_for_surface(surface.wl_surface())
                 .cloned();
+
+            // Kick off the window-close animation BEFORE the
+            // workspace forgets about this surface. The parked
+            // CosmicMapped clone keeps the WlSurface alive while
+            // the spring runs, so we can keep rendering it.
+            let _ = shell.begin_close_animation(&surface);
+
             let _ = shell.unmap_surface(
                 surface.wl_surface(),
                 &seat,

@@ -253,15 +253,7 @@ where
             }
             CosmicElement::Zoom(elem) => elem.draw(frame, src, dst, damage, opaque_regions, cache),
             CosmicElement::Blur(elem) => {
-                <BlurRenderElement as RenderElement<R>>::draw(
-                    elem,
-                    frame,
-                    src,
-                    dst,
-                    damage,
-                    opaque_regions,
-                    cache,
-                )
+                elem.draw_through_glow::<R>(frame, src, dst, damage, opaque_regions, cache)
             }
             #[cfg(feature = "debug")]
             CosmicElement::Egui(elem) => {
@@ -291,9 +283,7 @@ where
                 elem.underlying_storage(glow_renderer)
             }
             CosmicElement::Zoom(elem) => elem.underlying_storage(renderer),
-            CosmicElement::Blur(elem) => {
-                <BlurRenderElement as RenderElement<R>>::underlying_storage(elem, renderer)
-            }
+            CosmicElement::Blur(_) => None,
             #[cfg(feature = "debug")]
             CosmicElement::Egui(elem) => {
                 let glow_renderer = renderer.glow_renderer_mut();
@@ -323,9 +313,7 @@ where
             }
             CosmicElement::Zoom(elem) => elem.capture_framebuffer(frame, src, dst, cache),
             CosmicElement::Blur(elem) => {
-                <BlurRenderElement as RenderElement<R>>::capture_framebuffer(
-                    elem, frame, src, dst, cache,
-                )
+                elem.capture_through_glow::<R>(frame, src, dst, cache)
             }
             #[cfg(feature = "debug")]
             CosmicElement::Egui(elem) => {

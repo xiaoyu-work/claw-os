@@ -77,6 +77,10 @@ use smithay::{
     wayland::{dmabuf::get_dmabuf, session_lock::LockSurface},
 };
 
+use smithay::wayland::{
+    background_effect::BackgroundEffectSurfaceCachedState, compositor::with_states,
+};
+
 #[cfg(feature = "debug")]
 use smithay_egui::EguiState;
 
@@ -861,14 +865,15 @@ where
                 );
             }
             Stage::LayerSurface { layer, location } => {
+                let surface_loc = location
+                    .to_local(output)
+                    .as_logical()
+                    .to_physical_precise_round(scale);
                 elements.extend(
                     render_elements_from_surface_tree::<_, WorkspaceRenderElement<_>>(
                         renderer,
                         layer.wl_surface(),
-                        location
-                            .to_local(output)
-                            .as_logical()
-                            .to_physical_precise_round(scale),
+                        surface_loc,
                         Scale::from(scale),
                         1.0,
                         FRAME_TIME_FILTER,
@@ -877,6 +882,40 @@ where
                     .flat_map(crop_to_output)
                     .map(Into::into),
                 );
+
+                // Frosted glass: if the layer client opted in via
+                // ext_background_effect_v1 and the compositor has
+                // experimental_blur enabled, append a blur element
+                // BEHIND the layer surface.
+                if shell.appearance_conf.experimental_blur {
+                    let has_blur = with_states(layer.wl_surface(), |states| {
+                        states
+                            .cached_state
+                            .get::<BackgroundEffectSurfaceCachedState>()
+                            .current()
+                            .blur_region
+                            .is_some()
+                    });
+                    if has_blur {
+                        let logical_bbox = layer.bbox();
+                        let mut blur_rect: Rectangle<i32, Physical> = Rectangle::new(
+                            surface_loc,
+                            logical_bbox
+                                .size
+                                .to_physical_precise_round(scale),
+                        );
+                        let output_rect = Rectangle::from_size(output_size);
+                        if let Some(clipped) = blur_rect.intersection(output_rect) {
+                            blur_rect = clipped;
+                            let element = crate::backend::render::blur::BlurRenderElement::new(
+                                blur_rect,
+                                [0, 0, 0, 0],
+                                1.0,
+                            );
+                            elements.push(CosmicElement::Blur(element));
+                        }
+                    }
+                }
             }
             Stage::OverrideRedirect { surface, location } => {
                 elements.extend(surface.wl_surface().into_iter().flat_map(|surface| {
