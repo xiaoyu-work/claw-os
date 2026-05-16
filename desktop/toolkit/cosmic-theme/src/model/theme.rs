@@ -23,6 +23,13 @@ pub const LIGHT_THEME_BUILDER_ID: &str = "com.clawos.Theme.Light.Builder";
 /// ID for the current light Theme config
 pub const LIGHT_THEME_ID: &str = "com.clawos.Theme.Light";
 
+/// Alpha applied to surface colors (background / primary / secondary container `base`)
+/// when `ThemeBuilder::is_frosted` is enabled. Lower = more wallpaper bleed-through.
+/// 0.72 leaves chrome clearly tinted but still legible against typical wallpapers,
+/// approximating macOS's translucent material look (compositor-side blur is not yet
+/// available in cosmic-comp, so this is a pure alpha tint).
+pub const FROSTED_SURFACE_ALPHA: f32 = 0.72;
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 /// Theme layer type
 pub enum Layer {
@@ -803,7 +810,7 @@ pub struct ThemeBuilder {
     /// override the destructive color for the builder
     pub destructive: Option<Srgb>,
     /// enabled blurred transparency
-    pub is_frosted: bool, // TODO handle
+    pub is_frosted: bool,
     /// cosmic-comp window gaps size (outer, inner)
     pub gaps: (u32, u32),
     /// cosmic-comp active hint window outline width
@@ -827,7 +834,7 @@ impl Default for ThemeBuilder {
             success: Default::default(),
             warning: Default::default(),
             destructive: Default::default(),
-            is_frosted: false,
+            is_frosted: true,
             // cosmic-comp theme settings
             gaps: (0, 8),
             active_hint: 3,
@@ -1025,6 +1032,25 @@ impl ThemeBuilder {
             bg_color
         } else {
             p_ref.gray_1
+        };
+
+        // Apply the frosted-glass alpha tint to surface colors. step_array is
+        // derived from `bg`, so primary/secondary container backgrounds inherit
+        // the alpha automatically through `get_surface_color`. Explicit
+        // primary/secondary overrides are clamped too so the chrome stays
+        // consistent end-to-end.
+        let (bg, primary_container_bg, secondary_container_bg) = if is_frosted {
+            let frost = |mut c: Srgba| {
+                c.alpha = c.alpha.min(FROSTED_SURFACE_ALPHA);
+                c
+            };
+            (
+                frost(bg),
+                primary_container_bg.map(frost),
+                secondary_container_bg.map(frost),
+            )
+        } else {
+            (bg, primary_container_bg, secondary_container_bg)
         };
 
         let step_array = steps(bg, NonZeroUsize::new(100).unwrap());
