@@ -69,18 +69,94 @@ fn cmd_info() -> Result<Value, String> {
 }
 
 fn cmd_env(args: &[String]) -> Result<Value, String> {
-    let vars: std::collections::BTreeMap<String, String> = if let Some(pattern) = args.first() {
-        let pat = pattern.to_lowercase();
-        env::vars()
-            .filter(|(k, _)| k.to_lowercase().contains(&pat))
-            .collect()
-    } else {
-        env::vars().collect()
-    };
+    let include_secrets = args.iter().any(|a| a == "--include-secrets");
+
+    // Build the raw map first, then redact unless the caller opted
+    // in via --include-secrets. Without this, any caller with the
+    // (broad) `sysinfo` capability could exfiltrate `OPENAI_API_KEY`,
+    // `AWS_SECRET_ACCESS_KEY`, GitHub PATs, etc. inherited from the
+    // parent shell. The redaction policy mirrors the cred-name
+    // patterns elsewhere in the codebase.
+    let raw: std::collections::BTreeMap<String, String> =
+        if let Some(pattern) = args.iter().find(|a| !a.starts_with("--")) {
+            let pat = pattern.to_lowercase();
+            env::vars()
+                .filter(|(k, _)| k.to_lowercase().contains(&pat))
+                .collect()
+        } else {
+            env::vars().collect()
+        };
+
+    let mut redacted = 0_usize;
+    let vars: std::collections::BTreeMap<String, String> = raw
+        .into_iter()
+        .map(|(k, v)| {
+            if include_secrets || !looks_like_secret_key(&k) {
+                (k, v)
+            } else {
+                redacted += 1;
+                (k, "***REDACTED***".into())
+            }
+        })
+        .collect();
     Ok(json!({
         "env": vars,
         "count": vars.len(),
+        "redacted_count": redacted,
+        "include_secrets": include_secrets,
     }))
+}
+
+/// Heuristic match for environment variable NAMES that almost
+/// certainly hold credentials. Substring (case-insensitive) hits on
+/// well-known suffixes/prefixes. Conservatively over-redacts: a
+/// developer wanting the unredacted view can re-run with
+/// `--include-secrets`.
+fn looks_like_secret_key(key: &str) -> bool {
+    let upper = key.to_ascii_uppercase();
+    const SUFFIX_HITS: &[&str] = &[
+        "_API_KEY",
+        "_TOKEN",
+        "_SECRET",
+        "_PASSWORD",
+        "_PASS",
+        "_PRIVATE_KEY",
+        "_CREDENTIALS",
+        "_AUTH",
+    ];
+    const FULL_HITS: &[&str] = &[
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GITHUB_TOKEN",
+        "GOOGLE_API_KEY",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_ACCESS_KEY_ID",
+        "GH_TOKEN",
+    ];
+    const PREFIX_HITS: &[&str] = &[
+        "OPENAI_",
+        "ANTHROPIC_",
+        "GOOGLE_",
+        "AWS_",
+        "AZURE_",
+        "GITHUB_",
+        "GH_",
+        "STRIPE_",
+        "TWILIO_",
+    ];
+    if FULL_HITS.iter().any(|n| upper == *n) {
+        return true;
+    }
+    if SUFFIX_HITS.iter().any(|s| upper.ends_with(s)) {
+        return true;
+    }
+    if PREFIX_HITS.iter().any(|p| upper.starts_with(p))
+        && (upper.contains("KEY") || upper.contains("SECRET") || upper.contains("TOKEN"))
+    {
+        return true;
+    }
+    false
 }
 
 fn cmd_resources() -> Result<Value, String> {
@@ -179,18 +255,20 @@ fn cmd_proc() -> Result<Value, String> {
                     Err(_) => continue,
                 };
 
-                let fields: Vec<&str> = stat.split_whitespace().collect();
-                if fields.len() < 24 {
+                let (comm, fields) = match parse_proc_stat(&stat) {
+                    Some(t) => t,
+                    None => continue,
+                };
+                // Need state(0), utime(11), stime(12), vsize(20), rss(21).
+                if fields.len() < 22 {
                     continue;
                 }
 
-                // comm is in parens, state is after
-                let comm = fields[1].trim_matches(|c| c == '(' || c == ')');
-                let state = fields[2];
-                let utime = fields[13].parse::<u64>().unwrap_or(0);
-                let stime = fields[14].parse::<u64>().unwrap_or(0);
-                let vsize = fields[22].parse::<u64>().unwrap_or(0);
-                let rss_pages = fields[23].parse::<i64>().unwrap_or(0);
+                let state = fields[0];
+                let utime = fields[11].parse::<u64>().unwrap_or(0);
+                let stime = fields[12].parse::<u64>().unwrap_or(0);
+                let vsize = fields[20].parse::<u64>().unwrap_or(0);
+                let rss_pages = fields[21].parse::<i64>().unwrap_or(0);
 
                 let state_name = match state {
                     "R" => "running",
@@ -554,16 +632,16 @@ fn cmd_threads(args: &[String]) -> Result<Value, String> {
                 Ok(s) => s,
                 Err(_) => continue,
             };
-            let fields: Vec<&str> = stat.split_whitespace().collect();
-            if fields.len() < 24 {
+            let (comm, fields) = match parse_proc_stat(&stat) {
+                Some(t) => t,
+                None => continue,
+            };
+            if fields.len() < 13 {
                 continue;
             }
-            let comm = fields[1]
-                .trim_matches(|c| c == '(' || c == ')')
-                .to_string();
-            let state = fields[2];
-            let utime = fields[13].parse::<u64>().unwrap_or(0);
-            let stime = fields[14].parse::<u64>().unwrap_or(0);
+            let state = fields[0];
+            let utime = fields[11].parse::<u64>().unwrap_or(0);
+            let stime = fields[12].parse::<u64>().unwrap_or(0);
             threads.push(json!({
                 "tid": tid,
                 "name": comm,
@@ -1265,6 +1343,29 @@ fn cmd_largest_files(args: &[String]) -> Result<Value, String> {
 
 // ----- shared helpers (Linux) -----
 
+/// Parse a `/proc/<pid>/stat` line into (comm, fields_after_comm).
+///
+/// /proc stat format: `pid (comm) state ppid ...` where `comm` is up
+/// to 16 chars and may itself contain spaces or `(`/`)`. Splitting on
+/// whitespace and indexing into fields[1] (the previous code) breaks
+/// for any process named `foo bar`, `(weird` or `proc) name`. We must
+/// find the LAST `)` to delimit comm, since the rest of the line
+/// has no parens. Returns None if the line is malformed.
+#[cfg(target_os = "linux")]
+fn parse_proc_stat(stat: &str) -> Option<(String, Vec<&str>)> {
+    let lparen = stat.find('(')?;
+    let rparen = stat.rfind(')')?;
+    if rparen <= lparen {
+        return None;
+    }
+    let comm = stat[lparen + 1..rparen].to_string();
+    // Fields AFTER the closing paren are positionally fields[2..]
+    // in `man 5 proc`. Index 0 of our slice is `state`, etc.
+    let tail = stat[rparen + 1..].trim();
+    let fields: Vec<&str> = tail.split_whitespace().collect();
+    Some((comm, fields))
+}
+
 #[cfg(target_os = "linux")]
 fn read_arg<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     let prefix = format!("{flag}=");
@@ -1375,17 +1476,17 @@ fn sample_proc_stats() -> Result<std::collections::HashMap<u32, ProcSnap>, Strin
             Ok(s) => s,
             Err(_) => continue,
         };
-        let fields: Vec<&str> = stat.split_whitespace().collect();
-        if fields.len() < 24 {
+        let (comm, fields) = match parse_proc_stat(&stat) {
+            Some(t) => t,
+            None => continue,
+        };
+        if fields.len() < 22 {
             continue;
         }
-        let comm = fields[1]
-            .trim_matches(|c| c == '(' || c == ')')
-            .to_string();
-        let state = fields[2].to_string();
-        let utime = fields[13].parse::<u64>().unwrap_or(0);
-        let stime = fields[14].parse::<u64>().unwrap_or(0);
-        let rss_pages = fields[23].parse::<u64>().unwrap_or(0);
+        let state = fields[0].to_string();
+        let utime = fields[11].parse::<u64>().unwrap_or(0);
+        let stime = fields[12].parse::<u64>().unwrap_or(0);
+        let rss_pages = fields[21].parse::<u64>().unwrap_or(0);
         map.insert(
             pid,
             ProcSnap {

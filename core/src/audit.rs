@@ -6,32 +6,78 @@ use chrono::Utc;
 use serde_json::json;
 
 /// Redact sensitive patterns from args before logging.
-/// Catches bearer/token prefixes, common API key prefixes, and authorization headers.
+/// Catches bearer/token prefixes, common API key prefixes, URL
+/// userinfo segments, and authorization headers (both as their own
+/// arg and as a substring of a larger arg like `--header
+/// "Authorization: Bearer ..."` or `-H Authorization: ...`).
 fn redact_args(args: &[String]) -> Vec<String> {
-    args.iter()
-        .map(|arg| {
-            let lower = arg.to_lowercase();
-            // Redact values that follow auth/token/key/password patterns
-            if lower.starts_with("bearer ") || lower.starts_with("token ") {
-                return "***REDACTED***".to_string();
-            }
-            // Redact common API key patterns (sk-..., ghp_..., etc.)
-            if arg.starts_with("sk-")
-                || arg.starts_with("ghp_")
-                || arg.starts_with("ghs_")
-                || arg.starts_with("glpat-")
-                || arg.starts_with("xoxb-")
-                || arg.starts_with("xoxp-")
-            {
-                return "***REDACTED***".to_string();
-            }
-            // Redact Authorization header values
-            if lower.contains("authorization:") {
-                return "Authorization: ***REDACTED***".to_string();
-            }
-            arg.clone()
-        })
-        .collect()
+    args.iter().map(|arg| redact_one(arg)).collect()
+}
+
+fn redact_one(arg: &str) -> String {
+    let lower = arg.to_lowercase();
+    // Whole-arg auth tokens
+    if lower.starts_with("bearer ") || lower.starts_with("token ") {
+        return "***REDACTED***".to_string();
+    }
+    // Whole-arg API key shapes
+    if arg.starts_with("sk-")
+        || arg.starts_with("ghp_")
+        || arg.starts_with("ghs_")
+        || arg.starts_with("gho_")
+        || arg.starts_with("ghu_")
+        || arg.starts_with("ghr_")
+        || arg.starts_with("glpat-")
+        || arg.starts_with("xoxb-")
+        || arg.starts_with("xoxp-")
+        || arg.starts_with("xoxa-")
+        || arg.starts_with("xoxs-")
+        || arg.starts_with("AKIA")
+    {
+        return "***REDACTED***".to_string();
+    }
+    // Authorization header — may be a whole arg ("Authorization: Bearer X")
+    // or embedded inside an arg ('--header Authorization: ...').
+    if let Some(idx) = lower.find("authorization:") {
+        let prefix = &arg[..idx];
+        return format!("{prefix}Authorization: ***REDACTED***");
+    }
+    // URLs with embedded credentials (https://user:pass@host).
+    // Replace `user:pass@` with `***REDACTED***@` while keeping the
+    // host/path visible for triage.
+    if let Some(redacted) = redact_url_creds(arg) {
+        return redacted;
+    }
+    arg.to_string()
+}
+
+/// If `arg` contains a `://user:pass@` userinfo segment, return a
+/// redacted copy. Returns None when there's nothing credential-like
+/// to redact.
+fn redact_url_creds(arg: &str) -> Option<String> {
+    let scheme_end = arg.find("://")?;
+    let after_scheme = &arg[scheme_end + 3..];
+    // Userinfo ends at the next '@' that comes before the path / query.
+    let at_idx = after_scheme.find('@')?;
+    let userinfo = &after_scheme[..at_idx];
+    if !userinfo.contains(':') {
+        // username-only (e.g. github.com/user@email/repo paths) — be
+        // conservative and only redact when it looks like user:pass.
+        return None;
+    }
+    // Stop scanning at the first path/query/fragment delimiter to
+    // avoid pulling in '@' from inside a path.
+    let stop = userinfo
+        .find(|c: char| c == '/' || c == '?' || c == '#' || c == ' ')
+        .unwrap_or(usize::MAX);
+    if stop != usize::MAX {
+        return None;
+    }
+    let mut out = String::with_capacity(arg.len());
+    out.push_str(&arg[..scheme_end + 3]);
+    out.push_str("***REDACTED***@");
+    out.push_str(&after_scheme[at_idx + 1..]);
+    Some(out)
 }
 
 /// Write an audit log entry to the JSONL file.
