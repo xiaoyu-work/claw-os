@@ -1225,7 +1225,9 @@ impl Program for CosmicStackInternal {
             );
 
             let mut paint = tiny_skia::Paint::default();
-            let (b, g, r, a) = theme.cosmic().accent_color().into_components();
+            // ClawOS: accent removed. Stack group "focused" indicator strip
+            // uses primary container colour rather than the cosmic accent.
+            let (b, g, r, a) = theme.cosmic().primary_container_color().into_components();
             paint.set_color(tiny_skia::Color::from_rgba(r, g, b, a).unwrap());
 
             for rect in damage {
@@ -1347,7 +1349,10 @@ impl Decorations<CosmicStackInternal, Message> for DefaultDecorations {
                 let cosmic_theme = theme.cosmic();
 
                 let background = if group_focused {
-                    cosmic_theme.accent_color()
+                    // ClawOS: accent removed. Both focused/unfocused stack
+                    // tabs use the primary container colour; we lean on the
+                    // tab rule + active-tab background to show focus.
+                    cosmic_theme.primary_container_color()
                 } else {
                     cosmic_theme.primary_container_color()
                 };
