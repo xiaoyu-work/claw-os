@@ -73,6 +73,7 @@ use smithay::{
     utils::{Clock, Monotonic, Point},
     wayland::{
         alpha_modifier::AlphaModifierState,
+        background_effect::BackgroundEffectState,
         compositor::{CompositorClientState, CompositorState, SurfaceData},
         cursor_shape::CursorShapeManagerState,
         dmabuf::{DmabufFeedback, DmabufGlobal, DmabufState},
@@ -258,6 +259,7 @@ pub struct Common {
     pub output_configuration_state: OutputConfigurationState<State>,
     pub output_power_state: OutputPowerState,
     pub presentation_state: PresentationState,
+    pub background_effect_state: BackgroundEffectState,
     pub primary_selection_state: PrimarySelectionState,
     pub ext_data_control_state: ExtDataControlState,
     pub wlr_data_control_state: WlrDataControlState,
@@ -650,6 +652,7 @@ impl State {
         let overlap_notify_state =
             OverlapNotifyState::new::<Self, _>(dh, client_has_no_security_context);
         let presentation_state = PresentationState::new::<Self>(dh, clock.id() as u32);
+        let background_effect_state = BackgroundEffectState::new::<Self>(dh);
         let primary_selection_state = PrimarySelectionState::new::<Self>(dh);
         let cosmic_image_capture_source_state =
             CosmicImageCaptureSourceState::new::<Self, _>(dh, client_not_sandboxed);
@@ -778,6 +781,7 @@ impl State {
                 output_power_state,
                 overlap_notify_state,
                 presentation_state,
+                background_effect_state,
                 primary_selection_state,
                 ext_data_control_state,
                 wlr_data_control_state,
