@@ -3849,6 +3849,12 @@ fn llm_error_kind(e: &llm::LlmError) -> &'static str {
         llm::LlmError::Parse(_) => "parse",
         llm::LlmError::Stream(_) => "stream",
         llm::LlmError::Internal(_) => "internal",
+        // Added by HIGH-3/MEDIUM-12 fix: upstream returned a syntactically
+        // malformed payload (bad JSON in SSE, oversized headers, etc.).
+        // Distinct from `parse` (which we used for any decode failure)
+        // because here the bug is on the provider's side, not in the
+        // request we built.
+        llm::LlmError::UpstreamMalformed(_) => "upstream_malformed",
     }
 }
 

@@ -28,8 +28,9 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::hash::{BuildHasher, Hash, Hasher};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::sync::Mutex as AsyncMutex;
 
 /// GitHub OAuth client ID for Copilot's first-party application.
 ///
@@ -88,11 +89,12 @@ impl From<reqwest::Error> for CopilotAuthError {
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else {
-        format!("{}…", &s[..max])
-    }
+    // Use char-boundary truncation. The previous implementation did
+    // `&s[..max]` which panics when `max` lands inside a multi-byte
+    // UTF-8 sequence — a real bug for non-ASCII error bodies (e.g. a
+    // 240-byte cap into a Chinese / Japanese error message would
+    // crash the LLM request path).
+    crate::agent::llm::truncate_for_display(s, max)
 }
 
 // ---------------------------------------------------------------------------
@@ -268,10 +270,32 @@ pub async fn exchange_for_copilot_token(
 /// Resolve a usable Copilot token for the supplied GitHub token. Uses
 /// the in-process cache when possible; re-exchanges with a 5-minute
 /// safety margin when the cached value is close to expiry.
+///
+/// Concurrent callers for the *same* GitHub token coalesce on a
+/// per-token `tokio::sync::Mutex`: the first caller does the network
+/// exchange, the rest wait and share the freshly cached result. This
+/// prevents the thundering-herd that used to happen when N parallel
+/// chat requests started up against an empty / expired cache and all
+/// raced into `exchange_for_copilot_token`, blowing the upstream
+/// rate-limit and risking N tokens issued for the same user.
 pub async fn ensure_copilot_token(
     github_token: &str,
 ) -> Result<CopilotToken, CopilotAuthError> {
     let fingerprint = token_fingerprint(github_token);
+
+    // Fast path: cache already has a usable token.
+    if let Some(cached) = lookup_cached(fingerprint) {
+        if !needs_refresh(&cached) {
+            return Ok(cached);
+        }
+    }
+
+    // Slow path: serialise the exchange per token. Only the first
+    // caller hits the network; the rest awaits this lock and then
+    // re-checks the cache.
+    let lock = exchange_lock_for(fingerprint);
+    let _guard = lock.lock().await;
+
     if let Some(cached) = lookup_cached(fingerprint) {
         if !needs_refresh(&cached) {
             return Ok(cached);
@@ -313,6 +337,19 @@ fn store_cached(fingerprint: u64, token: CopilotToken) {
 fn cache() -> &'static Mutex<HashMap<u64, CopilotToken>> {
     static CACHE: OnceLock<Mutex<HashMap<u64, CopilotToken>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Per-fingerprint async mutex used to serialise concurrent token
+/// exchanges against the same GitHub token. We keep one mutex per
+/// fingerprint forever — they're tiny and bounded by the number of
+/// distinct users signed in within this process.
+fn exchange_lock_for(fingerprint: u64) -> Arc<AsyncMutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<u64, Arc<AsyncMutex<()>>>>> = OnceLock::new();
+    let locks = LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut g = locks.lock().unwrap_or_else(|e| e.into_inner());
+    g.entry(fingerprint)
+        .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+        .clone()
 }
 
 /// Stable in-process fingerprint of a GitHub token. We deliberately
@@ -359,6 +396,10 @@ fn http_client() -> &'static reqwest::Client {
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
             .user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")))
+            // Per-phase timeouts: tighten the connect window so the
+            // OAuth / token-exchange path can't stall the agent on a
+            // dead-network race; cap the overall request at 30s.
+            .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(30))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new())
@@ -458,5 +499,52 @@ mod tests {
         };
         assert!(needs_refresh(&stale));
         assert!(!needs_refresh(&fresh));
+    }
+
+    /// Regression: `truncate` used to do `&s[..n]`, which panics
+    /// when `n` lands inside a multi-byte UTF-8 sequence. A 240-byte
+    /// truncation of an error body that happens to contain CJK
+    /// characters around byte 240 would crash the LLM request path
+    /// instead of surfacing the upstream error.
+    #[test]
+    fn truncate_handles_non_ascii() {
+        // Each '配' is 3 bytes in UTF-8. With max=4 the old impl would
+        // try to slice at byte index 4 (mid-character) and panic.
+        let s = "配额不足配额不足"; // 24 bytes, 8 chars
+        let out = truncate(s, 4);
+        // Exactly 4 chars + ellipsis.
+        assert_eq!(out.chars().count(), 5);
+        assert!(out.ends_with('…'));
+        // And the prefix is the first four characters intact.
+        assert!(out.starts_with("配额不足"));
+
+        // Boundary cases that previously panicked.
+        for n in [1usize, 2, 3, 5, 7] {
+            // Must not panic.
+            let _ = truncate(s, n);
+        }
+
+        // ASCII fast path still works.
+        assert_eq!(truncate("hello", 100), "hello");
+        assert!(truncate("hello world", 5).starts_with("hello"));
+    }
+
+    /// Sanity-check the exchange-mutex helper: two acquisitions for
+    /// the same fingerprint return the same underlying Arc, while
+    /// different fingerprints get different locks.
+    #[tokio::test]
+    async fn exchange_lock_is_per_fingerprint() {
+        let a1 = exchange_lock_for(1);
+        let a2 = exchange_lock_for(1);
+        let b = exchange_lock_for(2);
+        assert!(Arc::ptr_eq(&a1, &a2), "same fingerprint must share lock");
+        assert!(!Arc::ptr_eq(&a1, &b), "different fingerprints must NOT share lock");
+
+        // Holding the lock for fingerprint 1 must not block fingerprint 2.
+        let g = a1.lock().await;
+        let started = std::time::Instant::now();
+        let _g2 = b.try_lock().expect("different lock must be free");
+        assert!(started.elapsed() < std::time::Duration::from_millis(50));
+        drop(g);
     }
 }

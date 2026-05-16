@@ -36,6 +36,55 @@
 
 use std::collections::VecDeque;
 
+/// Hard caps to keep a hostile / runaway upstream from OOMing us via
+/// a malformed SSE stream. The body cap at the `read_body_capped`
+/// layer protects non-streaming readers; these protect the streaming
+/// parser's own internal state.
+///
+/// * `MAX_LINE_BUFFER_BYTES` — one event-stream line never legitimately
+///   exceeds ~1 MiB. An upstream sending one giant unterminated line
+///   would otherwise have us buffer forever.
+/// * `MAX_PENDING_LINES` — Anthropic events use a handful of `data:`
+///   lines per message; 10k is a generous ceiling.
+/// * `MAX_READY_BYTES` — events queued but not yet popped sum to at
+///   most 64 MiB before we treat the stream as runaway.
+pub const MAX_LINE_BUFFER_BYTES: usize = 1024 * 1024;
+pub const MAX_PENDING_LINES: usize = 10_000;
+pub const MAX_READY_BYTES: usize = 64 * 1024 * 1024;
+
+/// Error returned by [`SseParser::feed`] / [`SseParser::finish`] when
+/// the parser would otherwise need to allocate beyond the configured
+/// caps. Callers should treat it as a fatal stream-level error,
+/// terminate the response, and bubble up as
+/// [`crate::agent::llm::LlmError::UpstreamMalformed`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SseOverflow {
+    /// Which buffer overflowed.
+    pub kind: SseOverflowKind,
+    /// Limit that was exceeded.
+    pub cap: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SseOverflowKind {
+    LineBuffer,
+    PendingLines,
+    ReadyBytes,
+}
+
+impl std::fmt::Display for SseOverflow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let what = match self.kind {
+            SseOverflowKind::LineBuffer => "incoming line buffer",
+            SseOverflowKind::PendingLines => "pending lines per event",
+            SseOverflowKind::ReadyBytes => "ready event queue bytes",
+        };
+        write!(f, "SSE parser {what} exceeded cap {}", self.cap)
+    }
+}
+
+impl std::error::Error for SseOverflow {}
+
 /// One complete SSE event, as decoded by [`SseParser`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SseEvent {
@@ -53,6 +102,11 @@ pub struct SseEvent {
 /// a UTF-8 multi-byte sequence — so we accumulate raw bytes and
 /// only `String`-decode complete lines.
 ///
+/// All accumulating buffers are bounded; see [`MAX_LINE_BUFFER_BYTES`],
+/// [`MAX_PENDING_LINES`], [`MAX_READY_BYTES`]. When any cap is hit
+/// `feed` / `finish` return [`SseOverflow`] and the parser must be
+/// discarded — further feeds will keep returning the same error.
+///
 /// [`feed`]: SseParser::feed
 /// [`pop_event`]: SseParser::pop_event
 #[derive(Debug, Default)]
@@ -63,6 +117,11 @@ pub struct SseParser {
     pending_lines: Vec<String>,
     /// Completed events ready to be popped.
     ready: VecDeque<SseEvent>,
+    /// Running total of bytes currently in `ready` (sum of event + data lens).
+    ready_bytes: usize,
+    /// Sticky overflow flag — once set, the parser refuses all further
+    /// work and surfaces the original cause.
+    errored: Option<SseOverflow>,
 }
 
 impl SseParser {
@@ -74,7 +133,19 @@ impl SseParser {
     /// emitting an event each time a blank line (i.e., `\n` after
     /// a previous `\n`) terminates the current accumulating event.
     /// Handles `\r\n` line endings too.
-    pub fn feed(&mut self, chunk: &[u8]) {
+    ///
+    /// Returns [`SseOverflow`] when any internal cap would be
+    /// exceeded; the parser is then poisoned (subsequent calls
+    /// return the same error) and must be discarded.
+    pub fn feed(&mut self, chunk: &[u8]) -> std::result::Result<(), SseOverflow> {
+        if let Some(e) = &self.errored {
+            return Err(e.clone());
+        }
+        // Bound the in-progress line buffer BEFORE appending so we
+        // don't briefly allocate above the cap.
+        if self.buffer.len().saturating_add(chunk.len()) > MAX_LINE_BUFFER_BYTES {
+            return self.poison(SseOverflowKind::LineBuffer, MAX_LINE_BUFFER_BYTES);
+        }
         self.buffer.extend_from_slice(chunk);
         while let Some(pos) = self.buffer.iter().position(|&b| b == b'\n') {
             // Slice [..pos] is one line, possibly with a trailing
@@ -92,17 +163,21 @@ impl SseParser {
             // handled above by buffering, so what's left here is
             // a complete line).
             let line = String::from_utf8_lossy(line_bytes).into_owned();
-            self.consume_line(line);
+            self.consume_line(line)?;
             // Consume the \n we found.
             self.buffer.drain(..=pos);
         }
+        Ok(())
     }
 
     /// Mark end-of-stream. Flushes any pending event that wasn't
     /// terminated by a blank line. The wire spec says streams end
     /// at a blank line; this is a forgiving final-flush helper for
     /// servers that close without one.
-    pub fn finish(&mut self) {
+    pub fn finish(&mut self) -> std::result::Result<(), SseOverflow> {
+        if let Some(e) = &self.errored {
+            return Err(e.clone());
+        }
         // If the buffer has trailing data (no newline), treat it as
         // a final unterminated line.
         if !self.buffer.is_empty() {
@@ -113,39 +188,50 @@ impl SseParser {
                 &line_bytes[..]
             };
             let line = String::from_utf8_lossy(line_bytes).into_owned();
-            self.consume_line(line);
+            self.consume_line(line)?;
         }
         if !self.pending_lines.is_empty() {
-            self.dispatch_event();
+            self.dispatch_event()?;
         }
+        Ok(())
     }
 
     /// Pop the next complete event, if one is ready.
     pub fn pop_event(&mut self) -> Option<SseEvent> {
-        self.ready.pop_front()
+        let ev = self.ready.pop_front();
+        if let Some(e) = &ev {
+            let cost = event_cost(e);
+            self.ready_bytes = self.ready_bytes.saturating_sub(cost);
+        }
+        ev
     }
 
     /// Drain all complete events, in order.
     pub fn drain_events(&mut self) -> Vec<SseEvent> {
+        self.ready_bytes = 0;
         self.ready.drain(..).collect()
     }
 
-    fn consume_line(&mut self, line: String) {
+    fn consume_line(&mut self, line: String) -> std::result::Result<(), SseOverflow> {
         if line.is_empty() {
             // Blank line: dispatch event (if any pending fields).
             if !self.pending_lines.is_empty() {
-                self.dispatch_event();
+                self.dispatch_event()?;
             }
-            return;
+            return Ok(());
         }
         // Comment line — starts with ':'.
         if line.starts_with(':') {
-            return;
+            return Ok(());
+        }
+        if self.pending_lines.len() >= MAX_PENDING_LINES {
+            return self.poison(SseOverflowKind::PendingLines, MAX_PENDING_LINES);
         }
         self.pending_lines.push(line);
+        Ok(())
     }
 
-    fn dispatch_event(&mut self) {
+    fn dispatch_event(&mut self) -> std::result::Result<(), SseOverflow> {
         let mut event_name: Option<String> = None;
         let mut data_lines: Vec<String> = Vec::new();
         for raw in self.pending_lines.drain(..) {
@@ -165,13 +251,39 @@ impl SseParser {
         }
         // Per spec: if no data lines, do not dispatch.
         if data_lines.is_empty() {
-            return;
+            return Ok(());
         }
-        self.ready.push_back(SseEvent {
+        let event = SseEvent {
             event: event_name.unwrap_or_else(|| "message".to_string()),
             data: data_lines.join("\n"),
-        });
+        };
+        let cost = event_cost(&event);
+        if self.ready_bytes.saturating_add(cost) > MAX_READY_BYTES {
+            return self.poison(SseOverflowKind::ReadyBytes, MAX_READY_BYTES);
+        }
+        self.ready_bytes += cost;
+        self.ready.push_back(event);
+        Ok(())
     }
+
+    fn poison(
+        &mut self,
+        kind: SseOverflowKind,
+        cap: usize,
+    ) -> std::result::Result<(), SseOverflow> {
+        let err = SseOverflow { kind, cap };
+        // Clear large buffers so we don't keep holding the memory.
+        self.buffer.clear();
+        self.pending_lines.clear();
+        self.ready.clear();
+        self.ready_bytes = 0;
+        self.errored = Some(err.clone());
+        Err(err)
+    }
+}
+
+fn event_cost(e: &SseEvent) -> usize {
+    e.event.len().saturating_add(e.data.len())
 }
 
 /// Split an SSE line into `(field, value)`. Per spec:
@@ -191,7 +303,7 @@ mod tests {
 
     fn one_chunk(input: &[u8]) -> Vec<SseEvent> {
         let mut p = SseParser::new();
-        p.feed(input);
+        p.feed(input).expect("test input fits in caps");
         p.drain_events()
     }
 
@@ -274,7 +386,7 @@ mod tests {
         let input = b"event: msg\ndata: hello\n\nevent: end\ndata: bye\n\n";
         let mut p = SseParser::new();
         for b in input {
-            p.feed(&[*b]);
+            p.feed(&[*b]).expect("fits in caps");
         }
         let events = p.drain_events();
         assert_eq!(events.len(), 2);
@@ -287,9 +399,9 @@ mod tests {
     #[test]
     fn split_in_middle_of_field_name() {
         let mut p = SseParser::new();
-        p.feed(b"eve");
-        p.feed(b"nt: ping\nda");
-        p.feed(b"ta: hi\n\n");
+        p.feed(b"eve").expect("fits in caps");
+        p.feed(b"nt: ping\nda").expect("fits in caps");
+        p.feed(b"ta: hi\n\n").expect("fits in caps");
         let events = p.drain_events();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event, "ping");
@@ -299,10 +411,10 @@ mod tests {
     #[test]
     fn split_in_middle_of_blank_separator() {
         let mut p = SseParser::new();
-        p.feed(b"event: a\ndata: 1\n");
+        p.feed(b"event: a\ndata: 1\n").expect("fits in caps");
         // First event terminator arrives split across 2 feeds.
-        p.feed(b"\n");
-        p.feed(b"event: b\ndata: 2\n\n");
+        p.feed(b"\n").expect("fits in caps");
+        p.feed(b"event: b\ndata: 2\n\n").expect("fits in caps");
         let events = p.drain_events();
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].data, "1");
@@ -312,9 +424,9 @@ mod tests {
     #[test]
     fn finish_flushes_unterminated_event() {
         let mut p = SseParser::new();
-        p.feed(b"event: end\ndata: bye\n");
+        p.feed(b"event: end\ndata: bye\n").expect("fits in caps");
         // No blank line before EOF.
-        p.finish();
+        p.finish().expect("fits in caps");
         let events = p.drain_events();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].data, "bye");
@@ -323,8 +435,8 @@ mod tests {
     #[test]
     fn finish_flushes_unterminated_partial_line() {
         let mut p = SseParser::new();
-        p.feed(b"event: end\ndata: bye");
-        p.finish();
+        p.feed(b"event: end\ndata: bye").expect("fits in caps");
+        p.finish().expect("fits in caps");
         let events = p.drain_events();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].data, "bye");
@@ -346,7 +458,7 @@ mod tests {
     #[test]
     fn pop_event_drains_in_fifo_order() {
         let mut p = SseParser::new();
-        p.feed(b"event: a\ndata: 1\n\nevent: b\ndata: 2\n\n");
+        p.feed(b"event: a\ndata: 1\n\nevent: b\ndata: 2\n\n").expect("fits in caps");
         let first = p.pop_event().unwrap();
         let second = p.pop_event().unwrap();
         assert_eq!(first.event, "a");
@@ -420,5 +532,61 @@ mod tests {
         let (f, v) = parse_field_line("data: hello: world");
         assert_eq!(f, "data");
         assert_eq!(v, " hello: world");
+    }
+
+    /// A hostile upstream that streams a single unterminated multi-MiB
+    /// line must NOT cause us to allocate without bound. We surface
+    /// an `SseOverflow` and the caller stops the stream.
+    #[test]
+    fn oversized_buffer_errors() {
+        let mut p = SseParser::new();
+        // Feed up to just under the cap — still happy.
+        let chunk = vec![b'x'; MAX_LINE_BUFFER_BYTES / 2];
+        p.feed(&chunk).expect("first half OK");
+        // Second chunk pushes us past the cap → must error.
+        let chunk2 = vec![b'y'; MAX_LINE_BUFFER_BYTES / 2 + 100];
+        let err = p.feed(&chunk2).expect_err("second half must overflow");
+        assert_eq!(err.kind, SseOverflowKind::LineBuffer);
+        // Parser is poisoned: subsequent feeds return the same error.
+        let err2 = p.feed(b"more").expect_err("poisoned parser stays errored");
+        assert_eq!(err, err2);
+    }
+
+    /// Too many lines per event (no terminating blank line) must also
+    /// surface as overflow, not OOM.
+    #[test]
+    fn oversized_pending_lines_errors() {
+        let mut p = SseParser::new();
+        // Each "data: x\n" line is 8 bytes, so MAX_PENDING_LINES of
+        // them fits in the line-buffer cap.
+        let mut buf = Vec::with_capacity(8 * (MAX_PENDING_LINES + 10));
+        for _ in 0..(MAX_PENDING_LINES + 10) {
+            buf.extend_from_slice(b"data: x\n");
+        }
+        // Note no trailing blank line — they all accumulate in
+        // pending_lines until the cap kicks in.
+        let err = p.feed(&buf).expect_err("must overflow pending lines");
+        assert_eq!(err.kind, SseOverflowKind::PendingLines);
+    }
+
+    /// Too many ready events queued must surface as overflow.
+    #[test]
+    fn oversized_ready_queue_errors() {
+        // One event of ~512 KiB. 130 such events ≈ 65 MiB > cap.
+        let mut p = SseParser::new();
+        let payload = "y".repeat(512 * 1024);
+        let mut total_err: Option<SseOverflow> = None;
+        for _ in 0..130 {
+            let mut chunk = Vec::with_capacity(payload.len() + 16);
+            chunk.extend_from_slice(b"data: ");
+            chunk.extend_from_slice(payload.as_bytes());
+            chunk.extend_from_slice(b"\n\n");
+            if let Err(e) = p.feed(&chunk) {
+                total_err = Some(e);
+                break;
+            }
+        }
+        let e = total_err.expect("ready queue should have overflowed");
+        assert_eq!(e.kind, SseOverflowKind::ReadyBytes);
     }
 }

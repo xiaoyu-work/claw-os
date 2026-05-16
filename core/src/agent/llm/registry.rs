@@ -74,9 +74,21 @@ pub fn build(name: &str, model: &str, agent_cfg: &AgentConfig) -> Result<Arc<dyn
         "llama_local" => Ok(Arc::new(providers::llama_local::LlamaLocalProvider::new(
             model, agent_cfg,
         ))),
-        other => Err(LlmError::NotConfigured(format!(
-            "unknown provider '{other}'. registered: {REGISTERED:?}"
-        ))),
+        other => {
+            // LOW: a typo in `agent.provider` is a high-blast-radius
+            // misconfiguration. Surface it through both the error
+            // path (callers handle) AND a `tracing::warn` so the
+            // failure shows up in logs even when the caller silently
+            // swallows the error (e.g. config-reload paths).
+            tracing::warn!(
+                provider = other,
+                registered = ?REGISTERED,
+                "registry: unknown provider alias; falling back is not possible"
+            );
+            Err(LlmError::NotConfigured(format!(
+                "unknown provider '{other}'. registered: {REGISTERED:?}"
+            )))
+        }
     }
 }
 
