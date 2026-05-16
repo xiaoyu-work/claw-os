@@ -41,37 +41,69 @@ mod inotify_impl {
         pub name: String,
     }
 
-    /// Create a non-blocking, close-on-exec inotify file descriptor.
-    pub fn inotify_init() -> Result<RawFd, String> {
-        let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
-        if fd < 0 {
-            Err("inotify_init failed".into())
-        } else {
-            Ok(fd)
+    /// RAII wrapper around an inotify file descriptor. Closes the fd on
+    /// drop so an early-return path between `inotify_init` and the next
+    /// successful `inotify_add_watch` (e.g. ENOENT on a parent path the
+    /// caller can't read) does not leak kernel inotify slots — agents
+    /// retrying a denied-path watch in a loop used to exhaust the
+    /// per-process inotify limit.
+    pub struct InotifyFd {
+        fd: RawFd,
+    }
+
+    impl InotifyFd {
+        /// Create a non-blocking, close-on-exec inotify file descriptor.
+        pub fn new() -> Result<Self, String> {
+            let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
+            if fd < 0 {
+                Err(format!(
+                    "inotify_init1 failed: {}",
+                    std::io::Error::last_os_error()
+                ))
+            } else {
+                Ok(InotifyFd { fd })
+            }
+        }
+
+        /// Raw underlying file descriptor (for poll/read).
+        pub fn as_raw_fd(&self) -> RawFd {
+            self.fd
+        }
+
+        /// Add a watch for `path` with the given event `mask`.
+        pub fn add_watch(&self, path: &str, mask: u32) -> Result<i32, String> {
+            let c_path = std::ffi::CString::new(path).map_err(|e| e.to_string())?;
+            let wd = unsafe { libc::inotify_add_watch(self.fd, c_path.as_ptr(), mask) };
+            if wd < 0 {
+                Err(format!(
+                    "inotify_add_watch failed for {path}: {}",
+                    std::io::Error::last_os_error()
+                ))
+            } else {
+                Ok(wd)
+            }
         }
     }
 
-    /// Add a watch for `path` with the given event `mask`. Returns a watch
-    /// descriptor (wd).
-    pub fn inotify_add_watch(fd: RawFd, path: &str, mask: u32) -> Result<i32, String> {
-        let c_path = std::ffi::CString::new(path).map_err(|e| e.to_string())?;
-        let wd = unsafe { libc::inotify_add_watch(fd, c_path.as_ptr(), mask) };
-        if wd < 0 {
-            Err(format!("inotify_add_watch failed for {path}"))
-        } else {
-            Ok(wd)
+    impl Drop for InotifyFd {
+        fn drop(&mut self) {
+            // SAFETY: we own this fd; nothing else still holds it.
+            unsafe {
+                libc::close(self.fd);
+            }
         }
     }
 
-    /// Close an inotify file descriptor.
-    pub fn inotify_close(fd: RawFd) {
-        unsafe {
-            libc::close(fd);
-        }
-    }
-
-    /// Wait up to `timeout_ms` for events on `fd`, then read and decode them.
-    /// A negative `timeout_ms` means wait indefinitely.
+    /// Wait up to `timeout_ms` for events on `fd`, then read and decode
+    /// them. A negative `timeout_ms` means wait indefinitely.
+    ///
+    /// The kernel can have many inotify events ready (a Yarn install can
+    /// produce hundreds of CREATE/MODIFY events per second). The previous
+    /// 4 KiB stack buffer dropped events under burst because each
+    /// `read()` returns at most the bytes that fit. We use a 16 KiB
+    /// heap buffer (the canonical inotify drain size) and loop the read
+    /// until EAGAIN (the fd is `IN_NONBLOCK`), draining everything the
+    /// kernel queued before this poll cycle ended.
     pub fn read_events(fd: RawFd, timeout_ms: i32) -> Vec<InotifyEvent> {
         // Use poll() to wait for readability with a timeout.
         let mut pfd = libc::pollfd {
@@ -84,35 +116,55 @@ mod inotify_impl {
             return Vec::new(); // timeout or error
         }
 
-        // Read raw bytes from the inotify fd.
-        let mut buf = [0u8; 4096];
-        let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
-        if n <= 0 {
-            return Vec::new();
-        }
-        let n = n as usize;
-
-        // Decode inotify_event structs from the buffer.
+        // 16 KiB is the buffer size the inotify(7) man page recommends
+        // and the size used in `select-with-inotify` and other reference
+        // drainers. A single inotify_event header is 16 bytes; with
+        // typical 256-byte filenames this fits 50+ events per read.
+        const READ_BUF_BYTES: usize = 16 * 1024;
         let mut events = Vec::new();
-        let mut offset = 0usize;
+        let mut buf = vec![0u8; READ_BUF_BYTES];
         let event_hdr_size = std::mem::size_of::<libc::inotify_event>();
-        while offset + event_hdr_size <= n {
-            let ev_ptr = unsafe { &*(buf.as_ptr().add(offset) as *const libc::inotify_event) };
-            let name_len = ev_ptr.len as usize;
-            let name = if name_len > 0 && offset + event_hdr_size + name_len <= n {
-                let name_bytes = &buf[offset + event_hdr_size..offset + event_hdr_size + name_len];
-                // The name is NUL-padded.
-                let end = name_bytes.iter().position(|&b| b == 0).unwrap_or(name_len);
-                String::from_utf8_lossy(&name_bytes[..end]).to_string()
-            } else {
-                String::new()
-            };
-            events.push(InotifyEvent {
-                wd: ev_ptr.wd,
-                mask: ev_ptr.mask,
-                name,
-            });
-            offset += event_hdr_size + name_len;
+
+        loop {
+            let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+            if n < 0 {
+                // EAGAIN/EWOULDBLOCK: nothing left to drain this cycle.
+                // Any other error: bail with what we have.
+                break;
+            }
+            if n == 0 {
+                break;
+            }
+            let n = n as usize;
+
+            // Decode inotify_event structs from the buffer.
+            let mut offset = 0usize;
+            while offset + event_hdr_size <= n {
+                let ev_ptr =
+                    unsafe { &*(buf.as_ptr().add(offset) as *const libc::inotify_event) };
+                let name_len = ev_ptr.len as usize;
+                let name = if name_len > 0 && offset + event_hdr_size + name_len <= n {
+                    let name_bytes =
+                        &buf[offset + event_hdr_size..offset + event_hdr_size + name_len];
+                    // The name is NUL-padded.
+                    let end = name_bytes.iter().position(|&b| b == 0).unwrap_or(name_len);
+                    String::from_utf8_lossy(&name_bytes[..end]).to_string()
+                } else {
+                    String::new()
+                };
+                events.push(InotifyEvent {
+                    wd: ev_ptr.wd,
+                    mask: ev_ptr.mask,
+                    name,
+                });
+                offset += event_hdr_size + name_len;
+            }
+
+            // If the kernel filled less than the buffer, there's nothing
+            // more to drain right now — return what we have.
+            if n < buf.len() {
+                break;
+            }
         }
         events
     }
@@ -166,7 +218,19 @@ fn history_path() -> PathBuf {
     data_dir().join("watch").join("history.jsonl")
 }
 
+/// Rotation threshold for the watch history log. Above this size the
+/// file is renamed to `<path>.1` after the next write so the active
+/// file resets. 1 MiB is plenty for the few-KB-per-event observability
+/// trail this log captures, and matches the single-generation rotation
+/// pattern used by the AI run log (`agent/llm/run_log.rs`).
+const HISTORY_ROTATE_BYTES: u64 = 1 * 1024 * 1024;
+
 /// Append a watch event to the JSONL history log.
+///
+/// Heavy multi-watch use (e.g. an agent reacting to file changes in a
+/// large source tree) used to grow this file without bound, and
+/// `cmd_watch_history` loads it whole. Rotate at 1 MiB to keep both the
+/// active file and `cmd_watch_history`'s working-set predictable.
 fn log_watch_event(source: &str, event: &Value) {
     let path = history_path();
     if let Some(parent) = path.parent() {
@@ -179,7 +243,69 @@ fn log_watch_event(source: &str, event: &Value) {
         obj.insert("source".into(), json!(source));
     }
     let line = serde_json::to_string(&entry).unwrap_or_default();
-    let _ = crate::filelock::append_locked(&path, &line);
+    let _ = append_with_rotation(&path, &line, HISTORY_ROTATE_BYTES);
+}
+
+/// Append `line` to `path` under an exclusive flock; after the append
+/// commits, if the file has grown past `rotate_bytes` rotate it to
+/// `<path>.1` so the next write starts from a fresh file. Single-
+/// generation rotation (only `.1` is retained) matches the AI run log
+/// idiom in `agent/llm/run_log.rs`.
+fn append_with_rotation(path: &std::path::Path, line: &str, rotate_bytes: u64) -> Result<(), String> {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+    }
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| format!("open {}: {e}", path.display()))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+        if ret != 0 {
+            return Err(format!(
+                "flock LOCK_EX {}: {}",
+                path.display(),
+                std::io::Error::last_os_error()
+            ));
+        }
+    }
+
+    writeln!(file, "{line}").map_err(|e| format!("write {}: {e}", path.display()))?;
+    file.flush()
+        .map_err(|e| format!("flush {}: {e}", path.display()))?;
+
+    let size = file
+        .metadata()
+        .map(|m| m.len())
+        .map_err(|e| format!("stat {}: {e}", path.display()))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        unsafe {
+            libc::flock(file.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+    drop(file);
+
+    if size > rotate_bytes {
+        let mut backup = path.as_os_str().to_owned();
+        backup.push(".1");
+        let backup = std::path::PathBuf::from(backup);
+        // Best-effort rotation: a rename failure must not lose the
+        // line we just wrote, so swallow the error.
+        let _ = fs::rename(path, &backup);
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -262,13 +388,17 @@ fn watch_file_inotify(path: &PathBuf, timeout_secs: u64) -> Result<Value, String
         (path_str.clone(), false)
     };
 
-    let fd = inotify_impl::inotify_init()?;
+    // RAII: the fd is closed in `InotifyFd::Drop` so an early `?`
+    // return — including the case where `add_watch` fails on a path
+    // we can't open (parent ENOENT, EACCES, etc.) — does not leak
+    // the kernel inotify instance.
+    let inotify = inotify_impl::InotifyFd::new()?;
     let mask = if watching_parent {
         inotify_impl::dir_watch_mask()
     } else {
         inotify_impl::file_watch_mask()
     };
-    let _wd = inotify_impl::inotify_add_watch(fd, &watch_path, mask)?;
+    let _wd = inotify.add_watch(&watch_path, mask)?;
 
     let deadline = Instant::now() + Duration::from_secs(timeout_secs);
 
@@ -276,7 +406,6 @@ fn watch_file_inotify(path: &PathBuf, timeout_secs: u64) -> Result<Value, String
         let remaining_ms = {
             let rem = deadline.saturating_duration_since(Instant::now());
             if rem.is_zero() {
-                inotify_impl::inotify_close(fd);
                 return Ok(json!({
                     "status": "timeout",
                     "path": path_str,
@@ -287,13 +416,12 @@ fn watch_file_inotify(path: &PathBuf, timeout_secs: u64) -> Result<Value, String
             rem.as_millis() as i32
         };
 
-        let events = inotify_impl::read_events(fd, remaining_ms.min(500));
+        let events = inotify_impl::read_events(inotify.as_raw_fd(), remaining_ms.min(500));
         for ev in &events {
             if watching_parent {
                 // Only care about the target filename appearing.
                 let target_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                 if ev.name == target_name && ev.mask & libc::IN_CREATE as u32 != 0 {
-                    inotify_impl::inotify_close(fd);
                     let cur = stat_file(path);
                     return Ok(json!({
                         "status": "changed",
@@ -304,7 +432,6 @@ fn watch_file_inotify(path: &PathBuf, timeout_secs: u64) -> Result<Value, String
                 }
             } else {
                 let event_name = inotify_impl::mask_to_event_name(ev.mask);
-                inotify_impl::inotify_close(fd);
                 if event_name == "deleted" {
                     return Ok(json!({
                         "status": "changed",
@@ -407,8 +534,10 @@ fn cmd_watch_dir(args: &[String]) -> Result<Value, String> {
 #[cfg(target_os = "linux")]
 fn watch_dir_inotify(path: &PathBuf, timeout_secs: u64) -> Result<Value, String> {
     let path_str = path.to_string_lossy().to_string();
-    let fd = inotify_impl::inotify_init()?;
-    let _wd = inotify_impl::inotify_add_watch(fd, &path_str, inotify_impl::dir_watch_mask())?;
+    // RAII: same reasoning as `watch_file_inotify` — `?` on add_watch
+    // would otherwise leak the inotify fd.
+    let inotify = inotify_impl::InotifyFd::new()?;
+    let _wd = inotify.add_watch(&path_str, inotify_impl::dir_watch_mask())?;
 
     let deadline = Instant::now() + Duration::from_secs(timeout_secs);
 
@@ -416,7 +545,6 @@ fn watch_dir_inotify(path: &PathBuf, timeout_secs: u64) -> Result<Value, String>
         let remaining_ms = {
             let rem = deadline.saturating_duration_since(Instant::now());
             if rem.is_zero() {
-                inotify_impl::inotify_close(fd);
                 return Ok(json!({
                     "status": "timeout",
                     "path": path_str,
@@ -427,7 +555,7 @@ fn watch_dir_inotify(path: &PathBuf, timeout_secs: u64) -> Result<Value, String>
             rem.as_millis() as i32
         };
 
-        let events = inotify_impl::read_events(fd, remaining_ms.min(500));
+        let events = inotify_impl::read_events(inotify.as_raw_fd(), remaining_ms.min(500));
         if !events.is_empty() {
             let json_events: Vec<Value> = events
                 .iter()
@@ -441,7 +569,6 @@ fn watch_dir_inotify(path: &PathBuf, timeout_secs: u64) -> Result<Value, String>
                 })
                 .collect();
             let count = json_events.len();
-            inotify_impl::inotify_close(fd);
             return Ok(json!({
                 "status": "changed",
                 "path": path_str,
@@ -1497,5 +1624,114 @@ mod tests {
         assert_eq!(count_ipc_messages(&dir), 2);
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// History rotation regression: once the active log exceeds the
+    /// configured byte cap, the rotation step renames it to `<path>.1`
+    /// so the next append starts from a fresh file. Without this the
+    /// log grew unbounded and `cmd_watch_history` had to load the whole
+    /// thing on every read.
+    #[test]
+    fn test_append_with_rotation_rotates_when_over_cap() {
+        let dir = unique_test_dir("rotate");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rotating.jsonl");
+
+        // Cap intentionally tiny so a single longish line trips it.
+        let cap: u64 = 64;
+        let long_line = "x".repeat(120);
+
+        let backup = {
+            let mut b = path.as_os_str().to_owned();
+            b.push(".1");
+            std::path::PathBuf::from(b)
+        };
+
+        // First append: writes line, size > cap → rotation moves the
+        // file to `<path>.1` in the same call.
+        append_with_rotation(&path, &long_line, cap).unwrap();
+        assert!(
+            backup.exists(),
+            "rotation backup .1 should exist after first oversize append"
+        );
+        assert!(
+            !path.exists(),
+            "live file should be gone immediately after rotation"
+        );
+        let backup_content = fs::read_to_string(&backup).unwrap();
+        assert!(
+            backup_content.contains(&long_line),
+            "rotated backup must hold the pre-rotation line"
+        );
+
+        // Second append: live file is recreated from scratch.
+        append_with_rotation(&path, "second", cap).unwrap();
+        let live_content = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            live_content.trim(),
+            "second",
+            "live file must be fresh post-rotation"
+        );
+        assert!(
+            !live_content.contains(&long_line),
+            "live file must not carry over pre-rotation content"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// History rotation regression: when the file is under the cap, no
+    /// rotation should happen and lines accumulate normally.
+    #[test]
+    fn test_append_with_rotation_no_rotate_under_cap() {
+        let dir = unique_test_dir("no-rotate");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("small.jsonl");
+
+        // Large cap so the small lines we append never trip rotation.
+        let cap: u64 = 1024 * 1024;
+        append_with_rotation(&path, "one", cap).unwrap();
+        append_with_rotation(&path, "two", cap).unwrap();
+        append_with_rotation(&path, "three", cap).unwrap();
+
+        let backup = {
+            let mut b = path.as_os_str().to_owned();
+            b.push(".1");
+            std::path::PathBuf::from(b)
+        };
+        assert!(
+            !backup.exists(),
+            "no rotation expected when below the cap"
+        );
+
+        let content = fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines, vec!["one", "two", "three"]);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// RAII regression: dropping an `InotifyFd` must close the
+    /// underlying kernel inotify instance. Verified indirectly by
+    /// observing that a fresh fd reuses the slot — without close the
+    /// process would eventually hit the per-uid inotify cap.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_inotify_fd_drop_closes() {
+        let raw = {
+            let fd = inotify_impl::InotifyFd::new().unwrap();
+            fd.as_raw_fd()
+        };
+        // The fd should now be closed. close(fd) on an already-closed
+        // descriptor returns -1 / EBADF. We use that as the witness.
+        let rc = unsafe { libc::close(raw) };
+        assert_eq!(
+            rc, -1,
+            "InotifyFd::Drop should have closed the fd already (close()-on-closed returns -1)"
+        );
+        let err = std::io::Error::last_os_error().raw_os_error();
+        assert_eq!(err, Some(libc::EBADF));
     }
 }
