@@ -429,6 +429,9 @@ pub fn init_shaders(renderer: &mut GlesRenderer) -> Result<(), GlesError> {
         &[
             UniformName::new("shadow_color", UniformType::_4f),
             UniformName::new("sigma", UniformType::_1f),
+            UniformName::new("ambient_color", UniformType::_4f),
+            UniformName::new("ambient_sigma", UniformType::_1f),
+            UniformName::new("ambient_offset", UniformType::_2f),
             UniformName::new("input_to_geo", UniformType::Matrix3x3),
             UniformName::new("geo_size", UniformType::_2f),
             UniformName::new("corner_radius", UniformType::_4f),

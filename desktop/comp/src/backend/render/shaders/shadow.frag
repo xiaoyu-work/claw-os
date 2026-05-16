@@ -11,6 +11,12 @@ uniform float tint;
 uniform vec4 shadow_color;
 uniform float sigma;
 
+// Optional ambient (second) shadow — wider/softer halo composited UNDER the key shadow.
+// Set ambient_color.a = 0 to disable the second layer (single-shadow legacy behaviour).
+uniform vec4 ambient_color;
+uniform float ambient_sigma;
+uniform vec2 ambient_offset;
+
 uniform mat3 input_to_geo;
 uniform vec2 geo_size;
 uniform vec4 corner_radius;
@@ -98,8 +104,8 @@ void main() {
     vec3 coords_geo = input_to_geo * vec3(v_coords, 1.0);
     vec3 coords_window_geo = window_input_to_geo * vec3(v_coords, 1.0);
 
+    // ---- Key shadow (close, sharp, dark) ----
     vec4 color = shadow_color;
-
     float shadow_value;
     if (sigma < 0.1) {
         // With low enough sigma just draw a rounded rectangle.
@@ -118,6 +124,25 @@ void main() {
             );
     }
     color = color * shadow_value;
+
+    // ---- Ambient shadow (wide, soft halo composited under the key shadow) ----
+    // Skipped if alpha is zero to preserve the single-shadow legacy code path.
+    if (ambient_color.a > 0.001 && ambient_sigma > 0.1) {
+        // The ambient layer is offset in screen space by ambient_offset; we model
+        // that by translating the sample point in geo-space by the negative offset
+        // (so the box appears to be at +offset relative to the sample).
+        vec2 ambient_point = coords_geo.xy - ambient_offset;
+        float ambient_value = roundedBoxShadow(
+                vec2(0.0, 0.0),
+                geo_size,
+                ambient_point,
+                ambient_sigma,
+                corner_radius.z
+            );
+        vec4 ambient = ambient_color * ambient_value;
+        // 'over' composite: key on top, ambient below.
+        color = color + ambient * (1.0 - color.a);
+    }
 
     // Cut out the inside of the window geometry if requested.
     if (window_geo_size != vec2(0.0, 0.0)) {

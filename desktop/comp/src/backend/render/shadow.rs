@@ -85,6 +85,14 @@ impl ShadowShader {
             let spread = 5.;
             let offset = [0., 5.];
             let color = [0., 0., 0., if dark_mode { 0.45 } else { 0.35 }];
+            // Wider ambient halo composited UNDER the key shadow — macOS-style
+            // two-layer depth. Tuned roughly to Big Sur+ window shadows:
+            // ~1.6x softer + 2x further down + ~40% lower opacity than the key.
+            let ambient_sigma = 40_f64;
+            let ambient_offset_xy = [0_f64, 10_f64];
+            let ambient_offset_uniform =
+                [ceil(ambient_offset_xy[0]) as f32, ceil(ambient_offset_xy[1]) as f32];
+            let ambient_color = [0., 0., 0., if dark_mode { 0.18 } else { 0.12 }];
             let radius = radius.map(|r| ceil(r as f64));
             let radius = [
                 radius[3], // top_left
@@ -93,9 +101,13 @@ impl ShadowShader {
                 radius[2], // bottom_left
             ];
 
-            let width = softness;
-            let sigma = width / 2.;
-            let width = ceil(sigma * 3.);
+            let sigma = softness / 2.;
+            // Shader area must enclose BOTH the key shadow (sigma*3 cutoff) AND
+            // the wider ambient halo (ambient_sigma*3 + |ambient_offset_y|).
+            let key_half_width = ceil(sigma * 3.);
+            let ambient_half_width =
+                ceil(ambient_sigma * 3.) + ambient_offset_xy[1].abs().max(ambient_offset_xy[0].abs());
+            let width = key_half_width.max(ambient_half_width);
 
             let offset = Point::new(ceil(offset[0]), ceil(offset[1]));
             let spread = ceil(spread.abs()).copysign(spread);
@@ -142,6 +154,9 @@ impl ShadowShader {
                 vec![
                     Uniform::new("shadow_color", color),
                     Uniform::new("sigma", sigma as f32),
+                    Uniform::new("ambient_color", ambient_color),
+                    Uniform::new("ambient_sigma", ambient_sigma as f32),
+                    Uniform::new("ambient_offset", ambient_offset_uniform),
                     Uniform::new(
                         "input_to_geo",
                         UniformValue::Matrix3x3 {
