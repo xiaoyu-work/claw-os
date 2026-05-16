@@ -977,9 +977,7 @@ impl cosmic::Application for CosmicAppLibrary {
 
             // add to pinned
             let svg_accent = Rc::new(|theme: &cosmic::Theme| {
-                // ClawOS: accent removed. Use neutral on-bg colour for
-                // "pinned" checkmark.
-                let color = theme.cosmic().background.on.into();
+                let color = theme.cosmic().accent_color().into();
                 svg::Style { color: Some(color) }
             });
             let is_pinned = self.app_list_config.favorites.iter().any(|p| p == &menu.id);

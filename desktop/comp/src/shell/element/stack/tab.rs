@@ -28,10 +28,7 @@ impl From<TabRuleTheme> for theme::Rule {
     fn from(theme: TabRuleTheme) -> Self {
         match theme {
             TabRuleTheme::ActiveActivated => Self::custom(|theme| widget::rule::Style {
-                // ClawOS: accent removed. Active tab rule uses neutral_8 (dark
-                // grey) instead of accent_color so the marker is visible but
-                // not coloured.
-                color: theme.cosmic().palette.neutral_8.into(),
+                color: theme.cosmic().accent_color().into(),
                 snap: true,
                 radius: 0.0.into(),
                 fill_mode: FillMode::Full,
@@ -65,10 +62,8 @@ impl From<TabBackgroundTheme> for theme::Container<'_> {
             TabBackgroundTheme::ActiveActivated => {
                 Self::custom(move |theme| widget::container::Style {
                     snap: true,
-                    // ClawOS: accent removed. Use neutral on-bg text instead of
-                    // accent_text_color for active tab labels.
-                    icon_color: Some(Color::from(theme.cosmic().background.on)),
-                    text_color: Some(Color::from(theme.cosmic().background.on)),
+                    icon_color: Some(Color::from(theme.cosmic().accent_text_color())),
+                    text_color: Some(Color::from(theme.cosmic().accent_text_color())),
                     background: Some(Background::Color(
                         theme.cosmic().primary.component.selected.into(),
                     )),

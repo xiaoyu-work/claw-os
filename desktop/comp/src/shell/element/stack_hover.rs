@@ -49,10 +49,9 @@ impl Program for StackHoverInternal {
         .apply(container)
         .class(theme::Container::custom(|theme| container::Style {
             snap: true,
-            // ClawOS: accent removed. Quiet primary container palette.
-            icon_color: Some(Color::from(theme.cosmic().primary.on)),
-            text_color: Some(Color::from(theme.cosmic().primary.on)),
-            background: Some(Background::Color(theme.cosmic().primary.base.into())),
+            icon_color: Some(Color::from(theme.cosmic().accent.on)),
+            text_color: Some(Color::from(theme.cosmic().accent.on)),
+            background: Some(Background::Color(theme.cosmic().accent_color().into())),
             border: Border {
                 radius: 18.0.into(),
                 width: 0.0,

@@ -418,9 +418,7 @@ impl Program for ContextMenu {
                                 .prefer_svg(true)
                                 .icon()
                                 .class(theme::Svg::custom(|theme| iced_widget::svg::Style {
-                                    // ClawOS: accent removed. Use neutral
-                                    // on-bg colour for menu-toggle checkmark.
-                                    color: Some(theme.cosmic().background.on.into()),
+                                    color: Some(theme.cosmic().accent.base.into()),
                                 }))
                                 .into()
                         } else {

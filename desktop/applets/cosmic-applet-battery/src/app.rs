@@ -590,9 +590,7 @@ impl cosmic::Application for CosmicBatteryApplet {
                 .class(cosmic::style::Container::Custom(Box::new(|theme| {
                     container::Style {
                         text_color: Some(Color::TRANSPARENT),
-                        // ClawOS: accent removed. Use neutral on-bg colour for
-                        // the GPU activity dot.
-                        background: Some(Background::Color(theme.cosmic().background.on.into())),
+                        background: Some(Background::Color(theme.cosmic().accent_color().into())),
                         border: Border {
                             radius: 2.0.into(),
                             width: 0.0,
@@ -836,10 +834,8 @@ impl cosmic::Application for CosmicBatteryApplet {
                         .class(cosmic::style::Container::Custom(Box::new(|theme| {
                             container::Style {
                                 text_color: Some(Color::TRANSPARENT),
-                                // ClawOS: accent removed. Use neutral on-bg
-                                // for the GPU activity indicator.
                                 background: Some(Background::Color(
-                                    theme.cosmic().background.on.into(),
+                                    theme.cosmic().accent_color().into(),
                                 )),
                                 border: Border {
                                     radius: 4.0.into(),
