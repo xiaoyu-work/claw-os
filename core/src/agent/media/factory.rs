@@ -172,7 +172,13 @@ pub fn tts_registry_from_cfg(cfg: &CosConfig) -> TtsRegistry {
             reg.register(Arc::new(EdgeTtsProvider::new(ec)));
         }
         _ => {
-            // Unknown alias — leave only noop registered.
+            // Unknown alias — leave only noop registered, but log
+            // so the operator notices the config drift rather than
+            // silently getting a noop-only registry.
+            tracing::warn!(
+                provider = %provider,
+                "unknown tts provider; defaulting to noop only"
+            );
         }
     }
 
@@ -210,7 +216,12 @@ pub fn stt_registry_from_cfg(cfg: &CosConfig) -> SttRegistry {
             reg.register(prov);
         }
         _ => {
-            // Unknown alias — leave only noop registered.
+            // Unknown alias — leave only noop registered, but log so
+            // the operator notices the config drift.
+            tracing::warn!(
+                provider = %provider,
+                "unknown stt provider; defaulting to noop only"
+            );
         }
     }
 
@@ -261,8 +272,13 @@ pub fn imagegen_registry_from_cfg(cfg: &CosConfig) -> ImageGenRegistry {
         fc.extra_headers = extra_headers;
         fc.request_timeout = timeout;
         reg.register(Arc::new(FalImageGenProvider::new(fc)));
+    } else {
+        // Unknown alias — leave only noop registered, but log.
+        tracing::warn!(
+            provider = %provider,
+            "unknown imagegen provider; defaulting to noop only"
+        );
     }
-    // Unknown alias → leave only noop registered.
 
     reg
 }

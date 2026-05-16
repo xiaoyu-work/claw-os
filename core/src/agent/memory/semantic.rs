@@ -186,9 +186,14 @@ impl SemanticStore {
         text: &str,
     ) -> Result<i64, SemanticError> {
         let embedder = self.embedder.as_ref().ok_or(SemanticError::Disabled)?;
+        // Bound the input we send to the embedder; some providers
+        // accept inputs > 8 KiB but charge per token and stall on
+        // multi-megabyte payloads. Truncating at char boundary
+        // protects against panics on multi-byte UTF-8.
+        let bounded = truncate_to_chars(text, MAX_EMBED_TEXT_CHARS);
         let resp = embedder
             .embed(EmbedRequest {
-                inputs: vec![text.to_string()],
+                inputs: vec![bounded],
             })
             .await
             .map_err(|e| SemanticError::Embed(e.to_string()))?;
@@ -201,9 +206,12 @@ impl SemanticStore {
         let dim = vec.len();
         let blob = encode_vec(&vec);
         let ts = current_ts_ms();
-        let conn = self.lock_conn()?;
-        // Stickiness: refuse to mix vector spaces in one corpus.
-        let existing: Option<String> = conn
+        // Wrap the stickiness check + insert in a transaction so a
+        // concurrent indexer can't squeak in a row of a different
+        // model between the SELECT and the UPSERT.
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction()?;
+        let existing: Option<String> = tx
             .query_row("SELECT model FROM semantic_docs LIMIT 1", [], |r| {
                 r.get::<_, String>(0)
             })
@@ -216,7 +224,7 @@ impl SemanticStore {
                 });
             }
         }
-        conn.execute(
+        tx.execute(
             "INSERT INTO semantic_docs (namespace, key, text, model, dim, embedding, ts_ms)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(namespace, key) DO UPDATE SET
@@ -227,7 +235,9 @@ impl SemanticStore {
                 ts_ms=excluded.ts_ms",
             params![namespace, key, text, resp.model, dim as i64, blob, ts],
         )?;
-        Ok(conn.last_insert_rowid())
+        let rowid = tx.last_insert_rowid();
+        tx.commit()?;
+        Ok(rowid)
     }
 
     /// Embed `query` and rank rows (optionally filtered by `namespace`)
@@ -265,41 +275,63 @@ impl SemanticStore {
         query: &[f32],
         limit: usize,
     ) -> Result<Vec<SemanticHit>, SemanticError> {
-        let conn = self.lock_conn()?;
-        let mut hits: Vec<SemanticHit> = Vec::new();
-        let sql = if namespace.is_some() {
-            "SELECT id, namespace, key, text, model, dim, embedding, ts_ms
-                FROM semantic_docs WHERE namespace = ?"
-        } else {
-            "SELECT id, namespace, key, text, model, dim, embedding, ts_ms
-                FROM semantic_docs"
-        };
-        let mut stmt = conn.prepare(sql)?;
-        let mut rows = if let Some(ns) = namespace {
-            stmt.query(params![ns])?
-        } else {
-            stmt.query([])?
-        };
-        while let Some(row) = rows.next()? {
-            let dim: i64 = row.get(5)?;
-            let blob: Vec<u8> = row.get(6)?;
-            if (dim as usize) != query.len() {
-                // Skip rows from a different model / dim instead of
-                // erroring — we may have a mixed corpus during a
-                // model upgrade and want partial answers.
-                continue;
+        // We collect the candidate rows under the mutex into a small
+        // intermediate buffer, then *drop the lock* before doing the
+        // O(rows × dim) scoring work. Holding the connection mutex
+        // across a busy CPU loop was starving other writers (notably
+        // the FTS recorder) on long-corpus queries.
+        let candidates: Vec<(SemanticHit, Vec<u8>, usize)> = {
+            let conn = self.lock_conn()?;
+            let sql = if namespace.is_some() {
+                "SELECT id, namespace, key, text, model, dim, embedding, ts_ms
+                    FROM semantic_docs WHERE namespace = ?"
+            } else {
+                "SELECT id, namespace, key, text, model, dim, embedding, ts_ms
+                    FROM semantic_docs"
+            };
+            let mut stmt = conn.prepare(sql)?;
+            let mut rows = if let Some(ns) = namespace {
+                stmt.query(params![ns])?
+            } else {
+                stmt.query([])?
+            };
+            let mut buf: Vec<(SemanticHit, Vec<u8>, usize)> = Vec::new();
+            while let Some(row) = rows.next()? {
+                let dim: i64 = row.get(5)?;
+                if (dim as usize) != query.len() {
+                    // Skip rows from a different model / dim — we may
+                    // have a mixed corpus during a model upgrade.
+                    continue;
+                }
+                let blob: Vec<u8> = row.get(6)?;
+                let hit = SemanticHit {
+                    id: row.get(0)?,
+                    namespace: row.get(1)?,
+                    key: row.get(2)?,
+                    text: row.get(3)?,
+                    model: row.get(4)?,
+                    score: 0.0,
+                    ts_ms: row.get(7)?,
+                };
+                buf.push((hit, blob, dim as usize));
             }
-            let v = decode_vec(&blob, dim as usize);
-            let score = dot(&v, query);
-            hits.push(SemanticHit {
-                id: row.get(0)?,
-                namespace: row.get(1)?,
-                key: row.get(2)?,
-                text: row.get(3)?,
-                model: row.get(4)?,
-                score,
-                ts_ms: row.get(7)?,
-            });
+            buf
+        }; // mutex released here
+
+        let mut hits: Vec<SemanticHit> = Vec::with_capacity(candidates.len());
+        for (mut hit, blob, dim) in candidates {
+            let v = match decode_vec(&blob, dim) {
+                Ok(v) => v,
+                Err(_) => {
+                    // Corrupted row — skip rather than aborting the
+                    // whole search. Surfacing the error in a hot path
+                    // would degrade query stability on a single bad
+                    // blob.
+                    continue;
+                }
+            };
+            hit.score = dot(&v, query)?;
+            hits.push(hit);
         }
         hits.sort_by(|a, b| {
             b.score
@@ -389,6 +421,19 @@ fn current_ts_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// Hard cap on the size of any one text body we'll embed. Anything
+/// larger gets truncated to a character boundary so we don't
+/// accidentally ship a multi-MB document to the embedder (most
+/// providers charge per token and time-out on huge inputs).
+pub const MAX_EMBED_TEXT_CHARS: usize = 8 * 1024;
+
+fn truncate_to_chars(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    s.chars().take(max_chars).collect()
+}
+
 fn encode_vec(v: &[f32]) -> Vec<u8> {
     let mut out = Vec::with_capacity(v.len() * 4);
     for f in v {
@@ -397,19 +442,37 @@ fn encode_vec(v: &[f32]) -> Vec<u8> {
     out
 }
 
-fn decode_vec(blob: &[u8], dim: usize) -> Vec<f32> {
+fn decode_vec(blob: &[u8], dim: usize) -> Result<Vec<f32>, SemanticError> {
+    // Each f32 is 4 bytes; the blob must be exactly `dim * 4` bytes,
+    // not just "at least". A short blob means a corrupted row or a
+    // mismatched-dim insert; either way we refuse to silently
+    // pad-with-zeros and skew similarity scores.
+    let expected = dim
+        .checked_mul(4)
+        .ok_or_else(|| SemanticError::Embed(format!("invalid dim {dim} (overflow)")))?;
+    if blob.len() != expected {
+        return Err(SemanticError::DimMismatch {
+            row: blob.len() / 4,
+            query: dim,
+        });
+    }
     let mut out = Vec::with_capacity(dim);
-    for chunk in blob.chunks_exact(4).take(dim) {
+    for chunk in blob.chunks_exact(4) {
         let mut buf = [0u8; 4];
         buf.copy_from_slice(chunk);
         out.push(f32::from_le_bytes(buf));
     }
-    out
+    Ok(out)
 }
 
-fn dot(a: &[f32], b: &[f32]) -> f32 {
-    debug_assert_eq!(a.len(), b.len());
-    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
+fn dot(a: &[f32], b: &[f32]) -> Result<f32, SemanticError> {
+    if a.len() != b.len() {
+        return Err(SemanticError::DimMismatch {
+            row: a.len(),
+            query: b.len(),
+        });
+    }
+    Ok(a.iter().zip(b.iter()).map(|(x, y)| x * y).sum())
 }
 
 fn normalise(v: &mut [f32]) {
@@ -627,7 +690,7 @@ mod tests {
     fn encode_decode_roundtrips() {
         let v = vec![0.1f32, -0.5, 0.0, 1.5, f32::NEG_INFINITY, f32::INFINITY];
         let blob = encode_vec(&v);
-        let back = decode_vec(&blob, v.len());
+        let back = decode_vec(&blob, v.len()).unwrap();
         assert_eq!(back, v);
     }
 
@@ -645,7 +708,26 @@ mod tests {
         let mut b = vec![0.0f32, 1.0];
         normalise(&mut a);
         normalise(&mut b);
-        assert!((dot(&a, &b)).abs() < 1e-6);
+        assert!((dot(&a, &b).unwrap()).abs() < 1e-6);
+    }
+
+    #[test]
+    fn dim_mismatch_errors() {
+        // Cross-dimension `dot` must surface an error so silent
+        // truncation can't poison cosine scores.
+        let err = dot(&[1.0, 0.0], &[1.0, 0.0, 0.0]).unwrap_err();
+        assert!(matches!(
+            err,
+            SemanticError::DimMismatch { row: 2, query: 3 }
+        ));
+
+        // `decode_vec` of a truncated blob must also error rather
+        // than silently zero-pad and skew similarity later.
+        let v = vec![0.1f32, -0.5, 1.5];
+        let blob = encode_vec(&v); // 12 bytes
+        let too_few = &blob[..8]; // only 2 floats' worth
+        let err = decode_vec(too_few, 3).unwrap_err();
+        assert!(matches!(err, SemanticError::DimMismatch { .. }));
     }
 
     #[tokio::test]
@@ -769,6 +851,10 @@ impl SemanticStore {
         while let Some(row) = rows.next()? {
             let dim: i64 = row.get(5)?;
             let blob: Vec<u8> = row.get(6)?;
+            let embedding = match decode_vec(&blob, dim as usize) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
             out.push(SemanticRow {
                 id: row.get(0)?,
                 namespace: row.get(1)?,
@@ -776,7 +862,7 @@ impl SemanticStore {
                 text: row.get(3)?,
                 model: row.get(4)?,
                 dim: dim as usize,
-                embedding: decode_vec(&blob, dim as usize),
+                embedding,
                 ts_ms: row.get(7)?,
             });
         }

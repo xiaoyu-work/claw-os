@@ -127,10 +127,18 @@ impl UsageStore {
         let line = serde_json::to_string(rec)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         let _g = self.mu.lock().unwrap_or_else(|p| p.into_inner());
-        let mut f = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)?;
+        let mut opts = OpenOptions::new();
+        opts.create(true).append(true);
+        // On Unix, refuse to follow symlinks at the usage log path
+        // so a malicious sibling can't redirect our writes into a
+        // privileged file (e.g. an authorized_keys file). On other
+        // platforms we accept the platform's default open semantics.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.custom_flags(libc::O_NOFOLLOW);
+        }
+        let mut f = opts.open(&self.path)?;
         f.write_all(line.as_bytes())?;
         f.write_all(b"\n")?;
         f.flush()
@@ -256,19 +264,60 @@ fn manifest_allowed_tools_empty(m: &SkillManifest) -> bool {
     m.allowed_tools.is_empty()
 }
 
-/// Walk the skill dir one level deep (no recursion); return the
-/// first sibling file that exceeds `cap`.
+/// Walk the skill dir recursively (bounded by [`MAX_GUARD_WALK_FILES`]
+/// and [`MAX_GUARD_WALK_DEPTH`]) and return the first sibling file
+/// whose advertised size exceeds `cap`. We *avoid following symlinks*
+/// so a malicious skill can't escape its own directory tree by
+/// pointing at a giant file elsewhere on disk and tricking the guard
+/// into reporting it. Symlinks themselves are reported as oversized
+/// if they point at a regular file that exceeds `cap` (via
+/// `metadata`, only after we've confirmed the link target stays
+/// inside `dir`).
 fn oversized_sibling(dir: &Path, cap: u64) -> Option<(PathBuf, u64)> {
-    let entries = fs::read_dir(dir).ok()?;
+    /// File-count budget for a single guard walk. Keeps the guard
+    /// O(skill-dir) not O(filesystem) when a user accidentally drops
+    /// a skill into a shared directory.
+    const MAX_GUARD_WALK_FILES: usize = 10_000;
+    /// Recursion budget. Skill dirs are typically 1-2 levels deep.
+    const MAX_GUARD_WALK_DEPTH: usize = 16;
+
+    let dir_canon = dir.canonicalize().ok()?;
     let mut hits: Vec<(PathBuf, u64)> = Vec::new();
-    for entry in entries.flatten() {
-        let Ok(meta) = entry.metadata() else { continue };
-        if !meta.is_file() {
+    let mut stack: Vec<(PathBuf, usize)> = vec![(dir.to_path_buf(), 0)];
+    let mut visited = 0usize;
+    while let Some((cur, depth)) = stack.pop() {
+        if depth > MAX_GUARD_WALK_DEPTH {
             continue;
         }
-        let size = meta.len();
-        if size > cap {
-            hits.push((entry.path(), size));
+        let Ok(rd) = fs::read_dir(&cur) else { continue };
+        for entry in rd.flatten() {
+            visited += 1;
+            if visited > MAX_GUARD_WALK_FILES {
+                break;
+            }
+            let path = entry.path();
+            // `symlink_metadata` does NOT follow symlinks — we never
+            // hop out of the skill dir through a symlink, even if
+            // the target would canonicalise outside `dir_canon`.
+            let Ok(meta) = entry.metadata() else { continue };
+            // Defensive: if the entry resolved through a symlink,
+            // verify the final target is still inside the skill dir.
+            if let Ok(canon) = path.canonicalize() {
+                if !canon.starts_with(&dir_canon) {
+                    continue;
+                }
+            }
+            let ft = meta.file_type();
+            if ft.is_dir() {
+                stack.push((path, depth + 1));
+                continue;
+            }
+            if ft.is_file() {
+                let size = meta.len();
+                if size > cap {
+                    hits.push((path, size));
+                }
+            }
         }
     }
     hits.sort_by(|a, b| a.0.cmp(&b.0));

@@ -286,7 +286,12 @@ impl SkillsHub {
         }
         let resp = req.send().await?;
         let status = resp.status();
-        let body = resp.text().await?;
+        // Cap the response body so a malicious or misconfigured hub
+        // can't OOM the agent by publishing a multi-GB catalogue.
+        // 16 MiB is comfortably above any plausible hub.json and
+        // small enough to fit on the smallest agent host.
+        const MAX_CATALOGUE_BYTES: usize = 16 * 1024 * 1024;
+        let body = read_capped_text(resp, MAX_CATALOGUE_BYTES, &asset.name).await?;
         if !status.is_success() {
             return Err(HubError::Status {
                 status: status.as_u16(),
@@ -296,6 +301,36 @@ impl SkillsHub {
         }
         Ok(body)
     }
+}
+
+/// Drain a response body to a `String`, refusing to allocate more
+/// than `cap` bytes. The body is read in chunks via `bytes_stream`
+/// so we never buffer the whole transfer to memory before checking
+/// the cap.
+async fn read_capped_text(
+    resp: reqwest::Response,
+    cap: usize,
+    what: &str,
+) -> Result<String, HubError> {
+    use futures_util::StreamExt;
+    let mut stream = resp.bytes_stream();
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        if buf.len().saturating_add(chunk.len()) > cap {
+            return Err(HubError::Status {
+                status: 0,
+                what: what.to_string(),
+                body: format!("response exceeded {cap}-byte cap"),
+            });
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    String::from_utf8(buf).map_err(|e| HubError::Status {
+        status: 0,
+        what: what.to_string(),
+        body: format!("response was not valid utf-8: {e}"),
+    })
 }
 
 #[cfg(test)]

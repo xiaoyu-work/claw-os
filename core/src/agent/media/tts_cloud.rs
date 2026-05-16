@@ -164,10 +164,12 @@ impl TtsProvider for CloudTtsProvider {
             .await
             .map_err(|e| MediaError::Transport(e.to_string()))?;
         let status = resp.status();
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| MediaError::Transport(e.to_string()))?;
+        let bytes = super::util::read_bytes_capped(
+            resp,
+            super::util::MAX_BINARY_BODY_BYTES,
+            "tts_cloud",
+        )
+        .await?;
 
         if !status.is_success() {
             let preview = body_preview(&bytes);
@@ -187,11 +189,7 @@ impl TtsProvider for CloudTtsProvider {
 
 fn body_preview(bytes: &[u8]) -> String {
     let text = String::from_utf8_lossy(bytes);
-    if text.len() > 512 {
-        format!("{}…", &text[..512])
-    } else {
-        text.into_owned()
-    }
+    super::util::preview(&text, 512)
 }
 
 #[cfg(test)]

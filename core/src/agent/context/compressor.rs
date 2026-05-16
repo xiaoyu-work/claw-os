@@ -78,10 +78,15 @@ pub const SUMMARY_MARKER: &str = "[CONTEXT SUMMARY]";
 /// Cheap char-to-token heuristic. Mirrors the OpenAI rule of thumb of
 /// ~4 chars per token for English / code; close enough for budget
 /// decisions, deliberately fast.
+///
+/// We count *characters* (not bytes) so multi-byte UTF-8 input
+/// — Chinese, Japanese, Korean, emoji-heavy markdown — doesn't
+/// massively over-estimate. A 100-character Chinese sentence is 300
+/// bytes but still around 100 tokens; counting bytes would charge
+/// it 75 tokens instead of 25, blowing the budget early.
 pub fn estimate_text_tokens(s: &str) -> u32 {
-    // Round up so a 1-char string still counts as 1 token.
-    let bytes = s.len() as u32;
-    bytes.div_ceil(4)
+    let chars = s.chars().count() as u32;
+    chars.div_ceil(4)
 }
 
 /// Estimate the token cost of one [`Message`] across all its content
@@ -211,8 +216,24 @@ impl LlmCompressor {
     /// tool_result lives in the tail; if any of those ids' tool_use
     /// is in the head, we extend the tail backward to include them.
     fn adjust_for_tool_pairs(messages: &[Message], mut boundary: usize) -> usize {
-        // Collect tool_use ids referenced by tool_results in the tail.
-        let mut needed_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        use std::collections::{HashMap, HashSet};
+        // Pre-index where each ToolUse id lives so we don't re-scan
+        // the whole conversation O(n²) just to ask "is this id's use
+        // in the tail?". We build the map once and consult it on
+        // every iteration of the boundary walk.
+        let mut tool_use_msg: HashMap<&str, usize> = HashMap::new();
+        for (idx, m) in messages.iter().enumerate() {
+            for b in &m.content {
+                if let ContentBlock::ToolUse { id, .. } = b {
+                    tool_use_msg.insert(id.as_str(), idx);
+                }
+            }
+        }
+        // Set of tool_use ids referenced by tool_results in the tail.
+        // Re-computed lazily when we shrink boundary, by *adding* the
+        // newly-absorbed message's result ids — never re-scanning the
+        // whole tail.
+        let mut needed_ids: HashSet<String> = HashSet::new();
         for m in &messages[boundary..] {
             for b in &m.content {
                 if let ContentBlock::ToolResult { tool_use_id, .. } = b {
@@ -220,10 +241,6 @@ impl LlmCompressor {
                 }
             }
         }
-        // Walk back: while the message just before the boundary
-        // contains a tool_use whose id is needed, OR the message at
-        // boundary contains a tool_result without a matching tool_use
-        // in the tail, move boundary back.
         loop {
             if boundary == 0 {
                 break;
@@ -233,32 +250,28 @@ impl LlmCompressor {
                 .content
                 .iter()
                 .any(|b| matches!(b, ContentBlock::ToolUse { id, .. } if needed_ids.contains(id)));
-            // Also: if the message at `boundary` has a tool_result
-            // whose tool_use id is NOT in any later (tail) message,
-            // we need to absorb its tool_use into the tail.
-            let boundary_msg_orphan_result = messages[boundary..].first().is_some_and(|m| {
+            // Does the message at `boundary` have a tool_result whose
+            // matching tool_use is *not* in the tail? Use the prebuilt
+            // index instead of an inner O(tail) scan.
+            let boundary_msg_orphan_result = messages.get(boundary).is_some_and(|m| {
                 m.content.iter().any(|b| match b {
                     ContentBlock::ToolResult { tool_use_id, .. } => {
-                        // is the matching tool_use somewhere in the tail?
-                        let in_tail = messages[boundary..].iter().any(|tm| {
-                            tm.content.iter().any(|tb| {
-                                matches!(tb, ContentBlock::ToolUse { id, .. } if id == tool_use_id)
-                            })
-                        });
-                        !in_tail
+                        match tool_use_msg.get(tool_use_id.as_str()) {
+                            Some(&use_idx) => use_idx < boundary,
+                            None => true,
+                        }
                     }
                     _ => false,
                 })
             });
             if prev_has_needed_use || boundary_msg_orphan_result {
                 boundary -= 1;
-                // Re-collect needed_ids for the new tail.
-                needed_ids.clear();
-                for m in &messages[boundary..] {
-                    for b in &m.content {
-                        if let ContentBlock::ToolResult { tool_use_id, .. } = b {
-                            needed_ids.insert(tool_use_id.clone());
-                        }
+                // Only absorb the newly-included message's results
+                // into the needed set — the rest of needed_ids is
+                // still valid for the new (larger) tail.
+                for b in &messages[boundary].content {
+                    if let ContentBlock::ToolResult { tool_use_id, .. } = b {
+                        needed_ids.insert(tool_use_id.clone());
                     }
                 }
                 continue;
@@ -321,11 +334,14 @@ impl LlmCompressor {
         )
     }
 
-    /// Build the synthesised summary message. Uses Role::User so the
-    /// resulting list looks like a normal conversation lead-in to the
-    /// preserved tail.
+    /// Build the synthesised summary message. We use the *assistant*
+    /// role rather than user: the summary is a recap of prior turns
+    /// produced by the model, not new input from the user, and most
+    /// chat-completion APIs require strict user/assistant alternation.
+    /// Surfacing the summary as `assistant` keeps the boundary clean
+    /// when the immediately-preserved tail message is from the user.
     fn make_summary_message(summary: &str, head_count: usize) -> Message {
-        Message::user_text(format!(
+        Message::assistant_text(format!(
             "{SUMMARY_MARKER} (compressed {head_count} prior messages)\n\n{summary}"
         ))
     }
