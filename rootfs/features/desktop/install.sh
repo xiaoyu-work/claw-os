@@ -224,6 +224,65 @@ if [ "$missing" = "1" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# 2c. Generate UTF-8 locales.
+#
+# Debian's `locales` package ships /etc/locale.gen entirely commented out,
+# so a fresh chroot has only C / C.utf8 / POSIX in `locale -a`. That
+# starves cosmic-initial-setup's Language page — which calls `locale -a`
+# via claw-bridge exec.run — leaving the dropdown empty and the wizard
+# unusable. Bake a small UTF-8 default set into the image so the wizard
+# always has something to offer.
+#
+# The set is intentionally short (en + zh + ja) to keep image size and
+# build time bounded; users can `dpkg-reconfigure locales` post-install
+# for anything exotic.
+#
+# History: this was hot-patched on a running VM during prior debugging
+# without making it into source — so every fresh rebuild regressed. The
+# assertion below (2d) guards against that ever happening again silently.
+# ---------------------------------------------------------------------------
+echo "  :: generating UTF-8 locales (en/zh/ja)"
+LOCALES_WANTED=(
+    "en_US.UTF-8 UTF-8"
+    "zh_CN.UTF-8 UTF-8"
+    "zh_TW.UTF-8 UTF-8"
+    "ja_JP.UTF-8 UTF-8"
+)
+for entry in "${LOCALES_WANTED[@]}"; do
+    pattern="^# ${entry}\$"
+    if grep -qE "$pattern" "$ROOTFS/etc/locale.gen"; then
+        sed -i "s|^# ${entry}\$|${entry}|" "$ROOTFS/etc/locale.gen"
+    elif ! grep -qE "^${entry}\$" "$ROOTFS/etc/locale.gen"; then
+        echo "${entry}" >> "$ROOTFS/etc/locale.gen"
+    fi
+done
+chroot "$ROOTFS" locale-gen
+
+echo "LANG=en_US.UTF-8" > "$ROOTFS/etc/default/locale"
+
+# ---------------------------------------------------------------------------
+# 2d. Assert the locales actually generated.
+#
+# Mirrors 2b: silent regression of the locale set has bitten us before
+# (empty Language dropdown in cosmic-initial-setup). Fail the build loud
+# instead of shipping a broken image.
+# ---------------------------------------------------------------------------
+echo "  :: verifying generated locales"
+locale_missing=0
+for want in en_US.utf8 zh_CN.utf8 zh_TW.utf8 ja_JP.utf8; do
+    if ! chroot "$ROOTFS" locale -a 2>/dev/null | grep -qx "$want"; then
+        echo "    missing locale: $want"
+        locale_missing=1
+    fi
+done
+if [ "$locale_missing" = "1" ]; then
+    echo "  error: UTF-8 locales failed to generate — cosmic-initial-setup" >&2
+    echo "         Language page would be empty. Check /etc/locale.gen and" >&2
+    echo "         that the 'locales' package is installed (packages.txt)." >&2
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
 # 3. Wire up the login chain.
 #
 # `just install` puts the binaries / .desktop / sysusers / tmpfiles in
