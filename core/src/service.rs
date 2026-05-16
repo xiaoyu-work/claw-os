@@ -308,42 +308,95 @@ fn send_sigkill(pid: u32) {
 }
 
 /// Run a lifecycle hook command and return structured result.
-/// Hooks run synchronously with a timeout.
+/// Hooks run synchronously with a wall-clock timeout — a hung
+/// `pre_start` / `pre_stop` / `checkpoint_cmd` / `post_stop` used
+/// to deadlock the entire service-management surface (and via
+/// `cmd_stop_all`, the whole shutdown) because the call was
+/// `Command::output()` with no deadline. We now spawn, drain via
+/// background threads, and kill on timeout.
 fn run_hook(hook_name: &str, command: &str, timeout_secs: u64) -> Value {
     let start = Instant::now();
     let shell_cmd = build_shell_command(command);
-    let result = Command::new(&shell_cmd.0)
+    let spawn_result = Command::new(&shell_cmd.0)
         .args(&shell_cmd.1)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .output();
+        .spawn();
 
-    let duration_ms = start.elapsed().as_millis() as u64;
-    let _ = timeout_secs; // timeout enforced by caller if needed
-
-    match result {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            json!({
-                "step": hook_name,
-                "status": if output.status.success() { "ok" } else { "failed" },
-                "exit_code": output.status.code(),
-                "stdout": stdout.trim(),
-                "stderr": stderr.trim(),
-                "duration_ms": duration_ms,
-            })
-        }
+    let mut child = match spawn_result {
+        Ok(c) => c,
         Err(e) => {
-            json!({
+            return json!({
                 "step": hook_name,
                 "status": "error",
                 "error": e.to_string(),
-                "duration_ms": duration_ms,
-            })
+                "duration_ms": start.elapsed().as_millis() as u64,
+            });
+        }
+    };
+
+    // Poll for the child to exit while honouring the deadline.
+    // `try_wait` is non-blocking; this loop keeps the parent
+    // responsive without burning CPU.
+    let deadline = Instant::now() + Duration::from_secs(timeout_secs.max(1));
+    let mut timed_out = false;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    timed_out = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => {
+                return json!({
+                    "step": hook_name,
+                    "status": "error",
+                    "error": format!("wait failed: {e}"),
+                    "duration_ms": start.elapsed().as_millis() as u64,
+                });
+            }
         }
     }
+
+    let output = match child.wait_with_output() {
+        Ok(o) => o,
+        Err(e) => {
+            return json!({
+                "step": hook_name,
+                "status": "error",
+                "error": format!("wait_with_output failed: {e}"),
+                "duration_ms": start.elapsed().as_millis() as u64,
+            });
+        }
+    };
+    let duration_ms = start.elapsed().as_millis() as u64;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if timed_out {
+        return json!({
+            "step": hook_name,
+            "status": "timeout",
+            "timeout_secs": timeout_secs,
+            "stdout": stdout.trim(),
+            "stderr": stderr.trim(),
+            "duration_ms": duration_ms,
+        });
+    }
+
+    json!({
+        "step": hook_name,
+        "status": if output.status.success() { "ok" } else { "failed" },
+        "exit_code": output.status.code(),
+        "stdout": stdout.trim(),
+        "stderr": stderr.trim(),
+        "duration_ms": duration_ms,
+    })
 }
 
 /// Build the shell command tuple (program, args) for running a hook command.
@@ -504,8 +557,17 @@ fn cmd_start(args: &[String]) -> Result<Value, String> {
     let pid = child.id();
     write_pid(name, pid);
 
-    // Detach — process keeps running after cos exits
-    std::mem::forget(child);
+    // Reap the child in a background thread. The previous
+    // `std::mem::forget(child)` left every exited service as a
+    // <defunct> entry in the cos parent's process table — long-
+    // running cos daemons gradually consumed pid_max. The reaper
+    // thread blocks on `wait()` and then drops, releasing the kernel
+    // entry. The service still runs detached from the cos
+    // foreground; we just don't leak the slot when it dies.
+    std::thread::spawn(move || {
+        let mut child = child;
+        let _ = child.wait();
+    });
 
     steps.push(json!({
         "step": "spawn",
