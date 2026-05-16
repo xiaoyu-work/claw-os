@@ -113,6 +113,34 @@ fn save_config(cfg: &NetFilterConfig) {
     }
 }
 
+/// Atomic read-modify-write on the netfilter config. Without this,
+/// `load_config()` + mutate + `save_config()` is a textbook lost-
+/// update race: two concurrent `cos netfilter add` calls both read
+/// the same starting state and the second `save_config` clobbers
+/// the first. Funnel every mutation through here.
+fn update_config<F>(transform: F) -> Result<(), String>
+where
+    F: FnOnce(NetFilterConfig) -> NetFilterConfig,
+{
+    crate::filelock::update_locked::<_, String>(&rules_path(), |existing| {
+        let cfg = match existing {
+            Some(s) => serde_json::from_str::<NetFilterConfig>(&s).unwrap_or(NetFilterConfig {
+                default_policy: "allow-all".into(),
+                rules: vec![],
+                rate_limits: vec![],
+            }),
+            None => NetFilterConfig {
+                default_policy: "allow-all".into(),
+                rules: vec![],
+                rate_limits: vec![],
+            },
+        };
+        let next = transform(cfg);
+        serde_json::to_string_pretty(&next).map_err(|e| format!("serialize: {e}"))
+    })
+    .map_err(|e| e.to_string())
+}
+
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     match command {
         "add" => cmd_add(args),
@@ -204,14 +232,21 @@ fn cmd_add(args: &[String]) -> Result<Value, String> {
         created_at: now,
     };
 
-    let mut cfg = load_config();
-
-    // Remove any existing rule for this exact domain+port+path+binary combo
-    cfg.rules.retain(|r| {
-        !(r.domain == domain && r.port == port && r.path == path && r.binary == binary)
-    });
-    cfg.rules.push(rule);
-    save_config(&cfg);
+    let domain_for_retain = domain.clone();
+    let port_for_retain = port;
+    let path_for_retain = path.clone();
+    let binary_for_retain = binary.clone();
+    let rule_for_push = rule;
+    update_config(|mut cfg| {
+        cfg.rules.retain(|r| {
+            !(r.domain == domain_for_retain
+                && r.port == port_for_retain
+                && r.path == path_for_retain
+                && r.binary == binary_for_retain)
+        });
+        cfg.rules.push(rule_for_push);
+        cfg
+    })?;
 
     let mut result = json!({
         "added": true,
@@ -243,11 +278,15 @@ fn cmd_remove(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::SYS_KERNEL, Scope::wild()).map_err(|v| v.to_string())?;
 
     let domain = args.first().ok_or("usage: cos netfilter remove <domain>")?;
-    let mut cfg = load_config();
-    let before = cfg.rules.len();
-    cfg.rules.retain(|r| r.domain != *domain);
-    let removed = before - cfg.rules.len();
-    save_config(&cfg);
+    let domain_clone = domain.clone();
+    let mut removed = 0_usize;
+    let removed_ref = &mut removed;
+    update_config(|mut cfg| {
+        let before = cfg.rules.len();
+        cfg.rules.retain(|r| r.domain != domain_clone);
+        *removed_ref = before - cfg.rules.len();
+        cfg
+    })?;
 
     Ok(json!({
         "domain": domain,
@@ -470,12 +509,11 @@ fn domain_matches(pattern: &str, domain: &str) -> bool {
 fn cmd_reset(_args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::SYS_KERNEL, Scope::wild()).map_err(|v| v.to_string())?;
 
-    let cfg = NetFilterConfig {
+    update_config(|_| NetFilterConfig {
         default_policy: "allow-all".into(),
         rules: vec![],
         rate_limits: vec![],
-    };
-    save_config(&cfg);
+    })?;
     save_rate_state(&RateLimitState::default());
 
     Ok(json!({
@@ -498,9 +536,11 @@ fn cmd_default(args: &[String]) -> Result<Value, String> {
         return Err("default policy must be 'allow-all' or 'deny-all'".into());
     }
 
-    let mut cfg = load_config();
-    cfg.default_policy = policy_str.clone();
-    save_config(&cfg);
+    let policy_clone = policy_str.clone();
+    update_config(|mut cfg| {
+        cfg.default_policy = policy_clone;
+        cfg
+    })?;
 
     Ok(json!({
         "default_policy": policy_str,
@@ -650,10 +690,13 @@ fn cmd_rate_limit(args: &[String]) -> Result<Value, String> {
         created_at: now,
     };
 
-    let mut cfg = load_config();
-    cfg.rate_limits.retain(|r| r.domain != *domain);
-    cfg.rate_limits.push(rl);
-    save_config(&cfg);
+    let domain_for_rl = domain.clone();
+    let rl_for_push = rl;
+    update_config(|mut cfg| {
+        cfg.rate_limits.retain(|r| r.domain != domain_for_rl);
+        cfg.rate_limits.push(rl_for_push);
+        cfg
+    })?;
 
     Ok(json!({
         "domain": domain,
@@ -698,11 +741,15 @@ fn cmd_rate_limit_remove(args: &[String]) -> Result<Value, String> {
         .first()
         .ok_or("usage: cos netfilter rate-limit-remove <domain>")?;
 
-    let mut cfg = load_config();
-    let before = cfg.rate_limits.len();
-    cfg.rate_limits.retain(|r| r.domain != *domain);
-    let removed = before - cfg.rate_limits.len();
-    save_config(&cfg);
+    let domain_clone = domain.clone();
+    let mut removed = 0_usize;
+    let removed_ref = &mut removed;
+    update_config(|mut cfg| {
+        let before = cfg.rate_limits.len();
+        cfg.rate_limits.retain(|r| r.domain != domain_clone);
+        *removed_ref = before - cfg.rate_limits.len();
+        cfg
+    })?;
 
     // Also clean up state for this domain
     let mut state = load_rate_state();
@@ -729,7 +776,7 @@ fn cmd_rate_check(args: &[String]) -> Result<Value, String> {
 
     let config = load_config();
     let rl = match find_rate_limit(&config, domain) {
-        Some(rl) => rl,
+        Some(rl) => rl.clone(),
         None => {
             // No rate limit configured — always allowed
             return Ok(json!({
@@ -742,29 +789,55 @@ fn cmd_rate_check(args: &[String]) -> Result<Value, String> {
             }));
         }
     };
-
-    let mut state = load_rate_state();
-    let timestamps = state
-        .requests
-        .get(domain.as_str())
-        .cloned()
-        .unwrap_or_default();
-
-    // Prune old timestamps
-    let active = prune_timestamps(&timestamps, 60);
-    let count = active.len();
     let limit = rl.rpm + rl.burst;
 
-    if count < limit as usize {
-        // Allowed
-        let remaining = limit as usize - count - 1; // -1 for this request
-        if !dry_run {
+    // Counter increment must run inside a single locked window or
+    // every concurrent caller reads the same counter, decides it's
+    // under-limit, and writes its own +1 back — the rate limiter
+    // becomes effectively disabled. Use update_locked to serialize
+    // the entire read-prune-decide-write block.
+    let path = rate_state_path();
+    let mut decision: Option<(bool, usize, Option<u64>)> = None;
+    let decision_ref = &mut decision;
+    let domain_str = domain.clone();
+    let result = crate::filelock::update_locked::<_, String>(&path, |existing| {
+        let mut state: RateLimitState = match existing {
+            Some(s) => serde_json::from_str(&s).unwrap_or_default(),
+            None => RateLimitState::default(),
+        };
+        let timestamps = state
+            .requests
+            .get(domain_str.as_str())
+            .cloned()
+            .unwrap_or_default();
+        let active = prune_timestamps(&timestamps, 60);
+        let count = active.len();
+        let allowed = count < limit as usize;
+        let retry_after = if allowed {
+            None
+        } else {
+            Some(earliest_expiry(&active, 60).unwrap_or(60))
+        };
+
+        let new_active = if allowed && !dry_run {
             let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-            let mut new_timestamps = active;
-            new_timestamps.push(now);
-            state.requests.insert(domain.clone(), new_timestamps);
-            save_rate_state(&state);
-        }
+            let mut v = active;
+            v.push(now);
+            v
+        } else {
+            active
+        };
+        state.requests.insert(domain_str.clone(), new_active);
+
+        *decision_ref = Some((allowed, count, retry_after));
+        serde_json::to_string_pretty(&state).map_err(|e| format!("serialize: {e}"))
+    });
+    result.map_err(|e| e.to_string())?;
+
+    let (allowed, count, retry_after) =
+        decision.ok_or_else(|| "rate-check: missing decision (unreachable)".to_string())?;
+    if allowed {
+        let remaining = (limit as usize).saturating_sub(count).saturating_sub(1);
         Ok(json!({
             "domain": domain,
             "allowed": true,
@@ -774,8 +847,6 @@ fn cmd_rate_check(args: &[String]) -> Result<Value, String> {
             "remaining": remaining,
         }))
     } else {
-        // Denied
-        let retry_after = earliest_expiry(&active, 60).unwrap_or(60);
         Ok(json!({
             "domain": domain,
             "allowed": false,
@@ -783,7 +854,7 @@ fn cmd_rate_check(args: &[String]) -> Result<Value, String> {
             "limit": limit,
             "burst": rl.burst,
             "remaining": 0,
-            "retry_after_secs": retry_after,
+            "retry_after_secs": retry_after.unwrap_or(60),
         }))
     }
 }
@@ -1180,5 +1251,62 @@ mod tests {
         let r = cmd_rate_check(&vec!["api.openai.com".into()]).unwrap();
         assert_eq!(r["allowed"], false);
         assert_eq!(r["limit"], 3);
+    }
+
+    /// Regression for the CRITICAL lost-update race that effectively
+    /// disabled the rate limiter under concurrency. N parallel
+    /// callers all under the limit at the same time must be
+    /// serialized: after spawning more callers than the limit, the
+    /// number that report `allowed=true` MUST equal exactly the
+    /// configured limit.
+    ///
+    /// Before porting `cmd_rate_check` to `filelock::update_locked`,
+    /// every thread saw the same starting counter, every thread
+    /// decided "still under limit", and every thread's own +1 write
+    /// clobbered the others — final counter ended at +1 instead of
+    /// +N, and every caller got `allowed=true`.
+    #[test]
+    fn rate_check_no_lost_update() {
+        use std::sync::atomic::{AtomicUsize, Ordering as AOrd};
+        use std::sync::Arc;
+
+        let _g = setup();
+        let domain = "concurrent.example.com";
+        let limit: u32 = 8;
+        cmd_rate_limit(&vec![
+            domain.into(),
+            "--rpm".into(),
+            limit.to_string(),
+        ])
+        .unwrap();
+
+        let allowed = Arc::new(AtomicUsize::new(0));
+        let denied = Arc::new(AtomicUsize::new(0));
+
+        let mut handles = vec![];
+        for _ in 0..32 {
+            let a = allowed.clone();
+            let d = denied.clone();
+            let domain = domain.to_string();
+            handles.push(std::thread::spawn(move || {
+                let r = cmd_rate_check(&vec![domain]).unwrap();
+                if r["allowed"] == true {
+                    a.fetch_add(1, AOrd::SeqCst);
+                } else {
+                    d.fetch_add(1, AOrd::SeqCst);
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let a = allowed.load(AOrd::SeqCst);
+        let d = denied.load(AOrd::SeqCst);
+        assert_eq!(
+            a, limit as usize,
+            "expected exactly {limit} allowed (rate limiter must serialize); got allowed={a} denied={d}"
+        );
+        assert_eq!(d, 32 - limit as usize, "remaining must be denied");
     }
 }
