@@ -69,7 +69,7 @@ fi
 #    `sudo apt update && sudo apt upgrade` to pull newer claw-os-* packages.
 #
 #    FEATURES is overridable. Example, build a desktop VM image:
-#       FEATURES=base,cos-core,systemd,kernel,desktop,grub-disk,vm,apt-source \
+#       FEATURES=base,cos-core,systemd,kernel,desktop,copilot-cli,grub-disk,vm,apt-source \
 #       SIZE=16G FORMATS=vhdx ./targets/vm/build.sh
 FEATURES="${FEATURES:-base,cos-core,systemd,kernel,grub-disk,vm,apt-source}"
 echo ":: features: $FEATURES"

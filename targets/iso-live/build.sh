@@ -60,7 +60,7 @@ done
 #    FEATURES is overridable so callers can add `desktop` (and any other
 #    optional feature) without forking this script. Example, build a live
 #    ISO that boots straight into the COSMIC desktop:
-#       FEATURES=base,cos-core,systemd,kernel,desktop,live,apt-source \
+#       FEATURES=base,cos-core,systemd,kernel,desktop,copilot-cli,live,apt-source \
 #           ./targets/iso-live/build.sh
 #    Note: rootfs/features/live/install.sh detects whether `desktop` was
 #    already applied and, if so, layers a greetd [initial_session] block

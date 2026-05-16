@@ -240,6 +240,8 @@ pub struct Config {
     pub default_profile: Option<ProfileId>,
     #[serde(default)]
     pub shortcuts_custom: Shortcuts,
+    #[serde(default)]
+    pub ai: crate::ai::AiConfig,
 }
 
 impl Default for Config {
@@ -265,6 +267,7 @@ impl Default for Config {
             use_bright_bold: false,
             default_profile: None,
             shortcuts_custom: Shortcuts::default(),
+            ai: crate::ai::AiConfig::default(),
         }
     }
 }

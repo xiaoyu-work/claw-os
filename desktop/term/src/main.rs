@@ -65,6 +65,7 @@ use menu::menu_bar;
 mod menu;
 
 use terminal::{Terminal, TerminalPaneGrid, TerminalScroll};
+mod ai;
 mod terminal;
 
 use terminal_box::terminal_box;
@@ -506,6 +507,7 @@ pub struct App {
         Option<mpsc::UnboundedSender<(pane_grid::Pane, segmented_button::Entity, TermEvent)>>,
     startup_options: Option<tty::Options>,
     term_config: term::Config,
+    ai_runtime: Option<terminal::AiRuntime>,
     color_scheme_errors: Vec<String>,
     color_scheme_expanded: Option<(ColorSchemeKind, Option<ColorSchemeId>)>,
     color_scheme_renaming: Option<(ColorSchemeKind, ColorSchemeId, String)>,
@@ -1563,22 +1565,30 @@ impl App {
                     Some(colors) => {
                         let current_pane = self.pane_model.focused();
                         if let Some(tab_model) = self.pane_model.active_mut() {
-                            let (options, tab_title_override) = if let Some(profile) =
+                            let (mut options, tab_title_override, profile_shell) = if let Some(
+                                profile,
+                            ) =
                                 profile_id_opt
                                     .and_then(|profile_id| self.config.profiles.get(&profile_id))
                             {
                                 // Merge profile and startup options, preferring startup options
                                 let startup_options =
                                     self.startup_options.take().unwrap_or_default();
+                                let profile_shell: Option<(String, Vec<String>)> = if startup_options.shell.is_some() {
+                                    None
+                                } else if let Some(mut args) = shlex::split(&profile.command)
+                                    && !args.is_empty()
+                                {
+                                    let command = args.remove(0);
+                                    Some((command, args))
+                                } else {
+                                    None
+                                };
                                 let options = tty::Options {
                                     shell: startup_options.shell.or_else(|| {
-                                        if let Some(mut args) = shlex::split(&profile.command)
-                                            && !args.is_empty()
-                                        {
-                                            let command = args.remove(0);
-                                            return Some(tty::Shell::new(command, args));
-                                        }
-                                        None
+                                        profile_shell
+                                            .clone()
+                                            .map(|(c, a)| tty::Shell::new(c, a))
                                     }),
                                     working_directory: startup_options
                                         .working_directory
@@ -1596,14 +1606,24 @@ impl App {
                                 } else {
                                     Some(profile.tab_title.clone())
                                 };
-                                (options, tab_title_override)
+                                (options, tab_title_override, profile_shell)
                             } else {
                                 let mut options = self.startup_options.take().unwrap_or_default();
                                 if options.working_directory.is_none() {
                                     options.working_directory = inherited_working_directory.clone();
                                 }
-                                (options, None)
+                                (options, None, None)
                             };
+
+                            // Apply AI integration: env vars + shell auto-source args.
+                            if let Some(runtime) = self.ai_runtime.as_ref() {
+                                let existing = if options.shell.is_some() {
+                                    None
+                                } else {
+                                    profile_shell
+                                };
+                                ai::apply_options(&mut options, runtime, existing);
+                            }
 
                             let entity = tab_model
                                 .insert()
@@ -1625,6 +1645,7 @@ impl App {
                                 *colors,
                                 profile_id_opt,
                                 tab_title_override,
+                                self.ai_runtime.clone(),
                             ) {
                                 Ok(mut terminal) => {
                                     terminal.set_config(&self.config, &self.themes);
@@ -1867,6 +1888,7 @@ impl Application for App {
             find_search_value: String::new(),
             startup_options: flags.startup_options,
             term_config: flags.term_config,
+            ai_runtime: None,
             term_event_tx_opt: None,
             color_scheme_errors: Vec::new(),
             color_scheme_expanded: None,
@@ -1889,6 +1911,7 @@ impl Application for App {
         };
 
         app.set_curr_font_weights_and_stretches();
+        app.ai_runtime = ai::build_runtime(&app.config.ai);
         let command = Task::batch([app.update_config(), app.update_title(None)]);
 
         (app, command)

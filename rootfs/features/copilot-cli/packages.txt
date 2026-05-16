@@ -1,0 +1,7 @@
+# copilot-cli — GitHub Copilot CLI (@github/copilot) installed via npm.
+#
+# cosmic-term's @-trigger AI integration spawns `copilot -p "<prompt>"`
+# from a shell function. Node + npm here, the actual @github/copilot
+# package is installed globally in install.sh.
+nodejs
+npm
