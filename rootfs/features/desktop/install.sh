@@ -207,6 +207,10 @@ required_files=(
     "$ROOTFS/usr/share/cosmic/com.clawos.Theme.Dark/v1/name"
     "$ROOTFS/usr/share/cosmic/com.clawos.Theme.Light/v1/name"
     "$ROOTFS/usr/share/cosmic/com.clawos.Theme.Mode/v1/is_dark"
+    # cosmic-comp appearance — enables window shadows + corner clipping by
+    # default. Without this file cosmic-comp falls back to the AppearanceConfig
+    # struct Default (now also shadow_tiled_windows=true, but seed wins).
+    "$ROOTFS/usr/share/cosmic/com.clawos.Comp/v1/appearance_settings"
     # Icon theme — WhiteSur is installed via just install
     # icons-whitesur-pkg/install in desktop/justfile. If it's missing
     # the toolkit default icon_theme="WhiteSur-dark" falls back to
