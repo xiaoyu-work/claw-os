@@ -82,6 +82,10 @@ ai-page = Configure AI
     .model-description = Provider-specific model identifier (e.g. `claude-sonnet-4-5`, `gpt-4o-mini`, `llama3.2:3b`).
     .api-key = API key
     .api-key-description = Optional — leave blank and add it later via `cos agent setup llm apply --api-key-stdin`.
+    .azure-endpoint = Azure endpoint
+    .azure-endpoint-description = Resource root URL from your Azure OpenAI portal (e.g. `https://acme.openai.azure.com/`). Do not append `/openai/deployments/…` — that path is constructed automatically from the model field, which must match your Azure deployment name.
+    .azure-api-version = API version
+    .azure-api-version-description = Azure REST API version (e.g. `2024-12-01-preview`). Find current versions in the Azure OpenAI docs.
     .apply-ok = Saved
     .apply-failed = Could not save
 
