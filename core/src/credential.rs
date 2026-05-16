@@ -14,7 +14,8 @@
 ///   - **TTL / expiry**: optional `--ttl <seconds>` on store; enforced on load.
 ///   - **Bundles**: named groups of credentials loaded as a single JSON object.
 ///
-/// Storage: `$COS_DATA_DIR/credentials/<namespace>/<name>.json`
+/// Storage: `~/.local/share/cos/credentials/<namespace>/<name>.json`
+///          (overridable via `COS_CREDENTIALS_DIR`).
 ///
 ///   - **Auto-refresh**: optional `--refresh-cmd CMD` on store; executed on
 ///     load if credential is expired.
@@ -869,18 +870,19 @@ struct BundleManifest {
 // Path helpers
 // ===========================================================================
 
-/// Root credentials directory: `$COS_DATA_DIR/credentials`.
+/// Root credentials directory: `~/.local/share/cos/credentials`
+/// (overridable via `COS_CREDENTIALS_DIR`). Per-user so non-root
+/// callers can store API keys without touching `/var/lib/cos`.
 fn credentials_dir() -> PathBuf {
-    PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
-        .join("credentials")
+    crate::paths::user_credentials_dir()
 }
 
-/// Namespace directory: `$COS_DATA_DIR/credentials/<namespace>`.
+/// Namespace directory: `<credentials_dir>/<namespace>`.
 fn namespace_dir(namespace: &str) -> PathBuf {
     credentials_dir().join(namespace)
 }
 
-/// Bundle directory: `$COS_DATA_DIR/credentials/<namespace>/bundles`.
+/// Bundle directory: `<credentials_dir>/<namespace>/bundles`.
 fn bundles_dir(namespace: &str) -> PathBuf {
     namespace_dir(namespace).join("bundles")
 }
@@ -1819,7 +1821,7 @@ mod tests {
     static INIT: Once = Once::new();
     static COUNTER: AtomicU32 = AtomicU32::new(0);
 
-    /// All tests share one COS_DATA_DIR (set once). Each test uses unique
+    /// All tests share one COS_CREDENTIALS_DIR (set once). Each test uses unique
     /// credential names so there is no cross-test interference.
     fn unique_name(prefix: &str) -> String {
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -1830,7 +1832,11 @@ mod tests {
         INIT.call_once(|| {
             let dir = std::env::temp_dir().join(format!("cos-test-shared-{}", std::process::id()));
             let _ = fs::create_dir_all(&dir);
+            // credentials_dir() now reads COS_CREDENTIALS_DIR (per-user
+            // store moved out of $COS_DATA_DIR). Tests still set
+            // COS_DATA_DIR for other modules that share this dir.
             std::env::set_var("COS_DATA_DIR", &dir);
+            std::env::set_var("COS_CREDENTIALS_DIR", dir.join("credentials"));
         });
         std::env::remove_var("COS_SESSION");
     }

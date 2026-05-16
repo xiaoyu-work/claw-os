@@ -999,7 +999,7 @@ fn _ensure_arc_send<T: ?Sized + Send + Sync>(_: &Arc<T>) {}
 //     check AND structured audit emission to `caps.jsonl`.
 //   * `budget::reserve/settle` against the stable pseudo-app id
 //     `system.agent`, capped by `agent.system_budget_monthly_units`
-//     in `/etc/cos/config.json`.
+//     in `~/.config/cos/config.json`.
 //
 // Implemented as a Provider decorator so call sites need only wrap
 // the result of `llm::registry::build(...)`. The wrapper transparently

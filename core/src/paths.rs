@@ -80,6 +80,64 @@ pub fn user_config_dir() -> PathBuf {
     }
 }
 
+/// Path to the per-user agent config:
+/// `$HOME/.config/cos/config.json`. This is where `cos agent setup`
+/// writes the `[agent]`/`[tts]`/`[stt]`/`[imagegen]`/`[embed]` blocks
+/// when the user picks providers, models, and keys from the wizard
+/// or the cosmic-settings agent page. System-wide defaults live in
+/// `CosConfig::default()`; there is no read-only `/etc/cos/config.json`
+/// overlay any more.
+///
+/// Override the directory with `COS_USER_CONFIG_DIR`, or the file
+/// directly with `COS_CONFIG_PATH` (used by tests).
+pub fn user_config_path() -> PathBuf {
+    user_config_dir().join("config.json")
+}
+
+/// Per-user data root. Follows XDG_DATA_HOME on Linux
+/// (`$HOME/.local/share/cos`) and `%APPDATA%\cos\data` on Windows.
+/// Holds per-user secrets and large blobs that don't belong in the
+/// config tree: encrypted credentials, future per-user model caches,
+/// etc.
+///
+/// Override with `COS_USER_DATA_DIR` for tests / multi-tenant setups.
+/// Distinct from [`data_dir`] which is the system-wide root
+/// (`/var/lib/cos`) holding state managed by `cos` itself
+/// (sessions, audit logs, jobs, model registry).
+pub fn user_data_dir() -> PathBuf {
+    if let Some(v) = std::env::var_os("COS_USER_DATA_DIR") {
+        return PathBuf::from(v);
+    }
+    #[cfg(windows)]
+    {
+        if let Some(v) = std::env::var_os("APPDATA") {
+            return PathBuf::from(v).join("cos").join("data");
+        }
+        return windows_program_data().join("data");
+    }
+    #[cfg(not(windows))]
+    {
+        let home = std::env::var_os("HOME").unwrap_or_else(|| "/root".into());
+        PathBuf::from(home)
+            .join(".local")
+            .join("share")
+            .join("cos")
+    }
+}
+
+/// Per-user encrypted credential store root:
+/// `$HOME/.local/share/cos/credentials`. Each `cos agent setup` API
+/// key, plus any other secret a user stores via `cos credential
+/// store`, lands under here as `<namespace>/<name>.json` (AES-256-GCM
+/// encrypted). Per-user so non-root users can save API keys without
+/// touching `/var/lib/cos`. Override with `COS_CREDENTIALS_DIR`.
+pub fn user_credentials_dir() -> PathBuf {
+    if let Some(v) = std::env::var_os("COS_CREDENTIALS_DIR") {
+        return PathBuf::from(v);
+    }
+    user_data_dir().join("credentials")
+}
+
 /// Per-app user override file:
 /// `$HOME/.config/cos/apps/<app_id>.json`. Missing is normal and
 /// means "no overrides, inherit the manifest verbatim". See

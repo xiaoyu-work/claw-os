@@ -1,16 +1,17 @@
 /// Configuration loading for Claw OS.
 ///
-/// Reads `/etc/cos/config.json` (or `COS_CONFIG_PATH` override) and
-/// provides typed access to settings. Falls back to sensible defaults
-/// if the config file is missing or malformed.
+/// Reads `~/.config/cos/config.json` (or `COS_CONFIG_PATH` override)
+/// and provides typed access to settings. Falls back to sensible
+/// defaults if the config file is missing or malformed. The file is
+/// per-user; `cos agent setup` (and the cosmic-settings agent page)
+/// write to it under the running user's `$HOME`, so changes don't
+/// need root.
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use std::sync::OnceLock;
 
 static CONFIG: OnceLock<CosConfig> = OnceLock::new();
-
-const DEFAULT_CONFIG_PATH: &str = "/etc/cos/config.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CosConfig {
@@ -68,7 +69,7 @@ pub struct WebConfig {
 }
 
 /// Agent runtime configuration. Reads from `[agent]` block of
-/// `/etc/cos/config.json`. All fields have sensible defaults so the agent
+/// `~/.config/cos/config.json`. All fields have sensible defaults so the agent
 /// can run without explicit configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
@@ -878,9 +879,11 @@ impl Default for AgentConfig {
 
 /// Load config from disk, or return defaults if file is missing/invalid.
 fn load_from_disk() -> CosConfig {
-    let path = std::env::var("COS_CONFIG_PATH").unwrap_or_else(|_| DEFAULT_CONFIG_PATH.into());
+    let path = std::env::var_os("COS_CONFIG_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(crate::paths::user_config_path);
 
-    let path = Path::new(&path);
+    let path: &Path = path.as_ref();
     if !path.is_file() {
         return CosConfig::default();
     }
