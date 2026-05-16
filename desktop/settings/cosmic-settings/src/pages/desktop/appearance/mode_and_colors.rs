@@ -28,6 +28,7 @@ pub fn section() -> Section<crate::pages::Message> {
                 .title(&section.title)
                 .add(theme_mode(page, section, &label_keys))
                 .add(auto_switch(page, section, &label_keys))
+                .add(accent_color_palette(page, section, &label_keys))
                 .add(application_background(page, section, &label_keys))
                 .add(container_background(page, section, &label_keys))
                 .add(interface_text(page, section, &label_keys))
@@ -192,10 +193,6 @@ fn auto_switch<'a>(
         .toggler(page.theme_manager.mode().auto_switch, Message::Autoswitch)
 }
 
-// ClawOS: hidden until the freeze on accent switch is diagnosed.
-// Keep the implementation so we can re-enable it once theme_manager.set_accent
-// stops deadlocking the settings app.
-#[allow(dead_code)]
 fn accent_color_palette<'a>(
     page: &Page,
     section: &'a Section<crate::pages::Message>,
