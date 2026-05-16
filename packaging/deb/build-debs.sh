@@ -143,15 +143,14 @@ install -m 755 "$PROJECT_DIR/rootfs/overlay/usr/local/bin/cos-init" \
 install -m 755 "$PROJECT_DIR/rootfs/overlay/usr/lib/cos/init/setup-home.sh" \
     "$BASE_STAGE/usr/lib/cos/init/setup-home.sh"
 
-# Config files (declared as conffiles above).
-install -m 644 "$PROJECT_DIR/rootfs/overlay/etc/cos/config.json" \
-    "$BASE_STAGE/etc/cos/config.json"
+# Config files (declared as conffiles above). Agent config is per-user
+# (~/.config/cos/config.json, written by `cos agent setup`); only the
+# profile shim is shipped system-wide here.
 install -m 644 "$PROJECT_DIR/rootfs/overlay/etc/cos/profile.sh" \
     "$BASE_STAGE/etc/cos/profile.sh"
 
-# Inject the version into config.json + profile.sh so the binaries and
-# scripts agree on the same string at runtime.
-sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" "$BASE_STAGE/etc/cos/config.json"
+# Inject the version into profile.sh so the binaries and scripts
+# agree on the same string at runtime.
 sed -i "s/COS_VERSION=\".*\"/COS_VERSION=\"$VERSION\"/" "$BASE_STAGE/etc/cos/profile.sh"
 
 # Apps, skills.

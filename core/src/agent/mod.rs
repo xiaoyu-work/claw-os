@@ -4225,7 +4225,7 @@ fn tools_cmd(args: &[String]) -> Result<Value, String> {
 /// `<tool>` and returns `{permitted, decision: "allow"|"deny", reason?}`.
 ///
 /// Useful for verifying that a `tool_allow`/`tool_deny` change in
-/// `/etc/cos/config.json` is actually parsed the way you expect
+/// `~/.config/cos/config.json` is actually parsed the way you expect
 /// before running a session.
 fn guardrails_cmd(args: &[String]) -> Result<Value, String> {
     use crate::agent::tools::guardrails::Decision;
@@ -12641,7 +12641,7 @@ mod tests {
 
     #[test]
     fn binary_ext_check_recognises_text_path_as_not_binary() {
-        let v = binary_ext_cmd(&["check".into(), "/etc/cos/config.json".into()]).expect("check ok");
+        let v = binary_ext_cmd(&["check".into(), "/etc/passwd".into()]).expect("check ok");
         assert_eq!(v.get("mode").and_then(|s| s.as_str()), Some("path"));
         assert_eq!(v.get("is_binary").and_then(|b| b.as_bool()), Some(false));
     }

@@ -3,9 +3,10 @@
 //! Replaces the previous `cos agent onboarding` family. Pick a
 //! modality (llm / tts / stt / imagegen / embed / all), then walk
 //! through provider → model → API key → persist → optional probe.
-//! Each modality writes to its own `/etc/cos/config.json` block
+//! Each modality writes to its own `~/.config/cos/config.json` block
 //! (`[agent]`, `[tts]`, `[stt]`, `[imagegen]`, `[embed]`) and stores
-//! credentials in the `agent` namespace of the credential store.
+//! credentials in the `agent` namespace of the per-user credential
+//! store (`~/.local/share/cos/credentials/agent/`).
 //!
 //! Subcommands:
 //!   * `<modality>`     Run the wizard for one modality. Requires a TTY.
@@ -340,8 +341,8 @@ fn help_doc() -> Value {
 }
 
 /// Probe the currently configured provider without re-running the
-/// wizard. Useful after editing `/etc/cos/config.json` by hand or
-/// rotating an API key.
+/// wizard. Useful after editing `~/.config/cos/config.json` by hand
+/// or rotating an API key.
 fn verify_cmd(modality: Modality) -> Result<Value, String> {
     match modality {
         Modality::Llm => verify_llm(),
@@ -632,7 +633,7 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
     if !std::io::stdin().is_terminal() {
         return Err(json!({
             "error": "cos agent setup requires an interactive TTY",
-            "hint": "run it in a terminal, or write /etc/cos/config.json and the `agent` credential manually",
+            "hint": "run it in a terminal, or write ~/.config/cos/config.json and the `agent` credential manually",
         })
         .to_string());
     }
@@ -1230,7 +1231,7 @@ fn wizard_media(spec: &'static media::ModalitySpec, verify_after: bool) -> Resul
             "error": "cos agent setup requires an interactive TTY",
             "modality": spec.name,
             "hint": format!(
-                "run it in a terminal, or edit /etc/cos/config.json's `{}` block manually",
+                "run it in a terminal, or edit ~/.config/cos/config.json's `{}` block manually",
                 spec.config_block
             ),
         })
@@ -1457,7 +1458,7 @@ fn wizard_all(verify_after: bool) -> Result<Value, String> {
     if !std::io::stdin().is_terminal() {
         return Err(json!({
             "error": "cos agent setup all requires an interactive TTY",
-            "hint": "set up each modality non-interactively by editing /etc/cos/config.json",
+            "hint": "set up each modality non-interactively by editing ~/.config/cos/config.json",
         })
         .to_string());
     }
@@ -1750,7 +1751,7 @@ fn providers_cmd(modality: Modality) -> Result<Value, String> {
 /// AI page). Filters out `mock` (test-only) and `llama_local` (managed
 /// via `cos model load`, not the standard credential flow). Power users
 /// can still address these by name via `cos agent setup llm apply
-/// --provider mock ...` or by editing /etc/cos/config.json directly —
+/// --provider mock ...` or by editing ~/.config/cos/config.json directly —
 /// only the lists are hidden, not the registry.
 fn user_facing_providers() -> Vec<&'static str> {
     llm::available_providers()
@@ -2222,9 +2223,9 @@ fn read_line() -> Result<String, String> {
 }
 
 pub fn config_path() -> PathBuf {
-    std::env::var("COS_CONFIG_PATH")
+    std::env::var_os("COS_CONFIG_PATH")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/etc/cos/config.json"))
+        .unwrap_or_else(crate::paths::user_config_path)
 }
 
 fn read_config_or_empty(path: &Path) -> Result<Value, String> {
@@ -2242,13 +2243,13 @@ fn read_config_or_empty(path: &Path) -> Result<Value, String> {
 fn write_config_atomic(path: &Path, cfg: &Value) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
-            .map_err(|e| format!("create {}: {e}\nhint: try `sudo cos agent setup`", parent.display()))?;
+            .map_err(|e| format!("create {}: {e}", parent.display()))?;
     }
     let json_text =
         serde_json::to_string_pretty(cfg).map_err(|e| format!("serialize config: {e}"))?;
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, json_text)
-        .map_err(|e| format!("write {}: {e}\nhint: try `sudo cos agent setup`", tmp.display()))?;
+        .map_err(|e| format!("write {}: {e}", tmp.display()))?;
     std::fs::rename(&tmp, path)
         .map_err(|e| format!("rename {} -> {}: {e}", tmp.display(), path.display()))?;
     Ok(())
@@ -2482,7 +2483,7 @@ mod tests {
     #[test]
     fn status_returns_provider_and_ready_flag() {
         let _g = env_lock();
-        // Use a tmp config path so we don't depend on /etc/cos/config.json.
+        // Use a tmp config path so we don't depend on the user's real config.
         let tmp_dir = std::env::temp_dir().join(format!("cos-setup-test-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&tmp_dir).unwrap();
         let cfg_path = tmp_dir.join("config.json");
@@ -2494,6 +2495,38 @@ mod tests {
 
         std::env::remove_var("COS_CONFIG_PATH");
         std::fs::remove_dir_all(&tmp_dir).ok();
+    }
+
+    #[test]
+    fn config_path_defaults_to_user_config_dir() {
+        // Regression: agent config used to default to /etc/cos/config.json,
+        // which non-root users couldn't write to — saving Azure in
+        // cosmic-settings then silently failed. With per-user paths,
+        // config_path() must land under COS_USER_CONFIG_DIR.
+        let _g = env_lock();
+        let tmp = std::env::temp_dir().join(format!("cos-setup-user-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let prev_path = std::env::var_os("COS_CONFIG_PATH");
+        let prev_user = std::env::var_os("COS_USER_CONFIG_DIR");
+        std::env::remove_var("COS_CONFIG_PATH");
+        std::env::set_var("COS_USER_CONFIG_DIR", &tmp);
+
+        let p = config_path();
+        assert_eq!(p, tmp.join("config.json"));
+        // Round-trip: write+read should both succeed under the user dir
+        // (no root needed). This is the bug fix in action.
+        write_config_atomic(&p, &json!({"agent": {"provider": "azure"}})).expect("write ok");
+        let v = read_config_or_empty(&p).expect("read ok");
+        assert_eq!(v["agent"]["provider"], "azure");
+
+        match prev_user {
+            Some(v) => std::env::set_var("COS_USER_CONFIG_DIR", v),
+            None => std::env::remove_var("COS_USER_CONFIG_DIR"),
+        }
+        if let Some(v) = prev_path {
+            std::env::set_var("COS_CONFIG_PATH", v);
+        }
+        std::fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]

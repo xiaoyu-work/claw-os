@@ -410,7 +410,7 @@ fn check_memory() -> Value {
             "status": "warn",
             "configured": false,
             "reason": "no embedder configured",
-            "fix": "set `agent.semantic_embedder` in /etc/cos/config.json (or COS_CONFIG_PATH) — semantic memory is opt-in",
+            "fix": "set `agent.semantic_embedder` in ~/.config/cos/config.json (or COS_CONFIG_PATH) — semantic memory is opt-in",
         }),
         Err(e) => json!({
             "status": "fail",

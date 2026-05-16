@@ -31,9 +31,10 @@ chroot "$ROOTFS" pip3 install --break-system-packages --no-cache-dir \
     pymupdf python-docx openpyxl python-pptx pyyaml
 
 # Inject version from Cargo.toml into runtime files (overlay was already
-# applied by build.sh before features ran).
+# applied by build.sh before features ran). The system overlay no longer
+# ships /etc/cos/config.json — agent config lives under
+# ~/.config/cos/config.json per user, defaults come from Rust.
 echo "  :: injecting version $COS_VERSION"
-sed -i "s/\"version\": \".*\"/\"version\": \"$COS_VERSION\"/" "$ROOTFS/etc/cos/config.json"
 sed -i "s/COS_VERSION=\".*\"/COS_VERSION=\"$COS_VERSION\"/" "$ROOTFS/etc/cos/profile.sh"
 sed -i "s/@COS_VERSION@/$COS_VERSION/g" \
     "$ROOTFS/etc/os-release" \

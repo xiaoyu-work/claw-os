@@ -2171,14 +2171,14 @@ mod tests {
     fn dispatch_builtin_recovery_envelope_propagates_failure() {
         // Regression: a builtin handler that returns Err with a string
         // matching a `recovery_hint` pattern (e.g. "Permission denied"
-        // when writing /etc/cos/config.json as a non-root user) used to
+        // when writing config as a non-root user) used to
         // be re-wrapped in `Ok(Some(envelope))`. That zeroed out the CLI
         // exit code, so callers like cosmic-settings' agent page parsed
         // the failure as a default-valued success and silently flipped
         // the provider back to openai. The wrapper must keep failures
         // failing while still attaching the recovery hints.
         fn boom(_command: &str, _args: &[String]) -> Result<Value, String> {
-            Err("write /etc/cos/config.json.tmp: Permission denied (os error 13)".into())
+            Err("write /var/lib/foo.tmp: Permission denied (os error 13)".into())
         }
         let result = dispatch_builtin(&["agent".into(), "boom".into()], "agent", boom);
         let err = result.expect_err("dispatch_builtin must propagate Err for failed primitives");

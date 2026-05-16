@@ -5,7 +5,7 @@
 // image gen / embeddings) gets its own thin `Page` wrapper around `State`;
 // all the actual logic lives here so the per-modality files stay tiny.
 //
-// The page never touches `/etc/cos/config.json` directly. Reads and writes
+// The page never touches `~/.config/cos/config.json` directly. Reads and writes
 // are funnelled through the kernel's non-interactive subcommands:
 //
 //   * `cos agent setup --providers <modality>` -> provider/model catalogue

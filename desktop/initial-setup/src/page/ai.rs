@@ -12,16 +12,14 @@
 //     just fails fast with `LlmError::NotConfigured`. The user can
 //     return here via `cos agent setup llm apply ...` at any time.
 //
-//   * Applying writes to `/etc/cos/config.json` by invoking the
-//     existing `cos agent setup llm apply` CLI through claw-os-sdk
+//   * Applying writes to `~/.config/cos/config.json` by invoking the
+//     existing `cos agent setup llm apply` CLI through cos-runtime
 //     exec.run. The bridge runs as the same unprivileged user as the
-//     desktop session; if the user can't write `/etc/cos/`, the
-//     command exits non-zero and we surface the bridge's denial in
-//     the UI (same pattern as `timedatectl set-timezone` in
-//     location.rs and `cosmic-randr` in a11y.rs).
+//     desktop session, so the config file lives under the running
+//     user's `$HOME` and no privilege escalation is needed.
 //
 //   * The api-key is passed inline via `--api-key` rather than
-//     `--api-key-stdin`. claw-os-sdk's exec verb doesn't carry stdin
+//     `--api-key-stdin`. cos-runtime's exec verb doesn't carry stdin
 //     to the spawned child today. The key is visible in `ps` for the
 //     duration of the call — initial-setup runs once, on a freshly
 //     installed system, so the leak window is acceptable; users who
