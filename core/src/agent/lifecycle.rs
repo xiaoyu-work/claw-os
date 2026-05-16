@@ -128,7 +128,8 @@ pub fn show(args: &[String]) -> Result<Value, String> {
 
 pub fn stop(args: &[String]) -> Result<Value, String> {
     let sid = parse_sid(args, "stop")?;
-    let meta = get_meta(&sid).map_err(|e| format!("read meta: {e}"))?;
+    // Validate that the session exists before any side effects.
+    let _ = get_meta(&sid).map_err(|e| format!("read meta: {e}"))?;
 
     // Cooperative: drop a sentinel file the runtime is expected to
     // notice on its next heartbeat. We never yank a held lease.
@@ -146,6 +147,18 @@ pub fn stop(args: &[String]) -> Result<Value, String> {
         std::process::id()
     );
 
+    // Hold a flock spanning the `current_lease` check and the
+    // `update_meta(Paused)` rewrite below. Without this lock, two
+    // concurrent `cos agent stop` calls (or a `stop` racing a
+    // `resume`) could both observe "no lease, status active" and
+    // both write a meta — the later writer's status wins for the
+    // wrong reason. The sentinel is sibling to the session dir so
+    // the flock attaches to a stable inode even if meta.json is
+    // rewritten via tmp+rename underneath us.
+    let _lock = StopLock::acquire(&sid)?;
+    // Re-read meta and lease *after* taking the lock to avoid using
+    // stale TOCTOU snapshots from before the gate.
+    let meta = get_meta(&sid).map_err(|e| format!("read meta: {e}"))?;
     let mut action = "sentinel-written";
     let lease = current_lease(&sid).ok().flatten();
 
@@ -284,6 +297,59 @@ fn parse_sid(args: &[String], verb: &str) -> Result<SessionId, String> {
 
 fn stop_sentinel(sid: &SessionId) -> std::path::PathBuf {
     session_dir(sid).join("stop.requested")
+}
+
+/// Sibling sentinel that serializes the `current_lease` + `update_meta`
+/// pair inside `stop`. Without it, two callers can both observe an
+/// active+unleased meta and both write a meta — a transition is then
+/// effectively lost. Living next to the session dir means it survives
+/// the meta.json tmp+rename inode swap.
+fn stop_lock_path(sid: &SessionId) -> std::path::PathBuf {
+    session_dir(sid).join("stop.lock")
+}
+
+struct StopLock {
+    file: fs::File,
+}
+
+impl StopLock {
+    fn acquire(sid: &SessionId) -> Result<Self, String> {
+        let path = stop_lock_path(sid);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        }
+        let f = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)
+            .map_err(|e| format!("open lock {}: {e}", path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            let rc = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) };
+            if rc != 0 {
+                return Err(format!(
+                    "flock LOCK_EX {}: {}",
+                    path.display(),
+                    std::io::Error::last_os_error()
+                ));
+            }
+        }
+        Ok(Self { file: f })
+    }
+}
+
+impl Drop for StopLock {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            unsafe {
+                libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+            }
+        }
+    }
 }
 
 fn now_rfc3339() -> String {
@@ -474,5 +540,49 @@ mod tests {
         let _g = session::try_acquire(&sid).unwrap();
         let err = resume(&[sid.as_str().into()]).unwrap_err();
         assert!(err.contains("lease"), "got {err}");
+    }
+
+    #[test]
+    fn stop_no_toctou() {
+        // Regression: two concurrent `cos agent stop` calls on the
+        // same session must serialize through the stop.lock flock.
+        // Without it, both observe `lease.is_none() && active` from
+        // their independent reads and both write a meta — one of
+        // those updates is then silently lost. With the lock, the
+        // second call sees Status::Paused inside the lock and
+        // chooses the "sentinel-written" branch instead.
+        let _l = lock_env();
+        let _d = redirect_data_dir();
+        let sid = session::create("toctou").unwrap();
+        session::update_meta(&sid, |m| m.status = Status::Running).unwrap();
+        let sid_a = sid.clone();
+        let sid_b = sid.clone();
+        let h1 = std::thread::spawn(move || stop(&[sid_a.as_str().into()]).unwrap());
+        let h2 = std::thread::spawn(move || stop(&[sid_b.as_str().into()]).unwrap());
+        let r1 = h1.join().unwrap();
+        let r2 = h2.join().unwrap();
+        // Exactly one caller observed the transition to Paused. The
+        // other ran *after* the lock and so saw Paused already and
+        // returned "sentinel-written".
+        let actions: Vec<String> = [&r1, &r2]
+            .iter()
+            .map(|v| v["action"].as_str().unwrap_or("").to_string())
+            .collect();
+        let paused = actions.iter().filter(|a| a.as_str() == "marked-paused").count();
+        let sentinels = actions
+            .iter()
+            .filter(|a| a.as_str() == "sentinel-written")
+            .count();
+        assert_eq!(
+            paused, 1,
+            "exactly one stop() should flip Paused, got actions={actions:?}"
+        );
+        assert_eq!(
+            sentinels, 1,
+            "the loser should report sentinel-written, got actions={actions:?}"
+        );
+        // Final state must be Paused regardless of ordering.
+        let meta = session::get_meta(&sid).unwrap();
+        assert_eq!(meta.status, Status::Paused);
     }
 }

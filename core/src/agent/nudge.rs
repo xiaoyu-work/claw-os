@@ -12,6 +12,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -60,23 +61,53 @@ impl NudgeStore {
         }
     }
 
-    fn save(&self, file: &NudgeFile) -> std::io::Result<()> {
+    fn save(&self, file: &NudgeFile) -> io::Result<()> {
+        let json = serde_json::to_vec_pretty(file)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        // Crash-safe: per-process tmp + fsync(tmp) + rename + fsync(parent).
+        // Replaces a previous `fs::write(tmp) + fs::rename` which skipped
+        // both fsyncs and could surface a torn/empty nudges file on
+        // recovery, dropping every queued reminder.
+        crate::agent::util::atomic_write_with_fsync(&self.path, &json)
+    }
+
+    /// Acquire an exclusive advisory lock for the duration of a
+    /// read-modify-write cycle. The lock attaches to a sibling
+    /// `.lock` sentinel — locking the data file directly would be
+    /// useless because `save_atomic` swaps its inode on each write.
+    /// On non-unix we return Ok with no lock (best-effort).
+    fn lock_rmw(&self) -> io::Result<RmwLock> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let json = serde_json::to_string_pretty(file)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        let tmp = self.path.with_extension("json.tmp");
-        fs::write(&tmp, json)?;
-        fs::rename(&tmp, &self.path)
+        let lock_path = {
+            let mut s: std::ffi::OsString = self.path.as_os_str().to_os_string();
+            s.push(".lock");
+            PathBuf::from(s)
+        };
+        let f = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            let rc = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) };
+            if rc != 0 {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        Ok(RmwLock { file: f })
     }
 
     /// Add a nudge. Returns the assigned id (caller may have
     /// supplied one via `nudge.id`; if blank, a UUID is assigned).
-    pub fn add(&self, mut nudge: Nudge) -> std::io::Result<String> {
+    pub fn add(&self, mut nudge: Nudge) -> io::Result<String> {
         if nudge.id.is_empty() {
             nudge.id = Uuid::new_v4().simple().to_string();
         }
+        let _lock = self.lock_rmw()?;
         let mut file = self.load();
         let id = nudge.id.clone();
         file.nudges.insert(id.clone(), nudge);
@@ -84,7 +115,8 @@ impl NudgeStore {
         Ok(id)
     }
 
-    pub fn remove(&self, id: &str) -> std::io::Result<bool> {
+    pub fn remove(&self, id: &str) -> io::Result<bool> {
+        let _lock = self.lock_rmw()?;
         let mut file = self.load();
         let removed = file.nudges.remove(id).is_some();
         if removed {
@@ -116,7 +148,8 @@ impl NudgeStore {
     ///   `last_fired_epoch_s` set.
     ///
     /// Returns true if the nudge existed and was updated/removed.
-    pub fn fire(&self, id: &str, now_epoch_s: u64) -> std::io::Result<bool> {
+    pub fn fire(&self, id: &str, now_epoch_s: u64) -> io::Result<bool> {
+        let _lock = self.lock_rmw()?;
         let mut file = self.load();
         let Some(nudge) = file.nudges.get_mut(id) else {
             return Ok(false);
@@ -133,6 +166,25 @@ impl NudgeStore {
         }
         self.save(&file)?;
         Ok(true)
+    }
+}
+
+/// RAII guard for the exclusive flock taken by `lock_rmw`. Releases
+/// on drop via `flock(LOCK_UN)`; closing the fd would do the same but
+/// being explicit makes the lock lifetime obvious in profiles.
+struct RmwLock {
+    file: fs::File,
+}
+
+impl Drop for RmwLock {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            unsafe {
+                libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+            }
+        }
     }
 }
 
@@ -266,11 +318,31 @@ mod tests {
         let p = tmp("atomic");
         let store = NudgeStore::new(&p);
         store.add(n("x", 100, None)).unwrap();
-        // Tmp file should not linger after a successful save.
-        let tmp_path = p.with_extension("json.tmp");
-        assert!(!tmp_path.exists(), "tmp file should be renamed away");
+        // No per-process tmp file should linger after a successful save.
+        // The shared atomic_write helper uses a hidden `.<name>.<pid>...tmp`
+        // sibling and renames it into place. Restrict the scan to this
+        // test's stem so we don't false-positive on `.tmp` files left
+        // by other concurrently-running tests sharing `/tmp`.
+        let stem = p.file_name().unwrap().to_string_lossy().into_owned();
+        if let Some(parent) = p.parent() {
+            for entry in fs::read_dir(parent).unwrap().flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if !name.contains(&stem) {
+                    continue;
+                }
+                assert!(
+                    !name.ends_with(".tmp"),
+                    "no leftover tmp file expected for {stem}, got {name}"
+                );
+            }
+        }
         assert!(p.exists());
-        fs::remove_file(&p).ok();
+        let _ = fs::remove_file(&p);
+        let lock = p.with_file_name(format!(
+            "{}.lock",
+            p.file_name().unwrap().to_string_lossy()
+        ));
+        let _ = fs::remove_file(&lock);
     }
 
     #[test]

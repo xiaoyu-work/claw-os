@@ -29,7 +29,7 @@
 //! free-form `note` set when the user accepts/rejects.
 
 use std::fs;
-use std::io::Write;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -132,6 +132,12 @@ impl DraftStore {
     /// The new record is the *last* element of `list()` after the
     /// call.
     pub fn add(&mut self, session_id: String, draft: SkillDraft) -> Result<String, String> {
+        let _lock = self.lock_rmw()?;
+        // Re-read after taking the lock so concurrent writers can't
+        // silently undo each other's additions (open_default + add
+        // from two processes / threads otherwise saw the same baseline
+        // snapshot and last writer won).
+        self.reload_locked()?;
         let id = uuid::Uuid::new_v4().simple().to_string();
         let rec = DraftRecord {
             id: id.clone(),
@@ -155,6 +161,8 @@ impl DraftStore {
         status: DraftStatus,
         note: Option<String>,
     ) -> Result<(), String> {
+        let _lock = self.lock_rmw()?;
+        self.reload_locked()?;
         let rec = self
             .file
             .drafts
@@ -170,6 +178,8 @@ impl DraftStore {
 
     /// Drop a record entirely. `Err` when the id is unknown.
     pub fn delete(&mut self, id: &str) -> Result<(), String> {
+        let _lock = self.lock_rmw()?;
+        self.reload_locked()?;
         let before = self.file.drafts.len();
         self.file.drafts.retain(|r| r.id != id);
         if self.file.drafts.len() == before {
@@ -188,6 +198,8 @@ impl DraftStore {
         if trimmed.is_empty() {
             return Err("title must not be empty".into());
         }
+        let _lock = self.lock_rmw()?;
+        self.reload_locked()?;
         let rec = self
             .file
             .drafts
@@ -198,26 +210,98 @@ impl DraftStore {
         self.save_atomic()
     }
 
-    /// Atomic write: serialise to `<path>.tmp`, fsync, rename to
-    /// `<path>`. Worst-case crash leaves either the old contents
-    /// (if rename hadn't happened yet) or the new contents (rename
-    /// succeeded) — never a torn file.
-    fn save_atomic(&self) -> Result<(), String> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+    /// Re-read the on-disk state into `self.file`. Must only be
+    /// called while holding the rmw lock. Lets us avoid the
+    /// classic open-mutate-save TOCTOU where a peer's update is
+    /// silently overwritten because we acted on a stale baseline.
+    fn reload_locked(&mut self) -> Result<(), String> {
+        if !self.path.exists() {
+            self.file = DraftFile::default();
+            return Ok(());
         }
-        let json = serde_json::to_vec_pretty(&self.file).map_err(|e| format!("serialise: {e}"))?;
-        let tmp = self.path.with_extension("json.tmp");
-        {
-            let mut f =
-                fs::File::create(&tmp).map_err(|e| format!("create {}: {e}", tmp.display()))?;
-            f.write_all(&json)
-                .map_err(|e| format!("write {}: {e}", tmp.display()))?;
-            f.sync_all().ok();
+        let bytes =
+            fs::read(&self.path).map_err(|e| format!("read {}: {e}", self.path.display()))?;
+        if bytes.is_empty() {
+            self.file = DraftFile::default();
+            return Ok(());
         }
-        fs::rename(&tmp, &self.path)
-            .map_err(|e| format!("rename {} -> {}: {e}", tmp.display(), self.path.display()))?;
+        let parsed: DraftFile = serde_json::from_slice(&bytes)
+            .map_err(|e| format!("parse {}: {e}", self.path.display()))?;
+        if parsed.schema != SCHEMA_VERSION {
+            return Err(format!(
+                "{} has schema v{}, expected v{}",
+                self.path.display(),
+                parsed.schema,
+                SCHEMA_VERSION
+            ));
+        }
+        self.file = parsed;
         Ok(())
+    }
+
+    /// Acquire an exclusive advisory flock on a sibling sentinel for
+    /// the duration of a read-modify-write cycle. Save_atomic
+    /// replaces the data file's inode, so locking the data file
+    /// itself would be useless across rename — the sentinel inode is
+    /// stable and serves as a valid sync point.
+    fn lock_rmw(&self) -> Result<RmwLock, String> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        }
+        let lock_path = {
+            let mut s: std::ffi::OsString = self.path.as_os_str().to_os_string();
+            s.push(".lock");
+            PathBuf::from(s)
+        };
+        let f = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)
+            .map_err(|e| format!("open lock {}: {e}", lock_path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            let rc = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) };
+            if rc != 0 {
+                return Err(format!(
+                    "flock LOCK_EX {}: {}",
+                    lock_path.display(),
+                    io::Error::last_os_error()
+                ));
+            }
+        }
+        Ok(RmwLock { file: f })
+    }
+
+    /// Atomic write: serialise via the shared `atomic_write_with_fsync`
+    /// helper (tmp + sync_all + rename + parent dir fsync). Worst-case
+    /// crash leaves either the old contents (rename hadn't happened
+    /// yet) or the new contents (rename + parent fsync succeeded) —
+    /// never a torn or zero-byte file.
+    fn save_atomic(&self) -> Result<(), String> {
+        let json = serde_json::to_vec_pretty(&self.file).map_err(|e| format!("serialise: {e}"))?;
+        crate::agent::util::atomic_write_with_fsync(&self.path, &json)
+            .map_err(|e| format!("write {}: {e}", self.path.display()))?;
+        Ok(())
+    }
+}
+
+/// RAII guard for the exclusive flock taken by [`DraftStore::lock_rmw`].
+struct RmwLock {
+    file: fs::File,
+}
+
+impl Drop for RmwLock {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            unsafe {
+                libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+            }
+        }
     }
 }
 
@@ -388,9 +472,24 @@ mod tests {
         let p = tmp_path("atomic");
         let mut store = DraftStore::open_at(p.clone()).unwrap();
         store.add("s".into(), sample_draft("a")).unwrap();
-        // tmp file must NOT linger after a successful save.
-        let tmp = p.with_extension("json.tmp");
-        assert!(!tmp.exists(), "tmp file should be renamed away");
+        // No leftover tmp file *for this path*. The shared helper uses
+        // hidden per-process `.<name>.<pid>.<nonce>.tmp` siblings and
+        // renames them into place — none should remain. Restrict the
+        // scan to this test's stem so we don't accidentally pick up
+        // .tmp files left by other tests that share `/tmp`.
+        let stem = p.file_name().unwrap().to_string_lossy().into_owned();
+        if let Some(parent) = p.parent() {
+            for entry in std::fs::read_dir(parent).unwrap().flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if !name.contains(&stem) {
+                    continue;
+                }
+                assert!(
+                    !name.ends_with(".tmp"),
+                    "no leftover tmp file expected for {stem}, got {name}"
+                );
+            }
+        }
         assert!(p.exists());
         std::fs::remove_file(&p).ok();
     }
