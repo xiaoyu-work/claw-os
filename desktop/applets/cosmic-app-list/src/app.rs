@@ -31,7 +31,10 @@ use cosmic::{
     iced::{
         self, Alignment, Background, Border, Length, Limits, Padding, Subscription,
         advanced::text::{Ellipsize, EllipsizeHeightLimit},
-        clipboard::mime::{AllowedMimeTypes, AsMimeTypes},
+        clipboard::{
+            dnd::{DndEvent, OfferEvent},
+            mime::{AllowedMimeTypes, AsMimeTypes},
+        },
         event::listen_with,
         platform_specific::shell::commands::popup::{destroy_popup, get_popup},
         widget::{
@@ -410,6 +413,7 @@ enum Message {
     DndLeave,
     DndMotion(f64, f64),
     DndDropFinished,
+    DndDrop(Option<DndPathBuf>),
     DndData(Option<DndPathBuf>),
     StartListeningForDnd,
     StopListeningForDnd,
@@ -1239,6 +1243,33 @@ impl cosmic::Application for CosmicAppList {
                     }
                 }
             }
+            Message::DndDrop(data) => {
+                if let Some(DndPathBuf(path_buf)) = data {
+                    if self.dnd_offer.is_none() {
+                        self.dnd_offer = Some(DndOffer {
+                            preview_index: self.pinned_list.len(),
+                            ..DndOffer::default()
+                        });
+                    }
+                    if let Some(offer) = self.dnd_offer.as_mut() {
+                        if offer.dock_item.is_none() {
+                            if let Ok(de) =
+                                fde::DesktopEntry::from_path(path_buf, Some(&self.locales))
+                            {
+                                self.item_ctr += 1;
+                                offer.dock_item = Some(DockItem {
+                                    id: self.item_ctr,
+                                    toplevels: Vec::new(),
+                                    original_app_id: de.id().to_string(),
+                                    desktop_info: de,
+                                });
+                            }
+                        }
+                    }
+                }
+                self.is_listening_for_dnd = false;
+                return self.update(Message::DndDropFinished);
+            }
             Message::DndDropFinished => {
                 // we actually should have the data already, if not, we probably shouldn't do
                 // anything anyway
@@ -1952,7 +1983,7 @@ impl cosmic::Application for CosmicAppList {
                 Length::Shrink,
                 DndDestination::for_data::<DndPathBuf>(
                     row(favorites).spacing(app_icon.icon_spacing),
-                    |_, _| Message::DndDropFinished,
+                    |data, _| Message::DndDrop(data),
                 )
                 .drag_id(DND_FAVORITES),
                 row(active).spacing(app_icon.icon_spacing).into(),
@@ -1967,7 +1998,7 @@ impl cosmic::Application for CosmicAppList {
                 Length::Shrink,
                 DndDestination::for_data(
                     column(favorites).spacing(app_icon.icon_spacing),
-                    |_data: Option<DndPathBuf>, _| Message::DndDropFinished,
+                    |data: Option<DndPathBuf>, _| Message::DndDrop(data),
                 )
                 .drag_id(DND_FAVORITES),
                 column(active).spacing(app_icon.icon_spacing).into(),
@@ -2491,6 +2522,16 @@ impl cosmic::Application for CosmicAppList {
                 cosmic::iced::core::Event::Mouse(
                     cosmic::iced::core::mouse::Event::ButtonPressed(_),
                 ) => Some(Message::Pressed(id)),
+                cosmic::iced::core::Event::Dnd(DndEvent::Offer(
+                    _,
+                    OfferEvent::Enter { mime_types, .. },
+                )) if mime_types.iter().any(|m| m == MIME_TYPE) => {
+                    Some(Message::StartListeningForDnd)
+                }
+                cosmic::iced::core::Event::Dnd(DndEvent::Offer(
+                    _,
+                    OfferEvent::Leave | OfferEvent::Drop,
+                )) => Some(Message::StopListeningForDnd),
                 _ => None,
             }),
             rectangle_tracker_subscription(0).map(|update| Message::Rectangle(update.1)),
