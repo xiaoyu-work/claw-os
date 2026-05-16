@@ -97,7 +97,7 @@
         alpha: 1.0,
     ),
     accent_blue: (
-        red: 0.4, green: 0.58039218, blue: 1.0,
+        red: 0.0, green: 0.36078432, blue: 0.99607843,
         alpha: 1.0,
     ),
     accent_indigo: (
