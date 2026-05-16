@@ -582,12 +582,28 @@ impl Page {
         let dock_config_helper = CosmicPanelConfig::cosmic_config("Dock").ok();
 
         let mut panel_config = panel_config_helper.as_ref().and_then(|config_helper| {
-            let panel_config = CosmicPanelConfig::get_entry(config_helper).ok()?;
+            let panel_config = match CosmicPanelConfig::get_entry(config_helper) {
+                Ok(c) => c,
+                Err((errs, c)) => {
+                    for err in errs.into_iter().filter(cosmic_config::Error::is_err) {
+                        tracing::error!(?err, "Failed to load Panel config field.");
+                    }
+                    c
+                }
+            };
             (panel_config.name == "Panel").then_some(panel_config)
         });
 
         let mut dock_config = dock_config_helper.as_ref().and_then(|config_helper| {
-            let panel_config = CosmicPanelConfig::get_entry(config_helper).ok()?;
+            let panel_config = match CosmicPanelConfig::get_entry(config_helper) {
+                Ok(c) => c,
+                Err((errs, c)) => {
+                    for err in errs.into_iter().filter(cosmic_config::Error::is_err) {
+                        tracing::error!(?err, "Failed to load Dock config field.");
+                    }
+                    c
+                }
+            };
             (panel_config.name == "Dock").then_some(panel_config)
         });
 
@@ -631,7 +647,15 @@ impl Page {
         let dock_config_helper = CosmicPanelConfig::cosmic_config("Dock").ok();
 
         let mut dock_config = dock_config_helper.as_ref().and_then(|config_helper| {
-            let panel_config = CosmicPanelConfig::get_entry(config_helper).ok()?;
+            let panel_config = match CosmicPanelConfig::get_entry(config_helper) {
+                Ok(c) => c,
+                Err((errs, c)) => {
+                    for err in errs.into_iter().filter(cosmic_config::Error::is_err) {
+                        tracing::error!(?err, "Failed to load Dock config field.");
+                    }
+                    c
+                }
+            };
             (panel_config.name == "Dock").then_some(panel_config)
         });
 
@@ -658,11 +682,27 @@ impl Page {
         let panel_config_helper = CosmicPanelConfig::cosmic_config("Panel").ok();
         let dock_config_helper = CosmicPanelConfig::cosmic_config("Dock").ok();
         let mut panel_config = panel_config_helper.as_ref().and_then(|config_helper| {
-            let panel_config = CosmicPanelConfig::get_entry(config_helper).ok()?;
+            let panel_config = match CosmicPanelConfig::get_entry(config_helper) {
+                Ok(c) => c,
+                Err((errs, c)) => {
+                    for err in errs.into_iter().filter(cosmic_config::Error::is_err) {
+                        tracing::error!(?err, "Failed to load Panel config field.");
+                    }
+                    c
+                }
+            };
             (panel_config.name == "Panel").then_some(panel_config)
         });
         let mut dock_config = dock_config_helper.as_ref().and_then(|config_helper| {
-            let panel_config = CosmicPanelConfig::get_entry(config_helper).ok()?;
+            let panel_config = match CosmicPanelConfig::get_entry(config_helper) {
+                Ok(c) => c,
+                Err((errs, c)) => {
+                    for err in errs.into_iter().filter(cosmic_config::Error::is_err) {
+                        tracing::error!(?err, "Failed to load Dock config field.");
+                    }
+                    c
+                }
+            };
             (panel_config.name == "Dock").then_some(panel_config)
         });
 

@@ -149,6 +149,49 @@ chroot "$ROOTFS" env \
 '
 
 # ---------------------------------------------------------------------------
+# 2b. Assert that critical data files actually landed in the rootfs.
+#
+# These are silently-required by the desktop and have, in the past, gone
+# missing without breaking the build — leading to bugs like "Panel/Dock
+# settings page shows only Reset to Default" (missing schema files under
+# /usr/share/cosmic/com.clawos.Panel.*/v1/) or "wallpaper page has no preview"
+# (missing /usr/share/backgrounds/cosmic/claw-default.jpg).
+#
+# If any of these are missing here, the rootfs is broken — fail the build
+# loudly instead of shipping a broken image.
+# ---------------------------------------------------------------------------
+echo "  :: verifying critical desktop data files"
+required_files=(
+    # Wallpaper bitmap + cosmic-bg default entry
+    "$ROOTFS/usr/share/backgrounds/cosmic/claw-default.jpg"
+    "$ROOTFS/usr/share/cosmic/com.clawos.Background/v1/all"
+    # Panel + Dock default schemas — the "name" file is the canary;
+    # if it's missing the settings page collapses to "Reset to Default".
+    "$ROOTFS/usr/share/cosmic/com.clawos.Panel.Panel/v1/name"
+    "$ROOTFS/usr/share/cosmic/com.clawos.Panel.Panel/v1/padding_overlap"
+    "$ROOTFS/usr/share/cosmic/com.clawos.Panel.Dock/v1/name"
+    "$ROOTFS/usr/share/cosmic/com.clawos.Panel.Dock/v1/padding_overlap"
+    # Theme + comp defaults
+    "$ROOTFS/usr/share/cosmic/com.clawos.Theme.Dark/v1/name"
+    "$ROOTFS/usr/share/cosmic/com.clawos.Theme.Light/v1/name"
+    "$ROOTFS/usr/share/cosmic/com.clawos.Theme.Mode/v1/is_dark"
+)
+missing=0
+for f in "${required_files[@]}"; do
+    if [ ! -e "$f" ]; then
+        echo "    missing: ${f#$ROOTFS}"
+        missing=1
+    fi
+done
+if [ "$missing" = "1" ]; then
+    echo "  error: critical desktop data files are missing — the resulting" >&2
+    echo "         image would have broken Settings + Wallpaper pages."     >&2
+    echo "         Check desktop/justfile install recipes and confirm"      >&2
+    echo "         the source tree under $DESKTOP_SRC is intact."           >&2
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
 # 3. Wire up the login chain.
 #
 # `just install` puts the binaries / .desktop / sysusers / tmpfiles in
