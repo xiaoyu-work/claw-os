@@ -13,8 +13,8 @@ use std::sync::{LazyLock, RwLock};
 /// ID for the `CosmicTk` config.
 pub const ID: &str = "com.clawos.Tk";
 
-const MONO_FAMILY_DEFAULT: &str = "Noto Sans Mono";
-const SANS_FAMILY_DEFAULT: &str = "Open Sans";
+const MONO_FAMILY_DEFAULT: &str = "JetBrains Mono";
+const SANS_FAMILY_DEFAULT: &str = "Inter";
 
 pub static COSMIC_TK: LazyLock<RwLock<CosmicTk>> = LazyLock::new(|| {
     RwLock::new(
@@ -117,7 +117,7 @@ impl Default for CosmicTk {
             apply_theme_global: false,
             show_minimize: true,
             show_maximize: true,
-            icon_theme: String::from("Cosmic"),
+            icon_theme: String::from("WhiteSur-dark"),
             header_size: Density::Standard,
             interface_density: Density::Standard,
             interface_font: FontConfig {
