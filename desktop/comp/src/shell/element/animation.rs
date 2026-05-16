@@ -91,6 +91,9 @@ impl WindowAnimation {
     /// arrives if `experimental_window_animations` is on. See
     /// `Workspace::closing_windows` for the parking mechanism that
     /// keeps the surface alive while this runs.
+    ///
+    /// Visuals: scale 1.0 → 0.80 (clearly visible shrink toward the
+    /// window centre, à la macOS), alpha 1.0 → 0.0, ~220 ms.
     pub fn close(now: Instant) -> Self {
         let params = SpringParams::new(0.85, 800.0, 0.0001);
         let spring = Spring {
@@ -106,7 +109,7 @@ impl WindowAnimation {
             started: now,
             duration,
             from_scale: 1.0,
-            to_scale: 0.94,
+            to_scale: 0.80,
             from_alpha: 1.0,
             to_alpha: 0.0,
             spring,

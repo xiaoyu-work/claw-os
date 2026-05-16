@@ -5,30 +5,40 @@
 // Algorithm
 // ---------
 //
-// We compile the blur-down + blur-up GLSL programs via smithay's
-// `compile_custom_texture_shader`, capture the output framebuffer
-// region behind the blurred surface into a downsampled texture
-// using `glBlitFramebuffer`, then composite the texture back over
-// the destination rect with the blur-up shader applied
-// (single-pass 8-tap kernel). This gives an inexpensive ~5–8 px
-// effective blur radius — not as silky as a true 4-pass dual-Kawase
-// cascade but visible, GPU-cheap, and survives multi-renderer
-// dispatch without us having to manage raw GL program objects
-// outside smithay's plumbing.
+// We compile our own raw-GL blur-down + blur-up programs (smithay's
+// `compile_custom_texture_shader` returns an opaque
+// `GlesTexProgram` that doesn't expose the underlying `GLuint` or
+// uniform locations, so we can't direct it at arbitrary FBOs from
+// inside `with_context`). The cascade is the classic Bjørge
+// dual-Kawase pyramid:
 //
-// Reference (full cascade, kept here for the next pass):
+//   1. `capture_framebuffer` blits the output FB region behind the
+//      surface into `mips[0]` (full resolution).
+//   2. `passes` down-passes draw `mips[i] -> mips[i+1]`,
+//      progressively halving the working resolution.
+//   3. `passes` up-passes draw `mips[i+1] -> mips[i]`, applying the
+//      8-tap upsample kernel and accumulating into the lower mip.
+//   4. `mips[0]` now holds the fully-blurred image; `draw` samples
+//      it back over `dst` via `render_texture_from_to`.
+//
+// All raw GL work happens inside `frame.with_context(|gl| unsafe …)`.
+// Per the smithay contract we save + restore framebuffer binding,
+// viewport, blending state, vertex-attrib state, and texture binding
+// because smithay does NOT restore state for you between
+// `with_context` calls.
+//
+// Reference (the cascade pattern is mirrored from niri):
 //   Marius Bjørge, "Bandwidth-Efficient Rendering", SIGGRAPH 2015.
-//   https://github.com/niri-wm/niri/blob/main/src/render_helpers/blur.rs
+//   https://github.com/YaLTeR/niri/blob/main/src/render_helpers/blur.rs
 //
 // Integration
 // -----------
 //
-//   The compiled `BlurDownShader` + `BlurUpShader` are stashed in
-//   `EglContext::user_data()` once on first init by
-//   `init_blur_shaders` (called from `render::init_shaders`). Per-
-//   element state — the captured framebuffer texture — lives in the
-//   smithay-managed per-element `cache: &UserDataMap` so it
-//   persists across frames without external bookkeeping.
+//   The compiled `BlurPrograms` is stashed in `EglContext::user_data()`
+//   once on first init by `init_blur_shaders` (called from
+//   `render::init_shaders`). Per-element state — the mip chain —
+//   lives in the smithay-managed per-element `cache: &UserDataMap`
+//   so it persists across frames without external bookkeeping.
 //
 //   Gated by `AppearanceConfig::experimental_blur` (default `true`).
 //   Errors during shader compile or texture allocation are logged
@@ -36,7 +46,9 @@
 //   (no-op) and the surface composites as if blur were disabled.
 
 use std::cell::RefCell;
+use std::cmp::max;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use smithay::{
     backend::{
@@ -45,8 +57,8 @@ use smithay::{
             Frame, FrameContext, Offscreen, Texture,
             element::{Element, Id, Kind, RenderElement, UnderlyingStorage},
             gles::{
-                GlesError, GlesFrame, GlesRenderer, GlesTexProgram, GlesTexture, Uniform,
-                UniformName, UniformType, ffi,
+                GlesError, GlesFrame, GlesRenderer, GlesTexture,
+                ffi, link_program,
             },
             glow::{GlowFrame, GlowRenderer},
             utils::{CommitCounter, DamageSet, OpaqueRegions},
@@ -60,58 +72,100 @@ use smithay::{
 
 use super::element::{AsGlowRenderer, FromGlesError};
 
+pub static BLUR_VERT_SHADER: &str = include_str!("./shaders/blur.vert");
 pub static BLUR_DOWN_SHADER: &str = include_str!("./shaders/blur_down.frag");
 pub static BLUR_UP_SHADER: &str = include_str!("./shaders/blur_up.frag");
-
-/// Compiled dual-Kawase downsample program.
-pub struct BlurDownShader(pub GlesTexProgram);
-
-/// Compiled dual-Kawase upsample program.
-pub struct BlurUpShader(pub GlesTexProgram);
 
 pub const DEFAULT_PASSES: usize = 4;
 pub const DEFAULT_OFFSET: f32 = 1.5;
 
 // ────────────────────────────────────────────────────────────────
-// Shader compilation
+// Compiled GL programs (raw — we need program IDs + uniform
+// locations to drive arbitrary FBO targets per pass)
+// ────────────────────────────────────────────────────────────────
+
+#[derive(Debug)]
+struct BlurProgramInternal {
+    program: ffi::types::GLuint,
+    uniform_tex: ffi::types::GLint,
+    uniform_half_pixel: ffi::types::GLint,
+    uniform_offset: ffi::types::GLint,
+    attrib_vert: ffi::types::GLint,
+}
+
+/// Compiled dual-Kawase down + up programs. Stored once per
+/// `GlesRenderer` in its `EglContext::user_data()`.
+#[derive(Debug, Clone)]
+pub struct BlurPrograms(Rc<BlurProgramsInner>);
+
+#[derive(Debug)]
+struct BlurProgramsInner {
+    down: BlurProgramInternal,
+    up: BlurProgramInternal,
+}
+
+unsafe fn compile_blur(
+    gl: &ffi::Gles2,
+    frag_src: &str,
+) -> Result<BlurProgramInternal, GlesError> {
+    let program = link_program(gl, BLUR_VERT_SHADER, frag_src)?;
+
+    let tex = c"tex";
+    let half_pixel = c"half_pixel";
+    let offset = c"offset";
+    let vert = c"vert";
+
+    Ok(BlurProgramInternal {
+        program,
+        uniform_tex: gl.GetUniformLocation(program, tex.as_ptr()),
+        uniform_half_pixel: gl.GetUniformLocation(program, half_pixel.as_ptr()),
+        uniform_offset: gl.GetUniformLocation(program, offset.as_ptr()),
+        attrib_vert: gl.GetAttribLocation(program, vert.as_ptr()),
+    })
+}
+
+// ────────────────────────────────────────────────────────────────
+// Shader compilation entry-point
 // ────────────────────────────────────────────────────────────────
 
 pub fn init_blur_shaders(renderer: &mut GlesRenderer) {
     {
         let ud = renderer.egl_context().user_data();
-        if ud.get::<BlurDownShader>().is_some() && ud.get::<BlurUpShader>().is_some() {
+        if ud.get::<BlurPrograms>().is_some() {
             return;
         }
     }
 
-    let uniforms = [
-        UniformName::new("half_pixel", UniformType::_2f),
-        UniformName::new("offset", UniformType::_1f),
-    ];
+    let result = renderer.with_context(|gl| unsafe {
+        let down = compile_blur(gl, BLUR_DOWN_SHADER)?;
+        let up = compile_blur(gl, BLUR_UP_SHADER)?;
+        Ok::<_, GlesError>(BlurPrograms(Rc::new(BlurProgramsInner { down, up })))
+    });
 
-    let down = match renderer.compile_custom_texture_shader(BLUR_DOWN_SHADER, &uniforms) {
-        Ok(p) => p,
-        Err(err) => {
-            tracing::warn!(?err, "blur_down shader failed to compile; blur disabled");
+    let programs = match result {
+        Ok(Ok(p)) => p,
+        Ok(Err(err)) => {
+            tracing::warn!(?err, "blur shaders failed to compile; blur disabled");
             return;
         }
-    };
-    let up = match renderer.compile_custom_texture_shader(BLUR_UP_SHADER, &uniforms) {
-        Ok(p) => p,
         Err(err) => {
-            tracing::warn!(?err, "blur_up shader failed to compile; blur disabled");
+            tracing::warn!(?err, "blur shaders: failed to make GL context current");
             return;
         }
     };
 
     let ud = renderer.egl_context().user_data();
-    ud.insert_if_missing(|| BlurDownShader(down));
-    ud.insert_if_missing(|| BlurUpShader(up));
-    tracing::info!("dual-Kawase blur shaders compiled");
+    ud.insert_if_missing(|| programs);
+    tracing::info!(
+        "dual-Kawase blur shaders compiled (passes={}, offset={})",
+        DEFAULT_PASSES,
+        DEFAULT_OFFSET
+    );
 }
 
 // ────────────────────────────────────────────────────────────────
-// Per-output state (kept for compat with the eventual cascade)
+// Per-output state (kept for compatibility; no longer the primary
+// home for the mip chain, which now lives per-element)
 // ────────────────────────────────────────────────────────────────
 
 pub struct BlurState {
@@ -137,7 +191,7 @@ impl Default for BlurState {
 impl BlurState {
     pub fn shaders_available(renderer: &GlesRenderer) -> bool {
         let ud = renderer.egl_context().user_data();
-        ud.get::<BlurDownShader>().is_some() && ud.get::<BlurUpShader>().is_some()
+        ud.get::<BlurPrograms>().is_some()
     }
 
     pub fn output_texture(&self) -> Option<&GlesTexture> {
@@ -171,39 +225,59 @@ impl BlurStates {
 /// Per-element scratch state stored in the smithay-managed
 /// `UserDataMap` so it persists across frames without external
 /// bookkeeping.
+///
+/// `mips[0]` is the full-resolution capture / final cascade output;
+/// `mips[i]` for `i >= 1` is half the size of `mips[i-1]`.
 struct BlurInner {
-    /// Captured framebuffer region. Allocated to match the
-    /// destination rectangle's buffer size.
-    framebuffer: Option<GlesTexture>,
-    /// Set in `capture_framebuffer`, read in `draw`. Same handle as
-    /// `framebuffer` once capture completes.
-    intermediate: Option<GlesTexture>,
+    mips: Vec<GlesTexture>,
+    /// `true` once the cascade has run successfully in the current
+    /// frame; `do_draw` only samples back if this is set.
+    ready: bool,
 }
 
 impl BlurInner {
     fn new() -> Self {
         Self {
-            framebuffer: None,
-            intermediate: None,
+            mips: Vec::new(),
+            ready: false,
         }
     }
 
-    /// (Re)allocate framebuffer so it matches `size` in buffer coords.
+    /// (Re)allocate the mip chain so it matches `top_size` in buffer
+    /// coords, with `passes + 1` total textures decreasing by 2 each
+    /// step (clamped to a minimum of 1 pixel).
     fn prepare(
         &mut self,
         renderer: &mut GlesRenderer,
-        size: Size<i32, Buffer>,
+        top_size: Size<i32, Buffer>,
+        passes: usize,
     ) -> Result<(), GlesError> {
-        let recreate = match self.framebuffer.as_ref() {
-            Some(fb) => fb.size() != size,
-            None => true,
-        };
-        if recreate {
-            self.framebuffer = Some(Offscreen::<GlesTexture>::create_buffer(
-                renderer,
-                Fourcc::Abgr8888,
-                size,
-            )?);
+        let mut needed = Vec::with_capacity(passes + 1);
+        let mut w = top_size.w;
+        let mut h = top_size.h;
+        for _ in 0..=passes {
+            needed.push(Size::<i32, Buffer>::from((w, h)));
+            w = max(1, w / 2);
+            h = max(1, h / 2);
+        }
+
+        let same_layout = self.mips.len() == needed.len()
+            && self
+                .mips
+                .iter()
+                .zip(&needed)
+                .all(|(t, s)| t.size() == *s);
+
+        if !same_layout {
+            self.mips.clear();
+            for size in &needed {
+                let tex = Offscreen::<GlesTexture>::create_buffer(
+                    renderer,
+                    Fourcc::Abgr8888,
+                    *size,
+                )?;
+                self.mips.push(tex);
+            }
         }
         Ok(())
     }
@@ -226,6 +300,13 @@ pub struct BlurRenderElement {
     /// Alpha multiplier on the composited blur layer.
     alpha: f32,
     commit_counter: CommitCounter,
+    /// Number of down/up cascade passes (>= 1). Higher = wider
+    /// effective blur radius for the same shader cost (because
+    /// passes operate on progressively smaller mips).
+    passes: usize,
+    /// Kawase tap offset, in half-pixels. ~1.0 ‒ 2.0 is typical;
+    /// our default `1.5` matches niri's default.
+    offset: f32,
 }
 
 impl std::fmt::Debug for BlurRenderElement {
@@ -235,6 +316,8 @@ impl std::fmt::Debug for BlurRenderElement {
             .field("geometry", &self.geometry)
             .field("corner_radius", &self.corner_radius)
             .field("alpha", &self.alpha)
+            .field("passes", &self.passes)
+            .field("offset", &self.offset)
             .finish()
     }
 }
@@ -251,6 +334,8 @@ impl BlurRenderElement {
             corner_radius,
             alpha,
             commit_counter: CommitCounter::default(),
+            passes: DEFAULT_PASSES,
+            offset: DEFAULT_OFFSET,
         }
     }
 }
@@ -327,9 +412,11 @@ impl BlurRenderElement {
         let inner = cache.get_or_insert::<RefCell<BlurInner>, _>(|| RefCell::new(BlurInner::new()));
         let mut inner = inner.borrow_mut();
         let inner = &mut *inner;
-        inner.intermediate = None;
+        inner.ready = false;
 
-        // Clamp dst to the output (BlitFramebuffer skips OOB pixels).
+        // Clamp dst to the output (BlitFramebuffer skips OOB pixels
+        // but we'd rather not allocate a texture larger than what
+        // we'll actually read).
         let clamped_dst = match dst.intersection(output_rect) {
             Some(c) => c,
             None => return Ok(()),
@@ -350,53 +437,82 @@ impl BlurRenderElement {
             return Ok(());
         }
 
-        // Allocate framebuffer texture if needed.
-        {
-            let mut guard = frame.renderer();
-            inner.prepare(guard.as_mut(), cap_size)?;
-        }
-
-        let fb_tex = match inner.framebuffer.as_ref() {
-            Some(t) => t.clone(),
-            None => return Ok(()),
-        };
-
-        // Bail out cleanly if the blur shaders aren't compiled —
-        // capture would succeed but draw can't sample them, so
-        // there's no point burning the blit.
-        {
+        // Pull the compiled programs first — if shaders failed to
+        // compile we don't even bother allocating textures.
+        let programs = {
             let mut guard = frame.renderer();
             let r = guard.as_mut();
-            if !BlurState::shaders_available(r) {
-                return Ok(());
+            match r.egl_context().user_data().get::<BlurPrograms>() {
+                Some(p) => p.clone(),
+                None => return Ok(()),
             }
+        };
+
+        let passes = self.passes.clamp(1, 8);
+
+        // Allocate / reuse mip chain.
+        {
+            let mut guard = frame.renderer();
+            inner.prepare(guard.as_mut(), cap_size, passes)?;
         }
 
-        // Blit the output FB region into fb_tex.
+        // We're going to run the entire cascade in `with_context`.
+        // All texture references it touches need to outlive the
+        // closure; clone them up-front.
+        let mips: Vec<GlesTexture> = inner.mips.clone();
+        if mips.is_empty() {
+            return Ok(());
+        }
+
+        let read_x = dst_xformed.loc.x;
+        let read_y = dst_xformed.loc.y;
+        let read_w = dst_xformed.size.w;
+        let read_h = dst_xformed.size.h;
+        let offset = self.offset;
+
         frame.with_context(|gl| unsafe {
             while gl.GetError() != ffi::NO_ERROR {}
 
-            let mut current_fbo: i32 = 0;
-            gl.GetIntegerv(ffi::DRAW_FRAMEBUFFER_BINDING, &mut current_fbo as *mut _);
+            // ─── Save state we'll touch ────────────────────────
+            let mut prev_draw_fbo: i32 = 0;
+            let mut prev_read_fbo: i32 = 0;
+            let mut prev_viewport: [i32; 4] = [0; 4];
+            let mut prev_program: i32 = 0;
+            let mut prev_tex_2d: i32 = 0;
+            let mut prev_array_buffer: i32 = 0;
+            let mut prev_active_texture: i32 = 0;
+            let prev_blend = gl.IsEnabled(ffi::BLEND) != 0;
+            let prev_scissor = gl.IsEnabled(ffi::SCISSOR_TEST) != 0;
+            gl.GetIntegerv(ffi::DRAW_FRAMEBUFFER_BINDING, &mut prev_draw_fbo);
+            gl.GetIntegerv(ffi::READ_FRAMEBUFFER_BINDING, &mut prev_read_fbo);
+            gl.GetIntegerv(ffi::VIEWPORT, prev_viewport.as_mut_ptr());
+            gl.GetIntegerv(ffi::CURRENT_PROGRAM, &mut prev_program);
+            gl.GetIntegerv(ffi::ACTIVE_TEXTURE, &mut prev_active_texture);
+            gl.ActiveTexture(ffi::TEXTURE0);
+            gl.GetIntegerv(ffi::TEXTURE_BINDING_2D, &mut prev_tex_2d);
+            gl.GetIntegerv(ffi::ARRAY_BUFFER_BINDING, &mut prev_array_buffer);
 
+            gl.Disable(ffi::BLEND);
             gl.Disable(ffi::SCISSOR_TEST);
 
+            // ─── Step 1: blit output FB region into mips[0] ────
             let mut fbo: u32 = 0;
-            gl.GenFramebuffers(1, &mut fbo as *mut _);
+            gl.GenFramebuffers(1, &mut fbo);
             gl.BindFramebuffer(ffi::DRAW_FRAMEBUFFER, fbo);
             gl.FramebufferTexture2D(
                 ffi::DRAW_FRAMEBUFFER,
                 ffi::COLOR_ATTACHMENT0,
                 ffi::TEXTURE_2D,
-                fb_tex.tex_id(),
+                mips[0].tex_id(),
                 0,
             );
-
+            // READ_FRAMEBUFFER stays bound to whatever smithay had
+            // (i.e. the output's compositing target).
             gl.BlitFramebuffer(
-                dst_xformed.loc.x,
-                dst_xformed.loc.y,
-                dst_xformed.loc.x + dst_xformed.size.w,
-                dst_xformed.loc.y + dst_xformed.size.h,
+                read_x,
+                read_y,
+                read_x + read_w,
+                read_y + read_h,
                 0,
                 0,
                 cap_size.w,
@@ -405,14 +521,154 @@ impl BlurRenderElement {
                 ffi::LINEAR,
             );
 
-            gl.BindFramebuffer(ffi::DRAW_FRAMEBUFFER, current_fbo as u32);
-            gl.Enable(ffi::SCISSOR_TEST);
-            gl.DeleteFramebuffers(1, &mut fbo as *mut _);
+            // ─── Step 2: down/up cascade ───────────────────────
+            //
+            // Vertex setup: bind a unit-quad attribute array. We
+            // re-use the same data for every pass — only the
+            // sampler / FBO / viewport / uniforms change.
+            #[rustfmt::skip]
+            let verts: [f32; 12] = [
+                0.0, 0.0,  0.0, 1.0,  1.0, 1.0,
+                0.0, 0.0,  1.0, 1.0,  1.0, 0.0,
+            ];
+            gl.BindBuffer(ffi::ARRAY_BUFFER, 0);
+
+            // ─── Down pass: mips[i] → mips[i+1] ────────────────
+            let down = &programs.0.down;
+            gl.UseProgram(down.program);
+            gl.Uniform1i(down.uniform_tex, 0);
+            gl.Uniform1f(down.uniform_offset, offset);
+            gl.EnableVertexAttribArray(down.attrib_vert as u32);
+            gl.VertexAttribPointer(
+                down.attrib_vert as u32,
+                2,
+                ffi::FLOAT,
+                ffi::FALSE,
+                0,
+                verts.as_ptr().cast(),
+            );
+
+            for i in 0..passes {
+                let src_tex = &mips[i];
+                let dst_tex = &mips[i + 1];
+                let ds = dst_tex.size();
+
+                gl.Viewport(0, 0, ds.w, ds.h);
+                // During downsample, `half_pixel` is half of the
+                // DEST pixel (`offset` then expands the sampling
+                // radius outward in source space).
+                gl.Uniform2f(
+                    down.uniform_half_pixel,
+                    0.5 / ds.w as f32,
+                    0.5 / ds.h as f32,
+                );
+
+                gl.FramebufferTexture2D(
+                    ffi::DRAW_FRAMEBUFFER,
+                    ffi::COLOR_ATTACHMENT0,
+                    ffi::TEXTURE_2D,
+                    dst_tex.tex_id(),
+                    0,
+                );
+                gl.BindTexture(ffi::TEXTURE_2D, src_tex.tex_id());
+                gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_MIN_FILTER, ffi::LINEAR as i32);
+                gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_MAG_FILTER, ffi::LINEAR as i32);
+                gl.TexParameteri(
+                    ffi::TEXTURE_2D,
+                    ffi::TEXTURE_WRAP_S,
+                    ffi::CLAMP_TO_EDGE as i32,
+                );
+                gl.TexParameteri(
+                    ffi::TEXTURE_2D,
+                    ffi::TEXTURE_WRAP_T,
+                    ffi::CLAMP_TO_EDGE as i32,
+                );
+
+                gl.DrawArrays(ffi::TRIANGLES, 0, 6);
+            }
+            gl.DisableVertexAttribArray(down.attrib_vert as u32);
+
+            // ─── Up pass: mips[i+1] → mips[i] ──────────────────
+            let up = &programs.0.up;
+            gl.UseProgram(up.program);
+            gl.Uniform1i(up.uniform_tex, 0);
+            gl.Uniform1f(up.uniform_offset, offset);
+            gl.EnableVertexAttribArray(up.attrib_vert as u32);
+            gl.VertexAttribPointer(
+                up.attrib_vert as u32,
+                2,
+                ffi::FLOAT,
+                ffi::FALSE,
+                0,
+                verts.as_ptr().cast(),
+            );
+
+            for i in (0..passes).rev() {
+                let src_tex = &mips[i + 1];
+                let dst_tex = &mips[i];
+                let ds = dst_tex.size();
+                let ss = src_tex.size();
+
+                gl.Viewport(0, 0, ds.w, ds.h);
+                // During upsample, `half_pixel` is half of the
+                // SOURCE pixel (we're spreading the smaller mip out
+                // over the next-larger texture).
+                gl.Uniform2f(
+                    up.uniform_half_pixel,
+                    0.5 / ss.w as f32,
+                    0.5 / ss.h as f32,
+                );
+
+                gl.FramebufferTexture2D(
+                    ffi::DRAW_FRAMEBUFFER,
+                    ffi::COLOR_ATTACHMENT0,
+                    ffi::TEXTURE_2D,
+                    dst_tex.tex_id(),
+                    0,
+                );
+                gl.BindTexture(ffi::TEXTURE_2D, src_tex.tex_id());
+                gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_MIN_FILTER, ffi::LINEAR as i32);
+                gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_MAG_FILTER, ffi::LINEAR as i32);
+                gl.TexParameteri(
+                    ffi::TEXTURE_2D,
+                    ffi::TEXTURE_WRAP_S,
+                    ffi::CLAMP_TO_EDGE as i32,
+                );
+                gl.TexParameteri(
+                    ffi::TEXTURE_2D,
+                    ffi::TEXTURE_WRAP_T,
+                    ffi::CLAMP_TO_EDGE as i32,
+                );
+
+                gl.DrawArrays(ffi::TRIANGLES, 0, 6);
+            }
+            gl.DisableVertexAttribArray(up.attrib_vert as u32);
+
+            // ─── Restore state ─────────────────────────────────
+            gl.BindFramebuffer(ffi::DRAW_FRAMEBUFFER, prev_draw_fbo as u32);
+            gl.BindFramebuffer(ffi::READ_FRAMEBUFFER, prev_read_fbo as u32);
+            gl.Viewport(
+                prev_viewport[0],
+                prev_viewport[1],
+                prev_viewport[2],
+                prev_viewport[3],
+            );
+            gl.UseProgram(prev_program as u32);
+            gl.BindTexture(ffi::TEXTURE_2D, prev_tex_2d as u32);
+            gl.BindBuffer(ffi::ARRAY_BUFFER, prev_array_buffer as u32);
+            gl.ActiveTexture(prev_active_texture as u32);
+            if prev_blend {
+                gl.Enable(ffi::BLEND);
+            }
+            if prev_scissor {
+                gl.Enable(ffi::SCISSOR_TEST);
+            }
+            gl.DeleteFramebuffers(1, &fbo);
 
             Ok::<(), GlesError>(())
         })??;
 
-        inner.intermediate = Some(fb_tex);
+        inner.ready = true;
         Ok(())
     }
 
@@ -434,28 +690,19 @@ impl BlurRenderElement {
             None => return Ok(()),
         };
         let inner = inner.borrow();
+        if !inner.ready || inner.mips.is_empty() {
+            return Ok(());
+        }
 
-        let texture = match inner.intermediate.as_ref() {
-            Some(t) => t,
-            None => return Ok(()),
-        };
-
+        let texture = &inner.mips[0];
         let tex_size = texture.size();
         if tex_size.w <= 0 || tex_size.h <= 0 {
             return Ok(());
         }
-        let half_pixel = [0.5 / tex_size.w as f32, 0.5 / tex_size.h as f32];
 
-        let up_program = {
-            let mut guard = frame.renderer();
-            guard
-                .as_mut()
-                .egl_context()
-                .user_data()
-                .get::<BlurUpShader>()
-                .map(|p| p.0.clone())
-        };
-
+        // mips[0] already holds the fully-blurred image. Sample it
+        // back through smithay's standard texture path — no
+        // additional shader required (we're past the cascade).
         frame.render_texture_from_to(
             texture,
             Rectangle::from_size(tex_size.to_f64()),
@@ -464,11 +711,8 @@ impl BlurRenderElement {
             &[],
             Transform::Normal,
             self.alpha,
-            up_program.as_ref(),
-            &[
-                Uniform::new("half_pixel", half_pixel),
-                Uniform::new("offset", DEFAULT_OFFSET),
-            ],
+            None,
+            &[],
         )?;
 
         // corner_radius is reserved for the eventual ClippingShader
