@@ -204,6 +204,21 @@ impl CosmicMapped {
         *slot = Some(animation::WindowAnimation::open(std::time::Instant::now()));
     }
 
+    /// Begin the window-close (shrink + fade) animation. Returns the
+    /// stored animation (so callers parking the window can also tick
+    /// it independently of the live `window_animation` slot, which
+    /// may be cleared once `current_animation` sees `is_done`).
+    pub fn start_close_animation(&self, enable: bool) -> Option<animation::WindowAnimation> {
+        if !enable {
+            return None;
+        }
+        let now = std::time::Instant::now();
+        let anim = animation::WindowAnimation::close(now);
+        let mut slot = self.window_animation.lock().unwrap();
+        *slot = Some(anim);
+        Some(anim)
+    }
+
     /// Returns `Some` if an open/close animation is currently driving
     /// this window's render. Clears the slot once the animation has
     /// reached its rest position so subsequent frames skip the

@@ -61,9 +61,9 @@ use wayland_backend::server::ClientId;
 use super::{
     CosmicMappedRenderElement, CosmicSurface, ResizeDirection, ResizeMode,
     element::{
-        CosmicMapped, MaximizedState, resize_indicator::ResizeIndicator,
-        stack::CosmicStackRenderElement, swap_indicator::SwapIndicator,
-        window::CosmicWindowRenderElement,
+        CosmicMapped, MaximizedState, animation::WindowAnimation,
+        resize_indicator::ResizeIndicator, stack::CosmicStackRenderElement,
+        swap_indicator::SwapIndicator, window::CosmicWindowRenderElement,
     },
     focus::{
         FocusStack, FocusStackMut,
@@ -107,6 +107,11 @@ pub struct Workspace {
     pub tiling_layer: TilingLayout,
     pub floating_layer: FloatingLayout,
     pub minimized_windows: Vec<MinimizedWindow>,
+    /// Windows whose toplevel was destroyed but are still animating
+    /// out (window-close shrink + fade). The CosmicMapped clone keeps
+    /// the wayland surface alive — and thus its last committed buffer
+    /// renderable — for the duration of the animation.
+    pub closing_windows: Vec<ClosingWindow>,
     pub tiling_enabled: bool,
     pub fullscreen: Option<FullscreenSurface>,
     pub pinned: bool,
@@ -134,6 +139,25 @@ pub enum MinimizedWindow {
         window: CosmicMapped,
         previous: TilingRestoreData,
     },
+}
+
+/// A window whose toplevel surface is gone but whose close animation
+/// is still running. We hold a clone of the `CosmicMapped` (and thus
+/// the underlying `WlSurface`) so the last committed buffer remains
+/// renderable for the duration of the animation, then drop it.
+#[derive(Debug)]
+pub struct ClosingWindow {
+    pub mapped: CosmicMapped,
+    /// Last-known geometry on the workspace in local coordinates.
+    pub geometry: Rectangle<i32, Local>,
+    /// The animation slot that drives scale + alpha. Cloned from the
+    /// CosmicMapped at the moment of parking so ticking it here is
+    /// independent of the mapped's own animation slot (which gets
+    /// cleared by `current_animation` when done, racing with our
+    /// retain).
+    pub anim: WindowAnimation,
+    /// Strictly for diagnostics + debug.
+    pub started: Instant,
 }
 
 impl PartialEq<CosmicMapped> for MinimizedWindow {
@@ -378,6 +402,7 @@ impl Workspace {
             floating_layer,
             tiling_enabled,
             minimized_windows: Vec::new(),
+            closing_windows: Vec::new(),
             fullscreen: None,
             pinned: false,
             id: None,
@@ -411,6 +436,7 @@ impl Workspace {
             floating_layer,
             tiling_enabled: pinned.tiling_enabled,
             minimized_windows: Vec::new(),
+            closing_windows: Vec::new(),
             fullscreen: None,
             pinned: true,
             id: pinned.id.clone(),
@@ -520,6 +546,7 @@ impl Workspace {
             // workspaces hold <20 windows and `has_running_animation`
             // is one Mutex lock + Instant comparison.
             || self.mapped().any(|m| m.has_running_animation())
+            || !self.closing_windows.is_empty()
     }
 
     pub fn update_animations(&mut self) -> HashMap<ClientId, Client> {
@@ -541,9 +568,46 @@ impl Workspace {
             }
         }
 
+        // Reap finished close animations. Dropping the ClosingWindow
+        // drops the cloned CosmicMapped, which drops the last strong
+        // ref on the underlying CosmicSurface (assuming no other
+        // path holds it), letting smithay finally release the
+        // WlSurface refcount and free the buffer.
+        let now = Instant::now();
+        let before = self.closing_windows.len();
+        self.closing_windows.retain(|cw| !cw.anim.is_done(now));
+        if self.closing_windows.len() != before {
+            self.dirty.store(true, Ordering::SeqCst);
+        }
+
         let clients = self.tiling_layer.update_animation_state();
         self.floating_layer.update_animation_state();
         clients
+    }
+
+    /// Park `mapped` in this workspace's closing queue, kicking off
+    /// (or reusing) its window-close animation. Caller is responsible
+    /// for actually unmapping the surface from the layers afterwards.
+    /// Returns `true` if parking occurred (i.e. animations were
+    /// enabled and the mapped is renderable here).
+    pub fn park_for_close(&mut self, mapped: &CosmicMapped, enable: bool) -> bool {
+        if !enable {
+            return false;
+        }
+        let Some(geometry) = self.element_geometry(mapped) else {
+            return false;
+        };
+        let Some(anim) = mapped.start_close_animation(true) else {
+            return false;
+        };
+        self.closing_windows.push(ClosingWindow {
+            mapped: mapped.clone(),
+            geometry,
+            anim,
+            started: Instant::now(),
+        });
+        self.dirty.store(true, Ordering::SeqCst);
+        true
     }
 
     pub fn output(&self) -> &Output {
@@ -1731,6 +1795,34 @@ impl Workspace {
 
         if !matches!(focused, Some(FocusTarget::Fullscreen(_))) {
             elements.extend(fullscreen_elements.into_iter());
+        }
+
+        // Closing windows — fade out at last-known geometry. We
+        // reuse the existing animation slot on the parked
+        // CosmicMapped clone, whose alpha multiplier is folded into
+        // `render_elements`. Scale-on-close would require a new
+        // RescaleRenderElement-wrapping variant in
+        // WorkspaceRenderElement; the alpha fade alone matches what
+        // window-open does and lands the perceptual cue.
+        for cw in &self.closing_windows {
+            let render_loc = cw
+                .geometry
+                .loc
+                .as_logical()
+                .to_physical_precise_round(output_scale);
+
+            let mapped_elements = cw.mapped.render_elements::<R, CosmicMappedRenderElement<R>>(
+                renderer,
+                render_loc,
+                None,
+                Scale::from(output_scale),
+                1.0,
+                None,
+            );
+
+            for elem in mapped_elements {
+                elements.push(WorkspaceRenderElement::from(elem));
+            }
         }
 
         Ok(elements)

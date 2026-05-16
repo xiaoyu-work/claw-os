@@ -2051,6 +2051,38 @@ impl Shell {
         })
     }
 
+    /// If the toplevel `surface` is currently mapped on any
+    /// workspace and the compositor has window-close animations
+    /// enabled, clone the `CosmicMapped` into that workspace's
+    /// `closing_windows` queue so the surface stays renderable
+    /// for the duration of the fade-out. Returns `true` if a
+    /// parking happened.
+    pub fn begin_close_animation<S>(&mut self, surface: &S) -> bool
+    where
+        CosmicSurface: PartialEq<S>,
+    {
+        if !self.appearance_conf.experimental_window_animations {
+            return false;
+        }
+        // Locate the mapped + workspace by surface, then take a
+        // clone of the CosmicMapped to feed into park_for_close.
+        let mut parked_any = false;
+        for set in self.workspaces.sets.values_mut() {
+            for ws in set.workspaces.iter_mut() {
+                let mapped_clone = ws
+                    .mapped()
+                    .find(|m| m.windows().any(|(s, _)| &s == surface))
+                    .cloned();
+                if let Some(mapped) = mapped_clone {
+                    if ws.park_for_close(&mapped, true) {
+                        parked_any = true;
+                    }
+                }
+            }
+        }
+        parked_any
+    }
+
     pub fn is_surface_mapped<S>(&self, surface: &S) -> bool
     where
         CosmicSurface: PartialEq<S>,

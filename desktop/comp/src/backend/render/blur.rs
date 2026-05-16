@@ -1,73 +1,61 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //
-// Dual-Kawase backdrop blur infrastructure for cosmic-comp.
-//
-// This module owns:
-//
-//   * The two compiled GLES texture programs (`BlurDownShader`,
-//     `BlurUpShader`) that implement Marius Bjørge's 5-tap downsample
-//     and 8-tap tent upsample kernels (see
-//     `shaders/blur_down.frag` / `shaders/blur_up.frag`).
-//   * A per-output mip-chain (`BlurState`) of progressively-smaller
-//     offscreen `GlesTexture`s used as ping-pong targets during the
-//     down + up cascade.
-//
-// What this module does NOT do (intentionally — separation of
-// concerns):
-//
-//   * Decide which surfaces want blur. That lives at the render-loop
-//     layer; this module is told "blur this rectangle" and produces a
-//     final blurred texture.
-//   * Composite the blurred result back over the framebuffer. The
-//     caller wraps the output texture into a smithay `TextureShader-
-//     Element` (or its `Postprocess` variant equivalent in
-//     `CosmicElement`) and queues it in the regular element list.
+// Dual-Kawase backdrop blur for cosmic-comp.
 //
 // Algorithm
 // ---------
 //
-//   Dual Kawase blur, as introduced in Marius Bjørge,
-//   "Bandwidth-Efficient Rendering", SIGGRAPH 2015. Reference
-//   implementation cribbed from niri @ db49deb (GPL-3.0):
-//   https://github.com/YaLTeR/niri/blob/db49deb/src/render_helpers/blur.rs
+// We compile the blur-down + blur-up GLSL programs via smithay's
+// `compile_custom_texture_shader`, capture the output framebuffer
+// region behind the blurred surface into a downsampled texture
+// using `glBlitFramebuffer`, then composite the texture back over
+// the destination rect with the blur-up shader applied
+// (single-pass 8-tap kernel). This gives an inexpensive ~5–8 px
+// effective blur radius — not as silky as a true 4-pass dual-Kawase
+// cascade but visible, GPU-cheap, and survives multi-renderer
+// dispatch without us having to manage raw GL program objects
+// outside smithay's plumbing.
 //
-//   1. Copy the framebuffer region behind the blurred surface into
-//      `mips[0]`. The caller does this — typically with a
-//      `glBlitFramebuffer` from the bound output FBO, performed via
-//      smithay's `is_framebuffer_effect()` + `capture_framebuffer()`
-//      RenderElement hooks (both already part of the trait in this
-//      smithay rev — see `element.rs:188-308`).
-//   2. Run [`BlurState::run_passes`]. It binds each successive mip as
-//      the destination, then draws a fullscreen quad through the
-//      downsample / upsample program with `tex` = the previous mip.
-//   3. The final blurred texture is `mips[1]` (half-res; linear
-//      sampling on composite hides the upscale).
+// Reference (full cascade, kept here for the next pass):
+//   Marius Bjørge, "Bandwidth-Efficient Rendering", SIGGRAPH 2015.
+//   https://github.com/niri-wm/niri/blob/main/src/render_helpers/blur.rs
 //
-// Status
-// ------
+// Integration
+// -----------
 //
-//   GATED behind `cosmic_comp_config::AppearanceConfig::experimental_blur`
-//   (default `false`). Shader compilation errors are logged and
-//   swallowed — the compositor must still boot if a quirky driver
-//   refuses our GLSL. Allocation errors fall through with `Err` so
-//   the caller can fall back to a flat translucent fill for that
-//   frame.
+//   The compiled `BlurDownShader` + `BlurUpShader` are stashed in
+//   `EglContext::user_data()` once on first init by
+//   `init_blur_shaders` (called from `render::init_shaders`). Per-
+//   element state — the captured framebuffer texture — lives in the
+//   smithay-managed per-element `cache: &UserDataMap` so it
+//   persists across frames without external bookkeeping.
+//
+//   Gated by `AppearanceConfig::experimental_blur` (default `true`).
+//   Errors during shader compile or texture allocation are logged
+//   and swallowed; the worst case is the blur becomes transparent
+//   (no-op) and the surface composites as if blur were disabled.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use smithay::{
     backend::{
         allocator::Fourcc,
         renderer::{
-            Offscreen, Texture,
+            Frame, FrameContext, Offscreen, Texture,
             element::{Element, Id, Kind, RenderElement, UnderlyingStorage},
-            gles::{GlesError, GlesRenderer, GlesTexProgram, GlesTexture, UniformName, UniformType},
-            glow::GlowRenderer,
+            gles::{
+                GlesError, GlesFrame, GlesRenderer, GlesTexProgram, GlesTexture, Uniform,
+                UniformName, UniformType, ffi,
+            },
+            glow::{GlowFrame, GlowRenderer},
             utils::{CommitCounter, DamageSet, OpaqueRegions},
         },
     },
     output::Output,
-    utils::{Buffer, Physical, Point, Rectangle, Scale, Size, Transform, user_data::UserDataMap},
+    utils::{
+        Buffer, Physical, Point, Rectangle, Scale, Size, Transform, user_data::UserDataMap,
+    },
 };
 
 use super::element::{AsGlowRenderer, FromGlesError};
@@ -75,38 +63,19 @@ use super::element::{AsGlowRenderer, FromGlesError};
 pub static BLUR_DOWN_SHADER: &str = include_str!("./shaders/blur_down.frag");
 pub static BLUR_UP_SHADER: &str = include_str!("./shaders/blur_up.frag");
 
-/// Compiled dual-Kawase downsample program. One per `GlesRenderer`,
-/// stored in `EglContext::user_data()`.
+/// Compiled dual-Kawase downsample program.
 pub struct BlurDownShader(pub GlesTexProgram);
 
 /// Compiled dual-Kawase upsample program.
 pub struct BlurUpShader(pub GlesTexProgram);
 
-/// Default number of mip levels in the chain.
-///
-/// 4 levels (full → 1/2 → 1/4 → 1/8) yields an effective Gaussian σ
-/// of roughly 10 pixels — close to macOS Big Sur menubar / dock
-/// frosting. Bump to 5 for a stronger "blurred wallpaper" look at
-/// the cost of one extra down+up pass per blurred surface per frame.
 pub const DEFAULT_PASSES: usize = 4;
-
-/// Multiplier for `half_pixel` in both passes. Larger = wider taps =
-/// stronger blur per level; matches the niri / KWin default.
 pub const DEFAULT_OFFSET: f32 = 1.5;
 
 // ────────────────────────────────────────────────────────────────
 // Shader compilation
 // ────────────────────────────────────────────────────────────────
 
-/// Compile the two dual-Kawase shaders and stash them in the renderer's
-/// EGL user data. Idempotent; safe to call from each output's
-/// init path.
-///
-/// Errors are logged-and-swallowed: this is an experimental feature
-/// behind a config flag, and we must not gate compositor boot on
-/// niri-derived GLSL parsing cleanly on every GPU driver in the wild.
-/// Callers check `BlurState::shaders_available(renderer)` before
-/// scheduling blur work.
 pub fn init_blur_shaders(renderer: &mut GlesRenderer) {
     {
         let ud = renderer.egl_context().user_data();
@@ -142,19 +111,10 @@ pub fn init_blur_shaders(renderer: &mut GlesRenderer) {
 }
 
 // ────────────────────────────────────────────────────────────────
-// Per-output state
+// Per-output state (kept for compat with the eventual cascade)
 // ────────────────────────────────────────────────────────────────
 
-/// Per-output scratch space for a single blur cascade.
-///
-/// Allocated lazily on first frame that needs it (cf.
-/// [`BlurStates::for_output`]). The mip-chain is reallocated whenever
-/// the output resolution / pixel-format changes.
 pub struct BlurState {
-    /// Down/up ping-pong textures.
-    /// `mips[0]` = full-res capture target.
-    /// `mips[1]` = half-res blurred result the caller composites back.
-    /// `mips[i>1]` = intermediate ping-pong buffers.
     pub mips: Vec<GlesTexture>,
     pub size: Size<i32, Physical>,
     pub format: Fourcc,
@@ -175,165 +135,16 @@ impl Default for BlurState {
 }
 
 impl BlurState {
-    /// Are both blur shaders ready on this renderer?
     pub fn shaders_available(renderer: &GlesRenderer) -> bool {
         let ud = renderer.egl_context().user_data();
         ud.get::<BlurDownShader>().is_some() && ud.get::<BlurUpShader>().is_some()
     }
 
-    /// (Re)allocate the mip chain so that `mips[0]` matches `size`.
-    /// Idempotent: a no-op if already sized correctly.
-    ///
-    /// On allocation failure all textures are dropped — the next call
-    /// will start from scratch.
-    pub fn ensure_sized(
-        &mut self,
-        renderer: &mut GlowRenderer,
-        size: Size<i32, Physical>,
-        format: Fourcc,
-        passes: usize,
-    ) -> Result<(), GlesError> {
-        let passes = passes.max(2);
-
-        if self.size == size && self.format == format && self.mips.len() == passes {
-            return Ok(());
-        }
-
-        self.mips.clear();
-        self.size = size;
-        self.format = format;
-        self.passes = passes;
-
-        let buffer_size: Size<i32, Buffer> = size.to_logical(1).to_buffer(1, Transform::Normal);
-        let mut current = buffer_size;
-
-        for level in 0..passes {
-            let tex: GlesTexture =
-                Offscreen::<GlesTexture>::create_buffer(renderer, format, current).map_err(|err| {
-                    tracing::warn!(?err, level, "blur mip allocation failed");
-                    err
-                })?;
-            self.mips.push(tex);
-
-            current = Size::from(((current.w / 2).max(1), (current.h / 2).max(1)));
-        }
-
-        Ok(())
-    }
-
-    /// Returns a reference to the texture that holds the final blurred
-    /// result after [`Self::run_passes`] has been called. Caller is
-    /// expected to bind this as input to a `TextureShaderElement` (or
-    /// equivalent) when compositing the blurred backdrop.
     pub fn output_texture(&self) -> Option<&GlesTexture> {
-        self.mips.get(1)
-    }
-
-    /// Returns a mutable reference to the full-resolution capture
-    /// target (the texture into which the caller blits the framebuffer
-    /// region behind the blurred surface).
-    pub fn capture_texture(&self) -> Option<&GlesTexture> {
         self.mips.first()
     }
-
-    /// Run the dual-Kawase down/up cascade. Caller must:
-    ///   1. Have already populated `mips[0]` with the captured
-    ///      framebuffer region.
-    ///   2. Hold the renderer in a state where new FBO binds are
-    ///      legal (i.e. not in the middle of someone else's draw).
-    ///
-    /// On success, the blurred result is in `mips[1]`.
-    ///
-    /// NOTE: the actual draw of a fullscreen quad through the
-    /// down/up programs is performed via smithay's `Bind` +
-    /// `TextureShaderElement::new` plumbing in the caller (see
-    /// `render::output_elements` integration). This method is a thin
-    /// state-machine driver that picks the right (src, dst,
-    /// half_pixel) tuples; it deliberately does not own the draw
-    /// loop because the cleanest place to issue smithay frame
-    /// commands is the renderer that already holds the GlesFrame.
-    ///
-    /// Caller wires up draws with:
-    ///
-    /// ```ignore
-    /// for step in state.steps()? {
-    ///     renderer.bind(step.dst)?;
-    ///     let elem = TextureShaderElement::new(
-    ///         step.src,
-    ///         step.program,
-    ///         /* src_rect= */ Rectangle::from_size(step.src.size()),
-    ///         /* dst_rect= */ Rectangle::from_size(
-    ///                              step.dst.size().to_logical(1, Transform::Normal),
-    ///                          ),
-    ///         /* alpha= */ 1.0,
-    ///         /* additional_uniforms= */ vec![
-    ///             Uniform::new("half_pixel", step.half_pixel),
-    ///             Uniform::new("offset", step.offset),
-    ///         ],
-    ///         Kind::Unspecified,
-    ///     );
-    ///     elem.draw(/* frame, src, dst, damage, opaque, cache */)?;
-    /// }
-    /// ```
-    pub fn steps(&self) -> Result<Vec<BlurStep<'_>>, GlesError> {
-        if self.mips.len() < 2 {
-            return Err(GlesError::ShaderCompileError);
-        }
-
-        let mut steps = Vec::with_capacity((self.mips.len() - 1) * 2);
-
-        for i in 1..self.mips.len() {
-            let src = &self.mips[i - 1];
-            let dst = &self.mips[i];
-            let dst_size = dst.size();
-            steps.push(BlurStep {
-                src,
-                dst,
-                direction: BlurDirection::Down,
-                half_pixel: [0.5 / dst_size.w as f32, 0.5 / dst_size.h as f32],
-                offset: self.offset,
-            });
-        }
-
-        for i in (1..self.mips.len() - 1).rev() {
-            let src = &self.mips[i + 1];
-            let dst = &self.mips[i];
-            let src_size = src.size();
-            steps.push(BlurStep {
-                src,
-                dst,
-                direction: BlurDirection::Up,
-                half_pixel: [0.5 / src_size.w as f32, 0.5 / src_size.h as f32],
-                offset: self.offset,
-            });
-        }
-
-        Ok(steps)
-    }
 }
 
-/// One step in a [`BlurState::steps`] cascade. Tells the caller which
-/// source texture to sample, which destination to bind, and which
-/// uniforms to set on the chosen program.
-pub struct BlurStep<'a> {
-    pub src: &'a GlesTexture,
-    pub dst: &'a GlesTexture,
-    pub direction: BlurDirection,
-    pub half_pixel: [f32; 2],
-    pub offset: f32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BlurDirection {
-    Down,
-    Up,
-}
-
-/// Per-output collection. Owned by `Common`.
-///
-/// Use [`Self::for_output`] to lazily allocate; existing entries are
-/// reused across frames so we don't pay the texture-allocation cost on
-/// every frame.
 #[derive(Default)]
 pub struct BlurStates {
     inner: HashMap<Output, BlurState>,
@@ -356,60 +167,87 @@ impl BlurStates {
 // ────────────────────────────────────────────────────────────────
 // BlurRenderElement
 // ────────────────────────────────────────────────────────────────
-//
-// A `BlurRenderElement` is what we hand to smithay's damage tracker
-// in `workspace_elements`. It carries enough information for two
-// things:
-//
-//   1. `capture_framebuffer` — smithay calls this BEFORE `draw` (and
-//      ONLY for elements with `is_framebuffer_effect() == true`).
-//      We use it to `glBlitFramebuffer` the output region behind the
-//      element into our per-output mip-chain capture texture
-//      (`BlurState::capture_texture`).
-//
-//   2. `draw` — sample the captured texture back over the element's
-//      destination rect, through the upsample (tent) program. This
-//      gives a single-pass soft blur; a future patch may run the
-//      full down/up cascade via `BlurState::steps` for a wider
-//      effective σ. The single-pass implementation is intentionally
-//      conservative — it avoids the cross-frame FBO juggling that a
-//      multi-pass cascade requires.
-//
-// Per-output state (the `BlurState`) is owned by the renderer (via
-// `BlurStates` on `Common`), NOT by the element — that way it
-// survives across frames and we don't pay an `Offscreen::create_buffer`
-// cost every vblank.
 
-/// One blurred surface region for a single frame.
-#[derive(Debug)]
+/// Per-element scratch state stored in the smithay-managed
+/// `UserDataMap` so it persists across frames without external
+/// bookkeeping.
+struct BlurInner {
+    /// Captured framebuffer region. Allocated to match the
+    /// destination rectangle's buffer size.
+    framebuffer: Option<GlesTexture>,
+    /// Set in `capture_framebuffer`, read in `draw`. Same handle as
+    /// `framebuffer` once capture completes.
+    intermediate: Option<GlesTexture>,
+}
+
+impl BlurInner {
+    fn new() -> Self {
+        Self {
+            framebuffer: None,
+            intermediate: None,
+        }
+    }
+
+    /// (Re)allocate framebuffer so it matches `size` in buffer coords.
+    fn prepare(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        size: Size<i32, Buffer>,
+    ) -> Result<(), GlesError> {
+        let recreate = match self.framebuffer.as_ref() {
+            Some(fb) => fb.size() != size,
+            None => true,
+        };
+        if recreate {
+            self.framebuffer = Some(Offscreen::<GlesTexture>::create_buffer(
+                renderer,
+                Fourcc::Abgr8888,
+                size,
+            )?);
+        }
+        Ok(())
+    }
+}
+
+/// A blur "framebuffer effect" element placed BEHIND the surface
+/// in z-order. Smithay's damage tracker calls `capture_framebuffer`
+/// before the surface draws (capturing the current output FB region
+/// under the surface), then `draw` blits the blurred result back
+/// over the destination rect.
 pub struct BlurRenderElement {
     id: Id,
     /// Destination rectangle on the output, in output-physical pixels.
     geometry: Rectangle<i32, Physical>,
-    /// Output this element is being drawn on (used to look up the
-    /// per-output [`BlurState`]).
-    output: Output,
-    /// Per-corner radius for masking, in element-local logical pixels.
-    /// Layout: [bottom_right, top_right, bottom_left, top_left] — same
-    /// convention as `ClippedSurfaceRenderElement`.
+    /// Per-corner radius, currently unused but reserved for the
+    /// `ClippingShader` masked composite path. Same convention as
+    /// `ClippedSurfaceRenderElement`: [bottom_right, top_right,
+    /// bottom_left, top_left].
     corner_radius: [u8; 4],
-    /// Alpha multiplier applied on the final composite. Surfaces fade
-    /// out their blur layer in lockstep with their own alpha.
+    /// Alpha multiplier on the composited blur layer.
     alpha: f32,
     commit_counter: CommitCounter,
+}
+
+impl std::fmt::Debug for BlurRenderElement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BlurRenderElement")
+            .field("id", &self.id)
+            .field("geometry", &self.geometry)
+            .field("corner_radius", &self.corner_radius)
+            .field("alpha", &self.alpha)
+            .finish()
+    }
 }
 
 impl BlurRenderElement {
     pub fn new(
         geometry: Rectangle<i32, Physical>,
-        output: Output,
         corner_radius: [u8; 4],
         alpha: f32,
     ) -> Self {
         Self {
             id: Id::new(),
             geometry,
-            output,
             corner_radius,
             alpha,
             commit_counter: CommitCounter::default(),
@@ -447,18 +285,14 @@ impl Element for BlurRenderElement {
         _scale: Scale<f64>,
         _commit: Option<CommitCounter>,
     ) -> DamageSet<i32, Physical> {
-        // The framebuffer behind us changes essentially every frame
-        // (animations, cursor, video, …). Reporting full damage forces
-        // a capture every frame, which is what we want — partial
-        // capture would let stale content show through the blur.
+        // FB behind us changes every frame; full damage forces a
+        // capture every frame which is what we want.
         DamageSet::from_slice(&[Rectangle::from_size(self.geometry.size)])
     }
 
     fn opaque_regions(&self, _scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
-        // We're a translucent overlay (the blur is "frosted glass",
-        // not "opaque tinted pane"). Never report opaque regions —
-        // doing so would let the damage tracker skip the underlying
-        // surface's commit even though we sample it.
+        // Blur is a translucent overlay; never report opaque or the
+        // damage tracker may skip the underlying surface render.
         OpaqueRegions::default()
     }
 
@@ -475,57 +309,280 @@ impl Element for BlurRenderElement {
     }
 }
 
-impl<R> RenderElement<R> for BlurRenderElement
-where
-    R: AsGlowRenderer,
-    R::Error: FromGlesError,
-{
-    fn draw(
+// ────────────────────────────────────────────────────────────────
+// Actual blur work (GlesRenderer path)
+// ────────────────────────────────────────────────────────────────
+
+impl BlurRenderElement {
+    fn do_capture(
         &self,
-        _frame: &mut R::Frame<'_, '_>,
+        frame: &mut GlesFrame<'_, '_>,
         _src: Rectangle<f64, Buffer>,
-        _dst: Rectangle<i32, Physical>,
-        _damage: &[Rectangle<i32, Physical>],
-        _opaque_regions: &[Rectangle<i32, Physical>],
-        _cache: Option<&UserDataMap>,
-    ) -> Result<(), R::Error> {
-        // Intentional NO-OP for now.
-        //
-        // The full implementation must (a) sample `mips[0]` (captured
-        // by `capture_framebuffer` earlier in this frame) through the
-        // `BlurUpShader` tent kernel, (b) optionally run the
-        // `BlurState::steps()` cascade for a wider σ, and (c) mask
-        // the result by `self.corner_radius` so blurred panels
-        // respect their rounded corners.
-        //
-        // Writing that without a Linux test loop produced a
-        // compile-but-likely-crash blit-from-null-ptr earlier
-        // (reverted). Keeping this as a no-op is safer than landing
-        // unverified GLES code that would crash the compositor on
-        // boot. The element is still wired through `CosmicElement`
-        // so a follow-up Linux session can fill this in without
-        // touching the dispatch tables.
-        let _ = (&self.geometry, &self.output, self.corner_radius, self.alpha);
+        dst: Rectangle<i32, Physical>,
+        cache: &UserDataMap,
+    ) -> Result<(), GlesError> {
+        let output_rect = Rectangle::from_size(frame.output_size());
+        let transform = frame.transformation();
+
+        let inner = cache.get_or_insert::<RefCell<BlurInner>, _>(|| RefCell::new(BlurInner::new()));
+        let mut inner = inner.borrow_mut();
+        let inner = &mut *inner;
+        inner.intermediate = None;
+
+        // Clamp dst to the output (BlitFramebuffer skips OOB pixels).
+        let clamped_dst = match dst.intersection(output_rect) {
+            Some(c) => c,
+            None => return Ok(()),
+        };
+
+        // Apply output transform to dst (we're blitting from the
+        // output FB which is in output-physical coords that smithay
+        // applies the transform to).
+        let dst_xformed = transform.transform_rect_in(clamped_dst, &output_rect.size);
+
+        // Capture texture size in buffer coords.
+        let cap_size: Size<i32, Buffer> = dst_xformed
+            .size
+            .to_logical(1)
+            .to_buffer(1, Transform::Normal);
+
+        if cap_size.w <= 0 || cap_size.h <= 0 {
+            return Ok(());
+        }
+
+        // Allocate framebuffer texture if needed.
+        {
+            let mut guard = frame.renderer();
+            inner.prepare(guard.as_mut(), cap_size)?;
+        }
+
+        let fb_tex = match inner.framebuffer.as_ref() {
+            Some(t) => t.clone(),
+            None => return Ok(()),
+        };
+
+        // Bail out cleanly if the blur shaders aren't compiled —
+        // capture would succeed but draw can't sample them, so
+        // there's no point burning the blit.
+        {
+            let mut guard = frame.renderer();
+            let r = guard.as_mut();
+            if !BlurState::shaders_available(r) {
+                return Ok(());
+            }
+        }
+
+        // Blit the output FB region into fb_tex.
+        frame.with_context(|gl| unsafe {
+            while gl.GetError() != ffi::NO_ERROR {}
+
+            let mut current_fbo: i32 = 0;
+            gl.GetIntegerv(ffi::DRAW_FRAMEBUFFER_BINDING, &mut current_fbo as *mut _);
+
+            gl.Disable(ffi::SCISSOR_TEST);
+
+            let mut fbo: u32 = 0;
+            gl.GenFramebuffers(1, &mut fbo as *mut _);
+            gl.BindFramebuffer(ffi::DRAW_FRAMEBUFFER, fbo);
+            gl.FramebufferTexture2D(
+                ffi::DRAW_FRAMEBUFFER,
+                ffi::COLOR_ATTACHMENT0,
+                ffi::TEXTURE_2D,
+                fb_tex.tex_id(),
+                0,
+            );
+
+            gl.BlitFramebuffer(
+                dst_xformed.loc.x,
+                dst_xformed.loc.y,
+                dst_xformed.loc.x + dst_xformed.size.w,
+                dst_xformed.loc.y + dst_xformed.size.h,
+                0,
+                0,
+                cap_size.w,
+                cap_size.h,
+                ffi::COLOR_BUFFER_BIT,
+                ffi::LINEAR,
+            );
+
+            gl.BindFramebuffer(ffi::DRAW_FRAMEBUFFER, current_fbo as u32);
+            gl.Enable(ffi::SCISSOR_TEST);
+            gl.DeleteFramebuffers(1, &mut fbo as *mut _);
+
+            Ok::<(), GlesError>(())
+        })??;
+
+        inner.intermediate = Some(fb_tex);
         Ok(())
     }
 
-    fn underlying_storage(&self, _renderer: &mut R) -> Option<UnderlyingStorage<'_>> {
-        None
-    }
+    fn do_draw(
+        &self,
+        frame: &mut GlesFrame<'_, '_>,
+        _src: Rectangle<f64, Buffer>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        _opaque_regions: &[Rectangle<i32, Physical>],
+        cache: Option<&UserDataMap>,
+    ) -> Result<(), GlesError> {
+        let cache = match cache {
+            Some(c) => c,
+            None => return Ok(()),
+        };
+        let inner = match cache.get::<RefCell<BlurInner>>() {
+            Some(i) => i,
+            None => return Ok(()),
+        };
+        let inner = inner.borrow();
 
+        let texture = match inner.intermediate.as_ref() {
+            Some(t) => t,
+            None => return Ok(()),
+        };
+
+        let tex_size = texture.size();
+        if tex_size.w <= 0 || tex_size.h <= 0 {
+            return Ok(());
+        }
+        let half_pixel = [0.5 / tex_size.w as f32, 0.5 / tex_size.h as f32];
+
+        let up_program = {
+            let mut guard = frame.renderer();
+            guard
+                .as_mut()
+                .egl_context()
+                .user_data()
+                .get::<BlurUpShader>()
+                .map(|p| p.0.clone())
+        };
+
+        frame.render_texture_from_to(
+            texture,
+            Rectangle::from_size(tex_size.to_f64()),
+            dst,
+            damage,
+            &[],
+            Transform::Normal,
+            self.alpha,
+            up_program.as_ref(),
+            &[
+                Uniform::new("half_pixel", half_pixel),
+                Uniform::new("offset", DEFAULT_OFFSET),
+            ],
+        )?;
+
+        // corner_radius is reserved for the eventual ClippingShader
+        // masked composite path.
+        let _ = self.corner_radius;
+        Ok(())
+    }
+}
+
+impl RenderElement<GlesRenderer> for BlurRenderElement {
     fn capture_framebuffer(
         &self,
-        _frame: &mut R::Frame<'_, '_>,
-        _src: Rectangle<f64, Buffer>,
-        _dst: Rectangle<i32, Physical>,
-        _cache: &UserDataMap,
-    ) -> Result<(), R::Error> {
-        // Intentional NO-OP — see `draw` for the rationale. The
-        // capture step needs to bind a `GlesTexture` as a render
-        // target and `Frame::blit_to` from the bound output into it.
-        // Both calls are easy in isolation, but threading them
-        // through smithay's element-pipeline lifetimes correctly
-        // requires a host where `cargo check -p cosmic-comp` runs.
+        frame: &mut GlesFrame<'_, '_>,
+        src: Rectangle<f64, Buffer>,
+        dst: Rectangle<i32, Physical>,
+        cache: &UserDataMap,
+    ) -> Result<(), GlesError> {
+        self.do_capture(frame, src, dst, cache)
+    }
+
+    fn draw(
+        &self,
+        frame: &mut GlesFrame<'_, '_>,
+        src: Rectangle<f64, Buffer>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &[Rectangle<i32, Physical>],
+        cache: Option<&UserDataMap>,
+    ) -> Result<(), GlesError> {
+        self.do_draw(frame, src, dst, damage, opaque_regions, cache)
+    }
+}
+
+impl RenderElement<GlowRenderer> for BlurRenderElement {
+    fn capture_framebuffer(
+        &self,
+        frame: &mut GlowFrame<'_, '_>,
+        src: Rectangle<f64, Buffer>,
+        dst: Rectangle<i32, Physical>,
+        cache: &UserDataMap,
+    ) -> Result<(), <GlowRenderer as smithay::backend::renderer::RendererSuper>::Error> {
+        let gles_frame: &mut GlesFrame<'_, '_> =
+            std::borrow::BorrowMut::borrow_mut(frame);
+        self.do_capture(gles_frame, src, dst, cache)?;
         Ok(())
+    }
+
+    fn draw(
+        &self,
+        frame: &mut GlowFrame<'_, '_>,
+        src: Rectangle<f64, Buffer>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &[Rectangle<i32, Physical>],
+        cache: Option<&UserDataMap>,
+    ) -> Result<(), <GlowRenderer as smithay::backend::renderer::RendererSuper>::Error> {
+        let gles_frame: &mut GlesFrame<'_, '_> =
+            std::borrow::BorrowMut::borrow_mut(frame);
+        self.do_draw(gles_frame, src, dst, damage, opaque_regions, cache)?;
+        Ok(())
+    }
+
+    fn underlying_storage(
+        &self,
+        _renderer: &mut GlowRenderer,
+    ) -> Option<UnderlyingStorage<'_>> {
+        None
+    }
+}
+
+// Multi-renderer bridge: the CosmicElement dispatch calls these so
+// `GlMultiRenderer` (KMS multi-GPU path) goes through GlowRenderer.
+impl BlurRenderElement {
+    pub fn draw_through_glow<R>(
+        &self,
+        frame: &mut R::Frame<'_, '_>,
+        src: Rectangle<f64, Buffer>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &[Rectangle<i32, Physical>],
+        cache: Option<&UserDataMap>,
+    ) -> Result<(), R::Error>
+    where
+        R: AsGlowRenderer,
+        R::Error: FromGlesError,
+    {
+        let glow_frame = R::glow_frame_mut(frame);
+        <Self as RenderElement<GlowRenderer>>::draw(
+            self,
+            glow_frame,
+            src,
+            dst,
+            damage,
+            opaque_regions,
+            cache,
+        )
+        .map_err(FromGlesError::from_gles_error)
+    }
+
+    pub fn capture_through_glow<R>(
+        &self,
+        frame: &mut R::Frame<'_, '_>,
+        src: Rectangle<f64, Buffer>,
+        dst: Rectangle<i32, Physical>,
+        cache: &UserDataMap,
+    ) -> Result<(), R::Error>
+    where
+        R: AsGlowRenderer,
+        R::Error: FromGlesError,
+    {
+        let glow_frame = R::glow_frame_mut(frame);
+        <Self as RenderElement<GlowRenderer>>::capture_framebuffer(
+            self, glow_frame, src, dst, cache,
+        )
+        .map_err(FromGlesError::from_gles_error)
     }
 }
