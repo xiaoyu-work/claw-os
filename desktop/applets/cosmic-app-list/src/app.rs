@@ -47,10 +47,10 @@ use cosmic::{
     theme::{self, Button, Container},
     widget::{
         DndDestination, Image, button, container, divider, dnd_source,
-        icon::{self, from_name},
+        icon,
         image::Handle,
         rectangle_tracker::{RectangleTracker, RectangleUpdate, rectangle_tracker_subscription},
-        svg, text,
+        text,
     },
 };
 use cosmic::{
@@ -61,7 +61,7 @@ use cosmic_app_list_config::{APP_ID, AppListConfig};
 use cosmic_protocols::toplevel_info::v1::client::zcosmic_toplevel_handle_v1::State;
 use futures::future::pending;
 use rustc_hash::FxHashMap;
-use std::{borrow::Cow, path::PathBuf, rc::Rc, str::FromStr, time::Duration};
+use std::{borrow::Cow, path::PathBuf, str::FromStr, time::Duration};
 use switcheroo_control::Gpu;
 use tokio::time::sleep;
 use url::Url;
@@ -2184,26 +2184,12 @@ impl cosmic::Application for CosmicAppList {
                         content = content.push(divider::horizontal::light());
                     }
 
-                    let svg_accent = Rc::new(|theme: &cosmic::Theme| {
-                        // ClawOS: accent removed. Use neutral on-bg for the
-                        // "pinned" checkmark icon.
-                        let color = theme.cosmic().background.on.into();
-                        svg::Style { color: Some(color) }
-                    });
                     content = content.push(
-                        menu_button(
-                            if is_pinned {
-                                row![
-                                    icon::icon(from_name("checkbox-checked-symbolic").into())
-                                        .size(16)
-                                        .class(cosmic::theme::Svg::Custom(svg_accent.clone())),
-                                    text::body(fl!("pin"))
-                                ]
-                            } else {
-                                row![text::body(fl!("pin"))]
-                            }
-                            .spacing(8),
-                        )
+                        menu_button(text::body(if is_pinned {
+                            fl!("unpin")
+                        } else {
+                            fl!("pin")
+                        }))
                         .on_press(if is_pinned {
                             Message::UnpinApp(*id)
                         } else {
