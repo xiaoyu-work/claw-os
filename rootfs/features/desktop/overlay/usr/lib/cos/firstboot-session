@@ -9,12 +9,17 @@
 #     to [default_session] (cosmic-greeter) for normal login.
 #
 #   • Otherwise this is a fresh image and we must collect a username /
-#     password before any real login can happen. exec cosmic-session,
-#     which starts cosmic-comp; the /etc/xdg/autostart entry for
-#     cosmic-initial-setup auto-launches the wizard inside that session.
-#     When the wizard's Finish handler runs `loginctl terminate-user
-#     cosmic-initial-setup`, this user-session dies and greetd advances
-#     to [default_session].
+#     password before any real login can happen. exec cosmic-comp in
+#     kiosk mode with cosmic-initial-setup as the inner client — the
+#     same pattern cosmic-greeter-start uses for the greeter. We do NOT
+#     use cosmic-session because it's compiled without the `autostart`
+#     feature (default = ["logind"]); /etc/xdg/autostart entries would
+#     be ignored, so the wizard would never launch.
+#
+#   When the wizard's Finish handler runs `loginctl terminate-user
+#   cosmic-initial-setup`, cosmic-comp exits with the wizard child,
+#   greetd's initial_session ends, and greetd advances to
+#   [default_session].
 #
 # We deliberately do NOT consult passwd -S / /etc/shadow: this script
 # runs as the non-root cosmic-initial-setup user and cannot read shadow.
@@ -33,5 +38,6 @@ while IFS=: read -r name _ uid _ _ _ shell; do
     exit 0
 done < /etc/passwd
 
-exec cosmic-session
+exec cosmic-comp cosmic-initial-setup
+
 
