@@ -298,7 +298,11 @@ App identity — that path does not exist by design.
 App code uses two helpers, both shipped with Claw OS as the
 `claw_os_sdk` Python package (lives at
 `claw-os-sdk/python/src/claw_os_sdk/` in-repo, installed to
-`/usr/lib/cos/python/claw_os_sdk/`).
+`/usr/lib/cos/python/claw_os_sdk/`). Capability gating and the COW
+snapshot helper live in the sibling **`cos_runtime`** package — see
+[`cos-runtime/README.md`](../cos-runtime/README.md). Third-party apps
+that don't gate themselves (i.e. don't touch fs/exec/pkg/net) need
+only `claw_os_sdk`.
 
 ```python
 from claw_os_sdk import ai, tools

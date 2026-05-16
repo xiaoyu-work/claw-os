@@ -24,7 +24,17 @@ sys.path.insert(
         "python",
         "src",
     ),
-)  # for `from claw_os_sdk import policy`
+)  # for `from claw_os_sdk import …`
+sys.path.insert(
+    0,
+    os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        os.pardir,
+        "cos-runtime",
+        "python",
+        "src",
+    ),
+)  # for `from cos_runtime import policy`
 
 import main  # noqa: E402
 

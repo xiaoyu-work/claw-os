@@ -1,0 +1,18 @@
+[package]
+name = "cos-runtime"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "INTERNAL runtime crate for claw-os bundled apps and desktop GUI binaries. Not a developer SDK — use `claw-os-sdk` for that. Routes every `fs`/`exec`/`pkg`/`notify`/`net` op through `cos app <id> <verb>` so capability gating, audit, and session checkpointing apply uniformly."
+repository = "https://github.com/xiaoyu-work/claw-os"
+publish = false
+
+[dependencies]
+claw-os-sdk = { path = "../../claw-os-sdk/rust" }
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"

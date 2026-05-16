@@ -29,7 +29,8 @@ import argparse
 import json
 import re
 
-from claw_os_sdk import ai, policy
+from claw_os_sdk import ai
+from cos_runtime import policy
 
 
 # ---------------------------------------------------------------------------

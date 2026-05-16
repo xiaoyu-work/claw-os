@@ -278,7 +278,7 @@ pub fn export() {
         };
 
         let path = format!("color-schemes/{name}.ron");
-        match claw_os_sdk::fs::write(&path, &ron) {
+        match cos_runtime::fs::write(&path, &ron) {
             Ok(_) => {
                 log::info!("exported {path:?}");
             }

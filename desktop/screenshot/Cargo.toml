@@ -10,7 +10,7 @@ edition = "2024"
 # do the same.
 
 [dependencies]
-claw-os-sdk = { path = "../../claw-os-sdk/rust" }
+cos-runtime = { path = "../../cos-runtime/rust" }
 cos-mcp-serve = { path = "../../crates/cos-mcp-serve" }
 ashpd = { version = "0.12", default-features = false, features = ["tokio"] }
 async-trait = "0.1"

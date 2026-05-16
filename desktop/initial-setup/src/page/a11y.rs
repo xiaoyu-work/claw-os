@@ -378,7 +378,7 @@ impl Page {
                     ];
                     let bridge_res = tokio::task::spawn_blocking(move || {
                         let argv_refs: Vec<&str> = argv.iter().map(String::as_str).collect();
-                        claw_os_sdk::exec::run(&argv_refs, None)
+                        cos_runtime::exec::run(&argv_refs, None)
                     })
                     .await;
 

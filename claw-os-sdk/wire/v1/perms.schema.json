@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://claw-os.dev/wire/v1/perms.schema.json",
   "title": "Permissions request / reply",
-  "description": "Shape of the success-path data field returned by `cos perms check`. Apps call this via SDK helpers (e.g. claw_os_sdk.policy.check).",
+  "description": "Shape of the success-path data field returned by `cos perms check`. Apps call this via SDK helpers (e.g. cos_runtime.policy.check).",
   "type": "object",
   "required": ["decision", "verb"],
   "additionalProperties": true,

@@ -223,7 +223,7 @@ fn copy_dir(src: &Path, dst: &Path) {
 
     while let Some((src_dir, dst_dir)) = dirs_to_copy.pop_front() {
         let dst_dir_str = dst_dir.to_string_lossy();
-        if let Err(why) = claw_os_sdk::fs::mkdir(dst_dir_str.as_ref()) {
+        if let Err(why) = cos_runtime::fs::mkdir(dst_dir_str.as_ref()) {
             if why.is_denied() {
                 tracing::warn!(?dst_dir, ?why, "fs.mkdir denied by claw-os-sdk");
             } else {
@@ -247,7 +247,7 @@ fn copy_dir(src: &Path, dst: &Path) {
                 } else if meta.is_file() {
                     let src_str = src_path.to_string_lossy().into_owned();
                     let dst_str = dst_path.to_string_lossy().into_owned();
-                    let copy_result = claw_os_sdk::call(
+                    let copy_result = cos_runtime::call(
                         "fs",
                         "copy",
                         [src_str.as_str(), dst_str.as_str()],
@@ -295,7 +295,7 @@ fn apply_layout(path: &Path) {
 
             // Delete any existing config
             let dest_str = config_dest_path.to_string_lossy();
-            if let Err(why) = claw_os_sdk::fs::rm(dest_str.as_ref()) {
+            if let Err(why) = cos_runtime::fs::rm(dest_str.as_ref()) {
                 if why.is_denied() {
                     tracing::warn!(?config_dest_path, ?why, "fs.rm denied by claw-os-sdk");
                 } else {
@@ -312,7 +312,7 @@ fn apply_layout(path: &Path) {
     let panel_process = "cosmic-panel";
     #[cfg(feature = "nixos")]
     let panel_process = ".cosmic-panel-wrapped";
-    if let Err(why) = claw_os_sdk::exec::run(&["killall", panel_process], None) {
+    if let Err(why) = cos_runtime::exec::run(&["killall", panel_process], None) {
         if why.is_denied() {
             tracing::warn!(?why, panel_process, "exec.run killall denied by claw-os-sdk");
         } else {

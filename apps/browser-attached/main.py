@@ -29,7 +29,7 @@ import sys
 import urllib.parse
 import uuid
 
-from claw_os_sdk import policy
+from cos_runtime import policy
 
 
 SOCK_PATH = os.environ.get(

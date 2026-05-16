@@ -5,7 +5,7 @@
 // User-intent mutations (write configs, rename connection profiles,
 // remove desktop entries) and user-intent process spawns
 // (`nm-connection-editor`, `gnome-language-selector`, `update-desktop-database`)
-// are funnelled through `claw_os_sdk::{fs, exec}` so the kernel
+// are funnelled through `cos_runtime::{fs, exec}` so the kernel
 // capability gate, the structured audit log (`caps.jsonl`), and
 // checkpoint snapshots all apply uniformly.
 //
@@ -24,7 +24,7 @@ use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::process::{ExitStatus, Output};
 
-use claw_os_sdk::{BridgeError, exec, fs};
+use cos_runtime::{BridgeError, exec, fs};
 
 fn map_err(err: BridgeError) -> io::Error {
     if err.is_denied() {

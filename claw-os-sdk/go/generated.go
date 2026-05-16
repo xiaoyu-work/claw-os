@@ -115,7 +115,7 @@ type Caprequest struct {
 
 // Perms — Permissions request / reply.
 // Shape of the success-path data field returned by `cos perms check`. Apps call
-// this via SDK helpers (e.g. claw_os_sdk.policy.check).
+// this via SDK helpers (e.g. cos_runtime.policy.check).
 type Perms struct {
 	Decision string `json:"decision"`
 	Verb string `json:"verb"`

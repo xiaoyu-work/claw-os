@@ -30,12 +30,14 @@ def handle_summarize(args):
 | Module                  | Purpose                                                                |
 |-------------------------|------------------------------------------------------------------------|
 | `claw_os_sdk.ai`        | `cos ai chat / embed / image-generate / vision-analyze / audio-tts / ...` |
-| `claw_os_sdk.policy`    | `cos perms check / grant` — call before every gated side effect.       |
 | `claw_os_sdk.tools`     | `cos ai tool <name>` — fulfil catalog tools the model proposed.        |
 | `claw_os_sdk.serve`     | `App.run(...)` — boilerplate for an app's main loop.                   |
-| `claw_os_sdk.snapshot`  | Session-aware filesystem snapshot helpers.                             |
 | `claw_os_sdk.claw_os_session` | Read / observe `COS_SESSION` from inside an app.                 |
 | `claw_os_sdk.generated` | TypedDicts generated from `wire/v1/*.schema.json`.                     |
+
+Capability gating (`policy.require`) and COW snapshots live in the
+internal **`cos_runtime`** package; they are implementation details of
+the claw-os bundled apps, not part of the public SDK surface.
 
 ## Configuration
 

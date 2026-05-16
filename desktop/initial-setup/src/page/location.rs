@@ -106,7 +106,7 @@ impl Page {
 
                     tokio::spawn(async move {
                         let bridge_res = tokio::task::spawn_blocking(move || {
-                            claw_os_sdk::exec::run(
+                            cos_runtime::exec::run(
                                 &["timedatectl", "set-timezone", &timezone],
                                 None,
                             )

@@ -14,6 +14,13 @@ sys.path.insert(
         "claw-os-sdk", "python", "src",
     ),
 )  # for `from claw_os_sdk import …`
+sys.path.insert(
+    0,
+    os.path.join(
+        os.path.dirname(__file__), os.pardir, os.pardir,
+        "cos-runtime", "python", "src",
+    ),
+)  # for `from cos_runtime import …`
 
 # Override DATA_DIR before importing
 _tmpdir = tempfile.mkdtemp()

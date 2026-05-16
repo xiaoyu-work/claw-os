@@ -28,11 +28,12 @@ pub fn run_python_app(
 import importlib.util, json, sys, os
 os.environ.setdefault("COS_DATA_DIR", {data_dir})
 os.environ.setdefault("COS_APPS_DIR", {apps_dir})
-# Make the claw_os_sdk package importable from every app, so Python
-# apps can `from claw_os_sdk import policy` for capability checks
-# without bundling the SDK into each app's own tree. Honour an
-# explicit override; otherwise fall back to the common production
-# install path and the in-repo dev-checkout path.
+# Make the claw_os_sdk + cos_runtime packages importable from every
+# app, so Python apps can `from cos_runtime import policy` (capability
+# checks) and `from claw_os_sdk import ai` (AI features) without
+# bundling either tree into each app. Honour an explicit override;
+# otherwise fall back to the common production install path and the
+# in-repo dev-checkout paths.
 _sdk_override = os.environ.get("COS_SDK_PYTHON_DIR")
 _sdk_candidates = []
 if _sdk_override:
@@ -45,11 +46,18 @@ if _apps_root:
             os.path.join(_apps_root, os.pardir, "claw-os-sdk", "python", "src")
         )
     )
+    _sdk_candidates.append(
+        os.path.normpath(
+            os.path.join(_apps_root, os.pardir, "cos-runtime", "python", "src")
+        )
+    )
+_wanted = ("claw_os_sdk", "cos_runtime")
 for _cand in _sdk_candidates:
-    if _cand and os.path.isdir(os.path.join(_cand, "claw_os_sdk")):
+    if not _cand or not os.path.isdir(_cand):
+        continue
+    if any(os.path.isdir(os.path.join(_cand, _pkg)) for _pkg in _wanted):
         if _cand not in sys.path:
             sys.path.insert(0, _cand)
-        break
 spec = importlib.util.spec_from_file_location("app", {main_py})
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)

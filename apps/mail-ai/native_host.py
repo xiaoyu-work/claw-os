@@ -15,7 +15,7 @@ MailExtension itself. The extension is the user-driven half; the
 Python verbs are pure compute.
 
 Capability / budget / safety enforcement all happen inside
-``main._ai_call()`` via ``claw_os_sdk.policy`` and ``claw_os_sdk.ai``, so this host
+``main._ai_call()`` via ``cos_runtime.policy`` and ``claw_os_sdk.ai``, so this host
 does not need its own gate.
 """
 

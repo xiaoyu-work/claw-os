@@ -3,7 +3,7 @@
 import os
 import sqlite3
 
-from claw_os_sdk import policy
+from cos_runtime import policy
 
 DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 DB_DIR = os.path.join(DATA_DIR, "db")

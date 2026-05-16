@@ -8,7 +8,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from claw_os_sdk import policy
+from cos_runtime import policy
 
 USER_AGENT = "cos/" + os.environ.get("COS_VERSION", "0.1.0")
 DEFAULT_TIMEOUT = int(os.environ.get("COS_NET_TIMEOUT", "30"))

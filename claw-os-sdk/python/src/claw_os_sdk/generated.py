@@ -129,7 +129,7 @@ class Perms(TypedDict, total=False):
     """Permissions request / reply.
 
     Shape of the success-path data field returned by `cos perms check`. Apps
-    call this via SDK helpers (e.g. claw_os_sdk.policy.check).
+    call this via SDK helpers (e.g. cos_runtime.policy.check).
     """
     decision: str  # required
     verb: str  # required
