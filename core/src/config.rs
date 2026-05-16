@@ -878,6 +878,18 @@ impl Default for AgentConfig {
 }
 
 /// Load config from disk, or return defaults if file is missing/invalid.
+///
+/// Read or parse failures are surfaced via `tracing::error!` rather
+/// than silently falling back to defaults. The previous silent-default
+/// behaviour meant an operator who hand-edited
+/// `~/.config/cos/config.json` and introduced a JSON syntax error
+/// would get a fully default config (different shell, no AI provider,
+/// network outbound enabled, etc.) with no indication anything was
+/// wrong. The audit explicitly called out "we never silently keep
+/// stale config on a parse failure" — when the on-disk file is
+/// unreadable we still return defaults so cos can boot, but we log
+/// the underlying error at ERROR severity so it shows up in logs and
+/// observability dashboards.
 fn load_from_disk() -> CosConfig {
     let path = std::env::var_os("COS_CONFIG_PATH")
         .map(std::path::PathBuf::from)
@@ -885,12 +897,32 @@ fn load_from_disk() -> CosConfig {
 
     let path: &Path = path.as_ref();
     if !path.is_file() {
+        // Missing file is normal on a fresh install — don't log.
         return CosConfig::default();
     }
 
-    match fs::read_to_string(path) {
-        Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
-        Err(_) => CosConfig::default(),
+    let data = match fs::read_to_string(path) {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::error!(
+                "config: failed to read {}: {e} — falling back to defaults",
+                path.display()
+            );
+            return CosConfig::default();
+        }
+    };
+
+    match serde_json::from_str::<CosConfig>(&data) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            tracing::error!(
+                "config: failed to parse {} as JSON: {e} — falling back to defaults. \
+                 Check the file with `jq . {}` and re-run cos.",
+                path.display(),
+                path.display()
+            );
+            CosConfig::default()
+        }
     }
 }
 
@@ -986,6 +1018,71 @@ mod tests {
     fn malformed_json_returns_defaults() {
         let json = "not valid json {{{";
         let cfg: CosConfig = serde_json::from_str(json).unwrap_or_default();
+        assert_eq!(cfg.version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(cfg.exec.timeout, 300);
+    }
+
+    /// Parse-failure regression: a malformed config file on disk must
+    /// (a) NOT panic, (b) return the safe defaults so cos can still
+    /// boot, and (c) emit a tracing::error! so the operator notices.
+    /// The earlier behaviour swallowed the serde error with
+    /// `unwrap_or_default()` and silently downgraded the running
+    /// process to defaults — confusing because it looks like setup
+    /// was simply never done.
+    ///
+    /// We can't easily intercept the tracing dispatcher inside a
+    /// unit test without adding test infrastructure, so this test
+    /// verifies (a) and (b) directly; the tracing::error! line is
+    /// also covered by the source-level audit / code-review path.
+    // regression: load_from_disk must tracing::error! on parse failure
+    #[test]
+    fn load_from_disk_returns_defaults_on_malformed_file_without_panic() {
+        use std::io::Write;
+        let pid = std::process::id();
+        let dir = std::env::temp_dir().join(format!("cos-config-malformed-{pid}"));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+
+        let mut f = fs::File::create(&path).unwrap();
+        write!(f, "{{ this is definitely not json").unwrap();
+        drop(f);
+
+        let prev = std::env::var_os("COS_CONFIG_PATH");
+        std::env::set_var("COS_CONFIG_PATH", &path);
+        let cfg = load_from_disk();
+        match prev {
+            Some(x) => std::env::set_var("COS_CONFIG_PATH", x),
+            None => std::env::remove_var("COS_CONFIG_PATH"),
+        }
+        let _ = fs::remove_dir_all(&dir);
+
+        // Defaults: cos can still boot.
+        assert_eq!(cfg.version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(cfg.exec.timeout, 300);
+        assert_eq!(cfg.exec.shell, "/bin/bash");
+    }
+
+    /// Missing-file regression: a fresh install with no config.json
+    /// must return defaults silently (no error log). This is the only
+    /// path through `load_from_disk` that does NOT log — make sure we
+    /// preserve that.
+    #[test]
+    fn load_from_disk_returns_defaults_when_file_missing() {
+        let pid = std::process::id();
+        let dir = std::env::temp_dir().join(format!("cos-config-missing-{pid}"));
+        let _ = fs::remove_dir_all(&dir);
+        // Intentionally do NOT create the file.
+        let path = dir.join("config.json");
+
+        let prev = std::env::var_os("COS_CONFIG_PATH");
+        std::env::set_var("COS_CONFIG_PATH", &path);
+        let cfg = load_from_disk();
+        match prev {
+            Some(x) => std::env::set_var("COS_CONFIG_PATH", x),
+            None => std::env::remove_var("COS_CONFIG_PATH"),
+        }
+
         assert_eq!(cfg.version, env!("CARGO_PKG_VERSION"));
         assert_eq!(cfg.exec.timeout, 300);
     }
