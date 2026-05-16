@@ -29,6 +29,7 @@
 //! does this dance once for every fallible FFI call.
 
 use std::ffi::{CStr, CString};
+use std::marker::PhantomData;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -170,9 +171,19 @@ pub struct OgaTokenizer {
 unsafe impl Send for OgaTokenizer {}
 
 impl OgaTokenizer {
-    /// Construct a tokenizer for `model`. The returned tokenizer does
-    /// **not** keep `model` alive; the caller must guarantee `model`
-    /// outlives any subsequent `encode()` call (see module-level note).
+    /// Construct a tokenizer for `model`. The returned tokenizer
+    /// borrows from `model` internally; the caller must guarantee
+    /// `model` outlives every subsequent `encode()` call (the
+    /// embedder pattern of holding both behind the same `Mutex`
+    /// and dropping the tokenizer first via field-declaration
+    /// order satisfies this).
+    ///
+    /// We deliberately do NOT encode the borrow with a `'m`
+    /// lifetime parameter even though that would be the strictest
+    /// Rustic option — every container that stores `(OgaModel,
+    /// OgaTokenizer)` together (see `model::tasks::qwen3_genai::
+    /// Inner`) would otherwise become self-referential and require
+    /// `ouroboros` or unsafe `'static` casts.
     pub fn new(model: &OgaModel) -> Result<Self, OrtGenaiError> {
         let rt = model.runtime().clone();
         let mut out: *mut sys::OgaTokenizer = std::ptr::null_mut();
@@ -334,7 +345,13 @@ pub struct OgaGenerator {
 unsafe impl Send for OgaGenerator {}
 
 impl OgaGenerator {
-    pub fn new(model: &OgaModel, params: &OgaGeneratorParams) -> Result<Self, OrtGenaiError> {
+    /// Caller must guarantee `model` outlives this generator. (We
+    /// don't carry a `'m` lifetime parameter for the same self-
+    /// referential reasons documented on [`OgaTokenizer::new`].)
+    pub fn new(
+        model: &OgaModel,
+        params: &OgaGeneratorParams,
+    ) -> Result<Self, OrtGenaiError> {
         let rt = model.runtime().clone();
         let mut out: *mut sys::OgaGenerator = std::ptr::null_mut();
         // SAFETY: model.ptr / params.ptr live; out is a stack slot.
@@ -366,7 +383,13 @@ impl OgaGenerator {
     }
 
     /// Fetch a named output tensor (e.g. `"hidden_states"`).
-    pub fn get_output(&self, name: &str) -> Result<OgaTensor, OrtGenaiError> {
+    ///
+    /// The returned [`OgaTensor`] borrows from `self` — the FFI
+    /// tensor reads directly out of the generator's working buffer,
+    /// which the next `append_tokens` call would reallocate. Binding
+    /// the tensor's lifetime to `&self` makes that aliasing rule a
+    /// compile error instead of a use-after-free at runtime.
+    pub fn get_output<'g>(&'g self, name: &str) -> Result<OgaTensor<'g>, OrtGenaiError> {
         let c_name = CString::new(name).map_err(|_| OrtGenaiError::InputWithNul)?;
         let mut out: *mut sys::OgaTensor = std::ptr::null_mut();
         // SAFETY: self.ptr live; c_name alive; out is a stack slot.
@@ -386,6 +409,7 @@ impl OgaGenerator {
         Ok(OgaTensor {
             rt: self.rt.clone(),
             ptr: out,
+            _gen: PhantomData,
         })
     }
 }
@@ -403,14 +427,21 @@ impl Drop for OgaGenerator {
 // OgaTensor
 // =====================================================================
 
-pub struct OgaTensor {
+pub struct OgaTensor<'g> {
     rt: Arc<OrtGenaiRuntime>,
     ptr: *mut sys::OgaTensor,
+    /// Tensors are non-owning views into the generator's output
+    /// buffer. Without this `PhantomData` the borrow checker would
+    /// happily let `gen.append_tokens(...)` run while a previous
+    /// `OgaTensor` is still alive — the next forward pass then
+    /// invalidates the slice returned by `data_f32`. Binding to the
+    /// generator's lifetime forces the tensor to drop first.
+    _gen: PhantomData<&'g OgaGenerator>,
 }
 
-unsafe impl Send for OgaTensor {}
+unsafe impl<'g> Send for OgaTensor<'g> {}
 
-impl OgaTensor {
+impl<'g> OgaTensor<'g> {
     pub fn dtype(&self) -> Result<OgaElementType, OrtGenaiError> {
         let mut t = OgaElementType::Undefined;
         // SAFETY: self.ptr live; &mut t is a stack slot.
@@ -486,7 +517,7 @@ impl OgaTensor {
     }
 }
 
-impl Drop for OgaTensor {
+impl<'g> Drop for OgaTensor<'g> {
     fn drop(&mut self) {
         if !self.ptr.is_null() {
             unsafe { (self.rt.syms.OgaDestroyTensor)(self.ptr) }

@@ -373,6 +373,17 @@ fn cmd_remove(args: &[String]) -> Result<Value, String> {
             .uninstall(&engine, &version)
             .map_err(|e| e.to_string())?;
         index.save().map_err(|e| e.to_string())?;
+        // Save committed — now reclaim the bytes. If this fails, the
+        // registry is already consistent; the directory will be
+        // garbage-collected on the next `gc` pass.
+        if let Err(e) = registry::EnginesIndex::cleanup_uninstalled_dir(&engine, &version) {
+            tracing::warn!(
+                target: "cos::engine_pkg",
+                engine = %engine, version = %version,
+                error = %e,
+                "registry uninstall committed, but install dir cleanup failed"
+            );
+        }
         return Ok(json!({
             "status": "uninstalled",
             "engine": engine,
@@ -384,6 +395,16 @@ fn cmd_remove(args: &[String]) -> Result<Value, String> {
     let keep = keep.unwrap_or(3);
     let removed = index.gc(&engine, keep).map_err(|e| e.to_string())?;
     index.save().map_err(|e| e.to_string())?;
+    for v in &removed {
+        if let Err(e) = registry::EnginesIndex::cleanup_uninstalled_dir(&engine, v) {
+            tracing::warn!(
+                target: "cos::engine_pkg",
+                engine = %engine, version = %v,
+                error = %e,
+                "registry gc committed, but install dir cleanup failed"
+            );
+        }
+    }
     Ok(json!({
         "status": "gc-complete",
         "engine": engine,
@@ -568,26 +589,90 @@ fn cmd_update(args: &[String]) -> Result<Value, String> {
         .ok()
         .or_else(|| std::env::var("GH_TOKEN").ok());
 
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| e.to_string())?;
+    // Run the async install pipeline. We have to support two callers:
+    //   * The synchronous CLI dispatcher (no ambient runtime) — build a
+    //     small current-thread runtime and `block_on` it.
+    //   * A test or embedding that *already* holds a tokio runtime —
+    //     `Builder::new()...build().block_on()` from inside a runtime
+    //     panics, so we use `Handle::block_on` via `block_in_place`.
+    let work = run_online_install(
+        engine.clone(),
+        spec,
+        ctx,
+        to_tag.clone(),
+        token,
+        activate_flag,
+        pin_after,
+        force,
+        check_only,
+    );
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(work)),
+        Err(_) => tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| e.to_string())?
+            .block_on(work),
+    }
+}
 
-    rt.block_on(async move {
-        let client = sources::github::GhClient::new().with_token(token);
-        let release = match &to_tag {
-            Some(tag) => client
-                .tag(&spec, tag)
-                .await
-                .map_err(|e| format!("github: {e}"))?,
-            None => client
-                .latest(&spec)
-                .await
-                .map_err(|e| format!("github: {e}"))?,
-        };
+/// Decide whether to allow installation of an asset that has no
+/// publisher-supplied SHA-256 digest. Returns `Ok(())` when the
+/// install may proceed (either because we have a digest or the
+/// operator set `COS_ENGINE_TRUST_UNVERIFIED`). Returns `Err(msg)`
+/// otherwise so the caller can surface a user-facing refusal.
+///
+/// Extracted so it can be unit-tested without spinning up an HTTP
+/// client or hitting GitHub.
+pub(crate) fn check_digest_requirement(
+    engine: &str,
+    tag: &str,
+    asset_name: &str,
+    expected_sha: Option<&str>,
+) -> Result<(), String> {
+    if expected_sha.is_some() {
+        return Ok(());
+    }
+    let allow_unverified = std::env::var_os("COS_ENGINE_TRUST_UNVERIFIED")
+        .map(|v| v != "0" && !v.is_empty())
+        .unwrap_or(false);
+    if allow_unverified {
+        Ok(())
+    } else {
+        Err(format!(
+            "refusing to install {engine}@{tag}: release asset \"{asset_name}\" is \
+             missing a SHA-256 digest. Re-run with COS_ENGINE_TRUST_UNVERIFIED=1 to \
+             override (insecure)."
+        ))
+    }
+}
 
-        let asset = sources::asset_select::select(&engine, &ctx, &release.assets).ok_or_else(
-            || {
+#[allow(clippy::too_many_arguments)]
+async fn run_online_install(
+    engine: String,
+    spec: sources::github::GhSpec,
+    ctx: sources::asset_select::SelectionContext,
+    to_tag: Option<String>,
+    token: Option<String>,
+    activate_flag: bool,
+    pin_after: bool,
+    force: bool,
+    check_only: bool,
+) -> Result<Value, String> {
+    let client = sources::github::GhClient::new().with_token(token);
+    let release = match &to_tag {
+        Some(tag) => client
+            .tag(&spec, tag)
+            .await
+            .map_err(|e| format!("github: {e}"))?,
+        None => client
+            .latest(&spec)
+            .await
+            .map_err(|e| format!("github: {e}"))?,
+    };
+
+    let asset = sources::asset_select::select(&engine, &ctx, &release.assets).ok_or_else(
+        || {
                 format!(
                     "no compatible asset found in release {} for ({}, {}, {})",
                     release.tag_name, ctx.os, ctx.arch, ctx.accelerator
@@ -642,6 +727,31 @@ fn cmd_update(args: &[String]) -> Result<Value, String> {
             headers.push(("Authorization", auth_value.as_str()));
         }
         let expected_sha = asset.sha256_hex();
+        // **Refuse to install an unverified engine.** The release asset
+        // must publish a SHA-256 digest (in the release notes, the
+        // sibling `.sha256` file, or the `digest` field of GitHub's
+        // asset metadata). Anything else means we'd be running native
+        // code we can't independently authenticate. The
+        // `COS_ENGINE_TRUST_UNVERIFIED=1` env var is an emergency
+        // override for operators rescuing themselves from a publisher
+        // outage; setting it is logged.
+        if let Err(msg) = check_digest_requirement(
+            &engine,
+            &release.tag_name,
+            &asset.name,
+            expected_sha.as_deref(),
+        ) {
+            return Err(msg);
+        }
+        if expected_sha.is_none() {
+            tracing::warn!(
+                target: "cos::engine_pkg",
+                engine = %engine,
+                version = %release.tag_name,
+                asset = %asset.name,
+                "installing engine without publisher-supplied digest (COS_ENGINE_TRUST_UNVERIFIED set)"
+            );
+        }
         let dl_label = format!("{engine}@{}", release.tag_name);
         let dl = download::stream_to_temp(&download::DownloadOpts {
             url: &asset.browser_download_url,
@@ -699,7 +809,6 @@ fn cmd_update(args: &[String]) -> Result<Value, String> {
             "activated": activate_flag,
             "pinned": pin_after,
         }))
-    })
 }
 
 #[cfg(test)]
@@ -1173,5 +1282,75 @@ mod dispatch_tests {
         let idx = registry::EnginesIndex::load_or_default().expect("reload");
         assert!(!idx.entry("llama-cpp").unwrap().pinned);
         paths::set_engines_dir_override(None);
+    }
+
+    // ---------- digest-required guard (audit fix) ----------
+
+    /// Audit fix (engine_pkg HIGH "digest required"): online install
+    /// of a release asset that does NOT publish a SHA-256 digest
+    /// must be refused, because the kernel would otherwise execute
+    /// unverified native code shipped by the publisher's CDN. The
+    /// `COS_ENGINE_TRUST_UNVERIFIED=1` env var is the documented
+    /// emergency override.
+    ///
+    /// We test the decision helper directly — the rest of the
+    /// install path requires a live network, which we don't want
+    /// in unit tests.
+    #[test]
+    fn digest_required() {
+        // Clean env to a known state. Use a unique key with
+        // env::remove because cargo test runs in a shared process.
+        std::env::remove_var("COS_ENGINE_TRUST_UNVERIFIED");
+
+        // No digest, no override → refuse with a clear message.
+        let err = check_digest_requirement("llama-cpp", "b4001", "llama-cpp.tar.gz", None)
+            .expect_err("must refuse without digest");
+        assert!(
+            err.contains("missing a SHA-256 digest"),
+            "error must explain the refusal reason, got: {err}",
+        );
+        assert!(
+            err.contains("COS_ENGINE_TRUST_UNVERIFIED"),
+            "error must mention the override env var, got: {err}",
+        );
+
+        // Override → allowed.
+        std::env::set_var("COS_ENGINE_TRUST_UNVERIFIED", "1");
+        assert!(check_digest_requirement(
+            "llama-cpp",
+            "b4001",
+            "llama-cpp.tar.gz",
+            None
+        )
+        .is_ok());
+        std::env::remove_var("COS_ENGINE_TRUST_UNVERIFIED");
+
+        // Empty / "0" must NOT be treated as on.
+        std::env::set_var("COS_ENGINE_TRUST_UNVERIFIED", "0");
+        assert!(check_digest_requirement(
+            "llama-cpp",
+            "b4001",
+            "llama-cpp.tar.gz",
+            None
+        )
+        .is_err());
+        std::env::set_var("COS_ENGINE_TRUST_UNVERIFIED", "");
+        assert!(check_digest_requirement(
+            "llama-cpp",
+            "b4001",
+            "llama-cpp.tar.gz",
+            None
+        )
+        .is_err());
+        std::env::remove_var("COS_ENGINE_TRUST_UNVERIFIED");
+
+        // With a digest, the check passes regardless of env state.
+        assert!(check_digest_requirement(
+            "llama-cpp",
+            "b4001",
+            "llama-cpp.tar.gz",
+            Some("deadbeef"),
+        )
+        .is_ok());
     }
 }

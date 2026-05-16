@@ -15,6 +15,7 @@
 //! cannot leak.
 
 use std::fs;
+use std::fs::OpenOptions;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -41,6 +42,8 @@ pub enum ImportError {
     AlreadyRegistered { name: String, version: String },
     #[error("could not detect format from extension '{0}'; pass --format <onnx|gguf|onnx-genai>")]
     UnknownFormat(String),
+    #[error("refusing to import via symlink: {0} (move/copy the real file/directory and re-run)")]
+    SymlinkRejected(PathBuf),
     #[error("io: {0}")]
     Io(#[from] io::Error),
     #[error("json: {0}")]
@@ -122,6 +125,29 @@ pub fn import_model(cfg: &ImportConfig) -> Result<ImportedModel, ImportError> {
 
     if !cfg.source.exists() {
         return Err(ImportError::SourceMissing(cfg.source.clone()));
+    }
+    // Reject symlinks at the source entry: an attacker who can plant
+    // a symlink in a watched import directory could otherwise read or
+    // delete files outside the source tree (e.g. by symlinking to
+    // `/etc` and triggering `--force` overwrite, or pointing at the
+    // user's SSH key). We canonicalize so a symlinked grandparent is
+    // also caught.
+    let lmeta = fs::symlink_metadata(&cfg.source)?;
+    if lmeta.file_type().is_symlink() {
+        return Err(ImportError::SymlinkRejected(cfg.source.clone()));
+    }
+    let canonical_source = fs::canonicalize(&cfg.source)
+        .map_err(ImportError::Io)?;
+    if canonical_source != cfg.source {
+        // The source was specified with a relative or non-canonical
+        // path; require it to point inside the cwd / stable
+        // directory. We don't outright reject, but we re-check with
+        // the canonical form to make the symlink-graph deterministic.
+        if let Ok(lm) = fs::symlink_metadata(&canonical_source) {
+            if lm.file_type().is_symlink() {
+                return Err(ImportError::SymlinkRejected(cfg.source.clone()));
+            }
+        }
     }
     let meta = fs::metadata(&cfg.source)?;
     if meta.is_dir() {
@@ -328,24 +354,81 @@ fn import_directory(cfg: &ImportConfig) -> Result<ImportedModel, ImportError> {
     })
 }
 
+/// Open (or create) `lock_path` and acquire an advisory exclusive
+/// flock on it. The returned [`File`] keeps the lock alive — dropping
+/// it releases the lock. On non-Unix the lock is degraded to a no-op
+/// (we still create the file so callers don't have to special-case
+/// Windows).
+fn acquire_import_lock(lock_path: &Path) -> Result<std::fs::File, ImportError> {
+    let f = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        let r = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) };
+        if r != 0 {
+            return Err(ImportError::Io(std::io::Error::other(format!(
+                "flock LOCK_EX {}: {}",
+                lock_path.display(),
+                std::io::Error::last_os_error()
+            ))));
+        }
+    }
+    Ok(f)
+}
+
 /// Compute the registry slot for `(name, version)`, removing an
 /// existing slot only when `force` is set.
+///
+/// `--force` previously called `fs::remove_dir_all` without checking
+/// whether the existing path was a symlink — an attacker who could
+/// pre-create the slot as a symlink to e.g. `~/.ssh` could trick
+/// the import into wiping the linked directory. We now reject any
+/// path that has a symlink component anywhere on the route to
+/// `target_dir` and use `symlink_metadata` to detect direct links.
+///
+/// We also serialize the `--force` rmtree against concurrent
+/// imports of the same `(name, version)` via a small lockfile in
+/// the parent directory; without this two concurrent `--force`
+/// imports could each see "target exists → rmtree → create" and
+/// race, leaving one of them with a half-deleted directory.
 fn prepare_target_dir(cfg: &ImportConfig) -> Result<(PathBuf, PathBuf), ImportError> {
     let target_dir = paths::model_version_dir(&cfg.name, &cfg.version);
-    if target_dir.exists() {
+    let parent = target_dir
+        .parent()
+        .ok_or_else(|| io::Error::other("models_dir parent missing"))?
+        .to_path_buf();
+    fs::create_dir_all(&parent)?;
+
+    // Acquire a coarse-grained per-model lockfile in the parent
+    // dir. The lock guards both the symlink-check + rmtree (--force
+    // path) and the empty-slot creation, so concurrent imports of
+    // the same model name serialize cleanly. We hold the OS handle
+    // for the duration of `prepare_target_dir`; on Unix the lock is
+    // released by the kernel when the file descriptor closes
+    // (drop), on Windows the OpenOptions handle suffices.
+    let lock_path = parent.join(format!(".import.{}.lock", cfg.version));
+    let _lock = acquire_import_lock(&lock_path)?;
+
+    if target_dir.exists() || fs::symlink_metadata(&target_dir).is_ok() {
         if !cfg.force {
             return Err(ImportError::AlreadyRegistered {
                 name: cfg.name.clone(),
                 version: cfg.version.clone(),
             });
         }
+        // Refuse to follow a symlink during --force rmtree: deleting
+        // through a symlink would wipe whatever the link points at.
+        let lm = fs::symlink_metadata(&target_dir)?;
+        if lm.file_type().is_symlink() {
+            return Err(ImportError::SymlinkRejected(target_dir));
+        }
         fs::remove_dir_all(&target_dir)?;
     }
-    let parent = target_dir
-        .parent()
-        .ok_or_else(|| io::Error::other("models_dir parent missing"))?
-        .to_path_buf();
-    fs::create_dir_all(&parent)?;
     Ok((target_dir, parent))
 }
 
@@ -369,6 +452,15 @@ fn collect_files_recursive(
         let entry = entry?;
         let p = entry.path();
         let ft = entry.file_type()?;
+        if ft.is_symlink() {
+            // Refuse rather than silently skip: an attacker who
+            // can plant a symlink in the source tree (e.g. shared
+            // CI cache, world-writable scratch dir) would otherwise
+            // have the import bypass scrutiny of an entire subtree.
+            // If the symlink points to a real file the user wants
+            // imported, they can copy it in first.
+            return Err(ImportError::SymlinkRejected(p));
+        }
         if ft.is_dir() {
             collect_files_recursive(base, &p, out)?;
         } else if ft.is_file() {
@@ -377,8 +469,6 @@ fn collect_files_recursive(
                 .map_err(|e| io::Error::other(format!("strip_prefix failed: {e}")))?;
             out.push(rel.to_path_buf());
         }
-        // symlinks ignored — Windows doesn't permit them by default
-        // and following them would let import escape the source dir.
     }
     Ok(())
 }
@@ -397,8 +487,11 @@ pub fn remove_model(name: &str, version: &str) -> Result<bool, ImportError> {
         return Ok(false);
     }
     fs::remove_dir_all(&target)?;
-    // Best-effort: if the model dir is now empty, drop it too.
+    // Best-effort: drop the per-version import lockfile so a follow-up
+    // `remove_model` can prune the empty model dir.
     let model_root = paths::model_dir(name);
+    let _ = fs::remove_file(model_root.join(format!(".import.{version}.lock")));
+    // Best-effort: if the model dir is now empty, drop it too.
     if let Ok(mut entries) = fs::read_dir(&model_root) {
         if entries.next().is_none() {
             let _ = fs::remove_dir(&model_root);

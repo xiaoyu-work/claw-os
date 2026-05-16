@@ -51,12 +51,36 @@ pub enum DownloadError {
     },
     #[error("invalid header value: {0}")]
     BadHeader(String),
+    #[error("refusing to download over insecure scheme: {0} (https:// required)")]
+    InsecureScheme(String),
+    #[error("invalid url: {0}")]
+    BadUrl(String),
 }
 
 pub async fn stream_to_temp(opts: &DownloadOpts<'_>) -> Result<DownloadResult, DownloadError> {
+    // Refuse non-HTTPS URLs unconditionally. Engine downloads carry
+    // native code into our process via libloading later, so the
+    // transport must be encrypted + authenticated end-to-end.
+    let parsed = reqwest::Url::parse(opts.url)
+        .map_err(|e| DownloadError::BadUrl(format!("{}: {e}", opts.url)))?;
+    if parsed.scheme() != "https" && !allow_insecure_for_tests() {
+        return Err(DownloadError::InsecureScheme(opts.url.to_string()));
+    }
+
     let client = reqwest::Client::builder()
         .user_agent(concat!("cos/", env!("CARGO_PKG_VERSION"), " (engine-pkg)"))
         .timeout(std::time::Duration::from_secs(60 * 30))
+        // Refuse any redirect that leaves https — a redirect to http://
+        // would defeat the scheme guard above.
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= 10 {
+                return attempt.error("too many redirects");
+            }
+            if attempt.url().scheme() != "https" && !allow_insecure_for_tests() {
+                return attempt.error("redirect to non-https scheme");
+            }
+            attempt.follow()
+        }))
         .build()?;
 
     let mut req = client.get(opts.url);
@@ -126,11 +150,67 @@ fn url_extension(url: &str) -> Option<String> {
     None
 }
 
+/// Test-only hook: cfg(test) builds may flip
+/// [`TEST_ALLOW_INSECURE`] to exercise the streaming/checksum logic
+/// against a local plaintext HTTP fixture. The flag is **never**
+/// honored in release builds — the scheme guard is unconditional
+/// outside `cfg(test)`.
+#[cfg(test)]
+pub(crate) static TEST_ALLOW_INSECURE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn allow_insecure_for_tests() -> bool {
+    #[cfg(test)]
+    {
+        TEST_ALLOW_INSECURE.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    #[cfg(not(test))]
+    {
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Read as _;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// Acquire a guard that pins [`TEST_ALLOW_INSECURE`] for the
+    /// duration of one test. The mutex serializes tests that need
+    /// opposite settings so the parallel-test runner can't observe
+    /// torn state.
+    async fn allow_http_guard() -> InsecureGuard {
+        InsecureGuard::set(true).await
+    }
+
+    async fn reject_http_guard() -> InsecureGuard {
+        InsecureGuard::set(false).await
+    }
+
+    struct InsecureGuard {
+        prev: bool,
+        _lock: tokio::sync::MutexGuard<'static, ()>,
+    }
+
+    impl InsecureGuard {
+        async fn set(allow: bool) -> Self {
+            use std::sync::OnceLock;
+            static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+            let lock = LOCK
+                .get_or_init(|| tokio::sync::Mutex::new(()))
+                .lock()
+                .await;
+            let prev = TEST_ALLOW_INSECURE.swap(allow, std::sync::atomic::Ordering::Relaxed);
+            Self { prev, _lock: lock }
+        }
+    }
+
+    impl Drop for InsecureGuard {
+        fn drop(&mut self) {
+            TEST_ALLOW_INSECURE.store(self.prev, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
 
     /// Tiny one-shot HTTP/1.1 server that serves `body` once.
     async fn spawn_blob_server(
@@ -177,6 +257,7 @@ mod tests {
 
     #[tokio::test]
     async fn download_succeeds_and_hashes() {
+        let _g = allow_http_guard().await;
         let (url, _h) = spawn_blob_server(b"abc".to_vec(), "HTTP/1.1 200 OK").await;
         let result = stream_to_temp(&DownloadOpts {
             url: &url,
@@ -198,6 +279,7 @@ mod tests {
 
     #[tokio::test]
     async fn checksum_match_passes() {
+        let _g = allow_http_guard().await;
         let (url, _h) = spawn_blob_server(b"abc".to_vec(), "HTTP/1.1 200 OK").await;
         let r = stream_to_temp(&DownloadOpts {
             url: &url,
@@ -212,6 +294,7 @@ mod tests {
 
     #[tokio::test]
     async fn checksum_mismatch_fails() {
+        let _g = allow_http_guard().await;
         let (url, _h) = spawn_blob_server(b"abc".to_vec(), "HTTP/1.1 200 OK").await;
         let err = stream_to_temp(&DownloadOpts {
             url: &url,
@@ -231,6 +314,7 @@ mod tests {
 
     #[tokio::test]
     async fn non_2xx_propagates_status() {
+        let _g = allow_http_guard().await;
         let (url, _h) =
             spawn_blob_server(b"oops".to_vec(), "HTTP/1.1 500 Internal Server Error").await;
         let err = stream_to_temp(&DownloadOpts {
@@ -249,6 +333,7 @@ mod tests {
 
     #[tokio::test]
     async fn extra_headers_are_sent() {
+        let _g = allow_http_guard().await;
         let (url, handle) = spawn_blob_server(b"abc".to_vec(), "HTTP/1.1 200 OK").await;
         stream_to_temp(&DownloadOpts {
             url: &url,
@@ -270,6 +355,7 @@ mod tests {
 
     #[tokio::test]
     async fn temp_file_uses_url_extension() {
+        let _g = allow_http_guard().await;
         let (url, _h) = spawn_blob_server(b"PK\x03\x04 fake zip".to_vec(), "HTTP/1.1 200 OK").await;
         let r = stream_to_temp(&DownloadOpts {
             url: &url,
@@ -301,5 +387,54 @@ mod tests {
             Some(".tgz".to_string())
         );
         assert_eq!(url_extension("https://example.com/no-ext"), None);
+    }
+
+    /// New: without the test escape hatch, an `http://` URL is rejected
+    /// before any network IO is attempted. This protects engine
+    /// installs against MITM substitution of the native libraries we
+    /// later `dlopen`.
+    #[tokio::test]
+    async fn http_scheme_rejected_in_release_mode() {
+        let _g = reject_http_guard().await;
+        let err = stream_to_temp(&DownloadOpts {
+            url: "http://example.com/engine.zip",
+            headers: &[],
+            expected_sha256: None,
+            label: "test",
+        })
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, DownloadError::InsecureScheme(_)),
+            "expected InsecureScheme, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ftp_scheme_rejected() {
+        let _g = reject_http_guard().await;
+        let err = stream_to_temp(&DownloadOpts {
+            url: "ftp://example.com/engine.zip",
+            headers: &[],
+            expected_sha256: None,
+            label: "test",
+        })
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DownloadError::InsecureScheme(_)));
+    }
+
+    #[tokio::test]
+    async fn malformed_url_rejected() {
+        let _g = reject_http_guard().await;
+        let err = stream_to_temp(&DownloadOpts {
+            url: "not a url",
+            headers: &[],
+            expected_sha256: None,
+            label: "test",
+        })
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DownloadError::BadUrl(_)));
     }
 }

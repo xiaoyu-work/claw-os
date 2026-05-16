@@ -476,6 +476,8 @@ pub enum ManifestError {
     Json(#[from] serde_json::Error),
     #[error("invalid manifest id `{0}`: must match [a-z][a-z0-9_-]*")]
     InvalidId(String),
+    #[error("invalid operation key `{0}`: must match [a-z][a-z0-9_.]*")]
+    InvalidOperationKey(String),
     #[error("operation `{op}`: arg `{arg}` declared twice")]
     DuplicateArg { op: String, arg: String },
     #[error("operation `{op}`: need #{idx} references undeclared arg `{arg}`")]
@@ -637,6 +639,16 @@ impl Manifest {
         }
 
         for (op_name, op) in &self.operations {
+            // Operation keys appear in URLs, command-line invocations,
+            // catalog lookups, and audit logs. Allow the standard
+            // identifier alphabet plus `.` so namespacing like
+            // `notes.create` works, but refuse anything else (`..`,
+            // `/`, whitespace, NUL, etc.) — we don't want a hostile
+            // manifest splicing path separators into a key that later
+            // joins onto a filesystem path or HTTP route.
+            if !is_valid_operation_key(op_name) {
+                return Err(ManifestError::InvalidOperationKey(op_name.clone()));
+            }
             op.label
                 .validate()
                 .map_err(|d| ManifestError::LocalizedTextInvalid {
@@ -939,6 +951,25 @@ fn is_valid_id(s: &str) -> bool {
         _ => return false,
     }
     bytes.all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+}
+
+/// Operation keys allow the same alphabet as ids plus `.` so
+/// namespaced operations like `notes.create` are legal. They must
+/// not be empty, must start with a lowercase letter, and must not
+/// contain `..` (which would be a path-traversal vector if a key is
+/// ever joined onto a filesystem path).
+fn is_valid_operation_key(s: &str) -> bool {
+    let mut bytes = s.bytes();
+    match bytes.next() {
+        Some(b) if b.is_ascii_lowercase() => {}
+        _ => return false,
+    }
+    if s.contains("..") {
+        return false;
+    }
+    bytes.all(|b| {
+        b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'.' || b == b'-'
+    })
 }
 
 // ---------------------------------------------------------------------------

@@ -169,6 +169,29 @@ fn extract_zip(archive: &Path, dest: &Path) -> Result<ExtractStats, InstallError
             }
             let mut out = File::create(&outpath)?;
             io::copy(&mut entry, &mut out)?;
+            // Preserve the Unix permission bits from the archive so
+            // engine binaries land on disk with their executable bit
+            // intact (zip's default mode-0666 -> umask makes them
+            // unrunnable). We restrict the mask we honor to the read,
+            // write and execute bits — any setuid/setgid/sticky bits
+            // are dropped so a malicious archive can't promote
+            // privileges through extraction. Symlink bits aren't
+            // relevant here: the entry has already been routed to
+            // `File::create`.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                if let Some(mode) = entry.unix_mode() {
+                    let safe = mode & 0o777;
+                    if safe != 0 {
+                        // Drop the file handle before chmod'ing so the
+                        // permission change is visible on next open.
+                        drop(out);
+                        let perms = fs::Permissions::from_mode(safe);
+                        fs::set_permissions(&outpath, perms)?;
+                    }
+                }
+            }
             files += 1;
         }
     }

@@ -112,16 +112,83 @@ impl EnginesIndex {
         Ok(idx)
     }
 
-    pub fn save(&self) -> Result<(), RegistryError> {
+    /// Race-free load + mutate + save under a file lock.
+    ///
+    /// Two `cos engine` invocations running concurrently against the
+    /// same `engines.json` would otherwise read the same state, each
+    /// apply their mutation locally, and have the second writer's
+    /// `save()` clobber the first writer's record (lost-update).
+    /// Routing all writes through this helper serializes the RMW
+    /// against the [`crate::filelock`] sentinel so the second writer
+    /// observes the first writer's commit and applies its change on
+    /// top.
+    ///
+    /// The closure returns whatever auxiliary value the caller wants
+    /// to thread out (the previously active version, the list of
+    /// pruned tags, etc.). Callers should treat any side effects
+    /// inside `f` *other than* mutating `self` as best-effort:
+    /// rolling back rmtree on save failure is the caller's problem.
+    pub fn update_with<F, T>(f: F) -> Result<T, RegistryError>
+    where
+        F: FnOnce(&mut Self) -> Result<T, RegistryError>,
+    {
+        use std::cell::RefCell;
         let p = Self::path();
         if let Some(parent) = p.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let tmp = p.with_extension("json.tmp");
+        let out: RefCell<Option<Result<T, RegistryError>>> = RefCell::new(None);
+        crate::filelock::update_locked::<_, RegistryError>(&p, |current| {
+            let mut idx: Self = match current {
+                Some(s) if !s.trim().is_empty() => serde_json::from_str(&s)?,
+                _ => Self::empty(),
+            };
+            if idx.version == 0 {
+                idx.version = SCHEMA_VERSION;
+            }
+            let res = f(&mut idx);
+            let was_ok = res.is_ok();
+            *out.borrow_mut() = Some(res);
+            if !was_ok {
+                // Surface the closure error through the file-lock
+                // wrapper so we don't overwrite the file on failure.
+                return Err(RegistryError::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "update_with closure failed",
+                )));
+            }
+            Ok(serde_json::to_string_pretty(&idx)?)
+        })
+        .map_err(|e| match e {
+            crate::filelock::UpdateLockError::Io(msg) => {
+                RegistryError::Io(std::io::Error::other(msg))
+            }
+            crate::filelock::UpdateLockError::Transform(inner) => inner,
+        })?;
+        // SAFETY: on `Ok` path the closure always set the cell.
+        out.into_inner().expect("update closure ran")
+    }
+
+    pub fn save(&self) -> Result<(), RegistryError> {
+        // Take the file lock so concurrent writers can't clobber each
+        // other. We do *not* re-read the file under the lock here —
+        // that would silently throw away the caller's mutations.
+        // Callers that need read-modify-write atomicity must use
+        // [`Self::update_with`].
+        let p = Self::path();
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         let bytes = serde_json::to_vec_pretty(self)?;
-        std::fs::write(&tmp, bytes)?;
-        std::fs::rename(&tmp, &p)?;
-        Ok(())
+        let body = String::from_utf8(bytes)
+            .map_err(|e| RegistryError::Io(std::io::Error::other(e)))?;
+        crate::filelock::update_locked::<_, RegistryError>(&p, |_existing| Ok(body.clone()))
+            .map_err(|e| match e {
+                crate::filelock::UpdateLockError::Io(msg) => {
+                    RegistryError::Io(std::io::Error::other(msg))
+                }
+                crate::filelock::UpdateLockError::Transform(inner) => inner,
+            })
     }
 
     pub fn entry(&self, engine: &str) -> Option<&EngineEntry> {
@@ -223,6 +290,23 @@ impl EnginesIndex {
         if entry.previous == version {
             entry.previous.clear();
         }
+        // **Do not rmtree here.** We want the on-disk index to commit
+        // *before* we delete bytes, so a crash mid-uninstall leaves
+        // the registry in a consistent state (the version is gone
+        // from the registry; the directory is now garbage and is
+        // safe to remove manually or on next gc). Callers are
+        // expected to invoke [`Self::cleanup_uninstalled_dir`] after
+        // a successful `save()` (or `update_with()` will batch both
+        // under the lock for them).
+        Ok(())
+    }
+
+    /// Remove the on-disk install directory for `engine@version`.
+    /// Idempotent — missing directory is not an error. Intended to
+    /// run **after** the registry mutation has been persisted, so
+    /// a crash never leaves the registry pointing at a half-deleted
+    /// install.
+    pub fn cleanup_uninstalled_dir(engine: &str, version: &str) -> Result<(), RegistryError> {
         let dir = super::paths::engine_version_dir(engine, version);
         if dir.exists() {
             std::fs::remove_dir_all(&dir)?;
@@ -251,14 +335,13 @@ impl EnginesIndex {
             if keep_set.contains(&v.version) {
                 survivors.push(v);
             } else {
-                let dir = super::paths::engine_version_dir(engine, &v.version);
-                if dir.exists() {
-                    std::fs::remove_dir_all(&dir)?;
-                }
                 removed.push(v.version);
             }
         }
         entry.installed = survivors;
+        // Don't rmtree here either — same reasoning as `uninstall`.
+        // Callers are expected to call [`Self::cleanup_uninstalled_dir`]
+        // for each returned version after a successful save.
         Ok(removed)
     }
 
@@ -485,6 +568,10 @@ mod tests {
         let entry = idx.entry("llama-cpp").unwrap();
         let kept: Vec<&str> = entry.installed.iter().map(|v| v.version.as_str()).collect();
         assert_eq!(kept, vec!["v1", "v3", "v4", "v5"]);
+        // gc no longer rmtree's; caller is expected to invoke
+        // `cleanup_uninstalled_dir` after a successful save.
+        assert!(super::super::paths::engine_version_dir("llama-cpp", "v2").exists());
+        EnginesIndex::cleanup_uninstalled_dir("llama-cpp", "v2").unwrap();
         assert!(!super::super::paths::engine_version_dir("llama-cpp", "v2").exists());
         assert!(super::super::paths::engine_version_dir("llama-cpp", "v3").exists());
     }

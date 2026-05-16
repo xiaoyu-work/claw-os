@@ -564,6 +564,119 @@ fn denial_reason_token(err: &AiError) -> &'static str {
     }
 }
 
+/// RAII guard that owns the per-app + per-user budget reservation
+/// for one in-flight AI call. On `Drop` without `commit()`, both
+/// rows are refunded so a panic / `?` early-return / provider error
+/// can't leak budget. `commit(actual_units)` settles against actuals
+/// and consumes the guard.
+///
+/// Lifecycle:
+/// 1. `reserve()` — debits both rows with `estimated_units`.
+/// 2. either `commit(actual)` — settles to `actual - estimated`, OR
+/// 3. drop without commit — refunds `-estimated` to both rows.
+///
+/// The user-row is opt-in: if `user_cap == 0` the per-user ledger
+/// is not touched at all.
+struct BudgetReservation {
+    store: Store,
+    app_id: String,
+    estimated: u64,
+    user_cap: u64,
+    /// Period that the underlying SQL row was tagged with at
+    /// `reserve` time. Re-using this for settle/refund avoids a
+    /// month-boundary race where the request started in period N
+    /// but settled in N+1, double-billing both periods.
+    period: String,
+    committed: bool,
+}
+
+impl BudgetReservation {
+    fn reserve(
+        mut store: Store,
+        app_id: String,
+        estimated: u64,
+        per_app_cap: u64,
+        user_cap: u64,
+    ) -> Result<Self, AiError> {
+        let snap = store.reserve(&app_id, estimated, per_app_cap)?;
+        let period = snap.period;
+        if user_cap > 0 {
+            match store.reserve(user_budget::USER_BUDGET_BUCKET, estimated, user_cap) {
+                Ok(_) => {}
+                Err(BudgetError::OverUnitCap { used, cap, .. }) => {
+                    let _ = store.settle(&app_id, &period, -(estimated as i64));
+                    return Err(AiError::UserBudgetExceeded { used, cap });
+                }
+                Err(other) => {
+                    let _ = store.settle(&app_id, &period, -(estimated as i64));
+                    return Err(AiError::Budget(other));
+                }
+            }
+        }
+        Ok(Self {
+            store,
+            app_id,
+            estimated,
+            user_cap,
+            period,
+            committed: false,
+        })
+    }
+
+    /// Settle the reservation against the actual usage. After this
+    /// returns the guard no longer holds a debt — `Drop` will not
+    /// refund.
+    fn commit(mut self, actual_units: i64) -> Result<crate::ai::budget::Snapshot, AiError> {
+        let delta = actual_units - self.estimated as i64;
+        let snapshot = self
+            .store
+            .settle(&self.app_id, &self.period, delta)
+            .map_err(AiError::Budget)?;
+        if self.user_cap > 0 {
+            if let Err(e) = self.store.settle(
+                user_budget::USER_BUDGET_BUCKET,
+                &self.period,
+                delta,
+            ) {
+                // Audit noise, not user-facing; the per-app row is
+                // already correct.
+                eprintln!("ai::gate user-budget settle failed (delta={delta}): {e}");
+            }
+        }
+        self.committed = true;
+        Ok(snapshot)
+    }
+}
+
+impl Drop for BudgetReservation {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        // Refund both rows. Errors are best-effort: the call is
+        // already unwinding, and an audit operator will see the
+        // mismatch in the run log.
+        let refund = -(self.estimated as i64);
+        if let Err(e) = self.store.settle(&self.app_id, &self.period, refund) {
+            eprintln!(
+                "ai::gate budget reservation drop: app refund failed (app={}, refund={refund}): {e}",
+                self.app_id
+            );
+        }
+        if self.user_cap > 0 {
+            if let Err(e) = self.store.settle(
+                user_budget::USER_BUDGET_BUCKET,
+                &self.period,
+                refund,
+            ) {
+                eprintln!(
+                    "ai::gate budget reservation drop: user refund failed (refund={refund}): {e}"
+                );
+            }
+        }
+    }
+}
+
 /// Inner gate sequence. Returns the structured error variants so
 /// [`chat`] can map them to a stable `denial_reason` for the audit
 /// stream before the caller sees them.
@@ -659,38 +772,23 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
         Some(cap) => estimated_units.min(cap.max(1)),
         None => estimated_units,
     };
-    let mut store = Store::open().map_err(AiError::Internal)?;
-    let _reserved = store.reserve(
-        &req.app_id,
-        estimated_units,
-        policy.budget.monthly_units,
-    )?;
-
-    // 7b. Reserve against the per-user aggregate ceiling. This is a
-    //     second, independent budget axis: a user who installs many
-    //     apps — each with a small per-app cap — can still exhaust
-    //     their own monthly token volume. The cap lives in
-    //     `$HOME/.config/cos/ai/budget.json` and is opt-in (the file
-    //     is missing or `monthly_units == 0` ⇒ no ceiling). If we
-    //     accept the per-app reserve but reject here, we MUST roll
-    //     back the per-app row so the user isn't billed for a call
-    //     that never ran.
+    let store = Store::open().map_err(AiError::Internal)?;
     let user_cap = user_budget::load()
         .map_err(AiError::Internal)?
         .monthly_units;
-    if user_cap > 0 {
-        match store.reserve(user_budget::USER_BUDGET_BUCKET, estimated_units, user_cap) {
-            Ok(_) => {}
-            Err(BudgetError::OverUnitCap { used, cap, .. }) => {
-                let _ = store.settle(&req.app_id, -(estimated_units as i64));
-                return Err(AiError::UserBudgetExceeded { used, cap });
-            }
-            Err(other) => {
-                let _ = store.settle(&req.app_id, -(estimated_units as i64));
-                return Err(AiError::Budget(other));
-            }
-        }
-    }
+    // [BudgetReservation] takes care of refunding both the per-app
+    // and per-user rows automatically if any error path between
+    // here and `commit()` returns early — including provider
+    // failures, tool resolution errors, panics, and the modality
+    // short-circuit below. Before, every refund site was hand-
+    // maintained and several paths leaked budget on error.
+    let mut reservation = BudgetReservation::reserve(
+        store,
+        req.app_id.clone(),
+        estimated_units,
+        policy.budget.monthly_units,
+        user_cap,
+    )?;
 
     // 8. Apply safety pipeline to the prompt (when present).
     let (prompt_for_provider, prompt_redacted) = match req.prompt.as_deref() {
@@ -707,14 +805,7 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
     //    audit machinery has run, so the abuse-detection story works
     //    even before providers grow new entry points.
     if !modality.is_chat_like() {
-        // Refund the reservation since we never reached the provider.
-        let _ = store.settle(&req.app_id, -(estimated_units as i64));
-        if user_cap > 0 {
-            let _ = store.settle(
-                user_budget::USER_BUDGET_BUCKET,
-                -(estimated_units as i64),
-            );
-        }
+        // Reservation auto-refunds on drop.
         return Err(AiError::ModalityNotSupported(modality.label()));
     }
 
@@ -784,21 +875,13 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
         .collect::<Vec<_>>()
         .join("\n");
 
-    // 12. Settle the budget against actuals.
+    // 12. Settle the budget against actuals via the reservation
+    //     guard. `commit()` consumes the guard, so any subsequent
+    //     early return (e.g. response construction) does not double-
+    //     refund — there is nothing left to roll back.
     let actual_units =
         llm_resp.usage.input_tokens as i64 + llm_resp.usage.output_tokens as i64;
-    let delta_units = actual_units - estimated_units as i64;
-    let snapshot = store
-        .settle(&req.app_id, delta_units)
-        .map_err(AiError::Budget)?;
-    // Settle the user-level aggregate row with the same delta so the
-    // two ledgers stay in lockstep. Best-effort: settlement errors
-    // here are post-call audit noise, not user-visible failures.
-    if user_cap > 0 {
-        if let Err(e) = store.settle(user_budget::USER_BUDGET_BUCKET, delta_units) {
-            eprintln!("ai::gate user-budget settle failed (delta={delta_units}): {e}");
-        }
-    }
+    let snapshot = reservation.commit(actual_units)?;
 
     Ok(ChatResult {
         text,
@@ -878,27 +961,33 @@ fn validate_inputs(req: &ChatRequest, m: Modality) -> Result<(), AiError> {
 /// Estimate units the request will charge against the budget. Today
 /// this is per-modality stub pricing; the next phase
 /// (`prices-loader`) replaces it with `/etc/cos/ai/prices.yaml`.
+///
+/// All arithmetic is performed with [`u64::checked_*`] / saturating
+/// math: an attacker who passes a giant prompt would otherwise be
+/// able to wrap the unit count to zero and bypass the budget. Any
+/// overflow saturates to `u64::MAX`, which the budget store then
+/// treats as "request is too expensive" and rejects deterministically.
 fn units_for_modality(req: &ChatRequest, m: Modality) -> u64 {
     use Modality::*;
-    let prompt_units = req
+    let prompt_chars = req
         .prompt
         .as_deref()
-        .map(|p| (p.chars().count() as u64 / 4) + 128)
-        .unwrap_or(128);
+        .map(|p| p.chars().count() as u64)
+        .unwrap_or(0);
+    let prompt_units = (prompt_chars / 4).saturating_add(128);
     match m {
         Chat | ChatUntrusted => prompt_units,
         // Embeddings: input-only, no big response buffer.
-        Embed => (req.prompt.as_deref().map(|p| p.chars().count()).unwrap_or(0)
-            as u64
-            / 4)
-            .max(1),
+        Embed => (prompt_chars / 4).max(1),
         // Flat rates for binary modalities until prices.yaml lands.
         ImageGenerate => 1_000,
-        ImageAnalyze | VisionAnalyze => 100 + prompt_units,
-        AudioTts => 10 * req.prompt.as_deref().map(|p| p.chars().count() as u64).unwrap_or(0),
+        ImageAnalyze | VisionAnalyze => 100u64.saturating_add(prompt_units),
+        // 10 units per prompt char: deliberately use checked_mul so
+        // a giant prompt saturates to u64::MAX rather than wrapping.
+        AudioTts => prompt_chars.checked_mul(10).unwrap_or(u64::MAX),
         AudioStt => 100,
         VideoGenerate => 10_000,
-        VideoAnalyze => 1_000 + prompt_units,
+        VideoAnalyze => 1_000u64.saturating_add(prompt_units),
     }
 }
 
@@ -907,15 +996,66 @@ fn units_for_modality(req: &ChatRequest, m: Modality) -> u64 {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Cached app lookup. `apps::discover` walks the apps directory and
+/// re-parses every manifest on every call — that's fine for a CLI
+/// invocation but pathological inside the gate, which is on the hot
+/// path of every AI request. We cache the discovered map for up to
+/// 60 seconds; this is short enough that `claw-os apps add` is visible
+/// within an interactive session and long enough to avoid re-walking
+/// the disk on tight request loops.
+///
+/// `COS_APPS_DIR` is read as part of the cache key so test setups
+/// that flip the env between cases (and `setup`/`teardown` blocks)
+/// still see fresh results when they override the dir.
 fn lookup_app(app_id: &str) -> Result<apps::App, AiError> {
+    use std::collections::BTreeMap;
+    use std::sync::Mutex;
+    use std::sync::OnceLock;
+    use std::time::{Duration, Instant};
+
+    struct Entry {
+        dir: std::path::PathBuf,
+        map: BTreeMap<String, apps::App>,
+        fetched_at: Instant,
+    }
+    static CACHE: OnceLock<Mutex<Option<Entry>>> = OnceLock::new();
+    const TTL: Duration = Duration::from_secs(60);
+
     let apps_dir = std::env::var("COS_APPS_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::path::PathBuf::from("/usr/lib/cos/apps"));
+
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    // Fast path: read the cache and clone the requested app out.
+    if let Ok(guard) = cache.lock() {
+        if let Some(entry) = guard.as_ref() {
+            if entry.dir == apps_dir && entry.fetched_at.elapsed() < TTL {
+                return entry
+                    .map
+                    .get(app_id)
+                    .cloned()
+                    .ok_or_else(|| AiError::UnknownApp(app_id.to_string()));
+            }
+        }
+    }
+
+    // Slow path: rebuild the cache. We re-acquire the lock just
+    // long enough to swap the new entry in; concurrent calls may
+    // each re-discover once, which is benign (the second result
+    // overwrites the first with identical data).
     let discovered = apps::discover(&apps_dir);
-    discovered
+    let result = discovered
         .get(app_id)
         .cloned()
-        .ok_or_else(|| AiError::UnknownApp(app_id.to_string()))
+        .ok_or_else(|| AiError::UnknownApp(app_id.to_string()));
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some(Entry {
+            dir: apps_dir,
+            map: discovered,
+            fetched_at: Instant::now(),
+        });
+    }
+    result
 }
 
 fn parse_origin(s: &str) -> Result<PromptOrigin, AiError> {
@@ -1064,17 +1204,21 @@ impl LlmProvider for SystemGatedProvider {
                 ))
             })?;
 
-        // 2. Reserve budget against the system-agent bucket.
+        // 2. Reserve budget against the system-agent bucket via a
+        //    Drop-guarded reservation so a provider error doesn't
+        //    leak the reservation. The guard refunds the full
+        //    estimate if `commit_to_actuals` is not called.
         let est_units = estimate_request_units(&request);
         let cap_units = cfg.system_budget_monthly_units;
 
-        let mut store = Store::open()
+        let store = Store::open()
             .map_err(|e| llm::LlmError::Internal(format!("system-agent budget store: {e}")))?;
-        store
-            .reserve(SYSTEM_AGENT_BUCKET, est_units, cap_units)
+        let mut reservation = SystemBudgetReservation::reserve(store, est_units, cap_units)
             .map_err(|e| llm::LlmError::InvalidRequest(format!("system-agent budget: {e}")))?;
 
-        // 3. Delegate to the wrapped provider.
+        // 3. Delegate to the wrapped provider. `?` on this line
+        //    will drop the reservation, which refunds the full
+        //    estimate automatically.
         let resp = self.inner.chat(request).await?;
 
         // 4. Settle to actuals. Best-effort: settlement errors are
@@ -1083,13 +1227,7 @@ impl LlmProvider for SystemGatedProvider {
         //    to the caller about whether the model was invoked.
         let actual_units =
             resp.usage.input_tokens as i64 + resp.usage.output_tokens as i64;
-        let delta_units = actual_units - est_units as i64;
-        if let Err(e) = store.settle(SYSTEM_AGENT_BUCKET, delta_units) {
-            tracing::warn!(
-                target: "ai.gate",
-                "system-agent budget settle failed (delta_units={delta_units}): {e}",
-            );
-        }
+        reservation.commit_to_actuals(actual_units);
 
         Ok(resp)
     }
@@ -1098,13 +1236,13 @@ impl LlmProvider for SystemGatedProvider {
         &self,
         request: LlmChatRequest,
     ) -> LlmResult<BoxStream<'static, LlmResult<StreamEvent>>> {
-        // Streaming path: do the caps check and a best-effort
-        // up-front reservation, then hand the stream through
-        // unmodified. Settlement against streamed actuals is a
-        // future enhancement (would require wrapping the stream
-        // to capture the terminal `StreamEvent::Done { usage }`
-        // and updating the bucket — non-trivial without losing
-        // back-pressure semantics, so deferred).
+        // Streaming path: do the caps check, reserve, then wrap the
+        // returned stream so that:
+        //   - on `StreamEvent::Done { usage }` we settle to actuals,
+        //   - on early drop (consumer hung up) we refund the
+        //     remaining reservation.
+        // Without this wrapper a dropped stream silently consumed
+        // the entire estimate from the per-user bucket.
         let cfg = &config::get().agent;
         let model = request.model.clone();
 
@@ -1117,20 +1255,107 @@ impl LlmProvider for SystemGatedProvider {
             })?;
 
         let est_units = estimate_request_units(&request);
-        if let Ok(mut store) = Store::open() {
-            if let Err(e) = store.reserve(
-                SYSTEM_AGENT_BUCKET,
-                est_units,
-                cfg.system_budget_monthly_units,
-            ) {
-                return Err(llm::LlmError::InvalidRequest(format!(
-                    "system-agent budget: {e}"
-                )));
+        let store = Store::open().map_err(|e| {
+            llm::LlmError::Internal(format!("system-agent budget store: {e}"))
+        })?;
+        let reservation = SystemBudgetReservation::reserve(
+            store,
+            est_units,
+            cfg.system_budget_monthly_units,
+        )
+        .map_err(|e| llm::LlmError::InvalidRequest(format!("system-agent budget: {e}")))?;
+
+        let inner_stream = self.inner.chat_stream(request).await?;
+        Ok(wrap_system_stream(inner_stream, reservation))
+    }
+}
+
+/// Drop-guarded reservation for the system-agent budget bucket. Same
+/// shape as [`BudgetReservation`] but single-row (no per-user axis).
+struct SystemBudgetReservation {
+    store: Store,
+    estimated: u64,
+    /// Period the reservation row was tagged with; we settle/refund
+    /// against this exact period so a long-running streaming call
+    /// that crosses a UTC month boundary doesn't end up debiting
+    /// two separate rows.
+    period: String,
+    committed: bool,
+}
+
+impl SystemBudgetReservation {
+    fn reserve(
+        mut store: Store,
+        estimated: u64,
+        cap_units: u64,
+    ) -> Result<Self, BudgetError> {
+        let snap = store.reserve(SYSTEM_AGENT_BUCKET, estimated, cap_units)?;
+        Ok(Self {
+            store,
+            estimated,
+            period: snap.period,
+            committed: false,
+        })
+    }
+
+    /// Settle the bucket from `estimated` to `actual_units`. Best-
+    /// effort: settlement failures are logged but never bubbled,
+    /// because the upstream call has already been served. Marks the
+    /// guard committed so `Drop` does NOT refund.
+    fn commit_to_actuals(&mut self, actual_units: i64) {
+        let delta_units = actual_units - self.estimated as i64;
+        if let Err(e) = self
+            .store
+            .settle(SYSTEM_AGENT_BUCKET, &self.period, delta_units)
+        {
+            tracing::warn!(
+                target: "ai.gate",
+                "system-agent budget settle failed (delta_units={delta_units}): {e}",
+            );
+        }
+        self.committed = true;
+    }
+}
+
+impl Drop for SystemBudgetReservation {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        let refund = -(self.estimated as i64);
+        if let Err(e) = self
+            .store
+            .settle(SYSTEM_AGENT_BUCKET, &self.period, refund)
+        {
+            tracing::warn!(
+                target: "ai.gate",
+                "system-agent budget reservation drop refund failed (refund={refund}): {e}",
+            );
+        }
+    }
+}
+
+/// Wraps a streaming chat response so the [`SystemBudgetReservation`]
+/// is settled to actuals on `StreamEvent::Done { usage }` and
+/// refunded on early drop. The wrapper carries the reservation in
+/// its state and runs `commit_to_actuals` exactly once, the first
+/// time it sees a `Done` event.
+fn wrap_system_stream(
+    inner: BoxStream<'static, LlmResult<StreamEvent>>,
+    reservation: SystemBudgetReservation,
+) -> BoxStream<'static, LlmResult<StreamEvent>> {
+    use futures_util::StreamExt;
+    let state = std::sync::Arc::new(std::sync::Mutex::new(Some(reservation)));
+    let wrapped = inner.map(move |item| {
+        if let Ok(StreamEvent::Done { ref usage, .. }) = item {
+            if let Some(mut r) = state.lock().ok().and_then(|mut g| g.take()) {
+                let actual = usage.input_tokens as i64 + usage.output_tokens as i64;
+                r.commit_to_actuals(actual);
             }
         }
-
-        self.inner.chat_stream(request).await
-    }
+        item
+    });
+    Box::pin(wrapped)
 }
 
 /// Approximate tokens a request will cost on the input side, using
@@ -1376,5 +1601,66 @@ mod tests {
         assert!(msg.contains("fs.read_text"), "{msg}");
         assert!(msg.contains("kv.get"), "{msg}");
         assert!(msg.contains("ai.tools[]"), "{msg}");
+    }
+
+    // ---------- BudgetReservation Drop guard (audit fix) ----------
+
+    /// Build a `Store` backed by a private on-disk SQLite file under
+    /// a tempdir. Returns the tempdir so the file outlives the
+    /// store; dropping it cleans up. We override `COS_DATA_DIR` so
+    /// `Store::open()` uses our tempdir instead of the system path.
+    fn ephemeral_budget_store_via_tempdir() -> (tempfile::TempDir, Store) {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("COS_DATA_DIR", dir.path());
+        let store = Store::open().expect("open store in tempdir");
+        (dir, store)
+    }
+
+    /// The `BudgetReservation` Drop guard refunds the reserved
+    /// units when it goes out of scope without `commit()`. This is
+    /// the audit fix for `ai/gate.rs HIGH`: previously a provider
+    /// error between `reserve` and `settle` left the units debited.
+    #[test]
+    fn budget_refunded_on_provider_error() {
+        let (_dir, store) = ephemeral_budget_store_via_tempdir();
+
+        // Take a snapshot of the starting balance so the assertion
+        // is independent of any leftover rows in the in-tempdir DB.
+        let before = {
+            let s = Store::open().unwrap();
+            s.current("test.app").unwrap().units_used
+        };
+
+        // Reserve 500 units, then drop without committing — mimics
+        // a provider error path between `reserve` and `commit`.
+        {
+            let _r = BudgetReservation::reserve(
+                store,
+                "test.app".to_string(),
+                500,
+                10_000,
+                0, // no user cap
+            )
+            .expect("reserve");
+            // Reservation is alive here; the row should reflect the debit.
+            let probe = Store::open().unwrap();
+            let mid = probe.current("test.app").unwrap().units_used;
+            assert_eq!(
+                mid,
+                before + 500,
+                "reservation should debit `units_used` while alive"
+            );
+            // Falling out of scope drops `_r` without calling `commit`.
+        }
+
+        // After Drop, the row must be refunded back to `before`.
+        let after_store = Store::open().unwrap();
+        let after = after_store.current("test.app").unwrap().units_used;
+        assert_eq!(
+            after, before,
+            "BudgetReservation::drop must refund the reservation when commit() was not called"
+        );
+
+        std::env::remove_var("COS_DATA_DIR");
     }
 }

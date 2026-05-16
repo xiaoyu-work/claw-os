@@ -69,6 +69,28 @@ use super::store::{self, SessionError};
 /// session, not mint a new one".
 const ENV_COS_SESSION: &str = "COS_SESSION";
 
+/// Serializes every mutation of `COS_SESSION` across the entire
+/// process.
+///
+/// `std::env::set_var` is `unsafe`-ish on Unix: glibc's `setenv`
+/// races against any concurrent reader of `environ` (e.g. another
+/// thread calling `std::env::var`, `getenv`, or fork()ing). The
+/// safest in-tree fix is to funnel **every** read-or-write of
+/// `COS_SESSION` through this mutex. Callers that touch the env are
+/// the lifecycle helpers in this module; nothing else inside the
+/// kernel mutates it.
+static ENV_COS_SESSION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn with_env_lock<F, T>(f: F) -> T
+where
+    F: FnOnce() -> T,
+{
+    let _g = ENV_COS_SESSION_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    f()
+}
+
 // ---------------------------------------------------------------------------
 // DurableSession — the RAII handle returned by promote / resume
 // ---------------------------------------------------------------------------
@@ -243,8 +265,11 @@ pub fn promote_to_durable(
 
     let lease = lease::try_acquire(&sid)?;
 
-    let prev_session_env = std::env::var_os(ENV_COS_SESSION);
-    std::env::set_var(ENV_COS_SESSION, sid.as_str());
+    let prev_session_env = with_env_lock(|| {
+        let prev = std::env::var_os(ENV_COS_SESSION);
+        std::env::set_var(ENV_COS_SESSION, sid.as_str());
+        prev
+    });
 
     Ok(DurableSession {
         sid,
@@ -266,12 +291,21 @@ pub fn promote_to_durable(
 pub fn pause(mut handle: DurableSession) -> Result<(), TransitionError> {
     let sid = handle.sid.clone();
 
-    // Flip to Paused while we still hold the lease. If this fails the
-    // lease is still released by Drop below — caller can retry.
+    // Refuse to "pause" anything other than a Running session. Pause
+    // is a transition from {Running} → {Paused}; firing it on a
+    // session that is already Paused, or that is terminal, is a
+    // caller bug we want to surface loudly. We check *before*
+    // mutating the meta so a misuse doesn't leave the meta in a
+    // wedged state.
+    let meta = store::get_meta(&sid)?;
+    if meta.status != Status::Running {
+        return Err(TransitionError::InvalidStatus {
+            actual: meta.status,
+        });
+    }
+
     store::update_meta(&sid, |m| {
-        if m.status.is_active() && m.status != Status::Paused {
-            m.status = Status::Paused;
-        }
+        m.status = Status::Paused;
     })?;
 
     handle.lease = None;
@@ -280,15 +314,25 @@ pub fn pause(mut handle: DurableSession) -> Result<(), TransitionError> {
     Ok(())
 }
 
-/// Resume a previously paused session: re-acquire the lease, flip
-/// `status` back to `Running`, set `COS_SESSION`, return a fresh
-/// [`DurableSession`].
+/// Resume a previously paused — *or crashed-but-orphaned* — session:
+/// re-acquire the lease, flip `status` back to `Running`, set
+/// `COS_SESSION`, return a fresh [`DurableSession`].
 ///
-/// Refuses sessions whose status is anything other than `Paused`
-/// (`Pending` should go through [`promote_to_durable`], terminal
-/// sessions are read-only). To take over from a runtime that crashed
-/// mid-Running you'll currently see `InvalidStatus { actual: Running }`
-/// — the recovery path will be filed as a Phase 6 follow-up.
+/// Accepts two starting states:
+///
+/// 1. `Paused` — the previous holder cleanly handed off via
+///    [`pause`]. The lease is free; we grab it and flip Running.
+/// 2. `Running` but with no live lease holder — the previous holder
+///    crashed (panic, segfault, kill -9) before pause could run. The
+///    on-disk meta still says Running because nobody got to update
+///    it. We *can* prove the previous process is gone because
+///    `lease::try_acquire` returns `Held` while any other process
+///    holds the flock; if it succeeds, the kernel has already
+///    released the prior holder's lock, which only happens at
+///    process exit. In that case we re-stamp `meta.status` first so
+///    audit logs reflect the recovery.
+///
+/// All other statuses (`Pending`, terminal) are rejected.
 pub fn resume(
     sid: &SessionId,
     runtime: impl Into<String>,
@@ -298,20 +342,33 @@ pub fn resume(
     }
 
     let meta = store::get_meta(sid)?;
-    if meta.status != Status::Paused {
-        return Err(TransitionError::InvalidStatus {
-            actual: meta.status,
-        });
+    match meta.status {
+        Status::Paused | Status::Running => {}
+        other => {
+            return Err(TransitionError::InvalidStatus { actual: other });
+        }
     }
 
+    // `try_acquire` is the proof of life. If the previous holder is
+    // still up, this fails with AcquireError::Held and we bail
+    // without disturbing the meta — the caller learns "another
+    // runtime owns this session".
     let lease = lease::try_acquire(sid)?;
 
+    // We got the lease. If status was Running, the previous holder
+    // is provably dead (or it would still hold the flock). Re-stamp
+    // status so the audit log records the recovery point even
+    // though the value doesn't change after we flip it back to
+    // Running below.
     store::update_meta(sid, |m| {
         m.status = Status::Running;
     })?;
 
-    let prev_session_env = std::env::var_os(ENV_COS_SESSION);
-    std::env::set_var(ENV_COS_SESSION, sid.as_str());
+    let prev_session_env = with_env_lock(|| {
+        let prev = std::env::var_os(ENV_COS_SESSION);
+        std::env::set_var(ENV_COS_SESSION, sid.as_str());
+        prev
+    });
 
     Ok(DurableSession {
         sid: sid.clone(),
@@ -327,8 +384,99 @@ pub fn resume(
 // ---------------------------------------------------------------------------
 
 fn restore_env(prev: Option<OsString>) {
-    match prev {
+    with_env_lock(|| match prev {
         Some(v) => std::env::set_var(ENV_COS_SESSION, v),
         None => std::env::remove_var(ENV_COS_SESSION),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Audit fix (session/runtime.rs HIGH "resume from crashed"):
+    /// a session whose on-disk `meta.status` is still `Running`
+    /// because the previous holder crashed before it could flip to
+    /// `Paused` must be resumable — otherwise the session is
+    /// permanently wedged. The proof of crash is that
+    /// `lease::try_acquire` succeeds: the kernel only releases the
+    /// flock when the holding process exits.
+    #[test]
+    fn resume_from_crashed_state() {
+        let _lock = crate::test_env::lock_env();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let prev_data = std::env::var_os("COS_DATA_DIR");
+        std::env::set_var("COS_DATA_DIR", dir.path());
+
+        // Create a session and flip it to Running directly — we do
+        // NOT acquire a lease, mimicking a process that died after
+        // updating meta but before holding the flock long enough for
+        // any orderly handoff.
+        let sid = store::create("test").expect("create session");
+        store::update_meta(&sid, |m| {
+            m.status = Status::Running;
+        })
+        .expect("flip to Running");
+
+        // Sanity: no current process holds the flock.
+        assert_eq!(
+            store::get_meta(&sid).unwrap().status,
+            Status::Running,
+            "precondition: meta should report Running"
+        );
+
+        // Resume from a "crashed Running" state. Audit fix says this
+        // must succeed (not return InvalidStatus) and return a
+        // handle that re-stamps the lease.
+        let handle = resume(&sid, "runtime-test").expect(
+            "resume must accept Status::Running when the prior lease holder is gone",
+        );
+
+        // The returned handle owns a fresh lease so a subsequent
+        // resume from a competing process would now see `Held`.
+        assert!(handle.lease.is_some(), "resume should re-acquire lease");
+
+        // And the meta should still be Running (resume re-stamps).
+        assert_eq!(
+            store::get_meta(&sid).unwrap().status,
+            Status::Running,
+            "post-resume status should remain Running"
+        );
+
+        // Cleanly drop the handle without finish(); that's a
+        // separate concern — what matters is that resume() didn't
+        // refuse the crashed-Running state.
+        drop(handle);
+
+        match prev_data {
+            Some(v) => std::env::set_var("COS_DATA_DIR", v),
+            None => std::env::remove_var("COS_DATA_DIR"),
+        }
+    }
+
+    /// Resume from a normal `Paused` state still works (regression
+    /// guard so the audit fix's "also accept Running" doesn't
+    /// inadvertently break the canonical happy path).
+    #[test]
+    fn resume_from_paused_state() {
+        let _lock = crate::test_env::lock_env();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let prev_data = std::env::var_os("COS_DATA_DIR");
+        std::env::set_var("COS_DATA_DIR", dir.path());
+
+        let sid = store::create("test").expect("create session");
+        store::update_meta(&sid, |m| {
+            m.status = Status::Paused;
+        })
+        .expect("flip to Paused");
+
+        let handle = resume(&sid, "runtime-test").expect("resume from Paused");
+        assert!(handle.lease.is_some());
+        drop(handle);
+
+        match prev_data {
+            Some(v) => std::env::set_var("COS_DATA_DIR", v),
+            None => std::env::remove_var("COS_DATA_DIR"),
+        }
     }
 }

@@ -941,12 +941,16 @@ fn resume_rejects_non_paused_status() {
         let s = promote_to_durable("running", "cos-agent").unwrap();
         let sid = s.sid().clone();
 
-        // Status is Running. resume must refuse.
+        // Status is Running and the original holder `s` still owns the
+        // flock. Audit fix (session/runtime.rs HIGH) explicitly
+        // *allows* resuming a Running session when the prior holder
+        // has crashed (proof: lease::try_acquire succeeds). Here the
+        // prior holder is alive, so resume must fail — but with
+        // `Lease(Held)`, not `InvalidStatus`, because the on-disk
+        // status itself is a valid resume target.
         match resume(&sid, "other") {
-            Err(TransitionError::InvalidStatus {
-                actual: Status::Running,
-            }) => {}
-            other => panic!("expected InvalidStatus(Running), got {other:?}"),
+            Err(TransitionError::Lease(_)) => {}
+            other => panic!("expected Lease(Held), got {other:?}"),
         }
 
         s.finish(Status::Done).unwrap();
@@ -1263,6 +1267,7 @@ fn record_fs_rename_records_both_paths() {
 fn rollback_restores_overwritten_file() {
     let _lock = lock_env();
     let _data = redirect_data_dir();
+    let _perms = crate::test_env::PermissiveModeGuard::new();
 
     let sid = create("rollback overwrite").unwrap();
     let work = tempfile::tempdir().unwrap();
@@ -1285,6 +1290,7 @@ fn rollback_restores_overwritten_file() {
 fn rollback_deletes_file_created_from_nothing() {
     let _lock = lock_env();
     let _data = redirect_data_dir();
+    let _perms = crate::test_env::PermissiveModeGuard::new();
 
     let sid = create("rollback create").unwrap();
     let work = tempfile::tempdir().unwrap();
@@ -1303,6 +1309,7 @@ fn rollback_deletes_file_created_from_nothing() {
 fn rollback_undeletes_file_with_saved_bytes() {
     let _lock = lock_env();
     let _data = redirect_data_dir();
+    let _perms = crate::test_env::PermissiveModeGuard::new();
 
     let sid = create("rollback delete").unwrap();
     let work = tempfile::tempdir().unwrap();
@@ -1322,6 +1329,7 @@ fn rollback_undeletes_file_with_saved_bytes() {
 fn rollback_reverses_rename() {
     let _lock = lock_env();
     let _data = redirect_data_dir();
+    let _perms = crate::test_env::PermissiveModeGuard::new();
 
     let sid = create("rollback rename").unwrap();
     let work = tempfile::tempdir().unwrap();
@@ -1343,6 +1351,7 @@ fn rollback_reverses_rename() {
 fn rollback_replays_in_reverse_seq_order() {
     let _lock = lock_env();
     let _data = redirect_data_dir();
+    let _perms = crate::test_env::PermissiveModeGuard::new();
 
     let sid = create("rollback order").unwrap();
     let work = tempfile::tempdir().unwrap();
@@ -1373,6 +1382,7 @@ fn rollback_replays_in_reverse_seq_order() {
 fn rollback_marks_already_done_when_path_already_absent() {
     let _lock = lock_env();
     let _data = redirect_data_dir();
+    let _perms = crate::test_env::PermissiveModeGuard::new();
 
     let sid = create("already done").unwrap();
     let work = tempfile::tempdir().unwrap();
@@ -1508,6 +1518,7 @@ fn python_snapshot_mirrors_into_durable_mutations_log() {
     }
     let _lock = lock_env();
     let _data = redirect_data_dir();
+    let _perms = crate::test_env::PermissiveModeGuard::new();
 
     let sid = create("python bridge").unwrap();
     let work = tempfile::tempdir().unwrap();
@@ -1547,6 +1558,7 @@ fn python_snapshot_rm_records_fs_delete_with_blob() {
     }
     let _lock = lock_env();
     let _data = redirect_data_dir();
+    let _perms = crate::test_env::PermissiveModeGuard::new();
 
     let sid = create("python rm").unwrap();
     let work = tempfile::tempdir().unwrap();
@@ -1749,6 +1761,7 @@ fn cross_runtime_python_records_mutation_rollback_restores_it() {
     }
     let _lock = lock_env();
     let _data = redirect_data_dir();
+    let _perms = crate::test_env::PermissiveModeGuard::new();
 
     let sid = create("cross-runtime mutation").unwrap();
 

@@ -46,7 +46,14 @@ use crate::paths;
 
 /// Current schema version. Bump if the on-disk shape changes in a
 /// way that requires a re-prompt.
-pub const SCHEMA_VERSION: u32 = 1;
+///
+/// **Version 2** widens [`freshness`] to compare the `policy.tools`
+/// set in addition to budget / safety / origins. Any consent record
+/// stored under version 1 is treated as schema-stale and the user is
+/// re-prompted before the new policy takes effect — necessary
+/// because version-1 records were silently treated as fresh even if
+/// the app added new tool grants.
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// On-disk shape of `<user_config>/consents/<app_id>.json`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -152,6 +159,17 @@ pub fn freshness(current: &AiPolicy, consent: &Consent) -> Freshness {
     if !origins_equal(&current.origins, &consent.policy.origins) {
         changed.push("origins".to_string());
     }
+    // Tool grants are a security-sensitive subset of the policy:
+    // every AI tool gives the assistant a new effector (file write,
+    // network call, …). Adding a tool to the manifest without
+    // re-prompting the user would silently broaden the agent's
+    // power, which is exactly the trust-decision the consent file
+    // exists to track. Compare as a multiset (order-independent,
+    // duplicates honored) so a manifest author reordering the list
+    // doesn't force a re-prompt.
+    if !tools_equal(&current.tools, &consent.policy.tools) {
+        changed.push("tools".to_string());
+    }
 
     if changed.is_empty() {
         Freshness::Fresh
@@ -168,6 +186,22 @@ fn origins_equal(a: &[PromptOrigin], b: &[PromptOrigin]) -> bool {
         return false;
     }
     a.iter().all(|x| b.contains(x))
+}
+
+/// Compare two tool lists as sorted vectors. Order is not
+/// semantically meaningful (manifests can list `["fs.read",
+/// "fs.write"]` or `["fs.write", "fs.read"]` interchangeably) but
+/// duplicates *are* significant — an author shouldn't be able to
+/// pad the same name twice as a denial-of-service.
+fn tools_equal(a: &[String], b: &[String]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut x: Vec<&str> = a.iter().map(String::as_str).collect();
+    let mut y: Vec<&str> = b.iter().map(String::as_str).collect();
+    x.sort_unstable();
+    y.sort_unstable();
+    x == y
 }
 
 /// Render an AiPolicy as a plain-text review block for the CLI
@@ -365,6 +399,63 @@ mod tests {
                 assert!(changed.contains(&"safety".to_string()));
                 assert!(changed.contains(&"origins".to_string()));
             }
+            _ => panic!("expected stale"),
+        }
+    }
+
+    // ---- tools-drift detection (audit fix) ----
+
+    /// A previously-stored consent record that listed `fs.read` only
+    /// must be treated as stale if the manifest now lists
+    /// `fs.read + fs.write`. The user has to re-approve before the
+    /// new tool grant takes effect — otherwise a silent manifest
+    /// update could broaden the agent's powers without consent.
+    #[test]
+    fn consent_drift_on_tools_change() {
+        let mut current = policy(1000, AiSafety::Standard, vec![PromptOrigin::Trusted]);
+        current.tools = vec!["fs.read".to_string()];
+
+        // User approved the original (single-tool) policy.
+        let stored = Consent::approve(current.clone());
+
+        // Now the manifest adds fs.write to the tool list.
+        let mut next = current.clone();
+        next.tools = vec!["fs.read".to_string(), "fs.write".to_string()];
+
+        match freshness(&next, &stored) {
+            Freshness::Stale { changed } => assert!(
+                changed.contains(&"tools".to_string()),
+                "expected 'tools' in changed list, got {changed:?}"
+            ),
+            other => panic!("expected stale on tools change, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn consent_fresh_when_tools_reordered() {
+        let mut current = policy(1000, AiSafety::Standard, vec![PromptOrigin::Trusted]);
+        current.tools = vec!["fs.read".to_string(), "fs.write".to_string()];
+
+        let stored = Consent::approve(current.clone());
+
+        let mut reordered = current;
+        reordered.tools = vec!["fs.write".to_string(), "fs.read".to_string()];
+
+        assert_eq!(freshness(&reordered, &stored), Freshness::Fresh);
+    }
+
+    #[test]
+    fn consent_stale_when_tool_removed() {
+        let mut current = policy(1000, AiSafety::Standard, vec![PromptOrigin::Trusted]);
+        current.tools = vec!["fs.read".to_string(), "fs.write".to_string()];
+
+        let stored = Consent::approve(current.clone());
+
+        let mut next = current;
+        next.tools = vec!["fs.read".to_string()];
+
+        match freshness(&next, &stored) {
+            Freshness::Stale { changed } => assert!(changed.contains(&"tools".to_string())),
             _ => panic!("expected stale"),
         }
     }
