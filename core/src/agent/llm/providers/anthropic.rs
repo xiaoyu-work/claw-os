@@ -150,8 +150,13 @@ pub struct AnthropicProvider {
 
 impl AnthropicProvider {
     pub fn new(cfg: AnthropicConfig) -> Self {
-        let mut builder =
-            reqwest::Client::builder().user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")));
+        let mut builder = reqwest::Client::builder()
+            .user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")))
+            // MEDIUM-14: per-phase HTTP timeout. `connect_timeout`
+            // bounds TCP + TLS independently of the overall request
+            // budget so a black-holed host doesn't tie up a worker.
+            .connect_timeout(Duration::from_secs(5))
+            .pool_idle_timeout(Duration::from_secs(60));
         if cfg.request_timeout > Duration::from_secs(0) {
             builder = builder.timeout(cfg.request_timeout);
         }
@@ -235,16 +240,25 @@ impl Provider for AnthropicProvider {
             .get(reqwest::header::RETRY_AFTER)
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.parse::<u64>().ok());
-        let bytes = match resp.bytes().await {
+        // HIGH-5: cap the response body.
+        let bytes = match crate::agent::llm::read_body_capped(
+            resp,
+            crate::agent::llm::MAX_NONSTREAM_BODY_BYTES,
+        )
+        .await
+        {
             Ok(b) => b,
             Err(e) => {
                 if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                    pool.report_failure(
-                        l,
-                        crate::agent::llm::error_classifier::classify_network_error(),
-                    );
+                    let cls = match &e {
+                        LlmError::UpstreamMalformed(_) => {
+                            crate::agent::llm::credential_pool::FailureClass::Transient
+                        }
+                        _ => crate::agent::llm::error_classifier::classify_network_error(),
+                    };
+                    pool.report_failure(l, cls);
                 }
-                return Err(LlmError::Transport(e));
+                return Err(e);
             }
         };
 
@@ -337,7 +351,12 @@ impl Provider for AnthropicProvider {
             .and_then(|s| s.parse::<u64>().ok());
 
         if !status.is_success() {
-            let bytes = resp.bytes().await.map_err(LlmError::Transport)?;
+            let bytes = crate::agent::llm::read_body_capped(
+                resp,
+                crate::agent::llm::MAX_NONSTREAM_BODY_BYTES,
+            )
+            .await
+            .unwrap_or_default();
             let err = wire::classify_http_error(status, &bytes, retry_after_secs);
             if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
                 let body_str = std::str::from_utf8(&bytes).unwrap_or("");
@@ -347,16 +366,20 @@ impl Provider for AnthropicProvider {
             return Err(err);
         }
 
-        if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-            // Success-on-headers — credit the lease so cooldowns
-            // clear. Subsequent body errors don't penalise (the
-            // upstream did accept the request).
-            pool.report_success(l);
-        }
-
+        // MEDIUM-9: previously we credited the lease as soon as the
+        // upstream returned 200 headers, which masked stalls and
+        // mid-stream failures from the credential pool. We now move
+        // that accounting into `AnthropicStream` so it fires only
+        // when the body actually completes (or, on mid-stream
+        // failure, charges the lease).
         let bytes_stream = resp.bytes_stream();
         let model = self.cfg.model.clone();
-        let stream = wire::AnthropicStream::new(bytes_stream, &model);
+        let stream = wire::AnthropicStream::new(
+            bytes_stream,
+            &model,
+            self.cfg.pool.clone(),
+            lease,
+        );
         Ok(stream.boxed())
     }
 }
@@ -735,13 +758,13 @@ pub(crate) mod wire {
                 .and_then(|e| e.get("message"))
                 .and_then(|m| m.as_str())
             {
-                return msg.to_string();
+                return crate::agent::llm::redact_body_for_error(msg);
             }
             if let Some(msg) = v.get("message").and_then(|m| m.as_str()) {
-                return msg.to_string();
+                return crate::agent::llm::redact_body_for_error(msg);
             }
         }
-        body.chars().take(500).collect()
+        crate::agent::llm::redact_body_for_error(body)
     }
 
     // --- Streaming ----------------------------------------------------------
@@ -1062,10 +1085,19 @@ pub(crate) mod wire {
         converter: StreamConverter,
         pending: std::collections::VecDeque<Result<StreamEvent>>,
         bytes_done: bool,
+        total_bytes: usize,
+        pool: Option<Arc<crate::agent::llm::credential_pool::Pool>>,
+        lease: Option<crate::agent::llm::credential_pool::Lease>,
+        accounted: bool,
     }
 
     impl AnthropicStream {
-        pub(crate) fn new<S>(bytes: S, default_model: &str) -> Self
+        pub(crate) fn new<S>(
+            bytes: S,
+            default_model: &str,
+            pool: Option<Arc<crate::agent::llm::credential_pool::Pool>>,
+            lease: Option<crate::agent::llm::credential_pool::Lease>,
+        ) -> Self
         where
             S: futures_util::Stream<Item = std::result::Result<bytes::Bytes, reqwest::Error>>
                 + Send
@@ -1077,6 +1109,10 @@ pub(crate) mod wire {
                 converter: StreamConverter::new(default_model),
                 pending: std::collections::VecDeque::new(),
                 bytes_done: false,
+                total_bytes: 0,
+                pool,
+                lease,
+                accounted: false,
             }
         }
 
@@ -1084,6 +1120,43 @@ pub(crate) mod wire {
             while let Some(sse) = self.parser.pop_event() {
                 let events = self.converter.process(&sse);
                 self.pending.extend(events);
+            }
+        }
+
+        /// Translate an SSE parser-level overflow into a stream error
+        /// the caller can surface as `LlmError::UpstreamMalformed`.
+        /// Once called, the byte source is considered drained so the
+        /// stream terminates after this single error.
+        fn surface_sse_overflow(&mut self, e: crate::agent::llm::sse::SseOverflow) {
+            self.pending.push_back(Err(LlmError::UpstreamMalformed(
+                format!("anthropic stream: {e}"),
+            )));
+            self.bytes_done = true;
+            self.report_failure_once(
+                crate::agent::llm::credential_pool::FailureClass::Transient,
+            );
+        }
+
+        fn report_success_once(&mut self) {
+            if self.accounted {
+                return;
+            }
+            self.accounted = true;
+            if let (Some(p), Some(l)) = (&self.pool, &self.lease) {
+                p.report_success(l);
+            }
+        }
+
+        fn report_failure_once(
+            &mut self,
+            cls: crate::agent::llm::credential_pool::FailureClass,
+        ) {
+            if self.accounted {
+                return;
+            }
+            self.accounted = true;
+            if let (Some(p), Some(l)) = (&self.pool, &self.lease) {
+                p.report_failure(l, cls);
             }
         }
     }
@@ -1098,6 +1171,17 @@ pub(crate) mod wire {
             use std::task::Poll;
             loop {
                 if let Some(ev) = self.pending.pop_front() {
+                    // MEDIUM-9: credit / charge the lease only when
+                    // the body actually finishes. The terminal `Done`
+                    // event means the stream completed successfully;
+                    // any prior error is charged as Transient.
+                    if matches!(ev, Ok(StreamEvent::Done { .. })) {
+                        self.report_success_once();
+                    } else if matches!(ev, Err(_)) {
+                        self.report_failure_once(
+                            crate::agent::llm::credential_pool::FailureClass::Transient,
+                        );
+                    }
                     return Poll::Ready(Some(ev));
                 }
                 if self.bytes_done {
@@ -1106,13 +1190,34 @@ pub(crate) mod wire {
                 match std::pin::Pin::new(&mut self.bytes).poll_next(cx) {
                     Poll::Pending => return Poll::Pending,
                     Poll::Ready(None) => {
-                        self.parser.finish();
+                        if let Err(e) = self.parser.finish() {
+                            self.surface_sse_overflow(e);
+                            continue;
+                        }
                         self.drain_parser();
                         self.bytes_done = true;
                         continue;
                     }
                     Poll::Ready(Some(Ok(chunk))) => {
-                        self.parser.feed(&chunk);
+                        self.total_bytes =
+                            self.total_bytes.saturating_add(chunk.len());
+                        if self.total_bytes > crate::agent::llm::MAX_STREAM_TOTAL_BYTES {
+                            self.pending.push_back(Err(LlmError::UpstreamMalformed(
+                                format!(
+                                    "anthropic stream exceeded {} bytes",
+                                    crate::agent::llm::MAX_STREAM_TOTAL_BYTES
+                                ),
+                            )));
+                            self.bytes_done = true;
+                            self.report_failure_once(
+                                crate::agent::llm::credential_pool::FailureClass::Transient,
+                            );
+                            continue;
+                        }
+                        if let Err(e) = self.parser.feed(&chunk) {
+                            self.surface_sse_overflow(e);
+                            continue;
+                        }
                         self.drain_parser();
                         // If converter signalled finish, drop any
                         // remaining buffered bytes.
@@ -1124,6 +1229,9 @@ pub(crate) mod wire {
                     Poll::Ready(Some(Err(e))) => {
                         self.pending.push_back(Err(LlmError::Transport(e)));
                         self.bytes_done = true;
+                        self.report_failure_once(
+                            crate::agent::llm::error_classifier::classify_network_error(),
+                        );
                         continue;
                     }
                 }
@@ -2245,7 +2353,7 @@ mod tests {
 
         async fn collect(chunks: Vec<Bytes>) -> Vec<Result<StreamEvent>> {
             let bytes_stream = stream::iter(chunks.into_iter().map(Ok::<_, reqwest::Error>));
-            let mut s = wire::AnthropicStream::new(bytes_stream, "claude-x");
+            let mut s = wire::AnthropicStream::new(bytes_stream, "claude-x", None, None);
             let mut out = Vec::new();
             while let Some(ev) = s.next().await {
                 out.push(ev);

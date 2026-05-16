@@ -361,7 +361,104 @@ pub fn record(rec: &LlmRunRecord) {
 ///     polluting the host's log dir.
 pub fn record_to_path(rec: &LlmRunRecord, path: &Path) -> Result<(), String> {
     let line = serde_json::to_string(rec).map_err(|e| format!("serialize: {e}"))?;
-    crate::filelock::append_locked(path, &line)
+    // MEDIUM-8: previously we routed through `filelock::append_locked`,
+    // which holds an `flock(LOCK_EX)` and writes the line — but never
+    // fsyncs the file and never rotates. A crash within seconds of a
+    // call could lose audit records and the file grows unbounded.
+    // We now use a local helper that:
+    //   1. Holds the same `flock(LOCK_EX)` so concurrent writes are
+    //      still serialised across processes (kernel + sidecars).
+    //   2. fsyncs the file before releasing the lock so the kernel
+    //      page cache is flushed.
+    //   3. Rotates the file once it grows past
+    //      `RUN_LOG_ROTATE_BYTES` (50 MiB) by renaming the old file
+    //      to `.1` (overwriting any prior `.1`). Single-generation
+    //      rotation is plenty for an append-only audit trail.
+    // TODO(kernel-core): consider promoting this into `filelock` so
+    // every audit-style log (audit.jsonl, watch history, …) gets
+    // the same fsync + rotation guarantees.
+    append_locked_with_rotation(path, &line, RUN_LOG_ROTATE_BYTES)
+}
+
+/// Rotation threshold for the AI run log. Above this size the file is
+/// renamed to `<path>.1` on the next write. 50 MiB ≈ ~50–100k entries
+/// at our typical record size — enough to retain a day's worth of
+/// audit on a busy host without consuming gigabytes.
+pub const RUN_LOG_ROTATE_BYTES: u64 = 50 * 1024 * 1024;
+
+/// Append `line` to `path` under an exclusive `flock`, fsync the file
+/// before releasing the lock, and rotate the file to `<path>.1`
+/// when it exceeds `rotate_bytes` (single-generation rotation).
+fn append_locked_with_rotation(
+    path: &Path,
+    line: &str,
+    rotate_bytes: u64,
+) -> Result<(), String> {
+    use std::fs::{self, OpenOptions};
+    use std::io::Write;
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+    }
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| format!("open {}: {e}", path.display()))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+        if ret != 0 {
+            return Err(format!(
+                "flock LOCK_EX {}: {}",
+                path.display(),
+                std::io::Error::last_os_error()
+            ));
+        }
+    }
+
+    writeln!(file, "{line}").map_err(|e| format!("write {}: {e}", path.display()))?;
+    // Flush user-space buffers, then ask the kernel to commit to
+    // disk. We accept the throughput cost — audit must be durable.
+    file.flush()
+        .map_err(|e| format!("flush {}: {e}", path.display()))?;
+    file.sync_data()
+        .map_err(|e| format!("fsync {}: {e}", path.display()))?;
+
+    // Check size AFTER write under the same lock. If we overshot,
+    // rotate to `<path>.1`. The next write will create a fresh
+    // `<path>` from scratch.
+    let size = file
+        .metadata()
+        .map(|m| m.len())
+        .map_err(|e| format!("stat {}: {e}", path.display()))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        unsafe {
+            libc::flock(file.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+    drop(file);
+
+    if size > rotate_bytes {
+        let mut backup = path.as_os_str().to_owned();
+        backup.push(".1");
+        let backup = std::path::PathBuf::from(backup);
+        // Best-effort: a rename failure shouldn't block the write
+        // we just successfully fsynced.
+        if let Err(e) = fs::rename(path, &backup) {
+            tracing::warn!(
+                "run_log: rotation of {} → {} failed: {e}",
+                path.display(),
+                backup.display()
+            );
+        }
+    }
+    Ok(())
 }
 
 /// `<log_dir>/ai.jsonl`. Re-exported for callers that want the path

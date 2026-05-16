@@ -237,8 +237,11 @@ pub struct BedrockProvider {
 
 impl BedrockProvider {
     pub fn new(cfg: BedrockConfig) -> Self {
-        let mut builder =
-            reqwest::Client::builder().user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")));
+        let mut builder = reqwest::Client::builder()
+            .user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")))
+            // MEDIUM-14: per-phase HTTP timeout.
+            .connect_timeout(Duration::from_secs(5))
+            .pool_idle_timeout(Duration::from_secs(60));
         if cfg.request_timeout > Duration::from_secs(0) {
             builder = builder.timeout(cfg.request_timeout);
         }
@@ -375,7 +378,11 @@ impl Provider for BedrockProvider {
             .or_else(|| resp.headers().get("X-Amzn-Errortype"))
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
-        let bytes = resp.bytes().await.map_err(LlmError::Transport)?;
+        let bytes = crate::agent::llm::read_body_capped(
+            resp,
+            crate::agent::llm::MAX_NONSTREAM_BODY_BYTES,
+        )
+        .await?;
 
         if !status.is_success() {
             return Err(classify_bedrock_error(
@@ -388,8 +395,8 @@ impl Provider for BedrockProvider {
 
         // Body shape is identical to Anthropic's Messages API
         // response — reuse the parser.
-        let parsed: anthropic_wire::Response =
-            serde_json::from_slice(&bytes).map_err(|e| LlmError::Parse(e.to_string()))?;
+        let parsed: anthropic_wire::Response = serde_json::from_slice(&bytes)
+            .map_err(|e| LlmError::UpstreamMalformed(format!("bedrock response: {e}")))?;
         anthropic_wire::response_to_chat(parsed, &self.cfg.model)
     }
 
@@ -468,7 +475,12 @@ impl Provider for BedrockProvider {
             // before model engagement, ModelNotReadyException, etc).
             // Body is small JSON; read it synchronously so the error
             // we surface includes the AWS message.
-            let bytes = resp.bytes().await.map_err(LlmError::Transport)?;
+            let bytes = crate::agent::llm::read_body_capped(
+                resp,
+                crate::agent::llm::MAX_NONSTREAM_BODY_BYTES,
+            )
+            .await
+            .unwrap_or_default();
             return Err(classify_bedrock_error(
                 status,
                 &bytes,
@@ -523,7 +535,8 @@ fn classify_bedrock_error(
 ) -> LlmError {
     let body_text = String::from_utf8_lossy(body).to_string();
     let upstream_message = extract_aws_error_message(&body_text)
-        .unwrap_or_else(|| body_text.chars().take(500).collect::<String>());
+        .map(|m| crate::agent::llm::redact_body_for_error(&m))
+        .unwrap_or_else(|| crate::agent::llm::redact_body_for_error(&body_text));
 
     // Specific AWS error types take precedence over status code.
     if let Some(t) = amz_error_type {

@@ -30,7 +30,7 @@
 //!   HTTP 429 with `Retry-After` header.
 
 use async_trait::async_trait;
-use futures_util::stream::{self, BoxStream, StreamExt};
+use futures_util::stream::{BoxStream, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -150,8 +150,13 @@ pub struct GeminiProvider {
 
 impl GeminiProvider {
     pub fn new(cfg: GeminiConfig) -> Self {
-        let mut builder =
-            reqwest::Client::builder().user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")));
+        let mut builder = reqwest::Client::builder()
+            .user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")))
+            // MEDIUM-14: cap the TCP/TLS handshake separately from
+            // the overall request budget so a black-holed DNS or
+            // firewalled host can't tie up the kernel.
+            .connect_timeout(Duration::from_secs(5))
+            .pool_idle_timeout(Duration::from_secs(60));
         if cfg.request_timeout > Duration::from_secs(0) {
             builder = builder.timeout(cfg.request_timeout);
         }
@@ -235,16 +240,26 @@ impl Provider for GeminiProvider {
             .get(reqwest::header::RETRY_AFTER)
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.parse::<u64>().ok());
-        let bytes = match resp.bytes().await {
+        // HIGH-5: bound the response body so a hostile upstream
+        // can't OOM the kernel.
+        let bytes = match crate::agent::llm::read_body_capped(
+            resp,
+            crate::agent::llm::MAX_NONSTREAM_BODY_BYTES,
+        )
+        .await
+        {
             Ok(b) => b,
             Err(e) => {
                 if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                    pool.report_failure(
-                        l,
-                        crate::agent::llm::error_classifier::classify_network_error(),
-                    );
+                    let cls = match &e {
+                        LlmError::UpstreamMalformed(_) => {
+                            crate::agent::llm::credential_pool::FailureClass::Transient
+                        }
+                        _ => crate::agent::llm::error_classifier::classify_network_error(),
+                    };
+                    pool.report_failure(l, cls);
                 }
-                return Err(LlmError::Transport(e));
+                return Err(e);
             }
         };
 
@@ -261,13 +276,20 @@ impl Provider for GeminiProvider {
         let parsed: wire::Response = match serde_json::from_slice(&bytes) {
             Ok(p) => p,
             Err(e) => {
+                // MEDIUM-12: a 2xx with un-parseable body is the
+                // upstream's bug, not ours. Mark the lease as
+                // Transient (don't permanently penalise the key)
+                // and surface as UpstreamMalformed so callers can
+                // distinguish from caller-side bugs.
                 if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
                     pool.report_failure(
                         l,
-                        crate::agent::llm::credential_pool::FailureClass::CallerError,
+                        crate::agent::llm::credential_pool::FailureClass::Transient,
                     );
                 }
-                return Err(LlmError::Parse(e.to_string()));
+                return Err(LlmError::UpstreamMalformed(format!(
+                    "gemini response: {e}"
+                )));
             }
         };
 
@@ -284,14 +306,37 @@ impl Provider for GeminiProvider {
         &self,
         request: ChatRequest,
     ) -> Result<BoxStream<'static, Result<StreamEvent>>> {
+        // HIGH-4: real SSE delta streaming requires speaking
+        // Gemini's `:streamGenerateContent?alt=sse` endpoint, which
+        // differs enough from generateContent that wiring it is a
+        // larger refactor (incremental candidate parts + finish
+        // events). Until that lands, we route through `chat()` so
+        // callers at least get the (now body-capped) full response;
+        // the shim still surfaces TextDelta + Done so downstream
+        // streaming consumers don't break.
+        //
+        // TODO: implement an OpenAi-style streaming converter for
+        // Gemini's SSE shape (see openai_compat::wire::OpenAiStream
+        // for the pattern). Tracked in the LLM hardening backlog.
         let response = self.chat(request).await?;
         let finish = response.finish_reason;
         let usage = response.usage.clone();
-        let events: Vec<std::result::Result<StreamEvent, LlmError>> = vec![
-            Ok(StreamEvent::Message(response)),
-            Ok(StreamEvent::Done { finish, usage }),
-        ];
-        Ok(stream::iter(events).boxed())
+        let mut events: Vec<std::result::Result<StreamEvent, LlmError>> = Vec::new();
+        // Surface any text content as a single TextDelta so the
+        // caller's SSE consumer sees the same event shape as a real
+        // streaming provider.
+        for block in &response.content {
+            if let ContentBlock::Text { text } = block {
+                if !text.is_empty() {
+                    events.push(Ok(StreamEvent::TextDelta {
+                        text: text.clone(),
+                    }));
+                }
+            }
+        }
+        events.push(Ok(StreamEvent::Message(response)));
+        events.push(Ok(StreamEvent::Done { finish, usage }));
+        Ok(futures_util::stream::iter(events).boxed())
     }
 }
 
@@ -637,10 +682,13 @@ pub(crate) mod wire {
                 .and_then(|e| e.get("message"))
                 .and_then(|m| m.as_str())
             {
-                return msg.to_string();
+                return crate::agent::llm::redact_body_for_error(msg);
             }
         }
-        body.chars().take(500).collect()
+        // SECURITY: error bodies frequently echo prompts + key
+        // fragments. Run through the bearer / API-key masking
+        // helper before surfacing.
+        crate::agent::llm::redact_body_for_error(body)
     }
 }
 

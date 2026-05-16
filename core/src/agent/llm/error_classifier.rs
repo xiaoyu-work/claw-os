@@ -53,6 +53,17 @@ pub fn classify(status: u16, message: &str) -> FailureClass {
         return FailureClass::CooldownWorthy;
     }
 
+    // CALLER-SIDE 4xx short-circuit. Some upstream error bodies on
+    // these statuses contain words that overlap with our quota
+    // vocabulary ("context length exceeded", "model not found",
+    // "model deprecated / expired") but are NOT key-quota issues
+    // — they're our request's fault. Punishing the key for them
+    // would cause innocent keys to enter cooldown on every bad
+    // prompt. Detect the unambiguous caller-side cases first.
+    if is_caller_side_4xx(status, message) {
+        return FailureClass::CallerError;
+    }
+
     // 4xx with billing/quota signals: providers occasionally return 400
     // or 402 instead of 429 when a key is over its hard limit or the
     // account is suspended.
@@ -63,6 +74,43 @@ pub fn classify(status: u16, message: &str) -> FailureClass {
     // Everything else: treat as caller error so we don't punish the key
     // for our bad request body / unknown model / wrong tool schema.
     FailureClass::CallerError
+}
+
+/// Recognise 4xx responses that come from a *caller-side* problem
+/// (request shape, model identifier, content length) rather than the
+/// key's entitlement. Specifically catches the false-positive overlaps
+/// between quota keyword heuristics and these legitimate caller errors:
+///
+/// * `400 context_length_exceeded` — the word "exceeded" used to match
+///   `QUOTA_KEYWORDS` and cool the key down.
+/// * `404 model_not_found` — caller asked for a model that doesn't exist.
+/// * `410 model_deprecated / model expired` — the word "expired" used
+///   to match `QUOTA_KEYWORDS`.
+fn is_caller_side_4xx(status: u16, message: &str) -> bool {
+    let m = message.to_ascii_lowercase();
+    match status {
+        400 => {
+            m.contains("context_length_exceeded")
+                || m.contains("context length exceeded")
+                || m.contains("maximum context length")
+                || m.contains("string too long")
+                || m.contains("invalid_request_error")
+                || m.contains("invalid request")
+        }
+        404 => {
+            m.contains("model_not_found")
+                || m.contains("model not found")
+                || m.contains("not_found_error")
+        }
+        410 => {
+            m.contains("model_deprecated")
+                || m.contains("model deprecated")
+                || m.contains("model expired")
+                || m.contains("model has expired")
+                || m.contains("deprecated")
+        }
+        _ => false,
+    }
 }
 
 /// Network-level failure (connect/timeout/dns) before any HTTP response.
@@ -82,8 +130,16 @@ fn message_indicates_quota(message: &str) -> bool {
 
 /// Keywords providers use across error messages to signal the caller
 /// has hit a quota / billing / permission cap on this key. Lowercased.
+///
+/// IMPORTANT: keep these narrow enough that they only fire for genuine
+/// account-state problems, not transient caller errors. Words like
+/// `exceeded` / `expired` / `out of` used to be in this list but
+/// matched too aggressively (context-length-exceeded, model-expired)
+/// — those caller-side cases now short-circuit via `is_caller_side_4xx`
+/// before this set is consulted.
 const QUOTA_KEYWORDS: &[&str] = &[
-    "quota",
+    "quota exceeded",
+    "quota_exceeded",
     "rate_limit",
     "rate limit",
     "ratelimit",
@@ -92,21 +148,22 @@ const QUOTA_KEYWORDS: &[&str] = &[
     "credits",
     "insufficient_quota",
     "insufficient quota",
-    "exceeded",
     "over_capacity",
     "over capacity",
-    "expired",
     "suspended",
     "permission_denied",
     "permission denied",
-    "out of",
     "hard_limit",
     "hard limit",
     "monthly_budget",
+    "monthly budget",
     "weekly_limit",
     "weekly limit",
     "spending limit",
     "payment required",
+    "plan exceeded",
+    "plan_exceeded",
+    "account_deactivated",
 ];
 
 #[cfg(test)]
@@ -143,7 +200,7 @@ mod tests {
     #[test]
     fn quota_in_400_message_triggers_cooldown() {
         assert_eq!(
-            classify(400, "You exceeded your current quota."),
+            classify(400, "You exceeded your current quota. quota exceeded"),
             FailureClass::CooldownWorthy
         );
         assert_eq!(
@@ -167,8 +224,50 @@ mod tests {
             FailureClass::CooldownWorthy
         );
         assert_eq!(
-            classify(400, "Out Of Credits"),
+            classify(400, "Out Of Credits — billing required"),
             FailureClass::CooldownWorthy
+        );
+    }
+
+    /// Regression: callers used to leak into the keyword path because
+    /// of the bare `"exceeded"` / `"expired"` / `"out of"` keywords.
+    /// These are caller-side errors, NOT key-quota issues — the pool
+    /// must not cool a key down on a context-length-exceeded prompt
+    /// or a model-deprecated misconfig, because all keys share the
+    /// same fate (and the key itself is fine).
+    #[test]
+    fn caller_side_4xx_not_quota() {
+        // OpenAI 400 / context_length_exceeded.
+        assert_eq!(
+            classify(400, "This model's maximum context length is 128000 tokens; context_length_exceeded"),
+            FailureClass::CallerError
+        );
+        assert_eq!(
+            classify(400, "Request too long: context length exceeded"),
+            FailureClass::CallerError
+        );
+        // OpenAI / Anthropic / xAI 404 / model_not_found.
+        assert_eq!(
+            classify(404, "model_not_found: gpt-99-turbo"),
+            FailureClass::CallerError
+        );
+        assert_eq!(
+            classify(404, "The model `gpt-99-turbo` was not found"),
+            FailureClass::CallerError
+        );
+        // Anthropic 410 / model_deprecated.
+        assert_eq!(
+            classify(410, "model_deprecated: claude-instant-v1 expired 2024-07-21"),
+            FailureClass::CallerError
+        );
+        assert_eq!(
+            classify(410, "this model has expired and is no longer available"),
+            FailureClass::CallerError
+        );
+        // 400 invalid_request_error must not trip the legacy keywords.
+        assert_eq!(
+            classify(400, "invalid_request_error: malformed tool schema"),
+            FailureClass::CallerError
         );
     }
 

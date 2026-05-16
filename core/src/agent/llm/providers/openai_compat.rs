@@ -25,7 +25,7 @@
 //! keep the contract stable across upstreams.
 
 use async_trait::async_trait;
-use futures_util::stream::{self, BoxStream, StreamExt};
+use futures_util::stream::{BoxStream, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -228,8 +228,14 @@ pub struct OpenAICompatProvider {
 
 impl OpenAICompatProvider {
     pub fn new(cfg: OpenAICompatConfig) -> Self {
-        let mut builder =
-            reqwest::Client::builder().user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")));
+        let mut builder = reqwest::Client::builder()
+            .user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")))
+            // MEDIUM-14: per-phase timeouts. `request_timeout` covers
+            // the whole call; `connect_timeout` bounds just the TCP +
+            // TLS handshake so a black-holed DNS / firewalled host
+            // can't tie up a worker for the full request budget.
+            .connect_timeout(Duration::from_secs(5))
+            .pool_idle_timeout(Duration::from_secs(60));
         if cfg.request_timeout > Duration::from_secs(0) {
             builder = builder.timeout(cfg.request_timeout);
         }
@@ -416,16 +422,26 @@ impl Provider for OpenAICompatProvider {
             }
         };
         let status = resp.status();
-        let bytes = match resp.bytes().await {
+        // SECURITY: cap the response body so a hostile upstream can't
+        // OOM us with a multi-GiB blob (HIGH-5).
+        let bytes = match crate::agent::llm::read_body_capped(
+            resp,
+            crate::agent::llm::MAX_NONSTREAM_BODY_BYTES,
+        )
+        .await
+        {
             Ok(b) => b,
             Err(e) => {
                 if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                    pool.report_failure(
-                        l,
-                        crate::agent::llm::error_classifier::classify_network_error(),
-                    );
+                    let cls = match &e {
+                        LlmError::UpstreamMalformed(_) => {
+                            crate::agent::llm::credential_pool::FailureClass::Transient
+                        }
+                        _ => crate::agent::llm::error_classifier::classify_network_error(),
+                    };
+                    pool.report_failure(l, cls);
                 }
-                return Err(LlmError::Transport(e));
+                return Err(e);
             }
         };
 
@@ -469,17 +485,125 @@ impl Provider for OpenAICompatProvider {
         &self,
         request: ChatRequest,
     ) -> Result<BoxStream<'static, Result<StreamEvent>>> {
-        // Phase 1: ship a non-SSE shim — call chat() then emit
-        // Message + Done. Real SSE delta streaming lands in Phase 5
-        // (alongside prompt caching) once a use case demands it.
-        let response = self.chat(request).await?;
-        let finish = response.finish_reason;
-        let usage = response.usage.clone();
-        let events: Vec<std::result::Result<StreamEvent, LlmError>> = vec![
-            Ok(StreamEvent::Message(response)),
-            Ok(StreamEvent::Done { finish, usage }),
-        ];
-        Ok(stream::iter(events).boxed())
+        // HIGH-4: real SSE delta streaming. Build the request body
+        // with stream:true, POST it, validate the HTTP status
+        // synchronously (so 401/429/5xx surface immediately), then
+        // wrap the body's bytes_stream in the OpenAI SSE converter
+        // below, which emits TextDelta / ToolUseStart /
+        // ToolInputDelta / ToolUse / Done events as the upstream
+        // deltas arrive.
+        if self.cfg.alias == "azure" && self.cfg.base_url.is_empty() {
+            return Err(LlmError::NotConfigured(
+                "azure provider needs `agent.base_url` set".into(),
+            ));
+        }
+        let body = wire::build_request_body(&request, &self.cfg.model, true);
+
+        let lease = if let Some(pool) = &self.cfg.pool {
+            match pool.acquire() {
+                Ok(l) => Some(l),
+                Err(e) => return Err(LlmError::NotConfigured(format!("pool: {e}"))),
+            }
+        } else {
+            None
+        };
+
+        let (bearer_owned, endpoint_url) = if alias_is_copilot(&self.cfg.alias) {
+            let github_token = match &lease {
+                Some(l) => l.value().to_string(),
+                None => match self.cfg.api_key.as_deref() {
+                    Some(k) => k.to_string(),
+                    None => {
+                        return Err(LlmError::NotConfigured(
+                            "GitHub Copilot is not signed in".into(),
+                        ));
+                    }
+                },
+            };
+            let resolved = match super::copilot_auth::ensure_copilot_token(&github_token).await {
+                Ok(t) => t,
+                Err(e) => return Err(LlmError::NotConfigured(format!("copilot auth: {e}"))),
+            };
+            (Some(resolved.bearer), endpoint_from_base(&resolved.base_url))
+        } else {
+            let bearer = match &lease {
+                Some(l) => Some(l.value().to_string()),
+                None => self.cfg.api_key.clone(),
+            };
+            (bearer, self.endpoint())
+        };
+
+        let mut http = self
+            .client
+            .post(&endpoint_url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "text/event-stream")
+            .json(&body);
+
+        if let Some(key) = bearer_owned.as_deref() {
+            if alias_uses_api_key_header(&self.cfg.alias) {
+                http = http.header("api-key", key);
+            } else {
+                http = http.bearer_auth(key);
+            }
+        }
+        for (k, v) in &self.cfg.extra_headers {
+            http = http.header(k.as_str(), v.as_str());
+        }
+        if alias_is_copilot(&self.cfg.alias) {
+            http = http
+                .header("Editor-Version", super::copilot_auth::EDITOR_VERSION)
+                .header(
+                    "Copilot-Integration-Id",
+                    super::copilot_auth::COPILOT_INTEGRATION_ID,
+                );
+        }
+
+        let resp = match http.send().await {
+            Ok(r) => r,
+            Err(e) => {
+                if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
+                    pool.report_failure(
+                        l,
+                        crate::agent::llm::error_classifier::classify_network_error(),
+                    );
+                }
+                return Err(LlmError::Transport(e));
+            }
+        };
+
+        let status = resp.status();
+        if !status.is_success() {
+            // Reuse the body cap so an error response can't OOM us
+            // either.
+            let bytes = crate::agent::llm::read_body_capped(
+                resp,
+                crate::agent::llm::MAX_NONSTREAM_BODY_BYTES,
+            )
+            .await
+            .unwrap_or_default();
+            let err = wire::classify_http_error(status, &bytes);
+            if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
+                let body_str = std::str::from_utf8(&bytes).unwrap_or("");
+                let cls = crate::agent::llm::error_classifier::classify(status.as_u16(), body_str);
+                pool.report_failure(l, cls);
+            }
+            return Err(err);
+        }
+
+        // MEDIUM-9 / streaming success accounting: credit the lease
+        // only when the body's `[DONE]` event lands, not here on
+        // headers. Pass the lease into the stream so it can call
+        // report_success / report_failure at the right boundary.
+        let bytes_stream = resp.bytes_stream();
+        let model = self.cfg.model.clone();
+        let stream = wire::OpenAiStream::new(
+            bytes_stream,
+            model,
+            self.cfg.pool.clone(),
+            lease,
+        );
+        Ok(stream.boxed())
     }
 }
 
@@ -813,8 +937,26 @@ pub(crate) mod wire {
         }
 
         for tc in choice.message.tool_calls {
-            let parsed: serde_json::Value =
-                serde_json::from_str(&tc.function.arguments).unwrap_or(serde_json::Value::Null);
+            // MEDIUM-11: An upstream that returns malformed JSON in
+            // `function.arguments` used to silently null-out the
+            // payload, hiding bugs that would later surface deep
+            // inside the tool runner. Empty arguments are legal
+            // (the tool takes no input); anything else must parse.
+            let args_raw = tc.function.arguments.trim();
+            let parsed: serde_json::Value = if args_raw.is_empty() {
+                serde_json::Value::Object(serde_json::Map::new())
+            } else {
+                match serde_json::from_str(args_raw) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return Err(LlmError::UpstreamMalformed(format!(
+                            "tool_calls[{name}].arguments is not valid JSON: {err}",
+                            name = tc.function.name,
+                            err = e
+                        )));
+                    }
+                }
+            };
             content_blocks.push(ContentBlock::ToolUse {
                 id: tc.id.clone(),
                 name: tc.function.name.clone(),
@@ -880,13 +1022,16 @@ pub(crate) mod wire {
                 .and_then(|e| e.get("message"))
                 .and_then(|m| m.as_str())
             {
-                return msg.to_string();
+                return crate::agent::llm::redact_body_for_error(msg);
             }
             if let Some(msg) = v.get("message").and_then(|m| m.as_str()) {
-                return msg.to_string();
+                return crate::agent::llm::redact_body_for_error(msg);
             }
         }
-        body.chars().take(500).collect()
+        // SECURITY: error bodies routinely echo prompts + key
+        // fragments. Run them through the bearer / API-key
+        // masking helper before surfacing.
+        crate::agent::llm::redact_body_for_error(body)
     }
 
     fn extract_retry_after_ms(body: &str) -> Option<u64> {
@@ -899,6 +1044,419 @@ pub(crate) mod wire {
             .collect();
         let secs: f64 = num.parse().ok()?;
         Some((secs * 1000.0) as u64)
+    }
+
+    // -------------------------------------------------------------------
+    // Streaming
+    // -------------------------------------------------------------------
+    //
+    // OpenAI's `stream=true` shape:
+    //
+    //   data: {"choices":[{"delta":{"content":"hi"},"index":0,"finish_reason":null}]}
+    //   data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_x","type":"function","function":{"name":"f","arguments":""}}]}}]}
+    //   data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"a\""}}]}}]}
+    //   ...
+    //   data: [DONE]
+    //
+    // Tool-call args arrive incrementally; we buffer them per index
+    // and emit a single `ToolUse` event with the parsed JSON when
+    // the stream finishes (or, on `[DONE]`, attempt a final parse).
+
+    #[derive(Debug, Deserialize)]
+    struct StreamChunk {
+        #[serde(default)]
+        choices: Vec<StreamChoice>,
+        #[serde(default)]
+        usage: Option<UsageJson>,
+        #[serde(default)]
+        model: Option<String>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct StreamChoice {
+        #[serde(default)]
+        delta: StreamDelta,
+        #[serde(default)]
+        finish_reason: Option<String>,
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    struct StreamDelta {
+        #[serde(default)]
+        content: Option<String>,
+        #[serde(default)]
+        tool_calls: Vec<StreamToolCall>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct StreamToolCall {
+        #[serde(default)]
+        index: usize,
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        function: Option<StreamToolFunction>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct StreamToolFunction {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        arguments: Option<String>,
+    }
+
+    struct PartialToolCall {
+        id: String,
+        name: String,
+        args_buf: String,
+        started: bool,
+    }
+
+    pub(crate) struct OpenAiStreamConverter {
+        model: String,
+        usage: Usage,
+        finish: FinishReason,
+        tool_calls: std::collections::BTreeMap<usize, PartialToolCall>,
+        finished: bool,
+    }
+
+    impl OpenAiStreamConverter {
+        pub(crate) fn new(model: String) -> Self {
+            Self {
+                model,
+                usage: Usage::default(),
+                finish: FinishReason::Stop,
+                tool_calls: std::collections::BTreeMap::new(),
+                finished: false,
+            }
+        }
+
+        pub(crate) fn is_finished(&self) -> bool {
+            self.finished
+        }
+
+        /// Process a single SSE event. Returns the StreamEvents to
+        /// surface to the caller, in order.
+        pub(crate) fn process(
+            &mut self,
+            sse: &crate::agent::llm::sse::SseEvent,
+        ) -> Vec<Result<StreamEvent>> {
+            if self.finished {
+                return Vec::new();
+            }
+            let data = sse.data.trim();
+            if data.is_empty() {
+                return Vec::new();
+            }
+            if data == "[DONE]" {
+                return self.finish_stream();
+            }
+            let chunk: StreamChunk = match serde_json::from_str(data) {
+                Ok(c) => c,
+                Err(e) => {
+                    self.finished = true;
+                    return vec![Err(LlmError::UpstreamMalformed(format!(
+                        "openai stream chunk: {e}"
+                    )))];
+                }
+            };
+
+            if let Some(m) = chunk.model {
+                self.model = m;
+            }
+            if let Some(u) = chunk.usage {
+                self.usage = Usage {
+                    input_tokens: u.prompt_tokens,
+                    output_tokens: u.completion_tokens,
+                    ..Default::default()
+                };
+            }
+
+            let mut out: Vec<Result<StreamEvent>> = Vec::new();
+            for ch in chunk.choices {
+                if let Some(text) = ch.delta.content {
+                    if !text.is_empty() {
+                        out.push(Ok(StreamEvent::TextDelta { text }));
+                    }
+                }
+                for tc in ch.delta.tool_calls {
+                    let slot =
+                        self.tool_calls.entry(tc.index).or_insert_with(|| PartialToolCall {
+                            id: String::new(),
+                            name: String::new(),
+                            args_buf: String::new(),
+                            started: false,
+                        });
+                    if let Some(id) = tc.id {
+                        slot.id = id;
+                    }
+                    if let Some(f) = tc.function {
+                        if let Some(n) = f.name {
+                            if !n.is_empty() {
+                                slot.name = n;
+                            }
+                        }
+                        if let Some(args) = f.arguments {
+                            // Emit a single ToolUseStart on first
+                            // delta for this index, then stream args
+                            // as ToolInputDelta. We tolerate the
+                            // case where `id` arrives in a later
+                            // chunk by using a synthesised id until
+                            // it lands.
+                            if !slot.started && (!slot.name.is_empty() || !slot.id.is_empty()) {
+                                let id = if slot.id.is_empty() {
+                                    format!("tool_{}", tc.index)
+                                } else {
+                                    slot.id.clone()
+                                };
+                                let name = slot.name.clone();
+                                out.push(Ok(StreamEvent::ToolUseStart { id, name }));
+                                slot.started = true;
+                            }
+                            if !args.is_empty() {
+                                slot.args_buf.push_str(&args);
+                                if slot.started {
+                                    out.push(Ok(StreamEvent::ToolInputDelta {
+                                        id: if slot.id.is_empty() {
+                                            format!("tool_{}", tc.index)
+                                        } else {
+                                            slot.id.clone()
+                                        },
+                                        partial_json: args,
+                                    }));
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(fr) = ch.finish_reason {
+                    self.finish = match fr.as_str() {
+                        "stop" | "end_turn" => FinishReason::Stop,
+                        "length" | "max_tokens" => FinishReason::Length,
+                        "tool_calls" | "function_call" => FinishReason::ToolUse,
+                        "content_filter" => FinishReason::ContentFilter,
+                        _ => FinishReason::Other,
+                    };
+                }
+            }
+            out
+        }
+
+        /// Flush buffered tool calls and emit the terminal `Done`
+        /// event. Idempotent — repeated invocations are no-ops once
+        /// finished.
+        pub(crate) fn finish_stream(&mut self) -> Vec<Result<StreamEvent>> {
+            if self.finished {
+                return Vec::new();
+            }
+            self.finished = true;
+            let mut out: Vec<Result<StreamEvent>> = Vec::new();
+            // Flush any unstarted tool calls (no name yet → impossible
+            // but be defensive) and accumulate parsed args into a
+            // ToolUse event each.
+            let calls = std::mem::take(&mut self.tool_calls);
+            for (idx, slot) in calls {
+                let id = if slot.id.is_empty() {
+                    format!("tool_{idx}")
+                } else {
+                    slot.id
+                };
+                let input: serde_json::Value = if slot.args_buf.trim().is_empty() {
+                    serde_json::Value::Object(serde_json::Map::new())
+                } else {
+                    match serde_json::from_str(&slot.args_buf) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            out.push(Err(LlmError::UpstreamMalformed(format!(
+                                "tool_calls[{name}].arguments: {e}",
+                                name = slot.name
+                            ))));
+                            continue;
+                        }
+                    }
+                };
+                if !slot.started {
+                    out.push(Ok(StreamEvent::ToolUseStart {
+                        id: id.clone(),
+                        name: slot.name.clone(),
+                    }));
+                }
+                out.push(Ok(StreamEvent::ToolUse(ToolCall {
+                    id,
+                    name: slot.name,
+                    input,
+                })));
+            }
+            out.push(Ok(StreamEvent::Done {
+                finish: self.finish,
+                usage: self.usage.clone(),
+            }));
+            out
+        }
+    }
+
+    pub(crate) struct OpenAiStream {
+        bytes: BoxStream<'static, std::result::Result<bytes::Bytes, reqwest::Error>>,
+        parser: crate::agent::llm::sse::SseParser,
+        converter: OpenAiStreamConverter,
+        pending: std::collections::VecDeque<Result<StreamEvent>>,
+        bytes_done: bool,
+        total_bytes: usize,
+        pool: Option<Arc<crate::agent::llm::credential_pool::Pool>>,
+        lease: Option<crate::agent::llm::credential_pool::Lease>,
+        accounted: bool,
+    }
+
+    impl OpenAiStream {
+        pub(crate) fn new<S>(
+            bytes: S,
+            model: String,
+            pool: Option<Arc<crate::agent::llm::credential_pool::Pool>>,
+            lease: Option<crate::agent::llm::credential_pool::Lease>,
+        ) -> Self
+        where
+            S: futures_util::Stream<Item = std::result::Result<bytes::Bytes, reqwest::Error>>
+                + Send
+                + 'static,
+        {
+            Self {
+                bytes: bytes.boxed(),
+                parser: crate::agent::llm::sse::SseParser::new(),
+                converter: OpenAiStreamConverter::new(model),
+                pending: std::collections::VecDeque::new(),
+                bytes_done: false,
+                total_bytes: 0,
+                pool,
+                lease,
+                accounted: false,
+            }
+        }
+
+        fn drain_parser(&mut self) {
+            while let Some(sse) = self.parser.pop_event() {
+                for ev in self.converter.process(&sse) {
+                    self.pending.push_back(ev);
+                }
+            }
+        }
+
+        fn surface_overflow(&mut self, e: crate::agent::llm::sse::SseOverflow) {
+            self.pending.push_back(Err(LlmError::UpstreamMalformed(format!(
+                "openai stream: {e}"
+            ))));
+            self.bytes_done = true;
+            self.report_failure_once(
+                crate::agent::llm::credential_pool::FailureClass::Transient,
+            );
+        }
+
+        fn report_failure_once(
+            &mut self,
+            cls: crate::agent::llm::credential_pool::FailureClass,
+        ) {
+            if self.accounted {
+                return;
+            }
+            self.accounted = true;
+            if let (Some(p), Some(l)) = (&self.pool, &self.lease) {
+                p.report_failure(l, cls);
+            }
+        }
+
+        fn report_success_once(&mut self) {
+            if self.accounted {
+                return;
+            }
+            self.accounted = true;
+            if let (Some(p), Some(l)) = (&self.pool, &self.lease) {
+                p.report_success(l);
+            }
+        }
+    }
+
+    impl futures_util::Stream for OpenAiStream {
+        type Item = Result<StreamEvent>;
+
+        fn poll_next(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Self::Item>> {
+            use std::task::Poll;
+            loop {
+                if let Some(ev) = self.pending.pop_front() {
+                    // Successful completion: when we surface the
+                    // final `Done` event, credit the lease (MEDIUM-9
+                    // success-on-DONE).
+                    if matches!(ev, Ok(StreamEvent::Done { .. })) {
+                        self.report_success_once();
+                    } else if matches!(ev, Err(_)) && !self.accounted {
+                        self.report_failure_once(
+                            crate::agent::llm::credential_pool::FailureClass::Transient,
+                        );
+                    }
+                    return Poll::Ready(Some(ev));
+                }
+                if self.bytes_done {
+                    return Poll::Ready(None);
+                }
+                match std::pin::Pin::new(&mut self.bytes).poll_next(cx) {
+                    Poll::Pending => return Poll::Pending,
+                    Poll::Ready(None) => {
+                        if let Err(e) = self.parser.finish() {
+                            self.surface_overflow(e);
+                            continue;
+                        }
+                        self.drain_parser();
+                        // Stream ended without an explicit [DONE].
+                        // Synthesise a Done event so callers can
+                        // close out cleanly.
+                        if !self.converter.is_finished() {
+                            for ev in self.converter.finish_stream() {
+                                self.pending.push_back(ev);
+                            }
+                        }
+                        self.bytes_done = true;
+                        continue;
+                    }
+                    Poll::Ready(Some(Ok(chunk))) => {
+                        self.total_bytes =
+                            self.total_bytes.saturating_add(chunk.len());
+                        if self.total_bytes > crate::agent::llm::MAX_STREAM_TOTAL_BYTES {
+                            self.pending.push_back(Err(LlmError::UpstreamMalformed(
+                                format!(
+                                    "openai stream exceeded {} bytes",
+                                    crate::agent::llm::MAX_STREAM_TOTAL_BYTES
+                                ),
+                            )));
+                            self.bytes_done = true;
+                            self.report_failure_once(
+                                crate::agent::llm::credential_pool::FailureClass::Transient,
+                            );
+                            continue;
+                        }
+                        if let Err(e) = self.parser.feed(&chunk) {
+                            self.surface_overflow(e);
+                            continue;
+                        }
+                        self.drain_parser();
+                        if self.converter.is_finished() {
+                            self.bytes_done = true;
+                        }
+                        continue;
+                    }
+                    Poll::Ready(Some(Err(e))) => {
+                        self.pending
+                            .push_back(Err(LlmError::Transport(e)));
+                        self.bytes_done = true;
+                        self.report_failure_once(
+                            crate::agent::llm::error_classifier::classify_network_error(),
+                        );
+                        continue;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1756,5 +2314,88 @@ mod tests {
         let stats = pool_handle.stats();
         assert_eq!(stats.len(), 1);
         assert_eq!(stats[0].failures, 1);
+    }
+
+    /// HIGH-4: the streaming converter must surface each delta as
+    /// soon as it parses, not buffer them all until [DONE]. This
+    /// exercises `OpenAiStreamConverter::process` directly: feed
+    /// three deltas + [DONE] and assert the output order is
+    /// `TextDelta("Hel")`, `TextDelta("lo, ")`, `TextDelta("world!")`,
+    /// `Done`.
+    #[test]
+    fn streaming_emits_incrementally() {
+        use crate::agent::llm::sse::SseEvent;
+        let mut conv = wire::OpenAiStreamConverter::new("gpt-4o-mini".into());
+
+        let mk = |body: &str| SseEvent {
+            event: "message".into(),
+            data: body.into(),
+        };
+
+        let mut out: Vec<StreamEvent> = Vec::new();
+        for chunk in [
+            r#"{"choices":[{"delta":{"content":"Hel"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{"content":"lo, "},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{"content":"world!"},"finish_reason":"stop"}]}"#,
+        ] {
+            for e in conv.process(&mk(chunk)) {
+                out.push(e.expect("delta should parse"));
+            }
+        }
+        // The text deltas must have surfaced BEFORE we see [DONE].
+        let texts: Vec<&str> = out
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::TextDelta { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            texts,
+            vec!["Hel", "lo, ", "world!"],
+            "deltas should stream in order"
+        );
+        // No Done yet — it only arrives on [DONE] / finish_stream.
+        assert!(
+            !out.iter().any(|e| matches!(e, StreamEvent::Done { .. })),
+            "Done event must wait for [DONE]"
+        );
+        // Now feed [DONE].
+        for e in conv.process(&mk("[DONE]")) {
+            out.push(e.expect("done should parse"));
+        }
+        let last = out.last().expect("at least one event");
+        match last {
+            StreamEvent::Done { finish, .. } => assert!(matches!(
+                finish,
+                FinishReason::Stop
+            )),
+            other => panic!("expected Done, got {other:?}"),
+        }
+        // And the converter is now poisoned: further events are noops.
+        assert!(conv.is_finished());
+        assert!(conv.process(&mk("{}")).is_empty());
+    }
+
+    /// Malformed JSON in a streaming chunk must surface as
+    /// `LlmError::UpstreamMalformed`, NOT as a silently dropped
+    /// delta. The converter must also poison itself so subsequent
+    /// chunks don't keep emitting.
+    #[test]
+    fn streaming_malformed_chunk_errors() {
+        use crate::agent::llm::sse::SseEvent;
+        let mut conv = wire::OpenAiStreamConverter::new("gpt-4o-mini".into());
+        let sse = SseEvent {
+            event: "message".into(),
+            data: "this is not json".into(),
+        };
+        let out = conv.process(&sse);
+        assert_eq!(out.len(), 1);
+        assert!(
+            matches!(out[0], Err(LlmError::UpstreamMalformed(_))),
+            "got {:?}",
+            out[0]
+        );
+        assert!(conv.is_finished());
     }
 }

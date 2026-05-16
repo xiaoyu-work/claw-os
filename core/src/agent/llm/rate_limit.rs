@@ -213,6 +213,52 @@ pub fn is_transient(err: &LlmError) -> bool {
     }
 }
 
+/// Idempotency hint passed to [`retry_with_backoff_with_idempotency`].
+///
+/// The standard `retry_with_backoff` retries non-idempotent POSTs on
+/// 5xx — which is a real bug, because the upstream may have processed
+/// the request before returning the 5xx and a retry would issue the
+/// effect twice. Callers that know the request is safe to retry pass
+/// `Idempotency::Safe`; callers that have an `Idempotency-Key` header
+/// pass `Idempotency::KeyHeader(key)`; everything else passes
+/// `Idempotency::Unsafe` and gets stricter retry rules.
+#[derive(Debug, Clone)]
+pub enum Idempotency {
+    /// HTTP method is GET/HEAD/OPTIONS, or the call is otherwise
+    /// known-idempotent at the upstream. Same retry rules as the
+    /// legacy `retry_with_backoff`.
+    Safe,
+    /// Caller is attaching an `Idempotency-Key: <key>` header (or
+    /// equivalent) — upstream will collapse duplicate requests with
+    /// the same key, so retrying on 5xx is OK. The key is stored
+    /// here only for diagnostics.
+    KeyHeader(String),
+    /// Non-idempotent POST without a dedup key — retrying on a 5xx
+    /// response can cause duplicate side effects. Only retry on
+    /// `Transport` (the request never reached the server) and on
+    /// explicit `RateLimited` (the server told us to wait).
+    Unsafe,
+}
+
+impl Idempotency {
+    /// Whether the retry helper is allowed to retry a transient
+    /// 5xx server-response error under this idempotency hint.
+    fn allows_5xx_retry(&self) -> bool {
+        matches!(self, Idempotency::Safe | Idempotency::KeyHeader(_))
+    }
+}
+
+/// True if `err` should trigger a retry under the given idempotency
+/// hint. This is the stricter cousin of [`is_transient`] used by
+/// [`retry_with_backoff_with_idempotency`].
+fn is_transient_idem(err: &LlmError, hint: &Idempotency) -> bool {
+    match err {
+        LlmError::RateLimited { .. } | LlmError::Transport(_) => true,
+        LlmError::Provider { status, .. } => *status >= 500 && hint.allows_5xx_retry(),
+        _ => false,
+    }
+}
+
 /// Run `op` with exponential-backoff retry. `op` is a closure
 /// returning a future — invoked fresh on each attempt so callers
 /// can rebuild stateful HTTP requests per try.
@@ -222,7 +268,32 @@ pub fn is_transient(err: &LlmError) -> bool {
 ///   * The operation succeeds.
 ///   * The error is non-transient (see [`is_transient`]).
 ///   * `policy.max_attempts` total attempts have been spent.
-pub async fn retry_with_backoff<T, F, Fut>(policy: RetryPolicy, mut op: F) -> Result<T>
+///
+/// **CAUTION**: this function treats every call as idempotent — it
+/// will retry 5xx errors even when the caller is doing a POST without
+/// an idempotency key, which can cause duplicate side effects at the
+/// upstream. New call sites SHOULD use
+/// [`retry_with_backoff_with_idempotency`] and pass
+/// [`Idempotency::Unsafe`] for non-idempotent POSTs.
+pub async fn retry_with_backoff<T, F, Fut>(policy: RetryPolicy, op: F) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    retry_with_backoff_with_idempotency(policy, Idempotency::Safe, op).await
+}
+
+/// Like [`retry_with_backoff`] but takes an explicit idempotency
+/// hint. POSTs without an `Idempotency-Key` header (or upstream-side
+/// dedup guarantee) MUST pass [`Idempotency::Unsafe`] so a 5xx
+/// response does NOT trigger a retry — the upstream may have
+/// processed the request before failing and a re-send would cause
+/// duplicate side effects.
+pub async fn retry_with_backoff_with_idempotency<T, F, Fut>(
+    policy: RetryPolicy,
+    idempotency: Idempotency,
+    mut op: F,
+) -> Result<T>
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<T>>,
@@ -232,7 +303,7 @@ where
         match op().await {
             Ok(v) => return Ok(v),
             Err(e) => {
-                if !is_transient(&e) || attempt == policy.max_attempts {
+                if !is_transient_idem(&e, &idempotency) || attempt == policy.max_attempts {
                     return Err(e);
                 }
                 let suggested = match &e {
@@ -581,5 +652,126 @@ mod tests {
         // seeds give different output.
         assert_eq!(xorshift64(1), xorshift64(1));
         assert_ne!(xorshift64(1), xorshift64(2));
+    }
+
+    /// A POST without `Idempotency-Key` must NOT have 5xx responses
+    /// retried — the upstream may have applied the side effect
+    /// before failing, and a re-send would duplicate it.
+    /// `Idempotency::Unsafe` callers therefore see Provider 5xx
+    /// surface on the first attempt. Transport errors and explicit
+    /// RateLimited still retry (the server either never saw the
+    /// request or explicitly asked us to wait).
+    #[tokio::test(start_paused = true)]
+    async fn post_not_retried_without_idempotency_key() {
+        // 5xx with Unsafe → no retry.
+        let calls = Arc::new(AtomicU32::new(0));
+        let c = calls.clone();
+        let result: Result<u32> = retry_with_backoff_with_idempotency(
+            RetryPolicy {
+                max_attempts: 5,
+                base_ms: 1,
+                max_ms: 10,
+                jitter: false,
+            },
+            Idempotency::Unsafe,
+            move || {
+                let c = c.clone();
+                async move {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    Err::<u32, _>(LlmError::Provider {
+                        status: 503,
+                        message: "Service Unavailable".into(),
+                    })
+                }
+            },
+        )
+        .await;
+        assert!(matches!(result, Err(LlmError::Provider { status: 503, .. })));
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "Unsafe POST must not retry 5xx responses"
+        );
+
+        // Same call with Safe DOES retry on 5xx (until exhausted).
+        let calls = Arc::new(AtomicU32::new(0));
+        let c = calls.clone();
+        let _: Result<u32> = retry_with_backoff_with_idempotency(
+            RetryPolicy {
+                max_attempts: 4,
+                base_ms: 1,
+                max_ms: 10,
+                jitter: false,
+            },
+            Idempotency::Safe,
+            move || {
+                let c = c.clone();
+                async move {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    Err::<u32, _>(LlmError::Provider {
+                        status: 503,
+                        message: "Service Unavailable".into(),
+                    })
+                }
+            },
+        )
+        .await;
+        assert_eq!(calls.load(Ordering::SeqCst), 4, "Safe path must retry 5xx");
+
+        // Idempotency-Key header also unlocks 5xx retries.
+        let calls = Arc::new(AtomicU32::new(0));
+        let c = calls.clone();
+        let _: Result<u32> = retry_with_backoff_with_idempotency(
+            RetryPolicy {
+                max_attempts: 3,
+                base_ms: 1,
+                max_ms: 10,
+                jitter: false,
+            },
+            Idempotency::KeyHeader("uuid-123".into()),
+            move || {
+                let c = c.clone();
+                async move {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    Err::<u32, _>(LlmError::Provider {
+                        status: 502,
+                        message: "Bad gateway".into(),
+                    })
+                }
+            },
+        )
+        .await;
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            3,
+            "KeyHeader must permit 5xx retry"
+        );
+
+        // Transport errors still retry under Unsafe — the request
+        // never reached the server, so re-issuing is fine.
+        let calls = Arc::new(AtomicU32::new(0));
+        let c = calls.clone();
+        let _: Result<u32> = retry_with_backoff_with_idempotency(
+            RetryPolicy {
+                max_attempts: 3,
+                base_ms: 1,
+                max_ms: 10,
+                jitter: false,
+            },
+            Idempotency::Unsafe,
+            move || {
+                let c = c.clone();
+                async move {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    Err::<u32, _>(LlmError::RateLimited { retry_after_ms: 1 })
+                }
+            },
+        )
+        .await;
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            3,
+            "Unsafe POST must still retry RateLimited (explicit hint)"
+        );
     }
 }
