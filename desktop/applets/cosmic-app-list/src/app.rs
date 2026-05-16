@@ -47,10 +47,10 @@ use cosmic::{
     theme::{self, Button, Container},
     widget::{
         DndDestination, Image, button, container, divider, dnd_source,
-        icon,
+        icon::{self, from_name},
         image::Handle,
         rectangle_tracker::{RectangleTracker, RectangleUpdate, rectangle_tracker_subscription},
-        text,
+        svg, text,
     },
 };
 use cosmic::{
@@ -61,7 +61,7 @@ use cosmic_app_list_config::{APP_ID, AppListConfig};
 use cosmic_protocols::toplevel_info::v1::client::zcosmic_toplevel_handle_v1::State;
 use futures::future::pending;
 use rustc_hash::FxHashMap;
-use std::{borrow::Cow, path::PathBuf, str::FromStr, time::Duration};
+use std::{borrow::Cow, path::PathBuf, rc::Rc, str::FromStr, time::Duration};
 use switcheroo_control::Gpu;
 use tokio::time::sleep;
 use url::Url;
@@ -238,10 +238,11 @@ impl DockItem {
                 container
             } else {
                 container.class(theme::Container::custom(move |theme| container::Style {
-                    // ClawOS: accent removed. Use on_bg_color for both focused
-                    // and unfocused app-list dots — the dot's presence already
-                    // signals "app is running".
-                    background: Some(Background::Color(theme.cosmic().on_bg_color().into())),
+                    background: if is_focused {
+                        Some(Background::Color(theme.cosmic().accent_color().into()))
+                    } else {
+                        Some(Background::Color(theme.cosmic().on_bg_color().into()))
+                    },
                     border: Border {
                         radius: dot_border_radius.into(),
                         ..Default::default()
@@ -2184,12 +2185,24 @@ impl cosmic::Application for CosmicAppList {
                         content = content.push(divider::horizontal::light());
                     }
 
+                    let svg_accent = Rc::new(|theme: &cosmic::Theme| {
+                        let color = theme.cosmic().accent_color().into();
+                        svg::Style { color: Some(color) }
+                    });
                     content = content.push(
-                        menu_button(text::body(if is_pinned {
-                            fl!("unpin")
-                        } else {
-                            fl!("pin")
-                        }))
+                        menu_button(
+                            if is_pinned {
+                                row![
+                                    icon::icon(from_name("checkbox-checked-symbolic").into())
+                                        .size(16)
+                                        .class(cosmic::theme::Svg::Custom(svg_accent.clone())),
+                                    text::body(fl!("pin"))
+                                ]
+                            } else {
+                                row![text::body(fl!("pin"))]
+                            }
+                            .spacing(8),
+                        )
                         .on_press(if is_pinned {
                             Message::UnpinApp(*id)
                         } else {
