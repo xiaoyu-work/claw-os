@@ -91,7 +91,7 @@ if result is not None:
     let child = Command::new(python)
         .arg("-c")
         .arg(&wrapper)
-        .stdin(Stdio::inherit())
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         // Agent-native: suppress all interactive prompts
@@ -242,7 +242,7 @@ pub fn run_app(
     };
 
     let child = cmd
-        .stdin(Stdio::inherit())
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("COS_COMMAND", command)
