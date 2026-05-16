@@ -1,0 +1,37 @@
+#!/bin/sh
+# /usr/lib/cos/firstboot-session — greetd [initial_session] entry point.
+#
+# Run by greetd on every startup as user `cosmic-initial-setup`. Decides
+# whether the first-boot wizard still needs to run:
+#
+#   • If at least one human user (uid 1000+, real login shell) already
+#     exists, the wizard has done its job. Exit 0 — greetd then advances
+#     to [default_session] (cosmic-greeter) for normal login.
+#
+#   • Otherwise this is a fresh image and we must collect a username /
+#     password before any real login can happen. exec cosmic-session,
+#     which starts cosmic-comp; the /etc/xdg/autostart entry for
+#     cosmic-initial-setup auto-launches the wizard inside that session.
+#     When the wizard's Finish handler runs `loginctl terminate-user
+#     cosmic-initial-setup`, this user-session dies and greetd advances
+#     to [default_session].
+#
+# We deliberately do NOT consult passwd -S / /etc/shadow: this script
+# runs as the non-root cosmic-initial-setup user and cannot read shadow.
+# Presence of *any* uid-1000+ user with a real shell is the signal —
+# safe because rootfs/features/vm/install.sh skips its default `cos`
+# user when this wizard is wired, so a fresh image truly has no human
+# users.
+set -eu
+
+while IFS=: read -r name _ uid _ _ _ shell; do
+    [ "$uid" -ge 1000 ] && [ "$uid" -lt 60000 ] || continue
+    case "${shell##*/}" in
+        nologin|false|"") continue ;;
+    esac
+    # Found a real user — wizard already ran (or admin pre-provisioned).
+    exit 0
+done < /etc/passwd
+
+exec cosmic-session
+

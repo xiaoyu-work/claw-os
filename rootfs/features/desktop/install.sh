@@ -243,6 +243,41 @@ install -Dm0644 "$GREETER_DEB/cosmic-greeter.pam" \
 install -Dm0644 "$DESKTOP_SRC/greeter/cosmic-greeter.toml" \
     "$ROOTFS/etc/greetd/cosmic-greeter.toml"
 
+# ---------------------------------------------------------------------------
+# First-boot wizard wiring.
+#
+# Fresh images have no human user with a usable password, so cosmic-greeter
+# has nothing to log into. Pop!_OS solves this with an installer ISO; we
+# don't ship one, so we run cosmic-initial-setup as a first-boot wizard
+# inside greetd's [initial_session]:
+#
+#   1. Create system user `cosmic-initial-setup` (uid <1000, hidden from
+#      the cosmic-greeter user list by UserFilter).
+#   2. Append [initial_session] to /etc/greetd/cosmic-greeter.toml
+#      pointing at /usr/lib/cos/firstboot-session — a wrapper that either
+#      execs cosmic-session (no human user yet) or exits 0 so greetd
+#      falls through to [default_session] (wizard already ran).
+#
+# Inside the cosmic-session started by the wrapper, the autostart entry
+# /etc/xdg/autostart/com.clawos.InitialSetup.desktop auto-launches the
+# wizard. When the wizard's Finish handler runs `loginctl terminate-user
+# cosmic-initial-setup`, the session dies and greetd advances to
+# cosmic-greeter for normal login as the user the wizard just created.
+# ---------------------------------------------------------------------------
+echo "  :: creating cosmic-initial-setup system user (first-boot wizard)"
+source "$PROJECT_DIR/scripts/lib/add-cos-user.sh"
+add_cosmic_initial_setup_user "$ROOTFS"
+
+if ! grep -q '^\[initial_session\]' "$ROOTFS/etc/greetd/cosmic-greeter.toml"; then
+    echo "  :: appending [initial_session] block to cosmic-greeter.toml"
+    cat >> "$ROOTFS/etc/greetd/cosmic-greeter.toml" <<'EOF'
+
+[initial_session]
+command = "/usr/lib/cos/firstboot-session"
+user = "cosmic-initial-setup"
+EOF
+fi
+
 # Create the cosmic-greeter system user + its runtime/state dirs from the
 # sysusers.d / tmpfiles.d that `just install` already dropped.
 echo "  :: applying systemd-sysusers / systemd-tmpfiles"
