@@ -173,7 +173,16 @@ impl Application for App {
             })
             .collect::<Vec<_>>()
             .apply(Task::batch)
-            .chain(app.update(Message::PageOpen(0)));
+            .chain(app.update(Message::PageOpen(0)))
+            // Promote the wizard window to fullscreen as soon as it opens so
+            // the wallpaper actually fills the screen instead of leaving a
+            // ~50px cosmic-comp black backdrop above (and around) the default
+            // 1024x768 toplevel. style() returns a transparent app surface so
+            // the fullscreen state doesn't make libcosmic paint an opaque
+            // background over our stack.
+            .chain(cosmic::iced::window::latest().and_then(|id| {
+                cosmic::iced::window::set_mode::<cosmic::Action<Message>>(id, cosmic::iced::window::Mode::Fullscreen)
+            }));
 
         (app, tasks)
     }
@@ -519,6 +528,21 @@ impl Application for App {
         }
 
         Subscription::batch(subscriptions)
+    }
+
+    fn style(&self) -> Option<cosmic::iced::theme::Style> {
+        // Default libcosmic application style paints theme.cosmic.background.base
+        // as the surface clear color whenever the window is maximized/fullscreen.
+        // We *want* the wizard fullscreen but we also want the wallpaper image
+        // we render inside view() to be the only visible color — so force the
+        // surface clear color transparent and let our stack provide pixels.
+        let theme = cosmic::theme::active();
+        let cosmic = theme.cosmic();
+        Some(cosmic::iced::theme::Style {
+            background_color: Color::TRANSPARENT,
+            text_color: cosmic.on_bg_color().into(),
+            icon_color: cosmic.on_bg_color().into(),
+        })
     }
 }
 
