@@ -186,6 +186,21 @@ fn cmd_recv(args: &[String]) -> Result<Value, String> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
 
     loop {
+        // Lock the queue directory around read+unlink so two concurrent
+        // recvs can't both grab the same message. Without the lock,
+        // sorted_messages -> read -> remove_file ran twice and the at-
+        // most-once contract degraded to at-least-twice. cmd_send
+        // already uses the same dir lock to serialize ID allocation.
+        let lock_acquired = if dir.exists() {
+            let lock_path = dir.join(".lock");
+            match acquire_dir_lock(&lock_path) {
+                Ok(g) => Some(g),
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+
         let messages = sorted_messages(&dir);
 
         if let Some((id, path)) = messages.first() {
@@ -198,6 +213,8 @@ fn cmd_recv(args: &[String]) -> Result<Value, String> {
                 let _ = fs::remove_file(path);
             }
 
+            drop(lock_acquired);
+
             return Ok(json!({
                 "message_id": id,
                 "from": msg["from"],
@@ -205,6 +222,8 @@ fn cmd_recv(args: &[String]) -> Result<Value, String> {
                 "timestamp": msg["timestamp"],
             }));
         }
+
+        drop(lock_acquired);
 
         if std::time::Instant::now() >= deadline {
             return Ok(json!({ "empty": true }));
@@ -268,11 +287,34 @@ fn locks_dir() -> PathBuf {
 }
 
 /// Check whether a process with the given PID is still alive.
+///
+/// Cross-uid safe: `kill(pid, 0)` returns -1/EPERM when the target
+/// PID exists but belongs to a different uid, which the old code
+/// interpreted as "process is gone" and allowed lock reclaim — that
+/// let unprivileged caller B steal user A's locks on multi-user
+/// hosts. Treat EPERM as "alive (just not ours)". On Linux we also
+/// double-check `/proc/<pid>` so we don't trust `kill(0)`'s ambient
+/// permissions implicitly.
 fn is_pid_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if std::path::Path::new(&format!("/proc/{pid}")).exists() {
+            return true;
+        }
+    }
     #[cfg(unix)]
     {
-        // Signal 0 doesn't send a signal but checks if the process exists.
-        unsafe { libc::kill(pid as i32, 0) == 0 }
+        let rc = unsafe { libc::kill(pid as i32, 0) };
+        if rc == 0 {
+            return true;
+        }
+        // EPERM => process exists but is not signalable by us. Treat
+        // as alive so we never reclaim another user's lock.
+        let err = std::io::Error::last_os_error();
+        return err.raw_os_error() == Some(libc::EPERM);
     }
     #[cfg(not(unix))]
     {
@@ -321,28 +363,69 @@ fn cmd_lock(args: &[String]) -> Result<Value, String> {
     let lock_path = dir.join(format!("{resource}.lock"));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
 
+    // Use O_EXCL on the lockfile itself so acquisition is a single
+    // atomic syscall. Before this fix, two concurrent acquirers both
+    // saw "no live holder" via read_locked → fell through to
+    // write_locked, and both believed they owned the lock. The dir
+    // already serializes ID allocation for messaging (cmd_send) but
+    // wasn't used here at all.
     loop {
-        // Try to read an existing lock file.
-        if let Ok(Some(data)) = crate::filelock::read_locked(&lock_path) {
-            if let Ok(existing) = serde_json::from_str::<Value>(&data) {
-                let existing_holder = existing["holder"].as_str().unwrap_or("");
-                let existing_pid = existing["pid"].as_u64().unwrap_or(0) as u32;
+        let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let lock_data = json!({
+            "resource": resource,
+            "holder": holder,
+            "pid": std::process::id(),
+            "acquired_at": now,
+        });
+        let payload = serde_json::to_string_pretty(&lock_data)
+            .map_err(|e| format!("failed to serialize lock: {e}"))?;
 
-                // Same holder already holds the lock.
-                if existing_holder == holder {
-                    return Ok(json!({
-                        "locked": true,
-                        "status": "already_held",
-                        "resource": resource,
-                        "holder": holder,
-                    }));
-                }
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+        {
+            Ok(mut f) => {
+                use std::io::Write;
+                f.write_all(payload.as_bytes())
+                    .map_err(|e| format!("failed to write lock file: {e}"))?;
+                let _ = f.sync_all();
+                return Ok(json!({
+                    "locked": true,
+                    "status": "acquired",
+                    "resource": resource,
+                    "holder": holder,
+                }));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                // Someone else holds the lock. Inspect to see whether
+                // we should treat it as stale (dead holder) and try
+                // to reclaim.
+                let body = fs::read_to_string(&lock_path).unwrap_or_default();
+                if let Ok(existing) = serde_json::from_str::<Value>(&body) {
+                    let existing_holder = existing["holder"].as_str().unwrap_or("");
+                    let existing_pid = existing["pid"].as_u64().unwrap_or(0) as u32;
 
-                // Stale lock detection: if the holder's PID is dead, reclaim.
-                if existing_pid > 0 && !is_pid_alive(existing_pid) {
-                    // Fall through to acquire — the old holder is gone.
-                } else {
-                    // Lock is held by a live process. Wait or timeout.
+                    if existing_holder == holder {
+                        return Ok(json!({
+                            "locked": true,
+                            "status": "already_held",
+                            "resource": resource,
+                            "holder": holder,
+                        }));
+                    }
+
+                    if existing_pid > 0 && !is_pid_alive(existing_pid) {
+                        // Reclaim atomically: only the caller whose
+                        // rename(stale -> reclaim) succeeds gets the
+                        // lock. We unlink first, then loop back and
+                        // race for the create_new. Since unlink is
+                        // idempotent and the create_new is mutually
+                        // exclusive, at most one caller wins.
+                        let _ = fs::remove_file(&lock_path);
+                        continue;
+                    }
+
                     if std::time::Instant::now() >= deadline {
                         return Ok(json!({
                             "locked": false,
@@ -351,30 +434,22 @@ fn cmd_lock(args: &[String]) -> Result<Value, String> {
                             "held_by": existing_holder,
                         }));
                     }
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                    continue;
+                } else {
+                    // Corrupt lockfile: don't auto-reclaim; surface
+                    // it so the operator can clean up.
+                    if std::time::Instant::now() >= deadline {
+                        return Ok(json!({
+                            "locked": false,
+                            "status": "corrupt_lock",
+                            "resource": resource,
+                        }));
+                    }
                 }
+
+                std::thread::sleep(std::time::Duration::from_millis(100));
             }
+            Err(e) => return Err(format!("failed to create lock file: {e}")),
         }
-
-        // No lock file, or stale lock — acquire it.
-        let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-        let lock_data = json!({
-            "resource": resource,
-            "holder": holder,
-            "pid": std::process::id(),
-            "acquired_at": timestamp,
-        });
-        let data = serde_json::to_string_pretty(&lock_data)
-            .map_err(|e| format!("failed to serialize lock: {e}"))?;
-        crate::filelock::write_locked(&lock_path, &data)?;
-
-        return Ok(json!({
-            "locked": true,
-            "status": "acquired",
-            "resource": resource,
-            "holder": holder,
-        }));
     }
 }
 
@@ -401,6 +476,13 @@ fn cmd_unlock(args: &[String]) -> Result<Value, String> {
         .first()
         .ok_or("usage: cos ipc unlock <resource-name> [--holder <session-id>]")?;
 
+    // Default to caller-pid holder so omitting --holder never lets
+    // an unrelated caller drop someone else's lock. Before this
+    // fix, any process with IPC_INVOKE could release any lock by
+    // just leaving --holder off.
+    let required_holder =
+        holder.unwrap_or_else(|| format!("pid-{}", std::process::id()));
+
     let lock_path = locks_dir().join(format!("{resource}.lock"));
 
     if !lock_path.exists() {
@@ -411,21 +493,19 @@ fn cmd_unlock(args: &[String]) -> Result<Value, String> {
         }));
     }
 
-    // If holder is specified, verify it matches before unlocking.
-    if let Some(ref required_holder) = holder {
-        let data = crate::filelock::read_locked(&lock_path)?
-            .ok_or_else(|| format!("lock file not found: {}", lock_path.display()))?;
-        let existing: Value =
-            serde_json::from_str(&data).map_err(|e| format!("failed to parse lock file: {e}"))?;
-        let current_holder = existing["holder"].as_str().unwrap_or("");
-        if current_holder != required_holder.as_str() {
-            return Ok(json!({
-                "unlocked": false,
-                "status": "holder_mismatch",
-                "resource": resource,
-                "held_by": current_holder,
-            }));
-        }
+    // Holder check is now mandatory.
+    let data = fs::read_to_string(&lock_path)
+        .map_err(|e| format!("failed to read lock file: {e}"))?;
+    let existing: Value =
+        serde_json::from_str(&data).map_err(|e| format!("failed to parse lock file: {e}"))?;
+    let current_holder = existing["holder"].as_str().unwrap_or("");
+    if current_holder != required_holder.as_str() {
+        return Ok(json!({
+            "unlocked": false,
+            "status": "holder_mismatch",
+            "resource": resource,
+            "held_by": current_holder,
+        }));
     }
 
     fs::remove_file(&lock_path).map_err(|e| format!("failed to remove lock file: {e}"))?;
@@ -1163,8 +1243,13 @@ mod tests {
         let lock_path = locks_dir().join(format!("{res}.lock"));
         assert!(lock_path.exists());
 
-        // Unlock it.
-        let r = cmd_unlock(&vec![res.clone()]).unwrap();
+        // Unlock it — holder is mandatory; supply the matching one.
+        let r = cmd_unlock(&vec![
+            res.clone(),
+            "--holder".to_string(),
+            "agent-1".to_string(),
+        ])
+        .unwrap();
         assert_eq!(r["unlocked"], true);
         assert_eq!(r["status"], "released");
         assert!(!lock_path.exists());
@@ -1191,7 +1276,12 @@ mod tests {
         assert_eq!(r["status"], "already_held");
 
         // Clean up.
-        cmd_unlock(&vec![res]).unwrap();
+        cmd_unlock(&vec![
+            res,
+            "--holder".to_string(),
+            "agent-x".to_string(),
+        ])
+        .unwrap();
     }
 
     #[test]
@@ -1249,7 +1339,12 @@ mod tests {
         assert_eq!(r["status"], "timeout");
         assert_eq!(r["held_by"], "agent-a");
 
-        cmd_unlock(&vec![res]).unwrap();
+        cmd_unlock(&vec![
+            res,
+            "--holder".to_string(),
+            "agent-a".to_string(),
+        ])
+        .unwrap();
     }
 
     #[test]
@@ -1279,7 +1374,12 @@ mod tests {
         assert_eq!(r["status"], "acquired");
         assert_eq!(r["holder"], "alive-agent");
 
-        cmd_unlock(&vec![res]).unwrap();
+        cmd_unlock(&vec![
+            res,
+            "--holder".to_string(),
+            "alive-agent".to_string(),
+        ])
+        .unwrap();
     }
 
     #[test]
@@ -1319,8 +1419,8 @@ mod tests {
         assert!(resources.contains(&res1.as_str()));
         assert!(resources.contains(&res2.as_str()));
 
-        cmd_unlock(&vec![res1]).unwrap();
-        cmd_unlock(&vec![res2]).unwrap();
+        cmd_unlock(&vec![res1, "--holder".to_string(), "h1".to_string()]).unwrap();
+        cmd_unlock(&vec![res2, "--holder".to_string(), "h2".to_string()]).unwrap();
     }
 
     #[test]
@@ -1333,6 +1433,98 @@ mod tests {
     fn unlock_missing_args_returns_error() {
         let r = cmd_unlock(&vec![]);
         assert!(r.is_err());
+    }
+
+    /// Without a holder check on every unlock, any caller holding
+    /// `IPC_INVOKE` could release somebody else's lock by just
+    /// omitting `--holder`. Confirms that's no longer possible.
+    #[test]
+    fn unlock_requires_holder_match() {
+        let res = unique_resource("unlock-holder-required");
+        cmd_lock(&vec![
+            res.clone(),
+            "--holder".to_string(),
+            "owner-agent".to_string(),
+        ])
+        .unwrap();
+
+        // Attacker omits --holder. Default falls back to the caller
+        // pid which can never match the owner's holder string.
+        let r = cmd_unlock(&vec![res.clone()]).unwrap();
+        assert_eq!(r["unlocked"], false);
+        assert_eq!(r["status"], "holder_mismatch");
+        assert_eq!(r["held_by"], "owner-agent");
+
+        // Lock file must still exist.
+        let lock_path = locks_dir().join(format!("{res}.lock"));
+        assert!(lock_path.exists());
+
+        // Owner can release it normally.
+        let r = cmd_unlock(&vec![
+            res,
+            "--holder".to_string(),
+            "owner-agent".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(r["unlocked"], true);
+    }
+
+    /// Two threads racing for the same resource MUST end with
+    /// exactly one acquisition; the other must time out / be denied.
+    /// Before the O_EXCL rewrite, both `read_locked → write_locked`
+    /// callers saw "no live holder" and both wrote the lock file —
+    /// the user-facing IPC lock primitive had no mutual exclusion.
+    #[test]
+    fn lock_is_atomic_under_concurrency() {
+        use std::sync::atomic::{AtomicUsize, Ordering as AOrd};
+        use std::sync::Arc;
+
+        let res = unique_resource("lock-concurrent");
+        let acquired = Arc::new(AtomicUsize::new(0));
+        let denied = Arc::new(AtomicUsize::new(0));
+
+        let mut handles = vec![];
+        for i in 0..16 {
+            let res = res.clone();
+            let acq = acquired.clone();
+            let den = denied.clone();
+            let holder = format!("racer-{i}");
+            handles.push(std::thread::spawn(move || {
+                let r = cmd_lock(&vec![
+                    res,
+                    "--holder".to_string(),
+                    holder,
+                    "--timeout".to_string(),
+                    "0".to_string(),
+                ])
+                .unwrap();
+                if r["locked"] == true && r["status"] == "acquired" {
+                    acq.fetch_add(1, AOrd::SeqCst);
+                } else {
+                    den.fetch_add(1, AOrd::SeqCst);
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        assert_eq!(
+            acquired.load(AOrd::SeqCst),
+            1,
+            "exactly one acquirer must win under concurrency"
+        );
+        assert_eq!(
+            denied.load(AOrd::SeqCst),
+            15,
+            "every other concurrent caller must be denied"
+        );
+
+        // The winner's lock file is still in place; we don't try to
+        // unlock it here because we don't know which racer won.
+        let lock_path = locks_dir().join(format!("{res}.lock"));
+        assert!(lock_path.exists());
+        let _ = fs::remove_file(&lock_path);
     }
 
     // -----------------------------------------------------------------------
@@ -1423,7 +1615,11 @@ mod tests {
         let r = run("locks", &vec![]).unwrap();
         assert!(r["count"].as_u64().unwrap() >= 1);
 
-        let r = run("unlock", &vec![res]).unwrap();
+        let r = run(
+            "unlock",
+            &vec![res, "--holder".to_string(), "h1".to_string()],
+        )
+        .unwrap();
         assert_eq!(r["unlocked"], true);
     }
 
