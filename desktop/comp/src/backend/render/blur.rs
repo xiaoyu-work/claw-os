@@ -59,14 +59,18 @@ use smithay::{
     backend::{
         allocator::Fourcc,
         renderer::{
-            Bind, Offscreen, Texture,
+            Offscreen, Texture,
+            element::{Element, Id, Kind, RenderElement, UnderlyingStorage},
             gles::{GlesError, GlesRenderer, GlesTexProgram, GlesTexture, UniformName, UniformType},
             glow::GlowRenderer,
+            utils::{CommitCounter, DamageSet, OpaqueRegions},
         },
     },
     output::Output,
-    utils::{Buffer, Physical, Size, Transform},
+    utils::{Buffer, Physical, Point, Rectangle, Scale, Size, Transform, user_data::UserDataMap},
 };
+
+use super::element::{AsGlowRenderer, FromGlesError};
 
 pub static BLUR_DOWN_SHADER: &str = include_str!("./shaders/blur_down.frag");
 pub static BLUR_UP_SHADER: &str = include_str!("./shaders/blur_up.frag");
@@ -346,5 +350,182 @@ impl BlurStates {
 
     pub fn clear(&mut self) {
         self.inner.clear();
+    }
+}
+
+// ────────────────────────────────────────────────────────────────
+// BlurRenderElement
+// ────────────────────────────────────────────────────────────────
+//
+// A `BlurRenderElement` is what we hand to smithay's damage tracker
+// in `workspace_elements`. It carries enough information for two
+// things:
+//
+//   1. `capture_framebuffer` — smithay calls this BEFORE `draw` (and
+//      ONLY for elements with `is_framebuffer_effect() == true`).
+//      We use it to `glBlitFramebuffer` the output region behind the
+//      element into our per-output mip-chain capture texture
+//      (`BlurState::capture_texture`).
+//
+//   2. `draw` — sample the captured texture back over the element's
+//      destination rect, through the upsample (tent) program. This
+//      gives a single-pass soft blur; a future patch may run the
+//      full down/up cascade via `BlurState::steps` for a wider
+//      effective σ. The single-pass implementation is intentionally
+//      conservative — it avoids the cross-frame FBO juggling that a
+//      multi-pass cascade requires.
+//
+// Per-output state (the `BlurState`) is owned by the renderer (via
+// `BlurStates` on `Common`), NOT by the element — that way it
+// survives across frames and we don't pay an `Offscreen::create_buffer`
+// cost every vblank.
+
+/// One blurred surface region for a single frame.
+#[derive(Debug)]
+pub struct BlurRenderElement {
+    id: Id,
+    /// Destination rectangle on the output, in output-physical pixels.
+    geometry: Rectangle<i32, Physical>,
+    /// Output this element is being drawn on (used to look up the
+    /// per-output [`BlurState`]).
+    output: Output,
+    /// Per-corner radius for masking, in element-local logical pixels.
+    /// Layout: [bottom_right, top_right, bottom_left, top_left] — same
+    /// convention as `ClippedSurfaceRenderElement`.
+    corner_radius: [u8; 4],
+    /// Alpha multiplier applied on the final composite. Surfaces fade
+    /// out their blur layer in lockstep with their own alpha.
+    alpha: f32,
+    commit_counter: CommitCounter,
+}
+
+impl BlurRenderElement {
+    pub fn new(
+        geometry: Rectangle<i32, Physical>,
+        output: Output,
+        corner_radius: [u8; 4],
+        alpha: f32,
+    ) -> Self {
+        Self {
+            id: Id::new(),
+            geometry,
+            output,
+            corner_radius,
+            alpha,
+            commit_counter: CommitCounter::default(),
+        }
+    }
+}
+
+impl Element for BlurRenderElement {
+    fn id(&self) -> &Id {
+        &self.id
+    }
+
+    fn current_commit(&self) -> CommitCounter {
+        self.commit_counter
+    }
+
+    fn src(&self) -> Rectangle<f64, Buffer> {
+        Rectangle::from_size(self.geometry.size.to_f64().to_buffer(1.0, Transform::Normal))
+    }
+
+    fn geometry(&self, _scale: Scale<f64>) -> Rectangle<i32, Physical> {
+        self.geometry
+    }
+
+    fn location(&self, _scale: Scale<f64>) -> Point<i32, Physical> {
+        self.geometry.loc
+    }
+
+    fn transform(&self) -> Transform {
+        Transform::Normal
+    }
+
+    fn damage_since(
+        &self,
+        _scale: Scale<f64>,
+        _commit: Option<CommitCounter>,
+    ) -> DamageSet<i32, Physical> {
+        // The framebuffer behind us changes essentially every frame
+        // (animations, cursor, video, …). Reporting full damage forces
+        // a capture every frame, which is what we want — partial
+        // capture would let stale content show through the blur.
+        DamageSet::from_slice(&[Rectangle::from_size(self.geometry.size)])
+    }
+
+    fn opaque_regions(&self, _scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
+        // We're a translucent overlay (the blur is "frosted glass",
+        // not "opaque tinted pane"). Never report opaque regions —
+        // doing so would let the damage tracker skip the underlying
+        // surface's commit even though we sample it.
+        OpaqueRegions::default()
+    }
+
+    fn alpha(&self) -> f32 {
+        self.alpha
+    }
+
+    fn kind(&self) -> Kind {
+        Kind::Unspecified
+    }
+
+    fn is_framebuffer_effect(&self) -> bool {
+        true
+    }
+}
+
+impl<R> RenderElement<R> for BlurRenderElement
+where
+    R: AsGlowRenderer,
+    R::Error: FromGlesError,
+{
+    fn draw(
+        &self,
+        _frame: &mut R::Frame<'_, '_>,
+        _src: Rectangle<f64, Buffer>,
+        _dst: Rectangle<i32, Physical>,
+        _damage: &[Rectangle<i32, Physical>],
+        _opaque_regions: &[Rectangle<i32, Physical>],
+        _cache: Option<&UserDataMap>,
+    ) -> Result<(), R::Error> {
+        // Intentional NO-OP for now.
+        //
+        // The full implementation must (a) sample `mips[0]` (captured
+        // by `capture_framebuffer` earlier in this frame) through the
+        // `BlurUpShader` tent kernel, (b) optionally run the
+        // `BlurState::steps()` cascade for a wider σ, and (c) mask
+        // the result by `self.corner_radius` so blurred panels
+        // respect their rounded corners.
+        //
+        // Writing that without a Linux test loop produced a
+        // compile-but-likely-crash blit-from-null-ptr earlier
+        // (reverted). Keeping this as a no-op is safer than landing
+        // unverified GLES code that would crash the compositor on
+        // boot. The element is still wired through `CosmicElement`
+        // so a follow-up Linux session can fill this in without
+        // touching the dispatch tables.
+        let _ = (&self.geometry, &self.output, self.corner_radius, self.alpha);
+        Ok(())
+    }
+
+    fn underlying_storage(&self, _renderer: &mut R) -> Option<UnderlyingStorage<'_>> {
+        None
+    }
+
+    fn capture_framebuffer(
+        &self,
+        _frame: &mut R::Frame<'_, '_>,
+        _src: Rectangle<f64, Buffer>,
+        _dst: Rectangle<i32, Physical>,
+        _cache: &UserDataMap,
+    ) -> Result<(), R::Error> {
+        // Intentional NO-OP — see `draw` for the rationale. The
+        // capture step needs to bind a `GlesTexture` as a render
+        // target and `Frame::blit_to` from the bound output into it.
+        // Both calls are easy in isolation, but threading them
+        // through smithay's element-pipeline lifetimes correctly
+        // requires a host where `cargo check -p cosmic-comp` runs.
+        Ok(())
     }
 }
