@@ -56,20 +56,30 @@ pub fn read_locked(path: &Path) -> Result<Option<String>, String> {
 
 /// Write data atomically under an exclusive lock.
 ///
-/// Uses write-to-tmp + rename(2) for crash safety.
+/// Uses write-to-tmp + rename(2) for crash safety, with fsync of the
+/// temp file before rename and fsync of the parent directory after, so
+/// the new bytes are durable on disk after this returns.
+///
+/// Lock surface: a sibling `<path>.lock` sentinel (same idiom as
+/// [`update_locked`]). Locking the data file's own inode was unsafe
+/// because the atomic-write path renames a tmp file over the data
+/// file; the original inode goes away and any flock held on it
+/// becomes useless. A separate sentinel inode is never renamed and
+/// remains a stable synchronization point.
+///
 /// Parent directories are created automatically.
 pub fn write_locked(path: &Path, data: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
 
-    // Open or create the target file for locking.
+    let lock_path = lock_sentinel_path(path);
     let lock_file = OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(false)
-        .open(path)
-        .map_err(|e| format!("open {}: {e}", path.display()))?;
+        .open(&lock_path)
+        .map_err(|e| format!("open lock {}: {e}", lock_path.display()))?;
 
     #[cfg(unix)]
     {
@@ -78,16 +88,31 @@ pub fn write_locked(path: &Path, data: &str) -> Result<(), String> {
         if ret != 0 {
             return Err(format!(
                 "flock LOCK_EX {}: {}",
-                path.display(),
+                lock_path.display(),
                 std::io::Error::last_os_error()
             ));
         }
     }
 
-    // Write to tmp, then atomic rename(2).
+    // Write to tmp + fsync, then atomic rename(2), then fsync the
+    // parent directory so the directory entry is durable too.
     let tmp_path = path.with_extension("tmp");
-    fs::write(&tmp_path, data).map_err(|e| format!("write {}: {e}", tmp_path.display()))?;
+    {
+        let mut tmp = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&tmp_path)
+            .map_err(|e| format!("open tmp {}: {e}", tmp_path.display()))?;
+        tmp.write_all(data.as_bytes())
+            .map_err(|e| format!("write {}: {e}", tmp_path.display()))?;
+        tmp.sync_all()
+            .map_err(|e| format!("fsync {}: {e}", tmp_path.display()))?;
+    }
     fs::rename(&tmp_path, path).map_err(|e| format!("rename {}: {e}", path.display()))?;
+    if let Some(parent) = path.parent() {
+        let _ = sync_dir(parent);
+    }
 
     #[cfg(unix)]
     {
@@ -98,6 +123,21 @@ pub fn write_locked(path: &Path, data: &str) -> Result<(), String> {
     }
 
     drop(lock_file);
+    Ok(())
+}
+
+/// fsync a directory so that recent rename(2) / unlink(2) operations
+/// inside it become durable. Best-effort: opening a directory for
+/// read+fsync is a Linux/POSIX-ism that works on every Unix we ship
+/// to. On non-Unix the call is a no-op.
+#[cfg(unix)]
+fn sync_dir(dir: &Path) -> std::io::Result<()> {
+    let f = File::open(dir)?;
+    f.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_dir(_dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
@@ -224,10 +264,23 @@ where
     let new_data = transform(existing).map_err(UpdateLockError::Transform)?;
 
     let tmp_path = path.with_extension("tmp");
-    fs::write(&tmp_path, &new_data)
-        .map_err(|e| UpdateLockError::Io(format!("write {}: {e}", tmp_path.display())))?;
+    {
+        let mut tmp = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&tmp_path)
+            .map_err(|e| UpdateLockError::Io(format!("open tmp {}: {e}", tmp_path.display())))?;
+        tmp.write_all(new_data.as_bytes())
+            .map_err(|e| UpdateLockError::Io(format!("write {}: {e}", tmp_path.display())))?;
+        tmp.sync_all()
+            .map_err(|e| UpdateLockError::Io(format!("fsync {}: {e}", tmp_path.display())))?;
+    }
     fs::rename(&tmp_path, path)
         .map_err(|e| UpdateLockError::Io(format!("rename {}: {e}", path.display())))?;
+    if let Some(parent) = path.parent() {
+        let _ = sync_dir(parent);
+    }
 
     #[cfg(unix)]
     {

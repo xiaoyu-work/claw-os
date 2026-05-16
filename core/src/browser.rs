@@ -69,9 +69,27 @@ fn clear_pid() {
 }
 
 fn is_process_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if std::path::Path::new(&format!("/proc/{pid}")).exists() {
+            return true;
+        }
+    }
     #[cfg(unix)]
-    unsafe {
-        libc::kill(pid as i32, 0) == 0
+    {
+        let rc = unsafe { libc::kill(pid as i32, 0) };
+        if rc == 0 {
+            return true;
+        }
+        // EPERM => process exists but is owned by a different uid.
+        // Don't claim it's gone — that would let a low-privileged
+        // launcher "reclaim" the PID file and SIGTERM whatever pid
+        // the kernel recycled to next.
+        let err = std::io::Error::last_os_error();
+        return err.raw_os_error() == Some(libc::EPERM);
     }
     #[cfg(not(unix))]
     {
@@ -185,7 +203,13 @@ fn cmd_start(args: &[String]) -> Result<Value, String> {
 
     let pid = child.id();
     write_pid(pid);
-    std::mem::forget(child);
+    // Reap the child in a background thread so the kernel doesn't
+    // accumulate <defunct> entries once cos-browser exits. Replaces
+    // the prior `std::mem::forget(child)` zombie leak.
+    std::thread::spawn(move || {
+        let mut child = child;
+        let _ = child.wait();
+    });
 
     // Poll up to 15 seconds for the CDP endpoint to come online.
     let mut ready = false;

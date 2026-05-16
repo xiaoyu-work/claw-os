@@ -238,6 +238,8 @@ fn cmd_undo(args: &[String]) -> Result<Value, String> {
     }
 
     let mut report = Vec::with_capacity(entries.len());
+    let mut all_ok = true;
+    let mut failed_entries: Vec<String> = Vec::new();
     for entry in entries.iter().rev() {
         let mut rec = json!({
             "seq": entry.meta.seq,
@@ -256,6 +258,8 @@ fn cmd_undo(args: &[String]) -> Result<Value, String> {
                 rec.as_object_mut().unwrap().insert("ok".into(), json!(true));
             }
             Err(e) => {
+                all_ok = false;
+                failed_entries.push(entry.meta.path.clone());
                 rec.as_object_mut().unwrap().insert("ok".into(), json!(false));
                 rec.as_object_mut().unwrap().insert("error".into(), json!(e));
             }
@@ -263,18 +267,34 @@ fn cmd_undo(args: &[String]) -> Result<Value, String> {
         report.push(rec);
     }
 
-    // Once everything is restored, drop the trash dir so a second
-    // `cos perms undo` is a no-op rather than a double-restore.
-    if !dry_run {
+    // Only drop the trash dir if EVERY restore succeeded. If even
+    // one entry failed (permission, disk-full, parent not writable)
+    // the only authoritative copy of the deleted data is still in
+    // the trash dir — wiping it would destroy the operator's last
+    // chance to retry. Leave the trash in place and surface the
+    // unrecovered paths so they can be inspected manually.
+    let trash_preserved = !dry_run && !all_ok;
+    if !dry_run && all_ok {
         let _ = fs::remove_dir_all(trash_root().join(&sid));
     }
 
-    Ok(json!({
+    let mut out = json!({
         "session": sid,
         "undone": report.len(),
         "dry_run": dry_run,
         "entries": report,
-    }))
+    });
+    if trash_preserved {
+        let obj = out.as_object_mut().unwrap();
+        obj.insert("ok".into(), json!(false));
+        obj.insert("trash_preserved".into(), json!(true));
+        obj.insert("unrecovered_paths".into(), json!(failed_entries));
+        obj.insert(
+            "hint".into(),
+            json!("trash dir kept so the failed entries can still be recovered manually"),
+        );
+    }
+    Ok(out)
 }
 
 /// True if `sid_str` is the id of a durable session that lives under
@@ -962,6 +982,78 @@ mod tests {
         }
         match prev_mode {
             Some(m) => std::env::set_var("COS_PERMS_MODE", m),
+            None => std::env::remove_var("COS_PERMS_MODE"),
+        }
+    }
+
+    /// Regression for the HIGH data-loss bug where `cmd_undo`
+    /// unconditionally wiped the trash directory after attempting
+    /// restores — even when some entries failed (permission denied,
+    /// disk full, parent missing). The on-disk blobs are the ONLY
+    /// authoritative copy of the deleted data; nuking them on
+    /// failure made retry impossible. After the fix the trash dir
+    /// is preserved whenever any entry failed.
+    #[test]
+    fn undo_preserves_trash_on_failed_restore() {
+        let prev_data = std::env::var("COS_DATA_DIR").ok();
+        let prev_sess = std::env::var("COS_SESSION").ok();
+        let prev_mode = std::env::var("COS_PERMS_MODE").ok();
+
+        let tmp = std::env::temp_dir().join(format!(
+            "cos-test-undo-fail-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+        std::env::set_var("COS_DATA_DIR", &tmp);
+        std::env::set_var("COS_PERMS_MODE", "permissive");
+        std::env::remove_var("COS_SESSION");
+
+        let sid = "test-undo-fail";
+        let trash_dir = trash_root().join(sid);
+        fs::create_dir_all(&trash_dir).unwrap();
+
+        // Stage one trash entry whose blob is missing — `restore_entry`
+        // will fail with an IO error when `fs::copy(blob, target)`
+        // can't find the source. We choose `kind: "file"` because
+        // that branch dereferences entry.dir/blob.
+        let seq_dir = trash_dir.join("00001");
+        fs::create_dir_all(&seq_dir).unwrap();
+        // NOTE: deliberately do NOT create seq_dir/blob.
+        let target = tmp.join("target.txt");
+        let meta = json!({
+            "op": "fs.write",
+            "path": target.to_string_lossy(),
+            "kind": "file",
+            "snapshot_at": 1_u64,
+            "session": sid,
+            "seq": "00001",
+        });
+        fs::write(seq_dir.join("meta.json"), meta.to_string()).unwrap();
+
+        let r = cmd_undo(&["--session".into(), sid.into()]).unwrap();
+        // Restore failed → trash dir must still exist.
+        assert!(
+            trash_dir.exists(),
+            "trash dir must be preserved when any restore fails"
+        );
+        assert_eq!(r["ok"], false);
+        assert_eq!(r["trash_preserved"], true);
+        let unrecovered = r["unrecovered_paths"].as_array().unwrap();
+        assert_eq!(unrecovered.len(), 1);
+
+        let _ = fs::remove_dir_all(&tmp);
+        match prev_data {
+            Some(v) => std::env::set_var("COS_DATA_DIR", v),
+            None => std::env::remove_var("COS_DATA_DIR"),
+        }
+        match prev_sess {
+            Some(v) => std::env::set_var("COS_SESSION", v),
+            None => std::env::remove_var("COS_SESSION"),
+        }
+        match prev_mode {
+            Some(v) => std::env::set_var("COS_PERMS_MODE", v),
             None => std::env::remove_var("COS_PERMS_MODE"),
         }
     }

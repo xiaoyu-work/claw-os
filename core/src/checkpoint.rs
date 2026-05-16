@@ -138,6 +138,90 @@ fn next_checkpoint_id(checkpoints_dir: &Path) -> String {
     format!("{:03}", max + 1)
 }
 
+/// Acquire an exclusive create-lock for `checkpoints_dir`. Pure RAII:
+/// the returned guard removes the sentinel on drop.
+///
+/// Without this, two parallel `cos checkpoint create` invocations
+/// will both call `next_checkpoint_id` (TOCTOU), pick the same id,
+/// and one of them will silently overwrite the other's freshly
+/// created `meta.json` and layer.
+struct CreateLockGuard {
+    path: PathBuf,
+}
+
+impl Drop for CreateLockGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn acquire_create_lock(checkpoints_dir: &Path) -> Result<CreateLockGuard, String> {
+    use std::io::Write;
+    fs::create_dir_all(checkpoints_dir)
+        .map_err(|e| format!("failed to create checkpoints dir: {e}"))?;
+    let lock_path = checkpoints_dir.join(".create.lock");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+        {
+            Ok(mut f) => {
+                let _ = write!(f, "{}", std::process::id());
+                return Ok(CreateLockGuard {
+                    path: lock_path.clone(),
+                });
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                // Stale-lock reclaim: if the recorded pid is gone,
+                // remove and retry.
+                if let Ok(meta) = fs::metadata(&lock_path) {
+                    let age = meta
+                        .modified()
+                        .ok()
+                        .and_then(|m| m.elapsed().ok())
+                        .unwrap_or_default();
+                    let pid_str = fs::read_to_string(&lock_path).unwrap_or_default();
+                    let pid: u32 = pid_str.trim().parse().unwrap_or(0);
+                    let stale_by_pid = pid != 0
+                        && !{
+                            #[cfg(unix)]
+                            {
+                                let rc = unsafe { libc::kill(pid as i32, 0) };
+                                rc == 0
+                                    || std::io::Error::last_os_error().raw_os_error()
+                                        == Some(libc::EPERM)
+                            }
+                            #[cfg(not(unix))]
+                            {
+                                false
+                            }
+                        };
+                    let stale_by_age = age >= std::time::Duration::from_secs(60);
+                    if stale_by_pid || stale_by_age {
+                        let _ = fs::remove_file(&lock_path);
+                        continue;
+                    }
+                }
+                if std::time::Instant::now() >= deadline {
+                    return Err(format!(
+                        "timed out waiting for checkpoint create lock at {}",
+                        lock_path.display()
+                    ));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(e) => {
+                return Err(format!(
+                    "failed to acquire create lock {}: {e}",
+                    lock_path.display()
+                ))
+            }
+        }
+    }
+}
+
 /// Return all numeric IDs found in checkpoint directory names.
 ///
 /// Directory names follow the pattern `{id}-{description}` where id is a
@@ -153,6 +237,12 @@ fn existing_ids(checkpoints_dir: &Path) -> Vec<u32> {
         .filter(|e| e.path().is_dir())
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().to_string();
+            // Skip hidden / sentinel entries — `.create.lock` and
+            // any future staging directories must not influence id
+            // allocation.
+            if name.starts_with('.') {
+                return None;
+            }
             // Take everything before the first '-' as the numeric ID.
             let id_part = name.split('-').next()?;
             id_part.parse::<u32>().ok()
@@ -342,29 +432,50 @@ fn cmd_create(args: &[String]) -> Result<Value, String> {
     fs::create_dir_all(&checkpoints_dir)
         .map_err(|e| format!("failed to create checkpoints dir: {e}"))?;
 
-    let id = next_checkpoint_id(&checkpoints_dir);
-    let slug = sanitize_description(&description);
-    let dir_name = if slug.is_empty() {
-        id.clone()
-    } else {
-        format!("{id}-{slug}")
-    };
+    // Take the exclusive create-lock for the lifetime of this
+    // operation. Without it, two parallel callers race on
+    // next_checkpoint_id and silently produce duplicates.
+    let _lock = acquire_create_lock(&checkpoints_dir)?;
 
-    let cp_dir = checkpoints_dir.join(&dir_name);
+    // Allocate the id under the lock, then retry past any
+    // pre-existing dir (e.g., a partial recover artifact). Use the
+    // first id that does not currently exist on disk.
+    let mut id_num = existing_ids(&checkpoints_dir).into_iter().max().unwrap_or(0) + 1;
+    let slug = sanitize_description(&description);
+    let (id, dir_name, cp_dir) = loop {
+        let id_s = format!("{:03}", id_num);
+        let dn = if slug.is_empty() {
+            id_s.clone()
+        } else {
+            format!("{id_s}-{slug}")
+        };
+        let cp = checkpoints_dir.join(&dn);
+        if !cp.exists() {
+            break (id_s, dn, cp);
+        }
+        id_num += 1;
+        if id_num > 999_999 {
+            return Err("checkpoint id space exhausted".into());
+        }
+    };
     let cp_layer = cp_dir.join("layer");
 
     // Count files before we move.
     let files_changed = count_files_in_upper(&upper);
 
-    // 1. Unmount the overlay (best-effort — may not be mounted).
-    let _ = umount_overlay();
-
-    // 2. Move current upper → checkpoint layer.
+    // 1. Create the checkpoint directory.
     fs::create_dir_all(&cp_dir).map_err(|e| format!("failed to create checkpoint dir: {e}"))?;
-    fs::rename(&upper, &cp_layer)
-        .map_err(|e| format!("failed to move upper to checkpoint: {e}"))?;
 
-    // 3. Write meta.json.
+    // 2. Write meta.json FIRST.
+    //
+    // This inverts the prior write order so a crash *before*
+    // moving the upper leaves a meta-only directory (no layer),
+    // which `cmd_list` now skips as incomplete. The prior order
+    // (rename upper → cp_layer, THEN write meta) had two distinct
+    // failure modes: a crash between rename and meta-write left a
+    // layer with no meta (silently un-listable) AND a crash between
+    // rename and the new-upper mkdir left the workspace with no
+    // upper at all.
     let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let meta = CheckpointMeta {
         id: id.clone(),
@@ -372,20 +483,32 @@ fn cmd_create(args: &[String]) -> Result<Value, String> {
         created_at: now.clone(),
         files_changed,
     };
-    let meta_path = cp_dir.join("meta.json");
     let meta_json = serde_json::to_string_pretty(&meta)
         .map_err(|e| format!("failed to serialize meta: {e}"))?;
-    crate::filelock::write_locked(&meta_path, &meta_json)
+    crate::filelock::write_locked(&cp_dir.join("meta.json"), &meta_json)
         .map_err(|e| format!("failed to write meta.json: {e}"))?;
 
-    // 4. Create fresh empty upper + work dir.
+    // 3. Unmount the overlay (best-effort — may not be mounted).
+    let _ = umount_overlay();
+
+    // 4. Move current upper → checkpoint layer. If the upper
+    //    didn't exist (fresh install), create an empty layer so
+    //    cmd_list's both-exist invariant still holds.
+    if upper.exists() {
+        fs::rename(&upper, &cp_layer)
+            .map_err(|e| format!("failed to move upper to checkpoint: {e}"))?;
+    } else {
+        fs::create_dir_all(&cp_layer)
+            .map_err(|e| format!("failed to create empty checkpoint layer: {e}"))?;
+    }
+
+    // 5. Create fresh empty upper + work dir.
     fs::create_dir_all(&upper).map_err(|e| format!("failed to create fresh upper: {e}"))?;
-    // Recreate work dir — overlayfs requires a clean workdir after remount.
     let work = overlay.join("work");
     let _ = fs::remove_dir_all(&work);
     fs::create_dir_all(&work).map_err(|e| format!("failed to create work dir: {e}"))?;
 
-    // 5. Remount overlay (best-effort).
+    // 6. Remount overlay (best-effort).
     let mount_err = mount_overlay().err();
 
     let mut result = json!({
@@ -486,33 +609,73 @@ fn cmd_rollback(args: &[String]) -> Result<Value, String> {
     // 1. Unmount overlay (best-effort).
     let _ = umount_overlay();
 
-    // 2. Wipe current upper.
-    if upper.exists() {
-        fs::remove_dir_all(&upper).map_err(|e| format!("failed to remove upper: {e}"))?;
-    }
-
-    // 3. Restore the validated layer (or leave upper empty for base reset).
+    // 2. Restore via stage-then-swap.
+    //
+    // Old order: rm -r upper, then copy layer → upper. A crash in
+    // the gap between the rm and the copy left the workspace with
+    // NO upper at all — i.e., all uncommitted changes destroyed
+    // and the checkpoint contents not yet visible.
+    //
+    // New order: stage the new upper alongside the old one
+    // (`upper.new`), copy the layer into the stage, then atomically
+    // swap (`rename upper -> upper.old`, then `rename upper.new ->
+    // upper`, then `rm upper.old`). The window where `upper` is
+    // missing collapses to one fs::rename. For the no-id "reset to
+    // base" path the stage is just an empty directory.
     let rolled_back_to = match resolved_layer {
         Some((target_id, layer)) => {
-            // Copy (not move) the layer as the new upper so the checkpoint is
-            // preserved for future rollbacks.
-            copy_dir_recursive(&layer, &upper)
-                .map_err(|e| format!("failed to restore checkpoint layer: {e}"))?;
+            let new_upper = overlay.join("upper.new");
+            let old_upper = overlay.join("upper.old");
+            // Remove leftover from any earlier botched run.
+            let _ = fs::remove_dir_all(&new_upper);
+            let _ = fs::remove_dir_all(&old_upper);
+            copy_dir_recursive(&layer, &new_upper)
+                .map_err(|e| format!("failed to stage checkpoint layer: {e}"))?;
+            if upper.exists() {
+                fs::rename(&upper, &old_upper)
+                    .map_err(|e| format!("failed to move current upper aside: {e}"))?;
+            }
+            if let Err(e) = fs::rename(&new_upper, &upper) {
+                // Try to put the original upper back so we don't
+                // leave the workspace with no upper at all.
+                if old_upper.exists() {
+                    let _ = fs::rename(&old_upper, &upper);
+                }
+                return Err(format!("failed to swap staged upper into place: {e}"));
+            }
+            let _ = fs::remove_dir_all(&old_upper);
             target_id
         }
         None => {
-            // No id → reset to base (empty upper).
-            fs::create_dir_all(&upper).map_err(|e| format!("failed to create empty upper: {e}"))?;
+            // No id → reset to base (empty upper). Same stage-and-swap
+            // pattern: stage an empty dir, then swap.
+            let new_upper = overlay.join("upper.new");
+            let old_upper = overlay.join("upper.old");
+            let _ = fs::remove_dir_all(&new_upper);
+            let _ = fs::remove_dir_all(&old_upper);
+            fs::create_dir_all(&new_upper)
+                .map_err(|e| format!("failed to stage empty upper: {e}"))?;
+            if upper.exists() {
+                fs::rename(&upper, &old_upper)
+                    .map_err(|e| format!("failed to move current upper aside: {e}"))?;
+            }
+            if let Err(e) = fs::rename(&new_upper, &upper) {
+                if old_upper.exists() {
+                    let _ = fs::rename(&old_upper, &upper);
+                }
+                return Err(format!("failed to swap staged upper into place: {e}"));
+            }
+            let _ = fs::remove_dir_all(&old_upper);
             "base".to_string()
         }
     };
 
-    // 4. Recreate work dir.
+    // 3. Recreate work dir.
     let work = overlay.join("work");
     let _ = fs::remove_dir_all(&work);
     fs::create_dir_all(&work).map_err(|e| format!("failed to create work dir: {e}"))?;
 
-    // 5. Remount overlay (best-effort).
+    // 4. Remount overlay (best-effort).
     let mount_err = mount_overlay().err();
 
     let mut result = json!({
@@ -535,6 +698,12 @@ fn find_checkpoint_dir(checkpoints_dir: &Path, id: &str) -> Result<PathBuf, Stri
     let prefix = format!("{id}-");
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
+        // Hidden / sentinel dirs (`.create.lock`, staging dirs) are
+        // never user-addressable checkpoints — refuse to resolve to
+        // them even on a literal id match.
+        if name.starts_with('.') {
+            continue;
+        }
         if name == id || name.starts_with(&prefix) {
             let p = entry.path();
             if p.is_dir() {
@@ -631,7 +800,22 @@ fn cmd_list(_args: &[String]) -> Result<Value, String> {
     dirs.sort_by_key(|e| e.file_name());
 
     for entry in dirs {
-        let meta_path = entry.path().join("meta.json");
+        let name = entry.file_name().to_string_lossy().to_string();
+        // Skip hidden / sentinel entries (`.create.lock`, future
+        // staging dirs, …).
+        if name.starts_with('.') {
+            continue;
+        }
+        let cp_path = entry.path();
+        let meta_path = cp_path.join("meta.json");
+        let layer_path = cp_path.join("layer");
+        // An incomplete checkpoint (created mid-crash) is one
+        // where meta.json or the layer/ subdir is missing. List
+        // must hide those so rollback can't restore half a
+        // checkpoint and so the count is meaningful.
+        if !layer_path.is_dir() {
+            continue;
+        }
         if let Ok(Some(data)) = crate::filelock::read_locked(&meta_path) {
             if let Ok(meta) = serde_json::from_str::<CheckpointMeta>(&data) {
                 checkpoints.push(json!({
@@ -1657,5 +1841,83 @@ mod tests {
         assert_eq!(res["rolled_back_to"], "base");
         assert!(upper.exists(), "upper should be re-created empty");
         assert!(!upper.join("scratch.txt").exists(), "scratch should be gone");
+    }
+
+    /// Crashes in the middle of cmd_create must NOT pollute the
+    /// checkpoint list with half-built entries. Specifically, a
+    /// directory whose meta.json was written but whose `layer/`
+    /// did not survive the rename, OR a directory whose `layer/`
+    /// exists but whose meta.json was never written, must be
+    /// invisible to `cmd_list` and `find_checkpoint_dir`.
+    #[test]
+    fn create_is_atomic_on_crash() {
+        perms_init();
+        let _g = cp_setup();
+
+        let overlay = overlay_dir();
+        let checkpoints = overlay.join("checkpoints");
+        let _ = fs::remove_dir_all(&checkpoints);
+        fs::create_dir_all(&checkpoints).unwrap();
+
+        // 1) A complete checkpoint — should be visible.
+        let good = checkpoints.join("001-good");
+        fs::create_dir_all(good.join("layer")).unwrap();
+        let meta = CheckpointMeta {
+            id: "001".to_string(),
+            description: "good".to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            files_changed: 0,
+        };
+        fs::write(
+            good.join("meta.json"),
+            serde_json::to_string_pretty(&meta).unwrap(),
+        )
+        .unwrap();
+
+        // 2) Crash AFTER meta.json was written but BEFORE the
+        //    upper-rename completed: meta.json present, layer
+        //    missing.
+        let no_layer = checkpoints.join("002-no-layer");
+        fs::create_dir_all(&no_layer).unwrap();
+        let meta2 = CheckpointMeta {
+            id: "002".to_string(),
+            description: "no-layer".to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            files_changed: 0,
+        };
+        fs::write(
+            no_layer.join("meta.json"),
+            serde_json::to_string_pretty(&meta2).unwrap(),
+        )
+        .unwrap();
+
+        // 3) Legacy crash from the old write-meta-last code path:
+        //    layer present, meta.json missing.
+        let no_meta = checkpoints.join("003-no-meta");
+        fs::create_dir_all(no_meta.join("layer")).unwrap();
+
+        // 4) A hidden sentinel — the create-lock file. Must NEVER
+        //    be reported.
+        fs::write(checkpoints.join(".create.lock"), b"99999").unwrap();
+
+        // cmd_list must only surface the complete checkpoint.
+        let list = cmd_list(&vec![]).unwrap();
+        let arr = list["checkpoints"].as_array().unwrap();
+        let ids: Vec<&str> = arr.iter().map(|c| c["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, vec!["001"], "list must hide partial checkpoints");
+        assert_eq!(list["count"], 1);
+
+        // find_checkpoint_dir must refuse the sentinel even if
+        // someone passes its literal name.
+        let err = find_checkpoint_dir(&checkpoints, ".create.lock").unwrap_err();
+        assert!(
+            err.contains("not found"),
+            "must not resolve to the create-lock sentinel: {err}"
+        );
+
+        // existing_ids must ignore the sentinel — next_checkpoint_id
+        // proceeds as 003 + 1 = 004 (NOT some giant value derived
+        // from the sentinel's filename).
+        assert_eq!(next_checkpoint_id(&checkpoints), "004");
     }
 }

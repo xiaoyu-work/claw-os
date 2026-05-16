@@ -95,6 +95,7 @@ pub fn bootstrap_user_cli_session() -> Option<SessionGuard> {
         priority: None,
         caps: Some(caps),
         role: Some(Role::Admin.name().to_string()),
+        start_time_ticks: None,
     };
 
     match register_session(info) {
