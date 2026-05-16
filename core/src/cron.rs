@@ -79,6 +79,11 @@ struct CronRunResult {
     stdout_tail: Option<String>,
     stderr_tail: Option<String>,
     duration_ms: Option<u64>,
+    /// PID of the spawned shell. Recorded so that, on cos restart,
+    /// `is_running` can decide whether a stale `status: "running"`
+    /// row belongs to a still-live process or a crashed run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pid: Option<u32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -240,6 +245,33 @@ fn save_job(job: &CronJob) -> Result<(), String> {
         .map_err(|e| format!("failed to write job: {e}"))
 }
 
+/// Atomic read-modify-write on a single cron job file. Eliminates
+/// the lost-update race between concurrent `cos cron run X` and
+/// `cos cron tick` invocations (the prior load_job + mutate +
+/// save_job pattern would clobber whichever path finished writing
+/// second).
+fn update_job<F>(id: &str, transform: F) -> Result<CronJob, String>
+where
+    F: FnOnce(CronJob) -> Result<CronJob, String>,
+{
+    let path = job_path(id);
+    let captured: std::cell::RefCell<Option<CronJob>> = std::cell::RefCell::new(None);
+    crate::filelock::update_locked::<_, String>(&path, |existing| {
+        let raw = existing.ok_or_else(|| format!("cron job not found: {id}"))?;
+        let job: CronJob = serde_json::from_str(&raw)
+            .map_err(|e| format!("failed to parse job {id}: {e}"))?;
+        let next = transform(job)?;
+        let data = serde_json::to_string_pretty(&next)
+            .map_err(|e| format!("failed to serialize job: {e}"))?;
+        *captured.borrow_mut() = Some(next);
+        Ok(data)
+    })
+    .map_err(|e| e.to_string())?;
+    captured
+        .into_inner()
+        .ok_or_else(|| "internal: update_job lost captured job".to_string())
+}
+
 fn list_all_jobs() -> Result<Vec<CronJob>, String> {
     let dir = jobs_dir();
     if !dir.is_dir() {
@@ -339,6 +371,10 @@ fn execute_job(job: &CronJob) -> CronRunResult {
 
     let mut cmd = std::process::Command::new(shell);
     cmd.arg(shell_flag).arg(&job.command);
+    // Default stdin to /dev/null so a job that mistakenly tries to
+    // read input doesn't block forever inheriting the cos parent
+    // tty / pipe.
+    cmd.stdin(std::process::Stdio::null());
 
     // Inject cron context env vars
     cmd.env("COS_CRON_JOB", &job.id);
@@ -352,18 +388,50 @@ fn execute_job(job: &CronJob) -> CronRunResult {
         cmd.env("COS_SCOPE", scope);
     }
 
-    // Inject credentials via the credential store (decrypted, tier-checked, expiry-checked)
+    // Inject credentials via 0600 files instead of env vars. Any
+    // same-uid process can read `/proc/<pid>/environ`, so dropping
+    // the secret value into `cmd.env(...)` exposes it to a
+    // surprisingly wide set of attackers (and worse, the script's
+    // own `env > log.txt` lines). The shim file is mode 0600, owned
+    // by the caller, and lives only inside this run's scratch
+    // directory.
+    let cred_dir = match prepare_cred_dir(&job.id) {
+        Ok(d) => d,
+        Err(e) => {
+            let end = chrono::Utc::now();
+            let duration = (end - start).num_milliseconds().max(0) as u64;
+            return CronRunResult {
+                started_at,
+                finished_at: Some(format_time(&end)),
+                exit_code: None,
+                status: "failed".to_string(),
+                stdout_tail: None,
+                stderr_tail: Some(format!("failed to prepare credential dir: {e}")),
+                duration_ms: Some(duration),
+                pid: None,
+            };
+        }
+    };
+    let mut cred_files: Vec<PathBuf> = Vec::new();
     for cred_name in &job.credentials {
         match crate::credential::run("load", &[cred_name.clone()]) {
             Ok(v) => {
                 if let Some(val) = v["value"].as_str() {
-                    let env_key =
-                        format!("COS_CRED_{}", cred_name.to_uppercase().replace('-', "_"));
-                    cmd.env(env_key, val);
+                    let safe_name = cred_name.to_uppercase().replace('-', "_");
+                    let p = cred_dir.join(format!("{safe_name}.cred"));
+                    if let Err(e) = write_cred_file(&p, val) {
+                        eprintln!(
+                            "warning: failed to write credential file for '{}': {}",
+                            cred_name, e
+                        );
+                        continue;
+                    }
+                    cred_files.push(p.clone());
+                    let env_key = format!("COS_CRED_{}_FILE", safe_name);
+                    cmd.env(env_key, &p);
                 }
             }
             Err(e) => {
-                // Log but don't fail the job — credential might be optional
                 eprintln!("warning: failed to load credential '{}': {}", cred_name, e);
             }
         }
@@ -378,6 +446,7 @@ fn execute_job(job: &CronJob) -> CronRunResult {
         Err(e) => {
             let end = chrono::Utc::now();
             let duration = (end - start).num_milliseconds().max(0) as u64;
+            cleanup_cred_files(&cred_files);
             return CronRunResult {
                 started_at,
                 finished_at: Some(format_time(&end)),
@@ -386,59 +455,64 @@ fn execute_job(job: &CronJob) -> CronRunResult {
                 stdout_tail: None,
                 stderr_tail: Some(format!("failed to spawn: {e}")),
                 duration_ms: Some(duration),
+                pid: None,
             };
         }
     };
+    let child_pid = child.id();
 
-    // Apply timeout if configured
-    if let Some(timeout_secs) = job.timeout_secs {
-        return wait_with_timeout(child, &started_at, &start, timeout_secs);
+    // Always go through the bounded drainer. The previous
+    // wait_with_output path read ALL output into memory, so a
+    // multi-GB log line would OOM the cron driver and take down
+    // tick processing for every other job.
+    let effective_timeout = job.timeout_secs.unwrap_or(u64::MAX);
+    let mut result = wait_with_timeout(child, &started_at, &start, effective_timeout);
+    result.pid = Some(child_pid);
+    cleanup_cred_files(&cred_files);
+    result
+}
+
+fn prepare_cred_dir(job_id: &str) -> std::io::Result<PathBuf> {
+    let dir = cron_dir().join("run").join(job_id);
+    fs::create_dir_all(&dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
     }
+    Ok(dir)
+}
 
-    // No timeout — wait indefinitely
-    match child.wait_with_output() {
-        Ok(output) => {
-            let end = chrono::Utc::now();
-            let duration = (end - start).num_milliseconds().max(0) as u64;
-            let code = output.status.code();
-            let status = if output.status.success() {
-                "success"
-            } else {
-                "failed"
-            };
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            CronRunResult {
-                started_at,
-                finished_at: Some(format_time(&end)),
-                exit_code: code,
-                status: status.to_string(),
-                stdout_tail: if stdout.is_empty() {
-                    None
-                } else {
-                    Some(tail_string(&stdout))
-                },
-                stderr_tail: if stderr.is_empty() {
-                    None
-                } else {
-                    Some(tail_string(&stderr))
-                },
-                duration_ms: Some(duration),
-            }
-        }
-        Err(e) => {
-            let end = chrono::Utc::now();
-            let duration = (end - start).num_milliseconds().max(0) as u64;
-            CronRunResult {
-                started_at,
-                finished_at: Some(format_time(&end)),
-                exit_code: None,
-                status: "failed".to_string(),
-                stdout_tail: None,
-                stderr_tail: Some(format!("wait failed: {e}")),
-                duration_ms: Some(duration),
-            }
-        }
+fn write_cred_file(path: &PathBuf, value: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        f.write_all(value.as_bytes())?;
+        f.flush()?;
+    }
+    #[cfg(not(unix))]
+    {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)?;
+        f.write_all(value.as_bytes())?;
+        f.flush()?;
+    }
+    Ok(())
+}
+
+fn cleanup_cred_files(files: &[PathBuf]) {
+    for p in files {
+        let _ = fs::remove_file(p);
     }
 }
 
@@ -452,7 +526,19 @@ fn wait_with_timeout(
     use std::sync::{Arc, Mutex};
     use std::thread;
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    /// Per-stream output cap. A misbehaving job can otherwise pin
+    /// gigabytes in the cron driver's RSS and OOM-kill the
+    /// scheduler. We cap at 1 MiB which is far larger than the
+    /// 2 KiB tail we eventually keep — plenty of headroom for the
+    /// `tail_string` window — and continue draining the pipe past
+    /// the cap so the writer doesn't wedge on a full pipe.
+    const STREAM_CAP_BYTES: usize = 1 * 1024 * 1024;
+
+    let deadline = if timeout_secs == u64::MAX {
+        None
+    } else {
+        Some(std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs))
+    };
 
     // Drain stdout / stderr on background threads while we poll
     // try_wait. Without this, a job that produces more than the
@@ -461,27 +547,25 @@ fn wait_with_timeout(
     // None, and we falsely report "timeout" even though the command
     // would have completed if anyone had been reading its output.
     //
-    // Threads exit when read_to_end sees EOF, which happens when
-    // either the child exits naturally OR we kill it on timeout.
+    // Threads exit when read sees EOF, which happens when either
+    // the child exits naturally OR we kill it on timeout. They keep
+    // draining past STREAM_CAP_BYTES but discard those bytes so the
+    // pipe never fills and the child never blocks.
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     let stdout_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
     let stderr_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let stdout_truncated = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stderr_truncated = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stdout_thread = stdout.map(|mut s| {
         let buf = Arc::clone(&stdout_buf);
-        thread::spawn(move || {
-            let mut tmp = Vec::new();
-            let _ = s.read_to_end(&mut tmp);
-            buf.lock().expect("stdout buf").extend_from_slice(&tmp);
-        })
+        let truncated = Arc::clone(&stdout_truncated);
+        thread::spawn(move || drain_capped(&mut s, &buf, &truncated, STREAM_CAP_BYTES))
     });
     let stderr_thread = stderr.map(|mut s| {
         let buf = Arc::clone(&stderr_buf);
-        thread::spawn(move || {
-            let mut tmp = Vec::new();
-            let _ = s.read_to_end(&mut tmp);
-            buf.lock().expect("stderr buf").extend_from_slice(&tmp);
-        })
+        let truncated = Arc::clone(&stderr_truncated);
+        thread::spawn(move || drain_capped(&mut s, &buf, &truncated, STREAM_CAP_BYTES))
     });
 
     // Poll for natural exit; break on exit or on timeout-induced kill.
@@ -494,10 +578,12 @@ fn wait_with_timeout(
         match child.try_wait() {
             Ok(Some(status)) => break Reap::Exited(status),
             Ok(None) => {
-                if std::time::Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait(); // reap
-                    break Reap::Killed;
+                if let Some(dl) = deadline {
+                    if std::time::Instant::now() >= dl {
+                        let _ = child.kill();
+                        let _ = child.wait(); // reap
+                        break Reap::Killed;
+                    }
                 }
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
@@ -527,6 +613,24 @@ fn wait_with_timeout(
     } else {
         Some(tail_string(&stderr_string))
     };
+    let stdout_tail = if stdout_truncated.load(std::sync::atomic::Ordering::Relaxed) {
+        Some(format!(
+            "{}\n[truncated: stdout exceeded {} bytes]",
+            stdout_tail.as_deref().unwrap_or(""),
+            STREAM_CAP_BYTES
+        ))
+    } else {
+        stdout_tail
+    };
+    let stderr_tail_base = if stderr_truncated.load(std::sync::atomic::Ordering::Relaxed) {
+        Some(format!(
+            "{}\n[truncated: stderr exceeded {} bytes]",
+            stderr_tail_base.as_deref().unwrap_or(""),
+            STREAM_CAP_BYTES
+        ))
+    } else {
+        stderr_tail_base
+    };
 
     let end = chrono::Utc::now();
     let duration = (end - *start).num_milliseconds().max(0) as u64;
@@ -543,6 +647,7 @@ fn wait_with_timeout(
                 stdout_tail,
                 stderr_tail: stderr_tail_base,
                 duration_ms: Some(duration),
+                pid: None,
             }
         }
         Reap::Killed => CronRunResult {
@@ -557,6 +662,7 @@ fn wait_with_timeout(
                     .unwrap_or_else(|| format!("[killed: timeout after {timeout_secs}s]")),
             ),
             duration_ms: Some(duration),
+            pid: None,
         },
         Reap::Errored(msg) => CronRunResult {
             started_at: started_at.to_string(),
@@ -566,7 +672,38 @@ fn wait_with_timeout(
             stdout_tail,
             stderr_tail: Some(msg),
             duration_ms: Some(duration),
+            pid: None,
         },
+    }
+}
+
+/// Read from `s` indefinitely until EOF, but only retain the first
+/// `cap` bytes in `buf`. Bytes after `cap` are read and discarded so
+/// the writer never wedges on a full pipe.
+fn drain_capped<R: std::io::Read>(
+    s: &mut R,
+    buf: &std::sync::Mutex<Vec<u8>>,
+    truncated: &std::sync::atomic::AtomicBool,
+    cap: usize,
+) {
+    let mut chunk = [0u8; 8192];
+    loop {
+        match s.read(&mut chunk) {
+            Ok(0) => return,
+            Ok(n) => {
+                let mut held = buf.lock().expect("drain buf");
+                if held.len() < cap {
+                    let want = (cap - held.len()).min(n);
+                    held.extend_from_slice(&chunk[..want]);
+                    if n > want {
+                        truncated.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                } else {
+                    truncated.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            Err(_) => return,
+        }
     }
 }
 
@@ -574,8 +711,54 @@ fn wait_with_timeout(
 // Overlap checking
 // ---------------------------------------------------------------------------
 
+/// Whether the job's last-recorded run is still active.
+///
+/// Returns true only when the recorded pid is still alive. Crashes
+/// of the cos process while a run was marked `running` would
+/// otherwise leave `last_run.status == "running"` on disk forever
+/// — blocking every subsequent tick under the default Skip policy.
 fn is_running(job: &CronJob) -> bool {
-    matches!(&job.last_run, Some(r) if r.status == "running")
+    let Some(r) = &job.last_run else {
+        return false;
+    };
+    if r.status != "running" {
+        return false;
+    }
+    match r.pid {
+        // Recorded pid: verify it still exists. EPERM => alive
+        // under a different uid, also counts as running.
+        Some(pid) => pid_alive(pid),
+        // Legacy entries (no pid) — fall back to old behaviour:
+        // trust the on-disk status. Newer runs will always carry a
+        // pid, so this only affects entries written by older cos.
+        None => true,
+    }
+}
+
+fn pid_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if std::path::Path::new(&format!("/proc/{pid}")).exists() {
+            return true;
+        }
+    }
+    #[cfg(unix)]
+    {
+        let rc = unsafe { libc::kill(pid as i32, 0) };
+        if rc == 0 {
+            return true;
+        }
+        let err = std::io::Error::last_os_error();
+        return err.raw_os_error() == Some(libc::EPERM);
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        false
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -888,52 +1071,54 @@ fn cmd_run(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::PROC_SPAWN, Scope::wild()).map_err(|v| v.to_string())?;
 
     let id = args.first().ok_or("usage: cos cron run <id>")?;
-    let mut job = load_job(id)?;
 
-    // Respect overlap policy
-    if is_running(&job) {
-        match job.overlap_policy {
-            OverlapPolicy::Skip => {
-                return Ok(json!({
-                    "job_id": id,
-                    "status": "skipped",
-                    "reason": "previous run is still running (overlap_policy: Skip)",
-                }));
-            }
-            OverlapPolicy::Queue | OverlapPolicy::Kill | OverlapPolicy::Allow => {
-                // For manual runs, proceed for Queue/Kill/Allow
-            }
+    // Phase 1: claim the run slot atomically. update_job rejects
+    // any concurrent claimant who saw is_running=true under Skip.
+    let job = update_job(id, |mut job| {
+        if is_running(&job) && job.overlap_policy == OverlapPolicy::Skip {
+            return Err("__SKIPPED__".to_string());
         }
-    }
-
-    // Mark as running
-    let running_marker = CronRunResult {
-        started_at: format_time(&chrono::Utc::now()),
-        finished_at: None,
-        exit_code: None,
-        status: "running".to_string(),
-        stdout_tail: None,
-        stderr_tail: None,
-        duration_ms: None,
+        let running_marker = CronRunResult {
+            started_at: format_time(&chrono::Utc::now()),
+            finished_at: None,
+            exit_code: None,
+            status: "running".to_string(),
+            stdout_tail: None,
+            stderr_tail: None,
+            duration_ms: None,
+            pid: None,
+        };
+        job.last_run = Some(running_marker);
+        Ok(job)
+    });
+    let job = match job {
+        Ok(j) => j,
+        Err(e) if e == "__SKIPPED__" => {
+            return Ok(json!({
+                "job_id": id,
+                "status": "skipped",
+                "reason": "previous run is still running (overlap_policy: Skip)",
+            }));
+        }
+        Err(e) => return Err(e),
     };
-    job.last_run = Some(running_marker);
-    save_job(&job)?;
 
-    // Execute
+    // Phase 2: execute (no lock held — the run row is the lease).
     let result = execute_job(&job);
 
-    // Save result
+    // Phase 3: persist result + next_run atomically.
     save_run_log(&job.id, &result)?;
-    job.last_run = Some(result.clone());
-
-    // Update next_run
-    let now = chrono::Utc::now();
-    job.next_run = if job.enabled {
-        next_run_time(&job.schedule, &now).map(|t| format_time(&t))
-    } else {
-        None
-    };
-    save_job(&job)?;
+    let result_for_close = result.clone();
+    update_job(id, |mut job| {
+        job.last_run = Some(result_for_close);
+        let now = chrono::Utc::now();
+        job.next_run = if job.enabled {
+            next_run_time(&job.schedule, &now).map(|t| format_time(&t))
+        } else {
+            None
+        };
+        Ok(job)
+    })?;
 
     Ok(serde_json::to_value(&result).map_err(|e| format!("failed to serialize result: {e}"))?)
 }
@@ -992,18 +1177,43 @@ fn cmd_tick(_args: &[String]) -> Result<Value, String> {
             }
         }
 
-        // Mark as running
-        let running_marker = CronRunResult {
-            started_at: format_time(&now),
-            finished_at: None,
-            exit_code: None,
-            status: "running".to_string(),
-            stdout_tail: None,
-            stderr_tail: None,
-            duration_ms: None,
+        // Phase 1: atomically claim the run slot. If another tick
+        // raced us and stamped a still-live "running" marker first,
+        // update_job's closure sees that and re-skips.
+        let claimed = update_job(&job.id, |mut j| {
+            if is_running(&j) && j.overlap_policy == OverlapPolicy::Skip {
+                return Err("__SKIPPED__".to_string());
+            }
+            let running_marker = CronRunResult {
+                started_at: format_time(&now),
+                finished_at: None,
+                exit_code: None,
+                status: "running".to_string(),
+                stdout_tail: None,
+                stderr_tail: None,
+                duration_ms: None,
+                pid: None,
+            };
+            j.last_run = Some(running_marker);
+            Ok(j)
+        });
+        let job = match claimed {
+            Ok(j) => j,
+            Err(e) if e == "__SKIPPED__" => {
+                skipped.push(json!({
+                    "id": job.id,
+                    "reason": "previous run still running (race with concurrent tick)",
+                }));
+                continue;
+            }
+            Err(e) => {
+                skipped.push(json!({
+                    "id": job.id,
+                    "reason": format!("failed to claim run slot: {e}"),
+                }));
+                continue;
+            }
         };
-        job.last_run = Some(running_marker);
-        let _ = save_job(&job);
 
         // Execute
         let result = execute_job(&job);
@@ -1011,11 +1221,14 @@ fn cmd_tick(_args: &[String]) -> Result<Value, String> {
         // Save log entry
         let _ = save_run_log(&job.id, &result);
 
-        // Update job definition
+        // Phase 2: persist result + next_run atomically.
         let exec_status = result.status.clone();
-        job.last_run = Some(result);
-        job.next_run = next_run_time(&job.schedule, &now).map(|t| format_time(&t));
-        let _ = save_job(&job);
+        let result_for_close = result.clone();
+        let _ = update_job(&job.id, |mut j| {
+            j.last_run = Some(result_for_close);
+            j.next_run = next_run_time(&j.schedule, &now).map(|t| format_time(&t));
+            Ok(j)
+        });
 
         executed.push(json!({
             "id": job.id,
@@ -1474,6 +1687,7 @@ mod tests {
                 stdout_tail: Some(format!("output {i}")),
                 stderr_tail: None,
                 duration_ms: Some(100),
+                pid: None,
             };
             save_run_log("log-job", &result).unwrap();
         }
@@ -1605,6 +1819,7 @@ mod tests {
             stdout_tail: None,
             stderr_tail: None,
             duration_ms: None,
+            pid: None,
         });
         assert!(is_running(&job));
 
@@ -1616,6 +1831,7 @@ mod tests {
             stdout_tail: None,
             stderr_tail: None,
             duration_ms: Some(60000),
+            pid: None,
         });
         assert!(!is_running(&job));
     }
@@ -1706,6 +1922,75 @@ mod tests {
         assert!(
             stderr_tail.contains("killed: timeout after 1s"),
             "stderr_tail missing kill marker: {stderr_tail:?}"
+        );
+    }
+
+    #[test]
+    fn crashed_running_recovered_on_startup() {
+        // Reproduces the crashed-mid-run availability bug: a job
+        // whose last_run was stamped `status: "running"` before cos
+        // crashed must NOT be treated as still-running forever
+        // under the default Skip policy. The fix records `pid` in
+        // `last_run`; `is_running` checks whether that pid is
+        // actually alive.
+        perms_init();
+        let _g = cron_setup();
+
+        // 1) Add a job under Skip policy.
+        cmd_add(&[
+            "crash-job".to_string(),
+            "--schedule".to_string(),
+            "* * * * *".to_string(),
+            "--command".to_string(),
+            "true".to_string(),
+            "--overlap-policy".to_string(),
+            "skip".to_string(),
+        ])
+        .unwrap();
+
+        // 2) Simulate the on-disk state of a crashed run: stamp
+        //    last_run = {status: running, pid: definitely-dead}.
+        //    Pid 1 is alive on basically every system, so pick a
+        //    pid that's almost certainly not in use. We claim the
+        //    largest legal pid value (kernel.pid_max defaults to
+        //    4194304 on Linux) which is unlikely to be allocated.
+        let dead_pid: u32 = 0x7FFF_FFFE;
+        // Verify it really is dead. If it isn't (extraordinarily
+        // unlikely), pick another in a tight loop.
+        let mut pid = dead_pid;
+        while pid_alive(pid) {
+            pid -= 1;
+            if pid < 1000 {
+                panic!("could not find a dead pid for test");
+            }
+        }
+        let mut job = load_job("crash-job").unwrap();
+        job.last_run = Some(CronRunResult {
+            started_at: format_time(&chrono::Utc::now()),
+            finished_at: None,
+            exit_code: None,
+            status: "running".to_string(),
+            stdout_tail: None,
+            stderr_tail: None,
+            duration_ms: None,
+            pid: Some(pid),
+        });
+        save_job(&job).unwrap();
+
+        // 3) Pre-fix: this would return true (stuck "running"
+        //    forever). With the fix, is_running consults pid_alive.
+        let reloaded = load_job("crash-job").unwrap();
+        assert!(
+            !is_running(&reloaded),
+            "is_running must treat dead-pid 'running' rows as not-running"
+        );
+
+        // 4) cmd_run with overlap=Skip should now proceed (not
+        //    skip) and execute the command successfully.
+        let result = cmd_run(&["crash-job".to_string()]).unwrap();
+        assert_ne!(
+            result["status"], "skipped",
+            "cmd_run wrongly skipped a crashed-stuck job: {result:?}"
         );
     }
 }
