@@ -5,7 +5,7 @@ use std::any::TypeId;
 use std::path::Path;
 
 use cosmic::app::{Core, Settings, Task};
-use cosmic::iced::{Alignment, Background, Border, Color, ContentFit, Length, Limits, Shadow, Subscription};
+use cosmic::iced::{Alignment, Background, Border, Color, ContentFit, Length, Shadow, Subscription};
 use cosmic::widget::container;
 use cosmic::{Application, Apply, Element, cosmic_theme, executor, theme, widget};
 use futures::channel::mpsc::Sender;
@@ -73,8 +73,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         page::AppMode::NewInstall { create_user: pwd::Passwd::current_user().is_some_and(|current_user| current_user.name == "cosmic-initial-setup") }
     };
 
-    let mut settings = Settings::default();
-    settings = settings.size_limits(Limits::NONE.max_width(900.0).max_height(650.0));
+    // Allow the wizard window to fill whatever output cosmic-comp gives us
+    // (typically the entire screen in kiosk mode). The old 900x650 cap left
+    // a large cosmic-comp black backdrop around the window, which made the
+    // wallpaper appear "framed" instead of edge-to-edge.
+    let settings = Settings::default();
 
     cosmic::app::run::<App>(settings, mode)?;
 
@@ -140,6 +143,12 @@ impl Application for App {
         core.window.show_close = false;
         core.window.show_maximize = false;
         core.window.show_minimize = false;
+        // Drop libcosmic's opaque "COSMIC_content_container" wrapper around
+        // view(). With it on, the wrapper paints theme.cosmic.background.base
+        // over our whole client area, hiding the wallpaper stack we render
+        // beneath the wizard card. Turning it off lets the wallpaper extend
+        // edge-to-edge while still preserving the 1px window border.
+        core.window.content_container = false;
 
         let mut app = App {
             core,
