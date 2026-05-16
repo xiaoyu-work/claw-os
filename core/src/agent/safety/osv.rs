@@ -95,12 +95,82 @@ impl OsvVulnerability {
 
 const OSV_QUERY_URL: &str = "https://api.osv.dev/v1/query";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a successful osv.dev response is cached for. 24 h is the
+/// industry-standard CVE feed refresh cadence — anything tighter
+/// burns the public endpoint's rate limit without surfacing new
+/// disclosures faster.
+const CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+/// Hard cap on the in-memory cache so a script that scans an enormous
+/// monorepo (1000s of packages × many versions) doesn't grow the
+/// process's RSS without bound. When full the oldest entry is
+/// evicted on insert.
+const CACHE_MAX_ENTRIES: usize = 1024;
+
+type CacheKey = (String, String, String);
+
+struct CacheEntry {
+    inserted: std::time::Instant,
+    vulns: Vec<OsvVulnerability>,
+}
+
+static OSV_CACHE: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<CacheKey, CacheEntry>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+fn cache_get(pkg: &Package) -> Option<Vec<OsvVulnerability>> {
+    let key: CacheKey = (pkg.ecosystem.clone(), pkg.name.clone(), pkg.version.clone());
+    let mut guard = OSV_CACHE.lock().ok()?;
+    if let Some(entry) = guard.get(&key) {
+        if entry.inserted.elapsed() < CACHE_TTL {
+            return Some(entry.vulns.clone());
+        }
+        // Expired — drop it so a subsequent fetch repopulates.
+        guard.remove(&key);
+    }
+    None
+}
+
+fn cache_put(pkg: &Package, vulns: &[OsvVulnerability]) {
+    let key: CacheKey = (pkg.ecosystem.clone(), pkg.name.clone(), pkg.version.clone());
+    let Ok(mut guard) = OSV_CACHE.lock() else {
+        return;
+    };
+    if guard.len() >= CACHE_MAX_ENTRIES {
+        // Evict the oldest entry. HashMap iteration is unordered so
+        // we scan once — acceptable, this branch only fires after
+        // 1024 distinct lookups have already happened in one process.
+        if let Some(oldest_key) = guard
+            .iter()
+            .min_by_key(|(_, v)| v.inserted)
+            .map(|(k, _)| k.clone())
+        {
+            guard.remove(&oldest_key);
+        }
+    }
+    guard.insert(
+        key,
+        CacheEntry {
+            inserted: std::time::Instant::now(),
+            vulns: vulns.to_vec(),
+        },
+    );
+}
 
 /// Query osv.dev for vulnerabilities affecting one package version.
 ///
 /// Returns `Ok(vec![])` if osv.dev returned no `vulns` for the package.
+///
+/// Results are cached in-process for [`CACHE_TTL`] (24 h). A repeated
+/// scan of the same lockfile — or two unrelated lockfiles that share a
+/// transitive dependency — only round-trips to osv.dev once. The cache
+/// is bounded at [`CACHE_MAX_ENTRIES`] entries; oldest-first eviction
+/// on overflow.
 pub async fn query(pkg: &Package) -> Result<Vec<OsvVulnerability>, String> {
-    query_with_url(pkg, OSV_QUERY_URL, DEFAULT_TIMEOUT).await
+    if let Some(hit) = cache_get(pkg) {
+        return Ok(hit);
+    }
+    let vulns = query_with_url(pkg, OSV_QUERY_URL, DEFAULT_TIMEOUT).await?;
+    cache_put(pkg, &vulns);
+    Ok(vulns)
 }
 
 /// Same as [`query`], but with explicit URL and timeout (for tests
@@ -252,13 +322,44 @@ pub fn parse_cargo_lock(body: &str) -> Result<Vec<Package>, String> {
 }
 
 fn parse_toml_string_value(rest: &str) -> Option<String> {
-    // rest = " = \"value\"" possibly with trailing comment
+    // rest looks like ` = "value" # optional comment`. The naive
+    // approach of split_once('#') misclassifies values that legally
+    // contain a `#` inside the quoted string (e.g. a URL fragment in
+    // a registry-source key), so we hand-roll a tiny scanner that
+    // tracks whether we are inside a double-quoted string and only
+    // honours `#` as a comment marker when *outside* a string.
     let after_eq = rest.split_once('=')?.1.trim();
-    // Strip a possible comment.
-    let no_comment = match after_eq.split_once('#') {
-        Some((before, _)) => before.trim(),
+
+    let bytes = after_eq.as_bytes();
+    // Find the position where a comment starts (if any). Walk the
+    // bytes, flipping `in_string` on each unescaped `"`. The simple
+    // backslash-escape handling matches TOML's basic-string rules
+    // closely enough for the lockfile we actually parse — Cargo
+    // writes `name = "foo"` / `version = "1.2.3"` with no embedded
+    // quotes or escapes.
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut comment_at: Option<usize> = None;
+    for (i, &b) in bytes.iter().enumerate() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match b {
+            b'\\' if in_string => escaped = true,
+            b'"' => in_string = !in_string,
+            b'#' if !in_string => {
+                comment_at = Some(i);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let no_comment = match comment_at {
+        Some(i) => after_eq[..i].trim(),
         None => after_eq,
     };
+
     let unquoted = no_comment.strip_prefix('"')?.strip_suffix('"')?;
     Some(unquoted.to_string())
 }

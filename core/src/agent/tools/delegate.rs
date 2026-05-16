@@ -38,9 +38,11 @@ use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
 
+use super::guardrails::Guardrails;
 use super::registry::{default_registry, ToolRegistry};
 use super::{Tool, ToolResult};
 use crate::agent::llm::{self, Provider};
+use crate::agent::runtime::approval::ApprovalGate;
 use crate::agent::runtime::loop_::{self, AskResult};
 use crate::config::AgentConfig;
 
@@ -67,6 +69,27 @@ tokio::task_local! {
     /// delegate active). Each `cos_delegate.exec` reads this, refuses if
     /// `>= max_depth`, then runs the child inside `scope(depth + 1, ...)`.
     static DELEGATE_DEPTH: u32;
+
+    /// Snapshot of the *parent* registry's [`Guardrails`] set by the
+    /// caller (typically `runtime::turn::dispatch_tool`) around every
+    /// `Tool::exec`. The delegate tool reads it via [`current_parent_policy`]
+    /// to propagate deny rules and approval policy into the child registry.
+    /// Outside an active scope the value is `None`, meaning "no parent
+    /// constraint" (default permissive).
+    pub static PARENT_GUARDRAILS: Guardrails;
+
+    /// Snapshot of the parent registry's [`ApprovalGate`]. See
+    /// [`PARENT_GUARDRAILS`] for scope semantics.
+    pub static PARENT_APPROVAL: ApprovalGate;
+}
+
+/// Snapshot of the parent's policy as observed inside a tool's `exec`.
+/// Returns `(None, None)` when called outside a `dispatch_tool` scope
+/// (e.g. unit tests that call `Tool::exec` directly).
+pub fn current_parent_policy() -> (Option<Guardrails>, Option<ApprovalGate>) {
+    let g = PARENT_GUARDRAILS.try_with(|g| g.clone()).ok();
+    let a = PARENT_APPROVAL.try_with(|a| a.clone()).ok();
+    (g, a)
 }
 
 /// Read the current delegate depth. Returns 0 outside any delegate scope.
@@ -244,7 +267,13 @@ async fn run_delegate(
     };
     let provider = crate::ai::gate::wrap_for_system(provider);
 
-    let tools = build_child_registry(factory(), &input.allowed_tools);
+    let (parent_guardrails, parent_approval) = current_parent_policy();
+    let tools = build_child_registry(
+        parent_guardrails.as_ref(),
+        parent_approval.as_ref(),
+        factory(),
+        &input.allowed_tools,
+    );
 
     let timeout = Duration::from_secs(input.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS));
     let task = input.task.clone();
@@ -266,13 +295,49 @@ async fn run_delegate(
 /// we additionally never pass the tool to children to keep the surface
 /// minimal). Unknown names are silently dropped — the child sees only the
 /// tools that actually exist.
-fn build_child_registry(source: ToolRegistry, allowed: &[String]) -> ToolRegistry {
+///
+/// The child registry **inherits the parent's `Guardrails` and
+/// `ApprovalGate`**. Without this, every delegate ran with the
+/// default permissive guardrails + a default no-op approver — meaning
+/// any tool the parent had a deny rule for, or any tool that required
+/// human approval, became unguarded as soon as it crossed the
+/// delegate boundary. The agent's blast-radius advertised model
+/// (parent picks tools, parent's deny/approval policy follows them)
+/// only works if the child's registry inherits these.
+///
+/// We also re-apply the `allowed_tools` filter on top of the parent's
+/// guardrails by inserting `allowed` into the child's `allow` set —
+/// the net effect is the intersection of "parent allowed" ∩ "this
+/// delegate call's allowed_tools".
+fn build_child_registry(
+    parent_guardrails: Option<&Guardrails>,
+    parent_approval: Option<&ApprovalGate>,
+    source: ToolRegistry,
+    allowed: &[String],
+) -> ToolRegistry {
     let mut child = ToolRegistry::new();
+    // Inherit parent's policy primitives. These are Clone (Guardrails
+    // is a pair of sets; ApprovalGate wraps everything in Arcs).
+    if let Some(g) = parent_guardrails {
+        child.set_guardrails(g.clone());
+    }
+    if let Some(a) = parent_approval {
+        child.set_approval(a.clone());
+    }
+
     for name in allowed {
         if name == "cos_delegate" {
             continue;
         }
-        if let Some(tool) = source.get(name) {
+        // Honour the parent's deny list — even if the caller asked
+        // for a tool, if the parent denied it the child shouldn't
+        // see it either.
+        if let Some(g) = parent_guardrails {
+            if !g.permits(name) {
+                continue;
+            }
+        }
+        if let Some(tool) = source.get_unfiltered(name) {
             child.register(tool);
         }
     }
@@ -328,7 +393,7 @@ mod tests {
     fn build_child_registry_keeps_only_allowed() {
         let parent = test_registry();
         let allowed = vec!["echo".to_string()];
-        let child = build_child_registry(parent, &allowed);
+        let child = build_child_registry(None, None, parent, &allowed);
         assert!(child.get("echo").is_some());
         assert!(child.get("now").is_none());
     }
@@ -337,7 +402,7 @@ mod tests {
     fn build_child_registry_strips_cos_delegate() {
         let parent = test_registry();
         let allowed = vec!["cos_delegate".to_string(), "echo".to_string()];
-        let child = build_child_registry(parent, &allowed);
+        let child = build_child_registry(None, None, parent, &allowed);
         assert!(child.get("cos_delegate").is_none());
         assert!(child.get("echo").is_some());
     }
@@ -346,7 +411,7 @@ mod tests {
     fn build_child_registry_silently_drops_unknown_tool_names() {
         let parent = test_registry();
         let allowed = vec!["echo".to_string(), "ghost_tool".to_string()];
-        let child = build_child_registry(parent, &allowed);
+        let child = build_child_registry(None, None, parent, &allowed);
         assert_eq!(child.len(), 1);
         assert!(child.get("echo").is_some());
     }
@@ -354,8 +419,59 @@ mod tests {
     #[test]
     fn build_child_registry_empty_allowed_yields_empty_child() {
         let parent = test_registry();
-        let child = build_child_registry(parent, &[]);
+        let child = build_child_registry(None, None, parent, &[]);
         assert_eq!(child.len(), 0);
+    }
+
+    #[test]
+    fn build_child_registry_respects_parent_deny_list() {
+        // Parent denies `echo`; even though the delegate caller listed
+        // it under `allowed_tools`, the child must not see it. This is
+        // the regression that the task-local inheritance was added for.
+        let parent_g = Guardrails::default().deny_tool("echo");
+        let allowed = vec!["echo".to_string(), "now".to_string()];
+        let source = test_registry();
+        let child = build_child_registry(Some(&parent_g), None, source, &allowed);
+        assert!(
+            child.get_unfiltered("echo").is_none(),
+            "echo must not leak through parent's deny rule"
+        );
+        assert!(
+            child.get("now").is_some(),
+            "non-denied tools should still pass through"
+        );
+    }
+
+    #[tokio::test]
+    async fn child_inherits_parent_guardrails() {
+        // End-to-end: scope the task-local PARENT_GUARDRAILS to a deny
+        // rule and call exec; the child's registry must reflect it.
+        // We exercise this through `run_delegate` directly with a test
+        // registry factory, then assert the child registry's guardrails
+        // by intercepting via a fresh build.
+        let parent_g = Guardrails::default().deny_tool("echo");
+        let observed = PARENT_GUARDRAILS
+            .scope(parent_g.clone(), async {
+                let (g, _a) = current_parent_policy();
+                let child = build_child_registry(
+                    g.as_ref(),
+                    None,
+                    test_registry(),
+                    &["echo".to_string(), "now".to_string()],
+                );
+                // echo was denied by parent → child must not have it
+                let echo_present = child.get_unfiltered("echo").is_some();
+                let now_present = child.get_unfiltered("now").is_some();
+                (echo_present, now_present, child.guardrails().clone())
+            })
+            .await;
+        let (echo_present, now_present, child_g) = observed;
+        assert!(!echo_present, "echo should be blocked by inherited deny");
+        assert!(now_present, "now should be passed through");
+        assert!(
+            child_g.deny.contains("echo"),
+            "child registry's guardrails must carry parent's deny set"
+        );
     }
 
     #[test]

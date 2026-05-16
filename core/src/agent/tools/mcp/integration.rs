@@ -33,6 +33,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Child;
 use tokio::time::timeout;
 
@@ -114,14 +115,21 @@ impl McpServerHandle {
 impl Drop for McpServerHandle {
     fn drop(&mut self) {
         // Releasing this Arc lets the McpClient::Drop fire (if no
-        // tool still holds a clone), which aborts the reader task.
-        // Then we best-effort kill + reap the child.
+        // tool still holds a clone), which signals the reader task
+        // to exit. Then we best-effort kill + reap the child.
         let _ = Arc::strong_count(&self.client);
         if let Some(mut child) = self.child.take() {
             let _ = child.start_kill();
-            // We don't await wait() here — we're not async — but
-            // start_kill posts SIGKILL/TerminateProcess; the OS will
-            // reap once stdio fds close.
+            // Reap in a detached task so a zombie doesn't linger.
+            // This requires a tokio runtime to be present; if Drop
+            // fires outside one (the cos binary doesn't construct
+            // these handles outside an agent run), the spawn silently
+            // fails and the OS reaps on parent exit, which is fine.
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    let _ = child.wait().await;
+                });
+            }
         }
     }
 }
@@ -268,12 +276,38 @@ fn render_call_result(tool_name: &str, res: super::protocol::CallToolResult) -> 
 /// Spawn one server, run the handshake, register every tool it
 /// advertises, and return the live handle. Returns `Err` on any
 /// hard failure (caller logs and skips).
+///
+/// Process security:
+/// - **Environment** is `env_clear()`ed first, then a small,
+///   well-known allowlist is copied across (PATH, HOME, USER, SHELL,
+///   LANG, LC_*, TZ, COS_*), then the caller-supplied `spec.env`
+///   overlays on top. Without `env_clear()` the child would inherit
+///   every secret the parent has (`GITHUB_TOKEN`, `OPENAI_API_KEY`,
+///   etc.) — MCP servers are third-party code and should see only
+///   what the agent operator explicitly grants.
+/// - **Stderr** is piped into a forwarder task that prefixes each
+///   line with `[mcp:<name>] ` and emits it via `tracing::warn!`.
+///   The previous `Stdio::inherit()` would scribble unprefixed bytes
+///   onto the parent's stderr, which corrupts TUIs and makes it
+///   impossible to attribute log lines to a specific server.
+/// - **Child reaping**: on handle drop we `start_kill()` and then
+///   spawn a background task to `wait()` for the process. Without
+///   the wait, a long-lived agent process accumulates zombies — a
+///   real problem when the agent re-attaches servers on config
+///   reload.
 pub async fn attach_server(
     spec: &McpServerSpec,
     registry: &mut ToolRegistry,
 ) -> Result<McpServerHandle, String> {
     let mut command = tokio::process::Command::new(&spec.command);
     command.args(&spec.args);
+    // Wipe inherited environment then re-add an explicit allowlist.
+    // The order is: env_clear → allowlist from os::env → spec.env
+    // overlay. Caller-provided values win on collision.
+    command.env_clear();
+    for (k, v) in safe_env_allowlist() {
+        command.env(k, v);
+    }
     for (k, v) in &spec.env {
         command.env(k, v);
     }
@@ -283,7 +317,7 @@ pub async fn attach_server(
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit());
+        .stderr(Stdio::piped());
     let mut child = command
         .spawn()
         .map_err(|e| format!("spawn `{}`: {e}", spec.command))?;
@@ -295,6 +329,26 @@ pub async fn attach_server(
         .stdout
         .take()
         .ok_or_else(|| "child stdout unavailable".to_string())?;
+    // Forward child stderr line-by-line under a `[mcp:<name>]`
+    // prefix. The task ends when the child closes its stderr.
+    if let Some(stderr) = child.stderr.take() {
+        let prefix = spec.name.clone();
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(stderr).lines();
+            loop {
+                match lines.next_line().await {
+                    Ok(Some(line)) => {
+                        tracing::warn!(target: "mcp", "[mcp:{prefix}] {line}");
+                    }
+                    Ok(None) => break,
+                    Err(e) => {
+                        tracing::warn!(target: "mcp", "[mcp:{prefix}] stderr read error: {e}");
+                        break;
+                    }
+                }
+            }
+        });
+    }
     let transport = StdioTransport::from_pair(Box::new(stdout), Box::new(stdin));
     let client = McpClient::new(transport);
     client.start().await;
@@ -310,11 +364,11 @@ pub async fn attach_server(
     let init = match timeout(timeout_dur, init_fut).await {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
-            let _ = child.start_kill();
+            kill_and_reap(child);
             return Err(format!("initialize: {}", render_client_err(e)));
         }
         Err(_) => {
-            let _ = child.start_kill();
+            kill_and_reap(child);
             return Err(format!(
                 "initialize timed out after {}s",
                 timeout_dur.as_secs()
@@ -341,11 +395,11 @@ pub async fn attach_server(
     let tools = match timeout(timeout_dur, list_fut).await {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
-            let _ = child.start_kill();
+            kill_and_reap(child);
             return Err(format!("tools/list: {}", render_client_err(e)));
         }
         Err(_) => {
-            let _ = child.start_kill();
+            kill_and_reap(child);
             return Err(format!(
                 "tools/list timed out after {}s",
                 timeout_dur.as_secs()
@@ -366,6 +420,47 @@ pub async fn attach_server(
         name: spec.name.clone(),
         tool_count: registered,
     })
+}
+
+/// Environment variables passed unconditionally to MCP child
+/// processes. These are the bare minimum a typical command-line tool
+/// needs to function (locate its libraries, render Unicode, locate
+/// its config home). Notably absent: any `*_TOKEN`, `*_KEY`,
+/// `*_SECRET`, AWS / GCP / Azure credentials, the user's
+/// `OPENAI_API_KEY`, GitHub tokens, etc.
+///
+/// `COS_*` variables are forwarded because they configure the
+/// agent's own runtime; some MCP servers shipped with cos expect
+/// e.g. `COS_DATA_DIR` to be set.
+fn safe_env_allowlist() -> Vec<(String, String)> {
+    const ALWAYS: &[&str] = &[
+        "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES",
+        "TZ", "TERM", "TMPDIR", "TEMP", "TMP",
+    ];
+    let mut out = Vec::with_capacity(ALWAYS.len() + 8);
+    for k in ALWAYS {
+        if let Ok(v) = std::env::var(k) {
+            out.push(((*k).to_string(), v));
+        }
+    }
+    for (k, v) in std::env::vars() {
+        if k.starts_with("COS_") {
+            out.push((k, v));
+        }
+    }
+    out
+}
+
+/// Kill the child and spawn a background reap so zombies don't
+/// accumulate across many attach attempts. `start_kill()` posts the
+/// signal synchronously; `wait()` collects the exit status. We must
+/// take the child by-value because both methods need exclusive
+/// access and the caller's error path can't await.
+fn kill_and_reap(mut child: Child) {
+    let _ = child.start_kill();
+    tokio::spawn(async move {
+        let _ = child.wait().await;
+    });
 }
 
 /// Convenience wrapper: try to attach every spec, log and skip

@@ -5,10 +5,29 @@
 //! and then awaits the matching response by id. We multiplex on a
 //! single transport via a background reader task that demuxes
 //! responses to per-request oneshot channels.
+//!
+//! ## Timeouts
+//!
+//! Each `request()` has a per-call timeout (default
+//! [`DEFAULT_REQUEST_TIMEOUT`]). If the server is silent past the
+//! deadline, the pending entry is removed and the call returns
+//! [`ClientError::Timeout`]. Without this the agent loop would
+//! deadlock waiting on a hung remote tool — the model can't
+//! cancel its own tool call mid-flight.
+//!
+//! ## Shutdown
+//!
+//! `Drop` signals a `oneshot::Sender` that the reader task selects
+//! against; the reader exits cleanly the next tick, releases its
+//! transport `Arc`, and the peer sees EOF. Earlier versions called
+//! `JoinHandle::abort()` via a `try_lock` race — which silently
+//! failed when the abort happened during a borrowed lock and left
+//! the reader holding the transport forever.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde_json::Value;
 use tokio::sync::oneshot;
@@ -21,6 +40,11 @@ use super::protocol::{
     ListToolsResult, RequestId, PROTOCOL_VERSION,
 };
 use super::transport::{Transport, TransportError};
+
+/// Default per-request timeout. MCP tools are often LLM-backed and
+/// can take tens of seconds; 60s is a reasonable upper bound. Caller
+/// code that needs longer waits should use `request_with_timeout`.
+pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
@@ -38,6 +62,8 @@ pub enum ClientError {
     },
     #[error("connection closed before response arrived")]
     ConnectionClosed,
+    #[error("request timed out after {0:?}")]
+    Timeout(Duration),
     #[error("protocol violation: {0}")]
     Protocol(String),
 }
@@ -59,13 +85,31 @@ pub struct McpClient {
     next_id: AtomicI64,
     pending: Arc<Mutex<Pending>>,
     reader: Mutex<Option<JoinHandle<()>>>,
+    /// Set on `Drop` to signal the reader to exit cleanly. The reader
+    /// `select!`s between this and the transport. Held inside a
+    /// `Mutex<Option<…>>` because the sender is consumed by `.send()`.
+    shutdown_tx: Mutex<Option<oneshot::Sender<()>>>,
+    /// Per-request timeout. Override via [`McpClient::with_request_timeout`].
+    request_timeout: Duration,
 }
 
 impl Drop for McpClient {
     fn drop(&mut self) {
-        // Abort the background reader so the transport halves can
-        // close. Without this the reader holds an Arc to the
-        // transport forever, deadlocking any peer waiting on EOF.
+        // Signal the reader. Best-effort: if the reader already
+        // exited (transport EOF), `send` errors and we just fall
+        // through. Using a cooperative shutdown rather than
+        // `JoinHandle::abort()` avoids the historical race where
+        // `try_lock` could fail under load and leave the reader
+        // holding the transport forever.
+        if let Ok(mut guard) = self.shutdown_tx.try_lock() {
+            if let Some(tx) = guard.take() {
+                let _ = tx.send(());
+            }
+        }
+        // Belt-and-braces: abort the JoinHandle if cooperative
+        // shutdown couldn't deliver. The reader uses `recv()` which
+        // may be parked indefinitely on a transport that never
+        // EOFs (e.g. a stuck child process).
         if let Ok(mut guard) = self.reader.try_lock() {
             if let Some(handle) = guard.take() {
                 handle.abort();
@@ -83,6 +127,24 @@ impl McpClient {
             next_id: AtomicI64::new(1),
             pending: Arc::new(Mutex::new(HashMap::new())),
             reader: Mutex::new(None),
+            shutdown_tx: Mutex::new(None),
+            request_timeout: DEFAULT_REQUEST_TIMEOUT,
+        })
+    }
+
+    /// Override the per-request timeout. Returns a fresh `Arc<Self>`
+    /// because the existing one may have started its reader already.
+    /// Intended for caller code that knows its tools are slow (e.g. a
+    /// long-running batch job). Defaults to [`DEFAULT_REQUEST_TIMEOUT`].
+    #[cfg(test)]
+    pub fn new_with_timeout(transport: impl Transport, timeout: Duration) -> Arc<Self> {
+        Arc::new(Self {
+            transport: Arc::new(transport),
+            next_id: AtomicI64::new(1),
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            reader: Mutex::new(None),
+            shutdown_tx: Mutex::new(None),
+            request_timeout: timeout,
         })
     }
 
@@ -94,26 +156,34 @@ impl McpClient {
         }
         let transport = self.transport.clone();
         let pending = self.pending.clone();
+        let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
+        *self.shutdown_tx.lock().await = Some(shutdown_tx);
+
         *guard = Some(tokio::spawn(async move {
             loop {
-                match transport.recv().await {
-                    Ok(Some(frame)) => {
-                        if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&frame) {
-                            let id = resp.id.clone();
-                            let mut p = pending.lock().await;
-                            if let Some(tx) = p.remove(&id) {
-                                let _ = tx.send(resp);
+                tokio::select! {
+                    // Cooperative shutdown — Drop hits this.
+                    _ = &mut shutdown_rx => break,
+                    next = transport.recv() => match next {
+                        Ok(Some(frame)) => {
+                            if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&frame) {
+                                let id = resp.id.clone();
+                                let mut p = pending.lock().await;
+                                if let Some(tx) = p.remove(&id) {
+                                    let _ = tx.send(resp);
+                                }
+                                // Unmatched responses (and notifications) are
+                                // silently dropped at this layer.
                             }
-                            // Unmatched responses are silently dropped;
-                            // a Notification arriving on this channel
-                            // is also ignored at this layer.
                         }
-                    }
-                    Ok(None) => break,
-                    Err(_) => break,
+                        Ok(None) => break,
+                        Err(_) => break,
+                    },
                 }
             }
-            // Reader exiting: cancel every outstanding request.
+            // Reader exiting: cancel every outstanding request so
+            // their `rx.await` resolves to ConnectionClosed instead
+            // of hanging forever.
             let mut p = pending.lock().await;
             p.drain().for_each(|(_, tx)| drop(tx));
         }));
@@ -124,7 +194,11 @@ impl McpClient {
     }
 
     /// Send a JSON-RPC request and await the response. Returns the
-    /// raw `result` value on success.
+    /// raw `result` value on success. Times out after
+    /// [`Self::request_timeout`] (default [`DEFAULT_REQUEST_TIMEOUT`])
+    /// — on timeout, removes the pending entry so the eventual late
+    /// response from the server is silently dropped instead of
+    /// queueing forever.
     pub async fn request(
         self: &Arc<Self>,
         method: &str,
@@ -144,7 +218,17 @@ impl McpClient {
             p.remove(&id);
             return Err(ClientError::Transport(send_err));
         }
-        let resp = rx.await.map_err(|_| ClientError::ConnectionClosed)?;
+        let resp = match tokio::time::timeout(self.request_timeout, rx).await {
+            Ok(Ok(resp)) => resp,
+            Ok(Err(_)) => return Err(ClientError::ConnectionClosed),
+            Err(_) => {
+                // Timeout fired. Reap the pending entry so a late
+                // response doesn't accumulate forever.
+                let mut p = self.pending.lock().await;
+                p.remove(&id);
+                return Err(ClientError::Timeout(self.request_timeout));
+            }
+        };
         if let Some(err) = resp.error {
             return Err(ClientError::from_server(err));
         }
@@ -294,5 +378,54 @@ mod tests {
             ),
             "expected ConnectionClosed or Transport, got {err:?}"
         );
+    }
+
+    /// A server that accepts the frame but never replies must result
+    /// in `ClientError::Timeout` rather than the client hanging
+    /// forever. Regression test for the missing per-request timeout.
+    #[tokio::test]
+    async fn client_per_request_timeout_fires_and_reaps_pending() {
+        let (client_t, server_t) = in_memory_pair();
+        // Use a very short timeout so the test is fast; production
+        // path uses DEFAULT_REQUEST_TIMEOUT (60s).
+        let client = McpClient::new_with_timeout(client_t, Duration::from_millis(50));
+        client.start().await;
+
+        // Server consumes one frame, then sleeps for a long time —
+        // effectively "never responds" within the test window.
+        let server = tokio::spawn(async move {
+            let _ = server_t.recv().await;
+            // Hold the transport alive so the reader doesn't hit EOF
+            // (which would give us ConnectionClosed instead of the
+            // Timeout we want to test).
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            drop(server_t);
+        });
+
+        let started = std::time::Instant::now();
+        let err = client.request("slow", None).await.unwrap_err();
+        let elapsed = started.elapsed();
+        match err {
+            ClientError::Timeout(d) => {
+                assert_eq!(d, Duration::from_millis(50));
+            }
+            other => panic!("expected Timeout, got {other:?}"),
+        }
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "timeout must fire promptly, elapsed = {elapsed:?}"
+        );
+
+        // After a timeout the pending map must be empty — otherwise a
+        // late response from the server would accumulate forever and
+        // we'd leak a oneshot per timed-out request.
+        let pending_len = client.pending.lock().await.len();
+        assert_eq!(
+            pending_len, 0,
+            "timed-out request must be reaped from pending"
+        );
+
+        drop(client);
+        let _ = server.await;
     }
 }

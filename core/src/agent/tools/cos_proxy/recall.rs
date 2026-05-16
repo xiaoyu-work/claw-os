@@ -103,11 +103,22 @@ impl Tool for CosRecallTool {
                     if query.is_empty() {
                         return Err("'search' requires non-empty 'query'".to_string());
                     }
+                    // FTS5 query strings have their own grammar (`AND`,
+                    // `OR`, `NEAR`, column filters like `body:foo`). A
+                    // raw user query containing `:` or `"` can either
+                    // mis-parse (HTTP 500) or escape into a different
+                    // column. Wrap the whole user blob as a single
+                    // double-quoted phrase and double-escape interior
+                    // `"`s — FTS5 treats `""` as a literal `"` inside
+                    // a quoted phrase. This preserves "give me back what
+                    // I typed" semantics; advanced users wanting raw
+                    // operators can use the `cos_memory` direct path.
+                    let fts_query = escape_fts5_query(&query);
                     let hits = match &session_id {
                         Some(sid) => db
-                            .search_session(sid, &query, limit)
+                            .search_session(sid, &fts_query, limit)
                             .map_err(|e| e.to_string())?,
-                        None => db.search(&query, limit).map_err(|e| e.to_string())?,
+                        None => db.search(&fts_query, limit).map_err(|e| e.to_string())?,
                     };
                     Ok(json!({
                         "query": query,
@@ -186,6 +197,35 @@ fn hit_to_json(hit: &SearchHit) -> Value {
         "ts_ms": hit.row.ts_ms,
         "rank": hit.rank,
     })
+}
+
+/// Escape a free-text user query for FTS5's MATCH grammar.
+///
+/// FTS5 reserves `:` for column filters (`body:foo`), `"` for phrase
+/// delimiters, `-` for negation, `*` for prefix, parens for grouping,
+/// and the bare keywords `AND` / `OR` / `NOT` / `NEAR`. The model is
+/// not in control of the raw FTS dialect — it asks for "search for X"
+/// and expects literal matching. Wrap the entire query as a single
+/// double-quoted phrase and double-escape interior `"` to a pair (the
+/// SQLite-documented escape rule for FTS5 quoted phrases). Whitespace
+/// inside the phrase is still tokenised by FTS5 as a multi-word
+/// phrase-with-stopwords-allowed search.
+///
+/// The empty string would build `""` which is a valid-but-empty FTS5
+/// match (returns no rows); the caller already rejects empty queries.
+fn escape_fts5_query(q: &str) -> String {
+    let mut out = String::with_capacity(q.len() + 2);
+    out.push('"');
+    for ch in q.chars() {
+        if ch == '"' {
+            out.push('"');
+            out.push('"');
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('"');
+    out
 }
 
 #[cfg(test)]
@@ -283,5 +323,43 @@ mod tests {
             }))
             .await;
         assert!(!r.is_error, "{}", r.content);
+    }
+
+    /// Hostile / unusual queries (FTS5 column filters, embedded quotes,
+    /// operator keywords) must not raise an FTS5 syntax error — they
+    /// must round-trip as literal-match phrase queries.
+    #[tokio::test]
+    async fn search_query_with_fts_meta_chars_is_safe() {
+        let t = tool();
+        t.db.record_message("s", "user", r#"a "quoted" phrase: with colons"#)
+            .unwrap();
+        // Each of these would be an FTS5 syntax error or hijack a
+        // column filter if we passed it through raw.
+        for hostile in [
+            r#""quoted""#,
+            "body: secret",
+            r#"hi"; DROP TABLE foo --"#,
+            "AND OR NEAR(",
+            "*wildcard",
+            "-negation",
+        ] {
+            let r = t
+                .exec(json!({ "command": "search", "query": hostile }))
+                .await;
+            assert!(
+                !r.is_error,
+                "FTS5 meta query {hostile:?} must not error: {}",
+                r.content
+            );
+        }
+    }
+
+    #[test]
+    fn escape_fts5_query_quotes_input() {
+        assert_eq!(escape_fts5_query("hello world"), "\"hello world\"");
+        // Double-up internal quotes.
+        assert_eq!(escape_fts5_query(r#"a"b"#), "\"a\"\"b\"");
+        // Column filter syntax must be inside the phrase, not at the top.
+        assert_eq!(escape_fts5_query("body:foo"), "\"body:foo\"");
     }
 }

@@ -206,6 +206,45 @@ pub enum ManifestError {
     Transport { path: PathBuf, transport: String },
     #[error("{path}: missing required field `{field}`")]
     MissingField { path: PathBuf, field: &'static str },
+    #[error("{path}: unsafe value in `{field}`: {detail}")]
+    UnsafeValue {
+        path: PathBuf,
+        field: &'static str,
+        detail: String,
+    },
+}
+
+/// Characters that have shell-grammar meaning. Even though we
+/// never run `spec.command` through `/bin/sh -c`, an unescaped
+/// semicolon / backtick / pipe in a manifest is a strong signal of
+/// either a typo or a hostile payload — we'd rather reject and have
+/// the operator fix the manifest than silently spawn a binary
+/// named `/usr/bin/python3; rm -rf /home`.
+const SHELL_METACHARS: &[char] = &[';', '|', '&', '$', '`', '<', '>', '(', ')', '{', '}', '\n'];
+
+/// Verify that a string used as a path-like value in a manifest
+/// doesn't contain shell metacharacters or `..` segments. Returns
+/// an `UnsafeValue` error otherwise.
+fn validate_no_shell_metachars(
+    path: &Path,
+    field: &'static str,
+    value: &str,
+) -> Result<(), ManifestError> {
+    if let Some(c) = value.chars().find(|c| SHELL_METACHARS.contains(c)) {
+        return Err(ManifestError::UnsafeValue {
+            path: path.to_path_buf(),
+            field,
+            detail: format!("contains shell metacharacter {c:?}"),
+        });
+    }
+    if value.contains("..") {
+        return Err(ManifestError::UnsafeValue {
+            path: path.to_path_buf(),
+            field,
+            detail: format!("contains parent-traversal `..` segment ({value:?})"),
+        });
+    }
+    Ok(())
 }
 
 /// Read one manifest file → [`McpServerSpec`]. The returned spec is
@@ -278,16 +317,46 @@ fn spec_from_manifest(
 
     let sub = |s: &str| s.replace("${manifest_dir}", &manifest_dir);
 
+    // Reject shell-metacharacter injection in path-shaped fields.
+    // We do this *post*-substitution so a hostile `${manifest_dir}`
+    // doesn't get a free pass — though `manifest_dir` is derived
+    // from the file's own path, which a user with write access to
+    // an XDG dir already controls; the defensive check is cheap.
+    let cmd = sub(&m.command);
+    validate_no_shell_metachars(path, "command", &cmd)?;
+    let args: Vec<String> = m
+        .args
+        .iter()
+        .map(|a| {
+            let s = sub(a);
+            validate_no_shell_metachars(path, "args", &s)?;
+            Ok::<_, ManifestError>(s)
+        })
+        .collect::<Result<_, _>>()?;
+    let env: HashMap<String, String> = m
+        .env
+        .into_iter()
+        .map(|(k, v)| {
+            let v = sub(&v);
+            validate_no_shell_metachars(path, "env", &v)?;
+            Ok::<_, ManifestError>((k, v))
+        })
+        .collect::<Result<_, _>>()?;
+    let cwd = match m.cwd.as_deref() {
+        Some(s) => {
+            let s = sub(s);
+            validate_no_shell_metachars(path, "cwd", &s)?;
+            Some(s)
+        }
+        None => None,
+    };
+
     Ok(Some(McpServerSpec {
         name: m.name,
-        command: sub(&m.command),
-        args: m.args.iter().map(|a| sub(a)).collect(),
-        env: m
-            .env
-            .into_iter()
-            .map(|(k, v)| (k, sub(&v)))
-            .collect(),
-        cwd: m.cwd.as_deref().map(sub),
+        command: cmd,
+        args,
+        env,
+        cwd,
         timeout_secs: m.timeout_secs,
     }))
 }
@@ -334,15 +403,21 @@ fn xdg_data_dirs() -> Vec<PathBuf> {
 /// Scan every directory in `dirs`, parse every `*.json` it finds,
 /// return the deduped list of specs.
 ///
-/// First-wins dedup on manifest `id`: a manifest in a higher-priority
-/// directory shadows the same `id` in lower-priority ones. Errors on
-/// individual files are logged via `tracing::warn!` and skipped.
+/// First-wins dedup on the `(id, name)` pair: a manifest in a
+/// higher-priority directory shadows the same `id` *or* the same
+/// `name` in lower-priority ones. Dedup-by-id alone was insufficient
+/// — two manifests with different `id`s but the same `name` would
+/// both register and try to claim the same `mcp_<name>_<tool>`
+/// prefix, producing duplicate-tool-name errors at registry-merge
+/// time. Errors on individual files are logged via `tracing::warn!`
+/// and skipped.
 ///
 /// The returned [`McpServerSpec`]s are paired with their source path
 /// for diagnostics. Callers that only want the specs can `.0` over
 /// them.
 pub fn discover_in(dirs: &[PathBuf]) -> Vec<(McpServerSpec, PathBuf)> {
     let mut seen_ids: HashMap<String, PathBuf> = HashMap::new();
+    let mut seen_names: HashMap<String, PathBuf> = HashMap::new();
     let mut out: Vec<(McpServerSpec, PathBuf)> = Vec::new();
 
     for dir in dirs {
@@ -399,13 +474,28 @@ pub fn discover_in(dirs: &[PathBuf]) -> Vec<(McpServerSpec, PathBuf)> {
             }
             if let Some(prev) = seen_ids.get(&manifest.id) {
                 tracing::info!(
-                    "agent-api: ignoring duplicate manifest {} (already loaded from {})",
+                    "agent-api: ignoring duplicate manifest {} (id {} already loaded from {})",
                     path.display(),
+                    manifest.id,
                     prev.display()
                 );
                 continue;
             }
+            if !manifest.name.is_empty() {
+                if let Some(prev) = seen_names.get(&manifest.name) {
+                    tracing::info!(
+                        "agent-api: ignoring manifest {} (name {} collides with {})",
+                        path.display(),
+                        manifest.name,
+                        prev.display()
+                    );
+                    continue;
+                }
+            }
             seen_ids.insert(manifest.id.clone(), path.clone());
+            if !manifest.name.is_empty() {
+                seen_names.insert(manifest.name.clone(), path.clone());
+            }
 
             match spec_from_manifest(&path, manifest) {
                 Ok(Some(spec)) => out.push((spec, path)),

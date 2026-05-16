@@ -136,6 +136,18 @@ fn build_description(manifest: &Manifest) -> String {
     }
 }
 
+/// Resolve the apps root directory. Honours `COS_APPS_DIR` for tests
+/// and dev installs; defaults to the FHS location `/usr/lib/cos/apps`
+/// for production.
+///
+/// Resolve the apps root directory from the `COS_APPS_DIR` env var,
+/// falling back to `/usr/lib/cos/apps`.
+///
+/// **Not cached**: tests set this env var per-test (each call constructs
+/// its own scratch dir), so a process-wide cache breaks isolation.
+/// In production `COS_APPS_DIR` is set once at boot and an extra
+/// env var read per tool call is sub-microsecond — well below the
+/// noise floor of the rest of the tool dispatch path.
 fn apps_root() -> PathBuf {
     PathBuf::from(std::env::var("COS_APPS_DIR").unwrap_or_else(|_| "/usr/lib/cos/apps".into()))
 }

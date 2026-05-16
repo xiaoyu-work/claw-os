@@ -174,6 +174,40 @@ impl Tool for SttTool {
             Some(s) => PathBuf::from(s),
             None => return ToolResult::err("missing required field: path"),
         };
+
+        // Path-safety pre-flight. Without this, `cos_stt` is an
+        // unguarded "read arbitrary file" primitive that the LLM can
+        // point at `/etc/passwd` or `~/.ssh/id_rsa` and exfiltrate
+        // the contents via a malicious STT provider (or even via the
+        // default `noop` provider's response). Two independent gates:
+        //   1. `safety::file_safety::classify` — refuses
+        //      credential / system-dir / VCS-internal paths and
+        //      resolves symlinks so an attacker can't smuggle.
+        //   2. `caps::require(FS_READ, path)` — enforces the
+        //      process-wide capability sandbox so the tool can only
+        //      read inside paths the operator explicitly granted.
+        let classified = crate::agent::safety::file_safety::classify(&path);
+        if !classified.is_allow() {
+            let cat = classified
+                .category()
+                .map(|c| c.as_str())
+                .unwrap_or("unsafe");
+            return ToolResult::err(format!(
+                "refusing to read stt audio at {}: classified as {} by file-safety",
+                path.display(),
+                cat
+            ));
+        }
+        let path_str = path.to_string_lossy().to_string();
+        if let Err(denial) = crate::caps::require(
+            crate::caps::Verb::FS_READ,
+            crate::caps::Scope::path(&path_str),
+        ) {
+            return ToolResult::err(format!(
+                "fs_read denied for stt audio at {path_str}: {denial}"
+            ));
+        }
+
         let provider_name = input
             .get("provider")
             .and_then(|v| v.as_str())
@@ -185,7 +219,9 @@ impl Tool for SttTool {
                 return ToolResult::err(format!("stt provider '{provider_name}' not registered"));
             }
         };
-        let bytes = match std::fs::read(&path) {
+        // `tokio::fs::read` to avoid blocking the runtime on large
+        // audio files — STT inputs can easily run to tens of MB.
+        let bytes = match tokio::fs::read(&path).await {
             Ok(b) => b,
             Err(e) => return ToolResult::err(format!("failed to read audio file: {e}")),
         };
@@ -372,6 +408,7 @@ mod tests {
 
     #[tokio::test]
     async fn stt_tool_reads_file_and_transcribes() {
+        let _perms = crate::test_env::PermissiveModeGuard::new();
         let dir = std::env::temp_dir().join(format!("cos-stt-test-{}", Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let audio = dir.join("clip.wav");
@@ -390,6 +427,7 @@ mod tests {
 
     #[tokio::test]
     async fn stt_tool_missing_path_errors() {
+        let _perms = crate::test_env::PermissiveModeGuard::new();
         let reg = Arc::new(SttRegistry::with_default_providers());
         let tool = SttTool::new(reg);
         let r = tool.exec(json!({})).await;
@@ -398,11 +436,49 @@ mod tests {
 
     #[tokio::test]
     async fn stt_tool_missing_file_errors() {
+        let _perms = crate::test_env::PermissiveModeGuard::new();
         let reg = Arc::new(SttRegistry::with_default_providers());
         let tool = SttTool::new(reg);
-        let r = tool.exec(json!({"path": "/no/such/file.wav"})).await;
+        // Use a path inside the user's home so the classifier doesn't
+        // deny on its own; we want the test to exercise the
+        // "file doesn't exist" branch.
+        let dir = std::env::temp_dir().join(format!("cos-stt-missing-{}", Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let missing = dir.join("nope.wav");
+        let r = tool.exec(json!({"path": missing.display().to_string()})).await;
         assert!(r.is_error);
-        assert!(r.content.contains("read audio"));
+        assert!(r.content.contains("read audio"), "got: {}", r.content);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Path-safety regression: `cos_stt` must refuse paths the
+    /// file-safety classifier flags as Deny/Caution. Without the
+    /// `classify` pre-flight added in this commit the tool would
+    /// happily slurp `/etc/passwd` and hand the bytes off to whatever
+    /// STT provider the model picked — a credential exfil primitive.
+    #[tokio::test]
+    async fn stt_path_must_be_in_scope() {
+        // Force permissive caps so the test specifically exercises the
+        // file-safety classifier, not the (stricter) caps gate. In
+        // production the two layers are independent — either refusal
+        // is acceptable — but for this regression we want to pin the
+        // classifier behaviour.
+        let _perms = crate::test_env::PermissiveModeGuard::new();
+
+        let reg = Arc::new(SttRegistry::with_default_providers());
+        let tool = SttTool::new(reg);
+        #[cfg(unix)]
+        let bad = "/etc/passwd";
+        #[cfg(windows)]
+        let bad = r"C:\Windows\System32\config\SAM";
+        let r = tool.exec(json!({"path": bad})).await;
+        assert!(r.is_error, "expected refusal for {bad}, got: {}", r.content);
+        assert!(
+            r.content.contains("refusing to read")
+                && r.content.contains("file-safety"),
+            "expected file-safety refusal message, got: {}",
+            r.content
+        );
     }
 
     #[tokio::test]

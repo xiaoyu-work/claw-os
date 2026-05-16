@@ -83,15 +83,45 @@ impl Drop for ActiveSession {
     fn drop(&mut self) {
         if let Some(mut child) = self.child.take() {
             let _ = child.start_kill();
+            // Reap in a detached tokio task so we don't leak a
+            // zombie. Falls back to relying on parent-exit reap if
+            // no tokio runtime is available (which shouldn't happen
+            // — every caller of `close_session` is async).
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    let _ = child.wait().await;
+                });
+            }
         }
     }
 }
 
 type SessionTable = Mutex<HashMap<String, ActiveSession>>;
+/// Per-app exclusion for the lazy-open path. The session table mutex
+/// is held only for hash-map probes; the actual spawn + handshake
+/// happens with this per-app lock held, so a tight burst of
+/// concurrent callers to `get_or_open` for the same app spawns
+/// exactly one child instead of N. The map of locks itself is keyed
+/// by `app_id` and grows monotonically (one entry per app the agent
+/// ever touches in this process — bounded by the number of
+/// installed apps, so a memory non-issue).
+type OpenLocks = std::sync::Mutex<HashMap<String, Arc<Mutex<()>>>>;
 
 fn manager() -> &'static SessionTable {
     static MANAGER: OnceLock<SessionTable> = OnceLock::new();
     MANAGER.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn open_locks() -> &'static OpenLocks {
+    static LOCKS: OnceLock<OpenLocks> = OnceLock::new();
+    LOCKS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+fn app_open_lock(app_id: &str) -> Arc<Mutex<()>> {
+    let mut map = open_locks().lock().unwrap_or_else(|p| p.into_inner());
+    map.entry(app_id.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
 }
 
 // ---------------------------------------------------------------------------
@@ -107,6 +137,20 @@ fn manager() -> &'static SessionTable {
 /// at boot time, not from the server's `tools/list` response. The
 /// `tools/list` we still issue is purely advisory — it verifies the
 /// server speaks MCP and exposes at least the manifest tools.
+///
+/// Path safety: `session.entry` is joined to `app_dir`, then the
+/// canonical absolute path is verified to lie under the canonical
+/// `app_dir` itself. A manifest with `"entry": "../../escape.py"` is
+/// rejected before we ever spawn anything. Without this check, a
+/// hostile manifest could induce the kernel to exec arbitrary
+/// files outside the apps tree.
+///
+/// Env safety: the child env is `env_clear()`ed then a small
+/// allowlist is reinstated. Without this the child inherits every
+/// secret in the parent process — MCP-session apps are third-party
+/// code and should see only what the operator explicitly grants
+/// (`COS_*` config and the small set of locale/PATH/HOME vars in
+/// [`safe_session_env_allowlist`]).
 async fn bring_up_app(
     app_id: &str,
     app_dir: &Path,
@@ -126,12 +170,42 @@ async fn bring_up_app(
         .entry
         .clone()
         .unwrap_or_else(|| manifest.runtime.default_session_entry().to_string());
+    // Reject obvious traversal up front (the canonicalise step below
+    // catches the deep version, but rejecting `..` early is cheaper
+    // and gives a clearer error).
+    if entry_rel.contains("..") {
+        return Err(format!(
+            "app `{app_id}`: session entry `{entry_rel}` contains parent-traversal `..`"
+        ));
+    }
     let entry_abs = app_dir.join(&entry_rel);
     if !entry_abs.is_file() {
         return Err(format!(
             "app `{app_id}`: session entry `{}` not found at {}",
             entry_rel,
             entry_abs.display()
+        ));
+    }
+    // Realpath defence: confirm the resolved entry lives under the
+    // resolved app_dir. Catches symlink escapes that the lexical
+    // `..` check above would miss.
+    let canon_app = std::fs::canonicalize(app_dir).map_err(|e| {
+        format!(
+            "app `{app_id}`: canonicalize app_dir {}: {e}",
+            app_dir.display()
+        )
+    })?;
+    let canon_entry = std::fs::canonicalize(&entry_abs).map_err(|e| {
+        format!(
+            "app `{app_id}`: canonicalize entry {}: {e}",
+            entry_abs.display()
+        )
+    })?;
+    if !canon_entry.starts_with(&canon_app) {
+        return Err(format!(
+            "app `{app_id}`: session entry resolves to {} which escapes app dir {}",
+            canon_entry.display(),
+            canon_app.display()
         ));
     }
 
@@ -153,6 +227,14 @@ async fn bring_up_app(
     let pythonpath = path_parts.join(pathsep());
 
     let mut command = build_command(manifest.runtime, &entry_abs);
+    // Wipe inherited env then reinstate the bare minimum + the
+    // `COS_*` configuration variables. App-internal env from
+    // `crate::config::as_env_vars()` is the curated subset the
+    // kernel decides to share with apps.
+    command.env_clear();
+    for (k, v) in safe_session_env_allowlist() {
+        command.env(k, v);
+    }
     command
         .env("COS_APP_ID", app_id)
         .env("COS_DATA_DIR", &data_dir)
@@ -170,7 +252,7 @@ async fn bring_up_app(
         .envs(crate::config::as_env_vars())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit());
+        .stderr(Stdio::piped());
 
     let mut child = command
         .spawn()
@@ -183,6 +265,24 @@ async fn bring_up_app(
         .stdout
         .take()
         .ok_or_else(|| "child stdout unavailable".to_string())?;
+    // Pipe + prefix child stderr so per-app log lines are
+    // attributable and don't corrupt the parent's TUI/log stream.
+    if let Some(stderr) = child.stderr.take() {
+        let prefix = app_id.to_string();
+        tokio::spawn(async move {
+            use tokio::io::{AsyncBufReadExt, BufReader};
+            let mut lines = BufReader::new(stderr).lines();
+            loop {
+                match lines.next_line().await {
+                    Ok(Some(line)) => {
+                        tracing::warn!(target: "cos_app", "[app:{prefix}] {line}");
+                    }
+                    Ok(None) => break,
+                    Err(_) => break,
+                }
+            }
+        });
+    }
 
     let transport = StdioTransport::from_pair(Box::new(stdout), Box::new(stdin));
     let client: Arc<McpClient> = McpClient::new(transport);
@@ -198,11 +298,11 @@ async fn bring_up_app(
     let init = match timeout(timeout_dur, init_fut).await {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
-            let _ = child.start_kill();
+            kill_and_reap_child(child);
             return Err(format!("initialize: {e}"));
         }
         Err(_) => {
-            let _ = child.start_kill();
+            kill_and_reap_child(child);
             return Err(format!(
                 "initialize timed out after {}s",
                 timeout_dur.as_secs()
@@ -225,11 +325,11 @@ async fn bring_up_app(
     let listed_count = match timeout(timeout_dur, list_fut).await {
         Ok(Ok(v)) => v.tools.len(),
         Ok(Err(e)) => {
-            let _ = child.start_kill();
+            kill_and_reap_child(child);
             return Err(format!("tools/list: {e}"));
         }
         Err(_) => {
-            let _ = child.start_kill();
+            kill_and_reap_child(child);
             return Err(format!(
                 "tools/list timed out after {}s",
                 timeout_dur.as_secs()
@@ -238,6 +338,19 @@ async fn bring_up_app(
     };
 
     Ok((client, child, listed_count))
+}
+
+/// Best-effort kill + detached reap of a child process. Used on
+/// handshake-failure paths inside [`bring_up_app`]. Without the
+/// background `wait()` a long-lived agent process accumulates one
+/// zombie per failed app spawn.
+fn kill_and_reap_child(mut child: Child) {
+    let _ = child.start_kill();
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle.spawn(async move {
+            let _ = child.wait().await;
+        });
+    }
 }
 
 fn build_command(runtime: Runtime, entry: &Path) -> Command {
@@ -293,7 +406,21 @@ async fn get_or_open(app_id: &str) -> Result<Arc<McpClient>, String> {
 
 /// Explicitly bring up `app_id`. Returns `(client, tool_count)`.
 /// Idempotent: returns the existing session if one is already open.
+///
+/// Race safety: the previous implementation released the manager
+/// mutex between the "is there a session?" probe and the spawn. Two
+/// callers racing on the same app would each see "no session", each
+/// spawn a child, and the slower one would overwrite the faster's
+/// table entry — leaving an orphan child whose stdin/stdout get
+/// dropped immediately. We now take a *per-app* mutex across the
+/// whole probe-then-spawn-then-insert sequence so exactly one child
+/// is created per app per process.
 async fn open_session(app_id: &str) -> Result<(Arc<McpClient>, usize), String> {
+    let lock = app_open_lock(app_id);
+    let _open_guard = lock.lock().await;
+
+    // Re-probe under the per-app lock — another racer may have just
+    // finished the spawn we were blocked on.
     {
         let table = manager().lock().await;
         if let Some(s) = table.get(app_id) {
@@ -322,9 +449,23 @@ async fn open_session(app_id: &str) -> Result<(Arc<McpClient>, usize), String> {
 
 /// Close a session, dropping the handle (which kills the child).
 /// Returns `true` if a session was found and closed.
+///
+/// We move the `ActiveSession` out of the table *before* dropping it
+/// so the manager mutex isn't held across the kill+reap. The Drop
+/// impl on `ActiveSession` spawns a detached `wait()` task so we
+/// don't block here either — any in-flight `tools/call` against this
+/// session will return `ConnectionClosed` once the child's stdio is
+/// torn down.
 async fn close_session(app_id: &str) -> bool {
-    let mut table = manager().lock().await;
-    table.remove(app_id).is_some()
+    let removed = {
+        let mut table = manager().lock().await;
+        table.remove(app_id)
+    };
+    let was_present = removed.is_some();
+    // Explicit drop here to make the lifetime obvious — the Drop
+    // impl does the async reap.
+    drop(removed);
+    was_present
 }
 
 fn apps_root() -> PathBuf {
@@ -333,6 +474,25 @@ fn apps_root() -> PathBuf {
 
 fn data_dir_string() -> String {
     std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into())
+}
+
+/// Environment variables an app-session child needs at a minimum:
+/// PATH (for locating interpreters), HOME (cache dirs), locale/TZ
+/// (for correct output), terminal hints. Everything else — and in
+/// particular every `*_TOKEN`, `*_API_KEY`, `*_SECRET` — is dropped
+/// by [`bring_up_app`]'s `env_clear`.
+fn safe_session_env_allowlist() -> Vec<(String, String)> {
+    const ALWAYS: &[&str] = &[
+        "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES",
+        "TZ", "TERM", "TMPDIR", "TEMP", "TMP",
+    ];
+    let mut out = Vec::with_capacity(ALWAYS.len());
+    for k in ALWAYS {
+        if let Ok(v) = std::env::var(k) {
+            out.push(((*k).to_string(), v));
+        }
+    }
+    out
 }
 
 /// Locate the directories containing the `claw_os_sdk` and
@@ -1028,6 +1188,81 @@ mod tests {
         );
 
         // Clean up so subsequent tests start fresh.
+        let _ = close_session("kv").await;
+
+        match prev_apps {
+            Some(v) => std::env::set_var("COS_APPS_DIR", v),
+            None => std::env::remove_var("COS_APPS_DIR"),
+        }
+        match prev_data {
+            Some(v) => std::env::set_var("COS_DATA_DIR", v),
+            None => std::env::remove_var("COS_DATA_DIR"),
+        }
+        match prev_mode {
+            Some(v) => std::env::set_var("COS_CAPS_MODE", v),
+            None => std::env::remove_var("COS_CAPS_MODE"),
+        }
+    }
+
+    /// Race test: two callers concurrently invoke `open_session` on
+    /// the same app. The per-app lock guarantees exactly one child is
+    /// spawned + one session table entry is created. Without the
+    /// lock both callers would race past the manager probe, both
+    /// would spawn a child, and one of them would be silently
+    /// overwritten in `table.insert` — leaving an orphan whose stdio
+    /// handles get dropped immediately.
+    ///
+    /// We assert this by counting how many distinct `Arc<McpClient>`s
+    /// the two opens return — they must both be the same Arc, which
+    /// proves the second caller found the first's entry under the
+    /// lock and short-circuited the spawn.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn open_race_single_child() {
+        let _g = env_lock();
+        let apps_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("apps");
+        if !apps_dir.join("kv").join("server.py").is_file() {
+            eprintln!("skip open_race_single_child: {} not present", apps_dir.display());
+            return;
+        }
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("skip open_race_single_child: python3 not on PATH");
+            return;
+        }
+
+        let data = tempfile::tempdir().unwrap();
+        let prev_apps = std::env::var("COS_APPS_DIR").ok();
+        let prev_data = std::env::var("COS_DATA_DIR").ok();
+        let prev_mode = std::env::var("COS_CAPS_MODE").ok();
+        std::env::set_var("COS_APPS_DIR", &apps_dir);
+        std::env::set_var("COS_DATA_DIR", data.path());
+        std::env::set_var("COS_CAPS_MODE", "permissive");
+
+        let _ = close_session("kv").await;
+
+        // Spawn two concurrent open_session calls. With the bug, both
+        // would race past the manager probe and each spawn its own
+        // server. With the per-app lock, the second blocks until the
+        // first finishes, then short-circuits.
+        let t1 = tokio::spawn(async { open_session("kv").await });
+        let t2 = tokio::spawn(async { open_session("kv").await });
+        let (r1, r2) = (t1.await.unwrap(), t2.await.unwrap());
+        let (c1, _) = r1.expect("first open");
+        let (c2, _) = r2.expect("second open");
+
+        // Both callers must observe the same client (`Arc::ptr_eq`).
+        // A second spawn would have produced a fresh Arc.
+        assert!(
+            Arc::ptr_eq(&c1, &c2),
+            "open_session race produced two distinct sessions"
+        );
+
         let _ = close_session("kv").await;
 
         match prev_apps {

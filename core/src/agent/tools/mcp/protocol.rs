@@ -290,13 +290,27 @@ pub struct CallToolResult {
 }
 
 /// Content payload — MCP allows `text` / `image` / `resource`. We
-/// model just `text` for now; richer kinds can be added without
-/// breaking callers.
+/// model `text` and `image` for now; richer kinds can be added
+/// without breaking callers.
+///
+/// Field naming: MCP wire format is camelCase for object fields
+/// (see e.g. `inputSchema`, `protocolVersion`). The variant-level
+/// `rename_all = "snake_case"` here only renames the discriminator
+/// values (`text` / `image`); the `Image.mime_type` field gets an
+/// explicit per-field `rename` to `mimeType` to stay spec-compliant.
+/// A spec server emits `{"type":"image","mimeType":"image/png",
+/// "data":"..."}`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentItem {
-    Text { text: String },
-    Image { data: String, mime_type: String },
+    Text {
+        text: String,
+    },
+    Image {
+        data: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+    },
 }
 
 #[cfg(test)]
@@ -390,5 +404,38 @@ mod tests {
         };
         let s = serde_json::to_string(&t).unwrap();
         assert!(s.contains("\"inputSchema\""));
+    }
+
+    /// MCP spec mandates `mimeType` (camelCase) for image content items.
+    /// Regression test for the `mime_type` → `mimeType` rename — a
+    /// spec-compliant server returning image content must round-trip
+    /// through us without a Decode error.
+    #[test]
+    fn image_content_item_uses_camel_case_mime_type_on_the_wire() {
+        let item = ContentItem::Image {
+            data: "QUJD".into(),
+            mime_type: "image/png".into(),
+        };
+        let s = serde_json::to_string(&item).unwrap();
+        assert!(
+            s.contains("\"mimeType\""),
+            "wire payload must use camelCase, got {s}"
+        );
+        assert!(
+            !s.contains("\"mime_type\""),
+            "snake_case mime_type leaked into wire payload: {s}"
+        );
+
+        // And it must accept spec-compliant payloads on the way back in.
+        let parsed: ContentItem =
+            serde_json::from_str(r#"{"type":"image","mimeType":"image/jpeg","data":"AAA"}"#)
+                .expect("must parse spec-compliant mimeType");
+        match parsed {
+            ContentItem::Image { mime_type, data } => {
+                assert_eq!(mime_type, "image/jpeg");
+                assert_eq!(data, "AAA");
+            }
+            other => panic!("expected Image, got {other:?}"),
+        }
     }
 }
