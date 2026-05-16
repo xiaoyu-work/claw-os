@@ -10,7 +10,7 @@ use clap::Parser;
 use cosmic::{
     Element,
     app::{Core, CosmicFlags, Settings, Task},
-    cctk::sctk::{self, shell::wlr_layer::{Anchor, KeyboardInteractivity}},
+    cctk::sctk::{self, shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer}},
     cosmic_config::{Config, CosmicConfigEntry},
     cosmic_theme::Spacing,
     dbus_activation,
@@ -41,7 +41,7 @@ use cosmic::{
         platform_specific::shell::wayland::commands::{
             self,
             activation::request_token,
-            layer_surface::{destroy_layer_surface, get_layer_surface},
+            layer_surface::{destroy_layer_surface, get_layer_surface, set_layer},
             overlap_notify::overlap_notify,
             popup::destroy_popup,
         },
@@ -788,12 +788,15 @@ impl cosmic::Application for CosmicAppLibrary {
             }
             Message::StartDrag(i) => {
                 self.dnd_icon = Some(i);
+                return set_layer(*WINDOW_ID, Layer::Bottom);
             }
             Message::FinishDrag(_) => {
                 self.dnd_icon = None;
+                return set_layer(*WINDOW_ID, Layer::Top);
             }
             Message::CancelDrag => {
                 self.dnd_icon = None;
+                return set_layer(*WINDOW_ID, Layer::Top);
             }
             Message::ScrollYOffset(y) => {
                 self.scroll_offset = y;
