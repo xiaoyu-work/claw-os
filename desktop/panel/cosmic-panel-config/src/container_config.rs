@@ -143,10 +143,7 @@ impl Default for CosmicPanelContainerConfig {
                     output: CosmicPanelOuput::All,
                     background: CosmicPanelBackground::ThemeDefault,
                     plugins_wings: Some((
-                        vec![
-                            "com.clawos.PanelWorkspacesButton".to_string(),
-                            "com.clawos.PanelAppButton".to_string(),
-                        ],
+                        vec![],
                         vec![
                             "com.clawos.AppletInputSources".to_string(),
                             "com.clawos.AppletA11y".to_string(),
