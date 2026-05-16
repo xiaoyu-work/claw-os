@@ -25,17 +25,25 @@ pub struct Manager {
     mode: (ThemeMode, Option<Config>),
     light: ThemeCustomizer,
     dark: ThemeCustomizer,
+
+    custom_accent: Option<Srgb>,
 }
 
 #[derive(Debug)]
 pub struct ThemeCustomizer {
     builder: (ThemeBuilder, Option<Config>),
     theme: (Theme, Option<Config>),
+    accent_palette: Option<Vec<Srgba>>,
+    custom_window_hint: Option<Srgb>,
 }
 
-impl From<(Option<Config>, Option<Config>)> for ThemeCustomizer {
+impl From<(Option<Config>, Option<Config>, Option<Vec<Srgba>>)> for ThemeCustomizer {
     fn from(
-        (theme_config, builder_config): (Option<Config>, Option<Config>),
+        (theme_config, builder_config, palette): (
+            Option<Config>,
+            Option<Config>,
+            Option<Vec<Srgba>>,
+        ),
     ) -> Self {
         let theme = match Theme::get_entry(theme_config.as_ref().unwrap()) {
             Ok(theme) => theme,
@@ -70,15 +78,36 @@ impl From<(Option<Config>, Option<Config>)> for ThemeCustomizer {
 
         theme_builder.gaps = theme.gaps;
 
-        Self {
+        let mut customizer = Self {
             builder: (theme_builder, builder_config),
             theme: (theme, theme_config),
+            accent_palette: palette,
+            custom_window_hint: None,
+        };
+
+        if customizer.accent_palette.is_none() {
+            let palette = customizer.builder.0.palette.as_ref();
+            customizer.accent_palette = Some(vec![
+                palette.accent_blue,
+                palette.accent_indigo,
+                palette.accent_purple,
+                palette.accent_pink,
+                palette.accent_red,
+                palette.accent_orange,
+                palette.accent_yellow,
+                palette.accent_green,
+                palette.accent_warm_grey,
+            ]);
         }
+
+        customizer
     }
 }
 
 impl Default for Manager {
     fn default() -> Self {
+        let settings_config = crate::config::Config::new();
+
         let theme_mode_config = ThemeMode::config().ok();
         let theme_mode = theme_mode_config
             .as_ref()
@@ -93,11 +122,39 @@ impl Default for Manager {
             })
             .unwrap_or_default();
 
-        Self {
+        let mut manager = Self {
             mode: (theme_mode, theme_mode_config),
-            light: (Theme::light_config().ok(), ThemeBuilder::light_config().ok()).into(),
-            dark: (Theme::dark_config().ok(), ThemeBuilder::dark_config().ok()).into(),
-        }
+            light: (
+                Theme::light_config().ok(),
+                ThemeBuilder::light_config().ok(),
+                settings_config.accent_palette_light().ok(),
+            )
+                .into(),
+            dark: (
+                Theme::dark_config().ok(),
+                ThemeBuilder::dark_config().ok(),
+                settings_config.accent_palette_dark().ok(),
+            )
+                .into(),
+            custom_accent: None,
+        };
+
+        let customizer = manager.selected_customizer();
+        manager.custom_accent = customizer.builder.0.accent.filter(|c| {
+            let c = Srgba::new(c.red, c.green, c.blue, 1.0);
+            let theme = &customizer.theme.0;
+            c != theme.palette.accent_blue
+                && c != theme.palette.accent_green
+                && c != theme.palette.accent_indigo
+                && c != theme.palette.accent_orange
+                && c != theme.palette.accent_pink
+                && c != theme.palette.accent_purple
+                && c != theme.palette.accent_red
+                && c != theme.palette.accent_warm_grey
+                && c != theme.palette.accent_yellow
+        });
+
+        manager
     }
 }
 
@@ -149,6 +206,8 @@ impl Manager {
 
                     let new_theme = builder.build();
                     theme_transaction!(config, current_theme, new_theme, {
+                        accent;
+                        accent_button;
                         background;
                         button;
                         destructive;
@@ -163,6 +222,8 @@ impl Manager {
                         text_button;
                         warning;
                         warning_button;
+                        window_hint;
+                        accent_text;
                     });
                 }
             }
@@ -209,6 +270,21 @@ impl Manager {
     #[inline]
     pub fn builder(&self) -> &ThemeBuilder {
         &self.selected_customizer().builder.0
+    }
+
+    #[inline]
+    pub fn custom_accent(&self) -> &Option<Srgb> {
+        &self.custom_accent
+    }
+
+    #[inline]
+    pub fn accent_palette(&self) -> &Option<Vec<Srgba>> {
+        &self.selected_customizer().accent_palette
+    }
+
+    #[inline]
+    pub fn custom_window_hint(&self) -> &Option<Srgb> {
+        self.selected_customizer().custom_window_hint()
     }
 
     #[inline]
@@ -286,12 +362,14 @@ impl Manager {
 
     pub fn get_color(&self, context: &ContextView) -> Option<Color> {
         match *context {
+            ContextView::CustomAccent => self.custom_accent().map(Color::from),
             ContextView::ApplicationBackground => self.builder().bg_color.map(Color::from),
             ContextView::ContainerBackground => {
                 self.builder().primary_container_bg.map(Color::from)
             }
             ContextView::InterfaceText => self.builder().text_tint.map(Color::from),
             ContextView::ControlComponent => self.builder().neutral_tint.map(Color::from),
+            ContextView::AccentWindowHint => self.builder().window_hint.map(Color::from),
             _ => None,
         }
     }
@@ -303,6 +381,7 @@ impl Manager {
     ) -> Option<ThemeStaged> {
         let theme_customizer = self.selected_customizer_mut();
         match *context {
+            ContextView::CustomAccent => theme_customizer.set_accent(color.map(Srgb::from)),
             ContextView::ApplicationBackground => {
                 theme_customizer.set_bg_color(color.map(Srgba::from))
             }
@@ -312,6 +391,9 @@ impl Manager {
             ContextView::InterfaceText => theme_customizer.set_text_tint(color.map(Srgb::from)),
             ContextView::ControlComponent => {
                 theme_customizer.set_neutral_tint(color.map(Srgb::from))
+            }
+            ContextView::AccentWindowHint => {
+                theme_customizer.set_window_hint(color.map(Srgb::from))
             }
             _ => None,
         }
@@ -356,6 +438,23 @@ impl ThemeCustomizer {
         self
     }
 
+    pub fn set_window_hint(&mut self, color: Option<Srgb>) -> Option<ThemeStaged> {
+        let config = self.builder.1.as_ref()?;
+
+        self.custom_window_hint = color;
+        self.builder.0.set_window_hint(config, color).ok()?;
+        self.theme
+            .0
+            .set_window_hint(self.theme.1.as_ref()?, color)
+            .ok()?;
+
+        Some(ThemeStaged::Current)
+    }
+
+    pub fn custom_window_hint(&self) -> &Option<Srgb> {
+        &self.custom_window_hint
+    }
+
     pub fn set_bg_color(&mut self, color: Option<Srgba>) -> Option<ThemeStaged> {
         let config = self.builder.1.as_ref()?;
 
@@ -371,6 +470,13 @@ impl ThemeCustomizer {
             .set_primary_container_bg(config, color)
             .ok()?;
 
+        Some(ThemeStaged::Current)
+    }
+
+    pub fn set_accent(&mut self, color: Option<Srgb>) -> Option<ThemeStaged> {
+        let config = self.builder.1.as_ref()?;
+
+        self.builder.0.set_accent(config, color).ok()?;
         Some(ThemeStaged::Current)
     }
 
