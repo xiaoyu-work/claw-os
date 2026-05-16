@@ -73,8 +73,19 @@ impl Default for AppearanceConfig {
             clip_floating_windows: true,
             clip_tiled_windows: true,
             shadow_tiled_windows: true,
-            experimental_blur: false,
-            experimental_window_animations: false,
+            // Default ON: protocol binding + client wiring already
+            // shipped. Render-pass integration is currently a no-op
+            // (see `desktop/comp/src/backend/render/blur.rs`), so
+            // turning this on does NOT regress anything — it only
+            // unlocks the cosmetic effect for follow-up work.
+            experimental_blur: true,
+            // Default ON: open-animation is fully wired. Close
+            // animation is defined but not dispatched (would need
+            // surface-lifetime parking that's risky to land without
+            // a Linux test loop), so the user sees the open spring
+            // but no close fade — that's still a meaningful
+            // improvement over the current hard pop.
+            experimental_window_animations: true,
         }
     }
 }
