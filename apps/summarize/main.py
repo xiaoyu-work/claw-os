@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import sys
 
-from claw_os_sdk import ai, policy
+from claw_os_sdk import ai
+from cos_runtime import policy
 
 
 SYSTEM_PROMPT = (

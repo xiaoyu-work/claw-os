@@ -2027,7 +2027,7 @@ impl Application for App {
                                 ) {
                                     Ok(ron) => {
                                         let path_str = path.to_string_lossy();
-                                        if let Err(err) = claw_os_sdk::fs::write(&path_str, &ron)
+                                        if let Err(err) = cos_runtime::fs::write(&path_str, &ron)
                                         {
                                             if err.is_denied() {
                                                 log::error!(
@@ -2077,7 +2077,7 @@ impl Application for App {
                             ) {
                                 Ok(ron) => {
                                     let path_str = path.to_string_lossy();
-                                    if let Err(err) = claw_os_sdk::fs::write(&path_str, &ron) {
+                                    if let Err(err) = cos_runtime::fs::write(&path_str, &ron) {
                                         if err.is_denied() {
                                             log::error!(
                                                 "permission denied exporting {:?} to {:?}: {}",
@@ -3248,7 +3248,7 @@ impl Application for App {
             Message::WindowNew => match env::current_exe() {
                 Ok(exe) => {
                     let exe_str = exe.to_string_lossy().into_owned();
-                    match claw_os_sdk::exec::start(&[exe_str.as_str()]) {
+                    match cos_runtime::exec::start(&[exe_str.as_str()]) {
                         Ok(_) => {}
                         Err(err) if err.is_denied() => {
                             log::error!(

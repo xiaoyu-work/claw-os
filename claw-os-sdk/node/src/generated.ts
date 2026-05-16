@@ -140,7 +140,7 @@ export interface Caprequest {
 /**
  * Permissions request / reply.
  * Shape of the success-path data field returned by `cos perms check`. Apps
- * call this via SDK helpers (e.g. claw_os_sdk.policy.check).
+ * call this via SDK helpers (e.g. cos_runtime.policy.check).
  */
 export interface Perms {
   decision: "allow" | "deny" | "prompt";

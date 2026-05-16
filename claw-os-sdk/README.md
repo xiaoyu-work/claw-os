@@ -28,15 +28,10 @@ claw-os-sdk/
 │   ├── README.md
 │   ├── examples/
 │   └── src/
-│       ├── lib.rs               top-level re-exports
-│       ├── transport.rs         subprocess transport (cos CLI)
+│       ├── lib.rs               top-level re-exports + transport
 │       ├── envelope.rs          common envelope parse / error
 │       ├── ai.rs                ai::chat / ai::embed / ai::image_generate / ...
-│       ├── policy.rs            policy::require / policy::check
 │       ├── tools.rs             tools::call / tools::catalog
-│       ├── fs.rs, exec.rs,
-│       ├── pkg.rs, notify.rs,
-│       ├── net.rs               existing app wrappers (from claw-bridge)
 │       └── generated.rs         codegen output (envelope types)
 │
 ├── python/              Python SDK (pip package `claw-os-sdk`)
@@ -44,8 +39,7 @@ claw-os-sdk/
 │   ├── README.md
 │   └── src/claw_os_sdk/
 │       ├── __init__.py
-│       ├── ai.py, policy.py, tools.py, serve.py, snapshot.py,
-│       │                        claw_os_session.py
+│       ├── ai.py, tools.py, serve.py, claw_os_session.py
 │       └── generated.py
 │
 ├── node/                Node SDK (npm package `@claw-os/sdk`)
@@ -54,18 +48,24 @@ claw-os-sdk/
 │   └── src/
 │       ├── index.ts             top-level re-exports
 │       ├── transport.ts         subprocess transport
-│       ├── ai.ts, policy.ts, tools.ts
+│       ├── ai.ts, tools.ts
 │       └── generated.ts         codegen output
 │
 ├── go/                  Go SDK (module github.com/xiaoyu-work/claw-os-sdk/go)
 │   ├── go.mod
 │   ├── README.md
 │   ├── transport.go
-│   ├── ai.go, policy.go, tools.go
+│   ├── ai.go, tools.go
 │   └── generated.go
 │
 └── README.md
 ```
+
+> The OS-internal `policy`, `snapshot`, and Rust `fs / exec / pkg /
+> notify / net` helpers used by the bundled claw-os apps live in the
+> sibling [`cos-runtime/`](../cos-runtime/) tree, not here. Third-party
+> Linux app developers do **not** need that package — it's only
+> referenced by code that ships inside the OS itself.
 
 ## The model
 
@@ -140,8 +140,8 @@ version and refuse to run against incompatible kernels.
 |-----------|--------|
 | `wire/v1` schemas | Initial draft |
 | `wire/codegen.py` | Initial — emits Rust + Python; Node + Go are placeholder generators |
-| `rust/` | Moved from `crates/claw-bridge`; adds `ai`, `policy`, `tools` |
-| `python/` | Moved from `apps/_lib`; published as `claw-os-sdk` |
+| `rust/` | Moved from `crates/claw-bridge`; adds `ai`, `tools`. The `policy / fs / exec / pkg / notify / net` modules moved on into `cos-runtime/`. |
+| `python/` | Moved from `apps/_lib`; published as `claw-os-sdk`. The internal `policy` / `snapshot` helpers moved on into `cos-runtime/python/`. |
 | `node/` | Scaffold only — transport stub, hand-rolled API to come |
 | `go/`   | Scaffold only — transport stub, hand-rolled API to come |
 

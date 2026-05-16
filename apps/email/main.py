@@ -22,7 +22,8 @@ import urllib.request
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
-from claw_os_sdk import ai, policy
+from claw_os_sdk import ai
+from cos_runtime import policy
 
 
 # ---------------------------------------------------------------------------

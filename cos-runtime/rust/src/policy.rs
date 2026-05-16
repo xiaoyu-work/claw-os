@@ -1,10 +1,10 @@
-//! Permission helper — every SDK consumer that touches a gated verb
-//! should call [`require`] before performing the side effect. Mirrors
-//! the Python `claw_os_sdk.policy` module so apps written in either
-//! language behave identically.
+//! Permission helper — every claw-os bundled app or desktop binary
+//! that touches a gated verb calls [`require`] before performing the
+//! side effect. Mirrors the Python `cos_runtime.policy` module so
+//! apps written in either language behave identically.
 //!
 //! ```no_run
-//! use claw_os_sdk::policy;
+//! use cos_runtime::policy;
 //!
 //! fn handle_rm(path: &str) -> Result<(), Box<dyn std::error::Error>> {
 //!     policy::require("fs.delete", policy::Scope::path(path))?;

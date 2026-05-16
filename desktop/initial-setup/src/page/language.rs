@@ -204,7 +204,7 @@ impl super::Page for Page {
 
             // Use 'locale -a' instead of 'localectl list-locales' for OpenRC compatibility
             let output_result = tokio::task::spawn_blocking(|| {
-                claw_os_sdk::exec::run(&["locale", "-a"], None)
+                cos_runtime::exec::run(&["locale", "-a"], None)
             })
             .await;
 

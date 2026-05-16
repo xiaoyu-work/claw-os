@@ -139,16 +139,18 @@ async fn bring_up_app(
     let apps_dir_str = apps_dir.to_string_lossy().to_string();
     let data_dir = data_dir_string();
 
-    // Resolve the directory containing the `claw_os_sdk` Python
-    // package so `runtime: python` MCP-session apps can `from
-    // claw_os_sdk import …`. Honour an explicit override; otherwise
-    // try the production install path and the in-repo dev path
-    // (`<repo>/claw-os-sdk/python/src`).
-    let sdk_python_dir = resolve_sdk_python_dir(&apps_dir);
-    let pythonpath = match &sdk_python_dir {
-        Some(sdk) => format!("{}{}{}", sdk.to_string_lossy(), pathsep(), apps_dir_str),
-        None => apps_dir_str.clone(),
-    };
+    // Resolve the directories holding `claw_os_sdk` and `cos_runtime`
+    // Python packages so `runtime: python` MCP-session apps can
+    // `from claw_os_sdk import ai` and `from cos_runtime import
+    // policy`. Honour the explicit override first; otherwise probe
+    // the production install path and the in-repo dev paths
+    // (`<repo>/claw-os-sdk/python/src` and
+    // `<repo>/cos-runtime/python/src`).
+    let py_dirs = resolve_python_pkg_dirs(&apps_dir);
+    let mut path_parts: Vec<String> =
+        py_dirs.iter().map(|p| p.to_string_lossy().to_string()).collect();
+    path_parts.push(apps_dir_str.clone());
+    let pythonpath = path_parts.join(pathsep());
 
     let mut command = build_command(manifest.runtime, &entry_abs);
     command
@@ -333,14 +335,15 @@ fn data_dir_string() -> String {
     std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into())
 }
 
-/// Locate the directory containing the `claw_os_sdk` Python package.
+/// Locate the directories containing the `claw_os_sdk` and
+/// `cos_runtime` Python packages.
 ///
 /// Honours `COS_SDK_PYTHON_DIR` first, then falls back to the
 /// production install path (`/usr/lib/cos/python`), and finally to
-/// the in-repo dev-checkout path at a fixed offset from
-/// `$COS_APPS_DIR`. Returns the first directory that actually
-/// contains a `claw_os_sdk/` subdirectory.
-fn resolve_sdk_python_dir(apps_dir: &std::path::Path) -> Option<PathBuf> {
+/// the in-repo dev-checkout paths at fixed offsets from
+/// `$COS_APPS_DIR`. Returns the *distinct* candidates that actually
+/// host one of the wanted packages, deduplicated and order-preserving.
+fn resolve_python_pkg_dirs(apps_dir: &std::path::Path) -> Vec<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Ok(v) = std::env::var("COS_SDK_PYTHON_DIR") {
         if !v.is_empty() {
@@ -350,10 +353,19 @@ fn resolve_sdk_python_dir(apps_dir: &std::path::Path) -> Option<PathBuf> {
     candidates.push(PathBuf::from("/usr/lib/cos/python"));
     if let Some(parent) = apps_dir.parent() {
         candidates.push(parent.join("claw-os-sdk").join("python").join("src"));
+        candidates.push(parent.join("cos-runtime").join("python").join("src"));
     }
-    candidates
-        .into_iter()
-        .find(|c| c.join("claw_os_sdk").is_dir())
+    let wanted = ["claw_os_sdk", "cos_runtime"];
+    let mut out: Vec<PathBuf> = Vec::new();
+    for c in candidates {
+        if !wanted.iter().any(|p| c.join(p).is_dir()) {
+            continue;
+        }
+        if !out.iter().any(|existing| existing == &c) {
+            out.push(c);
+        }
+    }
+    out
 }
 
 fn pathsep() -> &'static str {

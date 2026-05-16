@@ -116,6 +116,10 @@ class DocsAppTests(unittest.TestCase):
             0,
             str(_HERE.parent.parent / "claw-os-sdk" / "python" / "src"),
         )  # for `from claw_os_sdk import …`
+        sys.path.insert(
+            0,
+            str(_HERE.parent.parent / "cos-runtime" / "python" / "src"),
+        )  # for `from cos_runtime import …`
         if "main" in sys.modules:
             del sys.modules["main"]
         self.main = importlib.import_module("main")
@@ -130,6 +134,7 @@ class DocsAppTests(unittest.TestCase):
         for p in (
             str(_HERE),
             str(_HERE.parent.parent / "claw-os-sdk" / "python" / "src"),
+            str(_HERE.parent.parent / "cos-runtime" / "python" / "src"),
         ):
             try:
                 sys.path.remove(p)

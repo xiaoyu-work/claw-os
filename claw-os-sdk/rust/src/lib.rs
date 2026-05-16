@@ -1,29 +1,31 @@
 //! # claw-os-sdk
 //!
 //! Official Rust SDK for [Claw OS](https://github.com/xiaoyu-work/claw-os).
-//! This crate is the typed, language-idiomatic surface every Rust app
-//! (or external integration) uses to talk to the `cos` kernel CLI.
+//! This crate is the typed, language-idiomatic surface a Rust app uses
+//! to add AI capabilities to itself — call the system LLM, expose
+//! tools to the agent, discover the kernel tool catalogue.
 //!
 //! See [the SDK README](https://github.com/xiaoyu-work/claw-os/tree/main/claw-os-sdk)
 //! and `wire/v1/README.md` for the protocol specification this crate
 //! implements.
 //!
-//! ## What's in here
+//! ## Scope
 //!
-//! The crate is organised by capability family — each family is a
-//! thin client over one [wire protocol](../../../wire/v1/README.md)
-//! request type:
+//! claw-os-sdk is **the AI-facing public surface**. It deliberately
+//! does *not* contain the helpers claw-os's own bundled apps use for
+//! self-gating (`policy`) or filesystem-mutation routing (`fs`,
+//! `exec`, `pkg`, `notify`, `net`). Those live in the internal
+//! [`cos-runtime`](../../../cos-runtime/) crate, which is not
+//! published. A regular Linux app written for claw-os does not need
+//! `cos-runtime`; it imports `claw-os-sdk` only when it wants to call
+//! the system LLM or be invoked as a tool by the system agent.
+//!
+//! ## What's in here
 //!
 //! | Module        | Wire family | Equivalent CLI                  |
 //! |---------------|-------------|---------------------------------|
 //! | [`ai`]        | `ai`        | `cos ai chat / embed / ...`     |
-//! | [`policy`]    | `perms`     | `cos perms check / grant`       |
 //! | [`tools`]     | `tool`      | `cos ai tool <name> --app <id>` |
-//! | [`fs`]        | `app`       | `cos app fs ...`                |
-//! | [`exec`]      | `app`       | `cos app exec ...`              |
-//! | [`pkg`]       | `app`       | `cos app pkg ...`               |
-//! | [`notify`]    | `app`       | `cos app notify ...`            |
-//! | [`net`]       | `app`       | `cos app net ...`               |
 //! | [`envelope`]  | shared      | the common reply envelope       |
 //! | [`generated`] | shared      | typed structs codegen'd from `wire/v1/*.schema.json` |
 //!
@@ -43,14 +45,6 @@
 //! The first cut is subprocess-per-call (~50 ms per call). A wire v2
 //! socket transport will replace this without changing the surface
 //! you see here. See `wire/v2-design.md` for the plan.
-//!
-//! ## History
-//!
-//! This crate is the renamed-and-extended successor to the internal
-//! `claw-bridge` crate that lived under `crates/claw-bridge`. Old call
-//! sites used `use claw_bridge::*` — new code uses `use claw_os_sdk::*`.
-//! There is no compatibility shim — claw-os is pre-1.0 and breaking
-//! changes are allowed.
 
 use std::ffi::OsStr;
 use std::io::Write;
@@ -60,13 +54,7 @@ use serde::de::DeserializeOwned;
 
 pub mod ai;
 pub mod envelope;
-pub mod exec;
-pub mod fs;
 pub mod generated;
-pub mod net;
-pub mod notify;
-pub mod pkg;
-pub mod policy;
 pub mod tools;
 
 /// Errors returned by every bridge call.
@@ -228,9 +216,11 @@ where
 }
 
 /// Typed variant of [`call`] — deserialises stdout into the caller's
-/// chosen struct. Use this in the typed app wrappers (`fs::read`,
-/// `pkg::has`, …).
-pub(crate) fn call_typed<A, R>(
+/// chosen struct. Used by the typed app wrappers (`fs::read`,
+/// `pkg::has`, …) — both inside this crate and inside the internal
+/// `cos-runtime` crate.
+#[doc(hidden)]
+pub fn call_typed<A, R>(
     app: &str,
     verb: &str,
     args: A,
@@ -256,12 +246,13 @@ where
 // ---------------------------------------------------------------------------
 
 /// Invoke any `cos` sub-command and parse stdout (or stderr fall-back)
-/// as JSON. Used by [`ai`], [`policy`], and [`tools`] for their
-/// `cos ai ...`, `cos perms ...` etc. paths.
+/// as JSON. Used by [`ai`] and [`tools`] (and `cos-runtime`'s
+/// `policy`) for `cos ai ...`, `cos perms ...` etc.
 ///
 /// `family` and `verb` are surfaced in [`BridgeError`] variants when
 /// the call fails — pass any human-meaningful strings.
-pub(crate) fn cos_call_json<A>(
+#[doc(hidden)]
+pub fn cos_call_json<A>(
     family: &str,
     verb: &str,
     args: A,
@@ -415,23 +406,5 @@ mod tests {
             code: Some("denied".into()),
         };
         assert!(err.is_denied());
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn fs_read_bytes_decodes_base64() {
-        // The Python side returns {"base64": "..."} for read_bytes;
-        // the bridge wrapper has to base64-decode that on its way
-        // back to the Rust caller.
-        let dir = tempfile::tempdir().unwrap();
-        // "hello world" base64-encoded is "aGVsbG8gd29ybGQ=".
-        let bin = write_fake_cos(
-            dir.path(),
-            r#"{"path":"/x","base64":"aGVsbG8gd29ybGQ=","bytes_returned":11,"total_size":11}"#,
-        );
-        std::env::set_var("CLAW_COS_BIN", &bin);
-        let v = fs::read_bytes("/x").unwrap();
-        assert_eq!(v, b"hello world");
-        std::env::remove_var("CLAW_COS_BIN");
     }
 }

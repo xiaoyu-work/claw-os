@@ -288,7 +288,7 @@ impl Application for App {
                     let marker = home.join(COSMIC_SETUP_DONE_PATH);
                     let marker_str = marker.to_string_lossy().into_owned();
                     let bridge_res = tokio::task::spawn_blocking(move || {
-                        claw_os_sdk::fs::write(&marker_str, "")
+                        cos_runtime::fs::write(&marker_str, "")
                     })
                     .await;
                     if let Ok(Err(why)) = bridge_res {
@@ -320,7 +320,7 @@ impl Application for App {
                     tasks = tasks.chain(
                         cosmic::Task::future(async {
                             let bridge_res = tokio::task::spawn_blocking(|| {
-                                claw_os_sdk::exec::run(
+                                cos_runtime::exec::run(
                                     &["loginctl", "terminate-user", "cosmic-initial-setup"],
                                     None,
                                 )

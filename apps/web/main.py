@@ -24,7 +24,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from claw_os_sdk import ai, policy
+from claw_os_sdk import ai
+from cos_runtime import policy
 
 TIMEOUT = int(os.environ.get("COS_WEB_TIMEOUT", "30"))
 DEFAULT_MAX_LENGTH = int(os.environ.get("COS_WEB_MAX_CONTENT_LENGTH", "50000"))

@@ -9,7 +9,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from claw_os_sdk import policy
+from cos_runtime import policy
 
 VERSION = os.environ.get("COS_VERSION", "0.1.0")
 USER_AGENT = "cos/" + VERSION

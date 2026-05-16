@@ -207,7 +207,7 @@ impl Tool for CosAppTool {
         // permission to dispatch *any* `cos_app_fs` command. The
         // fine-grained per-arg checks (e.g. `fs.read` on a specific
         // path) happen *inside* the Python app via
-        // `claw_os_sdk.policy.require`, where the args have already
+        // `cos_runtime.policy.require`, where the args have already
         // been parsed. Schema introspection bypasses this gate so
         // tooling / the agent registry can still describe an app it
         // is not allowed to call.

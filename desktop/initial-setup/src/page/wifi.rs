@@ -949,7 +949,7 @@ async fn nm_connection_editor(args: &[&str]) -> Result<(), String> {
 
     let join = tokio::task::spawn_blocking(move || {
         let argv_refs: Vec<&str> = argv.iter().map(String::as_str).collect();
-        claw_os_sdk::exec::start(&argv_refs)
+        cos_runtime::exec::start(&argv_refs)
     })
     .await
     .map_err(|why| why.to_string())?;

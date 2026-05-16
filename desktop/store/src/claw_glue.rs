@@ -1,4 +1,4 @@
-//! Thin desktop-side glue around [`claw_os_sdk`] so the COSMIC App
+//! Thin desktop-side glue around [`cos_runtime`] so the COSMIC App
 //! Store fork can route user-intent fs / exec calls through
 //! `cos app <name> <verb>` without each call-site re-deriving error
 //! handling, base64 decoding, or denial-message formatting.
@@ -18,7 +18,7 @@
 use std::path::Path;
 
 use base64::Engine as _;
-use claw_os_sdk::{BridgeError, call, exec, fs as bridge_fs};
+use cos_runtime::{BridgeError, call, exec, fs as bridge_fs};
 
 /// Format a [`BridgeError`] for end-user display. Permission denials
 /// from the kernel get a friendlier blurb that points the user at
@@ -38,7 +38,7 @@ pub fn user_message(err: &BridgeError) -> String {
 /// Read a (possibly binary) file via `cos app fs read_bytes`,
 /// base64-decoding the response server-side.
 ///
-/// [`claw_os_sdk::fs::read`] can't be used here because that verb is
+/// [`cos_runtime::fs::read`] can't be used here because that verb is
 /// UTF-8 only — binary content comes back through `errors=replace`
 /// which is lossy. The `read_bytes` verb is base64 over the wire and
 /// pages at the kernel's binary read limit, so we loop on

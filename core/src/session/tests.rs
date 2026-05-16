@@ -1422,7 +1422,7 @@ fn rollback_on_empty_session_is_empty_vec() {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 3b — Python `claw-os-sdk/python/src/claw_os_sdk/snapshot.py` mirrors into mutations.jsonl
+// Phase 3b — Python `cos-runtime/python/src/cos_runtime/snapshot.py` mirrors into mutations.jsonl
 // ---------------------------------------------------------------------------
 //
 // These tests prove that the Python helper and the Rust kernel agree
@@ -1443,8 +1443,22 @@ fn python3_available() -> bool {
 }
 
 fn apps_lib_dir() -> std::path::PathBuf {
-    // tests run from the package dir (`core/`); the SDK lives at
-    // `<repo>/claw-os-sdk/python/src/claw_os_sdk`, two levels up.
+    // tests run from the package dir (`core/`); the runtime helper
+    // lives at `<repo>/cos-runtime/python/src/cos_runtime`, two
+    // levels up.
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    std::path::PathBuf::from(manifest)
+        .parent()
+        .unwrap()
+        .join("cos-runtime")
+        .join("python")
+        .join("src")
+        .join("cos_runtime")
+}
+
+fn sdk_lib_dir() -> std::path::PathBuf {
+    // Public SDK Python package at
+    // `<repo>/claw-os-sdk/python/src/claw_os_sdk`.
     let manifest = env!("CARGO_MANIFEST_DIR");
     std::path::PathBuf::from(manifest)
         .parent()
@@ -1646,7 +1660,7 @@ fn python_snapshot_no_mirror_for_ephemeral_session() {
 // =====================================================================
 
 fn run_python(script: &str) -> std::process::Output {
-    let lib = apps_lib_dir();
+    let lib = sdk_lib_dir();
     assert!(
         lib.join("claw_os_session.py").is_file(),
         "claw_os_session.py missing at {}",

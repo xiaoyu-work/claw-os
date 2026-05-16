@@ -291,7 +291,7 @@ impl page::Page for Page {
 }
 
 /// Synchronous worker — runs on a blocking pool because
-/// `claw_os_sdk::exec::run` is itself blocking. Returns a verdict
+/// `cos_runtime::exec::run` is itself blocking. Returns a verdict
 /// suitable for the UI; tracing log lines mirror the structure used
 /// by other pages (location.rs, a11y.rs).
 fn apply_blocking(provider: &str, model: &str, api_key: &str) -> ApplyOutcome {
@@ -310,7 +310,7 @@ fn apply_blocking(provider: &str, model: &str, api_key: &str) -> ApplyOutcome {
         argv.push("--api-key");
         argv.push(api_key);
     }
-    match claw_os_sdk::exec::run(&argv, Some(30)) {
+    match cos_runtime::exec::run(&argv, Some(30)) {
         Ok(r) if r.exit_code == 0 => {
             tracing::info!(
                 provider,

@@ -8,7 +8,7 @@
 #   - Thunderbird policies      → /etc/thunderbird/policies/policies.json
 #   - Thunderbird NM manifest   → /etc/thunderbird/native-messaging-hosts/os.claw.mail_ai.json
 #   - Native host launcher      → /usr/lib/cos/claw-mail-ai-host
-#   - Python host + deps        → /usr/lib/cos/mail-ai/, /usr/lib/cos/python/claw_os_sdk/
+#   - Python host + deps        → /usr/lib/cos/mail-ai/, /usr/lib/cos/python/claw_os_sdk/, /usr/lib/cos/python/cos_runtime/
 #
 # Run as root. Re-run is idempotent (overwrites).
 #
@@ -26,11 +26,13 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EXT_SRC="${REPO_ROOT}/extensions/claw-mail-ai"
 APP_SRC="${REPO_ROOT}/apps/mail-ai"
 SDK_PY_SRC="${REPO_ROOT}/claw-os-sdk/python/src/claw_os_sdk"
+RUNTIME_PY_SRC="${REPO_ROOT}/cos-runtime/python/src/cos_runtime"
 
 EXT_ID="claw-mail-ai@claw.os"
 EXT_DEST="/usr/share/claw/extensions/claw-mail-ai"
 APP_DEST="/usr/lib/cos/mail-ai"
 SDK_DEST="/usr/lib/cos/python/claw_os_sdk"
+RUNTIME_DEST="/usr/lib/cos/python/cos_runtime"
 HOST_LAUNCHER="/usr/lib/cos/claw-mail-ai-host"
 NM_MANIFEST="/etc/thunderbird/native-messaging-hosts/os.claw.mail_ai.json"
 POLICY_FILE="/etc/thunderbird/policies/policies.json"
@@ -38,7 +40,7 @@ XPI_DEST_DIR="/usr/lib/thunderbird/distribution/extensions"
 XPI_DEST="${XPI_DEST_DIR}/${EXT_ID}.xpi"
 
 # Sanity checks.
-for d in "${EXT_SRC}" "${APP_SRC}" "${SDK_PY_SRC}"; do
+for d in "${EXT_SRC}" "${APP_SRC}" "${SDK_PY_SRC}" "${RUNTIME_PY_SRC}"; do
   if [[ ! -d "$d" ]]; then
     echo "error: source dir missing: $d" >&2
     exit 1
@@ -80,6 +82,11 @@ if [[ ! -d "${SDK_DEST}" ]]; then
   echo "[claw-mail-ai] installing claw-os-sdk → ${SDK_DEST}"
   install -d -m 0755 "${SDK_DEST}"
   cp -a "${SDK_PY_SRC}/." "${SDK_DEST}/"
+fi
+if [[ ! -d "${RUNTIME_DEST}" ]]; then
+  echo "[claw-mail-ai] installing cos-runtime → ${RUNTIME_DEST}"
+  install -d -m 0755 "${RUNTIME_DEST}"
+  cp -a "${RUNTIME_PY_SRC}/." "${RUNTIME_DEST}/"
 fi
 
 # ---------------------------------------------------------------------------

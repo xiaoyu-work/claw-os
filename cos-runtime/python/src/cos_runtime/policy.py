@@ -9,7 +9,7 @@ the answer the Rust side would give.
 
 Typical usage::
 
-    from claw_os_sdk import policy
+    from cos_runtime import policy
 
     def handle_rm(args):
         policy.require("fs.delete", path=args["path"])

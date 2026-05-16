@@ -166,7 +166,7 @@ pub struct Caprequest {
 
 /// Permissions request / reply
 /// Shape of the success-path data field returned by `cos perms check`. Apps call
-/// this via SDK helpers (e.g. claw_os_sdk.policy.check).
+/// this via SDK helpers (e.g. cos_runtime.policy.check).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Perms {
     pub decision: String,

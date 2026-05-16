@@ -11,7 +11,7 @@
 use std::io;
 use std::path::Path;
 
-use claw_os_sdk::{exec, fs, BridgeError};
+use cos_runtime::{exec, fs, BridgeError};
 
 fn map_err(err: BridgeError) -> io::Error {
     let kind = if err.is_denied() {
