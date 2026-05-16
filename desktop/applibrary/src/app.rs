@@ -1111,7 +1111,7 @@ impl cosmic::Application for CosmicAppLibrary {
 
         // App grid: 7 cells wide, large icons with white labels.
         const GRID_COLS: usize = 7;
-        let app_grid_list: Vec<_> = self
+        let app_grid_list: Vec<Element<'_, Message>> = self
             .entry_path_input
             .iter()
             .zip(self.entry_ids.iter())
@@ -1156,7 +1156,7 @@ impl cosmic::Application for CosmicAppLibrary {
             .chunks(GRID_COLS)
             .into_iter()
             .map(|row_chunk| {
-                let mut new_row = row_chunk.collect_vec();
+                let mut new_row: Vec<Element<'_, Message>> = row_chunk.collect_vec();
                 let missing = GRID_COLS - new_row.len();
                 if missing > 0 {
                     new_row.push(
