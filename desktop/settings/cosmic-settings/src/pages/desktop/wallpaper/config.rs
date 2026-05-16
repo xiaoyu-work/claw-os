@@ -120,19 +120,31 @@ impl Config {
 
     #[must_use]
     pub fn default_folder() -> PathBuf {
+        let cosmic_dir = PathBuf::from("/usr/share/backgrounds/cosmic");
+
+        // Prefer a non-empty XDG_DATA_DIRS/backgrounds — the user (or a
+        // packaged extension) may have added their own wallpaper folder.
+        // An existing-but-empty dir at /usr/local/share/backgrounds (or
+        // similar) used to win this lookup and leave the wallpaper page
+        // with no preview — we now skip those and fall through.
         if let Some(data_dirs) = env::var_os("XDG_DATA_DIRS")
             && let Some(data_dirs) = data_dirs.to_str()
         {
-            let data_dirs = data_dirs.split(":");
-
-            for data_dir in data_dirs {
-                let potential_path = PathBuf::from(data_dir).join(BACKGROUNDS_DIR);
-                if let Ok(true) = &potential_path.try_exists() {
-                    return potential_path;
+            for data_dir in data_dirs.split(":") {
+                let candidate = PathBuf::from(data_dir).join(BACKGROUNDS_DIR);
+                if folder_has_files(&candidate) {
+                    return candidate;
                 }
             }
         }
-        PathBuf::from("/usr/share").join(BACKGROUNDS_DIR)
+
+        // Final fallback: our shipped cosmic-bg directory if it exists,
+        // otherwise the parent /usr/share/backgrounds.
+        if cosmic_dir.is_dir() {
+            cosmic_dir
+        } else {
+            PathBuf::from("/usr/share").join(BACKGROUNDS_DIR)
+        }
     }
 
     /// Sets the current background folder
@@ -304,4 +316,33 @@ impl Config {
     fn update_rotation_frequency(&self) -> Result<(), cosmic_config::Error> {
         self.update(ROTATION_FREQUENCY, &self.rotation_frequency)
     }
+}
+
+/// Whether `path` is a directory that contains at least one file (recursively,
+/// up to a few levels deep).
+///
+/// Used by `Config::default_folder` to skip XDG_DATA_DIRS entries whose
+/// `backgrounds/` subfolder is empty — otherwise the wallpaper page can land
+/// on `/usr/local/share/backgrounds/` (empty) and never fall through to
+/// `/usr/share/backgrounds/cosmic/` where our default wallpaper lives.
+fn folder_has_files(path: &Path) -> bool {
+    if !path.is_dir() {
+        return false;
+    }
+    let mut stack = vec![(path.to_path_buf(), 0u32)];
+    while let Some((dir, depth)) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in rd.flatten() {
+            let Ok(ty) = entry.file_type() else { continue };
+            if ty.is_file() {
+                return true;
+            }
+            if ty.is_dir() && depth < 3 {
+                stack.push((entry.path(), depth + 1));
+            }
+        }
+    }
+    false
 }
