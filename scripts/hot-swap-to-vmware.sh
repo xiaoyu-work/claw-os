@@ -124,7 +124,7 @@ for t in "${TARGETS[@]}"; do
   chmod_args+=" --run-command 'chmod 0755 $install'"
 done
 orb -m "$ORB_VM" bash -lc "set -e; cd '$REPO_ROOT'; \
-  virt-customize -a '${QCOW#$REPO_ROOT/}' $upload_args $chmod_args"
+  virt-customize -a '${QCOW#"$REPO_ROOT"/}' $upload_args $chmod_args"
 
 if [ "$DO_CONVERT" = 1 ] && [ -f "$VMDK" ]; then
   echo ">> qcow2 → vmdk ($VMDK)"

@@ -9,6 +9,12 @@
   window.__clawAgentInstalled = true;
 
   const REF_PREFIX = "el#";
+  // axTree caps — protect callers from pathological pages.
+  const AX_MAX_NODES = 10_000;
+  const AX_MAX_BYTES = 16 * 1024 * 1024;
+  // Periodic prune of dead WeakRefs so long-lived tabs don't leak the
+  // `table` Map unbounded.
+  const PRUNE_INTERVAL_MS = 30_000;
   let nextRef = 1;
   const table = new Map(); // refId -> WeakRef<Element>
 
@@ -22,10 +28,20 @@
     const wr = table.get(ref);
     if (!wr) return null;
     const el = wr.deref();
-    if (!el) return null;
+    if (!el) {
+      table.delete(ref);
+      return null;
+    }
     if (!el.isConnected) return null;
     return el;
   }
+
+  function pruneRefs() {
+    for (const [id, wr] of table) {
+      if (wr.deref() === undefined) table.delete(id);
+    }
+  }
+  setInterval(pruneRefs, PRUNE_INTERVAL_MS);
 
   function isSecretField(el) {
     if (!(el instanceof HTMLInputElement)) return false;
@@ -71,9 +87,11 @@
     };
   }
 
-  function axTree(root, depth, max) {
+  function axTree(root, depth, max, budget) {
     if (depth > max) return null;
     if (!(root instanceof Element)) return null;
+    if (budget.nodes >= AX_MAX_NODES) { budget.truncated = true; return null; }
+    if (budget.bytes >= AX_MAX_BYTES)  { budget.truncated = true; return null; }
     const tag = (root.tagName || "").toLowerCase();
     if (tag === "script" || tag === "style" || tag === "noscript" || tag === "template") return null;
     const role = root.getAttribute("role") || implicitRole(tag);
@@ -90,10 +108,18 @@
       name: name ? name.replace(/\s+/g, " ").slice(0, 240) : "",
       ref: makeRef(root),
     };
+    budget.nodes++;
+    // Approximate byte cost — role/tag/name + JSON overhead. We don't
+    // need exactness; we only need a hard ceiling.
+    budget.bytes += (node.role || "").length + node.tag.length + node.name.length + node.ref.length + 32;
     if (root.children && root.children.length) {
       const kids = [];
       for (const c of root.children) {
-        const n = axTree(c, depth + 1, max);
+        if (budget.nodes >= AX_MAX_NODES || budget.bytes >= AX_MAX_BYTES) {
+          budget.truncated = true;
+          break;
+        }
+        const n = axTree(c, depth + 1, max, budget);
         if (n) kids.push(n);
       }
       if (kids.length) node.children = kids;
@@ -184,11 +210,15 @@
             : "").slice(0, 50000),
         };
       }
+      const budget = { nodes: 0, bytes: 0, truncated: false };
+      const tree = axTree(document.body || document.documentElement, 0, 24, budget);
       return {
         kind: "ax",
         title: document.title || "",
         url: location.href,
-        tree: axTree(document.body || document.documentElement, 0, 24),
+        tree,
+        truncated: budget.truncated,
+        node_count: budget.nodes,
       };
     },
   };

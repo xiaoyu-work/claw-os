@@ -30,7 +30,7 @@
   ],
 
   "background": {
-    "scripts": ["background.js"]
+    "scripts": ["lib/native.js", "background.js"]
   },
 
   "action": {

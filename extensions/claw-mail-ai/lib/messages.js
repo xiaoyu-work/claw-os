@@ -72,22 +72,29 @@
   function bodyToPlain(body, isPlain) {
     if (!body) return "";
     if (isPlain) return body;
-    // Compose details body is HTML when isPlainText=false.
-    return body
-      .replace(/<style[\s\S]*?<\/style>/gi, " ")
-      .replace(/<script[\s\S]*?<\/script>/gi, " ")
-      .replace(/<br\s*\/?>/gi, "\n")
-      .replace(/<\/p>/gi, "\n\n")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/&nbsp;/g, " ")
-      .replace(/&amp;/g, "&")
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">")
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
-      .replace(/[ \t]+\n/g, "\n")
-      .replace(/\n{3,}/g, "\n\n")
-      .trim();
+    // Compose details body is HTML when isPlainText=false. Use DOMParser
+    // for proper entity decoding (named + numeric + hex) — the previous
+    // regex-based stripper missed everything except a handful of common
+    // entities and would leave &mdash;, &rsquo;, &#8211; etc. in output.
+    try {
+      const doc = new DOMParser().parseFromString(body, "text/html");
+      for (const el of doc.querySelectorAll("script,style,noscript,template")) {
+        el.remove();
+      }
+      for (const br of doc.querySelectorAll("br")) {
+        br.replaceWith("\n");
+      }
+      for (const p of doc.querySelectorAll("p,div,li,tr")) {
+        p.appendChild(doc.createTextNode("\n"));
+      }
+      const text = (doc.body?.textContent || "").replace(/\r\n?/g, "\n");
+      return text
+        .replace(/[ \t]+\n/g, "\n")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+    } catch (_) {
+      return body.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    }
   }
 
   function plainToHtml(text) {
