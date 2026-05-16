@@ -478,16 +478,13 @@ fn extract_text(response: &ChatResponse) -> String {
 
 async fn dispatch_tool(registry: &ToolRegistry, call: &ToolCall) -> ToolResult {
     // Per-call approval gate. Skip the await entirely when the tool
-    // is not configured under any of the three sets — the default
-    // ApprovalGate has all sets empty, so this is a one-set-contains
-    // check per dispatch in the common case.
-    let cfg = registry.approval().config();
-    if cfg.auto_deny.contains(&call.name)
-        || cfg.auto_approve.contains(&call.name)
-        || cfg.dangerous.contains(&call.name)
-    {
-        let outcome = registry
-            .approval()
+    // is not configured under any of the three sets. `is_classified`
+    // is one O(1) HashSet lookup that covers
+    // `auto_approve ∪ auto_deny ∪ dangerous` — vs. three
+    // separate `BTreeSet::contains` calls on the hot path.
+    let approval = registry.approval();
+    if approval.is_classified(&call.name) {
+        let outcome = approval
             .evaluate(&call.name, &call.input, "policy: dangerous_tools")
             .await;
         match outcome {
@@ -517,7 +514,24 @@ async fn dispatch_tool(registry: &ToolRegistry, call: &ToolCall) -> ToolResult {
     }
 
     match registry.get(&call.name) {
-        Some(tool) => tool.exec(call.input.clone()).await,
+        Some(tool) => {
+            // Scope the task-locals that `cos_delegate` (and any other
+            // policy-aware tool) reads to discover the parent registry's
+            // current guardrails + approval gate. Without this scope a
+            // child agent spawned via `cos_delegate` would run under
+            // permissive defaults regardless of the parent's deny rules
+            // or approval policy — a privilege-escalation bug at the
+            // delegate boundary.
+            let g = registry.guardrails().clone();
+            let a = registry.approval().clone();
+            crate::agent::tools::delegate::PARENT_GUARDRAILS
+                .scope(
+                    g,
+                    crate::agent::tools::delegate::PARENT_APPROVAL
+                        .scope(a, tool.exec(call.input.clone())),
+                )
+                .await
+        }
         None => ToolResult::err(format!(
             "unknown tool '{}'. registered: {:?}",
             call.name,

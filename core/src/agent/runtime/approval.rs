@@ -140,6 +140,12 @@ impl ApprovalConfig {
 pub struct ApprovalGate {
     config: Arc<ApprovalConfig>,
     approver: Option<Arc<dyn Approver>>,
+    /// Pre-computed union of `auto_approve ∪ auto_deny ∪ dangerous`.
+    /// Used by [`ApprovalGate::is_classified`] so the runtime can do a
+    /// single O(1) lookup per `dispatch_tool` instead of three separate
+    /// `BTreeSet::contains` calls. Built once at construction; shared
+    /// across clones via `Arc`.
+    classified: Arc<std::collections::HashSet<String>>,
 }
 
 impl Default for ApprovalGate {
@@ -153,9 +159,23 @@ impl Default for ApprovalGate {
 
 impl ApprovalGate {
     pub fn new(config: ApprovalConfig) -> Self {
+        let mut classified =
+            std::collections::HashSet::with_capacity(
+                config.auto_approve.len() + config.auto_deny.len() + config.dangerous.len(),
+            );
+        for n in &config.auto_approve {
+            classified.insert(n.clone());
+        }
+        for n in &config.auto_deny {
+            classified.insert(n.clone());
+        }
+        for n in &config.dangerous {
+            classified.insert(n.clone());
+        }
         Self {
             config: Arc::new(config),
             approver: None,
+            classified: Arc::new(classified),
         }
     }
 
@@ -218,6 +238,16 @@ impl ApprovalGate {
         self.config.auto_deny.contains(tool_name)
             || self.config.auto_approve.contains(tool_name)
             || !self.config.dangerous.contains(tool_name)
+    }
+
+    /// Single-lookup classification check: `true` iff `tool_name` is
+    /// configured under *any* of `auto_approve`, `auto_deny`, or
+    /// `dangerous`. The runtime uses this to skip the full
+    /// [`evaluate`](Self::evaluate) call when the tool has no policy
+    /// (the common case), with a single `HashSet` lookup instead of
+    /// three separate `BTreeSet::contains` calls.
+    pub fn is_classified(&self, tool_name: &str) -> bool {
+        self.classified.contains(tool_name)
     }
 }
 

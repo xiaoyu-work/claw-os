@@ -53,43 +53,61 @@ impl McpServer {
     }
 
     /// Run the read/dispatch/write loop until the transport closes
-    /// or errors. Each request is handled in-line; for long-running
-    /// tools consider spawning a task per request — left as a
-    /// follow-up.
+    /// or errors.
+    ///
+    /// Each request is dispatched on its own `tokio::spawn`'d task so
+    /// a slow tool (e.g. a 30-second LLM call inside a `tools/call`)
+    /// does not head-of-line block subsequent requests. Responses are
+    /// serialized through the single transport `send` channel; the
+    /// `Transport` impls hold an internal mutex around the writer.
+    ///
+    /// MCP does not require strict request/response ordering (each
+    /// response carries the request id), so interleaving is safe and
+    /// well within spec.
     pub async fn serve(self, transport: impl Transport) -> Result<(), ServerError> {
         let t = Arc::new(transport);
+        let me = Arc::new(self);
+        let mut handlers: Vec<tokio::task::JoinHandle<()>> = Vec::new();
         loop {
             let frame = match t.recv().await? {
                 Some(f) => f,
-                None => return Ok(()),
+                None => break,
             };
+            // Reap finished handlers opportunistically so the vec
+            // doesn't grow unbounded for long-lived servers.
+            handlers.retain(|h| !h.is_finished());
+
             let parsed: Result<JsonRpcRequest, _> = serde_json::from_str(&frame);
-            match parsed {
-                Ok(req) => {
-                    let resp = self.handle(req).await;
-                    let body = serde_json::to_string(&resp).unwrap_or_else(|_| {
-                        serde_json::to_string(&JsonRpcResponse::err(
-                            super::protocol::RequestId::Num(0),
-                            JsonRpcError::new(ERR_INTERNAL, "encode failed"),
-                        ))
-                        .unwrap()
-                    });
-                    t.send(body).await?;
-                }
-                Err(err) => {
-                    // We can't know the request id; fall back to id 0.
-                    let resp = JsonRpcResponse::err(
+            let server = me.clone();
+            let t = t.clone();
+            handlers.push(tokio::spawn(async move {
+                let resp = match parsed {
+                    Ok(req) => server.handle(req).await,
+                    Err(err) => JsonRpcResponse::err(
                         super::protocol::RequestId::Num(0),
                         JsonRpcError::new(
                             super::protocol::ERR_PARSE,
                             format!("parse error: {err}"),
                         ),
-                    );
-                    t.send(serde_json::to_string(&resp).unwrap_or_default())
-                        .await?;
-                }
-            }
+                    ),
+                };
+                let body = serde_json::to_string(&resp).unwrap_or_else(|_| {
+                    serde_json::to_string(&JsonRpcResponse::err(
+                        super::protocol::RequestId::Num(0),
+                        JsonRpcError::new(ERR_INTERNAL, "encode failed"),
+                    ))
+                    .unwrap_or_default()
+                });
+                let _ = t.send(body).await;
+            }));
         }
+        // Best-effort drain of in-flight handlers before returning so
+        // queued responses get a chance to flush before the transport
+        // closes.
+        for h in handlers {
+            let _ = h.await;
+        }
+        Ok(())
     }
 
     async fn handle(&self, req: JsonRpcRequest) -> JsonRpcResponse {

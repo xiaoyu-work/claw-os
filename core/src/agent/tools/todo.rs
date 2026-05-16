@@ -29,15 +29,32 @@
 //! flip. Both go through the same on-disk file with an atomic rename
 //! so a crashed write can't leave a half-written JSON.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::agent::tools::{Tool, ToolResult};
+
+/// Windows-reserved device names. These names — regardless of suffix
+/// or case — refer to character devices on Windows and **never** to a
+/// real file. A file named "CON.json" on a Windows host would resolve
+/// to the console device and either hang or corrupt the request.
+/// Reject them in [`TodoStore::session_file`] to keep cross-OS
+/// behaviour predictable.
+const WINDOWS_RESERVED: &[&str] = &[
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+
+fn is_windows_reserved(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    WINDOWS_RESERVED.iter().any(|r| *r == upper)
+}
 
 /// One todo entry. `id` is caller-supplied (must be unique within the
 /// list) so the model can reference items between writes.
@@ -105,18 +122,46 @@ impl TodoList {
 /// On-disk store of per-session todo lists. Files live under
 /// `<data_dir>/agent/todos/<session_id>.json`. `session_id` is treated
 /// as an opaque token; we sanitise it to forbid path traversal.
+///
+/// Concurrency: `set_status` is a read-modify-write cycle on the
+/// session's JSON file. Two callers racing on the same session would
+/// each read the same baseline, each apply their own status change,
+/// and the later writer would win — silently dropping the earlier
+/// caller's update. We hold a per-session `Mutex` across the RMW so
+/// each `set_status` is serial against itself within one process.
+/// Cross-process serialisation would need a real lock file; in
+/// practice each `cos agent` invocation owns a session id, so the
+/// in-process lock is sufficient.
 pub struct TodoStore {
     root: PathBuf,
+    /// Per-session RMW lock. `std::sync::Mutex` because the critical
+    /// section is a small synchronous file rename (no `.await`s).
+    /// The outer Mutex is held only long enough to look up / insert
+    /// the inner Arc<Mutex<()>>, never across the RMW itself.
+    session_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
 }
 
 impl TodoStore {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            session_locks: Mutex::new(HashMap::new()),
+        }
     }
 
     /// System-default store rooted at `crate::paths::agent_todos_dir()`.
     pub fn default_store() -> Self {
         Self::new(crate::paths::agent_todos_dir())
+    }
+
+    /// Borrow (or lazily create) the per-session lock. Outer lock is
+    /// only held for the hashmap lookup/insert; the returned `Arc` is
+    /// what the caller actually locks for the RMW.
+    fn lock_for(&self, session_id: &str) -> Arc<Mutex<()>> {
+        let mut map = self.session_locks.lock().unwrap_or_else(|p| p.into_inner());
+        map.entry(session_id.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
     }
 
     fn session_file(&self, session_id: &str) -> Result<PathBuf, String> {
@@ -130,6 +175,21 @@ impl TodoStore {
             || trimmed.contains('\0')
         {
             return Err(format!("invalid session_id: {trimmed:?}"));
+        }
+        // Reject Windows reserved device names. Match on the trimmed
+        // basename as well as the basename-with-suffix form: "CON",
+        // "con", and even "CON.txt" all resolve to the console device
+        // on Windows regardless of case. We reject anything whose
+        // pre-extension stem is reserved.
+        if is_windows_reserved(trimmed) {
+            return Err(format!("session_id is a reserved name: {trimmed:?}"));
+        }
+        if let Some((stem, _ext)) = trimmed.split_once('.') {
+            if is_windows_reserved(stem) {
+                return Err(format!(
+                    "session_id stem is a reserved name: {trimmed:?}"
+                ));
+            }
         }
         Ok(self.root.join(format!("{trimmed}.json")))
     }
@@ -170,6 +230,11 @@ impl TodoStore {
         id: &str,
         status: TodoStatus,
     ) -> Result<TodoList, String> {
+        // Validate first so we don't pollute the lock map with bad ids.
+        let _ = self.session_file(session_id)?;
+        let lock = self.lock_for(session_id);
+        let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
+
         let mut list = self.read(session_id)?;
         let mut found = false;
         for item in list.items.iter_mut() {
@@ -503,6 +568,82 @@ mod tests {
         assert!(store.read("").is_err());
         assert!(store.read("  ").is_err());
         assert!(store.read("with\0null").is_err());
+    }
+
+    /// Windows treats these names as character devices regardless of
+    /// case or suffix. Reject them up-front so cross-OS deployments
+    /// can't end up with an unwriteable file (or worse, one that
+    /// blocks on `fs::write` because it's bound to the console).
+    #[test]
+    fn session_id_windows_reserved_names_rejected() {
+        let (store, _g) = tmp_store();
+        for s in [
+            "CON", "con", "Con", "PRN", "AUX", "NUL", "COM1", "lpt9",
+            // Reserved stem with an extension is still reserved on
+            // Windows ("CON.json" resolves to the console).
+            "CON.json", "nul.foo",
+        ] {
+            assert!(
+                store.read(s).is_err(),
+                "{s:?} should be rejected as reserved"
+            );
+        }
+        // Sanity: 'concrete' is NOT reserved.
+        assert!(store.read("concrete").is_ok());
+    }
+
+    /// Two threads racing `set_status` on the same session must both
+    /// commit — without the per-session RMW lock, the later writer
+    /// silently drops the earlier writer's update because both read
+    /// the same baseline list. With the lock, both updates are
+    /// observed in the final on-disk list.
+    #[test]
+    fn set_status_serialises_concurrent_writers() {
+        use std::sync::Arc;
+        let (store, _g) = tmp_store();
+        let store = Arc::new(store);
+
+        // Seed two items, both pending.
+        store
+            .write(
+                "race-session",
+                &TodoList {
+                    items: vec![
+                        TodoItem {
+                            id: "a".into(),
+                            title: "first".into(),
+                            status: TodoStatus::Pending,
+                            note: None,
+                        },
+                        TodoItem {
+                            id: "b".into(),
+                            title: "second".into(),
+                            status: TodoStatus::Pending,
+                            note: None,
+                        },
+                    ],
+                },
+            )
+            .unwrap();
+
+        let s1 = store.clone();
+        let h1 = std::thread::spawn(move || {
+            s1.set_status("race-session", "a", TodoStatus::Completed)
+                .unwrap();
+        });
+        let s2 = store.clone();
+        let h2 = std::thread::spawn(move || {
+            s2.set_status("race-session", "b", TodoStatus::Completed)
+                .unwrap();
+        });
+        h1.join().unwrap();
+        h2.join().unwrap();
+
+        let final_list = store.read("race-session").unwrap();
+        let by_id: std::collections::HashMap<_, _> =
+            final_list.items.iter().map(|i| (&i.id, i.status)).collect();
+        assert_eq!(by_id[&"a".to_string()], TodoStatus::Completed);
+        assert_eq!(by_id[&"b".to_string()], TodoStatus::Completed);
     }
 
     #[test]

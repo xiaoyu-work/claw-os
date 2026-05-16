@@ -16,7 +16,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 
@@ -92,13 +92,22 @@ impl Transport for InMemoryTransport {
 ///
 /// Frames are written as `<json>\n`. Reads are line-buffered; lines
 /// containing only whitespace are silently skipped (a courtesy for
-/// peers that emit blank-line keepalives). Maximum frame size is
-/// bounded only by the underlying buffer; pathological clients
-/// can exhaust memory but this is the same constraint MCP itself
-/// places on its transport.
+/// peers that emit blank-line keepalives).
+///
+/// **Frame-size cap**: a single frame is capped at
+/// [`MAX_FRAME_BYTES`] (16 MiB). A peer that streams data without
+/// ever emitting `\n` will hit this cap; the transport returns
+/// `TransportError::Decode("frame too large")` and the reader loop
+/// is expected to tear down the connection. The cap protects the
+/// process from a hostile / buggy MCP peer that would otherwise
+/// drive us to OOM by streaming megabytes per "frame".
 pub struct StdioTransport {
     reader: Mutex<BufReader<Box<dyn AsyncRead + Send + Unpin>>>,
     writer: Mutex<Box<dyn AsyncWrite + Send + Unpin>>,
+    /// Per-frame byte cap. Defaults to [`MAX_FRAME_BYTES`]; tests
+    /// override with a lower value to exercise the OOM defence
+    /// without a real-size frame.
+    max_frame_bytes: usize,
 }
 
 impl StdioTransport {
@@ -112,6 +121,7 @@ impl StdioTransport {
         Self {
             reader: Mutex::new(BufReader::new(reader)),
             writer: Mutex::new(writer),
+            max_frame_bytes: MAX_FRAME_BYTES,
         }
     }
 
@@ -120,6 +130,15 @@ impl StdioTransport {
     /// which is exactly what an MCP client subprocess wants.
     pub fn stdio() -> Self {
         Self::from_pair(Box::new(tokio::io::stdin()), Box::new(tokio::io::stdout()))
+    }
+
+    /// Test-only: override the per-frame byte cap so the
+    /// oversize-frame defence can be exercised without streaming
+    /// the full 16 MiB.
+    #[cfg(test)]
+    pub(crate) fn with_max_frame_bytes(mut self, n: usize) -> Self {
+        self.max_frame_bytes = n;
+        self
     }
 }
 
@@ -141,15 +160,37 @@ impl Transport for StdioTransport {
 
     async fn recv(&self) -> Result<Option<Frame>, TransportError> {
         let mut r = self.reader.lock().await;
+        let cap = self.max_frame_bytes;
         loop {
-            let mut line = String::new();
-            let n = r
-                .read_line(&mut line)
+            // Wrap the locked reader in a per-call `take()` limit so a
+            // peer that streams without ever sending `\n` cannot drive
+            // us to OOM. We pull at most `cap + 1` bytes — the `+1`
+            // lets us detect "exactly at limit vs. went past" without
+            // a second probe.
+            let mut limited = (&mut *r).take(cap as u64 + 1);
+            let mut buf = Vec::with_capacity(256);
+            let n = limited
+                .read_until(b'\n', &mut buf)
                 .await
                 .map_err(|e| TransportError::Io(e.to_string()))?;
             if n == 0 {
                 return Ok(None);
             }
+            // If we read more than `cap` bytes without seeing `\n`,
+            // the peer's frame exceeded the cap. Drop the connection
+            // — recovery is impossible (we don't know where the
+            // truncation falls in the JSON grammar).
+            if n > cap && buf.last() != Some(&b'\n') {
+                return Err(TransportError::Decode(format!(
+                    "frame exceeded {cap} bytes"
+                )));
+            }
+            let line = match std::str::from_utf8(&buf) {
+                Ok(s) => s,
+                Err(e) => {
+                    return Err(TransportError::Decode(format!("non-utf8 frame: {e}")));
+                }
+            };
             // Strip trailing newline(s); skip blank-line keepalives.
             let trimmed = line.trim_end_matches(['\n', '\r']).to_string();
             if trimmed.trim().is_empty() {
@@ -159,6 +200,12 @@ impl Transport for StdioTransport {
         }
     }
 }
+
+/// Per-frame byte cap for [`StdioTransport`]. Chosen as 16 MiB — well
+/// above any plausible legitimate MCP message (tool descriptors,
+/// resource bodies, image attachments) and well below a process
+/// memory limit that would matter operationally.
+pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
 #[cfg(test)]
 mod tests {
@@ -249,5 +296,35 @@ mod tests {
 
         let frame = server.recv().await.unwrap();
         assert!(frame.is_none(), "EOF must surface as Ok(None)");
+    }
+
+    /// A peer that streams more bytes than the configured per-frame
+    /// cap without ever sending `\n` must be cut off with a `Decode`
+    /// error rather than allowed to drive us to OOM. Use a small
+    /// override of the cap to keep the test fast.
+    #[tokio::test]
+    async fn stdio_transport_rejects_oversize_frame() {
+        use tokio::io::AsyncWriteExt;
+        let (mut cli_in_w, srv_in) = tokio::io::duplex(8192);
+        let (srv_out, _cli_out_r) = tokio::io::duplex(4096);
+        let server = StdioTransport::from_pair(Box::new(srv_in), Box::new(srv_out))
+            .with_max_frame_bytes(1024);
+
+        let recv_task = tokio::spawn(async move { server.recv().await });
+
+        // 2 KiB of bytes, no newline. Cap is 1 KiB → cap+1 = 1025
+        // bytes get pulled, then `\n` not found → Decode error.
+        let payload = vec![b'x'; 2048];
+        let _ = cli_in_w.write_all(&payload).await;
+        let _ = cli_in_w.shutdown().await;
+        drop(cli_in_w);
+
+        let result = recv_task.await.unwrap();
+        match result {
+            Err(TransportError::Decode(msg)) => {
+                assert!(msg.contains("exceeded"), "got {msg}");
+            }
+            other => panic!("expected Decode(exceeded), got {other:?}"),
+        }
     }
 }

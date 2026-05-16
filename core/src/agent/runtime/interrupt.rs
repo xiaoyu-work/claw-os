@@ -21,7 +21,9 @@
 //! 2. The handle's [`Handle::check`] is called between turns; returns
 //!    `true` if an external [`signal`] has been issued.
 //! 3. On loop exit (success / failure / interrupt), the handle's
-//!    `Drop` removes the session from the registry.
+//!    `Drop` removes the session from the registry **only if the
+//!    map entry still points at this handle's own flag** — see the
+//!    re-register hazard discussion below.
 //!
 //! External signalers (e.g. a `cos agent interrupt <session-id>`
 //! command, a Ctrl-C handler installed by the CLI) call [`signal`]
@@ -35,6 +37,16 @@
 //! Lock hold time is bounded to a hashmap lookup + clone of an `Arc`,
 //! so it's never held across an `await`. Hot-path `check()` reads the
 //! `AtomicBool` directly with `Ordering::Relaxed` — no lock.
+//!
+//! ## Re-registration semantics
+//!
+//! Re-registering the same `session_id` is allowed: it cancels the
+//! previous registration (sets its flag, so the old loop returns
+//! [`AgentError::Interrupted`]) and installs the new entry. The old
+//! handle's `Drop` no longer wipes the new entry — `RegistryGuard`
+//! holds its own `Arc<AtomicBool>` and only removes the map entry
+//! when the still-installed flag is pointer-equal to the one being
+//! dropped.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -62,15 +74,29 @@ pub struct Handle {
     _guard: Arc<RegistryGuard>,
 }
 
+/// Owned by the live `Handle` chain. On drop, removes the registry
+/// entry **only** when it still matches the flag this guard installed
+/// — re-registering under the same `session_id` rotates the flag, so
+/// a stale guard whose flag has been displaced is a no-op cleanup.
+/// Without this check, the late drop of the previous handle would
+/// silently wipe the new entry and any pending [`signal`] for the
+/// active session would return `false`.
 #[derive(Debug)]
 struct RegistryGuard {
     session_id: String,
+    flag: Arc<AtomicBool>,
 }
 
 impl Drop for RegistryGuard {
     fn drop(&mut self) {
         if let Ok(mut map) = registry().lock() {
-            map.remove(&self.session_id);
+            if let Some(current) = map.get(&self.session_id) {
+                if Arc::ptr_eq(current, &self.flag) {
+                    map.remove(&self.session_id);
+                }
+                // Otherwise: someone re-registered under this id and
+                // installed a fresh flag; leave it alone.
+            }
         }
     }
 }
@@ -100,18 +126,27 @@ impl Handle {
 
 /// Register a new session. Returns the handle the loop holds for the
 /// duration of the session. Re-registering the same `session_id`
-/// silently replaces the prior entry — interrupts queued for the old
-/// session are lost. Callers should pick session ids unique enough to
-/// avoid collisions; the runtime uses the random session id from
-/// `MemoryDb::new_session` for this.
+/// **cancels** the prior registration (sets its flag to `true`, so the
+/// old loop sees `check() == true`) and installs the new entry.
+///
+/// Callers should still pick session ids unique enough to avoid
+/// collisions in normal operation; the runtime uses the random session
+/// id from `MemoryDb::new_session` for this. The re-register-cancel
+/// path is defence in depth against caller bugs and quick test loops.
 pub fn register(session_id: impl Into<String>) -> Handle {
     let session_id = session_id.into();
     let flag = Arc::new(AtomicBool::new(false));
     let guard = Arc::new(RegistryGuard {
         session_id: session_id.clone(),
+        flag: flag.clone(),
     });
     if let Ok(mut map) = registry().lock() {
-        map.insert(session_id.clone(), flag.clone());
+        if let Some(old) = map.insert(session_id.clone(), flag.clone()) {
+            // Cancel any in-flight session that still observes the old
+            // flag — its loop will see `check() == true` and exit with
+            // `Interrupted` on its next turn boundary.
+            old.store(true, Ordering::Relaxed);
+        }
     }
     Handle {
         session_id,
@@ -236,20 +271,50 @@ mod tests {
     }
 
     #[test]
-    fn re_register_replaces_prior() {
+    fn re_register_cancels_old() {
         let id = unique_id("re-register");
         let h1 = register(&id);
-        signal(&id);
-        assert!(h1.check());
+        assert!(!h1.check());
 
         // Re-register under the same id. The new handle starts fresh.
         let h2 = register(&id);
         assert!(!h2.check());
-        // h1 still sees its own old flag — we do NOT unify them.
-        // (Caller bug: don't reuse session ids across runs.)
-        assert!(h1.check());
-        // signal hits the new flag, not the old.
+        // The old handle is now signaled — its loop will exit on the
+        // next turn check (`AgentError::Interrupted`). This is the
+        // re-register-cancels-old behaviour.
+        assert!(
+            h1.check(),
+            "re-registering under the same id must cancel the prior handle"
+        );
+
+        // The new handle is the live one — signal hits its flag.
         signal(&id);
+        assert!(h2.check());
+
+        // When the old handle eventually drops, the registry entry for
+        // the new handle must survive (Drop ptr-equality check).
+        drop(h1);
+        assert!(
+            is_registered(&id),
+            "old handle Drop must not wipe the active registration"
+        );
+        assert!(signal(&id), "the new handle is still reachable via signal");
+    }
+
+    /// Companion to `re_register_cancels_old`: even after the old
+    /// handle is dropped (which previously called an unconditional
+    /// `map.remove`), the new handle remains queryable both by
+    /// [`is_registered`] and by [`signal`].
+    #[test]
+    fn old_handle_drop_does_not_evict_new_entry() {
+        let id = unique_id("ptr-eq-drop");
+        let h1 = register(&id);
+        let h2 = register(&id);
+        // Drop the displaced old handle first.
+        drop(h1);
+        // The new handle's flag must still be reachable.
+        assert!(is_registered(&id));
+        assert!(signal(&id));
         assert!(h2.check());
     }
 

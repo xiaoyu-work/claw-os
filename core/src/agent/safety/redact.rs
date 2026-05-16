@@ -249,8 +249,16 @@ fn default_patterns() -> Vec<Pattern> {
         ),
         // Discord bot token: 3 base64-ish segments separated by '.'.
         // First segment ~24 chars (snowflake id b64), then 6, then 27+.
+        //
+        // The shape `<b64>.<b64>.<b64>` also matches any opaque
+        // triple-dotted blob — JWTs, capability bundles, signed URLs —
+        // so we anchor the first segment to the Discord-specific
+        // `M` / `N` / `O` snowflake-id prefix. Real-world Discord
+        // bot tokens always start with one of these (the snowflake
+        // id base64-encodes a 64-bit integer < 2^63). The JWT rule
+        // (`eyJ…`) above runs first and is preferred for that shape.
         pat(
-            r"[A-Za-z0-9_\-]{24,}\.[A-Za-z0-9_\-]{6}\.[A-Za-z0-9_\-]{27,}",
+            r"\b[MNO][A-Za-z0-9_\-]{23,}\.[A-Za-z0-9_\-]{6}\.[A-Za-z0-9_\-]{27,}\b",
             SecretKind::DiscordToken,
             0,
         ),
@@ -481,5 +489,44 @@ mod tests {
         // host but no '@', so it must NOT trigger the URL-cred pattern.
         let s = "http://example.com/foo:bar";
         assert_eq!(r().redact(s), s);
+    }
+
+    /// Discord-token regex used to fire on any `<b64>.<b64>.<b64>` blob
+    /// (long opaque OIDC ID tokens, capability bundles, etc.). The
+    /// tightened pattern requires the `M/N/O` snowflake-id prefix, so
+    /// a non-Discord triple-dotted blob passes through unchanged.
+    #[test]
+    fn discord_rule_does_not_match_arbitrary_triple_dotted_blob() {
+        // Non-Discord token (starts with `Z`, not M/N/O). Must not be
+        // matched as Discord. (It may still match the JWT rule above,
+        // but only when the first segment starts with `eyJ`.)
+        let s = "ZGFiY2RlZmdoaWprbG1ub3BxcnN0dXY=.YWJjZGVm.dGhpc2lzbm90YWRpc2NvcmR0b2tlbmFsc28=";
+        let out = r().redact(s);
+        assert!(
+            !out.contains("[REDACTED:discord_token]"),
+            "non-Discord triple-dotted blob must not match the Discord rule, got {out}"
+        );
+    }
+
+    /// Positive control: verify the redactor's machinery (pattern match +
+    /// placeholder substitution) actually does its job for the Discord
+    /// kind. We use a custom benign pattern (`token123`) instead of a
+    /// real-shaped Discord token so that GitHub push-protection / secret-
+    /// scanning does not flag this fixture. The production Discord regex
+    /// is exercised indirectly by `discord_rule_does_not_match_*` (above)
+    /// and by `redactor_default_count_includes_all_patterns`.
+    #[test]
+    fn discord_kind_substitutes_placeholder() {
+        let custom = Redactor::with_patterns(vec![Pattern {
+            re: Regex::new(r"\btoken123\b").unwrap(),
+            kind: SecretKind::DiscordToken,
+            group: 0,
+        }]);
+        let out = custom.redact("hello token123 world");
+        assert!(
+            out.contains("[REDACTED:discord_token]"),
+            "Discord placeholder must be substituted, got {out}"
+        );
+        assert!(!out.contains("token123"));
     }
 }
