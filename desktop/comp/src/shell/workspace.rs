@@ -1797,19 +1797,29 @@ impl Workspace {
             elements.extend(fullscreen_elements.into_iter());
         }
 
-        // Closing windows — fade out at last-known geometry. We
-        // reuse the existing animation slot on the parked
-        // CosmicMapped clone, whose alpha multiplier is folded into
-        // `render_elements`. Scale-on-close would require a new
-        // RescaleRenderElement-wrapping variant in
-        // WorkspaceRenderElement; the alpha fade alone matches what
-        // window-open does and lands the perceptual cue.
+        // Closing windows — fade out + shrink toward the window
+        // centre at last-known geometry. The animation drives both
+        // alpha (folded into surface alpha by the existing
+        // `current_animation()` hook on CosmicMapped) and scale
+        // (applied here via RescaleRenderElement).
+        let now = Instant::now();
         for cw in &self.closing_windows {
             let render_loc = cw
                 .geometry
                 .loc
                 .as_logical()
                 .to_physical_precise_round(output_scale);
+            let phys_size = cw
+                .geometry
+                .size
+                .as_logical()
+                .to_physical_precise_round::<i32, _>(output_scale);
+            let pivot = Point::<i32, Physical>::from((
+                render_loc.x + phys_size.w / 2,
+                render_loc.y + phys_size.h / 2,
+            ));
+            let s = cw.anim.scale_at(now);
+            let scale = Scale { x: s, y: s };
 
             let mapped_elements = cw.mapped.render_elements::<R, CosmicMappedRenderElement<R>>(
                 renderer,
@@ -1821,7 +1831,8 @@ impl Workspace {
             );
 
             for elem in mapped_elements {
-                elements.push(WorkspaceRenderElement::from(elem));
+                let rescaled = RescaleRenderElement::from_element(elem, pivot, scale);
+                elements.push(WorkspaceRenderElement::ClosingWindow(rescaled));
             }
         }
 
@@ -1985,6 +1996,10 @@ where
     Fullscreen(RescaleRenderElement<CosmicWindowRenderElement<R>>),
     FullscreenPopup(CosmicWindowRenderElement<R>),
     Window(CosmicMappedRenderElement<R>),
+    /// A scaled + alpha-faded window being played out as part of
+    /// the close animation; clone of the original `CosmicMapped`
+    /// kept alive by `Workspace::closing_windows`.
+    ClosingWindow(RescaleRenderElement<CosmicMappedRenderElement<R>>),
     Backdrop(TextureRenderElement<GlesTexture>),
 }
 
@@ -1999,6 +2014,7 @@ where
             WorkspaceRenderElement::Fullscreen(elem) => elem.id(),
             WorkspaceRenderElement::FullscreenPopup(elem) => elem.id(),
             WorkspaceRenderElement::Window(elem) => elem.id(),
+            WorkspaceRenderElement::ClosingWindow(elem) => elem.id(),
             WorkspaceRenderElement::Backdrop(elem) => elem.id(),
         }
     }
@@ -2009,6 +2025,7 @@ where
             WorkspaceRenderElement::Fullscreen(elem) => elem.current_commit(),
             WorkspaceRenderElement::FullscreenPopup(elem) => elem.current_commit(),
             WorkspaceRenderElement::Window(elem) => elem.current_commit(),
+            WorkspaceRenderElement::ClosingWindow(elem) => elem.current_commit(),
             WorkspaceRenderElement::Backdrop(elem) => elem.current_commit(),
         }
     }
@@ -2019,6 +2036,7 @@ where
             WorkspaceRenderElement::Fullscreen(elem) => elem.src(),
             WorkspaceRenderElement::FullscreenPopup(elem) => elem.src(),
             WorkspaceRenderElement::Window(elem) => elem.src(),
+            WorkspaceRenderElement::ClosingWindow(elem) => elem.src(),
             WorkspaceRenderElement::Backdrop(elem) => elem.src(),
         }
     }
@@ -2029,6 +2047,7 @@ where
             WorkspaceRenderElement::Fullscreen(elem) => elem.geometry(scale),
             WorkspaceRenderElement::FullscreenPopup(elem) => elem.geometry(scale),
             WorkspaceRenderElement::Window(elem) => elem.geometry(scale),
+            WorkspaceRenderElement::ClosingWindow(elem) => elem.geometry(scale),
             WorkspaceRenderElement::Backdrop(elem) => elem.geometry(scale),
         }
     }
@@ -2039,6 +2058,7 @@ where
             WorkspaceRenderElement::Fullscreen(elem) => elem.location(scale),
             WorkspaceRenderElement::FullscreenPopup(elem) => elem.location(scale),
             WorkspaceRenderElement::Window(elem) => elem.location(scale),
+            WorkspaceRenderElement::ClosingWindow(elem) => elem.location(scale),
             WorkspaceRenderElement::Backdrop(elem) => elem.location(scale),
         }
     }
@@ -2049,6 +2069,7 @@ where
             WorkspaceRenderElement::Fullscreen(elem) => elem.transform(),
             WorkspaceRenderElement::FullscreenPopup(elem) => elem.transform(),
             WorkspaceRenderElement::Window(elem) => elem.transform(),
+            WorkspaceRenderElement::ClosingWindow(elem) => elem.transform(),
             WorkspaceRenderElement::Backdrop(elem) => elem.transform(),
         }
     }
@@ -2063,6 +2084,7 @@ where
             WorkspaceRenderElement::Fullscreen(elem) => elem.damage_since(scale, commit),
             WorkspaceRenderElement::FullscreenPopup(elem) => elem.damage_since(scale, commit),
             WorkspaceRenderElement::Window(elem) => elem.damage_since(scale, commit),
+            WorkspaceRenderElement::ClosingWindow(elem) => elem.damage_since(scale, commit),
             WorkspaceRenderElement::Backdrop(elem) => elem.damage_since(scale, commit),
         }
     }
@@ -2073,6 +2095,7 @@ where
             WorkspaceRenderElement::Fullscreen(elem) => elem.opaque_regions(scale),
             WorkspaceRenderElement::FullscreenPopup(elem) => elem.opaque_regions(scale),
             WorkspaceRenderElement::Window(elem) => elem.opaque_regions(scale),
+            WorkspaceRenderElement::ClosingWindow(elem) => elem.opaque_regions(scale),
             WorkspaceRenderElement::Backdrop(elem) => elem.opaque_regions(scale),
         }
     }
@@ -2083,6 +2106,7 @@ where
             WorkspaceRenderElement::Fullscreen(elem) => elem.alpha(),
             WorkspaceRenderElement::FullscreenPopup(elem) => elem.alpha(),
             WorkspaceRenderElement::Window(elem) => elem.alpha(),
+            WorkspaceRenderElement::ClosingWindow(elem) => elem.alpha(),
             WorkspaceRenderElement::Backdrop(elem) => elem.alpha(),
         }
     }
@@ -2093,6 +2117,7 @@ where
             WorkspaceRenderElement::Fullscreen(elem) => elem.kind(),
             WorkspaceRenderElement::FullscreenPopup(elem) => elem.kind(),
             WorkspaceRenderElement::Window(elem) => elem.kind(),
+            WorkspaceRenderElement::ClosingWindow(elem) => elem.kind(),
             WorkspaceRenderElement::Backdrop(elem) => elem.kind(),
         }
     }
@@ -2103,6 +2128,7 @@ where
             WorkspaceRenderElement::Fullscreen(elem) => elem.is_framebuffer_effect(),
             WorkspaceRenderElement::FullscreenPopup(elem) => elem.is_framebuffer_effect(),
             WorkspaceRenderElement::Window(elem) => elem.is_framebuffer_effect(),
+            WorkspaceRenderElement::ClosingWindow(elem) => elem.is_framebuffer_effect(),
             WorkspaceRenderElement::Backdrop(elem) => elem.is_framebuffer_effect(),
         }
     }
@@ -2136,6 +2162,9 @@ where
             WorkspaceRenderElement::Window(elem) => {
                 elem.draw(frame, src, dst, damage, opaque_regions, cache)
             }
+            WorkspaceRenderElement::ClosingWindow(elem) => {
+                elem.draw(frame, src, dst, damage, opaque_regions, cache)
+            }
             WorkspaceRenderElement::Backdrop(elem) => RenderElement::<GlowRenderer>::draw(
                 elem,
                 R::glow_frame_mut(frame),
@@ -2158,6 +2187,7 @@ where
             WorkspaceRenderElement::Fullscreen(elem) => elem.underlying_storage(renderer),
             WorkspaceRenderElement::FullscreenPopup(elem) => elem.underlying_storage(renderer),
             WorkspaceRenderElement::Window(elem) => elem.underlying_storage(renderer),
+            WorkspaceRenderElement::ClosingWindow(elem) => elem.underlying_storage(renderer),
             WorkspaceRenderElement::Backdrop(elem) => {
                 elem.underlying_storage(renderer.glow_renderer_mut())
             }
@@ -2182,6 +2212,9 @@ where
                 elem.capture_framebuffer(frame, src, dst, cache)
             }
             WorkspaceRenderElement::Window(elem) => {
+                elem.capture_framebuffer(frame, src, dst, cache)
+            }
+            WorkspaceRenderElement::ClosingWindow(elem) => {
                 elem.capture_framebuffer(frame, src, dst, cache)
             }
             WorkspaceRenderElement::Backdrop(elem) => {
