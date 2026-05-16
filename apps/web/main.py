@@ -24,8 +24,13 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from claw_os_sdk import ai
-from cos_runtime import policy
+# Shared env scrubbing — drop OPENAI_API_KEY / GITHUB_TOKEN / etc. out
+# of the cos-browser child's environment.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _shared.env_scrub import scrub_env  # noqa: E402
+
+from claw_os_sdk import ai  # noqa: E402
+from cos_runtime import policy  # noqa: E402
 
 TIMEOUT = int(os.environ.get("COS_WEB_TIMEOUT", "30"))
 DEFAULT_MAX_LENGTH = int(os.environ.get("COS_WEB_MAX_CONTENT_LENGTH", "50000"))
@@ -89,11 +94,17 @@ def _run_cos_browser(argv, timeout_secs=None):
         )
     timeout_secs = timeout_secs if timeout_secs is not None else TIMEOUT
     try:
+        # ``stdin=DEVNULL`` so cos-browser can't block waiting for input
+        # if it ever tries to prompt; ``env=scrub_env()`` keeps provider
+        # API keys / OAuth tokens out of the browser engine.
         proc = subprocess.run(
             [COS_BROWSER_BIN] + argv,
             capture_output=True,
             text=True,
             timeout=timeout_secs + 10,
+            stdin=subprocess.DEVNULL,
+            env=scrub_env(),
+            check=False,
         )
         return proc.stdout, proc.stderr, proc.returncode, None
     except subprocess.TimeoutExpired:
@@ -407,7 +418,7 @@ def _cmd_screenshot(args):
     host = _host_of(url)
     if host is None:
         return {"error": f"invalid URL: {url}"}
-    output_abs = os.path.abspath(output)
+    output_abs = os.path.realpath(output)
     policy.require("net.dial", host=host)
     policy.require("fs.write", path=output_abs)
 

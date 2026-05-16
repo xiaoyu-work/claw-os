@@ -32,11 +32,32 @@ import uuid
 from cos_runtime import policy
 
 
-SOCK_PATH = os.environ.get(
-    "CLAW_BROWSER_SOCK",
-    os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "claw-browser.sock"),
-)
+def _resolve_sock_path() -> str:
+    """Resolve the bridge socket path, refusing to fall back to /tmp.
+
+    Matches the policy in ``native_host.py``: ``XDG_RUNTIME_DIR``
+    must be set, else we error out instead of touching a world-
+    writable directory.
+    """
+    override = os.environ.get("CLAW_BROWSER_SOCK")
+    if override:
+        return override
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if not runtime:
+        raise RuntimeError(
+            "$XDG_RUNTIME_DIR is not set and CLAW_BROWSER_SOCK is not "
+            "overridden — refusing to fall back to /tmp."
+        )
+    return os.path.join(runtime, "claw-browser.sock")
+
+
+try:
+    SOCK_PATH = _resolve_sock_path()
+except RuntimeError:
+    SOCK_PATH = ""
+
 TIMEOUT_S = int(os.environ.get("CLAW_BROWSER_TIMEOUT", "30"))
+MAX_FRAME = 8 * 1024 * 1024  # 8 MiB; matches native_host.py
 
 
 # ---------------------------------------------------------------------------
@@ -49,6 +70,14 @@ def _send_request(verb: str, args: dict, timeout: float = TIMEOUT_S) -> dict:
     Wire format on the socket (same framing as Chromium Native Messaging):
         [4 bytes little-endian length][UTF-8 JSON body]
     """
+    if not SOCK_PATH:
+        return {
+            "ok": False,
+            "error": (
+                "$XDG_RUNTIME_DIR is unset — refusing to talk to /tmp. "
+                "Run the agent inside an interactive user session."
+            ),
+        }
     if not os.path.exists(SOCK_PATH):
         return {
             "ok": False,
@@ -73,7 +102,7 @@ def _send_request(verb: str, args: dict, timeout: float = TIMEOUT_S) -> dict:
         if hdr is None:
             return {"ok": False, "error": "bridge closed connection before responding"}
         (length,) = struct.unpack("<I", hdr)
-        if length == 0 or length > 64 * 1024 * 1024:
+        if length == 0 or length > MAX_FRAME:
             return {"ok": False, "error": f"bridge returned implausible frame size {length}"}
         body = _recv_exact(s, length)
         if body is None:
@@ -135,6 +164,27 @@ def _unwrap(reply: dict) -> dict:
 # Verb handlers
 # ---------------------------------------------------------------------------
 
+def _require_host(verb: str, host: str) -> None:
+    """Run ``policy.require(verb, host=...)`` after refusing an empty
+    or ``None`` host.
+
+    SECURITY: ``policy.require("browser.nav", host="")`` silently
+    matches the wild grant on some kernels, opening every host. We
+    refuse that case at the gate so a bogus URL never leaks past the
+    cap check.
+    """
+    if not host or not isinstance(host, str):
+        raise policy.PermissionDenied(
+            {
+                "decision": "deny",
+                "summary": f"refusing {verb}: no host could be derived",
+                "verb": verb,
+                "reason": "empty-host",
+            }
+        )
+    policy.require(verb, host=host)
+
+
 def _cmd_tabs_list(_argv):
     policy.require("browser.tabs.read", wild=True)
     return _unwrap(_send_request("tabs.list", {}))
@@ -151,7 +201,7 @@ def _cmd_nav_go(argv):
     host = _host_of(args["url"])
     if not host:
         return {"ok": False, "error": f"could not parse a host out of url={args['url']!r}"}
-    policy.require("browser.nav", host=host)
+    _require_host("browser.nav", host)
     return _unwrap(
         _send_request("nav.go", {"id": _tab_id(args["id"]), "url": args["url"]})
     )
@@ -161,7 +211,7 @@ def _cmd_dom_query(argv):
     args = _parse_kv(argv, required=("id", "selector"))
     info = _send_request("tabs.info", {"id": _tab_id(args["id"])})
     host = (info.get("result") or {}).get("host") or info.get("host") or ""
-    policy.require("browser.dom.read", host=host or "")
+    _require_host("browser.dom.read", host)
     return _unwrap(
         _send_request(
             "dom.query",
@@ -174,7 +224,7 @@ def _cmd_dom_click(argv):
     args = _parse_kv(argv, required=("id", "ref"))
     info = _send_request("tabs.info", {"id": _tab_id(args["id"])})
     host = (info.get("result") or {}).get("host") or ""
-    policy.require("browser.dom.write", host=host)
+    _require_host("browser.dom.write", host)
     return _unwrap(
         _send_request("dom.click", {"id": _tab_id(args["id"]), "ref": args["ref"]})
     )
@@ -184,7 +234,7 @@ def _cmd_dom_fill(argv):
     args = _parse_kv(argv, required=("id", "ref", "value"))
     info = _send_request("tabs.info", {"id": _tab_id(args["id"])})
     host = (info.get("result") or {}).get("host") or ""
-    policy.require("browser.dom.write", host=host)
+    _require_host("browser.dom.write", host)
     return _unwrap(
         _send_request(
             "dom.fill",
@@ -202,7 +252,7 @@ def _cmd_dom_fill_secret(argv):
     args = _parse_kv(argv, required=("id", "ref", "value"))
     info = _send_request("tabs.info", {"id": _tab_id(args["id"])})
     host = (info.get("result") or {}).get("host") or ""
-    policy.require("browser.input.secret", host=host)
+    _require_host("browser.input.secret", host)
     return _unwrap(
         _send_request(
             "dom.fill",
@@ -220,7 +270,7 @@ def _cmd_page_snapshot(argv):
     args = _parse_kv(argv, required=("id",), optional=("kind",))
     info = _send_request("tabs.info", {"id": _tab_id(args["id"])})
     host = (info.get("result") or {}).get("host") or ""
-    policy.require("browser.dom.read", host=host)
+    _require_host("browser.dom.read", host)
     return _unwrap(
         _send_request(
             "page.snapshot",
@@ -233,8 +283,12 @@ def _cmd_page_screenshot(argv):
     args = _parse_kv(argv, required=("id", "output"))
     info = _send_request("tabs.info", {"id": _tab_id(args["id"])})
     host = (info.get("result") or {}).get("host") or ""
-    policy.require("browser.dom.read", host=host)
-    policy.require("fs.write", path=args["output"])
+    _require_host("browser.dom.read", host)
+    # ``realpath`` so a symlink under the output dir can't redirect
+    # the screenshot write somewhere the caller doesn't have fs.write
+    # on. Matches the fs app's symlink-safety policy.
+    out_path = os.path.realpath(args["output"])
+    policy.require("fs.write", path=out_path)
 
     reply = _send_request("page.screenshot", {"id": _tab_id(args["id"])})
     if not reply or reply.get("ok") is False:
@@ -244,11 +298,12 @@ def _cmd_page_screenshot(argv):
         return {"ok": False, "error": "bridge did not return png_base64"}
     try:
         png = base64.b64decode(data_b64)
-    except Exception as exc:
+    except (ValueError, TypeError) as exc:
         return {"ok": False, "error": f"could not decode screenshot base64: {exc}"}
     try:
-        out_path = os.path.abspath(args["output"])
-        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        parent = os.path.dirname(out_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         with open(out_path, "wb") as fh:
             fh.write(png)
     except OSError as exc:
@@ -260,7 +315,7 @@ def _cmd_eval(argv):
     args = _parse_kv(argv, required=("id", "expr"))
     info = _send_request("tabs.info", {"id": _tab_id(args["id"])})
     host = (info.get("result") or {}).get("host") or ""
-    policy.require("browser.eval", host=host)
+    _require_host("browser.eval", host)
     return _unwrap(
         _send_request("eval", {"id": _tab_id(args["id"]), "expr": args["expr"]})
     )

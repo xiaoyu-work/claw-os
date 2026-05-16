@@ -3,14 +3,27 @@
 Say what you need, not how to install it.
 """
 
+import os
 import shutil
 import subprocess
+import sys
 
-from cos_runtime import policy
+# Pull in scrub_env so the apt-* / dpkg children we shell out to don't
+# inherit OPENAI_API_KEY / GITHUB_TOKEN / etc.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _shared.env_scrub import scrub_env  # noqa: E402
+
+from cos_runtime import policy  # noqa: E402
 
 
 DEFAULT_SEARCH_LIMIT = 25
 MAX_SEARCH_LIMIT = 100
+
+# Per-command upper bounds for spawned apt/dpkg children. ``apt-get
+# install`` can be genuinely slow (mirror, large download); the read
+# helpers should be near-instant.
+QUERY_TIMEOUT_SECS = 60
+INSTALL_TIMEOUT_SECS = int(os.environ.get("CLAW_PKG_INSTALL_TIMEOUT", "900"))
 
 
 def _dpkg_check(package):
@@ -18,10 +31,15 @@ def _dpkg_check(package):
     try:
         result = subprocess.run(
             ["dpkg", "-s", package],
-            capture_output=True, text=True
+            capture_output=True,
+            text=True,
+            timeout=QUERY_TIMEOUT_SECS,
+            stdin=subprocess.DEVNULL,
+            env=scrub_env(),
+            check=False,
         )
         return result.returncode == 0
-    except FileNotFoundError:
+    except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
 
 
@@ -33,7 +51,12 @@ def _apt_install(packages):
         try:
             result = subprocess.run(
                 ["apt-get", "install", "-y", pkg],
-                capture_output=True, text=True
+                capture_output=True,
+                text=True,
+                timeout=INSTALL_TIMEOUT_SECS,
+                stdin=subprocess.DEVNULL,
+                env=scrub_env(),
+                check=False,
             )
             if result.returncode == 0:
                 installed.append(pkg)
@@ -42,6 +65,8 @@ def _apt_install(packages):
         except PermissionError:
             failed.append(pkg)
         except FileNotFoundError:
+            failed.append(pkg)
+        except subprocess.TimeoutExpired:
             failed.append(pkg)
     return installed, failed
 
@@ -165,10 +190,17 @@ def cmd_search(args):
     try:
         result = subprocess.run(
             ["apt-cache", "search", "--names-only", query],
-            capture_output=True, text=True
+            capture_output=True,
+            text=True,
+            timeout=QUERY_TIMEOUT_SECS,
+            stdin=subprocess.DEVNULL,
+            env=scrub_env(),
+            check=False,
         )
     except FileNotFoundError:
         return {"results": [], "error": "apt-cache not found"}
+    except subprocess.TimeoutExpired:
+        return {"results": [], "error": f"apt-cache search exceeded {QUERY_TIMEOUT_SECS}s"}
 
     if result.returncode != 0:
         return {"results": [], "error": result.stderr.strip() or "apt-cache search failed"}
@@ -236,10 +268,17 @@ def cmd_show(args):
     try:
         result = subprocess.run(
             ["apt-cache", "show", name],
-            capture_output=True, text=True
+            capture_output=True,
+            text=True,
+            timeout=QUERY_TIMEOUT_SECS,
+            stdin=subprocess.DEVNULL,
+            env=scrub_env(),
+            check=False,
         )
     except FileNotFoundError:
         return {"name": name, "found": False, "error": "apt-cache not found"}
+    except subprocess.TimeoutExpired:
+        return {"name": name, "found": False, "error": f"apt-cache show exceeded {QUERY_TIMEOUT_SECS}s"}
 
     if result.returncode != 0 or not result.stdout.strip():
         return {
@@ -276,7 +315,12 @@ def cmd_list(args):
     try:
         result = subprocess.run(
             ["dpkg", "--get-selections"],
-            capture_output=True, text=True
+            capture_output=True,
+            text=True,
+            timeout=QUERY_TIMEOUT_SECS,
+            stdin=subprocess.DEVNULL,
+            env=scrub_env(),
+            check=False,
         )
         if result.returncode != 0:
             return {"packages": [], "error": result.stderr.strip()}
@@ -289,6 +333,8 @@ def cmd_list(args):
         return {"packages": packages}
     except FileNotFoundError:
         return {"packages": [], "error": "dpkg not found"}
+    except subprocess.TimeoutExpired:
+        return {"packages": [], "error": f"dpkg --get-selections exceeded {QUERY_TIMEOUT_SECS}s"}
 
 
 def _schema():

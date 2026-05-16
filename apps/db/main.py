@@ -1,6 +1,7 @@
 """SQLite database — create, query, and manage databases."""
 
 import os
+import re
 import sqlite3
 
 from cos_runtime import policy
@@ -9,11 +10,69 @@ DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 DB_DIR = os.path.join(DATA_DIR, "db")
 MAX_ROWS = 1000  # Maximum rows returned from a single query
 
+# Database names must look like ordinary filenames — letters, digits,
+# underscore, dash, dot. Anything else (slashes, NULs, `..`, leading
+# dot, control chars) is rejected at the gate. This is what stops the
+# old `_db_path(name)` from being turned into a path-traversal
+# primitive by a caller passing ``../../../tmp/pwned``.
+_VALID_DB_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_\-.]*$")
+
+
+class _InvalidName(Exception):
+    """Sentinel raised by ``_db_path`` for a bad database name."""
+
+
+def _validate_name(name):
+    """Return ``name`` if it is a safe single path component, else raise.
+
+    Refuses:
+
+    * empty / non-string input
+    * anything containing ``/``, ``\\``, ``\\0``, or ``..``
+    * leading ``.`` (hidden / dotfile abuse)
+    * anything that PurePosixPath would not treat as a bare basename
+    """
+    if not isinstance(name, str) or not name:
+        raise _InvalidName("database name must be a non-empty string")
+    if (
+        "/" in name
+        or "\\" in name
+        or "\x00" in name
+        or ".." in name
+        or name.startswith(".")
+    ):
+        raise _InvalidName(
+            f"invalid database name {name!r}: must be a single path component"
+        )
+    if not _VALID_DB_NAME.match(name):
+        raise _InvalidName(
+            f"invalid database name {name!r}: only [A-Za-z0-9_.-] allowed"
+        )
+    # belt-and-braces: PurePosixPath should agree this is a bare basename.
+    import pathlib
+
+    if pathlib.PurePosixPath(name).name != name:
+        raise _InvalidName(f"invalid database name {name!r}")
+    return name
+
 
 def _db_path(name):
-    """Return the full path for a database name, creating the directory if needed."""
+    """Return the full path for a database name, creating the directory if needed.
+
+    SECURITY: ``name`` is validated against a strict whitelist so a
+    caller passing ``../../../tmp/pwned`` can no longer escape
+    ``DB_DIR`` to read or write arbitrary files.
+    """
+    safe = _validate_name(name)
     os.makedirs(DB_DIR, exist_ok=True)
-    return os.path.join(DB_DIR, f"{name}.db")
+    full = os.path.join(DB_DIR, f"{safe}.db")
+    # Defence in depth: after joining, confirm the result still sits
+    # directly inside DB_DIR with no symlink escape.
+    real_dir = os.path.realpath(DB_DIR)
+    real_full = os.path.realpath(full)
+    if os.path.dirname(real_full) != real_dir:
+        raise _InvalidName(f"resolved path {real_full!r} escapes db dir {real_dir!r}")
+    return full
 
 
 def cmd_query(args):
@@ -22,8 +81,18 @@ def cmd_query(args):
         return {"error": "usage: db query <database> <sql>"}
     name = args[0]
     sql = " ".join(args[1:])
+    # Validate the name BEFORE policy.require — a hostile name (null
+    # byte, traversal, ...) would otherwise leak into the policy
+    # check's subprocess argv and surface as an opaque ValueError.
+    try:
+        _validate_name(name)
+    except _InvalidName as exc:
+        return {"error": str(exc)}
     policy.require("data.db.read", name=name)
-    path = _db_path(name)
+    try:
+        path = _db_path(name)
+    except _InvalidName as exc:
+        return {"error": str(exc)}
     try:
         with sqlite3.connect(path) as conn:
             cur = conn.execute(sql)
@@ -53,8 +122,15 @@ def cmd_exec(args):
         return {"error": "usage: db exec <database> <sql>"}
     name = args[0]
     sql = " ".join(args[1:])
+    try:
+        _validate_name(name)
+    except _InvalidName as exc:
+        return {"error": str(exc)}
     policy.require("data.db.write", name=name)
-    path = _db_path(name)
+    try:
+        path = _db_path(name)
+    except _InvalidName as exc:
+        return {"error": str(exc)}
     try:
         with sqlite3.connect(path) as conn:
             cur = conn.execute(sql)
@@ -73,8 +149,15 @@ def cmd_tables(args):
     if len(args) < 1:
         return {"error": "usage: db tables <database>"}
     name = args[0]
+    try:
+        _validate_name(name)
+    except _InvalidName as exc:
+        return {"error": str(exc)}
     policy.require("data.db.read", name=name)
-    path = _db_path(name)
+    try:
+        path = _db_path(name)
+    except _InvalidName as exc:
+        return {"error": str(exc)}
     try:
         with sqlite3.connect(path) as conn:
             cur = conn.execute(
@@ -92,8 +175,15 @@ def cmd_schema(args):
         return {"error": "usage: db schema <database> <table>"}
     name = args[0]
     table = args[1]
+    try:
+        _validate_name(name)
+    except _InvalidName as exc:
+        return {"error": str(exc)}
     policy.require("data.db.read", name=name)
-    path = _db_path(name)
+    try:
+        path = _db_path(name)
+    except _InvalidName as exc:
+        return {"error": str(exc)}
     try:
         with sqlite3.connect(path) as conn:
             cur = conn.execute(
@@ -109,7 +199,13 @@ def cmd_schema(args):
 
 
 def cmd_databases(args):
-    """List all databases in the data directory."""
+    """List all databases in the data directory.
+
+    Filters to entries with a ``.db`` suffix that pass the same
+    name-validation as ``_db_path`` — so a malicious file someone
+    dropped into ``DB_DIR`` (e.g. by writing through a different
+    code path) isn't surfaced as a usable database name.
+    """
     policy.require("data.db.read", wild=True)
     os.makedirs(DB_DIR, exist_ok=True)
     databases = []
@@ -117,6 +213,10 @@ def cmd_databases(args):
         if not entry.endswith(".db"):
             continue
         db_name = entry[:-3]
+        try:
+            _validate_name(db_name)
+        except _InvalidName:
+            continue
         full_path = os.path.join(DB_DIR, entry)
         size = os.path.getsize(full_path)
         try:

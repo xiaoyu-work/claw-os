@@ -234,7 +234,9 @@ def cmd_read(args):
     if not args:
         return {"error": "usage: cos doc read <path>"}
     path = args[0]
-    abs_path = os.path.abspath(path)
+    # ``realpath`` so a symlink can't sneak the policy check past
+    # the real on-disk target. Matches apps/fs/main.py.
+    abs_path = os.path.realpath(path)
     policy.require("fs.read", path=abs_path)
     if not os.path.isfile(path):
         return {"error": f"file not found: {path}"}
@@ -295,7 +297,7 @@ def cmd_info(args):
     if not args:
         return {"error": "usage: cos doc info <path>"}
     path = args[0]
-    abs_path = os.path.abspath(path)
+    abs_path = os.path.realpath(path)
     policy.require("fs.meta", path=abs_path)
     if not os.path.exists(path):
         return {"error": f"file not found: {path}"}
@@ -412,8 +414,8 @@ def cmd_convert(args):
     base = os.path.splitext(path)[0]
     output_path = f"{base}.{target_fmt}"
 
-    abs_input = os.path.abspath(path)
-    abs_output = os.path.abspath(output_path)
+    abs_input = os.path.realpath(path)
+    abs_output = os.path.realpath(output_path)
     policy.require("fs.read", path=abs_input)
     policy.require("fs.write", path=abs_output)
 

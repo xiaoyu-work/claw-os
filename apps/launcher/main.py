@@ -29,9 +29,16 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 from datetime import datetime, timezone
 
-from cos_runtime import policy
+# Pull in shared atomic-write + env-scrub helpers (recent log + GUI
+# launch env hygiene).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _shared.atomic import atomic_write_bytes  # noqa: E402
+from _shared.env_scrub import scrub_env  # noqa: E402
+
+from cos_runtime import policy  # noqa: E402
 
 DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 LAUNCHER_DIR = os.path.join(DATA_DIR, "launcher")
@@ -325,7 +332,9 @@ def _spawn_detached(argv):
     """Spawn `argv` fully detached from the agent's session.
 
     Returns ``(pid, error)``. Uses ``start_new_session=True`` so the
-    launched GUI keeps running after the agent exits.
+    launched GUI keeps running after the agent exits, and
+    ``scrub_env`` to keep provider API keys / OAuth tokens out of the
+    GUI child's environment.
     """
     try:
         proc = subprocess.Popen(
@@ -335,6 +344,7 @@ def _spawn_detached(argv):
             stderr=subprocess.DEVNULL,
             start_new_session=True,
             close_fds=True,
+            env=scrub_env(),
         )
     except FileNotFoundError:
         return None, f"launcher binary not found: {argv[0]}"

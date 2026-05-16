@@ -29,7 +29,7 @@ import traceback
 from typing import Any, Dict, List
 
 
-MAX_FRAME = 64 * 1024 * 1024  # 64 MiB — Mozilla's documented ceiling
+MAX_FRAME = 8 * 1024 * 1024  # 8 MiB — matches apps/browser-attached/native_host.py
 
 
 # ---------------------------------------------------------------------------
