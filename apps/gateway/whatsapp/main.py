@@ -22,10 +22,14 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 import urllib.error
-import urllib.request
+
+
+# Sibling ``_shared`` package import (script-mode invocation).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from _shared import safe_egress, safe_subprocess  # noqa: E402
 
 
 PLATFORM = "whatsapp"
@@ -85,28 +89,7 @@ def _schema() -> dict:
 
 
 def _load_credential(name: str) -> tuple[str | None, str | None]:
-    try:
-        proc = subprocess.run(
-            ["cos", "credential", "load", name],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        return None, f"cos credential load failed: {e}"
-    if proc.returncode != 0:
-        return None, (
-            f"cos credential load returned {proc.returncode}: "
-            f"{proc.stderr.strip()}"
-        )
-    try:
-        payload = json.loads(proc.stdout)
-    except json.JSONDecodeError as e:
-        return None, f"credential payload not JSON: {e}"
-    val = payload.get("value") if isinstance(payload, dict) else None
-    if not isinstance(val, str) or not val.strip():
-        return None, f"credential '{name}' missing 'value'"
-    return val.strip(), None
+    return safe_subprocess.safe_credential_load(name)
 
 
 def _load_token() -> tuple[str | None, str | None]:
@@ -165,36 +148,40 @@ def _send(recipient_phone: str, text: str) -> dict:
     ).encode("utf-8")
 
     url = f"{GRAPH_API}/{API_VERSION}/{pnid}/messages"
-    req = urllib.request.Request(
-        url,
-        data=body,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "User-Agent": USER_AGENT,
-        },
-    )
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "User-Agent": USER_AGENT,
+    }
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
-            try:
-                data = json.loads(raw)
-            except json.JSONDecodeError:
-                data = {"raw": raw}
-            wamid = None
-            if isinstance(data, dict):
-                msgs = data.get("messages")
-                if isinstance(msgs, list) and msgs:
-                    first = msgs[0]
-                    if isinstance(first, dict):
-                        wamid = first.get("id")
-            return {
-                "ok": True,
-                "platform": PLATFORM,
-                "to": phone,
-                "wamid": wamid,
-            }
+        _, _, raw_resp = safe_egress.safe_urlopen(
+            "POST",
+            url,
+            headers=headers,
+            body=body,
+            timeout=15,
+            verb_id="gateway.whatsapp.send",
+        )
+        raw = raw_resp.decode("utf-8", errors="replace")
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            data = {"raw": raw}
+        wamid = None
+        if isinstance(data, dict):
+            msgs = data.get("messages")
+            if isinstance(msgs, list) and msgs:
+                first = msgs[0]
+                if isinstance(first, dict):
+                    wamid = first.get("id")
+        return {
+            "ok": True,
+            "platform": PLATFORM,
+            "to": phone,
+            "wamid": wamid,
+        }
+    except safe_egress.EgressBlocked as e:
+        return {"ok": False, "platform": PLATFORM, "error": f"egress blocked: {e}"}
     except urllib.error.HTTPError as e:
         try:
             err_body = e.read().decode("utf-8", errors="replace")
@@ -206,7 +193,12 @@ def _send(recipient_phone: str, text: str) -> dict:
             "error": f"HTTP {e.code}: {err_body}",
         }
     except urllib.error.URLError as e:
-        return {"ok": False, "platform": PLATFORM, "error": f"URL error: {e}"}
+        return {"ok": False, "platform": PLATFORM, "error": f"URL error: {e.reason}"}
+    except Exception as e:
+        denial = getattr(e, "denial", None)
+        if denial is not None:
+            return {"ok": False, "platform": PLATFORM, "error": "permission denied", "denial": denial}
+        raise
 
 
 def _not_yet(command: str) -> dict:

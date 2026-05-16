@@ -3,10 +3,14 @@
 Outbound-only baseline: ``send`` delivers a one-shot text email via
 the configured SMTP server. Inbound (IMAP polling) is still a stub.
 
-TLS strategy:
+TLS strategy (hardened in the post-incident sweep):
   * port 465  -> implicit TLS (smtplib.SMTP_SSL)
-  * port 587  -> STARTTLS upgrade after EHLO (the common modern default)
-  * port 25   -> plain unencrypted (only useful on internal relays)
+  * port 587  -> STARTTLS upgrade after EHLO. STARTTLS is **forced**:
+                 if the server doesn't advertise it (which a MITM
+                 actively strips it from EHLO would simulate), the
+                 send aborts rather than fall back to cleartext.
+  * port 25   -> plain unencrypted (only useful on internal relays,
+                 and the kernel must explicitly authorise the host).
 
 Credentials needed:
   * ``smtp_host``     -- hostname (env override: COS_SMTP_HOST)
@@ -16,7 +20,9 @@ Credentials needed:
   * ``smtp_from``     -- optional From: address (env override: COS_SMTP_FROM);
                           falls back to ``smtp_user``.
 
-Stdlib only.
+Stdlib only. Policy gating routes via
+``policy.require("gateway.email.send", host=smtp_host)`` before any
+login or send.
 """
 
 from __future__ import annotations
@@ -26,15 +32,36 @@ import os
 import smtplib
 import socket
 import ssl
-import subprocess
 import sys
+from email import charset as email_charset
 from email.message import EmailMessage
+
+
+# Sibling ``_shared`` package import (script-mode invocation).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from _shared import safe_subprocess  # noqa: E402
+
+try:
+    from cos_runtime import policy  # type: ignore[import-not-found]
+except Exception:  # pragma: no cover - missing only outside the kernel
+    policy = None  # type: ignore[assignment]
 
 
 PLATFORM = "email"
 USER_AGENT = "ClawOSEmail/0.1.0"
 DEFAULT_PORT = 587
 SOFT_LEN = 200_000  # 200 KB body cap; SMTP servers usually allow far more
+
+
+# Force quoted-printable for UTF-8 text bodies. The stdlib default is
+# base64 which is fine but harder for downstream MTAs to introspect /
+# anti-spam scan. QP keeps Content-Transfer-Encoding explicit and
+# stable across hop rewrites. We pass the encoding to set_content via
+# the cte kwarg below; this constant is kept for documentation /
+# tooling that wants to inspect the policy.
+_BODY_CHARSET = email_charset.Charset("utf-8")
+_BODY_CHARSET.body_encoding = email_charset.QP
 
 
 def _schema() -> dict:
@@ -100,29 +127,7 @@ def _schema() -> dict:
 
 
 def _load_credential(name: str) -> tuple[str | None, str | None]:
-    """Load one named credential via `cos credential load`."""
-    try:
-        proc = subprocess.run(
-            ["cos", "credential", "load", name],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        return None, f"cos credential load failed: {e}"
-    if proc.returncode != 0:
-        return None, (
-            f"cos credential load returned {proc.returncode}: "
-            f"{proc.stderr.strip()}"
-        )
-    try:
-        payload = json.loads(proc.stdout)
-    except json.JSONDecodeError as e:
-        return None, f"credential payload not JSON: {e}"
-    val = payload.get("value") if isinstance(payload, dict) else None
-    if not isinstance(val, str) or not val.strip():
-        return None, f"credential '{name}' missing 'value'"
-    return val.strip(), None
+    return safe_subprocess.safe_credential_load(name)
 
 
 def _env_or_credential(env_var: str, cred_name: str) -> tuple[str | None, str | None]:
@@ -185,8 +190,17 @@ def _build_message(cfg: dict, to: str, subject: str, body: str, cc: str) -> Emai
         msg["Cc"] = cc
     msg["Subject"] = subject
     msg["User-Agent"] = USER_AGENT
-    msg.set_content(_truncate(body))
+    # Pin charset and content-transfer-encoding to UTF-8 / QP so
+    # downstream MTAs don't silently mangle the encoding choice.
+    msg.set_content(_truncate(body), charset="utf-8", cte="quoted-printable")
     return msg
+
+
+class _StartTLSUnavailable(smtplib.SMTPException):
+    """Raised when the SMTP server doesn't advertise STARTTLS on the
+    submission port. A MITM stripping STARTTLS from EHLO would
+    surface as exactly this, and we'd rather fail loud than ship
+    credentials in cleartext."""
 
 
 def _send(to: str, subject: str, body: str, cc: str = "") -> dict:
@@ -200,6 +214,21 @@ def _send(to: str, subject: str, body: str, cc: str = "") -> dict:
     if not cfg:
         return {"ok": False, "error": err or "config error"}
 
+    # Kernel gate before login: a denied host means we never even
+    # send the password.
+    if policy is not None:
+        try:
+            policy.require("gateway.email.send", host=cfg["host"])
+        except Exception as e:
+            denial = getattr(e, "denial", None)
+            return {
+                "ok": False,
+                "platform": PLATFORM,
+                "host": cfg["host"],
+                "error": "permission denied",
+                "denial": denial,
+            }
+
     msg = _build_message(cfg, str(to).strip(), str(subject), str(body), str(cc).strip())
     recipients = [str(to).strip()] + _split_csv(str(cc))
 
@@ -211,12 +240,27 @@ def _send(to: str, subject: str, body: str, cc: str = "") -> dict:
                 smtp.login(cfg["user"], cfg["password"])
                 smtp.send_message(msg, from_addr=cfg["from"], to_addrs=recipients)
         else:
-            # STARTTLS for 587 / plain for 25.
             with smtplib.SMTP(cfg["host"], cfg["port"], timeout=30) as smtp:
                 smtp.ehlo()
-                if cfg["port"] == 587 and smtp.has_extn("starttls"):
+                if cfg["port"] == 587:
+                    # STARTTLS is mandatory on 587 — even if the server
+                    # claims (or a MITM forges) that it doesn't support
+                    # it, we refuse to keep going in cleartext.
+                    if not smtp.has_extn("starttls"):
+                        raise _StartTLSUnavailable(
+                            f"server {cfg['host']!r} did not advertise "
+                            "STARTTLS on the submission port; refusing "
+                            "to send credentials in cleartext"
+                        )
                     smtp.starttls(context=ssl.create_default_context())
                     smtp.ehlo()
+                elif cfg["port"] == 25:
+                    # Plain port 25 is an internal-relay-only mode.
+                    # We still try STARTTLS opportunistically when the
+                    # server offers it, but don't force it.
+                    if smtp.has_extn("starttls"):
+                        smtp.starttls(context=ssl.create_default_context())
+                        smtp.ehlo()
                 smtp.login(cfg["user"], cfg["password"])
                 smtp.send_message(msg, from_addr=cfg["from"], to_addrs=recipients)
     except smtplib.SMTPException as e:

@@ -28,7 +28,11 @@ the command line):
                                  token (env override:
                                  COS_WEBHOOK_SECRET)
 
-Stdlib only.
+Stdlib only. Every outbound request funnels through
+:func:`apps.gateway._shared.safe_egress.safe_urlopen` so the kernel
+sees a ``policy.require("gateway.webhook.send", host=…)`` decision
+before the bytes leave the box, and so the response cannot redirect
+us back to an internal IMDS endpoint.
 """
 
 from __future__ import annotations
@@ -38,11 +42,16 @@ import hashlib
 import hmac
 import json
 import os
-import subprocess
 import sys
 import time
 import urllib.error
-import urllib.request
+
+
+# Make sibling ``_shared`` package importable when this file is run
+# as a script (``cos app gateway-webhook …`` execs main.py directly).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from _shared import safe_egress, safe_subprocess  # noqa: E402
 
 
 PLATFORM = "webhook"
@@ -129,28 +138,7 @@ def _schema() -> dict:
 
 
 def _load_credential(name: str) -> tuple[str | None, str | None]:
-    try:
-        proc = subprocess.run(
-            ["cos", "credential", "load", name],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        return None, f"cos credential load failed: {e}"
-    if proc.returncode != 0:
-        return None, (
-            f"cos credential load returned {proc.returncode}: "
-            f"{proc.stderr.strip()}"
-        )
-    try:
-        payload = json.loads(proc.stdout)
-    except json.JSONDecodeError as e:
-        return None, f"credential payload not JSON: {e}"
-    val = payload.get("value") if isinstance(payload, dict) else None
-    if not isinstance(val, str) or not val.strip():
-        return None, f"credential '{name}' missing 'value'"
-    return val.strip(), None
+    return safe_subprocess.safe_credential_load(name)
 
 
 def _env_or_credential(env_var: str, cred_name: str) -> tuple[str | None, str | None]:
@@ -250,21 +238,23 @@ def _send(
     headers = _build_headers(
         content_type, body, bearer, basic, api_key, hmac_secret
     )
-    req = urllib.request.Request(
-        target, data=body, method="POST", headers=headers,
-    )
+
     try:
-        with urllib.request.urlopen(req, timeout=DEFAULT_TIMEOUT) as resp:
-            raw_body = resp.read().decode("utf-8", errors="replace")
-            return {
-                "ok": True,
-                "platform": PLATFORM,
-                "target": target,
-                "status": resp.getcode(),
-                "kind": "raw" if raw else "json",
-                "signed": hmac_secret is not None,
-                "body_preview": raw_body[:200],
-            }
+        status, _resp_headers, raw_resp = safe_egress.safe_urlopen(
+            "POST",
+            target,
+            headers=headers,
+            body=body,
+            timeout=DEFAULT_TIMEOUT,
+            verb_id="gateway.webhook.send",
+        )
+    except safe_egress.EgressBlocked as e:
+        return {
+            "ok": False,
+            "platform": PLATFORM,
+            "target": target,
+            "error": f"egress blocked: {e}",
+        }
     except urllib.error.HTTPError as e:
         try:
             err_body = e.read().decode("utf-8", errors="replace")
@@ -284,8 +274,34 @@ def _send(
             "platform": PLATFORM,
             "target": target,
             "kind": "raw" if raw else "json",
-            "error": f"URL error: {e}",
+            "error": f"URL error: {e.reason}",
         }
+    except Exception as e:
+        # Catches cos_runtime.policy.PermissionDenied (which is not
+        # importable here without coupling to the kernel) and any
+        # other unexpected denial path.
+        denial = getattr(e, "denial", None)
+        if denial is not None:
+            return {
+                "ok": False,
+                "platform": PLATFORM,
+                "target": target,
+                "kind": "raw" if raw else "json",
+                "error": "permission denied",
+                "denial": denial,
+            }
+        raise
+
+    raw_body = raw_resp.decode("utf-8", errors="replace")
+    return {
+        "ok": True,
+        "platform": PLATFORM,
+        "target": target,
+        "status": status,
+        "kind": "raw" if raw else "json",
+        "signed": hmac_secret is not None,
+        "body_preview": raw_body[:200],
+    }
 
 
 def _status() -> dict:
@@ -382,15 +398,21 @@ def run(command: str, args):
             parsed = _parse_args_list(args)
         else:
             return {"ok": False, "error": "invalid args"}
-        return _send(
-            parsed["target"],
-            parsed["text"],
-            parsed["raw"],
-            parsed["bearer"],
-            parsed["basic"],
-            parsed["api_key"],
-            parsed["hmac_secret"],
-        )
+        try:
+            return _send(
+                parsed["target"],
+                parsed["text"],
+                parsed["raw"],
+                parsed["bearer"],
+                parsed["basic"],
+                parsed["api_key"],
+                parsed["hmac_secret"],
+            )
+        except Exception as e:  # surface PermissionDenied cleanly
+            denial = getattr(e, "denial", None)
+            if denial is not None:
+                return {"ok": False, "platform": PLATFORM, "error": "permission denied", "denial": denial}
+            raise
     if command == "status":
         return _status()
     return {"ok": False, "error": f"unknown command: {command}"}

@@ -13,10 +13,14 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 import urllib.error
-import urllib.request
+
+
+# Sibling ``_shared`` package import (script-mode invocation).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from _shared import safe_egress, safe_subprocess  # noqa: E402
 
 
 PLATFORM = "slack"
@@ -80,25 +84,7 @@ def _load_token() -> tuple[str | None, str | None]:
     env_tok = os.environ.get("COS_SLACK_TOKEN")
     if env_tok:
         return env_tok.strip(), None
-    try:
-        proc = subprocess.run(
-            ["cos", "credential", "load", "slack_bot_token"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        return None, f"cos credential load failed: {e}"
-    if proc.returncode != 0:
-        return None, f"cos credential load returned {proc.returncode}: {proc.stderr.strip()}"
-    try:
-        payload = json.loads(proc.stdout)
-    except json.JSONDecodeError as e:
-        return None, f"credential payload not JSON: {e}"
-    val = payload.get("value") if isinstance(payload, dict) else None
-    if not isinstance(val, str) or not val.strip():
-        return None, "credential payload missing 'value'"
-    return val.strip(), None
+    return safe_subprocess.safe_credential_load("slack_bot_token")
 
 
 def _truncate(text: str, limit: int = MAX_LEN) -> str:
@@ -117,19 +103,23 @@ def _send(channel_id: str, text: str) -> dict:
         return {"ok": False, "error": err or "no token"}
 
     body = json.dumps({"channel": channel_id, "text": _truncate(str(text))}).encode("utf-8")
-    req = urllib.request.Request(
-        f"{SLACK_API}/chat.postMessage",
-        data=body,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json; charset=utf-8",
-            "User-Agent": USER_AGENT,
-        },
-    )
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json; charset=utf-8",
+        "User-Agent": USER_AGENT,
+    }
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
+        _, _, raw_resp = safe_egress.safe_urlopen(
+            "POST",
+            f"{SLACK_API}/chat.postMessage",
+            headers=headers,
+            body=body,
+            timeout=15,
+            verb_id="gateway.slack.send",
+        )
+        raw = raw_resp.decode("utf-8", errors="replace")
+    except safe_egress.EgressBlocked as e:
+        return {"ok": False, "platform": PLATFORM, "error": f"egress blocked: {e}"}
     except urllib.error.HTTPError as e:
         try:
             err_body = e.read().decode("utf-8", errors="replace")
@@ -141,7 +131,12 @@ def _send(channel_id: str, text: str) -> dict:
             "error": f"HTTP {e.code}: {err_body}",
         }
     except urllib.error.URLError as e:
-        return {"ok": False, "platform": PLATFORM, "error": f"URL error: {e}"}
+        return {"ok": False, "platform": PLATFORM, "error": f"URL error: {e.reason}"}
+    except Exception as e:
+        denial = getattr(e, "denial", None)
+        if denial is not None:
+            return {"ok": False, "platform": PLATFORM, "error": "permission denied", "denial": denial}
+        raise
 
     try:
         data = json.loads(raw)

@@ -29,10 +29,14 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 import urllib.error
-import urllib.request
+
+
+# Sibling ``_shared`` package import (script-mode invocation).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from _shared import safe_egress, safe_subprocess  # noqa: E402
 
 
 PLATFORM = "homeassistant"
@@ -125,28 +129,7 @@ def _schema() -> dict:
 
 
 def _load_credential(name: str) -> tuple[str | None, str | None]:
-    try:
-        proc = subprocess.run(
-            ["cos", "credential", "load", name],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        return None, f"cos credential load failed: {e}"
-    if proc.returncode != 0:
-        return None, (
-            f"cos credential load returned {proc.returncode}: "
-            f"{proc.stderr.strip()}"
-        )
-    try:
-        payload = json.loads(proc.stdout)
-    except json.JSONDecodeError as e:
-        return None, f"credential payload not JSON: {e}"
-    val = payload.get("value") if isinstance(payload, dict) else None
-    if not isinstance(val, str) or not val.strip():
-        return None, f"credential '{name}' missing 'value'"
-    return val.strip(), None
+    return safe_subprocess.safe_credential_load(name)
 
 
 def _env_or_credential(env_var: str, cred_name: str) -> tuple[str | None, str | None]:
@@ -199,31 +182,40 @@ def _post_service(domain: str, service: str, payload: dict) -> dict:
 
     body = json.dumps(payload).encode("utf-8")
     url = f"{cfg['base']}/api/services/{domain}/{service}"
-    req = urllib.request.Request(
-        url,
-        data=body,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {cfg['token']}",
-            "Content-Type": "application/json",
-            "User-Agent": USER_AGENT,
-            "Accept": "application/json",
-        },
-    )
+    headers = {
+        "Authorization": f"Bearer {cfg['token']}",
+        "Content-Type": "application/json",
+        "User-Agent": USER_AGENT,
+        "Accept": "application/json",
+    }
     try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
-            try:
-                data = json.loads(raw)
-            except json.JSONDecodeError:
-                data = raw
-            return {
-                "ok": True,
-                "platform": PLATFORM,
-                "service": f"{domain}.{service}",
-                "status": resp.status,
-                "result": data,
-            }
+        status, _, raw_resp = safe_egress.safe_urlopen(
+            "POST",
+            url,
+            headers=headers,
+            body=body,
+            timeout=20,
+            verb_id="gateway.homeassistant.send",
+        )
+        raw = raw_resp.decode("utf-8", errors="replace")
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            data = raw
+        return {
+            "ok": True,
+            "platform": PLATFORM,
+            "service": f"{domain}.{service}",
+            "status": status,
+            "result": data,
+        }
+    except safe_egress.EgressBlocked as e:
+        return {
+            "ok": False,
+            "platform": PLATFORM,
+            "service": f"{domain}.{service}",
+            "error": f"egress blocked: {e}",
+        }
     except urllib.error.HTTPError as e:
         try:
             err_body = e.read().decode("utf-8", errors="replace")
@@ -240,8 +232,19 @@ def _post_service(domain: str, service: str, payload: dict) -> dict:
             "ok": False,
             "platform": PLATFORM,
             "service": f"{domain}.{service}",
-            "error": f"URL error: {e}",
+            "error": f"URL error: {e.reason}",
         }
+    except Exception as e:
+        denial = getattr(e, "denial", None)
+        if denial is not None:
+            return {
+                "ok": False,
+                "platform": PLATFORM,
+                "service": f"{domain}.{service}",
+                "error": "permission denied",
+                "denial": denial,
+            }
+        raise
 
 
 def _send(service: str, text: str, title: str | None) -> dict:

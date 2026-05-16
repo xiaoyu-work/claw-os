@@ -1,12 +1,31 @@
 """Telegram gateway — long-poll the Telegram Bot API and forward
 inbound messages to `cos agent ask`, replying with the answer.
 
-Phase 9 implementation.
+Phase 9 implementation, hardened in the post-incident sweep:
+
+* Every inbound message goes through an explicit sender allowlist
+  (env ``COS_TELEGRAM_ALLOWED_CHATS``, comma-separated chat IDs).
+  Anything else is dropped with a polite "not authorised" reply, so
+  the public side of the bot can't drive ``cos agent ask`` for free.
+
+* Per-chat token-bucket rate limit (5 calls / 60s by default; tunable
+  via ``COS_TELEGRAM_RPM``). Bursts get a "rate-limited, try again"
+  reply instead of being silently dropped or queued.
+
+* The ``cos agent ask`` subprocess is now timed out and run with a
+  scrubbed environment (``stdin=DEVNULL``), so a hung agent can never
+  pin the long-poll loop forever or inherit ambient secrets.
+
+* All outbound HTTP funnels through
+  :func:`apps.gateway._shared.safe_egress.safe_urlopen` which enforces
+  ``policy.require("gateway.telegram.send", host="api.telegram.org")``
+  and refuses to follow 30x redirects.
 
 Wiring:
 
-  cos credential store telegram_bot_token <token>     # one-time
-  cos app gateway-telegram start                       # foreground loop
+  cos credential store telegram_bot_token <token>      # one-time
+  export COS_TELEGRAM_ALLOWED_CHATS=12345,67890         # required
+  cos app gateway-telegram start                        # foreground loop
 
 Or run under `cos service` so it survives across sessions.
 
@@ -19,19 +38,7 @@ keeps:
   * ``gateway.pid`` — PID of the running ``start`` loop, used by
     ``status`` and ``stop``.
 
-Message flow per inbound update:
-
-  1. ``message.text`` → run ``cos agent ask <text>`` as a subprocess,
-     reading stdout (JSON-or-text agnostic).
-  2. ``sendMessage`` back to ``message.chat.id`` with the response.
-  3. Persist the new offset (update_id + 1) so we never re-process
-     after a restart.
-
-Errors are logged inline (``log_event``) and the loop continues
-with exponential backoff on transport failures.
-
-Stdlib only (urllib, json, subprocess, signal, time, os, sys, errno)
-— no third-party deps required to install/run the gateway.
+Stdlib only.
 """
 
 from __future__ import annotations
@@ -45,11 +52,17 @@ import sys
 import time
 import urllib.error
 import urllib.parse
-import urllib.request
+
+
+# Sibling ``_shared`` package import (script-mode invocation).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from _shared import atomic, inbound, safe_egress, safe_subprocess  # noqa: E402
 
 
 PLATFORM = "telegram"
 TG_API_BASE = "https://api.telegram.org"
+TG_API_HOST = "api.telegram.org"
 
 # Long-poll timeout (Telegram caps at 50; we use 25 so the socket
 # never feels frozen to a watcher).
@@ -58,6 +71,40 @@ LONG_POLL_TIMEOUT_S = 25
 BACKOFF_SCHEDULE_S = [1, 2, 5, 10, 30, 60]
 # Truncate replies past Telegram's 4096-char message limit.
 TG_MESSAGE_LIMIT = 4096
+# Default rate-limit budget per chat. Override via COS_TELEGRAM_RPM.
+DEFAULT_RPM = 5
+# Hard cap on how long a `cos agent ask` invocation may run before
+# the gateway gives up and tells the user.
+AGENT_TIMEOUT_S = 60
+
+# Environment variable names. Kept as module constants so tests can
+# poke them out of band.
+ENV_ALLOWED_CHATS = "COS_TELEGRAM_ALLOWED_CHATS"
+ENV_RPM = "COS_TELEGRAM_RPM"
+
+
+# In-process rate limiter shared across all inbound calls. Build it
+# lazily so test harnesses can reset it.
+_RATE_LIMITER: inbound.TokenBucket | None = None
+
+
+def _rate_limiter() -> inbound.TokenBucket:
+    global _RATE_LIMITER
+    if _RATE_LIMITER is None:
+        try:
+            rpm = int(os.environ.get(ENV_RPM, str(DEFAULT_RPM)))
+            if rpm <= 0:
+                rpm = DEFAULT_RPM
+        except ValueError:
+            rpm = DEFAULT_RPM
+        _RATE_LIMITER = inbound.TokenBucket(capacity=rpm, refill_seconds=60.0)
+    return _RATE_LIMITER
+
+
+def _reset_rate_limiter_for_tests() -> None:
+    """Test hook — re-reads env on next ``_rate_limiter()`` call."""
+    global _RATE_LIMITER
+    _RATE_LIMITER = None
 
 
 def _state_dir() -> str:
@@ -90,10 +137,10 @@ def _read_state() -> dict:
 
 
 def _write_state(state: dict) -> None:
-    tmp = _state_path() + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(state, f)
-    os.replace(tmp, _state_path())
+    # Atomic via tmp + fsync + replace + dir-fsync so a crash mid-write
+    # can't leave a half-written offset that drops or replays updates
+    # on the next run.
+    atomic.atomic_write_json(_state_path(), state)
 
 
 def _read_pid() -> int | None:
@@ -105,8 +152,7 @@ def _read_pid() -> int | None:
 
 
 def _write_pid(pid: int) -> None:
-    with open(_pid_path(), "w", encoding="utf-8") as f:
-        f.write(str(pid))
+    atomic.atomic_write_text(_pid_path(), str(pid), mode=0o644)
 
 
 def _clear_pid() -> None:
@@ -157,26 +203,18 @@ def _load_token() -> str:
     env_token = os.environ.get("COS_TELEGRAM_TOKEN")
     if env_token:
         return env_token.strip()
-    proc = subprocess.run(
-        [_cos_bin(), "credential", "load", "telegram_bot_token"],
-        capture_output=True,
-        text=True,
+    val, err = safe_subprocess.safe_credential_load(
+        "telegram_bot_token", timeout=10.0, cos_bin=_cos_bin()
     )
-    if proc.returncode != 0:
+    if val is None:
         raise RuntimeError(
-            "telegram_bot_token not in credential store; "
-            "run `cos credential store telegram_bot_token <token>` first"
+            err
+            or (
+                "telegram_bot_token not in credential store; "
+                "run `cos credential store telegram_bot_token <token>` first"
+            )
         )
-    try:
-        payload = json.loads(proc.stdout)
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"credential load returned non-JSON: {e}; raw={proc.stdout!r}")
-    if "error" in payload:
-        raise RuntimeError(f"credential load failed: {payload['error']}")
-    value = payload.get("value")
-    if not value:
-        raise RuntimeError("credential load returned empty value")
-    return value.strip()
+    return val
 
 
 def _api_call(token: str, method: str, params: dict, timeout: float) -> dict:
@@ -185,29 +223,65 @@ def _api_call(token: str, method: str, params: dict, timeout: float) -> dict:
     raises RuntimeError on Telegram-side `ok: false`."""
     url = f"{TG_API_BASE}/bot{token}/{method}"
     body = urllib.parse.urlencode(params).encode("utf-8")
-    req = urllib.request.Request(
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    _, _, raw = safe_egress.safe_urlopen(
+        "POST",
         url,
-        data=body,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        headers=headers,
+        body=body,
+        timeout=timeout,
+        verb_id="gateway.telegram.send",
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        raw = resp.read().decode("utf-8")
-    payload = json.loads(raw)
+    payload = json.loads(raw.decode("utf-8"))
     if not payload.get("ok"):
-        raise RuntimeError(f"telegram api error: {payload.get('description', raw)}")
+        raise RuntimeError(
+            f"telegram api error: {payload.get('description', 'unknown')}"
+        )
     return payload
 
 
-def _ask_agent(text: str) -> str:
-    proc = subprocess.run(
-        [_cos_bin(), "agent", "ask", text],
-        capture_output=True,
-        text=True,
-    )
+def _ask_agent(chat_id: object, text: str) -> str:
+    """Run ``cos agent ask <text>`` with the kernel having authorised
+    the inbound first. Bounded timeout, scrubbed env, no inherited
+    stdin.
+
+    Raises:
+        inbound.SenderNotAllowed: ``chat_id`` not in
+            ``COS_TELEGRAM_ALLOWED_CHATS``.
+        inbound.RateLimited:      Per-chat budget exhausted.
+    """
+    inbound.verify_sender(chat_id, ENV_ALLOWED_CHATS)
+
+    # Kernel-side gate as well — even an allowlisted chat must clear
+    # the policy verb. The kernel can deny per-session.
+    try:
+        from cos_runtime import policy as _policy  # type: ignore
+    except Exception:  # pragma: no cover - missing only outside kernel
+        _policy = None
+    if _policy is not None:
+        _policy.require("gateway.telegram.recv", name=str(chat_id))
+
+    if not _rate_limiter().try_consume(str(chat_id)):
+        raise inbound.RateLimited(
+            f"chat {chat_id} exceeded {DEFAULT_RPM} req/min budget"
+        )
+
+    try:
+        proc = safe_subprocess.safe_subprocess(
+            [_cos_bin(), "agent", "ask", text],
+            timeout=AGENT_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        return f"[agent timeout after {AGENT_TIMEOUT_S}s]"
+    except FileNotFoundError:
+        return "[agent unavailable: cos binary not on PATH]"
+
     if proc.returncode != 0:
         # Surface a short error so the user gets feedback in chat
         # instead of silent drops.
-        return f"[agent error] {proc.stderr.strip() or proc.stdout.strip() or 'non-zero exit'}"
+        stderr_preview = (proc.stderr or "").strip()[:200]
+        stdout_preview = (proc.stdout or "").strip()[:200]
+        return f"[agent error] {stderr_preview or stdout_preview or 'non-zero exit'}"
     out = proc.stdout.strip()
     if not out:
         return "[agent returned empty response]"
@@ -230,6 +304,18 @@ def _truncate(text: str) -> str:
     return text[: TG_MESSAGE_LIMIT - 1] + "…"
 
 
+def _send_reply(token: str, chat_id: object, text: str) -> None:
+    try:
+        _api_call(
+            token,
+            "sendMessage",
+            {"chat_id": chat_id, "text": _truncate(text)},
+            timeout=15,
+        )
+    except (urllib.error.URLError, RuntimeError, safe_egress.EgressBlocked) as e:
+        log_event("error", "send failed", chat_id=chat_id, err=str(e))
+
+
 def _process_update(token: str, update: dict) -> None:
     msg = update.get("message") or update.get("edited_message")
     if not isinstance(msg, dict):
@@ -240,16 +326,41 @@ def _process_update(token: str, update: dict) -> None:
     if chat_id is None or not isinstance(text, str) or not text.strip():
         return
     log_event("info", "inbound", chat_id=chat_id, len=len(text))
-    reply = _ask_agent(text.strip())
+
     try:
-        _api_call(
+        reply = _ask_agent(chat_id, text.strip())
+    except inbound.SenderNotAllowed as e:
+        log_event("warn", "sender not allowed", chat_id=chat_id, err=str(e))
+        _send_reply(
             token,
-            "sendMessage",
-            {"chat_id": chat_id, "text": _truncate(reply)},
-            timeout=15,
+            chat_id,
+            "Sorry — this gateway is not configured to take requests from this chat.",
         )
-    except (urllib.error.URLError, RuntimeError) as e:
-        log_event("error", "send failed", chat_id=chat_id, err=str(e))
+        return
+    except inbound.RateLimited as e:
+        log_event("warn", "rate limited", chat_id=chat_id, err=str(e))
+        _send_reply(
+            token,
+            chat_id,
+            "Rate-limited (max ~5 requests / minute per chat). Please slow down.",
+        )
+        return
+    except Exception as e:
+        # PermissionDenied from the kernel and anything else we did
+        # not anticipate. Don't surface implementation details to the
+        # chat (could include token fragments in pathological cases).
+        denial = getattr(e, "denial", None)
+        log_event(
+            "error",
+            "agent dispatch failed",
+            chat_id=chat_id,
+            err=str(e),
+            kernel=denial,
+        )
+        _send_reply(token, chat_id, "Internal error handling that message.")
+        return
+
+    _send_reply(token, chat_id, reply)
 
 
 def _start_loop() -> dict:
@@ -297,7 +408,11 @@ def _start_loop() -> dict:
                     timeout=LONG_POLL_TIMEOUT_S + 5,
                 )
                 backoff_idx = 0
-            except urllib.error.URLError as e:
+            except (urllib.error.URLError, safe_egress.EgressBlocked) as e:
+                # Transient transport failure or local egress
+                # rejection (DNS flap, IMDS-shaped redirect). Back
+                # off exponentially up to 60s before retrying so we
+                # don't hot-loop against a misbehaving network.
                 wait = BACKOFF_SCHEDULE_S[min(backoff_idx, len(BACKOFF_SCHEDULE_S) - 1)]
                 backoff_idx += 1
                 log_event("warn", "poll failed", err=str(e), backoff_s=wait)
@@ -333,8 +448,14 @@ def _stop() -> dict:
         return {"ok": True, "platform": PLATFORM, "running": False, "stale_pid": pid}
     if sys.platform == "win32":
         # Best-effort terminate via taskkill; cos service will
-        # generally manage process lifetime instead.
-        subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True)
+        # generally manage process lifetime instead. Bounded timeout
+        # so a wedged taskkill can't hang ``stop`` forever.
+        try:
+            safe_subprocess.safe_subprocess(
+                ["taskkill", "/PID", str(pid), "/F"], timeout=10.0
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
     else:
         try:
             os.kill(pid, signal.SIGTERM)
@@ -354,6 +475,8 @@ def _status() -> dict:
         "pid": pid,
         "offset": state.get("offset", 0),
         "state_dir": _state_dir(),
+        "allowlist_env": ENV_ALLOWED_CHATS,
+        "allowlist_configured": bool(os.environ.get(ENV_ALLOWED_CHATS, "").strip()),
     }
 
 
@@ -372,7 +495,7 @@ def _send(args) -> dict:
             {"chat_id": chat_id, "text": _truncate(text)},
             timeout=15,
         )
-    except (urllib.error.URLError, RuntimeError) as e:
+    except (urllib.error.URLError, RuntimeError, safe_egress.EgressBlocked) as e:
         return {"ok": False, "error": str(e)}
     return {"ok": True, "platform": PLATFORM, "sent_to": chat_id, "len": len(text)}
 
