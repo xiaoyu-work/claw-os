@@ -118,13 +118,6 @@ fn cmd_end(args: &[String]) -> Result<Value, String> {
     }
     let trace_id = &args[0];
 
-    let path = trace_path(trace_id);
-    let data = crate::filelock::read_locked(&path)
-        .map_err(|e| format!("failed to read trace: {e}"))?
-        .ok_or_else(|| format!("trace not found: {trace_id}"))?;
-    let mut trace: TraceInfo =
-        serde_json::from_str(&data).map_err(|e| format!("corrupt trace file: {e}"))?;
-
     // Parse --status flag
     let mut status = "completed".to_string();
     let mut i = 1;
@@ -145,16 +138,27 @@ fn cmd_end(args: &[String]) -> Result<Value, String> {
     }
 
     let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let path = trace_path(trace_id);
 
-    trace.ended_at = Some(now.clone());
-    trace.status = status.clone();
+    // Atomic RMW so two concurrent `trace end` / `trace span` calls
+    // can't read the same TraceInfo and clobber each other on write.
+    let mut started_at_out: Option<String> = None;
+    let started_ref = &mut started_at_out;
+    let now_for_closure = now.clone();
+    let status_for_closure = status.clone();
+    crate::filelock::update_locked::<_, String>(&path, |existing| {
+        let raw = existing.ok_or_else(|| format!("trace not found: {trace_id}"))?;
+        let mut trace: TraceInfo =
+            serde_json::from_str(&raw).map_err(|e| format!("corrupt trace file: {e}"))?;
+        *started_ref = Some(trace.started_at.clone());
+        trace.ended_at = Some(now_for_closure.clone());
+        trace.status = status_for_closure.clone();
+        serde_json::to_string_pretty(&trace).map_err(|e| format!("serialize trace: {e}"))
+    })
+    .map_err(|e| e.to_string())?;
 
-    let updated = serde_json::to_string_pretty(&trace)
-        .map_err(|e| format!("failed to serialize trace: {e}"))?;
-    crate::filelock::write_locked(&path, &updated)
-        .map_err(|e| format!("failed to write trace file: {e}"))?;
-
-    let duration_ms = compute_duration_ms(&trace.started_at, &now);
+    let started_at = started_at_out.unwrap_or_default();
+    let duration_ms = compute_duration_ms(&started_at, &now);
 
     Ok(json!({
         "trace_id": trace_id,
@@ -182,13 +186,6 @@ fn cmd_span(args: &[String]) -> Result<Value, String> {
         return Err("COS_TRACE_ID is empty — start a trace first".into());
     }
 
-    let path = trace_path(&trace_id);
-    let data = crate::filelock::read_locked(&path)
-        .map_err(|e| format!("failed to read trace: {e}"))?
-        .ok_or_else(|| format!("trace not found: {trace_id}"))?;
-    let mut trace: TraceInfo =
-        serde_json::from_str(&data).map_err(|e| format!("corrupt trace file: {e}"))?;
-
     // Build span path: if COS_SPAN_ID is set, nest under it
     let parent_span = std::env::var("COS_SPAN_ID").unwrap_or_default();
     let span_path = if parent_span.is_empty() {
@@ -198,20 +195,26 @@ fn cmd_span(args: &[String]) -> Result<Value, String> {
     };
 
     let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let path = trace_path(&trace_id);
 
-    let span = SpanInfo {
+    // Atomic append: concurrent `trace span` calls would otherwise
+    // both read the same TraceInfo and one's `spans.push` would be
+    // overwritten by the other's `write_locked`.
+    let span_for_push = SpanInfo {
         name: span_name.clone(),
         span_path: span_path.clone(),
         started_at: now.clone(),
         ended_at: None,
     };
-
-    trace.spans.push(span);
-
-    let updated = serde_json::to_string_pretty(&trace)
-        .map_err(|e| format!("failed to serialize trace: {e}"))?;
-    crate::filelock::write_locked(&path, &updated)
-        .map_err(|e| format!("failed to write trace file: {e}"))?;
+    let trace_id_for_err = trace_id.clone();
+    crate::filelock::update_locked::<_, String>(&path, |existing| {
+        let raw = existing.ok_or_else(|| format!("trace not found: {trace_id_for_err}"))?;
+        let mut trace: TraceInfo =
+            serde_json::from_str(&raw).map_err(|e| format!("corrupt trace file: {e}"))?;
+        trace.spans.push(span_for_push.clone());
+        serde_json::to_string_pretty(&trace).map_err(|e| format!("serialize trace: {e}"))
+    })
+    .map_err(|e| e.to_string())?;
 
     Ok(json!({
         "trace_id": trace_id,
@@ -262,32 +265,31 @@ fn cmd_span_end(args: &[String]) -> Result<Value, String> {
     };
 
     let path = trace_path(&trace_id);
-    let data = crate::filelock::read_locked(&path)
-        .map_err(|e| format!("failed to read trace: {e}"))?
-        .ok_or_else(|| format!("trace not found: {trace_id}"))?;
-    let mut trace: TraceInfo =
-        serde_json::from_str(&data).map_err(|e| format!("corrupt trace file: {e}"))?;
-
     let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
-    // Find the span by path and end it
+    let span_path_for_closure = span_path.clone();
+    let now_for_closure = now.clone();
+    let trace_id_for_err = trace_id.clone();
     let mut found = false;
-    for span in &mut trace.spans {
-        if span.span_path == span_path && span.ended_at.is_none() {
-            span.ended_at = Some(now.clone());
-            found = true;
-            break;
+    let found_ref = &mut found;
+    crate::filelock::update_locked::<_, String>(&path, |existing| {
+        let raw = existing.ok_or_else(|| format!("trace not found: {trace_id_for_err}"))?;
+        let mut trace: TraceInfo =
+            serde_json::from_str(&raw).map_err(|e| format!("corrupt trace file: {e}"))?;
+        for span in &mut trace.spans {
+            if span.span_path == span_path_for_closure && span.ended_at.is_none() {
+                span.ended_at = Some(now_for_closure.clone());
+                *found_ref = true;
+                break;
+            }
         }
-    }
+        serde_json::to_string_pretty(&trace).map_err(|e| format!("serialize trace: {e}"))
+    })
+    .map_err(|e| e.to_string())?;
 
     if !found {
         return Err(format!("span not found or already ended: {span_path}"));
     }
-
-    let updated = serde_json::to_string_pretty(&trace)
-        .map_err(|e| format!("failed to serialize trace: {e}"))?;
-    crate::filelock::write_locked(&path, &updated)
-        .map_err(|e| format!("failed to write trace file: {e}"))?;
 
     // Compute parent span for env hint
     let parent_span = if let Some(pos) = span_path.rfind('/') {
