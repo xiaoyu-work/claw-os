@@ -87,18 +87,14 @@ impl Default for MiniMaxConfig {
 
 pub struct MiniMaxTts {
     cfg: MiniMaxConfig,
-    client: reqwest::Client,
 }
 
 impl MiniMaxTts {
     pub fn new(cfg: MiniMaxConfig) -> Self {
-        let mut builder =
-            reqwest::Client::builder().user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")));
-        if cfg.request_timeout > Duration::from_secs(0) {
-            builder = builder.timeout(cfg.request_timeout);
-        }
-        let client = builder.build().unwrap_or_else(|_| reqwest::Client::new());
-        Self { cfg, client }
+        // Per-request client via `util::build_safe_client` so the
+        // endpoint host is DNS-pinned to a vetted public IP. See
+        // `media/util.rs`.
+        Self { cfg }
     }
 
     fn endpoint(&self) -> String {
@@ -221,12 +217,17 @@ impl TtsProvider for MiniMaxTts {
             },
         };
 
-        let mut http = self
-            .client
-            .post(self.endpoint())
-            .query(&[("GroupId", group)])
-            .header("Content-Type", "application/json")
-            .json(&body);
+        let mut http = {
+            let endpoint = self.endpoint();
+            let url = reqwest::Url::parse(&endpoint)
+                .map_err(|e| MediaError::InvalidRequest(format!("invalid endpoint url: {e}")))?;
+            let client = super::util::build_safe_client(&url, self.cfg.request_timeout).await?;
+            client
+                .post(url)
+                .query(&[("GroupId", group)])
+                .header("Content-Type", "application/json")
+                .json(&body)
+        };
         if let Some(key) = &self.cfg.api_key {
             http = http.bearer_auth(key);
         }

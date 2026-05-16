@@ -66,9 +66,31 @@ pub struct SkillManifest {
     /// Free-form trigger keywords/phrases the loader may match
     /// against user prompts.
     pub triggers: Vec<String>,
+    /// Optional cryptographic signature over the canonical
+    /// signing input (see [`canonical_signing_input`]). Hub /
+    /// vendor releases are expected to populate this so installs
+    /// can be authenticated against a known release key — see
+    /// [`crate::agent::skills::provenance::verify_signature`].
+    pub signature: Option<ManifestSignature>,
     /// Anything unrecognised: preserved as raw scalar strings or
     /// joined sequence values so we don't lose data.
     pub extra: BTreeMap<String, ManifestValue>,
+}
+
+/// Ed25519 signature block attached to a manifest. All three
+/// fields are mandatory when the block is present; an incomplete
+/// block surfaces as [`ManifestError::InvalidSignatureBlock`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManifestSignature {
+    /// Algorithm identifier — currently only `"ed25519"` is
+    /// supported. Validated by the verifier, not the parser, so
+    /// future algorithms can be threaded without re-touching the
+    /// YAML subset code.
+    pub algorithm: String,
+    /// Lower-case hex of the 32-byte ed25519 verifying key.
+    pub public_key: String,
+    /// Lower-case hex of the 64-byte signature value.
+    pub value: String,
 }
 
 /// Raw value preserved for fields we don't have a typed slot for.
@@ -101,6 +123,8 @@ pub enum ManifestError {
     UnsupportedYaml { line: usize, reason: String },
     #[error("manifest input is {len} bytes; exceeds parser cap {cap} bytes")]
     TooLarge { len: usize, cap: usize },
+    #[error("signature block is malformed: {0}")]
+    InvalidSignatureBlock(String),
 }
 
 /// Hard cap on raw manifest input size — protects the parser from
@@ -473,6 +497,22 @@ fn build_manifest(mut raw: BTreeMap<String, RawValue>) -> Result<SkillManifest, 
         .unwrap_or_default();
     let triggers = take_sequence_or_csv(&mut raw, "triggers").unwrap_or_default();
 
+    // Signature is parsed as a *nested mapping* under the top-level
+    // `signature:` key. The YAML subset parser captures nested
+    // mappings as a verbatim Scalar block — we re-walk that block
+    // here to pluck out the three required fields, so the typed
+    // manifest never has to round-trip through the raw `extra`
+    // map to authenticate an install.
+    let signature = match raw.remove("signature") {
+        Some(RawValue::Scalar(block)) => Some(parse_signature_block(&block)?),
+        Some(RawValue::Sequence(_)) => {
+            return Err(ManifestError::InvalidSignatureBlock(
+                "signature must be a mapping, not a sequence".to_string(),
+            ));
+        }
+        None => None,
+    };
+
     let mut extra = BTreeMap::new();
     for (k, v) in raw {
         let value = match v {
@@ -491,8 +531,124 @@ fn build_manifest(mut raw: BTreeMap<String, RawValue>) -> Result<SkillManifest, 
         homepage,
         allowed_tools,
         triggers,
+        signature,
         extra,
     })
+}
+
+/// Parse the verbatim YAML block captured for the top-level
+/// `signature:` mapping. Expects three scalar sub-fields —
+/// `algorithm`, `public_key`, `value` — and rejects anything else
+/// so an attacker can't smuggle extra keys past the parser.
+fn parse_signature_block(block: &str) -> Result<ManifestSignature, ManifestError> {
+    let mut algorithm: Option<String> = None;
+    let mut public_key: Option<String> = None;
+    let mut value: Option<String> = None;
+    for (lineno, raw_line) in block.lines().enumerate().map(|(i, l)| (i + 1, l)) {
+        let trimmed = raw_line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let (k, v) = split_key(trimmed).ok_or_else(|| {
+            ManifestError::InvalidSignatureBlock(format!(
+                "expected `key: value` at line {lineno}"
+            ))
+        })?;
+        let v = unquote_scalar(v);
+        match k.as_str() {
+            "algorithm" => {
+                if algorithm.replace(v).is_some() {
+                    return Err(ManifestError::InvalidSignatureBlock(
+                        "duplicate `algorithm`".to_string(),
+                    ));
+                }
+            }
+            "public_key" => {
+                if public_key.replace(v).is_some() {
+                    return Err(ManifestError::InvalidSignatureBlock(
+                        "duplicate `public_key`".to_string(),
+                    ));
+                }
+            }
+            "value" => {
+                if value.replace(v).is_some() {
+                    return Err(ManifestError::InvalidSignatureBlock(
+                        "duplicate `value`".to_string(),
+                    ));
+                }
+            }
+            other => {
+                return Err(ManifestError::InvalidSignatureBlock(format!(
+                    "unsupported signature field `{other}`"
+                )));
+            }
+        }
+    }
+    let algorithm = algorithm
+        .ok_or_else(|| ManifestError::InvalidSignatureBlock("missing `algorithm`".to_string()))?;
+    let public_key = public_key
+        .ok_or_else(|| ManifestError::InvalidSignatureBlock("missing `public_key`".to_string()))?;
+    let value = value
+        .ok_or_else(|| ManifestError::InvalidSignatureBlock("missing `value`".to_string()))?;
+    Ok(ManifestSignature {
+        algorithm,
+        public_key,
+        value,
+    })
+}
+
+/// Deterministic byte stream over the manifest's canonical fields,
+/// with the `signature` block elided. Used as the message passed to
+/// ed25519 signing/verification — both sides must produce the same
+/// bytes for the same logical manifest.
+///
+/// Implementation: every typed field plus the `extra` blob is
+/// dropped into a [`BTreeMap`] keyed by field name (BTreeMap orders
+/// by key, so insertion order doesn't affect output), then
+/// serialised with `serde_json::to_vec`. The verifier hashes the
+/// result with SHA-256 before passing the digest to ed25519 — see
+/// [`crate::agent::skills::provenance::verify_signature`].
+pub fn canonical_signing_input(manifest: &SkillManifest) -> Vec<u8> {
+    use serde_json::{json, Map, Value};
+    let mut map: BTreeMap<&'static str, Value> = BTreeMap::new();
+    map.insert("name", json!(manifest.name));
+    if let Some(v) = &manifest.description {
+        map.insert("description", json!(v));
+    }
+    if let Some(v) = &manifest.version {
+        map.insert("version", json!(v));
+    }
+    if let Some(v) = &manifest.license {
+        map.insert("license", json!(v));
+    }
+    if let Some(v) = &manifest.author {
+        map.insert("author", json!(v));
+    }
+    if let Some(v) = &manifest.homepage {
+        map.insert("homepage", json!(v));
+    }
+    map.insert("allowed_tools", json!(manifest.allowed_tools));
+    map.insert("triggers", json!(manifest.triggers));
+    // Extras are emitted in BTreeMap key order so the canonical
+    // form is reproducible across runs / hosts. The `signature`
+    // block itself is always elided (it lives on `manifest.signature`,
+    // not in `extra` — but be defensive in case a future parser
+    // change re-routes it).
+    let mut extras: Map<String, Value> = Map::new();
+    for (k, v) in &manifest.extra {
+        if k == "signature" {
+            continue;
+        }
+        let json_val = match v {
+            ManifestValue::Scalar(s) => Value::String(s.clone()),
+            ManifestValue::Sequence(items) => {
+                Value::Array(items.iter().map(|s| Value::String(s.clone())).collect())
+            }
+        };
+        extras.insert(k.clone(), json_val);
+    }
+    map.insert("extra", Value::Object(extras));
+    serde_json::to_vec(&map).unwrap_or_else(|_| Vec::new())
 }
 
 fn take_scalar(map: &mut BTreeMap<String, RawValue>, key: &str) -> Option<String> {
@@ -769,5 +925,56 @@ mod tests {
     fn missing_opening_delimiter_after_blanks_errors() {
         let err = parse("\n\nname: x\n").unwrap_err();
         assert!(matches!(err, ManifestError::MissingFrontmatter));
+    }
+
+    #[test]
+    fn parses_signature_block() {
+        let pubkey = "1".repeat(64);
+        let sig_val = "2".repeat(128);
+        let raw = format!(
+            "---\nname: signed\nsignature:\n  algorithm: ed25519\n  public_key: {pubkey}\n  value: {sig_val}\n---\n"
+        );
+        let s = doc(&raw);
+        let sig = s.manifest.signature.expect("signature parsed");
+        assert_eq!(sig.algorithm, "ed25519");
+        assert_eq!(sig.public_key.len(), 64);
+        assert_eq!(sig.value.len(), 128);
+        // signature must not also appear in extras
+        assert!(!s.manifest.extra.contains_key("signature"));
+    }
+
+    #[test]
+    fn rejects_signature_block_with_unknown_field() {
+        let err = parse(
+            "---\nname: signed\nsignature:\n  algorithm: ed25519\n  public_key: aa\n  value: bb\n  evil: yes\n---\n",
+        )
+        .unwrap_err();
+        assert!(matches!(err, ManifestError::InvalidSignatureBlock(_)));
+    }
+
+    #[test]
+    fn rejects_signature_block_missing_field() {
+        let err =
+            parse("---\nname: signed\nsignature:\n  algorithm: ed25519\n  public_key: aa\n---\n")
+                .unwrap_err();
+        assert!(matches!(err, ManifestError::InvalidSignatureBlock(_)));
+    }
+
+    #[test]
+    fn canonical_signing_input_is_stable_across_signature_block_changes() {
+        // The point of canonical_signing_input is that the byte stream
+        // is the same whether or not a signature is attached — that's
+        // what lets a signer compute the bytes once, sign them, and a
+        // verifier reproduce them from the on-disk manifest.
+        let m_unsigned = parse("---\nname: x\nversion: 1.0\n---\n").unwrap().manifest;
+        let m_signed = parse(
+            "---\nname: x\nversion: 1.0\nsignature:\n  algorithm: ed25519\n  public_key: aa\n  value: bb\n---\n",
+        )
+        .unwrap()
+        .manifest;
+        assert_eq!(
+            canonical_signing_input(&m_unsigned),
+            canonical_signing_input(&m_signed)
+        );
     }
 }

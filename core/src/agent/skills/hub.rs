@@ -49,6 +49,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::agent::media::util::build_safe_client;
 use crate::engine_pkg::sources::github::{GhAsset, GhClient, GhError, GhSpec};
 
 /// Where to fetch the hub from. Default points at the canonical
@@ -115,6 +116,12 @@ pub enum HubError {
     Json(#[from] serde_json::Error),
     #[error("schema mismatch: expected {expected}, got {got}")]
     Schema { expected: u32, got: u32 },
+    /// Asset download URL resolved to a non-public IP (loopback,
+    /// link-local, RFC1918) or used a disallowed scheme. The hub
+    /// can't be trusted to publish URLs we'll then connect to
+    /// blindly: this is the SSRF / DNS-rebinding gate.
+    #[error("unsafe asset url: {0}")]
+    UnsafeUrl(String),
 }
 
 /// One skill listed in the hub catalogue.
@@ -162,7 +169,6 @@ pub struct SkillsHub {
     cfg: HubConfig,
     spec: GhSpec,
     gh: GhClient,
-    http: reqwest::Client,
 }
 
 impl SkillsHub {
@@ -170,34 +176,16 @@ impl SkillsHub {
         let token = cfg.token.clone();
         let gh = GhClient::new().with_token(token);
         let spec = cfg.gh_spec();
-        let http = reqwest::Client::builder()
-            .user_agent(concat!("cos/", env!("CARGO_PKG_VERSION"), " (skills-hub)"))
-            .timeout(std::time::Duration::from_secs(60))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
-        Self {
-            cfg,
-            spec,
-            gh,
-            http,
-        }
+        // No long-lived `http` client here: see `fetch_asset_text`
+        // for the per-request DNS-pinned builder.
+        Self { cfg, spec, gh }
     }
 
     /// Allow tests to inject a custom-base GhClient (e.g. wiremock).
     #[cfg(test)]
     pub(crate) fn with_gh_client(cfg: HubConfig, gh: GhClient) -> Self {
         let spec = cfg.gh_spec();
-        let http = reqwest::Client::builder()
-            .user_agent("cos-test (skills-hub)")
-            .timeout(std::time::Duration::from_secs(5))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
-        Self {
-            cfg,
-            spec,
-            gh,
-            http,
-        }
+        Self { cfg, spec, gh }
     }
 
     /// Fetch the hub catalogue from the latest release of the
@@ -280,7 +268,23 @@ impl SkillsHub {
     }
 
     async fn fetch_asset_text(&self, asset: &GhAsset) -> Result<String, HubError> {
-        let mut req = self.http.get(&asset.browser_download_url);
+        // Build a per-call client pinned to a single vetted public
+        // IP for the asset host. The hub publishes the download URL
+        // so we can't assume it's safe — between DNS resolution and
+        // connect, a malicious or compromised host could rebind to
+        // a private address. `build_safe_client` resolves once and
+        // pins the client to those addresses, which neutralises the
+        // rebinding race.
+        let asset_url = reqwest::Url::parse(&asset.browser_download_url).map_err(|e| {
+            HubError::UnsafeUrl(format!(
+                "asset url {} is not a valid URL: {e}",
+                asset.browser_download_url
+            ))
+        })?;
+        let client = build_safe_client(&asset_url, std::time::Duration::from_secs(60))
+            .await
+            .map_err(|e| HubError::UnsafeUrl(e.to_string()))?;
+        let mut req = client.get(asset_url);
         if let Some(t) = &self.cfg.token {
             req = req.header("Authorization", format!("Bearer {t}"));
         }

@@ -91,18 +91,14 @@ impl Default for GeminiTtsConfig {
 
 pub struct GeminiTts {
     cfg: GeminiTtsConfig,
-    client: reqwest::Client,
 }
 
 impl GeminiTts {
     pub fn new(cfg: GeminiTtsConfig) -> Self {
-        let mut builder =
-            reqwest::Client::builder().user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")));
-        if cfg.request_timeout > Duration::from_secs(0) {
-            builder = builder.timeout(cfg.request_timeout);
-        }
-        let client = builder.build().unwrap_or_else(|_| reqwest::Client::new());
-        Self { cfg, client }
+        // Per-request client built via `util::build_safe_client` so the
+        // hostname is DNS-pinned to a vetted public IP, defeating
+        // rebinding races. See `media/util.rs`.
+        Self { cfg }
     }
 
     fn endpoint(&self) -> String {
@@ -236,11 +232,16 @@ impl TtsProvider for GeminiTts {
             },
         };
 
-        let mut http = self
-            .client
-            .post(self.endpoint())
-            .header("Content-Type", "application/json")
-            .json(&body);
+        let mut http = {
+            let endpoint = self.endpoint();
+            let url = reqwest::Url::parse(&endpoint)
+                .map_err(|e| MediaError::InvalidRequest(format!("invalid endpoint url: {e}")))?;
+            let client = super::util::build_safe_client(&url, self.cfg.request_timeout).await?;
+            client
+                .post(url)
+                .header("Content-Type", "application/json")
+                .json(&body)
+        };
         if let Some(key) = &self.cfg.api_key {
             http = http.header("x-goog-api-key", key.as_str());
         }

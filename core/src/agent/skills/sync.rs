@@ -32,6 +32,7 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use super::manifest::{self, ManifestError};
+use super::provenance::{self, SignatureCheck, SignatureError, SignatureVerifyConfig};
 
 /// Hard cap on how much *uncompressed* data a single zip may produce,
 /// regardless of advertised entry sizes. Defends against zip bombs.
@@ -94,6 +95,8 @@ pub enum SyncError {
     ZipPathTooDeep { name: String, cap: usize },
     #[error("archive integrity check failed: expected sha256 {expected}, got {actual}")]
     ChecksumMismatch { expected: String, actual: String },
+    #[error("manifest signature rejected: {0}")]
+    Signature(#[from] SignatureError),
 }
 
 /// Install a skill bundle into the default agent skills directory.
@@ -131,11 +134,35 @@ pub fn install_into(
 /// Install into an explicit `skills_root` with an optional SHA-256
 /// integrity check. When `expected_sha256` is `Some(_)` the archive
 /// bytes are hashed and the install is rejected on mismatch.
+///
+/// Signature policy is read from the process environment via
+/// [`SignatureVerifyConfig::from_env`]. Tests can dial the policy
+/// explicitly through [`install_into_with_policy`].
 pub fn install_into_verified(
     archive: &Path,
     skills_root: &Path,
     force: bool,
     expected_sha256: Option<&str>,
+) -> Result<SyncResult, SyncError> {
+    install_into_with_policy(
+        archive,
+        skills_root,
+        force,
+        expected_sha256,
+        &SignatureVerifyConfig::from_env(),
+    )
+}
+
+/// Install with an explicit signature policy. The other knobs
+/// (`force`, `expected_sha256`) work as in [`install_into_verified`].
+/// Pulled out so unit tests can drive the signature flow without
+/// having to mutate process env state.
+pub fn install_into_with_policy(
+    archive: &Path,
+    skills_root: &Path,
+    force: bool,
+    expected_sha256: Option<&str>,
+    signature_config: &SignatureVerifyConfig,
 ) -> Result<SyncResult, SyncError> {
     if !archive.exists() {
         return Err(SyncError::ArchiveMissing(archive.to_path_buf()));
@@ -192,6 +219,28 @@ pub fn install_into_verified(
         }
         let raw = fs::read_to_string(&manifest_path)?;
         let doc = manifest::parse(&raw)?;
+
+        // Authenticate the manifest before we let it influence the
+        // install destination. Unsigned manifests log a warning
+        // (operator can spot them in audit) but go through when the
+        // policy allows it.
+        match provenance::verify_signature(&doc.manifest, signature_config)? {
+            SignatureCheck::Verified { public_key_hex } => {
+                tracing::info!(
+                    skill = %doc.manifest.name,
+                    key = %public_key_hex,
+                    "skill manifest signature verified"
+                );
+            }
+            SignatureCheck::Unsigned => {
+                tracing::warn!(
+                    skill = %doc.manifest.name,
+                    "installing skill without a signature — set \
+                     COS_SKILLS_REQUIRE_SIGNATURE=1 to refuse unsigned manifests"
+                );
+            }
+        }
+
         let safe_id = sanitize_skill_id(&doc.manifest.name)
             .ok_or_else(|| SyncError::UnsafeSkillName(doc.manifest.name.clone()))?;
 
@@ -881,5 +930,119 @@ mod tests {
         // Correct digest installs cleanly.
         let ok = install_into_verified(&archive, &dest, false, Some(&actual)).unwrap();
         assert_eq!(ok.id, "checksummed");
+    }
+
+    // ----- ed25519 signature flow -----
+
+    /// Build a SKILL.md whose signature block authenticates the
+    /// canonical signing input for the rest of the manifest.
+    fn signed_skill_md(name: &str, version: &str) -> (String, [u8; 32]) {
+        use ed25519_dalek::{Signer, SigningKey};
+        let secret: [u8; 32] = [42u8; 32];
+        let signing_key = SigningKey::from_bytes(&secret);
+        let verifying_key = signing_key.verifying_key();
+        let pk_hex = hex::encode(verifying_key.to_bytes());
+
+        // Parse the unsigned form first to recover the same
+        // canonical bytes that the verifier will compute when the
+        // signed SKILL.md is loaded from disk.
+        let unsigned = format!(
+            "---\nname: {name}\nversion: {version}\ndescription: test skill\n---\n# {name}\n"
+        );
+        let doc = manifest::parse(&unsigned).unwrap();
+        let canonical = manifest::canonical_signing_input(&doc.manifest);
+        let mut hasher = crate::crypto::Sha256Stream::new();
+        hasher.update(&canonical);
+        let digest = hasher.finalize_bytes();
+        let signature = signing_key.sign(&digest);
+        let sig_hex = hex::encode(signature.to_bytes());
+
+        let signed = format!(
+            "---\nname: {name}\nversion: {version}\ndescription: test skill\nsignature:\n  algorithm: ed25519\n  public_key: {pk_hex}\n  value: {sig_hex}\n---\n# {name}\n"
+        );
+        (signed, verifying_key.to_bytes())
+    }
+
+    #[test]
+    fn install_accepts_valid_signature() {
+        let tmp = TempDir::new().unwrap();
+        let archive = tmp.path().join("signed.zip");
+        let (md, _pk) = signed_skill_md("signed-skill", "0.1.0");
+        make_zip(&archive, &[("SKILL.md", &md)]);
+        let dest = tmp.path().join("skills");
+        let policy = SignatureVerifyConfig {
+            require_signature: true,
+            trusted_keys: None,
+        };
+        let res =
+            install_into_with_policy(&archive, &dest, false, None, &policy).unwrap();
+        assert_eq!(res.id, "signed-skill");
+    }
+
+    #[test]
+    fn install_rejects_tampered_manifest() {
+        let tmp = TempDir::new().unwrap();
+        let archive = tmp.path().join("tampered.zip");
+        let (mut md, _pk) = signed_skill_md("tampered", "0.1.0");
+        // Flip the version after signing — every byte of the
+        // canonical signing input feeds the digest, so a value
+        // change must invalidate the signature.
+        md = md.replace("version: 0.1.0", "version: 9.9.9");
+        make_zip(&archive, &[("SKILL.md", &md)]);
+        let dest = tmp.path().join("skills");
+        let policy = SignatureVerifyConfig::default();
+        let err =
+            install_into_with_policy(&archive, &dest, false, None, &policy).unwrap_err();
+        match err {
+            SyncError::Signature(SignatureError::BadSignature(_)) => {}
+            other => panic!("expected BadSignature, got {other:?}"),
+        }
+        // No half-installed tree on rejection.
+        assert!(!dest.join("tampered").exists());
+    }
+
+    #[test]
+    fn install_rejects_unsigned_when_required() {
+        let tmp = TempDir::new().unwrap();
+        let archive = tmp.path().join("nosig.zip");
+        make_zip(&archive, &[("SKILL.md", &good_skill_md("nosig"))]);
+        let dest = tmp.path().join("skills");
+        let policy = SignatureVerifyConfig {
+            require_signature: true,
+            trusted_keys: None,
+        };
+        let err =
+            install_into_with_policy(&archive, &dest, false, None, &policy).unwrap_err();
+        assert!(matches!(
+            err,
+            SyncError::Signature(SignatureError::Required)
+        ));
+        // And without the policy flag, the same archive installs.
+        let res =
+            install_into_with_policy(&archive, &dest, false, None, &SignatureVerifyConfig::default())
+                .unwrap();
+        assert_eq!(res.id, "nosig");
+    }
+
+    #[test]
+    fn install_rejects_untrusted_key() {
+        let tmp = TempDir::new().unwrap();
+        let archive = tmp.path().join("evil.zip");
+        let (md, _signer_pk) = signed_skill_md("evil-skill", "0.1.0");
+        make_zip(&archive, &[("SKILL.md", &md)]);
+        let dest = tmp.path().join("skills");
+        // Allow-list contains a *different* key than the one that
+        // signed this manifest.
+        let other_key: [u8; 32] = [7u8; 32];
+        let policy = SignatureVerifyConfig {
+            require_signature: true,
+            trusted_keys: Some(vec![other_key]),
+        };
+        let err =
+            install_into_with_policy(&archive, &dest, false, None, &policy).unwrap_err();
+        assert!(matches!(
+            err,
+            SyncError::Signature(SignatureError::UntrustedKey { .. })
+        ));
     }
 }
