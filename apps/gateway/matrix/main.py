@@ -18,12 +18,17 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 import time
 import urllib.error
-import urllib.request
+import urllib.parse
 import uuid
+
+
+# Sibling ``_shared`` package import (script-mode invocation).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from _shared import safe_egress, safe_subprocess  # noqa: E402
 
 
 PLATFORM = "matrix"
@@ -82,32 +87,8 @@ def _schema() -> dict:
 
 
 def _load_credential(name: str) -> tuple[str | None, str | None]:
-    """Load a single named credential via `cos credential load`.
-
-    Returns (value, error). Stdlib subprocess + json parse only.
-    """
-    try:
-        proc = subprocess.run(
-            ["cos", "credential", "load", name],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        return None, f"cos credential load failed: {e}"
-    if proc.returncode != 0:
-        return None, (
-            f"cos credential load returned {proc.returncode}: "
-            f"{proc.stderr.strip()}"
-        )
-    try:
-        payload = json.loads(proc.stdout)
-    except json.JSONDecodeError as e:
-        return None, f"credential payload not JSON: {e}"
-    val = payload.get("value") if isinstance(payload, dict) else None
-    if not isinstance(val, str) or not val.strip():
-        return None, f"credential '{name}' missing 'value'"
-    return val.strip(), None
+    """Load a single named credential via `cos credential load`."""
+    return safe_subprocess.safe_credential_load(name)
 
 
 def _load_token() -> tuple[str | None, str | None]:
@@ -152,35 +133,44 @@ def _send(room_id: str, text: str) -> dict:
 
     body = json.dumps({"msgtype": "m.text", "body": _truncate(str(text))}).encode("utf-8")
     # Path-escape the room id (e.g. ! and : are reserved).
-    encoded_room = urllib.request.quote(room_id, safe="")
+    encoded_room = urllib.parse.quote(room_id, safe="")
     url = (
         f"{homeserver}/_matrix/client/v3/rooms/{encoded_room}"
         f"/send/m.room.message/{txn}"
     )
-    req = urllib.request.Request(
-        url,
-        data=body,
-        method="PUT",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "User-Agent": USER_AGENT,
-        },
-    )
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "User-Agent": USER_AGENT,
+    }
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
-            try:
-                data = json.loads(raw)
-            except json.JSONDecodeError:
-                data = {"raw": raw}
-            return {
-                "ok": True,
-                "platform": PLATFORM,
-                "room_id": room_id,
-                "event_id": data.get("event_id") if isinstance(data, dict) else None,
-                "homeserver": homeserver,
-            }
+        _, _, raw_resp = safe_egress.safe_urlopen(
+            "PUT",
+            url,
+            headers=headers,
+            body=body,
+            timeout=15,
+            verb_id="gateway.matrix.send",
+        )
+        raw = raw_resp.decode("utf-8", errors="replace")
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            data = {"raw": raw}
+        return {
+            "ok": True,
+            "platform": PLATFORM,
+            "room_id": room_id,
+            "event_id": data.get("event_id") if isinstance(data, dict) else None,
+            "homeserver": homeserver,
+        }
+    except safe_egress.EgressBlocked as e:
+        return {
+            "ok": False,
+            "platform": PLATFORM,
+            "homeserver": homeserver,
+            "error": f"egress blocked: {e}",
+        }
     except urllib.error.HTTPError as e:
         try:
             err_body = e.read().decode("utf-8", errors="replace")
@@ -197,8 +187,19 @@ def _send(room_id: str, text: str) -> dict:
             "ok": False,
             "platform": PLATFORM,
             "homeserver": homeserver,
-            "error": f"URL error: {e}",
+            "error": f"URL error: {e.reason}",
         }
+    except Exception as e:
+        denial = getattr(e, "denial", None)
+        if denial is not None:
+            return {
+                "ok": False,
+                "platform": PLATFORM,
+                "homeserver": homeserver,
+                "error": "permission denied",
+                "denial": denial,
+            }
+        raise
 
 
 def _not_yet(command: str) -> dict:
