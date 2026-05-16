@@ -101,6 +101,7 @@ mkdir -p "$BASE_STAGE/usr/local/bin"
 mkdir -p "$BASE_STAGE/usr/lib/cos/apps"
 mkdir -p "$BASE_STAGE/usr/lib/cos/skills"
 mkdir -p "$BASE_STAGE/usr/lib/cos/init"
+mkdir -p "$BASE_STAGE/usr/lib/cos/python"
 mkdir -p "$BASE_STAGE/usr/share/applications"
 mkdir -p "$BASE_STAGE/etc/cos"
 
@@ -159,6 +160,32 @@ if [ -d "$PROJECT_DIR/apps" ]; then
 fi
 if [ -d "$PROJECT_DIR/skills" ]; then
     cp -a "$PROJECT_DIR/skills/." "$BASE_STAGE/usr/lib/cos/skills/"
+fi
+
+# Python packages shipped system-wide so every bundled app can
+# `from claw_os_sdk import ai` (public AI surface) and
+# `from cos_runtime import policy` (internal capability gate). The
+# `cos` kernel's app-spawn wrapper (core/src/bridge.rs) and its
+# MCP-session helper (core/src/agent/tools/cos_apps_session.rs) both
+# seed sys.path / PYTHONPATH from /usr/lib/cos/python first, so a
+# deb-only install needs the packages to live exactly here.
+SDK_PY_SRC="$PROJECT_DIR/claw-os-sdk/python/src/claw_os_sdk"
+RUNTIME_PY_SRC="$PROJECT_DIR/cos-runtime/python/src/cos_runtime"
+if [ -d "$SDK_PY_SRC" ]; then
+    echo "  :: claw_os_sdk python  <- $SDK_PY_SRC"
+    cp -a "$SDK_PY_SRC" "$BASE_STAGE/usr/lib/cos/python/claw_os_sdk"
+    find "$BASE_STAGE/usr/lib/cos/python/claw_os_sdk" -name '__pycache__' -type d \
+        -exec rm -rf {} + 2>/dev/null || true
+else
+    echo "  :: WARNING — claw-os-sdk python tree missing at $SDK_PY_SRC" >&2
+fi
+if [ -d "$RUNTIME_PY_SRC" ]; then
+    echo "  :: cos_runtime python  <- $RUNTIME_PY_SRC"
+    cp -a "$RUNTIME_PY_SRC" "$BASE_STAGE/usr/lib/cos/python/cos_runtime"
+    find "$BASE_STAGE/usr/lib/cos/python/cos_runtime" -name '__pycache__' -type d \
+        -exec rm -rf {} + 2>/dev/null || true
+else
+    echo "  :: WARNING — cos-runtime python tree missing at $RUNTIME_PY_SRC" >&2
 fi
 
 # Desktop launchers for ClawOS-specific apps (e.g. com.clawos.Agent).

@@ -12,7 +12,8 @@ Description: Claw OS — agent-native operating system core
  This package installs the `cos` supervisor binary, the Docker PID-1
  entrypoint `cos-init`, the shared OverlayFS helper for the agent
  home, the per-user agent configuration under `~/.config/cos/`, and
- the bundled apps and skills under `/usr/lib/cos/`.
+ the bundled apps, skills, and Python helper packages
+ (`claw_os_sdk`, `cos_runtime`) under `/usr/lib/cos/`.
  .
  On its own, this package provides a complete agent runtime usable
  from any shell. Install `claw-os-systemd` to add boot-time services,
