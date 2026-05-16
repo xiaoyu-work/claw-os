@@ -126,7 +126,9 @@ impl Default for CosmicCompConfig {
             keyboard_config: Default::default(),
             autotile: Default::default(),
             autotile_behavior: Default::default(),
-            active_hint: true,
+            // ClawOS: accent feature removed — the colored focus-ring around the
+            // active window was the most visible accent surface. Default to off.
+            active_hint: false,
             focus_follows_cursor: false,
             cursor_follows_focus: false,
             focus_follows_cursor_delay: 250,

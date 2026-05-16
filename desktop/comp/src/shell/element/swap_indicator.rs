@@ -45,9 +45,11 @@ impl Program for SwapIndicatorInternal {
         .apply(container)
         .class(theme::Container::custom(|theme| container::Style {
             snap: true,
-            icon_color: Some(Color::from(theme.cosmic().accent.on)),
-            text_color: Some(Color::from(theme.cosmic().accent.on)),
-            background: Some(Background::Color(theme.cosmic().accent_color().into())),
+            // ClawOS: accent removed. Use the quieter primary container palette
+            // instead of the cosmic accent for swap/resize/hover indicators.
+            icon_color: Some(Color::from(theme.cosmic().primary.on)),
+            text_color: Some(Color::from(theme.cosmic().primary.on)),
+            background: Some(Background::Color(theme.cosmic().primary.base.into())),
             border: Border {
                 radius: 18.0.into(),
                 width: 0.0,

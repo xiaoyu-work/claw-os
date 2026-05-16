@@ -16,7 +16,11 @@ pub(crate) fn active_window_hint(theme: &Theme) -> palette::Srgba {
     if let Some(hint) = theme.window_hint {
         palette::Srgba::from(hint)
     } else {
-        theme.accent_color()
+        // ClawOS: accent feature removed. Use a neutral grey instead of
+        // theme.accent_color() so that if a user re-enables active_hint via
+        // cosmic-comp config, the focus ring is a quiet grey not the cosmic
+        // accent blue.
+        palette::Srgba::from(theme.palette.neutral_5)
     }
 }
 

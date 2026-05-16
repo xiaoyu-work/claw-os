@@ -238,11 +238,10 @@ impl DockItem {
                 container
             } else {
                 container.class(theme::Container::custom(move |theme| container::Style {
-                    background: if is_focused {
-                        Some(Background::Color(theme.cosmic().accent_color().into()))
-                    } else {
-                        Some(Background::Color(theme.cosmic().on_bg_color().into()))
-                    },
+                    // ClawOS: accent removed. Use on_bg_color for both focused
+                    // and unfocused app-list dots — the dot's presence already
+                    // signals "app is running".
+                    background: Some(Background::Color(theme.cosmic().on_bg_color().into())),
                     border: Border {
                         radius: dot_border_radius.into(),
                         ..Default::default()
@@ -2186,7 +2185,9 @@ impl cosmic::Application for CosmicAppList {
                     }
 
                     let svg_accent = Rc::new(|theme: &cosmic::Theme| {
-                        let color = theme.cosmic().accent_color().into();
+                        // ClawOS: accent removed. Use neutral on-bg for the
+                        // "pinned" checkmark icon.
+                        let color = theme.cosmic().background.on.into();
                         svg::Style { color: Some(color) }
                     });
                     content = content.push(
