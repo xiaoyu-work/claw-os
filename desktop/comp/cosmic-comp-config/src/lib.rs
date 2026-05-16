@@ -54,6 +54,17 @@ pub struct AppearanceConfig {
     pub clip_floating_windows: bool,
     pub clip_tiled_windows: bool,
     pub shadow_tiled_windows: bool,
+    /// Real backdrop blur via ext_background_effect_v1 + dual-Kawase passes.
+    /// EXPERIMENTAL — protocol binding is live, but the GL render-pass
+    /// integration is still under development and needs validation on a
+    /// Linux/wayland host. Leave `false` until that lands.
+    #[serde(default)]
+    pub experimental_blur: bool,
+    /// Spring-animate windows on open / close (scale + alpha).
+    /// EXPERIMENTAL — surface lifecycle hooks in Smithay are subtle; leave
+    /// `false` until validated on a Linux/wayland host.
+    #[serde(default)]
+    pub experimental_window_animations: bool,
 }
 
 impl Default for AppearanceConfig {
@@ -62,6 +73,8 @@ impl Default for AppearanceConfig {
             clip_floating_windows: true,
             clip_tiled_windows: true,
             shadow_tiled_windows: true,
+            experimental_blur: false,
+            experimental_window_animations: false,
         }
     }
 }
