@@ -125,6 +125,14 @@ fn job_logs_dir(id: &str) -> PathBuf {
 ///   `*/N` — step (every N from min)
 ///   `N-M` — range (inclusive)
 ///   `N,M` — list (comma-separated; items can be values, ranges, or steps)
+///
+/// Day-of-month (field 3) and day-of-week (field 5) follow Vixie /
+/// POSIX semantics: when both are restricted (non-`*`), the job runs
+/// if **either** field matches the current day. When exactly one is
+/// restricted, only that one applies. When both are `*`, every day
+/// matches. This matches `cron(1)` on every mainstream Linux/BSD; the
+/// previous AND-based logic silently desynchronised users who
+/// imported a crontab written for vixie / systemd-cron.
 fn cron_matches(schedule: &str, time: &chrono::DateTime<chrono::Utc>) -> bool {
     let fields: Vec<&str> = schedule.split_whitespace().collect();
     if fields.len() != 5 {
@@ -133,11 +141,35 @@ fn cron_matches(schedule: &str, time: &chrono::DateTime<chrono::Utc>) -> bool {
 
     use chrono::{Datelike, Timelike};
 
-    field_matches(fields[0], time.minute(), 0, 59)
-        && field_matches(fields[1], time.hour(), 0, 23)
-        && field_matches(fields[2], time.day(), 1, 31)
-        && field_matches(fields[3], time.month(), 1, 12)
-        && field_matches(fields[4], time.weekday().num_days_from_sunday(), 0, 6)
+    if !field_matches(fields[0], time.minute(), 0, 59) {
+        return false;
+    }
+    if !field_matches(fields[1], time.hour(), 0, 23) {
+        return false;
+    }
+    if !field_matches(fields[3], time.month(), 1, 12) {
+        return false;
+    }
+
+    // Day-of-month (field 2) and day-of-week (field 4) get the
+    // Vixie OR-semantics treatment. A `*` is treated as "unrestricted"
+    // — when both are `*` the combined day predicate is trivially
+    // true; when exactly one is restricted, only that one matters;
+    // when both are restricted, EITHER match makes the rule fire.
+    let dom_field = fields[2];
+    let dow_field = fields[4];
+    let dom_wild = dom_field == "*";
+    let dow_wild = dow_field == "*";
+
+    let dom_ok = field_matches(dom_field, time.day(), 1, 31);
+    let dow_ok = field_matches(dow_field, time.weekday().num_days_from_sunday(), 0, 6);
+
+    match (dom_wild, dow_wild) {
+        (true, true) => true,
+        (false, true) => dom_ok,
+        (true, false) => dow_ok,
+        (false, false) => dom_ok || dow_ok,
+    }
 }
 
 /// Check whether a single cron field matches the given `value`.
@@ -1375,6 +1407,57 @@ mod tests {
         let t = chrono::Utc.with_ymd_and_hms(2026, 3, 25, 12, 0, 0).unwrap();
         assert!(cron_matches("0 12 * * 3", &t)); // Wednesday
         assert!(!cron_matches("0 12 * * 1", &t)); // Monday
+    }
+
+    /// VIXIE/POSIX cron DoM/DoW OR-semantics regression. When BOTH
+    /// day-of-month (field 3) AND day-of-week (field 5) are restricted
+    /// (non-`*`), the job must fire if EITHER matches. The previous
+    /// AND-based implementation silently desynchronised crontabs
+    /// migrated from vixie-cron / systemd-cron — e.g. `0 0 1 * 1`
+    /// (run at midnight on the 1st of the month OR every Monday)
+    /// used to require both, so it almost never fired.
+    #[test]
+    fn test_cron_vixie_dom_dow_or_semantics() {
+        perms_init();
+
+        // 2026-03-25 is a Wednesday (DoW=3), day-of-month=25.
+        let wed_25 = chrono::Utc.with_ymd_and_hms(2026, 3, 25, 12, 0, 0).unwrap();
+        // 2026-03-23 is a Monday (DoW=1), day-of-month=23.
+        let mon_23 = chrono::Utc.with_ymd_and_hms(2026, 3, 23, 12, 0, 0).unwrap();
+        // 2026-03-01 is a Sunday (DoW=0), day-of-month=1.
+        let sun_1 = chrono::Utc.with_ymd_and_hms(2026, 3, 1, 12, 0, 0).unwrap();
+
+        // Schedule: 12:00 on the 1st of the month OR every Monday.
+        let schedule = "0 12 1 * 1";
+
+        // Sunday the 1st: DoM matches → fire.
+        assert!(
+            cron_matches(schedule, &sun_1),
+            "vixie OR: DoM=1 must fire on the 1st (sun 1)"
+        );
+        // Monday the 23rd: DoW matches → fire.
+        assert!(
+            cron_matches(schedule, &mon_23),
+            "vixie OR: DoW=1 (Mon) must fire on Monday (mon 23)"
+        );
+        // Wednesday the 25th: neither matches → do not fire.
+        assert!(
+            !cron_matches(schedule, &wed_25),
+            "vixie OR: must NOT fire on Wed 25 (neither DoM nor DoW matches)"
+        );
+
+        // When DoM is `*` and DoW is restricted, only DoW gates.
+        assert!(cron_matches("0 12 * * 3", &wed_25));
+        assert!(!cron_matches("0 12 * * 3", &mon_23));
+
+        // When DoW is `*` and DoM is restricted, only DoM gates.
+        assert!(cron_matches("0 12 25 * *", &wed_25));
+        assert!(!cron_matches("0 12 25 * *", &mon_23));
+
+        // When both are `*`, the day predicate is unconditionally true
+        // (still subject to minute/hour/month).
+        assert!(cron_matches("0 12 * * *", &wed_25));
+        assert!(cron_matches("0 12 * * *", &mon_23));
     }
 
     // -- next_run_time --

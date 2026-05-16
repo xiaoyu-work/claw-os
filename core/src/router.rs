@@ -585,17 +585,36 @@ fn install_cmd(args: &[String]) -> Result<Option<String>, String> {
     Ok(Some(envelope.to_string()))
 }
 
-/// Plain recursive directory copy. Symlinks are followed (treated as
-/// regular files) — Apps shipped in this repo don't use symlinks and
-/// the install path is meant for real, copyable trees rather than
-/// development bind mounts.
+/// Plain recursive directory copy. **Symlinks are rejected** with an
+/// error rather than followed.
+///
+/// `fs::copy` and `Path::is_dir` traverse symlinks, so a malicious
+/// install source containing a link such as `passwd -> /etc/passwd`
+/// (or `data -> /var/lib/cos/credentials`) used to either escape the
+/// source tree or materialise privileged content as part of the
+/// installed App. For Apps we want a verbatim copy of a developer tree:
+/// rejecting symlinks is both safer and matches what every shipped
+/// App actually needs (none use symlinks). Use `symlink_metadata` to
+/// inspect entries without traversal, the same pattern checkpoint.rs
+/// uses in `copy_dir_recursive`.
 fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
         let from = entry.path();
         let to = dst.join(entry.file_name());
-        if from.is_dir() {
+        let metadata = std::fs::symlink_metadata(&from)?;
+        let ft = metadata.file_type();
+        if ft.is_symlink() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "refusing to copy symlink at `{}` during app install: \
+                     install sources must not contain symlinks",
+                    from.display()
+                ),
+            ));
+        } else if ft.is_dir() {
             copy_dir_recursive(&from, &to)?;
         } else {
             std::fs::copy(&from, &to)?;
@@ -2683,5 +2702,64 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&src);
         let _ = std::fs::remove_dir_all(&dst);
+    }
+
+    /// Regression: a symlink anywhere in the install source tree must
+    /// be rejected. Otherwise an attacker who can plant a link inside a
+    /// "trusted developer tree" can either copy out-of-tree files (e.g.
+    /// `/etc/shadow`, the system credential store) into the installed
+    /// App location, or escape the source tree during recursion.
+    #[cfg(unix)]
+    #[test]
+    fn install_rejects_symlink_in_source_tree() {
+        let pid = std::process::id();
+        let src = std::env::temp_dir().join(format!("cos-install-symlink-src-{pid}"));
+        let dst = std::env::temp_dir().join(format!("cos-install-symlink-dst-{pid}"));
+        let outside = std::env::temp_dir().join(format!("cos-install-symlink-outside-{pid}"));
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
+        let _ = std::fs::remove_file(&outside);
+
+        write_min_app(
+            &src,
+            "linky",
+            r#"{
+              "id": "linky",
+              "version": "0.0.1",
+              "name": "Linky"
+            }"#,
+        );
+
+        // Create a target outside the source tree we wouldn't want
+        // materialised inside the App.
+        std::fs::write(&outside, b"secret-bytes-not-meant-for-this-app").unwrap();
+        // Plant a symlink in the source tree pointing at the outside
+        // target. With the old `fs::copy` traversal this would be
+        // copied verbatim under `dst/linky/secret`.
+        std::os::unix::fs::symlink(&outside, src.join("secret")).unwrap();
+
+        let prev_apps = std::env::var_os("COS_APPS_DIR");
+        std::env::set_var("COS_APPS_DIR", &dst);
+        let err = install_cmd(&[src.display().to_string()]).unwrap_err();
+        match prev_apps {
+            Some(x) => std::env::set_var("COS_APPS_DIR", x),
+            None => std::env::remove_var("COS_APPS_DIR"),
+        }
+
+        assert!(
+            err.contains("symlink"),
+            "expected symlink rejection error, got: {err}"
+        );
+        // The installed dest must not exist (or at minimum must not
+        // contain the would-be copied symlink target).
+        let leaked = dst.join("linky").join("secret");
+        assert!(
+            !leaked.is_file(),
+            "symlink target must not have been materialised in install dest"
+        );
+
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
+        let _ = std::fs::remove_file(&outside);
     }
 }
