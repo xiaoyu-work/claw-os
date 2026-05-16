@@ -49,6 +49,15 @@ pub struct SessionInfo {
     /// Has no enforcement effect — `caps` is the source of truth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
+    /// Linux kernel clock ticks at which the process started
+    /// (`/proc/<pid>/stat` field 22). Used to detect pid-recycle
+    /// — kernels reuse pids, so an aliveness check on `pid` alone
+    /// can falsely report a recycled-by-another-program pid as "our
+    /// session still alive." Treat the session as exited if the
+    /// kernel-reported start time no longer matches what we stored
+    /// at spawn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_time_ticks: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -77,6 +86,27 @@ fn save_registry(reg: &Registry) {
     if let Ok(data) = serde_json::to_string_pretty(reg) {
         let _ = crate::filelock::write_locked(&registry_path(), &data);
     }
+}
+
+/// Atomic read-modify-write on the proc registry. Concurrent spawn /
+/// status / wait calls all do load_registry + mutate + save_registry,
+/// which is the classic lost-update race — parallel `cos proc spawn`
+/// invocations (the default sub-agent pattern in claw-os) routinely
+/// lost one session row each. Funnel mutations through here.
+fn update_registry<F>(transform: F) -> Result<(), String>
+where
+    F: FnOnce(Registry) -> Registry,
+{
+    let _ = fs::create_dir_all(proc_dir());
+    crate::filelock::update_locked::<_, String>(&registry_path(), |existing| {
+        let reg: Registry = match existing {
+            Some(s) => serde_json::from_str(&s).unwrap_or_default(),
+            None => Registry::default(),
+        };
+        let next = transform(reg);
+        serde_json::to_string_pretty(&next).map_err(|e| format!("serialize: {e}"))
+    })
+    .map_err(|e| e.to_string())
 }
 
 /// Register a freshly-built [`SessionInfo`] into the on-disk registry.
@@ -109,10 +139,30 @@ pub fn deregister_session(session_id: &str) {
     }
 }
 
+/// Cross-uid safe aliveness check. `kill(pid, 0)` alone returns
+/// -1/EPERM for a pid that exists but belongs to a different uid,
+/// which the old code interpreted as "process is gone" — that
+/// allowed a low-privileged process to "reclaim" a high-privileged
+/// agent's recorded PID and (via cmd_kill) try to SIGTERM whatever
+/// landed on that pid next. Treat EPERM as "alive (not ours)".
 fn is_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if std::path::Path::new(&format!("/proc/{pid}")).exists() {
+            return true;
+        }
+    }
     #[cfg(unix)]
-    unsafe {
-        libc::kill(pid as i32, 0) == 0
+    {
+        let rc = unsafe { libc::kill(pid as i32, 0) };
+        if rc == 0 {
+            return true;
+        }
+        let err = std::io::Error::last_os_error();
+        return err.raw_os_error() == Some(libc::EPERM);
     }
     #[cfg(not(unix))]
     {
@@ -121,6 +171,57 @@ fn is_alive(pid: u32) -> bool {
             .output()
             .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()))
             .unwrap_or(false)
+    }
+}
+
+/// Read field 22 (`starttime` in clock ticks since boot) of
+/// `/proc/<pid>/stat`. Used by [`is_alive_for_info`] to detect a
+/// pid-recycle race where another process now owns the pid we
+/// previously recorded for the session.
+///
+/// `comm` (field 2) may itself contain spaces or parens, so the
+/// only safe way to split is to find the LAST `)` and parse the
+/// post-comm region as whitespace-separated fields. starttime is
+/// field 22, which is index 19 of the post-comm slice (state=0,
+/// ppid=1, …, starttime=19).
+fn read_start_time_ticks(pid: u32) -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let rparen = stat.rfind(')')?;
+        let tail = stat.get(rparen + 1..)?.trim();
+        let fields: Vec<&str> = tail.split_whitespace().collect();
+        // post-comm: state(0) ppid(1) pgrp(2) sid(3) tty(4) tpgid(5)
+        //   flags(6) min(7) cmin(8) maj(9) cmaj(10) utime(11)
+        //   stime(12) cutime(13) cstime(14) prio(15) nice(16)
+        //   nthreads(17) itrealvalue(18) starttime(19)
+        fields.get(19).and_then(|s| s.parse::<u64>().ok())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+/// Aliveness check qualified by start-time identity. If we recorded
+/// the kernel's reported starttime when the session was spawned,
+/// only count the pid as our session if its current starttime
+/// still matches. Otherwise — including the case where the pid was
+/// recycled into a different process — report exited.
+fn is_alive_for_info(info: &SessionInfo) -> bool {
+    if !is_alive(info.pid) {
+        return false;
+    }
+    match info.start_time_ticks {
+        Some(expected) => match read_start_time_ticks(info.pid) {
+            Some(now) => now == expected,
+            // Couldn't read /proc/<pid>/stat (cross-uid, permission
+            // denied, or non-Linux) → fall back to the basic pid
+            // check which already returned true above.
+            None => true,
+        },
+        None => true,
     }
 }
 
@@ -439,6 +540,12 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     let child = cmd.spawn().map_err(|e| format!("failed to spawn: {e}"))?;
 
     let pid = child.id();
+    // Capture the kernel-reported start time IMMEDIATELY after
+    // spawn. Stored on disk in SessionInfo so future aliveness
+    // checks can detect a pid-recycle (kernels reuse pids; if the
+    // start time differs, the pid now refers to a different
+    // process).
+    let start_time_ticks = read_start_time_ticks(pid);
     let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
     let info = SessionInfo {
@@ -458,14 +565,25 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         priority: priority.clone(),
         caps: cap_set.clone(),
         role: role_name.clone(),
+        start_time_ticks,
     };
 
-    let mut reg = load_registry();
-    reg.sessions.push(info);
-    save_registry(&reg);
+    let info_for_registry = info.clone();
+    update_registry(|mut reg| {
+        reg.sessions.push(info_for_registry);
+        reg
+    })?;
 
-    // Detach -- process keeps running after cos exits
-    std::mem::forget(child);
+    // Reap the child in a background thread. Replacing the old
+    // `std::mem::forget(child)` — which left every exited child as
+    // <defunct> in the cos parent's process table — preserves the
+    // detached-spawn semantics (process keeps running after `cos
+    // proc spawn` returns) while freeing the kernel PID slot once
+    // the child exits.
+    thread::spawn(move || {
+        let mut child = child;
+        let _ = child.wait();
+    });
 
     let mut result = json!({
         "session_id": sid,
@@ -521,7 +639,7 @@ fn cmd_status(args: &[String]) -> Result<Value, String> {
         .position(|s| &s.session_id == sid)
         .ok_or_else(|| format!("session not found: {sid}"))?;
 
-    let alive = is_alive(reg.sessions[idx].pid);
+    let alive = is_alive_for_info(&reg.sessions[idx]);
     let status = if alive { "running" } else { "exited" };
 
     // Auto-capture ended_at when process is first detected as dead
@@ -965,7 +1083,7 @@ fn cmd_result(args: &[String]) -> Result<Value, String> {
         .position(|s| &s.session_id == sid)
         .ok_or_else(|| format!("session not found: {sid}"))?;
 
-    let alive = is_alive(reg.sessions[idx].pid);
+    let alive = is_alive_for_info(&reg.sessions[idx]);
     let status = if alive { "running" } else { "exited" };
 
     // Auto-capture ended_at if process is dead and not yet recorded
@@ -1316,4 +1434,74 @@ fn short_id() -> String {
         .unwrap_or_default()
         .as_nanos();
     format!("{:x}", t & 0xFFFFFFFF)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// PID recycle protection: a registry entry with a pid that is
+    /// currently alive but whose recorded `start_time_ticks` does
+    /// not match the kernel's report must be treated as exited.
+    /// Without this check, a recycled pid (e.g. a different
+    /// program that happens to land on the same pid after a wrap)
+    /// would falsely look like "our session still alive" and a
+    /// caller could SIGTERM the wrong process.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn pid_recycle_safe() {
+        // Use the test binary's own pid: definitely alive, and we
+        // can read its real starttime from /proc/<pid>/stat.
+        let real_pid = std::process::id();
+        let real_start = read_start_time_ticks(real_pid)
+            .expect("test must run on Linux with /proc/<pid>/stat readable");
+
+        // 1) Matching start_time → alive.
+        let info_match = SessionInfo {
+            session_id: "s-match".into(),
+            pid: real_pid,
+            command: vec!["cos".into()],
+            started_at: "2026-01-01T00:00:00Z".into(),
+            stdout_path: "/dev/null".into(),
+            stderr_path: "/dev/null".into(),
+            group: None,
+            parent: None,
+            workdir: None,
+            exit_code: None,
+            ended_at: None,
+            tier: None,
+            scope: None,
+            priority: None,
+            caps: None,
+            role: None,
+            start_time_ticks: Some(real_start),
+        };
+        assert!(
+            is_alive_for_info(&info_match),
+            "matching pid + start_time should report alive"
+        );
+
+        // 2) Mismatched start_time (the pid was recycled into a
+        //    different process from the one we recorded) → exited.
+        let info_recycled = SessionInfo {
+            start_time_ticks: Some(real_start.wrapping_add(1_000_000)),
+            ..info_match.clone()
+        };
+        assert!(
+            !is_alive_for_info(&info_recycled),
+            "recycled-pid: start_time mismatch must be reported as exited"
+        );
+
+        // 3) Legacy entry with no recorded start_time → fall back
+        //    to the basic pid check (preserves behaviour for rows
+        //    written by older cos).
+        let info_legacy = SessionInfo {
+            start_time_ticks: None,
+            ..info_match.clone()
+        };
+        assert!(
+            is_alive_for_info(&info_legacy),
+            "legacy entry (no start_time) falls back to pid-only check"
+        );
+    }
 }
