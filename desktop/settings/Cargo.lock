@@ -1130,7 +1130,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
-name = "claw-bridge"
+name = "claw-os-sdk"
 version = "0.1.0"
 dependencies = [
  "base64",
@@ -1368,6 +1368,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cos-runtime"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "claw-os-sdk",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "cosmic-bg-config"
 version = "1.0.3"
 source = "git+https://github.com/pop-os/cosmic-bg#06970d5945b45a634b9ed314f5ca3a86a8502fd8"
@@ -1564,8 +1575,8 @@ dependencies = [
  "bluez-zbus",
  "chrono",
  "clap",
- "claw-bridge",
  "color-eyre",
+ "cos-runtime",
  "cosmic-bg-config",
  "cosmic-comp-config",
  "cosmic-config",
