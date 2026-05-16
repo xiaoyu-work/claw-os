@@ -39,6 +39,19 @@ import subprocess
 from typing import Any, Mapping, Optional
 
 
+# Subprocess timeout for every shell-out to `cos perms check`. A hung
+# child translates to PolicyUnavailable, which the caller can decide
+# to treat as deny or warn-and-continue.
+_DEFAULT_TIMEOUT_S = 60
+
+
+def _truncate(value: Any, limit: int = 200) -> str:
+    s = repr(value) if not isinstance(value, str) else value
+    if len(s) <= limit:
+        return s
+    return s[:limit] + f"... [{len(s) - limit} more bytes elided]"
+
+
 # ---------------------------------------------------------------------------
 # Exceptions
 # ---------------------------------------------------------------------------
@@ -122,12 +135,18 @@ def check(
     cmd = [_cos_binary(), "perms", "check", verb]
     cmd.extend(_scope_flag(path=path, host=host, name=name, self_ref=self_ref, wild=wild))
 
-    proc = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_DEFAULT_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise PolicyUnavailable(
+            f"cos perms check timed out after {_DEFAULT_TIMEOUT_S}s"
+        ) from exc
 
     # The router prints JSON to stdout on success and to stderr on
     # CLI-level errors. We treat both as candidate JSON.
@@ -140,12 +159,21 @@ def check(
         decision = json.loads(payload)
     except json.JSONDecodeError as exc:
         raise PolicyUnavailable(
-            f"cos perms check returned non-JSON output: {payload!r}"
+            f"cos perms check returned non-JSON output: {_truncate(payload)}"
         ) from exc
+
+    # A non-zero exit code is always a transport failure even when
+    # stdout happens to be JSON-shaped — the body might be a partial
+    # response, and silently accepting "decision: allow" from a
+    # crashing kernel is the textbook fail-open vulnerability.
+    if proc.returncode != 0:
+        raise PolicyUnavailable(
+            f"cos perms check exited {proc.returncode}: {_truncate(payload)}"
+        )
 
     if "decision" not in decision:
         raise PolicyUnavailable(
-            f"cos perms check returned an unrecognised envelope: {decision!r}"
+            f"cos perms check returned an unrecognised envelope: {_truncate(decision)}"
         )
     return decision
 

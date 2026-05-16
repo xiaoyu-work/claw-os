@@ -269,5 +269,70 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(out[0]["result"], {})
 
 
+class FrameValidationTests(unittest.TestCase):
+    """Cover the audit-flagged framing bugs: non-object top-level
+    JSON used to crash the serve loop with AttributeError, and an
+    unbounded line read let a peer OOM the server with a single
+    long line."""
+
+    def test_top_level_list_returns_invalid_request(self) -> None:
+        app = serve.App(name="kv")
+        # Hand-craft a list-valued frame instead of using `_drive`'s
+        # dict-only signature.
+        stdin_text = json.dumps([1, 2, 3]) + "\n"
+        real_stdin, real_stdout = sys.stdin, sys.stdout
+        sys.stdin = io.StringIO(stdin_text)
+        sys.stdout = io.StringIO()
+        try:
+            app.serve()
+            sys.stdout.seek(0)
+            out = sys.stdout.read()
+        finally:
+            sys.stdin, sys.stdout = real_stdin, real_stdout
+        frame = json.loads(out.strip())
+        self.assertEqual(frame["error"]["code"], serve.ERR_INVALID_REQUEST)
+        self.assertIsNone(frame["id"])
+
+    def test_top_level_scalar_returns_invalid_request(self) -> None:
+        app = serve.App(name="kv")
+        stdin_text = "42\n"
+        real_stdin, real_stdout = sys.stdin, sys.stdout
+        sys.stdin = io.StringIO(stdin_text)
+        sys.stdout = io.StringIO()
+        try:
+            app.serve()
+            sys.stdout.seek(0)
+            out = sys.stdout.read()
+        finally:
+            sys.stdin, sys.stdout = real_stdin, real_stdout
+        frame = json.loads(out.strip())
+        self.assertEqual(frame["error"]["code"], serve.ERR_INVALID_REQUEST)
+
+    def test_oversize_line_rejected(self) -> None:
+        # Build a single line a hair over the limit. The serve loop
+        # must emit a parse-error frame and continue, not OOM and
+        # not silently truncate. We follow the oversize line with a
+        # well-formed `ping` so we can prove the loop survives.
+        app = serve.App(name="kv")
+        oversize = "x" * (serve.MAX_LINE_BYTES + 16)
+        followup = json.dumps({"jsonrpc": "2.0", "id": 7, "method": "ping"})
+        stdin_text = oversize + "\n" + followup + "\n"
+        real_stdin, real_stdout = sys.stdin, sys.stdout
+        sys.stdin = io.StringIO(stdin_text)
+        sys.stdout = io.StringIO()
+        try:
+            app.serve()
+            sys.stdout.seek(0)
+            out = sys.stdout.read()
+        finally:
+            sys.stdin, sys.stdout = real_stdin, real_stdout
+        frames = [json.loads(l) for l in out.splitlines() if l.strip()]
+        self.assertEqual(len(frames), 2, frames)
+        self.assertEqual(frames[0]["error"]["code"], serve.ERR_PARSE)
+        self.assertIn("exceeds", frames[0]["error"]["message"])
+        self.assertEqual(frames[1]["id"], 7)
+        self.assertEqual(frames[1]["result"], {})
+
+
 if __name__ == "__main__":
     unittest.main()

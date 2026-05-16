@@ -7,6 +7,29 @@
 
 use serde_json;
 
+/// Expected wire-version value emitted by the kernel. The
+/// generated [`Envelope`] type's runtime check accepts only
+/// this constant; anything else is surfaced as an error.
+pub const EXPECTED_WIRE_VERSION: i64 = 1;
+
+/// Verify a deserialised envelope advertises a wire version this
+/// SDK understands. Returns `Err(msg)` on mismatch.
+///
+/// Callers (typically `claw_os_sdk::envelope::Envelope::accept`)
+/// should refuse to interpret the payload further when this
+/// returns Err — a future kernel speaking wire/v2 must be
+/// matched by an SDK that knows that protocol.
+pub fn check_wire_version(seen: i64) -> Result<(), String> {
+    if seen == EXPECTED_WIRE_VERSION {
+        Ok(())
+    } else {
+        Err(format!(
+            "unsupported wire_version: got {}, expected {}",
+            seen, EXPECTED_WIRE_VERSION,
+        ))
+    }
+}
+
 /// AI request / reply
 /// Shape of the data payload returned by `cos ai chat|embed|image-generate`. Apps
 /// call this via SDK helpers (claw_os_sdk.ai.chat / ai.embed /
@@ -105,7 +128,7 @@ pub struct App {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Envelope {
     pub ok: bool,
-    pub wire_version: u8,
+    pub wire_version: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audit_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -192,5 +215,57 @@ pub struct Tool {
     pub result: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audit_id: Option<String>,
+}
+
+/// Reject values outside the ai.verb enum.
+///
+/// The wire schema lists a closed set of allowed values; a kernel
+/// that emits an unknown one should not be silently accepted.
+pub fn validate_ai_verb(value: &str) -> Result<(), String> {
+    const ALLOWED: &[&str] = &["ai.chat", "ai.embed", "ai.image_generate", "ai.tool"];
+    if ALLOWED.iter().any(|a| *a == value) {
+        Ok(())
+    } else {
+        Err(format!("invalid ai.verb value: {value}"))
+    }
+}
+
+/// Reject values outside the ai_review.safety enum.
+///
+/// The wire schema lists a closed set of allowed values; a kernel
+/// that emits an unknown one should not be silently accepted.
+pub fn validate_ai_review_safety(value: &str) -> Result<(), String> {
+    const ALLOWED: &[&str] = &["strict", "balanced", "off"];
+    if ALLOWED.iter().any(|a| *a == value) {
+        Ok(())
+    } else {
+        Err(format!("invalid ai_review.safety value: {value}"))
+    }
+}
+
+/// Reject values outside the manifest.runtime enum.
+///
+/// The wire schema lists a closed set of allowed values; a kernel
+/// that emits an unknown one should not be silently accepted.
+pub fn validate_manifest_runtime(value: &str) -> Result<(), String> {
+    const ALLOWED: &[&str] = &["python", "binary", "node", "go"];
+    if ALLOWED.iter().any(|a| *a == value) {
+        Ok(())
+    } else {
+        Err(format!("invalid manifest.runtime value: {value}"))
+    }
+}
+
+/// Reject values outside the perms.decision enum.
+///
+/// The wire schema lists a closed set of allowed values; a kernel
+/// that emits an unknown one should not be silently accepted.
+pub fn validate_perms_decision(value: &str) -> Result<(), String> {
+    const ALLOWED: &[&str] = &["allow", "deny", "prompt"];
+    if ALLOWED.iter().any(|a| *a == value) {
+        Ok(())
+    } else {
+        Err(format!("invalid perms.decision value: {value}"))
+    }
 }
 

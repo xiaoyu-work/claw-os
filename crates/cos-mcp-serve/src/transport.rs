@@ -20,6 +20,21 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 
+/// Maximum bytes the transport will buffer for a single frame before
+/// surfacing [`TransportError::TooLarge`] and bailing out. Picked to be
+/// comfortably above any realistic MCP frame (tool args, prompts,
+/// embedded JSON-RPC payloads) while keeping a single misbehaving peer
+/// from exhausting the host. 16 MiB matches the SDK-side serve.py
+/// cap so the two ends agree on what an oversize frame looks like.
+pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
+
+/// Capacity of the in-memory channel paired by [`in_memory_pair`].
+/// Bounded so a stalled receiver applies backpressure on the sender
+/// instead of letting both sides grow without limit (the prior
+/// `unbounded_channel` made every test that forgets to drain the
+/// peer an OOM risk).
+pub const PAIR_CHANNEL_CAPACITY: usize = 1024;
+
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
     #[error("transport closed")]
@@ -30,6 +45,11 @@ pub enum TransportError {
     Encode(String),
     #[error("decode: {0}")]
     Decode(String),
+    /// A peer tried to send more than [`MAX_FRAME_BYTES`] of data in a
+    /// single frame. The transport drops the connection rather than
+    /// keep buffering.
+    #[error("frame exceeded {limit} bytes")]
+    TooLarge { limit: usize },
 }
 
 /// One framed JSON message — already serialized (we keep the
@@ -54,8 +74,8 @@ pub trait Transport: Send + Sync + 'static {
 /// `(client_side, server_side)`; messages sent on one are received
 /// on the other.
 pub fn in_memory_pair() -> (InMemoryTransport, InMemoryTransport) {
-    let (a_tx, a_rx) = mpsc::unbounded_channel();
-    let (b_tx, b_rx) = mpsc::unbounded_channel();
+    let (a_tx, a_rx) = mpsc::channel(PAIR_CHANNEL_CAPACITY);
+    let (b_tx, b_rx) = mpsc::channel(PAIR_CHANNEL_CAPACITY);
     let client = InMemoryTransport {
         outgoing: a_tx,
         incoming: Arc::new(Mutex::new(b_rx)),
@@ -68,8 +88,8 @@ pub fn in_memory_pair() -> (InMemoryTransport, InMemoryTransport) {
 }
 
 pub struct InMemoryTransport {
-    outgoing: mpsc::UnboundedSender<Frame>,
-    incoming: Arc<Mutex<mpsc::UnboundedReceiver<Frame>>>,
+    outgoing: mpsc::Sender<Frame>,
+    incoming: Arc<Mutex<mpsc::Receiver<Frame>>>,
 }
 
 #[async_trait]
@@ -77,6 +97,7 @@ impl Transport for InMemoryTransport {
     async fn send(&self, frame: Frame) -> Result<(), TransportError> {
         self.outgoing
             .send(frame)
+            .await
             .map_err(|_| TransportError::Closed)
     }
 
@@ -142,20 +163,80 @@ impl Transport for StdioTransport {
     async fn recv(&self) -> Result<Option<Frame>, TransportError> {
         let mut r = self.reader.lock().await;
         loop {
-            let mut line = String::new();
-            let n = r
-                .read_line(&mut line)
-                .await
-                .map_err(|e| TransportError::Io(e.to_string()))?;
-            if n == 0 {
-                return Ok(None);
+            // Read one frame using AsyncBufRead's fill_buf/consume so
+            // we get the underlying buffered chunks without paying
+            // for a per-byte read syscall. After every chunk we
+            // check against MAX_FRAME_BYTES so a pathological peer
+            // can't drive us OOM by streaming an endless "line".
+            // This replaces the prior `read_line` (no size bound) —
+            // see also the matching SDK-side cap in
+            // claw_os_sdk.serve.MAX_LINE_BYTES.
+            let mut buf: Vec<u8> = Vec::new();
+            loop {
+                // The fill_buf borrow ends inside this inner block,
+                // freeing `r` for the matching `consume` call below.
+                enum ChunkDecision {
+                    Eof,
+                    Newline(usize),
+                    Continue(usize),
+                    TooLarge(usize),
+                }
+                let decision = {
+                    let chunk = r
+                        .fill_buf()
+                        .await
+                        .map_err(|e| TransportError::Io(e.to_string()))?;
+                    if chunk.is_empty() {
+                        ChunkDecision::Eof
+                    } else if let Some(pos) = chunk.iter().position(|&b| b == b'\n') {
+                        if buf.len() + pos > MAX_FRAME_BYTES {
+                            ChunkDecision::TooLarge(pos + 1)
+                        } else {
+                            buf.extend_from_slice(&chunk[..pos]);
+                            ChunkDecision::Newline(pos + 1)
+                        }
+                    } else if buf.len() + chunk.len() > MAX_FRAME_BYTES {
+                        ChunkDecision::TooLarge(chunk.len())
+                    } else {
+                        buf.extend_from_slice(chunk);
+                        ChunkDecision::Continue(chunk.len())
+                    }
+                };
+                match decision {
+                    ChunkDecision::Eof => {
+                        if buf.is_empty() {
+                            return Ok(None);
+                        }
+                        break;
+                    }
+                    ChunkDecision::Newline(advance) => {
+                        r.consume(advance);
+                        break;
+                    }
+                    ChunkDecision::Continue(advance) => {
+                        r.consume(advance);
+                    }
+                    ChunkDecision::TooLarge(advance) => {
+                        r.consume(advance);
+                        return Err(TransportError::TooLarge {
+                            limit: MAX_FRAME_BYTES,
+                        });
+                    }
+                }
             }
-            // Strip trailing newline(s); skip blank-line keepalives.
-            let trimmed = line.trim_end_matches(['\n', '\r']).to_string();
-            if trimmed.trim().is_empty() {
+            if buf.last() == Some(&b'\r') {
+                buf.pop();
+            }
+            let line = match String::from_utf8(buf) {
+                Ok(s) => s,
+                Err(e) => {
+                    return Err(TransportError::Decode(format!("invalid utf-8: {e}")))
+                }
+            };
+            if line.trim().is_empty() {
                 continue;
             }
-            return Ok(Some(trimmed));
+            return Ok(Some(line));
         }
     }
 }
@@ -249,5 +330,44 @@ mod tests {
 
         let frame = server.recv().await.unwrap();
         assert!(frame.is_none(), "EOF must surface as Ok(None)");
+    }
+
+    /// A peer that streams more than [`MAX_FRAME_BYTES`] without a
+    /// newline must trip the size guard rather than letting us
+    /// buffer endlessly. Regression test for the prior unbounded
+    /// `read_line`.
+    #[tokio::test(flavor = "current_thread")]
+    async fn stdio_transport_rejects_oversize_frame() {
+        let (mut cli_in_w, srv_in) = tokio::io::duplex(64 * 1024);
+        let (srv_out, _cli_out_r) = tokio::io::duplex(4096);
+        let server = StdioTransport::from_pair(Box::new(srv_in), Box::new(srv_out));
+
+        use tokio::io::AsyncWriteExt;
+        // Use a small chunk repeatedly so we don't block on the
+        // duplex's own buffer; recv() reads byte-by-byte so the
+        // bytes drain as we feed them.
+        let chunk = vec![b'a'; 64 * 1024];
+        let writer = tokio::spawn(async move {
+            let need = MAX_FRAME_BYTES + 16;
+            let mut written = 0;
+            while written < need {
+                let to_write = std::cmp::min(chunk.len(), need - written);
+                if cli_in_w.write_all(&chunk[..to_write]).await.is_err() {
+                    return;
+                }
+                written += to_write;
+            }
+            let _ = cli_in_w.flush().await;
+            // Hold the write half open until the test reads the
+            // error so tokio doesn't surface a premature EOF.
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        });
+
+        let err = server.recv().await.unwrap_err();
+        assert!(
+            matches!(err, TransportError::TooLarge { limit } if limit == MAX_FRAME_BYTES),
+            "expected TooLarge, got {err:?}",
+        );
+        writer.abort();
     }
 }

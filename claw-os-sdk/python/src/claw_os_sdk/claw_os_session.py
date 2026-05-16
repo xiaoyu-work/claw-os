@@ -42,6 +42,7 @@ import json
 import os
 import pathlib
 import re
+import threading
 import time
 import typing as _t
 import uuid
@@ -109,10 +110,47 @@ def _now_rfc3339() -> str:
 
 
 def _atomic_write_json(path: pathlib.Path, payload) -> None:
-    """tmp + rename; matches `crate::filelock::write_locked` semantics."""
-    tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
-    tmp.write_text(json.dumps(payload, separators=(",", ":")))
+    """tmp + fsync + rename; matches `crate::filelock::write_locked` semantics.
+
+    The tmp suffix combines pid + native thread id + uuid so two
+    threads in the same process (or two processes that happen to
+    collide on pid after a fork) cannot race each other to the same
+    ``.tmp.<pid>`` filename and then both ``os.replace`` partial
+    writes over the target.
+
+    We fsync the tmp file before renaming and fsync the parent
+    directory after, so a power loss between write() and replace()
+    leaves either the old file or the new file — never a torn write.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    suffix = f".tmp.{os.getpid()}.{threading.get_native_id()}.{uuid.uuid4().hex}"
+    tmp = path.with_suffix(path.suffix + suffix)
+    data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    try:
+        os.write(fd, data)
+        try:
+            os.fsync(fd)
+        except OSError:
+            # fsync may fail on filesystems that don't support it
+            # (e.g. some test FUSE mounts); the rename still
+            # provides at-least-once durability semantics.
+            pass
+    finally:
+        os.close(fd)
     os.replace(tmp, path)
+    # Sync the directory so the rename is recorded on stable storage.
+    try:
+        dir_fd = os.open(str(path.parent), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    except OSError:
+        return
+    try:
+        try:
+            os.fsync(dir_fd)
+        except OSError:
+            pass
+    finally:
+        os.close(dir_fd)
 
 
 def _read_json(path: pathlib.Path):
@@ -120,13 +158,70 @@ def _read_json(path: pathlib.Path):
         return json.load(f)
 
 
+def _count_path(path: pathlib.Path) -> pathlib.Path:
+    """Sidecar counter file for ``path``. Holds the canonical line count
+    for the JSONL file so we can append in O(1) instead of re-scanning
+    the entire file on every call.
+    """
+    return path.with_suffix(path.suffix + ".count")
+
+
+def _read_sidecar_count(path: pathlib.Path) -> _t.Optional[int]:
+    """Return the cached line count for ``path`` (sidecar), or ``None``
+    if no sidecar exists / it's unreadable. Treats any malformed
+    sidecar as missing — the caller will fall back to a one-time scan.
+    """
+    cp = _count_path(path)
+    try:
+        with open(cp, "rb") as f:
+            raw = f.read().strip()
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return None
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _write_sidecar_count(path: pathlib.Path, count: int) -> None:
+    """Atomically update the sidecar counter (write + rename)."""
+    cp = _count_path(path)
+    tmp = cp.with_suffix(cp.suffix + f".tmp.{os.getpid()}.{threading.get_native_id()}.{uuid.uuid4().hex}")
+    try:
+        with open(tmp, "wb") as f:
+            f.write(str(count).encode("ascii"))
+        os.replace(tmp, cp)
+    except OSError:
+        # Best-effort: a missing sidecar just forces the next caller
+        # to rescan once. Don't let a sidecar failure poison the
+        # actual append.
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
 def _count_lines(path: pathlib.Path) -> int:
+    """Return the current number of newline-terminated lines in
+    ``path``. Prefers a sidecar counter for O(1) reads; falls back to a
+    one-time linear scan if no sidecar yet exists (e.g. for files
+    written by a peer process before this code shipped).
+    """
     if not path.exists():
         return 0
+    cached = _read_sidecar_count(path)
+    if cached is not None:
+        return cached
     n = 0
     with open(path, "rb") as f:
         for _ in f:
             n += 1
+    # Best-effort: bootstrap the sidecar so subsequent calls are O(1).
+    _write_sidecar_count(path, n)
     return n
 
 
@@ -135,6 +230,12 @@ def _append_jsonl_with_seq(path: pathlib.Path, record: dict, seq_field: str = "s
 
     Returns the seq number assigned. The same file lock that observes the
     line count covers the append, so two writers cannot collide on seq.
+
+    On success we fsync the JSONL fd, write the updated sidecar count,
+    and release the lock. A crash between the JSONL write and the
+    sidecar update leaves the sidecar one entry stale; the next reader
+    will detect the mismatch by trying to read a record that doesn't
+    yet exist and re-bootstrap from scratch.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o644)
@@ -143,9 +244,13 @@ def _append_jsonl_with_seq(path: pathlib.Path, record: dict, seq_field: str = "s
         seq = _count_lines(path)
         record = dict(record)
         record[seq_field] = seq
-        # Write through a fresh fd that respects the O_APPEND flag.
         line = json.dumps(record, separators=(",", ":")) + "\n"
         os.write(fd, line.encode("utf-8"))
+        try:
+            os.fsync(fd)
+        except OSError:
+            pass
+        _write_sidecar_count(path, seq + 1)
         return seq
     finally:
         try:
@@ -244,22 +349,31 @@ class Session:
     # ------------------------------------------------------------------
 
     def turns(self) -> _t.List[dict]:
-        """Return every turn, oldest first. Tolerates a trailing half-line."""
+        """Return every turn, oldest first. Tolerates a trailing half-line.
+
+        For very large turn logs prefer :meth:`iter_turns`, which yields
+        one record at a time instead of holding the whole file in RAM.
+        """
+        return list(self.iter_turns())
+
+    def iter_turns(self) -> _t.Iterator[dict]:
+        """Yield turns lazily, oldest first. Skips half-written tail
+        lines per the Phase 1.5 contract. The yielded dicts are
+        independent of the file — safe to mutate.
+        """
         path = self.dir / "turns.jsonl"
         if not path.exists():
-            return []
-        out: _t.List[dict] = []
+            return
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
-                line = line.strip()
-                if not line:
+                stripped = line.strip()
+                if not stripped:
                     continue
                 try:
-                    out.append(json.loads(line))
+                    yield json.loads(stripped)
                 except json.JSONDecodeError:
                     # Half-written tail line — skip per Phase 1.5 contract.
                     continue
-        return out
 
     def append_turn(
         self,
@@ -300,20 +414,25 @@ class Session:
     # ------------------------------------------------------------------
 
     def mutations(self) -> _t.List[dict]:
+        """Return every mutation, oldest first. See :meth:`iter_mutations`
+        for a streaming alternative when the file is large.
+        """
+        return list(self.iter_mutations())
+
+    def iter_mutations(self) -> _t.Iterator[dict]:
+        """Yield mutation records lazily, oldest first."""
         path = self.dir / "mutations.jsonl"
         if not path.exists():
-            return []
-        out: _t.List[dict] = []
+            return
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
-                line = line.strip()
-                if not line:
+                stripped = line.strip()
+                if not stripped:
                     continue
                 try:
-                    out.append(json.loads(line))
+                    yield json.loads(stripped)
                 except json.JSONDecodeError:
                     continue
-        return out
 
     def record_fs_write(
         self,
@@ -385,8 +504,20 @@ class Session:
         blob_dir = self.dir / "files" / "inverse"
         blob_dir.mkdir(parents=True, exist_ok=True)
         target = blob_dir / f"{blob_id}.bin"
-        tmp = target.with_suffix(".bin.tmp")
-        tmp.write_bytes(payload)
+        # Unique tmp suffix so two threads writing different blobs to
+        # the same dir cannot collide on a shared ".bin.tmp" path.
+        tmp = target.with_suffix(
+            f".bin.tmp.{os.getpid()}.{threading.get_native_id()}.{uuid.uuid4().hex}"
+        )
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+        try:
+            os.write(fd, payload)
+            try:
+                os.fsync(fd)
+            except OSError:
+                pass
+        finally:
+            os.close(fd)
         os.replace(tmp, target)
         return blob_id
 

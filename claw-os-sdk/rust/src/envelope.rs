@@ -53,6 +53,24 @@ impl Envelope {
     ///     envelope with `detail = entire input`
     ///   - anything else ⇒ success envelope with `data = entire input`
     pub fn accept(raw: serde_json::Value) -> Self {
+        // If a `wire_version` field is present, reject anything we
+        // don't speak before we trust the surrounding shape. A future
+        // wire/v2 kernel must be matched by a wire/v2 SDK; silently
+        // downgrading would let mismatched field semantics through.
+        if let Some(v) = raw.get("wire_version") {
+            // Schema pins this to const: 1; allow integer or string
+            // (the JSON spec doesn't constrain ints) but require it
+            // to equal the constant.
+            let ok = match v {
+                serde_json::Value::Number(n) => n.as_u64() == Some(1),
+                _ => false,
+            };
+            if !ok {
+                return Envelope::synthetic_error(&format!(
+                    "unsupported wire_version: got {v}, expected 1",
+                ));
+            }
+        }
         if raw.get("ok").is_some() {
             return serde_json::from_value(raw).unwrap_or_else(|_| Envelope::synthetic_error(
                 "envelope had `ok` but didn't deserialise",

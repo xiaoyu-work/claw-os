@@ -60,6 +60,7 @@ need background work, keep an internal task table and return task ids.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import sys
@@ -71,11 +72,21 @@ from typing import Any, Callable, Dict, List, Optional
 PROTOCOL_VERSION = "2025-06-18"
 JSONRPC_VERSION = "2.0"
 
+# Wire-version reported by the kernel; must match wire/v1/envelope.schema.json.
+EXPECTED_WIRE_VERSION = 1
+
 ERR_PARSE = -32700
 ERR_INVALID_REQUEST = -32600
 ERR_METHOD_NOT_FOUND = -32601
 ERR_INVALID_PARAMS = -32602
 ERR_INTERNAL = -32603
+
+# Cap any single inbound JSON-RPC frame at 16 MiB. A peer (buggy debug
+# client, fuzz harness, malicious caller) that sends a single 4 GB line
+# without a newline would otherwise allocate the entire frame in RAM
+# before json.loads even sees it. 16 MiB is comfortably above MCP's
+# realistic per-frame ceiling (largest tools/list payloads are < 1 MiB).
+MAX_LINE_BYTES = 16 * 1024 * 1024
 
 
 @dataclass
@@ -153,12 +164,29 @@ class App:
         and writing replies to stdout. Returns when stdin reaches EOF.
         Notifications produce no reply; everything else gets exactly
         one envelope per inbound request.
+
+        Lines are capped at :data:`MAX_LINE_BYTES` (16 MiB). A peer
+        emitting an over-sized frame gets a single parse-error response
+        and we drain its bytes up to the next newline before continuing,
+        so one bad frame can't poison the rest of the session.
         """
-        for line in sys.stdin:
-            line = line.strip()
-            if not line:
+        reader = _wrap_stdin_for_bounded_lines(sys.stdin)
+        while True:
+            line, overflowed = _read_bounded_line(reader, MAX_LINE_BYTES)
+            if not line and not overflowed:
+                # EOF — stop the serve loop.
+                return
+            if overflowed:
+                self._send_error(
+                    None,
+                    ERR_PARSE,
+                    f"frame exceeds {MAX_LINE_BYTES} bytes; rejected",
+                )
                 continue
-            self._handle_line(line)
+            stripped = line.strip()
+            if not stripped:
+                continue
+            self._handle_line(stripped)
 
     # ---- per-frame dispatch -----------------------------------------
 
@@ -169,7 +197,15 @@ class App:
             # Parse errors get a null-id response per JSON-RPC.
             self._send_error(None, ERR_PARSE, f"parse error: {e}")
             return
-        if not isinstance(msg, dict) or msg.get("jsonrpc") != JSONRPC_VERSION:
+        # JSON allows scalars / arrays at the top level; the JSON-RPC
+        # framing requires an object. Reject anything else before we
+        # try to look up fields on it — otherwise `msg.get("id")` on a
+        # list / int / string raises AttributeError and crashes the
+        # whole serve() loop.
+        if not isinstance(msg, dict):
+            self._send_error(None, ERR_INVALID_REQUEST, "request not an object")
+            return
+        if msg.get("jsonrpc") != JSONRPC_VERSION:
             self._send_error(msg.get("id"), ERR_INVALID_REQUEST, "missing jsonrpc 2.0 envelope")
             return
 
@@ -308,3 +344,81 @@ def _text_result(text: str, *, is_error: bool) -> Dict[str, Any]:
         "content": [{"type": "text", "text": text}],
         "isError": is_error,
     }
+
+
+def _wrap_stdin_for_bounded_lines(stream: Any) -> Any:
+    """Return an object that supports ``readline()``. We prefer the raw
+    buffered binary stream behind :data:`sys.stdin` so we can enforce a
+    byte-level cap (a 4 GB UTF-8 sequence is still 4 GB whether or not
+    the text layer would have decoded it).
+
+    Tests that swap in an :class:`io.StringIO` are also supported — we
+    fall through to the original stream in that case.
+    """
+    buffered = getattr(stream, "buffer", None)
+    if buffered is not None:
+        return buffered
+    return stream
+
+
+def _read_bounded_line(reader: Any, limit: int) -> tuple[str, bool]:
+    """Read one newline-terminated line from ``reader``, capped at
+    ``limit`` bytes.
+
+    Returns ``(text, overflowed)``:
+
+      * ``("", False)`` at EOF.
+      * ``(text, False)`` for any line within the cap (newline stripped).
+      * ``("", True)`` if the line exceeds ``limit``; in that case we
+        drain bytes up to the next newline (still bounded) so a single
+        oversize frame doesn't poison the rest of the stream.
+
+    Works for both binary buffered streams (production) and text
+    streams (tests inject :class:`io.StringIO`).
+    """
+    # Binary path — preferred in production. The buffer attribute on
+    # sys.stdin is typically a BufferedReader.
+    if hasattr(reader, "read1") or isinstance(reader, (io.RawIOBase, io.BufferedIOBase)):
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            byte = reader.read(1)
+            if not byte:
+                if chunks:
+                    return b"".join(chunks).decode("utf-8", errors="replace"), False
+                return "", False
+            if byte == b"\n":
+                return b"".join(chunks).decode("utf-8", errors="replace"), False
+            total += 1
+            if total > limit:
+                # Drain the rest of this line, still bounded, so we
+                # land cleanly at the next frame boundary.
+                drained = 0
+                while drained < limit:
+                    b = reader.read(1)
+                    if not b or b == b"\n":
+                        break
+                    drained += 1
+                return "", True
+            chunks.append(byte)
+    # Text-stream fallback — used by tests.
+    text_chunks: list[str] = []
+    total = 0
+    while True:
+        ch = reader.read(1)
+        if not ch:
+            if text_chunks:
+                return "".join(text_chunks), False
+            return "", False
+        if ch == "\n":
+            return "".join(text_chunks), False
+        total += len(ch.encode("utf-8", errors="replace"))
+        if total > limit:
+            drained = 0
+            while drained < limit:
+                c = reader.read(1)
+                if not c or c == "\n":
+                    break
+                drained += len(c.encode("utf-8", errors="replace"))
+            return "", True
+        text_chunks.append(ch)

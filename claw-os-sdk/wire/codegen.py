@@ -16,7 +16,9 @@ dependency. It handles the subset of JSON Schema used by wire/v1:
   - primitive types: string, integer, number, boolean
   - arrays (with `items`)
   - `enum` ⇒ becomes a string with a doc-listed allow-list (kept loose to
-    stay forward-compatible with kernel additions)
+    stay forward-compatible with kernel additions). For Rust/Python/Go we
+    additionally emit a runtime validator so a server emitting an
+    out-of-spec value can be detected, not silently accepted.
   - `const` (used for the wire_version field)
   - $defs / $ref for in-file definitions
   - oneOf (rendered as JsonValue / Any / unknown / any)
@@ -39,6 +41,11 @@ RUST_OUT = ROOT / "rust" / "src" / "generated.rs"
 PY_OUT   = ROOT / "python" / "src" / "claw_os_sdk" / "generated.py"
 TS_OUT   = ROOT / "node" / "src" / "generated.ts"
 GO_OUT   = ROOT / "go" / "generated.go"
+
+# Wire protocol version. All schemas pin `wire_version: { const: 1 }`
+# in envelope.schema.json; we re-export the constant from each language
+# binding so consumers have a single source of truth at runtime.
+EXPECTED_WIRE_VERSION = 1
 
 BANNER_LINES = [
     "DO NOT EDIT BY HAND.",
@@ -63,6 +70,37 @@ def _snake(name: str) -> str:
     return "".join(out).replace("-", "_")
 
 
+def _is_scalar_schema(schema: dict) -> bool:
+    """Return True when the schema describes a scalar (string / number /
+    integer / boolean). Used by the Go emitter to decide whether
+    ``omitempty`` will actually do anything for an optional field.
+    Go's ``omitempty`` is a no-op on non-pointer struct values: a
+    zero-valued struct still serialises as ``{}``, which silently
+    diverges from what the other SDKs emit. For non-scalar optional
+    fields we emit a pointer type instead.
+    """
+    if "$ref" in schema:
+        return False
+    if "oneOf" in schema or "anyOf" in schema:
+        # Rendered as `interface{}` which is already a reference type.
+        return True
+    if "const" in schema:
+        return True
+    t = schema.get("type")
+    if isinstance(t, list):
+        return True
+    if t in ("string", "integer", "number", "boolean"):
+        return True
+    # Arrays in Go are slices (already nil-zero), and maps likewise —
+    # `omitempty` works for them. Only inline object structs ("type":
+    # "object" with properties) need a pointer wrapper.
+    if t == "array":
+        return True
+    if t == "object" and "properties" not in schema:
+        return True
+    return False
+
+
 def load_schemas() -> list[tuple[str, dict]]:
     schemas: list[tuple[str, dict]] = []
     for path in sorted(WIRE_DIR.glob("*.schema.json")):
@@ -81,13 +119,33 @@ def rust_type(schema: dict, defs: dict, ctx: str) -> str:
     if "oneOf" in schema or "anyOf" in schema:
         return "serde_json::Value"
     if "const" in schema:
-        return "u8" if isinstance(schema["const"], int) else "String"
+        v = schema["const"]
+        if isinstance(v, bool):
+            return "bool"
+        if isinstance(v, int):
+            # Default to i64 — narrowing to u8 silently corrupts any
+            # future const integer > 255 (a build number, an HTTP
+            # status, etc.). Only emit the smaller type when the schema
+            # explicitly constrains the value into a u8 range.
+            mn = schema.get("minimum")
+            mx = schema.get("maximum")
+            if mn is not None and mx is not None and 0 <= mn and mx <= 255:
+                return "u8"
+            return "i64"
+        return "String"
     t = schema.get("type")
     if isinstance(t, list):
         return "serde_json::Value"
     if t == "string":
         return "String"
     if t == "integer":
+        # No const, no bounds → i64 is the universally-safe default for
+        # wire integers. Schemas that need a smaller type can declare
+        # `minimum`/`maximum` and we'll narrow accordingly.
+        mn = schema.get("minimum")
+        mx = schema.get("maximum")
+        if mn is not None and mx is not None and 0 <= mn and mx <= 255:
+            return "u8"
         return "i64"
     if t == "number":
         return "f64"
@@ -101,26 +159,6 @@ def rust_type(schema: dict, defs: dict, ctx: str) -> str:
             return _camel(ctx)
         return "serde_json::Value"
     return "serde_json::Value"
-
-
-def _collect_nested(name: str, schema: dict, acc: list[tuple[str, dict]]) -> None:
-    """Walk properties / items and collect anonymous nested objects.
-
-    Each entry produced has a fully-qualified ctx name (e.g. ``ai_usage``)
-    matching what ``*_type`` helpers compute, so emitters can generate
-    matching standalone struct / interface definitions for them.
-    """
-    props = schema.get("properties", {})
-    for pname, pschema in props.items():
-        ctx = f"{name}_{pname}"
-        if pschema.get("type") == "object" and "properties" in pschema:
-            acc.append((ctx, pschema))
-            _collect_nested(ctx, pschema, acc)
-        elif pschema.get("type") == "array":
-            items = pschema.get("items", {})
-            if items.get("type") == "object" and "properties" in items:
-                acc.append((ctx, items))
-                _collect_nested(ctx, items, acc)
 
 
 def rust_struct(name: str, schema: dict, defs: dict, out: list[str]) -> None:
@@ -165,6 +203,30 @@ def emit_rust(schemas: list[tuple[str, dict]]) -> str:
     body.append("")
     body.append("use serde_json;")
     body.append("")
+    body.append(f"/// Expected wire-version value emitted by the kernel. The")
+    body.append(f"/// generated [`Envelope`] type's runtime check accepts only")
+    body.append(f"/// this constant; anything else is surfaced as an error.")
+    body.append(f"pub const EXPECTED_WIRE_VERSION: i64 = {EXPECTED_WIRE_VERSION};")
+    body.append("")
+    body.append("/// Verify a deserialised envelope advertises a wire version this")
+    body.append("/// SDK understands. Returns `Err(msg)` on mismatch.")
+    body.append("///")
+    body.append("/// Callers (typically `claw_os_sdk::envelope::Envelope::accept`)")
+    body.append("/// should refuse to interpret the payload further when this")
+    body.append("/// returns Err — a future kernel speaking wire/v2 must be")
+    body.append("/// matched by an SDK that knows that protocol.")
+    body.append("pub fn check_wire_version(seen: i64) -> Result<(), String> {")
+    body.append("    if seen == EXPECTED_WIRE_VERSION {")
+    body.append("        Ok(())")
+    body.append("    } else {")
+    body.append("        Err(format!(")
+    body.append("            \"unsupported wire_version: got {}, expected {}\",")
+    body.append("            seen, EXPECTED_WIRE_VERSION,")
+    body.append("        ))")
+    body.append("    }")
+    body.append("}")
+    body.append("")
+    enum_validators: list[tuple[str, str, list]] = []
     for name, schema in schemas:
         rust_struct(name, schema, schema.get("$defs", {}), body)
         nested: list[tuple[str, dict]] = []
@@ -173,7 +235,55 @@ def emit_rust(schemas: list[tuple[str, dict]]) -> str:
             rust_struct(nname, nschema, schema.get("$defs", {}), body)
         for def_name, def_schema in schema.get("$defs", {}).items():
             rust_struct(def_name, def_schema, {}, body)
+        _collect_enum_validators(name, schema, enum_validators)
+        for nname, nschema in nested:
+            _collect_enum_validators(nname, nschema, enum_validators)
+    for parent, field_name, values in enum_validators:
+        fn = f"validate_{_snake(parent)}_{_snake(field_name)}"
+        body.append(f"/// Reject values outside the {parent}.{field_name} enum.")
+        body.append("///")
+        body.append("/// The wire schema lists a closed set of allowed values; a kernel")
+        body.append("/// that emits an unknown one should not be silently accepted.")
+        body.append(f"pub fn {fn}(value: &str) -> Result<(), String> {{")
+        rendered = ", ".join(f'"{v}"' for v in values)
+        body.append(f"    const ALLOWED: &[&str] = &[{rendered}];")
+        body.append("    if ALLOWED.iter().any(|a| *a == value) {")
+        body.append("        Ok(())")
+        body.append("    } else {")
+        body.append(f"        Err(format!(\"invalid {parent}.{field_name} value: {{value}}\"))")
+        body.append("    }")
+        body.append("}")
+        body.append("")
     return "\n".join(body) + "\n"
+
+
+def _collect_nested(name: str, schema: dict, acc: list[tuple[str, dict]]) -> None:
+    """Walk properties / items and collect anonymous nested objects.
+
+    Each entry produced has a fully-qualified ctx name (e.g. ``ai_usage``)
+    matching what ``*_type`` helpers compute, so emitters can generate
+    matching standalone struct / interface definitions for them.
+    """
+    props = schema.get("properties", {})
+    for pname, pschema in props.items():
+        ctx = f"{name}_{pname}"
+        if pschema.get("type") == "object" and "properties" in pschema:
+            acc.append((ctx, pschema))
+            _collect_nested(ctx, pschema, acc)
+        elif pschema.get("type") == "array":
+            items = pschema.get("items", {})
+            if items.get("type") == "object" and "properties" in items:
+                acc.append((ctx, items))
+                _collect_nested(ctx, items, acc)
+
+
+def _collect_enum_validators(parent: str, schema: dict, acc: list) -> None:
+    """Collect (parent, field, values) tuples for every string `enum`
+    property — used to emit per-language runtime validators."""
+    props = schema.get("properties", {})
+    for pname, pschema in props.items():
+        if pschema.get("type") == "string" and "enum" in pschema:
+            acc.append((parent, pname, list(pschema["enum"])))
 
 
 # --- python ------------------------------------------------------------
@@ -185,7 +295,12 @@ def py_type(schema: dict, defs: dict, ctx: str) -> str:
     if "oneOf" in schema or "anyOf" in schema:
         return "Any"
     if "const" in schema:
-        return "int" if isinstance(schema["const"], int) else "str"
+        v = schema["const"]
+        if isinstance(v, bool):
+            return "bool"
+        if isinstance(v, int):
+            return "int"
+        return "str"
     t = schema.get("type")
     if isinstance(t, list):
         return "Any"
@@ -238,8 +353,30 @@ def emit_python(schemas: list[tuple[str, dict]]) -> str:
     body.append("")
     body.append("from __future__ import annotations")
     body.append("")
-    body.append("from typing import Any, Dict, List, TypedDict")
+    body.append("from typing import Any, Dict, List, Mapping, TypedDict")
     body.append("")
+    body.append(f"# Wire-version value the kernel must advertise. See")
+    body.append(f"# wire/v1/envelope.schema.json.")
+    body.append(f"EXPECTED_WIRE_VERSION = {EXPECTED_WIRE_VERSION}")
+    body.append("")
+    body.append("")
+    body.append("def check_wire_version(envelope: Mapping[str, object]) -> None:")
+    body.append('    """Raise :class:`ValueError` if the envelope advertises a wire')
+    body.append('    version this SDK does not understand. Returns ``None`` on')
+    body.append('    success; callers that prefer non-raising semantics can wrap')
+    body.append('    this in ``try``.')
+    body.append("")
+    body.append("    Mirrors the Rust ``generated::check_wire_version`` helper so")
+    body.append("    a future wire/v2 kernel never gets silently downgraded by a")
+    body.append("    wire/v1 SDK.")
+    body.append('    """')
+    body.append('    seen = envelope.get("wire_version")')
+    body.append("    if seen != EXPECTED_WIRE_VERSION:")
+    body.append("        raise ValueError(")
+    body.append("            f\"unsupported wire_version: got {seen!r}, expected {EXPECTED_WIRE_VERSION}\"")
+    body.append("        )")
+    body.append("")
+    enum_validators: list[tuple[str, str, list]] = []
     for name, schema in schemas:
         py_typed_dict(name, schema, schema.get("$defs", {}), body)
         nested: list[tuple[str, dict]] = []
@@ -248,6 +385,18 @@ def emit_python(schemas: list[tuple[str, dict]]) -> str:
             py_typed_dict(nname, nschema, schema.get("$defs", {}), body)
         for def_name, def_schema in schema.get("$defs", {}).items():
             py_typed_dict(def_name, def_schema, {}, body)
+        _collect_enum_validators(name, schema, enum_validators)
+        for nname, nschema in nested:
+            _collect_enum_validators(nname, nschema, enum_validators)
+    for parent, field_name, values in enum_validators:
+        fn = f"validate_{_snake(parent)}_{_snake(field_name)}"
+        body.append("")
+        body.append(f"def {fn}(value: str) -> None:")
+        body.append(f"    \"\"\"Raise ValueError if value is not in the {parent}.{field_name}")
+        body.append(f"    enum. Mirrors generated::{fn}.\"\"\"")
+        body.append(f"    allowed = {values!r}")
+        body.append("    if value not in allowed:")
+        body.append(f"        raise ValueError(f\"invalid {parent}.{field_name} value: {{value!r}}\")")
     body.append("")
     return "\n".join(body) + "\n"
 
@@ -262,13 +411,20 @@ def ts_type(schema: dict, defs: dict, ctx: str) -> str:
         return "unknown"
     if "const" in schema:
         v = schema["const"]
-        return repr(v) if isinstance(v, str) else str(v)
+        if isinstance(v, bool):
+            return "true" if v else "false"
+        if isinstance(v, int):
+            return str(v)
+        # Emit a JSON-style double-quoted string literal. Python's
+        # `repr` would produce single quotes (`'foo'`) which TypeScript
+        # accepts but diverges from what the other generators emit.
+        return json.dumps(v)
     t = schema.get("type")
     if isinstance(t, list):
         return "unknown"
     if t == "string":
         if "enum" in schema:
-            return " | ".join(f'"{e}"' for e in schema["enum"])
+            return " | ".join(json.dumps(e) for e in schema["enum"])
         return "string"
     if t == "integer" or t == "number":
         return "number"
@@ -310,6 +466,8 @@ def emit_ts(schemas: list[tuple[str, dict]]) -> str:
         body.append("// " + line)
     body.append("")
     body.append("/* eslint-disable */")
+    body.append("")
+    body.append(f"export const EXPECTED_WIRE_VERSION = {EXPECTED_WIRE_VERSION} as const;")
     body.append("")
     for name, schema in schemas:
         ts_interface(name, schema, schema.get("$defs", {}), body)
@@ -365,7 +523,16 @@ def go_struct(name: str, schema: dict, defs: dict, out: list[str]) -> None:
     out.append(f"type {_camel(name)} struct {{")
     for pname, pschema in props.items():
         ty = go_type(pschema, defs, f"{name}_{pname}")
-        omit = "" if pname in required else ",omitempty"
+        is_required = pname in required
+        omit = "" if is_required else ",omitempty"
+        # Go's `omitempty` is a no-op on non-pointer struct values: a
+        # zero-valued nested struct still serialises as `{}`, which
+        # diverges from what the Python/Rust/TS SDKs emit (they omit
+        # the field entirely). For optional object-type fields we emit
+        # a pointer (`*T`) so `omitempty` actually skips the key when
+        # the field is `nil`.
+        if not is_required and not _is_scalar_schema(pschema):
+            ty = f"*{ty}"
         field = "".join(p.capitalize() for p in pname.replace("-", "_").split("_"))
         out.append(f'\t{field} {ty} `json:"{pname}{omit}"`')
     out.append("}")
@@ -380,6 +547,23 @@ def emit_go(schemas: list[tuple[str, dict]]) -> str:
     body.append("")
     body.append("package clawossdk")
     body.append("")
+    body.append("import \"fmt\"")
+    body.append("")
+    body.append(f"// ExpectedWireVersion is the wire-protocol version the kernel must")
+    body.append(f"// advertise on every envelope. Mirrors generated.rs's")
+    body.append(f"// EXPECTED_WIRE_VERSION.")
+    body.append(f"const ExpectedWireVersion = {EXPECTED_WIRE_VERSION}")
+    body.append("")
+    body.append("// CheckWireVersion reports an error when the envelope's")
+    body.append("// wire_version does not match what this SDK supports.")
+    body.append("func CheckWireVersion(seen int) error {")
+    body.append("\tif seen != ExpectedWireVersion {")
+    body.append("\t\treturn fmt.Errorf(\"unsupported wire_version: got %d, expected %d\", seen, ExpectedWireVersion)")
+    body.append("\t}")
+    body.append("\treturn nil")
+    body.append("}")
+    body.append("")
+    enum_validators: list[tuple[str, str, list]] = []
     for name, schema in schemas:
         go_struct(name, schema, schema.get("$defs", {}), body)
         nested: list[tuple[str, dict]] = []
@@ -388,6 +572,21 @@ def emit_go(schemas: list[tuple[str, dict]]) -> str:
             go_struct(nname, nschema, schema.get("$defs", {}), body)
         for def_name, def_schema in schema.get("$defs", {}).items():
             go_struct(def_name, def_schema, {}, body)
+        _collect_enum_validators(name, schema, enum_validators)
+        for nname, nschema in nested:
+            _collect_enum_validators(nname, nschema, enum_validators)
+    for parent, field_name, values in enum_validators:
+        fn = f"Validate{_camel(parent)}{_camel(field_name)}"
+        body.append(f"// {fn} reports an error if value is not in the {parent}.{field_name} enum.")
+        body.append(f"func {fn}(value string) error {{")
+        body.append("\tswitch value {")
+        rendered = ", ".join(json.dumps(v) for v in values)
+        body.append(f"\tcase {rendered}:")
+        body.append("\t\treturn nil")
+        body.append("\t}")
+        body.append(f"\treturn fmt.Errorf(\"invalid {parent}.{field_name} value: %q\", value)")
+        body.append("}")
+        body.append("")
     return "\n".join(body)
 
 

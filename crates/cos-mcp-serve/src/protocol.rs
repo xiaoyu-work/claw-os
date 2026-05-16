@@ -24,14 +24,19 @@ pub const JSONRPC_VERSION: &str = "2.0";
 /// when MCP releases a new dated version we have validated.
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 
-/// Either a numeric or string request id. JSON-RPC 2.0 allows both;
-/// notifications omit the field entirely (handled at the envelope
-/// level via `Option<RequestId>`).
+/// Either a numeric, string, or null request id. JSON-RPC 2.0 allows
+/// all three; notifications omit the field entirely (handled at the
+/// envelope level via `Option<RequestId>`). Null is reserved by the
+/// spec for responses whose request id could not be determined — e.g.
+/// the request didn't parse as JSON or arrived without an id — so we
+/// MUST be able to emit it on error frames without collapsing it onto
+/// the request namespace (Num(0) silently aliases legitimate id=0).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum RequestId {
     Num(i64),
     Str(String),
+    Null,
 }
 
 impl From<i64> for RequestId {
@@ -301,8 +306,20 @@ pub struct CallToolResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentItem {
-    Text { text: String },
-    Image { data: String, mime_type: String },
+    Text {
+        text: String,
+    },
+    Image {
+        data: String,
+        // MCP spec uses camelCase `mimeType`. The struct-level
+        // `rename_all = "snake_case"` only renames the variant
+        // discriminator, not the inner fields, so we have to apply
+        // the rename explicitly. Without this the field was emitted
+        // as `mime_type` and Claude Desktop / Cursor silently
+        // dropped images attached to tool results.
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+    },
 }
 
 #[cfg(test)]
