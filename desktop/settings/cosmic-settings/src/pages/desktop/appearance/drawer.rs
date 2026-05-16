@@ -23,8 +23,6 @@ use super::{
 
 pub struct Content {
     context_view: Option<ContextView>,
-    pub custom_accent: ColorPickerModel,
-    pub accent_window_hint: ColorPickerModel,
     pub application_background: ColorPickerModel,
     pub container_background: ColorPickerModel,
     pub interface_text: ColorPickerModel,
@@ -85,12 +83,6 @@ impl From<&theme_manager::Manager> for Content {
             .unwrap_or_default();
         Self {
             context_view: None,
-            custom_accent: ColorPickerModel::new(
-                &*HEX,
-                &*RGB,
-                None,
-                theme_manager.get_color(&ContextView::CustomAccent),
-            ),
             application_background: ColorPickerModel::new(
                 &*HEX,
                 &*RGB,
@@ -114,12 +106,6 @@ impl From<&theme_manager::Manager> for Content {
                 &*RGB,
                 Some(theme.palette.neutral_5.into()),
                 theme_manager.get_color(&ContextView::ControlComponent),
-            ),
-            accent_window_hint: ColorPickerModel::new(
-                &*HEX,
-                &*RGB,
-                None,
-                theme_manager.get_color(&ContextView::AccentWindowHint),
             ),
             font_config: font_config::Model::new(),
             icons_fetched: false,
@@ -201,12 +187,10 @@ impl Content {
         }
 
         tasks.push(match *context_view {
-            ContextView::CustomAccent => self.custom_accent.update(message),
             ContextView::ApplicationBackground => self.application_background.update(message),
             ContextView::ContainerBackground => self.container_background.update(message),
             ContextView::InterfaceText => self.interface_text.update(message),
             ContextView::ControlComponent => self.control_component.update(message),
-            ContextView::AccentWindowHint => self.accent_window_hint.update(message),
             _ => return needs_update,
         });
 
@@ -317,12 +301,10 @@ impl Content {
     // Returns None if the context view is not associated to any color picker.
     pub fn current_color(&self, context_view: &ContextView) -> Option<Color> {
         match *context_view {
-            ContextView::CustomAccent => self.custom_accent.get_applied_color(),
             ContextView::ApplicationBackground => self.application_background.get_applied_color(),
             ContextView::ContainerBackground => self.container_background.get_applied_color(),
             ContextView::InterfaceText => self.interface_text.get_applied_color(),
             ContextView::ControlComponent => self.control_component.get_applied_color(),
-            ContextView::AccentWindowHint => self.accent_window_hint.get_applied_color(),
             _ => None,
         }
     }
@@ -333,12 +315,6 @@ impl Content {
             &*RGB,
             Some(manager.theme().background.base.into()),
             manager.get_color(&ContextView::ApplicationBackground),
-        );
-        self.custom_accent = ColorPickerModel::new(
-            &*HEX,
-            &*RGB,
-            None,
-            manager.get_color(&ContextView::CustomAccent),
         );
         self.container_background = ColorPickerModel::new(
             &*HEX,
@@ -358,12 +334,6 @@ impl Content {
             Some(manager.theme().palette.neutral_5.into()),
             manager.get_color(&ContextView::ControlComponent),
         );
-        self.accent_window_hint = ColorPickerModel::new(
-            &*HEX,
-            &*RGB,
-            None,
-            manager.get_color(&ContextView::AccentWindowHint),
-        );
     }
 
     pub fn context_drawer(
@@ -371,18 +341,6 @@ impl Content {
         context_view: Option<ContextView>,
     ) -> Option<ContextDrawer<'_, crate::pages::Message>> {
         Some(match context_view? {
-            ContextView::AccentWindowHint => context_drawer(
-                color_picker_context_view(
-                    None,
-                    RESET_TO_DEFAULT.as_str().into(),
-                    Message::DrawerColor,
-                    &self.accent_window_hint,
-                )
-                .map(crate::pages::Message::Appearance),
-                crate::pages::Message::CloseContextDrawer,
-            )
-            .title(fl!("window-hint-accent")),
-
             ContextView::ApplicationBackground => context_drawer(
                 color_picker_context_view(
                     None,
@@ -418,18 +376,6 @@ impl Content {
                 crate::pages::Message::CloseContextDrawer,
             )
             .title(fl!("control-tint")),
-
-            ContextView::CustomAccent => context_drawer(
-                color_picker_context_view(
-                    None,
-                    RESET_TO_DEFAULT.as_str().into(),
-                    Message::DrawerColor,
-                    &self.custom_accent,
-                )
-                .map(crate::pages::Message::Appearance),
-                crate::pages::Message::CloseContextDrawer,
-            )
-            .title(fl!("accent-color")),
 
             ContextView::InterfaceText => context_drawer(
                 color_picker_context_view(

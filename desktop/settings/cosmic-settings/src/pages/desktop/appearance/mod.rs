@@ -15,7 +15,6 @@ use cosmic::app::ContextDrawer;
 //TODO: use embedded cosmic-files for portability
 use cosmic::config::CosmicTk;
 use cosmic::cosmic_config::{Config, ConfigSet, CosmicConfigEntry};
-use cosmic::cosmic_theme::palette::{FromColor, Hsv, Srgb};
 use cosmic::cosmic_theme::{CornerRadii, Density, ThemeBuilder, ThemeMode};
 #[cfg(feature = "xdg-portal")]
 use cosmic::dialog::file_chooser::{self, FileFilter};
@@ -36,13 +35,11 @@ use crate::app;
 
 #[derive(Clone, Copy, Debug)]
 pub enum ContextView {
-    AccentWindowHint,
     ApplicationBackground,
     ContainerBackground,
     ControlComponent,
     #[cfg(feature = "cosmic-comp-config")]
     ShadowAndCorners,
-    CustomAccent,
     IconsAndToolkit,
     InterfaceText,
     MonospaceFont,
@@ -147,14 +144,12 @@ pub enum Message {
     #[cfg(feature = "xdg-portal")]
     ImportSuccess(Box<ThemeBuilder>),
     Left,
-    PaletteAccent(cosmic::iced::Color),
     Reset,
     Roundness(Roundness),
     #[cfg(feature = "xdg-portal")]
     StartExport,
     #[cfg(feature = "xdg-portal")]
     StartImport,
-    UseDefaultWindowHint(bool),
     WindowHintSize(u32),
     Daytime(bool),
 }
@@ -310,13 +305,6 @@ impl Page {
             }
 
             Message::Left => {}
-
-            Message::PaletteAccent(c) => {
-                theme_staged = self
-                    .theme_manager
-                    .selected_customizer_mut()
-                    .set_accent(Some(Srgb::from(c)));
-            }
 
             Message::Reset => {
                 let theme_type = self.theme_manager.cosmic_theme().theme_type;
@@ -509,39 +497,6 @@ impl Page {
                 return cosmic::task::future(async move {
                     app::Message::SetTheme(cosmic::theme::system_preference())
                 });
-            }
-
-            Message::UseDefaultWindowHint(v) => {
-                if v {
-                    let _ = self
-                        .theme_manager
-                        .selected_customizer_mut()
-                        .set_window_hint(None)
-                        .is_some_and(|_| true);
-                    return Task::none();
-                }
-
-                let window_hint = self
-                    .theme_manager
-                    .builder()
-                    .window_hint
-                    .or(self.theme_manager.builder().accent);
-
-                _ = self.drawer.accent_window_hint.update::<app::Message>(
-                    ColorPickerUpdate::ActiveColor(Hsv::from_color(
-                        window_hint.unwrap_or_default(),
-                    )),
-                );
-
-                _ = self
-                    .drawer
-                    .accent_window_hint
-                    .update::<app::Message>(ColorPickerUpdate::AppliedColor);
-
-                theme_staged = self
-                    .theme_manager
-                    .selected_customizer_mut()
-                    .set_window_hint(window_hint);
             }
 
             Message::Daytime(day_time) => {
