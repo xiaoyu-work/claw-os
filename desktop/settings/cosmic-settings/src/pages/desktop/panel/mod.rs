@@ -75,7 +75,19 @@ impl Default for Page {
     fn default() -> Self {
         let config_helper = CosmicPanelConfig::cosmic_config("Panel").ok();
         let panel_config = config_helper.as_ref().and_then(|config_helper| {
-            let panel_config = CosmicPanelConfig::get_entry(config_helper).ok()?;
+            let panel_config = match CosmicPanelConfig::get_entry(config_helper) {
+                Ok(c) => c,
+                Err((errs, c)) => {
+                    // ClawOS: do not collapse the entire page to "Reset to Default"
+                    // when a single field is missing from the system default schema —
+                    // fall back to the partial result (which has every field that
+                    // *was* readable, plus Default::default() for the missing ones).
+                    for err in errs.into_iter().filter(cosmic_config::Error::is_err) {
+                        tracing::error!(?err, "Failed to load Panel config field.");
+                    }
+                    c
+                }
+            };
             // If the config is not present, it will be created with the default values and the name will not match
             (panel_config.name == "Panel").then_some(panel_config)
         });
