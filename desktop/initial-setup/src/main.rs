@@ -5,7 +5,8 @@ use std::any::TypeId;
 use std::path::Path;
 
 use cosmic::app::{Core, Settings, Task};
-use cosmic::iced::{Alignment, Length, Limits, Subscription};
+use cosmic::iced::{Alignment, Background, Border, Color, ContentFit, Length, Limits, Shadow, Subscription};
+use cosmic::widget::container;
 use cosmic::{Application, Apply, Element, cosmic_theme, executor, theme, widget};
 use futures::channel::mpsc::Sender;
 use futures::{SinkExt, Stream, StreamExt};
@@ -97,7 +98,19 @@ pub struct App {
     page_i: usize,
     oem_mode: bool,
     wifi_exists: bool,
+    /// Wallpaper for the wizard background, when one is available on disk.
+    /// Loaded once at init from the system default path; absence (e.g. in
+    /// a stripped-down build) just falls back to a solid theme background.
+    wallpaper: Option<widget::image::Handle>,
 }
+
+/// System paths to probe for a wizard background. First hit wins. Kept in
+/// /usr/share/backgrounds/cosmic/ which the `desktop/wallpapers` Makefile
+/// already installs into.
+const WIZARD_WALLPAPER_PATHS: &[&str] = &[
+    "/usr/share/backgrounds/cosmic/claw-default.jpg",
+    "/usr/share/backgrounds/cosmic/claw-default.png",
+];
 
 /// Implement [`Application`] to integrate with COSMIC.
 impl Application for App {
@@ -134,6 +147,11 @@ impl Application for App {
             pages: page::pages(mode),
             page_i: 0,
             wifi_exists: true, // TODO: Detect
+            wallpaper: WIZARD_WALLPAPER_PATHS
+                .iter()
+                .map(Path::new)
+                .find(|p| p.exists())
+                .map(widget::image::Handle::from_path),
         };
 
         let tasks = app
@@ -416,7 +434,10 @@ impl Application for App {
             .apply(widget::container)
             .height(Length::Fill);
 
-        widget::column::with_capacity(7)
+        // The wizard content column — title, page body, navigation buttons.
+        // Wrapped in a translucent rounded "frosted-glass" panel that floats
+        // over the wallpaper instead of the previous full-bleed black surface.
+        let card = widget::column::with_capacity(7)
             .push(widget::space::vertical().height(space_xl))
             .push(title)
             .push(widget::space::vertical().height(space_l))
@@ -428,8 +449,51 @@ impl Application for App {
             .width(page.width())
             .align_x(Alignment::Center)
             .apply(widget::container)
+            .padding([0, space_xl])
+            .class(theme::Container::custom(|theme| {
+                let cosmic = theme.cosmic();
+                let corners = cosmic.corner_radii;
+                // base = solid bg color; we knock the alpha down to ~55% so
+                // the wallpaper bleeds through while widgets inside still
+                // read clearly. Border + soft shadow give the panel an edge
+                // so it doesn't melt into the photo.
+                let mut bg: Color = cosmic.background.base.into();
+                bg.a = 0.55;
+                let mut border_color: Color = cosmic.background.divider.into();
+                border_color.a = 0.45;
+                container::Style {
+                    text_color: Some(cosmic.background.on.into()),
+                    icon_color: Some(cosmic.background.on.into()),
+                    background: Some(Background::Color(bg)),
+                    border: Border {
+                        radius: corners.radius_l.into(),
+                        width: 1.0,
+                        color: border_color,
+                    },
+                    shadow: Shadow {
+                        color: Color { r: 0.0, g: 0.0, b: 0.0, a: 0.25 },
+                        offset: cosmic::iced::Vector { x: 0.0, y: 6.0 },
+                        blur_radius: 24.0,
+                    },
+                    snap: true,
+                }
+            }));
+
+        let centered = widget::container(card)
             .center_x(Length::Fill)
-            .into()
+            .center_y(Length::Fill)
+            .padding(space_l);
+
+        match &self.wallpaper {
+            Some(handle) => {
+                let bg = widget::image(handle.clone())
+                    .content_fit(ContentFit::Cover)
+                    .width(Length::Fill)
+                    .height(Length::Fill);
+                cosmic::iced::widget::stack![bg, centered].into()
+            }
+            None => centered.into(),
+        }
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {
