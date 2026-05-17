@@ -263,7 +263,9 @@ impl Embedder for Qwen3GenaiEmbedder {
     }
 
     fn is_configured(&self) -> bool {
-        self.model_dir.exists() && self.model_dir.join("genai_config.json").exists()
+        self.model_dir.exists()
+            && self.model_dir.join("genai_config.json").exists()
+            && crate::model::engines::ort_genai::is_installed()
     }
 
     async fn embed(&self, request: EmbedRequest) -> Result<EmbedResponse, EmbedError> {

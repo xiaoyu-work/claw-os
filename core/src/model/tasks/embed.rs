@@ -47,9 +47,8 @@ pub const MODEL_NAME: &str = "text-embedding-3-small";
 
 /// Build the configured embedder, if any. Returns `Ok(None)` when
 /// embedding is disabled (`provider="none"`) or when `provider="auto"`
-/// but the main `[agent]` provider isn't OpenAI-shape (so there's
-/// nothing safe to derive from). Returns an error if the config
-/// block names a provider that does not exist.
+/// but the bundled local Qwen3 stack is not available. Returns an
+/// error if the config block names a provider that does not exist.
 pub fn build_default() -> Result<Option<Box<dyn Embedder>>, String> {
     let cfg = &crate::config::get().embed;
     build_from(cfg)
@@ -60,22 +59,24 @@ pub fn build_from(cfg: &EmbedConfig) -> Result<Option<Box<dyn Embedder>>, String
 }
 
 /// Variant of [`build_from`] that takes the `[agent]` config
-/// explicitly. Lets tests exercise the `provider="auto"` derivation
-/// path without depending on global config state.
+/// explicitly. Lets tests exercise the `provider="agent-auto"` path
+/// without depending on global config state.
 pub fn build_from_with_agent(
     cfg: &EmbedConfig,
     agent: &crate::config::AgentConfig,
 ) -> Result<Option<Box<dyn Embedder>>, String> {
     match cfg.provider.as_str() {
         "none" => Ok(None),
-        // Derive from the user's main agent provider when possible.
-        // No extra setup required — the embedder reuses the chat
-        // credentials + base_url. Azure users may need to create a
-        // separate embedding deployment named `text-embedding-3-small`
-        // (or override `[embed].model`); on a missing deployment the
-        // upstream returns 404 which surfaces as a `warn!` per
-        // attempted index — never fatal.
-        "auto" | "" => derive_from_agent(cfg, agent),
+        // Default path: use the bundled local Qwen3 embedding stack
+        // when the image includes both the model and the ort-genai
+        // runtime. Linux arm64 builds currently skip that stack because
+        // upstream does not publish a Linux arm64 CPU runtime; those
+        // systems return None here so setup can ask the user to choose
+        // an embedding provider explicitly.
+        "auto" | "" => system_local_default(cfg),
+        // Compatibility escape hatch for users who deliberately want the
+        // old "derive embeddings from my chat provider" behaviour.
+        "agent-auto" => derive_from_agent(cfg, agent),
         // Every OpenAI-API-shape backend (OpenAI / Azure / Ollama / vLLM /
         // TGI / LMStudio) shares one impl — switch behaviour via base_url.
         // `azure` differs only in the auth header style (`api-key:` instead
@@ -91,12 +92,27 @@ pub fn build_from_with_agent(
     }
 }
 
+fn system_local_default(cfg: &EmbedConfig) -> Result<Option<Box<dyn Embedder>>, String> {
+    let mut local_cfg = cfg.clone();
+    local_cfg.provider = "local".to_string();
+    let embedder = super::qwen3_genai::build_from_config(&local_cfg);
+    if embedder.is_configured() {
+        Ok(Some(Box::new(embedder)))
+    } else {
+        tracing::debug!(
+            "embed: provider=auto but bundled local Qwen3 embedding stack is unavailable — embeddings require explicit setup"
+        );
+        Ok(None)
+    }
+}
+
 /// Build an embedder by inheriting credentials + base_url from the
-/// main `[agent]` block. Returns `Ok(None)` when the main provider
+/// main `[agent]` block. Used by explicit `provider="agent-auto"`.
+/// Returns `Ok(None)` when the main provider
 /// doesn't speak the OpenAI `/embeddings` shape (mock / anthropic /
 /// gemini / bedrock / etc.). Explicit fields on `cfg` (model,
 /// api_key_credential, api_key_env, base_url) win over the derived
-/// values — so users can keep `provider="auto"` while pointing the
+/// values — so users can keep `provider="agent-auto"` while pointing the
 /// embedder at a separate Azure deployment via `[embed].model`.
 fn derive_from_agent(
     cfg: &EmbedConfig,
@@ -106,7 +122,7 @@ fn derive_from_agent(
         "openai" | "azure" | "xai" | "deepseek" | "openrouter" | "ollama" => &agent.provider,
         _ => {
             tracing::debug!(
-                "embed: [embed].provider=auto and main agent provider={} is not OpenAI-shape — auto-indexing skipped (set [embed].provider explicitly to enable)",
+                "embed: [embed].provider=agent-auto and main agent provider={} is not OpenAI-shape — auto-indexing skipped (set [embed].provider explicitly to enable)",
                 agent.provider
             );
             return Ok(None);
@@ -145,7 +161,7 @@ fn derive_from_agent(
             derived.model = MODEL_NAME.to_string();
         } else {
             return Err(format!(
-                "embed: [embed].model is required when [embed].provider=auto \
+                "embed: [embed].model is required when [embed].provider=agent-auto \
                  (provider={alias}); set `model = \"<embedding model name>\"` \
                  explicitly under [embed]"
             ));
@@ -406,6 +422,18 @@ mod tests {
     }
 
     #[test]
+    fn build_auto_returns_none_when_local_stack_missing() {
+        let mut c = EmbedConfig::default();
+        c.model_dir = Some(
+            std::env::temp_dir()
+                .join("cos-test-missing-qwen3-embedding-stack")
+                .display()
+                .to_string(),
+        );
+        assert!(build_from(&c).unwrap().is_none());
+    }
+
+    #[test]
     fn build_returns_err_for_unknown_provider() {
         let mut c = EmbedConfig::default();
         c.provider = "magic".into();
@@ -438,13 +466,14 @@ mod tests {
         assert_eq!(e.endpoint(), "https://api.openai.com/v1/embeddings");
     }
 
-    /// Auto-derive: `[embed].provider = "auto"` (the default) reads
+    /// Agent auto-derive: `[embed].provider = "agent-auto"` reads
     /// the main agent provider and builds an OpenAI-compat embedder
     /// when the alias is compatible. Inherits base_url + credentials
     /// from `[agent]`.
     #[test]
-    fn build_auto_derives_from_openai_main() {
-        let mut embed_cfg = EmbedConfig::default(); // provider == "auto"
+    fn build_agent_auto_derives_from_openai_main() {
+        let mut embed_cfg = EmbedConfig::default();
+        embed_cfg.provider = "agent-auto".into();
         embed_cfg.model = String::new();
         let mut agent = crate::config::AgentConfig::default();
         agent.provider = "openai".into();
@@ -452,21 +481,22 @@ mod tests {
         agent.api_key_env = Some("OPENAI_API_KEY".into());
 
         let built = build_from_with_agent(&embed_cfg, &agent)
-            .expect("auto-derive ok")
+            .expect("agent-auto derive ok")
             .expect("openai main → some");
         assert_eq!(built.name(), "openai");
         assert_eq!(built.model(), MODEL_NAME);
     }
 
-    /// Auto-derive against an Azure agent without an explicit
+    /// Agent auto-derive against an Azure agent without an explicit
     /// `[embed].model` is now an explicit error (audit fix): the
     /// OpenAI canonical name `text-embedding-3-small` does not exist
     /// as an Azure deployment, so silently substituting it would
     /// produce a confusing 404 at runtime rather than a clear
     /// configuration error.
     #[test]
-    fn build_auto_derives_from_azure_main() {
-        let mut embed_cfg = EmbedConfig::default(); // provider == "auto"
+    fn build_agent_auto_derives_from_azure_main() {
+        let mut embed_cfg = EmbedConfig::default();
+        embed_cfg.provider = "agent-auto".into();
         embed_cfg.model = String::new();
         let mut agent = crate::config::AgentConfig::default();
         agent.provider = "azure".into();
@@ -492,29 +522,31 @@ mod tests {
         assert_eq!(built.model(), "my-azure-embed-deployment");
     }
 
-    /// Auto-derive against a non-OpenAI-shape provider (mock /
+    /// Agent auto-derive against a non-OpenAI-shape provider (mock /
     /// anthropic / gemini / bedrock) silently returns `None` —
     /// embedding stays off and the runtime continues without
     /// semantic memory.
     #[test]
-    fn build_auto_returns_none_for_mock_main() {
-        let embed_cfg = EmbedConfig::default(); // provider == "auto"
+    fn build_agent_auto_returns_none_for_mock_main() {
+        let mut embed_cfg = EmbedConfig::default();
+        embed_cfg.provider = "agent-auto".into();
         let agent = crate::config::AgentConfig::default(); // provider == "mock"
         assert!(build_from_with_agent(&embed_cfg, &agent).unwrap().is_none());
     }
 
-    /// Auto-derive against an unsupported main provider also returns
+    /// Agent auto-derive against an unsupported main provider also returns
     /// `None` (rather than erroring) so misconfigured users still
     /// get a working agent.
     #[test]
-    fn build_auto_returns_none_for_anthropic_main() {
-        let embed_cfg = EmbedConfig::default(); // provider == "auto"
+    fn build_agent_auto_returns_none_for_anthropic_main() {
+        let mut embed_cfg = EmbedConfig::default();
+        embed_cfg.provider = "agent-auto".into();
         let mut agent = crate::config::AgentConfig::default();
         agent.provider = "anthropic".into();
         assert!(build_from_with_agent(&embed_cfg, &agent).unwrap().is_none());
     }
 
-    /// Explicit `provider = "none"` always wins over auto-derive:
+    /// Explicit `provider = "none"` always wins over agent auto-derive:
     /// users who want embeddings off get them off.
     #[test]
     fn build_explicit_none_still_wins_over_main() {

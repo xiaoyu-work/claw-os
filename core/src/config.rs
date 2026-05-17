@@ -444,18 +444,20 @@ pub struct McpServerConfig {
 }
 
 /// Embedding service configuration. Reads from `[embed]` block.
-/// `provider="auto"` (the default) derives the embedder from the
-/// main `[agent]` provider when it speaks an OpenAI-compatible
-/// `/embeddings` shape (openai / azure / xai / deepseek / openrouter
-/// / ollama). `provider="none"` disables embeddings explicitly.
+/// `provider="auto"` (the default) uses the bundled local Qwen3
+/// embedding stack when the image ships both the model and the
+/// `ort-genai` runtime. `provider="none"` disables embeddings
+/// explicitly; `provider="agent-auto"` derives the embedder from the
+/// main `[agent]` provider for users who want cloud embeddings to reuse
+/// their chat credentials.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbedConfig {
-    /// `"auto"` (default — derive from `[agent]` when possible) |
+    /// `"auto"` (default — bundled local Qwen3 when available) |
+    /// `"agent-auto"` (derive from `[agent]` when possible) |
     /// `"none"` (explicit off) | `"openai"` | `"azure"` | `"ollama"` |
     /// `"qwen3-local"` | other self-hosted alias. When `"auto"` and
-    /// the main agent provider isn't OpenAI-shape (e.g. `mock`,
-    /// `anthropic`, `gemini`, `bedrock`), the embedder is silently
-    /// disabled with a `debug!` log line.
+    /// the bundled local stack is absent, embeddings are disabled until
+    /// the user runs `cos agent setup embed`.
     #[serde(default = "default_embed_provider")]
     pub provider: String,
 

@@ -1260,6 +1260,62 @@ mod media {
     }
 }
 
+const LOCAL_EMBED_PROVIDER: &str = "local";
+const LOCAL_EMBED_MODEL: &str = "qwen3-embedding-0.6b";
+
+fn is_embed_spec(spec: &media::ModalitySpec) -> bool {
+    spec.name == "embed"
+}
+
+fn is_local_embed_provider(provider: &str) -> bool {
+    matches!(provider, "local" | "qwen3-local")
+}
+
+fn local_embed_config_from_snapshot(
+    snap: &Value,
+    model: Option<&str>,
+) -> crate::config::EmbedConfig {
+    let mut cfg = crate::config::EmbedConfig::default();
+    cfg.provider = LOCAL_EMBED_PROVIDER.to_string();
+    cfg.model = model
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(LOCAL_EMBED_MODEL)
+        .to_string();
+    cfg.model_dir = snap
+        .get("model_dir")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    cfg
+}
+
+fn local_embed_precheck(snap: &Value, model: Option<&str>) -> Result<(), String> {
+    let cfg = local_embed_config_from_snapshot(snap, model);
+    crate::model::tasks::qwen3_genai::precheck(&cfg)
+}
+
+fn local_embed_unavailable_details(err: &str) -> String {
+    if std::env::consts::OS == "linux" && std::env::consts::ARCH == "aarch64" {
+        format!(
+            "{err}. Linux arm64 builds do not bundle the local Qwen3 embedding stack because upstream ort-genai has no Linux arm64 CPU runtime yet; configure another embedding provider."
+        )
+    } else {
+        format!(
+            "{err}. Configure another embedding provider or install the local model and ort-genai runtime."
+        )
+    }
+}
+
+fn default_provider_for(spec: &media::ModalitySpec) -> &'static str {
+    if is_embed_spec(spec) && local_embed_precheck(&json!({}), None).is_err() {
+        "openai"
+    } else {
+        spec.default_provider
+    }
+}
+
 /// Run the wizard for one media modality (TTS / STT / ImageGen / Embed).
 fn wizard_media(spec: &'static media::ModalitySpec, verify_after: bool) -> Result<Value, String> {
     if !std::io::stdin().is_terminal() {
@@ -1280,9 +1336,10 @@ fn wizard_media(spec: &'static media::ModalitySpec, verify_after: bool) -> Resul
     let _ = writeln!(e);
 
     // ---- Step 1: provider ------------------------------------------------
+    let default_provider = default_provider_for(spec);
     let _ = writeln!(e, "Available providers:");
     for (i, p) in spec.providers.iter().enumerate() {
-        let marker = if p.name == spec.default_provider { " (default)" } else { "" };
+        let marker = if p.name == default_provider { " (default)" } else { "" };
         let _ = writeln!(e, "  {}. {:12} — {}{}", i + 1, p.name, p.label, marker);
     }
     let _ = writeln!(e, "  0. none — skip (clear this modality)");
@@ -1292,7 +1349,7 @@ fn wizard_media(spec: &'static media::ModalitySpec, verify_after: bool) -> Resul
         spec.providers.len(),
         spec.providers
             .iter()
-            .position(|p| p.name == spec.default_provider)
+            .position(|p| p.name == default_provider)
             .map(|i| (i + 1).to_string())
             .unwrap_or_else(|| "1".into())
     );
@@ -1301,7 +1358,7 @@ fn wizard_media(spec: &'static media::ModalitySpec, verify_after: bool) -> Resul
     let picked_idx: usize = if raw.is_empty() {
         spec.providers
             .iter()
-            .position(|p| p.name == spec.default_provider)
+            .position(|p| p.name == default_provider)
             .map(|i| i + 1)
             .unwrap_or(1)
     } else {
@@ -1325,6 +1382,16 @@ fn wizard_media(spec: &'static media::ModalitySpec, verify_after: bool) -> Resul
         ));
     }
     let provider = &spec.providers[picked_idx - 1];
+    if is_embed_spec(spec) && is_local_embed_provider(provider.name) {
+        if let Err(err) = local_embed_precheck(&json!({}), None) {
+            return Err(json!({
+                "error": "local embedding stack unavailable",
+                "details": local_embed_unavailable_details(&err),
+                "fix": "cos agent setup embed",
+            })
+            .to_string());
+        }
+    }
 
     // ---- Step 2: model ---------------------------------------------------
     let _ = writeln!(e);
@@ -1579,18 +1646,44 @@ fn status_media(modality: Modality) -> Value {
         _ => return json!({"error": "not a media modality"}),
     };
     let snap = media::snapshot(spec.config_block);
-    let raw_provider = snap.get("provider").and_then(|s| s.as_str()).unwrap_or("").to_string();
-    // For `embed`, the serde default is `"auto"` (derive the embedder
-    // from the main `[agent]` provider). An empty / missing on-disk
-    // value is therefore equivalent to `"auto"`, not `"none"`.
-    let provider = if matches!(modality, Modality::Embed) && raw_provider.is_empty() {
-        crate::config::get().embed.provider.clone()
-    } else if raw_provider.is_empty() {
-        "none".to_string()
+    let raw_provider = snap
+        .get("provider")
+        .and_then(|s| s.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let embed_auto = matches!(modality, Modality::Embed)
+        && raw_provider
+            .as_deref()
+            .map(|p| p == "auto")
+            .unwrap_or(true);
+    let auto_local_precheck = if embed_auto {
+        Some(local_embed_precheck(&snap, None))
     } else {
-        raw_provider
+        None
     };
-    let model = snap.get("model").and_then(|s| s.as_str()).unwrap_or("").to_string();
+    let provider = if embed_auto {
+        if auto_local_precheck
+            .as_ref()
+            .is_some_and(|result| result.is_ok())
+        {
+            LOCAL_EMBED_PROVIDER.to_string()
+        } else {
+            "none".to_string()
+        }
+    } else if let Some(provider) = raw_provider {
+        provider
+    } else {
+        "none".to_string()
+    };
+    let mut model = snap.get("model").and_then(|s| s.as_str()).unwrap_or("").to_string();
+    if model.is_empty() {
+        if matches!(modality, Modality::Embed) && is_local_embed_provider(&provider) {
+            model = LOCAL_EMBED_MODEL.to_string();
+        } else if let Some(choice) = spec.providers.iter().find(|p| p.name == provider) {
+            model = choice.default_model.to_string();
+        }
+    }
     let credential = snap.get("api_key_credential").and_then(|s| s.as_str()).map(|s| s.to_string());
     let env = snap.get("api_key_env").and_then(|s| s.as_str()).map(|s| s.to_string());
     let base_url_raw = snap.get("base_url").and_then(|s| s.as_str()).map(|s| s.to_string());
@@ -1612,33 +1705,36 @@ fn status_media(modality: Modality) -> Value {
     } else {
         false
     };
-    // `embed` has a special `"auto"` provider that derives the
-    // embedder from the main `[agent]` config. It's ready iff the
-    // derivation actually produces an embedder (the main provider
-    // is OpenAI-shape).
-    //
     // `reason` is emitted as a structured envelope (`error` /
     // `details` / `fix`) matching the shape the cosmic-settings UI
     // expects in [`ErrorEnvelope`]. `status_llm` (line 568) emits the
     // same shape via `is_ready`; emitting a plain string here used to
     // make every media settings page fail with "invalid status JSON:
     // invalid type: string, expected struct ErrorEnvelope".
-    let (ready, reason): (bool, Value) = if matches!(modality, Modality::Embed)
-        && provider == "auto"
-    {
-        let derived = crate::model::tasks::embed::build_default().ok().flatten();
-        match derived {
-            Some(_) => (true, Value::Null),
-            None => (
+    let (ready, reason): (bool, Value) = if embed_auto && provider == "none" {
+        let details = auto_local_precheck
+            .and_then(Result::err)
+            .map(|err| local_embed_unavailable_details(&err))
+            .unwrap_or_else(|| {
+                "The bundled local embedding stack is not available; configure an embedding provider.".to_string()
+            });
+        (
+            false,
+            json!({
+                "error": "embedding not configured",
+                "details": details,
+                "fix": "cos agent setup embed",
+            }),
+        )
+    } else if matches!(modality, Modality::Embed) && is_local_embed_provider(&provider) {
+        match local_embed_precheck(&snap, Some(&model)) {
+            Ok(()) => (true, Value::Null),
+            Err(err) => (
                 false,
                 json!({
-                    "error": "auto-derivation not supported",
-                    "details": format!(
-                        "`embed.provider=auto` but main agent provider `{}` is not \
-                         OpenAI-compatible — auto-derivation skipped.",
-                        crate::config::get().agent.provider
-                    ),
-                    "fix": format!("cos agent setup {}", spec.name),
+                    "error": "local embedding stack unavailable",
+                    "details": local_embed_unavailable_details(&err),
+                    "fix": "cos agent setup embed",
                 }),
             ),
         }
@@ -1866,6 +1962,7 @@ fn providers_media(modality: Modality) -> Value {
         Modality::Embed => media::embed_spec(),
         _ => return json!({"error": "not a media modality"}),
     };
+    let default_provider = default_provider_for(spec);
     let provs: Vec<Value> = spec
         .providers
         .iter()
@@ -1888,7 +1985,7 @@ fn providers_media(modality: Modality) -> Value {
         .collect();
     json!({
         "modality": spec.name,
-        "default_provider": spec.default_provider,
+        "default_provider": default_provider,
         "providers": provs,
     })
 }
@@ -2305,6 +2402,16 @@ fn apply_media(
         .to_string();
     if model.is_empty() {
         return Err("--model cannot be empty".into());
+    }
+    if is_embed_spec(spec) && is_local_embed_provider(provider.name) {
+        if let Err(err) = local_embed_precheck(&json!({}), Some(&model)) {
+            return Err(json!({
+                "error": "local embedding stack unavailable",
+                "details": local_embed_unavailable_details(&err),
+                "fix": "cos agent setup embed",
+            })
+            .to_string());
+        }
     }
 
     let resolved_base_url = resolve_base_url_args(
@@ -3424,6 +3531,89 @@ mod tests {
                 m.name()
             );
         }
+
+        std::env::remove_var("COS_CONFIG_PATH");
+        std::fs::remove_dir_all(&tmp_dir).ok();
+    }
+
+    #[test]
+    fn status_embed_auto_prompts_when_local_stack_missing() {
+        let _g = env_lock();
+        let tmp_dir = std::env::temp_dir()
+            .join(format!("cos-setup-test-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+        let cfg_path = tmp_dir.join("config.json");
+        let missing_model_dir = tmp_dir.join("missing-qwen3");
+        std::env::set_var("COS_CONFIG_PATH", &cfg_path);
+        std::fs::write(
+            &cfg_path,
+            json!({
+                "embed": {
+                    "provider": "auto",
+                    "model_dir": missing_model_dir.display().to_string()
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let v = status_cmd(Modality::Embed).expect("status ok");
+        assert_eq!(v["ready"], json!(false));
+        assert_eq!(v["provider"].as_str(), Some("none"));
+        assert_eq!(v["reason"]["error"].as_str(), Some("embedding not configured"));
+        assert_eq!(v["reason"]["fix"].as_str(), Some("cos agent setup embed"));
+        assert!(
+            v["reason"]["details"]
+                .as_str()
+                .is_some_and(|s| s.contains("model dir does not exist")),
+            "unexpected reason: {}",
+            v["reason"]
+        );
+
+        std::env::remove_var("COS_CONFIG_PATH");
+        std::fs::remove_dir_all(&tmp_dir).ok();
+    }
+
+    #[test]
+    fn providers_embed_defaults_away_from_local_when_unavailable() {
+        let expected = if local_embed_precheck(&json!({}), None).is_err() {
+            "openai"
+        } else {
+            "local"
+        };
+        let v = providers_cmd(Modality::Embed).expect("providers ok");
+        assert_eq!(v["default_provider"].as_str(), Some(expected));
+    }
+
+    #[test]
+    fn apply_embed_local_rejects_missing_local_stack() {
+        if local_embed_precheck(&json!({}), None).is_ok() {
+            eprintln!("(skipping: local embedding stack is installed)");
+            return;
+        }
+
+        let _g = env_lock();
+        let tmp_dir = std::env::temp_dir()
+            .join(format!("cos-setup-test-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+        let cfg_path = tmp_dir.join("config.json");
+        std::env::set_var("COS_CONFIG_PATH", &cfg_path);
+
+        let err = run(&[
+            "embed".into(),
+            "apply".into(),
+            "--provider".into(),
+            "local".into(),
+            "--model".into(),
+            "qwen3-embedding-0.6b".into(),
+        ])
+        .expect_err("local apply should fail when stack is unavailable");
+        let envelope: serde_json::Value = serde_json::from_str(&err).expect("json envelope");
+        assert_eq!(
+            envelope["error"].as_str(),
+            Some("local embedding stack unavailable")
+        );
+        assert_eq!(envelope["fix"].as_str(), Some("cos agent setup embed"));
 
         std::env::remove_var("COS_CONFIG_PATH");
         std::fs::remove_dir_all(&tmp_dir).ok();

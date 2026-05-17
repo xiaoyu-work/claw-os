@@ -396,12 +396,16 @@ fn run_embed(args: &[String]) -> Result<Value, String> {
     let embedder = embed::build_from(&cfg)
         .map_err(|e| format!("embed config: {e}"))?
         .ok_or_else(|| {
-            "embedding provider is disabled (set [embed] in config.json, \
-             or configure a `[agent].provider` that supports embeddings \
-             so `provider=\"auto\"` can derive one)"
+            "embedding provider is disabled or unavailable (run `cos agent setup embed` \
+             to configure embeddings)"
                 .to_string()
         })?;
     if !embedder.is_configured() {
+        if matches!(cfg.provider.as_str(), "" | "auto" | "local" | "qwen3-local") {
+            if let Err(err) = tasks::qwen3_genai::precheck(&cfg) {
+                return Err(format!("local embed provider not configured: {err}"));
+            }
+        }
         return Err(format!(
             "embed provider \"{}\" missing API key (set api_key_credential or api_key_env)",
             cfg.provider

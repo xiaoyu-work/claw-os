@@ -296,17 +296,16 @@ fn check_media_modalities() -> Value {
         let provider = snap.get("provider").and_then(|v| v.as_str()).unwrap_or("none");
         let ready = snap.get("ready").and_then(|v| v.as_bool()).unwrap_or(false);
         let reason = snap.get("reason").cloned().unwrap_or(Value::Null);
-        // `embed.provider=auto` (the new default) means "derive from
-        // main agent config when possible". When it can't derive
-        // (mock / anthropic / gemini / bedrock main provider), report
-        // `auto-unavailable` and stay at `ok` rather than warn — the
-        // user hasn't misconfigured anything, the chosen main
-        // provider just doesn't offer embeddings.
-        let state = if matches!(m, Modality::Embed) && provider == "auto" {
+        // `embed.provider=auto` means "use the bundled local embedding
+        // stack when available". When it is missing (for example Linux
+        // arm64 images), setup/status reports the modality as
+        // unconfigured so the user can choose a provider explicitly.
+        let state = if matches!(m, Modality::Embed) && provider == "local" {
             if ready {
-                "auto-derived"
+                "system-local"
             } else {
-                "auto-unavailable"
+                warn = true;
+                "configured-but-not-ready"
             }
         } else if provider == "none" || provider.is_empty() {
             "unconfigured"
