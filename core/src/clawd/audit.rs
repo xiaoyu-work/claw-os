@@ -11,6 +11,7 @@ use crate::agent::runtime::hooks::{
 };
 use crate::session::{self, Mutation, MutationRecord, SessionId};
 
+use super::client_identity::ClientIdentity;
 use super::protocol::Response;
 
 #[derive(Debug, Serialize)]
@@ -21,6 +22,7 @@ struct RequestAudit<'a> {
     ok: bool,
     duration_ms: u128,
     params: &'a Value,
+    client: &'a ClientIdentity,
     #[serde(skip_serializing_if = "Option::is_none")]
     error_code: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -34,6 +36,7 @@ struct InvalidRequestAudit<'a> {
     ok: bool,
     duration_ms: u128,
     raw: &'a str,
+    client: &'a ClientIdentity,
     error_code: &'a str,
     error_message: &'a str,
 }
@@ -96,6 +99,7 @@ pub fn record_request(
     params: &Value,
     response: &Response,
     duration: Duration,
+    client: &ClientIdentity,
 ) -> Result<(), String> {
     let audit = RequestAudit {
         ts: Utc::now(),
@@ -104,13 +108,19 @@ pub fn record_request(
         ok: response.ok,
         duration_ms: duration.as_millis(),
         params,
+        client,
         error_code: response.error.as_ref().map(|err| err.code.as_str()),
         error_message: response.error.as_ref().map(|err| err.message.as_str()),
     };
     append_jsonl(&audit)
 }
 
-pub fn record_invalid(raw: &str, response: &Response, duration: Duration) -> Result<(), String> {
+pub fn record_invalid(
+    raw: &str,
+    response: &Response,
+    duration: Duration,
+    client: &ClientIdentity,
+) -> Result<(), String> {
     let (error_code, error_message) = response
         .error
         .as_ref()
@@ -122,6 +132,7 @@ pub fn record_invalid(raw: &str, response: &Response, duration: Duration) -> Res
         ok: response.ok,
         duration_ms: duration.as_millis(),
         raw,
+        client,
         error_code,
         error_message,
     };
@@ -143,6 +154,7 @@ pub fn record_task_event(event: &'static str, job: &crate::agent::service::Job) 
     if let Err(err) = append_jsonl(&audit) {
         tracing::error!(error = %err, event, job_id = %job.id, "failed to write clawd task audit record");
     }
+    super::system_journal::record_task_event(event, job);
 }
 
 pub fn install_runtime_hook() {

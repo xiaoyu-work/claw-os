@@ -14,7 +14,7 @@ Description: Claw OS — systemd integration for non-Docker targets
      boot (target path from /etc/default/cos-home; enabled by default).
    * cos-browser.service — runs the cos-browser CDP server on port
      9222 (installed but not enabled; opt-in).
-   * clawd.service — starts the user-session agent daemon.
+   * clawd.service — starts the boot-time system agent daemon.
  .
  Docker containers do NOT need this package — they use cos-init as
  PID 1 instead.

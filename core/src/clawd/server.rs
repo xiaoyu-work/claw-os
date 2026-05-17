@@ -8,20 +8,22 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
+use super::client_identity::ClientIdentity;
 use super::protocol::{encode_response, Request, Response};
 use super::state::DaemonState;
-use super::{audit, context, permissions, tasks, transactions};
+use super::{audit, context, permissions, system_journal, tasks, transactions};
 
 #[derive(Debug, Clone)]
 pub struct ServerOptions {
     pub socket_path: PathBuf,
+    pub socket_mode: u32,
 }
 
 pub async fn run(options: ServerOptions) -> Result<(), String> {
     prepare_socket(&options.socket_path).await?;
     let listener = UnixListener::bind(&options.socket_path)
         .map_err(|err| format!("failed to bind {}: {err}", options.socket_path.display()))?;
-    set_socket_permissions(&options.socket_path)?;
+    set_socket_permissions(&options.socket_path, options.socket_mode)?;
 
     tracing::info!(socket = %options.socket_path.display(), "clawd listening");
 
@@ -34,9 +36,10 @@ pub async fn run(options: ServerOptions) -> Result<(), String> {
             .accept()
             .await
             .map_err(|err| format!("failed to accept clawd client: {err}"))?;
+        let client = ClientIdentity::from_stream(&stream);
         let state = state.clone();
         tokio::spawn(async move {
-            if let Err(err) = handle_client(stream, state).await {
+            if let Err(err) = handle_client(stream, state, client).await {
                 tracing::warn!(error = %err, "clawd client handler failed");
             }
         });
@@ -57,7 +60,11 @@ fn spawn_agent_worker() {
     });
 }
 
-async fn handle_client(stream: UnixStream, state: DaemonState) -> Result<(), String> {
+async fn handle_client(
+    stream: UnixStream,
+    state: DaemonState,
+    client: ClientIdentity,
+) -> Result<(), String> {
     let (reader, mut writer) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();
 
@@ -80,16 +87,26 @@ async fn handle_client(stream: UnixStream, state: DaemonState) -> Result<(), Str
                     &request.params,
                     &response,
                     started.elapsed(),
+                    &client,
                 ) {
                     tracing::error!(error = %err, "failed to write clawd audit record");
                 }
+                system_journal::record_clawd_request(
+                    &request.command,
+                    &request.params,
+                    &response,
+                    started.elapsed(),
+                    &client,
+                );
                 response
             }
             Err(err) => {
                 let response = Response::error(None, "invalid_json", err.to_string());
-                if let Err(err) = audit::record_invalid(line, &response, started.elapsed()) {
+                if let Err(err) = audit::record_invalid(line, &response, started.elapsed(), &client)
+                {
                     tracing::error!(error = %err, "failed to write clawd invalid-request audit record");
                 }
+                system_journal::record_invalid_request(line, &response, started.elapsed(), &client);
                 response
             }
         };
@@ -144,6 +161,7 @@ async fn dispatch_result(request: Request, state: &DaemonState) -> Result<Value,
         "permission.recent" => permissions::recent(request.params),
         "permission.request" => permissions::request(request.params),
         "permission.decide" => permissions::decide(request.params),
+        "system.operations" => system_journal::query(request.params),
         "transaction.begin" => transactions::begin(state, request.params),
         "transaction.list" => transactions::list(state),
         "transaction.commit" => transactions::commit(state, request.params),
@@ -175,14 +193,14 @@ async fn prepare_socket(socket_path: &PathBuf) -> Result<(), String> {
 }
 
 #[cfg(unix)]
-fn set_socket_permissions(socket_path: &PathBuf) -> Result<(), String> {
+fn set_socket_permissions(socket_path: &PathBuf, mode: u32) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
 
-    std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o600))
+    std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(mode))
         .map_err(|err| format!("failed to chmod {}: {err}", socket_path.display()))
 }
 
 #[cfg(not(unix))]
-fn set_socket_permissions(_socket_path: &PathBuf) -> Result<(), String> {
+fn set_socket_permissions(_socket_path: &PathBuf, _mode: u32) -> Result<(), String> {
     Ok(())
 }

@@ -38,12 +38,12 @@ else
 fi
 echo "  :: cos-browser.service installed (not enabled by default)"
 
-if [ -L "$ROOTFS/etc/systemd/user/default.target.wants/clawd.service" ]; then
-    echo "  :: clawd.service enabled for user sessions"
+if [ -L "$ROOTFS/etc/systemd/system/multi-user.target.wants/clawd.service" ]; then
+    echo "  :: clawd.service enabled as system daemon"
 else
-    echo "  :: WARNING — clawd.service was not globally enabled" >&2
+    echo "  :: WARNING — clawd.service was not enabled as a system daemon" >&2
     echo "     falling back to direct symlink"
-    mkdir -p "$ROOTFS/etc/systemd/user/default.target.wants"
-    ln -sf /usr/lib/systemd/user/clawd.service \
-        "$ROOTFS/etc/systemd/user/default.target.wants/clawd.service"
+    mkdir -p "$ROOTFS/etc/systemd/system/multi-user.target.wants"
+    ln -sf /usr/lib/systemd/system/clawd.service \
+        "$ROOTFS/etc/systemd/system/multi-user.target.wants/clawd.service"
 fi

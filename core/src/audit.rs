@@ -214,6 +214,7 @@ pub fn log_cap_decision(entry: serde_json::Value) {
     if std::env::var("COS_CAPS_AUDIT").as_deref() == Ok("0") {
         return;
     }
+    crate::clawd::system_journal::record_cap_decision(&entry);
     let path = crate::paths::caps_audit_log_path();
     log_event(&path, entry);
 }

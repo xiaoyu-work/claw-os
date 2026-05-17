@@ -34,13 +34,10 @@ fn clawd_socket_path() -> PathBuf {
     if let Ok(path) = std::env::var("CLAWD_SOCKET") {
         return PathBuf::from(path);
     }
-    if let Ok(path) = std::env::var("XDG_RUNTIME_DIR") {
-        return PathBuf::from(path).join("clawd.sock");
-    }
     if let Ok(path) = std::env::var("COS_RUNTIME_DIR") {
         return PathBuf::from(path).join("clawd.sock");
     }
-    std::env::temp_dir().join("clawd.sock")
+    PathBuf::from("/run/cos/clawd.sock")
 }
 
 /// Write the bound port to `$XDG_RUNTIME_DIR/cos-agent-bridge.port`

@@ -6,6 +6,7 @@ set -e
 case "$1" in
     purge)
         if [ -x /usr/bin/deb-systemd-helper ]; then
+            deb-systemd-helper purge clawd.service >/dev/null || true
             deb-systemd-helper purge cos-home-setup.service >/dev/null || true
             deb-systemd-helper purge cos-browser.service >/dev/null || true
         fi

@@ -1,6 +1,7 @@
 pub mod agent_client;
 pub mod audit;
 pub mod client;
+pub mod client_identity;
 pub mod config;
 pub mod context;
 pub mod permissions;
@@ -9,5 +10,6 @@ pub mod server;
 pub mod session_scope;
 pub mod state;
 pub mod system_caps;
+pub mod system_journal;
 pub mod tasks;
 pub mod transactions;

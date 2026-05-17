@@ -55,9 +55,6 @@ pub fn runtime_dir() -> PathBuf {
 }
 
 pub fn clawd_socket_path() -> PathBuf {
-    if let Some(v) = env::var_os("XDG_RUNTIME_DIR") {
-        return PathBuf::from(v).join("clawd.sock");
-    }
     runtime_dir().join("clawd.sock")
 }
 
@@ -264,6 +261,16 @@ pub fn agent_audit_log_path() -> PathBuf {
 /// suppress writing entirely (used by hot-path tests).
 pub fn caps_audit_log_path() -> PathBuf {
     log_dir().join("caps.jsonl")
+}
+
+/// Central system-operation journal owned by `clawd`.
+///
+/// This is the persistent machine-level timeline AI and system UIs read
+/// when they need to understand what happened recently. It receives
+/// normalized events from the daemon API, capability enforcement, and
+/// other system integration points as they are wired in.
+pub fn system_operations_log_path() -> PathBuf {
+    data_dir().join("clawd").join("system-operations.jsonl")
 }
 
 /// Directory for agent's per-session todo lists. Lives under
