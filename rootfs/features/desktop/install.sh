@@ -379,9 +379,6 @@ chroot "$ROOTFS" bash -c '
     systemctl enable power-profiles-daemon.service || true
     systemctl enable upower.service           || true
     systemctl enable accounts-daemon.service  || true
-    # VM integration — no-op on bare metal.
-    systemctl enable qemu-guest-agent.service || true
-    systemctl enable spice-vdagentd.service   || true
 '
 
 # Per-user services (PipeWire, WirePlumber, xdg-desktop-portal). These ship

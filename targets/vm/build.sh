@@ -68,8 +68,8 @@ fi
 #    apt-source pre-configures the Claw OS apt repo so users can run
 #    `sudo apt update && sudo apt upgrade` to pull newer claw-os-* packages.
 #
-#    FEATURES is overridable. Example, build a desktop VM image:
-#       FEATURES=base,cos-core,systemd,kernel,desktop,copilot-cli,grub-disk,vm,apt-source \
+#    FEATURES is overridable. Example, build a desktop VMware image:
+#       FEATURES=base,cos-core,systemd,kernel,desktop,vmware,copilot-cli,grub-disk,vm,apt-source \
 #       SIZE=16G FORMATS=vhdx ./targets/vm/build.sh
 FEATURES="${FEATURES:-base,cos-core,systemd,kernel,grub-disk,vm,apt-source}"
 echo ":: features: $FEATURES"
@@ -249,7 +249,10 @@ Hyper-V Gen 2 note:
   Alternatively, attach to a Gen 1 VM (BIOS) — same .vhdx works.
 
 VMware:
-  Create a new VM, choose "I will install the OS later", point the
+  Build with the optional 'vmware' feature for guest resize / clipboard:
+    sudo FEATURES=base,cos-core,systemd,kernel,desktop,vmware,copilot-cli,grub-disk,vm,apt-source \
+      FORMATS=vmdk ./build.sh vm
+  Then create a new VM, choose "I will install the OS later", point the
   existing virtual disk at build/claw-os-vm-amd64.vmdk.
 EOF
 else
@@ -267,6 +270,9 @@ UTM (Apple Silicon):
   Use UEFI boot (default).
 
 Parallels / VMware Fusion (Apple Silicon):
-  Create a new ARM Linux VM, attach the .vmdk as the existing disk.
+  For VMware guest resize / clipboard, build with the optional 'vmware' feature:
+    sudo FEATURES=base,cos-core,systemd,kernel,desktop,vmware,copilot-cli,grub-disk,vm,apt-source \
+      FORMATS=vmdk ./build.sh vm
+  Then create a new ARM Linux VM, attach the .vmdk as the existing disk.
 EOF
 fi

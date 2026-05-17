@@ -73,6 +73,11 @@ sudo ./build.sh vm
 # Multiple formats in one build:
 sudo FORMATS="qcow2 vmdk vhdx" ./build.sh vm
 
+# VMware Fusion / Workstation build with VMware Tools guest integration
+# for guest resize / clipboard:
+sudo FEATURES=base,cos-core,systemd,kernel,desktop,vmware,copilot-cli,grub-disk,vm,apt-source \
+     FORMATS=vmdk ./build.sh vm
+
 # Larger disk:
 sudo SIZE=16G ./build.sh vm
 

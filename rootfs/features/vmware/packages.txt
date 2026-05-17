@@ -1,0 +1,5 @@
+# VMware guest integration for VMware Fusion / Workstation / ESXi images.
+# Keep this as an optional feature so non-VMware builds do not bake in
+# hypervisor-specific guest agents.
+open-vm-tools
+open-vm-tools-desktop
