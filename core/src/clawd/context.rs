@@ -68,12 +68,12 @@ pub fn refresh_builtin_sources(state: &DaemonState) {
     collect_session_environment(state);
     collect_system_overview(state);
     collect_system_inventory(state);
-    collect_headless_runtime(state);
-    collect_headless_shells(state);
-    collect_headless_workspaces(state);
-    collect_headless_recent_files(state);
-    collect_headless_services(state);
-    collect_headless_package_activity(state);
+    collect_runtime_context(state);
+    collect_activity_terminals(state);
+    collect_activity_workspaces(state);
+    collect_activity_recent_files(state);
+    collect_system_services(state);
+    collect_system_package_activity(state);
     collect_system_processes(state);
     collect_system_mounts(state);
     collect_system_users(state);
@@ -265,13 +265,13 @@ fn collect_system_operations(state: &DaemonState) {
     );
 }
 
-fn collect_headless_runtime(state: &DaemonState) {
+fn collect_runtime_context(state: &DaemonState) {
     let kernel_release = read_trimmed(PathBuf::from("/proc/sys/kernel/osrelease"));
     let kernel_version = read_trimmed(PathBuf::from("/proc/version"));
     state.update_context(
-        "clawd.headless.runtime".to_string(),
+        "clawd.runtime".to_string(),
         json!({
-            "headless": is_headless_environment(),
+            "session": session_runtime_summary(),
             "wsl": wsl_summary(kernel_release.as_deref(), kernel_version.as_deref()),
             "systemd": systemd_summary(),
             "login_sessions": logged_in_users_snapshot(32),
@@ -283,39 +283,39 @@ fn collect_headless_runtime(state: &DaemonState) {
         }),
         json!({
             "kind": "builtin",
-            "collector": "headless_runtime",
+            "collector": "runtime_context",
             "capability": "sys.observe",
             "mode": "readonly",
-            "platform": "linux_headless",
+            "providers": ["linux", "wsl"],
         }),
     );
 }
 
-fn collect_headless_shells(state: &DaemonState) {
-    let shells = shell_process_snapshot(128);
-    let count = shells.len();
+fn collect_activity_terminals(state: &DaemonState) {
+    let terminals = terminal_process_snapshot(128);
+    let count = terminals.len();
     state.update_context(
-        "clawd.headless.shells".to_string(),
+        "clawd.activity.terminals".to_string(),
         json!({
-            "shells": shells,
+            "terminals": terminals,
             "count": count,
             "truncated": count >= 128,
         }),
         json!({
             "kind": "builtin",
-            "collector": "headless_shells",
+            "collector": "activity_terminals",
             "capability": "proc.observe",
             "mode": "readonly",
-            "platform": "linux_headless",
+            "providers": ["linux_procfs"],
         }),
     );
 }
 
-fn collect_headless_workspaces(state: &DaemonState) {
+fn collect_activity_workspaces(state: &DaemonState) {
     let workspaces = active_git_workspaces_snapshot(64);
     let count = workspaces.len();
     state.update_context(
-        "clawd.headless.workspaces".to_string(),
+        "clawd.activity.workspaces".to_string(),
         json!({
             "workspaces": workspaces,
             "count": count,
@@ -323,20 +323,20 @@ fn collect_headless_workspaces(state: &DaemonState) {
         }),
         json!({
             "kind": "builtin",
-            "collector": "headless_workspaces",
+            "collector": "activity_workspaces",
             "capability": "sys.observe",
             "mode": "readonly",
-            "platform": "linux_headless",
+            "providers": ["linux_procfs", "git"],
         }),
     );
 }
 
-fn collect_headless_recent_files(state: &DaemonState) {
+fn collect_activity_recent_files(state: &DaemonState) {
     let roots = recent_file_roots(32);
     let root_count = roots.len();
     let snapshot = recent_files_snapshot(roots, 100, 3, 4_000);
     state.update_context(
-        "clawd.headless.recent_files".to_string(),
+        "clawd.activity.recent_files".to_string(),
         json!({
             "files": snapshot.files,
             "roots": snapshot.roots,
@@ -347,39 +347,39 @@ fn collect_headless_recent_files(state: &DaemonState) {
         }),
         json!({
             "kind": "builtin",
-            "collector": "headless_recent_files",
+            "collector": "activity_recent_files",
             "capability": "fs.meta",
             "mode": "readonly",
-            "platform": "linux_headless",
+            "providers": ["linux_fs"],
             "max_depth": 3,
         }),
     );
 }
 
-fn collect_headless_services(state: &DaemonState) {
+fn collect_system_services(state: &DaemonState) {
     state.update_context(
-        "clawd.headless.services".to_string(),
+        "clawd.system.services".to_string(),
         system_services_snapshot(100),
         json!({
             "kind": "builtin",
-            "collector": "headless_services",
+            "collector": "system_services",
             "capability": "sys.observe",
             "mode": "readonly",
-            "platform": "linux_headless",
+            "providers": ["systemd"],
         }),
     );
 }
 
-fn collect_headless_package_activity(state: &DaemonState) {
+fn collect_system_package_activity(state: &DaemonState) {
     state.update_context(
-        "clawd.headless.package_activity".to_string(),
+        "clawd.system.package_activity".to_string(),
         apt_history_snapshot(40),
         json!({
             "kind": "builtin",
-            "collector": "headless_package_activity",
+            "collector": "system_package_activity",
             "capability": "sys.observe",
             "mode": "readonly",
-            "platform": "linux_headless",
+            "providers": ["apt"],
         }),
     );
 }
@@ -595,8 +595,16 @@ struct ProcStatSummary {
     tty_nr: Option<i64>,
 }
 
-fn is_headless_environment() -> bool {
-    std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_none()
+fn session_runtime_summary() -> Value {
+    let graphical =
+        std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_some();
+    json!({
+        "graphical": graphical,
+        "headless": !graphical,
+        "type": if graphical { "desktop" } else { "headless" },
+        "desktop": std::env::var("XDG_CURRENT_DESKTOP").ok(),
+        "session_type": std::env::var("XDG_SESSION_TYPE").ok(),
+    })
 }
 
 fn wsl_summary(kernel_release: Option<&str>, kernel_version: Option<&str>) -> Value {
@@ -665,7 +673,7 @@ fn parse_who_line(line: &str) -> Option<Value> {
     }))
 }
 
-fn shell_process_snapshot(limit: usize) -> Vec<Value> {
+fn terminal_process_snapshot(limit: usize) -> Vec<Value> {
     terminal_processes(limit)
         .into_iter()
         .map(|process| {
