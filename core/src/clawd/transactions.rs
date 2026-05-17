@@ -2,6 +2,7 @@ use chrono::Utc;
 use serde_json::{json, Value};
 use std::str::FromStr;
 
+use crate::caps::{Role, Scope};
 use crate::session::{self, RollbackOutcome, SessionId, Status as SessionStatus};
 
 use super::state::{DaemonState, TransactionHandle};
@@ -11,9 +12,13 @@ pub fn begin(state: &DaemonState, params: Value) -> Result<Value, String> {
     let session_id = session::create(&purpose).map_err(|err| err.to_string())?;
     session::update_meta(&session_id, |meta| {
         meta.creator_runtime = Some("clawd".to_string());
+        meta.role = Some(Role::Admin);
         meta.status = SessionStatus::Running;
     })
     .map_err(|err| err.to_string())?;
+    let caps =
+        Role::Admin.caps_with_scopes(Some(Scope::Wild), Some(Scope::Wild), Some(Scope::Wild));
+    session::set_caps(&session_id, &caps).map_err(|err| err.to_string())?;
 
     let lease = session::try_acquire(&session_id).map_err(|err| err.to_string())?;
     state.insert_transaction(TransactionHandle {
@@ -66,6 +71,8 @@ pub fn commit(state: &DaemonState, params: Value) -> Result<Value, String> {
 pub fn rollback(state: &DaemonState, params: Value) -> Result<Value, String> {
     let id = required_string(&params, "id")?;
     let session_id = parse_session_id(&id)?;
+    let _scope = super::session_scope::ProcSessionGuard::enter(&session_id, "clawd-rollback")
+        .map_err(|err| format!("transaction rollback session scope: {err}"))?;
     let handle = state.take_transaction(session_id.as_str());
     let rolled_back = session::rollback(&session_id).map_err(|err| err.to_string())?;
     let entries = rolled_back.into_iter().map(entry_value).collect::<Vec<_>>();

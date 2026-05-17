@@ -1,10 +1,15 @@
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{json, Value};
+
+use crate::agent::llm::ToolCall;
+use crate::agent::runtime::hooks::{
+    self, Hook, HookContext, HookOutcome, ToolDecision, ToolResultSummary, TurnSummary,
+};
+use crate::session::{self, Mutation, MutationRecord, SessionId};
 
 use super::protocol::Response;
 
@@ -31,6 +36,59 @@ struct InvalidRequestAudit<'a> {
     raw: &'a str,
     error_code: &'a str,
     error_message: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct TaskAudit<'a> {
+    ts: chrono::DateTime<Utc>,
+    event: &'static str,
+    job_id: &'a str,
+    status: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worker_pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<&'a str>,
+}
+
+#[derive(Debug, Serialize)]
+struct RuntimeTurnAudit<'a> {
+    ts: chrono::DateTime<Utc>,
+    event: &'static str,
+    session_id: &'a str,
+    turn_index: u32,
+    provider: &'a str,
+    model: &'a str,
+    success: bool,
+    latency_ms: u64,
+    input_tokens: u32,
+    output_tokens: u32,
+    cache_read_tokens: u32,
+    cache_write_tokens: u32,
+    tool_calls_made: u32,
+    stop_reason: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<&'a str>,
+}
+
+#[derive(Debug, Serialize)]
+struct RuntimeToolAudit<'a> {
+    ts: chrono::DateTime<Utc>,
+    event: &'static str,
+    session_id: &'a str,
+    turn_index: u32,
+    tool_name: &'a str,
+    tool_use_id: &'a str,
+    success: bool,
+    latency_ms: u64,
+    bytes_returned: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<&'a str>,
 }
 
 pub fn record_request(
@@ -70,22 +128,147 @@ pub fn record_invalid(raw: &str, response: &Response, duration: Duration) -> Res
     append_jsonl(&audit)
 }
 
+pub fn record_task_event(event: &'static str, job: &crate::agent::service::Job) {
+    let audit = TaskAudit {
+        ts: Utc::now(),
+        event,
+        job_id: &job.id,
+        status: job.status.as_str(),
+        session_id: job.session_id.as_deref(),
+        worker_pid: job.worker_pid,
+        provider: job.provider.as_deref(),
+        model: job.model.as_deref(),
+        error: job.error.as_deref(),
+    };
+    if let Err(err) = append_jsonl(&audit) {
+        tracing::error!(error = %err, event, job_id = %job.id, "failed to write clawd task audit record");
+    }
+}
+
+pub fn install_runtime_hook() {
+    hooks::global_registry().register(Arc::new(ClawdRuntimeAuditHook));
+}
+
+#[derive(Debug)]
+struct ClawdRuntimeAuditHook;
+
+impl Hook for ClawdRuntimeAuditHook {
+    fn name(&self) -> &str {
+        "clawd-runtime-audit"
+    }
+
+    fn pre_tool(&self, ctx: &HookContext, tool_call: &ToolCall) -> ToolDecision {
+        let audit = RuntimeToolAudit {
+            ts: Utc::now(),
+            event: "clawd.agent.tool.started",
+            session_id: &ctx.session_id,
+            turn_index: ctx.turn_index,
+            tool_name: &tool_call.name,
+            tool_use_id: &tool_call.id,
+            success: true,
+            latency_ms: 0,
+            bytes_returned: 0,
+            error: None,
+        };
+        if let Err(err) = append_jsonl(&audit) {
+            tracing::error!(error = %err, "failed to write clawd pre-tool audit record");
+        }
+        ToolDecision::Allow
+    }
+
+    fn post_tool(
+        &self,
+        ctx: &HookContext,
+        tool_call: &ToolCall,
+        result: &ToolResultSummary,
+    ) -> HookOutcome {
+        let audit = RuntimeToolAudit {
+            ts: Utc::now(),
+            event: "clawd.agent.tool.finished",
+            session_id: &ctx.session_id,
+            turn_index: ctx.turn_index,
+            tool_name: &tool_call.name,
+            tool_use_id: &tool_call.id,
+            success: result.success,
+            latency_ms: result.latency_ms,
+            bytes_returned: result.bytes_returned,
+            error: result.error.as_deref(),
+        };
+        if let Err(err) = append_jsonl(&audit) {
+            tracing::error!(error = %err, "failed to write clawd post-tool audit record");
+        }
+        if result.success {
+            record_tool_mutation(ctx, tool_call, result);
+        }
+        HookOutcome::Continue
+    }
+
+    fn post_turn(&self, ctx: &HookContext, summary: &TurnSummary) -> HookOutcome {
+        let audit = RuntimeTurnAudit {
+            ts: Utc::now(),
+            event: "clawd.agent.turn.finished",
+            session_id: &ctx.session_id,
+            turn_index: ctx.turn_index,
+            provider: &ctx.provider,
+            model: &ctx.model,
+            success: summary.success,
+            latency_ms: summary.latency_ms,
+            input_tokens: summary.input_tokens,
+            output_tokens: summary.output_tokens,
+            cache_read_tokens: summary.cache_read_tokens,
+            cache_write_tokens: summary.cache_write_tokens,
+            tool_calls_made: summary.tool_calls_made,
+            stop_reason: &summary.stop_reason,
+            error: summary.error.as_deref(),
+        };
+        if let Err(err) = append_jsonl(&audit) {
+            tracing::error!(error = %err, "failed to write clawd turn audit record");
+        }
+        HookOutcome::Continue
+    }
+}
+
+fn record_tool_mutation(ctx: &HookContext, tool_call: &ToolCall, result: &ToolResultSummary) {
+    if ctx.session_id.is_empty() {
+        return;
+    }
+    let Ok(session_id) = ctx.session_id.parse::<SessionId>() else {
+        return;
+    };
+    if !session::session_dir(&session_id).exists() {
+        return;
+    }
+
+    let record = MutationRecord::new(Mutation::Opaque {
+        verb: format!("agent.tool.{}", tool_call.name),
+        forward: json!({
+            "tool": tool_call.name,
+            "tool_use_id": tool_call.id,
+            "input": tool_call.input,
+            "turn_index": ctx.turn_index,
+        }),
+        inverse: json!({
+            "unsupported": true,
+            "reason": "tool-level transaction wrapper; use typed mutation records when the tool exposes a reversible operation",
+            "bytes_returned": result.bytes_returned,
+        }),
+    })
+    .with_runtime("clawd")
+    .with_turn(ctx.turn_index as u64);
+
+    if let Err(err) = session::record_mutation(&session_id, record) {
+        tracing::warn!(
+            error = %err,
+            session_id = %session_id.as_str(),
+            tool = %tool_call.name,
+            "failed to record clawd tool mutation wrapper"
+        );
+    }
+}
+
 fn append_jsonl<T: Serialize>(record: &T) -> Result<(), String> {
     let path = crate::paths::data_dir().join("clawd").join("audit.jsonl");
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|err| {
-            format!(
-                "failed to create clawd audit dir {}: {err}",
-                parent.display()
-            )
-        })?;
-    }
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .map_err(|err| format!("failed to open clawd audit log {}: {err}", path.display()))?;
     let line = serde_json::to_string(record).map_err(|err| err.to_string())?;
-    writeln!(file, "{line}")
+    crate::filelock::append_locked(&path, &line)
         .map_err(|err| format!("failed to write clawd audit log {}: {err}", path.display()))
 }
