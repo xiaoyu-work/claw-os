@@ -31,10 +31,13 @@ Claw OS provides primitives that traditional operating systems don't:
 
 ### Docker
 
-The Docker image is the **terminal-version of Claw OS** — same surface as the
-WSL distribution (full `cos` CLI, all built-in apps, bundled Chromium, the
-agent), wrapped for one-command containerised use. The default user is `cos`
-(uid 1000, NOPASSWD sudo).
+The Docker image is the **headless Claw OS** runtime — the full non-desktop OS
+surface with Claw's own `cos`/`clawd` agent runtime, built-in apps, skills,
+browser automation, systemd units, and apt upgrade source. It does not bake in
+desktop UI, installer/boot/VM-only features, or third-party agents. The default
+user is `cos` (uid 1000, NOPASSWD sudo).
+The published image is multi-arch (`linux/amd64` and `linux/arm64`), so
+Docker/OrbStack on Apple Silicon pulls the native arm64 image automatically.
 
 ```bash
 docker pull ghcr.io/xiaoyu-work/claw-os:latest
