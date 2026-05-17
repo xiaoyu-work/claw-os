@@ -273,6 +273,16 @@ pub fn system_operations_log_path() -> PathBuf {
     data_dir().join("clawd").join("system-operations.jsonl")
 }
 
+/// Append-only context-event journal owned by `clawd`.
+///
+/// Providers (apps, desktop integrations, shell/WSL collectors, browser
+/// bridges, etc.) write source-scoped time-series events here. The daemon
+/// exposes query APIs for source/app/time-range/order lookups and derives
+/// recent activity snapshots from this same journal.
+pub fn context_events_log_path() -> PathBuf {
+    data_dir().join("clawd").join("context-events.jsonl")
+}
+
 /// Directory for agent's per-session todo lists. Lives under
 /// `data_dir/agent/todos/`. Each session writes a JSON file named
 /// `<session_id>.json`.

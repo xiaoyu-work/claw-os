@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use super::context_events;
 use super::state::DaemonState;
 use super::system_journal;
 
@@ -80,6 +81,7 @@ pub fn refresh_builtin_sources(state: &DaemonState) {
     collect_system_packages(state);
     collect_system_audit_sources(state);
     collect_system_operations(state);
+    collect_activity_timeline(state);
 }
 
 fn collect_session_environment(state: &DaemonState) {
@@ -258,6 +260,20 @@ fn collect_system_operations(state: &DaemonState) {
         json!({
             "kind": "builtin",
             "collector": "system_operations",
+            "capability": "sys.observe",
+            "mode": "readonly",
+            "persistent": true,
+        }),
+    );
+}
+
+fn collect_activity_timeline(state: &DaemonState) {
+    state.update_context(
+        "clawd.activity.timeline".to_string(),
+        context_events::context_payload(50),
+        json!({
+            "kind": "builtin",
+            "collector": "activity_timeline",
             "capability": "sys.observe",
             "mode": "readonly",
             "persistent": true,
