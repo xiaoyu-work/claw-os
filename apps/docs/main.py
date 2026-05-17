@@ -149,8 +149,12 @@ def cmd_search(args):
             "results": [],
             "count": 0,
             "hint": (
-                "No Recoll index found at ~/.recoll/xapiandb. "
-                "Run `cos app docs configure` then `cos app docs index` first."
+                "No Recoll index found at ~/.recoll/xapiandb yet. The "
+                "claw-recoll-index.service (systemd --user) builds it "
+                "automatically ~60 s after the first graphical login and "
+                "then keeps it live via inotify. If you just logged in, "
+                "retry in a minute. To kick it off manually run "
+                "`cos app docs index`."
             ),
         }
 
