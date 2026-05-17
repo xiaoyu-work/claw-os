@@ -47,6 +47,13 @@ pub mod sources;
 /// + (when remote install lands) adding asset rules.
 pub const KNOWN_ENGINES: &[&str] = &["llama-cpp", "ort", "ort-genai"];
 
+/// Known-good ONNX Runtime GenAI version verified against the bundled
+/// Qwen3 embedding path. Keep the GitHub release tag separate because
+/// upstream tags include a leading `v`, while model compatibility ranges
+/// use plain semver.
+pub const ORT_GENAI_KNOWN_GOOD_VERSION: &str = "0.12.2";
+pub const ORT_GENAI_KNOWN_GOOD_TAG: &str = "v0.12.2";
+
 pub fn is_known_engine(name: &str) -> bool {
     KNOWN_ENGINES.contains(&name)
 }
@@ -576,7 +583,7 @@ fn cmd_update(args: &[String]) -> Result<Value, String> {
             "--version is for offline install (--from). For online, use --to <tag> instead.".into(),
         );
     }
-    let to_tag = to_tag.or(version_in_pos);
+    let to_tag = online_release_tag(&engine, to_tag.or(version_in_pos));
     let spec = sources::github::spec_for(&engine)
         .ok_or_else(|| format!("no GitHub release source registered for engine \"{engine}\""))?;
 
@@ -613,6 +620,17 @@ fn cmd_update(args: &[String]) -> Result<Value, String> {
             .build()
             .map_err(|e| e.to_string())?
             .block_on(work),
+    }
+}
+
+fn online_release_tag(engine: &str, requested: Option<String>) -> Option<String> {
+    requested.or_else(|| default_online_release_tag(engine).map(str::to_string))
+}
+
+fn default_online_release_tag(engine: &str) -> Option<&'static str> {
+    match engine {
+        "ort-genai" => Some(ORT_GENAI_KNOWN_GOOD_TAG),
+        _ => None,
     }
 }
 
@@ -1264,6 +1282,19 @@ mod dispatch_tests {
         .expect_err("online --version should error");
         assert!(err.contains("--to"));
         paths::set_engines_dir_override(None);
+    }
+
+    #[test]
+    fn ort_genai_update_defaults_to_known_good_tag() {
+        assert_eq!(
+            online_release_tag("ort-genai", None),
+            Some(ORT_GENAI_KNOWN_GOOD_TAG.to_string())
+        );
+        assert_eq!(
+            online_release_tag("ort-genai", Some("v0.13.1".to_string())),
+            Some("v0.13.1".to_string())
+        );
+        assert_eq!(online_release_tag("ort", None), None);
     }
 
     #[test]

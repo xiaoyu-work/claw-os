@@ -1,6 +1,6 @@
 //! Local archive install — Phase 2.1.
 //!
-//! Lays a `.zip` (or eventually `.tar.gz`) archive down at
+//! Lays a `.zip`, `.tar`, `.tar.gz`, or `.tgz` archive down at
 //! `<engines_dir>/<engine>/<version>/`, then registers the install in
 //! `engines.json`. **No network, no version inference**: caller passes
 //! `engine` + `version` + path to the archive.
@@ -17,7 +17,7 @@
 //! On any error we roll back by removing the staging dir.
 
 use std::fs::{self, File};
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
@@ -42,9 +42,7 @@ pub enum InstallError {
     Registry(#[from] RegistryError),
     #[error("archive does not exist: {0}")]
     ArchiveMissing(PathBuf),
-    #[error(
-        "unsupported archive format: {0} (Phase 2.1 supports .zip; tar.gz lands with P2.2 GitHub adapter)"
-    )]
+    #[error("unsupported archive format: {0} (supported: .zip, .tar, .tar.gz, .tgz)")]
     UnsupportedFormat(String),
     #[error("archive is empty after extraction")]
     EmptyArchive,
@@ -134,14 +132,28 @@ struct ExtractStats {
 }
 
 fn extract(archive: &Path, dest: &Path) -> Result<ExtractStats, InstallError> {
-    let ext = archive
-        .extension()
+    let name = archive
+        .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
-    match ext.as_str() {
-        "zip" => extract_zip(archive, dest),
-        other => Err(InstallError::UnsupportedFormat(other.to_string())),
+    if name.ends_with(".zip") {
+        extract_zip(archive, dest)
+    } else if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
+        let file = File::open(archive)?;
+        let gz = flate2::read::GzDecoder::new(file);
+        extract_tar(gz, dest)
+    } else if name.ends_with(".tar") {
+        let file = File::open(archive)?;
+        extract_tar(file, dest)
+    } else {
+        Err(InstallError::UnsupportedFormat(
+            archive
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string(),
+        ))
     }
 }
 
@@ -192,6 +204,24 @@ fn extract_zip(archive: &Path, dest: &Path) -> Result<ExtractStats, InstallError
                     }
                 }
             }
+            files += 1;
+        }
+    }
+    Ok(ExtractStats { files })
+}
+
+fn extract_tar<R: Read>(reader: R, dest: &Path) -> Result<ExtractStats, InstallError> {
+    let mut archive = tar::Archive::new(reader);
+    let mut files = 0;
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let raw_path = entry.path()?.to_string_lossy().to_string();
+        let entry_type = entry.header().entry_type();
+        let unpacked = entry.unpack_in(dest)?;
+        if !unpacked {
+            return Err(InstallError::PathTraversal(raw_path));
+        }
+        if entry_type.is_file() {
             files += 1;
         }
     }
@@ -300,6 +330,48 @@ mod tests {
         f
     }
 
+    fn make_tar_gz(wrap: bool) -> tempfile::NamedTempFile {
+        let f = tempfile::Builder::new()
+            .prefix("cos-engine-archive-")
+            .suffix(".tar.gz")
+            .tempfile()
+            .unwrap();
+        let enc =
+            flate2::write::GzEncoder::new(f.reopen().unwrap(), flate2::Compression::default());
+        let mut tar = tar::Builder::new(enc);
+        let prefix = if wrap { "wrapper/" } else { "" };
+        append_tar_file(
+            &mut tar,
+            &format!("{prefix}bin/llama-cli"),
+            b"fake exe",
+            0o755,
+        );
+        append_tar_file(
+            &mut tar,
+            &format!("{prefix}lib/libllama.so"),
+            b"fake so",
+            0o644,
+        );
+        append_tar_file(
+            &mut tar,
+            &format!("{prefix}include/llama.h"),
+            b"// header",
+            0o644,
+        );
+        tar.finish().unwrap();
+        let enc = tar.into_inner().unwrap();
+        enc.finish().unwrap();
+        f
+    }
+
+    fn append_tar_file<W: Write>(tar: &mut tar::Builder<W>, path: &str, body: &[u8], mode: u32) {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(body.len() as u64);
+        header.set_mode(mode);
+        header.set_cksum();
+        tar.append_data(&mut header, path, body).unwrap();
+    }
+
     fn make_bad_zip() -> tempfile::NamedTempFile {
         let f = tempfile::Builder::new()
             .prefix("cos-engine-bad-")
@@ -327,6 +399,20 @@ mod tests {
         assert_eq!(entry.installed.len(), 1);
         assert_eq!(entry.installed[0].version, "b4001");
         assert!(entry.installed[0].bytes > 0);
+    }
+
+    #[test]
+    fn install_from_tar_gz_succeeds_and_records() {
+        let _g = EnginesDirGuard::new();
+        let archive = make_tar_gz(false);
+        let mut idx = EnginesIndex::empty();
+        let result = install_from_archive(&mut idx, "llama-cpp", "b4001", archive.path()).unwrap();
+        assert_eq!(result.files_extracted, 3);
+        assert!(result.install_dir.join("bin/llama-cli").exists());
+        assert!(result.install_dir.join("lib/libllama.so").exists());
+        let entry = idx.entry("llama-cpp").unwrap();
+        assert_eq!(entry.installed.len(), 1);
+        assert_eq!(entry.installed[0].version, "b4001");
     }
 
     #[test]
@@ -368,7 +454,7 @@ mod tests {
         let _g = EnginesDirGuard::new();
         let f = tempfile::Builder::new()
             .prefix("cos-engine-unsup-")
-            .suffix(".tar.gz")
+            .suffix(".txt")
             .tempfile()
             .unwrap();
         let mut idx = EnginesIndex::empty();

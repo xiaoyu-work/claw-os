@@ -350,11 +350,19 @@ fn parse_llama_build(s: &str) -> Option<u32> {
 }
 
 fn compare_semver(active: &str, operand: &str) -> Result<std::cmp::Ordering, String> {
-    let a = semver::Version::parse(active)
+    let a = parse_semver_tag(active)
         .map_err(|e| format!("active version \"{active}\" is not semver: {e}"))?;
-    let b = semver::Version::parse(operand)
+    let b = parse_semver_tag(operand)
         .map_err(|e| format!("range operand \"{operand}\" is not semver: {e}"))?;
     Ok(a.cmp(&b))
+}
+
+fn parse_semver_tag(s: &str) -> Result<semver::Version, semver::Error> {
+    semver::Version::parse(
+        s.strip_prefix('v')
+            .or_else(|| s.strip_prefix('V'))
+            .unwrap_or(s),
+    )
 }
 
 #[cfg(test)]
@@ -495,6 +503,13 @@ mod tests {
     fn semver_match_version_in_range() {
         let r = parse_range(">=1.22.0, <2.0.0").unwrap();
         match_version("ort", "1.22.5", &r).unwrap();
+    }
+
+    #[test]
+    fn semver_accepts_github_v_prefix() {
+        let r = parse_range(">=0.12.0, <0.13.0").unwrap();
+        match_version("ort-genai", "v0.12.2", &r).unwrap();
+        match_version("ort-genai", "v0.13.1", &r).unwrap_err();
     }
 
     #[test]

@@ -314,7 +314,7 @@ fn import_directory(cfg: &ImportConfig) -> Result<ImportedModel, ImportError> {
     let requires_engine = if is_genai {
         Some(crate::model::registry::EngineRequirement {
             name: "ort-genai".to_string(),
-            version: ">=0.12.0,<0.13.0".to_string(),
+            version: format!("={}", crate::engine_pkg::ORT_GENAI_KNOWN_GOOD_VERSION),
         })
     } else {
         None
@@ -775,6 +775,10 @@ mod tests {
         assert_eq!(parsed["engine"], "ort-genai");
         assert_eq!(parsed["format"], "onnx-genai");
         assert_eq!(parsed["requires_engine"]["name"], "ort-genai");
+        assert_eq!(
+            parsed["requires_engine"]["version"],
+            format!("={}", crate::engine_pkg::ORT_GENAI_KNOWN_GOOD_VERSION)
+        );
         assert!(parsed["files"].as_array().unwrap().len() >= 3);
     }
 

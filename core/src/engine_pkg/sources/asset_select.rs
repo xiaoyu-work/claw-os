@@ -330,7 +330,7 @@ mod tests {
     #[test]
     fn ort_excludes_genai_assets() {
         let assets = vec![
-            asset("onnxruntime-genai-0.13.1-win-x64.zip"),
+            asset("onnxruntime-genai-0.12.2-win-x64.zip"),
             asset("onnxruntime-win-x64-1.25.1.zip"),
         ];
         let pick = select("ort", &ctx("windows", "x86_64", "cpu"), &assets).unwrap();
@@ -340,21 +340,21 @@ mod tests {
     #[test]
     fn ort_genai_picks_genai_assets_only() {
         let assets = vec![
-            asset("onnxruntime-genai-0.13.1-win-x64.zip"),
+            asset("onnxruntime-genai-0.12.2-win-x64.zip"),
             asset("onnxruntime-win-x64-1.25.1.zip"),
         ];
         let pick = select("ort-genai", &ctx("windows", "x86_64", "cpu"), &assets).unwrap();
-        assert_eq!(pick.name, "onnxruntime-genai-0.13.1-win-x64.zip");
+        assert_eq!(pick.name, "onnxruntime-genai-0.12.2-win-x64.zip");
     }
 
     #[test]
     fn ort_genai_cuda_linux() {
         let assets = vec![
-            asset("onnxruntime-genai-0.13.1-linux-x64.tar.gz"),
-            asset("onnxruntime-genai-0.13.1-linux-x64-cuda.tar.gz"),
+            asset("onnxruntime-genai-0.12.2-linux-x64.tar.gz"),
+            asset("onnxruntime-genai-0.12.2-linux-x64-cuda.tar.gz"),
         ];
         let pick = select("ort-genai", &ctx("linux", "x86_64", "cuda"), &assets).unwrap();
-        assert_eq!(pick.name, "onnxruntime-genai-0.13.1-linux-x64-cuda.tar.gz");
+        assert_eq!(pick.name, "onnxruntime-genai-0.12.2-linux-x64-cuda.tar.gz");
     }
 
     #[test]

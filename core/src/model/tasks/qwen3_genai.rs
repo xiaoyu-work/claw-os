@@ -344,7 +344,7 @@ pub fn precheck(cfg: &crate::config::EmbedConfig) -> Result<(), String> {
     }
     if !crate::model::engines::ort_genai::is_installed() {
         return Err(
-            "ort-genai engine is not installed; run `cos engine install ort-genai --from <release.zip>`"
+            "ort-genai engine is not installed; run `cos engine update ort-genai`"
                 .into(),
         );
     }
