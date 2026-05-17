@@ -52,7 +52,14 @@ impl CapMeta {
         icon: &'static str,
         risk: Risk,
     ) -> Self {
-        Self { verb, scope_kind, label, blurb, icon, risk }
+        Self {
+            verb,
+            scope_kind,
+            label,
+            blurb,
+            icon,
+            risk,
+        }
     }
 }
 
@@ -176,6 +183,14 @@ pub const CATALOG: &[CapMeta] = &[
     ),
 
     // -- System --------------------------------------------------------------
+    CapMeta::new(
+        Verb::SYS_OBSERVE,
+        ScopeKind::Name,
+        LocalizedStr::new("Inspect system state"),
+        LocalizedStr::new("Read system status such as services, packages, hardware, and logs without changing them."),
+        "🖥",
+        Risk::Low,
+    ),
     CapMeta::new(
         Verb::SYS_SERVICE,
         ScopeKind::Name,

@@ -88,6 +88,7 @@ impl Verb {
     pub const PROC_OBSERVE: Verb = Verb::new("proc.observe");
 
     // -- System state -----------------------------------------------------
+    pub const SYS_OBSERVE: Verb = Verb::new("sys.observe");
     pub const SYS_SERVICE: Verb = Verb::new("sys.service");
     pub const SYS_PACKAGE: Verb = Verb::new("sys.package");
     pub const SYS_MOUNT: Verb = Verb::new("sys.mount");
@@ -203,6 +204,7 @@ pub const ALL_VERBS: &[Verb] = &[
     Verb::PROC_SPAWN,
     Verb::PROC_SIGNAL,
     Verb::PROC_OBSERVE,
+    Verb::SYS_OBSERVE,
     Verb::SYS_SERVICE,
     Verb::SYS_PACKAGE,
     Verb::SYS_MOUNT,
@@ -267,7 +269,10 @@ mod tests {
     #[test]
     fn parse_known_verb() {
         assert_eq!(Verb::parse("fs.read"), Some(Verb::FS_READ));
-        assert_eq!(Verb::parse("device.microphone"), Some(Verb::DEVICE_MICROPHONE));
+        assert_eq!(
+            Verb::parse("device.microphone"),
+            Some(Verb::DEVICE_MICROPHONE)
+        );
     }
 
     #[test]

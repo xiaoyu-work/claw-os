@@ -106,7 +106,7 @@ def cmd_has(args):
         return {"error": "has requires a name argument"}
 
     name = args[0]
-    policy.require("sys.package", name=name)
+    policy.require("sys.observe", name=f"package:{name}")
 
     # Check dpkg first
     if _dpkg_check(name):
@@ -185,7 +185,7 @@ def cmd_search(args):
     if not query:
         return {"error": "search requires a query"}
 
-    policy.require("sys.package", wild=True)
+    policy.require("sys.observe", name="packages")
 
     try:
         result = subprocess.run(
@@ -263,7 +263,7 @@ def cmd_show(args):
         return {"error": "show requires a package name"}
 
     name = args[0]
-    policy.require("sys.package", name=name)
+    policy.require("sys.observe", name=f"package:{name}")
 
     try:
         result = subprocess.run(
@@ -311,7 +311,7 @@ def cmd_show(args):
 
 def cmd_list(args):
     """List installed packages via dpkg."""
-    policy.require("sys.package", wild=True)
+    policy.require("sys.observe", name="packages")
     try:
         result = subprocess.run(
             ["dpkg", "--get-selections"],

@@ -160,7 +160,9 @@ impl Role {
 
         let mut set = CapSet::new();
         for &verb in self.verbs() {
-            let kind = meta_for(verb).map(|m| m.scope_kind).unwrap_or(ScopeKind::Wild);
+            let kind = meta_for(verb)
+                .map(|m| m.scope_kind)
+                .unwrap_or(ScopeKind::Wild);
             let scope = match kind {
                 ScopeKind::Path => path_scope.clone(),
                 ScopeKind::Host => host_scope.clone(),
@@ -188,6 +190,7 @@ const OBSERVER_VERBS: &[Verb] = &[
     Verb::FS_META,
     Verb::FS_WATCH,
     Verb::PROC_OBSERVE,
+    Verb::SYS_OBSERVE,
     Verb::DATA_KV_READ,
     Verb::DATA_DB_READ,
     Verb::DATA_LOG_READ,
@@ -204,6 +207,7 @@ const WORKER_VERBS: &[Verb] = &[
     Verb::FS_META,
     Verb::FS_WATCH,
     Verb::PROC_OBSERVE,
+    Verb::SYS_OBSERVE,
     Verb::DATA_KV_READ,
     Verb::DATA_DB_READ,
     Verb::DATA_LOG_READ,
@@ -230,6 +234,7 @@ const CURATOR_VERBS: &[Verb] = &[
     Verb::FS_META,
     Verb::FS_WATCH,
     Verb::PROC_OBSERVE,
+    Verb::SYS_OBSERVE,
     Verb::DATA_KV_READ,
     Verb::DATA_DB_READ,
     Verb::DATA_LOG_READ,
@@ -258,6 +263,7 @@ const CONNECTOR_VERBS: &[Verb] = &[
     Verb::FS_META,
     Verb::FS_WATCH,
     Verb::PROC_OBSERVE,
+    Verb::SYS_OBSERVE,
     Verb::DATA_KV_READ,
     Verb::DATA_DB_READ,
     Verb::DATA_LOG_READ,
@@ -285,6 +291,7 @@ const AUTOMATOR_VERBS: &[Verb] = &[
     Verb::FS_META,
     Verb::FS_WATCH,
     Verb::PROC_OBSERVE,
+    Verb::SYS_OBSERVE,
     Verb::DATA_KV_READ,
     Verb::DATA_DB_READ,
     Verb::DATA_LOG_READ,
@@ -332,6 +339,7 @@ const AGENT_HOST_VERBS: &[Verb] = &[
     Verb::FS_META,
     Verb::FS_WATCH,
     Verb::PROC_OBSERVE,
+    Verb::SYS_OBSERVE,
     Verb::DATA_KV_READ,
     Verb::DATA_DB_READ,
     Verb::DATA_LOG_READ,
@@ -383,6 +391,7 @@ const ADMIN_VERBS: &[Verb] = &[
     Verb::FS_META,
     Verb::FS_WATCH,
     Verb::PROC_OBSERVE,
+    Verb::SYS_OBSERVE,
     Verb::DATA_KV_READ,
     Verb::DATA_DB_READ,
     Verb::DATA_LOG_READ,
@@ -487,6 +496,7 @@ mod tests {
         assert!(!Role::Observer.verbs().contains(&Verb::FS_WRITE));
         assert!(!Role::Observer.verbs().contains(&Verb::FS_DELETE));
         assert!(!Role::Observer.verbs().contains(&Verb::NET_DIAL));
+        assert!(Role::Observer.verbs().contains(&Verb::SYS_OBSERVE));
     }
 
     #[test]
@@ -533,7 +543,11 @@ mod tests {
     #[test]
     fn kernel_role_has_every_verb() {
         for v in super::super::verb::ALL_VERBS {
-            assert!(Role::Kernel.verbs().contains(v), "kernel missing {}", v.as_str());
+            assert!(
+                Role::Kernel.verbs().contains(v),
+                "kernel missing {}",
+                v.as_str()
+            );
         }
     }
 
@@ -549,7 +563,10 @@ mod tests {
         // Should cover net.dial for github.
         assert!(caps.covers(&Cap::new(Verb::NET_DIAL, Scope::host("api.github.com:443"))));
         // Must NOT cover fs.write (connector is read-only).
-        assert!(!caps.covers(&Cap::new(Verb::FS_WRITE, Scope::path("/home/jay/docs/x.md"))));
+        assert!(!caps.covers(&Cap::new(
+            Verb::FS_WRITE,
+            Scope::path("/home/jay/docs/x.md")
+        )));
         // Must NOT cover dial outside the host scope.
         assert!(!caps.covers(&Cap::new(Verb::NET_DIAL, Scope::host("evil.com:443"))));
     }
@@ -573,11 +590,7 @@ mod tests {
     #[test]
     fn child_role_must_be_subset_of_parent() {
         // Spawning a child with elevated role from a worker parent fails.
-        let parent = Role::Worker.caps_with_scopes(
-            Some(Scope::path("/home/jay/**")),
-            None,
-            None,
-        );
+        let parent = Role::Worker.caps_with_scopes(Some(Scope::path("/home/jay/**")), None, None);
         let child_request = Role::Automator.caps_with_scopes(
             Some(Scope::path("/home/jay/**")),
             Some(Scope::host("*")),
