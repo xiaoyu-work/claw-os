@@ -1,7 +1,8 @@
 # copilot-cli — GitHub Copilot CLI (@github/copilot) installed via npm.
 #
-# cosmic-term's @-trigger AI integration spawns `copilot -p "<prompt>"`
-# from a shell function. Node + npm here, the actual @github/copilot
-# package is installed globally in install.sh.
-nodejs
-npm
+# Node.js 24 + bundled npm are installed by the `base` feature from the
+# nodesource repo. Listing Debian's `npm` here would conflict because
+# trixie's npm (9.2.0) hard-depends on nodejs ≤ 20.x.
+#
+# No additional packages — install.sh just runs `npm install -g
+# @github/copilot` against the existing toolchain.
