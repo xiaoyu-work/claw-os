@@ -1,0 +1,44 @@
+[Unit]
+Description=ClawOS: Recoll real-time document indexing (inotify)
+Documentation=man:recollindex(1) man:recoll.conf(5)
+# Tied to the graphical session so it only runs once the user actually
+# logs in — no point indexing while at the greeter.
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+
+# Make sure the per-user config dir exists. The /etc/skel/.recoll/
+# template is copied at useradd time, but if a user nuked it we still
+# want the service to come up with Recoll's built-in defaults rather
+# than fail to start.
+ExecStartPre=/bin/sh -c 'install -d "%h/.recoll"'
+
+# -m  monitor: stay running, use inotify to track changes in real time.
+# -w 60  wait 60s after start before the first sweep, to avoid hammering
+#        disk during login.
+# -D  enable filesystem monitoring of mount/unmount events.
+# -x  no X11 (we're not the GUI process).
+ExecStart=/usr/bin/recollindex -m -w 60 -D -x
+
+# recollindex catches SIGTERM and finishes the current document cleanly.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Resource caps so a runaway indexer can't OOM the desktop.
+MemoryHigh=1G
+MemoryMax=2G
+CPUWeight=50
+IOWeight=50
+Nice=10
+
+Restart=on-failure
+RestartSec=30
+
+# Crash-loop guard: if it dies 5 times in 5 minutes, stop.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Install]
+WantedBy=default.target
