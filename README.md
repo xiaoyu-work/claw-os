@@ -75,14 +75,6 @@ docker run -d --name claw --privileged -v ./workspace:/home/cos/workspace ghcr.i
 docker exec -it --user cos claw bash --login
 ```
 
-### Configure the agent
-
-After entering the WSL distro or Docker container, run the setup wizard:
-
-```bash
-cos agent setup
-```
-
 ### Desktop / ISO / VM
 
 The desktop environment is in **experimental development**. The target direction
@@ -107,6 +99,7 @@ cos app web read https://example.com   # fetch a page as Markdown
 ### Talk to the agent
 
 ```bash
+cos agent setup                               # configure providers and credentials
 cos agent ask "find the largest files and tell me why"
 cos agent chat                                 # interactive REPL
 ```
