@@ -38,7 +38,10 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use tokio::sync::Mutex;
 
-use super::embed::{EmbedError, EmbedRequest, EmbedResponse, EmbedUsage, Embedder};
+// Trait + types come from the workspace-internal `claw-embed` crate.
+// We can still `impl Embedder for Qwen3GenaiEmbedder` because the
+// type is local to this crate (orphan rule).
+use claw_embed::{EmbedError, EmbedRequest, EmbedResponse, EmbedUsage, Embedder};
 use crate::model::engines::ort_genai::runtime::OrtGenaiRuntime;
 use crate::model::engines::ort_genai::safe::{
     OgaGenerator, OgaGeneratorParams, OgaModel, OgaTokenizer, OrtGenaiError,

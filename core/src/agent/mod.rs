@@ -697,7 +697,7 @@ fn parse_kind_arg(rest: &[String]) -> Result<String, String> {
 ///
 /// All sub-commands respect `[embed]` from config.json.
 fn semantic_cmd(args: &[String]) -> Result<Value, String> {
-    use crate::agent::memory::semantic::SemanticStore;
+    use crate::agent::memory::semantic::{SemanticStore, SemanticStoreExt};
 
     let sub = args.first().map(|s| s.as_str()).ok_or(
         "usage: cos agent semantic <index|search|list|count|remove|clear|clear-all|status> ...",

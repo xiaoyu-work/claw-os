@@ -13,6 +13,7 @@ members = [
     "crates/cos-browser",
     "crates/cos-cli",
     "crates/claw-semantic",
+    "crates/claw-embed",
 ]
 
 # core/ keeps its own [package] section with explicit version/edition so it
