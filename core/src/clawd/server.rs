@@ -11,7 +11,7 @@ use tokio::net::{UnixListener, UnixStream};
 use super::client_identity::ClientIdentity;
 use super::protocol::{encode_response, Request, Response};
 use super::state::DaemonState;
-use super::{audit, context, permissions, system_journal, tasks, transactions};
+use super::{audit, context, context_events, permissions, system_journal, tasks, transactions};
 
 #[derive(Debug, Clone)]
 pub struct ServerOptions {
@@ -81,7 +81,7 @@ async fn handle_client(
         let started = Instant::now();
         let response = match serde_json::from_str::<Request>(line) {
             Ok(request) => {
-                let response = dispatch(request.clone(), &state).await;
+                let response = dispatch(request.clone(), &state, &client).await;
                 if let Err(err) = audit::record_request(
                     &request.command,
                     &request.params,
@@ -124,15 +124,19 @@ async fn handle_client(
     Ok(())
 }
 
-async fn dispatch(request: Request, state: &DaemonState) -> Response {
+async fn dispatch(request: Request, state: &DaemonState, client: &ClientIdentity) -> Response {
     let id = request.id.clone();
-    match dispatch_result(request, state).await {
+    match dispatch_result(request, state, client).await {
         Ok(result) => Response::ok(id, result),
         Err(message) => Response::error(id, "request_failed", message),
     }
 }
 
-async fn dispatch_result(request: Request, state: &DaemonState) -> Result<Value, String> {
+async fn dispatch_result(
+    request: Request,
+    state: &DaemonState,
+    client: &ClientIdentity,
+) -> Result<Value, String> {
     match request.command.as_str() {
         "daemon.health" => Ok(json!({
             "status": "ok",
@@ -157,6 +161,8 @@ async fn dispatch_result(request: Request, state: &DaemonState) -> Result<Value,
         "context.snapshot" => context::snapshot(state),
         "context.sources" => context::sources(state),
         "context.update" => context::update(state, request.params),
+        "context.event.append" => context_events::append(request.params, client),
+        "context.event.query" => context_events::query(request.params),
         "permission.pending" => permissions::pending(request.params),
         "permission.recent" => permissions::recent(request.params),
         "permission.request" => permissions::request(request.params),

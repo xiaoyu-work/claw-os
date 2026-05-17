@@ -42,11 +42,12 @@ pub fn service_cmd(args: &[String]) -> Result<Value, String> {
         "result" => service_result(rest),
         "cancel" => service_cancel(rest),
         "context" => send("context.snapshot", Value::Null),
+        "events" => service_events(rest),
         "operations" => service_operations(rest),
         "work" => Err("agent workers are owned by system clawd.service".to_string()),
         "prune" => Err("agent queue pruning is owned by clawd".to_string()),
         other => Err(format!(
-            "unknown agent service subcommand: {other}. try: submit | list | status | result | cancel | context | operations"
+            "unknown agent service subcommand: {other}. try: submit | list | status | result | cancel | context | events | operations"
         )),
     }
 }
@@ -61,6 +62,7 @@ fn service_help() -> Value {
             "result  <task_id> [--wait-secs N]",
             "cancel  <task_id>",
             "context",
+            "events [--limit N] [--source SOURCE] [--app-id APP] [--event-type TYPE] [--entity-id ID] [--since RFC3339] [--until RFC3339] [--order asc|desc]",
             "operations [--limit N] [--source SOURCE]",
         ],
     })
@@ -196,6 +198,57 @@ fn service_operations(args: &[String]) -> Result<Value, String> {
         }
     }
     send("system.operations", params)
+}
+
+fn service_events(args: &[String]) -> Result<Value, String> {
+    let mut params = json!({});
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--limit" => {
+                let v = args.get(i + 1).ok_or("--limit needs a value")?;
+                params["limit"] = json!(v.parse::<u64>().map_err(|e| format!("--limit: {e}"))?);
+                i += 2;
+            }
+            "--source" => {
+                let v = args.get(i + 1).ok_or("--source needs a value")?;
+                params["source"] = json!(v);
+                i += 2;
+            }
+            "--app-id" | "--app" => {
+                let v = args.get(i + 1).ok_or("--app-id needs a value")?;
+                params["app_id"] = json!(v);
+                i += 2;
+            }
+            "--event-type" | "--type" => {
+                let v = args.get(i + 1).ok_or("--event-type needs a value")?;
+                params["event_type"] = json!(v);
+                i += 2;
+            }
+            "--entity-id" | "--entity" => {
+                let v = args.get(i + 1).ok_or("--entity-id needs a value")?;
+                params["entity_id"] = json!(v);
+                i += 2;
+            }
+            "--since" => {
+                let v = args.get(i + 1).ok_or("--since needs a value")?;
+                params["since"] = json!(v);
+                i += 2;
+            }
+            "--until" => {
+                let v = args.get(i + 1).ok_or("--until needs a value")?;
+                params["until"] = json!(v);
+                i += 2;
+            }
+            "--order" => {
+                let v = args.get(i + 1).ok_or("--order needs a value")?;
+                params["order"] = json!(v);
+                i += 2;
+            }
+            s => return Err(format!("unknown flag: {s}")),
+        }
+    }
+    send("context.event.query", params)
 }
 
 fn task_result_to_ask_response(job: Value, stream_requested: bool) -> Result<Value, String> {
