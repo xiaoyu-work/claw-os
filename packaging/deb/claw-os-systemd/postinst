@@ -1,7 +1,7 @@
 #!/bin/sh
-# claw-os-systemd postinst — enable cos-home-setup.service via the standard
+# claw-os-systemd postinst — enable the Claw OS boot units via the standard
 # deb-systemd-helper so it works in a chroot (no dbus required) and on a
-# running system alike.
+# running system alike. clawd.service is the required system agent path.
 
 set -e
 

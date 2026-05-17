@@ -9,10 +9,10 @@ Depends: bash, coreutils, ca-certificates
 Recommends: nodejs (>= 24), python3, python3-pip, git, ripgrep, curl, jq, sqlite3
 Description: Claw OS — agent-native operating system core
  Claw OS is a Debian-based Linux distribution designed for AI agents.
- This package installs the `cos` supervisor binary, the Docker PID-1
- entrypoint `cos-init`, the shared OverlayFS helper for the agent
- home, the per-user agent configuration under `~/.config/cos/`, and
- the bundled apps, skills, and Python helper packages
+ This package installs the `cos` supervisor binary, the `clawd`
+ system agent daemon, the recovery helper `cos-init`, the shared
+ OverlayFS helper for the agent home, the per-user agent configuration
+ under `~/.config/cos/`, and the bundled apps, skills, and Python helper packages
  (`claw_os_sdk`, `cos_runtime`) under `/usr/lib/cos/`.
  .
  On its own, this package provides a complete agent runtime usable

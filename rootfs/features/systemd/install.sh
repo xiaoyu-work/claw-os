@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # rootfs/features/systemd/install.sh — install claw-os-systemd.deb into ROOTFS.
 #
-# The .deb's postinst calls `deb-systemd-helper enable cos-home-setup.service`
-# which creates the multi-user.target.wants symlink without needing a
-# running systemd, so it works inside a chroot.
+# The .deb's postinst calls `deb-systemd-helper enable` for the boot-required
+# Claw OS units, including clawd.service. That creates the
+# multi-user.target.wants symlinks without needing a running systemd, so it
+# works inside a chroot.
 #
 # Inherited from environment: ROOTFS, PROJECT_DIR, SCRIPT_DIR.
 

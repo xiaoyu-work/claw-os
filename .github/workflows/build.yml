@@ -121,9 +121,10 @@ jobs:
       # Docker-specific prep on the shared rootfs:
       #   - Add the default `cos` user (uid 1000, NOPASSWD sudo).
       #   - Pre-create /var/lib/cos/overlay/{base,upper,work} chowned to cos
-      #     so cos-init (PID 1) can run as non-root inside the container.
-      # Both steps are idempotent; targets/wsl/build.sh below re-runs the
-      # user add as a no-op when it sees the user already exists.
+      #     so cos-home-setup.service can prepare the non-root agent home
+      #     when systemd boots the container.
+      # Both steps are idempotent; targets/wsl/build.sh below re-runs the user
+      # add as a no-op when it sees the user already exists.
       - name: Prep rootfs for Docker (cos user + overlay scratch dirs)
         run: |
           sudo bash -c '

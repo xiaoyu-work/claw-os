@@ -3,8 +3,8 @@
 # writable home directory.
 #
 # Used by:
-#   - /usr/local/bin/cos-init                 (Docker PID 1 entrypoint)
-#   - cos-home-setup.service (systemd unit)   (WSL / ISO / VM targets)
+#   - cos-home-setup.service (systemd unit)   (Docker / WSL / ISO / VM targets)
+#   - /usr/local/bin/cos-init                 (recovery/debug shell helper)
 #
 # Target path resolution (Linux-native, no hardcoded /home/<user>):
 #   1. First positional argument, if given.
