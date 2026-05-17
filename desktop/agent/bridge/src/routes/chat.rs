@@ -119,14 +119,40 @@ pub async fn stream_chat(
             }
         };
 
-        let result = match clawd::request(&socket, "task.stream", json!({
-            "id": task_id,
-            "timeout_ms": 300000u64
-        })).await {
-            Ok(value) => value,
-            Err(err) => {
-                yield Ok(error_event(&err.to_string()));
-                return;
+        let mut cursor = 0u64;
+        let mut emitted_text = false;
+        let result = loop {
+            let frame = match clawd::request(&socket, "task.stream", json!({
+                "id": task_id,
+                "cursor": cursor,
+                "timeout_ms": 1000u64
+            })).await {
+                Ok(value) => value,
+                Err(err) => {
+                    yield Ok(error_event(&err.to_string()));
+                    return;
+                }
+            };
+            cursor = frame
+                .get("cursor")
+                .and_then(Value::as_u64)
+                .unwrap_or(cursor);
+            if let Some(events) = frame.get("events").and_then(Value::as_array) {
+                for event in events {
+                    if let Some(text) = text_from_stream_event(event) {
+                        if !text.is_empty() {
+                            emitted_text = true;
+                            yield Ok(delta_event(&text));
+                        }
+                    }
+                }
+            }
+            if frame
+                .get("terminal")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                break frame.get("job").cloned().unwrap_or(Value::Null);
             }
         };
 
@@ -147,7 +173,7 @@ pub async fn stream_chat(
             {
                 map.entry("answer".to_string())
                     .or_insert(Value::from(answer.clone()));
-                if !answer.is_empty() {
+                if !emitted_text && !answer.is_empty() {
                     yield Ok(delta_event(&answer));
                 }
             }
@@ -159,4 +185,34 @@ pub async fn stream_chat(
     };
 
     Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+fn text_from_stream_event(frame: &Value) -> Option<String> {
+    let event = frame.get("event")?;
+    match event.get("kind").and_then(Value::as_str)? {
+        "text_delta" => event
+            .get("text")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        "message" => extract_message_text(event),
+        _ => None,
+    }
+}
+
+fn extract_message_text(event: &Value) -> Option<String> {
+    let content = event.get("content").and_then(Value::as_array)?;
+    let mut text = String::new();
+    for block in content {
+        if block.get("type").and_then(Value::as_str) == Some("text")
+            || block.get("kind").and_then(Value::as_str) == Some("text")
+        {
+            if let Some(chunk) = block.get("text").and_then(Value::as_str) {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str(chunk);
+            }
+        }
+    }
+    if text.is_empty() { None } else { Some(text) }
 }

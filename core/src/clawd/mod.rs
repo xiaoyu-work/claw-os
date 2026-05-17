@@ -6,6 +6,7 @@ pub mod context;
 pub mod permissions;
 pub mod protocol;
 pub mod server;
+pub mod session_scope;
 pub mod state;
 pub mod tasks;
 pub mod transactions;

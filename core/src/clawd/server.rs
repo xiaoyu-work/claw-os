@@ -26,6 +26,8 @@ pub async fn run(options: ServerOptions) -> Result<(), String> {
     tracing::info!(socket = %options.socket_path.display(), "clawd listening");
 
     let state = DaemonState::new();
+    audit::install_runtime_hook();
+    context::refresh_builtin_sources(&state);
     spawn_agent_worker();
     loop {
         let (stream, _addr) = listener

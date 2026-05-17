@@ -4,6 +4,7 @@ use serde_json::{json, Value};
 use tokio::time::sleep;
 
 use crate::agent::service::{Job, JobStatus, Store};
+use crate::caps::{Role, Scope};
 use crate::session;
 
 pub async fn submit(params: Value) -> Result<Value, String> {
@@ -35,8 +36,12 @@ fn create_task_session(prompt: &str) -> Result<String, String> {
     let sid = session::create(purpose).map_err(|err| err.to_string())?;
     session::update_meta(&sid, |meta| {
         meta.creator_runtime = Some("clawd".to_string());
+        meta.role = Some(Role::Admin);
     })
     .map_err(|err| err.to_string())?;
+    let caps =
+        Role::Admin.caps_with_scopes(Some(Scope::Wild), Some(Scope::Wild), Some(Scope::Wild));
+    session::set_caps(&sid, &caps).map_err(|err| err.to_string())?;
     Ok(sid.into_string())
 }
 
@@ -90,6 +95,15 @@ pub fn get(params: Value) -> Result<Value, String> {
 
 pub async fn result(params: Value) -> Result<Value, String> {
     let id = required_string(&params, "id")?;
+    let cursor = params
+        .get("cursor")
+        .and_then(Value::as_u64)
+        .map(|value| usize::try_from(value).map_err(|_| format!("cursor is too large: {value}")))
+        .transpose()?;
+    if let Some(cursor) = cursor {
+        return stream_events(id, cursor, &params).await;
+    }
+
     let timeout_ms = params
         .get("timeout_ms")
         .and_then(Value::as_u64)
@@ -113,6 +127,39 @@ pub async fn result(params: Value) -> Result<Value, String> {
             return Ok(job_value(job));
         }
         sleep(Duration::from_millis(250)).await;
+    }
+}
+
+async fn stream_events(id: String, mut cursor: usize, params: &Value) -> Result<Value, String> {
+    let timeout_ms = params
+        .get("timeout_ms")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    let store = Store::open_default().map_err(|err| err.to_string())?;
+
+    loop {
+        let (next_cursor, events) = store
+            .read_stream_events(&id, cursor)
+            .map_err(|err| err.to_string())?;
+        cursor = next_cursor;
+        let Some((_status, job)) = store.locate(&id).map_err(|err| err.to_string())? else {
+            return Err(format!("task not found: {id}"));
+        };
+        let terminal = matches!(
+            job.status,
+            JobStatus::Ok | JobStatus::Error | JobStatus::Cancelled
+        );
+        if !events.is_empty() || terminal || timeout_ms == 0 || Instant::now() >= deadline {
+            return Ok(json!({
+                "id": id,
+                "cursor": cursor,
+                "events": events,
+                "job": job_value(job),
+                "terminal": terminal,
+            }));
+        }
+        sleep(Duration::from_millis(100)).await;
     }
 }
 

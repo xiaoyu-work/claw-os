@@ -76,7 +76,7 @@ impl JobStatus {
         }
     }
 
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             JobStatus::Pending => "pending",
             JobStatus::Running => "running",
@@ -170,7 +170,7 @@ impl Store {
         // `locks/` dir hold the per-job flock sentinels. Pre-creating
         // them keeps the hot path (claim_one / cancel_pending /
         // submit) lock-free at start-up.
-        for sub in ["pending", "running", "done", "locks"] {
+        for sub in ["pending", "running", "done", "locks", "streams"] {
             fs::create_dir_all(root.join(sub))?;
         }
         Ok(Self { root })
@@ -186,6 +186,49 @@ impl Store {
 
     fn path_for(&self, status: JobStatus, id: &str) -> PathBuf {
         self.bucket_dir(status).join(format!("{id}.json"))
+    }
+
+    pub fn stream_path(&self, id: &str) -> PathBuf {
+        self.root.join("streams").join(format!("{id}.jsonl"))
+    }
+
+    pub fn append_stream_event(
+        &self,
+        id: &str,
+        event: &crate::agent::llm::StreamEvent,
+    ) -> io::Result<()> {
+        let value = json!({
+            "ts": chrono::Utc::now(),
+            "event": event,
+        });
+        let line = serde_json::to_string(&value).map_err(io_other)?;
+        crate::filelock::append_locked(&self.stream_path(id), &line).map_err(io_other)
+    }
+
+    pub fn read_stream_events(&self, id: &str, cursor: usize) -> io::Result<(usize, Vec<Value>)> {
+        let path = self.stream_path(id);
+        let raw = match fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok((0, Vec::new())),
+            Err(err) => return Err(err),
+        };
+        let mut events = Vec::new();
+        let mut next_cursor = 0usize;
+        for (idx, line) in raw.lines().enumerate() {
+            next_cursor = idx + 1;
+            if idx < cursor {
+                continue;
+            }
+            match serde_json::from_str::<Value>(line) {
+                Ok(value) => events.push(value),
+                Err(err) => {
+                    tracing::warn!(
+                        "agent service: skipping malformed stream frame {path:?}: {err}"
+                    );
+                }
+            }
+        }
+        Ok((next_cursor, events))
     }
 
     /// Locate a job by id by checking pending/, running/, then done/.
@@ -217,6 +260,7 @@ impl Store {
         let job = Job::new_pending(prompt, session_id, max_turns);
         let path = self.path_for(JobStatus::Pending, &job.id);
         write_json_atomic(&path, &job)?;
+        crate::clawd::audit::record_task_event("clawd.task.submitted", &job);
         Ok(job)
     }
 
@@ -325,6 +369,7 @@ impl Store {
                     job.started_at = Some(now_iso());
                     job.worker_pid = Some(std::process::id());
                     write_json_atomic(&dst, &job)?;
+                    crate::clawd::audit::record_task_event("clawd.task.started", &job);
                     return Ok(Some(job));
                 }
                 Err(e) if e.kind() == ErrorKind::NotFound => continue, // raced
@@ -361,6 +406,7 @@ impl Store {
         let done_path = self.path_for(JobStatus::Ok, &job.id);
         fs::rename(&running_path, &done_path)?;
         finish_durable_session(&job)?;
+        crate::clawd::audit::record_task_event("clawd.task.finished", &job);
         Ok(job)
     }
 
@@ -387,6 +433,7 @@ impl Store {
                 write_json_atomic(&src, &job)?;
                 fs::rename(&src, &dst)?;
                 finish_durable_session(&job)?;
+                crate::clawd::audit::record_task_event("clawd.task.cancelled", &job);
                 Ok(Some(job))
             }
             Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
@@ -876,6 +923,7 @@ fn run_worker_loop_inner(
     shutdown: Arc<AtomicBool>,
     install_signals: bool,
 ) -> Result<Value, String> {
+    crate::clawd::audit::install_runtime_hook();
     let store = Store::open_default().map_err(|e| e.to_string())?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -992,6 +1040,12 @@ async fn install_shutdown_listener(shutdown: Arc<AtomicBool>) {
 
 async fn run_one_job(job: &Job) -> FinishOutcome {
     use crate::agent::runtime::loop_;
+
+    let _session_guard = match enter_job_session(job) {
+        Ok(guard) => guard,
+        Err(err) => return FinishOutcome::Error(format!("session unavailable: {err}")),
+    };
+
     // Apply per-job max-turns override on a clone of the global cfg
     // so other jobs in the same worker process aren't affected.
     let base = crate::config::get().agent.clone();
@@ -1013,12 +1067,44 @@ async fn run_one_job(job: &Job) -> FinishOutcome {
     let result = if let Some(sid) = job.session_id.as_deref() {
         match crate::agent::memory::sqlite_fts::MemoryDb::open_default() {
             Ok(db) => {
-                loop_::ask_with_memory(provider.clone(), &cfg, &job.prompt, &tools, &db, sid).await
+                loop_::ask_with_stream(
+                    provider.clone(),
+                    &cfg,
+                    &job.prompt,
+                    &tools,
+                    Some((&db, sid)),
+                    Arc::new(JobStreamSink {
+                        job_id: job.id.clone(),
+                    }),
+                )
+                .await
             }
-            Err(_) => loop_::ask_with(provider.clone(), &cfg, &job.prompt, &tools).await,
+            Err(_) => {
+                loop_::ask_with_stream(
+                    provider.clone(),
+                    &cfg,
+                    &job.prompt,
+                    &tools,
+                    None,
+                    Arc::new(JobStreamSink {
+                        job_id: job.id.clone(),
+                    }),
+                )
+                .await
+            }
         }
     } else {
-        loop_::ask_with(provider.clone(), &cfg, &job.prompt, &tools).await
+        loop_::ask_with_stream(
+            provider.clone(),
+            &cfg,
+            &job.prompt,
+            &tools,
+            None,
+            Arc::new(JobStreamSink {
+                job_id: job.id.clone(),
+            }),
+        )
+        .await
     };
 
     match result {
@@ -1030,6 +1116,37 @@ async fn run_one_job(job: &Job) -> FinishOutcome {
         },
         Err(e) => FinishOutcome::Error(e.to_string()),
     }
+}
+
+struct JobStreamSink {
+    job_id: String,
+}
+
+impl crate::agent::llm::accumulate::StreamSink for JobStreamSink {
+    fn on_event(&self, event: &crate::agent::llm::StreamEvent) {
+        match Store::open_default().and_then(|store| store.append_stream_event(&self.job_id, event))
+        {
+            Ok(()) => {}
+            Err(err) => {
+                tracing::warn!(job_id = %self.job_id, error = %err, "failed to append agent stream event");
+            }
+        }
+    }
+}
+
+fn enter_job_session(
+    job: &Job,
+) -> Result<Option<crate::clawd::session_scope::ProcSessionGuard>, String> {
+    let Some(session_id) = job.session_id.as_deref() else {
+        return Ok(None);
+    };
+    let sid = session_id
+        .parse::<crate::session::SessionId>()
+        .map_err(|err| err.to_string())?;
+    if !crate::session::session_dir(&sid).exists() {
+        return Ok(None);
+    }
+    crate::clawd::session_scope::ProcSessionGuard::enter(&sid, "clawd-agent-worker").map(Some)
 }
 
 fn parse_status(s: &str) -> Result<JobStatus, String> {
