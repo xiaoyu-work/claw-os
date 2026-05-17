@@ -55,10 +55,11 @@ jobs:
   # Single amd64 headless OS rootfs, multiple distribution channels.
   #
   # The amd64 rootfs is built once with the full non-desktop runtime surface:
-  # `base,cos-core,browser,systemd,apt-source`. That includes Claw's own
-  # cos/clawd agent runtime, apps, skills, browser automation, and upgrade
-  # source. It intentionally excludes desktop UI, installer/boot/VM-only
-  # features, and third-party agent providers such as copilot-cli.
+  # `base,cos-core,browser,systemd,apt-source,qwen3-embedding`. That includes
+  # Claw's own cos/clawd agent runtime, apps, skills, browser automation, the
+  # local Qwen3 embedding stack, and upgrade source. It intentionally excludes
+  # desktop UI, installer/boot/VM-only features, and third-party agent providers
+  # such as copilot-cli.
   #
   # Downstream steps in this job then package that one rootfs into:
   #   - 1 Docker amd64 source image     → GHCR
@@ -85,7 +86,7 @@ jobs:
       - name: Install host build tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y musl-tools debootstrap
+          sudo apt-get install -y musl-tools debootstrap curl ca-certificates python3
 
       - name: Cache cargo registry & target
         uses: actions/cache@v4
@@ -113,7 +114,7 @@ jobs:
       # Build the headless Claw OS rootfs ONCE. The Docker image and WSL
       # tarball both consume this same tree.
       - name: Build headless rootfs (shared with Docker + WSL)
-        run: sudo ./rootfs/build.sh --features base,cos-core,browser,systemd,apt-source
+        run: sudo ./rootfs/build.sh --features base,cos-core,browser,systemd,apt-source,qwen3-embedding
 
       # Docker-specific prep on the shared rootfs:
       #   - Add the default `cos` user (uid 1000, NOPASSWD sudo).
@@ -233,7 +234,7 @@ jobs:
       - name: Install host build tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y musl-tools debootstrap
+          sudo apt-get install -y musl-tools debootstrap curl ca-certificates python3
 
       - name: Cache cargo registry & target
         uses: actions/cache@v4
@@ -260,7 +261,7 @@ jobs:
         run: cargo build --release -p claw-semantic --target aarch64-unknown-linux-gnu
 
       - name: Build arm64 headless rootfs
-        run: sudo ARCH=arm64 ./rootfs/build.sh --features base,cos-core,browser,systemd,apt-source
+        run: sudo ARCH=arm64 ./rootfs/build.sh --features base,cos-core,browser,systemd,apt-source,qwen3-embedding
 
       - name: Prep rootfs for Docker (cos user + overlay scratch dirs)
         run: |

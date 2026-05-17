@@ -18,6 +18,7 @@ Both are optional. `packages.txt` runs first, then `install.sh`.
 | `base` | Core CLI tools, Node.js 24 (+ pnpm/typescript/tsx), Python apt packages, runtime dirs, `/etc/cos/profile.sh` sourcing, version injection |
 | `cos-core` | The `cos` binary, `apps/`, `skills/` |
 | `browser` | Chromium runtime libs, the `cos-browser` and (optional) `cos-browser-worker` binaries |
+| `qwen3-embedding` | Downloads the public Hugging Face `johnucm/Qwen-Qwen3-Embedding-0.6B-onnx` ONNX GenAI bundle into `/var/lib/cos/models/qwen3-embedding-0.6b/v1` and installs the pinned `ort-genai` runtime |
 | `desktop` | Wayland desktop stack (cosmic-comp + greeter + panel + launcher + settings + apps) built from the vendored monorepo at `<repo>/desktop/`. Wires `cosmic-greeter` as the display manager and sets `graphical.target` as default. Set `DESKTOP_SKIP=1` to install runtime deps only (skip the ~30–60 min cargo build). |
 | `claw-mail-ai` | Packs the `extensions/claw-mail-ai` MailExtension as an `.xpi`, force-installs it into Thunderbird, deploys the Python Native Messaging host (`apps/mail-ai`) under `/usr/lib/cos/mail-ai`, and drops the NM manifest + policies. Requires Thunderbird (already pulled in by `desktop`). |
 | `copilot-cli` | Installs `@github/copilot` globally via npm so `copilot` is on every user's `$PATH`. Used by cosmic-term's `@`-trigger AI integration (`desktop/term/src/ai/`). |
@@ -25,12 +26,13 @@ Both are optional. `packages.txt` runs first, then `install.sh`.
 
 Default feature set (when no `--features` is given): `base,cos-core,browser`.
 Docker and WSL use the headless Claw OS runtime feature set:
-`base,cos-core,browser,systemd,apt-source`. This is the full non-desktop OS
-surface: Claw's own `cos`/`clawd` agent runtime, apps, skills, browser
-automation, service units, and upgrade source. In every system target, systemd
-starts `clawd.service` as part of boot. Target-specific boot/install features
-(`kernel`, `grub-disk`, `vm`, `vmware`, `live`, `installer`), desktop UI, and
-third-party agent providers (`copilot-cli`) are opt-in.
+`base,cos-core,browser,systemd,apt-source,qwen3-embedding`. This is the full
+non-desktop OS surface: Claw's own `cos`/`clawd` agent runtime, apps, skills,
+browser automation, service units, local embedding stack, and upgrade source. In
+every system target, systemd starts `clawd.service` as part of boot.
+Target-specific boot/install features (`kernel`, `grub-disk`, `vm`, `vmware`,
+`live`, `installer`), desktop UI, and third-party agent providers
+(`copilot-cli`) are opt-in.
 
 ## Usage
 

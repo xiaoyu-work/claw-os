@@ -25,7 +25,7 @@ Claw OS provides primitives that traditional operating systems don't:
 | **Job Scheduling** | crond (no context) | Agent-native cron with tier/scope/credential context, overlap protection |
 | **Event System** | inotify (raw events) | Multi-source aggregation (file + proc + service), event history |
 | **Skills** | None | Markdown recipes the agent loads on demand; ships kernel-primitive references in `skills/claw-os/` |
-| **Local Inference** | None | `cos model` + `cos engine` manage on-device LLM runtimes (llama.cpp, vllm, …) |
+| **Local Inference** | None | `cos model` + `cos engine` manage on-device runtimes; headless images bundle the Qwen3 embedding stack |
 
 ## Quick Start
 
@@ -60,12 +60,13 @@ wsl -d claw-os
 
 The Docker image is the **headless Claw OS** runtime — the full non-desktop OS
 surface with Claw's own `cos`/`clawd` agent runtime, built-in apps, skills,
-browser automation, systemd units, and apt upgrade source. It does not bake in
-desktop UI, installer/boot/VM-only features, or third-party agents. The default
-user is `cos` (uid 1000, NOPASSWD sudo). The container boots systemd, so
-`clawd.service` starts through the same system path used by WSL and VM images.
-The published image is multi-arch (`linux/amd64` and `linux/arm64`), so
-Docker/OrbStack on Apple Silicon pulls the native arm64 image automatically.
+browser automation, the local Qwen3 embedding stack, systemd units, and apt
+upgrade source. It does not bake in desktop UI, installer/boot/VM-only features,
+or third-party agents. The default user is `cos` (uid 1000, NOPASSWD sudo). The
+container boots systemd, so `clawd.service` starts through the same system path
+used by WSL and VM images. The published image is multi-arch (`linux/amd64` and
+`linux/arm64`), so Docker/OrbStack on Apple Silicon pulls the native arm64 image
+automatically.
 
 ```bash
 docker pull ghcr.io/xiaoyu-work/claw-os:latest

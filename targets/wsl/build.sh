@@ -6,8 +6,8 @@
 # Usage:   sudo ./build.sh wsl
 #
 # Steps:
-#   1. Build a Debian rootfs with features: base, cos-core, browser, systemd
-#      (browser is bundled but its systemd unit is NOT enabled — see plan §7).
+#   1. Build a Debian rootfs with features: base, cos-core, browser, systemd,
+#      qwen3-embedding (browser is bundled but its systemd unit is NOT enabled).
 #   2. Apply the WSL-specific overlay (wsl.conf).
 #   3. Create a default 'cos' user (uid 1000, passwordless sudo).
 #   4. Tar the rootfs into a tarball that `wsl --import` can consume.
@@ -22,6 +22,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ROOTFS="$PROJECT_DIR/build/claw-os-rootfs"
+FEATURES="${FEATURES:-base,cos-core,browser,systemd,apt-source,qwen3-embedding}"
 
 source "$PROJECT_DIR/scripts/lib/arch.sh"
 source "$PROJECT_DIR/scripts/lib/add-cos-user.sh"
@@ -41,9 +42,15 @@ fi
 #    surface; CI exploits this to build the rootfs once and run both target
 #    scripts against it (the second invocation sees the rootfs and skips).
 if [ ! -d "$ROOTFS" ]; then
-    "$PROJECT_DIR/rootfs/build.sh" --features base,cos-core,browser,systemd,apt-source
+    "$PROJECT_DIR/rootfs/build.sh" --features "$FEATURES"
 else
     echo ":: using existing rootfs at $ROOTFS"
+fi
+
+if [[ ",$FEATURES," == *,qwen3-embedding,* ]]; then
+    echo ":: ensuring qwen3-embedding feature"
+    ROOTFS="$ROOTFS" PROJECT_DIR="$PROJECT_DIR" \
+        "$PROJECT_DIR/rootfs/features/qwen3-embedding/install.sh"
 fi
 
 # 2. Apply WSL-specific overlay (wsl.conf, etc.).

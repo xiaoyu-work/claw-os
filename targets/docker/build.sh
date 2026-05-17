@@ -2,10 +2,11 @@
 # Claw OS — docker target.
 #
 # Produces the headless Claw OS Docker image: the full non-desktop OS runtime
-# (`base,cos-core,browser,systemd,apt-source`) with Claw's own cos/clawd agent,
-# apps, skills, browser automation, and upgrade source. It intentionally does
-# not include desktop UI, installer/boot/VM-only features, or third-party agent
-# providers such as copilot-cli.
+# (`base,cos-core,browser,systemd,apt-source,qwen3-embedding`) with Claw's own
+# cos/clawd agent, apps, skills, browser automation, local embedding stack, and
+# upgrade source. It intentionally does not include desktop UI,
+# installer/boot/VM-only features, or third-party agent providers such as
+# copilot-cli.
 #
 # systemd is PID 1, exactly like the WSL/VM targets, so clawd starts through
 # the same enabled clawd.service boot path everywhere. The default login user
@@ -27,7 +28,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ROOTFS="$PROJECT_DIR/build/claw-os-rootfs"
-FEATURES="${FEATURES:-base,cos-core,browser,systemd,apt-source}"
+FEATURES="${FEATURES:-base,cos-core,browser,systemd,apt-source,qwen3-embedding}"
 
 source "$PROJECT_DIR/scripts/lib/add-cos-user.sh"
 
@@ -53,6 +54,12 @@ if [ ! -d "$ROOTFS" ]; then
 else
     echo ":: using existing rootfs at $ROOTFS"
     echo "   (rebuild from scratch: sudo rm -rf $ROOTFS && sudo $0)"
+fi
+
+if [[ ",$FEATURES," == *,qwen3-embedding,* ]]; then
+    echo ":: ensuring qwen3-embedding feature"
+    ROOTFS="$ROOTFS" PROJECT_DIR="$PROJECT_DIR" \
+        "$PROJECT_DIR/rootfs/features/qwen3-embedding/install.sh"
 fi
 
 echo ":: prepping rootfs — cos user + overlay scratch dirs"
