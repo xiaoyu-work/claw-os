@@ -1,0 +1,34 @@
+[package]
+name = "claw-semantic"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/xiaoyu-work/claw-os"
+description = "Local semantic (embedding-based) document search daemon for ClawOS — companion to Recoll's keyword layer."
+
+[[bin]]
+name = "claw-semantic-daemon"
+path = "src/bin/daemon.rs"
+
+[[bin]]
+name = "claw-semantic"
+path = "src/bin/cli.rs"
+
+[lib]
+name = "claw_semantic"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["env"] }
+notify = "6"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+dirs = "5"
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3.27"

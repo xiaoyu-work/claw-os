@@ -1,19 +1,33 @@
 //! Embedding task — vector representations of text.
 //!
-//! Phase 1.5: cloud OpenAI-compatible backend (OpenAI / Azure OpenAI /
-//! self-hosted vLLM / Ollama via `/embeddings` endpoint shape).
+//! Wires the global `[embed]` config block to concrete embedder
+//! implementations. The trait surface ([`Embedder`], [`EmbedRequest`],
+//! [`EmbedResponse`], [`EmbedError`], [`EmbedUsage`]) is defined in
+//! the [`claw_embed`] crate so other workspace crates (e.g.
+//! `claw-semantic`) can implement / consume embeddings without
+//! pulling in the entire `core` runtime.
 //!
-//! Phase 0.5 originally scoped local ONNX (BGE / MiniLM / nomic-embed)
-//! but local engines wait for the user to supply ONNX files. The cloud
-//! path gives the agent an immediately usable embed surface.
+//! What lives here:
+//!
+//! - The OpenAI-compatible cloud embedder ([`OpenAICompatEmbedder`])
+//!   — needs `crate::config::EmbedConfig` and the agent's credential
+//!   resolver, so it can't be pure.
+//! - The `build_default` / `build_from` / `build_from_with_agent`
+//!   factory tree that reads `crate::config` and constructs whichever
+//!   embedder the user has configured.
 
 use std::collections::HashMap;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::config::EmbedConfig;
+
+// Re-export the trait surface so existing call-sites
+// (`crate::model::tasks::embed::{Embedder, ...}`) keep compiling
+// transparently after the move to claw-embed.
+pub use claw_embed::{EmbedError, EmbedRequest, EmbedResponse, EmbedUsage, Embedder};
 
 /// Default embedding model name. Used when [`crate::config::EmbedConfig::model`]
 /// is left empty; an explicit `model = "..."` in `[embed]` overrides this.
@@ -26,53 +40,6 @@ use crate::config::EmbedConfig;
 /// `ModelMismatch` on the first row from a new model. To migrate, run
 /// `cos agent semantic clear-all --yes` and re-index.
 pub const MODEL_NAME: &str = "text-embedding-3-small";
-
-/// One embedding request — a batch of inputs to embed.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EmbedRequest {
-    pub inputs: Vec<String>,
-}
-
-/// Result of an embedding call.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EmbedResponse {
-    pub embeddings: Vec<Vec<f32>>,
-    pub model: String,
-    pub dim: usize,
-    pub usage: EmbedUsage,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct EmbedUsage {
-    pub prompt_tokens: u32,
-    pub total_tokens: u32,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum EmbedError {
-    #[error("not configured: set [embed] block in config.json")]
-    NotConfigured,
-    #[error("authentication failed: bad or missing API key")]
-    Auth,
-    #[error("rate limited (retry after {retry_after_ms}ms)")]
-    RateLimited { retry_after_ms: u64 },
-    #[error("provider returned error: {status} — {message}")]
-    Provider { status: u16, message: String },
-    #[error("transport: {0}")]
-    Transport(String),
-    #[error("parse error: {0}")]
-    Parse(String),
-    #[error("invalid input: {0}")]
-    InvalidInput(String),
-}
-
-#[async_trait]
-pub trait Embedder: Send + Sync {
-    fn name(&self) -> &str;
-    fn model(&self) -> &str;
-    fn is_configured(&self) -> bool;
-    async fn embed(&self, request: EmbedRequest) -> Result<EmbedResponse, EmbedError>;
-}
 
 // =====================================================================
 // Factory

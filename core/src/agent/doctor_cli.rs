@@ -400,7 +400,8 @@ fn check_memory() -> Value {
 
     // Semantic store is opt-in (needs an embedder configured). When
     // it returns Ok(None), report disabled rather than failed.
-    let semantic = match crate::agent::memory::semantic::SemanticStore::open_default() {
+    use crate::agent::memory::semantic::{SemanticStore, SemanticStoreExt};
+    let semantic = match SemanticStore::open_default() {
         Ok(Some(s)) => json!({
             "status": "ok",
             "path": paths::agent_semantic_db_path().display().to_string(),

@@ -63,5 +63,13 @@ semver = "1"
 # rmcp = "..."
 # serde_yaml = "..."
 
+# claw-embed: pure embedding abstractions (Embedder trait + types,
+# SemanticStore). Lives in this workspace at crates/claw-embed/. We
+# depend on it so core can keep the config-aware factories
+# (`build_default`, `open_default`, `default_path`) while the storage
+# and trait definitions are reusable from claw-semantic and any other
+# future consumer.
+claw-embed = { path = "../crates/claw-embed" }
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

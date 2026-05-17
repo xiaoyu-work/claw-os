@@ -138,6 +138,24 @@ else
     echo "  :: WARNING — cos-agent-ui binary not built; the Agent app will not launch" >&2
 fi
 
+# Binaries: claw-semantic-daemon + claw-semantic CLI.
+# Both are optional — the OS still works without them (Recoll covers
+# the keyword layer); a missing binary just disables the semantic
+# search layer and apps/docs.search falls back to recoll-only.
+CLAW_SEMANTIC_DAEMON_BIN="$(find_bin claw-semantic-daemon || true)"
+if [ -n "$CLAW_SEMANTIC_DAEMON_BIN" ] && [ -f "$CLAW_SEMANTIC_DAEMON_BIN" ]; then
+    echo "  :: claw-semantic-daemon  <- $CLAW_SEMANTIC_DAEMON_BIN"
+    install -m 755 "$CLAW_SEMANTIC_DAEMON_BIN" "$BASE_STAGE/usr/local/bin/claw-semantic-daemon"
+else
+    echo "  :: WARNING — claw-semantic-daemon binary not built; semantic search disabled" >&2
+fi
+
+CLAW_SEMANTIC_CLI_BIN="$(find_bin claw-semantic || true)"
+if [ -n "$CLAW_SEMANTIC_CLI_BIN" ] && [ -f "$CLAW_SEMANTIC_CLI_BIN" ]; then
+    echo "  :: claw-semantic         <- $CLAW_SEMANTIC_CLI_BIN"
+    install -m 755 "$CLAW_SEMANTIC_CLI_BIN" "$BASE_STAGE/usr/local/bin/claw-semantic"
+fi
+
 # Shell scripts shared with all targets.
 install -m 755 "$PROJECT_DIR/rootfs/overlay/usr/local/bin/cos-init" \
     "$BASE_STAGE/usr/local/bin/cos-init"

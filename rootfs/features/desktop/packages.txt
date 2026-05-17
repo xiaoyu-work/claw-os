@@ -177,7 +177,12 @@ thunderbird
 # Recoll provides the Xapian-backed full-text index and the recollq /
 # recollindex / recoll CLIs. apps/docs wraps recollq + recollindex to
 # expose docs.search / docs.index / docs.status / docs.configure to the
-# AI agent. Defaults to indexing ~/Documents ~/Desktop ~/Downloads.
+# AI agent. Defaults to indexing ~/Documents ~/Desktop ~/Downloads
+# (see overlay/etc/skel/.recoll/recoll.conf for the seeded user config).
+# Real-time monitoring is enabled out of the box via the systemd --user
+# unit claw-recoll-index.service (overlay/etc/systemd/user/), which runs
+# `recollindex -m` and uses inotify to keep the index current on every
+# create / modify / delete.
 # Pulls in poppler-utils, antiword, unrtf, etc. as recommends for the
 # PDF / Office / RTF format filters.
 recoll
