@@ -1,37 +1,4 @@
-mod agent;
-mod ai;
-mod apps;
-mod approvals;
-mod audit;
-mod bridge;
-mod browser;
-mod caps;
-mod checkpoint;
-mod config;
-mod credential;
-mod cron;
-mod crypto;
-mod engine_pkg;
-pub mod errors;
-mod filelock;
-mod i18n;
-mod ipc;
-mod model;
-mod netfilter;
-mod paths;
-mod perms;
-mod policy;
-mod proc;
-mod router;
-mod sandbox;
-mod service;
-mod session;
-mod sysinfo;
-#[cfg(test)]
-mod test_env;
-mod trace;
-mod watch;
-
+use cos::{caps, router};
 use std::env;
 use std::io::IsTerminal;
 use std::process;
@@ -114,8 +81,9 @@ fn main() {
                 _ => serde_json::json!({"error": e.to_string()}),
             };
             let rendered = match fmt {
-                OutputFormat::Pretty => serde_json::to_string_pretty(&err)
-                    .unwrap_or_else(|_| err.to_string()),
+                OutputFormat::Pretty => {
+                    serde_json::to_string_pretty(&err).unwrap_or_else(|_| err.to_string())
+                }
                 OutputFormat::Compact => err.to_string(),
             };
             println!("{}", rendered);

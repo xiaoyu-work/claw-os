@@ -115,6 +115,11 @@ COS_BIN="$(find_bin cos)" || { echo "error: cos binary not built" >&2; exit 1; }
 echo "  :: cos          <- $COS_BIN"
 install -m 755 "$COS_BIN" "$BASE_STAGE/usr/local/bin/cos"
 
+# Binary: clawd (user-session agent daemon).
+CLAWD_BIN="$(find_bin clawd)" || { echo "error: clawd binary not built" >&2; exit 1; }
+echo "  :: clawd        <- $CLAWD_BIN"
+install -m 755 "$CLAWD_BIN" "$BASE_STAGE/usr/local/bin/clawd"
+
 # Binary: cos-agent-bridge (HTTP+SSE daemon for com.clawos.Agent).
 # Optional — the rest of the OS works without it, so a missing bridge
 # binary just produces a warning rather than failing the deb build.
@@ -294,9 +299,11 @@ mkdir -p "$SYSTEMD_STAGE/etc/default"
 install -m 644 "$DEFAULTS_SRC/cos-home" \
     "$SYSTEMD_STAGE/etc/default/cos-home"
 
-# User-scoped unit: auto-start cos-agent-bridge in every logged-in
-# user's graphical session. Enabled globally by the postinst.
+# User-scoped units: clawd starts in each user session; cos-agent-bridge
+# starts in graphical sessions. Enabled globally by the postinst.
 USER_UNITS_SRC="$PROJECT_DIR/rootfs/features/systemd/overlay/usr/lib/systemd/user"
+install -m 644 "$USER_UNITS_SRC/clawd.service" \
+    "$SYSTEMD_STAGE/usr/lib/systemd/user/clawd.service"
 install -m 644 "$USER_UNITS_SRC/cos-agent-bridge.service" \
     "$SYSTEMD_STAGE/usr/lib/systemd/user/cos-agent-bridge.service"
 

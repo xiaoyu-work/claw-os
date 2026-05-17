@@ -1,0 +1,35 @@
+pub mod agent;
+pub mod ai;
+pub mod approvals;
+pub mod apps;
+pub mod audit;
+pub mod bridge;
+pub mod browser;
+pub mod caps;
+pub mod checkpoint;
+pub mod clawd;
+pub mod config;
+pub mod credential;
+pub mod cron;
+pub mod crypto;
+pub mod engine_pkg;
+pub mod errors;
+pub mod filelock;
+pub mod i18n;
+pub mod ipc;
+pub mod model;
+pub mod netfilter;
+pub mod paths;
+pub mod perms;
+pub mod policy;
+pub mod proc;
+pub mod router;
+pub mod sandbox;
+pub mod service;
+pub mod session;
+pub mod sysinfo;
+pub mod trace;
+pub mod watch;
+
+#[cfg(test)]
+pub mod test_env;

@@ -491,6 +491,27 @@ pub enum FinishOutcome {
     Error(String),
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct WorkerOptions {
+    pub once: bool,
+    pub poll_ms: u64,
+    pub max_jobs: Option<u32>,
+}
+
+impl Default for WorkerOptions {
+    fn default() -> Self {
+        Self {
+            once: false,
+            poll_ms: 1_000,
+            max_jobs: None,
+        }
+    }
+}
+
+pub fn run_worker_loop(options: WorkerOptions, shutdown: Arc<AtomicBool>) -> Result<Value, String> {
+    run_worker_loop_inner(options, shutdown, false)
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -803,30 +824,37 @@ fn cmd_prune(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_work(args: &[String]) -> Result<Value, String> {
-    let mut once = false;
-    let mut poll_ms: u64 = 1_000;
-    let mut max_jobs: Option<u32> = None;
+    let mut options = WorkerOptions::default();
     let mut i = 0usize;
     while i < args.len() {
         match args[i].as_str() {
             "--once" => {
-                once = true;
+                options.once = true;
                 i += 1;
             }
             "--poll-ms" => {
                 let v = args.get(i + 1).ok_or("--poll-ms needs a value")?;
-                poll_ms = v.parse().map_err(|e| format!("--poll-ms: {e}"))?;
+                options.poll_ms = v.parse().map_err(|e| format!("--poll-ms: {e}"))?;
                 i += 2;
             }
             "--max-jobs" => {
                 let v = args.get(i + 1).ok_or("--max-jobs needs a value")?;
-                max_jobs = Some(v.parse().map_err(|e| format!("--max-jobs: {e}"))?);
+                options.max_jobs = Some(v.parse().map_err(|e| format!("--max-jobs: {e}"))?);
                 i += 2;
             }
             s => return Err(format!("unknown flag: {s}")),
         }
     }
 
+    let shutdown = Arc::new(AtomicBool::new(false));
+    run_worker_loop_inner(options, shutdown, true)
+}
+
+fn run_worker_loop_inner(
+    options: WorkerOptions,
+    shutdown: Arc<AtomicBool>,
+    install_signals: bool,
+) -> Result<Value, String> {
     let store = Store::open_default().map_err(|e| e.to_string())?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -839,8 +867,9 @@ fn cmd_work(args: &[String]) -> Result<Value, String> {
     // claimed/ with no response and no cancellation marker. With
     // this flag the worker finishes the in-flight job, then exits
     // before claiming a new one.
-    let shutdown = Arc::new(AtomicBool::new(false));
-    runtime.spawn(install_shutdown_listener(shutdown.clone()));
+    if install_signals {
+        runtime.spawn(install_shutdown_listener(shutdown.clone()));
+    }
     let mut processed: u32 = 0;
     let mut summaries: Vec<Value> = Vec::new();
     loop {
@@ -861,24 +890,24 @@ fn cmd_work(args: &[String]) -> Result<Value, String> {
                     }
                 }
                 processed += 1;
-                if once {
+                if options.once {
                     break;
                 }
-                if let Some(cap) = max_jobs {
+                if let Some(cap) = options.max_jobs {
                     if processed >= cap {
                         break;
                     }
                 }
             }
             None => {
-                if once {
+                if options.once {
                     break;
                 }
                 // Sleep in short slices so a shutdown signal can
                 // interrupt long poll intervals without waiting out
                 // the full duration.
-                let total = Duration::from_millis(poll_ms);
-                let slice = Duration::from_millis(100.min(poll_ms));
+                let total = Duration::from_millis(options.poll_ms);
+                let slice = Duration::from_millis(100.min(options.poll_ms));
                 let start = Instant::now();
                 while start.elapsed() < total {
                     if shutdown.load(Ordering::SeqCst) {
@@ -1204,12 +1233,7 @@ mod tests {
         let store = Arc::new(Store::with_root(dir.path().to_path_buf()).unwrap());
         let n_jobs = 64usize;
         let ids: Vec<String> = (0..n_jobs)
-            .map(|i| {
-                store
-                    .submit(format!("job-{i}"), None, None)
-                    .unwrap()
-                    .id
-            })
+            .map(|i| store.submit(format!("job-{i}"), None, None).unwrap().id)
             .collect();
 
         // Outcomes per id: count of successful claims and successful

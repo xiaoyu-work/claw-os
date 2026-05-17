@@ -5,7 +5,8 @@ Documentation=https://github.com/xiaoyu-work/claw-os
 # app (com.clawos.Agent) and the Super+A overlay, both of which are
 # only meaningful while the user is logged in graphically.
 PartOf=graphical-session.target
-After=graphical-session.target
+Wants=clawd.service
+After=graphical-session.target clawd.service
 
 [Service]
 Type=simple

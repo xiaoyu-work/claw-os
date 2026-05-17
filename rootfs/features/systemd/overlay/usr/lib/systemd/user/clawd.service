@@ -1,0 +1,19 @@
+[Unit]
+Description=Claw OS — Agent Daemon (clawd)
+Documentation=https://github.com/xiaoyu-work/claw-os
+After=basic.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/clawd
+Restart=on-failure
+RestartSec=3
+Environment=COS_BIN=/usr/local/bin/cos
+Environment=COS_DATA_DIR=%h/.local/share/cos
+Environment=COS_RUNTIME_DIR=%t/cos
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

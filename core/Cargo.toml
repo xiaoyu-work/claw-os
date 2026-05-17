@@ -4,9 +4,17 @@ version = "0.1.0"
 edition = "2021"
 description = "Claw OS — agent-native operating system core"
 
+[lib]
+name = "cos"
+path = "src/lib.rs"
+
 [[bin]]
 name = "cos"
 path = "src/main.rs"
+
+[[bin]]
+name = "clawd"
+path = "src/bin/clawd.rs"
 
 [features]
 default = []
