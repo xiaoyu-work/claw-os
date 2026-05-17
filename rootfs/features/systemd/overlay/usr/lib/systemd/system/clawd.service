@@ -1,0 +1,28 @@
+[Unit]
+Description=Claw OS — System Agent Daemon (clawd)
+Documentation=https://github.com/xiaoyu-work/claw-os
+After=basic.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/clawd --socket /run/cos/clawd.sock
+Restart=on-failure
+RestartSec=3
+Environment=COS_BIN=/usr/local/bin/cos
+Environment=COS_DATA_DIR=/var/lib/cos
+Environment=COS_RUNTIME_DIR=/run/cos
+Environment=COS_LOG_DIR=/var/log/cos
+Environment=CLAWD_SOCKET=/run/cos/clawd.sock
+Environment=CLAWD_SOCKET_MODE=0666
+RuntimeDirectory=cos
+RuntimeDirectoryMode=0755
+StateDirectory=cos
+StateDirectoryMode=0755
+LogsDirectory=cos
+LogsDirectoryMode=0755
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

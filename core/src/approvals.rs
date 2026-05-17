@@ -246,6 +246,7 @@ pub fn submit(
     let path = pending_dir().join(format!("{}.json", req.id));
     let data = serde_json::to_string_pretty(&req).map_err(|e| e.to_string())?;
     write_atomic(&path, data.as_bytes()).map_err(|e| format!("write pending: {e}"))?;
+    crate::clawd::system_journal::record_approval_request(&req);
     Ok(req.id)
 }
 
@@ -330,6 +331,8 @@ fn resolve(
     // authoritative copy is already in approved/ or denied/ and the
     // scratch file is harmless.
     let _ = fs::remove_file(&scratch);
+
+    crate::clawd::system_journal::record_approval_decision(&resolved);
 
     Ok(resolved)
 }

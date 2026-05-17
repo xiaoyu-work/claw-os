@@ -6,16 +6,17 @@ set -e
 case "$1" in
     remove)
         if [ -d /run/systemd/system ]; then
+            deb-systemd-invoke stop clawd.service >/dev/null || true
             deb-systemd-invoke stop cos-home-setup.service >/dev/null || true
             deb-systemd-invoke stop cos-browser.service >/dev/null || true
         fi
         if [ -x /usr/bin/deb-systemd-helper ]; then
+            deb-systemd-helper disable clawd.service >/dev/null || true
             deb-systemd-helper disable cos-home-setup.service >/dev/null || true
             deb-systemd-helper disable cos-browser.service >/dev/null || true
         fi
-        # User units: remove the global enable symlinks we created in
-        # postinst. We can't reach into individual user sessions, but
-        # this prevents new logins from starting the daemon/bridge.
+        # Remove both the current bridge symlink and the legacy
+        # user-scoped clawd symlink from older package versions.
         rm -f /etc/systemd/user/default.target.wants/clawd.service
         rm -f /etc/systemd/user/graphical-session.target.wants/cos-agent-bridge.service
         ;;

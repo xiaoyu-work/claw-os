@@ -41,10 +41,12 @@ pub fn service_cmd(args: &[String]) -> Result<Value, String> {
         }
         "result" => service_result(rest),
         "cancel" => service_cancel(rest),
-        "work" => Err("agent workers are owned by clawd; start clawd.service instead".to_string()),
+        "context" => send("context.snapshot", Value::Null),
+        "operations" => service_operations(rest),
+        "work" => Err("agent workers are owned by system clawd.service".to_string()),
         "prune" => Err("agent queue pruning is owned by clawd".to_string()),
         other => Err(format!(
-            "unknown agent service subcommand: {other}. try: submit | list | status | result | cancel"
+            "unknown agent service subcommand: {other}. try: submit | list | status | result | cancel | context | operations"
         )),
     }
 }
@@ -58,6 +60,8 @@ fn service_help() -> Value {
             "status  [<task_id>]",
             "result  <task_id> [--wait-secs N]",
             "cancel  <task_id>",
+            "context",
+            "operations [--limit N] [--source SOURCE]",
         ],
     })
 }
@@ -171,6 +175,27 @@ fn service_cancel(args: &[String]) -> Result<Value, String> {
         .filter(|s| !s.trim().is_empty())
         .ok_or("usage: cos agent service cancel <task_id>")?;
     send("task.cancel", json!({ "id": id }))
+}
+
+fn service_operations(args: &[String]) -> Result<Value, String> {
+    let mut params = json!({});
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--limit" => {
+                let v = args.get(i + 1).ok_or("--limit needs a value")?;
+                params["limit"] = json!(v.parse::<u64>().map_err(|e| format!("--limit: {e}"))?);
+                i += 2;
+            }
+            "--source" => {
+                let v = args.get(i + 1).ok_or("--source needs a value")?;
+                params["source"] = json!(v);
+                i += 2;
+            }
+            s => return Err(format!("unknown flag: {s}")),
+        }
+    }
+    send("system.operations", params)
 }
 
 fn task_result_to_ask_response(job: Value, stream_requested: bool) -> Result<Value, String> {

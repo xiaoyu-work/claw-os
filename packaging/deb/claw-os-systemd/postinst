@@ -11,18 +11,19 @@ case "$1" in
             deb-systemd-helper unmask cos-home-setup.service >/dev/null || true
             deb-systemd-helper --quiet was-enabled cos-home-setup.service \
                 || deb-systemd-helper enable cos-home-setup.service >/dev/null || true
+            deb-systemd-helper unmask clawd.service >/dev/null || true
+            deb-systemd-helper --quiet was-enabled clawd.service \
+                || deb-systemd-helper enable clawd.service >/dev/null || true
             deb-systemd-helper unmask cos-browser.service >/dev/null || true
         fi
 
-        # User units. Enable globally so every logging-in user gets
-        # clawd under their systemd --user instance, and graphical users
-        # also get the desktop bridge. deb-systemd-helper does not handle
+        # User units. The desktop bridge stays per-graphical-session
+        # and connects to the boot-time system clawd socket.
+        # deb-systemd-helper does not handle
         # user units, so do the symlinks directly (this is what
         # `systemctl --global enable` does internally and is safe in a
         # chroot — no systemd needs to be running).
-        mkdir -p /etc/systemd/user/default.target.wants
-        ln -sf /usr/lib/systemd/user/clawd.service \
-            /etc/systemd/user/default.target.wants/clawd.service
+        rm -f /etc/systemd/user/default.target.wants/clawd.service
 
         mkdir -p /etc/systemd/user/graphical-session.target.wants
         ln -sf /usr/lib/systemd/user/cos-agent-bridge.service \
@@ -33,6 +34,9 @@ case "$1" in
             systemctl --global daemon-reload >/dev/null 2>&1 || true
             if [ -n "$2" ]; then
                 deb-systemd-invoke try-restart cos-home-setup.service >/dev/null || true
+                deb-systemd-invoke try-restart clawd.service >/dev/null || true
+            else
+                deb-systemd-invoke start clawd.service >/dev/null || true
             fi
         fi
         ;;

@@ -115,7 +115,7 @@ COS_BIN="$(find_bin cos)" || { echo "error: cos binary not built" >&2; exit 1; }
 echo "  :: cos          <- $COS_BIN"
 install -m 755 "$COS_BIN" "$BASE_STAGE/usr/local/bin/cos"
 
-# Binary: clawd (user-session agent daemon).
+# Binary: clawd (system agent daemon).
 CLAWD_BIN="$(find_bin clawd)" || { echo "error: clawd binary not built" >&2; exit 1; }
 echo "  :: clawd        <- $CLAWD_BIN"
 install -m 755 "$CLAWD_BIN" "$BASE_STAGE/usr/local/bin/clawd"
@@ -292,6 +292,8 @@ install -m 644 "$UNITS_SRC/cos-home-setup.service" \
     "$SYSTEMD_STAGE/usr/lib/systemd/system/cos-home-setup.service"
 install -m 644 "$UNITS_SRC/cos-browser.service" \
     "$SYSTEMD_STAGE/usr/lib/systemd/system/cos-browser.service"
+install -m 644 "$UNITS_SRC/clawd.service" \
+    "$SYSTEMD_STAGE/usr/lib/systemd/system/clawd.service"
 
 # Admin-editable default for cos-home-setup.service.
 DEFAULTS_SRC="$PROJECT_DIR/rootfs/features/systemd/overlay/etc/default"
@@ -299,11 +301,9 @@ mkdir -p "$SYSTEMD_STAGE/etc/default"
 install -m 644 "$DEFAULTS_SRC/cos-home" \
     "$SYSTEMD_STAGE/etc/default/cos-home"
 
-# User-scoped units: clawd starts in each user session; cos-agent-bridge
-# starts in graphical sessions. Enabled globally by the postinst.
+# User-scoped units: cos-agent-bridge starts in graphical sessions and
+# connects to the system clawd socket. Enabled globally by the postinst.
 USER_UNITS_SRC="$PROJECT_DIR/rootfs/features/systemd/overlay/usr/lib/systemd/user"
-install -m 644 "$USER_UNITS_SRC/clawd.service" \
-    "$SYSTEMD_STAGE/usr/lib/systemd/user/clawd.service"
 install -m 644 "$USER_UNITS_SRC/cos-agent-bridge.service" \
     "$SYSTEMD_STAGE/usr/lib/systemd/user/cos-agent-bridge.service"
 
