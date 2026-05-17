@@ -115,9 +115,6 @@ jobs:
       - name: Build headless rootfs (shared with Docker + WSL)
         run: sudo ./rootfs/build.sh --features base,cos-core,browser,systemd,apt-source
 
-      - name: Fix rootfs permissions for Docker build
-        run: sudo chmod -R a+rX build/claw-os-rootfs
-
       # Docker-specific prep on the shared rootfs:
       #   - Add the default `cos` user (uid 1000, NOPASSWD sudo).
       #   - Pre-create /var/lib/cos/overlay/{base,upper,work} chowned to cos
@@ -139,6 +136,9 @@ jobs:
               chown -R cos:cos /var/lib/cos/overlay
             "
           '
+
+      - name: Fix rootfs permissions for Docker build context
+        run: sudo chmod -R a+rX build/claw-os-rootfs
 
       # Docker build (FROM scratch — no base image)
       - name: Set up Docker Buildx
@@ -262,9 +262,6 @@ jobs:
       - name: Build arm64 headless rootfs
         run: sudo ARCH=arm64 ./rootfs/build.sh --features base,cos-core,browser,systemd,apt-source
 
-      - name: Fix rootfs permissions for Docker build
-        run: sudo chmod -R a+rX build/claw-os-rootfs
-
       - name: Prep rootfs for Docker (cos user + overlay scratch dirs)
         run: |
           sudo bash -c '
@@ -279,6 +276,9 @@ jobs:
               chown -R cos:cos /var/lib/cos/overlay
             "
           '
+
+      - name: Fix rootfs permissions for Docker build context
+        run: sudo chmod -R a+rX build/claw-os-rootfs
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
