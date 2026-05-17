@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use tokio::time::sleep;
 
 use crate::agent::service::{Job, JobStatus, Store};
-use crate::caps::{Role, Scope};
+use crate::caps::Role;
 use crate::session;
 
 pub async fn submit(params: Value) -> Result<Value, String> {
@@ -36,11 +36,10 @@ fn create_task_session(prompt: &str) -> Result<String, String> {
     let sid = session::create(purpose).map_err(|err| err.to_string())?;
     session::update_meta(&sid, |meta| {
         meta.creator_runtime = Some("clawd".to_string());
-        meta.role = Some(Role::Admin);
+        meta.role = Some(Role::Observer);
     })
     .map_err(|err| err.to_string())?;
-    let caps =
-        Role::Admin.caps_with_scopes(Some(Scope::Wild), Some(Scope::Wild), Some(Scope::Wild));
+    let caps = super::system_caps::readonly_task_caps();
     session::set_caps(&sid, &caps).map_err(|err| err.to_string())?;
     Ok(sid.into_string())
 }

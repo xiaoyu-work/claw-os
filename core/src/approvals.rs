@@ -13,6 +13,7 @@
 //! $COS_DATA_DIR/approvals/
 //!     pending/<id>.json    # full Request
 //!     approved/<id>.json   # Request + Outcome
+//!     consumed/<id>.json   # approved once-grants after use
 //!     denied/<id>.json
 //! ```
 //!
@@ -38,7 +39,7 @@ pub enum GrantDuration {
     Once,
     /// Lasts for the lifetime of the requesting session.
     Session,
-    /// Persisted across sessions until the user revokes it.
+    /// Persisted until the user revokes it; still bound to the approved request.
     Forever,
 }
 
@@ -115,6 +116,9 @@ fn approved_dir() -> PathBuf {
 fn denied_dir() -> PathBuf {
     root().join("denied")
 }
+fn consumed_dir() -> PathBuf {
+    root().join("consumed")
+}
 /// Holding area for requests that have been claimed by a resolver
 /// (atomically renamed out of `pending/`) but not yet written to
 /// `approved/` or `denied/`. A crash between the claim and the final
@@ -129,6 +133,7 @@ fn ensure_dirs() -> std::io::Result<()> {
     fs::create_dir_all(pending_dir())?;
     fs::create_dir_all(approved_dir())?;
     fs::create_dir_all(denied_dir())?;
+    fs::create_dir_all(consumed_dir())?;
     fs::create_dir_all(scratch_dir())?;
     Ok(())
 }
@@ -175,10 +180,7 @@ fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
     })?;
     fs::create_dir_all(parent)?;
 
-    let leaf = path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("anon");
+    let leaf = path.file_name().and_then(|s| s.to_str()).unwrap_or("anon");
     // Hidden tmp name so partial writes never appear in directory
     // listings. The .tmp suffix + nonce keep concurrent writers from
     // racing on the same scratch path.
@@ -210,6 +212,12 @@ fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
         let _ = dir.sync_all();
     }
     Ok(())
+}
+
+fn sync_dir(path: &Path) {
+    if let Ok(dir) = fs::File::open(path) {
+        let _ = dir.sync_all();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -298,8 +306,8 @@ fn resolve(
         Ok(s) => s,
         Err(e) => return Err(format!("read claimed {id}: {e}")),
     };
-    let request: Request = serde_json::from_str(&data)
-        .map_err(|e| format!("parse claimed {id}: {e}"))?;
+    let request: Request =
+        serde_json::from_str(&data).map_err(|e| format!("parse claimed {id}: {e}"))?;
 
     let decision = Decision {
         outcome,
@@ -349,7 +357,7 @@ pub fn list_pending() -> Vec<Request> {
 
 pub fn list_recent(limit: usize) -> Vec<Resolved> {
     let mut out = Vec::new();
-    for dir in [approved_dir(), denied_dir()] {
+    for dir in [approved_dir(), consumed_dir(), denied_dir()] {
         for p in list_dir(&dir) {
             if let Ok(data) = fs::read_to_string(&p) {
                 if let Ok(r) = serde_json::from_str::<Resolved>(&data) {
@@ -367,6 +375,58 @@ pub fn lookup_pending(id: &str) -> Option<Request> {
     let p = pending_dir().join(format!("{id}.json"));
     let data = fs::read_to_string(&p).ok()?;
     serde_json::from_str(&data).ok()
+}
+
+/// Return an approved grant for `session`/`verb`/`scope`, consuming it
+/// atomically when it was approved for `once`.
+pub fn consume_matching_grant(
+    session: &str,
+    verb: Verb,
+    requested_scope: &Scope,
+) -> Result<Option<GrantDuration>, String> {
+    ensure_dirs().map_err(|e| format!("approvals dir: {e}"))?;
+    for path in list_dir(&approved_dir()) {
+        let Ok(data) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(resolved) = serde_json::from_str::<Resolved>(&data) else {
+            continue;
+        };
+        if resolved.request.session != session {
+            continue;
+        }
+        if Verb::parse(&resolved.request.verb) != Some(verb) {
+            continue;
+        }
+        if resolved.decision.outcome != Outcome::Approved {
+            continue;
+        }
+        if !resolved.request.scope.covers(requested_scope) {
+            continue;
+        }
+
+        let duration = resolved.decision.duration.unwrap_or(GrantDuration::Once);
+        if duration != GrantDuration::Once {
+            return Ok(Some(duration));
+        }
+
+        let Some(file_name) = path.file_name() else {
+            continue;
+        };
+        let dest = consumed_dir().join(file_name);
+        match fs::rename(&path, &dest) {
+            Ok(()) => {
+                sync_dir(&approved_dir());
+                sync_dir(&consumed_dir());
+                return Ok(Some(duration));
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => {
+                return Err(format!("consume approved grant {}: {err}", path.display()));
+            }
+        }
+    }
+    Ok(None)
 }
 
 fn list_dir(dir: &Path) -> Vec<PathBuf> {
@@ -411,11 +471,36 @@ pub fn wait(id: &str, timeout: Duration) -> Result<Decision, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
+    use std::sync::{Mutex, MutexGuard};
 
-    fn isolated_env() -> tempfile::TempDir {
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct IsolatedEnv {
+        _lock: MutexGuard<'static, ()>,
+        prev_data_dir: Option<OsString>,
+        _tmp: tempfile::TempDir,
+    }
+
+    impl Drop for IsolatedEnv {
+        fn drop(&mut self) {
+            match self.prev_data_dir.take() {
+                Some(value) => std::env::set_var("COS_DATA_DIR", value),
+                None => std::env::remove_var("COS_DATA_DIR"),
+            }
+        }
+    }
+
+    fn isolated_env() -> IsolatedEnv {
+        let lock = ENV_LOCK.lock().unwrap();
         let tmp = tempfile::tempdir().expect("tempdir");
+        let prev_data_dir = std::env::var_os("COS_DATA_DIR");
         std::env::set_var("COS_DATA_DIR", tmp.path());
-        tmp
+        IsolatedEnv {
+            _lock: lock,
+            prev_data_dir,
+            _tmp: tmp,
+        }
     }
 
     #[test]
@@ -433,6 +518,62 @@ mod tests {
         let resolved = approve(&id, GrantDuration::Once, None, None).unwrap();
         assert_eq!(resolved.decision.outcome, Outcome::Approved);
         assert!(!pending_dir().join(format!("{id}.json")).exists());
+        assert!(approved_dir().join(format!("{id}.json")).exists());
+    }
+
+    #[test]
+    fn approved_once_grant_is_consumed() {
+        let _tmp = isolated_env();
+        let id = submit(
+            Verb::FS_WRITE,
+            Scope::path("/tmp/approved/**"),
+            "sess-a",
+            "write requested",
+            None,
+        )
+        .unwrap();
+        approve(&id, GrantDuration::Once, None, None).unwrap();
+
+        let first = consume_matching_grant(
+            "sess-a",
+            Verb::FS_WRITE,
+            &Scope::path("/tmp/approved/file.txt"),
+        )
+        .unwrap();
+        assert_eq!(first, Some(GrantDuration::Once));
+        assert!(!approved_dir().join(format!("{id}.json")).exists());
+        assert!(consumed_dir().join(format!("{id}.json")).exists());
+
+        let second = consume_matching_grant(
+            "sess-a",
+            Verb::FS_WRITE,
+            &Scope::path("/tmp/approved/file.txt"),
+        )
+        .unwrap();
+        assert_eq!(second, None);
+
+        let recent = list_recent(10);
+        assert!(recent.iter().any(|resolved| resolved.request.id == id));
+    }
+
+    #[test]
+    fn approved_session_grant_is_reusable() {
+        let _tmp = isolated_env();
+        let id = submit(
+            Verb::SYS_PACKAGE,
+            Scope::name("git"),
+            "sess-a",
+            "install git",
+            None,
+        )
+        .unwrap();
+        approve(&id, GrantDuration::Session, None, None).unwrap();
+
+        for _ in 0..2 {
+            let grant =
+                consume_matching_grant("sess-a", Verb::SYS_PACKAGE, &Scope::name("git")).unwrap();
+            assert_eq!(grant, Some(GrantDuration::Session));
+        }
         assert!(approved_dir().join(format!("{id}.json")).exists());
     }
 
@@ -466,8 +607,14 @@ mod tests {
     #[test]
     fn grant_duration_parse() {
         assert_eq!(GrantDuration::parse("once"), Some(GrantDuration::Once));
-        assert_eq!(GrantDuration::parse("Session"), Some(GrantDuration::Session));
-        assert_eq!(GrantDuration::parse("FOREVER"), Some(GrantDuration::Forever));
+        assert_eq!(
+            GrantDuration::parse("Session"),
+            Some(GrantDuration::Session)
+        );
+        assert_eq!(
+            GrantDuration::parse("FOREVER"),
+            Some(GrantDuration::Forever)
+        );
         assert_eq!(GrantDuration::parse("nope"), None);
     }
 
@@ -594,6 +741,9 @@ mod tests {
         )
         .unwrap();
         let pending = list_pending();
-        assert!(pending.is_empty(), "should ignore tmp file, got {pending:?}");
+        assert!(
+            pending.is_empty(),
+            "should ignore tmp file, got {pending:?}"
+        );
     }
 }

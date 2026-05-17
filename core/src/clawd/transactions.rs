@@ -2,7 +2,7 @@ use chrono::Utc;
 use serde_json::{json, Value};
 use std::str::FromStr;
 
-use crate::caps::{Role, Scope};
+use crate::caps::Role;
 use crate::session::{self, RollbackOutcome, SessionId, Status as SessionStatus};
 
 use super::state::{DaemonState, TransactionHandle};
@@ -12,12 +12,11 @@ pub fn begin(state: &DaemonState, params: Value) -> Result<Value, String> {
     let session_id = session::create(&purpose).map_err(|err| err.to_string())?;
     session::update_meta(&session_id, |meta| {
         meta.creator_runtime = Some("clawd".to_string());
-        meta.role = Some(Role::Admin);
+        meta.role = Some(Role::Observer);
         meta.status = SessionStatus::Running;
     })
     .map_err(|err| err.to_string())?;
-    let caps =
-        Role::Admin.caps_with_scopes(Some(Scope::Wild), Some(Scope::Wild), Some(Scope::Wild));
+    let caps = super::system_caps::readonly_task_caps();
     session::set_caps(&session_id, &caps).map_err(|err| err.to_string())?;
 
     let lease = session::try_acquire(&session_id).map_err(|err| err.to_string())?;

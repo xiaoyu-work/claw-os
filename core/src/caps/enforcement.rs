@@ -194,16 +194,12 @@ fn require_impl(
         match pid_ancestry::is_descendant_of(caller_pid, session.pid) {
             AncestryResult::Yes => {}
             AncestryResult::No => {
-                return Err(Denial::pid_ancestry_mismatch(
-                    verb,
-                    scope,
-                    caller_pid,
-                    session.pid,
-                )
-                .with_hint(
-                    "the COS_SESSION env var does not match the process tree; \
+                return Err(
+                    Denial::pid_ancestry_mismatch(verb, scope, caller_pid, session.pid).with_hint(
+                        "the COS_SESSION env var does not match the process tree; \
                      do not set it manually",
-                ));
+                    ),
+                );
             }
             AncestryResult::Unsupported => {
                 if matches!(mode, Mode::Strict) {
@@ -237,11 +233,29 @@ fn require_impl(
 
     if caps.covers(&requested) {
         Ok(())
+    } else if approved_grant_covers(session_id, verb, &scope) {
+        Ok(())
     } else if caps.verbs().contains(&verb) {
         // Verb is held but at a scope that doesn't cover this request.
         Err(Denial::scope_out_of_range(verb, scope, caps))
     } else {
         Err(Denial::verb_not_granted(verb, scope))
+    }
+}
+
+fn approved_grant_covers(session_id: &str, verb: Verb, scope: &Scope) -> bool {
+    match crate::approvals::consume_matching_grant(session_id, verb, scope) {
+        Ok(Some(_duration)) => true,
+        Ok(None) => false,
+        Err(err) => {
+            tracing::warn!(
+                session_id,
+                verb = %verb.as_str(),
+                error = %err,
+                "failed to inspect approved permission grants"
+            );
+            false
+        }
     }
 }
 
@@ -264,8 +278,7 @@ fn build_cap_audit_record(
         Ok(()) => ("allow", serde_json::Value::Null, serde_json::Value::Null),
         Err(d) => (
             "deny",
-            serde_json::to_value(&d.reason)
-                .unwrap_or(serde_json::Value::Null),
+            serde_json::to_value(&d.reason).unwrap_or(serde_json::Value::Null),
             d.hint
                 .as_ref()
                 .map(|h| serde_json::Value::String(h.clone()))
@@ -575,8 +588,7 @@ mod tests {
     #[test]
     fn allows_when_session_caps_cover_request() {
         let _lock = ENV_LOCK.lock().unwrap();
-        let caps =
-            r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
+        let caps = r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
         let reg = registry_with_caps("s1", caps);
         let _g = EnvGuard::new(&reg, Some("s1"), Some("strict"));
         assert!(require(Verb::FS_READ, Scope::path("/home/jay/notes.md")).is_ok());
@@ -585,8 +597,7 @@ mod tests {
     #[test]
     fn denies_with_scope_out_of_range_when_verb_held_but_path_outside() {
         let _lock = ENV_LOCK.lock().unwrap();
-        let caps =
-            r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
+        let caps = r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
         let reg = registry_with_caps("s1", caps);
         let _g = EnvGuard::new(&reg, Some("s1"), Some("strict"));
         let err = require(Verb::FS_READ, Scope::path("/etc/passwd")).unwrap_err();
@@ -601,11 +612,34 @@ mod tests {
     #[test]
     fn denies_with_verb_not_granted_when_verb_missing() {
         let _lock = ENV_LOCK.lock().unwrap();
-        let caps =
-            r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
+        let caps = r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
         let reg = registry_with_caps("s1", caps);
         let _g = EnvGuard::new(&reg, Some("s1"), Some("strict"));
         let err = require(Verb::FS_DELETE, Scope::path("/home/jay/x")).unwrap_err();
+        assert!(matches!(
+            err.reason,
+            super::super::denial::DenialReason::VerbNotGranted
+        ));
+    }
+
+    #[test]
+    fn approved_once_grant_allows_exactly_one_denied_request() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let caps = r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
+        let reg = registry_with_caps("s1", caps);
+        let _g = EnvGuard::new(&reg, Some("s1"), Some("strict"));
+        let id = crate::approvals::submit(
+            Verb::FS_WRITE,
+            Scope::path("/tmp/granted/**"),
+            "s1",
+            "test grant",
+            None,
+        )
+        .unwrap();
+        crate::approvals::approve(&id, crate::approvals::GrantDuration::Once, None, None).unwrap();
+
+        assert!(require(Verb::FS_WRITE, Scope::path("/tmp/granted/file")).is_ok());
+        let err = require(Verb::FS_WRITE, Scope::path("/tmp/granted/file")).unwrap_err();
         assert!(matches!(
             err.reason,
             super::super::denial::DenialReason::VerbNotGranted
@@ -651,8 +685,7 @@ mod tests {
     #[test]
     fn json_envelope_matches_denial_shape() {
         let _lock = ENV_LOCK.lock().unwrap();
-        let caps =
-            r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
+        let caps = r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
         let reg = registry_with_caps("s1", caps);
         let _g = EnvGuard::new(&reg, Some("s1"), Some("strict"));
         let err = require_or_json(Verb::FS_DELETE, Scope::path("/etc")).unwrap_err();
@@ -665,13 +698,7 @@ mod tests {
     #[test]
     fn audit_record_allow_carries_decision_verb_and_target() {
         let scope = Scope::path("/home/jay/notes.md");
-        let rec = build_cap_audit_record(
-            Verb::FS_READ,
-            &scope,
-            Mode::Strict,
-            Some("s1"),
-            &Ok(()),
-        );
+        let rec = build_cap_audit_record(Verb::FS_READ, &scope, Mode::Strict, Some("s1"), &Ok(()));
         assert_eq!(rec["decision"], "allow");
         assert_eq!(rec["verb"], "fs.read");
         assert_eq!(rec["session_id"], "s1");
@@ -688,13 +715,7 @@ mod tests {
         let scope = Scope::path("/etc/passwd");
         let denial = super::super::denial::Denial::verb_not_granted(Verb::FS_DELETE, scope.clone())
             .with_hint("ask the user");
-        let rec = build_cap_audit_record(
-            Verb::FS_DELETE,
-            &scope,
-            Mode::Strict,
-            None,
-            &Err(denial),
-        );
+        let rec = build_cap_audit_record(Verb::FS_DELETE, &scope, Mode::Strict, None, &Err(denial));
         assert_eq!(rec["decision"], "deny");
         assert_eq!(rec["reason"], "verb-not-granted");
         assert_eq!(rec["hint"], "ask the user");
@@ -716,8 +737,7 @@ mod tests {
         let prev_audit = std::env::var_os("COS_CAPS_AUDIT");
         std::env::remove_var("COS_CAPS_AUDIT");
 
-        let caps =
-            r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
+        let caps = r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
         let reg = registry_with_caps("s1", caps);
         let _g = EnvGuard::new(&reg, Some("s1"), Some("strict"));
 

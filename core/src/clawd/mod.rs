@@ -8,5 +8,6 @@ pub mod protocol;
 pub mod server;
 pub mod session_scope;
 pub mod state;
+pub mod system_caps;
 pub mod tasks;
 pub mod transactions;
