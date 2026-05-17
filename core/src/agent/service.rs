@@ -360,6 +360,7 @@ impl Store {
         write_json_atomic(&running_path, &job)?;
         let done_path = self.path_for(JobStatus::Ok, &job.id);
         fs::rename(&running_path, &done_path)?;
+        finish_durable_session(&job)?;
         Ok(job)
     }
 
@@ -385,6 +386,7 @@ impl Store {
                 job.finished_at = Some(now_iso());
                 write_json_atomic(&src, &job)?;
                 fs::rename(&src, &dst)?;
+                finish_durable_session(&job)?;
                 Ok(Some(job))
             }
             Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
@@ -548,6 +550,25 @@ fn write_json_atomic<T: Serialize>(target: &Path, value: &T) -> io::Result<()> {
 
 fn io_other<E: std::fmt::Display>(e: E) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, e.to_string())
+}
+
+fn finish_durable_session(job: &Job) -> io::Result<()> {
+    let Some(raw_sid) = job.session_id.as_deref() else {
+        return Ok(());
+    };
+    let Ok(sid) = raw_sid.parse::<crate::session::SessionId>() else {
+        return Ok(());
+    };
+    if !crate::session::session_dir(&sid).exists() {
+        return Ok(());
+    }
+
+    let status = match job.status {
+        JobStatus::Ok => crate::session::Status::Done,
+        JobStatus::Error | JobStatus::Cancelled => crate::session::Status::Failed,
+        JobStatus::Pending | JobStatus::Running => return Ok(()),
+    };
+    crate::session::end(&sid, status).map_err(io_other)
 }
 
 fn now_iso() -> String {

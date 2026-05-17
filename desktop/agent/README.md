@@ -2,9 +2,9 @@
 
 The user-facing face of the ClawOS system Agent. The brain (LLM
 runtime, providers, tools, caps, memory) lives in `core/src/agent/`
-and is reachable via the `cos agent` CLI. This directory holds the
+and is orchestrated by the user-session `clawd` daemon. This directory holds the
 **desktop UI surface** plus the small local HTTP bridge that
-brokers a streaming JSON+SSE protocol between the UI and the CLI.
+brokers a streaming JSON+SSE protocol between the UI and `clawd`.
 
 ## Layout
 
@@ -16,7 +16,7 @@ desktop/agent/
 ├── bridge/                 # cos-agent-bridge — HTTP+SSE daemon
 │   └── src/
 │       ├── main.rs         # 127.0.0.1 Axum server (/api only)
-│       ├── state.rs        # port discovery + cos binary location
+│       ├── state.rs        # port discovery + clawd socket location
 │       └── routes/
 │           ├── chat.rs     # POST /api/chat   (SSE stream)
 │           ├── sessions.rs # GET/DELETE /api/sessions[/:id]
@@ -47,10 +47,10 @@ desktop/agent/
            │  /api/*  (JSON + SSE)    │
            └────────────┬─────────────┘
                         │
-                        ▼  subprocess
+                        ▼  Unix socket
            ┌──────────────────────────┐
-           │  cos agent stream "..."  │
-           │  core::agent::runtime    │
+           │  clawd                   │
+           │  task.submit / stream    │
            └──────────────────────────┘
 ```
 

@@ -5,7 +5,10 @@
 //! libcosmic), which talks to these endpoints directly. If a stray
 //! browser hits `/`, axum 404s, which is what we want.
 
-use axum::{Router, routing::{get, post}};
+use axum::{
+    Router,
+    routing::{get, post},
+};
 
 use crate::state::AppState;
 

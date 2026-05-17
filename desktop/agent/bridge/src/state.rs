@@ -2,10 +2,9 @@
 //!
 //! The bridge holds two things:
 //! - the configured HTTP port (env override or random)
-//! - the path to the `cos` binary that we subprocess for chat turns
+//! - the `clawd` Unix socket path used for chat turns
 //!
-//! Everything else (sessions, models, credentials) is owned by
-//! `cos agent` itself and reached through subprocess calls. The
+//! Everything else (sessions, models, credentials) is owned by `clawd`. The
 //! bridge no longer serves a static SPA — the React frontend was
 //! retired in favour of the native libcosmic UI (`cos-agent-ui`),
 //! which calls only the `/api/*` JSON+SSE endpoints.
@@ -17,7 +16,7 @@ use anyhow::Context;
 #[derive(Clone, Debug)]
 pub struct AppState {
     pub port: u16,
-    pub cos_bin: PathBuf,
+    pub clawd_socket: PathBuf,
 }
 
 impl AppState {
@@ -26,11 +25,22 @@ impl AppState {
             .ok()
             .and_then(|s| s.parse::<u16>().ok())
             .unwrap_or(0);
-        let cos_bin = std::env::var("COS_BIN")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("/usr/local/bin/cos"));
-        Ok(Self { port, cos_bin })
+        let clawd_socket = clawd_socket_path();
+        Ok(Self { port, clawd_socket })
     }
+}
+
+fn clawd_socket_path() -> PathBuf {
+    if let Ok(path) = std::env::var("CLAWD_SOCKET") {
+        return PathBuf::from(path);
+    }
+    if let Ok(path) = std::env::var("XDG_RUNTIME_DIR") {
+        return PathBuf::from(path).join("clawd.sock");
+    }
+    if let Ok(path) = std::env::var("COS_RUNTIME_DIR") {
+        return PathBuf::from(path).join("clawd.sock");
+    }
+    std::env::temp_dir().join("clawd.sock")
 }
 
 /// Write the bound port to `$XDG_RUNTIME_DIR/cos-agent-bridge.port`
