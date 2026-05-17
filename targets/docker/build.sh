@@ -3,8 +3,9 @@
 #
 # Produces the headless Claw OS Docker image: the full non-desktop OS runtime
 # (`base,cos-core,browser,systemd,apt-source,qwen3-embedding`) with Claw's own
-# cos/clawd agent, apps, skills, browser automation, local embedding stack, and
-# upgrade source. It intentionally does not include desktop UI,
+# cos/clawd agent, apps, skills, browser automation, upgrade source, and the
+# local embedding stack on architectures where upstream ships a Linux
+# ort-genai runtime. It intentionally does not include desktop UI,
 # installer/boot/VM-only features, or third-party agent providers such as
 # copilot-cli.
 #

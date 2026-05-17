@@ -61,6 +61,10 @@ jobs:
   # desktop UI, installer/boot/VM-only features, and third-party agent providers
   # such as copilot-cli.
   #
+  # arm64 uses the same feature list, but qwen3-embedding currently skips there
+  # because upstream ort-genai publishes Windows arm64 assets but no Linux arm64
+  # CPU runtime. WSL and Docker arm64 are Linux targets.
+  #
   # Downstream steps in this job then package that one rootfs into:
   #   - 1 Docker amd64 source image     → GHCR
   #   - 1 WSL amd64 tarball             → workflow artifact

@@ -3,6 +3,31 @@
 
 set -euo pipefail
 
+source "$PROJECT_DIR/scripts/lib/arch.sh"
+
+qwen3_ort_genai_supported() {
+    case "$DEB_ARCH" in
+        amd64)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+ORT_GENAI_VERSION="$(
+    sed -n 's/^pub const ORT_GENAI_KNOWN_GOOD_VERSION: &str = "\(.*\)";/\1/p' \
+        "$PROJECT_DIR/core/src/engine_pkg/mod.rs" | head -1
+)"
+ORT_GENAI_TAG="v${ORT_GENAI_VERSION:-0.12.2}"
+
+if ! qwen3_ort_genai_supported && [ "${COS_QWEN3_SKIP_ORT_GENAI:-0}" != "1" ]; then
+    echo "  :: skipping qwen3-embedding on $DEB_ARCH: $ORT_GENAI_TAG has no Linux $DEB_ARCH CPU release asset"
+    echo "     set COS_QWEN3_SKIP_ORT_GENAI=1 to install the model files without an engine runtime"
+    exit 0
+fi
+
 "$PROJECT_DIR/scripts/download-qwen3-embedding-model.sh" --rootfs "$ROOTFS"
 
 if [ "${COS_QWEN3_SKIP_ORT_GENAI:-0}" != "1" ]; then
@@ -38,12 +63,6 @@ if [ "${COS_QWEN3_SKIP_ORT_GENAI:-0}" != "1" ]; then
     if [ -e /etc/resolv.conf ]; then
         cp -L /etc/resolv.conf "$ROOTFS/etc/resolv.conf"
     fi
-
-    ORT_GENAI_VERSION="$(
-        sed -n 's/^pub const ORT_GENAI_KNOWN_GOOD_VERSION: &str = "\(.*\)";/\1/p' \
-            "$PROJECT_DIR/core/src/engine_pkg/mod.rs" | head -1
-    )"
-    ORT_GENAI_TAG="v${ORT_GENAI_VERSION:-0.12.2}"
 
     if chroot "$ROOTFS" /usr/local/bin/cos engine list ort-genai \
         | grep -q "\"active\":\"$ORT_GENAI_TAG\""; then

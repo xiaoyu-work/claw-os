@@ -60,13 +60,14 @@ wsl -d claw-os
 
 The Docker image is the **headless Claw OS** runtime — the full non-desktop OS
 surface with Claw's own `cos`/`clawd` agent runtime, built-in apps, skills,
-browser automation, the local Qwen3 embedding stack, systemd units, and apt
-upgrade source. It does not bake in desktop UI, installer/boot/VM-only features,
-or third-party agents. The default user is `cos` (uid 1000, NOPASSWD sudo). The
-container boots systemd, so `clawd.service` starts through the same system path
-used by WSL and VM images. The published image is multi-arch (`linux/amd64` and
-`linux/arm64`), so Docker/OrbStack on Apple Silicon pulls the native arm64 image
-automatically.
+browser automation, systemd units, and apt upgrade source. The amd64 image also
+bundles the local Qwen3 embedding stack; arm64 skips it because upstream
+`ort-genai` does not publish a Linux arm64 CPU runtime yet. It does not bake in
+desktop UI, installer/boot/VM-only features, or third-party agents. The default
+user is `cos` (uid 1000, NOPASSWD sudo). The container boots systemd, so
+`clawd.service` starts through the same system path used by WSL and VM images.
+The published image is multi-arch (`linux/amd64` and `linux/arm64`), so
+Docker/OrbStack on Apple Silicon pulls the native arm64 image automatically.
 
 ```bash
 docker pull ghcr.io/xiaoyu-work/claw-os:latest

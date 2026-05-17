@@ -7,7 +7,8 @@
 #
 # Steps:
 #   1. Build a Debian rootfs with features: base, cos-core, browser, systemd,
-#      qwen3-embedding (browser is bundled but its systemd unit is NOT enabled).
+#      qwen3-embedding where upstream ships the Linux runtime (browser is
+#      bundled but its systemd unit is NOT enabled).
 #   2. Apply the WSL-specific overlay (wsl.conf).
 #   3. Create a default 'cos' user (uid 1000, passwordless sudo).
 #   4. Tar the rootfs into a tarball that `wsl --import` can consume.
@@ -15,7 +16,9 @@
 # Note: WSL2 supports arm64 on Windows-on-ARM hosts (e.g. Surface Pro X,
 # Snapdragon X, Apple Silicon Mac via Parallels). The arm64 tarball is
 # imported the same way as amd64 — Windows picks the right tarball based
-# on the host arch.
+# on the host arch. It still runs Linux arm64 userland, not native Windows
+# arm64 binaries, so the Qwen3 embedding stack waits for a Linux arm64
+# ort-genai runtime.
 
 set -euo pipefail
 
