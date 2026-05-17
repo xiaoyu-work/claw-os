@@ -1,19 +1,14 @@
 //! `POST /api/chat` — Server-Sent Events stream of one chat turn.
 //!
-//! Wraps `cos agent ask "<prompt>" --stream` as a subprocess and
-//! re-frames its output as SSE:
+//! Submits the prompt to `clawd` and re-frames the daemon response as SSE:
 //!
-//! * tokens from the agent (written to subprocess stderr) → `delta`
-//!   events with payload `{"text": "<chunk>"}`
-//! * final JSON envelope (written to subprocess stdout) → `done`
+//! * final answer text from `clawd` → `delta`
+//! * final task envelope from `clawd` → `done`
 //!   event carrying the full agent response (answer, turns, usage,
 //!   tool calls, …)
-//! * spawn / IO errors → `error` events
-//!
-//! The child is killed if the SSE consumer drops the connection.
+//! * daemon / IO errors → `error` events
 
 use std::convert::Infallible;
-use std::process::Stdio;
 
 use axum::{
     Json,
@@ -23,10 +18,8 @@ use axum::{
 use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::io::AsyncReadExt;
-use tokio::process::{Child, Command};
-use tracing::warn;
 
+use crate::clawd;
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -36,7 +29,7 @@ pub struct ChatRequest {
     #[serde(default)]
     pub prompt: Option<String>,
     /// Multi-turn form for richer clients. We pick the last `user`
-    /// message and feed it to `cos agent ask` for now; full history
+    /// message and feed it to `clawd` for now; full history
     /// will land once the agent kernel grows a structured-NDJSON
     /// variant.
     #[serde(default)]
@@ -70,37 +63,6 @@ impl ChatRequest {
     }
 }
 
-/// Tokio's `Child` does not kill the subprocess on drop. The bridge
-/// is a streaming surface — if the HTTP client navigates away we want
-/// the agent process to stop too, not pile up zombies.
-struct KillOnDrop(Option<Child>);
-
-impl KillOnDrop {
-    fn new(child: Child) -> Self {
-        Self(Some(child))
-    }
-
-    fn take(&mut self) -> Option<Child> {
-        self.0.take()
-    }
-
-    fn stderr(&mut self) -> Option<tokio::process::ChildStderr> {
-        self.0.as_mut().and_then(|c| c.stderr.take())
-    }
-
-    fn stdout(&mut self) -> Option<tokio::process::ChildStdout> {
-        self.0.as_mut().and_then(|c| c.stdout.take())
-    }
-}
-
-impl Drop for KillOnDrop {
-    fn drop(&mut self) {
-        if let Some(mut child) = self.0.take() {
-            let _ = child.start_kill();
-        }
-    }
-}
-
 fn delta_event(text: &str) -> Event {
     Event::default()
         .event("delta")
@@ -127,7 +89,8 @@ pub async fn stream_chat(
     Json(req): Json<ChatRequest>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let prompt = req.resolve_prompt();
-    let cos_bin = state.cos_bin.clone();
+    let session_id = req.session_id.clone();
+    let socket = state.clawd_socket.clone();
 
     let stream = async_stream::stream! {
         if prompt.trim().is_empty() {
@@ -135,100 +98,59 @@ pub async fn stream_chat(
             return;
         }
 
-        let spawned = Command::new(&cos_bin)
-            .args(["agent", "ask"])
-            .arg(&prompt)
-            .arg("--stream")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn();
+        let mut params = json!({ "prompt": prompt });
+        if let Some(session_id) = session_id.as_ref().filter(|value| !value.trim().is_empty()) {
+            params["session_id"] = Value::from(session_id.clone());
+        }
 
-        let mut guard = match spawned {
-            Ok(child) => KillOnDrop::new(child),
+        let submitted = match clawd::request(&socket, "task.submit", params).await {
+            Ok(value) => value,
             Err(err) => {
-                yield Ok(error_event(&format!(
-                    "spawn {}: {}",
-                    cos_bin.display(),
-                    err
-                )));
+                yield Ok(error_event(&err.to_string()));
                 return;
             }
         };
 
-        let stderr = match guard.stderr() {
-            Some(s) => s,
+        let task_id = match submitted.get("id").and_then(Value::as_str) {
+            Some(id) => id.to_string(),
             None => {
-                yield Ok(error_event("missing piped stderr"));
-                return;
-            }
-        };
-        let stdout = match guard.stdout() {
-            Some(s) => s,
-            None => {
-                yield Ok(error_event("missing piped stdout"));
+                yield Ok(error_event("clawd task.submit returned no task id"));
                 return;
             }
         };
 
-        // Drain stdout in the background. The agent writes the final
-        // JSON envelope here at the very end; everything before that
-        // is just buffered.
-        let stdout_task = tokio::spawn(async move {
-            let mut buf = Vec::new();
-            let mut reader = stdout;
-            let _ = reader.read_to_end(&mut buf).await;
-            buf
-        });
-
-        // Stream stderr → delta events in real time.
-        let mut reader = stderr;
-        let mut buf = [0u8; 4096];
-        loop {
-            match reader.read(&mut buf).await {
-                Ok(0) => break,
-                Ok(n) => {
-                    let chunk = String::from_utf8_lossy(&buf[..n]);
-                    if chunk.is_empty() {
-                        continue;
-                    }
-                    yield Ok(delta_event(&chunk));
-                }
-                Err(err) => {
-                    warn!(?err, "stderr read failed");
-                    break;
-                }
-            }
-        }
-
-        // Reap the child + collect the final JSON envelope.
-        let exit = if let Some(mut child) = guard.take() {
-            child.wait().await.ok()
-        } else {
-            None
-        };
-
-        let envelope_bytes = stdout_task.await.unwrap_or_default();
-        let envelope: Value = match serde_json::from_slice::<Value>(&envelope_bytes) {
-            Ok(v) => v,
-            Err(_) => {
-                let raw = String::from_utf8_lossy(&envelope_bytes).trim().to_string();
-                if raw.is_empty() {
-                    json!({})
-                } else {
-                    json!({ "raw_stdout": raw })
-                }
+        let result = match clawd::request(&socket, "task.stream", json!({
+            "id": task_id,
+            "timeout_ms": 300000u64
+        })).await {
+            Ok(value) => value,
+            Err(err) => {
+                yield Ok(error_event(&err.to_string()));
+                return;
             }
         };
 
-        let mut payload = envelope;
-        if let Some(status) = exit.and_then(|s| s.code()) {
-            if let Value::Object(ref mut map) = payload {
-                map.entry("exit_status".to_string())
-                    .or_insert(Value::from(status));
-            }
-        }
+        let mut payload = result;
         if let Value::Object(ref mut map) = payload {
+            if map.get("status").and_then(Value::as_str) == Some("error") {
+                let message = map
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .unwrap_or("agent task failed");
+                yield Ok(error_event(message));
+                return;
+            }
+            if let Some(answer) = map
+                .get("response")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+            {
+                map.entry("answer".to_string())
+                    .or_insert(Value::from(answer.clone()));
+                if !answer.is_empty() {
+                    yield Ok(delta_event(&answer));
+                }
+            }
             map.entry("type".to_string())
                 .or_insert(Value::from("done"));
         }

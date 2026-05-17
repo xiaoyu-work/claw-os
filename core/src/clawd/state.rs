@@ -24,6 +24,7 @@ pub struct ContextEntry {
     pub source: String,
     pub updated_at: DateTime<Utc>,
     pub payload: Value,
+    pub metadata: Value,
 }
 
 pub struct TransactionHandle {
@@ -60,11 +61,12 @@ impl DaemonState {
         self.inner.started_instant.elapsed().as_millis()
     }
 
-    pub fn update_context(&self, source: String, payload: Value) {
+    pub fn update_context(&self, source: String, payload: Value, metadata: Value) {
         let entry = ContextEntry {
             source: source.clone(),
             updated_at: Utc::now(),
             payload,
+            metadata,
         };
         self.inner
             .context

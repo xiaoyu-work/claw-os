@@ -1,6 +1,49 @@
 use serde_json::{json, Value};
 
 use crate::approvals::{self, GrantDuration};
+use crate::caps::{Scope, Verb};
+
+pub fn request(params: Value) -> Result<Value, String> {
+    let verb_raw = required_string(&params, "verb")?;
+    let verb =
+        Verb::parse(&verb_raw).ok_or_else(|| format!("unknown capability verb: {verb_raw}"))?;
+    let scope_value = params
+        .get("scope")
+        .ok_or_else(|| "missing required parameter: scope".to_string())?;
+    let scope = serde_json::from_value::<Scope>(scope_value.clone())
+        .map_err(|err| format!("invalid scope: {err}"))?;
+    let session = params
+        .get("session")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| "clawd".to_string());
+    let reason = required_string(&params, "reason")?;
+    let requester = params
+        .get("requester")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+
+    let id = approvals::submit(
+        verb,
+        scope.clone(),
+        session.clone(),
+        reason.clone(),
+        requester,
+    )
+    .map_err(|err| err.to_string())?;
+    Ok(json!({
+        "id": id,
+        "status": "pending",
+        "verb": verb.as_str(),
+        "scope": scope,
+        "session": session,
+        "reason": reason,
+    }))
+}
 
 pub fn pending(params: Value) -> Result<Value, String> {
     let limit = optional_limit(&params)?;

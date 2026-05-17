@@ -1,4 +1,5 @@
 pub mod agent_client;
+pub mod audit;
 pub mod client;
 pub mod config;
 pub mod context;

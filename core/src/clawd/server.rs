@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::agent::service::{self, WorkerOptions};
 use serde_json::{json, Value};
@@ -9,7 +10,7 @@ use tokio::net::{UnixListener, UnixStream};
 
 use super::protocol::{encode_response, Request, Response};
 use super::state::DaemonState;
-use super::{context, permissions, tasks, transactions};
+use super::{audit, context, permissions, tasks, transactions};
 
 #[derive(Debug, Clone)]
 pub struct ServerOptions {
@@ -68,9 +69,27 @@ async fn handle_client(stream: UnixStream, state: DaemonState) -> Result<(), Str
             continue;
         }
 
+        let started = Instant::now();
         let response = match serde_json::from_str::<Request>(line) {
-            Ok(request) => dispatch(request, &state).await,
-            Err(err) => Response::error(None, "invalid_json", err.to_string()),
+            Ok(request) => {
+                let response = dispatch(request.clone(), &state).await;
+                if let Err(err) = audit::record_request(
+                    &request.command,
+                    &request.params,
+                    &response,
+                    started.elapsed(),
+                ) {
+                    tracing::error!(error = %err, "failed to write clawd audit record");
+                }
+                response
+            }
+            Err(err) => {
+                let response = Response::error(None, "invalid_json", err.to_string());
+                if let Err(err) = audit::record_invalid(line, &response, started.elapsed()) {
+                    tracing::error!(error = %err, "failed to write clawd invalid-request audit record");
+                }
+                response
+            }
         };
         let encoded = encode_response(&response).map_err(|err| err.to_string())?;
         writer
@@ -117,9 +136,11 @@ async fn dispatch_result(request: Request, state: &DaemonState) -> Result<Value,
         "task.cancel" => tasks::cancel(request.params),
         "task.stream" | "task.result" => tasks::result(request.params).await,
         "context.snapshot" => context::snapshot(state),
+        "context.sources" => context::sources(state),
         "context.update" => context::update(state, request.params),
         "permission.pending" => permissions::pending(request.params),
         "permission.recent" => permissions::recent(request.params),
+        "permission.request" => permissions::request(request.params),
         "permission.decide" => permissions::decide(request.params),
         "transaction.begin" => transactions::begin(state, request.params),
         "transaction.list" => transactions::list(state),

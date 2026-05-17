@@ -4,6 +4,7 @@ use serde_json::{json, Value};
 use tokio::time::sleep;
 
 use crate::agent::service::{Job, JobStatus, Store};
+use crate::session;
 
 pub async fn submit(params: Value) -> Result<Value, String> {
     let prompt = required_string(&params, "prompt")?;
@@ -19,10 +20,33 @@ pub async fn submit(params: Value) -> Result<Value, String> {
         .map(|value| u32::try_from(value).map_err(|_| format!("max_turns is too large: {value}")))
         .transpose()?;
     let store = Store::open_default().map_err(|err| err.to_string())?;
+    let session_id = match session_id {
+        Some(session_id) => Some(session_id),
+        None => Some(create_task_session(&prompt)?),
+    };
     let job = store
         .submit(prompt, session_id, max_turns)
         .map_err(|err| err.to_string())?;
     Ok(job_value(job))
+}
+
+fn create_task_session(prompt: &str) -> Result<String, String> {
+    let purpose = format!("agent task: {}", preview(prompt, 80));
+    let sid = session::create(purpose).map_err(|err| err.to_string())?;
+    session::update_meta(&sid, |meta| {
+        meta.creator_runtime = Some("clawd".to_string());
+    })
+    .map_err(|err| err.to_string())?;
+    Ok(sid.into_string())
+}
+
+fn preview(value: &str, max: usize) -> String {
+    let value = value.replace('\n', " ");
+    if value.chars().count() <= max {
+        value
+    } else {
+        format!("{}...", value.chars().take(max).collect::<String>())
+    }
 }
 
 pub fn list(params: Value) -> Result<Value, String> {
