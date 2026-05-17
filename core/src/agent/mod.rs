@@ -48,6 +48,7 @@ pub mod util;
 use serde_json::{json, Value};
 
 use crate::apps;
+use crate::clawd::agent_client;
 
 /// Recover from a poisoned [`std::sync::Mutex`] by taking the inner
 /// data. Poisoning means a previous holder panicked, but for the
@@ -84,48 +85,14 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
             if prompt.is_empty() {
                 return Err("usage: cos agent ask \"<prompt>\" [--stream]".into());
             }
-            let cfg_snapshot = crate::config::get().agent.clone();
-            setup::is_ready(&cfg_snapshot)?;
-            if stream {
-                // Multi-turn agent with live tokens streamed to stderr,
-                // final JSON envelope on stdout. Same registry/memory
-                // path as the blocking `ask`, just with a streaming
-                // sink. Replaces the old top-level `cos agent live`.
-                let provider = llm::registry::build(
-                    &cfg_snapshot.provider,
-                    &cfg_snapshot.model,
-                    &cfg_snapshot,
-                )
-                .map_err(|e| format!("provider unavailable: {e}"))?;
-                let provider = crate::ai::gate::wrap_for_system(provider);
-                let runtime = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .map_err(|e| format!("tokio runtime: {e}"))?;
-                let timeout = runtime::loop_::background_drain_timeout();
-                runtime.block_on(async move {
-                    let outcome = live_cmd_async(provider, &cfg_snapshot, &prompt).await;
-                    runtime::background::drain(timeout).await;
-                    outcome
-                })
-            } else {
-                match runtime::loop_::ask_blocking(&prompt) {
-                    Ok(result) => Ok(json!({
-                        "answer": result.answer,
-                        "turns": result.turns,
-                        "provider": result.provider,
-                        "model": result.model,
-                        "session_id": result.session_id,
-                    })),
-                    Err(e) => Err(e.to_string()),
-                }
-            }
+            agent_client::ask(&prompt, stream)
         }
         "chat" => chat_cmd(args),
         "budget" => budget_cmd(args),
         "override" => override_cmd(args),
         "status" => {
             let cfg = &crate::config::get().agent;
+            let daemon = agent_client::daemon_status()?;
             let ready = setup::is_ready(cfg);
             let key_source = setup::resolved_key_source(cfg)
                 .map(|s| s.to_json())
@@ -176,10 +143,11 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
                 "needs_credential": setup::provider_needs_credential(&cfg.provider),
                 "config_path": setup::config_path().display().to_string(),
                 "last_session": last_session,
+                "daemon": daemon,
                 "hint": "for the full provider/tools/skills/usage report, run `cos agent doctor`",
             }))
         }
-        "service" => service::cmd(args),
+        "service" => agent_client::service_cmd(args),
         "recall" => recall_cmd(args),
         "sessions" => sessions_cmd(args),
         "ls" => lifecycle::ls(args),

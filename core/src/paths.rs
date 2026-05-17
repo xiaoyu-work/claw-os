@@ -54,6 +54,13 @@ pub fn runtime_dir() -> PathBuf {
     from_env_or_default("COS_RUNTIME_DIR", "/run/cos", "run")
 }
 
+pub fn clawd_socket_path() -> PathBuf {
+    if let Some(v) = env::var_os("XDG_RUNTIME_DIR") {
+        return PathBuf::from(v).join("clawd.sock");
+    }
+    runtime_dir().join("clawd.sock")
+}
+
 pub fn config_dir() -> PathBuf {
     from_env_or_default("COS_CONFIG_DIR", "/etc/cos", "etc")
 }
@@ -118,10 +125,7 @@ pub fn user_data_dir() -> PathBuf {
     #[cfg(not(windows))]
     {
         let home = std::env::var_os("HOME").unwrap_or_else(|| "/root".into());
-        PathBuf::from(home)
-            .join(".local")
-            .join("share")
-            .join("cos")
+        PathBuf::from(home).join(".local").join("share").join("cos")
     }
 }
 
@@ -143,7 +147,9 @@ pub fn user_credentials_dir() -> PathBuf {
 /// means "no overrides, inherit the manifest verbatim". See
 /// [`crate::ai::overrides`] for the schema and merge semantics.
 pub fn user_app_override_path(app_id: &str) -> PathBuf {
-    user_config_dir().join("apps").join(format!("{app_id}.json"))
+    user_config_dir()
+        .join("apps")
+        .join(format!("{app_id}.json"))
 }
 
 /// Per-app user consent file:

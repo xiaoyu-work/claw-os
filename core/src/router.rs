@@ -1062,7 +1062,7 @@ fn builtin_apps() -> Vec<(
             ("tool", "Invoke one App-facing Tool by name: cos ai tool <name> --app <id> [--args <json>|--args-file <p>]. The kernel checks the App's caps grants, runs the Tool, and writes one audit row per call. List tools with `cos ai tools`."),
             ("tools", "Print the catalog of App-facing Tools (name, summary, verb, stability, JSON-Schema for args and return). Used by App authors and LLM function-call spec generators."),
         ]),
-        ("agent", "OS-native agent subsystem — runtime, memory, skills, LLM providers, tools, FS job queue", vec![
+        ("agent", "OS-native agent subsystem — clawd-backed runtime, memory, skills, LLM providers, tools, and tasks", vec![
             ("setup", "Per-modality config wizard: cos agent setup <llm|tts|stt|imagegen|embed|all> [--status|--reset|--verify-only|--no-verify]. Bare `cos agent setup` opens an interactive modality picker."),
             ("ask", "Single-shot prompt with full tool/memory loop: cos agent ask \"<prompt>\" [--stream] — without --stream waits for the full response; with --stream tokens are written live to stderr while the JSON envelope still lands on stdout."),
             ("chat", "Interactive REPL for the system agent: cos agent chat [--session <id>] [--no-stream] [--no-memory] [--show-tools] [--max-turns N] (slash commands: /quit /help /session /clear /history [N] /tools). For one-shot App-gated calls use `cos ai chat --app <id>` — `cos agent chat` is the kernel Agent's own surface and is not an App entry point."),
@@ -1070,7 +1070,7 @@ fn builtin_apps() -> Vec<(
             ("status", "Short live verdict: provider/model/key source, ready/not-ready, most-recent session. Use `cos agent doctor` for the full provider matrix, tool list, skills, usage."),
             ("sessions", "Inspect / manage conversation sessions in the memory DB: cos agent sessions [list [N] | title <id> | set-title <id> \"<title>\" | count [<id>] | clear <id> --yes]"),
             ("recall", "FTS5 search across recorded conversations: cos agent recall \"<query>\" [limit]"),
-            ("service", "Filesystem-based job queue: cos agent service {submit \"<prompt>\" | list | status <id> | result <id> | work | cancel <id> | prune}. Composes with cos cron + cos service for managed background workers."),
+            ("service", "Daemon-backed task queue: cos agent service {submit \"<prompt>\" | list | status <id> | result <id> | cancel <id>}. Requires clawd."),
             ("notes", "Manage agent markdown notes (MEMORY.md / USER.md / custom): cos agent notes [list|read <n>|write <n> <content>|append <n> <line>|delete <n>]"),
             ("skills", "Inspect or install skill bundles: cos agent skills [list|info <id>|install <archive.zip>|hub <list|show|install> <owner/repo>|...]"),
             ("todo", "Manage per-session agent todo lists: cos agent todo [list <session_id>|add <session_id> <id> <title>|set-status ...|remove ...|clear ...]"),

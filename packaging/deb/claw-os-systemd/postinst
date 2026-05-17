@@ -14,12 +14,16 @@ case "$1" in
             deb-systemd-helper unmask cos-browser.service >/dev/null || true
         fi
 
-        # User unit: cos-agent-bridge.service. Enable globally so that
-        # every logging-in user starts the bridge under their own
-        # systemd --user instance. deb-systemd-helper does not handle
-        # user units, so do the symlink directly (this is what
+        # User units. Enable globally so every logging-in user gets
+        # clawd under their systemd --user instance, and graphical users
+        # also get the desktop bridge. deb-systemd-helper does not handle
+        # user units, so do the symlinks directly (this is what
         # `systemctl --global enable` does internally and is safe in a
         # chroot — no systemd needs to be running).
+        mkdir -p /etc/systemd/user/default.target.wants
+        ln -sf /usr/lib/systemd/user/clawd.service \
+            /etc/systemd/user/default.target.wants/clawd.service
+
         mkdir -p /etc/systemd/user/graphical-session.target.wants
         ln -sf /usr/lib/systemd/user/cos-agent-bridge.service \
             /etc/systemd/user/graphical-session.target.wants/cos-agent-bridge.service
