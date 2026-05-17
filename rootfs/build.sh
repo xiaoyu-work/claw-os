@@ -121,6 +121,13 @@ mount --bind /dev/pts "$ROOTFS/dev/pts"
 if [ -e /etc/resolv.conf ]; then
     cp -L /etc/resolv.conf "$ROOTFS/etc/resolv.conf"
 fi
+install -d "$ROOTFS/etc/apt/apt.conf.d"
+cat > "$ROOTFS/etc/apt/apt.conf.d/80cos-retries" <<'EOF'
+Acquire::Retries "5";
+Acquire::http::Timeout "30";
+Acquire::https::Timeout "30";
+DPkg::Lock::Timeout "60";
+EOF
 
 cleanup_chroot_mounts() {
     # Unmount in reverse order, lazy fallback for stray references.
@@ -131,6 +138,26 @@ cleanup_chroot_mounts() {
     done
 }
 trap cleanup_chroot_mounts EXIT
+
+chroot_apt_get() {
+    local attempt=1
+    local max_attempts=3
+    local delay=5
+    local rc=0
+    while true; do
+        if chroot "$ROOTFS" apt-get "$@"; then
+            return 0
+        fi
+        rc=$?
+        if [ "$attempt" -ge "$max_attempts" ]; then
+            return "$rc"
+        fi
+        echo "  :: apt-get $* failed (attempt $attempt/$max_attempts); retrying in ${delay}s" >&2
+        sleep "$delay"
+        attempt=$((attempt + 1))
+        delay=$((delay * 2))
+    done
+}
 
 # 3. Apply each feature in order.
 for f in "${FEATURE_LIST[@]}"; do
@@ -160,9 +187,9 @@ for f in "${FEATURE_LIST[@]}"; do
         done < <(grep -vE '^\s*(#|$)' "$feature_dir/packages.txt" || true)
         if [ -n "${pkgs// /}" ]; then
             echo "  :: apt install$pkgs"
-            chroot "$ROOTFS" apt-get update -qq
-            chroot "$ROOTFS" apt-get install -y --no-install-recommends $pkgs
-            chroot "$ROOTFS" apt-get clean
+            chroot_apt_get update -qq
+            chroot_apt_get install -y --no-install-recommends $pkgs
+            chroot_apt_get clean
             rm -rf "$ROOTFS/var/lib/apt/lists"/*
         fi
     fi
