@@ -501,12 +501,18 @@ impl iced_container::Catalog for Theme {
 
             Container::List => {
                 let component = &self.current_container().component;
+                let mut background: Color = component.base.into();
+                background.a = 0.42;
+                let mut divider: Color = component.divider.into();
+                divider.a = 0.38;
                 iced_container::Style {
                     icon_color: Some(component.on.into()),
                     text_color: Some(component.on.into()),
-                    background: Some(Background::Color(component.base.into())),
+                    background: Some(Background::Color(background)),
                     border: iced::Border {
                         radius: cosmic.corner_radii.radius_s.into(),
+                        width: 1.0,
+                        color: divider,
                         ..Default::default()
                     },
                     shadow: Shadow::default(),
@@ -581,9 +587,17 @@ impl iced_container::Catalog for Theme {
             Container::Dropdown => iced_container::Style {
                 icon_color: None,
                 text_color: None,
-                background: Some(iced::Background::Color(cosmic.bg_component_color().into())),
+                background: Some(iced::Background::Color({
+                    let mut color: Color = cosmic.bg_component_color().into();
+                    color.a = 0.48;
+                    color
+                })),
                 border: Border {
-                    color: cosmic.bg_component_divider().into(),
+                    color: {
+                        let mut color: Color = cosmic.bg_component_divider().into();
+                        color.a = 0.45;
+                        color
+                    },
                     width: 1.0,
                     radius: cosmic.corner_radii.radius_s.into(),
                 },

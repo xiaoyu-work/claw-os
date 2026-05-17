@@ -73,12 +73,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         page::AppMode::NewInstall { create_user: pwd::Passwd::current_user().is_some_and(|current_user| current_user.name == "cosmic-initial-setup") }
     };
 
-    // Request a huge initial window size — cosmic-comp clamps it to the actual
-    // output dimensions, which gives us full-screen coverage without needing
-    // set_mode(Fullscreen) to win the race against the surface configure event.
-    // Combined with no size_limits, the wallpaper image inside view() (which
-    // already has Length::Fill) covers the entire screen edge-to-edge.
-    let settings = Settings::default().size(cosmic::iced::Size::new(7680.0, 4320.0));
+    // Start the first-boot wizard fullscreen at window creation time so the
+    // wallpaper is sized against the monitor, not a normal centered toplevel.
+    // The large size is only a fallback for toolkits/compositors that ignore
+    // the initial fullscreen hint.
+    let settings = Settings::default()
+        .fullscreen(true)
+        .size(cosmic::iced::Size::new(7680.0, 4320.0));
 
     cosmic::app::run::<App>(settings, mode)?;
 
@@ -175,12 +176,9 @@ impl Application for App {
             .collect::<Vec<_>>()
             .apply(Task::batch)
             .chain(app.update(Message::PageOpen(0)))
-            // Promote the wizard window to fullscreen as soon as it opens so
-            // the wallpaper actually fills the screen instead of leaving a
-            // ~50px cosmic-comp black backdrop above (and around) the default
-            // 1024x768 toplevel. style() returns a transparent app surface so
-            // the fullscreen state doesn't make libcosmic paint an opaque
-            // background over our stack.
+            // Keep a runtime fullscreen request as a fallback. The important
+            // path is Settings::fullscreen(true), which creates the first
+            // surface as fullscreen before cosmic-comp maps it.
             .chain(cosmic::iced::window::latest().and_then(|id| {
                 cosmic::iced::window::set_mode::<cosmic::Action<Message>>(id, cosmic::iced::window::Mode::Fullscreen)
             }));
@@ -499,6 +497,8 @@ impl Application for App {
             }));
 
         let centered = widget::container(card)
+            .width(Length::Fill)
+            .height(Length::Fill)
             .center_x(Length::Fill)
             .center_y(Length::Fill)
             .padding(space_l);
@@ -509,9 +509,15 @@ impl Application for App {
                     .content_fit(ContentFit::Cover)
                     .width(Length::Fill)
                     .height(Length::Fill);
-                cosmic::iced::widget::stack![bg, centered].into()
+                widget::container(cosmic::iced::widget::stack![bg, centered])
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into()
             }
-            None => centered.into(),
+            None => widget::container(centered)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
         }
     }
 

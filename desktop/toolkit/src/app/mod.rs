@@ -77,6 +77,7 @@ pub(crate) fn iced_settings<App: Application>(
     }
     window_settings.decorations = !settings.client_decorations;
     window_settings.size = settings.size;
+    window_settings.fullscreen = settings.fullscreen;
     let min_size = settings.size_limits.min();
     if min_size != iced::Size::ZERO {
         window_settings.min_size = Some(min_size);

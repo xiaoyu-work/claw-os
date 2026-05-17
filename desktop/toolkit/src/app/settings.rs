@@ -51,6 +51,9 @@ pub struct Settings {
     /// Initial size of the window.
     pub(crate) size: iced::Size,
 
+    /// Whether the window should start fullscreen.
+    pub(crate) fullscreen: bool,
+
     /// Limitations of the window size
     pub(crate) size_limits: Limits,
 
@@ -95,6 +98,7 @@ impl Default for Settings {
                 .and_then(|scale| scale.parse::<f32>().ok())
                 .unwrap_or(1.0),
             size: iced::Size::new(1024.0, 768.0),
+            fullscreen: false,
             size_limits: Limits::NONE.min_height(1.0).min_width(1.0),
             theme: crate::theme::system_preference(),
             transparent: true,
