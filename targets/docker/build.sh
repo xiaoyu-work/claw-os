@@ -7,9 +7,9 @@
 # not include desktop UI, installer/boot/VM-only features, or third-party agent
 # providers such as copilot-cli.
 #
-# systemd is installed but is NOT run as PID 1 — cos-init takes that role inside
-# the container, and the default user is `cos` (uid 1000, NOPASSWD sudo)
-# matching WSL.
+# systemd is PID 1, exactly like the WSL/VM targets, so clawd starts through
+# the same enabled clawd.service boot path everywhere. The default login user
+# remains `cos` (uid 1000, NOPASSWD sudo) matching WSL.
 #
 # Environment variables:
 #   TAG        Docker image tag (default: claw-os)
@@ -18,7 +18,8 @@
 # This script:
 #   1. Builds the rootfs at $PROJECT_DIR/build/claw-os-rootfs (if missing).
 #   2. Adds the default cos user and pre-creates /var/lib/cos/overlay/{base,
-#      upper,work} owned by cos so cos-init can run as non-root.
+#      upper,work} owned by cos so cos-home-setup.service can prepare the
+#      agent home at boot.
 #   3. Invokes `docker build` on the Dockerfile.
 
 set -euo pipefail
@@ -57,10 +58,9 @@ fi
 echo ":: prepping rootfs — cos user + overlay scratch dirs"
 add_cos_user "$ROOTFS"
 
-# Pre-create the overlay scratch dirs and chown them to cos so
-# setup-home.sh (invoked by cos-init as PID 1 inside the container) can
-# run as the non-root cos user. The overlay mount itself still needs
-# CAP_SYS_ADMIN and is skipped with a JSON warning when absent — that's
+# Pre-create the overlay scratch dirs and chown them to cos so setup-home.sh
+# can prepare the non-root agent home at boot. The overlay mount itself still
+# needs CAP_SYS_ADMIN and is skipped with a JSON warning when absent — that's
 # the documented behaviour for unprivileged containers.
 chroot "$ROOTFS" /bin/bash -c '
     set -e

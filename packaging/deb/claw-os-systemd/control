@@ -6,9 +6,9 @@ Architecture: all
 Maintainer: Claw OS <noreply@github.com>
 Homepage: https://github.com/xiaoyu-work/claw-os
 Depends: claw-os-base (= __VERSION__), systemd, init-system-helpers (>= 1.52)
-Description: Claw OS — systemd integration for non-Docker targets
- Installs systemd units for booting and running Claw OS on WSL, ISO,
- and VM targets. Specifically:
+Description: Claw OS — systemd integration for Claw OS targets
+ Installs systemd units for booting and running Claw OS on Docker, WSL,
+ ISO, and VM targets. Specifically:
  .
    * cos-home-setup.service — sets up the agent-home OverlayFS at
      boot (target path from /etc/default/cos-home; enabled by default).
@@ -16,5 +16,5 @@ Description: Claw OS — systemd integration for non-Docker targets
      9222 (installed but not enabled; opt-in).
    * clawd.service — starts the boot-time system agent daemon.
  .
- Docker containers do NOT need this package — they use cos-init as
- PID 1 instead.
+ Docker, WSL, ISO, and VM images all use these units so clawd is started
+ by the same system boot path everywhere.

@@ -27,9 +27,10 @@ Default feature set (when no `--features` is given): `base,cos-core,browser`.
 Docker and WSL use the headless Claw OS runtime feature set:
 `base,cos-core,browser,systemd,apt-source`. This is the full non-desktop OS
 surface: Claw's own `cos`/`clawd` agent runtime, apps, skills, browser
-automation, service units, and upgrade source. Target-specific boot/install
-features (`kernel`, `grub-disk`, `vm`, `vmware`, `live`, `installer`), desktop
-UI, and third-party agent providers (`copilot-cli`) are opt-in.
+automation, service units, and upgrade source. In every system target, systemd
+starts `clawd.service` as part of boot. Target-specific boot/install features
+(`kernel`, `grub-disk`, `vm`, `vmware`, `live`, `installer`), desktop UI, and
+third-party agent providers (`copilot-cli`) are opt-in.
 
 ## Usage
 

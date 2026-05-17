@@ -35,13 +35,15 @@ The Docker image is the **headless Claw OS** runtime — the full non-desktop OS
 surface with Claw's own `cos`/`clawd` agent runtime, built-in apps, skills,
 browser automation, systemd units, and apt upgrade source. It does not bake in
 desktop UI, installer/boot/VM-only features, or third-party agents. The default
-user is `cos` (uid 1000, NOPASSWD sudo).
+user is `cos` (uid 1000, NOPASSWD sudo). The container boots systemd, so
+`clawd.service` starts through the same system path used by WSL and VM images.
 The published image is multi-arch (`linux/amd64` and `linux/arm64`), so
 Docker/OrbStack on Apple Silicon pulls the native arm64 image automatically.
 
 ```bash
 docker pull ghcr.io/xiaoyu-work/claw-os:latest
-docker run -it --name claw -v ./workspace:/home/cos/workspace ghcr.io/xiaoyu-work/claw-os
+docker run -d --name claw --privileged -v ./workspace:/home/cos/workspace ghcr.io/xiaoyu-work/claw-os
+docker exec -it --user cos claw bash --login
 ```
 
 Other targets — bootable ISO (live + installer), WSL image, and `.deb` + apt repo — are produced from `packaging/`. See [CONTRIBUTING.md](CONTRIBUTING.md).
