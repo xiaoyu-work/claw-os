@@ -33,7 +33,7 @@ use cosmic::iced::{
 use cosmic::theme::{self, Button, Container};
 use cosmic::widget::icon::IconFallback;
 use cosmic::widget::space::{horizontal as horizontal_space, vertical as vertical_space};
-use cosmic::widget::text_input::{self, StyleSheet as TextInputStyleSheet};
+use cosmic::widget::text_input;
 use cosmic::widget::{autosize, button, divider, icon, id_container, mouse_area, scrollable, text};
 use cosmic::{Element, keyboard_nav, surface};
 use iced::keyboard::Key;
@@ -57,6 +57,34 @@ static SCROLLABLE: LazyLock<Id> = LazyLock::new(|| Id::new("scrollable"));
 
 pub(crate) static MENU_ID: LazyLock<SurfaceId> = LazyLock::new(SurfaceId::unique);
 const SCROLL_MIN: usize = 8;
+
+fn spotlight_pill_appearance(theme: &cosmic::Theme) -> cosmic::widget::text_input::Appearance {
+    let cosmic = theme.cosmic();
+    let is_dark = theme.theme_type.is_dark();
+    let (fill, fill_alpha, border_alpha) = if is_dark {
+        (0.16_f32, 0.55_f32, 0.18_f32)
+    } else {
+        (0.98_f32, 0.62_f32, 0.32_f32)
+    };
+    let fg = if is_dark { 1.0_f32 } else { 0.05_f32 };
+    let fg_color = Color::from_rgba(fg, fg, fg, 1.0);
+    let placeholder = Color::from_rgba(fg, fg, fg, 0.55);
+    cosmic::widget::text_input::Appearance {
+        background: cosmic::iced::Background::Color(Color::from_rgba(
+            fill, fill, fill, fill_alpha,
+        )),
+        border_radius: cosmic.corner_radii.radius_xl.into(),
+        border_offset: None,
+        border_width: 1.0,
+        border_color: Color::from_rgba(1.0, 1.0, 1.0, border_alpha),
+        label_color: fg_color,
+        placeholder_color: placeholder,
+        selected_text_color: cosmic.on_accent_color().into(),
+        icon_color: Some(Color::from_rgba(fg, fg, fg, 0.85)),
+        text_color: Some(fg_color),
+        selected_fill: cosmic.accent_color().into(),
+    }
+}
 
 #[derive(Parser, Debug, Serialize, Deserialize, Clone)]
 #[command(author, version, about, long_about = None)]
@@ -210,7 +238,7 @@ impl CosmicLauncher {
                 anchor: Anchor::TOP,
                 namespace: "launcher".into(),
                 size: None,
-                size_limits: Limits::NONE.min_width(1.0).min_height(1.0).max_width(600.0),
+                size_limits: Limits::NONE.min_width(1.0).min_height(1.0).max_width(720.0),
                 exclusive_zone: -1,
                 ..Default::default()
             }),
@@ -811,13 +839,13 @@ impl cosmic::Application for CosmicLauncher {
                 .on_submit(|_| Message::Activate(None))
                 .on_tab(Message::TabPress)
                 .style(cosmic::theme::TextInput::Custom {
-                    active: Box::new(|theme| theme.focused(&cosmic::theme::TextInput::Search)),
-                    error: Box::new(|theme| theme.focused(&cosmic::theme::TextInput::Search)),
-                    hovered: Box::new(|theme| theme.focused(&cosmic::theme::TextInput::Search)),
-                    focused: Box::new(|theme| theme.focused(&cosmic::theme::TextInput::Search)),
-                    disabled: Box::new(|theme| theme.disabled(&cosmic::theme::TextInput::Search)),
+                    active: Box::new(spotlight_pill_appearance),
+                    error: Box::new(spotlight_pill_appearance),
+                    hovered: Box::new(spotlight_pill_appearance),
+                    focused: Box::new(spotlight_pill_appearance),
+                    disabled: Box::new(spotlight_pill_appearance),
                 })
-                .width(600.)
+                .width(Length::Fixed(660.))
                 .id(INPUT_ID.clone())
                 .always_active();
 
@@ -994,13 +1022,13 @@ impl cosmic::Application for CosmicLauncher {
 
             let mut content = if self.alt_tab {
                 Column::new()
-                    .max_width(600)
+                    .max_width(660)
                     .spacing(16)
-                    .width(Length::Fixed(600.))
+                    .width(Length::Fixed(660.))
                     .height(Length::Shrink)
             } else {
                 column![launcher_entry]
-                    .max_width(600)
+                    .max_width(660)
                     .width(Length::Shrink)
                     .height(Length::Shrink)
                     .spacing(16)
@@ -1053,11 +1081,11 @@ impl cosmic::Application for CosmicLauncher {
                     // Use the built-in `Container::Transparent` variant
                     // (the default of `theme::Container`) so the launcher
                     // surface has no background / border / padding of its
-                    // own. The `search_input` widget (TextInput::Search)
-                    // already renders as a pill with its own dark fill and
-                    // accent border; result rows below it carry their own
-                    // visuals. Together this floats on the wallpaper like
-                    // macOS Spotlight.
+                    // own. The `search_input` widget renders the macOS
+                    // Spotlight-style translucent pill via
+                    // `spotlight_pill_appearance`; result rows below it
+                    // carry their own visuals. Together this floats on
+                    // the wallpaper like macOS Spotlight.
                     container(id_container(content, MAIN_ID.clone()))
                         .width(Length::Shrink)
                         .height(Length::Shrink)
