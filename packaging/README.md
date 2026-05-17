@@ -21,8 +21,8 @@ packaging/
 
 | Package | Contains | Architecture | Depends |
 |---|---|---|---|
-| `claw-os-base` | `cos`, `cos-init`, apps, skills, `/etc/cos/*`, `setup-home.sh` | `amd64` | `bash`, `coreutils`, `ca-certificates` |
-| `claw-os-browser` | `cos-browser`, `cos-browser-worker`, `browser/service.json` | `amd64` | `claw-os-base (= ${binary:Version})`, `chromium` |
+| `claw-os-base` | `cos`, `cos-init`, apps, skills, `/etc/cos/*`, `setup-home.sh` | `amd64`, `arm64` | `bash`, `coreutils`, `ca-certificates` |
+| `claw-os-browser` | `cos-browser`, `cos-browser-worker`, `browser/service.json` | `amd64`, `arm64` | `claw-os-base (= ${binary:Version})`, `chromium` |
 | `claw-os-systemd` | `cos-home-setup.service`, `cos-browser.service`, `/etc/default/cos-home` | `all` | `claw-os-base (= ${binary:Version})`, `systemd` |
 
 ## Build
@@ -32,7 +32,7 @@ just assembles staging trees. CI builds `cos` (musl) and `cos-browser`
 (glibc) first, then invokes `packaging/deb/build-debs.sh`.
 
 ```bash
-# Build binaries
+# Build binaries for the host architecture (amd64 shown here).
 cargo build --release -p cos --target x86_64-unknown-linux-musl
 cargo build --release -p cos-browser --target x86_64-unknown-linux-gnu
 
@@ -45,6 +45,7 @@ cargo build --release -p cos-browser --target x86_64-unknown-linux-gnu
 # Build apt repo
 ./packaging/apt-repo/build-repo.sh
 # -> build/apt-repo/dists/trixie/main/binary-amd64/Packages.gz
+# -> build/apt-repo/dists/trixie/main/binary-arm64/Packages.gz
 # -> build/apt-repo/pool/main/c/claw-os-{base,browser,systemd}/*.deb
 ```
 

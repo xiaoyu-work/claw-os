@@ -52,25 +52,22 @@ jobs:
       - name: Run cos-browser tests
         run: cargo test -p cos-browser
 
-  # Single rootfs, multiple distribution channels.
+  # Single amd64 rootfs, multiple distribution channels.
   #
-  # The rootfs is built once with the feature set shared by the Docker image
-  # and the WSL tarball (`base,cos-core,browser,systemd,apt-source`). Down-
+  # The amd64 rootfs is built once with the feature set shared by the Docker
+  # image and the amd64 WSL tarball (`base,cos-core,browser,systemd,apt-source`). Down-
   # stream steps in this job then package that one rootfs into:
   #   - 1 Docker image                  → GHCR
-  #   - 1 WSL tarball                   → GitHub Release
-  #   - .deb packages + apt repo        → GH Pages
+  #   - 1 WSL amd64 tarball             → workflow artifact
+  #   - amd64 .deb packages             → workflow artifact
   #
-  # Previously this work was split between `build` (Docker + .deb) and a
-  # separate `release-wsl` job that re-debootstrapped and re-built the cos
-  # binaries. That duplicated ~15min of CI work and meant the two channels
-  # could drift if the feature lists fell out of sync. Consolidating means
-  # the WSL artifact now requires `test` to pass (acceptable trade-off).
+  # Release publication and apt repo assembly are separate jobs that wait for
+  # both amd64 and arm64 WSL artifacts.
   build:
     needs: test
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # WSL release publishing
+      contents: read
       packages: write  # Docker push to GHCR
 
     steps:
@@ -170,23 +167,23 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-      # WSL packaging — same rootfs we just shipped to Docker, plus the
+      # WSL packaging — same amd64 rootfs we just shipped to Docker, plus the
       # WSL-specific overlay (/etc/wsl.conf). targets/wsl/build.sh detects
       # the existing rootfs and skips the rootfs rebuild.
-      - name: Package WSL rootfs tarball
+      - name: Package WSL amd64 rootfs tarball
         run: sudo ./targets/wsl/build.sh
 
       - name: Fix build/ ownership for non-sudo steps
         run: sudo chown -R "$(id -u):$(id -g)" build
 
-      - name: Upload .deb artifacts
+      - name: Upload amd64 .deb artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: claw-os-debs
+          name: claw-os-debs-amd64
           path: build/debs/*.deb
           if-no-files-found: error
 
-      - name: Compute SHA-256 and rename for release
+      - name: Compute SHA-256 for WSL amd64 artifact
         id: artifact
         run: |
           cd build
@@ -209,14 +206,132 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+  build-wsl-arm64:
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+    env:
+      ARCH: arm64
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl,aarch64-unknown-linux-gnu
+
+      - name: Install host build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y musl-tools debootstrap
+
+      - name: Cache cargo registry & target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            desktop/agent/target
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-build-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-cargo-build-
+
+      - name: Build cos binary (arm64 musl)
+        run: cargo build --release -p cos --target aarch64-unknown-linux-musl
+
+      - name: Build cos-browser binary (arm64 gnu)
+        run: cargo build --release -p cos-browser --target aarch64-unknown-linux-gnu
+
+      - name: Build cos-agent-bridge binary (arm64 musl)
+        run: cd desktop/agent && cargo build --release -p cos-agent-bridge --target aarch64-unknown-linux-musl
+
+      - name: Build claw-semantic binaries (arm64 gnu)
+        run: cargo build --release -p claw-semantic --target aarch64-unknown-linux-gnu
+
+      - name: Build arm64 rootfs
+        run: sudo ARCH=arm64 ./rootfs/build.sh --features base,cos-core,browser,systemd,apt-source
+
+      - name: Package WSL arm64 rootfs tarball
+        run: sudo ARCH=arm64 ./targets/wsl/build.sh
+
+      - name: Fix build/ ownership for non-sudo steps
+        run: sudo chown -R "$(id -u):$(id -g)" build
+
+      - name: Upload arm64 .deb artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: claw-os-debs-arm64
+          path: build/debs/*.deb
+          if-no-files-found: error
+
+      - name: Compute SHA-256 for WSL arm64 artifact
+        id: artifact
+        run: |
+          cd build
+          sha256sum claw-os-wsl-arm64.tar.gz > claw-os-wsl-arm64.tar.gz.sha256
+          SHA=$(cut -d' ' -f1 claw-os-wsl-arm64.tar.gz.sha256)
+          SIZE=$(du -h claw-os-wsl-arm64.tar.gz | cut -f1)
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+          echo "size=$SIZE" >> "$GITHUB_OUTPUT"
+          echo "## Claw OS WSL arm64 build" >> "$GITHUB_STEP_SUMMARY"
+          echo "- File: \`claw-os-wsl-arm64.tar.gz\` ($SIZE)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- SHA-256: \`$SHA\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload WSL arm64 tarball as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: claw-os-wsl-arm64
+          path: |
+            build/claw-os-wsl-arm64.tar.gz
+            build/claw-os-wsl-arm64.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+  publish-wsl-release:
+    needs: [build, build-wsl-arm64]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download WSL amd64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: claw-os-wsl-amd64
+          path: build
+
+      - name: Download WSL arm64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: claw-os-wsl-arm64
+          path: build
+
+      - name: Compute WSL release metadata
+        id: artifact
+        run: |
+          cd build
+          for arch in amd64 arm64; do
+            sha256sum "claw-os-wsl-${arch}.tar.gz" > "claw-os-wsl-${arch}.tar.gz.sha256"
+            sha=$(cut -d' ' -f1 "claw-os-wsl-${arch}.tar.gz.sha256")
+            size=$(du -h "claw-os-wsl-${arch}.tar.gz" | cut -f1)
+            echo "${arch}_sha=$sha" >> "$GITHUB_OUTPUT"
+            echo "${arch}_size=$size" >> "$GITHUB_OUTPUT"
+            echo "- claw-os-wsl-${arch}.tar.gz ($size): \`$sha\`" >> "$GITHUB_STEP_SUMMARY"
+          done
+
       # Rolling pre-release on every push to main, so there is always a
       # stable download URL pointing at the latest build of main:
       #   https://github.com/<org>/<repo>/releases/download/wsl-latest/claw-os-wsl-amd64.tar.gz
+      #   https://github.com/<org>/<repo>/releases/download/wsl-latest/claw-os-wsl-arm64.tar.gz
       #
       # action-gh-release does not move an existing tag, so we delete the
       # previous rolling release + tag first to force the new commit SHA.
       - name: Remove previous rolling release (main only)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -224,7 +339,7 @@ jobs:
             --repo "${GITHUB_REPOSITORY}" || true
 
       - name: Publish rolling pre-release (main only)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: wsl-latest
@@ -235,13 +350,19 @@ jobs:
             Rolling build of `main` for WSL2 import on Windows.
 
             **Commit:** ${{ github.sha }}
-            **SHA-256:** `${{ steps.artifact.outputs.sha256 }}`
-            **Size:** ${{ steps.artifact.outputs.size }}
+
+            | Architecture | File | SHA-256 | Size |
+            |---|---|---|---|
+            | amd64 | `claw-os-wsl-amd64.tar.gz` | `${{ steps.artifact.outputs.amd64_sha }}` | ${{ steps.artifact.outputs.amd64_size }} |
+            | arm64 | `claw-os-wsl-arm64.tar.gz` | `${{ steps.artifact.outputs.arm64_sha }}` | ${{ steps.artifact.outputs.arm64_size }} |
 
             ## Install on Windows
             ```powershell
-            # Download claw-os-wsl-amd64.tar.gz from this release
-            wsl --import claw-os C:\WSL\claw-os claw-os-wsl-amd64.tar.gz --version 2
+            # Download the tarball matching your Windows CPU architecture:
+            #   x64 Windows:       claw-os-wsl-amd64.tar.gz
+            #   Windows on ARM64:  claw-os-wsl-arm64.tar.gz
+            $tarball = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { ".\claw-os-wsl-arm64.tar.gz" } else { ".\claw-os-wsl-amd64.tar.gz" }
+            wsl --import claw-os C:\WSL\claw-os $tarball --version 2
             wsl -d claw-os
             ```
 
@@ -249,52 +370,70 @@ jobs:
           files: |
             build/claw-os-wsl-amd64.tar.gz
             build/claw-os-wsl-amd64.tar.gz.sha256
+            build/claw-os-wsl-arm64.tar.gz
+            build/claw-os-wsl-arm64.tar.gz.sha256
 
       # Versioned release on tag push (v*).
       - name: Publish versioned release (tag push)
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           name: Claw OS ${{ github.ref_name }}
           body: |
-            Claw OS ${{ github.ref_name }} — WSL2 importable rootfs tarball.
+            Claw OS ${{ github.ref_name }} — WSL2 importable rootfs tarballs.
 
-            **SHA-256:** `${{ steps.artifact.outputs.sha256 }}`
-            **Size:** ${{ steps.artifact.outputs.size }}
+            | Architecture | File | SHA-256 | Size |
+            |---|---|---|---|
+            | amd64 | `claw-os-wsl-amd64.tar.gz` | `${{ steps.artifact.outputs.amd64_sha }}` | ${{ steps.artifact.outputs.amd64_size }} |
+            | arm64 | `claw-os-wsl-arm64.tar.gz` | `${{ steps.artifact.outputs.arm64_sha }}` | ${{ steps.artifact.outputs.arm64_size }} |
 
             ## Install on Windows
             ```powershell
-            wsl --import claw-os C:\WSL\claw-os claw-os-wsl-amd64.tar.gz --version 2
+            $tarball = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { ".\claw-os-wsl-arm64.tar.gz" } else { ".\claw-os-wsl-amd64.tar.gz" }
+            wsl --import claw-os C:\WSL\claw-os $tarball --version 2
             wsl -d claw-os
             ```
           files: |
             build/claw-os-wsl-amd64.tar.gz
             build/claw-os-wsl-amd64.tar.gz.sha256
+            build/claw-os-wsl-arm64.tar.gz
+            build/claw-os-wsl-arm64.tar.gz.sha256
 
-      # apt repo build is the LAST step in this job. By design, a failure
-      # here must not block the Docker image push or the WSL release — both
-      # have already happened above. The .debs themselves were uploaded as
-      # a workflow artifact earlier, so apt repo failure only loses the
-      # Pages-served `deb https://…/claw-os` URL, not the .deb files.
-      #
-      # By this point build/ is fully runner-owned (see "Fix build/
-      # ownership" above), so `mkdir build/apt-repo` works without sudo.
-      - name: Build apt repo from .debs
+  build-apt-repo:
+    needs: [build, build-wsl-arm64]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download amd64 .deb artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: claw-os-debs-amd64
+          path: build/debs
+
+      - name: Download arm64 .deb artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: claw-os-debs-arm64
+          path: build/debs
+
+      - name: Build apt repo from multi-arch .debs
         run: |
+          sudo apt-get update -qq
           sudo apt-get install -y -qq apt-utils
           ./packaging/apt-repo/build-repo.sh
 
       - name: Upload apt repo as Pages artifact
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v3
         with:
           path: build/apt-repo
 
   # Publish the apt repo (build/apt-repo) to GitHub Pages.
   # Repo settings → Pages → Source must be set to "GitHub Actions" for the
-  # deployment to succeed. The artifact is uploaded by the `build` job.
+  # deployment to succeed. The artifact is uploaded by the `build-apt-repo` job.
   publish-apt-repo:
-    needs: build
+    needs: build-apt-repo
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
