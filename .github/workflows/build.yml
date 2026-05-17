@@ -52,17 +52,21 @@ jobs:
       - name: Run cos-browser tests
         run: cargo test -p cos-browser
 
-  # Single amd64 rootfs, multiple distribution channels.
+  # Single amd64 headless OS rootfs, multiple distribution channels.
   #
-  # The amd64 rootfs is built once with the feature set shared by the Docker
-  # image and the amd64 WSL tarball (`base,cos-core,browser,systemd,apt-source`). Down-
-  # stream steps in this job then package that one rootfs into:
-  #   - 1 Docker image                  → GHCR
+  # The amd64 rootfs is built once with the full non-desktop runtime surface:
+  # `base,cos-core,browser,systemd,apt-source`. That includes Claw's own
+  # cos/clawd agent runtime, apps, skills, browser automation, and upgrade
+  # source. It intentionally excludes desktop UI, installer/boot/VM-only
+  # features, and third-party agent providers such as copilot-cli.
+  #
+  # Downstream steps in this job then package that one rootfs into:
+  #   - 1 Docker amd64 source image     → GHCR
   #   - 1 WSL amd64 tarball             → workflow artifact
   #   - amd64 .deb packages             → workflow artifact
   #
-  # Release publication and apt repo assembly are separate jobs that wait for
-  # both amd64 and arm64 WSL artifacts.
+  # Multi-arch Docker manifest publication, WSL release publication, and apt
+  # repo assembly are separate jobs that wait for both amd64 and arm64 builds.
   build:
     needs: test
     runs-on: ubuntu-latest
@@ -106,9 +110,9 @@ jobs:
       - name: Build claw-semantic binaries (gnu)
         run: cargo build --release -p claw-semantic --target x86_64-unknown-linux-gnu
 
-      # Build the rootfs ONCE with the WSL feature set. The Docker image and
-      # WSL tarball both consume this same tree.
-      - name: Build rootfs (shared with Docker + WSL)
+      # Build the headless Claw OS rootfs ONCE. The Docker image and WSL
+      # tarball both consume this same tree.
+      - name: Build headless rootfs (shared with Docker + WSL)
         run: sudo ./rootfs/build.sh --features base,cos-core,browser,systemd,apt-source
 
       - name: Fix rootfs permissions for Docker build
@@ -147,7 +151,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata
+      - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -158,13 +162,15 @@ jobs:
             type=sha,prefix=
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build and push
+      - name: Build and push Docker amd64 image
         uses: docker/build-push-action@v5
         with:
           context: .
           file: targets/docker/Dockerfile
+          platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
+          load: ${{ github.event_name == 'pull_request' }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}-amd64
           labels: ${{ steps.meta.outputs.labels }}
 
       # WSL packaging — same amd64 rootfs we just shipped to Docker, plus the
@@ -206,12 +212,13 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-  build-wsl-arm64:
+  build-arm64:
     needs: test
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
+      packages: write  # Docker push to GHCR
     env:
       ARCH: arm64
 
@@ -251,8 +258,57 @@ jobs:
       - name: Build claw-semantic binaries (arm64 gnu)
         run: cargo build --release -p claw-semantic --target aarch64-unknown-linux-gnu
 
-      - name: Build arm64 rootfs
+      - name: Build arm64 headless rootfs
         run: sudo ARCH=arm64 ./rootfs/build.sh --features base,cos-core,browser,systemd,apt-source
+
+      - name: Fix rootfs permissions for Docker build
+        run: sudo chmod -R a+rX build/claw-os-rootfs
+
+      - name: Prep rootfs for Docker (cos user + overlay scratch dirs)
+        run: |
+          sudo bash -c '
+            set -euo pipefail
+            export ROOTFS="$PWD/build/claw-os-rootfs"
+            export PROJECT_DIR="$PWD"
+            source "$PROJECT_DIR/scripts/lib/add-cos-user.sh"
+            add_cos_user "$ROOTFS"
+            chroot "$ROOTFS" /bin/bash -c "
+              set -e
+              mkdir -p /var/lib/cos/overlay/base /var/lib/cos/overlay/upper /var/lib/cos/overlay/work
+              chown -R cos:cos /var/lib/cos/overlay
+            "
+          '
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker arm64 image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: targets/docker/Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}-arm64
+          labels: ${{ steps.meta.outputs.labels }}
 
       - name: Package WSL arm64 rootfs tarball
         run: sudo ARCH=arm64 ./targets/wsl/build.sh
@@ -290,8 +346,58 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+  publish-docker-image:
+    needs: [build, build-arm64]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Publish multi-arch Docker manifest
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          SOURCE_AMD64: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}-amd64
+          SOURCE_ARM64: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}-arm64
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            echo ":: publishing $tag"
+            docker buildx imagetools create \
+              --tag "$tag" \
+              "$SOURCE_AMD64" \
+              "$SOURCE_ARM64"
+          done <<< "$TAGS"
+
+          first_tag="$(printf '%s\n' "$TAGS" | sed -n '1p')"
+          docker buildx imagetools inspect "$first_tag"
+
   publish-wsl-release:
-    needs: [build, build-wsl-arm64]
+    needs: [build, build-arm64]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     permissions:
@@ -400,7 +506,7 @@ jobs:
             build/claw-os-wsl-arm64.tar.gz.sha256
 
   build-apt-repo:
-    needs: [build, build-wsl-arm64]
+    needs: [build, build-arm64]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:

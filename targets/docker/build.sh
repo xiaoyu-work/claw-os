@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
 # Claw OS — docker target.
 #
-# Produces a Docker image whose feature set matches the WSL distribution
-# (`base,cos-core,browser,systemd,apt-source`) so the two terminal-version
-# channels ship the same surface. systemd is installed but is NOT run as
-# PID 1 — cos-init takes that role inside the container, and the default
-# user is `cos` (uid 1000, NOPASSWD sudo) matching WSL.
+# Produces the headless Claw OS Docker image: the full non-desktop OS runtime
+# (`base,cos-core,browser,systemd,apt-source`) with Claw's own cos/clawd agent,
+# apps, skills, browser automation, and upgrade source. It intentionally does
+# not include desktop UI, installer/boot/VM-only features, or third-party agent
+# providers such as copilot-cli.
+#
+# systemd is installed but is NOT run as PID 1 — cos-init takes that role inside
+# the container, and the default user is `cos` (uid 1000, NOPASSWD sudo)
+# matching WSL.
 #
 # Environment variables:
-#   TAG   Docker image tag (default: claw-os)
+#   TAG        Docker image tag (default: claw-os)
+#   FEATURES   Rootfs feature set (default: headless Claw OS runtime)
 #
 # This script:
 #   1. Builds the rootfs at $PROJECT_DIR/build/claw-os-rootfs (if missing).
@@ -21,6 +26,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ROOTFS="$PROJECT_DIR/build/claw-os-rootfs"
+FEATURES="${FEATURES:-base,cos-core,browser,systemd,apt-source}"
 
 source "$PROJECT_DIR/scripts/lib/add-cos-user.sh"
 
@@ -42,7 +48,7 @@ fi
 
 if [ ! -d "$ROOTFS" ]; then
     echo ":: rootfs missing — building (this takes a few minutes)"
-    "$PROJECT_DIR/rootfs/build.sh" --features base,cos-core,browser,systemd,apt-source
+    "$PROJECT_DIR/rootfs/build.sh" --features "$FEATURES"
 else
     echo ":: using existing rootfs at $ROOTFS"
     echo "   (rebuild from scratch: sudo rm -rf $ROOTFS && sudo $0)"
