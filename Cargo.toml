@@ -12,6 +12,7 @@ members = [
     "crates/obscura-cdp",
     "crates/cos-browser",
     "crates/cos-cli",
+    "crates/claw-semantic",
 ]
 
 # core/ keeps its own [package] section with explicit version/edition so it
