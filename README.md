@@ -29,6 +29,33 @@ Claw OS provides primitives that traditional operating systems don't:
 
 ## Quick Start
 
+Recommended entry points today:
+
+| Target | Use when | Status |
+|---|---|---|
+| **WSL** | Windows users who want a full headless Claw OS shell | Recommended |
+| **Docker / OrbStack** | macOS/Linux users who want the headless Claw OS runtime in a container | Recommended |
+| **Desktop / ISO / VM** | Testing the graphical agent desktop environment | Experimental |
+
+Both recommended headless targets boot systemd and start `clawd.service`
+automatically. You should not run `clawd` by hand; if the system is up, the
+system agent should already be up.
+
+### WSL
+
+Download the latest WSL rootfs matching your Windows CPU architecture, import it,
+then enter the distro:
+
+```powershell
+$arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
+$tarball = "claw-os-wsl-$arch.tar.gz"
+$url = "https://github.com/xiaoyu-work/claw-os/releases/download/wsl-latest/$tarball"
+
+Invoke-WebRequest $url -OutFile $tarball
+wsl --import claw-os C:\WSL\claw-os .\$tarball --version 2
+wsl -d claw-os
+```
+
 ### Docker
 
 The Docker image is the **headless Claw OS** runtime — the full non-desktop OS
@@ -46,7 +73,16 @@ docker run -d --name claw --privileged -v ./workspace:/home/cos/workspace ghcr.i
 docker exec -it --user cos claw bash --login
 ```
 
-Other targets — bootable ISO (live + installer), WSL image, and `.deb` + apt repo — are produced from `packaging/`. See [CONTRIBUTING.md](CONTRIBUTING.md).
+### Desktop / ISO / VM
+
+The desktop environment is in **experimental development**. The target direction
+is the same system agent model as headless Claw OS, with desktop context,
+timeline, memory, and permission surfaces layered on top. For now, use WSL or
+Docker to validate the headless system agent runtime first.
+
+Other targets — bootable ISO (live + installer), VM images, WSL image, and
+`.deb` + apt repo — are produced from `packaging/`. See
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### Drive the OS
 
