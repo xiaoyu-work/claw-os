@@ -459,6 +459,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
+name = "claw-embed"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "notify",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "claw-os-sdk"
 version = "0.1.0"
 dependencies = [
@@ -584,6 +601,7 @@ dependencies = [
  "base64",
  "bytes",
  "chrono",
+ "claw-embed",
  "crc32fast",
  "ed25519-dalek",
  "futures-util",

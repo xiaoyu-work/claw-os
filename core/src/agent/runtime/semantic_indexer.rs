@@ -21,7 +21,7 @@
 
 use std::sync::Arc;
 
-use crate::agent::memory::semantic::{SemanticError, SemanticStore};
+use crate::agent::memory::semantic::{SemanticError, SemanticStore, SemanticStoreExt};
 
 /// Wraps a [`SemanticStore`] with a fire-and-forget `spawn_index`
 /// surface. Cheap to clone (single `Arc`).

@@ -149,7 +149,8 @@ pub fn default_registry() -> ToolRegistry {
     // Best-effort: open the default semantic store; only registered
     // when `[embed]` is configured. When disabled the tool silently
     // doesn't exist (the LLM falls back to cos_recall keyword search).
-    match crate::agent::memory::semantic::SemanticStore::open_default() {
+    use crate::agent::memory::semantic::{SemanticStore, SemanticStoreExt};
+    match SemanticStore::open_default() {
         Ok(Some(store)) => {
             super::cos_proxy::register_recall_semantic(&mut r, std::sync::Arc::new(store))
         }

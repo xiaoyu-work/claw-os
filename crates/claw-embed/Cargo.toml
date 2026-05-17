@@ -1,0 +1,25 @@
+[package]
+name = "claw-embed"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Pure embedding abstractions for claw-os: Embedder trait, SemanticStore, chunk/extract/walk utilities. No engine or global-config dependencies."
+repository = "https://github.com/xiaoyu-work/claw-os"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = "0.1"
+rusqlite = { version = "0.39.0", features = ["bundled"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = "1"
+tracing = { workspace = true }
+notify = "6"
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3.27"
+tokio = { workspace = true }
