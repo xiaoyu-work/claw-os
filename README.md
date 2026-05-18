@@ -1,7 +1,10 @@
 # Claw OS
 
 <p align="center">
-  <img src="assets/brand/clawos-wordmark.png" alt="Claw OS" width="220">
+  <img src="assets/brand/clawos-symbol.png" alt="" width="140">
+</p>
+<p align="center">
+  <img src="assets/brand/clawos-wordmark.png" alt="Claw OS" width="240">
 </p>
 
 <p align="center"><strong>The first agent native operating system.</strong></p>
