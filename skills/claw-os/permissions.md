@@ -3,7 +3,7 @@
 Two layers of permissions in Claw OS:
 
 1. **Role / scope on spawned processes** — set when the agent calls the `cos_proc` tool's `spawn` command.
-2. **Per-app capability gating** — apps declare verbs in their manifest and the runtime checks them via `cos perms check <verb>`. App authors do not call this themselves; the `cos_runtime.policy` helper does.
+2. **Per-app capability gating** — apps declare verbs in their manifest and the runtime checks them through the hidden kernel policy bridge. App authors do not call the bridge themselves; the `cos_runtime.policy` helper does.
 
 ## Roles passed to `cos_proc spawn`
 
@@ -31,11 +31,7 @@ Child processes cannot escalate beyond the parent's role or widen the parent's s
 
 ## App capability check
 
-Apps written in Python use the `cos_runtime.policy` helper, which shells out:
-
-```bash
-cos perms check <verb> [--scope <path>]
-```
-
-The verb (e.g. `fs.read`, `net.http`) must be declared in the app's manifest. Agents and end users do not invoke `cos perms` directly.
-
+Apps written in Python use the `cos_runtime.policy` helper. The verb
+(e.g. `fs.read`, `net.http`) must be declared in the app's manifest. Agents and
+end users do not invoke a permission CLI directly; permission requests are
+mediated by the Agent UX.

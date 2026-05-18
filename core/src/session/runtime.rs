@@ -16,7 +16,7 @@
 //!
 //! The CLI's bootstrap code (see [`crate::caps::bootstrap`]) mints a
 //! short-lived in-process session row for every `cos` invocation. Most
-//! invocations are one-shot (`cos perms ls`, `cos fs read …`) and
+//! invocations are one-shot (`cos app fs read …`, `cos sys info`, …) and
 //! should never spill onto disk — promoting them all would explode
 //! `$COS_DATA_DIR/sessions/` into millions of empty directories.
 //!
@@ -64,7 +64,7 @@ use super::store::{self, SessionError};
 
 /// Env var that carries "you are inside session X" to subprocesses.
 ///
-/// Mirrored from `caps/bootstrap.rs` and `perms.rs` — the canonical
+/// Mirrored from `caps/bootstrap.rs` and the internal policy bridge — the canonical
 /// signal for "this `cos` invocation should target an existing
 /// session, not mint a new one".
 const ENV_COS_SESSION: &str = "COS_SESSION";

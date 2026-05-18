@@ -185,7 +185,7 @@ def run(command, args):
 ```
 
 `policy.require(verb, *, path=..., host=..., name=..., self_ref=..., wild=False)`
-shells out to `cos perms check` and raises `PermissionDenied` on deny
+uses the hidden kernel policy bridge and raises `PermissionDenied` on deny
 ([`cos-runtime/python/src/cos_runtime/policy.py:79-106`](../cos-runtime/python/src/cos_runtime/policy.py)).
 Pass exactly one scope keyword (or `wild=True` for unscoped verbs).
 

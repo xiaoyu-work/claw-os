@@ -1,7 +1,7 @@
 """Per-apps pytest conftest.
 
 The Python apps under ``apps/*`` call ``cos_runtime.policy.require``,
-which shells out to the ``cos perms check`` subcommand. In CI / dev
+which shells out to the hidden policy bridge. In CI / dev
 environments without a built ``cos`` binary on ``$PATH`` the policy
 helper raises ``PolicyUnavailable`` and every functional test breaks.
 
@@ -23,7 +23,7 @@ import pytest
 
 
 _STUB = """#!/bin/sh
-# pytest cos-stub: every `cos perms check ...` returns allow.
+# pytest cos-stub: every policy check returns allow.
 case "$2" in
   check)
     echo '{"decision":"allow"}'

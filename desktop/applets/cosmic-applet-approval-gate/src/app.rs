@@ -69,8 +69,8 @@ impl cosmic::Application for ApprovalGate {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        // Poll the on-disk queue. inotify would be nicer but the
-        // approvals dir is local-only and the cost of a stat-loop is
+        // Poll the approval queue. inotify would be nicer, but clawd
+        // owns the authoritative store and the cost of a short RPC is
         // negligible vs the simplicity win.
         time::every(Duration::from_millis(1500)).map(|_| Message::Tick)
     }
@@ -120,7 +120,7 @@ impl cosmic::Application for ApprovalGate {
             Message::Approve(id, dur) => {
                 let id = id.clone();
                 Task::perform(
-                    async move { queue::approve(&id, dur) },
+                    async move { queue::approve(&id, dur).await },
                     |res| match res {
                         Ok(_) => cosmic::Action::App(Message::Resolved),
                         Err(e) => cosmic::Action::App(Message::LoadFailed(e.0)),
@@ -129,7 +129,7 @@ impl cosmic::Application for ApprovalGate {
             }
             Message::Deny(id) => {
                 let id = id.clone();
-                Task::perform(async move { queue::deny(&id) }, |res| match res {
+                Task::perform(async move { queue::deny(&id).await }, |res| match res {
                     Ok(_) => cosmic::Action::App(Message::Resolved),
                     Err(e) => cosmic::Action::App(Message::LoadFailed(e.0)),
                 })
@@ -317,7 +317,7 @@ fn relative_time(then: u64) -> String {
 }
 
 fn refresh_task() -> app::Task<Message> {
-    Task::perform(async { queue::load_pending() }, |res| match res {
+    Task::perform(async { queue::load_pending().await }, |res| match res {
         Ok(rows) => cosmic::Action::App(Message::Refreshed(rows)),
         Err(e) => cosmic::Action::App(Message::LoadFailed(e.0)),
     })

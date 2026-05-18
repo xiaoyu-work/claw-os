@@ -2,10 +2,10 @@
 //!
 //! When a gated operation is denied (or when an agent wants to
 //! pre-emptively ask before attempting one), it writes a request to
-//! `$COS_DATA_DIR/approvals/pending/<id>.json`. The user (via
-//! `cos perms approve` / `cos perms deny`, or via the GUI applet)
-//! moves the file to `approved/` or `denied/`. The requester polls
-//! until the file moves or the deadline passes.
+//! `$COS_DATA_DIR/approvals/pending/<id>.json`. The Agent or desktop consent
+//! surface presents the request in context and records the user's decision by
+//! moving the file to `approved/` or `denied/`. The requester polls until the
+//! file moves or the deadline passes.
 //!
 //! Layout:
 //!
@@ -17,10 +17,8 @@
 //!     denied/<id>.json
 //! ```
 //!
-//! Both the CLI ([`crate::perms`]) and the GUI applet
-//! (`desktop/applets/cosmic-applet-approval-gate`) read and write this
-//! directory; rendering and notification are owned by them. This
-//! module is just the storage + waiter layer.
+//! Rendering and notification are owned by the Agent UX. This module is just
+//! the storage + waiter layer.
 
 use std::fs;
 use std::io::Write;

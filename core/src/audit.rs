@@ -180,8 +180,8 @@ pub fn log_event(audit_path: &Path, mut entry: serde_json::Value) {
 ///
 /// Called by [`crate::caps::require`] on every check — both allows
 /// and denials. The shape is intentionally stable so log consumers
-/// (`cos perms history`, the permission-centre UI, downstream
-/// SIEMs) can rely on the field names:
+/// (Agent permission history, permission-centre UI, downstream SIEMs)
+/// can rely on the field names:
 ///
 /// ```text
 /// {

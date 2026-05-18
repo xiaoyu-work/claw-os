@@ -7,7 +7,7 @@ The two modules here exist so that the apps bundled inside the
 claw-os repo (under ``apps/*``) can:
 
 * :mod:`cos_runtime.policy`   — self-gate every fs / exec / pkg / net
-  / secret-handling op by shelling out to ``cos perms check``.
+  / secret-handling op through the hidden kernel policy bridge.
 * :mod:`cos_runtime.snapshot` — snapshot the previous state of a path
   (copy-on-write) into the current session's ``mutations.jsonl``
   before every gated mutation, so the kernel can revert.

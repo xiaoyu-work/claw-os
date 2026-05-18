@@ -66,6 +66,17 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         _ => {}
     }
 
+    // Hidden bridge for bundled app runtimes. This is intentionally not a
+    // user-facing CLI namespace; interactive permissions are mediated by the
+    // Agent UX, while apps only need an internal capability check.
+    if name == "__policy" {
+        let command = args
+            .get(1)
+            .ok_or_else(|| "internal policy command required".to_string())?;
+        let value = perms::run(command, &args[2..])?;
+        return Ok(Some(value.to_string()));
+    }
+
     // "app" namespace → route to Python apps
     if name == "app" {
         return dispatch_app(&args[1..]);
@@ -77,10 +88,6 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         "service" => dispatch_builtin(args, "service", service::run),
         "checkpoint" => dispatch_builtin(args, "checkpoint", checkpoint::run),
         "credential" => dispatch_builtin(args, "credential", credential::run),
-        // `perms` is invoked by Python apps (claw-os-sdk/python/src/claw_os_sdk/policy.py shells to
-        // `cos perms check`) and not directly by users — kept dispatchable
-        // but hidden from the user-facing overview list.
-        "perms" => dispatch_builtin(args, "perms", perms::run),
         "cron" => dispatch_builtin(args, "cron", cron::run),
         "ai" => dispatch_builtin(args, "ai", ai::run),
         "agent" => dispatch_agent(args),
@@ -2035,6 +2042,36 @@ mod tests {
         assert!(schemas.iter().any(|(n, _, _)| *n == "credential"));
         assert!(schemas.iter().any(|(n, _, _)| *n == "cron"));
         assert!(schemas.iter().any(|(n, _, _)| *n == "service"));
+    }
+
+    #[test]
+    fn perms_namespace_is_not_user_facing() {
+        let result = dispatch(&["perms".into(), "check".into(), "ui.notify".into()]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn hidden_policy_bridge_remains_available_to_runtimes() {
+        let _lock = crate::test_env::lock_env();
+        let prev_sess = std::env::var_os("COS_SESSION");
+        let prev_mode = std::env::var_os("COS_PERMS_MODE");
+        std::env::remove_var("COS_SESSION");
+        std::env::set_var("COS_PERMS_MODE", "permissive");
+
+        let output = dispatch(&["__policy".into(), "check".into(), "ui.notify".into()])
+            .expect("hidden policy bridge should dispatch")
+            .expect("hidden policy bridge should return JSON");
+        let v: Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(v["decision"], "allow");
+
+        match prev_sess {
+            Some(value) => std::env::set_var("COS_SESSION", value),
+            None => std::env::remove_var("COS_SESSION"),
+        }
+        match prev_mode {
+            Some(value) => std::env::set_var("COS_PERMS_MODE", value),
+            None => std::env::remove_var("COS_PERMS_MODE"),
+        }
     }
 
     #[test]

@@ -149,7 +149,7 @@ class Caprequest(TypedDict, total=False):
 class Perms(TypedDict, total=False):
     """Permissions request / reply.
 
-    Shape of the success-path data field returned by `cos perms check`. Apps
+    Shape of the success-path data field returned by policy checks. Apps
     call this via SDK helpers (e.g. cos_runtime.policy.check).
     """
     decision: str  # required
@@ -197,4 +197,3 @@ def validate_perms_decision(value: str) -> None:
     allowed = ['allow', 'deny', 'prompt']
     if value not in allowed:
         raise ValueError(f"invalid perms.decision value: {value!r}")
-

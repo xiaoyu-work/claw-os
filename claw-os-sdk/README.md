@@ -15,7 +15,7 @@ claw-os-sdk/
 │   ├── v1/
 │   │   ├── README.md           protocol overview
 │   │   ├── envelope.schema.json    common envelope shape
-│   │   ├── perms.schema.json       cos perms check / grant
+│   │   ├── perms.schema.json       capability decision envelope
 │   │   ├── ai.schema.json          cos ai chat / tool / embed / ...
 │   │   ├── tool.schema.json        catalog tool invocation
 │   │   ├── app.schema.json         cos app <id> <verb>
