@@ -1,5 +1,9 @@
 # Claw OS
 
+<p align="center">
+  <img src="assets/brand/clawos-wordmark.png" alt="Claw OS" width="220">
+</p>
+
 The First Agent Native Operating System
 
 Website: https://xiaoyu-work.github.io/claw-os
