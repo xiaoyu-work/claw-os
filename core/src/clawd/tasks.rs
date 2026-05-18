@@ -7,7 +7,9 @@ use crate::agent::service::{Job, JobStatus, Store};
 use crate::caps::Role;
 use crate::session;
 
-pub async fn submit(params: Value) -> Result<Value, String> {
+use super::client_identity::ClientIdentity;
+
+pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     let prompt = required_string(&params, "prompt")?;
     let session_id = params
         .get("session_id")
@@ -25,8 +27,12 @@ pub async fn submit(params: Value) -> Result<Value, String> {
         Some(session_id) => Some(session_id),
         None => Some(create_task_session(&prompt)?),
     };
+    let owner_uid = client.uid;
+    let owner_home = client
+        .home_dir()
+        .map(|p| p.to_string_lossy().into_owned());
     let job = store
-        .submit(prompt, session_id, max_turns)
+        .submit(prompt, session_id, max_turns, owner_uid, owner_home)
         .map_err(|err| err.to_string())?;
     Ok(job_value(job))
 }

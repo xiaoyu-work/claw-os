@@ -153,7 +153,7 @@ async fn dispatch_result(
             "context": context::snapshot(state)?,
             "transactions": transactions::list(state)?,
         })),
-        "task.submit" => tasks::submit(request.params).await,
+        "task.submit" => tasks::submit(request.params, client).await,
         "task.list" => tasks::list(request.params),
         "task.get" => tasks::get(request.params),
         "task.cancel" => tasks::cancel(request.params),

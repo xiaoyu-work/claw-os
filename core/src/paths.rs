@@ -27,7 +27,7 @@
 //! and per-home overlays).
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[cfg(windows)]
 fn windows_program_data() -> PathBuf {
@@ -125,6 +125,20 @@ pub fn user_config_dir() -> PathBuf {
 /// directly with `COS_CONFIG_PATH` (used by tests).
 pub fn user_config_path() -> PathBuf {
     user_config_dir().join("config.json")
+}
+
+/// Path to a specific user's agent config given their `$HOME` directory.
+/// Used by clawd (running as root) to read the requesting peer's
+/// `~/.config/cos/config.json` rather than its own — without this,
+/// every `cos agent ask` from a non-root user would silently fall back
+/// to clawd's default (empty) provider config and fail with
+/// "no LLM provider configured".
+///
+/// On Linux this is `<home>/.config/cos/config.json`. On Windows the
+/// concept doesn't apply (no peer-credential socket); callers there
+/// should keep using [`user_config_path`].
+pub fn user_config_path_for(home: &Path) -> PathBuf {
+    home.join(".config").join("cos").join("config.json")
 }
 
 /// Per-user data root. Follows XDG_DATA_HOME on Linux

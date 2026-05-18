@@ -114,10 +114,32 @@ pub struct Job {
     pub provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// uid of the user who submitted the task (via `SO_PEERCRED` on
+    /// the clawd unix socket). Used to load the requesting user's
+    /// `~/.config/cos/config.json` instead of clawd's root-owned one
+    /// when the worker executes the job — without this, every
+    /// non-root submitter sees "no LLM provider configured".
+    /// `None` for jobs submitted in-process or before this field
+    /// existed (old job files on disk are still readable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_uid: Option<u32>,
+    /// Absolute `$HOME` directory of the submitting user, resolved
+    /// via `getpwuid_r` at submit time. The worker reads
+    /// `<owner_home>/.config/cos/config.json` to pick up the user's
+    /// provider/model/key setup. `None` falls back to the daemon's
+    /// own (typically empty) config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_home: Option<String>,
 }
 
 impl Job {
-    fn new_pending(prompt: String, session_id: Option<String>, max_turns: Option<u32>) -> Self {
+    fn new_pending(
+        prompt: String,
+        session_id: Option<String>,
+        max_turns: Option<u32>,
+        owner_uid: Option<u32>,
+        owner_home: Option<String>,
+    ) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             prompt,
@@ -133,6 +155,8 @@ impl Job {
             turns_used: None,
             provider: None,
             model: None,
+            owner_uid,
+            owner_home,
         }
     }
 
@@ -251,13 +275,21 @@ impl Store {
     }
 
     /// Persist a new pending job. Returns the job (with assigned id).
+    /// `owner_uid`/`owner_home` carry the submitting peer's identity
+    /// resolved via `SO_PEERCRED` + `getpwuid_r` so the worker can
+    /// load that user's `~/.config/cos/config.json` instead of the
+    /// daemon's. Both fields are optional and default to `None`
+    /// (matches `cos agent service submit` from the same shell, where
+    /// no peer lookup is needed).
     pub fn submit(
         &self,
         prompt: String,
         session_id: Option<String>,
         max_turns: Option<u32>,
+        owner_uid: Option<u32>,
+        owner_home: Option<String>,
     ) -> io::Result<Job> {
-        let job = Job::new_pending(prompt, session_id, max_turns);
+        let job = Job::new_pending(prompt, session_id, max_turns, owner_uid, owner_home);
         let path = self.path_for(JobStatus::Pending, &job.id);
         write_json_atomic(&path, &job)?;
         crate::clawd::audit::record_task_event("clawd.task.submitted", &job);
@@ -622,6 +654,19 @@ fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
+/// Resolve the running process's uid + `$HOME` for stamping onto
+/// jobs submitted via `cos agent service submit`. clawd-routed
+/// submits go through `clawd::tasks::submit`, which uses the peer
+/// credentials of the unix socket instead.
+fn current_owner_identity() -> (Option<u32>, Option<String>) {
+    #[cfg(unix)]
+    let uid = Some(unsafe { libc::getuid() } as u32);
+    #[cfg(not(unix))]
+    let uid: Option<u32> = None;
+    let home = std::env::var("HOME").ok().filter(|s| !s.is_empty());
+    (uid, home)
+}
+
 fn job_to_summary(job: &Job) -> Value {
     json!({
         "id": job.id,
@@ -705,8 +750,13 @@ fn cmd_submit(args: &[String]) -> Result<Value, String> {
         .filter(|s| !s.trim().is_empty())
         .ok_or("usage: cos agent service submit \"<prompt>\" [--session ID] [--max-turns N]")?;
     let store = Store::open_default().map_err(|e| e.to_string())?;
+    // `cos agent service submit` runs in the user's own process, so
+    // the worker (which is also in this process in single-shot mode)
+    // will load that user's config naturally — but stamping owner_*
+    // anyway keeps the on-disk job document complete for ops/audit.
+    let (uid, home) = current_owner_identity();
     let job = store
-        .submit(prompt, session_id, max_turns)
+        .submit(prompt, session_id, max_turns, uid, home)
         .map_err(|e| e.to_string())?;
     Ok(json!({
         "status": "submitted",
@@ -1039,6 +1089,26 @@ async fn install_shutdown_listener(shutdown: Arc<AtomicBool>) {
 }
 
 async fn run_one_job(job: &Job) -> FinishOutcome {
+    // If the job carries an owner_home (clawd-routed jobs from a
+    // non-daemon user), load THAT user's config into a task-local
+    // override before running the rest of the job. Every
+    // `config::get()` inside the agent loop — including those reached
+    // transitively from tool implementations, the LLM gate, and the
+    // delegate tool — will see the user's provider/model/keys rather
+    // than the daemon's defaults.
+    //
+    // Without this, `cos agent ask` from a non-root user fails
+    // "no LLM provider configured" because clawd (uid=0, HOME=/root)
+    // reads /root/.config/cos/config.json which doesn't exist.
+    if let Some(home) = job.owner_home.as_deref() {
+        let cfg = crate::config::intern_for_home(std::path::Path::new(home));
+        crate::config::with_override(cfg, run_one_job_inner(job)).await
+    } else {
+        run_one_job_inner(job).await
+    }
+}
+
+async fn run_one_job_inner(job: &Job) -> FinishOutcome {
     use crate::agent::runtime::loop_;
 
     let _session_guard = match enter_job_session(job) {
@@ -1048,6 +1118,9 @@ async fn run_one_job(job: &Job) -> FinishOutcome {
 
     // Apply per-job max-turns override on a clone of the global cfg
     // so other jobs in the same worker process aren't affected.
+    // `config::get()` here is intentionally the *task-local* one
+    // installed by `run_one_job` for clawd-routed jobs; for in-process
+    // submits it falls through to the process-wide config as before.
     let base = crate::config::get().agent.clone();
     let mut cfg = base;
     if let Some(n) = job.max_turns {
@@ -1213,7 +1286,7 @@ mod tests {
     fn submit_writes_pending_file_with_uuid_id() {
         let dir = fresh_root();
         let store = Store::with_root(dir.path().to_path_buf()).unwrap();
-        let job = store.submit("hello".into(), None, None).unwrap();
+        let job = store.submit("hello".into(), None, None, None, None).unwrap();
         assert_eq!(job.status, JobStatus::Pending);
         let path = dir.path().join("pending").join(format!("{}.json", job.id));
         assert!(path.is_file(), "no file at {path:?}");
@@ -1224,10 +1297,55 @@ mod tests {
     }
 
     #[test]
+    fn submit_round_trips_owner_uid_and_home() {
+        let dir = fresh_root();
+        let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+        let job = store
+            .submit(
+                "hi".into(),
+                None,
+                None,
+                Some(1001),
+                Some("/home/alice".into()),
+            )
+            .unwrap();
+        assert_eq!(job.owner_uid, Some(1001));
+        assert_eq!(job.owner_home.as_deref(), Some("/home/alice"));
+
+        // Re-read from disk to confirm serde keeps the fields.
+        let path = dir.path().join("pending").join(format!("{}.json", job.id));
+        let parsed: Job = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(parsed.owner_uid, Some(1001));
+        assert_eq!(parsed.owner_home.as_deref(), Some("/home/alice"));
+    }
+
+    #[test]
+    fn legacy_job_file_without_owner_fields_still_loads() {
+        // Older clawd installs wrote Job JSON without owner_uid /
+        // owner_home. The new fields are #[serde(default)] so those
+        // files must still deserialize.
+        let dir = fresh_root();
+        let _store = Store::with_root(dir.path().to_path_buf()).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let legacy = json!({
+            "id": id,
+            "prompt": "old",
+            "status": "pending",
+            "created_at": now_iso(),
+        });
+        let path = dir.path().join("pending").join(format!("{id}.json"));
+        fs::write(&path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
+
+        let parsed: Job = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(parsed.id, id);
+        assert!(parsed.owner_uid.is_none());
+        assert!(parsed.owner_home.is_none());
+    }
+    #[test]
     fn locate_finds_job_in_pending_bucket() {
         let dir = fresh_root();
         let store = Store::with_root(dir.path().to_path_buf()).unwrap();
-        let job = store.submit("hi".into(), None, None).unwrap();
+        let job = store.submit("hi".into(), None, None, None, None).unwrap();
         let (bucket, found) = store.locate(&job.id).unwrap().unwrap();
         assert_eq!(bucket, JobStatus::Pending);
         assert_eq!(found.id, job.id);
@@ -1244,7 +1362,7 @@ mod tests {
     fn claim_one_atomically_moves_pending_to_running() {
         let dir = fresh_root();
         let store = Store::with_root(dir.path().to_path_buf()).unwrap();
-        let job = store.submit("do work".into(), None, None).unwrap();
+        let job = store.submit("do work".into(), None, None, None, None).unwrap();
         let claimed = store.claim_one().unwrap().unwrap();
         assert_eq!(claimed.id, job.id);
         assert_eq!(claimed.status, JobStatus::Running);
@@ -1274,11 +1392,11 @@ mod tests {
     fn claim_one_picks_oldest_first() {
         let dir = fresh_root();
         let store = Store::with_root(dir.path().to_path_buf()).unwrap();
-        let first = store.submit("first".into(), None, None).unwrap();
+        let first = store.submit("first".into(), None, None, None, None).unwrap();
         // Touch the second one with a later mtime to be unambiguous on
         // filesystems with low resolution timestamps.
         std::thread::sleep(Duration::from_millis(20));
-        let _second = store.submit("second".into(), None, None).unwrap();
+        let _second = store.submit("second".into(), None, None, None, None).unwrap();
         let claimed = store.claim_one().unwrap().unwrap();
         assert_eq!(claimed.id, first.id);
     }
@@ -1287,7 +1405,7 @@ mod tests {
     fn finish_ok_moves_running_to_done_with_response() {
         let dir = fresh_root();
         let store = Store::with_root(dir.path().to_path_buf()).unwrap();
-        let job = store.submit("p".into(), None, None).unwrap();
+        let job = store.submit("p".into(), None, None, None, None).unwrap();
         let claimed = store.claim_one().unwrap().unwrap();
         let finished = store
             .finish(
@@ -1319,7 +1437,7 @@ mod tests {
     fn finish_error_records_message() {
         let dir = fresh_root();
         let store = Store::with_root(dir.path().to_path_buf()).unwrap();
-        let _job = store.submit("p".into(), None, None).unwrap();
+        let _job = store.submit("p".into(), None, None, None, None).unwrap();
         let claimed = store.claim_one().unwrap().unwrap();
         let finished = store
             .finish(claimed, FinishOutcome::Error("boom".into()))
@@ -1332,7 +1450,7 @@ mod tests {
     fn cancel_pending_moves_to_done_with_cancelled_status() {
         let dir = fresh_root();
         let store = Store::with_root(dir.path().to_path_buf()).unwrap();
-        let job = store.submit("p".into(), None, None).unwrap();
+        let job = store.submit("p".into(), None, None, None, None).unwrap();
         let cancelled = store.cancel_pending(&job.id).unwrap().unwrap();
         assert_eq!(cancelled.status, JobStatus::Cancelled);
         assert!(dir
@@ -1351,7 +1469,7 @@ mod tests {
     fn cancel_pending_returns_none_when_already_running() {
         let dir = fresh_root();
         let store = Store::with_root(dir.path().to_path_buf()).unwrap();
-        let _ = store.submit("p".into(), None, None).unwrap();
+        let _ = store.submit("p".into(), None, None, None, None).unwrap();
         let _ = store.claim_one().unwrap().unwrap();
         // The job is now in running/, not pending/ — cancel is a noop.
         let c = store.cancel_pending("nonexistent").unwrap();
@@ -1374,7 +1492,7 @@ mod tests {
         let store = Arc::new(Store::with_root(dir.path().to_path_buf()).unwrap());
         let n_jobs = 64usize;
         let ids: Vec<String> = (0..n_jobs)
-            .map(|i| store.submit(format!("job-{i}"), None, None).unwrap().id)
+            .map(|i| store.submit(format!("job-{i}"), None, None, None, None).unwrap().id)
             .collect();
 
         // Outcomes per id: count of successful claims and successful
@@ -1444,11 +1562,11 @@ mod tests {
     fn list_bucket_returns_newest_first_and_respects_limit() {
         let dir = fresh_root();
         let store = Store::with_root(dir.path().to_path_buf()).unwrap();
-        let _a = store.submit("a".into(), None, None).unwrap();
+        let _a = store.submit("a".into(), None, None, None, None).unwrap();
         std::thread::sleep(Duration::from_millis(20));
-        let b = store.submit("b".into(), None, None).unwrap();
+        let b = store.submit("b".into(), None, None, None, None).unwrap();
         std::thread::sleep(Duration::from_millis(20));
-        let c = store.submit("c".into(), None, None).unwrap();
+        let c = store.submit("c".into(), None, None, None, None).unwrap();
         let v = store.list_bucket(JobStatus::Pending, Some(2)).unwrap();
         assert_eq!(v.len(), 2);
         assert_eq!(v[0].id, c.id);
@@ -1459,8 +1577,8 @@ mod tests {
     fn counts_reflect_per_bucket_state() {
         let dir = fresh_root();
         let store = Store::with_root(dir.path().to_path_buf()).unwrap();
-        let _a = store.submit("a".into(), None, None).unwrap();
-        let _b = store.submit("b".into(), None, None).unwrap();
+        let _a = store.submit("a".into(), None, None, None, None).unwrap();
+        let _b = store.submit("b".into(), None, None, None, None).unwrap();
         let claimed = store.claim_one().unwrap().unwrap();
         let _ = store
             .finish(
@@ -1485,7 +1603,7 @@ mod tests {
         let store = Store::with_root(dir.path().to_path_buf()).unwrap();
         // Create 3 done jobs by submitting + claiming + finishing.
         for _ in 0..3 {
-            let _ = store.submit("p".into(), None, None).unwrap();
+            let _ = store.submit("p".into(), None, None, None, None).unwrap();
             let claimed = store.claim_one().unwrap().unwrap();
             let _ = store
                 .finish(
@@ -1508,10 +1626,10 @@ mod tests {
 
     #[test]
     fn job_preview_truncates_with_ellipsis() {
-        let mut j = Job::new_pending("a".repeat(100), None, None);
+        let mut j = Job::new_pending("a".repeat(100), None, None, None, None);
         j.id = "fixed".into();
         assert_eq!(j.preview(10), "aaaaaaaaaa…");
-        let short = Job::new_pending("hi".into(), None, None);
+        let short = Job::new_pending("hi".into(), None, None, None, None);
         assert_eq!(short.preview(10), "hi");
     }
 
@@ -1631,7 +1749,7 @@ mod tests {
         // Manually drive a job through to done/ so we can assert
         // result without invoking a real provider.
         let store = Store::open_default().unwrap();
-        let job = store.submit("p".into(), None, None).unwrap();
+        let job = store.submit("p".into(), None, None, None, None).unwrap();
         let claimed = store.claim_one().unwrap().unwrap();
         let _ = store
             .finish(
@@ -1663,7 +1781,7 @@ mod tests {
         let _g = EnvGuard::set(dir.path());
         let store = Store::open_default().unwrap();
         for _ in 0..2 {
-            let _ = store.submit("p".into(), None, None).unwrap();
+            let _ = store.submit("p".into(), None, None, None, None).unwrap();
             let c = store.claim_one().unwrap().unwrap();
             let _ = store
                 .finish(
@@ -1701,7 +1819,7 @@ mod tests {
     fn list_bucket_skips_files_that_disappear_mid_read() {
         let dir = fresh_root();
         let store = Store::with_root(dir.path().to_path_buf()).unwrap();
-        let _ = store.submit("alive".into(), None, None).unwrap();
+        let _ = store.submit("alive".into(), None, None, None, None).unwrap();
         // Plant a stale path: write it then remove it before list_bucket
         // can read. Since list_bucket reads inside the directory iter,
         // simulate the race by deleting one file just before listing
@@ -1721,10 +1839,10 @@ mod tests {
         let _g = EnvGuard::set(dir.path());
         let store = Store::open_default().unwrap();
         // Submit oldest pending.
-        let oldest = store.submit("oldest".into(), None, None).unwrap();
+        let oldest = store.submit("oldest".into(), None, None, None, None).unwrap();
         std::thread::sleep(Duration::from_millis(1100)); // ensure created_at second-rollover
                                                          // Submit middle, then claim+finish (lands in done/).
-        let mid = store.submit("middle".into(), None, None).unwrap();
+        let mid = store.submit("middle".into(), None, None, None, None).unwrap();
         let claimed = store.claim_one().unwrap().unwrap();
         // claimed should be the oldest pending (FIFO). Finish it.
         let _ = store
@@ -1740,7 +1858,7 @@ mod tests {
             .unwrap();
         std::thread::sleep(Duration::from_millis(1100));
         // Newest pending.
-        let newest = store.submit("newest".into(), None, None).unwrap();
+        let newest = store.submit("newest".into(), None, None, None, None).unwrap();
 
         // Expected ordering by created_at desc: newest, mid (still
         // pending), oldest (now in done/ as ok). cmd_list with no

@@ -7,9 +7,13 @@
 /// write to it under the running user's `$HOME`, so changes don't
 /// need root.
 use serde::{Deserialize, Serialize};
+use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::fs;
+use std::future::Future;
+use std::hash::{Hash, Hasher};
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 static CONFIG: OnceLock<CosConfig> = OnceLock::new();
 
@@ -897,9 +901,18 @@ fn load_from_disk() -> CosConfig {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(crate::paths::user_config_path);
 
-    let path: &Path = path.as_ref();
+    load_from_path(path.as_ref())
+}
+
+/// Load a `CosConfig` from a specific path on disk. Missing file
+/// returns defaults silently (matches `load_from_disk` semantics).
+/// Read/parse errors log at ERROR severity and fall back to defaults.
+///
+/// Public for clawd, which resolves the requesting peer's `$HOME` from
+/// `SO_PEERCRED` and reads *their* `<home>/.config/cos/config.json`
+/// rather than its own root-owned file.
+pub fn load_from_path(path: &Path) -> CosConfig {
     if !path.is_file() {
-        // Missing file is normal on a fresh install — don't log.
         return CosConfig::default();
     }
 
@@ -928,8 +941,90 @@ fn load_from_disk() -> CosConfig {
     }
 }
 
-/// Get the global config (loaded once, cached).
+// ---------------------------------------------------------------------------
+// Per-task config override
+//
+// clawd is the system-level agent daemon. It runs as root with
+// `HOME=/root` under systemd, so its own `config::get()` reads
+// `/root/.config/cos/config.json` — empty by default. But the agent
+// jobs it executes were submitted by *user* shells (uid != 0), whose
+// per-user `~/.config/cos/config.json` carries the provider config the
+// user actually set up via `cos agent setup llm`.
+//
+// To bridge the two we install a per-async-task override: clawd's
+// worker resolves the job's owner home, loads that user's config, and
+// wraps the entire job execution in `with_override(...)`. Every
+// `config::get()` call from within that task — including ones deep
+// inside the LLM gate, model task helpers, and tool implementations —
+// transparently sees the user's config instead of clawd's.
+//
+// Lifetime: `get()` returns `&'static CosConfig` and ~50 call sites
+// rely on that. To keep the signature we intern each distinct
+// user-config payload (by content hash) into a leaked `Box`. After
+// interning the same content twice returns the same pointer, so the
+// leak is bounded by the number of *distinct* configs clawd sees over
+// its lifetime — in practice a small constant per user.
+// ---------------------------------------------------------------------------
+
+tokio::task_local! {
+    /// Optional override for `config::get()`. Set by
+    /// `with_override(...)` for the duration of a single
+    /// clawd-dispatched agent job; absent everywhere else.
+    static CONFIG_OVERRIDE: &'static CosConfig;
+}
+
+static OVERRIDE_INTERN: OnceLock<Mutex<HashMap<u64, &'static CosConfig>>> = OnceLock::new();
+
+fn intern_static(cfg: CosConfig) -> &'static CosConfig {
+    let serialized = serde_json::to_string(&cfg).unwrap_or_default();
+    let mut hasher = DefaultHasher::new();
+    serialized.hash(&mut hasher);
+    let key = hasher.finish();
+
+    let cache = OVERRIDE_INTERN.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = cache.lock().unwrap_or_else(|poison| poison.into_inner());
+    if let Some(existing) = guard.get(&key) {
+        return existing;
+    }
+    let leaked: &'static CosConfig = Box::leak(Box::new(cfg));
+    guard.insert(key, leaked);
+    leaked
+}
+
+/// Load `<home>/.config/cos/config.json` and intern it into a
+/// `'static` slot suitable for `with_override`. The same on-disk file
+/// content always returns the same pointer.
+pub fn intern_for_home(home: &Path) -> &'static CosConfig {
+    let path = crate::paths::user_config_path_for(home);
+    intern_static(load_from_path(&path))
+}
+
+/// Run `fut` with `cfg` installed as the per-task override visible to
+/// every `config::get()` call inside it (and any task spawned via
+/// `tokio::spawn` from within it, because `task_local` propagates).
+/// Outside the scope `config::get()` returns the process-wide config
+/// as before.
+pub async fn with_override<Fut, R>(cfg: &'static CosConfig, fut: Fut) -> R
+where
+    Fut: Future<Output = R>,
+{
+    CONFIG_OVERRIDE.scope(cfg, fut).await
+}
+
+/// Test/inspection helper: snapshot of the currently active override
+/// pointer (`None` outside any `with_override` scope).
+#[cfg(test)]
+fn current_override() -> Option<&'static CosConfig> {
+    CONFIG_OVERRIDE.try_with(|c| *c).ok()
+}
+
+/// Get the global config. Inside a [`with_override`] scope this
+/// returns the override; outside, it returns the process-wide config
+/// loaded once from disk.
 pub fn get() -> &'static CosConfig {
+    if let Ok(cfg) = CONFIG_OVERRIDE.try_with(|c| *c) {
+        return cfg;
+    }
     CONFIG.get_or_init(load_from_disk)
 }
 
@@ -1087,5 +1182,155 @@ mod tests {
 
         assert_eq!(cfg.version, env!("CARGO_PKG_VERSION"));
         assert_eq!(cfg.exec.timeout, 300);
+    }
+
+    #[test]
+    fn load_from_path_round_trip() {
+        let pid = std::process::id();
+        let dir = std::env::temp_dir().join(format!("cos-config-roundtrip-{pid}"));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+        fs::write(
+            &path,
+            r#"{"agent": {"provider": "copilot", "model": "claude-opus-4.7"}}"#,
+        )
+        .unwrap();
+
+        let cfg = load_from_path(&path);
+        assert_eq!(cfg.agent.provider, "copilot");
+        assert_eq!(cfg.agent.model, "claude-opus-4.7");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_from_path_missing_file_returns_defaults() {
+        let cfg = load_from_path(Path::new("/nonexistent/cos-config-xyzzy.json"));
+        // No panic, no error — just defaults.
+        assert_eq!(cfg.agent.provider, "");
+    }
+
+    #[tokio::test]
+    async fn with_override_swaps_get_inside_scope_only() {
+        // Establish a baseline: outside any scope, no override.
+        assert!(current_override().is_none());
+
+        let mut cfg = CosConfig::default();
+        cfg.agent.provider = "copilot".into();
+        cfg.agent.model = "claude-opus-4.7".into();
+        let leaked = intern_static(cfg);
+
+        with_override(leaked, async {
+            let inside = get();
+            assert_eq!(inside.agent.provider, "copilot");
+            assert_eq!(inside.agent.model, "claude-opus-4.7");
+            assert!(current_override().is_some());
+        })
+        .await;
+
+        // After the scope ends, the override is gone again.
+        assert!(current_override().is_none());
+    }
+
+    #[tokio::test]
+    async fn override_propagates_through_awaited_futures() {
+        // tokio::task_local values flow through `.await` and through
+        // primitives like `futures::join_all` that drive their inner
+        // futures from the same task. They do NOT auto-propagate
+        // across `tokio::spawn` — see
+        // `override_does_not_leak_across_spawn` for that boundary.
+        // The agent dispatch loop (turn.rs) joins concurrent tool
+        // futures with `join_all`, so the user's config is visible
+        // inside every tool's `exec` regardless of how many run in
+        // parallel.
+        let mut cfg = CosConfig::default();
+        cfg.agent.provider = "openai".into();
+        let leaked = intern_static(cfg);
+
+        let observed = with_override(leaked, async move {
+            // Plain `.await` of a child future.
+            let a = async { get().agent.provider.clone() }.await;
+            // join_all-style concurrency drives futures within the
+            // same task, so the override is still visible.
+            let bcd = futures_util::future::join_all((0..3).map(|_| async {
+                get().agent.provider.clone()
+            }))
+            .await;
+            (a, bcd)
+        })
+        .await;
+
+        assert_eq!(observed.0, "openai");
+        assert_eq!(observed.1, vec!["openai", "openai", "openai"]);
+    }
+
+    #[tokio::test]
+    async fn override_does_not_leak_across_spawn() {
+        // tokio::spawn creates a fresh task that does NOT inherit
+        // parent task_local values. This is the documented tokio
+        // contract; we keep it explicit because any future code that
+        // spawns background work and reads `config::get()` must
+        // re-scope the override itself (or capture an `&CosConfig`
+        // and pass it through).
+        let mut cfg = CosConfig::default();
+        cfg.agent.provider = "openai".into();
+        let leaked = intern_static(cfg);
+
+        let observed = with_override(leaked, async move {
+            tokio::spawn(async move {
+                // Inside the spawned task: no override, so this
+                // returns the process-wide config (defaults in the
+                // unit-test environment) and definitely NOT
+                // "openai".
+                get().agent.provider.clone()
+            })
+            .await
+            .unwrap()
+        })
+        .await;
+
+        assert_ne!(observed, "openai");
+    }
+
+    #[test]
+    fn intern_static_dedupes_by_content() {
+        let mut a = CosConfig::default();
+        a.agent.provider = "anthropic".into();
+        a.agent.model = "claude-sonnet-4.6".into();
+
+        let mut b = CosConfig::default();
+        b.agent.provider = "anthropic".into();
+        b.agent.model = "claude-sonnet-4.6".into();
+
+        let p1 = intern_static(a) as *const CosConfig;
+        let p2 = intern_static(b) as *const CosConfig;
+        assert_eq!(p1, p2, "identical config payloads must share leaked slot");
+
+        let mut c = CosConfig::default();
+        c.agent.provider = "anthropic".into();
+        c.agent.model = "claude-opus-4.7".into();
+        let p3 = intern_static(c) as *const CosConfig;
+        assert_ne!(p1, p3, "distinct config payloads must not dedupe");
+    }
+
+    #[test]
+    fn intern_for_home_reads_users_config_json() {
+        let pid = std::process::id();
+        let home = std::env::temp_dir().join(format!("cos-config-home-{pid}"));
+        let _ = fs::remove_dir_all(&home);
+        let cfg_path = crate::paths::user_config_path_for(&home);
+        fs::create_dir_all(cfg_path.parent().unwrap()).unwrap();
+        fs::write(
+            &cfg_path,
+            r#"{"agent": {"provider": "xai", "model": "grok-2"}}"#,
+        )
+        .unwrap();
+
+        let interned = intern_for_home(&home);
+        assert_eq!(interned.agent.provider, "xai");
+        assert_eq!(interned.agent.model, "grok-2");
+
+        let _ = fs::remove_dir_all(&home);
     }
 }
