@@ -21,6 +21,7 @@ use crate::agent::runtime::auto_curator::AutoCurator;
 use crate::agent::runtime::hooks;
 use crate::agent::runtime::hooks_config;
 use crate::agent::runtime::interrupt;
+use crate::agent::runtime::progress::{self, ProgressSink};
 use crate::agent::runtime::semantic_indexer::SemanticIndexer;
 use crate::agent::safety::redact::Redactor;
 use crate::agent::tools::registry::{default_registry, ToolRegistry};
@@ -118,6 +119,11 @@ pub async fn ask_with_compressor(
 ///
 /// Pass `db = None` to disable memory recording (mirrors `ask_with`);
 /// pass `Some((db, sid))` to record (mirrors `ask_with_memory`).
+///
+/// `progress` receives tool-execution events (start + result) that
+/// the provider stream never surfaces. Interactive REPLs supply a
+/// progress sink that renders `[tool_result …]` to stderr; headless
+/// callers can pass [`progress::null_progress`] to discard them.
 pub async fn ask_with_stream(
     provider: Arc<dyn Provider>,
     cfg: &AgentConfig,
@@ -125,8 +131,9 @@ pub async fn ask_with_stream(
     tools: &ToolRegistry,
     db: Option<(&MemoryDb, &str)>,
     sink: Arc<dyn StreamSink>,
+    progress: Arc<dyn ProgressSink>,
 ) -> Result<AskResult, AgentError> {
-    ask_inner_streaming(provider, cfg, user_prompt, tools, db, None, sink).await
+    ask_inner_streaming(provider, cfg, user_prompt, tools, db, None, sink, progress).await
 }
 
 async fn ask_inner(
@@ -270,6 +277,7 @@ async fn ask_inner(
             recorder.map(|(_, sid)| sid),
             retry_policy_from_cfg(cfg),
             Some(&hook_ctx),
+            progress::null_progress(),
         )
         .await;
 
@@ -415,6 +423,7 @@ async fn ask_inner_streaming(
     recorder: Option<(&MemoryDb, &str)>,
     compressor: Option<Arc<dyn Compressor>>,
     sink: Arc<dyn StreamSink>,
+    progress: Arc<dyn ProgressSink>,
 ) -> Result<AskResult, AgentError> {
     let redactor: Option<Redactor> = if cfg.redact_memory_enabled {
         Some(Redactor::default_set())
@@ -516,6 +525,7 @@ async fn ask_inner_streaming(
             recorder.map(|(_, sid)| sid),
             sink.clone(),
             Some(&hook_ctx),
+            progress.clone(),
         )
         .await;
 
@@ -1969,9 +1979,17 @@ mod tests {
         let provider: Arc<dyn Provider> = Arc::new(MockProvider::new(&cfg.model, &cfg));
         let tools = builtin_only_registry();
         let sink: Arc<CapturingSink> = Arc::default();
-        let result = ask_with_stream(provider, &cfg, "hello stream", &tools, None, sink.clone())
-            .await
-            .unwrap();
+        let result = ask_with_stream(
+            provider,
+            &cfg,
+            "hello stream",
+            &tools,
+            None,
+            sink.clone(),
+            progress::null_progress(),
+        )
+        .await
+        .unwrap();
         assert_eq!(result.turns, 1);
         assert!(result.answer.contains("hello stream"));
         let events = sink.events.lock().unwrap();
@@ -2005,6 +2023,7 @@ mod tests {
             &tools,
             None,
             sink.clone(),
+            progress::null_progress(),
         )
         .await
         .unwrap();
@@ -2027,7 +2046,16 @@ mod tests {
         let provider: Arc<dyn Provider> = Arc::new(mock);
         let tools = builtin_only_registry();
         let sink: Arc<CapturingSink> = Arc::default();
-        let res = ask_with_stream(provider, &cfg, "boom", &tools, None, sink).await;
+        let res = ask_with_stream(
+            provider,
+            &cfg,
+            "boom",
+            &tools,
+            None,
+            sink,
+            progress::null_progress(),
+        )
+        .await;
         assert!(matches!(res, Err(AgentError::Llm(_))));
     }
 
@@ -2295,9 +2323,17 @@ mod tests {
         let provider: Arc<dyn Provider> = Arc::new(MockProvider::new(&cfg.model, &cfg));
         let tools = builtin_only_registry();
         let sink: Arc<CapturingSink> = Arc::default();
-        let _ = ask_with_stream(provider, &cfg, "hello", &tools, None, sink.clone())
-            .await
-            .unwrap();
+        let _ = ask_with_stream(
+            provider,
+            &cfg,
+            "hello",
+            &tools,
+            None,
+            sink.clone(),
+            progress::null_progress(),
+        )
+        .await
+        .unwrap();
 
         global_registry().unregister("stream-loop-spy");
 
@@ -2332,9 +2368,17 @@ mod tests {
         let provider: Arc<dyn Provider> = Arc::new(MockProvider::new(&cfg.model, &cfg));
         let tools = builtin_only_registry();
         let sink: Arc<CapturingSink> = Arc::default();
-        let err = ask_with_stream(provider, &cfg, "hi", &tools, None, sink)
-            .await
-            .unwrap_err();
+        let err = ask_with_stream(
+            provider,
+            &cfg,
+            "hi",
+            &tools,
+            None,
+            sink,
+            progress::null_progress(),
+        )
+        .await
+        .unwrap_err();
 
         global_registry().unregister("stream-loop-stopper");
 

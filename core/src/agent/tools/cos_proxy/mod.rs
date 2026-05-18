@@ -48,6 +48,13 @@ pub struct CosPrimitiveTool {
     primitive: PrimitiveFn,
     /// Allowed `command` values (also documented in the schema enum).
     commands: &'static [&'static str],
+    /// Whether the underlying primitive is entirely read-only. The
+    /// runtime dispatch loop checks [`Tool::parallel_safe`] to decide
+    /// whether to fan this call out concurrently with siblings in the
+    /// same turn. Primitives that mix reads and writes leave this
+    /// `false`; the LLM still rarely fires more than one such call at
+    /// once, and serial dispatch is the safe default.
+    parallel_safe: bool,
 }
 
 impl CosPrimitiveTool {
@@ -62,6 +69,25 @@ impl CosPrimitiveTool {
             description,
             primitive,
             commands,
+            parallel_safe: false,
+        }
+    }
+
+    /// Variant constructor for primitives whose every command is
+    /// read-only (e.g. `cos_sysinfo`). The dispatch loop may run
+    /// these concurrently with other parallel-safe calls.
+    pub const fn new_readonly(
+        name: &'static str,
+        description: &'static str,
+        primitive: PrimitiveFn,
+        commands: &'static [&'static str],
+    ) -> Self {
+        Self {
+            name,
+            description,
+            primitive,
+            commands,
+            parallel_safe: true,
         }
     }
 }
@@ -133,16 +159,25 @@ impl Tool for CosPrimitiveTool {
             Err(join_err) => ToolResult::err(format!("primitive panicked: {join_err}")),
         }
     }
+
+    fn parallel_safe(&self) -> bool {
+        self.parallel_safe
+    }
 }
 
 /// Tool descriptor — name, human description, primitive entry point, and the
 /// list of commands the primitive understands. Keep this list in sync with
 /// each primitive's `run` `match` arms.
+///
+/// `parallel_safe` opts the primitive into concurrent dispatch with
+/// other parallel-safe tools in the same turn. Set to `true` only
+/// when every listed command is read-only.
 struct PrimitiveSpec {
     name: &'static str,
     description: &'static str,
     primitive: PrimitiveFn,
     commands: &'static [&'static str],
+    parallel_safe: bool,
 }
 
 const PRIMITIVES: &[PrimitiveSpec] = &[
@@ -154,6 +189,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
                       model-generated shell command.",
         primitive: crate::sandbox::run,
         commands: &["exec"],
+        parallel_safe: false, // runs arbitrary commands; never parallel.
     },
     PrimitiveSpec {
         name: "cos_proc",
@@ -165,6 +201,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
             "spawn", "status", "output", "kill", "list", "wait", "signal", "result", "stats",
             "renice",
         ],
+        parallel_safe: false, // includes spawn/kill/signal.
     },
     PrimitiveSpec {
         name: "cos_sysinfo",
@@ -204,6 +241,10 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
             "coredumps",
             "pkg_updates",
         ],
+        // Every command is a pure read of system state. The slow
+        // largest_files walk is the canonical reason we want parallel
+        // dispatch — the agent typically pairs it with other reads.
+        parallel_safe: true,
     },
     PrimitiveSpec {
         name: "cos_credential",
@@ -220,6 +261,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
             "load-bundle",
             "oauth-refresh",
         ],
+        parallel_safe: false, // mutating store; locks contended on parallel writes.
     },
     PrimitiveSpec {
         name: "cos_cron",
@@ -229,6 +271,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
         commands: &[
             "add", "remove", "list", "status", "enable", "disable", "logs", "run", "tick",
         ],
+        parallel_safe: false,
     },
     PrimitiveSpec {
         name: "cos_checkpoint",
@@ -246,6 +289,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
             "quota-status",
             "namespaces",
         ],
+        parallel_safe: false,
     },
     PrimitiveSpec {
         name: "cos_service",
@@ -256,6 +300,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
         commands: &[
             "start", "stop", "stop-all", "restart", "status", "health", "list", "logs", "register",
         ],
+        parallel_safe: false,
     },
     PrimitiveSpec {
         name: "cos_trace",
@@ -264,6 +309,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
                       what the agent did and why.",
         primitive: crate::trace::run,
         commands: &["start", "end", "span", "span-end", "show", "list"],
+        parallel_safe: false, // start/end/span mutate journal.
     },
     PrimitiveSpec {
         name: "cos_watch",
@@ -271,6 +317,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
                       Supports multi-target watches and history queries.",
         primitive: crate::watch::run,
         commands: &["file", "dir", "proc", "on", "multi", "history"],
+        parallel_safe: false,
     },
     PrimitiveSpec {
         name: "cos_ipc",
@@ -280,6 +327,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
         commands: &[
             "send", "recv", "list", "clear", "lock", "unlock", "locks", "barrier", "pipe",
         ],
+        parallel_safe: false,
     },
     PrimitiveSpec {
         name: "cos_browser",
@@ -287,6 +335,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
                       Lifecycle only — actual fetches go via the cos web app.",
         primitive: crate::browser::run,
         commands: &["start", "stop", "restart", "status", "health"],
+        parallel_safe: false,
     },
     PrimitiveSpec {
         name: "cos_netfilter",
@@ -307,6 +356,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
             "rate-limit-remove",
             "rate-check",
         ],
+        parallel_safe: false,
     },
     PrimitiveSpec {
         name: "cos_model",
@@ -317,6 +367,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
         commands: &[
             "list", "import", "load", "unload", "infer", "status", "bench", "rm",
         ],
+        parallel_safe: false, // import/load/unload mutate engine state.
     },
     PrimitiveSpec {
         name: "cos_doctor",
@@ -330,6 +381,8 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
                       with a top-level status of ok | warn | fail.",
         primitive: crate::agent::doctor_cli::doctor_primitive,
         commands: &["run"],
+        // Diagnostics-only; no writes outside ephemeral status fields.
+        parallel_safe: true,
     },
 ];
 
@@ -339,12 +392,17 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
 /// pure (no IO during test setup).
 pub fn register_all(registry: &mut ToolRegistry) {
     for spec in PRIMITIVES {
-        registry.register(Arc::new(CosPrimitiveTool::new(
-            spec.name,
-            spec.description,
-            spec.primitive,
-            spec.commands,
-        )));
+        let tool = if spec.parallel_safe {
+            CosPrimitiveTool::new_readonly(
+                spec.name,
+                spec.description,
+                spec.primitive,
+                spec.commands,
+            )
+        } else {
+            CosPrimitiveTool::new(spec.name, spec.description, spec.primitive, spec.commands)
+        };
+        registry.register(Arc::new(tool));
     }
     registry.register(Arc::new(memory::CosMemoryTool::new()));
 }
@@ -473,6 +531,32 @@ mod tests {
             !result.is_error,
             "sysinfo info unexpectedly failed: {}",
             result.content
+        );
+    }
+
+    #[test]
+    fn new_default_is_not_parallel_safe() {
+        let t = CosPrimitiveTool::new("cos_x", "desc", crate::sysinfo::run, &["info"]);
+        assert!(!t.parallel_safe(), "new() must default to serial");
+    }
+
+    #[test]
+    fn new_readonly_opts_into_parallel_safe() {
+        let t = CosPrimitiveTool::new_readonly("cos_x", "desc", crate::sysinfo::run, &["info"]);
+        assert!(t.parallel_safe(), "new_readonly() must opt into parallel");
+    }
+
+    #[test]
+    fn registered_sysinfo_is_parallel_safe() {
+        let mut r = ToolRegistry::new();
+        register_all(&mut r);
+        assert!(
+            r.is_parallel_safe("cos_sysinfo"),
+            "cos_sysinfo (read-only telemetry) should opt into parallel dispatch"
+        );
+        assert!(
+            !r.is_parallel_safe("cos_sandbox"),
+            "cos_sandbox (arbitrary command exec) must stay serial"
         );
     }
 }

@@ -14,6 +14,7 @@ use crate::agent::llm::{
     ToolCall, ToolChoice, Usage,
 };
 use crate::agent::runtime::hooks::{self, HookContext};
+use crate::agent::runtime::progress::{self, ProgressSink};
 use crate::agent::tools::{registry::ToolRegistry, ToolResult};
 
 /// Outcome of one turn.
@@ -64,6 +65,7 @@ pub async fn run_turn(
     session_id: Option<&str>,
     retry_policy: Option<crate::agent::llm::rate_limit::RetryPolicy>,
     hook_ctx: Option<&HookContext>,
+    progress: Arc<dyn ProgressSink>,
 ) -> Result<TurnReport, super::loop_::AgentError> {
     let mut request = ChatRequest {
         model: model.to_string(),
@@ -178,63 +180,12 @@ pub async fn run_turn(
     // and append the full results message before propagating
     // Interrupted, so message history (assistant tool_use ↔ user
     // tool_result) stays balanced for the next turn.
-    let mut result_blocks: Vec<ContentBlock> = Vec::with_capacity(tool_calls.len());
-    let mut pending_stop: Option<String> = None;
-    for call in &tool_calls {
-        let (effective_call, decision_error) = match hook_ctx {
-            Some(ctx) => {
-                let registry = hooks::global_registry();
-                match registry.dispatch_pre_tool(ctx, call) {
-                    hooks::ToolDecision::Allow => (call.clone(), None),
-                    hooks::ToolDecision::Deny(reason) => (
-                        call.clone(),
-                        Some(format!("hook deny `{}`: {reason}", call.name)),
-                    ),
-                    hooks::ToolDecision::Override(new_input) => {
-                        let mut overridden = call.clone();
-                        overridden.input = new_input;
-                        (overridden, None)
-                    }
-                }
-            }
-            None => (call.clone(), None),
-        };
-
-        let started = Instant::now();
-        let result = if let Some(reason) = decision_error {
-            ToolResult::err(reason)
-        } else {
-            dispatch_tool(tools, &effective_call).await
-        };
-        let latency_ms = started.elapsed().as_millis() as u64;
-
-        if let Some(ctx) = hook_ctx {
-            let summary = hooks::ToolResultSummary {
-                tool_name: effective_call.name.clone(),
-                success: !result.is_error,
-                latency_ms,
-                bytes_returned: result.content.len(),
-                error: if result.is_error {
-                    Some(result.content.clone())
-                } else {
-                    None
-                },
-            };
-            if pending_stop.is_none() {
-                if let hooks::HookOutcome::Stop(reason) =
-                    hooks::global_registry().dispatch_post_tool(ctx, &effective_call, &summary)
-                {
-                    pending_stop = Some(reason);
-                }
-            }
-        }
-
-        result_blocks.push(ContentBlock::ToolResult {
-            tool_use_id: call.id.clone(),
-            is_error: result.is_error,
-            content: result.content,
-        });
-    }
+    //
+    // Tools that opt into [`Tool::parallel_safe`] run concurrently
+    // via `dispatch_calls`; others serialise. See that helper for the
+    // ordering guarantees.
+    let (result_blocks, pending_stop) =
+        dispatch_calls(tools, hook_ctx, &tool_calls, progress.as_ref()).await;
     messages.push(Message {
         role: Role::User,
         content: result_blocks,
@@ -288,6 +239,7 @@ pub async fn run_turn_streaming(
     session_id: Option<&str>,
     sink: Arc<dyn StreamSink>,
     hook_ctx: Option<&HookContext>,
+    progress: Arc<dyn ProgressSink>,
 ) -> Result<TurnReport, super::loop_::AgentError> {
     let mut request = ChatRequest {
         model: model.to_string(),
@@ -364,63 +316,8 @@ pub async fn run_turn_streaming(
         });
     }
 
-    let mut result_blocks: Vec<ContentBlock> = Vec::with_capacity(tool_calls.len());
-    let mut pending_stop: Option<String> = None;
-    for call in &tool_calls {
-        let (effective_call, decision_error) = match hook_ctx {
-            Some(ctx) => {
-                let registry = hooks::global_registry();
-                match registry.dispatch_pre_tool(ctx, call) {
-                    hooks::ToolDecision::Allow => (call.clone(), None),
-                    hooks::ToolDecision::Deny(reason) => (
-                        call.clone(),
-                        Some(format!("hook deny `{}`: {reason}", call.name)),
-                    ),
-                    hooks::ToolDecision::Override(new_input) => {
-                        let mut overridden = call.clone();
-                        overridden.input = new_input;
-                        (overridden, None)
-                    }
-                }
-            }
-            None => (call.clone(), None),
-        };
-
-        let started = Instant::now();
-        let result = if let Some(reason) = decision_error {
-            ToolResult::err(reason)
-        } else {
-            dispatch_tool(tools, &effective_call).await
-        };
-        let latency_ms = started.elapsed().as_millis() as u64;
-
-        if let Some(ctx) = hook_ctx {
-            let summary = hooks::ToolResultSummary {
-                tool_name: effective_call.name.clone(),
-                success: !result.is_error,
-                latency_ms,
-                bytes_returned: result.content.len(),
-                error: if result.is_error {
-                    Some(result.content.clone())
-                } else {
-                    None
-                },
-            };
-            if pending_stop.is_none() {
-                if let hooks::HookOutcome::Stop(reason) =
-                    hooks::global_registry().dispatch_post_tool(ctx, &effective_call, &summary)
-                {
-                    pending_stop = Some(reason);
-                }
-            }
-        }
-
-        result_blocks.push(ContentBlock::ToolResult {
-            tool_use_id: call.id.clone(),
-            is_error: result.is_error,
-            content: result.content,
-        });
-    }
+    let (result_blocks, pending_stop) =
+        dispatch_calls(tools, hook_ctx, &tool_calls, progress.as_ref()).await;
     messages.push(Message {
         role: Role::User,
         content: result_blocks,
@@ -540,6 +437,181 @@ async fn dispatch_tool(registry: &ToolRegistry, call: &ToolCall) -> ToolResult {
     }
 }
 
+/// Outcome of a single dispatch: the (possibly-overridden) call, the
+/// tool result, and the wall-clock latency we measured. Returned by
+/// [`dispatch_one`] so the caller can run post-hooks and assemble
+/// `ContentBlock::ToolResult` after waiting on a batch of futures.
+struct DispatchOutcome {
+    effective_call: ToolCall,
+    result: ToolResult,
+    latency_ms: u64,
+}
+
+/// Resolve pre-hook for `call`. Returns the effective call (with
+/// `Override` applied) and an optional synthetic error string when
+/// the hook denied. The returned values mirror what the old serial
+/// loop computed inline.
+fn apply_pre_hook(hook_ctx: Option<&HookContext>, call: &ToolCall) -> (ToolCall, Option<String>) {
+    match hook_ctx {
+        Some(ctx) => {
+            let registry = hooks::global_registry();
+            match registry.dispatch_pre_tool(ctx, call) {
+                hooks::ToolDecision::Allow => (call.clone(), None),
+                hooks::ToolDecision::Deny(reason) => (
+                    call.clone(),
+                    Some(format!("hook deny `{}`: {reason}", call.name)),
+                ),
+                hooks::ToolDecision::Override(new_input) => {
+                    let mut overridden = call.clone();
+                    overridden.input = new_input;
+                    (overridden, None)
+                }
+            }
+        }
+        None => (call.clone(), None),
+    }
+}
+
+/// Run a single tool call end-to-end: pre-hook, [`ProgressSink::on_tool_start`],
+/// dispatch (or deny short-circuit), latency, [`ProgressSink::on_tool_result`].
+/// Does NOT run the post-hook — that's the caller's job, sequentially
+/// across the assembled outcomes, so a parallel batch can still
+/// produce a deterministic `pending_stop` order.
+async fn dispatch_one(
+    tools: &ToolRegistry,
+    hook_ctx: Option<&HookContext>,
+    call: &ToolCall,
+    progress: &dyn ProgressSink,
+) -> DispatchOutcome {
+    let (effective_call, decision_error) = apply_pre_hook(hook_ctx, call);
+
+    progress.on_tool_start(&effective_call.id, &effective_call.name, &effective_call.input);
+
+    let started = Instant::now();
+    let result = if let Some(reason) = decision_error {
+        ToolResult::err(reason)
+    } else {
+        dispatch_tool(tools, &effective_call).await
+    };
+    let latency_ms = started.elapsed().as_millis() as u64;
+
+    let ok = !result.is_error;
+    let bytes = result.content.len();
+    let preview = progress::render_preview(&result.content, ok);
+    progress.on_tool_result(
+        &effective_call.id,
+        &effective_call.name,
+        ok,
+        latency_ms,
+        bytes,
+        &preview,
+    );
+
+    DispatchOutcome {
+        effective_call,
+        result,
+        latency_ms,
+    }
+}
+
+/// Dispatch every tool call in `tool_calls` and return `(result_blocks,
+/// pending_stop)`. Calls that opt into [`Tool::parallel_safe`] run
+/// concurrently via `futures_util::future::join_all`; the rest serialise.
+///
+/// Ordering guarantees:
+/// * `result_blocks` is returned in the original `tool_calls` order
+///   (the LLM contract requires tool_result blocks to match tool_use
+///   blocks 1:1 in order).
+/// * Post-hooks run sequentially in the original order after every
+///   dispatch completes, so `pending_stop` reflects the first hook
+///   that signalled Stop in declaration order — same semantics as
+///   the old serial loop.
+async fn dispatch_calls(
+    tools: &ToolRegistry,
+    hook_ctx: Option<&HookContext>,
+    tool_calls: &[ToolCall],
+    progress: &dyn ProgressSink,
+) -> (Vec<ContentBlock>, Option<String>) {
+    // Partition into parallel-safe vs serial groups, preserving the
+    // original index so we can interleave the results back in order.
+    let mut parallel: Vec<usize> = Vec::new();
+    let mut serial: Vec<usize> = Vec::new();
+    for (i, call) in tool_calls.iter().enumerate() {
+        if tools.is_parallel_safe(&call.name) {
+            parallel.push(i);
+        } else {
+            serial.push(i);
+        }
+    }
+
+    // Pre-size with `None` so we can place results by index regardless
+    // of completion order. `take`/`unwrap` at the end converts to
+    // `Vec<DispatchOutcome>` in declaration order.
+    let mut slots: Vec<Option<DispatchOutcome>> = (0..tool_calls.len()).map(|_| None).collect();
+
+    // Concurrent batch first. `join_all` polls every future in this
+    // task; no `spawn` is needed and no `Send` bound creeps in.
+    if !parallel.is_empty() {
+        let futs = parallel.iter().map(|&i| {
+            let call = &tool_calls[i];
+            async move {
+                let outcome = dispatch_one(tools, hook_ctx, call, progress).await;
+                (i, outcome)
+            }
+        });
+        let results = futures_util::future::join_all(futs).await;
+        for (i, outcome) in results {
+            slots[i] = Some(outcome);
+        }
+    }
+
+    // Serial group runs after the parallel batch finished. This is a
+    // deliberate ordering — concurrent inspection calls (sysinfo,
+    // proxy reads) settle first; side-effecting calls (shell exec,
+    // fs writes) then run with the latest state. Matches the
+    // expected mental model: "do the safe reads, then the writes".
+    for i in serial {
+        let outcome = dispatch_one(tools, hook_ctx, &tool_calls[i], progress).await;
+        slots[i] = Some(outcome);
+    }
+
+    // Assemble result blocks + run post-hooks in declaration order.
+    let mut result_blocks: Vec<ContentBlock> = Vec::with_capacity(tool_calls.len());
+    let mut pending_stop: Option<String> = None;
+    for (i, slot) in slots.into_iter().enumerate() {
+        let outcome = slot.expect("every dispatch slot must be filled");
+        if let Some(ctx) = hook_ctx {
+            let summary = hooks::ToolResultSummary {
+                tool_name: outcome.effective_call.name.clone(),
+                success: !outcome.result.is_error,
+                latency_ms: outcome.latency_ms,
+                bytes_returned: outcome.result.content.len(),
+                error: if outcome.result.is_error {
+                    Some(outcome.result.content.clone())
+                } else {
+                    None
+                },
+            };
+            if pending_stop.is_none() {
+                if let hooks::HookOutcome::Stop(reason) = hooks::global_registry()
+                    .dispatch_post_tool(ctx, &outcome.effective_call, &summary)
+                {
+                    pending_stop = Some(reason);
+                }
+            }
+        }
+        // tool_use_id must match the original LLM-issued id, not the
+        // effective (overridden) one — providers correlate by the id
+        // they assigned in the assistant message.
+        result_blocks.push(ContentBlock::ToolResult {
+            tool_use_id: tool_calls[i].id.clone(),
+            is_error: outcome.result.is_error,
+            content: outcome.result.content,
+        });
+    }
+    (result_blocks, pending_stop)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -632,6 +704,7 @@ mod tests {
             None,
             None,
             Some(&hctx),
+            progress::null_progress(),
         )
         .await
         .unwrap();
@@ -687,6 +760,7 @@ mod tests {
             None,
             None,
             Some(&hctx),
+            progress::null_progress(),
         )
         .await
         .unwrap();
@@ -754,6 +828,7 @@ mod tests {
             None,
             None,
             Some(&hctx),
+            progress::null_progress(),
         )
         .await
         .unwrap();
@@ -831,6 +906,7 @@ mod tests {
             None,
             None,
             Some(&hctx),
+            progress::null_progress(),
         )
         .await;
 
@@ -896,6 +972,7 @@ mod tests {
             None,
             None,
             None, // <— no hook context: dispatch skipped
+            progress::null_progress(),
         )
         .await
         .unwrap();
@@ -914,5 +991,235 @@ mod tests {
             }
             other => panic!("expected ToolResult, got {other:?}"),
         }
+    }
+
+    // ----------------------------------------------------------------
+    // ProgressSink + parallel-dispatch unit tests
+    // ----------------------------------------------------------------
+
+    use crate::agent::tools::{Tool, ToolResult as TR};
+
+    /// Recording sink: every callback captures (id, name, ok?, latency).
+    /// Used to assert the runtime called us at the right moments with
+    /// the right arguments.
+    #[derive(Default)]
+    struct RecordingProgress {
+        starts: std::sync::Mutex<Vec<(String, String)>>,
+        results: std::sync::Mutex<Vec<(String, String, bool, usize)>>,
+    }
+    impl progress::ProgressSink for RecordingProgress {
+        fn on_tool_start(&self, id: &str, name: &str, _input: &serde_json::Value) {
+            self.starts
+                .lock()
+                .unwrap()
+                .push((id.to_string(), name.to_string()));
+        }
+        fn on_tool_result(
+            &self,
+            id: &str,
+            name: &str,
+            ok: bool,
+            _latency_ms: u64,
+            bytes_returned: usize,
+            _preview: &str,
+        ) {
+            self.results.lock().unwrap().push((
+                id.to_string(),
+                name.to_string(),
+                ok,
+                bytes_returned,
+            ));
+        }
+    }
+
+    /// Slow read-only tool. Sleeps for `delay` then returns. Marked
+    /// `parallel_safe = true` so the dispatch loop runs siblings
+    /// concurrently. Used to verify the parallel batch actually
+    /// overlaps work in wall time.
+    struct SlowReader {
+        name: &'static str,
+        delay: std::time::Duration,
+    }
+    #[async_trait::async_trait]
+    impl Tool for SlowReader {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+        fn description(&self) -> &'static str {
+            "slow read"
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type":"object"})
+        }
+        async fn exec(&self, _input: serde_json::Value) -> TR {
+            tokio::time::sleep(self.delay).await;
+            TR::ok(format!("done {}", self.name))
+        }
+        fn parallel_safe(&self) -> bool {
+            true
+        }
+    }
+
+    /// Side-effecting tool. Default `parallel_safe = false`.
+    struct SerialWriter {
+        name: &'static str,
+        delay: std::time::Duration,
+    }
+    #[async_trait::async_trait]
+    impl Tool for SerialWriter {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+        fn description(&self) -> &'static str {
+            "serial write"
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type":"object"})
+        }
+        async fn exec(&self, _input: serde_json::Value) -> TR {
+            tokio::time::sleep(self.delay).await;
+            TR::ok(format!("wrote {}", self.name))
+        }
+        // parallel_safe = false (default)
+    }
+
+    fn registry_with(tools_vec: Vec<Arc<dyn Tool>>) -> ToolRegistry {
+        let mut r = ToolRegistry::new();
+        for t in tools_vec {
+            r.register(t);
+        }
+        r
+    }
+
+    fn calls(specs: &[(&str, &str)]) -> Vec<ToolCall> {
+        specs
+            .iter()
+            .map(|(id, name)| ToolCall {
+                id: (*id).to_string(),
+                name: (*name).to_string(),
+                input: serde_json::json!({}),
+            })
+            .collect()
+    }
+
+    /// Progress sink receives exactly one start + one result per
+    /// dispatched tool call, in declaration order for the serial
+    /// path.
+    #[tokio::test]
+    async fn progress_sink_fires_for_every_dispatch_in_order() {
+        let registry = registry_with(vec![Arc::new(SerialWriter {
+            name: "w1",
+            delay: std::time::Duration::from_millis(1),
+        })]);
+        let tool_calls = calls(&[("id-1", "w1"), ("id-2", "w1")]);
+        let p = Arc::new(RecordingProgress::default());
+        let (blocks, stop) =
+            dispatch_calls(&registry, None, &tool_calls, p.as_ref() as &dyn progress::ProgressSink)
+                .await;
+        assert!(stop.is_none());
+        assert_eq!(blocks.len(), 2);
+        let starts = p.starts.lock().unwrap();
+        let results = p.results.lock().unwrap();
+        assert_eq!(
+            starts.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+            vec!["id-1", "id-2"]
+        );
+        assert_eq!(
+            results
+                .iter()
+                .map(|(id, _, ok, _)| (id.as_str(), *ok))
+                .collect::<Vec<_>>(),
+            vec![("id-1", true), ("id-2", true)]
+        );
+    }
+
+    /// Parallel-safe tools dispatched concurrently complete in
+    /// max(durations) rather than sum(durations). Three 100ms
+    /// sleeps must finish in well under 300ms.
+    #[tokio::test]
+    async fn parallel_safe_tools_dispatch_concurrently() {
+        let delay = std::time::Duration::from_millis(100);
+        let registry = registry_with(vec![
+            Arc::new(SlowReader { name: "r1", delay }),
+            Arc::new(SlowReader { name: "r2", delay }),
+            Arc::new(SlowReader { name: "r3", delay }),
+        ]);
+        let tool_calls = calls(&[("a", "r1"), ("b", "r2"), ("c", "r3")]);
+        let p = progress::null_progress();
+        let started = std::time::Instant::now();
+        let (blocks, _) =
+            dispatch_calls(&registry, None, &tool_calls, p.as_ref() as &dyn progress::ProgressSink)
+                .await;
+        let elapsed = started.elapsed();
+        assert_eq!(blocks.len(), 3);
+        // Sequential dispatch would take ~300ms. Concurrent
+        // dispatch finishes inside one delay plus scheduling
+        // slack; 250ms is a generous upper bound that still proves
+        // overlap occurred.
+        assert!(
+            elapsed < std::time::Duration::from_millis(250),
+            "expected concurrent dispatch, got {elapsed:?}"
+        );
+    }
+
+    /// `parallel_safe = false` tools serialise even when batched
+    /// together. Three 80ms serial writers must take at least
+    /// 240ms total.
+    #[tokio::test]
+    async fn serial_tools_remain_sequential() {
+        let delay = std::time::Duration::from_millis(80);
+        let registry = registry_with(vec![
+            Arc::new(SerialWriter { name: "w1", delay }),
+            Arc::new(SerialWriter { name: "w2", delay }),
+            Arc::new(SerialWriter { name: "w3", delay }),
+        ]);
+        let tool_calls = calls(&[("a", "w1"), ("b", "w2"), ("c", "w3")]);
+        let p = progress::null_progress();
+        let started = std::time::Instant::now();
+        let _ =
+            dispatch_calls(&registry, None, &tool_calls, p.as_ref() as &dyn progress::ProgressSink)
+                .await;
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed >= std::time::Duration::from_millis(220),
+            "expected serial dispatch (~240ms), got {elapsed:?}"
+        );
+    }
+
+    /// Mixed batch: result_blocks are returned in original
+    /// declaration order even when readers (parallel) finish
+    /// before writers (serial).
+    #[tokio::test]
+    async fn mixed_batch_preserves_declaration_order() {
+        let fast = std::time::Duration::from_millis(10);
+        let slow = std::time::Duration::from_millis(50);
+        let registry = registry_with(vec![
+            Arc::new(SerialWriter {
+                name: "w1",
+                delay: slow,
+            }),
+            Arc::new(SlowReader {
+                name: "r1",
+                delay: fast,
+            }),
+            Arc::new(SerialWriter {
+                name: "w2",
+                delay: slow,
+            }),
+        ]);
+        // Declaration order: w1 (serial), r1 (parallel), w2 (serial).
+        let tool_calls = calls(&[("id-w1", "w1"), ("id-r1", "r1"), ("id-w2", "w2")]);
+        let p = progress::null_progress();
+        let (blocks, _) =
+            dispatch_calls(&registry, None, &tool_calls, p.as_ref() as &dyn progress::ProgressSink)
+                .await;
+        let ids: Vec<&str> = blocks
+            .iter()
+            .map(|b| match b {
+                ContentBlock::ToolResult { tool_use_id, .. } => tool_use_id.as_str(),
+                _ => panic!("expected ToolResult"),
+            })
+            .collect();
+        assert_eq!(ids, vec!["id-w1", "id-r1", "id-w2"]);
     }
 }

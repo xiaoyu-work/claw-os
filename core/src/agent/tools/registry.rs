@@ -73,6 +73,17 @@ impl ToolRegistry {
         self.tools.get(name).cloned()
     }
 
+    /// Whether the named tool opts into concurrent dispatch with
+    /// siblings in the same turn (see [`Tool::parallel_safe`]).
+    /// Unknown / denied tools return `false` — they'll be handled by
+    /// the normal serial path which already raises a clear error.
+    pub fn is_parallel_safe(&self, name: &str) -> bool {
+        self.tools
+            .get(name)
+            .map(|t| t.parallel_safe())
+            .unwrap_or(false)
+    }
+
     /// Names of every permitted tool, sorted.
     pub fn names(&self) -> Vec<&'static str> {
         let mut names: Vec<&'static str> = self
