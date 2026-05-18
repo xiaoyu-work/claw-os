@@ -301,6 +301,7 @@ h1 .line {
 .section-head { margin-bottom: 24px; }
 .kicker { color: var(--blue); font-size: 13px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 h2 { margin: 8px 0 0; font-size: clamp(28px, 3.2vw, 40px); line-height: 1.08; letter-spacing: -.035em; }
+.section-copy { max-width: 520px; margin: 12px 0 0; color: var(--muted); font-size: 16px; line-height: 1.55; }
 
 .cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .feature-card { min-height: 128px; padding: 20px; border: 1px solid var(--line); border-radius: 16px; background: #fff; }
@@ -395,20 +396,20 @@ pre {
         </div>
         <div class="cards">
           <article class="feature-card">
-            <h3>Headless Linux</h3>
-            <p>Run a complete Linux system without requiring a desktop session.</p>
+            <h3>Structured primitives</h3>
+            <p>Expose apps, files, browser reads, jobs, credentials, and system state through <code>cos</code>.</p>
           </article>
           <article class="feature-card">
-            <h3>Structured control</h3>
-            <p>Expose OS actions through predictable <code>cos</code> commands and JSON output.</p>
+            <h3>Machine-readable results</h3>
+            <p>Return structured output so agents can inspect state without scraping human UI.</p>
           </article>
           <article class="feature-card">
-            <h3>Scoped execution</h3>
+            <h3>Scoped permissions</h3>
             <p>Gate risky actions with explicit capability checks and approvals.</p>
           </article>
           <article class="feature-card">
-            <h3>Reversible work</h3>
-            <p>Use checkpoints to inspect and roll back agent-made file changes.</p>
+            <h3>Checkpoints and rollback</h3>
+            <p>Snapshot, diff, and restore file changes made during agent work.</p>
           </article>
         </div>
       </div>
@@ -426,9 +427,13 @@ pre {
         <div class="install-grid">
           <article class="install-card">
             <h3>WSL</h3>
-            <p>Import the latest rootfs on Windows.</p>
-            <pre><code># Download the matching release asset, then:
-wsl --import claw-os C:\WSL\claw-os .\claw-os-wsl-amd64.tar.gz --version 2
+            <p>Download the latest rootfs from GitHub Releases, then import it.</p>
+            <pre><code>\$arch = if (\$env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
+\$tarball = "claw-os-wsl-\$arch.tar.gz"
+\$url = "https://github.com/xiaoyu-work/claw-os/releases/download/wsl-latest/\$tarball"
+
+Invoke-WebRequest \$url -OutFile \$tarball
+wsl --import claw-os C:\WSL\claw-os \$tarball --version 2
 wsl -d claw-os</code></pre>
           </article>
           <article class="install-card">
