@@ -2,49 +2,32 @@
 
 The OS for agents.
 
-Linux, macOS, and Windows were designed for humans — they return pixels, terminal text, and GUI windows. Claw OS was designed for agents — every system call returns structured data, every process is tracked by session, every operation is automatically audited, and an agent (`Claw`) is part of the OS.
+Claw OS is a Linux-based environment where apps, files, browser access, credentials, jobs, permissions, and rollback are exposed as structured `cos` primitives and controlled by a built-in agent (`Claw`).
 
-## Beyond Linux
+## What it provides
 
-Claw OS provides primitives that traditional operating systems don't:
-
-| Capability | Linux | Claw OS |
-|---|---|---|
-| **Built-in agent** | None | `cos agent ask/chat/setup` — local-first, LLM-pluggable, Spotlight-style overlay (Super+A), voice input (Super+Shift+A) |
-| **Structured I/O** | Text stdout | JSON from every command |
-| **Checkpoint / Rollback** | None | OverlayFS — snapshot, diff, undo any file changes |
-| **Permission Model** | uid/rwx (for humans) | Capability system — verb + scope (file/host/app/...) with risk-tiered roles |
-| **Interactive Consent** | sudo (binary yes/no) | Approval queue — gated ops surface to a panel applet and `cos perms approve/deny/ask` |
-| **Process Coordination** | Raw pipes, signals | IPC messages, locks, barriers, streaming named pipes |
-| **Process Hierarchy** | PIDs, process groups | Session IDs, named groups, parent-child context inheritance |
-| **Error Recovery** | "Permission denied" | Structured JSON with recovery commands to try |
-| **Service Management** | systemd (complex) | Lifecycle hooks, graceful drain, dependency-ordered shutdown |
-| **Browser** | Not included | Built-in Chromium engine — URL → Markdown in one call |
-| **Audit** | Optional, complex | Every operation logged automatically |
-| **Credential Management** | env vars, plaintext files | AES-256-GCM encrypted store with namespaces, TTL, and bundles |
-| **Job Scheduling** | crond (no context) | Agent-native cron with tier/scope/credential context, overlap protection |
-| **Event System** | inotify (raw events) | Multi-source aggregation (file + proc + service), event history |
-| **Skills** | None | Markdown recipes the agent loads on demand; ships kernel-primitive references in `skills/claw-os/` |
-| **Local Inference** | None | `cos model` + `cos engine` manage on-device runtimes; headless images bundle the Qwen3 embedding stack |
+| Capability | What it does |
+|---|---|
+| **Built-in agent** | `cos agent setup/ask/chat`, desktop overlay, voice input |
+| **Structured primitives** | JSON-first commands for apps, files, system info, and browser reads |
+| **Scoped permissions** | Capability checks and approvals for risky actions |
+| **Checkpoints** | Snapshot, diff, and rollback file changes |
+| **Credentials and jobs** | Encrypted credential store and agent-native scheduling |
+| **Local inference** | `cos model` and `cos engine` manage on-device runtimes |
 
 ## Quick Start
 
-Recommended entry points today:
+Pick an entry point:
 
-| Target | Use when | Status |
-|---|---|---|
-| **WSL** | Windows users who want a full headless Claw OS shell | Recommended |
-| **Docker / OrbStack** | macOS/Linux users who want the headless Claw OS runtime in a container | Recommended |
-| **Desktop / ISO / VM** | Testing the graphical agent desktop environment | Experimental |
-
-Both recommended headless targets boot systemd and start `clawd.service`
-automatically. You should not run `clawd` by hand; if the system is up, the
-system agent should already be up.
+| Target | Status |
+|---|---|
+| **WSL** | Recommended |
+| **Docker / OrbStack** | Recommended |
+| **Desktop / ISO / VM** | Experimental |
 
 ### WSL
 
-Download the latest WSL rootfs matching your Windows CPU architecture, import it,
-then enter the distro:
+Import the latest WSL rootfs:
 
 ```powershell
 $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
@@ -58,9 +41,7 @@ wsl -d claw-os
 
 ### Docker
 
-The Docker image runs headless Claw OS in a systemd container. It is published
-as a multi-arch image (`linux/amd64` and `linux/arm64`), so Docker/OrbStack on
-Apple Silicon pulls the native arm64 image automatically.
+Run the container:
 
 ```bash
 docker pull ghcr.io/xiaoyu-work/claw-os:latest
@@ -70,15 +51,12 @@ docker exec -it --user cos claw bash --login
 
 ### Desktop / ISO / VM
 
-The desktop environment is **experimental**. Claw OS apps are built to support
-the agent natively.
+Desktop images are **experimental**.
 
 ### Drive the OS
 
 ```bash
 cos                                    # list primitives
-cos app                                # list built-in apps
-cos sys info                           # system information
 cos checkpoint create "clean state"    # snapshot the workspace
 cos app web read https://example.com   # fetch a page as Markdown
 ```
