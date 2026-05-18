@@ -1,6 +1,6 @@
 # Claw OS
 
-The OS for agents.
+The First Agent Native Operating System
 
 Website: https://xiaoyu-work.github.io/claw-os
 

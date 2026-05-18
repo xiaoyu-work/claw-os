@@ -149,8 +149,8 @@ fi
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light">
-<meta name="description" content="Claw OS is the operating system for agents: structured OS primitives, scoped permissions, checkpoints, rollback, and a built-in agent.">
-<title>Claw OS - The OS for agents</title>
+<meta name="description" content="Claw OS is The First Agent Native Operating System: structured OS primitives, scoped permissions, checkpoints, rollback, and a built-in agent.">
+<title>Claw OS - The First Agent Native Operating System</title>
 <style>
 :root {
   --bg: #fff;
@@ -509,7 +509,7 @@ pre {
     <section class="hero">
       <div class="container">
         <div class="eyebrow"><span class="pulse"></span> Linux, redesigned for agentic work</div>
-        <h1>The OS for <span class="gradient-text">agents.</span></h1>
+        <h1>The First Agent Native <span class="gradient-text">Operating System</span></h1>
         <p class="lead">Claw OS exposes apps, files, browser sessions, credentials, jobs, permissions, and rollback as structured primitives that a built-in agent can use safely.</p>
         <div class="actions">
           <a class="button primary" href="#install">Install Claw OS</a>
@@ -673,7 +673,7 @@ EOF
 
   <footer class="footer">
     <div class="container footer-inner">
-      <span>Claw OS - The OS for agents.</span>
+      <span>Claw OS - The First Agent Native Operating System</span>
       <span><a href="https://github.com/xiaoyu-work/claw-os">GitHub</a> / <a href="dists/$SUITE/Release">Release metadata</a> / architectures: $arch_list</span>
     </div>
   </footer>
