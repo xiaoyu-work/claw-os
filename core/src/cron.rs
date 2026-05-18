@@ -91,8 +91,7 @@ struct CronRunResult {
 // ---------------------------------------------------------------------------
 
 fn cron_dir() -> PathBuf {
-    PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
-        .join("cron")
+    crate::paths::data_dir().join("cron")
 }
 
 fn jobs_dir() -> PathBuf {

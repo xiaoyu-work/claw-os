@@ -101,8 +101,7 @@ pub struct Resolved {
 // ---------------------------------------------------------------------------
 
 fn root() -> PathBuf {
-    PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
-        .join("approvals")
+    crate::paths::data_dir().join("approvals")
 }
 
 fn pending_dir() -> PathBuf {

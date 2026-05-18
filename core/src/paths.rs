@@ -1,14 +1,25 @@
 //! System-level path resolution for cos primitives.
 //!
 //! Follows the cos FHS convention established in `cron.rs:89`:
-//!   - System data:   `/var/lib/cos`            (overridable via `COS_DATA_DIR`)
-//!   - Cache:         `/var/cache/cos`          (overridable via `COS_CACHE_DIR`)
-//!   - Runtime:       `/run/cos`                (overridable via `COS_RUNTIME_DIR`)
-//!   - Config:        `/etc/cos`                (overridable via `COS_CONFIG_DIR`)
-//!   - Logs:          `/var/log/cos`            (overridable via `COS_LOG_DIR`)
+//!   - State (user CLI): `$HOME/.local/share/cos` (overridable via `COS_DATA_DIR` or `COS_USER_DATA_DIR`)
+//!   - State (clawd):    `/var/lib/cos`            (clawd's systemd unit pins `COS_DATA_DIR=/var/lib/cos`)
+//!   - Cache:            `/var/cache/cos`          (overridable via `COS_CACHE_DIR`)
+//!   - Runtime:          `/run/cos`                (overridable via `COS_RUNTIME_DIR`)
+//!   - Config:           `/etc/cos`                (overridable via `COS_CONFIG_DIR`)
+//!   - Logs:             `/var/log/cos`            (overridable via `COS_LOG_DIR`)
 //!
-//! On Windows, defaults map to `%ProgramData%\cos\` subdirectories. All
-//! environment variables still apply on every platform.
+//! `cos` is a user-level CLI: no subcommand should require root to
+//! create or write its on-disk state. We therefore default
+//! [`data_dir`] to the per-user XDG-style location and reserve the
+//! system tree (`/var/lib/cos`) for the clawd daemon, which sets
+//! `COS_DATA_DIR=/var/lib/cos` in its systemd unit. Anything that
+//! genuinely modifies the system goes through the approval gate and
+//! is executed by clawd on the caller's behalf, not by writing to
+//! root-owned paths from the CLI process.
+//!
+//! On Windows, defaults map to `%APPDATA%\cos\data` (per-user) or
+//! `%ProgramData%\cos\` (system) subdirectories. All environment
+//! variables still apply on every platform.
 //!
 //! Models, agent state, audit logs, etc. should resolve their paths through
 //! this module rather than hard-coding strings, so a single env var flip can
@@ -42,8 +53,26 @@ fn from_env_or_default(env_key: &str, unix_default: &str, subdir: &str) -> PathB
     }
 }
 
+/// Resolve the on-disk state directory for this process.
+///
+/// * If `COS_DATA_DIR` is set, honour it verbatim. This is the
+///   escape hatch tests use to redirect state into a tempdir, and
+///   the mechanism clawd uses to pin its state under `/var/lib/cos`
+///   (see the `Environment=` line in its systemd unit).
+/// * Otherwise default to the per-user data dir
+///   ([`user_data_dir`]): `$HOME/.local/share/cos` on Linux,
+///   `%APPDATA%\cos\data` on Windows. The `cos` CLI is a user-level
+///   command; it must never need root to write its own state.
+///
+/// Callers should treat this as opaque — anything that genuinely
+/// requires system-wide visibility (audit logs, machine-shared model
+/// registries, …) is clawd's job, and clawd already runs with
+/// `COS_DATA_DIR` pointing at `/var/lib/cos`.
 pub fn data_dir() -> PathBuf {
-    from_env_or_default("COS_DATA_DIR", "/var/lib/cos", "data")
+    if let Some(v) = env::var_os("COS_DATA_DIR") {
+        return PathBuf::from(v);
+    }
+    user_data_dir()
 }
 
 pub fn cache_dir() -> PathBuf {
@@ -105,9 +134,11 @@ pub fn user_config_path() -> PathBuf {
 /// etc.
 ///
 /// Override with `COS_USER_DATA_DIR` for tests / multi-tenant setups.
-/// Distinct from [`data_dir`] which is the system-wide root
-/// (`/var/lib/cos`) holding state managed by `cos` itself
-/// (sessions, audit logs, jobs, model registry).
+///
+/// When `COS_DATA_DIR` is unset, [`data_dir`] resolves to the same
+/// path. Code that wants the user dir specifically — independent of
+/// any `COS_DATA_DIR` override that might point at `/var/lib/cos`
+/// for clawd — should call `user_data_dir` directly.
 pub fn user_data_dir() -> PathBuf {
     if let Some(v) = std::env::var_os("COS_USER_DATA_DIR") {
         return PathBuf::from(v);

@@ -66,27 +66,13 @@ struct Registry {
 }
 
 /// Resolve the `proc/` directory used by `cos` for session-registry
-/// state. The `cos` CLI is a user-level command, so its registry
-/// belongs in the per-user XDG-style data dir
-/// (`$HOME/.local/share/cos/proc/`). clawd, which runs as a system
-/// daemon, explicitly sets `COS_DATA_DIR=/var/lib/cos` in its
-/// systemd unit so its task registrations stay in the system tree.
-///
-/// Honouring `COS_DATA_DIR` first lets:
-///   * clawd write to `/var/lib/cos/proc/` (system),
-///   * tests redirect both sides via `COS_DATA_DIR`, and
-///   * a normal user `cos` invocation fall through to per-user space
-///     without needing root or any pre-created `/var/lib/cos/proc`
-///     directory.
-///
-/// Mirrors the same per-user/per-system split already in place for
-/// credentials and agent config (`paths::user_credentials_dir`,
-/// `paths::user_config_path`).
+/// state. Delegates to [`crate::paths::data_dir`] which already
+/// applies the user-vs-system split: the cos CLI lands in
+/// `$HOME/.local/share/cos/proc/`, clawd lands in
+/// `/var/lib/cos/proc/` because its systemd unit pins
+/// `COS_DATA_DIR=/var/lib/cos`.
 fn proc_dir() -> PathBuf {
-    if let Some(v) = std::env::var_os("COS_DATA_DIR") {
-        return PathBuf::from(v).join("proc");
-    }
-    crate::paths::user_data_dir().join("proc")
+    crate::paths::data_dir().join("proc")
 }
 
 fn registry_path() -> PathBuf {
@@ -651,11 +637,10 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
 
     // Handle isolated workspace
     if isolated_workspace {
-        let base = match std::env::var_os("COS_DATA_DIR") {
-            Some(v) => PathBuf::from(v),
-            None => crate::paths::user_data_dir(),
-        };
-        let ws_dir = base.join("sessions").join(&sid).join("workspace");
+        let ws_dir = crate::paths::data_dir()
+            .join("sessions")
+            .join(&sid)
+            .join("workspace");
         fs::create_dir_all(&ws_dir)
             .map_err(|e| format!("failed to create isolated workspace: {e}"))?;
         workdir = Some(ws_dir.to_string_lossy().to_string());

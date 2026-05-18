@@ -153,7 +153,7 @@ fn apps_root() -> PathBuf {
 }
 
 fn data_dir() -> String {
-    std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into())
+    crate::paths::data_dir().to_string_lossy().into_owned()
 }
 
 #[async_trait]

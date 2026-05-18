@@ -122,8 +122,7 @@ fn services_dir() -> PathBuf {
 }
 
 fn runtime_dir() -> PathBuf {
-    PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
-        .join("services")
+    crate::paths::data_dir().join("services")
 }
 
 fn service_runtime_dir(name: &str) -> PathBuf {
