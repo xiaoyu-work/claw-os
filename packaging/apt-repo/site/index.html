@@ -6,7 +6,7 @@
 <meta name="color-scheme" content="light">
 <meta name="theme-color" content="#ffffff">
 <title>Claw OS — The first agent native operating system</title>
-<meta name="description" content="Claw OS is a complete Linux distribution rebuilt for AI agents. Structured cos primitives, scoped approvals, checkpoint-and-rollback, local models — instead of letting agents guess at the shell.">
+<meta name="description" content="Claw OS is a complete Linux distribution rebuilt for AI agents. Structured cos primitives, scoped approvals, a system-level broker, and local model runtime — instead of letting agents guess at the shell.">
 
 <link rel="icon" type="image/png" sizes="64x64" href="assets/brand/clawos-favicon-64.png">
 <link rel="apple-touch-icon" sizes="192x192" href="assets/brand/clawos-icon-192.png">
@@ -16,7 +16,7 @@
 <link rel="stylesheet" href="style.css?v=@@GIT_SHA@@">
 
 <meta property="og:title" content="Claw OS — The first agent native operating system">
-<meta property="og:description" content="A complete Linux distribution rebuilt for AI agents: structured cos primitives, scoped approvals, checkpoint-and-rollback, local models.">
+<meta property="og:description" content="A complete Linux distribution rebuilt for AI agents: structured cos primitives, scoped approvals, a system-level broker, and local model runtime.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://xiaoyu-work.github.io/claw-os/">
 <meta property="og:image" content="https://xiaoyu-work.github.io/claw-os/assets/brand/og.png">
@@ -68,8 +68,8 @@
         </h1>
         <p class="lede">
           Claw OS is a complete Linux distribution rebuilt around the agent.
-          Structured <code>cos</code> primitives, scoped approvals,
-          checkpoint-and-rollback, and a local model runtime — so an agent can
+          Structured <code>cos</code> primitives, scoped approvals, a
+          system-level broker, and a local model runtime — so an agent can
           drive your machine without guessing at the shell.
         </p>
         <div class="cta-row">
@@ -101,9 +101,8 @@
               <span class="t-prompt">cos</span>
               <span class="t-cmd"><span class="t-typing" data-typing>agent ask "draft a reply to mom's latest email"</span><span class="t-caret" aria-hidden="true"></span></span>
             </div>
-            <div class="t-line t-out t-delay-1"><span class="t-tag t-tag-check">checkpoint</span> created <code>before-email-draft</code></div>
 
-            <div class="t-block t-delay-2">
+            <div class="t-block t-delay-1">
               <div class="t-block-head">
                 <span class="t-tag t-tag-approve">approval</span>
                 <span class="t-block-title">2 capabilities requested</span>
@@ -123,8 +122,8 @@
               </ul>
             </div>
 
-            <div class="t-line t-out t-delay-3"><span class="t-tag t-tag-ok">drafted</span> 1 reply · saved to <code>inbox/drafts</code></div>
-            <div class="t-line t-out t-delay-4"><span class="t-tag t-tag-undo">undo</span> <code>cos checkpoint rollback before-email-draft</code></div>
+            <div class="t-line t-out t-delay-2"><span class="t-tag t-tag-ok">drafted</span> 1 reply · saved to <code>inbox/drafts</code></div>
+            <div class="t-line t-out t-delay-3"><span class="t-tag t-tag-undo">audit</span> <code>cos agent show $task</code> — every call is in the journal</div>
           </div>
         </figure>
       </div>
@@ -152,7 +151,7 @@
       <p class="section-lede">
         Most "AI for Linux" projects bolt an LLM onto bash. Claw OS instead
         gives the agent typed operating-system surfaces, so every action is
-        named, gated, observable, and reversible.
+        named, gated, audited, and undoable.
       </p>
 
       <div class="compare">
@@ -164,7 +163,7 @@
           <ul>
             <li>Scrapes human UIs and pattern-matches log lines.</li>
             <li>Holds a wide <code>sudo</code> token; risky ops blend in with safe ones.</li>
-            <li>File changes are immediate and unaudited — no inverse op.</li>
+            <li>Every call is unaudited — no journal, no redaction, no replay.</li>
             <li>Local model lifecycle, secrets, jobs each have ad-hoc tooling.</li>
             <li>Agent-vs-user boundary is invisible to the OS.</li>
           </ul>
@@ -177,7 +176,7 @@
           <ul>
             <li>Structured <code>cos</code> primitives return JSON — no scraping.</li>
             <li>Every risky op is a typed capability and waits at an approval gate.</li>
-            <li>Mutations land on an overlay; one command rolls them back.</li>
+            <li>Every call lands in an append-only journal — replayable, redacted.</li>
             <li>Models, engines, credentials, jobs are first-class kernel surfaces.</li>
             <li>A boot-time <code>clawd</code> service owns the agent / user boundary.</li>
           </ul>
@@ -189,7 +188,7 @@
   <section class="section section-primitives" id="primitives">
     <div class="container">
       <div class="kicker mono"><span class="kicker-dot"></span>primitives</div>
-      <h2 class="h2">Nine kernel surfaces. <span class="muted">All speak JSON.</span></h2>
+      <h2 class="h2">Eight kernel surfaces. <span class="muted">All speak JSON.</span></h2>
       <p class="section-lede">
         Every <code>cos &lt;primitive&gt; &lt;command&gt;</code> returns
         structured output. Agents reason about state instead of guessing it.
@@ -202,14 +201,6 @@
           <h3>agent</h3>
           <p>OS-native agent runtime — sessions, tools, memory, skills, providers.</p>
           <pre class="prim-code mono"><span class="t-prompt">cos</span> agent ask "<em>find the largest files and tell me why</em>"</pre>
-        </article>
-
-        <article class="prim-card">
-          <div class="prim-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M4 7l8-3 8 3-8 3-8-3z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M4 12l8 3 8-3M4 17l8 3 8-3" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></div>
-          <h3>checkpoint</h3>
-          <p>OverlayFS snapshots, diffs, and one-line rollback for everything the agent changes.</p>
-          <pre class="prim-code mono"><span class="t-prompt">cos</span> checkpoint create "clean state"
-<span class="t-prompt">cos</span> checkpoint rollback clean-state</pre>
         </article>
 
         <article class="prim-card">
@@ -275,7 +266,7 @@
   <section class="section section-safety" id="safety">
     <div class="container">
       <div class="kicker mono"><span class="kicker-dot"></span>safety surface</div>
-      <h2 class="h2">Every risky op is <span class="gradient">named, gated, and reversible.</span></h2>
+      <h2 class="h2">Every risky op is <span class="gradient">named, gated, and audited.</span></h2>
 
       <div class="safety-grid">
         <article class="safety-card">
@@ -296,18 +287,19 @@
         </article>
 
         <article class="safety-card">
-          <h3>Checkpoints &amp; rollback</h3>
+          <h3>Audit &amp; redaction</h3>
           <p>
-            Agent mutations land in an OverlayFS upper layer. Snapshot, diff
-            (created / modified / deleted), and roll back in one command — or
-            replay the inverse mutation log for a single task.
+            Every gated call lands in an append-only journal under
+            <code>/var/lib/cos</code>. Tokens, bearer headers, and provider
+            secrets are stripped before they touch disk — replay or inspect a
+            task without leaking what it touched.
           </p>
           <div class="flow mono">
-            <div class="flow-step">snapshot</div>
+            <div class="flow-step">call</div>
             <svg class="flow-arrow" viewBox="0 0 24 12" aria-hidden="true"><path d="M0 6h22M16 1l5 5-5 5" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            <div class="flow-step">diff +3 ~1 −0</div>
+            <div class="flow-step">redact</div>
             <svg class="flow-arrow" viewBox="0 0 24 12" aria-hidden="true"><path d="M0 6h22M16 1l5 5-5 5" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            <div class="flow-step flow-step-ok">rollback</div>
+            <div class="flow-step flow-step-ok">append</div>
           </div>
         </article>
       </div>
@@ -338,7 +330,6 @@
 <pre class="terminal mono">
 <span class="t-prompt">cos</span> agent ask "audit failed services and restart any that crashed"
 
-<span class="t-tag t-tag-check">checkpoint</span>   before-service-audit  (overlay upper: 3.2 MiB)
 <span class="t-tag t-tag-approve">approval</span>     sys.service : clawd.service              <span class="t-green">[allow once]</span>
 <span class="t-tag t-tag-approve">approval</span>     sys.service : claw-recoll-index          <span class="t-green">[allow once]</span>
 <span class="t-tag t-tag-ok">applied</span>      2 ops in 312ms
@@ -377,7 +368,7 @@
 <span class="t-out">{ "name":"qwen3", "version":"1.7b", "engine":"llama", "size":"1.1 GiB" }</span>
 <span class="t-prompt">cos</span> model load qwen3
 <span class="t-tag t-tag-ok">ready</span>        runtime=llama.cpp  device=cuda  ctx=8192
-<span class="t-prompt">cos</span> agent ask --model qwen3 "what changed in the last checkpoint?"
+<span class="t-prompt">cos</span> agent ask --model qwen3 "summarize this week's commits"
 <span class="t-out">{ "answer":"3 files written under /etc/...", "tokens":214 }</span>
 </pre>
             </div>
@@ -399,7 +390,7 @@
         </div>
         <div class="stack-layer stack-layer-cos">
           <div class="stack-name mono">cos · user-mode primitives</div>
-          <div class="stack-detail">sys · service · checkpoint · credential · cron · ai · model · engine</div>
+          <div class="stack-detail">sys · service · credential · cron · ai · agent · model · engine</div>
         </div>
         <div class="stack-layer stack-layer-clawd">
           <div class="stack-name mono">clawd · system broker</div>
@@ -407,7 +398,7 @@
         </div>
         <div class="stack-layer stack-layer-linux">
           <div class="stack-name mono">linux</div>
-          <div class="stack-detail">kernel · overlayfs · cgroup v2 · systemd · debian trixie</div>
+          <div class="stack-detail">kernel · cgroup v2 · systemd · debian trixie</div>
         </div>
       </div>
     </div>
@@ -472,9 +463,9 @@
           <summary>What does "agent-native" actually mean?</summary>
           <p>The agent isn't a chrome on top of bash. It has typed kernel
           surfaces (<code>cos</code> primitives), a system-level broker
-          (<code>clawd</code>), capability + approval enforcement, and a
-          checkpoint layer for state mutations. The OS itself knows when an
-          agent is acting and what it's allowed to do.</p>
+          (<code>clawd</code>), capability + approval enforcement, and an
+          append-only audit journal. The OS itself knows when an agent is
+          acting and what it's allowed to do.</p>
         </details>
         <details class="faq-item">
           <summary>Does Claw OS replace my distro?</summary>
@@ -496,9 +487,10 @@
         <details class="faq-item">
           <summary>What stops the agent from breaking my machine?</summary>
           <p>Every risky scope goes through <code>caps::require</code>, lands
-          at an approval gate, and is consumed once on success. File system
-          changes land on an overlay; <code>cos checkpoint rollback</code> or
-          <code>cos agent undo &lt;task&gt;</code> reverses them.</p>
+          at an approval gate, and is consumed once on success. If something
+          still goes sideways, <code>cos agent undo &lt;task&gt;</code>
+          reverses what that task did and the audit journal shows exactly
+          which calls were made.</p>
         </details>
         <details class="faq-item">
           <summary>Where does my data live?</summary>

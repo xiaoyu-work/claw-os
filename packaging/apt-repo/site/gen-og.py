@@ -129,7 +129,7 @@ def make() -> None:
     draw = ImageDraw.Draw(base)
     lede_font = _load_font(26, "regular")
     lede1 = "A Linux distribution rebuilt around the agent — structured cos"
-    lede2 = "primitives, scoped approvals, checkpoint-and-rollback, local models."
+    lede2 = "primitives, scoped approvals, an audit journal, and local models."
     draw.text((title_x, title_y + 240), lede1, font=lede_font, fill=(52, 64, 84, 255))
     draw.text((title_x, title_y + 278), lede2, font=lede_font, fill=(52, 64, 84, 255))
 
