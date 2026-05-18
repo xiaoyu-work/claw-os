@@ -351,16 +351,16 @@ h1 {
   gap: 10px;
   align-items: start;
 }
-.agent-card {
+.primitive-card {
   border: 1px solid var(--line);
   border-radius: 22px;
   padding: 18px;
   background: linear-gradient(180deg, #fff, #fbfbfb);
   box-shadow: 0 18px 60px rgba(0, 0, 0, .07);
 }
-.agent-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; font-weight: 650; }
+.primitive-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; font-weight: 650; }
 .badge { border: 1px solid var(--line); border-radius: 999px; padding: 4px 9px; color: var(--muted); font-size: 12px; background: #fff; }
-.agent-message {
+.primitive-message {
   border: 1px solid #dbe7ff;
   border-radius: 16px;
   padding: 14px;
@@ -368,15 +368,14 @@ h1 {
   color: #1f2937;
   line-height: 1.5;
 }
-.mini-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
+.primitive-list { display: grid; gap: 10px; margin-top: 14px; }
 .mini {
-  min-height: 92px;
   border: 1px solid var(--line);
   border-radius: 16px;
   padding: 13px;
   background: #fff;
 }
-.mini strong { display: block; font-size: 13px; margin-bottom: 6px; }
+.mini strong { display: block; font-size: 13px; margin-bottom: 4px; }
 .mini span { color: var(--muted); font-size: 12px; line-height: 1.45; }
 
 .section { padding: 98px 0; }
@@ -522,7 +521,7 @@ pre {
       <div class="product-shell">
         <div class="product-topbar">
           <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-          <span class="topbar-title">cos agent overlay</span>
+          <span class="topbar-title">headless cos runtime</span>
         </div>
         <div class="hero-grid">
           <div class="panel terminal">
@@ -532,17 +531,17 @@ pre {
             <div class="terminal-line"><span class="muted">-></span><span>Inspected 47 files, requested one scoped write approval, and prepared a rollback checkpoint.</span></div>
           </div>
           <div class="panel">
-            <div class="agent-card">
-              <div class="agent-title">
-                <span>Claw</span>
-                <span class="badge">Super+A</span>
+            <div class="primitive-card">
+              <div class="primitive-title">
+                <span>Headless Linux runtime</span>
+                <span class="badge">WSL / Docker</span>
               </div>
-              <div class="agent-message">I can update the package source, but need approval for <strong>fs.write</strong> in <strong>/etc/apt</strong>.</div>
-              <div class="mini-grid">
-                <div class="mini"><strong>Scoped permission</strong><span>Grant the exact action and path, not the whole machine.</span></div>
-                <div class="mini"><strong>Rollback ready</strong><span>Every risky change can be diffed and reverted.</span></div>
-                <div class="mini"><strong>Browser primitive</strong><span>Read pages as structured Markdown.</span></div>
-                <div class="mini"><strong>Local inference</strong><span>Manage on-device model runtimes.</span></div>
+              <div class="primitive-message">A Linux environment designed for agents to inspect, reason, execute, and roll back through structured <strong>cos</strong> APIs.</div>
+              <div class="primitive-list">
+                <div class="mini"><strong>WSL first</strong><span>Import a rootfs and run Claw OS beside your existing Windows workflow.</span></div>
+                <div class="mini"><strong>Container ready</strong><span>Run the same headless OS surface in Docker or OrbStack.</span></div>
+                <div class="mini"><strong>APT updates</strong><span>Keep core Claw OS packages upgraded from GitHub Pages.</span></div>
+                <div class="mini"><strong>Structured primitives</strong><span>Expose files, browser reads, packages, jobs, and system state as JSON.</span></div>
               </div>
             </div>
           </div>
@@ -568,7 +567,7 @@ pre {
           <article class="feature-card">
             <div class="icon">02</div>
             <h3>Built-in agent</h3>
-            <p>Ask from the terminal, open the desktop overlay with Super+A, or use voice input with Super+Shift+A.</p>
+            <p>Ask from the terminal and let the agent operate through structured headless Linux primitives.</p>
           </article>
           <article class="feature-card">
             <div class="icon">03</div>
