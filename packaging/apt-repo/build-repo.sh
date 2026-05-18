@@ -253,12 +253,17 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospac
   box-shadow: 0 0 0 5px rgba(0, 92, 254, .12);
 }
 h1 {
-  max-width: 980px;
+  max-width: 1120px;
   margin: 26px auto 0;
-  font-size: clamp(54px, 9vw, 124px);
-  line-height: .92;
-  letter-spacing: -.075em;
+  font-size: clamp(48px, 7.4vw, 92px);
+  line-height: .98;
+  letter-spacing: -.06em;
   font-weight: 720;
+  text-wrap: balance;
+}
+h1 .line {
+  display: block;
+  white-space: nowrap;
 }
 .gradient-text {
   background: linear-gradient(90deg, #000 0%, #1f2937 34%, var(--blue) 72%, var(--violet) 100%);
@@ -476,6 +481,8 @@ pre {
 @media (max-width: 900px) {
   .nav-links { display: none; }
   .hero { padding-top: 62px; }
+  h1 { font-size: clamp(42px, 13vw, 70px); letter-spacing: -.055em; }
+  h1 .line { white-space: normal; }
   .hero-grid, .architecture-grid, .install-grid { grid-template-columns: 1fr; }
   .cards { grid-template-columns: 1fr; }
   .feature-card.wide { grid-column: auto; }
@@ -508,7 +515,7 @@ pre {
     <section class="hero">
       <div class="container">
         <div class="eyebrow"><span class="pulse"></span> Linux, redesigned for agentic work</div>
-        <h1>The First Agent Native <span class="gradient-text">Operating System</span></h1>
+        <h1><span class="line">The First Agent Native</span><span class="line gradient-text">Operating System</span></h1>
         <p class="lead">Claw OS exposes apps, files, browser sessions, credentials, jobs, permissions, and rollback as structured primitives that a built-in agent can use safely.</p>
         <div class="actions">
           <a class="button primary" href="#install">Install Claw OS</a>
