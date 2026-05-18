@@ -64,7 +64,7 @@
   const labels = {
     service: "cos · agent ask · service repair",
     browser: "cos · agent ask · browser triage",
-    install: "cos · agent ask · app install",
+    schedule:"cos · agent ask · scheduled task",
     model:   "cos · model · local inference",
   };
   const activate = (name) => {
@@ -96,7 +96,7 @@
         userPicked = true;
       })
     );
-    const order = ["service", "browser", "install", "model"];
+    const order = ["service", "browser", "schedule", "model"];
     let idx = 0;
     setInterval(() => {
       if (hovered || !onScreen || userPicked) return;

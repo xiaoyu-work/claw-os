@@ -1,17 +1,21 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="color-scheme" content="dark">
-<title>Claw OS — The agent-native operating system</title>
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#ffffff">
+<title>Claw OS — The first agent native operating system</title>
 <meta name="description" content="Claw OS is a complete Linux distribution rebuilt for AI agents. Structured cos primitives, scoped approvals, checkpoint-and-rollback, local models — instead of letting agents guess at the shell.">
-<link rel="icon" type="image/png" href="assets/brand/clawos-favicon-64.png">
+
+<link rel="icon" type="image/png" sizes="64x64" href="assets/brand/clawos-favicon-64.png">
+<link rel="apple-touch-icon" sizes="192x192" href="assets/brand/clawos-icon-192.png">
+
 <link rel="preconnect" href="https://rsms.me/">
 <link rel="stylesheet" href="https://rsms.me/inter/inter.css">
 <link rel="stylesheet" href="style.css?v=@@GIT_SHA@@">
 
-<meta property="og:title" content="Claw OS — The agent-native operating system">
+<meta property="og:title" content="Claw OS — The first agent native operating system">
 <meta property="og:description" content="A complete Linux distribution rebuilt for AI agents: structured cos primitives, scoped approvals, checkpoint-and-rollback, local models.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://xiaoyu-work.github.io/claw-os/">
@@ -19,7 +23,7 @@
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Claw OS — The agent-native operating system">
+<meta name="twitter:title" content="Claw OS — The first agent native operating system">
 <meta name="twitter:description" content="A complete Linux distribution rebuilt for AI agents.">
 <meta name="twitter:image" content="https://xiaoyu-work.github.io/claw-os/assets/brand/og.png">
 </head>
@@ -28,24 +32,13 @@
 <div class="bg" aria-hidden="true">
   <div class="bg-grid"></div>
   <div class="bg-aurora"></div>
-  <div class="bg-noise"></div>
 </div>
 
 <header class="nav" id="nav">
   <div class="container nav-inner">
     <a class="brand" href="#top" aria-label="Claw OS — home">
-      <svg class="brand-mark" width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path d="M4 12c0-4.4 3.6-8 8-8 3.1 0 5.8 1.8 7.1 4.4" stroke="url(#g1)" stroke-width="2" stroke-linecap="round"/>
-        <path d="M20 12c0 4.4-3.6 8-8 8-3.1 0-5.8-1.8-7.1-4.4" stroke="url(#g2)" stroke-width="2" stroke-linecap="round"/>
-        <circle cx="12" cy="12" r="2.2" fill="url(#g3)"/>
-        <defs>
-          <linearGradient id="g1" x1="0" x2="1" y1="0" y2="0"><stop offset="0" stop-color="#3b82f6"/><stop offset="1" stop-color="#06b6d4"/></linearGradient>
-          <linearGradient id="g2" x1="1" x2="0" y1="0" y2="0"><stop offset="0" stop-color="#a855f7"/><stop offset="1" stop-color="#3b82f6"/></linearGradient>
-          <linearGradient id="g3" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#06b6d4"/><stop offset="1" stop-color="#a855f7"/></linearGradient>
-        </defs>
-      </svg>
-      <span class="brand-word">Claw OS</span>
-      <span class="brand-badge mono">v0.1 · trixie</span>
+      <img class="brand-mark" src="assets/brand/clawos-symbol.png" alt="" height="28">
+      <img class="brand-word" src="assets/brand/clawos-wordmark.png" alt="Claw OS" height="22">
     </a>
     <nav class="nav-links mono" aria-label="Primary">
       <a href="#primitives">primitives</a>
@@ -67,10 +60,11 @@
   <section class="hero">
     <div class="container hero-inner">
       <div class="hero-copy">
-        <div class="eyebrow mono"><span class="eyebrow-dot"></span>The first agent-native OS</div>
+        <div class="eyebrow mono"><span class="eyebrow-dot"></span>v0.1 · agent native linux</div>
         <h1 class="title">
-          <span>An operating system</span>
-          <span class="gradient">for AI agents.</span>
+          <span>The first</span>
+          <span class="gradient">agent native</span>
+          <span>operating system.</span>
         </h1>
         <p class="lede">
           Claw OS is a complete Linux distribution rebuilt around the agent.
@@ -89,44 +83,50 @@
           </a>
         </div>
         <div class="install-hint mono">
-          <span class="install-hint-label">apt</span>
-          <code id="aptOneLiner">echo "deb [trusted=yes] https://xiaoyu-work.github.io/claw-os trixie main" | sudo tee /etc/apt/sources.list.d/claw-os.list &amp;&amp; sudo apt update &amp;&amp; sudo apt install claw-os-base</code>
-          <button class="copy-btn" data-copy="#aptOneLiner" aria-label="Copy install command">copy</button>
+          <span class="install-hint-label">wsl</span>
+          <code id="wslOneLiner">wsl --import claw-os C:\WSL\claw-os claw-os-wsl-amd64.tar.gz --version 2 &amp;&amp; wsl -d claw-os</code>
+          <button class="copy-btn" data-copy="#wslOneLiner" aria-label="Copy install command">copy</button>
         </div>
       </div>
 
       <div class="hero-stage" aria-hidden="false">
-        <figure class="window window-deep">
+        <figure class="window">
           <div class="window-titlebar">
             <div class="window-dots"><i></i><i></i><i></i></div>
             <div class="window-address mono">cos · agent ask</div>
             <div class="window-meta mono"><span class="dot-live"></span>live</div>
           </div>
           <div class="window-body terminal" id="heroTerminal">
-            <div class="t-line"><span class="t-prompt">cos</span><span class="t-cmd"><span class="t-typing" data-typing>agent ask "repair the package source"</span><span class="t-caret" aria-hidden="true"></span></span></div>
-            <div class="t-line t-out t-delay-1"><span class="t-tag t-tag-check">checkpoint</span> created <code>before-system-repair</code></div>
-            <div class="t-line t-out t-delay-2"><span class="t-tag t-tag-approve">approval</span> needs <code>service.restart:clawd</code>, <code>fs.write:/etc/apt/sources.list.d/claw-os.list</code></div>
-            <div class="t-line t-out t-delay-3"><span class="t-tag t-tag-ok">applied</span> 2 ops · system health <span class="t-green">green</span></div>
-            <div class="t-line t-out t-delay-4"><span class="t-tag t-tag-undo">undo</span> <code>cos checkpoint rollback before-system-repair</code></div>
+            <div class="t-line">
+              <span class="t-prompt">cos</span>
+              <span class="t-cmd"><span class="t-typing" data-typing>agent ask "draft a reply to mom's latest email"</span><span class="t-caret" aria-hidden="true"></span></span>
+            </div>
+            <div class="t-line t-out t-delay-1"><span class="t-tag t-tag-check">checkpoint</span> created <code>before-email-draft</code></div>
+
+            <div class="t-block t-delay-2">
+              <div class="t-block-head">
+                <span class="t-tag t-tag-approve">approval</span>
+                <span class="t-block-title">2 capabilities requested</span>
+                <span class="t-block-meta mono">scoped · one-time</span>
+              </div>
+              <ul class="t-block-list mono">
+                <li>
+                  <span class="t-cap">secret.read</span>
+                  <span class="t-cap-target">gmail-oauth</span>
+                  <span class="t-cap-action">allow once</span>
+                </li>
+                <li>
+                  <span class="t-cap">ai.chat</span>
+                  <span class="t-cap-target">claude-sonnet · draft only</span>
+                  <span class="t-cap-action">allow once</span>
+                </li>
+              </ul>
+            </div>
+
+            <div class="t-line t-out t-delay-3"><span class="t-tag t-tag-ok">drafted</span> 1 reply · saved to <code>inbox/drafts</code></div>
+            <div class="t-line t-out t-delay-4"><span class="t-tag t-tag-undo">undo</span> <code>cos checkpoint rollback before-email-draft</code></div>
           </div>
         </figure>
-
-        <aside class="hud hud-approval">
-          <div class="hud-title mono">Approval gate</div>
-          <div class="hud-row"><span class="hud-key mono">scope</span><span class="hud-val mono">service.restart</span></div>
-          <div class="hud-row"><span class="hud-key mono">target</span><span class="hud-val mono">clawd.service</span></div>
-          <div class="hud-actions">
-            <span class="hud-btn hud-btn-allow">allow once</span>
-            <span class="hud-btn hud-btn-deny">deny</span>
-          </div>
-        </aside>
-
-        <aside class="hud hud-checkpoint">
-          <div class="hud-title mono">Checkpoint</div>
-          <div class="hud-row"><span class="hud-key mono">id</span><span class="hud-val mono">before-system-repair</span></div>
-          <div class="hud-row"><span class="hud-key mono">diff</span><span class="hud-val mono">+3 ~1 −0</span></div>
-          <div class="hud-row hud-row-foot"><span class="hud-key mono">rollback</span><span class="hud-val mono hud-rollback">ready</span></div>
-        </aside>
       </div>
     </div>
   </section>
@@ -136,12 +136,12 @@
       <span class="platforms-label">runs on</span>
       <span class="chip">WSL</span>
       <span class="chip">Docker</span>
-      <span class="chip">Debian / APT</span>
-      <span class="chip">Bare-metal</span>
-      <span class="chip chip-muted">ISO &amp; VM · experimental</span>
+      <span class="chip">OrbStack</span>
       <span class="chip chip-divider">·</span>
       <span class="chip">amd64</span>
       <span class="chip">arm64</span>
+      <span class="chip chip-divider">·</span>
+      <span class="chip chip-muted">desktop &amp; ISO · experimental</span>
     </div>
   </section>
 
@@ -245,11 +245,19 @@
         </article>
 
         <article class="prim-card">
-          <div class="prim-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="9" cy="6" r="2" fill="#0e1014" stroke="currentColor" stroke-width="1.6"/><circle cx="16" cy="12" r="2" fill="#0e1014" stroke="currentColor" stroke-width="1.6"/><circle cx="7" cy="18" r="2" fill="#0e1014" stroke="currentColor" stroke-width="1.6"/></svg></div>
-          <h3>model · engine</h3>
-          <p>Local model registry plus native engine package manager (ort, llama.cpp, ort-genai).</p>
+          <div class="prim-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="9" cy="6" r="2" fill="var(--bg)" stroke="currentColor" stroke-width="1.6"/><circle cx="16" cy="12" r="2" fill="var(--bg)" stroke="currentColor" stroke-width="1.6"/><circle cx="7" cy="18" r="2" fill="var(--bg)" stroke="currentColor" stroke-width="1.6"/></svg></div>
+          <h3>model</h3>
+          <p>Local model registry — import ONNX / GGUF, load, infer, benchmark; routes calls to a runtime daemon.</p>
           <pre class="prim-code mono"><span class="t-prompt">cos</span> model import ./qwen3.gguf --as qwen3 --task llm
-<span class="t-prompt">cos</span> model infer qwen3 --prompt "hello"</pre>
+<span class="t-prompt">cos</span> model load qwen3</pre>
+        </article>
+
+        <article class="prim-card">
+          <div class="prim-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M3 12l4-4 4 4-4 4-4-4zM13 12l4-4 4 4-4 4-4-4z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></div>
+          <h3>engine</h3>
+          <p>Native inference engine package manager — install, activate, rollback llama.cpp / ort / ort-genai side-by-side.</p>
+          <pre class="prim-code mono"><span class="t-prompt">cos</span> engine update llama-cpp --accelerator cuda
+<span class="t-prompt">cos</span> engine activate llama-cpp@b4321</pre>
         </article>
 
         <article class="prim-card">
@@ -258,14 +266,6 @@
           <p>App-gated single-shot AI for installed Apps — chat, embed, image, audio, video, tools.</p>
           <pre class="prim-code mono"><span class="t-prompt">cos</span> ai chat --app notes --prompt "summarize today"
 <span class="t-prompt">cos</span> ai tool web.read --app notes --args '{"url":"…"}'</pre>
-        </article>
-
-        <article class="prim-card">
-          <div class="prim-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M3 12l4-4 4 4-4 4-4-4zM13 12l4-4 4 4-4 4-4-4z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></div>
-          <h3>clawd</h3>
-          <p>The system broker — owns the agent ↔ user boundary, caps + approvals, context events, durable journals.</p>
-          <pre class="prim-code mono"><span class="t-prompt">socket</span> /run/cos/clawd.sock
-<span class="t-prompt">data  </span> /var/lib/cos</pre>
         </article>
 
       </div>
@@ -281,10 +281,10 @@
         <article class="safety-card">
           <h3>Capabilities &amp; approvals</h3>
           <p>
-            Risky scopes (<code>fs.write</code>, <code>net.fetch</code>,
-            <code>service.restart</code>, <code>cred.read</code>…) are typed.
-            <code>clawd</code> intercepts the call, surfaces a single approval
-            with the exact target, and consumes the grant on success.
+            Risky scopes (<code>fs.write</code>, <code>net.dial</code>,
+            <code>sys.service</code>, <code>secret.read</code>, <code>ai.chat</code>…)
+            are typed. <code>clawd</code> intercepts the call, surfaces a single
+            approval with the exact target, and consumes the grant on success.
           </p>
           <div class="flow mono">
             <div class="flow-step">caps::require</div>
@@ -323,7 +323,7 @@
         <div class="demo-tabs mono" role="tablist" aria-label="Live demo scenarios">
           <button class="demo-tab is-active" role="tab" aria-selected="true" data-tab="service">service repair</button>
           <button class="demo-tab" role="tab" aria-selected="false" data-tab="browser">browser triage</button>
-          <button class="demo-tab" role="tab" aria-selected="false" data-tab="install">app install</button>
+          <button class="demo-tab" role="tab" aria-selected="false" data-tab="schedule">scheduled task</button>
           <button class="demo-tab" role="tab" aria-selected="false" data-tab="model">local model</button>
         </div>
         <figure class="window window-flush">
@@ -336,11 +336,11 @@
           <div class="demo-panes">
             <div class="demo-pane is-active" data-pane="service">
 <pre class="terminal mono">
-<span class="t-prompt">cos</span> agent ask "audit failed services and repair the package source"
+<span class="t-prompt">cos</span> agent ask "audit failed services and restart any that crashed"
 
-<span class="t-tag t-tag-check">checkpoint</span>   before-system-repair  (overlay upper: 3.2 MiB)
-<span class="t-tag t-tag-approve">approval</span>     service.restart : clawd.service          <span class="t-green">[allow once]</span>
-<span class="t-tag t-tag-approve">approval</span>     fs.write : /etc/apt/sources.list.d/claw-os.list  <span class="t-green">[allow once]</span>
+<span class="t-tag t-tag-check">checkpoint</span>   before-service-audit  (overlay upper: 3.2 MiB)
+<span class="t-tag t-tag-approve">approval</span>     sys.service : clawd.service              <span class="t-green">[allow once]</span>
+<span class="t-tag t-tag-approve">approval</span>     sys.service : claw-recoll-index          <span class="t-green">[allow once]</span>
 <span class="t-tag t-tag-ok">applied</span>      2 ops in 312ms
 <span class="t-prompt">cos</span> service health
 <span class="t-out">{ "service":"clawd", "running":true, "healthy":true, "pid":1284 }</span>
@@ -351,22 +351,23 @@
 <pre class="terminal mono">
 <span class="t-prompt">cos</span> agent ask "read the changelog and tell me what landed this week"
 
-<span class="t-tag t-tag-approve">approval</span>     net.fetch : https://github.com/xiaoyu-work/claw-os/commits/main  <span class="t-green">[allow]</span>
+<span class="t-tag t-tag-approve">approval</span>     net.dial : github.com:443                <span class="t-green">[allow once]</span>
 <span class="t-prompt">cos</span> app web read https://github.com/xiaoyu-work/claw-os/commits/main
 <span class="t-out">{ "title":"Commits · main", "markdown":"…", "links":[…] }</span>
 <span class="t-tag t-tag-ok">answer</span>       7 PRs merged · 3 site polish · 1 packaging fix · 1 feature
 </pre>
             </div>
 
-            <div class="demo-pane" data-pane="install">
+            <div class="demo-pane" data-pane="schedule">
 <pre class="terminal mono">
-<span class="t-prompt">cos</span> agent ask "install neovim, pin to current major, and back up my dotfiles first"
+<span class="t-prompt">cos</span> agent ask "every weekday at 8am, summarize my unread email"
 
-<span class="t-tag t-tag-check">checkpoint</span>   dotfiles-before-nvim
-<span class="t-tag t-tag-approve">approval</span>     pkg.install : neovim                     <span class="t-green">[allow]</span>
-<span class="t-tag t-tag-approve">approval</span>     fs.write : /etc/apt/preferences.d/nvim   <span class="t-green">[allow]</span>
-<span class="t-tag t-tag-ok">applied</span>      sudo apt install -y neovim
-<span class="t-tag t-tag-ok">verified</span>     nvim --version → NVIM v0.10.x
+<span class="t-tag t-tag-approve">approval</span>     time.cron    : 0 8 * * 1-5              <span class="t-green">[allow]</span>
+<span class="t-tag t-tag-approve">approval</span>     secret.read  : gmail-oauth              <span class="t-green">[allow]</span>
+<span class="t-tag t-tag-approve">approval</span>     ai.chat      : claude-sonnet · summarize <span class="t-green">[allow]</span>
+<span class="t-prompt">cos</span> cron add --schedule "0 8 * * 1-5" \
+    --command "cos agent ask 'summarize unread email'"
+<span class="t-out">{ "id":"morning-inbox", "schedule":"0 8 * * 1-5", "next":"Mon 08:00" }</span>
 </pre>
             </div>
 
@@ -377,7 +378,7 @@
 <span class="t-prompt">cos</span> model load qwen3
 <span class="t-tag t-tag-ok">ready</span>        runtime=llama.cpp  device=cuda  ctx=8192
 <span class="t-prompt">cos</span> agent ask --model qwen3 "what changed in the last checkpoint?"
-<span class="t-out">{ "answer":"3 files written under /etc/apt/...", "tokens":214 }</span>
+<span class="t-out">{ "answer":"3 files written under /etc/...", "tokens":214 }</span>
 </pre>
             </div>
           </div>
@@ -415,16 +416,18 @@
   <section class="section section-install" id="install">
     <div class="container">
       <div class="kicker mono"><span class="kicker-dot"></span>install</div>
-      <h2 class="h2">Pick a runtime. <span class="muted">Same Claw OS underneath.</span></h2>
+      <h2 class="h2">Two runtimes. <span class="muted">Same Claw OS underneath.</span></h2>
       <p class="section-lede">
-        Desktop, ISO, and VM images are <strong>experimental</strong> — start
-        with WSL, Docker, or the APT repo on an existing Debian / Ubuntu host.
+        Run Claw OS where you already work: import it as a WSL distro on
+        Windows, or as a Docker container on macOS or Linux. The
+        <code>cos</code> / <code>clawd</code> agent stack is the same inside
+        either.
       </p>
 
-      <div class="install-grid">
+      <div class="install-grid install-grid-2">
         <article class="install-card">
           <header class="install-head">
-            <div class="install-rank mono">recommended</div>
+            <div class="install-rank mono">recommended · Windows</div>
             <h3>WSL</h3>
           </header>
           <p>Import the latest rootfs and launch into the agent shell.</p>
@@ -439,22 +442,7 @@
 
         <article class="install-card">
           <header class="install-head">
-            <div class="install-rank mono">one-liner</div>
-            <h3>Debian / APT</h3>
-          </header>
-          <p>Add the Claw OS apt repository on any Debian-family host.</p>
-<pre class="code-block mono" id="codeApt"><span class="code-comment"># Debian / Ubuntu / Mint</span>
-<span class="t-prompt">$</span> echo "deb [trusted=yes] https://xiaoyu-work.github.io/claw-os trixie main" \
-    | sudo tee /etc/apt/sources.list.d/claw-os.list
-<span class="t-prompt">$</span> sudo apt update
-<span class="t-prompt">$</span> sudo apt install claw-os-base claw-os-browser claw-os-systemd
-<span class="t-prompt">$</span> cos agent setup</pre>
-          <button class="copy-btn copy-btn-card" data-copy="#codeApt">copy</button>
-        </article>
-
-        <article class="install-card">
-          <header class="install-head">
-            <div class="install-rank mono">isolated</div>
+            <div class="install-rank mono">macOS / Linux</div>
             <h3>Docker / OrbStack</h3>
           </header>
           <p>Run the full OS image in a privileged container.</p>
@@ -490,10 +478,12 @@
         </details>
         <details class="faq-item">
           <summary>Does Claw OS replace my distro?</summary>
-          <p>It can — <code>claw-os-base</code> is a full Debian trixie
-          rootfs — but you can also drop it in as an APT layer on top of an
-          existing Debian / Ubuntu host. Most people start with WSL or
-          Docker.</p>
+          <p>It can — Claw OS <em>is</em> a Linux distribution. There are
+          bootable ISO, installer, and VM images that replace your OS outright
+          (still <strong>experimental</strong>). For day-to-day use most people
+          run the supported entry points instead: import it as a WSL distro on
+          Windows, or run it as a Docker / OrbStack container on macOS or
+          Linux — neither touches your host system.</p>
         </details>
         <details class="faq-item">
           <summary>How does it work with my existing models / providers?</summary>
@@ -512,10 +502,10 @@
         </details>
         <details class="faq-item">
           <summary>Where does my data live?</summary>
-          <p>On disk. State under <code>/var/lib/cos</code>, logs under
-          <code>/var/log/cos</code>, the clawd socket at
-          <code>/run/cos/clawd.sock</code>. Cloud providers are opt-in and
-          credentialed through <code>cos credential</code>.</p>
+          <p>On disk, inside the WSL distro or Docker volume. State under
+          <code>/var/lib/cos</code>, logs under <code>/var/log/cos</code>, the
+          clawd socket at <code>/run/cos/clawd.sock</code>. Cloud providers are
+          opt-in and credentialed through <code>cos credential</code>.</p>
         </details>
         <details class="faq-item">
           <summary>Is it open source?</summary>
@@ -545,9 +535,12 @@
 <footer class="footer">
   <div class="container footer-inner">
     <div class="footer-brand">
-      <div class="brand"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><use href="#"/><path d="M4 12c0-4.4 3.6-8 8-8 3.1 0 5.8 1.8 7.1 4.4" stroke="#7c8a99" stroke-width="2" stroke-linecap="round"/><path d="M20 12c0 4.4-3.6 8-8 8-3.1 0-5.8-1.8-7.1-4.4" stroke="#7c8a99" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="2.2" fill="#7c8a99"/></svg><span class="brand-word">Claw OS</span></div>
-      <p class="footer-tag">The first agent-native operating system.</p>
-      <p class="footer-meta mono">build @@GIT_SHA@@ · suite @@SUITE@@</p>
+      <a class="brand" href="#top" aria-label="Claw OS">
+        <img class="brand-mark" src="assets/brand/clawos-symbol.png" alt="" height="24">
+        <img class="brand-word" src="assets/brand/clawos-wordmark.png" alt="Claw OS" height="20">
+      </a>
+      <p class="footer-tag">The first agent native operating system.</p>
+      <p class="footer-meta mono">build @@GIT_SHA@@ · @@SUITE@@</p>
     </div>
     <div class="footer-cols">
       <div>
@@ -565,10 +558,10 @@
         <a href="https://github.com/xiaoyu-work/claw-os/blob/main/LICENSE" rel="noopener">License</a>
       </div>
       <div>
-        <div class="footer-col-title mono">apt</div>
-        <a href="dists/trixie/Release">Release</a>
-        <a href="pool/main/c/claw-os-base/">Pool</a>
-        <a href="claw-os.gpg">Signing key</a>
+        <div class="footer-col-title mono">runtimes</div>
+        <a href="#install">WSL</a>
+        <a href="#install">Docker · OrbStack</a>
+        <a href="https://github.com/xiaoyu-work/claw-os/releases" rel="noopener">Releases ↗</a>
       </div>
     </div>
   </div>
