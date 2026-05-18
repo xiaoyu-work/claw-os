@@ -68,7 +68,7 @@ Desktop images are **experimental**.
 
 ```bash
 cos                                    # list primitives
-cos app web read https://example.com   # fetch a page as Markdown
+cos app web read https://example.com   # fetch URL → {url, title, text, links}
 ```
 
 ### Talk to the agent
