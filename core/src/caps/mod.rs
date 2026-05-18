@@ -48,6 +48,9 @@ pub mod scope;
 pub mod verb;
 pub mod bootstrap;
 
+#[cfg(test)]
+pub(crate) mod test_env_lock;
+
 pub use cap::{Cap, CapSet};
 pub use catalog::{lookup as lookup_meta, CapMeta, CATALOG};
 pub use denial::{Denial, DenialReason};
