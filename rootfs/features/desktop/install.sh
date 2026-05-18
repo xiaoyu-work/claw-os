@@ -19,24 +19,41 @@ set -euo pipefail
 
 DESKTOP_SRC="${DESKTOP_SRC:-$PROJECT_DIR/desktop}"
 FEATURE_DIR="$SCRIPT_DIR/features/desktop"
+DESKTOP_PACKAGE_ROOT="$ROOTFS/build/claw-os-desktop-root"
+DESKTOP_PACKAGE_ROOT_CHROOT="/build/claw-os-desktop-root"
 
 # ---------------------------------------------------------------------------
-# 0. Apply static overlay (drop-in files, default configs) — always runs.
-# ---------------------------------------------------------------------------
-if [ -d "$FEATURE_DIR/overlay" ] && [ -n "$(ls -A "$FEATURE_DIR/overlay" 2>/dev/null)" ]; then
-    echo "  :: applying desktop overlay"
-    cp -a "$FEATURE_DIR/overlay/." "$ROOTFS/"
-fi
-
-# ---------------------------------------------------------------------------
-# 1. Validate source tree (unless skipped).
+# 0. Prepare package staging.
 # ---------------------------------------------------------------------------
 if [ "${DESKTOP_SKIP:-0}" = "1" ]; then
+    if [ -d "$FEATURE_DIR/overlay" ] && [ -n "$(ls -A "$FEATURE_DIR/overlay" 2>/dev/null)" ]; then
+        echo "  :: applying desktop overlay"
+        cp -a "$FEATURE_DIR/overlay/." "$ROOTFS/"
+    fi
     echo "  :: DESKTOP_SKIP=1 — runtime deps + overlay applied, build skipped"
     echo "  :: NOTE: login chain not wired (greeter binary missing). Re-run"
     echo "         without DESKTOP_SKIP to get a bootable graphical session."
     exit 0
 fi
+
+rm -rf "$DESKTOP_PACKAGE_ROOT"
+mkdir -p "$DESKTOP_PACKAGE_ROOT"
+if [ -d "$FEATURE_DIR/overlay" ] && [ -n "$(ls -A "$FEATURE_DIR/overlay" 2>/dev/null)" ]; then
+    echo "  :: staging desktop overlay"
+    cp -a "$FEATURE_DIR/overlay/." "$DESKTOP_PACKAGE_ROOT/"
+    # /etc/environment is owned by the base system on many Debian installs.
+    # The desktop package merges cursor defaults into it from postinst instead
+    # of trying to own the file directly.
+    rm -f "$DESKTOP_PACKAGE_ROOT/etc/environment"
+    # These icons are shipped by claw-os-base with the agent .desktop launcher.
+    # Keep desktop from owning them too.
+    find "$DESKTOP_PACKAGE_ROOT/usr/share/icons/hicolor" \
+        -path '*/apps/clawos-agent.png' -type f -delete 2>/dev/null || true
+fi
+
+# ---------------------------------------------------------------------------
+# 1. Validate source tree.
+# ---------------------------------------------------------------------------
 
 if [ ! -d "$DESKTOP_SRC" ] || [ ! -f "$DESKTOP_SRC/justfile" ]; then
     cat >&2 <<EOF
@@ -149,6 +166,7 @@ VERGEN_GIT_COMMIT_DATE="$(git -C "$PROJECT_DIR" log -1 --format=%cs HEAD 2>/dev/
 chroot "$ROOTFS" env \
     VERGEN_GIT_SHA="$VERGEN_GIT_SHA" \
     VERGEN_GIT_COMMIT_DATE="$VERGEN_GIT_COMMIT_DATE" \
+    DESKTOP_PACKAGE_ROOT="$DESKTOP_PACKAGE_ROOT_CHROOT" \
     bash -c '
     set -e
     export CARGO_HOME=/root/.cargo
@@ -161,7 +179,7 @@ chroot "$ROOTFS" env \
     # `/build/desktop-src/rootdir=/prefix=/usr/bin/cosmic-greeter`. The
     # cosmic-* binaries then never reach /usr/bin and the resulting image has
     # no working desktop. See desktop/justfile recipe `install rootdir="" prefix="/usr/local"`.
-    just install "" /usr
+    just install "$DESKTOP_PACKAGE_ROOT" /usr
 
     # ----------------------------------------------------------------------
     # ClawOS Agent UI + bridge — separate workspace (no justfile) under
@@ -175,13 +193,13 @@ chroot "$ROOTFS" env \
         echo "  :: building cos-agent-ui + cos-agent-bridge"
         cd /build/desktop-src/agent
         cargo build --release --workspace
-        install -Dm0755 target/release/cos-agent-ui     /usr/local/bin/cos-agent-ui
-        install -Dm0755 target/release/cos-agent-bridge /usr/local/bin/cos-agent-bridge
+        install -Dm0755 target/release/cos-agent-ui     "$DESKTOP_PACKAGE_ROOT/usr/local/bin/cos-agent-ui"
+        install -Dm0755 target/release/cos-agent-bridge "$DESKTOP_PACKAGE_ROOT/usr/local/bin/cos-agent-bridge"
     fi
 '
 
 # ---------------------------------------------------------------------------
-# 2b. Assert that critical data files actually landed in the rootfs.
+# 2b. Assert that critical data files landed in the package staging root.
 #
 # These are silently-required by the desktop and have, in the past, gone
 # missing without breaking the build — leading to bugs like "Panel/Dock
@@ -189,38 +207,38 @@ chroot "$ROOTFS" env \
 # /usr/share/cosmic/com.clawos.Panel.*/v1/) or "wallpaper page has no preview"
 # (missing /usr/share/backgrounds/cosmic/claw-default.jpg).
 #
-# If any of these are missing here, the rootfs is broken — fail the build
-# loudly instead of shipping a broken image.
+# If any of these are missing here, the package would produce a broken image —
+# fail loudly instead of shipping it.
 # ---------------------------------------------------------------------------
 echo "  :: verifying critical desktop data files"
 required_files=(
     # Wallpaper bitmap + cosmic-bg default entry
-    "$ROOTFS/usr/share/backgrounds/cosmic/claw-default.jpg"
-    "$ROOTFS/usr/share/cosmic/com.clawos.Background/v1/all"
+    "$DESKTOP_PACKAGE_ROOT/usr/share/backgrounds/cosmic/claw-default.jpg"
+    "$DESKTOP_PACKAGE_ROOT/usr/share/cosmic/com.clawos.Background/v1/all"
     # Panel + Dock default schemas — the "name" file is the canary;
     # if it's missing the settings page collapses to "Reset to Default".
-    "$ROOTFS/usr/share/cosmic/com.clawos.Panel.Panel/v1/name"
-    "$ROOTFS/usr/share/cosmic/com.clawos.Panel.Panel/v1/padding_overlap"
-    "$ROOTFS/usr/share/cosmic/com.clawos.Panel.Dock/v1/name"
-    "$ROOTFS/usr/share/cosmic/com.clawos.Panel.Dock/v1/padding_overlap"
+    "$DESKTOP_PACKAGE_ROOT/usr/share/cosmic/com.clawos.Panel.Panel/v1/name"
+    "$DESKTOP_PACKAGE_ROOT/usr/share/cosmic/com.clawos.Panel.Panel/v1/padding_overlap"
+    "$DESKTOP_PACKAGE_ROOT/usr/share/cosmic/com.clawos.Panel.Dock/v1/name"
+    "$DESKTOP_PACKAGE_ROOT/usr/share/cosmic/com.clawos.Panel.Dock/v1/padding_overlap"
     # Theme + comp defaults
-    "$ROOTFS/usr/share/cosmic/com.clawos.Theme.Dark/v1/name"
-    "$ROOTFS/usr/share/cosmic/com.clawos.Theme.Light/v1/name"
-    "$ROOTFS/usr/share/cosmic/com.clawos.Theme.Mode/v1/is_dark"
+    "$DESKTOP_PACKAGE_ROOT/usr/share/cosmic/com.clawos.Theme.Dark/v1/name"
+    "$DESKTOP_PACKAGE_ROOT/usr/share/cosmic/com.clawos.Theme.Light/v1/name"
+    "$DESKTOP_PACKAGE_ROOT/usr/share/cosmic/com.clawos.Theme.Mode/v1/is_dark"
     # cosmic-comp appearance — enables window shadows + corner clipping by
     # default. Without this file cosmic-comp falls back to the AppearanceConfig
     # struct Default (now also shadow_tiled_windows=true, but seed wins).
-    "$ROOTFS/usr/share/cosmic/com.clawos.Comp/v1/appearance_settings"
+    "$DESKTOP_PACKAGE_ROOT/usr/share/cosmic/com.clawos.Comp/v1/appearance_settings"
     # Icon theme — WhiteSur is installed via just install
     # icons-whitesur-pkg/install in desktop/justfile. If it's missing
     # the toolkit default icon_theme="WhiteSur-dark" falls back to
     # adwaita and the system loses its macOS-ish look.
-    "$ROOTFS/usr/share/icons/WhiteSur-dark/index.theme"
+    "$DESKTOP_PACKAGE_ROOT/usr/share/icons/WhiteSur-dark/index.theme"
 )
 missing=0
 for f in "${required_files[@]}"; do
     if [ ! -e "$f" ]; then
-        echo "    missing: ${f#$ROOTFS}"
+        echo "    missing: ${f#$DESKTOP_PACKAGE_ROOT}"
         missing=1
     fi
 done
@@ -233,83 +251,25 @@ if [ "$missing" = "1" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 2c. Generate UTF-8 locales.
-#
-# Debian's `locales` package ships /etc/locale.gen entirely commented out,
-# so a fresh chroot has only C / C.utf8 / POSIX in `locale -a`. That
-# starves cosmic-initial-setup's Language page — which calls `locale -a`
-# via claw-bridge exec.run — leaving the dropdown empty and the wizard
-# unusable. Bake a small UTF-8 default set into the image so the wizard
-# always has something to offer.
-#
-# The set is intentionally short (en + zh + ja) to keep image size and
-# build time bounded; users can `dpkg-reconfigure locales` post-install
-# for anything exotic.
-#
-# History: this was hot-patched on a running VM during prior debugging
-# without making it into source — so every fresh rebuild regressed. The
-# assertion below (2d) guards against that ever happening again silently.
-# ---------------------------------------------------------------------------
-echo "  :: generating UTF-8 locales (en/zh/ja)"
-LOCALES_WANTED=(
-    "en_US.UTF-8 UTF-8"
-    "zh_CN.UTF-8 UTF-8"
-    "zh_TW.UTF-8 UTF-8"
-    "ja_JP.UTF-8 UTF-8"
-)
-for entry in "${LOCALES_WANTED[@]}"; do
-    pattern="^# ${entry}\$"
-    if grep -qE "$pattern" "$ROOTFS/etc/locale.gen"; then
-        sed -i "s|^# ${entry}\$|${entry}|" "$ROOTFS/etc/locale.gen"
-    elif ! grep -qE "^${entry}\$" "$ROOTFS/etc/locale.gen"; then
-        echo "${entry}" >> "$ROOTFS/etc/locale.gen"
-    fi
-done
-chroot "$ROOTFS" locale-gen
-
-echo "LANG=en_US.UTF-8" > "$ROOTFS/etc/default/locale"
-
-# ---------------------------------------------------------------------------
-# 2d. Assert the locales actually generated.
-#
-# Mirrors 2b: silent regression of the locale set has bitten us before
-# (empty Language dropdown in cosmic-initial-setup). Fail the build loud
-# instead of shipping a broken image.
-# ---------------------------------------------------------------------------
-echo "  :: verifying generated locales"
-locale_missing=0
-for want in en_US.utf8 zh_CN.utf8 zh_TW.utf8 ja_JP.utf8; do
-    if ! chroot "$ROOTFS" locale -a 2>/dev/null | grep -qx "$want"; then
-        echo "    missing locale: $want"
-        locale_missing=1
-    fi
-done
-if [ "$locale_missing" = "1" ]; then
-    echo "  error: UTF-8 locales failed to generate — cosmic-initial-setup" >&2
-    echo "         Language page would be empty. Check /etc/locale.gen and" >&2
-    echo "         that the 'locales' package is installed (packages.txt)." >&2
-    exit 1
-fi
-
-# ---------------------------------------------------------------------------
-# 3. Wire up the login chain.
+# 3. Stage login-chain wiring into claw-os-desktop.deb.
 #
 # `just install` puts the binaries / .desktop / sysusers / tmpfiles in
 # place, but the upstream Debian packaging (which we are NOT using) is
-# responsible for systemd .service files, the greetd config, and the PAM
-# stack. We install them by hand here.
+# responsible for systemd .service files, the greetd config, and the PAM stack.
+# We stage those files into the deb and let postinst handle users, locale-gen,
+# systemctl enable, sysusers/tmpfiles, and plymouth activation.
 # ---------------------------------------------------------------------------
 GREETER_DEB="$DESKTOP_SRC/greeter/debian"
 
 echo "  :: installing greeter systemd units, PAM, greetd config"
 install -Dm0644 "$GREETER_DEB/cosmic-greeter.service" \
-    "$ROOTFS/lib/systemd/system/cosmic-greeter.service"
+    "$DESKTOP_PACKAGE_ROOT/lib/systemd/system/cosmic-greeter.service"
 install -Dm0644 "$GREETER_DEB/cosmic-greeter-daemon.service" \
-    "$ROOTFS/lib/systemd/system/cosmic-greeter-daemon.service"
+    "$DESKTOP_PACKAGE_ROOT/lib/systemd/system/cosmic-greeter-daemon.service"
 install -Dm0644 "$GREETER_DEB/cosmic-greeter.pam" \
-    "$ROOTFS/etc/pam.d/cosmic-greeter"
+    "$DESKTOP_PACKAGE_ROOT/etc/pam.d/cosmic-greeter"
 install -Dm0644 "$DESKTOP_SRC/greeter/cosmic-greeter.toml" \
-    "$ROOTFS/etc/greetd/cosmic-greeter.toml"
+    "$DESKTOP_PACKAGE_ROOT/etc/greetd/cosmic-greeter.toml"
 
 # ---------------------------------------------------------------------------
 # First-boot wizard wiring.
@@ -332,13 +292,9 @@ install -Dm0644 "$DESKTOP_SRC/greeter/cosmic-greeter.toml" \
 # cosmic-initial-setup`, the session dies and greetd advances to
 # cosmic-greeter for normal login as the user the wizard just created.
 # ---------------------------------------------------------------------------
-echo "  :: creating cosmic-initial-setup system user (first-boot wizard)"
-source "$PROJECT_DIR/scripts/lib/add-cos-user.sh"
-add_cosmic_initial_setup_user "$ROOTFS"
-
-if ! grep -q '^\[initial_session\]' "$ROOTFS/etc/greetd/cosmic-greeter.toml"; then
-    echo "  :: appending [initial_session] block to cosmic-greeter.toml"
-    cat >> "$ROOTFS/etc/greetd/cosmic-greeter.toml" <<'EOF'
+echo "  :: staging first-boot wizard greetd config"
+if ! grep -q '^\[initial_session\]' "$DESKTOP_PACKAGE_ROOT/etc/greetd/cosmic-greeter.toml"; then
+    cat >> "$DESKTOP_PACKAGE_ROOT/etc/greetd/cosmic-greeter.toml" <<'EOF'
 
 [initial_session]
 command = "/usr/lib/cos/firstboot-session"
@@ -347,54 +303,41 @@ EOF
 fi
 
 # Create the cosmic-greeter system user + its runtime/state dirs from the
-# sysusers.d / tmpfiles.d that `just install` already dropped.
-echo "  :: applying systemd-sysusers / systemd-tmpfiles"
-chroot "$ROOTFS" systemd-sysusers
-chroot "$ROOTFS" systemd-tmpfiles --create
+# sysusers.d / tmpfiles.d that `just install` already dropped. Package postinst
+# runs systemd-sysusers/systemd-tmpfiles after the files are installed.
 
 # Upstream cosmic-greeter.service has its [Install] section commented out
 # (the deb postinst manages display-manager.service symlinking via debconf).
 # We are not running dpkg, so wire the systemd targets explicitly.
 echo "  :: enabling display-manager + supporting services"
-mkdir -p "$ROOTFS/etc/systemd/system/graphical.target.wants"
-mkdir -p "$ROOTFS/etc/systemd/system/multi-user.target.wants"
+mkdir -p "$DESKTOP_PACKAGE_ROOT/etc/systemd/system/graphical.target.wants"
+mkdir -p "$DESKTOP_PACKAGE_ROOT/etc/systemd/system/multi-user.target.wants"
 
 ln -sf /lib/systemd/system/cosmic-greeter.service \
-    "$ROOTFS/etc/systemd/system/graphical.target.wants/cosmic-greeter.service"
+    "$DESKTOP_PACKAGE_ROOT/etc/systemd/system/graphical.target.wants/cosmic-greeter.service"
 ln -sf /lib/systemd/system/cosmic-greeter.service \
-    "$ROOTFS/etc/systemd/system/display-manager.service"
+    "$DESKTOP_PACKAGE_ROOT/etc/systemd/system/display-manager.service"
 ln -sf /lib/systemd/system/cosmic-greeter-daemon.service \
-    "$ROOTFS/etc/systemd/system/multi-user.target.wants/cosmic-greeter-daemon.service"
+    "$DESKTOP_PACKAGE_ROOT/etc/systemd/system/multi-user.target.wants/cosmic-greeter-daemon.service"
 
 # Boot to graphical.target by default.
 ln -sf /lib/systemd/system/graphical.target \
-    "$ROOTFS/etc/systemd/system/default.target"
-
-# System services the desktop expects.
-chroot "$ROOTFS" bash -c '
-    set -e
-    systemctl enable NetworkManager.service
-    systemctl enable bluetooth.service        || true
-    systemctl enable polkit.service           || true
-    systemctl enable power-profiles-daemon.service || true
-    systemctl enable upower.service           || true
-    systemctl enable accounts-daemon.service  || true
-'
+    "$DESKTOP_PACKAGE_ROOT/etc/systemd/system/default.target"
 
 # Per-user services (PipeWire, WirePlumber, xdg-desktop-portal). These ship
 # with default.target.wants symlinks from their deb packages, but in case
 # they ever stop doing so, force-enable them here in /etc/systemd/user/.
-mkdir -p "$ROOTFS/etc/systemd/user/sockets.target.wants"
-mkdir -p "$ROOTFS/etc/systemd/user/default.target.wants"
+mkdir -p "$DESKTOP_PACKAGE_ROOT/etc/systemd/user/sockets.target.wants"
+mkdir -p "$DESKTOP_PACKAGE_ROOT/etc/systemd/user/default.target.wants"
 for unit in pipewire.socket pipewire-pulse.socket; do
     [ -e "$ROOTFS/usr/lib/systemd/user/$unit" ] && \
         ln -sf "/usr/lib/systemd/user/$unit" \
-            "$ROOTFS/etc/systemd/user/sockets.target.wants/$unit"
+            "$DESKTOP_PACKAGE_ROOT/etc/systemd/user/sockets.target.wants/$unit"
 done
 for unit in pipewire.service wireplumber.service; do
     [ -e "$ROOTFS/usr/lib/systemd/user/$unit" ] && \
         ln -sf "/usr/lib/systemd/user/$unit" \
-            "$ROOTFS/etc/systemd/user/default.target.wants/$unit"
+            "$DESKTOP_PACKAGE_ROOT/etc/systemd/user/default.target.wants/$unit"
 done
 
 # cos-agent-bridge.service is shipped by rootfs/features/systemd/overlay/
@@ -403,17 +346,77 @@ done
 # means a fresh user (no prior login) never gets the symlink. Wire it
 # globally so the bridge starts as soon as cosmic-session reaches
 # graphical-session.target.
-mkdir -p "$ROOTFS/etc/systemd/user/graphical-session.target.wants"
+mkdir -p "$DESKTOP_PACKAGE_ROOT/etc/systemd/user/graphical-session.target.wants"
 [ -e "$ROOTFS/usr/lib/systemd/user/cos-agent-bridge.service" ] && \
     ln -sf "/usr/lib/systemd/user/cos-agent-bridge.service" \
-        "$ROOTFS/etc/systemd/user/graphical-session.target.wants/cos-agent-bridge.service"
+        "$DESKTOP_PACKAGE_ROOT/etc/systemd/user/graphical-session.target.wants/cos-agent-bridge.service"
 
-# Plymouth boot splash — the overlay shipped the "claw" theme files
-# (claw.plymouth, claw.script, watermark.png, dot.png). Activate it as the
-# default; initramfs is rebuilt lazily on first boot or by update-initramfs.
-echo "  :: setting plymouth default theme = claw"
-chroot "$ROOTFS" plymouth-set-default-theme claw || true
+# ---------------------------------------------------------------------------
+# 4. Build and install claw-os-desktop.deb.
+# ---------------------------------------------------------------------------
+echo "  :: building claw-os-desktop.deb"
+"$PROJECT_DIR/packaging/deb/build-desktop-deb.sh" "$DESKTOP_PACKAGE_ROOT"
 
-echo "  :: desktop installed; default target = graphical.target"
+DEBS_DIR="$PROJECT_DIR/build/debs"
+DESKTOP_DEB="$DEBS_DIR/claw-os-desktop_${COS_VERSION}_${DEB_ARCH:-amd64}.deb"
+if [ ! -f "$DESKTOP_DEB" ]; then
+    echo "  error: expected desktop package missing: $DESKTOP_DEB" >&2
+    exit 1
+fi
+echo "  :: installing $(basename "$DESKTOP_DEB")"
+
+mkdir -p "$ROOTFS/var/cache/cos-debs"
+cp "$DESKTOP_DEB" "$ROOTFS/var/cache/cos-debs/"
+chroot "$ROOTFS" apt-get install -y --no-install-recommends \
+    "/var/cache/cos-debs/$(basename "$DESKTOP_DEB")"
+chroot "$ROOTFS" apt-get clean
+rm -rf "$ROOTFS/var/lib/apt/lists"/*
+rm -rf "$DESKTOP_PACKAGE_ROOT"
+
+# ---------------------------------------------------------------------------
+# 5. Verify package install side effects.
+# ---------------------------------------------------------------------------
+echo "  :: verifying claw-os-desktop install"
+if ! chroot "$ROOTFS" dpkg-query -W -f='${Status}' claw-os-desktop 2>/dev/null \
+    | grep -qx 'install ok installed'; then
+    echo "  error: claw-os-desktop package is not installed" >&2
+    exit 1
+fi
+
+installed_required_files=(
+    "$ROOTFS/usr/share/backgrounds/cosmic/claw-default.jpg"
+    "$ROOTFS/usr/share/cosmic/com.clawos.Panel.Panel/v1/name"
+    "$ROOTFS/usr/share/cosmic/com.clawos.Panel.Dock/v1/name"
+    "$ROOTFS/usr/share/cosmic/com.clawos.Theme.Dark/v1/name"
+    "$ROOTFS/usr/share/icons/WhiteSur-dark/index.theme"
+    "$ROOTFS/etc/greetd/cosmic-greeter.toml"
+    "$ROOTFS/lib/systemd/system/cosmic-greeter.service"
+)
+install_missing=0
+for f in "${installed_required_files[@]}"; do
+    if [ ! -e "$f" ]; then
+        echo "    missing after package install: ${f#$ROOTFS}"
+        install_missing=1
+    fi
+done
+if [ "$install_missing" = "1" ]; then
+    echo "  error: claw-os-desktop installed with missing desktop files" >&2
+    exit 1
+fi
+
+locale_missing=0
+for want in en_US.utf8 zh_CN.utf8 zh_TW.utf8 ja_JP.utf8; do
+    if ! chroot "$ROOTFS" locale -a 2>/dev/null | grep -qx "$want"; then
+        echo "    missing locale: $want"
+        locale_missing=1
+    fi
+done
+if [ "$locale_missing" = "1" ]; then
+    echo "  error: UTF-8 locales failed to generate — cosmic-initial-setup" >&2
+    echo "         Language page would be empty. Check claw-os-desktop postinst." >&2
+    exit 1
+fi
+
+echo "  :: desktop installed via claw-os-desktop.deb; default target = graphical.target"
 echo "  :: greeter:  /etc/systemd/system/display-manager.service -> cosmic-greeter.service"
 echo "  :: greetd cfg: /etc/greetd/cosmic-greeter.toml"

@@ -1,0 +1,28 @@
+Package: claw-os-desktop
+Version: __VERSION__
+Section: x11
+Priority: optional
+Architecture: __ARCH__
+Maintainer: Claw OS <noreply@github.com>
+Homepage: https://github.com/xiaoyu-work/claw-os
+Depends: claw-os-base (= __VERSION__), claw-os-systemd (= __VERSION__), adduser,
+ greetd, gnome-keyring, libpam-gnome-keyring, polkitd, dbus,
+ pipewire, pipewire-pulse, pipewire-alsa, wireplumber, alsa-utils,
+ network-manager, iwd, wpasupplicant, bluez, bluez-tools, udev,
+ upower, power-profiles-daemon, accountsservice, xdg-user-dirs,
+ libwayland-client0, libwayland-server0, libwayland-cursor0, libwayland-egl1,
+ libxkbcommon0, libinput10, libdrm2, libgbm1, libegl1, libgles2, libgl1,
+ mesa-utils, mesa-vulkan-drivers, libvulkan1, libseat1, seatd, xwayland,
+ libfontconfig1, libfreetype6, libexpat1, libpixman-1-0, libgtk-4-1,
+ libpulse0, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good,
+ gstreamer1.0-plugins-bad, gstreamer1.0-plugins-ugly, gstreamer1.0-libav,
+ flatpak, fonts-inter, fonts-jetbrains-mono, fonts-noto-core, fonts-noto-cjk,
+ fonts-noto-color-emoji, adwaita-icon-theme, hicolor-icon-theme,
+ bibata-cursor-theme, xkb-data, locales, plymouth, plymouth-themes,
+ chromium, thunderbird, recoll
+Replaces: claw-os-base (<= __VERSION__)
+Description: Claw OS — graphical desktop environment
+ Installs the Claw OS desktop shell and applications built from the vendored
+ desktop workspace, including compositor, greeter, panel, launcher, settings,
+ terminal, file manager, editor, store, initial setup, wallpapers, icon theme,
+ xdg-desktop-portal integration, and graphical session wiring.

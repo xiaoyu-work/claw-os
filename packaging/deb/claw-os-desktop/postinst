@@ -1,0 +1,102 @@
+#!/bin/sh
+set -e
+
+ensure_line() {
+    file="$1"
+    line="$2"
+    mkdir -p "$(dirname "$file")"
+    touch "$file"
+    grep -qxF "$line" "$file" || echo "$line" >> "$file"
+}
+
+ensure_initial_setup_user() {
+    if id cosmic-initial-setup >/dev/null 2>&1; then
+        return 0
+    fi
+    adduser --system --force-badname --quiet \
+        --home /var/lib/cosmic-initial-setup \
+        --shell /bin/bash \
+        cosmic-initial-setup
+    install -d -o cosmic-initial-setup -g nogroup -m 0755 \
+        /var/lib/cosmic-initial-setup
+}
+
+enable_desktop_links() {
+    mkdir -p /etc/systemd/system/graphical.target.wants
+    mkdir -p /etc/systemd/system/multi-user.target.wants
+    ln -sf /lib/systemd/system/cosmic-greeter.service \
+        /etc/systemd/system/graphical.target.wants/cosmic-greeter.service
+    ln -sf /lib/systemd/system/cosmic-greeter.service \
+        /etc/systemd/system/display-manager.service
+    ln -sf /lib/systemd/system/cosmic-greeter-daemon.service \
+        /etc/systemd/system/multi-user.target.wants/cosmic-greeter-daemon.service
+    ln -sf /lib/systemd/system/graphical.target \
+        /etc/systemd/system/default.target
+
+    mkdir -p /etc/systemd/user/sockets.target.wants
+    mkdir -p /etc/systemd/user/default.target.wants
+    for unit in pipewire.socket pipewire-pulse.socket; do
+        [ -e "/usr/lib/systemd/user/$unit" ] && \
+            ln -sf "/usr/lib/systemd/user/$unit" \
+                "/etc/systemd/user/sockets.target.wants/$unit"
+    done
+    for unit in pipewire.service wireplumber.service; do
+        [ -e "/usr/lib/systemd/user/$unit" ] && \
+            ln -sf "/usr/lib/systemd/user/$unit" \
+                "/etc/systemd/user/default.target.wants/$unit"
+    done
+
+    mkdir -p /etc/systemd/user/graphical-session.target.wants
+    [ -e /usr/lib/systemd/user/cos-agent-bridge.service ] && \
+        ln -sf /usr/lib/systemd/user/cos-agent-bridge.service \
+            /etc/systemd/user/graphical-session.target.wants/cos-agent-bridge.service
+}
+
+enable_desktop_services() {
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl enable NetworkManager.service >/dev/null
+        systemctl enable bluetooth.service >/dev/null 2>&1 || true
+        systemctl enable polkit.service >/dev/null 2>&1 || true
+        systemctl enable power-profiles-daemon.service >/dev/null 2>&1 || true
+        systemctl enable upower.service >/dev/null 2>&1 || true
+        systemctl enable accounts-daemon.service >/dev/null 2>&1 || true
+    fi
+}
+
+generate_default_locales() {
+    [ -f /etc/locale.gen ] || return 0
+    for entry in \
+        "en_US.UTF-8 UTF-8" \
+        "zh_CN.UTF-8 UTF-8" \
+        "zh_TW.UTF-8 UTF-8" \
+        "ja_JP.UTF-8 UTF-8"; do
+        if grep -q "^# $entry$" /etc/locale.gen; then
+            sed -i "s|^# $entry$|$entry|" /etc/locale.gen
+        elif ! grep -q "^$entry$" /etc/locale.gen; then
+            echo "$entry" >> /etc/locale.gen
+        fi
+    done
+    if command -v locale-gen >/dev/null 2>&1; then
+        locale-gen
+    fi
+    echo "LANG=en_US.UTF-8" > /etc/default/locale
+}
+
+if [ "$1" = "configure" ]; then
+    ensure_line /etc/environment "XCURSOR_THEME=Bibata-Modern-Classic"
+    ensure_line /etc/environment "XCURSOR_SIZE=24"
+    ensure_initial_setup_user
+    enable_desktop_links
+    enable_desktop_services
+    if command -v systemd-sysusers >/dev/null 2>&1; then
+        systemd-sysusers
+    fi
+    if command -v systemd-tmpfiles >/dev/null 2>&1; then
+        systemd-tmpfiles --create
+    fi
+    generate_default_locales
+    command -v plymouth-set-default-theme >/dev/null 2>&1 && \
+        plymouth-set-default-theme claw || true
+fi
+
+exit 0

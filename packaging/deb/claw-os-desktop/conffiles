@@ -1,0 +1,4 @@
+/etc/profile.d/claw-cursor.sh
+/etc/xdg/mimeapps.list
+/etc/pam.d/cosmic-greeter
+/etc/greetd/cosmic-greeter.toml

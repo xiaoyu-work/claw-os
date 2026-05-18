@@ -16,6 +16,7 @@
 #   └── pool/main/c/claw-os-base/claw-os-base_<v>_<arch>.deb
 #       pool/main/c/claw-os-browser/claw-os-browser_<v>_<arch>.deb
 #       pool/main/c/claw-os-systemd/claw-os-systemd_<v>_all.deb
+#       pool/main/c/claw-os-desktop/claw-os-desktop_<v>_<arch>.deb
 #
 # Dual-arch: the script auto-discovers every Architecture: in build/debs/
 # and emits one binary-<arch>/ tree per architecture, so an admin can run
