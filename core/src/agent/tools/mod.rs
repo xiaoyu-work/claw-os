@@ -62,4 +62,21 @@ pub trait Tool: Send + Sync {
     /// Execute the tool. Errors should be returned via `ToolResult::err`,
     /// not via Result, so the model can see them and react.
     async fn exec(&self, input: serde_json::Value) -> ToolResult;
+
+    /// May this tool be dispatched concurrently with siblings in the
+    /// same turn? Default is `false` — every existing tool serializes,
+    /// preserving the historical guarantee that side-effecting tools
+    /// (shell exec, fs writes, network mutations) run one at a time
+    /// in declaration order.
+    ///
+    /// Read-only tools that only inspect process / filesystem / system
+    /// state (e.g. `cos_sysinfo`, `cos_app_web`, `cos_app_data` reads)
+    /// should override this to `true` so multi-tool turns return in
+    /// `max(durations)` rather than `sum(durations)`. The agent
+    /// frequently fires 4–6 inspection calls in parallel — running
+    /// them serially behind a slow filesystem walk dominated the
+    /// "what's the biggest file" UX.
+    fn parallel_safe(&self) -> bool {
+        false
+    }
 }

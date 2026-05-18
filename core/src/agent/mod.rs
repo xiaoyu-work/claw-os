@@ -2630,6 +2630,11 @@ async fn live_cmd_async(
         // forwarded — we just keep the latest.
         last_usage: Mutex<Option<crate::agent::llm::types::Usage>>,
         last_finish: Mutex<Option<crate::agent::llm::types::FinishReason>>,
+        // Heartbeat tasks keyed by tool_use id. Started on
+        // `on_tool_start`; cancelled on `on_tool_result`. Reuses
+        // the runtime-level [`progress::Heartbeat`] helper so the
+        // chat REPL and `ask --stream` share one implementation.
+        heartbeat: crate::agent::runtime::progress::Heartbeat,
     }
     impl StreamSink for LiveSink {
         fn on_event(&self, event: &StreamEvent) {
@@ -2692,13 +2697,53 @@ async fn live_cmd_async(
         }
     }
 
+    impl crate::agent::runtime::progress::ProgressSink for LiveSink {
+        fn on_tool_start(
+            &self,
+            id: &str,
+            _name: &str,
+            _input: &serde_json::Value,
+        ) {
+            // Start emitting heartbeat dots after 2s. The
+            // `[tool_use id=…]` line printed by StreamSink already
+            // tells the user which tool is running, so we don't
+            // duplicate that here — just signal life with dots.
+            self.heartbeat.start(id, "");
+        }
+
+        fn on_tool_result(
+            &self,
+            id: &str,
+            name: &str,
+            ok: bool,
+            latency_ms: u64,
+            bytes_returned: usize,
+            content_preview: &str,
+        ) {
+            self.heartbeat.stop(id);
+            let stderr = std::io::stderr();
+            let mut e = stderr.lock();
+            let _ = crate::agent::runtime::progress::write_result_block(
+                &mut e,
+                id,
+                name,
+                ok,
+                latency_ms,
+                bytes_returned,
+                content_preview,
+            );
+        }
+    }
+
     let sink_obj = Arc::new(LiveSink {
         tool_calls: Mutex::new(Vec::new()),
         warnings: Mutex::new(Vec::new()),
         last_usage: Mutex::new(None),
         last_finish: Mutex::new(None),
+        heartbeat: crate::agent::runtime::progress::Heartbeat::new(),
     });
     let sink: Arc<dyn StreamSink> = sink_obj.clone();
+    let progress: Arc<dyn crate::agent::runtime::progress::ProgressSink> = sink_obj.clone();
 
     // Mirror the `ask` path's memory-DB handling: try default DB,
     // fall back to no-recording on failure.
@@ -2712,6 +2757,7 @@ async fn live_cmd_async(
                 &tools,
                 Some((&db, session_id.as_str())),
                 sink,
+                progress,
             )
             .await
         }
@@ -2719,8 +2765,16 @@ async fn live_cmd_async(
             tracing::warn!(
                 "memory: default DB unavailable ({e}); running without history recording"
             );
-            runtime::loop_::ask_with_stream(provider.clone(), cfg, user_prompt, &tools, None, sink)
-                .await
+            runtime::loop_::ask_with_stream(
+                provider.clone(),
+                cfg,
+                user_prompt,
+                &tools,
+                None,
+                sink,
+                progress,
+            )
+            .await
         }
     };
 
@@ -3129,6 +3183,12 @@ async fn chat_cmd_async(
         warnings: Mutex<Vec<String>>,
         last_usage: Mutex<Option<crate::agent::llm::types::Usage>>,
         last_finish: Mutex<Option<crate::agent::llm::types::FinishReason>>,
+        // Heartbeat keyed by tool_use id. Started when the runtime
+        // dispatches a tool (via `ProgressSink::on_tool_start`),
+        // cancelled when the result arrives. Without it the REPL
+        // appeared frozen during slow filesystem walks — the user
+        // saw the `[tool_use …]` line and nothing else for 60s+.
+        heartbeat: crate::agent::runtime::progress::Heartbeat,
     }
     impl ChatSink {
         fn new(verbose_telemetry: bool) -> Self {
@@ -3138,6 +3198,7 @@ async fn chat_cmd_async(
                 warnings: Mutex::new(Vec::new()),
                 last_usage: Mutex::new(None),
                 last_finish: Mutex::new(None),
+                heartbeat: crate::agent::runtime::progress::Heartbeat::new(),
             }
         }
         fn reset(&self) {
@@ -3212,6 +3273,43 @@ async fn chat_cmd_async(
                     mlock(&self.warnings).push(message.clone());
                 }
             }
+        }
+    }
+
+    impl crate::agent::runtime::progress::ProgressSink for ChatSink {
+        fn on_tool_start(
+            &self,
+            id: &str,
+            _name: &str,
+            _input: &serde_json::Value,
+        ) {
+            // Heartbeat dots after 2s. The `[tool_use …]` line is
+            // already in flight from `on_event`; we just keep the
+            // user company while the tool churns.
+            self.heartbeat.start(id, "");
+        }
+
+        fn on_tool_result(
+            &self,
+            id: &str,
+            name: &str,
+            ok: bool,
+            latency_ms: u64,
+            bytes_returned: usize,
+            content_preview: &str,
+        ) {
+            self.heartbeat.stop(id);
+            let stderr = std::io::stderr();
+            let mut e = stderr.lock();
+            let _ = crate::agent::runtime::progress::write_result_block(
+                &mut e,
+                id,
+                name,
+                ok,
+                latency_ms,
+                bytes_returned,
+                content_preview,
+            );
         }
     }
 
@@ -3321,6 +3419,8 @@ async fn chat_cmd_async(
         let result = if streaming {
             sink_obj.reset();
             let sink: Arc<dyn StreamSink> = sink_obj.clone();
+            let progress: Arc<dyn crate::agent::runtime::progress::ProgressSink> =
+                sink_obj.clone();
             let recorder = memory_db.as_ref().map(|db| (db, session_id.as_str()));
             runtime::loop_::ask_with_stream(
                 provider.clone(),
@@ -3329,6 +3429,7 @@ async fn chat_cmd_async(
                 &tools,
                 recorder,
                 sink,
+                progress,
             )
             .await
         } else if let Some(db) = &memory_db {

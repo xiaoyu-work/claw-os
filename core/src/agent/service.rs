@@ -1076,6 +1076,7 @@ async fn run_one_job(job: &Job) -> FinishOutcome {
                     Arc::new(JobStreamSink {
                         job_id: job.id.clone(),
                     }),
+                    crate::agent::runtime::progress::null_progress(),
                 )
                 .await
             }
@@ -1089,6 +1090,7 @@ async fn run_one_job(job: &Job) -> FinishOutcome {
                     Arc::new(JobStreamSink {
                         job_id: job.id.clone(),
                     }),
+                    crate::agent::runtime::progress::null_progress(),
                 )
                 .await
             }
@@ -1103,6 +1105,7 @@ async fn run_one_job(job: &Job) -> FinishOutcome {
             Arc::new(JobStreamSink {
                 job_id: job.id.clone(),
             }),
+            crate::agent::runtime::progress::null_progress(),
         )
         .await
     };

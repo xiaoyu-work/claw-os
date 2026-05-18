@@ -41,6 +41,12 @@ impl Tool for Echo {
             None => ToolResult::err("missing required field: text"),
         }
     }
+
+    fn parallel_safe(&self) -> bool {
+        // Pure function: returns its argument. Trivially safe to
+        // run concurrently with anything.
+        true
+    }
 }
 
 /// `now` — return the current UTC time as RFC 3339.
@@ -67,6 +73,11 @@ impl Tool for Now {
     async fn exec(&self, _input: serde_json::Value) -> ToolResult {
         let now = chrono::Utc::now().to_rfc3339();
         ToolResult::ok(now)
+    }
+
+    fn parallel_safe(&self) -> bool {
+        // Read-only clock query; no side effects.
+        true
     }
 }
 
