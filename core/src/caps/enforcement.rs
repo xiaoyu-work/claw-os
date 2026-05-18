@@ -106,9 +106,7 @@ struct Registry {
 }
 
 fn registry_path() -> PathBuf {
-    PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
-        .join("proc")
-        .join("registry.json")
+    crate::proc::registry_path_for_caps()
 }
 
 fn load_registry() -> Registry {
@@ -538,8 +536,10 @@ mod tests {
         }
     }
 
-    // Single-threaded test mutex — these tests mutate process env.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // Shared env-var mutex — see `caps::test_env_lock`. Lives in the
+    // parent module so it's also held by `caps::bootstrap` tests
+    // (which mutate the same `COS_*` vars).
+    use crate::caps::test_env_lock::env_lock;
 
     fn registry_with_caps(sid: &str, caps_json: &str) -> String {
         // pid=0 disables the ancestry check (see the require() body).
@@ -558,14 +558,14 @@ mod tests {
 
     #[test]
     fn permissive_allows_when_no_session() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = env_lock();
         let _g = EnvGuard::new(r#"{"sessions":[]}"#, None, Some("permissive"));
         assert!(require(Verb::FS_READ, Scope::path("/etc")).is_ok());
     }
 
     #[test]
     fn strict_denies_when_no_session() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = env_lock();
         let _g = EnvGuard::new(r#"{"sessions":[]}"#, None, Some("strict"));
         let err = require(Verb::FS_READ, Scope::path("/etc")).unwrap_err();
         assert!(matches!(
@@ -576,7 +576,7 @@ mod tests {
 
     #[test]
     fn strict_denies_unknown_session() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = env_lock();
         let _g = EnvGuard::new(r#"{"sessions":[]}"#, Some("missing"), Some("strict"));
         let err = require(Verb::FS_READ, Scope::path("/etc")).unwrap_err();
         assert!(matches!(
@@ -587,7 +587,7 @@ mod tests {
 
     #[test]
     fn allows_when_session_caps_cover_request() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = env_lock();
         let caps = r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
         let reg = registry_with_caps("s1", caps);
         let _g = EnvGuard::new(&reg, Some("s1"), Some("strict"));
@@ -596,7 +596,7 @@ mod tests {
 
     #[test]
     fn denies_with_scope_out_of_range_when_verb_held_but_path_outside() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = env_lock();
         let caps = r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
         let reg = registry_with_caps("s1", caps);
         let _g = EnvGuard::new(&reg, Some("s1"), Some("strict"));
@@ -611,7 +611,7 @@ mod tests {
 
     #[test]
     fn denies_with_verb_not_granted_when_verb_missing() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = env_lock();
         let caps = r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
         let reg = registry_with_caps("s1", caps);
         let _g = EnvGuard::new(&reg, Some("s1"), Some("strict"));
@@ -624,7 +624,7 @@ mod tests {
 
     #[test]
     fn approved_once_grant_allows_exactly_one_denied_request() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = env_lock();
         let caps = r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
         let reg = registry_with_caps("s1", caps);
         let _g = EnvGuard::new(&reg, Some("s1"), Some("strict"));
@@ -648,7 +648,7 @@ mod tests {
 
     #[test]
     fn permissive_allows_session_without_caps_field() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = env_lock();
         let reg = r#"{
           "sessions": [{"session_id":"s1","pid":0}]
         }"#;
@@ -658,7 +658,7 @@ mod tests {
 
     #[test]
     fn strict_is_the_default() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = env_lock();
         let _g = EnvGuard::new(r#"{"sessions":[]}"#, None, None);
         // No COS_PERMS_MODE set → strict by default → denies.
         let err = require(Verb::FS_READ, Scope::path("/etc")).unwrap_err();
@@ -670,7 +670,7 @@ mod tests {
 
     #[test]
     fn strict_denies_session_without_caps_field() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = env_lock();
         let reg = r#"{
           "sessions": [{"session_id":"s1","pid":0}]
         }"#;
@@ -684,7 +684,7 @@ mod tests {
 
     #[test]
     fn json_envelope_matches_denial_shape() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = env_lock();
         let caps = r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
         let reg = registry_with_caps("s1", caps);
         let _g = EnvGuard::new(&reg, Some("s1"), Some("strict"));
@@ -733,7 +733,7 @@ mod tests {
 
     #[test]
     fn require_writes_to_caps_jsonl() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = env_lock();
         let prev_audit = std::env::var_os("COS_CAPS_AUDIT");
         std::env::remove_var("COS_CAPS_AUDIT");
 
