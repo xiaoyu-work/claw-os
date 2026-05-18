@@ -1091,18 +1091,32 @@ async fn install_shutdown_listener(shutdown: Arc<AtomicBool>) {
 async fn run_one_job(job: &Job) -> FinishOutcome {
     // If the job carries an owner_home (clawd-routed jobs from a
     // non-daemon user), load THAT user's config into a task-local
-    // override before running the rest of the job. Every
-    // `config::get()` inside the agent loop — including those reached
-    // transitively from tool implementations, the LLM gate, and the
-    // delegate tool — will see the user's provider/model/keys rather
-    // than the daemon's defaults.
+    // override AND redirect every per-user path resolver
+    // (`paths::user_config_dir`, `paths::user_data_dir`, and
+    // therefore `paths::user_credentials_dir`,
+    // `paths::user_app_override_path`, `paths::user_app_consent_path`,
+    // `paths::user_budget_config_path`, …) to the owner's home before
+    // running the rest of the job. Every `config::get()` inside the
+    // agent loop — and every credential / consent / app-override
+    // lookup reached transitively from tool implementations, the LLM
+    // gate, and the delegate tool — will see the user's
+    // provider/model/keys rather than the daemon's defaults.
     //
-    // Without this, `cos agent ask` from a non-root user fails
-    // "no LLM provider configured" because clawd (uid=0, HOME=/root)
-    // reads /root/.config/cos/config.json which doesn't exist.
+    // Without this, `cos agent ask` from a non-root user fails either
+    // "no LLM provider configured" (config not loaded) or, post
+    // config-override fix, "GitHub Copilot is not signed in" because
+    // clawd (uid=0, HOME=/root) reads
+    // `/root/.local/share/cos/credentials/agent/copilot_github_token.json`
+    // which doesn't exist — the user wrote the credential under
+    // `/home/<user>/.local/share/cos/credentials/...`.
     if let Some(home) = job.owner_home.as_deref() {
-        let cfg = crate::config::intern_for_home(std::path::Path::new(home));
-        crate::config::with_override(cfg, run_one_job_inner(job)).await
+        let home_path = std::path::PathBuf::from(home);
+        let cfg = crate::config::intern_for_home(&home_path);
+        crate::paths::with_home_override(
+            home_path,
+            crate::config::with_override(cfg, run_one_job_inner(job)),
+        )
+        .await
     } else {
         run_one_job_inner(job).await
     }

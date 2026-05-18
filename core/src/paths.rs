@@ -27,7 +27,72 @@
 //! and per-home overlays).
 
 use std::env;
+use std::ffi::OsString;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+
+// ---------------------------------------------------------------------------
+// Per-task HOME override (mirrors `config::with_override`).
+//
+// `cos agent ask` from a non-root user lands at the clawd socket; clawd
+// runs as root with `HOME=/root`. Every per-user resolver in this file
+// reads the `HOME` env var directly, so without an override clawd
+// looks for the user's config / credentials / consents under `/root/...`
+// rather than `/home/<user>/...`.
+//
+// Callers (the agent service worker) wrap each clawd-routed job in
+// [`with_home_override`] with the requesting peer's resolved home
+// directory. Inside that scope, [`user_config_dir`] / [`user_data_dir`]
+// — and every helper transitively built on top of them
+// ([`user_credentials_dir`], [`user_app_override_path`],
+// [`user_app_consent_path`], [`user_budget_config_path`], …) — see
+// the override instead of the daemon's own `HOME`. Outside any
+// `with_home_override` scope the resolvers fall back to the `HOME`
+// env var exactly as before.
+//
+// The override does NOT defeat the existing `COS_USER_CONFIG_DIR` /
+// `COS_USER_DATA_DIR` env vars: those still take precedence so tests
+// and multi-tenant overlays continue to work. The override only
+// replaces the "look at $HOME" default.
+// ---------------------------------------------------------------------------
+
+tokio::task_local! {
+    static HOME_OVERRIDE: PathBuf;
+}
+
+/// Run `fut` with `home` installed as the per-task user-home override
+/// visible to every per-user resolver inside it (and any task spawned
+/// via `tokio::spawn` from within it — `task_local` propagates).
+/// Outside the scope the resolvers fall back to the `HOME` env var
+/// as before.
+pub async fn with_home_override<F, R>(home: PathBuf, fut: F) -> R
+where
+    F: Future<Output = R>,
+{
+    HOME_OVERRIDE.scope(home, fut).await
+}
+
+/// Snapshot of the currently active home override (`None` outside any
+/// `with_home_override` scope). Exposed for crates that need to mirror
+/// the override into subprocess `HOME` env vars (e.g. when spawning a
+/// shell on the user's behalf).
+pub fn current_home_override() -> Option<PathBuf> {
+    HOME_OVERRIDE.try_with(|h| h.clone()).ok()
+}
+
+/// Resolve the effective user home directory:
+///   1. The current task's [`with_home_override`] scope, if any.
+///   2. The `HOME` env var.
+///   3. `/root` as a last-resort default.
+///
+/// Used internally by [`user_config_dir`] and [`user_data_dir`] so
+/// every per-user resolver picks up the override automatically.
+fn effective_home() -> OsString {
+    if let Some(home) = current_home_override() {
+        return home.into_os_string();
+    }
+    env::var_os("HOME").unwrap_or_else(|| "/root".into())
+}
 
 #[cfg(windows)]
 fn windows_program_data() -> PathBuf {
@@ -108,8 +173,7 @@ pub fn user_config_dir() -> PathBuf {
     }
     #[cfg(not(windows))]
     {
-        let home = std::env::var_os("HOME").unwrap_or_else(|| "/root".into());
-        PathBuf::from(home).join(".config").join("cos")
+        PathBuf::from(effective_home()).join(".config").join("cos")
     }
 }
 
@@ -166,8 +230,10 @@ pub fn user_data_dir() -> PathBuf {
     }
     #[cfg(not(windows))]
     {
-        let home = std::env::var_os("HOME").unwrap_or_else(|| "/root".into());
-        PathBuf::from(home).join(".local").join("share").join("cos")
+        PathBuf::from(effective_home())
+            .join(".local")
+            .join("share")
+            .join("cos")
     }
 }
 
@@ -435,5 +501,162 @@ mod tests {
     #[test]
     fn agent_state_dir_lives_under_data_dir() {
         assert!(agent_state_dir().starts_with(data_dir()));
+    }
+
+    // ----- HOME_OVERRIDE task_local --------------------------------------
+
+    #[test]
+    fn no_override_falls_back_to_home_env() {
+        assert!(current_home_override().is_none());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn home_override_redirects_user_config_dir() {
+        // Snapshot any existing COS_USER_CONFIG_DIR — we must clear it for
+        // the override path to be observable.
+        let prev_cfg = env::var_os("COS_USER_CONFIG_DIR");
+        // SAFETY: single-threaded by test name uniqueness.
+        unsafe {
+            env::remove_var("COS_USER_CONFIG_DIR");
+        }
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build current-thread runtime");
+
+        let got = rt.block_on(async {
+            with_home_override(PathBuf::from("/tmp/cos-test-home"), async {
+                user_config_dir()
+            })
+            .await
+        });
+        assert_eq!(got, PathBuf::from("/tmp/cos-test-home/.config/cos"));
+
+        // SAFETY: see above.
+        unsafe {
+            if let Some(v) = prev_cfg {
+                env::set_var("COS_USER_CONFIG_DIR", v);
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn home_override_redirects_user_data_dir_and_credentials() {
+        let prev_data = env::var_os("COS_USER_DATA_DIR");
+        let prev_creds = env::var_os("COS_CREDENTIALS_DIR");
+        // SAFETY: single-threaded by test name uniqueness.
+        unsafe {
+            env::remove_var("COS_USER_DATA_DIR");
+            env::remove_var("COS_CREDENTIALS_DIR");
+        }
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build current-thread runtime");
+
+        let (data, creds, snapshot) = rt.block_on(async {
+            with_home_override(PathBuf::from("/tmp/cos-test-creds-home"), async {
+                (
+                    user_data_dir(),
+                    user_credentials_dir(),
+                    current_home_override(),
+                )
+            })
+            .await
+        });
+        assert_eq!(
+            data,
+            PathBuf::from("/tmp/cos-test-creds-home/.local/share/cos")
+        );
+        assert_eq!(
+            creds,
+            PathBuf::from("/tmp/cos-test-creds-home/.local/share/cos/credentials")
+        );
+        assert_eq!(snapshot.as_deref(), Some(Path::new("/tmp/cos-test-creds-home")));
+
+        // SAFETY: see above.
+        unsafe {
+            if let Some(v) = prev_data {
+                env::set_var("COS_USER_DATA_DIR", v);
+            }
+            if let Some(v) = prev_creds {
+                env::set_var("COS_CREDENTIALS_DIR", v);
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn env_override_still_wins_over_home_override() {
+        // Explicit env-var overrides (used by tests and multi-tenant
+        // overlays) must keep winning even when a HOME override is
+        // installed — otherwise we'd break existing test isolation.
+        let prev = env::var_os("COS_USER_CONFIG_DIR");
+        // SAFETY: see above.
+        unsafe {
+            env::set_var("COS_USER_CONFIG_DIR", "/tmp/cos-test-env-wins");
+        }
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build current-thread runtime");
+
+        let got = rt.block_on(async {
+            with_home_override(PathBuf::from("/tmp/cos-test-home-loses"), async {
+                user_config_dir()
+            })
+            .await
+        });
+        assert_eq!(got, PathBuf::from("/tmp/cos-test-env-wins"));
+
+        // SAFETY: see above.
+        unsafe {
+            match prev {
+                Some(v) => env::set_var("COS_USER_CONFIG_DIR", v),
+                None => env::remove_var("COS_USER_CONFIG_DIR"),
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn home_override_scopes_to_task_only() {
+        let prev_cfg = env::var_os("COS_USER_CONFIG_DIR");
+        // SAFETY: see above.
+        unsafe {
+            env::remove_var("COS_USER_CONFIG_DIR");
+        }
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build current-thread runtime");
+
+        // Outside the scope: no override.
+        assert!(current_home_override().is_none());
+
+        // Inside: present. After the scope exits: gone again.
+        rt.block_on(async {
+            with_home_override(PathBuf::from("/tmp/cos-scope"), async {
+                assert_eq!(
+                    current_home_override().as_deref(),
+                    Some(Path::new("/tmp/cos-scope"))
+                );
+            })
+            .await;
+        });
+        assert!(current_home_override().is_none());
+
+        // SAFETY: see above.
+        unsafe {
+            if let Some(v) = prev_cfg {
+                env::set_var("COS_USER_CONFIG_DIR", v);
+            }
+        }
     }
 }
