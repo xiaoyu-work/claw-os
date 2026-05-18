@@ -155,7 +155,7 @@ fi
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light">
-<meta name="description" content="Claw OS is The First Agent Native Operating System, a minimal headless Linux environment built for AI agents.">
+<meta name="description" content="Claw OS is The First Agent Native Operating System, a complete Linux system with structured control surfaces for AI agents.">
 <title>Claw OS - The First Agent Native Operating System</title>
 <link rel="icon" type="image/png" href="assets/brand/clawos-favicon-64.png">
 <style>
@@ -189,7 +189,7 @@ body {
 a { color: inherit; text-decoration: none; }
 code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .page { position: relative; overflow: hidden; }
-.container { width: min(1200px, calc(100% - 40px)); margin: 0 auto; }
+.container { width: min(1080px, calc(100% - 40px)); margin: 0 auto; }
 
 .nav {
   position: sticky;
@@ -217,14 +217,14 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospac
   font-weight: 520;
 }
 
-.hero { padding: 86px 0 56px; text-align: center; }
+.hero { padding: 72px 0 42px; text-align: center; }
 .hero-logo { display: block; width: min(210px, 58vw); height: auto; margin: 0 auto 22px; }
 h1 {
-  max-width: 1120px;
+  max-width: 900px;
   margin: 26px auto 0;
-  font-size: clamp(48px, 7.4vw, 92px);
-  line-height: .98;
-  letter-spacing: -.06em;
+  font-size: clamp(42px, 6vw, 72px);
+  line-height: 1.04;
+  letter-spacing: -.045em;
   font-weight: 720;
   text-wrap: balance;
 }
@@ -238,15 +238,7 @@ h1 .line {
   background-clip: text;
   color: transparent;
 }
-.lead {
-  max-width: 760px;
-  margin: 28px auto 0;
-  color: var(--muted);
-  font-size: clamp(18px, 2.2vw, 24px);
-  line-height: 1.45;
-  letter-spacing: -.025em;
-}
-.actions { display: flex; justify-content: center; gap: 12px; margin-top: 34px; flex-wrap: wrap; }
+.actions { display: flex; justify-content: center; gap: 12px; margin-top: 30px; flex-wrap: wrap; }
 .button {
   display: inline-flex;
   align-items: center;
@@ -266,11 +258,11 @@ h1 .line {
 .product-shell {
   position: relative;
   margin: 0 auto;
-  max-width: 820px;
+  max-width: 760px;
   border: 1px solid #1f1f1f;
   border-radius: 20px;
   background: #0a0a0a;
-  box-shadow: 0 24px 70px rgba(0, 0, 0, .14);
+  box-shadow: 0 22px 60px rgba(0, 0, 0, .13);
   overflow: hidden;
 }
 .product-topbar {
@@ -304,14 +296,14 @@ h1 .line {
   align-items: start;
 }
 
-.terminal-preview { padding-bottom: 72px; }
-.section { padding: 76px 0; }
+.terminal-preview { padding-bottom: 56px; }
+.section { padding: 56px 0; }
 .section-head { margin-bottom: 24px; }
 .kicker { color: var(--blue); font-size: 13px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-h2 { margin: 8px 0 0; font-size: clamp(32px, 4.2vw, 52px); line-height: 1.05; letter-spacing: -.045em; }
+h2 { margin: 8px 0 0; font-size: clamp(28px, 3.2vw, 40px); line-height: 1.08; letter-spacing: -.035em; }
 
-.cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
-.feature-card { min-height: 150px; padding: 22px; border: 1px solid var(--line); border-radius: 18px; background: #fff; }
+.cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.feature-card { min-height: 128px; padding: 20px; border: 1px solid var(--line); border-radius: 16px; background: #fff; }
 .feature-card h3 { margin: 0 0 8px; font-size: 19px; letter-spacing: -.02em; }
 .feature-card p { margin: 0; color: var(--muted); line-height: 1.5; font-size: 15px; }
 
@@ -370,7 +362,6 @@ pre {
       <div class="container">
         <img class="hero-logo" src="assets/brand/clawos-wordmark.png" alt="Claw OS">
         <h1><span class="line">The First Agent Native</span><span class="line gradient-text">Operating System</span></h1>
-        <p class="lead">A minimal Linux environment built for AI agents.</p>
         <div class="actions">
           <a class="button primary" href="#install">Install Claw OS</a>
           <a class="button" href="https://github.com/xiaoyu-work/claw-os">View on GitHub</a>
@@ -397,17 +388,17 @@ pre {
         <div class="section-head">
           <div>
             <div class="kicker">Core ideas</div>
-            <h2>What makes it agent native.</h2>
+            <h2>Built for agents to operate safely.</h2>
           </div>
         </div>
         <div class="cards">
           <article class="feature-card">
             <h3>Headless Linux</h3>
-            <p>Run without a desktop session.</p>
+            <p>Run a complete Linux system without requiring a desktop session.</p>
           </article>
           <article class="feature-card">
             <h3>Structured control</h3>
-            <p>Expose operating-system actions through predictable <code>cos</code> commands and JSON output.</p>
+            <p>Expose OS actions through predictable <code>cos</code> commands and JSON output.</p>
           </article>
           <article class="feature-card">
             <h3>Scoped execution</h3>
