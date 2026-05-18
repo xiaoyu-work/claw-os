@@ -120,29 +120,6 @@ CLAWD_BIN="$(find_bin clawd)" || { echo "error: clawd binary not built" >&2; exi
 echo "  :: clawd        <- $CLAWD_BIN"
 install -m 755 "$CLAWD_BIN" "$BASE_STAGE/usr/local/bin/clawd"
 
-# Binary: cos-agent-bridge (HTTP+SSE daemon for com.clawos.Agent).
-# Optional — the rest of the OS works without it, so a missing bridge
-# binary just produces a warning rather than failing the deb build.
-COS_AGENT_BRIDGE_BIN="$(find_bin cos-agent-bridge || true)"
-if [ -n "$COS_AGENT_BRIDGE_BIN" ] && [ -f "$COS_AGENT_BRIDGE_BIN" ]; then
-    echo "  :: cos-agent-bridge  <- $COS_AGENT_BRIDGE_BIN"
-    install -m 755 "$COS_AGENT_BRIDGE_BIN" "$BASE_STAGE/usr/local/bin/cos-agent-bridge"
-else
-    echo "  :: WARNING — cos-agent-bridge binary not built; skipping" >&2
-fi
-
-# Binary: cos-agent-ui (native libcosmic chat UI for com.clawos.Agent).
-# This is the only UI surface — `cos app agent open` requires it.
-# If the binary is missing the launcher prints an actionable error
-# (see apps/agent/main.py).
-COS_AGENT_UI_BIN="$(find_bin cos-agent-ui || true)"
-if [ -n "$COS_AGENT_UI_BIN" ] && [ -f "$COS_AGENT_UI_BIN" ]; then
-    echo "  :: cos-agent-ui      <- $COS_AGENT_UI_BIN"
-    install -m 755 "$COS_AGENT_UI_BIN" "$BASE_STAGE/usr/local/bin/cos-agent-ui"
-else
-    echo "  :: WARNING — cos-agent-ui binary not built; the Agent app will not launch" >&2
-fi
-
 # Binaries: claw-semantic-daemon + claw-semantic CLI.
 # Both are optional — the OS still works without them (Recoll covers
 # the keyword layer); a missing binary just disables the semantic

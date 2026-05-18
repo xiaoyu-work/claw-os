@@ -19,7 +19,7 @@ Both are optional. `packages.txt` runs first, then `install.sh`.
 | `cos-core` | The `cos` binary, `apps/`, `skills/` |
 | `browser` | Chromium runtime libs, the `cos-browser` and (optional) `cos-browser-worker` binaries |
 | `qwen3-embedding` | Downloads the public Hugging Face `johnucm/Qwen-Qwen3-Embedding-0.6B-onnx` ONNX GenAI bundle into `/var/lib/cos/models/qwen3-embedding-0.6b/v1` and installs the pinned `ort-genai` runtime where upstream provides a Linux asset |
-| `desktop` | Wayland desktop stack (cosmic-comp + greeter + panel + launcher + settings + apps) built from the vendored monorepo at `<repo>/desktop/`. Wires `cosmic-greeter` as the display manager and sets `graphical.target` as default. Set `DESKTOP_SKIP=1` to install runtime deps only (skip the ~30–60 min cargo build). |
+| `desktop` | Builds the vendored desktop workspace into `claw-os-desktop.deb`, then installs it. Includes compositor, greeter, panel, launcher, settings, apps, desktop defaults, and graphical boot wiring. Set `DESKTOP_SKIP=1` to install runtime deps + overlay only. |
 | `claw-mail-ai` | Packs the `extensions/claw-mail-ai` MailExtension as an `.xpi`, force-installs it into Thunderbird, deploys the Python Native Messaging host (`apps/mail-ai`) under `/usr/lib/cos/mail-ai`, and drops the NM manifest + policies. Requires Thunderbird (already pulled in by `desktop`). |
 | `copilot-cli` | Installs `@github/copilot` globally via npm so `copilot` is on every user's `$PATH`. Used by cosmic-term's `@`-trigger AI integration (`desktop/term/src/ai/`). |
 | `vmware` | Optional VMware Tools guest integration (`open-vm-tools`, `open-vm-tools-desktop`) for VMware Fusion / Workstation / ESXi images. Include only for VMware builds, after `systemd`. |

@@ -46,6 +46,7 @@ seatd
 xwayland
 
 # --- Display manager / login chain ---
+adduser
 greetd
 libpam0g-dev
 gnome-keyring

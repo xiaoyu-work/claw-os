@@ -109,9 +109,6 @@ jobs:
       - name: Build cos-browser binary (gnu)
         run: cargo build --release -p cos-browser --target x86_64-unknown-linux-gnu
 
-      - name: Build cos-agent-bridge binary (musl)
-        run: cd desktop/agent && cargo build --release -p cos-agent-bridge --target x86_64-unknown-linux-musl
-
       - name: Build claw-semantic binaries (gnu)
         run: cargo build --release -p claw-semantic --target x86_64-unknown-linux-gnu
 
@@ -247,7 +244,6 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-            desktop/agent/target
           key: ${{ runner.os }}-${{ runner.arch }}-cargo-build-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-cargo-build-
@@ -257,9 +253,6 @@ jobs:
 
       - name: Build cos-browser binary (arm64 gnu)
         run: cargo build --release -p cos-browser --target aarch64-unknown-linux-gnu
-
-      - name: Build cos-agent-bridge binary (arm64 musl)
-        run: cd desktop/agent && cargo build --release -p cos-agent-bridge --target aarch64-unknown-linux-musl
 
       - name: Build claw-semantic binaries (arm64 gnu)
         run: cargo build --release -p claw-semantic --target aarch64-unknown-linux-gnu
