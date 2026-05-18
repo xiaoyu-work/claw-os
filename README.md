@@ -70,14 +70,8 @@ docker exec -it --user cos claw bash --login
 
 ### Desktop / ISO / VM
 
-The desktop environment is in **experimental development**. The target direction
-is the same system agent model as headless Claw OS, with desktop context,
-timeline, memory, and permission surfaces layered on top. For now, use WSL or
-Docker to validate the headless system agent runtime first.
-
-Other targets — bootable ISO (live + installer), VM images, WSL image, and
-`.deb` + apt repo — are produced from `packaging/`. See
-[CONTRIBUTING.md](CONTRIBUTING.md).
+The desktop environment is **experimental**. Claw OS apps are built to support
+the agent natively.
 
 ### Drive the OS
 
