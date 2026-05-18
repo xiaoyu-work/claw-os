@@ -180,23 +180,10 @@ body {
   margin: 0;
   color: var(--ink);
   background:
-    radial-gradient(circle at 50% -12%, rgba(0, 92, 254, .14), transparent 34rem),
-    radial-gradient(circle at 82% 18%, rgba(124, 58, 237, .10), transparent 28rem),
-    linear-gradient(#fff, #fafafa 55%, #fff);
+    radial-gradient(circle at 50% -16%, rgba(0, 92, 254, .10), transparent 32rem),
+    linear-gradient(#fff, #fafafa 68%, #fff);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
-}
-
-body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  background-image:
-    linear-gradient(rgba(0, 0, 0, .035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0, 0, 0, .035) 1px, transparent 1px);
-  background-size: 48px 48px;
-  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, .75), transparent 60%);
 }
 
 a { color: inherit; text-decoration: none; }
@@ -230,7 +217,7 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospac
   font-weight: 520;
 }
 
-.hero { padding: 86px 0 74px; text-align: center; }
+.hero { padding: 86px 0 56px; text-align: center; }
 .hero-logo { display: block; width: min(210px, 58vw); height: auto; margin: 0 auto 22px; }
 h1 {
   max-width: 1120px;
@@ -279,114 +266,54 @@ h1 .line {
 .product-shell {
   position: relative;
   margin: 0 auto;
-  max-width: 1080px;
-  border: 1px solid var(--line);
-  border-radius: 28px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, .9), rgba(255, 255, 255, .72));
-  box-shadow: var(--shadow);
+  max-width: 820px;
+  border: 1px solid #1f1f1f;
+  border-radius: 20px;
+  background: #0a0a0a;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, .14);
   overflow: hidden;
 }
-.product-shell::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: radial-gradient(circle at 50% 0, rgba(0, 92, 254, .14), transparent 22rem);
-  pointer-events: none;
-}
 .product-topbar {
-  position: relative;
-  height: 48px;
-  border-bottom: 1px solid var(--line);
+  height: 42px;
+  border-bottom: 1px solid #1f1f1f;
   display: flex;
   align-items: center;
-  padding: 0 18px;
+  padding: 0 16px;
   gap: 8px;
-  background: rgba(255, 255, 255, .72);
+  background: #111;
 }
-.dot { width: 12px; height: 12px; border-radius: 999px; background: #ff5f57; }
+.dot { width: 11px; height: 11px; border-radius: 999px; background: #ff5f57; }
 .dot:nth-child(2) { background: #febc2e; }
 .dot:nth-child(3) { background: #28c840; }
-.topbar-title { margin-left: 10px; color: var(--faint); font-size: 13px; }
-.hero-grid {
-  position: relative;
-  display: grid;
-  grid-template-columns: 1.15fr .85fr;
-  gap: 1px;
-  background: var(--line);
-}
-.panel {
-  min-height: 360px;
-  padding: 26px;
-  background: rgba(255, 255, 255, .9);
-}
 .terminal {
   display: flex;
   flex-direction: column;
-  gap: 15px;
+  gap: 12px;
   text-align: left;
-  color: #111;
+  padding: 24px;
+  color: #f5f5f5;
   font-size: 14px;
-  line-height: 1.65;
+  line-height: 1.6;
 }
 .prompt { color: var(--blue); font-weight: 700; }
-.terminal .muted { color: var(--faint); }
+.terminal .answer { color: #a3a3a3; }
 .terminal-line {
   display: grid;
   grid-template-columns: 24px 1fr;
   gap: 10px;
   align-items: start;
 }
-.primitive-card {
-  border: 1px solid var(--line);
-  border-radius: 22px;
-  padding: 18px;
-  background: linear-gradient(180deg, #fff, #fbfbfb);
-  box-shadow: 0 18px 60px rgba(0, 0, 0, .07);
-}
-.primitive-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; font-weight: 650; }
-.badge { border: 1px solid var(--line); border-radius: 999px; padding: 4px 9px; color: var(--muted); font-size: 12px; background: #fff; }
-.primitive-message {
-  border: 1px solid #dbe7ff;
-  border-radius: 16px;
-  padding: 14px;
-  background: linear-gradient(135deg, rgba(0, 92, 254, .08), rgba(255, 255, 255, .95));
-  color: #1f2937;
-  line-height: 1.5;
-}
-.primitive-list { display: grid; gap: 10px; margin-top: 14px; }
-.mini {
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  padding: 13px;
-  background: #fff;
-}
-.mini strong { display: block; font-size: 13px; margin-bottom: 4px; }
-.mini span { color: var(--muted); font-size: 12px; line-height: 1.45; }
 
-.section { padding: 98px 0; }
-.section-head { display: flex; justify-content: space-between; align-items: end; gap: 30px; margin-bottom: 28px; }
+.terminal-preview { padding-bottom: 72px; }
+.section { padding: 76px 0; }
+.section-head { margin-bottom: 24px; }
 .kicker { color: var(--blue); font-size: 13px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-h2 { margin: 8px 0 0; font-size: clamp(34px, 5vw, 64px); line-height: .98; letter-spacing: -.055em; }
-.section-copy { max-width: 510px; color: var(--muted); font-size: 18px; line-height: 1.55; }
+h2 { margin: 8px 0 0; font-size: clamp(32px, 4.2vw, 52px); line-height: 1.05; letter-spacing: -.045em; }
 
-.cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: 24px; overflow: hidden; background: var(--line); box-shadow: 0 18px 70px rgba(0, 0, 0, .05); }
-.feature-card { min-height: 260px; padding: 24px; background: #fff; }
-.feature-card.wide { grid-column: span 2; }
-.feature-card.tall { min-height: 320px; }
-.icon {
-  width: 36px;
-  height: 36px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  margin-bottom: 48px;
-  background: linear-gradient(180deg, #fff, #f7f7f7);
-  color: var(--blue);
-  font-weight: 800;
-}
-.feature-card h3 { margin: 0 0 10px; font-size: 22px; letter-spacing: -.03em; }
-.feature-card p { margin: 0; color: var(--muted); line-height: 1.55; }
+.cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.feature-card { min-height: 150px; padding: 22px; border: 1px solid var(--line); border-radius: 18px; background: #fff; }
+.feature-card h3 { margin: 0 0 8px; font-size: 19px; letter-spacing: -.02em; }
+.feature-card p { margin: 0; color: var(--muted); line-height: 1.5; font-size: 15px; }
 
 .install-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
 .install-card {
@@ -417,12 +344,8 @@ pre {
   .hero { padding-top: 62px; }
   h1 { font-size: clamp(42px, 13vw, 70px); letter-spacing: -.055em; }
   h1 .line { white-space: normal; }
-  .hero-grid, .install-grid { grid-template-columns: 1fr; }
+  .install-grid { grid-template-columns: 1fr; }
   .cards { grid-template-columns: 1fr; }
-  .feature-card.wide { grid-column: auto; }
-  .section-head { display: block; }
-  .section-copy { margin-top: 16px; }
-  .panel { min-height: auto; }
 }
 </style>
 </head>
@@ -455,6 +378,20 @@ pre {
       </div>
     </section>
 
+    <section class="container terminal-preview" aria-label="Terminal preview">
+      <div class="product-shell">
+        <div class="product-topbar">
+          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        </div>
+        <div class="terminal">
+          <div class="terminal-line"><span class="prompt">$</span><span>cos agent ask "prepare this workspace"</span></div>
+          <div class="terminal-line answer"><span></span><span>Plan ready. No files changed.</span></div>
+          <div class="terminal-line"><span class="prompt">$</span><span>cos checkpoint diff</span></div>
+          <div class="terminal-line answer"><span></span><span>No changes yet.</span></div>
+        </div>
+      </div>
+    </section>
+
     <section id="features" class="section">
       <div class="container">
         <div class="section-head">
@@ -462,26 +399,21 @@ pre {
             <div class="kicker">Core ideas</div>
             <h2>What makes it agent native.</h2>
           </div>
-          <p class="section-copy">One section, one pass over the product.</p>
         </div>
         <div class="cards">
           <article class="feature-card">
-            <div class="icon">01</div>
             <h3>Headless Linux</h3>
             <p>Run without a desktop session.</p>
           </article>
           <article class="feature-card">
-            <div class="icon">02</div>
             <h3>Structured control</h3>
             <p>Expose operating-system actions through predictable <code>cos</code> commands and JSON output.</p>
           </article>
           <article class="feature-card">
-            <div class="icon">03</div>
             <h3>Scoped execution</h3>
             <p>Gate risky actions with explicit capability checks and approvals.</p>
           </article>
           <article class="feature-card">
-            <div class="icon">04</div>
             <h3>Reversible work</h3>
             <p>Use checkpoints to inspect and roll back agent-made file changes.</p>
           </article>
