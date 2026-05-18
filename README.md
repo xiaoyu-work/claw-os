@@ -8,7 +8,7 @@ The First Agent Native Operating System
 
 Website: [xiaoyu-work.github.io/claw-os](https://xiaoyu-work.github.io/claw-os)
 
-Claw OS is a complete Linux-based environment designed for AI agents. It keeps the normal Linux system visible while adding structured OS primitives, scoped permissions, checkpoints, credentials, jobs, and local model runtime management through `cos`.
+Claw OS is a complete Linux-based environment designed for AI agents. It keeps the normal Linux system visible while adding structured OS primitives, scoped permissions, credentials, jobs, and local model runtime management through `cos`.
 
 ## Why it is agent-native
 
@@ -17,7 +17,6 @@ Claw OS is built around the idea that an agent should not control a computer thr
 - **Structured primitives** — apps, files, browser reads, system info, package search, credentials, jobs, and model runtimes are exposed through predictable `cos` commands.
 - **Machine-readable results** — primitives return structured output so an agent can inspect state without scraping human UI.
 - **Scoped permissions** — risky actions go through capability checks and approvals instead of granting broad access by default.
-- **Checkpoints and rollback** — agent-made file changes can be snapshotted, diffed, and restored.
 - **Built-in agent entry points** — `cos agent setup`, `cos agent ask`, and `cos agent chat` are first-class OS commands.
 - **Local runtime support** — `cos model` and `cos engine` manage on-device inference where available.
 
@@ -61,7 +60,6 @@ Desktop images are **experimental**.
 
 ```bash
 cos                                    # list primitives
-cos checkpoint create "clean state"    # snapshot the workspace
 cos app web read https://example.com   # fetch a page as Markdown
 ```
 
