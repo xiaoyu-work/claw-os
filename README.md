@@ -8,28 +8,26 @@ The First Agent Native Operating System
 
 Website: https://xiaoyu-work.github.io/claw-os
 
-Claw OS is a Linux-based environment where apps, files, browser access, credentials, jobs, permissions, and rollback are exposed as structured `cos` primitives and controlled by a built-in agent (`Claw`).
+Claw OS is a complete Linux-based environment designed for AI agents. It keeps the normal Linux system visible while adding structured OS primitives, scoped permissions, checkpoints, credentials, jobs, and local model runtime management through `cos`.
 
-## What it provides
+## Why it is agent-native
 
-| Capability | What it does |
-|---|---|
-| **Built-in agent** | `cos agent setup/ask/chat`, desktop overlay, voice input |
-| **Structured primitives** | JSON-first commands for apps, files, system info, and browser reads |
-| **Scoped permissions** | Capability checks and approvals for risky actions |
-| **Checkpoints** | Snapshot, diff, and rollback file changes |
-| **Credentials and jobs** | Encrypted credential store and agent-native scheduling |
-| **Local inference** | `cos model` and `cos engine` manage on-device runtimes |
+Claw OS is built around the idea that an agent should not control a computer through fragile shell guesses alone. It gives the agent explicit operating-system interfaces:
+
+- **Structured primitives** — apps, files, browser reads, system info, package search, credentials, jobs, and model runtimes are exposed through predictable `cos` commands.
+- **Machine-readable results** — primitives return structured output so an agent can inspect state without scraping human UI.
+- **Scoped permissions** — risky actions go through capability checks and approvals instead of granting broad access by default.
+- **Checkpoints and rollback** — agent-made file changes can be snapshotted, diffed, and restored.
+- **Built-in agent entry points** — `cos agent setup`, `cos agent ask`, and `cos agent chat` are first-class OS commands.
+- **Local runtime support** — `cos model` and `cos engine` manage on-device inference where available.
 
 ## Quick Start
 
 Pick an entry point:
 
-| Target | Status |
-|---|---|
-| **WSL** | Recommended |
-| **Docker / OrbStack** | Recommended |
-| **Desktop / ISO / VM** | Experimental |
+- **WSL** — recommended
+- **Docker / OrbStack** — recommended
+- **Desktop / ISO / VM** — experimental
 
 ### WSL
 
@@ -74,8 +72,6 @@ cos agent setup                               # configure providers and credenti
 cos agent ask "find the largest files and tell me why"
 cos agent chat                                 # interactive REPL
 ```
-
-On the desktop, **Super+A** opens the Spotlight-style agent overlay; **Super+Shift+A** arms voice input.
 
 ## License
 
