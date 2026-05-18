@@ -4,9 +4,14 @@
   <img src="assets/brand/clawos-wordmark.png" alt="Claw OS" width="220">
 </p>
 
-The First Agent Native Operating System
+<p align="center"><strong>The first agent native operating system.</strong></p>
 
-Website: [xiaoyu-work.github.io/claw-os](https://xiaoyu-work.github.io/claw-os)
+<p align="center">
+  <a href="https://xiaoyu-work.github.io/claw-os"><img alt="Website" src="https://img.shields.io/badge/website-xiaoyu--work.github.io%2Fclaw--os-2563eb?style=flat-square"></a>
+  <a href="https://github.com/xiaoyu-work/claw-os/actions/workflows/build.yml"><img alt="Build" src="https://img.shields.io/github/actions/workflow/status/xiaoyu-work/claw-os/build.yml?branch=main&style=flat-square"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-1f7a3a?style=flat-square"></a>
+  <a href="https://github.com/xiaoyu-work/claw-os/releases"><img alt="Release" src="https://img.shields.io/github/v/release/xiaoyu-work/claw-os?include_prereleases&style=flat-square"></a>
+</p>
 
 Claw OS is a complete Linux-based environment designed for AI agents. It keeps the normal Linux system visible while adding structured OS primitives, scoped permissions, credentials, jobs, and local model runtime management through `cos`.
 
