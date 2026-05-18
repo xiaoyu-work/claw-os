@@ -161,7 +161,6 @@
             Bare Linux + a shell-wrapped LLM
           </div>
           <ul>
-            <li>Scrapes human UIs and pattern-matches log lines.</li>
             <li>Holds a wide <code>sudo</code> token; risky ops blend in with safe ones.</li>
             <li>Every call is unaudited — no journal, no redaction, no replay.</li>
             <li>Local model lifecycle, secrets, jobs each have ad-hoc tooling.</li>
@@ -174,7 +173,6 @@
             Claw OS
           </div>
           <ul>
-            <li>Structured <code>cos</code> primitives return JSON — no scraping.</li>
             <li>Every risky op is a typed capability and waits at an approval gate.</li>
             <li>Every call lands in an append-only journal — replayable, redacted.</li>
             <li>Models, engines, credentials, jobs are first-class kernel surfaces.</li>
