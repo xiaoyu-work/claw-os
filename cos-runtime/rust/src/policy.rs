@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{cos_call_json, BridgeError};
 
-/// Decision envelope returned by `cos perms check`. See
+/// Decision envelope returned by the hidden policy bridge. See
 /// `wire/v1/perms.schema.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Decision {
@@ -62,7 +62,7 @@ pub enum PolicyError {
 
 /// Scope passed to [`require`] / [`check`]. Exactly one variant
 /// corresponds to one `--path` / `--host` / `--name` / `--self` /
-/// `--wild` flag on `cos perms check`.
+/// `--wild` flag on the hidden policy bridge.
 #[derive(Debug, Clone)]
 pub enum Scope {
     Path(String),
@@ -107,14 +107,14 @@ pub fn require(verb: &str, scope: Scope) -> Result<(), PolicyError> {
 /// — handy when the app wants to surface a "would-be-denied" hint
 /// without aborting.
 pub fn check(verb: &str, scope: Scope) -> Result<Decision, PolicyError> {
-    let mut argv: Vec<OsString> = vec!["perms".into(), "check".into(), verb.into()];
+    let mut argv: Vec<OsString> = vec!["__policy".into(), "check".into(), verb.into()];
     argv.extend(scope.argv());
 
-    let value = cos_call_json("perms", verb, argv).map_err(PolicyError::from)?;
+    let value = cos_call_json("policy", verb, argv).map_err(PolicyError::from)?;
 
     if value.get("decision").is_none() {
         return Err(PolicyError::Unavailable(format!(
-            "cos perms check returned unrecognised envelope: {value}"
+            "policy check returned unrecognised envelope: {value}"
         )));
     }
 

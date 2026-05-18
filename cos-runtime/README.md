@@ -12,7 +12,7 @@ detail:
 
 | Module (Rust) | Module (Python) | Purpose |
 |---|---|---|
-| `cos_runtime::policy` | `cos_runtime.policy` | Shell out to `cos perms check` for self-gating capability enforcement |
+| `cos_runtime::policy` | `cos_runtime.policy` | Shell out to the hidden policy bridge for self-gating capability enforcement |
 | `cos_runtime::fs` | (not applicable) | Route every `fs.*` op through `cos app fs <verb>` so audit / snapshots / caps apply |
 | `cos_runtime::exec` | (not applicable) | Route every `exec.*` op through `cos app exec <verb>` |
 | `cos_runtime::pkg` | (not applicable) | Route `pkg.*` ops similarly |

@@ -297,7 +297,7 @@ where
 
 /// Invoke any `cos` sub-command and parse stdout (or stderr fall-back)
 /// as JSON. Used by [`ai`] and [`tools`] (and `cos-runtime`'s
-/// `policy`) for `cos ai ...`, `cos perms ...` etc.
+/// `policy`) for `cos ai ...`, hidden policy checks, etc.
 ///
 /// `family` and `verb` are surfaced in [`BridgeError`] variants when
 /// the call fails — pass any human-meaningful strings.

@@ -21,14 +21,14 @@ use base64::Engine as _;
 use cos_runtime::{BridgeError, call, exec, fs as bridge_fs};
 
 /// Format a [`BridgeError`] for end-user display. Permission denials
-/// from the kernel get a friendlier blurb that points the user at
-/// the cli grant flow; everything else falls back to the bridge's
-/// own `Display`.
+/// from the kernel get a friendlier blurb that points the user back
+/// to the Agent-mediated approval flow; everything else falls back to
+/// the bridge's own `Display`.
 pub fn user_message(err: &BridgeError) -> String {
     if err.is_denied() {
         format!(
             "This action requires permission ({err}). \
-             Run `cos perms grant …` or use `cos approve …` to allow it."
+             Ask the Agent to explain and approve the request in context."
         )
     } else {
         err.to_string()

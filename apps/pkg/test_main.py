@@ -34,7 +34,7 @@ from main import (  # noqa: E402
 
 
 def _allow_policy():
-    """Stub policy.require so tests don't shell out to `cos perms check`."""
+    """Stub policy.require so tests don't shell out to the policy bridge."""
     return mock.patch.object(main.policy, "require", lambda *a, **kw: None)
 
 

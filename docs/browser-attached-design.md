@@ -135,7 +135,7 @@ tools/
    can connect.
 
 3. **Socket client → kernel**: `main.py` runs every verb through
-   `policy.require()`, which shells to `cos perms check` over `COS_SESSION`,
+   `policy.require()`, which uses the hidden policy bridge over `COS_SESSION`,
    inheriting the kernel's permission decision.
 
 4. **Coarse gate**: invoking `cos app browser-attached` itself requires
@@ -151,7 +151,7 @@ tools/
 
 ## Known MVP limitations
 
-- **Session attachment for `cos perms check`**: Chromium spawns the native
+- **Session attachment for policy checks**: Chromium spawns the native
   host without `COS_SESSION` set; the Python verb handlers run inside the
   user's normal cos session (because `cos app browser-attached` is invoked
   by the agent).  No change needed there, but the *bridge itself* runs

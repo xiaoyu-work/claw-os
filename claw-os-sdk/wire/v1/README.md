@@ -53,8 +53,8 @@ be added in v1; existing codes keep their meaning.
 
 > **Compatibility note.** The current `cos` binary (kernel v0.3.x) does
 > **not** yet wrap its replies in this `{ok, data}` shape — each
-> sub-command returns its own ad-hoc envelope (e.g. `cos perms check`
-> returns `{"decision": "allow"|"deny", …}`). The v1 wrapping is the
+> sub-command returns its own ad-hoc envelope (e.g. policy checks return
+> `{"decision": "allow"|"deny", …}`). The v1 wrapping is the
 > *target* protocol; SDKs read the existing flat shape and normalise
 > it through `envelope.rs` / `envelope.py` etc. so user code already
 > sees the v1 surface. The kernel will be migrated to emit v1 wrappings
@@ -62,9 +62,9 @@ be added in v1; existing codes keep their meaning.
 
 ## Request families
 
-| Family   | CLI form                                | Schema                  |
+| Family   | Route                                   | Schema                  |
 |----------|-----------------------------------------|-------------------------|
-| `perms`  | `cos perms check <verb> [--scope ...]`  | `perms.schema.json`     |
+| `policy` | internal capability check              | `perms.schema.json`     |
 | `ai`     | `cos ai chat --app <id> [...] `         | `ai.schema.json`        |
 | `tool`   | `cos ai tool <name> --app <id> --args <json>` | `tool.schema.json` |
 | `app`    | `cos app <id> <verb> [...]`             | `app.schema.json`       |

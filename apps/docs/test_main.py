@@ -59,7 +59,7 @@ exit "${RECOLLINDEX_EXIT:-0}"
 
 
 _COS_STUB = r"""#!/bin/sh
-# Permissive stub used in tests — every `cos perms check` returns allow.
+# Permissive stub used in tests — every policy check returns allow.
 case "$2" in
   check)
     echo '{"decision":"allow"}'

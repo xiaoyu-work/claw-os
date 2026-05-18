@@ -1,7 +1,7 @@
 //! Common envelope handling for wire v1 replies.
 //!
-//! Today the kernel emits flat per-command shapes — `cos perms check`
-//! returns `{ "decision": "...", "verb": "..." }`, `cos ai chat`
+//! Today the kernel emits flat per-command shapes — policy checks return
+//! `{ "decision": "...", "verb": "..." }`, `cos ai chat`
 //! returns `{ "text": "...", "model": "...", ... }`, and the few
 //! errors that escape the app dispatcher are `{ "error": "...", "code": "..." }`.
 //!

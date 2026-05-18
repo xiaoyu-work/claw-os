@@ -32,7 +32,7 @@ You are running on Claw OS. All commands return structured JSON.
 | `cos_trace` | Execution tracing — tree-structured observability ([details](trace.md)) |
 | `cos_browser` | Standalone CDP server lifecycle for external Puppeteer/Playwright clients (the `web` app already uses cos-browser per-request and does not need this) |
 
-Permission roles and the `cos perms check` app gate are documented in [permissions.md](permissions.md).
+Permission roles and app capability gates are documented in [permissions.md](permissions.md).
 
 **Apps** — `cos app <name> <command>` ([all apps](apps.md)):
 

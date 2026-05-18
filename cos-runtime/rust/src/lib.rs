@@ -12,9 +12,9 @@
 //! and the cosmic-desktop binaries under `desktop/*` is routed through
 //! one of these modules:
 //!
-//! | Module        | Wire family | Equivalent CLI             |
+//! | Module        | Wire family | Equivalent route           |
 //! |---------------|-------------|----------------------------|
-//! | [`policy`]    | `perms`     | `cos perms check / grant`  |
+//! | [`policy`]    | `policy`    | hidden policy bridge       |
 //! | [`fs`]        | `app`       | `cos app fs ...`           |
 //! | [`exec`]      | `app`       | `cos app exec ...`         |
 //! | [`pkg`]       | `app`       | `cos app pkg ...`          |

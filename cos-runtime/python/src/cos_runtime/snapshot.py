@@ -8,10 +8,9 @@ target path written under
 ``meta.json`` sidecar that records the original path, the operation
 that triggered the snapshot, and the timestamp.
 
-``cos perms undo <session_id>`` later walks the directory in reverse
-order and replays each entry — restoring the snapshotted bytes to the
-recorded path (or, for the "absent" case, deleting whatever was put
-there).
+The session rollback engine later walks the directory in reverse order
+and replays each entry — restoring the snapshotted bytes to the recorded
+path (or, for the "absent" case, deleting whatever was put there).
 
 The contract here is intentionally simple so a future move to
 btrfs / ZFS reflink can replace the bytes-on-disk implementation
@@ -44,8 +43,8 @@ exists at ``$COS_DATA_DIR/sessions/<sid>/`` with a ``meta.json`` —
 every snapshot is **also** mirrored into the durable session's
 ``mutations.jsonl`` log + ``files/inverse/<blob_id>.bin`` blob store.
 This is the cross-runtime contract the Rust kernel reads from
-``cos perms undo`` (which then routes through
-``core/src/session/rollback.rs``) and the future ``cos-apid`` socket.
+``cos agent undo`` (which routes through ``core/src/session/rollback.rs``)
+and the future ``cos-apid`` socket.
 
 The Python and Rust sides agree purely through the file format — see
 ``core/src/session/{mutation,recorder,inverse}.rs`` for the shapes.
@@ -263,7 +262,7 @@ def _mirror_to_durable_session(
 ) -> None:
     """If ``session_id`` points at a durable session, append the
     matching ``Mutation::{FsWrite,FsDelete}`` record (and its inverse
-    blob, if needed) so ``cos perms undo`` can replay it via the Rust
+    blob, if needed) so session rollback can replay it via the Rust
     rollback engine.
 
     Best-effort: any IO failure is swallowed with a warning printed to
@@ -338,7 +337,7 @@ def _mirror_to_durable_session(
             file=sys.stderr,
         )
         # Leave a marker in the session dir so a later validator
-        # (or `cos perms undo`) can surface the inconsistency
+        # (or session rollback) can surface the inconsistency
         # instead of silently lying about the rollback path.
         try:
             sd = _durable_session_dir(session_id)
@@ -435,7 +434,7 @@ def snapshot(path: str, op: str, *, session_id: Optional[str] = None) -> Optiona
 
     # Also mirror the snapshot into the durable session log if the sid
     # names one. Best-effort; the trash dir is still authoritative for
-    # the legacy CLI undo path.
+    # local rollback recovery.
     _mirror_to_durable_session(sid, op, abs_path, kind)
 
     return entry_dir
@@ -452,9 +451,8 @@ def snapshot_pair(src: str, dst: str, op: str, *, session_id: Optional[str] = No
 
 
 # ---------------------------------------------------------------------------
-# Replay / undo (called from Rust via `cos perms undo` — kept here so
-# both the Python apps and the Rust kernel agree on the directory
-# layout)
+# Replay / undo helpers. Kept here so both the Python apps and the
+# Rust kernel agree on the directory layout.
 # ---------------------------------------------------------------------------
 
 

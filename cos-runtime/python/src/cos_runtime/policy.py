@@ -3,7 +3,7 @@
 Every Python app should import this module and call ``policy.require()``
 at the top of every operation that touches files, the network,
 secrets, or anything else the kernel knows how to gate. The helper
-shells out to ``cos perms check`` — the kernel's authoritative
+shells out to the hidden policy bridge — the kernel's authoritative
 enforcement entry point — so the answer here is exactly the same as
 the answer the Rust side would give.
 
@@ -25,7 +25,7 @@ Why a subprocess and not an in-process check?
 The Python app already runs inside a process the kernel spawned with
 ``COS_SESSION`` set, so the subprocess call inherits the session and
 PID-ancestry context the kernel needs to validate the request.
-Centralising the decision in ``cos perms check`` keeps the Python
+Centralising the decision in the hidden policy bridge keeps the Python
 helper tiny, removes any risk of the rules drifting between Rust and
 Python, and gives audit / logging a single chokepoint.
 """
@@ -39,7 +39,7 @@ import subprocess
 from typing import Any, Mapping, Optional
 
 
-# Subprocess timeout for every shell-out to `cos perms check`. A hung
+# Subprocess timeout for every shell-out to the hidden policy bridge. A hung
 # child translates to PolicyUnavailable, which the caller can decide
 # to treat as deny or warn-and-continue.
 _DEFAULT_TIMEOUT_S = 60
@@ -65,7 +65,7 @@ class PermissionDenied(PolicyError):
     """The kernel refused the requested capability.
 
     ``denial`` holds the structured envelope returned by
-    ``cos perms check`` — verb, requested scope, granted scopes,
+    policy bridge — verb, requested scope, granted scopes,
     reason, hint — and is suitable for forwarding straight back to
     the caller as JSON.
     """
@@ -132,7 +132,7 @@ def check(
     raising. Useful when an app wants to surface a "would-be-denied"
     notice without aborting.
     """
-    cmd = [_cos_binary(), "perms", "check", verb]
+    cmd = [_cos_binary(), "__policy", "check", verb]
     cmd.extend(_scope_flag(path=path, host=host, name=name, self_ref=self_ref, wild=wild))
 
     try:
@@ -145,7 +145,7 @@ def check(
         )
     except subprocess.TimeoutExpired as exc:
         raise PolicyUnavailable(
-            f"cos perms check timed out after {_DEFAULT_TIMEOUT_S}s"
+            f"policy check timed out after {_DEFAULT_TIMEOUT_S}s"
         ) from exc
 
     # The router prints JSON to stdout on success and to stderr on
@@ -153,13 +153,13 @@ def check(
     payload = (proc.stdout or "").strip() or (proc.stderr or "").strip()
     if not payload:
         raise PolicyUnavailable(
-            f"cos perms check returned no output (exit {proc.returncode})"
+            f"policy check returned no output (exit {proc.returncode})"
         )
     try:
         decision = json.loads(payload)
     except json.JSONDecodeError as exc:
         raise PolicyUnavailable(
-            f"cos perms check returned non-JSON output: {_truncate(payload)}"
+            f"policy check returned non-JSON output: {_truncate(payload)}"
         ) from exc
 
     # A non-zero exit code is always a transport failure even when
@@ -168,12 +168,12 @@ def check(
     # crashing kernel is the textbook fail-open vulnerability.
     if proc.returncode != 0:
         raise PolicyUnavailable(
-            f"cos perms check exited {proc.returncode}: {_truncate(payload)}"
+            f"policy check exited {proc.returncode}: {_truncate(payload)}"
         )
 
     if "decision" not in decision:
         raise PolicyUnavailable(
-            f"cos perms check returned an unrecognised envelope: {_truncate(decision)}"
+            f"policy check returned an unrecognised envelope: {_truncate(decision)}"
         )
     return decision
 

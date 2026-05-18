@@ -255,7 +255,7 @@ pub fn agent_audit_log_path() -> PathBuf {
 /// Path to the structured capability-decision log. JSONL — one
 /// record per `caps::require` call (both allows and denials), with
 /// session id, agent label, verb, scope, decision, reason, and the
-/// resolved target resource. Powers `cos perms history`.
+/// resolved target resource. Powers Agent-facing permission history.
 ///
 /// Lives at `log_dir()/caps.jsonl`. Set `COS_CAPS_AUDIT=0` to
 /// suppress writing entirely (used by hot-path tests).

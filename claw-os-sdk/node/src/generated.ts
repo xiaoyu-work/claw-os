@@ -141,7 +141,7 @@ export interface Caprequest {
 
 /**
  * Permissions request / reply.
- * Shape of the success-path data field returned by `cos perms check`. Apps
+ * Shape of the success-path data field returned by policy checks. Apps
  * call this via SDK helpers (e.g. cos_runtime.policy.check).
  */
 export interface Perms {
@@ -164,4 +164,3 @@ export interface Tool {
   result?: unknown;
   audit_id?: string;
 }
-
