@@ -375,10 +375,12 @@ pre {
           <span class="dot"></span><span class="dot"></span><span class="dot"></span>
         </div>
         <div class="terminal">
-          <div class="terminal-line"><span class="prompt">$</span><span>cos agent ask "prepare this workspace"</span></div>
-          <div class="terminal-line answer"><span></span><span>Plan ready. No files changed.</span></div>
-          <div class="terminal-line"><span class="prompt">$</span><span>cos checkpoint diff</span></div>
-          <div class="terminal-line answer"><span></span><span>No changes yet.</span></div>
+          <div class="terminal-line"><span class="prompt">$</span><span>cos agent ask "update the README and keep rollback ready"</span></div>
+          <div class="terminal-line answer"><span></span><span>Created checkpoint "before-readme-update".</span></div>
+          <div class="terminal-line answer"><span></span><span>Edited README.md after fs.write approval.</span></div>
+          <div class="terminal-line"><span class="prompt">$</span><span>cos checkpoint diff before-readme-update</span></div>
+          <div class="terminal-line answer"><span></span><span>README.md +24 -9</span></div>
+          <div class="terminal-line answer"><span></span><span>Rollback: cos checkpoint restore before-readme-update</span></div>
         </div>
       </div>
     </section>
