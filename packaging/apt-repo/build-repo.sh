@@ -31,6 +31,7 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 DEBS_DIR="$PROJECT_DIR/build/debs"
 REPO_DIR="$PROJECT_DIR/build/apt-repo"
+BRAND_ASSETS_DIR="$PROJECT_DIR/assets/brand"
 SUITE="${SUITE:-trixie}"
 COMPONENT="main"
 GPG_KEY_ID="${GPG_KEY_ID:-}"
@@ -76,6 +77,10 @@ for a in "${binary_arches[@]}"; do
     mkdir -p "$REPO_DIR/dists/$SUITE/$COMPONENT/binary-$a"
 done
 mkdir -p "$REPO_DIR/dists/$SUITE/$COMPONENT/binary-all"
+mkdir -p "$REPO_DIR/assets/brand"
+cp "$BRAND_ASSETS_DIR/clawos-wordmark.png" \
+   "$BRAND_ASSETS_DIR/clawos-favicon-64.png" \
+   "$REPO_DIR/assets/brand/"
 
 # Move each .deb into pool/main/c/<package-name>/.
 for deb in "$DEBS_DIR"/*.deb; do
@@ -151,6 +156,7 @@ fi
 <meta name="color-scheme" content="light">
 <meta name="description" content="Claw OS is The First Agent Native Operating System: structured OS primitives, scoped permissions, checkpoints, rollback, and a built-in agent.">
 <title>Claw OS - The First Agent Native Operating System</title>
+<link rel="icon" type="image/png" href="assets/brand/clawos-favicon-64.png">
 <style>
 :root {
   --bg: #fff;
@@ -206,16 +212,8 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospac
   backdrop-filter: saturate(180%) blur(18px);
 }
 .nav-inner { height: 64px; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
-.brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 650; letter-spacing: -.02em; }
-.mark {
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
-  background:
-    radial-gradient(circle at 68% 28%, var(--blue) 0 4px, transparent 4px),
-    linear-gradient(135deg, #000 0 42%, #171717 42% 100%);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .18);
-}
+.brand { display: inline-flex; align-items: center; }
+.brand-logo { display: block; width: 118px; height: auto; }
 .nav-links { display: flex; align-items: center; gap: 22px; color: var(--muted); font-size: 14px; }
 .nav-links a:hover { color: var(--ink); }
 .nav-cta {
@@ -232,6 +230,7 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospac
 }
 
 .hero { padding: 86px 0 74px; text-align: center; }
+.hero-logo { display: block; width: min(210px, 58vw); height: auto; margin: 0 auto 22px; }
 .eyebrow {
   display: inline-flex;
   align-items: center;
@@ -497,8 +496,7 @@ pre {
   <header class="nav">
     <div class="container nav-inner">
       <a class="brand" href="#">
-        <span class="mark" aria-hidden="true"></span>
-        <span>Claw OS</span>
+        <img class="brand-logo" src="assets/brand/clawos-wordmark.png" alt="Claw OS">
       </a>
       <nav class="nav-links" aria-label="Primary">
         <a href="#features">Features</a>
@@ -514,6 +512,7 @@ pre {
   <main>
     <section class="hero">
       <div class="container">
+        <img class="hero-logo" src="assets/brand/clawos-wordmark.png" alt="Claw OS">
         <div class="eyebrow"><span class="pulse"></span> Linux, redesigned for agentic work</div>
         <h1><span class="line">The First Agent Native</span><span class="line gradient-text">Operating System</span></h1>
         <p class="lead">Claw OS exposes apps, files, browser sessions, credentials, jobs, permissions, and rollback as structured primitives that a built-in agent can use safely.</p>
