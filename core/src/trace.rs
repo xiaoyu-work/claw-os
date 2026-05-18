@@ -13,8 +13,7 @@ use std::path::PathBuf;
 use crate::caps::{require_or_json, Scope, Verb};
 
 fn traces_dir() -> PathBuf {
-    PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
-        .join("traces")
+    crate::paths::data_dir().join("traces")
 }
 
 fn trace_path(trace_id: &str) -> PathBuf {
@@ -22,7 +21,7 @@ fn trace_path(trace_id: &str) -> PathBuf {
 }
 
 fn audit_path() -> PathBuf {
-    PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
+    crate::paths::data_dir()
         .join("logs")
         .join("audit.jsonl")
 }

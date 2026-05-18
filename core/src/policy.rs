@@ -29,7 +29,7 @@ struct Registry {
 }
 
 fn proc_registry_path() -> PathBuf {
-    PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
+    crate::paths::data_dir()
         .join("proc")
         .join("registry.json")
 }

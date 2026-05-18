@@ -40,8 +40,7 @@ fn ws_url() -> String {
 }
 
 fn data_dir() -> PathBuf {
-    PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
-        .join("browser")
+    crate::paths::data_dir().join("browser")
 }
 
 fn pid_path() -> PathBuf {

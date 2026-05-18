@@ -26,7 +26,7 @@ fn apps_dir() -> PathBuf {
 }
 
 fn data_dir() -> String {
-    env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into())
+    crate::paths::data_dir().to_string_lossy().into_owned()
 }
 
 fn audit_path() -> PathBuf {

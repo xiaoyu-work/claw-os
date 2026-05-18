@@ -207,7 +207,7 @@ mod inotify_impl {
 // ---------------------------------------------------------------------------
 
 fn data_dir() -> PathBuf {
-    PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
+    crate::paths::data_dir()
 }
 
 // ---------------------------------------------------------------------------
@@ -1131,10 +1131,9 @@ fn watch_service_health_fail(args: &[String], timeout: u64) -> Result<Value, Str
 }
 
 fn watch_checkpoint_created(args: &[String], timeout: u64) -> Result<Value, String> {
-    let overlay_dir =
-        PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
-            .join("overlay")
-            .join("checkpoints");
+    let overlay_dir = crate::paths::data_dir()
+        .join("overlay")
+        .join("checkpoints");
 
     // Snapshot current checkpoint count
     let initial_count = if overlay_dir.exists() {

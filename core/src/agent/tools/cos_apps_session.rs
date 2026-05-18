@@ -473,7 +473,7 @@ fn apps_root() -> PathBuf {
 }
 
 fn data_dir_string() -> String {
-    std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into())
+    crate::paths::data_dir().to_string_lossy().into_owned()
 }
 
 /// Environment variables an app-session child needs at a minimum:

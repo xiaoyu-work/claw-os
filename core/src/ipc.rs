@@ -12,8 +12,7 @@ use std::path::PathBuf;
 use crate::caps::{require_or_json, Scope, Verb};
 
 fn ipc_dir() -> PathBuf {
-    PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
-        .join("ipc")
+    crate::paths::data_dir().join("ipc")
 }
 
 fn session_queue_dir(session_id: &str) -> PathBuf {

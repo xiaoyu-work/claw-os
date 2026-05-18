@@ -40,8 +40,7 @@ use crate::caps::{require_or_json, Scope, Verb};
 // ---------------------------------------------------------------------------
 
 fn overlay_dir() -> PathBuf {
-    PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
-        .join("overlay")
+    crate::paths::data_dir().join("overlay")
 }
 
 fn workspace_dir() -> PathBuf {
@@ -1055,8 +1054,7 @@ pub fn check_quota(additional_bytes: u64) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 fn namespace_base_dir() -> PathBuf {
-    PathBuf::from(std::env::var("COS_DATA_DIR").unwrap_or_else(|_| "/var/lib/cos".into()))
-        .join("overlay-namespaces")
+    crate::paths::data_dir().join("overlay-namespaces")
 }
 
 /// List all overlay namespaces.
