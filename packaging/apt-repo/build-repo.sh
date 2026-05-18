@@ -155,7 +155,7 @@ fi
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light">
-<meta name="description" content="Claw OS is The First Agent Native Operating System: structured OS primitives, scoped permissions, checkpoints, rollback, and a built-in agent.">
+<meta name="description" content="Claw OS is The First Agent Native Operating System, a minimal headless Linux environment built for AI agents.">
 <title>Claw OS - The First Agent Native Operating System</title>
 <link rel="icon" type="image/png" href="assets/brand/clawos-favicon-64.png">
 <style>
@@ -232,26 +232,6 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospac
 
 .hero { padding: 86px 0 74px; text-align: center; }
 .hero-logo { display: block; width: min(210px, 58vw); height: auto; margin: 0 auto 22px; }
-.eyebrow {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  height: 32px;
-  padding: 0 12px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  color: #444;
-  background: rgba(255, 255, 255, .72);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, .04);
-  font-size: 13px;
-}
-.pulse {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: var(--blue);
-  box-shadow: 0 0 0 5px rgba(0, 92, 254, .12);
-}
 h1 {
   max-width: 1120px;
   margin: 26px auto 0;
@@ -408,32 +388,6 @@ h2 { margin: 8px 0 0; font-size: clamp(34px, 5vw, 64px); line-height: .98; lette
 .feature-card h3 { margin: 0 0 10px; font-size: 22px; letter-spacing: -.03em; }
 .feature-card p { margin: 0; color: var(--muted); line-height: 1.55; }
 
-.architecture {
-  border: 1px solid var(--line);
-  border-radius: 28px;
-  background: #050505;
-  color: #fff;
-  overflow: hidden;
-  box-shadow: 0 28px 90px rgba(0, 0, 0, .18);
-}
-.architecture-grid { display: grid; grid-template-columns: .95fr 1.05fr; }
-.architecture-copy { padding: 38px; }
-.architecture-copy p { color: rgba(255, 255, 255, .62); line-height: 1.6; font-size: 17px; }
-.flow { padding: 30px; border-left: 1px solid rgba(255, 255, 255, .12); background: radial-gradient(circle at 80% 10%, rgba(0, 92, 254, .28), transparent 24rem); }
-.flow-step {
-  display: flex;
-  gap: 16px;
-  align-items: flex-start;
-  padding: 18px;
-  border: 1px solid rgba(255, 255, 255, .12);
-  border-radius: 18px;
-  background: rgba(255, 255, 255, .045);
-  margin-bottom: 12px;
-}
-.flow-num { width: 28px; height: 28px; border-radius: 999px; background: #fff; color: #000; display: grid; place-items: center; font-weight: 700; font-size: 13px; flex: 0 0 auto; }
-.flow-step strong { display: block; margin-bottom: 5px; }
-.flow-step span { color: rgba(255, 255, 255, .58); line-height: 1.45; }
-
 .install-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
 .install-card {
   border: 1px solid var(--line);
@@ -455,26 +409,6 @@ pre {
   font-size: 13px;
   line-height: 1.6;
 }
-.indexes { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
-.index-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 9px 12px;
-  color: #333;
-  background: #fff;
-  font-size: 13px;
-}
-.index-link::before {
-  content: "";
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
-  background: var(--green);
-}
-
 .footer { border-top: 1px solid var(--line); padding: 34px 0; color: var(--muted); font-size: 14px; }
 .footer-inner { display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
 
@@ -483,7 +417,7 @@ pre {
   .hero { padding-top: 62px; }
   h1 { font-size: clamp(42px, 13vw, 70px); letter-spacing: -.055em; }
   h1 .line { white-space: normal; }
-  .hero-grid, .architecture-grid, .install-grid { grid-template-columns: 1fr; }
+  .hero-grid, .install-grid { grid-template-columns: 1fr; }
   .cards { grid-template-columns: 1fr; }
   .feature-card.wide { grid-column: auto; }
   .section-head { display: block; }
@@ -501,9 +435,7 @@ pre {
       </a>
       <nav class="nav-links" aria-label="Primary">
         <a href="#features">Features</a>
-        <a href="#architecture">Architecture</a>
         <a href="#install">Install</a>
-        <a href="#apt">APT repo</a>
         <a href="https://github.com/xiaoyu-work/claw-os">GitHub</a>
       </nav>
       <a class="nav-cta" href="#install">Get started</a>
@@ -514,44 +446,11 @@ pre {
     <section class="hero">
       <div class="container">
         <img class="hero-logo" src="assets/brand/clawos-wordmark.png" alt="Claw OS">
-        <div class="eyebrow"><span class="pulse"></span> Linux, redesigned for agentic work</div>
         <h1><span class="line">The First Agent Native</span><span class="line gradient-text">Operating System</span></h1>
-        <p class="lead">Claw OS exposes apps, files, browser sessions, credentials, jobs, permissions, and rollback as structured primitives that a built-in agent can use safely.</p>
+        <p class="lead">A minimal Linux environment built for AI agents.</p>
         <div class="actions">
           <a class="button primary" href="#install">Install Claw OS</a>
           <a class="button" href="https://github.com/xiaoyu-work/claw-os">View on GitHub</a>
-        </div>
-      </div>
-    </section>
-
-    <section class="container" aria-label="Product preview">
-      <div class="product-shell">
-        <div class="product-topbar">
-          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-          <span class="topbar-title">headless cos runtime</span>
-        </div>
-        <div class="hero-grid">
-          <div class="panel terminal">
-            <div class="terminal-line"><span class="prompt">$</span><span>cos checkpoint create "clean state"</span></div>
-            <div class="terminal-line"><span class="prompt">$</span><span>cos app web read https://example.com <span class="muted"># Markdown in, JSON out</span></span></div>
-            <div class="terminal-line"><span class="prompt">$</span><span>cos agent ask "find risky changes and explain rollback options"</span></div>
-            <div class="terminal-line"><span class="muted">-></span><span>Inspected 47 files, requested one scoped write approval, and prepared a rollback checkpoint.</span></div>
-          </div>
-          <div class="panel">
-            <div class="primitive-card">
-              <div class="primitive-title">
-                <span>Headless Linux runtime</span>
-                <span class="badge">WSL / Docker</span>
-              </div>
-              <div class="primitive-message">A Linux environment designed for agents to inspect, reason, execute, and roll back through structured <strong>cos</strong> APIs.</div>
-              <div class="primitive-list">
-                <div class="mini"><strong>WSL first</strong><span>Import a rootfs and run Claw OS beside your existing Windows workflow.</span></div>
-                <div class="mini"><strong>Container ready</strong><span>Run the same headless OS surface in Docker or OrbStack.</span></div>
-                <div class="mini"><strong>APT updates</strong><span>Keep core Claw OS packages upgraded from GitHub Pages.</span></div>
-                <div class="mini"><strong>Structured primitives</strong><span>Expose files, browser reads, packages, jobs, and system state as JSON.</span></div>
-              </div>
-            </div>
-          </div>
         </div>
       </div>
     </section>
@@ -560,62 +459,32 @@ pre {
       <div class="container">
         <div class="section-head">
           <div>
-            <div class="kicker">Agent-native platform</div>
-            <h2>Your computer, exposed as safe primitives.</h2>
+            <div class="kicker">Core ideas</div>
+            <h2>What makes it agent native.</h2>
           </div>
-          <p class="section-copy">Vercel-style simplicity for an operating system: one clear surface for the agent, structured outputs for apps, and explicit control for the user.</p>
+          <p class="section-copy">One section, one pass over the product.</p>
         </div>
         <div class="cards">
-          <article class="feature-card wide">
+          <article class="feature-card">
             <div class="icon">01</div>
-            <h3>Structured OS primitives</h3>
-            <p>Use JSON-first commands for apps, files, system info, package search, browser reads, web fetches, notifications, and more.</p>
+            <h3>Headless Linux</h3>
+            <p>Run without a desktop session.</p>
           </article>
           <article class="feature-card">
             <div class="icon">02</div>
-            <h3>Built-in agent</h3>
-            <p>Ask from the terminal and let the agent operate through structured headless Linux primitives.</p>
+            <h3>Structured control</h3>
+            <p>Expose operating-system actions through predictable <code>cos</code> commands and JSON output.</p>
           </article>
           <article class="feature-card">
             <div class="icon">03</div>
-            <h3>Scoped approvals</h3>
-            <p>Risky actions are checked against capability scopes before execution, so the agent cannot silently widen access.</p>
+            <h3>Scoped execution</h3>
+            <p>Gate risky actions with explicit capability checks and approvals.</p>
           </article>
           <article class="feature-card">
             <div class="icon">04</div>
-            <h3>Checkpoints</h3>
-            <p>Create snapshots, inspect diffs, and roll back file changes after agent work.</p>
+            <h3>Reversible work</h3>
+            <p>Use checkpoints to inspect and roll back agent-made file changes.</p>
           </article>
-          <article class="feature-card wide">
-            <div class="icon">05</div>
-            <h3>Apps with AI boundaries</h3>
-            <p>Third-party apps call models through <code>cos ai chat</code> and execute tools through <code>cos ai tool</code>, keeping AI activity identity-pinned and audited.</p>
-          </article>
-          <article class="feature-card">
-            <div class="icon">06</div>
-            <h3>Local runtime</h3>
-            <p><code>cos model</code> and <code>cos engine</code> manage on-device inference where available.</p>
-          </article>
-        </div>
-      </div>
-    </section>
-
-    <section id="architecture" class="section">
-      <div class="container">
-        <div class="architecture">
-          <div class="architecture-grid">
-            <div class="architecture-copy">
-              <div class="kicker">Trust architecture</div>
-              <h2>Security, audit, and rollback included.</h2>
-              <p>Claw OS is not a chatbot bolted onto Linux. It is a Linux-based environment where the agent talks to the computer through explicit OS contracts.</p>
-            </div>
-            <div class="flow">
-              <div class="flow-step"><span class="flow-num">1</span><div><strong>Identity is pinned</strong><span>Apps inherit identity from the OS-spawned process tree.</span></div></div>
-              <div class="flow-step"><span class="flow-num">2</span><div><strong>Capabilities are checked</strong><span>Tools bind to verbs and scopes before any side effect.</span></div></div>
-              <div class="flow-step"><span class="flow-num">3</span><div><strong>Activity is audited</strong><span>Model calls and tool executions are recorded as structured events.</span></div></div>
-              <div class="flow-step"><span class="flow-num">4</span><div><strong>Changes can roll back</strong><span>Checkpoints make agent work inspectable and reversible.</span></div></div>
-            </div>
-          </div>
         </div>
       </div>
     </section>
@@ -625,9 +494,9 @@ pre {
         <div class="section-head">
           <div>
             <div class="kicker">Install</div>
-            <h2>Start with WSL or Docker.</h2>
+            <h2>Install Claw OS.</h2>
           </div>
-          <p class="section-copy">WSL and Docker are the recommended entry points today. Desktop, ISO, and VM images are experimental.</p>
+          <p class="section-copy">Desktop, ISO, and VM images are experimental.</p>
         </div>
         <div class="install-grid">
           <article class="install-card">
@@ -639,39 +508,11 @@ wsl -d claw-os</code></pre>
           </article>
           <article class="install-card">
             <h3>Docker</h3>
-            <p>Run the headless Claw OS environment in a container.</p>
+            <p>Run Claw OS in a container.</p>
             <pre><code>docker pull ghcr.io/xiaoyu-work/claw-os:latest
 docker run -d --name claw --privileged ghcr.io/xiaoyu-work/claw-os
 docker exec -it --user cos claw bash --login</code></pre>
           </article>
-        </div>
-      </div>
-    </section>
-
-    <section id="apt" class="section">
-      <div class="container">
-        <div class="section-head">
-          <div>
-            <div class="kicker">APT repository</div>
-            <h2>Packages stay on the same GitHub Pages URL.</h2>
-          </div>
-          <p class="section-copy">This website is served beside the Debian repository. Existing APT clients still fetch <code>/dists</code> and <code>/pool</code> from the same base URL.</p>
-        </div>
-        <div class="install-card">
-          <h3>Add the repo</h3>
-<pre>
-echo "deb [trusted=yes] https://xiaoyu-work.github.io/claw-os $SUITE $COMPONENT" \\
-  | sudo tee /etc/apt/sources.list.d/claw-os.list
-sudo apt update
-sudo apt install claw-os-base
-</pre>
-          <div class="indexes" aria-label="Available package indexes">
-EOF
-    for a in "${binary_arches[@]}" all; do
-        echo "            <a class=\"index-link\" href=\"dists/$SUITE/$COMPONENT/binary-$a/Packages\">binary-$a / Packages</a>"
-    done
-    cat <<EOF
-          </div>
         </div>
       </div>
     </section>
@@ -680,7 +521,7 @@ EOF
   <footer class="footer">
     <div class="container footer-inner">
       <span>Claw OS - The First Agent Native Operating System</span>
-      <span><a href="https://github.com/xiaoyu-work/claw-os">GitHub</a> / <a href="dists/$SUITE/Release">Release metadata</a> / architectures: $arch_list</span>
+      <span><a href="https://github.com/xiaoyu-work/claw-os">GitHub</a></span>
     </div>
   </footer>
 </div>
