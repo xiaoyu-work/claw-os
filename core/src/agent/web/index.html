@@ -1,0 +1,1923 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>claw-os agent</title>
+
+    <!--
+      Styling is a direct port of the open-agents web UI:
+        apps/web/app/globals.css                 — oklch color tokens
+        apps/web/components/tool-call/           — collapsible tool cards
+        apps/web/components/inbox-sidebar.tsx    — sidebar shell
+        apps/web/components/session-drawer.tsx   — session list rows
+        apps/web/components/thinking-block.tsx   — collapsible reasoning
+      Only the bits that map onto cos-agent data survived the port.
+    -->
+
+    <link
+      rel="preconnect"
+      href="https://fonts.googleapis.com"
+      crossorigin />
+    <link
+      rel="preconnect"
+      href="https://fonts.gstatic.com"
+      crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Geist:wght@300..700&family=Geist+Mono:wght@300..600&display=swap"
+      rel="stylesheet" />
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <script>
+      // Tailwind theme — mirrors the oklch tokens from
+      // open-agents/apps/web/app/globals.css (.dark block).
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ["Geist", "ui-sans-serif", "system-ui", "sans-serif"],
+              mono: ["Geist Mono", "ui-monospace", "monospace"],
+            },
+            colors: {
+              background: "oklch(0.141 0.005 285.823)",
+              foreground: "oklch(0.985 0 0)",
+              card: "oklch(0.21 0.006 285.885)",
+              "card-foreground": "oklch(0.985 0 0)",
+              popover: "oklch(0.21 0.006 285.885)",
+              "popover-foreground": "oklch(0.985 0 0)",
+              primary: "oklch(0.92 0.004 286.32)",
+              "primary-foreground": "oklch(0.21 0.006 285.885)",
+              secondary: "oklch(0.274 0.006 286.033)",
+              "secondary-foreground": "oklch(0.985 0 0)",
+              muted: "oklch(0.274 0.006 286.033)",
+              "muted-foreground": "oklch(0.705 0.015 286.067)",
+              accent: "oklch(0.304 0.006 286.033)",
+              "accent-foreground": "oklch(0.985 0 0)",
+              destructive: "oklch(0.704 0.191 22.216)",
+              border: "rgba(255,255,255,0.10)",
+              input: "rgba(255,255,255,0.15)",
+              ring: "oklch(0.552 0.016 285.938)",
+              sidebar: "oklch(0.21 0.006 285.885)",
+              "sidebar-foreground": "oklch(0.985 0 0)",
+              "sidebar-accent": "oklch(0.274 0.006 286.033)",
+              "sidebar-accent-foreground": "oklch(0.985 0 0)",
+              "sidebar-border": "rgba(255,255,255,0.10)",
+              "sidebar-active": "oklch(0.274 0.006 286.033)",
+            },
+          },
+        },
+      };
+    </script>
+    <style>
+      html,
+      body {
+        background: oklch(0.141 0.005 285.823);
+        color: oklch(0.985 0 0);
+        font-family: "Geist", ui-sans-serif, system-ui, sans-serif;
+      }
+      pre,
+      code {
+        font-family: "Geist Mono", ui-monospace, monospace;
+      }
+      /* Scrollbar — flat dark to match shadcn defaults */
+      ::-webkit-scrollbar {
+        width: 10px;
+        height: 10px;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.08);
+        border-radius: 8px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: rgba(255, 255, 255, 0.16);
+      }
+      /* Markdown */
+      .prose-msg p {
+        margin: 0.35rem 0;
+      }
+      .prose-msg ul,
+      .prose-msg ol {
+        margin: 0.35rem 0;
+        padding-left: 1.2rem;
+      }
+      .prose-msg ul {
+        list-style: disc;
+      }
+      .prose-msg ol {
+        list-style: decimal;
+      }
+      .prose-msg li {
+        margin: 0.15rem 0;
+      }
+      .prose-msg pre {
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        padding: 0.75rem;
+        border-radius: 0.5rem;
+        overflow-x: auto;
+        font-size: 12.5px;
+        line-height: 1.55;
+        margin: 0.55rem 0;
+      }
+      .prose-msg code {
+        background: rgba(255, 255, 255, 0.06);
+        padding: 0.1rem 0.35rem;
+        border-radius: 0.25rem;
+        font-size: 0.9em;
+      }
+      .prose-msg pre code {
+        background: transparent;
+        padding: 0;
+        font-size: inherit;
+      }
+      .prose-msg h1,
+      .prose-msg h2,
+      .prose-msg h3 {
+        font-weight: 600;
+        margin: 0.6rem 0 0.3rem;
+      }
+      .prose-msg h1 {
+        font-size: 1.15rem;
+      }
+      .prose-msg h2 {
+        font-size: 1.05rem;
+      }
+      .prose-msg h3 {
+        font-size: 0.98rem;
+      }
+      .prose-msg blockquote {
+        border-left: 2px solid rgba(255, 255, 255, 0.15);
+        padding-left: 0.7rem;
+        color: oklch(0.705 0.015 286.067);
+      }
+      .prose-msg a {
+        color: oklch(0.769 0.188 70.08);
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+      .prose-msg table {
+        border-collapse: collapse;
+        margin: 0.5rem 0;
+        font-size: 13px;
+      }
+      .prose-msg th,
+      .prose-msg td {
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        padding: 0.3rem 0.55rem;
+      }
+      .tool-card {
+        transition: background-color 0.12s ease;
+      }
+      .tool-card:hover {
+        background: rgba(255, 255, 255, 0.04);
+      }
+      .anim-fade-in {
+        animation: fadeIn 120ms ease-out;
+      }
+      @keyframes fadeIn {
+        from {
+          opacity: 0;
+          transform: translateY(2px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      .blink-cursor::after {
+        content: "▍";
+        margin-left: 2px;
+        animation: blink 1s steps(2, start) infinite;
+        opacity: 0.55;
+      }
+      @keyframes blink {
+        to {
+          visibility: hidden;
+        }
+      }
+    </style>
+  </head>
+  <body class="dark bg-background text-foreground antialiased">
+    <div id="root" class="flex h-screen w-screen overflow-hidden"></div>
+
+    <script>
+      // -------------------------------------------------------------------
+      // Small helpers
+      // -------------------------------------------------------------------
+      const $ = (sel, root = document) => root.querySelector(sel);
+      const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+      const h = (tag, attrs = {}, ...children) => {
+        const el = document.createElement(tag);
+        for (const [k, v] of Object.entries(attrs || {})) {
+          if (k === "class") el.className = v;
+          else if (k === "html") el.innerHTML = v;
+          else if (k.startsWith("on") && typeof v === "function") {
+            el.addEventListener(k.slice(2).toLowerCase(), v);
+          } else if (v === false || v == null) {
+            /* skip */
+          } else if (v === true) {
+            el.setAttribute(k, "");
+          } else {
+            el.setAttribute(k, String(v));
+          }
+        }
+        for (const c of children.flat()) {
+          if (c == null || c === false) continue;
+          if (typeof c === "string") el.appendChild(document.createTextNode(c));
+          else el.appendChild(c);
+        }
+        return el;
+      };
+      const escapeHtml = (s) =>
+        String(s)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;");
+      const md = (s) => {
+        try {
+          return window.marked.parse(String(s || ""), {
+            breaks: true,
+            gfm: true,
+          });
+        } catch {
+          return escapeHtml(s);
+        }
+      };
+      const relTime = (ms) => {
+        if (!ms) return "";
+        const diff = (Date.now() - ms) / 1000;
+        if (diff < 60) return `${Math.floor(diff)}s ago`;
+        if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+        if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+        return `${Math.floor(diff / 86400)}d ago`;
+      };
+      const fmtBytes = (n) => {
+        if (n < 1024) return `${n}B`;
+        if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
+        return `${(n / (1024 * 1024)).toFixed(1)}MB`;
+      };
+
+      // -------------------------------------------------------------------
+      // Token bootstrap
+      // -------------------------------------------------------------------
+      const url = new URL(location.href);
+      let TOKEN = url.searchParams.get("t") || localStorage.getItem("cos.token") || "";
+      if (TOKEN) localStorage.setItem("cos.token", TOKEN);
+
+      function api(path, opts = {}) {
+        const headers = Object.assign({}, opts.headers || {}, {
+          Authorization: `Bearer ${TOKEN}`,
+        });
+        if (opts.body && !headers["Content-Type"])
+          headers["Content-Type"] = "application/json";
+        return fetch(path, Object.assign({}, opts, { headers }));
+      }
+
+      // -------------------------------------------------------------------
+      // App state
+      // -------------------------------------------------------------------
+      const state = {
+        view: "chat", // chat | tasks | approvals | inbox | sysinfo
+        meta: null,
+        sessionId: localStorage.getItem("cos.sessionId") || crypto.randomUUID(),
+        sessions: [],
+        messages: [],
+        streaming: false,
+        currentAssistant: null, // {text, toolCalls, toolResults, thinking, finish}
+        toasts: [],
+      };
+      localStorage.setItem("cos.sessionId", state.sessionId);
+
+      // -------------------------------------------------------------------
+      // Layout: sidebar + main pane
+      // -------------------------------------------------------------------
+      function render() {
+        const root = $("#root");
+        root.innerHTML = "";
+        root.append(renderSidebar(), renderMain());
+        requestAnimationFrame(() => window.lucide?.createIcons());
+      }
+
+      function renderSidebar() {
+        const sidebar = h(
+          "aside",
+          {
+            class:
+              "hidden sidebar:flex w-72 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground",
+          },
+          // Brand header
+          h(
+            "div",
+            { class: "flex items-center gap-2 px-4 py-3.5 border-b border-sidebar-border" },
+            h(
+              "div",
+              {
+                class:
+                  "flex h-7 w-7 items-center justify-center rounded-md bg-gradient-to-br from-orange-400/80 to-rose-500/80 text-[12px] font-bold text-white shadow",
+              },
+              "C",
+            ),
+            h(
+              "div",
+              { class: "min-w-0 flex-1" },
+              h(
+                "div",
+                { class: "text-sm font-semibold leading-none" },
+                "claw-os",
+              ),
+              h(
+                "div",
+                { class: "mt-1 truncate text-[11px] text-muted-foreground" },
+                state.meta
+                  ? `${state.meta.provider} · ${state.meta.model}`
+                  : "loading…",
+              ),
+            ),
+          ),
+          // Primary nav
+          h(
+            "div",
+            { class: "p-2 space-y-0.5" },
+            ...[
+              ["chat", "message-square", "Chat"],
+              ["tasks", "list-tree", "Tasks"],
+              ["approvals", "shield-check", "Approvals"],
+              ["inbox", "inbox", "Inbox"],
+              ["sysinfo", "activity", "System"],
+            ].map(([id, icon, label]) =>
+              h(
+                "button",
+                {
+                  class: `flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors ${
+                    state.view === id
+                      ? "bg-sidebar-active text-sidebar-accent-foreground"
+                      : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground"
+                  }`,
+                  onclick: () => {
+                    state.view = id;
+                    render();
+                    if (id === "tasks") loadTasks();
+                    if (id === "approvals") loadApprovals();
+                    if (id === "inbox") loadInbox();
+                    if (id === "sysinfo") loadSysinfo();
+                  },
+                },
+                h("i", { "data-lucide": icon, class: "h-4 w-4 shrink-0" }),
+                h("span", { class: "truncate" }, label),
+              ),
+            ),
+          ),
+          // Session list
+          h(
+            "div",
+            { class: "mt-2 flex flex-col min-h-0 flex-1" },
+            h(
+              "div",
+              {
+                class:
+                  "flex items-center justify-between px-3 py-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground",
+              },
+              "Sessions",
+              h(
+                "button",
+                {
+                  class:
+                    "rounded p-1 text-muted-foreground hover:bg-sidebar-accent hover:text-foreground",
+                  title: "New session",
+                  onclick: () => newSession(),
+                },
+                h("i", { "data-lucide": "plus", class: "h-3.5 w-3.5" }),
+              ),
+            ),
+            h(
+              "div",
+              {
+                class:
+                  "flex-1 overflow-y-auto px-2 pb-3 space-y-0.5 text-sm",
+              },
+              ...renderSessionList(),
+            ),
+          ),
+          // Footer
+          h(
+            "div",
+            {
+              class:
+                "border-t border-sidebar-border p-3 text-[11px] text-muted-foreground",
+            },
+            state.meta
+              ? `${state.meta.hostname} · ${state.meta.version}`
+              : "",
+          ),
+        );
+        return sidebar;
+      }
+
+      function renderSessionList() {
+        if (!state.sessions.length) {
+          return [
+            h(
+              "div",
+              { class: "px-2 py-1 text-[12px] text-muted-foreground/70" },
+              "no sessions yet",
+            ),
+          ];
+        }
+        const groups = groupSessionsByDate(state.sessions);
+        const out = [];
+        for (const [label, items] of groups) {
+          out.push(
+            h(
+              "div",
+              {
+                class:
+                  "mt-2 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70",
+              },
+              label,
+            ),
+          );
+          for (const s of items) {
+            const active = s.id === state.sessionId;
+            out.push(
+              h(
+                "button",
+                {
+                  class: `flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${
+                    active
+                      ? "bg-sidebar-active text-sidebar-accent-foreground"
+                      : "text-foreground/80 hover:bg-sidebar-accent/60"
+                  }`,
+                  onclick: () => loadSession(s.id),
+                },
+                h(
+                  "span",
+                  { class: "min-w-0 flex-1 truncate text-[13px]" },
+                  s.title || s.id.slice(0, 8),
+                ),
+                h(
+                  "span",
+                  {
+                    class:
+                      "shrink-0 text-[10px] text-muted-foreground/70 tabular-nums",
+                  },
+                  s.message_count > 0 ? `${s.message_count}` : "",
+                ),
+              ),
+            );
+          }
+        }
+        return out;
+      }
+
+      function groupSessionsByDate(sessions) {
+        const groups = new Map();
+        const today = new Date();
+        const yest = new Date(today);
+        yest.setDate(yest.getDate() - 1);
+        for (const s of sessions) {
+          const d = new Date(s.last_ts_ms || 0);
+          let key;
+          if (d.toDateString() === today.toDateString()) key = "TODAY";
+          else if (d.toDateString() === yest.toDateString()) key = "YESTERDAY";
+          else
+            key = d.toLocaleDateString("en-US", {
+              month: "long",
+              day: "numeric",
+              year: d.getFullYear() !== today.getFullYear() ? "numeric" : undefined,
+            });
+          if (!groups.has(key)) groups.set(key, []);
+          groups.get(key).push(s);
+        }
+        return groups;
+      }
+
+      // -------------------------------------------------------------------
+      // Main pane
+      // -------------------------------------------------------------------
+      function renderMain() {
+        const main = h("main", {
+          class: "flex min-w-0 flex-1 flex-col overflow-hidden bg-background",
+        });
+        if (state.view === "chat") main.append(renderChatHeader(), renderChatMessages(), renderChatInput());
+        else if (state.view === "tasks") main.append(renderTasks());
+        else if (state.view === "approvals") main.append(renderApprovals());
+        else if (state.view === "inbox") main.append(renderInbox());
+        else if (state.view === "sysinfo") main.append(renderSysinfo());
+        return main;
+      }
+
+      // -------------------------------------------------------------------
+      // Chat view
+      // -------------------------------------------------------------------
+      function renderChatHeader() {
+        return h(
+          "header",
+          { class: "border-b border-border bg-background" },
+          h(
+            "div",
+            { class: "mx-auto flex w-full max-w-4xl items-end justify-between gap-3 px-4 py-3" },
+            h(
+              "div",
+              { class: "min-w-0 flex-1" },
+              h(
+                "h1",
+                { class: "text-base font-semibold leading-tight text-foreground truncate" },
+                "Chat",
+              ),
+              h(
+                "div",
+                { class: "mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-muted-foreground" },
+                h(
+                  "span",
+                  { class: "inline-flex items-center gap-1.5" },
+                  h("i", { "data-lucide": "bot", class: "h-3 w-3" }),
+                  h(
+                    "span",
+                    { class: "font-medium text-foreground" },
+                    state.meta?.model || "—",
+                  ),
+                  h("span", { class: "text-muted-foreground/60" }, "·"),
+                  h("span", {}, state.meta?.provider || "—"),
+                  h("span", { class: "text-muted-foreground/40" }, "·"),
+                  h(
+                    "span",
+                    {
+                      class: "font-mono text-[11px] text-muted-foreground/80 truncate max-w-[280px]",
+                      title: state.sessionId,
+                    },
+                    state.sessionId,
+                  ),
+                ),
+              ),
+            ),
+            h(
+              "div",
+              { class: "flex shrink-0 items-center gap-1.5" },
+              h(
+                "button",
+                {
+                  class:
+                    "inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1.5 text-[12px] text-muted-foreground hover:text-foreground hover:bg-accent transition-colors",
+                  onclick: () => newSession(),
+                  title: "Start a fresh session",
+                },
+                h("i", { "data-lucide": "plus", class: "h-3.5 w-3.5" }),
+                "New",
+              ),
+            ),
+          ),
+        );
+      }
+
+      function renderChatMessages() {
+        const wrap = h("div", {
+          class: "min-w-0 flex-1 overflow-y-auto",
+          id: "chat-scroll",
+        });
+        const inner = h(
+          "div",
+          { class: "mx-auto w-full max-w-4xl px-4 py-6 space-y-5" },
+        );
+        if (!state.messages.length && !state.currentAssistant) {
+          inner.append(renderEmptyState());
+        } else {
+          for (const m of state.messages) inner.append(renderMessage(m));
+          if (state.currentAssistant) inner.append(renderAssistantLive(state.currentAssistant));
+        }
+        wrap.append(inner);
+        // Auto-scroll on next frame
+        requestAnimationFrame(() => {
+          wrap.scrollTop = wrap.scrollHeight;
+        });
+        return wrap;
+      }
+
+      function renderEmptyState() {
+        return h(
+          "div",
+          { class: "flex flex-col items-center justify-center py-20 text-center" },
+          h(
+            "div",
+            {
+              class:
+                "flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-orange-400/30 to-rose-500/30",
+            },
+            h("i", { "data-lucide": "sparkles", class: "h-6 w-6 text-orange-300" }),
+          ),
+          h(
+            "h2",
+            { class: "mt-4 text-lg font-semibold text-foreground" },
+            "Ask your OS anything",
+          ),
+          h(
+            "p",
+            { class: "mt-1 max-w-md text-sm text-muted-foreground" },
+            "claw-os has the full kernel toolbox — processes, network, services, sysinfo, packages, browser, calendar, mail. Try one of the prompts below or write your own.",
+          ),
+          h(
+            "div",
+            { class: "mt-6 grid grid-cols-1 sm:grid-cols-2 gap-2 w-full max-w-xl" },
+            ...[
+              "Show me the top CPU consumers right now",
+              "Tail today's failed systemd units",
+              "List my recent agent tasks",
+              "What changed on my disks in the last hour?",
+            ].map((p) =>
+              h(
+                "button",
+                {
+                  class:
+                    "rounded-lg border border-border bg-card/40 px-3 py-2.5 text-left text-[13px] text-muted-foreground hover:bg-card hover:text-foreground transition-colors",
+                  onclick: () => {
+                    const ta = $("#prompt-input");
+                    if (ta) {
+                      ta.value = p;
+                      ta.focus();
+                      autosize(ta);
+                    }
+                  },
+                },
+                p,
+              ),
+            ),
+          ),
+        );
+      }
+
+      function renderMessage(m) {
+        if (m.role === "user") return renderUserMessage(m);
+        return renderAssistantMessage(m);
+      }
+
+      function renderUserMessage(m) {
+        return h(
+          "div",
+          { class: "flex justify-end anim-fade-in" },
+          h(
+            "div",
+            {
+              class:
+                "max-w-[85%] rounded-2xl rounded-tr-md bg-secondary px-4 py-2.5 text-[14px] leading-relaxed text-secondary-foreground whitespace-pre-wrap",
+            },
+            m.content,
+          ),
+        );
+      }
+
+      function renderAssistantMessage(m) {
+        const wrap = h("div", { class: "anim-fade-in space-y-2" });
+        // Tool calls / results (collapsible group)
+        if ((m.toolCalls && m.toolCalls.length) || (m.thinking && m.thinking.length)) {
+          wrap.append(renderToolsSummary(m));
+        }
+        if (m.content) wrap.append(renderAssistantText(m.content));
+        return wrap;
+      }
+
+      function renderAssistantLive(cur) {
+        const wrap = h("div", { class: "anim-fade-in space-y-2" });
+        if (cur.toolCalls && cur.toolCalls.length) {
+          wrap.append(renderToolsSummary(cur, { live: true }));
+        }
+        if (cur.text || cur.streaming)
+          wrap.append(
+            h(
+              "div",
+              {
+                class:
+                  "prose-msg max-w-none text-[14px] leading-relaxed text-foreground " +
+                  (cur.streaming ? "blink-cursor" : ""),
+                html: md(cur.text || ""),
+              },
+            ),
+          );
+        return wrap;
+      }
+
+      function renderAssistantText(text) {
+        return h(
+          "div",
+          {
+            class:
+              "prose-msg max-w-none text-[14px] leading-relaxed text-foreground",
+            html: md(text),
+          },
+        );
+      }
+
+      function renderToolsSummary(m, { live = false } = {}) {
+        const calls = m.toolCalls || [];
+        const total = calls.length;
+        const done = calls.filter((c) => c.result).length;
+        const failed = calls.filter((c) => c.result && c.result.ok === false).length;
+
+        const summary = h(
+          "details",
+          {
+            class:
+              "group rounded-lg border border-border/60 bg-card/40 overflow-hidden",
+            open: live || failed > 0,
+          },
+          h(
+            "summary",
+            {
+              class:
+                "flex cursor-pointer select-none items-center gap-2 px-3 py-2 text-[13px] text-muted-foreground hover:bg-accent/40 transition-colors",
+            },
+            h("i", {
+              "data-lucide": "wrench",
+              class: "h-3.5 w-3.5 text-muted-foreground/70",
+            }),
+            h("span", { class: "font-medium text-foreground" }, `${total} tool call${total === 1 ? "" : "s"}`),
+            failed > 0
+              ? h(
+                  "span",
+                  { class: "rounded-full bg-red-500/15 px-1.5 py-0.5 text-[10px] font-medium text-red-400" },
+                  `${failed} failed`,
+                )
+              : null,
+            done < total
+              ? h(
+                  "span",
+                  { class: "inline-flex items-center gap-1 text-[11px] text-yellow-400" },
+                  h("i", { "data-lucide": "loader-2", class: "h-3 w-3 animate-spin" }),
+                  `${done}/${total}`,
+                )
+              : null,
+            h("span", { class: "flex-1" }),
+            h("i", {
+              "data-lucide": "chevron-down",
+              class: "h-3.5 w-3.5 text-muted-foreground/60 transition-transform group-open:rotate-180",
+            }),
+          ),
+          h(
+            "div",
+            { class: "border-t border-border/60 divide-y divide-border/40" },
+            ...calls.map((c) => renderToolCard(c)),
+          ),
+        );
+        return summary;
+      }
+
+      function renderToolCard(c) {
+        const r = c.result;
+        const status = !r ? "running" : r.ok ? "ok" : "error";
+        const dot =
+          status === "running"
+            ? h("i", {
+                "data-lucide": "loader-2",
+                class: "h-3 w-3 animate-spin text-yellow-400",
+              })
+            : h("span", {
+                class: `inline-block h-2 w-2 rounded-full ${
+                  status === "ok" ? "bg-emerald-500" : "bg-red-500"
+                }`,
+              });
+
+        const body = h(
+          "details",
+          { class: "tool-card group/tool px-3 py-1.5" },
+          h(
+            "summary",
+            {
+              class:
+                "flex cursor-pointer select-none items-center gap-2 text-[13px] leading-snug",
+            },
+            h("span", { class: "flex h-4 w-4 shrink-0 items-center justify-center" }, dot),
+            h("span", { class: "shrink-0 font-medium text-foreground" }, c.name),
+            h(
+              "span",
+              {
+                class:
+                  "min-w-0 flex-1 truncate font-mono text-[12px] text-muted-foreground",
+              },
+              summarizeInput(c.input),
+            ),
+            r
+              ? h(
+                  "span",
+                  { class: "shrink-0 font-mono text-[11px] text-muted-foreground/60" },
+                  `${r.latency_ms}ms · ${fmtBytes(r.bytes)}`,
+                )
+              : null,
+          ),
+          h(
+            "div",
+            { class: "mt-2 pl-6 space-y-2" },
+            h(
+              "div",
+              {},
+              h(
+                "div",
+                { class: "text-[10px] uppercase tracking-wider text-muted-foreground/60 mb-1" },
+                "input",
+              ),
+              h(
+                "pre",
+                {
+                  class:
+                    "max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-md border border-border/60 bg-background/50 px-2.5 py-2 font-mono text-[11.5px] leading-snug text-foreground/90",
+                },
+                JSON.stringify(c.input, null, 2),
+              ),
+            ),
+            r
+              ? h(
+                  "div",
+                  {},
+                  h(
+                    "div",
+                    { class: "text-[10px] uppercase tracking-wider text-muted-foreground/60 mb-1" },
+                    r.ok ? "result" : "error",
+                  ),
+                  h(
+                    "pre",
+                    {
+                      class: `max-h-72 overflow-auto whitespace-pre-wrap break-all rounded-md border px-2.5 py-2 font-mono text-[11.5px] leading-snug ${
+                        r.ok
+                          ? "border-border/60 bg-background/50 text-foreground/90"
+                          : "border-red-500/20 bg-red-500/5 text-red-300"
+                      }`,
+                    },
+                    r.preview || "(no output)",
+                  ),
+                )
+              : null,
+          ),
+        );
+        return body;
+      }
+
+      function summarizeInput(input) {
+        if (input == null) return "";
+        if (typeof input === "string") return input;
+        // Pick the first 1–2 interesting keys
+        try {
+          const entries = Object.entries(input).slice(0, 3);
+          return entries
+            .map(([k, v]) => {
+              const sv =
+                typeof v === "string"
+                  ? v
+                  : Array.isArray(v)
+                    ? `[${v.length}]`
+                    : typeof v === "object"
+                      ? "{…}"
+                      : String(v);
+              return `${k}=${sv}`;
+            })
+            .join(" ");
+        } catch {
+          return "";
+        }
+      }
+
+      function renderChatInput() {
+        const form = h(
+          "form",
+          {
+            class: "border-t border-border bg-background",
+            onsubmit: (e) => {
+              e.preventDefault();
+              const ta = $("#prompt-input");
+              const text = (ta.value || "").trim();
+              if (!text || state.streaming) return;
+              ta.value = "";
+              autosize(ta);
+              sendChat(text);
+            },
+          },
+          h(
+            "div",
+            { class: "mx-auto w-full max-w-4xl px-4 py-3" },
+            h(
+              "div",
+              {
+                class:
+                  "flex items-end gap-2 rounded-xl border border-border bg-card/60 px-3 py-2 focus-within:border-ring/60 focus-within:bg-card/80 transition-colors",
+              },
+              h("textarea", {
+                id: "prompt-input",
+                rows: "1",
+                placeholder: state.streaming
+                  ? "agent is replying…"
+                  : "Ask anything, or describe a task to run…",
+                class:
+                  "flex-1 resize-none bg-transparent outline-none text-[14px] leading-relaxed text-foreground placeholder:text-muted-foreground/60 max-h-56",
+                oninput: (e) => autosize(e.target),
+                onkeydown: (e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    e.target.form?.requestSubmit();
+                  }
+                },
+              }),
+              state.streaming
+                ? h(
+                    "button",
+                    {
+                      type: "button",
+                      class:
+                        "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-secondary text-secondary-foreground hover:bg-accent transition-colors",
+                      title: "Stop",
+                      onclick: () => stopChat(),
+                    },
+                    h("i", { "data-lucide": "square", class: "h-3.5 w-3.5" }),
+                  )
+                : h(
+                    "button",
+                    {
+                      type: "submit",
+                      class:
+                        "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50",
+                      title: "Send (Enter)",
+                    },
+                    h("i", { "data-lucide": "arrow-up", class: "h-4 w-4" }),
+                  ),
+            ),
+            h(
+              "div",
+              {
+                class:
+                  "mt-1.5 px-1 text-[10.5px] text-muted-foreground/60 flex justify-between",
+              },
+              h(
+                "span",
+                {},
+                "Enter to send · Shift+Enter for newline",
+              ),
+              state.streaming
+                ? h(
+                    "span",
+                    { class: "inline-flex items-center gap-1" },
+                    h("i", { "data-lucide": "loader-2", class: "h-3 w-3 animate-spin" }),
+                    "streaming",
+                  )
+                : null,
+            ),
+          ),
+        );
+        // Restore focus on the input after re-render so the user can keep typing.
+        requestAnimationFrame(() => $("#prompt-input")?.focus());
+        return form;
+      }
+
+      function autosize(ta) {
+        ta.style.height = "auto";
+        ta.style.height = Math.min(ta.scrollHeight, 224) + "px";
+      }
+
+      // -------------------------------------------------------------------
+      // Tasks view
+      // -------------------------------------------------------------------
+      function renderTasks() {
+        const wrap = h(
+          "div",
+          { class: "flex-1 overflow-y-auto" },
+          h(
+            "div",
+            { class: "mx-auto w-full max-w-5xl px-6 py-6" },
+            h(
+              "div",
+              { class: "flex items-center justify-between mb-4" },
+              h(
+                "div",
+                {},
+                h("h1", { class: "text-lg font-semibold" }, "Agent tasks"),
+                h(
+                  "p",
+                  { class: "mt-1 text-[13px] text-muted-foreground" },
+                  "Durable agent sessions on disk. Stop, undo or resume any of them.",
+                ),
+              ),
+              h(
+                "button",
+                {
+                  class:
+                    "inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1.5 text-[12px] text-muted-foreground hover:text-foreground hover:bg-accent transition-colors",
+                  onclick: () => loadTasks(),
+                },
+                h("i", { "data-lucide": "refresh-cw", class: "h-3.5 w-3.5" }),
+                "Refresh",
+              ),
+            ),
+            h(
+              "div",
+              {
+                id: "tasks-body",
+                class:
+                  "rounded-lg border border-border bg-card/40 divide-y divide-border/60 overflow-hidden",
+              },
+              h(
+                "div",
+                { class: "p-6 text-center text-sm text-muted-foreground" },
+                "Loading…",
+              ),
+            ),
+          ),
+        );
+        return wrap;
+      }
+
+      async function loadTasks() {
+        try {
+          const r = await api("/api/tasks");
+          const data = await r.json();
+          const body = $("#tasks-body");
+          if (!body) return;
+          body.innerHTML = "";
+          const tasks = data.tasks || [];
+          if (!tasks.length) {
+            body.append(
+              h(
+                "div",
+                { class: "p-6 text-center text-sm text-muted-foreground" },
+                "no durable tasks yet",
+              ),
+            );
+            return;
+          }
+          for (const t of tasks) body.append(renderTaskRow(t));
+          window.lucide?.createIcons();
+        } catch (e) {
+          toast(`tasks: ${e}`);
+        }
+      }
+
+      function renderTaskRow(t) {
+        const status = t.status || "unknown";
+        const color = {
+          active: "bg-emerald-500/15 text-emerald-400",
+          pending: "bg-blue-500/15 text-blue-400",
+          paused: "bg-yellow-500/15 text-yellow-400",
+          done: "bg-zinc-500/15 text-zinc-400",
+          failed: "bg-red-500/15 text-red-400",
+          archived: "bg-zinc-500/10 text-zinc-500",
+        }[status] || "bg-zinc-500/15 text-zinc-400";
+
+        return h(
+          "div",
+          { class: "flex items-center gap-3 px-4 py-3 hover:bg-accent/30" },
+          h("i", {
+            "data-lucide": "git-branch-plus",
+            class: "h-4 w-4 shrink-0 text-muted-foreground",
+          }),
+          h(
+            "div",
+            { class: "min-w-0 flex-1" },
+            h(
+              "div",
+              { class: "flex items-center gap-2" },
+              h(
+                "span",
+                {
+                  class:
+                    "truncate text-[13px] font-medium text-foreground",
+                  title: t.id,
+                },
+                t.purpose || t.id,
+              ),
+              h(
+                "span",
+                { class: `rounded-full px-1.5 py-0.5 text-[10px] font-medium ${color}` },
+                status,
+              ),
+            ),
+            h(
+              "div",
+              {
+                class:
+                  "mt-0.5 truncate font-mono text-[11px] text-muted-foreground/70",
+              },
+              t.id,
+            ),
+          ),
+          h(
+            "div",
+            { class: "flex items-center gap-1 shrink-0" },
+            h(
+              "button",
+              {
+                class:
+                  "rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors",
+                title: "Stop",
+                onclick: () => taskAction(t.id, "stop"),
+              },
+              h("i", { "data-lucide": "octagon-pause", class: "h-3.5 w-3.5" }),
+            ),
+            h(
+              "button",
+              {
+                class:
+                  "rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors",
+                title: "Resume",
+                onclick: () => taskAction(t.id, "resume"),
+              },
+              h("i", { "data-lucide": "play", class: "h-3.5 w-3.5" }),
+            ),
+            h(
+              "button",
+              {
+                class:
+                  "rounded-md p-1.5 text-muted-foreground hover:bg-red-500/10 hover:text-red-400 transition-colors",
+                title: "Undo",
+                onclick: () => {
+                  if (confirm("Undo all mutations from this task?"))
+                    taskAction(t.id, "undo");
+                },
+              },
+              h("i", { "data-lucide": "undo-2", class: "h-3.5 w-3.5" }),
+            ),
+          ),
+        );
+      }
+
+      async function taskAction(id, action) {
+        try {
+          const r = await api(`/api/tasks/${encodeURIComponent(id)}/${action}`, {
+            method: "POST",
+          });
+          if (!r.ok) {
+            const d = await r.json().catch(() => ({}));
+            throw new Error(d.error || `HTTP ${r.status}`);
+          }
+          toast(`${action}: ok`);
+          loadTasks();
+        } catch (e) {
+          toast(`${action}: ${e.message}`);
+        }
+      }
+
+      // -------------------------------------------------------------------
+      // Approvals view
+      // -------------------------------------------------------------------
+      function renderApprovals() {
+        return h(
+          "div",
+          { class: "flex-1 overflow-y-auto" },
+          h(
+            "div",
+            { class: "mx-auto w-full max-w-3xl px-6 py-6" },
+            h(
+              "div",
+              { class: "flex items-center justify-between mb-4" },
+              h(
+                "div",
+                {},
+                h("h1", { class: "text-lg font-semibold" }, "Approvals"),
+                h(
+                  "p",
+                  { class: "mt-1 text-[13px] text-muted-foreground" },
+                  "Consent prompts gated by the kernel capability system.",
+                ),
+              ),
+              h(
+                "button",
+                {
+                  class:
+                    "inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1.5 text-[12px] text-muted-foreground hover:text-foreground hover:bg-accent transition-colors",
+                  onclick: () => loadApprovals(),
+                },
+                h("i", { "data-lucide": "refresh-cw", class: "h-3.5 w-3.5" }),
+                "Refresh",
+              ),
+            ),
+            h("div", { id: "approvals-body", class: "space-y-3" }),
+          ),
+        );
+      }
+
+      async function loadApprovals() {
+        try {
+          const [pendR, recR] = await Promise.all([
+            api("/api/approvals/pending"),
+            api("/api/approvals/recent"),
+          ]);
+          const pending = (await pendR.json()).requests || [];
+          const recent = (await recR.json()).entries || [];
+          const body = $("#approvals-body");
+          if (!body) return;
+          body.innerHTML = "";
+          body.append(
+            h(
+              "div",
+              {
+                class:
+                  "rounded-lg border border-border bg-card/40 overflow-hidden",
+              },
+              h(
+                "div",
+                {
+                  class:
+                    "border-b border-border/60 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground",
+                },
+                `Pending · ${pending.length}`,
+              ),
+              ...(pending.length
+                ? pending.map(renderApprovalRequest)
+                : [
+                    h(
+                      "div",
+                      { class: "px-4 py-6 text-center text-sm text-muted-foreground/70" },
+                      "no pending requests",
+                    ),
+                  ]),
+            ),
+          );
+          body.append(
+            h(
+              "div",
+              {
+                class:
+                  "rounded-lg border border-border bg-card/40 overflow-hidden",
+              },
+              h(
+                "div",
+                {
+                  class:
+                    "border-b border-border/60 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground",
+                },
+                "Recent",
+              ),
+              ...(recent.length
+                ? recent.slice(0, 20).map(renderApprovalResolved)
+                : [
+                    h(
+                      "div",
+                      { class: "px-4 py-6 text-center text-sm text-muted-foreground/70" },
+                      "nothing decided recently",
+                    ),
+                  ]),
+            ),
+          );
+          window.lucide?.createIcons();
+        } catch (e) {
+          toast(`approvals: ${e}`);
+        }
+      }
+
+      function renderApprovalRequest(r) {
+        return h(
+          "div",
+          {
+            class:
+              "flex flex-col gap-3 border-b border-border/40 px-4 py-3 last:border-b-0",
+          },
+          h(
+            "div",
+            { class: "flex items-start justify-between gap-3" },
+            h(
+              "div",
+              { class: "min-w-0 flex-1" },
+              h(
+                "div",
+                { class: "flex items-center gap-2" },
+                h(
+                  "span",
+                  {
+                    class:
+                      "inline-flex items-center gap-1 rounded-md bg-yellow-500/10 px-1.5 py-0.5 text-[11px] font-medium text-yellow-400",
+                  },
+                  h("i", { "data-lucide": "shield-alert", class: "h-3 w-3" }),
+                  r.verb,
+                ),
+                h(
+                  "span",
+                  {
+                    class: "font-mono text-[11px] text-muted-foreground/80 truncate",
+                    title: r.session,
+                  },
+                  r.session,
+                ),
+              ),
+              r.reason
+                ? h(
+                    "p",
+                    { class: "mt-1.5 text-[13px] text-foreground/90" },
+                    r.reason,
+                  )
+                : null,
+              h(
+                "pre",
+                {
+                  class:
+                    "mt-1.5 max-h-32 overflow-auto whitespace-pre-wrap break-all rounded-md border border-border/60 bg-background/50 px-2 py-1.5 font-mono text-[11px] text-foreground/80",
+                },
+                JSON.stringify(r.scope, null, 2),
+              ),
+            ),
+          ),
+          h(
+            "div",
+            { class: "flex items-center gap-2" },
+            h(
+              "button",
+              {
+                class:
+                  "inline-flex items-center gap-1.5 rounded-md bg-emerald-500/90 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-emerald-500 transition-colors",
+                onclick: () => approvalDecide(r.id, "approve", { duration: "once" }),
+              },
+              h("i", { "data-lucide": "check", class: "h-3.5 w-3.5" }),
+              "Approve once",
+            ),
+            h(
+              "button",
+              {
+                class:
+                  "inline-flex items-center gap-1.5 rounded-md bg-emerald-500/15 px-3 py-1.5 text-[12px] font-medium text-emerald-300 hover:bg-emerald-500/25 transition-colors",
+                onclick: () => approvalDecide(r.id, "approve", { duration: "session" }),
+              },
+              h("i", { "data-lucide": "check-check", class: "h-3.5 w-3.5" }),
+              "Approve for session",
+            ),
+            h(
+              "button",
+              {
+                class:
+                  "inline-flex items-center gap-1.5 rounded-md bg-red-500/15 px-3 py-1.5 text-[12px] font-medium text-red-300 hover:bg-red-500/25 transition-colors ml-auto",
+                onclick: () => approvalDecide(r.id, "deny"),
+              },
+              h("i", { "data-lucide": "x", class: "h-3.5 w-3.5" }),
+              "Deny",
+            ),
+          ),
+        );
+      }
+
+      function renderApprovalResolved(rr) {
+        const ok = rr.decision?.outcome === "approved";
+        return h(
+          "div",
+          {
+            class:
+              "flex items-center gap-3 border-b border-border/40 px-4 py-2 last:border-b-0",
+          },
+          h("span", {
+            class: `inline-block h-2 w-2 rounded-full shrink-0 ${ok ? "bg-emerald-500" : "bg-red-500"}`,
+          }),
+          h(
+            "span",
+            { class: "text-[12px] font-medium text-foreground" },
+            rr.verb,
+          ),
+          h(
+            "span",
+            {
+              class: "font-mono text-[11px] text-muted-foreground/70 truncate flex-1",
+              title: rr.session,
+            },
+            rr.session,
+          ),
+          h(
+            "span",
+            { class: "shrink-0 text-[11px] text-muted-foreground/60" },
+            rr.decision?.outcome || "?",
+          ),
+        );
+      }
+
+      async function approvalDecide(id, action, body) {
+        try {
+          const r = await api(`/api/approvals/${encodeURIComponent(id)}/${action}`, {
+            method: "POST",
+            body: body ? JSON.stringify(body) : undefined,
+          });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          toast(`${action}: ok`);
+          loadApprovals();
+        } catch (e) {
+          toast(`${action}: ${e.message}`);
+        }
+      }
+
+      // -------------------------------------------------------------------
+      // Inbox view
+      // -------------------------------------------------------------------
+      function renderInbox() {
+        return h(
+          "div",
+          { class: "flex-1 overflow-y-auto" },
+          h(
+            "div",
+            { class: "mx-auto w-full max-w-4xl px-6 py-6" },
+            h(
+              "div",
+              { class: "flex items-center justify-between mb-4" },
+              h(
+                "div",
+                {},
+                h("h1", { class: "text-lg font-semibold" }, "Inbox"),
+                h(
+                  "p",
+                  { class: "mt-1 text-[13px] text-muted-foreground" },
+                  "Append-only stream of agent context events from clawd.",
+                ),
+              ),
+              h(
+                "button",
+                {
+                  class:
+                    "inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1.5 text-[12px] text-muted-foreground hover:text-foreground hover:bg-accent transition-colors",
+                  onclick: () => loadInbox(),
+                },
+                h("i", { "data-lucide": "refresh-cw", class: "h-3.5 w-3.5" }),
+                "Refresh",
+              ),
+            ),
+            h(
+              "div",
+              {
+                id: "inbox-body",
+                class:
+                  "rounded-lg border border-border bg-card/40 divide-y divide-border/40 overflow-hidden",
+              },
+              h(
+                "div",
+                { class: "p-6 text-center text-sm text-muted-foreground" },
+                "Loading…",
+              ),
+            ),
+          ),
+        );
+      }
+
+      async function loadInbox() {
+        try {
+          const r = await api("/api/inbox?limit=100");
+          const data = await r.json();
+          const body = $("#inbox-body");
+          if (!body) return;
+          body.innerHTML = "";
+          const events = (data.events || []).slice().reverse();
+          if (!events.length) {
+            body.append(
+              h(
+                "div",
+                { class: "p-6 text-center text-sm text-muted-foreground/70" },
+                "no events yet — clawd writes here as agents run",
+              ),
+            );
+            return;
+          }
+          for (const e of events) body.append(renderInboxEvent(e));
+          window.lucide?.createIcons();
+        } catch (e) {
+          toast(`inbox: ${e}`);
+        }
+      }
+
+      function renderInboxEvent(e) {
+        const kind = e.kind || e.event || e.type || "event";
+        const ts = e.ts || e.timestamp || e.at || null;
+        return h(
+          "details",
+          { class: "px-3 py-2 hover:bg-accent/20 transition-colors" },
+          h(
+            "summary",
+            {
+              class:
+                "flex cursor-pointer select-none items-center gap-3 text-[13px]",
+            },
+            h("i", {
+              "data-lucide": "circle-dot",
+              class: "h-3.5 w-3.5 text-muted-foreground/70",
+            }),
+            h(
+              "span",
+              { class: "font-medium text-foreground" },
+              kind,
+            ),
+            h(
+              "span",
+              {
+                class:
+                  "min-w-0 flex-1 truncate font-mono text-[11.5px] text-muted-foreground/80",
+              },
+              e.summary || e.message || e.path || "",
+            ),
+            h(
+              "span",
+              {
+                class:
+                  "shrink-0 font-mono text-[11px] text-muted-foreground/60",
+              },
+              ts ? new Date(ts).toLocaleTimeString() : "",
+            ),
+          ),
+          h(
+            "pre",
+            {
+              class:
+                "mt-2 ml-6 max-h-72 overflow-auto whitespace-pre-wrap break-all rounded-md border border-border/40 bg-background/50 px-2.5 py-2 font-mono text-[11.5px] text-foreground/80",
+            },
+            JSON.stringify(e, null, 2),
+          ),
+        );
+      }
+
+      // -------------------------------------------------------------------
+      // Sysinfo view
+      // -------------------------------------------------------------------
+      function renderSysinfo() {
+        return h(
+          "div",
+          { class: "flex-1 overflow-y-auto" },
+          h(
+            "div",
+            { class: "mx-auto w-full max-w-5xl px-6 py-6" },
+            h(
+              "div",
+              { class: "flex items-center justify-between mb-4" },
+              h(
+                "div",
+                {},
+                h("h1", { class: "text-lg font-semibold" }, "System"),
+                h(
+                  "p",
+                  { class: "mt-1 text-[13px] text-muted-foreground" },
+                  "Live readout from /proc, /sys and the kernel.",
+                ),
+              ),
+              h(
+                "button",
+                {
+                  class:
+                    "inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1.5 text-[12px] text-muted-foreground hover:text-foreground hover:bg-accent transition-colors",
+                  onclick: () => loadSysinfo(),
+                },
+                h("i", { "data-lucide": "refresh-cw", class: "h-3.5 w-3.5" }),
+                "Refresh",
+              ),
+            ),
+            h(
+              "div",
+              {
+                id: "sysinfo-body",
+                class: "grid grid-cols-1 md:grid-cols-2 gap-3",
+              },
+              h(
+                "div",
+                {
+                  class:
+                    "rounded-lg border border-border bg-card/40 p-6 text-center text-sm text-muted-foreground",
+                },
+                "Loading…",
+              ),
+            ),
+          ),
+        );
+      }
+
+      async function loadSysinfo() {
+        const body = $("#sysinfo-body");
+        if (!body) return;
+        body.innerHTML = "";
+        const cards = [
+          ["info", "Identity", "info"],
+          ["uptime", "Uptime", "clock"],
+          ["loadavg", "Load average", "activity"],
+          ["resources", "Resources", "cpu"],
+          ["net", "Network", "globe"],
+          ["mounts", "Mounts", "hard-drive"],
+          ["failed_units", "Failed services", "alert-triangle"],
+        ];
+        for (const [cmd, title, icon] of cards) {
+          const card = h(
+            "div",
+            { class: "rounded-lg border border-border bg-card/40 overflow-hidden" },
+            h(
+              "div",
+              { class: "flex items-center gap-2 border-b border-border/60 px-4 py-2.5" },
+              h("i", { "data-lucide": icon, class: "h-3.5 w-3.5 text-muted-foreground" }),
+              h(
+                "span",
+                { class: "text-[12px] font-semibold uppercase tracking-wider text-muted-foreground" },
+                title,
+              ),
+            ),
+            h(
+              "pre",
+              {
+                id: `sys-${cmd}`,
+                class:
+                  "max-h-72 overflow-auto whitespace-pre-wrap break-all px-4 py-3 font-mono text-[11.5px] text-foreground/80",
+              },
+              "loading…",
+            ),
+          );
+          body.append(card);
+        }
+        window.lucide?.createIcons();
+        await Promise.all(
+          cards.map(async ([cmd]) => {
+            try {
+              const r = await api(`/api/sysinfo/${cmd}`);
+              const d = await r.json();
+              const pre = $(`#sys-${cmd}`);
+              if (pre) pre.textContent = JSON.stringify(d, null, 2);
+            } catch (e) {
+              const pre = $(`#sys-${cmd}`);
+              if (pre) pre.textContent = String(e);
+            }
+          }),
+        );
+      }
+
+      // -------------------------------------------------------------------
+      // Toasts
+      // -------------------------------------------------------------------
+      function toast(message) {
+        const el = h(
+          "div",
+          {
+            class:
+              "fixed bottom-4 right-4 z-50 rounded-md border border-border bg-card px-3 py-2 text-[12.5px] text-foreground shadow-lg anim-fade-in",
+          },
+          message,
+        );
+        document.body.appendChild(el);
+        setTimeout(() => el.remove(), 3500);
+      }
+
+      // -------------------------------------------------------------------
+      // Chat — SSE drive
+      // -------------------------------------------------------------------
+      let activeEventSource = null;
+      let activeAbort = null;
+
+      function newSession() {
+        state.sessionId = crypto.randomUUID();
+        localStorage.setItem("cos.sessionId", state.sessionId);
+        state.messages = [];
+        state.currentAssistant = null;
+        state.view = "chat";
+        render();
+      }
+
+      async function loadSession(sid) {
+        state.sessionId = sid;
+        localStorage.setItem("cos.sessionId", sid);
+        state.messages = [];
+        state.currentAssistant = null;
+        state.view = "chat";
+        render();
+        try {
+          const r = await api(`/api/sessions/${encodeURIComponent(sid)}/history`);
+          const data = await r.json();
+          state.messages = (data.messages || []).map((m) => ({
+            role: m.role === "assistant" ? "assistant" : m.role === "user" ? "user" : "assistant",
+            content: m.content,
+          }));
+          render();
+        } catch (e) {
+          toast(`history: ${e}`);
+        }
+      }
+
+      async function loadSessions() {
+        try {
+          const r = await api("/api/sessions");
+          const data = await r.json();
+          state.sessions = data.sessions || [];
+          render();
+        } catch (e) {
+          /* silent */
+        }
+      }
+
+      function stopChat() {
+        if (activeAbort) {
+          activeAbort.abort();
+          activeAbort = null;
+        }
+        state.streaming = false;
+        if (state.currentAssistant) {
+          state.messages.push({
+            role: "assistant",
+            content: state.currentAssistant.text || "",
+            toolCalls: state.currentAssistant.toolCalls || [],
+          });
+          state.currentAssistant = null;
+        }
+        render();
+      }
+
+      async function sendChat(prompt) {
+        state.messages.push({ role: "user", content: prompt });
+        state.currentAssistant = {
+          text: "",
+          toolCalls: [],
+          toolIdx: new Map(),
+          streaming: true,
+        };
+        state.streaming = true;
+        render();
+
+        const ctrl = new AbortController();
+        activeAbort = ctrl;
+        try {
+          const r = await fetch("/api/chat", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${TOKEN}`,
+            },
+            body: JSON.stringify({
+              prompt,
+              session_id: state.sessionId,
+              use_memory: true,
+            }),
+            signal: ctrl.signal,
+          });
+          if (!r.ok || !r.body) {
+            throw new Error(`HTTP ${r.status}`);
+          }
+          await consumeSse(r.body.getReader(), handleSseEvent);
+        } catch (e) {
+          if (e.name !== "AbortError") {
+            toast(`chat: ${e.message || e}`);
+            state.currentAssistant = state.currentAssistant || { text: "", toolCalls: [] };
+            state.currentAssistant.text += `\n\n_error: ${escapeHtml(String(e.message || e))}_`;
+          }
+        } finally {
+          state.streaming = false;
+          activeAbort = null;
+          if (state.currentAssistant) {
+            state.messages.push({
+              role: "assistant",
+              content: state.currentAssistant.text || "",
+              toolCalls: state.currentAssistant.toolCalls || [],
+            });
+            state.currentAssistant = null;
+          }
+          render();
+          loadSessions();
+        }
+      }
+
+      function handleSseEvent(ev) {
+        const cur = state.currentAssistant;
+        if (!cur) return;
+        if (ev.event === "text") {
+          cur.text += ev.data.delta || "";
+        } else if (ev.event === "tool_use") {
+          const call = { id: ev.data.id, name: ev.data.name, input: ev.data.input, result: null };
+          cur.toolCalls.push(call);
+          cur.toolIdx.set(call.id, cur.toolCalls.length - 1);
+        } else if (ev.event === "tool_start") {
+          if (!cur.toolIdx.has(ev.data.id)) {
+            const call = { id: ev.data.id, name: ev.data.name, input: ev.data.input, result: null };
+            cur.toolCalls.push(call);
+            cur.toolIdx.set(call.id, cur.toolCalls.length - 1);
+          }
+        } else if (ev.event === "tool_result") {
+          const idx = cur.toolIdx.get(ev.data.id);
+          if (idx != null) {
+            cur.toolCalls[idx].result = {
+              ok: ev.data.ok,
+              latency_ms: ev.data.latency_ms,
+              bytes: ev.data.bytes,
+              preview: ev.data.preview,
+            };
+          }
+        } else if (ev.event === "warning") {
+          toast(`warning: ${ev.data.message}`);
+        } else if (ev.event === "done") {
+          cur.text = ev.data.answer || cur.text;
+          cur.streaming = false;
+        } else if (ev.event === "error") {
+          cur.text += `\n\n_error: ${ev.data.error}_`;
+        }
+        // Throttle re-render to one per animation frame
+        scheduleRender();
+      }
+
+      let renderScheduled = false;
+      function scheduleRender() {
+        if (renderScheduled) return;
+        renderScheduled = true;
+        requestAnimationFrame(() => {
+          renderScheduled = false;
+          render();
+        });
+      }
+
+      async function consumeSse(reader, onEvent) {
+        const dec = new TextDecoder();
+        let buf = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let idx;
+          while ((idx = buf.indexOf("\n\n")) >= 0) {
+            const raw = buf.slice(0, idx);
+            buf = buf.slice(idx + 2);
+            const ev = parseSseChunk(raw);
+            if (ev) onEvent(ev);
+          }
+        }
+      }
+
+      function parseSseChunk(raw) {
+        let event = "message";
+        let data = "";
+        for (const line of raw.split("\n")) {
+          if (line.startsWith(":")) continue; // comment / heartbeat
+          if (line.startsWith("event:")) event = line.slice(6).trim();
+          else if (line.startsWith("data:"))
+            data += (data ? "\n" : "") + line.slice(5).trimStart();
+        }
+        if (!data && event === "message") return null;
+        let parsed = {};
+        try {
+          parsed = JSON.parse(data);
+        } catch {
+          parsed = { raw: data };
+        }
+        return { event, data: parsed };
+      }
+
+      // -------------------------------------------------------------------
+      // Boot
+      // -------------------------------------------------------------------
+      async function boot() {
+        if (!TOKEN) {
+          document.getElementById("root").append(
+            h(
+              "div",
+              {
+                class:
+                  "flex flex-1 items-center justify-center min-h-screen w-full",
+              },
+              h(
+                "div",
+                {
+                  class:
+                    "max-w-md rounded-xl border border-border bg-card p-6 text-center space-y-3",
+                },
+                h(
+                  "h1",
+                  { class: "text-lg font-semibold text-foreground" },
+                  "Token required",
+                ),
+                h(
+                  "p",
+                  { class: "text-sm text-muted-foreground" },
+                  "This UI is gated by the per-machine token printed when you ran ",
+                  h("code", { class: "rounded bg-muted px-1 py-0.5 text-foreground" }, "cos agent serve"),
+                  ". Re-open the URL from the terminal, or paste the token below.",
+                ),
+                h("input", {
+                  type: "text",
+                  id: "tok-input",
+                  placeholder: "paste token…",
+                  class:
+                    "w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-sm font-mono",
+                }),
+                h(
+                  "button",
+                  {
+                    class:
+                      "w-full rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-90",
+                    onclick: () => {
+                      const v = $("#tok-input").value.trim();
+                      if (v) {
+                        TOKEN = v;
+                        localStorage.setItem("cos.token", v);
+                        location.search = `?t=${encodeURIComponent(v)}`;
+                      }
+                    },
+                  },
+                  "Continue",
+                ),
+              ),
+            ),
+          );
+          return;
+        }
+        try {
+          const r = await api("/api/meta");
+          if (r.status === 401) {
+            localStorage.removeItem("cos.token");
+            TOKEN = "";
+            location.search = "";
+            return;
+          }
+          state.meta = await r.json();
+        } catch (e) {
+          toast(`meta: ${e}`);
+        }
+        await loadSessions();
+        render();
+      }
+
+      boot();
+    </script>
+  </body>
+</html>
