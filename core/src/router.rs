@@ -1071,7 +1071,7 @@ fn builtin_apps() -> Vec<(
         ]),
         ("agent", "OS-native agent subsystem — clawd-backed runtime, memory, skills, LLM providers, tools, and tasks", vec![
             ("setup", "Per-modality config wizard: cos agent setup <llm|tts|stt|imagegen|embed|all> [--status|--reset|--verify-only|--no-verify]. Bare `cos agent setup` opens an interactive modality picker."),
-            ("ask", "Single-shot prompt with full tool/memory loop: cos agent ask \"<prompt>\" [--stream] — without --stream waits for the full response; with --stream tokens are written live to stderr while the JSON envelope still lands on stdout."),
+            ("ask", "Single-shot prompt with full tool/memory loop: cos agent ask \"<prompt>\" [--stream] [--full]. Default prints just the model's plain-text answer; add --full to get the JSON envelope with provider/model/session/task ids. With --stream, tokens are written live to stderr while the final answer (or envelope) still lands on stdout."),
             ("chat", "Interactive REPL for the system agent: cos agent chat [--session <id>] [--no-stream] [--no-memory] [--show-tools] [--max-turns N] (slash commands: /quit /help /session /clear /history [N] /tools). For one-shot App-gated calls use `cos ai chat --app <id>` — `cos agent chat` is the kernel Agent's own surface and is not an App entry point."),
             ("budget", "Inspect or reset an app's monthly AI budget: cos agent budget show|reset|history <app>. The system agent reports under the pseudo-app id `system.agent`."),
             ("status", "Short live verdict: provider/model/key source, ready/not-ready, most-recent session. Use `cos agent doctor` for the full provider matrix, tool list, skills, usage."),
@@ -1821,7 +1821,18 @@ fn dispatch_builtin(
     match &result {
         Ok(v) => {
             audit::log_entry(&audit_p, app_name, command, &cmd_args, start, "ok", None);
-            Ok(Some(v.to_string()))
+            // A handler that has already written its human-facing output
+            // to stdout (e.g. `cos agent ask` printing the plain-text
+            // answer) signals "nothing more to render" by returning
+            // `Value::Null`. Without this special case the dispatcher
+            // would print a stray `null` line after the answer. No
+            // existing CLI command currently returns Value::Null as its
+            // top-level result, so this is safe to apply uniformly.
+            if v.is_null() {
+                Ok(None)
+            } else {
+                Ok(Some(v.to_string()))
+            }
         }
         Err(e) => {
             audit::log_entry(
@@ -2221,6 +2232,20 @@ mod tests {
         let v = parse(dispatch(&["help".into(), "nope".into()]).unwrap());
         assert!(v["primitives"].is_array());
         assert!(v["note"].as_str().unwrap().contains("unknown help topic"));
+    }
+
+    #[test]
+    fn dispatch_builtin_null_result_yields_no_output() {
+        // A handler that has already written its human-facing output
+        // directly to stdout (e.g. `cos agent ask` printing the plain
+        // answer) returns Value::Null to signal "nothing more to
+        // render". dispatch_builtin must surface that as Ok(None) so
+        // main.rs does not print a stray `null` line afterwards.
+        fn silent(_command: &str, _args: &[String]) -> Result<Value, String> {
+            Ok(Value::Null)
+        }
+        let result = dispatch_builtin(&["agent".into(), "ask".into()], "agent", silent);
+        assert!(matches!(result, Ok(None)));
     }
 
     #[test]
