@@ -68,14 +68,28 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     match command {
         "ask" => {
             let mut stream = false;
+            let mut full = false;
             let mut positional: Vec<String> = Vec::with_capacity(args.len());
             for a in args {
                 match a.as_str() {
                     "--stream" => stream = true,
                     "--no-stream" => stream = false,
+                    // Opt-in to the full JSON envelope (provider, model,
+                    // session_id, task_id, turns, …). Without this the
+                    // command prints just the model's plain-text answer
+                    // — that's the common case for humans and shell
+                    // pipelines (`cos agent ask "..." | tee log`). Note
+                    // the flag is `--full`, not `--json`: main.rs's
+                    // `extract_format` already consumes `--json` /
+                    // `--compact` / `--plain` / `--pretty` for the
+                    // global output-format selector, so any per-command
+                    // flag with those names would never reach this
+                    // handler.
+                    "--full" => full = true,
+                    "--no-full" => full = false,
                     other if other.starts_with("--") => {
                         return Err(format!(
-                            "unknown ask flag: {other}. supported: --stream | --no-stream"
+                            "unknown ask flag: {other}. supported: --stream | --no-stream | --full | --no-full"
                         ));
                     }
                     _ => positional.push(a.clone()),
@@ -83,9 +97,26 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
             }
             let prompt = positional.first().cloned().unwrap_or_default();
             if prompt.is_empty() {
-                return Err("usage: cos agent ask \"<prompt>\" [--stream]".into());
+                return Err("usage: cos agent ask \"<prompt>\" [--stream] [--full]".into());
             }
-            agent_client::ask(&prompt, stream)
+            let envelope = agent_client::ask(&prompt, stream)?;
+            if full {
+                Ok(envelope)
+            } else {
+                // Default: write the model's answer as plain text and
+                // return Value::Null so the router skips re-rendering
+                // the envelope as JSON. If `answer` is missing or not a
+                // string (shouldn't happen for `status=ok`) fall back
+                // to printing the whole envelope so we never silently
+                // drop the model's reply.
+                match envelope.get("answer").and_then(|v| v.as_str()) {
+                    Some(answer) => {
+                        println!("{answer}");
+                        Ok(Value::Null)
+                    }
+                    None => Ok(envelope),
+                }
+            }
         }
         "chat" => chat_cmd(args),
         "budget" => budget_cmd(args),
@@ -13303,6 +13334,10 @@ mod tests {
     fn ask_rejects_empty_prompt() {
         let err = run("ask", &[]).unwrap_err();
         assert!(err.to_lowercase().contains("usage"), "got {err}");
+        // Usage hint must document the flags the handler accepts so
+        // users discover --full / --stream from the error itself.
+        assert!(err.contains("--full"), "usage hint should mention --full: {err}");
+        assert!(err.contains("--stream"), "usage hint should mention --stream: {err}");
         let err2 = run("ask", &["".into()]).unwrap_err();
         assert!(err2.to_lowercase().contains("usage"), "got {err2}");
     }
@@ -13311,6 +13346,19 @@ mod tests {
     fn ask_rejects_unknown_flag() {
         let err = run("ask", &["--bogus".into(), "hi".into()]).unwrap_err();
         assert!(err.to_lowercase().contains("unknown ask flag"), "got {err}");
+        // The error must enumerate the supported flags so users can
+        // discover --full without reading source.
+        assert!(err.contains("--full"), "supported-flags list should include --full: {err}");
+    }
+
+    #[test]
+    fn ask_flag_alone_is_not_treated_as_prompt() {
+        // Regression: feeding only flags must surface the usage hint
+        // rather than silently using a flag string ("--full") as the
+        // prompt — which would route to clawd and either error
+        // opaquely or actually consume LLM tokens.
+        let err = run("ask", &["--full".into()]).unwrap_err();
+        assert!(err.contains("usage:"), "got {err}");
     }
 
     #[test]
