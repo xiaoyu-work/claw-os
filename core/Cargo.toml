@@ -81,5 +81,14 @@ semver = "1"
 # future consumer.
 claw-embed = { path = "../crates/claw-embed" }
 
+# `cos agent serve` — built-in web UI for headless / WSL setups. axum +
+# tower-http give us SSE streaming and a minimal HTTP surface without
+# pulling in a heavy framework. Pinned to versions compatible with the
+# tokio 1.x runtime already in use; default features only (no openssl).
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query"] }
+tower = { version = "0.5", default-features = false }
+tower-http = { version = "0.6", default-features = false, features = ["cors"] }
+http = "1"
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
