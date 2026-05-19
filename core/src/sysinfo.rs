@@ -10,8 +10,19 @@ use crate::caps::{require_or_json, Scope, Verb};
 /// coredumpctl). On non-Linux platforms the commands that need Linux
 /// kernel surfaces return an explicit "requires Linux" error so the
 /// shape of the response is always machine-readable.
+///
+/// Capability: every subcommand is read-only system observation, so the
+/// gate is [`Verb::SYS_OBSERVE`] (catalog: "Inspect system state … without
+/// changing them", Risk::Low). The previous gate was `Verb::SYS_KERNEL`
+/// ("Load kernel modules … reserved for trusted system tools",
+/// Risk::Critical), which mis-classified read-only ops like `loadavg` /
+/// `resources` / `uptime` as kernel-module loading and made
+/// clawd-routed agent jobs fail with `verb-not-granted: sys.kernel` even
+/// though [`crate::clawd::system_caps::readonly_task_caps`] already
+/// grants `SYS_OBSERVE`. The cron/netfilter/checkpoint sites that
+/// *do* mutate kernel state still use `SYS_KERNEL`.
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::SYS_KERNEL, Scope::wild()).map_err(|v| v.to_string())?;
+    require_or_json(Verb::SYS_OBSERVE, Scope::wild()).map_err(|v| v.to_string())?;
     match command {
         // identity / environment
         "info" => cmd_info(),
@@ -1687,5 +1698,100 @@ mod tests {
     #[test]
     fn num_cores_is_at_least_one() {
         assert!(num_cores() >= 1);
+    }
+
+    // -----------------------------------------------------------------
+    // Capability gate
+    // -----------------------------------------------------------------
+
+    /// Regression: the top-level `run()` gate is read-only system
+    /// observation, NOT kernel-module loading. Before this fix every
+    /// subcommand asked for [`Verb::SYS_KERNEL`] ("Load kernel modules
+    /// … reserved for trusted system tools", Risk::Critical), which
+    /// the clawd-routed agent doesn't have by default. The correct
+    /// verb per `caps::catalog` is [`Verb::SYS_OBSERVE`] ("Inspect
+    /// system state … without changing them", Risk::Low) — already
+    /// granted by [`crate::clawd::system_caps::readonly_task_caps`].
+    /// This test fails closed if anyone re-classifies the gate as a
+    /// privileged verb again.
+    #[test]
+    fn run_clears_gate_with_sys_observe_only() {
+        use crate::caps::{Cap, CapSet, Role};
+        use crate::proc::{deregister_session, register_session, SessionInfo};
+
+        let _lock = crate::caps::test_env_lock::env_lock();
+
+        // Redirect COS_DATA_DIR so the registry write lands in a
+        // tempdir, isolated from any concurrent test and from the
+        // real per-user proc/registry.json.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let prev_data = env::var_os("COS_DATA_DIR");
+        env::set_var("COS_DATA_DIR", tmp.path());
+
+        let prev_sess = env::var_os("COS_SESSION");
+        let prev_perms = env::var_os("COS_PERMS_MODE");
+        env::remove_var("COS_PERMS_MODE");
+
+        // Build a session that holds SYS_OBSERVE only — mirrors what
+        // `clawd::system_caps::readonly_task_caps` hands out. PID is
+        // our own so the ancestry check in caps::enforcement passes
+        // without a real fork.
+        let session_id = format!("sysinfo-cap-test-{}", std::process::id());
+        let mut caps = CapSet::new();
+        caps.insert(Cap::new(Verb::SYS_OBSERVE, Scope::Wild));
+        let info = SessionInfo {
+            session_id: session_id.clone(),
+            pid: std::process::id(),
+            command: vec!["sysinfo-cap-test".into()],
+            started_at: chrono::Utc::now().to_rfc3339(),
+            stdout_path: String::new(),
+            stderr_path: String::new(),
+            group: None,
+            parent: None,
+            workdir: None,
+            exit_code: None,
+            ended_at: None,
+            tier: None,
+            scope: None,
+            priority: None,
+            caps: Some(caps),
+            role: Some(Role::Observer.name().to_string()),
+            start_time_ticks: None,
+        };
+        register_session(info).expect("register session");
+        env::set_var("COS_SESSION", &session_id);
+
+        // Bogus command name so we hit the dispatch's "unknown
+        // command" arm immediately after the cap gate clears. If the
+        // gate is still on SYS_KERNEL, this errors with
+        // "permission denied" / "verb-not-granted" instead.
+        let result = run("__definitely-not-a-real-command__", &[]);
+
+        // Restore env BEFORE asserting so a panic doesn't leak state
+        // into other tests that share the lock.
+        deregister_session(&session_id);
+        match prev_sess {
+            Some(v) => env::set_var("COS_SESSION", v),
+            None => env::remove_var("COS_SESSION"),
+        }
+        match prev_perms {
+            Some(v) => env::set_var("COS_PERMS_MODE", v),
+            None => env::remove_var("COS_PERMS_MODE"),
+        }
+        match prev_data {
+            Some(v) => env::set_var("COS_DATA_DIR", v),
+            None => env::remove_var("COS_DATA_DIR"),
+        }
+
+        let err = result.expect_err("dispatch should error on bogus command");
+        let lower = err.to_lowercase();
+        assert!(
+            !lower.contains("permission denied") && !lower.contains("not granted"),
+            "SYS_OBSERVE should be sufficient to clear the run() cap gate, but got: {err}"
+        );
+        assert!(
+            lower.contains("unknown command"),
+            "expected to reach command dispatch (unknown command arm), got: {err}"
+        );
     }
 }
