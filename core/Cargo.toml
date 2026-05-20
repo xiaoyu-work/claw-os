@@ -90,5 +90,10 @@ tower = { version = "0.5", default-features = false }
 tower-http = { version = "0.6", default-features = false, features = ["cors"] }
 http = "1"
 
+# Embed the Vite-built web UI (HTML/JS/CSS) inside the cos binary so
+# `cos agent serve` stays a single self-contained file with zero
+# external assets. The `ui/dist/` directory is committed to git.
+include_dir = "0.7"
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
