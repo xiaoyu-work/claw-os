@@ -36,7 +36,7 @@ import urllib.error
 # Sibling ``_shared`` package import (script-mode invocation).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from _shared import safe_egress, safe_subprocess  # noqa: E402
+from _shared import gateway_memory, safe_egress, safe_subprocess  # noqa: E402
 
 
 PLATFORM = "homeassistant"
@@ -335,7 +335,9 @@ def run(command: str, args):
             title = str(t) if t is not None else None
         else:
             return {"ok": False, "error": "invalid args"}
-        return _send(service, text, title)
+        result = _send(service, text, title)
+        gateway_memory.remember_send(PLATFORM, result, channel_id=service, text=text)
+        return result
     if command == "call":
         service = ""
         raw = ""

@@ -90,6 +90,11 @@
             "scope": { "kind": "name", "value": "claude-*" }
           },
           "why": { "en": "Send the fetched page text to a model so it can be summarised for you." }
+        },
+        {
+          "verb": "memory.write",
+          "scope": { "kind": "fixed", "scope": { "kind": "self-ref", "value": "web" } },
+          "why": { "en": "Remember the page summary so the agent can recall it later." }
         }
       ]
     }

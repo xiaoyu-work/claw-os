@@ -37,6 +37,11 @@
           "why": {
             "en": "Send the text to a model so it can be condensed for you."
           }
+        },
+        {
+          "verb": "memory.write",
+          "scope": { "kind": "fixed", "scope": { "kind": "self-ref", "value": "summarize" } },
+          "why": { "en": "Remember the summary so the agent can recall it later." }
         }
       ]
     }

@@ -44,7 +44,7 @@ import urllib.parse
 # Sibling ``_shared`` package import (script-mode invocation).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from _shared import safe_egress, safe_subprocess  # noqa: E402
+from _shared import gateway_memory, safe_egress, safe_subprocess  # noqa: E402
 
 
 PLATFORM = "zulip"
@@ -310,7 +310,9 @@ def run(command: str, args):
             text = str(args.get("text", "") or "")
         else:
             return {"ok": False, "error": "invalid args"}
-        return _send(recipient, text)
+        result = _send(recipient, text)
+        gateway_memory.remember_send(PLATFORM, result, channel_id=recipient, text=text)
+        return result
     if command == "status":
         return _status()
     if command in {"start", "stop"}:

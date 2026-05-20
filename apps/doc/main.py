@@ -10,7 +10,7 @@ import os
 import sys
 
 from claw_os_sdk import ai
-from cos_runtime import policy
+from cos_runtime import memory, policy
 
 
 _SUMMARIZE_SYSTEM = (
@@ -362,7 +362,28 @@ def cmd_summarize(args):
     out = dict(result)
     # Preserve legacy field name "summary" for backwards compatibility.
     out["summary"] = out.pop("text")
+    _remember_doc_summary(source, out.get("summary", ""))
     return out
+
+
+def _remember_doc_summary(source, summary):
+    try:
+        if not summary or not source:
+            return
+        first = summary.strip().splitlines()
+        head = first[0] if first else ""
+        if len(head) > 200:
+            head = head[:197] + "..."
+        memory.remember(
+            source="doc",
+            text=f"Summarised document {source}: {head}",
+            kind="note",
+            entity_id=source,
+            tags=["doc", "summary"],
+            link=f"cos doc summarize --file {source}" if source != "<stdin>" else None,
+        )
+    except memory.MemoryError:
+        pass
 
 
 def cmd_explain(args):

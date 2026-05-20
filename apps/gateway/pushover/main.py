@@ -41,7 +41,7 @@ import urllib.parse
 # Sibling ``_shared`` package import (script-mode invocation).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from _shared import safe_egress, safe_subprocess  # noqa: E402
+from _shared import gateway_memory, safe_egress, safe_subprocess  # noqa: E402
 
 
 PLATFORM = "pushover"
@@ -380,7 +380,7 @@ def run(command: str, args):
                     expire = parsed
         else:
             return {"ok": False, "error": "invalid args"}
-        return _send(
+        result = _send(
             text,
             recipient=str(recipient) if recipient else None,
             title=str(title) if title else None,
@@ -394,6 +394,13 @@ def run(command: str, args):
             retry=retry,
             expire=expire,
         )
+        gateway_memory.remember_send(
+            PLATFORM,
+            result,
+            channel_id=str(recipient) if recipient else "",
+            text=text,
+        )
+        return result
     if command == "status":
         return _status()
     if command in {"start", "stop"}:

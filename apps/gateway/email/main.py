@@ -40,7 +40,7 @@ from email.message import EmailMessage
 # Sibling ``_shared`` package import (script-mode invocation).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from _shared import safe_subprocess  # noqa: E402
+from _shared import gateway_memory, safe_subprocess  # noqa: E402
 
 try:
     from cos_runtime import policy  # type: ignore[import-not-found]
@@ -335,7 +335,14 @@ def run(command: str, args):
             cc = args.get("cc", "")
         else:
             return {"ok": False, "error": "invalid args"}
-        return _send(str(to), str(subject), str(body), str(cc))
+        result = _send(str(to), str(subject), str(body), str(cc))
+        gateway_memory.remember_send(
+            PLATFORM,
+            result,
+            channel_id=str(to),
+            text=f"{subject}: {body}" if subject else str(body),
+        )
+        return result
     if command == "status":
         return _status()
     if command in {"start", "stop"}:

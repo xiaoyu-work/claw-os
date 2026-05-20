@@ -29,7 +29,7 @@ import sys
 import urllib.parse
 import uuid
 
-from cos_runtime import policy
+from cos_runtime import memory, policy
 
 
 def _resolve_sock_path() -> str:
@@ -202,9 +202,26 @@ def _cmd_nav_go(argv):
     if not host:
         return {"ok": False, "error": f"could not parse a host out of url={args['url']!r}"}
     _require_host("browser.nav", host)
-    return _unwrap(
+    result = _unwrap(
         _send_request("nav.go", {"id": _tab_id(args["id"]), "url": args["url"]})
     )
+    if isinstance(result, dict) and result.get("ok", True) and "error" not in result:
+        _remember_nav(args["id"], args["url"], host)
+    return result
+
+
+def _remember_nav(tab_id, url, host):
+    try:
+        memory.remember(
+            source="browser-attached",
+            text=f"Navigated tab {tab_id} to {url}",
+            kind="event",
+            entity_id=url,
+            tags=["browser", "nav", host],
+            link=f"cos app browser-attached page.snapshot --id {tab_id}",
+        )
+    except memory.MemoryError:
+        pass
 
 
 def _cmd_dom_query(argv):

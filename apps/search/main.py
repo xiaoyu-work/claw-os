@@ -9,7 +9,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from cos_runtime import policy
+from cos_runtime import memory, policy
 
 VERSION = os.environ.get("COS_VERSION", "0.1.0")
 USER_AGENT = "cos/" + VERSION
@@ -310,9 +310,10 @@ def cmd_web(args):
             brave_key = _brave_credential()
             policy.require("net.dial", host=BRAVE_HOST)
             result = _brave_web(query, max_results, {"key": brave_key})
-        return result
     else:
-        return _brave_web(query, max_results, config)
+        result = _brave_web(query, max_results, config)
+    _remember_search("web", query, result)
+    return result
 
 
 def cmd_image(args):
@@ -335,9 +336,27 @@ def cmd_image(args):
             brave_key = _brave_credential()
             policy.require("net.dial", host=BRAVE_HOST)
             result = _brave_image(query, max_results, {"key": brave_key})
-        return result
     else:
-        return _brave_image(query, max_results, config)
+        result = _brave_image(query, max_results, config)
+    _remember_search("image", query, result)
+    return result
+
+
+def _remember_search(kind, query, result):
+    try:
+        if not isinstance(result, dict) or "error" in result:
+            return
+        provider = result.get("provider") or "unknown"
+        count = result.get("count") or len(result.get("results") or [])
+        memory.remember(
+            source="search",
+            text=f"{kind.capitalize()} search '{query}' via {provider} → {count} result(s)",
+            kind="event",
+            tags=["search", kind, provider],
+            link=f"cos app search {kind} --query \"{query}\"",
+        )
+    except memory.MemoryError:
+        pass
 
 
 # ---------------------------------------------------------------------------

@@ -30,7 +30,7 @@ import json
 import re
 
 from claw_os_sdk import ai
-from cos_runtime import policy
+from cos_runtime import memory, policy
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +236,57 @@ def _build_chat_parser():
     return p
 
 
+def _remember_summary(opts, payload):
+    """Push the summary of an email into the agent's memory."""
+    try:
+        subject = opts.subject or "(no subject)"
+        sender = opts.sender or "(unknown)"
+        summary = (payload.get("summary") or "").strip()
+        action_items = payload.get("action_items") or []
+        if not summary and not action_items:
+            return  # nothing useful to remember
+        text = f"Summarized email from {sender} — {subject}: {summary}".strip()
+        if action_items:
+            text += " | actions: " + "; ".join(action_items[:3])
+        tags = ["mail-ai", "summary"]
+        sentiment = payload.get("sentiment")
+        if sentiment:
+            tags.append(sentiment)
+        memory.remember(
+            source="mail-ai",
+            text=text,
+            kind="note",
+            tags=tags,
+        )
+    except memory.MemoryError:
+        pass
+
+
+def _remember_triage(opts, payload):
+    """Push a triage decision into the agent's memory (only when notable)."""
+    try:
+        priority = payload.get("priority")
+        category = payload.get("category")
+        # Skip low-signal triage to keep memory clean.
+        if priority not in ("high",) and category in ("other", "newsletter", "marketing"):
+            return
+        subject = opts.subject or "(no subject)"
+        sender = opts.sender or "(unknown)"
+        reason = payload.get("reason") or ""
+        text = f"Triaged email from {sender} — {subject}: {category} (priority={priority})"
+        if reason:
+            text += f" — {reason}"
+        tags = ["mail-ai", "triage", category, priority]
+        memory.remember(
+            source="mail-ai",
+            text=text,
+            kind="event",
+            tags=tags,
+        )
+    except memory.MemoryError:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Operation: summarize
 # ---------------------------------------------------------------------------
@@ -276,13 +327,15 @@ def cmd_summarize(args):
         return result
 
     parsed = _safe_loads(result["text"]) or {}
-    return _wrap(result, {
+    payload = {
         "summary": str(parsed.get("summary") or "").strip(),
         "key_points": [str(x) for x in (parsed.get("key_points") or [])][:5],
         "action_items": [str(x) for x in (parsed.get("action_items") or [])][:5],
         "sentiment": str(parsed.get("sentiment") or "neutral"),
         "raw": result["text"] if not parsed else "",
-    })
+    }
+    _remember_summary(opts, payload)
+    return _wrap(result, payload)
 
 
 # ---------------------------------------------------------------------------
@@ -482,13 +535,15 @@ def cmd_triage(args):
     priority = str(parsed.get("priority") or "normal").lower()
     if priority not in ("low", "normal", "high"):
         priority = "normal"
-    return _wrap(result, {
+    payload = {
         "category": category,
         "tags": [str(x).lower().strip() for x in (parsed.get("tags") or [])][:4],
         "priority": priority,
         "reason": str(parsed.get("reason") or "").strip(),
         "raw": result["text"] if not parsed else "",
-    })
+    }
+    _remember_triage(opts, payload)
+    return _wrap(result, payload)
 
 
 # ---------------------------------------------------------------------------

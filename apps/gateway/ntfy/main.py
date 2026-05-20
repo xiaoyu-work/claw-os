@@ -36,7 +36,7 @@ import urllib.error
 # Sibling ``_shared`` package import (script-mode invocation).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from _shared import safe_egress, safe_subprocess  # noqa: E402
+from _shared import gateway_memory, safe_egress, safe_subprocess  # noqa: E402
 
 
 PLATFORM = "ntfy"
@@ -426,7 +426,7 @@ def run(command: str, args):
         return _schema()
     if command == "send":
         topic, text, flags = _parse_send_args(args)
-        return _send(
+        result = _send(
             topic,
             text,
             title=flags.get("title"),
@@ -438,6 +438,13 @@ def run(command: str, args):
             bearer=flags.get("bearer"),
             basic=flags.get("basic"),
         )
+        gateway_memory.remember_send(
+            PLATFORM,
+            result,
+            channel_id=str(topic) if topic else "",
+            text=str(text) if text else "",
+        )
+        return result
     if command == "status":
         return _status()
     if command in {"start", "stop"}:

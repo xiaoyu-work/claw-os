@@ -80,6 +80,11 @@
             "scope": { "kind": "name", "value": "claude-*" }
           },
           "why": { "en": "Send the document text to a model so it can be summarised for you." }
+        },
+        {
+          "verb": "memory.write",
+          "scope": { "kind": "fixed", "scope": { "kind": "self-ref", "value": "doc" } },
+          "why": { "en": "Remember the document summary so the agent can recall it later." }
         }
       ]
     },
