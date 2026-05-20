@@ -13,7 +13,10 @@
 //! [`caps::require(Verb::MEMORY_WRITE, Scope::self_ref(<source>))`].
 //! The capability has `ScopeKind::SelfRef`, so the kernel only allows
 //! it when the calling session's manifest scoped `memory.write` to its
-//! own app id. Apps cannot impersonate each other.
+//! own app id. Apps cannot impersonate each other. The `list`,
+//! `search`, and `show` subcommands likewise require
+//! [`caps::require(Verb::MEMORY_READ, Scope::self_ref(<source>))`] and
+//! `forget` re-uses `MEMORY_WRITE` against the owning source.
 
 use std::sync::OnceLock;
 
@@ -134,8 +137,13 @@ fn list(args: &[String]) -> Result<Value, String> {
             other => return Err(format!("memory list: unexpected arg {other}")),
         }
     }
+    // Apps may only enumerate their own namespace. The agent runtime
+    // reads in-process and never goes through this bridge.
+    let source = source.ok_or_else(|| "memory list: --source is required".to_string())?;
+    require(Verb::MEMORY_READ, Scope::self_ref(&source))
+        .map_err(|d| format!("memory list denied: {}", d.to_json()))?;
     let db = open_db()?;
-    let rows = app_memory::list(&db, source.as_deref(), limit)
+    let rows = app_memory::list(&db, Some(source.as_str()), limit)
         .map_err(|e| format!("memory list: {e}"))?;
     Ok(json!({ "rows": rows_to_json(rows) }))
 }
@@ -148,6 +156,12 @@ fn show(args: &[String]) -> Result<Value, String> {
         .map_err(|e| format!("memory show: id must be an integer: {e}"))?;
     let db = open_db()?;
     let row = app_memory::show(&db, id).map_err(|e| format!("memory show: {e}"))?;
+    // If the row exists, enforce SelfRef against its owning source so
+    // an app can only fetch its own rows by id.
+    if let Some(r) = row.as_ref() {
+        require(Verb::MEMORY_READ, Scope::self_ref(&r.source))
+            .map_err(|d| format!("memory show denied: {}", d.to_json()))?;
+    }
     Ok(match row {
         Some(r) => json!({ "row": row_to_json(r) }),
         None => json!({ "row": Value::Null }),
@@ -177,8 +191,11 @@ fn search(args: &[String]) -> Result<Value, String> {
             other => return Err(format!("memory search: unexpected arg {other}")),
         }
     }
+    let source = source.ok_or_else(|| "memory search: --source is required".to_string())?;
+    require(Verb::MEMORY_READ, Scope::self_ref(&source))
+        .map_err(|d| format!("memory search denied: {}", d.to_json()))?;
     let db = open_db()?;
-    let rows = app_memory::search(&db, &query, source.as_deref(), limit)
+    let rows = app_memory::search(&db, &query, Some(source.as_str()), limit)
         .map_err(|e| format!("memory search: {e}"))?;
     Ok(json!({ "rows": rows_to_json(rows) }))
 }
@@ -214,11 +231,22 @@ fn forget(args: &[String]) -> Result<Value, String> {
     let db = open_db()?;
     let store = app_memory::open_default_store();
     if let Some(s) = source {
+        // Deleting every row for a source is a write — gate it.
+        require(Verb::MEMORY_WRITE, Scope::self_ref(&s))
+            .map_err(|d| format!("memory forget denied: {}", d.to_json()))?;
         let n = app_memory::forget_source(&db, store.as_ref(), &s)
             .map_err(|e| format!("memory forget: {e}"))?;
         return Ok(json!({ "removed": n, "source": s }));
     }
     let id = row.unwrap();
+    // For row-id deletion we have to look up the owning source first
+    // so we can scope the cap check correctly. Missing rows succeed as
+    // a no-op (idempotent forget).
+    let target = app_memory::show(&db, id).map_err(|e| format!("memory forget: {e}"))?;
+    if let Some(r) = target.as_ref() {
+        require(Verb::MEMORY_WRITE, Scope::self_ref(&r.source))
+            .map_err(|d| format!("memory forget denied: {}", d.to_json()))?;
+    }
     let removed = app_memory::forget_row(&db, store.as_ref(), id)
         .map_err(|e| format!("memory forget: {e}"))?;
     Ok(json!({ "removed": if removed { 1 } else { 0 }, "row_id": id }))

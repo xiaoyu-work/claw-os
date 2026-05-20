@@ -154,8 +154,11 @@ pub fn default_registry() -> ToolRegistry {
     // Best-effort: open the default memory DB; if it fails (read-only fs,
     // etc.) the agent still works, just without searchable history.
     match crate::agent::memory::sqlite_fts::MemoryDb::open_default() {
-        Ok(db) => super::cos_proxy::register_recall(&mut r, db),
-        Err(e) => tracing::warn!("cos_recall: failed to open default memory DB: {e}"),
+        Ok(db) => {
+            super::cos_proxy::register_recall(&mut r, db.clone());
+            super::cos_proxy::register_app_memory(&mut r, db);
+        }
+        Err(e) => tracing::warn!("cos_recall/cos_app_memory: failed to open default memory DB: {e}"),
     }
     // Best-effort: open the default semantic store; only registered
     // when `[embed]` is configured. When disabled the tool silently

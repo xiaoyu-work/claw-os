@@ -383,6 +383,14 @@ pub const CATALOG: &[CapMeta] = &[
         "🧠",
         Risk::Medium,
     ),
+    CapMeta::new(
+        Verb::MEMORY_READ,
+        ScopeKind::SelfRef,
+        LocalizedStr::new("Read this app's memory"),
+        LocalizedStr::new("Look up entries the app itself wrote earlier (e.g. to dedupe before re-storing). Scope is the app's own namespace — cross-app reads are not possible. The agent reads memory in-process and is unaffected by this grant."),
+        "🔎",
+        Risk::Low,
+    ),
 
     // -- IPC -----------------------------------------------------------------
     CapMeta::new(

@@ -43,12 +43,16 @@ impl Tool for CosRecallSemanticTool {
     }
 
     fn description(&self) -> &'static str {
-        "Vector-similarity search over the agent's conversation history. \
-         Returns past messages whose MEANING is close to the query, even \
-         when no exact keyword matches. Use when the user paraphrases \
-         something they said earlier, or when you want concept-level \
-         recall. For exact-word search prefer `cos_recall`; for durable \
-         notes use `cos_memory`."
+        "Vector-similarity search over the agent's persistent memory. \
+         Returns past messages and app-pushed facts whose MEANING is close \
+         to the query, even when no exact keyword matches. With `session_id` \
+         given, restricts to that conversation; with `session_id` omitted \
+         (recommended for cross-app recall), scans every namespace including \
+         `app/<source>` rows produced by calendar/email/search/gateway/etc. \
+         Use when the user paraphrases something they said or did earlier. \
+         For exact-word search prefer `cos_recall`; for source-filtered \
+         structured app-fact queries prefer `cos_app_memory`; for durable \
+         Markdown notes use `cos_memory`."
     }
 
     fn input_schema(&self) -> Value {

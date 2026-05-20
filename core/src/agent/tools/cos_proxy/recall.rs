@@ -39,8 +39,11 @@ impl Tool for CosRecallTool {
         "Search the agent's full conversation history (every prior turn, every \
          session) using SQLite FTS5. Use this to recall what the user told you \
          earlier, what tools you ran, or what you concluded in a past session. \
-         Distinct from cos_memory, which is for durable notes you write \
-         deliberately."
+         Incidentally also returns structured facts that apps have pushed \
+         (calendar events, sent emails, etc.) because they share the same \
+         FTS index — for source-filtered queries over app facts specifically, \
+         prefer `cos_app_memory`. Distinct from `cos_memory`, which is for \
+         durable Markdown notes you write deliberately."
     }
 
     fn input_schema(&self) -> Value {
