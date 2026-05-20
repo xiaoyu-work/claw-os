@@ -288,6 +288,13 @@ fn spawn_detached(
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_clone))
         .stderr(Stdio::from(log));
+    // Clear the parent's session so the child can bootstrap its own
+    // proc-registry session via [`crate::caps::bootstrap`]. If we let
+    // the child inherit COS_SESSION, the parent's `SessionGuard::Drop`
+    // (running just before `spawn_detached` returns) will deregister
+    // the row out from under the daemon, leaving every gated call
+    // (sysinfo, etc.) failing with "no active session".
+    cmd.env_remove("COS_SESSION");
 
     #[cfg(unix)]
     {

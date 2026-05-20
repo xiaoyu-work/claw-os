@@ -88,8 +88,15 @@ pub async fn require_token(
     next: Next,
 ) -> Response {
     let path = req.uri().path().to_string();
-    let public = matches!(path.as_str(), "/" | "/index.html" | "/favicon.ico")
-        || path.starts_with("/assets/");
+    let public = matches!(
+        path.as_str(),
+        "/" | "/index.html"
+            | "/favicon.ico"
+            | "/favicon.png"
+            | "/clawos-symbol.png"
+            | "/clawos-symbol-dark.png"
+            | "/apple-touch-icon.png"
+    ) || path.starts_with("/assets/");
     if public {
         return next.run(req).await;
     }
