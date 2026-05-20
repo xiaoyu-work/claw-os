@@ -6,6 +6,7 @@
 //!   - semantic                            — fastembed via crate::model::tasks::embed
 //!   - curator                             — async fact extractor
 
+pub mod app_memory;
 pub mod curator;
 pub mod notes;
 pub mod semantic;
