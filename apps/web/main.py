@@ -30,7 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from _shared.env_scrub import scrub_env  # noqa: E402
 
 from claw_os_sdk import ai  # noqa: E402
-from cos_runtime import policy  # noqa: E402
+from cos_runtime import memory, policy  # noqa: E402
 
 TIMEOUT = int(os.environ.get("COS_WEB_TIMEOUT", "30"))
 DEFAULT_MAX_LENGTH = int(os.environ.get("COS_WEB_MAX_CONTENT_LENGTH", "50000"))
@@ -370,7 +370,7 @@ def _cmd_summarize(args):
     except ai.AiError as exc:
         return {"error": str(exc)}
 
-    return {
+    out = {
         "url": url,
         "title": title,
         "summary": response.text,
@@ -392,6 +392,29 @@ def _cmd_summarize(args):
             "prompt_redacted": response.review.prompt_redacted,
         },
     }
+    _remember_summary(url, title, response.text)
+    return out
+
+
+def _remember_summary(url, title, summary):
+    try:
+        if not summary or not url:
+            return
+        first = summary.strip().splitlines()
+        head = first[0] if first else ""
+        if len(head) > 200:
+            head = head[:197] + "..."
+        label = title or url
+        memory.remember(
+            source="web",
+            text=f"Summarised page {label}: {head}",
+            kind="note",
+            entity_id=url,
+            tags=["web", "summary"],
+            link=f"cos app web read {url}",
+        )
+    except memory.MemoryError:
+        pass
 
 
 def _cmd_screenshot(args):

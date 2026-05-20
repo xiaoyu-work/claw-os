@@ -57,7 +57,7 @@ import urllib.parse
 # Sibling ``_shared`` package import (script-mode invocation).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from _shared import atomic, inbound, safe_egress, safe_subprocess  # noqa: E402
+from _shared import atomic, gateway_memory, inbound, safe_egress, safe_subprocess  # noqa: E402
 
 
 PLATFORM = "telegram"
@@ -543,7 +543,17 @@ def run(command, args):
     if command == "status":
         return _status()
     if command == "send":
-        return _send(args)
+        result = _send(args)
+        chat_id = ""
+        text = ""
+        if isinstance(args, list) and len(args) >= 2:
+            chat_id = str(args[0])
+            text = " ".join(str(a) for a in args[1:])
+        elif isinstance(args, dict):
+            chat_id = str(args.get("chat_id", "") or "")
+            text = str(args.get("text", "") or "")
+        gateway_memory.remember_send(PLATFORM, result, channel_id=chat_id, text=text)
+        return result
     return {"error": f"unknown command: {command}"}
 
 

@@ -51,7 +51,7 @@ import urllib.error
 # as a script (``cos app gateway-webhook …`` execs main.py directly).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from _shared import safe_egress, safe_subprocess  # noqa: E402
+from _shared import gateway_memory, safe_egress, safe_subprocess  # noqa: E402
 
 
 PLATFORM = "webhook"
@@ -399,7 +399,7 @@ def run(command: str, args):
         else:
             return {"ok": False, "error": "invalid args"}
         try:
-            return _send(
+            result = _send(
                 parsed["target"],
                 parsed["text"],
                 parsed["raw"],
@@ -408,6 +408,13 @@ def run(command: str, args):
                 parsed["api_key"],
                 parsed["hmac_secret"],
             )
+            gateway_memory.remember_send(
+                PLATFORM,
+                result,
+                channel_id=str(parsed.get("target") or ""),
+                text=str(parsed.get("text") or parsed.get("raw") or ""),
+            )
+            return result
         except Exception as e:  # surface PermissionDenied cleanly
             denial = getattr(e, "denial", None)
             if denial is not None:

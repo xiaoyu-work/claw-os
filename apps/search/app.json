@@ -17,6 +17,11 @@
           "verb": "net.dial",
           "scope": { "kind": "wild" },
           "why": { "en": "Call the search provider's API (Google or Brave) to fetch results." }
+        },
+        {
+          "verb": "memory.write",
+          "scope": { "kind": "fixed", "scope": { "kind": "self-ref", "value": "search" } },
+          "why": { "en": "Remember the search so the agent can recall what was looked up." }
         }
       ]
     },
@@ -27,6 +32,11 @@
           "verb": "net.dial",
           "scope": { "kind": "wild" },
           "why": { "en": "Call the image search provider's API to fetch results." }
+        },
+        {
+          "verb": "memory.write",
+          "scope": { "kind": "fixed", "scope": { "kind": "self-ref", "value": "search" } },
+          "why": { "en": "Remember the image search so the agent can recall what was looked up." }
         }
       ]
     }

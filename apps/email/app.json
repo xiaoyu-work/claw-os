@@ -29,6 +29,11 @@
           "verb": "secret.read",
           "scope": { "kind": "wild" },
           "why": { "en": "Read the provider credentials (SMTP password, OAuth token) needed to authenticate." }
+        },
+        {
+          "verb": "memory.write",
+          "scope": { "kind": "fixed", "scope": { "kind": "self-ref", "value": "email" } },
+          "why": { "en": "Remember the sent message so the agent can recall it later." }
         }
       ]
     },

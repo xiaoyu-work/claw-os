@@ -49,6 +49,11 @@
           "verb": "browser.nav",
           "scope": { "kind": "wild" },
           "why": { "en": "Load the URL you specified in the chosen tab. The runtime check is scoped to that URL's host." }
+        },
+        {
+          "verb": "memory.write",
+          "scope": { "kind": "fixed", "scope": { "kind": "self-ref", "value": "browser-attached" } },
+          "why": { "en": "Remember which URLs you navigated to so the agent can recall them later." }
         }
       ]
     },

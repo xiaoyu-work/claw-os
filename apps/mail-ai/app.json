@@ -28,6 +28,11 @@
           "verb": "ai.chat",
           "scope": { "kind": "wild" },
           "why": { "en": "Send the email body to a model and get back a structured summary." }
+        },
+        {
+          "verb": "memory.write",
+          "scope": { "kind": "fixed", "scope": { "kind": "self-ref", "value": "mail-ai" } },
+          "why": { "en": "Remember the email summary so the agent can recall it later." }
         }
       ]
     },
@@ -76,6 +81,11 @@
           "verb": "ai.chat",
           "scope": { "kind": "wild" },
           "why": { "en": "Send the sender / subject / snippet to a model and get back a category + tags." }
+        },
+        {
+          "verb": "memory.write",
+          "scope": { "kind": "fixed", "scope": { "kind": "self-ref", "value": "mail-ai" } },
+          "why": { "en": "Remember high-priority triage decisions so the agent can recall what mattered." }
         }
       ]
     },

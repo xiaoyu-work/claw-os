@@ -13,7 +13,7 @@ from __future__ import annotations
 import sys
 
 from claw_os_sdk import ai
-from cos_runtime import policy
+from cos_runtime import memory, policy
 
 
 SYSTEM_PROMPT = (
@@ -67,7 +67,7 @@ def _cmd_run(args):
     except ai.AiError as exc:
         return {"error": str(exc)}
 
-    return {
+    out = {
         "summary": response.text,
         "source": file_path or "<stdin>",
         "model": response.model,
@@ -87,6 +87,29 @@ def _cmd_run(args):
             "prompt_redacted": response.review.prompt_redacted,
         },
     }
+    _remember_run(out["source"], out["summary"])
+    return out
+
+
+def _remember_run(source, summary):
+    try:
+        if not summary:
+            return
+        first = summary.strip().splitlines()
+        head = first[0] if first else ""
+        if len(head) > 200:
+            head = head[:197] + "..."
+        link = f"cos summarize run --file {source}" if source and source != "<stdin>" else None
+        memory.remember(
+            source="summarize",
+            text=f"Summarised {source}: {head}",
+            kind="note",
+            entity_id=source if source != "<stdin>" else None,
+            tags=["summarize"],
+            link=link,
+        )
+    except memory.MemoryError:
+        pass
 
 
 def _schema():

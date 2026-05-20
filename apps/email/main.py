@@ -23,7 +23,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 from claw_os_sdk import ai
-from cos_runtime import policy
+from cos_runtime import memory, policy
 
 
 # ---------------------------------------------------------------------------
@@ -487,6 +487,33 @@ def _read_outlook(message_id):
 # Command handlers
 # ---------------------------------------------------------------------------
 
+def _remember_sent(result, to, subject, body, cc=None):
+    """Push a one-line summary of a sent email into the agent's memory."""
+    try:
+        provider = result.get("provider") or "smtp"
+        message_id = result.get("id") or ""
+        snippet = (body or "").strip().splitlines()
+        first = snippet[0] if snippet else ""
+        if len(first) > 200:
+            first = first[:197] + "..."
+        text = f"Sent email to {to}: {subject}".strip()
+        if first:
+            text += f" — {first}"
+        tags = ["email", "sent", provider]
+        if cc:
+            tags.append("cc")
+        memory.remember(
+            source="email",
+            text=text,
+            kind="event",
+            entity_id=message_id or None,
+            tags=tags,
+            link=f"cos app email read --id {message_id}" if message_id else None,
+        )
+    except memory.MemoryError:
+        pass
+
+
 def cmd_send(args):
     parser = _build_send_parser()
     try:
@@ -508,17 +535,21 @@ def cmd_send(args):
         smtp_host = os.environ.get("SMTP_HOST", "localhost")
         policy.require("secret.read", name="SMTP_PASSWORD")
         policy.require("net.dial", host=smtp_host)
-        return _send_smtp(opts.to, opts.subject, opts.body, cc=opts.cc)
+        result = _send_smtp(opts.to, opts.subject, opts.body, cc=opts.cc)
     elif provider == "gmail":
         policy.require("secret.read", name="GMAIL_ACCESS_TOKEN")
         policy.require("net.dial", host=GMAIL_API_HOST)
-        return _send_gmail(opts.to, opts.subject, opts.body, cc=opts.cc)
+        result = _send_gmail(opts.to, opts.subject, opts.body, cc=opts.cc)
     elif provider == "outlook":
         policy.require("secret.read", name="MICROSOFT_ACCESS_TOKEN")
         policy.require("net.dial", host=OUTLOOK_API_HOST)
-        return _send_outlook(opts.to, opts.subject, opts.body, cc=opts.cc)
+        result = _send_outlook(opts.to, opts.subject, opts.body, cc=opts.cc)
     else:
         return {"error": f"unknown provider: {provider}"}
+
+    if isinstance(result, dict) and result.get("sent"):
+        _remember_sent(result, opts.to, opts.subject, opts.body, cc=opts.cc)
+    return result
 
 
 def cmd_search(args):

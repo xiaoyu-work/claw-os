@@ -37,6 +37,11 @@
           "verb": "net.dial",
           "scope": { "kind": "wild" },
           "why": { "en": "When using Google or Outlook, call the provider's API to create the event." }
+        },
+        {
+          "verb": "memory.write",
+          "scope": { "kind": "fixed", "scope": { "kind": "self-ref", "value": "calendar" } },
+          "why": { "en": "Remember the new event so the agent can recall it later." }
         }
       ]
     },
@@ -52,6 +57,11 @@
           "verb": "net.dial",
           "scope": { "kind": "wild" },
           "why": { "en": "When using Google or Outlook, call the provider's API to update the event." }
+        },
+        {
+          "verb": "memory.write",
+          "scope": { "kind": "fixed", "scope": { "kind": "self-ref", "value": "calendar" } },
+          "why": { "en": "Remember the change so the agent can recall what was updated." }
         }
       ]
     },
@@ -67,6 +77,11 @@
           "verb": "net.dial",
           "scope": { "kind": "wild" },
           "why": { "en": "When using Google or Outlook, call the provider's API to delete the event." }
+        },
+        {
+          "verb": "memory.write",
+          "scope": { "kind": "fixed", "scope": { "kind": "self-ref", "value": "calendar" } },
+          "why": { "en": "Remember the deletion so the agent can recall the change later." }
         }
       ]
     },

@@ -14,7 +14,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-from cos_runtime import policy
+from cos_runtime import memory, policy
 
 DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 
@@ -378,6 +378,7 @@ def cmd_create(args):
     except urllib.error.URLError as exc:
         return {"error": f"API request failed: {exc.reason}"}
 
+    _remember_event("created", provider, event)
     return {"created": True, "provider": provider, "event": event}
 
 
@@ -500,6 +501,7 @@ def cmd_update(args):
     except urllib.error.URLError as exc:
         return {"error": f"API request failed: {exc.reason}"}
 
+    _remember_event("updated", provider, event)
     return {"updated": True, "provider": provider, "event": event}
 
 
@@ -572,6 +574,7 @@ def cmd_delete(args):
     except urllib.error.URLError as exc:
         return {"error": f"API request failed: {exc.reason}"}
 
+    _remember_event("deleted", provider, {"id": event_id})
     return {"deleted": True, "provider": provider, "id": event_id}
 
 
@@ -589,6 +592,43 @@ def cmd_today(args):
         "--to", tomorrow_start.strftime("%Y-%m-%dT%H:%M:%SZ"),
     ] + args
     return cmd_list(new_args)
+
+
+# ---------------------------------------------------------------------------
+# Memory hook
+# ---------------------------------------------------------------------------
+
+def _remember_event(action, provider, event):
+    """Push a one-line summary of a calendar mutation into the agent's memory.
+
+    Best-effort: failures are swallowed so a memory hiccup never breaks the
+    user-visible operation.
+    """
+    try:
+        event_id = (event or {}).get("id") or ""
+        title = (event or {}).get("title") or ""
+        start = (event or {}).get("start") or ""
+        end = (event or {}).get("end") or ""
+        location = (event or {}).get("location") or ""
+        parts = [f"Calendar {action}: {title or event_id}".strip()]
+        if start:
+            parts.append(f"from {start}")
+        if end:
+            parts.append(f"to {end}")
+        if location:
+            parts.append(f"at {location}")
+        text = " ".join(parts) + f" (provider={provider})"
+        tags = ["calendar", action, provider]
+        memory.remember(
+            source="calendar",
+            text=text,
+            kind="event",
+            entity_id=event_id or None,
+            tags=tags,
+            link=f"cos app calendar list --provider {provider}",
+        )
+    except memory.MemoryError:
+        pass
 
 
 # ---------------------------------------------------------------------------

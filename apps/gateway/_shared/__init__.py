@@ -31,4 +31,5 @@ __all__ = [
     "safe_subprocess",
     "inbound",
     "atomic",
+    "gateway_memory",
 ]
