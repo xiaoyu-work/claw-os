@@ -21,22 +21,34 @@ use crate::agent::web::state::AppState;
 
 async fn run_args(args: Vec<String>) -> Response {
     // setup::run is sync and uses its own `block_on` for HTTP I/O
-    // (OAuth, verification). Calling it directly inside the axum tokio
-    // runtime would panic — wrap in spawn_blocking so the inner block_on
-    // executes on a thread without a tokio context.
-    let result = tokio::task::spawn_blocking(move || setup::run(&args)).await;
-    match result {
-        Ok(Ok(v)) => Json(v).into_response(),
-        Ok(Err(e)) => {
-            let body = serde_json::from_str::<Value>(&e).unwrap_or_else(|_| json!({"error": e}));
-            (StatusCode::BAD_REQUEST, Json(body)).into_response()
+    // (OAuth, verification). Calling it directly inside an axum tokio
+    // task would panic. `block_in_place` runs the blocking work on the
+    // *current* task instead of spawning to a separate worker — that
+    // both avoids the nested-runtime panic and keeps the
+    // `with_override` task-local visible from inside `setup::run`.
+    // `spawn_blocking` would NOT inherit task-locals, so the config
+    // override below would be silently ignored.
+    //
+    // We refresh the on-disk config and install it as a per-task
+    // override. Without this the daemon's process-wide `CONFIG`
+    // (`OnceLock`) keeps the snapshot taken at startup forever — every
+    // status call after an `apply` (including the one this very handler
+    // just performed via `setup::run`) returns the stale pre-apply
+    // state and the UI shows "not configured" right after the user has
+    // just configured the provider.
+    let cfg = crate::config::intern_user_config();
+    crate::config::with_override(cfg, async move {
+        let outcome = tokio::task::block_in_place(|| setup::run(&args));
+        match outcome {
+            Ok(v) => Json(v).into_response(),
+            Err(e) => {
+                let body =
+                    serde_json::from_str::<Value>(&e).unwrap_or_else(|_| json!({"error": e}));
+                (StatusCode::BAD_REQUEST, Json(body)).into_response()
+            }
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": format!("setup task join error: {e}")})),
-        )
-            .into_response(),
-    }
+    })
+    .await
 }
 
 pub async fn status_all(State(_): State<AppState>) -> Response {
