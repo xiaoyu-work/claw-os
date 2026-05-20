@@ -126,6 +126,10 @@ impl Verb {
     // pollute other apps' or the agent's session memory. The user
     // inspects and forgets these rows via `cos agent memory`.
     pub const MEMORY_WRITE: Verb = Verb::new("memory.write");
+    /// Read entries the app itself wrote. Scope is `self:<app_id>` —
+    /// an app cannot peek into another app's namespace. The agent
+    /// runtime reads in-process (no bridge) and is unaffected.
+    pub const MEMORY_READ: Verb = Verb::new("memory.read");
 
     // -- IPC / messaging ---------------------------------------------------
     pub const IPC_PUBLISH: Verb = Verb::new("ipc.publish");
@@ -237,6 +241,7 @@ pub const ALL_VERBS: &[Verb] = &[
     Verb::DATA_INBOX_READ,
     Verb::DATA_INBOX_WRITE,
     Verb::MEMORY_WRITE,
+    Verb::MEMORY_READ,
     Verb::IPC_PUBLISH,
     Verb::IPC_SUBSCRIBE,
     Verb::IPC_INVOKE,

@@ -26,6 +26,7 @@
 //! For now, calls are dispatched directly. The `policy` module already
 //! self-polices destructive operations at the primitive layer.
 
+pub mod app_memory;
 pub mod memory;
 pub mod recall;
 pub mod recall_semantic;
@@ -414,6 +415,17 @@ pub fn register_recall(
     db: crate::agent::memory::sqlite_fts::MemoryDb,
 ) {
     registry.register(Arc::new(recall::CosRecallTool::new(db)));
+}
+
+/// Register the `cos_app_memory` tool, which exposes app-pushed memory
+/// rows (calendar events, sent emails, document summaries, ...) to the
+/// LLM as a dedicated query surface. Backed by the same `MemoryDb` as
+/// `cos_recall`, but with source/kind filtering and structured rows.
+pub fn register_app_memory(
+    registry: &mut ToolRegistry,
+    db: crate::agent::memory::sqlite_fts::MemoryDb,
+) {
+    registry.register(Arc::new(app_memory::CosAppMemoryTool::new(db)));
 }
 
 /// Register the `cos_recall_semantic` similarity-search tool against
