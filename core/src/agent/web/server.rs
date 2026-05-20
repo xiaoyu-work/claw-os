@@ -21,6 +21,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/", get(assets::index))
         .route("/index.html", get(assets::index))
         .route("/favicon.ico", get(assets::favicon))
+        .route("/assets/{file}", get(assets::asset))
         // JSON API.
         .route("/api/meta", get(routes::meta::handler))
         .route("/api/chat", post(routes::chat::handler))
