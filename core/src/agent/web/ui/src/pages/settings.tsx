@@ -165,22 +165,23 @@ function ModalityPanel({ modality }: { modality: string }) {
       setStatus(st);
       const list = extractProviders(pv);
       setProviders(list);
-      if (!provider && list.length > 0) {
-        const cur =
-          (st as any)?.provider ||
-          (st as any)?.current ||
-          providerId(list[0]);
-        setProvider(String(cur || ""));
-      }
-      const curModel = (st as any)?.model || (st as any)?.current_model;
-      if (curModel) setModel(String(curModel));
-      // Pre-fill extra fields from status (status keys mirror extra_field keys).
       const stObj = (st as any) || {};
-      const nextExtras: Record<string, string> = {};
-      for (const k of ["base_url", "api_version", "endpoint"]) {
-        if (typeof stObj[k] === "string") nextExtras[k] = stObj[k];
-      }
-      setExtras(nextExtras);
+      const curProvider = stObj.provider || stObj.current || providerId(list[0] || {});
+      const curModel = stObj.model || stObj.current_model;
+      // Functional setters so a reload that runs *after* the user has
+      // selected something (e.g. OAuth flow → load() in the same panel
+      // instance) doesn't clobber their choice. The seeded value only
+      // wins on the first render when state is still empty.
+      setProvider((prev) => prev || String(curProvider || ""));
+      setModel((prev) => prev || String(curModel || ""));
+      setExtras((prev) => {
+        if (Object.keys(prev).length > 0) return prev;
+        const next: Record<string, string> = {};
+        for (const k of ["base_url", "api_version", "endpoint"]) {
+          if (typeof stObj[k] === "string") next[k] = stObj[k];
+        }
+        return next;
+      });
     } catch (e: any) {
       setMsg({ kind: "err", text: e?.message || "Load failed" });
     } finally {
@@ -299,25 +300,23 @@ function ModalityPanel({ modality }: { modality: string }) {
             modality,
             device_code: devCode,
           });
-          // Server returns the final outcome when the flow completes;
-          // anything truthy in `models` / `token_credential` / `status==="ok"`
-          // means success.
-          if (
-            p?.status === "ok" ||
-            p?.token_credential ||
-            p?.access_token ||
-            Array.isArray(p?.models)
-          ) {
-            setOauth({ status: "done" });
+          // `status === "ok"` is the canonical success. Other statuses
+          // ("pending" | "slow_down" | "expired" | "denied") loop back
+          // or fall through to the timeout branch.
+          if (p?.status === "ok") {
+            await finalizeOauth();
+            return;
+          }
+          if (p?.status === "expired" || p?.status === "denied") {
+            setOauth({ status: "error" });
             setMsg({
-              kind: "ok",
-              text: "Signed in. Pick a model and click Apply.",
+              kind: "err",
+              text: p.status === "denied" ? "Sign-in denied." : "Code expired. Try again.",
             });
-            await load();
             return;
           }
         } catch {
-          // expected during the "authorization_pending" phase; keep going
+          // server reports authorization_pending as a 4xx — keep polling
         }
       }
       setOauth({ status: "error" });
@@ -325,6 +324,57 @@ function ModalityPanel({ modality }: { modality: string }) {
     } catch (e: any) {
       setOauth({ status: "error" });
       setMsg({ kind: "err", text: e?.message || "OAuth failed" });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // After OAuth success, the GitHub token has been stored as a credential
+  // but the active LLM provider in config.json hasn't been switched. The
+  // CLI wizard's terminal flow handles this in one shot: fetch live
+  // models, let the user pick one, then `apply` with the credential. The
+  // web port mirrors that — auto-pick the first model and apply so the
+  // user lands on a fully-configured "ready" state instead of "signed in
+  // but not configured".
+  async function finalizeOauth() {
+    setBusy("oauth-finalize");
+    setOauth({ status: "done" });
+    setMsg({ kind: "ok", text: "Signed in. Configuring Copilot…" });
+    try {
+      // Fetch the live model list now that we have a token.
+      const m: any = await api.get(`/api/setup/models/${modality}/${provider}`);
+      const ids = extractModelIds(m);
+      setModels(ids);
+      // Prefer the provider's declared default if it's in the live list,
+      // else the first live entry.
+      const def = providerEntry?.default_model || "";
+      const pick = (def && ids.includes(def) ? def : ids[0]) || def;
+      if (!pick) {
+        setMsg({
+          kind: "err",
+          text: "Signed in, but Copilot returned no models. Pick one manually and click Apply.",
+        });
+        await load();
+        return;
+      }
+      setModel(pick);
+      // Auto-apply. Copilot's `apply` resolves the credential by provider
+      // name (COPILOT_GITHUB_TOKEN_CREDENTIAL) so we don't pass api_key.
+      await api.post("/api/setup/apply", {
+        modality,
+        provider,
+        model: pick,
+        verify: true,
+      });
+      setMsg({ kind: "ok", text: `Copilot configured with ${pick}.` });
+      await load();
+    } catch (e: any) {
+      setMsg({
+        kind: "err",
+        text: `Signed in, but auto-configure failed: ${e?.message || e}. Pick a model and click Apply.`,
+      });
+      // Even on failure, refresh status so the UI reflects the stored token.
+      await load();
     } finally {
       setBusy(null);
     }

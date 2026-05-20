@@ -999,6 +999,23 @@ pub fn intern_for_home(home: &Path) -> &'static CosConfig {
     intern_static(load_from_path(&path))
 }
 
+/// Re-read the standard user config (`~/.config/cos/config.json` or
+/// `$COS_CONFIG_PATH`) from disk and intern it as a `'static` pointer
+/// suitable for [`with_override`].
+///
+/// Long-running daemons like `cos agent serve` cache the process-wide
+/// `CONFIG: OnceLock<CosConfig>` at startup and never observe later
+/// writes — including writes the daemon itself makes via
+/// `cos agent setup apply`. Wrap each request handler in
+/// `with_override(intern_user_config(), ...)` so every `config::get()`
+/// call in the handler sees the current on-disk state.
+pub fn intern_user_config() -> &'static CosConfig {
+    let path = std::env::var_os("COS_CONFIG_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(crate::paths::user_config_path);
+    intern_static(load_from_path(&path))
+}
+
 /// Run `fut` with `cfg` installed as the per-task override visible to
 /// every `config::get()` call inside it (and any task spawned via
 /// `tokio::spawn` from within it, because `task_local` propagates).
