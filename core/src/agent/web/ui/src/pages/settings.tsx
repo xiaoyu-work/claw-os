@@ -102,6 +102,15 @@ function SettingsNavItem({
   );
 }
 
+type ProviderField = {
+  key: string;
+  label?: string;
+  help?: string;
+  placeholder?: string;
+  required?: boolean;
+  secret?: boolean;
+};
+
 type ProviderEntry = {
   id?: string;
   key?: string;
@@ -109,16 +118,19 @@ type ProviderEntry = {
   label?: string;
   display?: string;
   models?: any[];
-  requires_api_key?: boolean;
-  supports_oauth?: boolean;
-  needs_base_url?: boolean;
-  api_key_env?: string;
+  auth_kind?: string;
+  needs_credential?: boolean;
   default_env?: string;
   default_model?: string;
+  extra_fields?: ProviderField[];
 };
 
 function providerId(p: ProviderEntry): string {
   return String(p.id || p.key || p.label || p.name || "");
+}
+
+function isOauthOnly(p?: ProviderEntry): boolean {
+  return p?.auth_kind === "oauth_device";
 }
 
 function ModalityPanel({ modality }: { modality: string }) {
@@ -127,11 +139,20 @@ function ModalityPanel({ modality }: { modality: string }) {
   const [provider, setProvider] = useState<string>("");
   const [model, setModel] = useState<string>("");
   const [apiKey, setApiKey] = useState<string>("");
-  const [baseUrl, setBaseUrl] = useState<string>("");
+  // Free-form extra fields driven by `provider.extra_fields[]` (e.g.
+  // Azure's base_url + api_version). Keyed by field.key.
+  const [extras, setExtras] = useState<Record<string, string>>({});
   const [models, setModels] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  // OAuth device-flow display state: shown after user clicks "Sign in"
+  // and we have the user_code + verification_uri to display.
+  const [oauth, setOauth] = useState<{
+    user_code?: string;
+    verification_uri?: string;
+    status: "polling" | "done" | "error";
+  } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -153,8 +174,13 @@ function ModalityPanel({ modality }: { modality: string }) {
       }
       const curModel = (st as any)?.model || (st as any)?.current_model;
       if (curModel) setModel(String(curModel));
-      const curBase = (st as any)?.base_url;
-      if (curBase) setBaseUrl(String(curBase));
+      // Pre-fill extra fields from status (status keys mirror extra_field keys).
+      const stObj = (st as any) || {};
+      const nextExtras: Record<string, string> = {};
+      for (const k of ["base_url", "api_version", "endpoint"]) {
+        if (typeof stObj[k] === "string") nextExtras[k] = stObj[k];
+      }
+      setExtras(nextExtras);
     } catch (e: any) {
       setMsg({ kind: "err", text: e?.message || "Load failed" });
     } finally {
@@ -203,7 +229,11 @@ function ModalityPanel({ modality }: { modality: string }) {
       const body: any = { modality, provider, verify };
       if (model) body.model = model;
       if (apiKey) body.api_key = apiKey;
-      if (baseUrl) body.base_url = baseUrl;
+      // extras → known top-level fields (api endpoint accepts base_url
+      // and api_version directly; future extra_fields would need server
+      // support beyond what setup/apply currently exposes).
+      if (extras.base_url) body.base_url = extras.base_url;
+      if (extras.api_version) body.api_version = extras.api_version;
       await api.post("/api/setup/apply", body);
       setMsg({ kind: "ok", text: verify ? "Applied and verified." : "Applied." });
       setApiKey("");
@@ -225,7 +255,8 @@ function ModalityPanel({ modality }: { modality: string }) {
       setProvider("");
       setModel("");
       setApiKey("");
-      setBaseUrl("");
+      setExtras({});
+      setOauth(null);
       await load();
     } catch (e: any) {
       setMsg({ kind: "err", text: e?.message || "Reset failed" });
@@ -250,37 +281,49 @@ function ModalityPanel({ modality }: { modality: string }) {
   async function oauthStart() {
     setBusy("oauth");
     setMsg(null);
+    setOauth(null);
     try {
       const r: any = await api.post("/api/setup/oauth/start", { provider, modality });
-      const code = r?.user_code || r?.verification_code;
+      const userCode = r?.user_code || r?.verification_code;
       const url = r?.verification_uri || r?.verification_url;
-      if (url) window.open(url, "_blank", "noopener");
       const devCode = r?.device_code;
-      if (!devCode) throw new Error("No device_code returned");
-      setMsg({
-        kind: "ok",
-        text: `Code: ${code || "(check console)"}. Polling…`,
-      });
+      if (!devCode) throw new Error("No device_code returned by server");
+      setOauth({ user_code: userCode, verification_uri: url, status: "polling" });
       const deadline = Date.now() + 10 * 60_000;
+      const interval = Number(r?.interval) || 5;
       while (Date.now() < deadline) {
-        await new Promise((res) => setTimeout(res, (r?.interval || 5) * 1000));
+        await new Promise((res) => setTimeout(res, interval * 1000));
         try {
           const p: any = await api.post("/api/setup/oauth/poll", {
             provider,
             modality,
             device_code: devCode,
           });
-          if (p?.status === "ok" || p?.token || p?.access_token) {
-            setMsg({ kind: "ok", text: "OAuth complete." });
+          // Server returns the final outcome when the flow completes;
+          // anything truthy in `models` / `token_credential` / `status==="ok"`
+          // means success.
+          if (
+            p?.status === "ok" ||
+            p?.token_credential ||
+            p?.access_token ||
+            Array.isArray(p?.models)
+          ) {
+            setOauth({ status: "done" });
+            setMsg({
+              kind: "ok",
+              text: "Signed in. Pick a model and click Apply.",
+            });
             await load();
             return;
           }
         } catch {
-          // keep polling
+          // expected during the "authorization_pending" phase; keep going
         }
       }
+      setOauth({ status: "error" });
       setMsg({ kind: "err", text: "OAuth timed out" });
     } catch (e: any) {
+      setOauth({ status: "error" });
       setMsg({ kind: "err", text: e?.message || "OAuth failed" });
     } finally {
       setBusy(null);
@@ -288,8 +331,11 @@ function ModalityPanel({ modality }: { modality: string }) {
   }
 
   const ready = (status as any)?.ready === true || (status as any)?.configured === true;
-  const supportsOauth = !!providerEntry?.supports_oauth;
-  const needsBase = !!providerEntry?.needs_base_url;
+  const oauthOnly = isOauthOnly(providerEntry);
+  // Provider-declared extra fields (e.g. Azure base_url + api_version).
+  // We render these regardless of OAuth mode — Azure for example needs
+  // its endpoint URL even though API key auth is the only path today.
+  const extraFields = providerEntry?.extra_fields || [];
 
   return (
     <div className="mx-auto max-w-2xl p-6">
@@ -322,7 +368,14 @@ function ModalityPanel({ modality }: { modality: string }) {
         <Card className="grid gap-4 p-5">
           <div className="grid gap-1.5">
             <Label>Provider</Label>
-            <Select value={provider} onValueChange={setProvider}>
+            <Select
+              value={provider}
+              onValueChange={(v) => {
+                setProvider(v);
+                setOauth(null);
+                setMsg(null);
+              }}
+            >
               <SelectTrigger>
                 <SelectValue placeholder="Choose…" />
               </SelectTrigger>
@@ -332,12 +385,59 @@ function ModalityPanel({ modality }: { modality: string }) {
                   return (
                     <SelectItem key={id} value={id}>
                       {p.label || p.display || p.name || id}
+                      {isOauthOnly(p) ? " · OAuth" : ""}
                     </SelectItem>
                   );
                 })}
               </SelectContent>
             </Select>
           </div>
+
+          {oauthOnly ? (
+            <CopilotAuthBlock
+              providerLabel={providerEntry?.label || provider}
+              busy={busy === "oauth"}
+              oauth={oauth}
+              ready={ready}
+              onStart={oauthStart}
+            />
+          ) : (
+            <>
+              {extraFields.map((f) => (
+                <div key={f.key} className="grid gap-1.5">
+                  <Label>
+                    {f.label || f.key}
+                    {f.required ? <span className="text-destructive"> *</span> : null}
+                  </Label>
+                  <Input
+                    type={f.secret ? "password" : "text"}
+                    placeholder={f.placeholder || ""}
+                    value={extras[f.key] || ""}
+                    onChange={(e) =>
+                      setExtras((x) => ({ ...x, [f.key]: e.target.value }))
+                    }
+                  />
+                  {f.help && (
+                    <p className="text-[11px] text-muted-foreground">{f.help}</p>
+                  )}
+                </div>
+              ))}
+
+              <div className="grid gap-1.5">
+                <Label>API key</Label>
+                <Input
+                  type="password"
+                  placeholder={
+                    providerEntry?.default_env
+                      ? `from env ${providerEntry.default_env}, or paste here`
+                      : "Paste an API key"
+                  }
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                />
+              </div>
+            </>
+          )}
 
           <div className="grid gap-1.5">
             <Label>Model</Label>
@@ -356,40 +456,14 @@ function ModalityPanel({ modality }: { modality: string }) {
               </Select>
             ) : (
               <Input
-                placeholder="model id"
+                placeholder={
+                  oauthOnly && !ready
+                    ? "Sign in first to fetch the model list"
+                    : "model id"
+                }
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
               />
-            )}
-          </div>
-
-          {needsBase && (
-            <div className="grid gap-1.5">
-              <Label>Base URL</Label>
-              <Input
-                placeholder="https://api.example.com/v1"
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-              />
-            </div>
-          )}
-
-          <div className="grid gap-1.5">
-            <Label>API key</Label>
-            <Input
-              type="password"
-              placeholder={
-                providerEntry?.api_key_env
-                  ? `from env ${providerEntry.api_key_env}, or paste`
-                  : "Paste an API key"
-              }
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-            />
-            {supportsOauth && (
-              <p className="text-[11px] text-muted-foreground">
-                This provider supports OAuth. Use the button below instead of pasting a key.
-              </p>
             )}
           </div>
 
@@ -405,23 +479,25 @@ function ModalityPanel({ modality }: { modality: string }) {
           )}
 
           <div className="flex flex-wrap gap-2">
-            <Button disabled={busy != null || !provider} onClick={() => apply(true)}>
+            <Button
+              disabled={busy != null || !provider || (oauthOnly && !ready)}
+              onClick={() => apply(true)}
+            >
               {busy === "apply" ? (
                 <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
               ) : null}
               Apply & verify
             </Button>
-            <Button variant="outline" disabled={busy != null || !provider} onClick={() => apply(false)}>
+            <Button
+              variant="outline"
+              disabled={busy != null || !provider || (oauthOnly && !ready)}
+              onClick={() => apply(false)}
+            >
               Apply
             </Button>
             <Button variant="outline" disabled={busy != null || !ready} onClick={test}>
               Verify
             </Button>
-            {supportsOauth && (
-              <Button variant="outline" disabled={busy != null || !provider} onClick={oauthStart}>
-                OAuth sign-in
-              </Button>
-            )}
             <div className="ml-auto" />
             <Button
               variant="ghost"
@@ -435,6 +511,59 @@ function ModalityPanel({ modality }: { modality: string }) {
           </div>
         </Card>
       )}
+    </div>
+  );
+}
+
+function CopilotAuthBlock({
+  providerLabel,
+  busy,
+  oauth,
+  ready,
+  onStart,
+}: {
+  providerLabel: string;
+  busy: boolean;
+  oauth: { user_code?: string; verification_uri?: string; status: string } | null;
+  ready: boolean;
+  onStart: () => void;
+}) {
+  return (
+    <div className="grid gap-3 rounded-md border border-dashed border-border bg-muted/30 p-4">
+      <div className="grid gap-1">
+        <p className="text-sm font-medium">{providerLabel} sign-in</p>
+        <p className="text-xs text-muted-foreground">
+          {providerLabel} uses GitHub device-flow authorization — no API key.
+          {ready ? " Already signed in." : ""}
+        </p>
+      </div>
+      {oauth?.user_code && oauth.status === "polling" && (
+        <div className="grid gap-2 rounded bg-background p-3">
+          <p className="text-xs text-muted-foreground">
+            Open this URL on any device, then enter the code:
+          </p>
+          {oauth.verification_uri && (
+            <a
+              href={oauth.verification_uri}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="break-all text-xs font-medium text-primary underline"
+            >
+              {oauth.verification_uri}
+            </a>
+          )}
+          <div className="rounded bg-muted px-3 py-2 text-center text-lg font-mono font-semibold tracking-[0.3em]">
+            {oauth.user_code}
+          </div>
+          <p className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" /> Waiting for you to approve…
+          </p>
+        </div>
+      )}
+      <Button onClick={onStart} disabled={busy} className="w-fit">
+        {busy ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}
+        {ready ? "Sign in again" : `Sign in with GitHub`}
+      </Button>
     </div>
   );
 }

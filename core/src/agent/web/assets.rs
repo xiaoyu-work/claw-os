@@ -70,6 +70,9 @@ pub async fn index() -> Response {
 }
 
 pub async fn favicon() -> Response {
+    if UI_DIR.get_file("favicon.png").is_some() {
+        return serve_file("favicon.png");
+    }
     if UI_DIR.get_file("favicon.ico").is_some() {
         return serve_file("favicon.ico");
     }
@@ -90,6 +93,17 @@ pub async fn favicon() -> Response {
         HeaderValue::from_static("public, max-age=86400"),
     );
     resp
+}
+
+/// Brand assets emitted by Vite into `public/`, served at the bundle root.
+/// `assets::asset` only handles `assets/<file>`; the public-folder files
+/// need their own handlers.
+pub async fn brand_symbol_light() -> Response {
+    serve_file("clawos-symbol.png")
+}
+
+pub async fn brand_symbol_dark() -> Response {
+    serve_file("clawos-symbol-dark.png")
 }
 
 /// Catch-all for `/assets/<file>` — serves hashed Vite chunks.

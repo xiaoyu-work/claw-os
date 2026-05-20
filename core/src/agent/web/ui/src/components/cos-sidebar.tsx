@@ -12,17 +12,21 @@
 import {
   ChevronDown,
   Inbox,
+  Laptop,
   ListTodo,
   MessageSquare,
   Monitor,
+  Moon,
   Plus,
   ShieldCheck,
   Settings,
+  Sun,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { api } from "@/lib/api";
 import { isActive, navigate, useRoute } from "@/lib/router";
+import { setTheme, useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -99,16 +103,15 @@ export function CosSidebar({ meta }: { meta: any }) {
       <SidebarHeader className="gap-2">
         <div className="flex items-center justify-between px-2 py-1.5">
           <div className="flex items-center gap-2">
-            <div className="grid h-7 w-7 place-items-center rounded-md bg-sidebar-primary text-sidebar-primary-foreground">
-              <MessageSquare className="h-4 w-4" />
-            </div>
+            <Logo />
             <div className="grid leading-tight">
-              <span className="text-sm font-semibold tracking-tight">cos agent</span>
+              <span className="text-sm font-semibold tracking-tight">Claw OS</span>
               <span className="text-[11px] text-muted-foreground">
                 {meta?.hostname || "localhost"}
               </span>
             </div>
           </div>
+          <ThemeToggle />
         </div>
         <Button
           variant="default"
@@ -210,6 +213,63 @@ export function CosSidebar({ meta }: { meta: any }) {
         <SidebarFooterUser meta={meta} />
       </SidebarFooter>
     </Sidebar>
+  );
+}
+
+function Logo() {
+  // Brand symbol is dark strokes on light background; provide an inverted
+  // variant for dark mode so the strokes stay visible. Both PNGs live in
+  // public/ so Vite serves them at root.
+  return (
+    <span className="relative grid h-7 w-7 place-items-center">
+      <img
+        src="/clawos-symbol.png"
+        alt=""
+        className="h-6 w-6 object-contain dark:hidden"
+      />
+      <img
+        src="/clawos-symbol-dark.png"
+        alt=""
+        className="hidden h-6 w-6 object-contain dark:block"
+      />
+    </span>
+  );
+}
+
+function ThemeToggle() {
+  const theme = useTheme();
+  const Icon = theme === "light" ? Sun : theme === "system" ? Laptop : Moon;
+  return (
+    <DropdownMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" className="h-7 w-7">
+              <Icon className="h-3.5 w-3.5" />
+            </Button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="right">Theme</TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent align="end" className="w-40">
+        <DropdownMenuLabel className="text-xs text-muted-foreground">Theme</DropdownMenuLabel>
+        <DropdownMenuItem onClick={() => setTheme("light")}>
+          <Sun className="mr-2 h-3.5 w-3.5" />
+          Light
+          {theme === "light" && <span className="ml-auto text-[10px]">●</span>}
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => setTheme("dark")}>
+          <Moon className="mr-2 h-3.5 w-3.5" />
+          Dark
+          {theme === "dark" && <span className="ml-auto text-[10px]">●</span>}
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => setTheme("system")}>
+          <Laptop className="mr-2 h-3.5 w-3.5" />
+          System
+          {theme === "system" && <span className="ml-auto text-[10px]">●</span>}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
