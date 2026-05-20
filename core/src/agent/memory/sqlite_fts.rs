@@ -687,7 +687,7 @@ impl MemoryDb {
         }
     }
 
-    fn lock_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, MemoryError> {
+    pub(crate) fn lock_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, MemoryError> {
         self.conn
             .lock()
             .map_err(|e| MemoryError::Poisoned(e.to_string()))
@@ -704,7 +704,7 @@ pub struct SessionSummary {
     pub title: Option<String>,
 }
 
-fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<MessageRow> {
+pub(crate) fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<MessageRow> {
     Ok(MessageRow {
         id: row.get(0)?,
         session_id: row.get(1)?,

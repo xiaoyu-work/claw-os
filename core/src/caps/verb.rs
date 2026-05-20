@@ -118,6 +118,15 @@ impl Verb {
     pub const DATA_INBOX_READ: Verb = Verb::new("data.inbox.read");
     pub const DATA_INBOX_WRITE: Verb = Verb::new("data.inbox.write");
 
+    // -- Agent memory ------------------------------------------------------
+    // Apps that hold this verb can push searchable summaries of their own
+    // activity into the agent's memory (FTS5 + semantic). Scope is
+    // `self:<app_id>` by convention; the bridge constrains every write to
+    // the app's own namespace (`app/<source>`) so a granted app cannot
+    // pollute other apps' or the agent's session memory. The user
+    // inspects and forgets these rows via `cos agent memory`.
+    pub const MEMORY_WRITE: Verb = Verb::new("memory.write");
+
     // -- IPC / messaging ---------------------------------------------------
     pub const IPC_PUBLISH: Verb = Verb::new("ipc.publish");
     pub const IPC_SUBSCRIBE: Verb = Verb::new("ipc.subscribe");
@@ -227,6 +236,7 @@ pub const ALL_VERBS: &[Verb] = &[
     Verb::DATA_LOG_WRITE,
     Verb::DATA_INBOX_READ,
     Verb::DATA_INBOX_WRITE,
+    Verb::MEMORY_WRITE,
     Verb::IPC_PUBLISH,
     Verb::IPC_SUBSCRIBE,
     Verb::IPC_INVOKE,

@@ -374,6 +374,16 @@ pub const CATALOG: &[CapMeta] = &[
         Risk::Medium,
     ),
 
+    // -- Agent memory --------------------------------------------------------
+    CapMeta::new(
+        Verb::MEMORY_WRITE,
+        ScopeKind::SelfRef,
+        LocalizedStr::new("Write to the agent's memory"),
+        LocalizedStr::new("Push searchable summaries (events, facts) into the agent's memory under this app's own namespace, so the agent can later recall what you did. Each entry is tagged with the app id; you can inspect and forget entries with `cos agent memory`."),
+        "🧠",
+        Risk::Medium,
+    ),
+
     // -- IPC -----------------------------------------------------------------
     CapMeta::new(
         Verb::IPC_PUBLISH,

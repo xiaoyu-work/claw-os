@@ -190,13 +190,14 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "resume" => lifecycle::resume(args),
         "setup" => setup::run(args),
         "notes" => notes_cmd(args),
+        "memory" => memory_cmd(args),
         "skills" => skills_cmd(args),
         "mcp" => mcp_cmd(args),
         "todo" => todo_cmd(args),
         "doctor" => doctor_cli::doctor_cmd(args),
         "dev" => dev_dispatch(args),
         other => Err(format!(
-            "unknown command: {other}. try: setup | ask | chat | serve | budget | override | status | sessions | recall | service | notes | skills | todo | mcp | doctor | dev | ls | show | stop | undo | resume"
+            "unknown command: {other}. try: setup | ask | chat | serve | budget | override | status | sessions | recall | service | notes | memory | skills | todo | mcp | doctor | dev | ls | show | stop | undo | resume"
         )),
     }
 }
@@ -1465,6 +1466,157 @@ fn sessions_stats_session_with(
         "by_role": by_role,
         "oldest_ts_ms": stats.oldest_ts_ms,
         "newest_ts_ms": stats.newest_ts_ms,
+    }))
+}
+
+/// `cos agent memory [list|show|search|forget]` — user-facing
+/// inspect/redact view of app-emitted memory rows. Apps push entries
+/// in via the hidden `cos __memory remember` bridge under the
+/// `memory.write` capability; this CLI surfaces what's been stored
+/// and lets the user delete entries per row or per source.
+fn memory_cmd(args: &[String]) -> Result<Value, String> {
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("list");
+    let rest: &[String] = if args.is_empty() { &[] } else { &args[1..] };
+    match sub {
+        "list" | "" => memory_list(rest),
+        "show" => memory_show(rest),
+        "search" => memory_search(rest),
+        "forget" => memory_forget(rest),
+        other => Err(format!(
+            "unknown memory subcommand: {other}. try: list [--source <id>] [--limit N] | show <row_id> | search \"<query>\" [--source <id>] [--limit N] | forget {{--row <id> | --source <id>}} [--yes]"
+        )),
+    }
+}
+
+fn memory_list(args: &[String]) -> Result<Value, String> {
+    let mut source: Option<String> = None;
+    let mut limit: usize = 20;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--source" if i + 1 < args.len() => {
+                source = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--limit" if i + 1 < args.len() => {
+                limit = args[i + 1]
+                    .parse()
+                    .map_err(|e| format!("--limit must be a positive integer: {e}"))?;
+                i += 2;
+            }
+            other => return Err(format!("memory list: unexpected arg {other}")),
+        }
+    }
+    let db = memory::sqlite_fts::MemoryDb::open_default()
+        .map_err(|e| format!("memory db unavailable: {e}"))?;
+    let rows = memory::app_memory::list(&db, source.as_deref(), limit)
+        .map_err(|e| format!("memory list: {e}"))?;
+    let n = rows.len();
+    Ok(json!({
+        "n": n,
+        "rows": rows,
+    }))
+}
+
+fn memory_show(args: &[String]) -> Result<Value, String> {
+    let id: i64 = args
+        .first()
+        .ok_or_else(|| "usage: cos agent memory show <row_id>".to_string())?
+        .parse()
+        .map_err(|e| format!("row_id must be an integer: {e}"))?;
+    let db = memory::sqlite_fts::MemoryDb::open_default()
+        .map_err(|e| format!("memory db unavailable: {e}"))?;
+    let row = memory::app_memory::show(&db, id).map_err(|e| format!("memory show: {e}"))?;
+    Ok(json!({ "row": row }))
+}
+
+fn memory_search(args: &[String]) -> Result<Value, String> {
+    if args.is_empty() {
+        return Err(
+            "usage: cos agent memory search \"<query>\" [--source <id>] [--limit N]".into(),
+        );
+    }
+    let query = args[0].clone();
+    let mut source: Option<String> = None;
+    let mut limit: usize = 20;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--source" if i + 1 < args.len() => {
+                source = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--limit" if i + 1 < args.len() => {
+                limit = args[i + 1]
+                    .parse()
+                    .map_err(|e| format!("--limit must be a positive integer: {e}"))?;
+                i += 2;
+            }
+            other => return Err(format!("memory search: unexpected arg {other}")),
+        }
+    }
+    let db = memory::sqlite_fts::MemoryDb::open_default()
+        .map_err(|e| format!("memory db unavailable: {e}"))?;
+    let rows = memory::app_memory::search(&db, &query, source.as_deref(), limit)
+        .map_err(|e| format!("memory search: {e}"))?;
+    Ok(json!({
+        "query": query,
+        "limit": limit,
+        "n": rows.len(),
+        "rows": rows,
+    }))
+}
+
+fn memory_forget(args: &[String]) -> Result<Value, String> {
+    let mut source: Option<String> = None;
+    let mut row: Option<i64> = None;
+    let mut confirmed = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--source" if i + 1 < args.len() => {
+                source = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--row" if i + 1 < args.len() => {
+                row = Some(
+                    args[i + 1]
+                        .parse()
+                        .map_err(|e| format!("--row must be an integer: {e}"))?,
+                );
+                i += 2;
+            }
+            "--yes" | "-y" => {
+                confirmed = true;
+                i += 1;
+            }
+            other => return Err(format!("memory forget: unexpected arg {other}")),
+        }
+    }
+    if source.is_some() == row.is_some() {
+        return Err(
+            "usage: cos agent memory forget {--row <id> | --source <id>} [--yes]".into(),
+        );
+    }
+    let db = memory::sqlite_fts::MemoryDb::open_default()
+        .map_err(|e| format!("memory db unavailable: {e}"))?;
+    let store = memory::app_memory::open_default_store();
+    if let Some(s) = source {
+        if !confirmed {
+            return Err(format!(
+                "memory forget --source {s}: refusing to delete all rows for source `{s}` without --yes"
+            ));
+        }
+        let n = memory::app_memory::forget_source(&db, store.as_ref(), &s)
+            .map_err(|e| format!("memory forget: {e}"))?;
+        return Ok(json!({ "removed": n, "source": s }));
+    }
+    let id = row.unwrap();
+    let removed = memory::app_memory::forget_row(&db, store.as_ref(), id)
+        .map_err(|e| format!("memory forget: {e}"))?;
+    Ok(json!({
+        "removed": if removed { 1 } else { 0 },
+        "row_id": id,
     }))
 }
 

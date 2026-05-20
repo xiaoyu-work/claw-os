@@ -15,6 +15,7 @@ use crate::cron;
 use crate::engine_pkg;
 use crate::model;
 use crate::caps;
+use crate::mem_bridge;
 use crate::perms;
 use crate::service;
 use crate::sysinfo;
@@ -74,6 +75,18 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
             .get(1)
             .ok_or_else(|| "internal policy command required".to_string())?;
         let value = perms::run(command, &args[2..])?;
+        return Ok(Some(value.to_string()));
+    }
+
+    // Hidden bridge for apps that want to push searchable summaries
+    // into the agent's memory. The user-facing inspect/forget surface
+    // lives at `cos agent memory`. Kept off the public namespace so
+    // we can evolve the schema without an SDK rev.
+    if name == "__memory" {
+        let command = args
+            .get(1)
+            .ok_or_else(|| "internal memory command required".to_string())?;
+        let value = mem_bridge::run(command, &args[2..])?;
         return Ok(Some(value.to_string()));
     }
 
@@ -1080,6 +1093,7 @@ fn builtin_apps() -> Vec<(
             ("recall", "FTS5 search across recorded conversations: cos agent recall \"<query>\" [limit]"),
             ("service", "Daemon-backed task queue: cos agent service {submit \"<prompt>\" | list | status <id> | result <id> | cancel <id>}. Requires clawd."),
             ("notes", "Manage agent markdown notes (MEMORY.md / USER.md / custom): cos agent notes [list|read <n>|write <n> <content>|append <n> <line>|delete <n>]"),
+            ("memory", "Inspect or redact app-emitted memory rows: cos agent memory [list [--source <id>] [--limit N] | show <row_id> | search \"<query>\" [--source <id>] [--limit N] | forget {--row <id> | --source <id>} [--yes]]. Apps push rows via the `memory.write` capability."),
             ("skills", "Inspect or install skill bundles: cos agent skills [list|info <id>|install <archive.zip>|hub <list|show|install> <owner/repo>|...]"),
             ("todo", "Manage per-session agent todo lists: cos agent todo [list <session_id>|add <session_id> <id> <title>|set-status ...|remove ...|clear ...]"),
             ("mcp", "MCP (Model Context Protocol) bridge — server exposes the cos agent tool catalogue; client probes/invokes a remote MCP subprocess"),

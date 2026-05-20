@@ -24,6 +24,7 @@ pub mod perms;
 pub mod policy;
 pub mod proc;
 pub mod router;
+pub mod mem_bridge;
 pub mod sandbox;
 pub mod service;
 pub mod session;
