@@ -26,7 +26,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { api } from "@/lib/api";
 import { isActive, navigate, useRoute } from "@/lib/router";
-import { setTheme, useTheme } from "@/lib/theme";
+import { setTheme, useTheme, type Theme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -83,16 +83,25 @@ export function CosSidebar({ meta }: { meta: any }) {
 
   useEffect(() => {
     let cancelled = false;
-    api
-      .get<{ sessions?: Session[] } | Session[]>("/api/sessions")
-      .then((r) => {
-        if (cancelled) return;
-        const list = Array.isArray(r) ? r : r?.sessions || [];
-        setSessions(list);
-      })
-      .catch(() => {});
+    const fetchSessions = () => {
+      api
+        .get<{ sessions?: Session[] } | Session[]>("/api/sessions")
+        .then((r) => {
+          if (cancelled) return;
+          const list = Array.isArray(r) ? r : r?.sessions || [];
+          setSessions(list);
+        })
+        .catch(() => {});
+    };
+    fetchSessions();
+    // The chat page dispatches `cos:sessions-changed` after the server
+    // creates a fresh session id mid-stream, so the new chat appears in
+    // the sidebar immediately rather than only after the next reload.
+    const onChange = () => fetchSessions();
+    window.addEventListener("cos:sessions-changed", onChange);
     return () => {
       cancelled = true;
+      window.removeEventListener("cos:sessions-changed", onChange);
     };
   }, []);
 
@@ -239,12 +248,18 @@ function Logo() {
 function ThemeToggle() {
   const theme = useTheme();
   const Icon = theme === "light" ? Sun : theme === "system" ? Laptop : Moon;
+  // Use Radix's native `onSelect` instead of `onClick` so the menu's
+  // close handler can't swallow the event mid-flight on some browsers.
+  const pick = (next: Theme) => (e: Event) => {
+    e.preventDefault();
+    setTheme(next);
+  };
   return (
     <DropdownMenu>
       <Tooltip>
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="h-7 w-7">
+            <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Theme">
               <Icon className="h-3.5 w-3.5" />
             </Button>
           </DropdownMenuTrigger>
@@ -253,17 +268,17 @@ function ThemeToggle() {
       </Tooltip>
       <DropdownMenuContent align="end" className="w-40">
         <DropdownMenuLabel className="text-xs text-muted-foreground">Theme</DropdownMenuLabel>
-        <DropdownMenuItem onClick={() => setTheme("light")}>
+        <DropdownMenuItem onSelect={pick("light")}>
           <Sun className="mr-2 h-3.5 w-3.5" />
           Light
           {theme === "light" && <span className="ml-auto text-[10px]">●</span>}
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => setTheme("dark")}>
+        <DropdownMenuItem onSelect={pick("dark")}>
           <Moon className="mr-2 h-3.5 w-3.5" />
           Dark
           {theme === "dark" && <span className="ml-auto text-[10px]">●</span>}
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => setTheme("system")}>
+        <DropdownMenuItem onSelect={pick("system")}>
           <Laptop className="mr-2 h-3.5 w-3.5" />
           System
           {theme === "system" && <span className="ml-auto text-[10px]">●</span>}

@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { marked } from "marked";
 
 import { api, streamSse } from "@/lib/api";
-import { useRoute } from "@/lib/router";
+import { useRoute, navigate } from "@/lib/router";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -59,11 +59,21 @@ export function ChatPage({ meta }: { meta: any }) {
   const [busy, setBusy] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // When the server assigns a session id mid-stream we push the URL to
+  // `/chat/<id>`. That route change fires the history-load effect below
+  // again, which would otherwise overwrite the in-flight conversation
+  // with a stale server snapshot. Stash the just-assigned id so the
+  // effect can recognise it and skip the reload.
+  const skipReloadFor = useRef<string>("");
 
   useEffect(() => {
     setSessionId(sessionFromRoute);
     if (!sessionFromRoute) {
       setMessages([]);
+      return;
+    }
+    if (skipReloadFor.current === sessionFromRoute) {
+      skipReloadFor.current = "";
       return;
     }
     let cancelled = false;
@@ -129,8 +139,21 @@ export function ChatPage({ meta }: { meta: any }) {
             const last = copy[copy.length - 1];
             if (!last || last.role !== "assistant") return m;
             applyFrame(last, event, data);
-            if (event === "session" && data?.session_id) {
-              setSessionId(String(data.session_id));
+            if ((event === "session" || event === "done") && data?.session_id) {
+              const sid = String(data.session_id);
+              setSessionId(sid);
+              // Reflect the new session in the URL so navigating away
+              // and back (or hitting refresh) lands on the same chat.
+              // Without this, the route stays at `/chat` and the next
+              // mount restarts from scratch — losing all the messages
+              // that just streamed in.
+              if (route !== `/chat/${sid}`) {
+                skipReloadFor.current = sid;
+                navigate(`/chat/${sid}`);
+              }
+              // Tell the sidebar to refresh its session list so the
+              // brand-new chat shows up immediately.
+              window.dispatchEvent(new CustomEvent("cos:sessions-changed"));
             }
             return copy;
           });
@@ -151,7 +174,7 @@ export function ChatPage({ meta }: { meta: any }) {
       setBusy(false);
       abortRef.current = null;
     }
-  }, [input, busy, sessionId]);
+  }, [input, busy, sessionId, route]);
 
   const stop = useCallback(() => {
     abortRef.current?.abort();

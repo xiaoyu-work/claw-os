@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en" class="dark" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/favicon.png" />
@@ -7,6 +7,25 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark light" />
     <title>Claw OS — agent</title>
+    <script>
+      // Apply the persisted theme BEFORE React loads so the first paint
+      // matches the user's preference. Mirrors `lib/theme.ts`'s apply()
+      // — keep the two in sync.
+      (function () {
+        try {
+          var v = localStorage.getItem("cos.theme");
+          var theme = v === "light" || v === "dark" || v === "system" ? v : "dark";
+          var eff = theme;
+          if (theme === "system") {
+            eff = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+          }
+          var root = document.documentElement;
+          if (eff === "dark") root.classList.add("dark"); else root.classList.remove("dark");
+          root.setAttribute("data-theme", eff);
+          root.style.colorScheme = eff;
+        } catch (_) {}
+      })();
+    </script>
   </head>
   <body class="bg-background text-foreground antialiased">
     <div id="root"></div>

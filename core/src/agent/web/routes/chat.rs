@@ -178,6 +178,16 @@ async fn drive_chat(
     let sink: Arc<dyn StreamSink> = sink_obj.clone();
     let progress: Arc<dyn ProgressSink> = sink_obj.clone();
 
+    // Announce the session id up front so the client can update its
+    // route and show this conversation in the sidebar before the model
+    // produces a single token. The `done` event also carries the id at
+    // the very end, but emitting `session` early means navigation /
+    // refresh / stop mid-stream all preserve the conversation.
+    let _ = tx.send(Ok(bytes::Bytes::from(sse::encode_event(
+        "session",
+        &json!({ "session_id": session_id }),
+    ))));
+
     let recorder = memory_db.as_ref().map(|db| (db, session_id.as_str()));
     let result = runtime::loop_::ask_with_stream(
         provider.clone(),

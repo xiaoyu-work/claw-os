@@ -33,6 +33,10 @@ function apply(theme: Theme) {
   const root = document.documentElement;
   const eff = effective(theme);
   root.classList.toggle("dark", eff === "dark");
+  // Mirror the resolved theme on a data attribute too so any CSS or
+  // hand-written component that prefers `[data-theme]` selectors stays
+  // in sync. Belt-and-suspenders alongside the Tailwind `.dark` class.
+  root.setAttribute("data-theme", eff);
   root.style.colorScheme = eff;
 }
 
