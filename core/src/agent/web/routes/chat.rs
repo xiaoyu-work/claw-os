@@ -206,17 +206,42 @@ async fn drive_chat(
         &json!({ "session_id": session_id }),
     ))));
 
-    let recorder = memory_db.as_ref().map(|db| (db, session_id.as_str()));
-    let result = runtime::loop_::ask_with_stream(
-        provider.clone(),
-        &cfg,
-        &prompt,
-        &tools,
-        recorder,
-        sink,
-        progress,
-    )
-    .await;
+    // When memory is enabled, replay this session's prior turns into
+    // the LLM context so multi-turn chat actually *feels* multi-turn.
+    // Without this, `ask_with_stream` seeds `messages` with only the
+    // current prompt, so the user's follow-ups arrive context-free
+    // and the assistant treats every send like a fresh conversation.
+    // Cap replay at 100 rows (≈50 exchanges) to stay well under
+    // typical context windows; `ask_with_stream_continuation`
+    // truncates long tool-result bodies before replay.
+    let result = match memory_db.as_ref() {
+        Some(db) => {
+            runtime::loop_::ask_with_stream_continuation(
+                provider.clone(),
+                &cfg,
+                &prompt,
+                &tools,
+                db,
+                &session_id,
+                100,
+                sink,
+                progress,
+            )
+            .await
+        }
+        None => {
+            runtime::loop_::ask_with_stream(
+                provider.clone(),
+                &cfg,
+                &prompt,
+                &tools,
+                None,
+                sink,
+                progress,
+            )
+            .await
+        }
+    };
 
     match result {
         Ok(ask) => {
