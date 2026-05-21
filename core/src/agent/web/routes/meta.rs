@@ -7,7 +7,16 @@ use serde_json::{json, Value};
 use crate::agent::web::state::AppState;
 
 pub async fn handler(State(state): State<AppState>) -> Json<Value> {
-    let cfg = &state.inner.cfg;
+    // Re-read the agent config every time so a Copilot sign-in / model
+    // switch performed against a running daemon is reflected here on
+    // the very next request — see the matching note in `chat.rs` for
+    // why the startup snapshot in `state.inner.cfg` is not enough.
+    let fresh = crate::config::intern_user_config().agent.clone();
+    let cfg = if fresh.provider.is_empty() && !state.inner.cfg.provider.is_empty() {
+        state.inner.cfg.clone()
+    } else {
+        fresh
+    };
     let version = std::env::var("COS_VERSION").unwrap_or_else(|_| "dev".into());
     let hostname = std::env::var("HOSTNAME")
         .or_else(|_| std::env::var("COMPUTERNAME"))

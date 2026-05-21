@@ -269,7 +269,7 @@ function applyFrame(msg: Msg, event: string, data: any) {
       break;
     }
     case "warning":
-      msg.warnings.push(String(data?.message || data));
+      msg.warnings.push(stringifyServerMessage(data, "warning"));
       break;
     case "turn_done":
     case "done":
@@ -277,8 +277,34 @@ function applyFrame(msg: Msg, event: string, data: any) {
       break;
     case "error":
       msg.status = "error";
-      msg.error = String(data?.message || data);
+      msg.error = stringifyServerMessage(data, "stream error");
       break;
+  }
+}
+
+// The agent server emits errors as
+// `{ "error": "<short>", "details": "<long>", "fix": "<command>" }`
+// (see core/src/agent/setup.rs is_ready) and warnings as
+// `{ "message": "..." }`. Plus there's the catch-all in chat.rs that
+// stringifies the original error into `{ "error": "..." }`. Reach into
+// all of those shapes — naively calling `String(data)` on the object
+// produced the dreaded `[object Object]` users were seeing.
+function stringifyServerMessage(data: any, fallback: string): string {
+  if (typeof data === "string") return data;
+  if (!data || typeof data !== "object") return fallback;
+  if (typeof data.message === "string" && data.message) return data.message;
+  if (typeof data.error === "string" && data.error) {
+    const detail = typeof data.details === "string" ? data.details : "";
+    const fix = typeof data.fix === "string" ? data.fix : "";
+    return [data.error, detail, fix ? `Fix: ${fix}` : ""]
+      .filter(Boolean)
+      .join(" — ");
+  }
+  if (typeof data.details === "string" && data.details) return data.details;
+  try {
+    return JSON.stringify(data);
+  } catch {
+    return fallback;
   }
 }
 

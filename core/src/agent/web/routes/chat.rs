@@ -150,7 +150,25 @@ async fn drive_chat(
 ) -> Result<(), String> {
     use crate::agent::{llm, memory, setup};
 
-    let cfg = state.inner.cfg.clone();
+    // Re-read the agent config from disk on every chat request. The
+    // server captures a snapshot of `state.inner.cfg` at startup, but
+    // long-running daemons keep running across `cos agent setup …`
+    // writes (Copilot OAuth, provider switches, …). If we trusted the
+    // startup snapshot a daemon launched before the user signed in
+    // would forever report "agent not configured" — even after the
+    // config file on disk has been fully populated.
+    //
+    // Falls back to the startup snapshot if disk-read returns an
+    // empty provider AND the snapshot has one (paranoia for a config
+    // file truncated mid-write).
+    let cfg = {
+        let fresh = crate::config::intern_user_config().agent.clone();
+        if fresh.provider.is_empty() && !state.inner.cfg.provider.is_empty() {
+            state.inner.cfg.clone()
+        } else {
+            fresh
+        }
+    };
     setup::is_ready(&cfg)?;
 
     let provider = llm::registry::build(&cfg.provider, &cfg.model, &cfg)
