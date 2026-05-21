@@ -12,7 +12,6 @@
 import {
   ChevronDown,
   Inbox,
-  Laptop,
   ListTodo,
   MessageSquare,
   Monitor,
@@ -247,44 +246,36 @@ function Logo() {
 
 function ThemeToggle() {
   const theme = useTheme();
-  const Icon = theme === "light" ? Sun : theme === "system" ? Laptop : Moon;
-  // Use Radix's native `onSelect` instead of `onClick` so the menu's
-  // close handler can't swallow the event mid-flight on some browsers.
-  const pick = (next: Theme) => (e: Event) => {
-    e.preventDefault();
-    setTheme(next);
-  };
+  // Collapse "system" to whichever colour scheme it is currently
+  // resolving to. A single click then unambiguously flips the visible
+  // theme — no hidden tri-state surprises.
+  const effective: "dark" | "light" =
+    theme === "system"
+      ? (typeof window !== "undefined" &&
+        window.matchMedia("(prefers-color-scheme: dark)").matches
+          ? "dark"
+          : "light")
+      : theme;
+  const next: Theme = effective === "dark" ? "light" : "dark";
+  const Icon = effective === "dark" ? Sun : Moon;
+  const label = effective === "dark" ? "Switch to light mode" : "Switch to dark mode";
+  // Deliberately a plain Button — no Radix Tooltip / DropdownMenu
+  // wrapping. The previous implementation nested a Tooltip around a
+  // DropdownMenuTrigger via two layers of `asChild`, and Tooltip's
+  // pointer-event handlers ate the click so the menu never opened.
+  // A direct `onClick` toggle is simpler, more discoverable, and
+  // cannot suffer the same bug.
   return (
-    <DropdownMenu>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Theme">
-              <Icon className="h-3.5 w-3.5" />
-            </Button>
-          </DropdownMenuTrigger>
-        </TooltipTrigger>
-        <TooltipContent side="right">Theme</TooltipContent>
-      </Tooltip>
-      <DropdownMenuContent align="end" className="w-40">
-        <DropdownMenuLabel className="text-xs text-muted-foreground">Theme</DropdownMenuLabel>
-        <DropdownMenuItem onSelect={pick("light")}>
-          <Sun className="mr-2 h-3.5 w-3.5" />
-          Light
-          {theme === "light" && <span className="ml-auto text-[10px]">●</span>}
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={pick("dark")}>
-          <Moon className="mr-2 h-3.5 w-3.5" />
-          Dark
-          {theme === "dark" && <span className="ml-auto text-[10px]">●</span>}
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={pick("system")}>
-          <Laptop className="mr-2 h-3.5 w-3.5" />
-          System
-          {theme === "system" && <span className="ml-auto text-[10px]">●</span>}
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <Button
+      variant="ghost"
+      size="icon"
+      className="h-7 w-7"
+      aria-label={label}
+      title={label}
+      onClick={() => setTheme(next)}
+    >
+      <Icon className="h-3.5 w-3.5" />
+    </Button>
   );
 }
 
