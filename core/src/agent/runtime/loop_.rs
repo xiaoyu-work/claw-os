@@ -133,7 +133,184 @@ pub async fn ask_with_stream(
     sink: Arc<dyn StreamSink>,
     progress: Arc<dyn ProgressSink>,
 ) -> Result<AskResult, AgentError> {
-    ask_inner_streaming(provider, cfg, user_prompt, tools, db, None, sink, progress).await
+    ask_inner_streaming(
+        provider,
+        cfg,
+        user_prompt,
+        tools,
+        db,
+        None,
+        sink,
+        progress,
+        Vec::new(),
+    )
+    .await
+}
+
+/// Streaming variant that *replays* the conversation history stored in
+/// `db` under `session_id` before sending the new `user_prompt` to the
+/// model. Use this from chat surfaces (web UI, future REPL) where each
+/// new prompt continues an existing conversation — without this, every
+/// turn looks like a fresh exchange to the LLM, because
+/// [`ask_with_stream`] only seeds `messages` with the current prompt
+/// (it expects the model to fetch prior context on demand via
+/// `cos_recall`).
+///
+/// Prior turns are flattened to plain-text [`Message`]s (tool calls
+/// and results are inlined as one-line summaries) so providers that
+/// strictly validate `tool_use`/`tool_result` block pairing — Anthropic
+/// in particular — do not reject the request when ids no longer line
+/// up across a process boundary.
+///
+/// `history_limit` caps the number of prior memory rows replayed (0
+/// means "load up to a sane default"). Practical chat UIs should keep
+/// this small enough to stay within the model's context window.
+pub async fn ask_with_stream_continuation(
+    provider: Arc<dyn Provider>,
+    cfg: &AgentConfig,
+    user_prompt: &str,
+    tools: &ToolRegistry,
+    db: &MemoryDb,
+    session_id: &str,
+    history_limit: usize,
+    sink: Arc<dyn StreamSink>,
+    progress: Arc<dyn ProgressSink>,
+) -> Result<AskResult, AgentError> {
+    let limit = if history_limit == 0 { 200 } else { history_limit };
+    let prior = match db.recent(session_id, limit) {
+        Ok(rows) => rows_to_messages(&rows),
+        Err(e) => {
+            tracing::warn!(
+                "memory: failed to load prior history for session {session_id}: {e}; \
+                 continuing without context"
+            );
+            Vec::new()
+        }
+    };
+    ask_inner_streaming(
+        provider,
+        cfg,
+        user_prompt,
+        tools,
+        Some((db, session_id)),
+        None,
+        sink,
+        progress,
+        prior,
+    )
+    .await
+}
+
+/// Convert stored memory rows into plain-text [`Message`]s suitable
+/// for replay into the LLM. Tool calls and results are inlined as
+/// short text summaries — never as structured [`ContentBlock::ToolUse`]
+/// / [`ContentBlock::ToolResult`] — so providers do not need the
+/// original tool_use ids to match. Rows whose flattened text is empty
+/// are skipped.
+fn rows_to_messages(rows: &[sqlite_fts::MessageRow]) -> Vec<Message> {
+    use crate::agent::llm::{ContentBlock, Role};
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let role = match row.role.as_str() {
+            "assistant" => Role::Assistant,
+            "system" => Role::System,
+            _ => Role::User,
+        };
+        let text = flatten_stored_content(&row.content);
+        if text.trim().is_empty() {
+            continue;
+        }
+        out.push(Message {
+            role,
+            content: vec![ContentBlock::Text { text }],
+        });
+    }
+    out
+}
+
+/// Flatten the `render_message_content` marker format back into a
+/// single text payload. Mirror of the parser in
+/// `agent::web::routes::sessions::parse_stored_content`, but lossy
+/// where the web parser is structured — here `[tool_use:NAME] {json}`
+/// collapses to `[tool: NAME]` and `[tool_result] body` becomes
+/// `[tool result]\n<truncated body>` because the goal is replay
+/// context, not exact reconstruction. Long tool-result bodies are
+/// truncated to keep the replayed prompt cheap.
+fn flatten_stored_content(content: &str) -> String {
+    const MAX_RESULT_PREVIEW_CHARS: usize = 1500;
+    let mut out = String::new();
+    let mut active_result: Option<(bool, String)> = None;
+
+    let push_separator = |out: &mut String| {
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+    };
+
+    let flush_result =
+        |active: &mut Option<(bool, String)>, out: &mut String, max_chars: usize| {
+            if let Some((is_error, body)) = active.take() {
+                if !out.is_empty() && !out.ends_with('\n') {
+                    out.push('\n');
+                }
+                out.push_str(if is_error {
+                    "[tool result error]"
+                } else {
+                    "[tool result]"
+                });
+                let trimmed = body.trim();
+                if !trimmed.is_empty() {
+                    out.push('\n');
+                    if trimmed.chars().count() > max_chars {
+                        let preview: String = trimmed.chars().take(max_chars).collect();
+                        out.push_str(&preview);
+                        out.push_str("\n…[truncated]");
+                    } else {
+                        out.push_str(trimmed);
+                    }
+                }
+            }
+        };
+
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+
+        if let Some(rest) = trimmed.strip_prefix("[tool_use:") {
+            if let Some(end) = rest.find(']') {
+                let name = rest[..end].trim();
+                if !name.is_empty() {
+                    flush_result(&mut active_result, &mut out, MAX_RESULT_PREVIEW_CHARS);
+                    push_separator(&mut out);
+                    out.push_str("[tool: ");
+                    out.push_str(name);
+                    out.push(']');
+                    continue;
+                }
+            }
+        }
+
+        if let Some(rest) = trimmed.strip_prefix("[tool_result:error]") {
+            flush_result(&mut active_result, &mut out, MAX_RESULT_PREVIEW_CHARS);
+            active_result = Some((true, rest.trim_start_matches([' ', '\t']).to_string()));
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("[tool_result]") {
+            flush_result(&mut active_result, &mut out, MAX_RESULT_PREVIEW_CHARS);
+            active_result = Some((false, rest.trim_start_matches([' ', '\t']).to_string()));
+            continue;
+        }
+
+        if let Some((_, buf)) = active_result.as_mut() {
+            buf.push('\n');
+            buf.push_str(line);
+        } else {
+            push_separator(&mut out);
+            out.push_str(line);
+        }
+    }
+
+    flush_result(&mut active_result, &mut out, MAX_RESULT_PREVIEW_CHARS);
+    out.trim().to_string()
 }
 
 async fn ask_inner(
@@ -424,6 +601,7 @@ async fn ask_inner_streaming(
     compressor: Option<Arc<dyn Compressor>>,
     sink: Arc<dyn StreamSink>,
     progress: Arc<dyn ProgressSink>,
+    initial_messages: Vec<Message>,
 ) -> Result<AskResult, AgentError> {
     let redactor: Option<Redactor> = if cfg.redact_memory_enabled {
         Some(Redactor::default_set())
@@ -458,7 +636,11 @@ async fn ask_inner_streaming(
     let extra = cfg.system_prompt_path.as_deref().map(Path::new);
     let system = prompt::build_system_prompt(extra);
 
-    let mut messages: Vec<Message> = vec![Message::user_text(user_prompt)];
+    let mut messages: Vec<Message> = {
+        let mut v = initial_messages;
+        v.push(Message::user_text(user_prompt));
+        v
+    };
     let llm_tools = tools.as_llm_tools();
     let session_id = recorder.map(|(_, sid)| sid.to_string()).unwrap_or_default();
 
@@ -937,7 +1119,157 @@ mod tests {
     use super::*;
     use crate::agent::llm::providers::mock::{MockProvider, MockResponse};
     use crate::agent::llm::ToolCall;
+    use crate::agent::memory::sqlite_fts::MessageRow;
     use crate::agent::tools::registry::{builtin_only_registry, default_registry};
+
+    fn row(role: &str, content: &str) -> MessageRow {
+        MessageRow {
+            id: 0,
+            session_id: "test".into(),
+            role: role.into(),
+            content: content.into(),
+            ts_ms: 0,
+        }
+    }
+
+    #[test]
+    fn flatten_plain_text_is_unchanged() {
+        let out = flatten_stored_content("hello world\nsecond line");
+        assert_eq!(out, "hello world\nsecond line");
+    }
+
+    #[test]
+    fn flatten_collapses_tool_use_to_one_line_summary() {
+        let stored = "[tool_use:cos_sysinfo] {\"interval\":1000}";
+        assert_eq!(flatten_stored_content(stored), "[tool: cos_sysinfo]");
+    }
+
+    #[test]
+    fn flatten_preserves_text_around_tool_use() {
+        let stored = "let me check that\n[tool_use:cos_sysinfo] {\"interval\":1000}";
+        assert_eq!(
+            flatten_stored_content(stored),
+            "let me check that\n[tool: cos_sysinfo]"
+        );
+    }
+
+    #[test]
+    fn flatten_keeps_tool_result_body_short_enough() {
+        let stored = "[tool_result] {\"speed\":\"0 KB/s\"}";
+        assert_eq!(
+            flatten_stored_content(stored),
+            "[tool result]\n{\"speed\":\"0 KB/s\"}"
+        );
+    }
+
+    #[test]
+    fn flatten_marks_error_results() {
+        let stored = "[tool_result:error] boom";
+        assert_eq!(flatten_stored_content(stored), "[tool result error]\nboom");
+    }
+
+    #[test]
+    fn flatten_handles_multiline_result_body() {
+        let stored = "[tool_result] line one\nline two\nline three";
+        assert_eq!(
+            flatten_stored_content(stored),
+            "[tool result]\nline one\nline two\nline three"
+        );
+    }
+
+    #[test]
+    fn flatten_truncates_huge_tool_result_bodies() {
+        let big: String = "a".repeat(5000);
+        let stored = format!("[tool_result] {big}");
+        let out = flatten_stored_content(&stored);
+        assert!(out.starts_with("[tool result]\naaaa"));
+        assert!(out.ends_with("…[truncated]"));
+        // 1500 a's + the truncation marker line — well under the input length.
+        assert!(out.chars().count() < 2000);
+    }
+
+    #[test]
+    fn rows_to_messages_skips_empty_payloads_and_maps_roles() {
+        let rows = vec![
+            row("user", "hi"),
+            row("assistant", ""),
+            row("assistant", "[tool_use:cos_sysinfo] {}"),
+            row("user", "[tool_result] ok"),
+            row("assistant", "all done"),
+        ];
+        let msgs = rows_to_messages(&rows);
+        assert_eq!(msgs.len(), 4, "empty assistant row should be dropped");
+        assert!(matches!(msgs[0].role, crate::agent::llm::Role::User));
+        assert!(matches!(msgs[1].role, crate::agent::llm::Role::Assistant));
+        assert!(matches!(msgs[2].role, crate::agent::llm::Role::User));
+        assert!(matches!(msgs[3].role, crate::agent::llm::Role::Assistant));
+
+        // ToolUse markers collapse to text-only content blocks so
+        // providers don't need to match synthetic ids.
+        let blocks = &msgs[1].content;
+        assert_eq!(blocks.len(), 1);
+        match &blocks[0] {
+            crate::agent::llm::ContentBlock::Text { text } => {
+                assert_eq!(text, "[tool: cos_sysinfo]");
+            }
+            other => panic!("expected text block, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn continuation_replays_prior_turns_into_context() {
+        use crate::agent::memory::sqlite_fts::MemoryDb;
+
+        let db = MemoryDb::open_in_memory().unwrap();
+        let sid = "ctx-test";
+        db.record_message(sid, "user", "我网速现在多少").unwrap();
+        db.record_message(sid, "assistant", "当前网速：0 KB/s")
+            .unwrap();
+
+        let cfg = cfg();
+        let mock = MockProvider::new(&cfg.model, &cfg);
+        mock.push_response(MockResponse::Text("ok".into()));
+        let mock = Arc::new(mock);
+        let provider: Arc<dyn Provider> = mock.clone();
+
+        let tools = builtin_only_registry();
+        let sink = crate::agent::llm::accumulate::null_sink();
+        let progress = progress::null_progress();
+
+        ask_with_stream_continuation(
+            provider, &cfg, "开始", &tools, &db, sid, 50, sink, progress,
+        )
+        .await
+        .unwrap();
+
+        let req = mock
+            .last_request()
+            .expect("provider should have been called");
+        // Provider should see: prior user, prior assistant, then the
+        // new user prompt — not just the new prompt alone.
+        assert!(req.messages.len() >= 3, "got {} messages", req.messages.len());
+        let texts: Vec<String> = req
+            .messages
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter_map(|b| match b {
+                crate::agent::llm::ContentBlock::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            texts.iter().any(|t| t.contains("我网速现在多少")),
+            "prior user prompt missing from replay: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t.contains("当前网速")),
+            "prior assistant reply missing from replay: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t == "开始"),
+            "new user prompt missing from replay: {texts:?}"
+        );
+    }
 
     fn cfg() -> AgentConfig {
         AgentConfig {
