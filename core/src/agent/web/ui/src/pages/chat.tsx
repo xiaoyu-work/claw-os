@@ -82,14 +82,52 @@ export function ChatPage({ meta }: { meta: any }) {
       .then((r) => {
         if (cancelled) return;
         const list: any[] = Array.isArray(r) ? r : r?.messages || [];
-        const restored: Msg[] = list.map((m, i) => ({
-          id: String(m.id ?? i),
-          role: (m.role || m.kind || "assistant") as Msg["role"],
-          text: m.text || m.content || "",
-          tools: [],
-          warnings: [],
-          status: "done",
-        }));
+        const restored: Msg[] = [];
+        for (let i = 0; i < list.length; i++) {
+          const m = list[i];
+          const role = (m.role || m.kind || "assistant") as Msg["role"];
+          const text = typeof m.text === "string" ? m.text : (m.content || "");
+          const calls: any[] = Array.isArray(m.tool_calls) ? m.tool_calls : [];
+          const results: any[] = Array.isArray(m.tool_results) ? m.tool_results : [];
+
+          // Tool-result rows are stored under role="user" by the runtime
+          // (Anthropic convention). When such a row has tool_results and
+          // no user prose, treat it as a continuation of the previous
+          // assistant turn rather than a user message.
+          const isToolResultRow =
+            role === "user" && results.length > 0 && !text.trim();
+          if (isToolResultRow) {
+            for (const res of results) {
+              for (let j = restored.length - 1; j >= 0; j--) {
+                if (restored[j].role !== "assistant") continue;
+                const slot = restored[j].tools.find((t) => t.result == null);
+                if (slot) {
+                  slot.result = res?.text ?? "";
+                  slot.isError = !!res?.is_error;
+                  slot.finished = true;
+                  break;
+                }
+              }
+            }
+            continue;
+          }
+
+          const tools: ToolCall[] = calls.map((c, k) => ({
+            id: `${m.id ?? i}-${k}`,
+            name: String(c?.name || "tool"),
+            input: c?.input,
+            inputAccum: "",
+            finished: false,
+          }));
+          restored.push({
+            id: String(m.id ?? i),
+            role,
+            text,
+            tools,
+            warnings: [],
+            status: "done",
+          });
+        }
         setMessages(restored);
       })
       .catch(() => {});
