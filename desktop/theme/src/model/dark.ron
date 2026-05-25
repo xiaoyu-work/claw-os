@@ -1,17 +1,20 @@
 Dark (
     (
         name: "cosmic-dark",
+        // macOS-style system blue (#0A84FF) — replaces the upstream COSMIC
+        // cyan-mint accent. Picked to match SF Symbols / Aqua control tint
+        // in dark mode.
         blue: (
-            c: "#94EBEB",
+            c: "#0A84FF",
         ),
         red: (
-            c: "#FFB5B5",
+            c: "#FF453A",
         ),
         green: (
-            c: "#ACF7D2",
+            c: "#32D74B",
         ),
         yellow: (
-            c: "#FFF19E",
+            c: "#FFD60A",
         ),
         gray_1: (
             c: "#1E1E1E",

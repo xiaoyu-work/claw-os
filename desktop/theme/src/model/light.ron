@@ -1,17 +1,22 @@
 Light (
     (
         name: "cosmic-light",
+        // macOS-style system blue (#007AFF) — replaces the upstream COSMIC
+        // dark-teal accent. Matches Aqua control tint in light mode; the
+        // sibling semantic colors (red/green/yellow) follow the macOS
+        // system palette so destructive / success / warning surfaces feel
+        // native rather than COSMIC's pastel set.
         blue: (
-            c: "#00496D",
+            c: "#007AFF",
         ),
         red: (
-            c: "#A0252B",
+            c: "#FF3B30",
         ),
         green: (
-            c: "#3B6E43",
+            c: "#34C759",
         ),
         yellow: (
-            c: "#966800",
+            c: "#FFCC00",
         ),
         gray_1: (
             c: "#DEDEDE",

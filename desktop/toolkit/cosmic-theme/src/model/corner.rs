@@ -19,13 +19,16 @@ pub struct CornerRadii {
 
 impl Default for CornerRadii {
     fn default() -> Self {
+        // macOS-style continuous-curvature radii. The big jump from BigSur
+        // onward sets the standard: 10px window corners, 6px controls,
+        // ~16px for large surfaces, and a near-infinite pill for chips.
         Self {
             radius_0: [0.0; 4],
             radius_xs: [4.0; 4],
-            radius_s: [8.0; 4],
-            radius_m: [16.0; 4],
-            radius_l: [32.0; 4],
-            radius_xl: [160.0; 4],
+            radius_s: [6.0; 4],
+            radius_m: [10.0; 4],
+            radius_l: [16.0; 4],
+            radius_xl: [100.0; 4],
         }
     }
 }
@@ -68,7 +71,7 @@ impl From<Roundness> for CornerRadii {
 
 impl From<CornerRadii> for Roundness {
     fn from(value: CornerRadii) -> Self {
-        if (value.radius_m[0] - 16.0).abs() < 0.01 {
+        if (value.radius_m[0] - 10.0).abs() < 0.01 {
             Self::Round
         } else if (value.radius_m[0] - 8.0).abs() < 0.01 {
             Self::SlightlyRound
