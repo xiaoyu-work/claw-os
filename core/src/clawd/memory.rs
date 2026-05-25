@@ -12,6 +12,8 @@ use crate::agent::memory::sqlite_fts::MemoryDb;
 
 const DEFAULT_LIMIT: usize = 500;
 const MAX_LIMIT: usize = 2000;
+const DEFAULT_SESSION_LIMIT: usize = 200;
+const MAX_SESSION_LIMIT: usize = 1000;
 
 /// `memory.history` — return the most recent rows for `session_id`,
 /// each pre-parsed into `{ role, text, tool_calls, tool_results, ts_ms }`.
@@ -40,3 +42,39 @@ pub fn history(params: Value) -> Result<Value, String> {
         "messages": messages,
     }))
 }
+
+/// `memory.sessions` — list persisted chat sessions newest-first. Each
+/// entry carries `{ id, title, last_ts_ms, message_count }`, matching
+/// the shape the web `/api/sessions` route returns so the desktop UI
+/// can drive a sidebar identical to the web client.
+pub fn sessions(params: Value) -> Result<Value, String> {
+    let limit = params
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(DEFAULT_SESSION_LIMIT)
+        .clamp(1, MAX_SESSION_LIMIT);
+
+    let db = MemoryDb::open_default().map_err(|err| format!("open memory: {err}"))?;
+    let rows = db
+        .sessions(limit)
+        .map_err(|err| format!("list sessions: {err}"))?;
+
+    let sessions: Vec<Value> = rows
+        .into_iter()
+        .map(|s| {
+            json!({
+                "id": s.session_id,
+                "title": s.title,
+                "last_ts_ms": s.last_ts_ms,
+                "message_count": s.message_count,
+            })
+        })
+        .collect();
+
+    Ok(json!({
+        "n": sessions.len(),
+        "sessions": sessions,
+    }))
+}
+
