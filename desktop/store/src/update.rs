@@ -65,6 +65,28 @@ impl App {
                 return self.update_config();
             }
 
+            Message::AskClaw => {
+                let ctx = if let Some(selected) = &self.selected_opt {
+                    let safe_name = selected.info.name.replace('"', "\\\"");
+                    format!(
+                        r#"{{"app":"cosmic-store","view":"app","app_id":"{}","name":"{}"}}"#,
+                        selected.id.raw().replace('"', "\\\""),
+                        safe_name,
+                    )
+                } else if let Some(page) = self.explore_page_opt {
+                    format!(
+                        r#"{{"app":"cosmic-store","view":"explore","page":"{:?}"}}"#,
+                        page,
+                    )
+                } else {
+                    r#"{"app":"cosmic-store","view":"home"}"#.to_string()
+                };
+                let argv: &[&str] = &["cos-agent-ui", "--overlay", "--context", &ctx];
+                if let Err(err) = crate::claw_glue::exec_start(argv) {
+                    log::error!("failed to open Ask Claw overlay: {err}");
+                }
+            }
+
             Message::BackendUpdate(name, backend) => {
                 log::debug!("adding backend {name}");
                 self.backends.insert(name.clone(), backend.clone());

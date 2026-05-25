@@ -70,6 +70,7 @@ updates = 更新
 
 enable-flathub-cosmic = 请启用 Flathub 和 ClawOS Flatpak 远程仓库即可查看可用小部件。
 manage-repositories = 管理远程仓库
+ask-claw = 问 Claw…
 # Explore Pages
 editors-choice = 编辑推荐
 popular-apps = 热门应用

@@ -288,6 +288,7 @@ impl CosmicFlags for Flags {
 #[derive(Clone, Debug)]
 pub enum Message {
     AppTheme(AppTheme),
+    AskClaw,
     BackendUpdate(BackendName, Arc<dyn Backend>),
     BackendUpdateFinished,
     BackendUpdateStart,
@@ -2450,6 +2451,13 @@ impl Application for App {
     fn header_end(&self) -> Vec<Element<'_, Message>> {
         match self.mode {
             Mode::Normal => {
+                let ask_claw = widget::tooltip(
+                    widget::button::icon(widget::icon::from_name("face-smile-symbolic"))
+                        .on_press(Message::AskClaw),
+                    widget::text(fl!("ask-claw")),
+                    widget::tooltip::Position::Bottom,
+                );
+
                 let manage_repositories = widget::tooltip(
                     widget::button::icon(widget::icon::from_name("application-menu-symbolic"))
                         .on_press(Message::ToggleContextPage(ContextPage::Repositories)),
@@ -2471,6 +2479,7 @@ impl Application for App {
                     widgets.push(cosmic::widget::indeterminate_circular().size(20.0).into());
                 }
 
+                widgets.push(ask_claw.into());
                 widgets.push(manage_repositories.into());
                 widgets
             }

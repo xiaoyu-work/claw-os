@@ -78,6 +78,7 @@ updates = Updates
 ## Applets page
 enable-flathub-cosmic = Please enable Flathub and ClawOS Flatpak to see available applets.
 manage-repositories = Manage repositories
+ask-claw = Ask Claw…
 
 # Explore Pages
 editors-choice = Editor's choice
