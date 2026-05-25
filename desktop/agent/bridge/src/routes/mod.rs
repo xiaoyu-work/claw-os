@@ -26,6 +26,7 @@ pub fn api() -> Router<AppState> {
             "/sessions/:id",
             get(sessions::get).delete(sessions::delete_one),
         )
+        .route("/sessions/:id/history", get(sessions::history))
         .route("/models", get(models::list))
         .route("/voice/upload", post(voice::upload))
 }

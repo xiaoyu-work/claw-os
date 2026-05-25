@@ -11,7 +11,7 @@ use tokio::net::{UnixListener, UnixStream};
 use super::client_identity::ClientIdentity;
 use super::protocol::{encode_response, Request, Response};
 use super::state::DaemonState;
-use super::{audit, context, context_events, permissions, system_journal, tasks, transactions};
+use super::{audit, context, context_events, memory, permissions, system_journal, tasks, transactions};
 
 #[derive(Debug, Clone)]
 pub struct ServerOptions {
@@ -168,6 +168,7 @@ async fn dispatch_result(
         "permission.request" => permissions::request(request.params),
         "permission.decide" => permissions::decide(request.params),
         "system.operations" => system_journal::query(request.params),
+        "memory.history" => memory::history(request.params),
         "transaction.begin" => transactions::begin(state, request.params),
         "transaction.list" => transactions::list(state),
         "transaction.commit" => transactions::commit(state, request.params),
