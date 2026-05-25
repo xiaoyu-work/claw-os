@@ -88,6 +88,13 @@ ai-page = Configure AI
     .azure-api-version-description = Azure REST API version (e.g. `2024-12-01-preview`). Find current versions in the Azure OpenAI docs.
     .apply-ok = Saved
     .apply-failed = Could not save
+    .oauth-signin = Sign in with GitHub
+    .oauth-signin-again = Sign in again
+    .oauth-description = GitHub Copilot uses device-flow authorization — no API key needed. Click below, open the link, and enter the code shown.
+    .oauth-instructions = Open this URL on any device, then enter the code:
+    .oauth-waiting = Waiting for you to approve…
+    .oauth-authorized = Signed in.
+    .oauth-failed = Sign-in failed
 
 # WirelessPage
 

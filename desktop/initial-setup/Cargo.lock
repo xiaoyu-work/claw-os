@@ -1193,6 +1193,7 @@ dependencies = [
  "rust-embed",
  "secure-string",
  "serde",
+ "serde_json",
  "slotmap",
  "tokio",
  "tracing",
