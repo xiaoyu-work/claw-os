@@ -20,13 +20,14 @@
 //!
 //! ### Session sidebar
 //!
-//! The bridge does not yet expose multi-session resumption (see
-//! `bridge/src/routes/sessions.rs`). The sidebar therefore tracks
-//! conversations purely client-side: each `LocalSession` owns its own
-//! message vector + a `started_at` timestamp used to render the
-//! short "Xm / Xh / Xd" duration label. Switching tabs only swaps
-//! the visible history; a fresh POST to `/api/chat` always starts a
-//! new agent process.
+//! The sidebar combines real persisted sessions fetched from the
+//! bridge (`GET /api/sessions`) with any in-progress "new session"
+//! tabs the user has opened locally. Clicking a persisted entry
+//! lazily fetches its transcript via `GET /api/sessions/:id/history`
+//! and replays the parsed `tool_calls` / `tool_results` blocks into
+//! the message column. Subsequent turns in that conversation reuse
+//! the `session_id` on `POST /api/chat`, so clawd continues into the
+//! same memory thread instead of forking a fresh one.
 
 use std::env;
 use std::time::Instant;
@@ -46,7 +47,10 @@ mod bridge;
 mod recorder;
 mod sse;
 
-use crate::bridge::{ChatRequest, StreamEvent, read_bridge_port};
+use crate::bridge::{
+    ChatRequest, HistoryMessage, SessionSummary, StreamEvent, ToolCallView, ToolResultView,
+    fetch_history, fetch_sessions, read_bridge_port,
+};
 use crate::recorder::Recorder;
 
 /// Square symbol used both in the breadcrumb and the overlay header.
@@ -99,10 +103,18 @@ pub enum Message {
     VoiceTranscribed { text: String, placeholder: bool },
     /// Mic open / encode / upload failed.
     VoiceError(String),
-    /// Sidebar: switch which local session is visible.
+    /// Sidebar: switch which session is visible. Triggers a lazy
+    /// history fetch when the target session has not been loaded yet.
     SelectSession(usize),
     /// Sidebar "+" button: start a new local session.
     NewSession,
+    /// Background task finished fetching the bridge's session list.
+    SessionsFetched(Result<Vec<SessionSummary>, String>),
+    /// Background task finished loading a remote session's history.
+    HistoryFetched {
+        session_id: String,
+        result: Result<Vec<HistoryMessage>, String>,
+    },
 }
 
 /// Microphone capture state. Mirrors the React `useAudioRecording`
@@ -132,29 +144,85 @@ pub enum ChatRole {
     Assistant,
 }
 
-#[derive(Debug, Clone)]
+/// One rendered message in a conversation.
+///
+/// Tool calls and tool results from the agent's live stream and from
+/// loaded history both populate the `tool_calls` / `tool_results`
+/// vectors so the UI can paint structured cards instead of dumping
+/// raw `[tool_use:NAME] {…}` markers.
+#[derive(Debug, Clone, Default)]
 pub struct ChatMessage {
-    pub role: ChatRole,
+    pub role: Option<ChatRole>,
     pub content: String,
+    pub tool_calls: Vec<ToolCallView>,
+    pub tool_results: Vec<ToolResultView>,
     /// True while the assistant is still streaming this message.
     pub in_progress: bool,
 }
 
-/// A purely client-side conversation tab.
+impl ChatMessage {
+    fn user(content: String) -> Self {
+        Self {
+            role: Some(ChatRole::User),
+            content,
+            tool_calls: Vec::new(),
+            tool_results: Vec::new(),
+            in_progress: false,
+        }
+    }
+
+    fn assistant_streaming() -> Self {
+        Self {
+            role: Some(ChatRole::Assistant),
+            content: String::new(),
+            tool_calls: Vec::new(),
+            tool_results: Vec::new(),
+            in_progress: true,
+        }
+    }
+
+    fn role(&self) -> ChatRole {
+        self.role.clone().unwrap_or(ChatRole::Assistant)
+    }
+}
+
+/// Loading state for the remote history of a session that lives in
+/// the bridge's `/api/sessions` listing but whose messages have not
+/// been pulled yet.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum HistoryState {
+    /// History has never been requested. The first SelectSession
+    /// trips a fetch.
+    #[default]
+    NotLoaded,
+    /// A `fetch_history` task is in flight.
+    Loading,
+    /// History has been merged into `messages` (or the server
+    /// returned an empty conversation).
+    Loaded,
+    /// Last fetch failed; clicking again retries.
+    Failed(String),
+}
+
+/// One conversation tab.
 ///
-/// The bridge today only knows about the single agent subprocess it
-/// just spawned, so the sidebar's "switch session" UI is local: each
-/// entry remembers its own message history and a `started_at` used
-/// for the "3m / 2h / 1d" duration label.
+/// `remote_id` is `Some` once the bridge has persisted this
+/// conversation (either it was fetched from `/api/sessions` or the
+/// first `done` envelope carried back a clawd-assigned session id).
+/// We replay this id on subsequent `POST /api/chat` calls so clawd
+/// continues the same memory thread.
 #[derive(Debug, Clone)]
 pub struct LocalSession {
+    /// Stable client-side id used as the React-like `key` for sidebar
+    /// rows. Independent of `remote_id`.
     pub id: String,
-    /// Display label — populated lazily from the first user prompt
-    /// so that fresh sessions show "New session" until something is
-    /// actually said.
+    /// Display label — populated lazily from the first user prompt or
+    /// the title clawd persisted alongside the session.
     pub title: String,
     pub started_at: Instant,
     pub messages: Vec<ChatMessage>,
+    pub remote_id: Option<String>,
+    pub history: HistoryState,
 }
 
 impl LocalSession {
@@ -164,6 +232,19 @@ impl LocalSession {
             title: String::new(),
             started_at: Instant::now(),
             messages: Vec::new(),
+            remote_id: None,
+            history: HistoryState::NotLoaded,
+        }
+    }
+
+    fn from_summary(client_id: String, summary: &SessionSummary) -> Self {
+        Self {
+            id: client_id,
+            title: summary.title.clone(),
+            started_at: Instant::now(),
+            messages: Vec::new(),
+            remote_id: Some(summary.id.clone()),
+            history: HistoryState::NotLoaded,
         }
     }
 
@@ -257,6 +338,27 @@ impl Application for App {
         // the new layout.
         app.sessions.push(LocalSession::new("session-1".into()));
 
+        // Kick off a background fetch of the bridge's session list so
+        // the sidebar starts populated with the user's prior chats.
+        // Standalone-only — the overlay is a one-shot launcher.
+        let fetch_sessions = if !flags.overlay {
+            if let Some(p) = app.bridge_port {
+                cosmic::Task::perform(
+                    async move {
+                        fetch_sessions(p)
+                            .await
+                            .map_err(|err| format!("{err:#}"))
+                    },
+                    Message::SessionsFetched,
+                )
+                .map(cosmic::Action::App)
+            } else {
+                Task::none()
+            }
+        } else {
+            Task::none()
+        };
+
         let initial = if flags.query.is_some() {
             cosmic::Task::done(cosmic::Action::App(Message::Submit))
         } else if flags.voice {
@@ -264,7 +366,7 @@ impl Application for App {
         } else {
             Task::none()
         };
-        (app, initial)
+        (app, Task::batch([fetch_sessions, initial]))
     }
 
     fn header_start(&self) -> Vec<Element<'_, Self::Message>> {
@@ -294,14 +396,15 @@ impl Application for App {
                 if let Some(idx) = self.streaming_session
                     && let Some(sess) = self.sessions.get_mut(idx)
                     && let Some(last) = sess.messages.last_mut()
-                    && last.role == ChatRole::Assistant
+                    && last.role() == ChatRole::Assistant
                 {
                     last.content.push_str(&chunk);
                 }
                 Task::none()
             }
 
-            Message::StreamDone(_envelope) => {
+            Message::StreamDone(envelope) => {
+                self.capture_remote_session(&envelope);
                 self.finalize_stream();
                 Task::none()
             }
@@ -362,11 +465,12 @@ impl Application for App {
                 // *lose* deltas, but switching mid-stream creates the
                 // confusing illusion of a paused agent in the tab the
                 // user actually wants to read.
-                if !self.streaming && idx < self.sessions.len() {
-                    self.active = idx;
-                    self.error = None;
+                if self.streaming || idx >= self.sessions.len() {
+                    return Task::none();
                 }
-                Task::none()
+                self.active = idx;
+                self.error = None;
+                return self.maybe_fetch_history(idx);
             }
 
             Message::NewSession => {
@@ -377,6 +481,20 @@ impl Application for App {
                     self.input.clear();
                     self.error = None;
                 }
+                Task::none()
+            }
+
+            Message::SessionsFetched(Ok(summaries)) => {
+                self.merge_remote_sessions(summaries);
+                Task::none()
+            }
+            Message::SessionsFetched(Err(err)) => {
+                tracing::warn!("failed to fetch bridge sessions: {err}");
+                Task::none()
+            }
+
+            Message::HistoryFetched { session_id, result } => {
+                self.apply_history(&session_id, result);
                 Task::none()
             }
         }
@@ -431,6 +549,126 @@ impl App {
         self.streaming = false;
     }
 
+    /// Pull `session_id` out of the bridge's `done` envelope and
+    /// pin it to whichever session was the in-flight target so we
+    /// reuse the same clawd memory thread on the next turn.
+    fn capture_remote_session(&mut self, envelope: &serde_json::Value) {
+        let Some(idx) = self.streaming_session else {
+            return;
+        };
+        let Some(sess) = self.sessions.get_mut(idx) else {
+            return;
+        };
+        if sess.remote_id.is_some() {
+            return;
+        }
+        let candidate = envelope
+            .get("session_id")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| {
+                envelope
+                    .get("job")
+                    .and_then(|j| j.get("session_id"))
+                    .and_then(serde_json::Value::as_str)
+            });
+        if let Some(id) = candidate.filter(|s| !s.is_empty()) {
+            sess.remote_id = Some(id.to_string());
+            sess.history = HistoryState::Loaded;
+        }
+    }
+
+    /// Merge bridge-listed persisted sessions into the sidebar.
+    /// Sessions already represented by `remote_id` are left alone so
+    /// in-progress conversations don't get clobbered by a refresh.
+    fn merge_remote_sessions(&mut self, summaries: Vec<SessionSummary>) {
+        // Pre-compute what we already know about so the O(n*m)
+        // diff stays cheap.
+        let known: std::collections::HashSet<String> = self
+            .sessions
+            .iter()
+            .filter_map(|s| s.remote_id.clone())
+            .collect();
+        let mut next_id = self.sessions.len() + 1;
+        for summary in summaries {
+            if known.contains(&summary.id) {
+                continue;
+            }
+            let client_id = format!("session-remote-{}", next_id);
+            next_id += 1;
+            self.sessions
+                .push(LocalSession::from_summary(client_id, &summary));
+        }
+    }
+
+    /// Trigger a lazy history fetch for `idx` if the session has a
+    /// remote id and we have not loaded it yet.
+    fn maybe_fetch_history(&mut self, idx: usize) -> Task<Message> {
+        let Some(sess) = self.sessions.get_mut(idx) else {
+            return Task::none();
+        };
+        if sess.history != HistoryState::NotLoaded && !matches!(sess.history, HistoryState::Failed(_)) {
+            return Task::none();
+        }
+        let Some(remote_id) = sess.remote_id.clone() else {
+            sess.history = HistoryState::Loaded;
+            return Task::none();
+        };
+        let Some(port) = self.bridge_port else {
+            return Task::none();
+        };
+        sess.history = HistoryState::Loading;
+        cosmic::Task::perform(
+            async move {
+                let result = fetch_history(port, &remote_id)
+                    .await
+                    .map_err(|err| format!("{err:#}"));
+                Message::HistoryFetched {
+                    session_id: remote_id,
+                    result,
+                }
+            },
+            |m| m,
+        )
+        .map(cosmic::Action::App)
+    }
+
+    /// Replay history rows into the matching session's message column.
+    fn apply_history(
+        &mut self,
+        session_id: &str,
+        result: Result<Vec<HistoryMessage>, String>,
+    ) {
+        let Some(sess) = self
+            .sessions
+            .iter_mut()
+            .find(|s| s.remote_id.as_deref() == Some(session_id))
+        else {
+            return;
+        };
+        match result {
+            Ok(rows) => {
+                sess.messages.clear();
+                for row in rows {
+                    let role = match row.role.as_str() {
+                        "assistant" => ChatRole::Assistant,
+                        _ => ChatRole::User,
+                    };
+                    sess.messages.push(ChatMessage {
+                        role: Some(role),
+                        content: row.text,
+                        tool_calls: row.tool_calls,
+                        tool_results: row.tool_results,
+                        in_progress: false,
+                    });
+                }
+                sess.history = HistoryState::Loaded;
+            }
+            Err(err) => {
+                sess.history = HistoryState::Failed(err);
+            }
+        }
+    }
+
     fn submit(&mut self) -> Task<Message> {
         let prompt = self.input.trim().to_string();
         if prompt.is_empty() || self.streaming {
@@ -450,25 +688,21 @@ impl App {
         self.streaming = true;
         self.streaming_session = Some(self.active);
 
+        let remote_id = self
+            .active_session()
+            .and_then(|s| s.remote_id.clone());
+
         if let Some(sess) = self.active_session_mut() {
             if sess.title.trim().is_empty() {
                 sess.title = title_from_prompt(&prompt);
             }
-            sess.messages.push(ChatMessage {
-                role: ChatRole::User,
-                content: prompt.clone(),
-                in_progress: false,
-            });
-            sess.messages.push(ChatMessage {
-                role: ChatRole::Assistant,
-                content: String::new(),
-                in_progress: true,
-            });
+            sess.messages.push(ChatMessage::user(prompt.clone()));
+            sess.messages.push(ChatMessage::assistant_streaming());
         }
 
         let request = ChatRequest {
             prompt,
-            session_id: None,
+            session_id: remote_id,
             model: None,
         };
         cosmic::Task::stream(cosmic::iced::stream::channel(
@@ -939,19 +1173,31 @@ fn message_bubble(msg: &ChatMessage, compact: bool) -> Element<'_, Message> {
     let spacing = theme::active().cosmic().spacing;
     let body_size = if compact { 12.0 } else { 14.0 };
 
-    match msg.role {
+    match msg.role() {
         ChatRole::User => {
             // Right-aligned gray pill. The COSMIC `Button::Suggested`
             // would tint with the accent color, so we use a custom
             // neutral surface to match the reference look.
-            let body = text(msg.content.clone()).size(body_size);
-            let pill = container(body)
-                .padding([spacing.space_xs, spacing.space_s])
-                .class(theme::Container::custom(user_pill_style));
-            container(pill)
-                .width(Length::Fill)
-                .align_x(Alignment::End)
-                .into()
+            let mut col = Column::new().spacing(spacing.space_xxs);
+            if !msg.content.trim().is_empty() {
+                let body = text(msg.content.clone()).size(body_size);
+                let pill = container(body)
+                    .padding([spacing.space_xs, spacing.space_s])
+                    .class(theme::Container::custom(user_pill_style));
+                col = col.push(
+                    container(pill)
+                        .width(Length::Fill)
+                        .align_x(Alignment::End),
+                );
+            }
+            // Tool results stream back inside `role="user"` rows
+            // (Anthropic convention) — render them as their own cards
+            // so the user sees something coherent for that turn even
+            // when the row itself was just a tool result.
+            for result in &msg.tool_results {
+                col = col.push(tool_result_card(result, compact));
+            }
+            col.width(Length::Fill).into()
         }
         ChatRole::Assistant => {
             // Left-aligned plain text; the reference draws no bubble
@@ -961,14 +1207,99 @@ fn message_bubble(msg: &ChatMessage, compact: bool) -> Element<'_, Message> {
             // TODO(markdown): re-enable rendering via the iced
             // markdown widget once we can borrow a long-lived parsed
             // `Vec<Item>` from the session (E0515 today).
-            let body: Element<Message> = if msg.content.is_empty() && msg.in_progress {
-                text("…").size(body_size).into()
-            } else {
-                text(msg.content.clone()).size(body_size).into()
-            };
-            container(body).width(Length::Fill).into()
+            let mut col = Column::new().spacing(spacing.space_xxs);
+            if !msg.content.is_empty() {
+                col = col.push(text(msg.content.clone()).size(body_size));
+            } else if msg.in_progress && msg.tool_calls.is_empty() {
+                col = col.push(text("…").size(body_size));
+            }
+            for call in &msg.tool_calls {
+                col = col.push(tool_call_card(call, compact));
+            }
+            // Tool results occasionally land on the assistant row too
+            // when the runtime stitches them inline.
+            for result in &msg.tool_results {
+                col = col.push(tool_result_card(result, compact));
+            }
+            container(col).width(Length::Fill).into()
         }
     }
+}
+
+fn tool_call_card(call: &ToolCallView, compact: bool) -> Element<'_, Message> {
+    let spacing = theme::active().cosmic().spacing;
+    let title_size = if compact { 11.0 } else { 12.0 };
+    let body_size = if compact { 11.0 } else { 12.0 };
+
+    let header = Row::new()
+        .push(text("⚙").size(title_size))
+        .push(text(format!("{}", call.name)).size(title_size))
+        .spacing(spacing.space_xxs)
+        .align_y(Alignment::Center);
+
+    let mut col = Column::new().push(header).spacing(spacing.space_xxs);
+    let preview = format_input_preview(&call.input);
+    if !preview.is_empty() {
+        col = col.push(text(preview).size(body_size));
+    }
+
+    container(col)
+        .padding([spacing.space_xxs, spacing.space_s])
+        .class(theme::Container::custom(tool_card_style))
+        .width(Length::Fill)
+        .into()
+}
+
+fn tool_result_card(result: &ToolResultView, compact: bool) -> Element<'_, Message> {
+    let spacing = theme::active().cosmic().spacing;
+    let title_size = if compact { 11.0 } else { 12.0 };
+    let body_size = if compact { 11.0 } else { 12.0 };
+
+    let header_label = if result.is_error {
+        "✗ tool error"
+    } else {
+        "✓ tool result"
+    };
+    let header = text(header_label).size(title_size);
+
+    let preview = clip_preview(&result.text, 600);
+    let mut col = Column::new().push(header).spacing(spacing.space_xxs);
+    if !preview.is_empty() {
+        col = col.push(text(preview).size(body_size));
+    }
+
+    let style = if result.is_error {
+        theme::Container::custom(tool_error_card_style)
+    } else {
+        theme::Container::custom(tool_card_style)
+    };
+    container(col)
+        .padding([spacing.space_xxs, spacing.space_s])
+        .class(style)
+        .width(Length::Fill)
+        .into()
+}
+
+fn format_input_preview(value: &serde_json::Value) -> String {
+    if value.is_null() {
+        return String::new();
+    }
+    let text = if value.is_string() {
+        value.as_str().unwrap_or_default().to_string()
+    } else {
+        serde_json::to_string(value).unwrap_or_default()
+    };
+    clip_preview(&text, 240)
+}
+
+fn clip_preview(input: &str, max_chars: usize) -> String {
+    let trimmed = input.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+    let mut out: String = trimmed.chars().take(max_chars).collect();
+    out.push_str(" …");
+    out
 }
 
 // ----------------------------------------------------------------------
@@ -1103,6 +1434,40 @@ fn idle_dot_style(_theme: &cosmic::Theme) -> cosmic::widget::container::Style {
         border: Border::default(),
         shadow: Shadow::default(),
         icon_color: None,
+        snap: true,
+    }
+}
+
+fn tool_card_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
+    let cosmic = theme.cosmic();
+    let radius = cosmic.corner_radii.radius_s;
+    cosmic::widget::container::Style {
+        text_color: Some(cosmic.background.component.on.into()),
+        background: Some(Background::Color(Color::from(cosmic.background.component.base))),
+        border: Border {
+            radius: radius.into(),
+            width: 1.0,
+            color: cosmic.background.divider.into(),
+        },
+        shadow: Shadow::default(),
+        icon_color: Some(cosmic.background.component.on.into()),
+        snap: true,
+    }
+}
+
+fn tool_error_card_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
+    let cosmic = theme.cosmic();
+    let radius = cosmic.corner_radii.radius_s;
+    cosmic::widget::container::Style {
+        text_color: Some(cosmic.destructive.on.into()),
+        background: Some(Background::Color(Color::from(cosmic.destructive.base))),
+        border: Border {
+            radius: radius.into(),
+            width: 1.0,
+            color: cosmic.destructive.on.into(),
+        },
+        shadow: Shadow::default(),
+        icon_color: Some(cosmic.destructive.on.into()),
         snap: true,
     }
 }

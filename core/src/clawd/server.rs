@@ -169,6 +169,7 @@ async fn dispatch_result(
         "permission.decide" => permissions::decide(request.params),
         "system.operations" => system_journal::query(request.params),
         "memory.history" => memory::history(request.params),
+        "memory.sessions" => memory::sessions(request.params),
         "transaction.begin" => transactions::begin(state, request.params),
         "transaction.list" => transactions::list(state),
         "transaction.commit" => transactions::commit(state, request.params),
