@@ -41,6 +41,7 @@ use tokio::time;
 use unicode_segmentation::UnicodeSegmentation;
 
 mod claw_glue;
+mod mcp;
 
 use config::{AppTheme, CONFIG_VERSION, Config, ConfigState};
 mod config;
@@ -91,6 +92,10 @@ pub fn monospace_attrs() -> cosmic_text::Attrs<'static> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::var("COS_MCP_SERVER").as_deref() == Ok("1") {
+        return mcp::run().map_err(|e| -> Box<dyn std::error::Error> { e.into() });
+    }
+
     #[cfg(all(unix, not(target_os = "redox")))]
     match fork::daemon(true, true) {
         Ok(fork::Fork::Child) => (),

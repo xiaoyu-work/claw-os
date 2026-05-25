@@ -7,6 +7,13 @@
 // kernel "denied" decision surfaces as `io::ErrorKind::PermissionDenied`
 // so the existing pkexec fallback in `tab.rs::save` keeps working
 // unchanged.
+//
+// AI helpers (`summarize` / `explain` / `rewrite`) live in the [`ai`]
+// submodule. They are `async` and return `Result<_, String>` because
+// the MCP server and any future UI surface want a flat
+// human-presentable error, not an `io::Error`.
+
+pub mod ai;
 
 use std::io;
 use std::path::Path;
