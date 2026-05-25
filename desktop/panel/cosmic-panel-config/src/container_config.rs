@@ -145,6 +145,8 @@ impl Default for CosmicPanelContainerConfig {
                     plugins_wings: Some((
                         vec![],
                         vec![
+                            "com.clawos.AppletApprovalGate".to_string(),
+                            "com.clawos.AppletAgentActivity".to_string(),
                             "com.clawos.AppletInputSources".to_string(),
                             "com.clawos.AppletA11y".to_string(),
                             "com.clawos.AppletStatusArea".to_string(),
