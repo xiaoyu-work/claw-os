@@ -5,6 +5,8 @@ Some(([
     "com.clawos.AppList",
     "com.clawos.AppletMinimize",
 ], [
+    "com.clawos.AppletApprovalGate",
+    "com.clawos.AppletAgentActivity",
     "com.clawos.AppletInputSources",
     "com.clawos.AppletStatusArea",
     "com.clawos.AppletA11y",

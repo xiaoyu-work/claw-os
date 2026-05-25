@@ -2,6 +2,8 @@ Some(([
     "com.clawos.PanelWorkspacesButton",
     "com.clawos.PanelAppButton",
 ], [
+    "com.clawos.AppletApprovalGate",
+    "com.clawos.AppletAgentActivity",
     "com.clawos.AppletInputSources",
     "com.clawos.AppletStatusArea",
     "com.clawos.AppletA11y",
