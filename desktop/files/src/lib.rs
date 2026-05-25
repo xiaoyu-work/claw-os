@@ -24,6 +24,7 @@ mod key_bind;
 pub(crate) mod large_image;
 pub(crate) mod load_image;
 mod localize;
+mod mcp;
 mod menu;
 mod mime_app;
 pub mod mime_icon;
@@ -129,6 +130,10 @@ pub fn desktop() -> Result<(), Box<dyn std::error::Error>> {
 /// Runs application with these settings
 #[rustfmt::skip]
 pub fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::var("COS_MCP_SERVER").as_deref() == Ok("1") {
+        return mcp::run().map_err(|e| -> Box<dyn std::error::Error> { e.into() });
+    }
+
     let log_format = tracing_subscriber::fmt::format()
         .pretty()
         .with_line_number(true)

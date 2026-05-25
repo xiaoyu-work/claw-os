@@ -993,7 +993,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "claw-bridge"
+name = "claw-os-sdk"
 version = "0.1.0"
 dependencies = [
  "base64",
@@ -1346,6 +1346,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "cos-mcp-serve"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "cos-runtime"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "claw-os-sdk",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "cosmic-client-toolkit"
 version = "0.2.0"
 source = "git+https://github.com/pop-os/cosmic-protocols?rev=160b086#160b086abe03cd34a8a375d7fbe47b24308d1f38"
@@ -1397,8 +1419,9 @@ dependencies = [
  "atomic_float",
  "bstr",
  "bzip2",
- "claw-bridge",
  "compio",
+ "cos-mcp-serve",
+ "cos-runtime",
  "cosmic-client-toolkit",
  "cosmic-mime-apps",
  "dirs 6.0.0",
