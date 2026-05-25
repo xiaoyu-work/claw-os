@@ -76,6 +76,12 @@ pub struct Flags {
     /// Used by the global launcher's "Ask Claw AI" entry to forward
     /// the user's natural-language query into the agent overlay.
     pub query: Option<String>,
+    /// One-shot context hint that gets prepended (invisibly to the
+    /// user) to the first prompt this session sends to the bridge.
+    /// Lets per-app "Ask Claw" buttons tell the agent which app they
+    /// were invoked from, what file is open, and so on — without
+    /// cluttering the user-visible message history.
+    pub context: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -314,6 +320,12 @@ pub struct App {
     streaming: bool,
     error: Option<String>,
     voice: VoiceState,
+
+    /// One-shot context prefix consumed on the first `submit()` call.
+    /// Set by `--context`, then drained the first time the user
+    /// sends a message so the agent learns about the host app
+    /// without the prefix bloating subsequent turns.
+    pending_context: Option<String>,
 }
 
 impl Application for App {
@@ -358,6 +370,7 @@ impl Application for App {
             streaming: false,
             error: None,
             voice: VoiceState::Idle,
+            pending_context: flags.context.clone(),
         };
         // Always have at least one session so the sidebar renders a
         // meaningful row immediately. Without this the first launch
@@ -735,8 +748,19 @@ impl App {
             sess.messages.push(ChatMessage::assistant_streaming());
         }
 
+        // Drain any one-shot context hint into a prefix line on the
+        // first bridge-side prompt. The user-visible message we just
+        // pushed to `sess.messages` above stays unmodified, so the
+        // sidebar / transcript don't expose the host-app metadata.
+        let bridge_prompt = match self.pending_context.take() {
+            Some(ctx) if !ctx.trim().is_empty() => {
+                format!("[App context: {}]\n\n{}", ctx.trim(), prompt)
+            }
+            _ => prompt,
+        };
+
         let request = ChatRequest {
-            prompt,
+            prompt: bridge_prompt,
             session_id: remote_id,
             model: None,
         };
@@ -1602,9 +1626,16 @@ fn parse_flags() -> Flags {
                     eprintln!("warning: --query requires an argument");
                 }
             }
+            "--context" => {
+                if let Some(value) = args.next() {
+                    flags.context = Some(value);
+                } else {
+                    eprintln!("warning: --context requires an argument");
+                }
+            }
             "-h" | "--help" => {
                 eprintln!(
-                    "cos-agent-ui [--overlay] [--voice] [--query <text>]\n  --overlay         compact, Esc-to-close mode for global summon\n  --voice           auto-arm the microphone on launch\n  --query <text>    pre-fill the prompt and submit it immediately"
+                    "cos-agent-ui [--overlay] [--voice] [--query <text>] [--context <text>]\n  --overlay         compact, Esc-to-close mode for global summon\n  --voice           auto-arm the microphone on launch\n  --query <text>    pre-fill the prompt and submit it immediately\n  --context <text>  invisible one-shot context line prepended to the\n                    first user prompt (used by per-app 'Ask Claw' buttons)"
                 );
                 std::process::exit(0);
             }
