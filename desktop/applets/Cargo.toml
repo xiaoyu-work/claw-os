@@ -18,8 +18,8 @@ members = [
     "cosmic-panel-button",
     "cosmic-applet-input-sources",
     "cosmic-applet-a11y",
-    "cosmic-applet-agent-activity",
-    "cosmic-applet-approval-gate",
+    "claw-applet-agent-activity",
+    "claw-applet-approval-gate",
     "cosmic-applets-config",
 ]
 

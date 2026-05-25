@@ -1,6 +1,6 @@
 [package]
-name = "cosmic-applet-agent-activity"
-version = "0.1.0"
+name = "claw-applet-approval-gate"
+version = "1.0.2"
 edition = "2024"
 license = "GPL-3.0-only"
 

@@ -19,15 +19,15 @@ fn main() {
         ),
         (
             "com.clawos.AppletAgentActivity",
-            "cosmic-applet-agent-activity",
-            "cosmic-applet-agent-activity-comment",
-            "cosmic-applet-agent-activity-keywords",
+            "claw-applet-agent-activity",
+            "claw-applet-agent-activity-comment",
+            "claw-applet-agent-activity-keywords",
         ),
         (
             "com.clawos.AppletApprovalGate",
-            "cosmic-applet-approval-gate",
-            "cosmic-applet-approval-gate-comment",
-            "cosmic-applet-approval-gate-keywords",
+            "claw-applet-approval-gate",
+            "claw-applet-approval-gate-comment",
+            "claw-applet-approval-gate-keywords",
         ),
         (
             "com.clawos.AppletAudio",

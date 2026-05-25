@@ -2,7 +2,7 @@
 Name=Agent Activity
 Comment=Live timeline of running and paused Claw OS agent tasks
 Type=Application
-Exec=cosmic-applet-agent-activity
+Exec=claw-applet-agent-activity
 Terminal=false
 Categories=ClawOS;
 Keywords=ClawOS;Applet;Agent;Tasks;Sessions;

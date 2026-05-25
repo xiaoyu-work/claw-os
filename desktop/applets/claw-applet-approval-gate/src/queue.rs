@@ -115,7 +115,7 @@ async fn decide(
     let mut params = json!({
         "id": id,
         "decision": decision,
-        "decided_by": "cosmic-applet-approval-gate",
+        "decided_by": "claw-applet-approval-gate",
     });
     if let Some(duration) = duration {
         let duration = serde_json::to_value(duration)

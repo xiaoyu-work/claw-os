@@ -2,7 +2,7 @@
 Name=Approval Gate
 Comment=Approve or deny live capability requests from the panel
 Type=Application
-Exec=cosmic-applet-approval-gate
+Exec=claw-applet-approval-gate
 Terminal=false
 Categories=ClawOS;
 Keywords=ClawOS;Applet;Approval;Permissions;Capabilities;Security;

@@ -859,6 +859,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "claw-applet-agent-activity"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "i18n-embed",
+ "i18n-embed-fl",
+ "libcosmic",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-log",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "claw-applet-approval-gate"
+version = "1.0.2"
+dependencies = [
+ "anyhow",
+ "i18n-embed",
+ "i18n-embed-fl",
+ "libcosmic",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-log",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "clipboard-win"
 version = "5.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1108,23 +1142,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cosmic-applet-approval-gate"
-version = "1.0.2"
-dependencies = [
- "anyhow",
- "i18n-embed",
- "i18n-embed-fl",
- "libcosmic",
- "rust-embed",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-log",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "cosmic-applet-audio"
 version = "1.0.2"
 dependencies = [
@@ -1361,9 +1378,10 @@ dependencies = [
 name = "cosmic-applets"
 version = "1.0.2"
 dependencies = [
+ "claw-applet-agent-activity",
+ "claw-applet-approval-gate",
  "cosmic-app-list",
  "cosmic-applet-a11y",
- "cosmic-applet-approval-gate",
  "cosmic-applet-audio",
  "cosmic-applet-battery",
  "cosmic-applet-bluetooth",

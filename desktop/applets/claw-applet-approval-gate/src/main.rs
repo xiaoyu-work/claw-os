@@ -6,7 +6,7 @@ fn main() -> cosmic::iced::Result {
     tracing_subscriber::fmt::init();
     let _ = tracing_log::LogTracer::init();
 
-    tracing::info!("Starting agent-activity applet with version {VERSION}");
+    tracing::info!("Starting approval-gate applet with version {VERSION}");
 
-    cosmic_applet_agent_activity::run()
+    claw_applet_approval_gate::run()
 }

@@ -22,8 +22,8 @@ cosmic-applet-tiling = { path = "../cosmic-applet-tiling" }
 cosmic-applet-time = { path = "../cosmic-applet-time" }
 cosmic-applet-workspaces = { path = "../cosmic-applet-workspaces" }
 cosmic-applet-input-sources = { path = "../cosmic-applet-input-sources" }
-cosmic-applet-approval-gate = { path = "../cosmic-applet-approval-gate" }
-cosmic-applet-agent-activity = { path = "../cosmic-applet-agent-activity" }
+claw-applet-approval-gate = { path = "../claw-applet-approval-gate" }
+claw-applet-agent-activity = { path = "../claw-applet-agent-activity" }
 cosmic-panel-button = { path = "../cosmic-panel-button" }
 libcosmic.workspace = true
 tracing.workspace = true
