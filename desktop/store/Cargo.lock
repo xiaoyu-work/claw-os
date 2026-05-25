@@ -1082,6 +1082,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "cos-mcp-serve"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "cos-runtime"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "claw-os-sdk",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "cosmic-client-toolkit"
 version = "0.2.0"
 source = "git+https://github.com/pop-os/cosmic-protocols?rev=160b086#160b086abe03cd34a8a375d7fbe47b24308d1f38"
@@ -1191,6 +1213,7 @@ dependencies = [
 name = "cosmic-store"
 version = "1.0.13"
 dependencies = [
+ "anyhow",
  "appstream",
  "async-trait",
  "atomicwrites",
@@ -1198,7 +1221,8 @@ dependencies = [
  "bitcode",
  "chrono",
  "clap",
- "claw-os-sdk",
+ "cos-mcp-serve",
+ "cos-runtime",
  "cosmic-panel-config",
  "dirs",
  "env_logger",

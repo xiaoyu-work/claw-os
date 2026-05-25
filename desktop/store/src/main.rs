@@ -51,6 +51,7 @@ use backend::{BackendName, Backends, Package};
 mod backend;
 
 mod claw_glue;
+mod mcp;
 
 use config::{AppTheme, CONFIG_VERSION, Config};
 mod config;
@@ -116,6 +117,10 @@ struct Cli {
 
 /// Runs application with these settings
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::var("COS_MCP_SERVER").as_deref() == Ok("1") {
+        return mcp::run().map_err(|e| -> Box<dyn std::error::Error> { e.into() });
+    }
+
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
         .format_timestamp_millis()
         .init();
