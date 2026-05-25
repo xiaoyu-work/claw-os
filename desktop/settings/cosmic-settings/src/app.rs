@@ -160,6 +160,7 @@ impl SettingsApp {
 
 #[derive(Clone, Debug)]
 pub enum Message {
+    AskClaw,
     #[cfg(feature = "wayland")]
     DesktopInfo,
     Error(String),
@@ -262,6 +263,14 @@ impl cosmic::Application for SettingsApp {
 
     fn header_start(&self) -> Vec<Element<'_, Self::Message>> {
         let mut widgets = Vec::new();
+
+        widgets.push(
+            icon::from_name("face-smile-symbolic")
+                .apply(button::icon)
+                .padding(8)
+                .on_press(Message::AskClaw)
+                .into(),
+        );
 
         widgets.push(if self.search_active {
             text_input::search_input("", &self.search_input)
@@ -382,6 +391,19 @@ impl cosmic::Application for SettingsApp {
     #[allow(clippy::too_many_lines)]
     fn update(&mut self, message: Message) -> Task<Self::Message> {
         match message {
+            Message::AskClaw => {
+                let page_info = &self.pages.info[self.active_page];
+                let ctx = format!(
+                    r#"{{"app":"cosmic-settings","page":"{}","title":"{}"}}"#,
+                    page_info.id.replace('"', "\\\""),
+                    page_info.title.replace('"', "\\\""),
+                );
+                let argv: &[&str] = &["cos-agent-ui", "--overlay", "--context", &ctx];
+                if let Err(err) = cos_runtime::exec::start(argv) {
+                    tracing::error!(?err, "failed to open Ask Claw overlay");
+                }
+            }
+
             Message::Page(page) => return self.activate_page(page),
 
             Message::None => (),
