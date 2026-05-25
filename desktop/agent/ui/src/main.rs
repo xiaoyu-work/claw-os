@@ -1177,15 +1177,19 @@ fn empty_state(compact: bool) -> Element<'static, Message> {
     let title = if compact {
         text("Ready when you are.").size(14.0)
     } else {
-        text("How can I help?").size(22.0)
+        text("How can I help?").size(28.0)
     };
     let hint = if compact {
         text("Type below or paste anything.").size(11.0)
     } else {
-        text("Press Super+A from anywhere to summon me.").size(13.0)
+        text("Pick an example below, or press Super+A from anywhere to summon me.")
+            .size(13.0)
     };
 
-    let mut col = Column::new().spacing(spacing.space_xxs).align_x(Alignment::Center);
+    let mut col = Column::new()
+        .spacing(spacing.space_s)
+        .align_x(Alignment::Center);
+
     if !compact {
         col = col.push(
             widget::image(if is_dark() {
@@ -1193,14 +1197,39 @@ fn empty_state(compact: bool) -> Element<'static, Message> {
             } else {
                 widget::image::Handle::from_bytes(WORDMARK_LIGHT)
             })
-            .height(Length::Fixed(36.0)),
+            .height(Length::Fixed(40.0)),
         );
     }
     col = col.push(title).push(hint);
 
+    // Three example prompts that prefill the composer on click. These
+    // are chosen to showcase capabilities a Copilot CLI / coding agent
+    // can't easily do — system inspection, scoped exec, and
+    // approvals-gated permissions — rather than rehearsed coding
+    // problems.
+    if !compact {
+        let prompt_row = Row::new()
+            .spacing(spacing.space_xs)
+            .push(example_chip("Largest files on this system"))
+            .push(example_chip("Run a quick repro in a sandbox"))
+            .push(example_chip("Why is the panel battery red?"));
+        col = col
+            .push(widget::space::vertical().height(Length::Fixed(spacing.space_s as f32)))
+            .push(prompt_row);
+    }
+
     container(col)
         .center_x(Length::Fill)
         .center_y(Length::Fill)
+        .into()
+}
+
+fn example_chip(label: &'static str) -> Element<'static, Message> {
+    let spacing = theme::active().cosmic().spacing;
+    button::custom(text(label).size(12.0))
+        .class(cosmic::theme::Button::Standard)
+        .padding([spacing.space_xxs, spacing.space_s])
+        .on_press(Message::InputChanged(label.to_string()))
         .into()
 }
 
@@ -1389,7 +1418,10 @@ fn sidebar_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
 
 fn input_card_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
     let cosmic = theme.cosmic();
-    let radius = cosmic.corner_radii.radius_l;
+    // macOS chat composers (Messages, Mail) lean on a soft raised
+    // card: subtle accent-tinted border, neutral component fill, and
+    // a faint drop shadow so the input feels lifted off the page.
+    let radius = cosmic.corner_radii.radius_m;
     cosmic::widget::container::Style {
         text_color: Some(cosmic.background.component.on.into()),
         background: Some(Background::Color(Color::from(cosmic.background.component.base))),
@@ -1398,28 +1430,35 @@ fn input_card_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
             width: 1.0,
             color: cosmic.background.divider.into(),
         },
-        shadow: Shadow::default(),
+        shadow: Shadow {
+            color: Color::from_rgba(0.0, 0.0, 0.0, 0.08),
+            offset: cosmic::iced::Vector::new(0.0, 1.0),
+            blur_radius: 4.0,
+        },
         icon_color: Some(cosmic.background.component.on.into()),
         snap: true,
     }
 }
 
+
 fn user_pill_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
     let cosmic = theme.cosmic();
-    // A "fully rounded" pill: use a large radius value the renderer
-    // will clamp to half the height. radius_xl is the largest token
-    // exposed by the COSMIC palette.
-    let radius = cosmic.corner_radii.radius_xl;
+    // macOS Messages-style user bubble: filled with the system accent
+    // (blue) so the user's turns stand out from the assistant's plain
+    // body. We pin to radius_l (10px after the theme rebrand) rather
+    // than radius_xl so the bubble is rounded but recognizably a
+    // rectangle, mirroring iMessage's continuous-curvature look.
+    let radius = cosmic.corner_radii.radius_l;
     cosmic::widget::container::Style {
-        text_color: Some(cosmic.primary.component.on.into()),
-        background: Some(Background::Color(Color::from(cosmic.primary.component.base))),
+        text_color: Some(cosmic.accent.on.into()),
+        background: Some(Background::Color(Color::from(cosmic.accent.base))),
         border: Border {
             radius: radius.into(),
             width: 0.0,
             color: Color::TRANSPARENT,
         },
         shadow: Shadow::default(),
-        icon_color: Some(cosmic.primary.component.on.into()),
+        icon_color: Some(cosmic.accent.on.into()),
         snap: true,
     }
 }
@@ -1444,15 +1483,17 @@ fn active_pill_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style 
 fn selected_session_active_style() -> cosmic::widget::button::Style {
     let cosmic = theme::active().cosmic().clone();
     let radius = cosmic.corner_radii.radius_s;
+    // macOS Finder-style selection: filled with the system accent
+    // (blue) so the active session jumps out of the sidebar list.
     cosmic::widget::button::Style {
-        background: Some(Background::Color(Color::from(cosmic.primary.component.base))),
+        background: Some(Background::Color(Color::from(cosmic.accent.base))),
         border_radius: radius.into(),
         border_color: Color::TRANSPARENT,
         border_width: 0.0,
         outline_color: Color::TRANSPARENT,
         outline_width: 0.0,
-        icon_color: Some(cosmic.primary.component.on.into()),
-        text_color: Some(cosmic.primary.component.on.into()),
+        icon_color: Some(cosmic.accent.on.into()),
+        text_color: Some(cosmic.accent.on.into()),
         overlay: None,
         shadow_offset: cosmic::iced::Vector::new(0.0, 0.0),
     }
