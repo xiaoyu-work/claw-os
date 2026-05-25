@@ -8,6 +8,7 @@
 
 pub mod app_memory;
 pub mod curator;
+pub mod history;
 pub mod notes;
 pub mod semantic;
 pub mod sqlite_fts;

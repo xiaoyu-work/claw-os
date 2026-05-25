@@ -49,6 +49,26 @@ pub async fn delete_one(State(state): State<AppState>, Path(id): Path<String>) -
     }
 }
 
+/// `GET /api/sessions/:id/history` — proxy to clawd `memory.history`.
+///
+/// Returns the conversation transcript pre-parsed into structured
+/// `messages: [{ role, text, tool_calls, tool_results, ts_ms, ... }]`
+/// so the desktop UI can resume a chat session without having to
+/// reverse-engineer the `[tool_use:...]` storage format itself.
+pub async fn history(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    let value = clawd::request(
+        &state.clawd_socket,
+        "memory.history",
+        json!({ "session_id": id, "limit": 500 }),
+    )
+    .await
+    .map_err(|_| StatusCode::BAD_GATEWAY)?;
+    Ok(Json(value))
+}
+
 fn session_from_job(job: &Value) -> Option<Session> {
     let id = job.get("id")?.as_str()?.to_string();
     let prompt = job
