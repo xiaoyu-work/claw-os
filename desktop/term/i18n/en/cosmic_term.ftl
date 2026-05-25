@@ -106,6 +106,7 @@ find-next = Find next
 file = File
 new-tab = New tab
 new-window = New window
+ask-claw = Ask Claw…
 profile = Profile
 menu-profiles = Profiles...
 close-tab = Close tab

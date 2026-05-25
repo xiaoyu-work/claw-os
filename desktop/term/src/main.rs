@@ -244,6 +244,7 @@ pub struct Flags {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Action {
     About,
+    AskClaw,
     ClearScrollback,
     ColorSchemes(ColorSchemeKind),
     Copy,
@@ -295,6 +296,7 @@ impl Action {
     fn message(&self, entity_opt: Option<segmented_button::Entity>) -> Message {
         match self {
             Self::About => Message::ToggleContextPage(ContextPage::About),
+            Self::AskClaw => Message::AskClaw,
             Self::ClearScrollback => Message::ClearScrollback(entity_opt),
             Self::ColorSchemes(color_scheme_kind) => {
                 Message::ToggleContextPage(ContextPage::ColorSchemes(*color_scheme_kind))
@@ -358,6 +360,7 @@ impl MenuAction for Action {
 #[derive(Clone, Debug)]
 pub enum Message {
     AppTheme(AppTheme),
+    AskClaw,
     ClearScrollback(Option<segmented_button::Entity>),
     ColorSchemeCollapse,
     ColorSchemeDelete(ColorSchemeKind, ColorSchemeId),
@@ -3271,6 +3274,19 @@ impl Application for App {
             Message::WindowClose => {
                 if let Some(window_id) = self.core.main_window_id() {
                     return window::close(window_id);
+                }
+            }
+            Message::AskClaw => {
+                let cwd = self
+                    .active_terminal_working_directory()
+                    .map(|p| p.to_string_lossy().into_owned());
+                let ctx = match cwd {
+                    Some(c) => format!(r#"{{"app":"cosmic-term","cwd":"{}"}}"#, c),
+                    None => r#"{"app":"cosmic-term"}"#.to_string(),
+                };
+                let argv: &[&str] = &["cos-agent-ui", "--overlay", "--context", &ctx];
+                if let Err(err) = cos_runtime::exec::start(argv) {
+                    log::error!("failed to open Ask Claw overlay: {err}");
                 }
             }
             Message::WindowNew => match env::current_exe() {

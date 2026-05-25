@@ -218,6 +218,8 @@ pub fn menu_bar<'a>(
                 (
                     fl!("file"),
                     vec![
+                        MenuItem::Button(fl!("ask-claw"), None, Action::AskClaw),
+                        MenuItem::Divider,
                         MenuItem::Button(fl!("new-tab"), None, Action::TabNew),
                         MenuItem::Button(fl!("new-window"), None, Action::WindowNew),
                         MenuItem::Divider,

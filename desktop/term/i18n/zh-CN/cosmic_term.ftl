@@ -81,6 +81,7 @@ find-next = 查找下一个
 file = 文件
 new-tab = 新建标签
 new-window = 新建窗口
+ask-claw = 问 Claw…
 profile = 配置
 menu-profiles = 配置文件…
 close-tab = 关闭标签
