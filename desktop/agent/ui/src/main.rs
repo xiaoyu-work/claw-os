@@ -150,12 +150,20 @@ pub enum ChatRole {
 /// loaded history both populate the `tool_calls` / `tool_results`
 /// vectors so the UI can paint structured cards instead of dumping
 /// raw `[tool_use:NAME] {…}` markers.
+///
+/// `parsed_markdown` is populated lazily once the assistant message
+/// has finished streaming (or has been loaded from history). The
+/// widget renders it via `cosmic::widget::markdown::view`. We avoid
+/// re-parsing on every delta because the message can change shape
+/// mid-stream (open code fence, unbalanced lists) and a momentary
+/// "broken" render is worse than waiting for the final shape.
 #[derive(Debug, Clone, Default)]
 pub struct ChatMessage {
     pub role: Option<ChatRole>,
     pub content: String,
     pub tool_calls: Vec<ToolCallView>,
     pub tool_results: Vec<ToolResultView>,
+    pub parsed_markdown: Option<Vec<widget::markdown::Item>>,
     /// True while the assistant is still streaming this message.
     pub in_progress: bool,
 }
@@ -167,6 +175,7 @@ impl ChatMessage {
             content,
             tool_calls: Vec::new(),
             tool_results: Vec::new(),
+            parsed_markdown: None,
             in_progress: false,
         }
     }
@@ -177,12 +186,30 @@ impl ChatMessage {
             content: String::new(),
             tool_calls: Vec::new(),
             tool_results: Vec::new(),
+            parsed_markdown: None,
             in_progress: true,
         }
     }
 
     fn role(&self) -> ChatRole {
         self.role.clone().unwrap_or(ChatRole::Assistant)
+    }
+
+    /// Parse `content` into markdown items. Idempotent — repeated
+    /// calls overwrite the cached vector with the latest parse, which
+    /// is what we want after a history reload or stream finalize.
+    fn refresh_markdown(&mut self) {
+        if self.content.trim().is_empty() {
+            self.parsed_markdown = None;
+            return;
+        }
+        let items: Vec<widget::markdown::Item> =
+            widget::markdown::parse(&self.content).collect();
+        if items.is_empty() {
+            self.parsed_markdown = None;
+        } else {
+            self.parsed_markdown = Some(items);
+        }
     }
 }
 
@@ -545,6 +572,9 @@ impl App {
             && let Some(last) = sess.messages.last_mut()
         {
             last.in_progress = false;
+            if last.role() == ChatRole::Assistant {
+                last.refresh_markdown();
+            }
         }
         self.streaming = false;
     }
@@ -653,13 +683,18 @@ impl App {
                         "assistant" => ChatRole::Assistant,
                         _ => ChatRole::User,
                     };
-                    sess.messages.push(ChatMessage {
-                        role: Some(role),
+                    let mut msg = ChatMessage {
+                        role: Some(role.clone()),
                         content: row.text,
                         tool_calls: row.tool_calls,
                         tool_results: row.tool_results,
+                        parsed_markdown: None,
                         in_progress: false,
-                    });
+                    };
+                    if role == ChatRole::Assistant {
+                        msg.refresh_markdown();
+                    }
+                    sess.messages.push(msg);
                 }
                 sess.history = HistoryState::Loaded;
             }
@@ -1204,11 +1239,27 @@ fn message_bubble(msg: &ChatMessage, compact: bool) -> Element<'_, Message> {
             // around assistant turns so structure (paragraphs, code,
             // …) reads naturally.
             //
-            // TODO(markdown): re-enable rendering via the iced
-            // markdown widget once we can borrow a long-lived parsed
-            // `Vec<Item>` from the session (E0515 today).
+            // Once the message has finished streaming we render its
+            // parsed markdown items via the iced markdown widget so
+            // headings, lists, inline code, and code fences land
+            // correctly. During streaming we paint plain text — the
+            // markdown renderer doesn't degrade gracefully when an
+            // unfinished fence or list bullet is left dangling.
             let mut col = Column::new().spacing(spacing.space_xxs);
-            if !msg.content.is_empty() {
+            if let Some(items) = msg.parsed_markdown.as_ref() {
+                let palette = if is_dark() {
+                    cosmic::iced::theme::Palette::DARK
+                } else {
+                    cosmic::iced::theme::Palette::LIGHT
+                };
+                let settings = widget::markdown::Settings::with_text_size(
+                    body_size,
+                    widget::markdown::Style::from_palette(palette),
+                );
+                let view = widget::markdown::view(items, settings)
+                    .map(|uri| Message::LinkClicked(uri.to_string()));
+                col = col.push(view);
+            } else if !msg.content.is_empty() {
                 col = col.push(text(msg.content.clone()).size(body_size));
             } else if msg.in_progress && msg.tool_calls.is_empty() {
                 col = col.push(text("…").size(body_size));
