@@ -13,6 +13,7 @@ use std::str::FromStr;
 pub use app::{Message, SettingsApp};
 pub mod claw_glue;
 pub mod config;
+pub mod mcp;
 
 #[macro_use]
 pub mod localize;
@@ -182,6 +183,10 @@ impl CosmicFlags for Args {
 ///
 /// Returns error if iced fails to run the application.
 pub fn main() -> color_eyre::Result<()> {
+    if std::env::var("COS_MCP_SERVER").as_deref() == Ok("1") {
+        return mcp::run().map_err(|e| color_eyre::eyre::eyre!("{e}"));
+    }
+
     color_eyre::install()?;
 
     if std::env::var("RUST_SPANTRACE").is_err() {
