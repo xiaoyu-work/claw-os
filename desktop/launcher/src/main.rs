@@ -3,6 +3,7 @@ mod components;
 mod config;
 mod app;
 mod localize;
+mod mcp;
 mod subscriptions;
 use tracing::info;
 
@@ -11,6 +12,14 @@ use localize::localize;
 use crate::config::VERSION;
 
 fn main() -> cosmic::iced::Result {
+    if std::env::var("COS_MCP_SERVER").as_deref() == Ok("1") {
+        if let Err(e) = mcp::run() {
+            eprintln!("cosmic-launcher MCP server failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     init_logging();
 
     info!(

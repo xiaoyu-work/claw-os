@@ -11,6 +11,9 @@ wgpu = ["libcosmic/wgpu"]
 console = ["tokio/tracing"]
 
 [dependencies]
+anyhow = "1"
+async-trait = "0.1"
+cos-mcp-serve = { path = "../../crates/cos-mcp-serve" }
 console-subscriber = "0.5.0"
 futures = "0.3.31"
 i18n-embed = { version = "0.16", features = [
@@ -43,7 +46,7 @@ pop-launcher-service = { git = "https://github.com/pop-os/launcher/" }
 rust-embed = "8.11.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
-tokio = { version = "1.49.0", features = ["sync", "rt"] }
+tokio = { version = "1.49.0", features = ["sync", "rt", "process", "io-util", "macros"] }
 clap = { version = "4.5.56", features = ["derive"] }
 switcheroo-control = { git = "https://github.com/pop-os/dbus-settings-bindings" }
 zbus = { version = "5.13", default-features = false, features = ["tokio"] }
@@ -55,3 +58,6 @@ zbus = { version = "5.13", default-features = false, features = ["tokio"] }
 # libcosmic = { path = "../libcosmic" }
 # cosmic-config = { path = "../libcosmic/cosmic-config" }
 # cosmic-theme = { path = "../libcosmic/cosmic-theme" }
+
+[workspace]
+# Opt out of repo-root workspace; this crate has its own dependency graph.
