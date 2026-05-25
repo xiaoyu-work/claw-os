@@ -1154,12 +1154,17 @@ async fn run_one_job_inner(job: &Job) -> FinishOutcome {
     let result = if let Some(sid) = job.session_id.as_deref() {
         match crate::agent::memory::sqlite_fts::MemoryDb::open_default() {
             Ok(db) => {
-                loop_::ask_with_stream(
+                // Replay prior turns so multi-turn task.stream sessions (the
+                // desktop agent UI is the main caller) see continuous context
+                // instead of treating every job.submit as a fresh exchange.
+                loop_::ask_with_stream_continuation(
                     provider.clone(),
                     &cfg,
                     &job.prompt,
                     &tools,
-                    Some((&db, sid)),
+                    &db,
+                    sid,
+                    100,
                     Arc::new(JobStreamSink {
                         job_id: job.id.clone(),
                     }),
