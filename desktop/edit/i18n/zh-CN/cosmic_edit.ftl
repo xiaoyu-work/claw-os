@@ -138,6 +138,7 @@ ai = AI
 ai-summarize = 总结
 ai-explain = 解释
 ai-rewrite = 改写
+ai-ask-claw = 问 Claw…
 ai-panel-title = Claw AI
 ai-mode-summarize = 总结
 ai-mode-explain = 解释

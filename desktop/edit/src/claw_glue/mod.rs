@@ -67,3 +67,19 @@ pub fn start_detached(program: &Path, args: &[&str]) -> io::Result<()> {
     argv.extend_from_slice(args);
     exec::start(&argv).map(|_| ()).map_err(map_err)
 }
+
+/// Open the system "Ask Claw" agent overlay, optionally carrying a
+/// one-shot context hint (host-app + open file) so the kernel agent
+/// knows which document the user is asking about. The overlay is the
+/// same `cos-agent-ui --overlay` window that the global hotkey
+/// summons; passing `--context` ensures the agent's first response
+/// is grounded in the editor's state without polluting the visible
+/// chat transcript.
+pub fn ask_claw_overlay(context: Option<&str>) -> io::Result<()> {
+    let mut argv: Vec<&str> = vec!["cos-agent-ui", "--overlay"];
+    if let Some(ctx) = context {
+        argv.push("--context");
+        argv.push(ctx);
+    }
+    exec::start(&argv).map(|_| ()).map_err(map_err)
+}

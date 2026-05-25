@@ -127,6 +127,7 @@ ai = AI
 ai-summarize = Summarize
 ai-explain = Explain
 ai-rewrite = Rewrite
+ai-ask-claw = Ask Claw…
 ai-panel-title = Claw AI
 ai-mode-summarize = Summary
 ai-mode-explain = Explanation

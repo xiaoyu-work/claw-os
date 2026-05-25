@@ -268,6 +268,7 @@ impl AiVerb {
 pub enum Action {
     Todo,
     About,
+    AiAskClaw,
     AiExplain,
     AiRewrite,
     AiSummarize,
@@ -321,6 +322,7 @@ impl Action {
         match self {
             Self::Todo => Message::Todo,
             Self::About => Message::ToggleContextPage(ContextPage::About),
+            Self::AiAskClaw => Message::AiAskClaw,
             Self::AiExplain => Message::AiRun(AiVerb::Explain),
             Self::AiRewrite => Message::AiRun(AiVerb::Rewrite),
             Self::AiSummarize => Message::AiRun(AiVerb::Summarize),
@@ -413,6 +415,7 @@ enum NewTab {
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub enum Message {
+    AiAskClaw,
     AiInsert(String),
     AiResult {
         verb: AiVerb,
@@ -1923,6 +1926,20 @@ impl Application for App {
             };
         }
         match message {
+            Message::AiAskClaw => {
+                let context = self.active_tab().and_then(|tab| match tab {
+                    Tab::Editor(t) => t.path_opt.as_ref().and_then(|p| {
+                        p.to_str().map(|s| {
+                            format!(r#"{{"app":"cosmic-edit","file":"{}"}}"#, s)
+                        })
+                    }),
+                    _ => None,
+                });
+                let ctx_ref = context.as_deref();
+                if let Err(err) = crate::claw_glue::ask_claw_overlay(ctx_ref) {
+                    log::error!("failed to open Ask Claw overlay: {err}");
+                }
+            }
             Message::AiRun(verb) => {
                 return self.ai_start(verb);
             }

@@ -291,6 +291,8 @@ pub fn menu_bar<'a>(
                 (
                     (fl!("ai")),
                     vec![
+                        MenuItem::Button(fl!("ai-ask-claw"), None, Action::AiAskClaw),
+                        MenuItem::Divider,
                         MenuItem::Button(fl!("ai-summarize"), None, Action::AiSummarize),
                         MenuItem::Button(fl!("ai-explain"), None, Action::AiExplain),
                         MenuItem::Button(fl!("ai-rewrite"), None, Action::AiRewrite),
