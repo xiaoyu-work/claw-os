@@ -357,6 +357,7 @@ pub enum Message {
     AiAssistSubmit,
     AiAssistSearchResult(Result<Vec<crate::claw_glue::ai::SearchHit>, String>),
     AiAssistFindSimilar,
+    AskClaw,
     AiRewrite(Option<Entity>),
     AiRewriteInput(String),
     AiRewriteSubmit,
@@ -2586,6 +2587,13 @@ impl App {
             .padding(space_xxs)
             .selected(matches!(view, tab::View::List))
             .on_press(Message::TabView(None, tab::View::List));
+        let ask_claw = widget::tooltip(
+            widget::button::icon(icon::from_name("face-smile-symbolic").size(16))
+                .padding(space_xxs)
+                .on_press(Message::AskClaw),
+            widget::text::body(fl!("ask-claw")),
+            widget::tooltip::Position::Bottom,
+        );
 
         let mut row = widget::row::with_capacity(10)
             .align_y(Alignment::Center)
@@ -2595,7 +2603,8 @@ impl App {
             .push(widget::space::horizontal().width(Length::Fixed(space_s.into())))
             .push(grid)
             .push(list)
-            .push(widget::space::horizontal().width(Length::Fill));
+            .push(widget::space::horizontal().width(Length::Fill))
+            .push(ask_claw);
 
         let search_term = self.search_get();
         let search_input = widget::text_input::search_input(
@@ -3320,6 +3329,32 @@ impl Application for App {
                     })
                 });
                 return Task::batch([dialog_task, work]);
+            }
+            Message::AskClaw => {
+                let tab_opt = self.tab_model.active_data::<Tab>();
+                let selected = self.selected_paths(None).next();
+                let cwd = tab_opt
+                    .and_then(|t| t.location.path_opt().cloned())
+                    .map(|p| p.to_string_lossy().into_owned());
+                let sel_str = selected.map(|p| p.to_string_lossy().into_owned());
+                let ctx = match (cwd, sel_str) {
+                    (Some(c), Some(s)) => format!(
+                        r#"{{"app":"cosmic-files","cwd":"{}","selection":"{}"}}"#,
+                        c.replace('"', "\\\""),
+                        s.replace('"', "\\\""),
+                    ),
+                    (Some(c), None) => format!(
+                        r#"{{"app":"cosmic-files","cwd":"{}"}}"#,
+                        c.replace('"', "\\\""),
+                    ),
+                    _ => r#"{"app":"cosmic-files"}"#.to_string(),
+                };
+                if let Err(err) = crate::claw_glue::start_detached(
+                    "cos-agent-ui",
+                    &["--overlay", "--context", &ctx],
+                ) {
+                    log::error!("failed to open Ask Claw overlay: {err}");
+                }
             }
             Message::AiSummaryResult { path, outcome } => {
                 // Only mutate the dialog if it's still the one we kicked off

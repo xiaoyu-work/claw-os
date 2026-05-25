@@ -338,6 +338,7 @@ status-bar-items = { $count } 项
 status-bar-selected = 已选 { $count } 项
 status-bar-available = 可用 { $size }
 finder-toolbar-search = 搜索
+ask-claw = 问 Claw…
 
 ## Settings
 

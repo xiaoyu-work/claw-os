@@ -311,6 +311,7 @@ status-bar-items = {$count} items
 status-bar-selected = {$count} selected
 status-bar-available = {$size} available
 finder-toolbar-search = Search
+ask-claw = Ask Claw…
 
 ## Settings
 settings = Settings
