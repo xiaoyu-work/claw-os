@@ -12,6 +12,7 @@ rust-version = "1.90"
 alacritty_terminal = "0.25.1"
 anyhow = "1"
 async-trait = "0.1"
+cos-mcp-serve = { path = "../../crates/cos-mcp-serve" }
 cos-runtime = { path = "../../cos-runtime/rust" }
 hex_color = { version = "3", features = ["serde"] }
 indexmap = "2"

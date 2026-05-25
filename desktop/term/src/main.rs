@@ -66,6 +66,7 @@ mod menu;
 
 use terminal::{Terminal, TerminalPaneGrid, TerminalScroll};
 mod ai;
+mod mcp;
 mod terminal;
 
 use terminal_box::terminal_box;
@@ -92,6 +93,10 @@ pub fn icon_cache_get(name: &'static str, size: u16) -> widget::icon::Icon {
 /// Runs application with these settings
 #[rustfmt::skip]
 fn main() -> Result<(), Box<dyn Error>> {
+    if std::env::var("COS_MCP_SERVER").as_deref() == Ok("1") {
+        return mcp::run().map_err(|e| -> Box<dyn Error> { e.into() });
+    }
+
     let raw_args = RawArgs::from_args();
     let mut cursor = raw_args.cursor();
 
