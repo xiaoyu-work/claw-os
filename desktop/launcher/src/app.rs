@@ -46,7 +46,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::LazyLock;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
@@ -188,6 +188,28 @@ pub struct CosmicLauncher {
     needs_clear: bool,
     hand_over: String,
     dummy_id: window::Id,
+    ai_inline: AiInlineState,
+    ai_token: u64,
+}
+
+/// State machine for the inline AI answer card shown when the user
+/// prefixes their launcher query with `?` (or `？`).
+///
+/// Transitions:
+/// `Idle` -> `Pending` on `InputChanged` with AI prefix (debounce starts).
+/// `Pending` -> `Streaming` once the debounce fires and `cos agent ask`
+/// is spawned.
+/// `Streaming` -> `Done` when the child process exits with a final
+/// answer on stdout, or `Error` on non-zero exit / spawn failure.
+/// Any transition out of an in-flight state increments `ai_token` so
+/// late deltas from a previous request are ignored.
+#[derive(Debug, Clone)]
+pub enum AiInlineState {
+    Idle,
+    Pending { token: u64, query: String },
+    Streaming { token: u64, query: String, partial: String },
+    Done { query: String, answer: String },
+    Error { query: String, message: String },
 }
 
 #[derive(Debug, Clone)]
@@ -213,6 +235,22 @@ pub enum Message {
     AltRelease,
     Overlap(OverlapNotifyEvent),
     Surface(surface::Action),
+    StartAiInline(u64, String),
+    AiInlineDelta(u64, String),
+    AiInlineDone(u64, String),
+    AiInlineError(u64, String),
+}
+
+/// Extract the AI prompt from a launcher input value when the user has
+/// prefixed it with `?` or fullwidth `？`. Returns `None` for non-AI
+/// queries and for bare prefixes (`?` with no content).
+fn ai_prompt(input: &str) -> Option<&str> {
+    let trimmed = input.trim_start();
+    let rest = trimmed
+        .strip_prefix('?')
+        .or_else(|| trimmed.strip_prefix('？'))?;
+    let rest = rest.trim();
+    if rest.is_empty() { None } else { Some(rest) }
 }
 
 impl CosmicLauncher {
@@ -300,6 +338,95 @@ impl CosmicLauncher {
             self.margin = o.y + o.height;
         }
     }
+
+    /// Render the inline AI answer card for the current `ai_inline`
+    /// state. Returns `None` when there is nothing to show (Idle).
+    /// The card stays clickable in every non-Idle state: pressing it
+    /// (or hitting Enter) opens the full overlay with the same query
+    /// via `Message::AskAi`.
+    fn ai_inline_card(&self) -> Option<Element<'_, Message>> {
+        let (title, body, hint, is_error) = match &self.ai_inline {
+            AiInlineState::Idle => return None,
+            AiInlineState::Pending { query, .. } => (
+                fl!("ai-card-title"),
+                fl!("ai-card-thinking", query = query.clone()),
+                fl!("ai-card-hint-thinking"),
+                false,
+            ),
+            AiInlineState::Streaming { query, partial, .. } => {
+                let body = if partial.trim().is_empty() {
+                    fl!("ai-card-thinking", query = query.clone())
+                } else {
+                    partial.clone()
+                };
+                (
+                    fl!("ai-card-title"),
+                    body,
+                    fl!("ai-card-hint-streaming"),
+                    false,
+                )
+            }
+            AiInlineState::Done { answer, .. } => (
+                fl!("ai-card-title"),
+                answer.clone(),
+                fl!("ai-card-hint-open"),
+                false,
+            ),
+            AiInlineState::Error { message, .. } => (
+                fl!("ai-card-error-title"),
+                message.clone(),
+                fl!("ai-card-hint-open"),
+                true,
+            ),
+        };
+
+        let header = row![
+            text::heading(title)
+                .align_y(Vertical::Center)
+                .class(if is_error {
+                    theme::Text::Custom(|t| cosmic::iced::widget::text::Style {
+                        color: Some(t.cosmic().destructive_color().into()),
+                    })
+                } else {
+                    theme::Text::Custom(|t| cosmic::iced::widget::text::Style {
+                        color: Some(t.cosmic().accent_color().into()),
+                    })
+                }),
+            horizontal_space().width(Length::Fill),
+            text::caption(hint)
+                .align_y(Vertical::Center)
+                .class(theme::Text::Custom(|t| cosmic::iced::widget::text::Style {
+                    color: Some(t.cosmic().on_bg_color().into()),
+                })),
+        ]
+        .align_y(Alignment::Center)
+        .spacing(8);
+
+        let body_text = text::body(body)
+            .align_x(Horizontal::Left)
+            .align_y(Vertical::Top)
+            .class(theme::Text::Custom(|t| cosmic::iced::widget::text::Style {
+                color: Some(t.cosmic().on_bg_color().into()),
+            }));
+
+        // Cap height + scroll long answers so the card doesn't push
+        // the rest of the launcher offscreen.
+        let body_area = container(scrollable(body_text).height(Length::Shrink))
+            .max_height(220.0)
+            .width(Length::Fill);
+
+        let card = column![header, body_area]
+            .spacing(6)
+            .width(Length::Fixed(660.0));
+
+        let clickable = cosmic::widget::button::custom(card)
+            .width(Length::Fill)
+            .on_press(Message::AskAi)
+            .padding([8, 24])
+            .class(Button::Text);
+
+        Some(clickable.into())
+    }
 }
 
 async fn launch(
@@ -370,6 +497,8 @@ impl cosmic::Application for CosmicLauncher {
                 needs_clear: false,
                 hand_over: String::default(),
                                 dummy_id,
+                ai_inline: AiInlineState::Idle,
+                ai_token: 0,
 
             },
             get_layer_surface(SctkLayerSurfaceSettings {
@@ -401,7 +530,40 @@ impl cosmic::Application for CosmicLauncher {
         match message {
             Message::InputChanged(value) => {
                 self.input_value.clone_from(&value);
-                self.request(launcher::Request::Search(value));
+                if let Some(prompt) = ai_prompt(&value) {
+                    // AI mode: blow away regular launcher results so the
+                    // result list doesn't compete with the inline answer
+                    // card. Also push an empty Search request so pop-launcher
+                    // doesn't keep dripping stale results in.
+                    self.launcher_items.clear();
+                    self.launcher_item_icon_handles.clear();
+                    self.focused = 0;
+                    self.request(launcher::Request::Search(String::new()));
+
+                    // Each keystroke invalidates any in-flight stream by
+                    // bumping the token; the debounced StartAiInline below
+                    // only fires the latest token.
+                    self.ai_token = self.ai_token.wrapping_add(1);
+                    let token = self.ai_token;
+                    let prompt = prompt.to_string();
+                    self.ai_inline = AiInlineState::Pending {
+                        token,
+                        query: prompt.clone(),
+                    };
+                    return cosmic::Task::perform(
+                        async move {
+                            tokio::time::sleep(Duration::from_millis(350)).await;
+                            (token, prompt)
+                        },
+                        |(t, q)| cosmic::action::app(Message::StartAiInline(t, q)),
+                    );
+                } else {
+                    if !matches!(self.ai_inline, AiInlineState::Idle) {
+                        self.ai_inline = AiInlineState::Idle;
+                        self.ai_token = self.ai_token.wrapping_add(1);
+                    }
+                    self.request(launcher::Request::Search(value));
+                }
             }
             Message::Backspace => {
                 self.input_value.pop();
@@ -434,7 +596,16 @@ impl cosmic::Application for CosmicLauncher {
                 }
             }
             Message::AskAi => {
-                let query = self.input_value.trim().to_string();
+                // Strip `?` / `？` prefix so the overlay starts the
+                // conversation with the actual question, not the
+                // launcher-mode trigger character.
+                let raw = self.input_value.trim();
+                let query = raw
+                    .strip_prefix('?')
+                    .or_else(|| raw.strip_prefix('？'))
+                    .unwrap_or(raw)
+                    .trim()
+                    .to_string();
                 if !query.is_empty() {
                     let mut cmd = std::process::Command::new("cos");
                     cmd.args(["app", "agent", "overlay", "--query", &query]);
@@ -759,6 +930,150 @@ impl cosmic::Application for CosmicLauncher {
                     cosmic::app::Action::Surface(a),
                 ));
             }
+            Message::StartAiInline(token, prompt) => {
+                if token != self.ai_token {
+                    // A newer keystroke obsoleted this debounce.
+                    return Task::none();
+                }
+                // Only proceed if we're still in Pending for this token
+                // (defensive: another transition could have happened).
+                if !matches!(&self.ai_inline, AiInlineState::Pending { token: t, .. } if *t == token)
+                {
+                    return Task::none();
+                }
+                self.ai_inline = AiInlineState::Streaming {
+                    token,
+                    query: prompt.clone(),
+                    partial: String::new(),
+                };
+                return cosmic::Task::stream(cosmic::iced::stream::channel(
+                    16,
+                    move |mut tx: cosmic::iced::futures::channel::mpsc::Sender<Message>| {
+                        let prompt = prompt.clone();
+                        async move {
+                            use cosmic::iced::futures::SinkExt;
+                            use std::process::Stdio;
+                            use tokio::io::AsyncReadExt;
+                            use tokio::process::Command;
+                            let mut child = match Command::new("cos")
+                                .args(["agent", "ask", "--stream", &prompt])
+                                .stdin(Stdio::null())
+                                .stdout(Stdio::piped())
+                                .stderr(Stdio::piped())
+                                .kill_on_drop(true)
+                                .spawn()
+                            {
+                                Ok(c) => c,
+                                Err(e) => {
+                                    let _ = tx
+                                        .send(Message::AiInlineError(
+                                            token,
+                                            format!("failed to spawn cos: {e}"),
+                                        ))
+                                        .await;
+                                    return;
+                                }
+                            };
+                            let mut stdout = match child.stdout.take() {
+                                Some(s) => s,
+                                None => return,
+                            };
+                            let mut stderr = match child.stderr.take() {
+                                Some(s) => s,
+                                None => return,
+                            };
+                            // Forward stderr bytes as deltas. Hold a queue of
+                            // pending UTF-8 bytes so we don't split a
+                            // codepoint between chunks.
+                            let mut tx_stderr = tx.clone();
+                            let stderr_task = tokio::spawn(async move {
+                                let mut buf = [0u8; 1024];
+                                let mut leftover: Vec<u8> = Vec::new();
+                                loop {
+                                    match stderr.read(&mut buf).await {
+                                        Ok(0) => break,
+                                        Ok(n) => {
+                                            leftover.extend_from_slice(&buf[..n]);
+                                            let valid_end = match std::str::from_utf8(&leftover) {
+                                                Ok(s) => s.len(),
+                                                Err(e) => e.valid_up_to(),
+                                            };
+                                            if valid_end == 0 {
+                                                continue;
+                                            }
+                                            let bytes: Vec<u8> =
+                                                leftover.drain(..valid_end).collect();
+                                            if let Ok(chunk) = String::from_utf8(bytes)
+                                                && tx_stderr
+                                                    .send(Message::AiInlineDelta(token, chunk))
+                                                    .await
+                                                    .is_err()
+                                            {
+                                                return;
+                                            }
+                                        }
+                                        Err(_) => break,
+                                    }
+                                }
+                            });
+                            let stdout_task = tokio::spawn(async move {
+                                let mut buf = Vec::new();
+                                let _ = stdout.read_to_end(&mut buf).await;
+                                String::from_utf8_lossy(&buf).trim().to_string()
+                            });
+                            let _ = stderr_task.await;
+                            let answer = stdout_task.await.unwrap_or_default();
+                            let status = child.wait().await;
+                            match status {
+                                Ok(s) if s.success() => {
+                                    let _ = tx
+                                        .send(Message::AiInlineDone(token, answer))
+                                        .await;
+                                }
+                                _ => {
+                                    let _ = tx
+                                        .send(Message::AiInlineError(
+                                            token,
+                                            "agent returned non-zero".into(),
+                                        ))
+                                        .await;
+                                }
+                            }
+                        }
+                    },
+                ))
+                .map(cosmic::Action::App);
+            }
+            Message::AiInlineDelta(token, text) => {
+                if token != self.ai_token {
+                    return Task::none();
+                }
+                if let AiInlineState::Streaming { partial, .. } = &mut self.ai_inline {
+                    partial.push_str(&text);
+                }
+            }
+            Message::AiInlineDone(token, answer) => {
+                if token != self.ai_token {
+                    return Task::none();
+                }
+                let query = match &self.ai_inline {
+                    AiInlineState::Streaming { query, .. }
+                    | AiInlineState::Pending { query, .. } => query.clone(),
+                    _ => String::new(),
+                };
+                self.ai_inline = AiInlineState::Done { query, answer };
+            }
+            Message::AiInlineError(token, message) => {
+                if token != self.ai_token {
+                    return Task::none();
+                }
+                let query = match &self.ai_inline {
+                    AiInlineState::Streaming { query, .. }
+                    | AiInlineState::Pending { query, .. } => query.clone(),
+                    _ => String::new(),
+                };
+                self.ai_inline = AiInlineState::Error { query, message };
+            }
         }
         Task::none()
     }
@@ -836,7 +1151,14 @@ impl cosmic::Application for CosmicLauncher {
             let launcher_entry = text_input::search_input(fl!("type-to-search"), &self.input_value)
                 .on_input(Message::InputChanged)
                 .on_paste(Message::InputChanged)
-                .on_submit(|_| Message::Activate(None))
+                .on_submit(|val| {
+                    let trimmed = val.trim_start();
+                    if trimmed.starts_with('?') || trimmed.starts_with('？') {
+                        Message::AskAi
+                    } else {
+                        Message::Activate(None)
+                    }
+                })
                 .on_tab(Message::TabPress)
                 .style(cosmic::theme::TextInput::Custom {
                     active: Box::new(spotlight_pill_appearance),
@@ -1043,11 +1365,27 @@ impl cosmic::Application for CosmicLauncher {
                 content = content.push(components::list::column(buttons));
             }
 
-            // "Ask Claw AI" footer — always offered when the user has typed
-            // something, regardless of how many launcher results came back.
-            // Routes the raw query into the agent overlay via:
+            // Inline AI answer card. Rendered above the regular "Ask Claw AI"
+            // footer when the user has prefixed their query with `?` (or
+            // fullwidth `？`). Tokens stream into `partial`; pressing Enter
+            // continues the conversation in the full overlay via
+            // Message::AskAi.
+            if !self.alt_tab {
+                if let Some(card) = self.ai_inline_card() {
+                    content = content.push(divider::horizontal::light());
+                    content = content.push(card);
+                }
+            }
+
+            // "Ask Claw AI" footer — offered when the user has typed
+            // something AND is not already in inline-AI mode (the card
+            // above takes over for `?`-prefixed queries). Routes the
+            // raw query into the agent overlay via:
             //   cos app agent overlay --query <text>
-            if !self.alt_tab && !self.input_value.trim().is_empty() {
+            if !self.alt_tab
+                && !self.input_value.trim().is_empty()
+                && matches!(self.ai_inline, AiInlineState::Idle)
+            {
                 let q = self.input_value.trim().to_string();
                 let ai_row = row![
                     container(
