@@ -181,6 +181,7 @@ pub enum Message {
     SearchChanged(String),
     SearchClear,
     SearchSubmit,
+    AskClawSearch,
     SetTheme(cosmic::theme::Theme),
     SetWindowTitle,
     Surface(surface::Action),
@@ -427,6 +428,28 @@ impl cosmic::Application for SettingsApp {
 
             Message::SearchSubmit => {
                 self.search_active = true;
+            }
+
+            Message::AskClawSearch => {
+                // Bridge cosmic-settings' literal search to the kernel
+                // agent so a natural-language query like "make pointer
+                // bigger" can be resolved to the relevant settings page
+                // even when keyword matching falls flat. The agent has
+                // access to the `settings.search` MCP tool we ship — it
+                // can iterate page ids/titles itself and tell the user
+                // which page to open.
+                let query = self.search_input.trim().to_string();
+                if !query.is_empty() {
+                    let ctx = format!(
+                        r#"{{"app":"cosmic-settings","mode":"search","query":"{}"}}"#,
+                        escape_json_str(&query),
+                    );
+                    let argv: &[&str] =
+                        &["cos-agent-ui", "--overlay", "--context", &ctx];
+                    if let Err(err) = cos_runtime::exec::start(argv) {
+                        tracing::error!(?err, "failed to open Ask Claw overlay");
+                    }
+                }
             }
 
             Message::PageMessage(message) => match message {
@@ -1257,6 +1280,63 @@ impl SettingsApp {
             }
         }
 
+        // Empty-state banner — shown only when keyword search returns
+        // nothing. Pairs with the always-shown "Ask Claw" callout so
+        // the user has a clear escape hatch.
+        if self.search_selections.is_empty() {
+            let banner = container(
+                cosmic::widget::text::body(crate::fl!(
+                    "ai-search-no-results",
+                    query = self.search_input.clone()
+                ))
+                .width(Length::Fill),
+            )
+            .padding([
+                cosmic::theme::active().cosmic().space_xs(),
+                cosmic::theme::active().cosmic().space_l(),
+            ]);
+            sections.push(banner.into());
+        }
+
+        // Always-on natural-language fallback: hand the raw query to
+        // the kernel agent, which can use the `settings.search` MCP
+        // tool we ship to find the right page even when the literal
+        // keyword scan above couldn't.
+        if !self.search_input.trim().is_empty() {
+            let spacing = cosmic::theme::active().cosmic().spacing;
+            let title = cosmic::widget::text::heading(crate::fl!("ai-search-ask-claw"));
+            let query_line = cosmic::widget::text::body(format!("\u{201C}{}\u{201D}", self.search_input))
+                .class(cosmic::theme::Text::Custom(|t| {
+                    cosmic::iced::widget::text::Style {
+                        color: Some(t.cosmic().on_bg_color().into()),
+                    }
+                }));
+            let hint = cosmic::widget::text::caption(crate::fl!("ai-search-ask-claw-hint"));
+            let card_col = cosmic::widget::column::with_children(vec![
+                title.into(),
+                query_line.into(),
+                hint.into(),
+            ])
+            .spacing(spacing.space_xxs);
+
+            let icon_widget = cosmic::widget::icon::from_name("face-smile-symbolic")
+                .size(24)
+                .icon();
+            let inner = row::with_children(vec![icon_widget.into(), card_col.into()])
+                .spacing(spacing.space_s)
+                .align_y(iced::Alignment::Center);
+            let card = cosmic::widget::button::custom(inner)
+                .width(Length::Fill)
+                .padding([spacing.space_xs as u16, spacing.space_m as u16])
+                .class(cosmic::style::Button::Suggested)
+                .on_press(Message::AskClawSearch);
+            let card = container(card).padding([
+                spacing.space_s,
+                cosmic::theme::active().cosmic().space_l(),
+            ]);
+            sections.push(card.into());
+        }
+
         self.page_container(settings::view_column(sections))
             .apply(scrollable)
             .into()
@@ -1315,4 +1395,24 @@ impl SettingsApp {
             .padding([0, padding, bottom_spacer, padding])
             .into()
     }
+}
+
+/// Escape a Rust string for safe embedding inside a JSON string literal.
+/// Used by the AskClaw context payload, which is hand-built with
+/// `format!` so we don't need to make `serde_json` an unconditional
+/// dependency.
+fn escape_json_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
 }
