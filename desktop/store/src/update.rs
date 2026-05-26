@@ -87,6 +87,26 @@ impl App {
                 }
             }
 
+            Message::AskClawSearch => {
+                // The Store's literal search misses fuzzy / NL queries
+                // like "screen recording app" — keyword-match has no way
+                // to bridge concept→appstream-id. Hand the raw query to
+                // the kernel agent, which has the store.search MCP tool
+                // (commit 562d1326) plus a real LLM to pick the right
+                // result.
+                let query = self.search_input.trim().to_string();
+                if !query.is_empty() {
+                    let safe = escape_json_str(&query);
+                    let ctx = format!(
+                        r#"{{"app":"cosmic-store","mode":"search","query":"{safe}"}}"#,
+                    );
+                    let argv: &[&str] = &["cos-agent-ui", "--overlay", "--context", &ctx];
+                    if let Err(err) = crate::claw_glue::exec_start(argv) {
+                        log::error!("failed to open Ask Claw overlay: {err}");
+                    }
+                }
+            }
+
             Message::BackendUpdate(name, backend) => {
                 log::debug!("adding backend {name}");
                 self.backends.insert(name.clone(), backend.clone());
@@ -1072,4 +1092,22 @@ impl App {
 
         Task::none()
     }
+}
+
+fn escape_json_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }

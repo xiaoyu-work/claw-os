@@ -646,7 +646,7 @@ impl App {
                     //TODO: paging or dynamic load
                     let results_len = cmp::min(results.len(), MAX_RESULTS);
 
-                    let mut column = widget::column::with_capacity(2)
+                    let mut column = widget::column::with_capacity(3)
                         .padding([0, space_s, space_m, space_s])
                         .spacing(space_xxs)
                         .width(Length::Fill);
@@ -663,6 +663,7 @@ impl App {
                         grid_width,
                         Message::SelectSearchResult,
                     ));
+                    column = column.push(ask_claw_search_callout(input));
                     column.into()
                 }
                 None => match self
@@ -1043,4 +1044,36 @@ impl App {
             },
         }
     }
+}
+
+fn ask_claw_search_callout<'a>(query: &str) -> Element<'a, Message> {
+    let cosmic_theme::Spacing {
+        space_xxs, space_s, ..
+    } = theme::active().cosmic().spacing;
+    let q = query.trim();
+    let label = if q.is_empty() {
+        fl!("ai-search-ask-claw")
+    } else {
+        fl!("ai-search-ask-claw-q", query = q)
+    };
+    let hint = widget::text::caption(fl!("ai-search-ask-claw-hint"))
+        .class(theme::Text::Custom(|t| cosmic::iced::widget::text::Style {
+            color: Some(t.cosmic().accent_color().into()),
+        }));
+    let title = widget::text::body(label).class(theme::Text::Default);
+    let column = widget::column::with_capacity(2)
+        .push(title)
+        .push(hint)
+        .spacing(space_xxs);
+    let row = widget::row::with_capacity(2)
+        .push(widget::icon::from_name("face-smile-symbolic").size(20))
+        .push(column)
+        .spacing(space_s)
+        .align_y(Alignment::Center);
+    widget::button::custom(row)
+        .padding([space_xxs, space_s])
+        .on_press(Message::AskClawSearch)
+        .width(Length::Fill)
+        .class(theme::Button::Suggested)
+        .into()
 }

@@ -289,6 +289,7 @@ impl CosmicFlags for Flags {
 pub enum Message {
     AppTheme(AppTheme),
     AskClaw,
+    AskClawSearch,
     BackendUpdate(BackendName, Arc<dyn Backend>),
     BackendUpdateFinished,
     BackendUpdateStart,
