@@ -57,6 +57,7 @@ impl Binding {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum KeyBindAction {
     Disable,
+    AskClawExplain,
     ClearScrollback,
     Copy,
     CopyOrSigint,
@@ -99,6 +100,7 @@ impl KeyBindAction {
     fn to_action(self) -> Option<Action> {
         match self {
             Self::Disable => None,
+            Self::AskClawExplain => Some(Action::AskClawExplain),
             Self::ClearScrollback => Some(Action::ClearScrollback),
             Self::Copy => Some(Action::Copy),
             Self::CopyOrSigint => Some(Action::CopyOrSigint),
@@ -259,6 +261,7 @@ impl ShortcutsConfig {
 pub fn action_label(action: KeyBindAction) -> String {
     match action {
         KeyBindAction::Disable => fl!("disable"),
+        KeyBindAction::AskClawExplain => fl!("ask-claw-explain"),
         KeyBindAction::ClearScrollback => fl!("clear-scrollback"),
         KeyBindAction::Copy => fl!("copy"),
         KeyBindAction::CopyOrSigint => fl!("copy-or-sigint"),
@@ -456,6 +459,8 @@ fn fallback_shortcuts() -> Shortcuts {
     bind!([Ctrl, Shift], "W", TabClose);
     bind!([Ctrl], ",", Settings);
     bind!([], "F11", ToggleFullscreen);
+
+    bind!([Ctrl, Shift], "I", AskClawExplain);
 
     // Ctrl+Alt+D splits horizontally, Ctrl+Alt+R splits vertically, Ctrl+Shift+X maximizes split
     //TODO: Adjust bindings as desired by UX

@@ -245,6 +245,7 @@ pub struct Flags {
 pub enum Action {
     About,
     AskClaw,
+    AskClawExplain,
     ClearScrollback,
     ColorSchemes(ColorSchemeKind),
     Copy,
@@ -297,6 +298,7 @@ impl Action {
         match self {
             Self::About => Message::ToggleContextPage(ContextPage::About),
             Self::AskClaw => Message::AskClaw,
+            Self::AskClawExplain => Message::AskClawExplain,
             Self::ClearScrollback => Message::ClearScrollback(entity_opt),
             Self::ColorSchemes(color_scheme_kind) => {
                 Message::ToggleContextPage(ContextPage::ColorSchemes(*color_scheme_kind))
@@ -361,6 +363,7 @@ impl MenuAction for Action {
 pub enum Message {
     AppTheme(AppTheme),
     AskClaw,
+    AskClawExplain,
     ClearScrollback(Option<segmented_button::Entity>),
     ColorSchemeCollapse,
     ColorSchemeDelete(ColorSchemeKind, ColorSchemeId),
@@ -1543,6 +1546,22 @@ impl App {
         let terminal = tab_model.data::<Mutex<Terminal>>(entity)?;
         let terminal = terminal.lock().unwrap();
         terminal.working_directory()
+    }
+
+    /// Snapshot the active terminal's visible grid + scrollback as plain text
+    /// for the "Ask Claw → Explain output" action. Returns the captured
+    /// scrollback and the shell cwd (if known).
+    fn snapshot_active_terminal(&self, max_lines: usize) -> Option<(String, Option<String>)> {
+        let tab_model = self.pane_model.active()?;
+        let entity = tab_model.active();
+        let terminal = tab_model.data::<Mutex<Terminal>>(entity)?;
+        let terminal = terminal.lock().unwrap();
+        let cwd = terminal
+            .working_directory()
+            .map(|p| p.to_string_lossy().into_owned());
+        let term = terminal.term.lock();
+        let snap = crate::ai::context::capture_context(&*term, None, max_lines);
+        Some((snap.scrollback, cwd))
     }
 
     fn create_and_focus_new_terminal(
@@ -3289,6 +3308,31 @@ impl Application for App {
                     log::error!("failed to open Ask Claw overlay: {err}");
                 }
             }
+            Message::AskClawExplain => {
+                // Snapshot the active terminal's visible scrollback (last 80
+                // lines) and hand it to the kernel agent. This is the
+                // terminal-native "what just happened?" affordance: the user
+                // ran a command, got an error or a long log, and wants Claw
+                // to explain or suggest a fix without needing to copy/paste.
+                let snapshot = self.snapshot_active_terminal(80);
+                if let Some((scrollback, cwd)) = snapshot {
+                    let cwd_field = match cwd {
+                        Some(c) => format!(r#","cwd":"{}""#, escape_json_str(&c)),
+                        None => String::new(),
+                    };
+                    let ctx = format!(
+                        r#"{{"app":"cosmic-term","mode":"explain_output","output":"{}"{}}}"#,
+                        escape_json_str(&scrollback),
+                        cwd_field,
+                    );
+                    let argv: &[&str] = &["cos-agent-ui", "--overlay", "--context", &ctx];
+                    if let Err(err) = cos_runtime::exec::start(argv) {
+                        log::error!("failed to open Ask Claw explain overlay: {err}");
+                    }
+                } else {
+                    log::warn!("AskClawExplain: no active terminal to snapshot");
+                }
+            }
             Message::WindowNew => match env::current_exe() {
                 Ok(exe) => {
                     let exe_str = exe.to_string_lossy().into_owned();
@@ -3741,4 +3785,22 @@ fn is_wayland() -> bool {
         cosmic::app::cosmic::windowing_system(),
         Some(cosmic::app::cosmic::WindowingSystem::Wayland)
     )
+}
+
+fn escape_json_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
