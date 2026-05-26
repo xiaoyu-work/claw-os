@@ -63,6 +63,7 @@ pub fn key_binds() -> HashMap<KeyBind, Action> {
         ToggleProjectSearch
     );
     bind!([Ctrl], Key::Character(",".into()), ToggleSettingsPage);
+    bind!([Ctrl], Key::Character("k".into()), AiCustom);
     bind!([Alt], Key::Character("z".into()), ToggleWordWrap);
     bind!([Ctrl], Key::Character("z".into()), Undo);
 

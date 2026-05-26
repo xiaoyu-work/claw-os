@@ -198,14 +198,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn run_ai_doc(verb: AiVerb, text: String) -> Result<String, String> {
+async fn run_ai_doc(
+    verb: AiVerb,
+    text: String,
+    instruction: Option<String>,
+) -> Result<String, String> {
     use tokio::io::AsyncWriteExt;
     let bin = std::env::var("CLAW_COS_BIN").unwrap_or_else(|_| "cos".to_string());
     let mut cmd = tokio::process::Command::new(bin);
     cmd.arg("app")
         .arg("doc")
-        .arg(verb.cli_arg())
-        .stdin(std::process::Stdio::piped())
+        .arg(verb.cli_arg());
+    if let Some(ref inst) = instruction {
+        cmd.arg("--instruction").arg(inst);
+    }
+    cmd.stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
     let mut child = cmd
@@ -238,7 +245,7 @@ async fn run_ai_doc(verb: AiVerb, text: String) -> Result<String, String> {
     }
     let key = match verb {
         AiVerb::Summarize => "summary",
-        AiVerb::Explain | AiVerb::Rewrite => "text",
+        AiVerb::Explain | AiVerb::Rewrite | AiVerb::Custom => "text",
     };
     parsed
         .get(key)
@@ -252,6 +259,11 @@ pub enum AiVerb {
     Summarize,
     Explain,
     Rewrite,
+    /// Free-form user instruction. Implemented on the kernel side as a
+    /// `rewrite` invocation with a user-supplied `--instruction`, so the
+    /// same audit / budget / capability gating applies as for the built-in
+    /// verbs.
+    Custom,
 }
 
 impl AiVerb {
@@ -260,6 +272,7 @@ impl AiVerb {
             Self::Summarize => "summarize",
             Self::Explain => "explain",
             Self::Rewrite => "rewrite",
+            Self::Custom => "rewrite",
         }
     }
 }
@@ -269,6 +282,7 @@ pub enum Action {
     Todo,
     About,
     AiAskClaw,
+    AiCustom,
     AiExplain,
     AiRewrite,
     AiSummarize,
@@ -323,6 +337,7 @@ impl Action {
             Self::Todo => Message::Todo,
             Self::About => Message::ToggleContextPage(ContextPage::About),
             Self::AiAskClaw => Message::AiAskClaw,
+            Self::AiCustom => Message::AiCustomOpen,
             Self::AiExplain => Message::AiRun(AiVerb::Explain),
             Self::AiRewrite => Message::AiRun(AiVerb::Rewrite),
             Self::AiSummarize => Message::AiRun(AiVerb::Summarize),
@@ -416,6 +431,9 @@ enum NewTab {
 #[derive(Clone, Debug)]
 pub enum Message {
     AiAskClaw,
+    AiCustomChanged(String),
+    AiCustomOpen,
+    AiCustomRun,
     AiInsert(String),
     AiResult {
         verb: AiVerb,
@@ -549,6 +567,13 @@ enum AiStatus {
 struct AiState {
     verb: Option<AiVerb>,
     status: AiStatus,
+    /// Whether the source text fed to the AI came from an active
+    /// selection. When true, `AiInsert` should replace the selection
+    /// instead of inserting at the cursor.
+    text_was_selection: bool,
+    /// Free-form instruction backing the "Custom command" affordance.
+    /// Stays alive across runs so the user can tweak and re-run.
+    custom_prompt: String,
 }
 
 impl Default for AiState {
@@ -556,6 +581,8 @@ impl Default for AiState {
         Self {
             verb: None,
             status: AiStatus::Idle,
+            text_was_selection: false,
+            custom_prompt: String::new(),
         }
     }
 }
@@ -599,6 +626,7 @@ pub struct App {
     )>,
     modifiers: Modifiers,
     ai_state: AiState,
+    ai_custom_input_id: widget::Id,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1129,15 +1157,44 @@ impl App {
 
     fn ai_panel(&self) -> Element<'_, Message> {
         let spacing = self.core().system_theme().cosmic().spacing;
-        let mut col = widget::column::with_capacity(4).spacing(spacing.space_s);
+        let mut col = widget::column::with_capacity(8).spacing(spacing.space_s);
 
         let mode_label = match self.ai_state.verb {
             Some(AiVerb::Summarize) => fl!("ai-mode-summarize"),
             Some(AiVerb::Explain) => fl!("ai-mode-explain"),
             Some(AiVerb::Rewrite) => fl!("ai-mode-rewrite"),
+            Some(AiVerb::Custom) => fl!("ai-mode-custom"),
             None => fl!("ai-mode-idle"),
         };
         col = col.push(widget::text::heading(mode_label));
+
+        // Custom command palette — a single text_input + Run button.
+        // Always shown so users can drop into Cmd+K-style ad-hoc
+        // rewrites without leaving the AI panel. Enter submits.
+        let prompt_input = widget::text_input(fl!("ai-custom-placeholder"), &self.ai_state.custom_prompt)
+            .id(self.ai_custom_input_id.clone())
+            .on_input(Message::AiCustomChanged)
+            .on_submit(|_| Message::AiCustomRun)
+            .width(Length::Fill);
+        let run_button = {
+            let mut b = widget::button::suggested(fl!("ai-run"));
+            if !self.ai_state.custom_prompt.trim().is_empty()
+                && !matches!(self.ai_state.status, AiStatus::Loading)
+            {
+                b = b.on_press(Message::AiCustomRun);
+            }
+            b
+        };
+        col = col.push(prompt_input);
+        col = col.push(
+            widget::row::with_children(vec![
+                widget::text::caption(fl!("ai-custom-hint")).into(),
+                widget::space::horizontal().into(),
+                run_button.into(),
+            ])
+            .align_y(Alignment::Center)
+            .spacing(spacing.space_xs),
+        );
 
         match &self.ai_state.status {
             AiStatus::Idle => {
@@ -1148,9 +1205,13 @@ impl App {
             }
             AiStatus::Ready(text) => {
                 col = col.push(widget::text::body(text.clone()));
+                let label = if self.ai_state.text_was_selection {
+                    fl!("ai-replace-selection")
+                } else {
+                    fl!("ai-insert")
+                };
                 col = col.push(
-                    widget::button::suggested(fl!("ai-insert"))
-                        .on_press(Message::AiInsert(text.clone())),
+                    widget::button::suggested(label).on_press(Message::AiInsert(text.clone())),
                 );
             }
             AiStatus::Error(err) => {
@@ -1167,33 +1228,68 @@ impl App {
             self.ai_state = AiState {
                 verb: Some(verb),
                 status: AiStatus::Error(fl!("ai-empty-buffer")),
+                text_was_selection: false,
+                custom_prompt: self.ai_state.custom_prompt.clone(),
             };
             self.context_page = ContextPage::Ai;
             self.core.window.show_context = true;
             return Task::none();
         };
-        let text = {
+        // Prefer the active selection; fall back to the whole buffer.
+        // Selection-aware AI is one of the headline value-adds in the
+        // editor — keep it the default behaviour and let users
+        // explicitly clear the selection if they meant the whole file.
+        let (text, text_was_selection) = {
             let editor = tab.editor.lock().unwrap();
-            tab::editor_text(&editor)
+            if let Some(sel) = editor.copy_selection() {
+                if !sel.trim().is_empty() {
+                    (sel, true)
+                } else {
+                    (tab::editor_text(&editor), false)
+                }
+            } else {
+                (tab::editor_text(&editor), false)
+            }
         };
         if text.trim().is_empty() {
             self.ai_state = AiState {
                 verb: Some(verb),
                 status: AiStatus::Error(fl!("ai-empty-buffer")),
+                text_was_selection: false,
+                custom_prompt: self.ai_state.custom_prompt.clone(),
             };
             self.context_page = ContextPage::Ai;
             self.core.window.show_context = true;
             return Task::none();
         }
+        let instruction = if matches!(verb, AiVerb::Custom) {
+            let inst = self.ai_state.custom_prompt.trim().to_string();
+            if inst.is_empty() {
+                self.ai_state = AiState {
+                    verb: Some(verb),
+                    status: AiStatus::Error(fl!("ai-custom-empty")),
+                    text_was_selection,
+                    custom_prompt: self.ai_state.custom_prompt.clone(),
+                };
+                self.context_page = ContextPage::Ai;
+                self.core.window.show_context = true;
+                return Task::none();
+            }
+            Some(inst)
+        } else {
+            None
+        };
         self.ai_state = AiState {
             verb: Some(verb),
             status: AiStatus::Loading,
+            text_was_selection,
+            custom_prompt: self.ai_state.custom_prompt.clone(),
         };
         self.context_page = ContextPage::Ai;
         self.core.window.show_context = true;
         Task::perform(
             async move {
-                let outcome = run_ai_doc(verb, text).await;
+                let outcome = run_ai_doc(verb, text, instruction).await;
                 action::app(Message::AiResult { verb, outcome })
             },
             |x| x,
@@ -1686,6 +1782,7 @@ impl Application for App {
             watcher_opt: None,
             modifiers: Modifiers::empty(),
             ai_state: AiState::default(),
+            ai_custom_input_id: widget::Id::unique(),
         };
 
         // Do not show nav bar by default. Will be opened by open_project if needed
@@ -1956,11 +2053,25 @@ impl Application for App {
                     {
                         let mut editor = tab.editor.lock().unwrap();
                         editor.start_change();
+                        if editor.copy_selection().is_some() {
+                            editor.delete_selection();
+                        }
                         editor.insert_string(&text, None);
                         editor.finish_change();
                     }
                     return self.update(Message::TabChanged(self.tab_model.active()));
                 }
+            }
+            Message::AiCustomChanged(value) => {
+                self.ai_state.custom_prompt = value;
+            }
+            Message::AiCustomOpen => {
+                self.context_page = ContextPage::Ai;
+                self.core.window.show_context = true;
+                return widget::text_input::focus(self.ai_custom_input_id.clone());
+            }
+            Message::AiCustomRun => {
+                return self.ai_start(AiVerb::Custom);
             }
             Message::AppTheme(app_theme) => {
                 config_set!(app_theme, app_theme);
