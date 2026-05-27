@@ -46,6 +46,11 @@ case "$ARCH" in
         GRUB_EFI_PKG=grub-efi-amd64-bin
         GRUB_BIOS_TARGET=i386-pc
         GRUB_BIOS_PKG=grub-pc-bin
+        # CPU microcode is x86-only. Both intel-microcode and
+        # amd64-microcode are safe to install on any amd64 box: the
+        # kernel loads only the matching vendor blob at early boot.
+        MICROCODE_INTEL_PKG=intel-microcode
+        MICROCODE_AMD_PKG=amd64-microcode
         ;;
     arm64)
         DEB_ARCH=arm64
@@ -57,6 +62,10 @@ case "$ARCH" in
         # u-boot, which we don't currently support).
         GRUB_BIOS_TARGET=""
         GRUB_BIOS_PKG=""
+        # No x86 microcode story on arm64; SoC firmware ships from the
+        # bootloader instead.
+        MICROCODE_INTEL_PKG=""
+        MICROCODE_AMD_PKG=""
         ;;
     *)
         echo "error: unsupported ARCH='$ARCH' (expected: amd64 or arm64)" >&2
@@ -76,6 +85,7 @@ fi
 
 export ARCH DEB_ARCH RUST_TARGET KERNEL_PKG
 export GRUB_EFI_TARGET GRUB_EFI_PKG GRUB_BIOS_TARGET GRUB_BIOS_PKG
+export MICROCODE_INTEL_PKG MICROCODE_AMD_PKG
 
 # Convenience: a short suffix for output filenames. Always "$DEB_ARCH"
 # (so a binary built for amd64 is `*-amd64.qcow2`, arm64 is `*-arm64.qcow2`).

@@ -9,3 +9,14 @@
 # is the default; users can change it from Settings → Appearance.
 XCURSOR_THEME=Bibata-Modern-Classic
 XCURSOR_SIZE=24
+
+# Input method framework. cosmic-comp speaks Wayland input-method-v1 +
+# text-input-v3 natively, so libcosmic apps don't strictly need these.
+# They exist for legacy Gtk2 / Qt5 / SDL / Java apps that still consult
+# *_IM_MODULE at startup. Setting them globally is the standard recipe
+# (matches what Gnome / KDE / Sway distros ship).
+GTK_IM_MODULE=fcitx
+QT_IM_MODULE=fcitx
+XMODIFIERS=@im=fcitx
+SDL_IM_MODULE=fcitx
+GLFW_IM_MODULE=ibus

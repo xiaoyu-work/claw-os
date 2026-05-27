@@ -154,6 +154,38 @@ bibata-cursor-theme
 xkb-data
 locales
 
+# --- Input methods (CJK + extensible framework) ---
+# fcitx5 is the modern multi-language IME framework. Claw OS ships
+# zh / ja / ko locale data, fonts and dictionaries, so users on real
+# hardware can switch to Pinyin / Mozc / Hangul out of the box without
+# touching apt. cosmic-comp implements Wayland input-method-v1 +
+# text-input-v3, so libcosmic apps consume fcitx5 natively. The Gtk /
+# Qt frontends + /etc/environment exports handle legacy apps.
+fcitx5
+fcitx5-config-qt
+fcitx5-frontend-gtk3
+fcitx5-frontend-gtk4
+fcitx5-frontend-qt5
+fcitx5-frontend-qt6
+fcitx5-chinese-addons
+fcitx5-mozc
+fcitx5-hangul
+
+# --- GUI automation (AI agent driving the desktop) ---
+# wtype: Wayland-native, uses wlr-virtual-keyboard-v1 (cosmic-comp
+# supports it). Good for typing into focused windows.
+# ydotool: low-level libevdev / uinput; works regardless of compositor
+# protocol support but needs the ydotoold system service running. We
+# enable that unit in rootfs/features/systemd/install.sh.
+wtype
+ydotool
+
+# --- Time sync (silent NTP via systemd-timesyncd) ---
+# systemd-timesyncd is part of the systemd binary package but in
+# trixie ships separately. Enabled (started at boot) by
+# rootfs/features/systemd/install.sh.
+systemd-timesyncd
+
 # --- Boot splash (Plymouth, themed by the "claw" overlay) ---
 plymouth
 plymouth-themes

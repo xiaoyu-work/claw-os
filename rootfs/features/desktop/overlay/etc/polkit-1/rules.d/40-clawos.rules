@@ -1,0 +1,84 @@
+// /etc/polkit-1/rules.d/40-clawos.rules
+//
+// Default PolicyKit rules for Claw OS.
+//
+// Claw OS is a single-user desktop: the person sitting in front of the
+// machine is always in the `sudo` group, and they don't want to type
+// their password for routine actions that the system performs on their
+// behalf. These rules whitelist a small set of safe actions for active
+// local sessions in `sudo` so the desktop feels coherent (no surprise
+// "authenticate" popups when installing a flatpak from the Store, etc.).
+//
+// Anything *not* listed here keeps its upstream default (usually
+// "auth_admin_keep" — prompt once, cache for 5 min).
+//
+// PolicyKit's JS rules format: see polkit(8) and /usr/share/doc/polkitd
+// for the full spec.
+
+polkit.addRule(function(action, subject) {
+    // Only relax for users in the `sudo` group AND in an active local
+    // session. SSH sessions stay locked down.
+    if (!subject.isInGroup("sudo")) return;
+    if (!subject.local) return;
+    if (!subject.active) return;
+
+    // App store: installing / removing flatpak apps from Claw Store is
+    // the single most common reason the user sees an auth prompt.
+    // Going through `cos app pkg need` is gated by the system agent
+    // approval flow anyway, so dropping the password prompt here is
+    // safe.
+    if (action.id == "org.freedesktop.Flatpak.app-install" ||
+        action.id == "org.freedesktop.Flatpak.runtime-install" ||
+        action.id == "org.freedesktop.Flatpak.app-uninstall" ||
+        action.id == "org.freedesktop.Flatpak.runtime-uninstall" ||
+        action.id == "org.freedesktop.Flatpak.modify-repo" ||
+        action.id == "org.freedesktop.Flatpak.appstream-update") {
+        return polkit.Result.YES;
+    }
+
+    // Power: suspend / hibernate / reboot / shutdown are already
+    // default-yes for active sessions on most distros, but spell them
+    // out so they survive any upstream tightening.
+    if (action.id == "org.freedesktop.login1.suspend" ||
+        action.id == "org.freedesktop.login1.suspend-multiple-sessions" ||
+        action.id == "org.freedesktop.login1.hibernate" ||
+        action.id == "org.freedesktop.login1.hibernate-multiple-sessions" ||
+        action.id == "org.freedesktop.login1.reboot" ||
+        action.id == "org.freedesktop.login1.reboot-multiple-sessions" ||
+        action.id == "org.freedesktop.login1.power-off" ||
+        action.id == "org.freedesktop.login1.power-off-multiple-sessions") {
+        return polkit.Result.YES;
+    }
+
+    // NetworkManager: connecting to a Wi-Fi network or VPN should not
+    // prompt for the admin password on the desktop. Modifying the
+    // system-wide connection list still defaults to admin_keep so
+    // users who really want a confirmation can opt in.
+    if (action.id == "org.freedesktop.NetworkManager.enable-disable-wifi" ||
+        action.id == "org.freedesktop.NetworkManager.enable-disable-wwan" ||
+        action.id == "org.freedesktop.NetworkManager.enable-disable-network" ||
+        action.id == "org.freedesktop.NetworkManager.wifi.share.protected" ||
+        action.id == "org.freedesktop.NetworkManager.wifi.share.open" ||
+        action.id == "org.freedesktop.NetworkManager.settings.modify.own") {
+        return polkit.Result.YES;
+    }
+
+    // udisks2: mounting / unmounting removable media should be silent.
+    if (action.id.indexOf("org.freedesktop.udisks2.filesystem-mount") === 0 ||
+        action.id.indexOf("org.freedesktop.udisks2.eject-media") === 0 ||
+        action.id.indexOf("org.freedesktop.udisks2.power-off-drive") === 0) {
+        return polkit.Result.YES;
+    }
+
+    // Color profile uploads (gnome-color-manager / colord on display
+    // calibration). Local users plugging in a calibrator should not be
+    // hit with a password prompt.
+    if (action.id == "org.freedesktop.color-manager.create-device" ||
+        action.id == "org.freedesktop.color-manager.create-profile" ||
+        action.id == "org.freedesktop.color-manager.delete-device" ||
+        action.id == "org.freedesktop.color-manager.delete-profile" ||
+        action.id == "org.freedesktop.color-manager.modify-device" ||
+        action.id == "org.freedesktop.color-manager.modify-profile") {
+        return polkit.Result.YES;
+    }
+});

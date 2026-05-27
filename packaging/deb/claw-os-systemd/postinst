@@ -15,6 +15,23 @@ case "$1" in
             deb-systemd-helper --quiet was-enabled clawd.service \
                 || deb-systemd-helper enable clawd.service >/dev/null || true
             deb-systemd-helper unmask cos-browser.service >/dev/null || true
+
+            # Enable systemd-timesyncd (NTP) — shipped disabled by the
+            # systemd package on Debian. Wall clock matters for HTTPS,
+            # sudo timestamps, mail, sshd, …
+            if [ -f /lib/systemd/system/systemd-timesyncd.service ]; then
+                deb-systemd-helper unmask systemd-timesyncd.service >/dev/null || true
+                deb-systemd-helper --quiet was-enabled systemd-timesyncd.service \
+                    || deb-systemd-helper enable systemd-timesyncd.service >/dev/null || true
+            fi
+
+            # Enable ydotoold — the AI agent's universal GUI input
+            # driver depends on this daemon.
+            if [ -f /lib/systemd/system/ydotoold.service ]; then
+                deb-systemd-helper unmask ydotoold.service >/dev/null || true
+                deb-systemd-helper --quiet was-enabled ydotoold.service \
+                    || deb-systemd-helper enable ydotoold.service >/dev/null || true
+            fi
         fi
 
         # User units. The desktop bridge stays per-graphical-session

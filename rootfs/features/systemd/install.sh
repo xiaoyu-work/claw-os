@@ -48,3 +48,29 @@ else
     ln -sf /usr/lib/systemd/system/clawd.service \
         "$ROOTFS/etc/systemd/system/multi-user.target.wants/clawd.service"
 fi
+
+# Enable systemd-timesyncd so the wall clock comes up correct on every
+# boot (matters for HTTPS, sudo timestamps, mail dates, sshd…). The
+# unit ships disabled by the package; symlink it under
+# sysinit.target.wants so it starts very early in boot, before
+# multi-user.target.
+echo "  :: enabling systemd-timesyncd.service"
+mkdir -p "$ROOTFS/etc/systemd/system/sysinit.target.wants"
+ln -sf /lib/systemd/system/systemd-timesyncd.service \
+    "$ROOTFS/etc/systemd/system/sysinit.target.wants/systemd-timesyncd.service"
+
+# Enable ydotoold (the userspace daemon that fronts /dev/uinput for the
+# ydotool CLI). The AI agent uses ydotool as the universal GUI input
+# driver — without ydotoold running, every keystroke / click attempt
+# fails with "couldn't connect to socket". Only enable if the unit
+# actually shipped (the ydotool package on trixie ships the unit but
+# guard defensively in case the package is missing on arm64 or in a
+# stripped variant).
+YDOTOOLD_UNIT="$ROOTFS/lib/systemd/system/ydotoold.service"
+if [ -f "$YDOTOOLD_UNIT" ]; then
+    echo "  :: enabling ydotoold.service"
+    ln -sf /lib/systemd/system/ydotoold.service \
+        "$ROOTFS/etc/systemd/system/multi-user.target.wants/ydotoold.service"
+else
+    echo "  :: ydotoold.service unit not present (skipping)"
+fi

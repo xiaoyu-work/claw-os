@@ -1,3 +1,22 @@
 ${KERNEL_PKG}
-firmware-linux-free
 initramfs-tools
+
+# Linux firmware blobs (Wi-Fi / Bluetooth / GPU / misc devices).
+# Without these the kernel loads on real hardware but most non-Intel-GPU
+# laptops come up with no Wi-Fi, since `firmware-linux-free` only ships
+# the OSS bits (a tiny fraction of what's actually needed). All of
+# these are `Architecture: all`; they install on arm64 too but only
+# get loaded when matching hardware is present.
+firmware-linux-free
+firmware-misc-nonfree
+firmware-iwlwifi
+firmware-realtek
+firmware-atheros
+firmware-brcm80211
+firmware-libertas
+
+# CPU microcode (security errata: Spectre/Meltdown/MDS/etc.). x86-only;
+# the variables expand to empty strings on arm64 so this is a no-op
+# there (see scripts/lib/arch.sh).
+${MICROCODE_INTEL_PKG}
+${MICROCODE_AMD_PKG}

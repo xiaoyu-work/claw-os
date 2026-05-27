@@ -129,6 +129,37 @@ Acquire::https::Timeout "30";
 DPkg::Lock::Timeout "60";
 EOF
 
+# debootstrap writes a single-component sources.list (`main` only).
+# Claw OS needs `contrib` (e.g. some codec headers) and especially
+# `non-free-firmware` (Intel/Realtek/Broadcom Wi-Fi blobs, CPU
+# microcode). `non-free` covers anything still parked there that
+# trixie hasn't migrated. Overwrite both the legacy file and the
+# deb822 file (whichever debootstrap chose to use), so apt sees the
+# extra components on the very first `apt-get update`.
+echo ":: enabling contrib / non-free-firmware / non-free components"
+cat > "$ROOTFS/etc/apt/sources.list" <<EOF
+deb http://deb.debian.org/debian $SUITE main contrib non-free-firmware non-free
+deb http://deb.debian.org/debian $SUITE-updates main contrib non-free-firmware non-free
+deb http://security.debian.org/debian-security $SUITE-security main contrib non-free-firmware non-free
+EOF
+# Newer debootstrap variants emit /etc/apt/sources.list.d/debian.sources
+# in deb822 format; if present, override it so our components win.
+if [ -f "$ROOTFS/etc/apt/sources.list.d/debian.sources" ]; then
+    cat > "$ROOTFS/etc/apt/sources.list.d/debian.sources" <<EOF
+Types: deb
+URIs: http://deb.debian.org/debian
+Suites: $SUITE $SUITE-updates
+Components: main contrib non-free-firmware non-free
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+Types: deb
+URIs: http://security.debian.org/debian-security
+Suites: $SUITE-security
+Components: main contrib non-free-firmware non-free
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+EOF
+fi
+
 cleanup_chroot_mounts() {
     # Unmount in reverse order, lazy fallback for stray references.
     for mp in "$ROOTFS/dev/pts" "$ROOTFS/dev" "$ROOTFS/sys" "$ROOTFS/proc"; do

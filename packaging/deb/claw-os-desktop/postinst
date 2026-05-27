@@ -85,6 +85,11 @@ generate_default_locales() {
 if [ "$1" = "configure" ]; then
     ensure_line /etc/environment "XCURSOR_THEME=Bibata-Modern-Classic"
     ensure_line /etc/environment "XCURSOR_SIZE=24"
+    ensure_line /etc/environment "GTK_IM_MODULE=fcitx"
+    ensure_line /etc/environment "QT_IM_MODULE=fcitx"
+    ensure_line /etc/environment "XMODIFIERS=@im=fcitx"
+    ensure_line /etc/environment "SDL_IM_MODULE=fcitx"
+    ensure_line /etc/environment "GLFW_IM_MODULE=ibus"
     ensure_initial_setup_user
     enable_desktop_links
     enable_desktop_services
