@@ -1,0 +1,14 @@
+// /etc/apt/apt.conf.d/20auto-upgrades — Claw OS default.
+//
+// The unattended-upgrades package only runs when these two keys are
+// non-zero. Debian ships the file with everything off; we turn on
+// silent daily metadata refresh + security upgrade install. Mailing
+// is off (no MTA on a desktop). Reboot-on-kernel-upgrade is left to
+// the user via the corresponding settings in 50unattended-upgrades.
+//
+// "1" means "run every day" (the unit interval is days, the value is
+// "every N days"). Set to "0" to disable.
+
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::AutocleanInterval "7";

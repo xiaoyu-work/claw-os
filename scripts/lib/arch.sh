@@ -51,6 +51,10 @@ case "$ARCH" in
         # kernel loads only the matching vendor blob at early boot.
         MICROCODE_INTEL_PKG=intel-microcode
         MICROCODE_AMD_PKG=amd64-microcode
+        # thermald is Intel-centric but harmless on AMD (the unit
+        # self-disables when no Intel temperature interface is found).
+        # It's an x86-only package on Debian, so empty on arm64.
+        THERMALD_PKG=thermald
         ;;
     arm64)
         DEB_ARCH=arm64
@@ -66,6 +70,8 @@ case "$ARCH" in
         # bootloader instead.
         MICROCODE_INTEL_PKG=""
         MICROCODE_AMD_PKG=""
+        # thermald is x86-only on Debian.
+        THERMALD_PKG=""
         ;;
     *)
         echo "error: unsupported ARCH='$ARCH' (expected: amd64 or arm64)" >&2
@@ -86,6 +92,7 @@ fi
 export ARCH DEB_ARCH RUST_TARGET KERNEL_PKG
 export GRUB_EFI_TARGET GRUB_EFI_PKG GRUB_BIOS_TARGET GRUB_BIOS_PKG
 export MICROCODE_INTEL_PKG MICROCODE_AMD_PKG
+export THERMALD_PKG
 
 # Convenience: a short suffix for output filenames. Always "$DEB_ARCH"
 # (so a binary built for amd64 is `*-amd64.qcow2`, arm64 is `*-arm64.qcow2`).

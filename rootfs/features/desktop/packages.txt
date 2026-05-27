@@ -186,6 +186,91 @@ ydotool
 # rootfs/features/systemd/install.sh.
 systemd-timesyncd
 
+# --- Removable media / storage (real hardware fundamentals) ---
+# udisks2: D-Bus API the desktop uses to mount/unmount USB sticks
+# and external disks. Without it, plugging a USB stick into a
+# real laptop does literally nothing (cosmic-files won't see it).
+# The polkit rule shipped in 40-clawos.rules lets active sudo
+# users drive it without password prompts.
+udisks2
+# Mount Windows / Mac USB drives. The vast majority of USB sticks
+# sold today are formatted exFAT or NTFS, not ext4. Without these
+# the user plugs in a stick and gets "filesystem not supported".
+ntfs-3g
+exfatprogs
+# gvfs: GIO Virtual Filesystem. cosmic-files is built with the
+# `gvfs` feature on (desktop/files/Cargo.toml), so it depends on
+# this at runtime for: the trash, mount-monitoring, network
+# locations, archive:// scheme. gvfs-backends adds smb / sftp /
+# afp / dav / mtp / gphoto2 transports. gvfs-fuse exposes mounts
+# under /run/user/$UID/gvfs so non-GIO apps (CLI tools, terminal
+# etc.) can also see them as plain paths.
+gvfs
+gvfs-backends
+gvfs-fuse
+
+# --- Firmware updates (LVFS) ---
+# fwupd talks to the Linux Vendor Firmware Service and applies
+# UEFI / BIOS / dock / SSD / Thunderbolt firmware updates the same
+# way Windows Update does on Windows. Without it, laptops sit on
+# vendor firmware from 2021 forever and accumulate CVEs. The
+# fwupd-refresh.timer is enabled by rootfs/features/systemd
+# (weekly metadata refresh; firmware updates themselves remain
+# user-driven).
+fwupd
+
+# --- Local-network discovery (mDNS / .local / Bonjour) ---
+# avahi-daemon resolves <host>.local and advertises this machine
+# so phones, printers and other Macs find it. libnss-mdns plugs
+# mDNS into glibc's name resolution stack so every app benefits
+# transparently (its postinst patches nsswitch.conf).
+avahi-daemon
+libnss-mdns
+
+# --- Printing (CUPS + driverless + drivers) ---
+# Most users print at some point. cups is the print daemon,
+# cups-browsed auto-discovers shared printers on the LAN (works
+# hand in hand with avahi), cups-filters has the IPP-Everywhere
+# filters for modern driverless printers, printer-driver-all is
+# the catch-all metapackage for everything else (HP / Canon /
+# Brother / Epson / Lexmark / OKI / Samsung / Xerox / Lexmark /
+# Foomatic). Roughly +200MB but pays for itself the first time
+# someone double-clicks "Print" on a random office printer.
+cups
+cups-browsed
+cups-filters
+printer-driver-all
+
+# --- Thermal management (Intel laptops, no-op elsewhere) ---
+# thermald implements Intel's Dynamic Platform Thermal Framework.
+# Without it, modern Intel laptops thermal-throttle constantly
+# under load and burn through battery fast. Empty on arm64; harmless
+# (self-disables) on AMD machines that happen to install it.
+${THERMALD_PKG}
+
+# --- Automatic security updates ---
+# unattended-upgrades installs Debian security errata in the
+# background via apt-daily-upgrade.timer. The actual switch that
+# turns it on is /etc/apt/apt.conf.d/20auto-upgrades (shipped in
+# overlay/etc/apt/apt.conf.d/).
+unattended-upgrades
+
+# --- Location service (auto-timezone, weather, …) ---
+# geoclue is the D-Bus location broker. systemd-timedated reads
+# from it to set the system timezone automatically; cosmic-applet-
+# time and a future weather widget consume the same source. Always
+# user-permission-gated; nothing leaks coords without consent.
+geoclue-2.0
+
+# --- Fingerprint authentication (laptops) ---
+# fprintd is the system fingerprint daemon; libpam-fprintd is the
+# PAM module. We enable the PAM stack hook via pam-auth-update from
+# rootfs/features/desktop/install.sh. On machines without a reader,
+# pam_fprintd returns PAM_IGNORE so password auth falls through
+# normally; this is safe to ship by default.
+fprintd
+libpam-fprintd
+
 # --- Boot splash (Plymouth, themed by the "claw" overlay) ---
 plymouth
 plymouth-themes

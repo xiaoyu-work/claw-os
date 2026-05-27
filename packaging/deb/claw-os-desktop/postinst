@@ -60,6 +60,25 @@ enable_desktop_services() {
         systemctl enable power-profiles-daemon.service >/dev/null 2>&1 || true
         systemctl enable upower.service >/dev/null 2>&1 || true
         systemctl enable accounts-daemon.service >/dev/null 2>&1 || true
+        # Real-hardware basics (Phase 3 hardening).
+        systemctl enable udisks2.service >/dev/null 2>&1 || true
+        systemctl enable avahi-daemon.service >/dev/null 2>&1 || true
+        systemctl enable cups.service >/dev/null 2>&1 || true
+        systemctl enable cups-browsed.service >/dev/null 2>&1 || true
+        systemctl enable thermald.service >/dev/null 2>&1 || true
+        # geoclue is dbus-activated; no enable needed.
+    fi
+}
+
+enable_fingerprint_auth() {
+    # Wire fprintd into the PAM auth stack via the standard
+    # pam-auth-update mechanism. The libpam-fprintd package ships
+    # /usr/share/pam-configs/fprintd; pam-auth-update merges it into
+    # /etc/pam.d/common-auth. On machines without a reader, pam_fprintd
+    # returns PAM_IGNORE so password auth still works.
+    if [ -f /usr/share/pam-configs/fprintd ] && command -v pam-auth-update >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive pam-auth-update --enable fprintd \
+            >/dev/null 2>&1 || true
     fi
 }
 
@@ -93,6 +112,7 @@ if [ "$1" = "configure" ]; then
     ensure_initial_setup_user
     enable_desktop_links
     enable_desktop_services
+    enable_fingerprint_auth
     if command -v systemd-sysusers >/dev/null 2>&1; then
         systemd-sysusers
     fi

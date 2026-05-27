@@ -32,6 +32,14 @@ case "$1" in
                 deb-systemd-helper --quiet was-enabled ydotoold.service \
                     || deb-systemd-helper enable ydotoold.service >/dev/null || true
             fi
+
+            # Enable fwupd-refresh.timer — weekly LVFS firmware
+            # metadata refresh. Firmware *install* stays user-driven.
+            if [ -f /lib/systemd/system/fwupd-refresh.timer ]; then
+                deb-systemd-helper unmask fwupd-refresh.timer >/dev/null || true
+                deb-systemd-helper --quiet was-enabled fwupd-refresh.timer \
+                    || deb-systemd-helper enable fwupd-refresh.timer >/dev/null || true
+            fi
         fi
 
         # User units. The desktop bridge stays per-graphical-session
