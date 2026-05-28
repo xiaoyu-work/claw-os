@@ -98,28 +98,44 @@ export interface Envelope {
 
 /**
  * App manifest (app.json).
- * The manifest every app under COS_APPS_DIR must provide. The kernel validates
- * and uses this to derive declared verbs, runtime, and capability
- * requirements.
+ * The manifest every app under COS_APPS_DIR must provide. The kernel parses
+ * and validates this (core/src/caps/manifest.rs) to derive the app's
+ * operations, optional MCP session tools, optional desktop GUI surface,
+ * capability needs, and AI policy.
  */
 export interface Manifest {
   id: string;
-  name: string;
-  version?: string;
-  runtime: "python" | "binary" | "node" | "go";
+  version: string;
+  name: Localizedtext;
+  summary?: Localizedtext;
+  icon?: string;
+  runtime?: "python" | "node" | "shell" | "binary";
   entry?: string;
-  verbs: ManifestVerbs[];
+  operations?: Record<string, unknown>;
+  ai?: Aipolicy;
+  session?: Session;
+  desktop?: Desktop;
+  dependencies?: Record<string, unknown>;
 }
 
 /**
- * manifest_verbs.
+ * localizedText.
+ * Localized string map. The `en` key is required; other locales (zh-CN, ...)
+ * are optional fallbacks.
  */
-export interface ManifestVerbs {
-  name: string;
-  summary?: string;
+export interface Localizedtext {
+  en: string;
+}
+
+/**
+ * operation.
+ * A one-shot operation: its inputs and the capabilities it needs.
+ */
+export interface Operation {
+  label: Localizedtext;
+  summary?: Localizedtext;
   args?: Arg[];
-  needs?: Caprequest[];
-  side_effects?: boolean;
+  needs?: Need[];
 }
 
 /**
@@ -127,22 +143,104 @@ export interface ManifestVerbs {
  */
 export interface Arg {
   name: string;
-  kind: "path" | "host" | "name" | "text";
+  kind: "path" | "host" | "name" | "text" | "number" | "bool";
   required?: boolean;
+  default?: unknown;
+  label?: Localizedtext;
 }
 
 /**
- * capRequest.
+ * need.
+ * A single capability request: verb + scope binding + human reason.
  */
-export interface Caprequest {
-  verb: string;
-  scope?: unknown;
+export interface Need {
+  verb: "fs.read" | "fs.write" | "fs.delete" | "fs.exec" | "fs.watch" | "fs.meta" | "net.dial" | "net.listen" | "net.raw" | "net.resolve" | "proc.spawn" | "proc.signal" | "proc.observe" | "sys.observe" | "sys.service" | "sys.package" | "sys.mount" | "sys.time" | "sys.power" | "sys.kernel" | "secret.read" | "secret.write" | "secret.grant" | "agent.spawn" | "agent.invoke" | "agent.observe" | "agent.delegate" | "data.kv.read" | "data.kv.write" | "data.kv.delete" | "data.db.read" | "data.db.write" | "data.log.read" | "data.log.write" | "data.inbox.read" | "data.inbox.write" | "memory.write" | "memory.read" | "ipc.publish" | "ipc.subscribe" | "ipc.invoke" | "ui.notify" | "ui.prompt" | "ui.window" | "ui.input" | "device.audio" | "device.camera" | "device.microphone" | "device.location" | "device.sensor" | "device.usb" | "time.cron" | "time.delay" | "ai.chat" | "ai.chat.untrusted" | "ai.embed" | "ai.image.generate" | "ai.image.analyze" | "ai.audio.tts" | "ai.audio.stt" | "ai.vision.analyze" | "ai.video.generate" | "ai.video.analyze" | "ai.bypass" | "desktop.launch" | "browser.tabs.read" | "browser.nav" | "browser.dom.read" | "browser.dom.write" | "browser.input.secret" | "browser.eval";
+  scope: Scopebinding;
+  why: Localizedtext;
+}
+
+/**
+ * scopeBinding.
+ * How an operation's scope is determined at invocation time. kind=from-arg
+ * reads a named arg at call time; kind=fixed hard-codes a scope; kind=wild is
+ * an explicit wildcard (no implicit '*').
+ */
+export interface Scopebinding {
+  kind: "from-arg" | "fixed" | "wild";
+  arg?: string;
+  scope?: Scope;
+}
+
+/**
+ * scope.
+ * A concrete capability scope. value is a glob for path/host/name, the self-
+ * reference string for self-ref, and absent for wild.
+ */
+export interface Scope {
+  kind: "path" | "host" | "name" | "self-ref" | "wild";
+  value?: string;
+}
+
+/**
+ * aiPolicy.
+ * Budget + safety envelope under which the app may exercise ai.* verbs. Apps
+ * never pick the model; the OS owns the provider.
+ */
+export interface Aipolicy {
+  budget: Aibudget;
+  safety?: "strict" | "standard" | "minimal";
+  origins?: "trusted" | "user-input" | "external-content"[];
+  tools?: string[];
+}
+
+/**
+ * aiBudget.
+ */
+export interface Aibudget {
+  monthly_units?: number;
+}
+
+/**
+ * session.
+ * Long-lived MCP server the app launches for stateful, agent-driven tool
+ * calls.
+ */
+export interface Session {
+  entry?: string;
+  transport?: "stdio";
+  tools?: Sessiontool[];
+}
+
+/**
+ * sessionTool.
+ * One MCP-callable tool. Mirrors operation: args + needs drive the model's
+ * view and the kernel's enforcement.
+ */
+export interface Sessiontool {
+  name: string;
+  summary: Localizedtext;
+  args?: Arg[];
+  needs?: Need[];
+}
+
+/**
+ * desktop.
+ * Desktop GUI surface. Drives generation of
+ * /usr/share/applications/com.clawos.<Id>.desktop at install time.
+ */
+export interface Desktop {
+  exec?: string;
+  name?: Localizedtext;
+  icon?: string;
+  categories?: string[];
+  mime_types?: string[];
+  single_instance?: boolean;
 }
 
 /**
  * Permissions request / reply.
- * Shape of the success-path data field returned by policy checks. Apps
- * call this via SDK helpers (e.g. cos_runtime.policy.check).
+ * Shape of the success-path data field returned by policy checks. Apps call
+ * this via SDK helpers (e.g. cos_runtime.policy.check).
  */
 export interface Perms {
   decision: "allow" | "deny" | "prompt";
@@ -164,3 +262,4 @@ export interface Tool {
   result?: unknown;
   audit_id?: string;
 }
+

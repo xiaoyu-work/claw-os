@@ -2,51 +2,164 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://claw-os.dev/wire/v1/manifest.schema.json",
   "title": "App manifest (app.json)",
-  "description": "The manifest every app under COS_APPS_DIR must provide. The kernel validates and uses this to derive declared verbs, runtime, and capability requirements.",
+  "description": "The manifest every app under COS_APPS_DIR must provide. The kernel parses and validates this (core/src/caps/manifest.rs) to derive the app's operations, optional MCP session tools, optional desktop GUI surface, capability needs, and AI policy.",
   "type": "object",
-  "required": ["id", "name", "runtime", "verbs"],
+  "required": ["id", "version", "name"],
   "additionalProperties": true,
   "properties": {
-    "id":      { "type": "string", "pattern": "^[a-z][a-z0-9-]*$", "description": "Stable app identifier; matches the directory name under COS_APPS_DIR." },
-    "name":    { "type": "string", "description": "Human-friendly display name." },
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*$", "description": "Stable app identifier; must equal the directory name under COS_APPS_DIR." },
     "version": { "type": "string", "description": "Semantic version of the app." },
-    "runtime": { "type": "string", "enum": ["python", "binary", "node", "go"], "description": "Which runtime the kernel uses to invoke the entry point." },
-    "entry":   { "type": "string", "description": "Path relative to the app dir; python ⇒ <name>.py, binary ⇒ executable." },
-    "verbs": {
-      "type": "array",
-      "description": "Verbs this app exposes to AI / system callers.",
-      "items": {
-        "type": "object",
-        "required": ["name"],
-        "additionalProperties": true,
-        "properties": {
-          "name":        { "type": "string", "description": "Dotted verb name (e.g. \"fs.read\")." },
-          "summary":     { "type": "string" },
-          "args":        { "type": "array", "items": { "$ref": "#/$defs/arg" }, "description": "Declared input args." },
-          "needs":       { "type": "array", "items": { "$ref": "#/$defs/capRequest" }, "description": "Caps this verb requires before dispatch." },
-          "side_effects": { "type": "boolean", "description": "Whether this verb mutates user-visible state — drives the kernel's mutation log decision." }
-        }
-      }
-    }
+    "name": { "$ref": "#/$defs/localizedText", "description": "Human-friendly display name (localized; English required)." },
+    "summary": { "$ref": "#/$defs/localizedText", "description": "One-line description (localized)." },
+    "icon": { "type": "string", "description": "Emoji or icon name shown in launchers / the app store." },
+    "runtime": { "type": "string", "enum": ["python", "node", "shell", "binary"], "description": "Which interpreter the bridge invokes for the entry point. Defaults to python." },
+    "entry": { "type": "string", "description": "Entry file relative to the app dir. Defaults to the runtime's default (main.py / main.js / main.sh / main)." },
+    "operations": {
+      "type": "object",
+      "description": "One-shot operations keyed by command name. Each is invokable as `cos app <id> <op>` and auto-exposed to the agent. Values conform to #/$defs/operation.",
+      "additionalProperties": { "$ref": "#/$defs/operation" }
+    },
+    "ai": { "$ref": "#/$defs/aiPolicy", "description": "AI policy. Required iff any operation / session tool declares an ai.* need." },
+    "session": { "$ref": "#/$defs/session", "description": "Optional long-lived MCP server exposing stateful, agent-driven tools." },
+    "desktop": { "$ref": "#/$defs/desktop", "description": "Optional desktop GUI surface. Declaring it makes the app a launchable GUI; the installer generates a .desktop entry whose Exec routes through `cos app <id> --gui` so the GUI process is kernel-spawned and shares the app's identity, caps, consent, and audit." },
+    "dependencies": { "type": "object", "additionalProperties": true, "description": "Free-form dependency declarations (e.g. {\"binaries\": [...]}) consumed by the bridge's resolver." }
   },
   "$defs": {
+    "localizedText": {
+      "type": "object",
+      "description": "Localized string map. The `en` key is required; other locales (zh-CN, ...) are optional fallbacks.",
+      "required": ["en"],
+      "additionalProperties": { "type": "string" },
+      "properties": { "en": { "type": "string" } }
+    },
+    "operation": {
+      "type": "object",
+      "description": "A one-shot operation: its inputs and the capabilities it needs.",
+      "required": ["label"],
+      "additionalProperties": true,
+      "properties": {
+        "label": { "$ref": "#/$defs/localizedText" },
+        "summary": { "$ref": "#/$defs/localizedText" },
+        "args": { "type": "array", "items": { "$ref": "#/$defs/arg" }, "description": "Declared input parameters; order is significant for the UI." },
+        "needs": { "type": "array", "items": { "$ref": "#/$defs/need" }, "description": "Capability requirements checked before dispatch." }
+      }
+    },
     "arg": {
       "type": "object",
       "required": ["name", "kind"],
       "additionalProperties": true,
       "properties": {
-        "name":    { "type": "string" },
-        "kind":    { "type": "string", "enum": ["path", "host", "name", "text"] },
-        "required": { "type": "boolean" }
+        "name": { "type": "string", "description": "Identifier referenced by from-arg scope bindings." },
+        "kind": { "type": "string", "enum": ["path", "host", "name", "text", "number", "bool"], "description": "Value kind. path/host/name can populate a scope; text/number/bool cannot." },
+        "required": { "type": "boolean" },
+        "default": { "description": "Optional default value (any JSON type)." },
+        "label": { "$ref": "#/$defs/localizedText" }
       }
     },
-    "capRequest": {
+    "need": {
       "type": "object",
-      "required": ["verb"],
+      "description": "A single capability request: verb + scope binding + human reason.",
+      "required": ["verb", "scope", "why"],
       "additionalProperties": true,
       "properties": {
-        "verb":  { "type": "string", "description": "Capability verb the call needs (e.g. \"fs.read\")." },
-        "scope": { "description": "Either an inline literal scope, or { \"from-arg\": \"<argname>\" } to bind dynamically." }
+        "verb": {
+          "type": "string",
+          "description": "Capability verb. Must be a verb the kernel recognises (core/src/caps/verb.rs).",
+          "enum": [
+            "fs.read", "fs.write", "fs.delete", "fs.exec", "fs.watch", "fs.meta",
+            "net.dial", "net.listen", "net.raw", "net.resolve",
+            "proc.spawn", "proc.signal", "proc.observe",
+            "sys.observe", "sys.service", "sys.package", "sys.mount", "sys.time", "sys.power", "sys.kernel",
+            "secret.read", "secret.write", "secret.grant",
+            "agent.spawn", "agent.invoke", "agent.observe", "agent.delegate",
+            "data.kv.read", "data.kv.write", "data.kv.delete", "data.db.read", "data.db.write", "data.log.read", "data.log.write", "data.inbox.read", "data.inbox.write",
+            "memory.write", "memory.read",
+            "ipc.publish", "ipc.subscribe", "ipc.invoke",
+            "ui.notify", "ui.prompt", "ui.window", "ui.input",
+            "device.audio", "device.camera", "device.microphone", "device.location", "device.sensor", "device.usb",
+            "time.cron", "time.delay",
+            "ai.chat", "ai.chat.untrusted", "ai.embed", "ai.image.generate", "ai.image.analyze", "ai.audio.tts", "ai.audio.stt", "ai.vision.analyze", "ai.video.generate", "ai.video.analyze", "ai.bypass",
+            "desktop.launch",
+            "browser.tabs.read", "browser.nav", "browser.dom.read", "browser.dom.write", "browser.input.secret", "browser.eval"
+          ]
+        },
+        "scope": { "$ref": "#/$defs/scopeBinding" },
+        "why": { "$ref": "#/$defs/localizedText", "description": "Plain-language reason shown in the approval dialog." }
+      }
+    },
+    "scopeBinding": {
+      "type": "object",
+      "description": "How an operation's scope is determined at invocation time. kind=from-arg reads a named arg at call time; kind=fixed hard-codes a scope; kind=wild is an explicit wildcard (no implicit '*').",
+      "required": ["kind"],
+      "additionalProperties": true,
+      "properties": {
+        "kind": { "type": "string", "enum": ["from-arg", "fixed", "wild"] },
+        "arg": { "type": "string", "description": "Arg name to bind from (kind=from-arg)." },
+        "scope": { "$ref": "#/$defs/scope", "description": "Hard-coded scope (kind=fixed)." }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "description": "A concrete capability scope. value is a glob for path/host/name, the self-reference string for self-ref, and absent for wild.",
+      "required": ["kind"],
+      "additionalProperties": true,
+      "properties": {
+        "kind": { "type": "string", "enum": ["path", "host", "name", "self-ref", "wild"] },
+        "value": { "type": "string" }
+      }
+    },
+    "aiPolicy": {
+      "type": "object",
+      "description": "Budget + safety envelope under which the app may exercise ai.* verbs. Apps never pick the model; the OS owns the provider.",
+      "required": ["budget"],
+      "additionalProperties": true,
+      "properties": {
+        "budget": { "$ref": "#/$defs/aiBudget" },
+        "safety": { "type": "string", "enum": ["strict", "standard", "minimal"], "description": "Safety profile. Defaults to strict." },
+        "origins": { "type": "array", "items": { "type": "string", "enum": ["trusted", "user-input", "external-content"] }, "description": "Prompt origins the app accepts. Defaults to [\"trusted\"]." },
+        "tools": { "type": "array", "items": { "type": "string" }, "description": "Allowlist of kernel catalog tool names the app may expose to the model." }
+      }
+    },
+    "aiBudget": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "monthly_units": { "type": "integer", "minimum": 0, "description": "Abstract billing units per period. 0 disables enforcement." }
+      }
+    },
+    "session": {
+      "type": "object",
+      "description": "Long-lived MCP server the app launches for stateful, agent-driven tool calls.",
+      "additionalProperties": true,
+      "properties": {
+        "entry": { "type": "string", "description": "MCP server entry file relative to the app dir. Defaults to the runtime's server entry." },
+        "transport": { "type": "string", "enum": ["stdio"], "description": "Wire protocol. Only stdio is supported today." },
+        "tools": { "type": "array", "items": { "$ref": "#/$defs/sessionTool" }, "description": "Tools advertised through this session (authoritative allowlist)." }
+      }
+    },
+    "sessionTool": {
+      "type": "object",
+      "description": "One MCP-callable tool. Mirrors operation: args + needs drive the model's view and the kernel's enforcement.",
+      "required": ["name", "summary"],
+      "additionalProperties": true,
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z][a-z0-9._-]*$", "description": "Globally unique tool name; convention <app_id>.<verb> (e.g. kv.get)." },
+        "summary": { "$ref": "#/$defs/localizedText" },
+        "args": { "type": "array", "items": { "$ref": "#/$defs/arg" } },
+        "needs": { "type": "array", "items": { "$ref": "#/$defs/need" } }
+      }
+    },
+    "desktop": {
+      "type": "object",
+      "description": "Desktop GUI surface. Drives generation of /usr/share/applications/com.clawos.<Id>.desktop at install time.",
+      "additionalProperties": true,
+      "properties": {
+        "exec": { "type": "string", "description": "Command/args appended after `cos app <id>` in the generated Exec line. Defaults to \"--gui\". The kernel always routes launch through `cos app` so the GUI inherits the app's identity." },
+        "name": { "$ref": "#/$defs/localizedText", "description": "Display name for the launcher entry. Defaults to the manifest name." },
+        "icon": { "type": "string", "description": "Icon name (XDG icon theme) or path for the .desktop Icon= field. Defaults to com.clawos.<Id>." },
+        "categories": { "type": "array", "items": { "type": "string" }, "description": "XDG menu categories (e.g. [\"Utility\"]). ClawOS is always prepended." },
+        "mime_types": { "type": "array", "items": { "type": "string" }, "description": "MIME types this app can open (generates MimeType= + file associations)." },
+        "single_instance": { "type": "boolean", "description": "If true, the launcher reuses a running instance instead of spawning a new one." }
       }
     }
   }

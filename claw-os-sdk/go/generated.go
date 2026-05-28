@@ -96,24 +96,39 @@ type Envelope struct {
 }
 
 // Manifest — App manifest (app.json).
-// The manifest every app under COS_APPS_DIR must provide. The kernel validates
-// and uses this to derive declared verbs, runtime, and capability requirements.
+// The manifest every app under COS_APPS_DIR must provide. The kernel parses and
+// validates this (core/src/caps/manifest.rs) to derive the app's operations,
+// optional MCP session tools, optional desktop GUI surface, capability needs,
+// and AI policy.
 type Manifest struct {
 	Id string `json:"id"`
-	Name string `json:"name"`
-	Version string `json:"version,omitempty"`
-	Runtime string `json:"runtime"`
+	Version string `json:"version"`
+	Name Localizedtext `json:"name"`
+	Summary *Localizedtext `json:"summary,omitempty"`
+	Icon string `json:"icon,omitempty"`
+	Runtime string `json:"runtime,omitempty"`
 	Entry string `json:"entry,omitempty"`
-	Verbs []ManifestVerbs `json:"verbs"`
+	Operations map[string]interface{} `json:"operations,omitempty"`
+	Ai *Aipolicy `json:"ai,omitempty"`
+	Session *Session `json:"session,omitempty"`
+	Desktop *Desktop `json:"desktop,omitempty"`
+	Dependencies map[string]interface{} `json:"dependencies,omitempty"`
 }
 
-// ManifestVerbs — manifest_verbs.
-type ManifestVerbs struct {
-	Name string `json:"name"`
-	Summary string `json:"summary,omitempty"`
+// Localizedtext — localizedText.
+// Localized string map. The `en` key is required; other locales (zh-CN, ...) are
+// optional fallbacks.
+type Localizedtext struct {
+	En string `json:"en"`
+}
+
+// Operation — operation.
+// A one-shot operation: its inputs and the capabilities it needs.
+type Operation struct {
+	Label Localizedtext `json:"label"`
+	Summary *Localizedtext `json:"summary,omitempty"`
 	Args []Arg `json:"args,omitempty"`
-	Needs []Caprequest `json:"needs,omitempty"`
-	SideEffects bool `json:"side_effects,omitempty"`
+	Needs []Need `json:"needs,omitempty"`
 }
 
 // Arg — arg.
@@ -121,17 +136,84 @@ type Arg struct {
 	Name string `json:"name"`
 	Kind string `json:"kind"`
 	Required bool `json:"required,omitempty"`
+	Default *interface{} `json:"default,omitempty"`
+	Label *Localizedtext `json:"label,omitempty"`
 }
 
-// Caprequest — capRequest.
-type Caprequest struct {
+// Need — need.
+// A single capability request: verb + scope binding + human reason.
+type Need struct {
 	Verb string `json:"verb"`
-	Scope *interface{} `json:"scope,omitempty"`
+	Scope Scopebinding `json:"scope"`
+	Why Localizedtext `json:"why"`
+}
+
+// Scopebinding — scopeBinding.
+// How an operation's scope is determined at invocation time. kind=from-arg reads
+// a named arg at call time; kind=fixed hard-codes a scope; kind=wild is an
+// explicit wildcard (no implicit '*').
+type Scopebinding struct {
+	Kind string `json:"kind"`
+	Arg string `json:"arg,omitempty"`
+	Scope *Scope `json:"scope,omitempty"`
+}
+
+// Scope — scope.
+// A concrete capability scope. value is a glob for path/host/name, the self-
+// reference string for self-ref, and absent for wild.
+type Scope struct {
+	Kind string `json:"kind"`
+	Value string `json:"value,omitempty"`
+}
+
+// Aipolicy — aiPolicy.
+// Budget + safety envelope under which the app may exercise ai.* verbs. Apps
+// never pick the model; the OS owns the provider.
+type Aipolicy struct {
+	Budget Aibudget `json:"budget"`
+	Safety string `json:"safety,omitempty"`
+	Origins []string `json:"origins,omitempty"`
+	Tools []string `json:"tools,omitempty"`
+}
+
+// Aibudget — aiBudget.
+type Aibudget struct {
+	MonthlyUnits int64 `json:"monthly_units,omitempty"`
+}
+
+// Session — session.
+// Long-lived MCP server the app launches for stateful, agent-driven tool calls.
+type Session struct {
+	Entry string `json:"entry,omitempty"`
+	Transport string `json:"transport,omitempty"`
+	Tools []Sessiontool `json:"tools,omitempty"`
+}
+
+// Sessiontool — sessionTool.
+// One MCP-callable tool. Mirrors operation: args + needs drive the model's view
+// and the kernel's enforcement.
+type Sessiontool struct {
+	Name string `json:"name"`
+	Summary Localizedtext `json:"summary"`
+	Args []Arg `json:"args,omitempty"`
+	Needs []Need `json:"needs,omitempty"`
+}
+
+// Desktop — desktop.
+// Desktop GUI surface. Drives generation of
+// /usr/share/applications/com.clawos.<Id>.desktop at install time.
+type Desktop struct {
+	Exec string `json:"exec,omitempty"`
+	Name *Localizedtext `json:"name,omitempty"`
+	Icon string `json:"icon,omitempty"`
+	Categories []string `json:"categories,omitempty"`
+	MimeTypes []string `json:"mime_types,omitempty"`
+	SingleInstance bool `json:"single_instance,omitempty"`
 }
 
 // Perms — Permissions request / reply.
-// Shape of the success-path data field returned by policy checks. Apps call
-// this via SDK helpers (e.g. cos_runtime.policy.check).
+// Shape of the success-path data field returned by policy checks. Apps call this
+// via SDK helpers (e.g. cos_runtime.policy.check).
 type Perms struct {
 	Decision string `json:"decision"`
 	Verb string `json:"verb"`
@@ -172,7 +254,7 @@ func ValidateAiReviewSafety(value string) error {
 // ValidateManifestRuntime reports an error if value is not in the manifest.runtime enum.
 func ValidateManifestRuntime(value string) error {
 	switch value {
-	case "python", "binary", "node", "go":
+	case "python", "node", "shell", "binary":
 		return nil
 	}
 	return fmt.Errorf("invalid manifest.runtime value: %q", value)

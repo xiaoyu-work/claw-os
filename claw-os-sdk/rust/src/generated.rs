@@ -142,32 +142,54 @@ pub struct Envelope {
 }
 
 /// App manifest (app.json)
-/// The manifest every app under COS_APPS_DIR must provide. The kernel validates
-/// and uses this to derive declared verbs, runtime, and capability requirements.
+/// The manifest every app under COS_APPS_DIR must provide. The kernel parses and
+/// validates this (core/src/caps/manifest.rs) to derive the app's operations,
+/// optional MCP session tools, optional desktop GUI surface, capability needs,
+/// and AI policy.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Manifest {
     pub id: String,
-    pub name: String,
+    pub version: String,
+    pub name: Localizedtext,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
-    pub runtime: String,
+    pub summary: Option<Localizedtext>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entry: Option<String>,
-    pub verbs: Vec<ManifestVerbs>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operations: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai: Option<Aipolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<Session>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desktop: Option<Desktop>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dependencies: Option<serde_json::Value>,
 }
 
-/// manifest_verbs
+/// localizedText
+/// Localized string map. The `en` key is required; other locales (zh-CN, ...) are
+/// optional fallbacks.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ManifestVerbs {
-    pub name: String,
+pub struct Localizedtext {
+    pub en: String,
+}
+
+/// operation
+/// A one-shot operation: its inputs and the capabilities it needs.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Operation {
+    pub label: Localizedtext,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub summary: Option<String>,
+    pub summary: Option<Localizedtext>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub args: Option<Vec<Arg>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub needs: Option<Vec<Caprequest>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub side_effects: Option<bool>,
+    pub needs: Option<Vec<Need>>,
 }
 
 /// arg
@@ -177,19 +199,112 @@ pub struct Arg {
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<Localizedtext>,
 }
 
-/// capRequest
+/// need
+/// A single capability request: verb + scope binding + human reason.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct Caprequest {
+pub struct Need {
     pub verb: String,
+    pub scope: Scopebinding,
+    pub why: Localizedtext,
+}
+
+/// scopeBinding
+/// How an operation's scope is determined at invocation time. kind=from-arg reads
+/// a named arg at call time; kind=fixed hard-codes a scope; kind=wild is an
+/// explicit wildcard (no implicit '*').
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Scopebinding {
+    pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub scope: Option<serde_json::Value>,
+    pub arg: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<Scope>,
+}
+
+/// scope
+/// A concrete capability scope. value is a glob for path/host/name, the self-
+/// reference string for self-ref, and absent for wild.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Scope {
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+}
+
+/// aiPolicy
+/// Budget + safety envelope under which the app may exercise ai.* verbs. Apps
+/// never pick the model; the OS owns the provider.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Aipolicy {
+    pub budget: Aibudget,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub safety: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origins: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<String>>,
+}
+
+/// aiBudget
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Aibudget {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monthly_units: Option<i64>,
+}
+
+/// session
+/// Long-lived MCP server the app launches for stateful, agent-driven tool calls.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Session {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transport: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Sessiontool>>,
+}
+
+/// sessionTool
+/// One MCP-callable tool. Mirrors operation: args + needs drive the model's view
+/// and the kernel's enforcement.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Sessiontool {
+    pub name: String,
+    pub summary: Localizedtext,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<Vec<Arg>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub needs: Option<Vec<Need>>,
+}
+
+/// desktop
+/// Desktop GUI surface. Drives generation of
+/// /usr/share/applications/com.clawos.<Id>.desktop at install time.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Desktop {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exec: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<Localizedtext>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub categories: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime_types: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub single_instance: Option<bool>,
 }
 
 /// Permissions request / reply
-/// Shape of the success-path data field returned by policy checks. Apps call
-/// this via SDK helpers (e.g. cos_runtime.policy.check).
+/// Shape of the success-path data field returned by policy checks. Apps call this
+/// via SDK helpers (e.g. cos_runtime.policy.check).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Perms {
     pub decision: String,
@@ -248,7 +363,7 @@ pub fn validate_ai_review_safety(value: &str) -> Result<(), String> {
 /// The wire schema lists a closed set of allowed values; a kernel
 /// that emits an unknown one should not be silently accepted.
 pub fn validate_manifest_runtime(value: &str) -> Result<(), String> {
-    const ALLOWED: &[&str] = &["python", "binary", "node", "go"];
+    const ALLOWED: &[&str] = &["python", "node", "shell", "binary"];
     if ALLOWED.iter().any(|a| *a == value) {
         Ok(())
     } else {
@@ -268,3 +383,4 @@ pub fn validate_perms_decision(value: &str) -> Result<(), String> {
         Err(format!("invalid perms.decision value: {value}"))
     }
 }
+

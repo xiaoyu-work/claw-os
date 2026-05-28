@@ -113,25 +113,41 @@ class Envelope(TypedDict, total=False):
 class Manifest(TypedDict, total=False):
     """App manifest (app.json).
 
-    The manifest every app under COS_APPS_DIR must provide. The kernel validates
-    and uses this to derive declared verbs, runtime, and capability
-    requirements.
+    The manifest every app under COS_APPS_DIR must provide. The kernel parses
+    and validates this (core/src/caps/manifest.rs) to derive the app's
+    operations, optional MCP session tools, optional desktop GUI surface,
+    capability needs, and AI policy.
     """
     id: str  # required
-    name: str  # required
-    version: str
-    runtime: str  # required
+    version: str  # required
+    name: "Localizedtext"  # required
+    summary: "Localizedtext"
+    icon: str
+    runtime: str
     entry: str
-    verbs: List["ManifestVerbs"]  # required
+    operations: Dict[str, Any]
+    ai: "Aipolicy"
+    session: "Session"
+    desktop: "Desktop"
+    dependencies: Dict[str, Any]
 
-class ManifestVerbs(TypedDict, total=False):
-    """manifest_verbs.
+class Localizedtext(TypedDict, total=False):
+    """localizedText.
+
+    Localized string map. The `en` key is required; other locales (zh-CN, ...)
+    are optional fallbacks.
     """
-    name: str  # required
-    summary: str
+    en: str  # required
+
+class Operation(TypedDict, total=False):
+    """operation.
+
+    A one-shot operation: its inputs and the capabilities it needs.
+    """
+    label: "Localizedtext"  # required
+    summary: "Localizedtext"
     args: List["Arg"]
-    needs: List["Caprequest"]
-    side_effects: bool
+    needs: List["Need"]
 
 class Arg(TypedDict, total=False):
     """arg.
@@ -139,18 +155,93 @@ class Arg(TypedDict, total=False):
     name: str  # required
     kind: str  # required
     required: bool
+    default: Any
+    label: "Localizedtext"
 
-class Caprequest(TypedDict, total=False):
-    """capRequest.
+class Need(TypedDict, total=False):
+    """need.
+
+    A single capability request: verb + scope binding + human reason.
     """
     verb: str  # required
-    scope: Any
+    scope: "Scopebinding"  # required
+    why: "Localizedtext"  # required
+
+class Scopebinding(TypedDict, total=False):
+    """scopeBinding.
+
+    How an operation's scope is determined at invocation time. kind=from-arg
+    reads a named arg at call time; kind=fixed hard-codes a scope; kind=wild is
+    an explicit wildcard (no implicit '*').
+    """
+    kind: str  # required
+    arg: str
+    scope: "Scope"
+
+class Scope(TypedDict, total=False):
+    """scope.
+
+    A concrete capability scope. value is a glob for path/host/name, the self-
+    reference string for self-ref, and absent for wild.
+    """
+    kind: str  # required
+    value: str
+
+class Aipolicy(TypedDict, total=False):
+    """aiPolicy.
+
+    Budget + safety envelope under which the app may exercise ai.* verbs. Apps
+    never pick the model; the OS owns the provider.
+    """
+    budget: "Aibudget"  # required
+    safety: str
+    origins: List[str]
+    tools: List[str]
+
+class Aibudget(TypedDict, total=False):
+    """aiBudget.
+    """
+    monthly_units: int
+
+class Session(TypedDict, total=False):
+    """session.
+
+    Long-lived MCP server the app launches for stateful, agent-driven tool
+    calls.
+    """
+    entry: str
+    transport: str
+    tools: List["Sessiontool"]
+
+class Sessiontool(TypedDict, total=False):
+    """sessionTool.
+
+    One MCP-callable tool. Mirrors operation: args + needs drive the model's
+    view and the kernel's enforcement.
+    """
+    name: str  # required
+    summary: "Localizedtext"  # required
+    args: List["Arg"]
+    needs: List["Need"]
+
+class Desktop(TypedDict, total=False):
+    """desktop.
+
+    Desktop GUI surface. Drives generation of
+    /usr/share/applications/com.clawos.<Id>.desktop at install time.
+    """
+    exec: str
+    name: "Localizedtext"
+    icon: str
+    categories: List[str]
+    mime_types: List[str]
+    single_instance: bool
 
 class Perms(TypedDict, total=False):
     """Permissions request / reply.
 
-    Shape of the success-path data field returned by policy checks. Apps
-    call this via SDK helpers (e.g. cos_runtime.policy.check).
+    Shape of the success-path data field returned by policy checks. Apps call
+    this via SDK helpers (e.g. cos_runtime.policy.check).
     """
     decision: str  # required
     verb: str  # required
@@ -187,7 +278,7 @@ def validate_ai_review_safety(value: str) -> None:
 def validate_manifest_runtime(value: str) -> None:
     """Raise ValueError if value is not in the manifest.runtime
     enum. Mirrors generated::validate_manifest_runtime."""
-    allowed = ['python', 'binary', 'node', 'go']
+    allowed = ['python', 'node', 'shell', 'binary']
     if value not in allowed:
         raise ValueError(f"invalid manifest.runtime value: {value!r}")
 
@@ -197,3 +288,4 @@ def validate_perms_decision(value: str) -> None:
     allowed = ['allow', 'deny', 'prompt']
     if value not in allowed:
         raise ValueError(f"invalid perms.decision value: {value!r}")
+
