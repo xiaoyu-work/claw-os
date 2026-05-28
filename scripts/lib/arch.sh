@@ -55,6 +55,11 @@ case "$ARCH" in
         # self-disables when no Intel temperature interface is found).
         # It's an x86-only package on Debian, so empty on arm64.
         THERMALD_PKG=thermald
+            # Intel iHD media driver, non-free build. Adds hardware decoders
+            # the free intel-media-va-driver lacks (HEVC Main10 / VP9 Profile2 /
+            # AV1 on gen 12+). Package is `Architecture: amd64 i386` only on
+            # Debian, so empty on arm64. Pairs with va-driver-all (free).
+            VAAPI_INTEL_NONFREE_PKG=intel-media-va-driver-non-free
         ;;
     arm64)
         DEB_ARCH=arm64
@@ -72,6 +77,8 @@ case "$ARCH" in
         MICROCODE_AMD_PKG=""
         # thermald is x86-only on Debian.
         THERMALD_PKG=""
+            # Intel iHD media driver is x86-only.
+            VAAPI_INTEL_NONFREE_PKG=""
         ;;
     *)
         echo "error: unsupported ARCH='$ARCH' (expected: amd64 or arm64)" >&2
@@ -93,6 +100,7 @@ export ARCH DEB_ARCH RUST_TARGET KERNEL_PKG
 export GRUB_EFI_TARGET GRUB_EFI_PKG GRUB_BIOS_TARGET GRUB_BIOS_PKG
 export MICROCODE_INTEL_PKG MICROCODE_AMD_PKG
 export THERMALD_PKG
+export VAAPI_INTEL_NONFREE_PKG
 
 # Convenience: a short suffix for output filenames. Always "$DEB_ARCH"
 # (so a binary built for amd64 is `*-amd64.qcow2`, arm64 is `*-arm64.qcow2`).

@@ -333,6 +333,126 @@ gnome-disk-utility
 # events are silent. Tiny (~700KB) and harmless to ship by default.
 sound-theme-freedesktop
 
+# --- P0 desktop plumbing (boot-into-usable-system essentials) ---
+#
+# xdg-desktop-portal: the freedesktop "portal" frontend D-Bus daemon.
+# Apps speak `org.freedesktop.portal.*` to it (screen share, file
+# picker for sandboxed/Flatpak apps, screenshot, screencast, secret
+# storage, ...) and it dispatches to the backend impl appropriate
+# for the current session — for us that's xdg-desktop-portal-cosmic
+# (built from source under desktop/xdg-desktop-portal). Without the
+# frontend installed, the cosmic backend has nothing to register
+# with, so screen sharing in Chromium/Discord/Zoom/OBS and Flatpak
+# file pickers silently fail or freeze. The package is dbus-activated
+# (no systemd enable needed) and tiny (~200KB).
+xdg-desktop-portal
+# xdg-utils: provides /usr/bin/xdg-open, xdg-mime, xdg-settings,
+# xdg-email, xdg-screensaver, etc. Every shell script or CLI tool
+# that wants to "open a file in its default app" calls xdg-open,
+# which reads /etc/xdg/mimeapps.list (the table we just expanded
+# in Phase 3c) and execs the right .desktop. Without it: git editor
+# launchers, mail clients' "open attachment", `gh repo view --web`,
+# `cargo doc --open` all fail. Also pulled in by chromium but we
+# shouldn't rely on a transitive that lives in a separate feature.
+xdg-utils
+# systemd-zram-generator: creates a zram-backed compressed swap
+# device on boot, sized via /etc/systemd/zram-generator.conf
+# (overlayed below). Without swap of any kind, even a 16GB
+# laptop OOM-kills Chromium + IDE under modest load. zram trades
+# a small amount of CPU for ~3x effective memory and avoids the
+# latency cliff of disk swap. Default config: min(ram, 8GB) zstd.
+systemd-zram-generator
+# libcanberra-gtk3-module: GTK3 module that hooks libcanberra's
+# event-sound API into GTK input events (button click, focus change,
+# dialog appear) so the sound theme actually plays. With
+# sound-theme-freedesktop installed but no canberra GTK module
+# loaded, only apps that call canberra_play() directly produce
+# sound — the default cosmic-osd volume slider, file-roller error
+# beep, etc. stay silent. There is no libcanberra-gtk4-module
+# upstream; GTK4 apps using libadwaita drive sounds via the same
+# libcanberra0 library directly.
+libcanberra-gtk3-module
+# at-spi2-core: Assistive Technology Service Provider Interface
+# D-Bus bus. Required by every Gtk3/Gtk4/libadwaita app that
+# implements a11y (which is essentially all of them). Without it
+# they emit "Couldn't connect to accessibility bus" warnings on
+# startup, lose some keyboard navigation accelerators and become
+# unusable for screen-reader users. Bus is launched on demand;
+# no enable needed.
+at-spi2-core
+
+# --- P1 desktop plumbing (quality-of-life round-out) ---
+#
+# colord: system-wide color management daemon. ICC profile
+# storage, monitor calibration, printer color matching. Phase 3
+# polkit rules already pre-authorise color-manager.* actions for
+# active local users, but without colord installed those actions
+# go nowhere. dbus-activated; no enable needed.
+colord
+# systemd-coredump: replaces the default `kernel.core_pattern`
+# with a handler that writes coredumps under /var/lib/systemd/
+# coredump/ and indexes them in the journal. Without it, when
+# an app crashes the user has no way to diagnose: `coredumpctl
+# list` returns nothing. As a developer-friendly OS we want
+# this on by default. Drops in a sysctl + dbus service; tiny.
+systemd-coredump
+# NetworkManager VPN plugins. cosmic-applet-network already has
+# the "Add VPN connection" UI but it walks /usr/lib/NetworkManager/
+# VPN/ to enumerate available protocol plugins. Without these
+# packages installed the list is empty and the user has to
+# resort to manual config files. WireGuard support is built
+# into NM core since 1.16 (no separate plugin needed).
+network-manager-openvpn
+network-manager-openvpn-gnome
+network-manager-l2tp
+network-manager-l2tp-gnome
+# wireguard-tools: userspace utilities (wg, wg-quick) for the
+# in-kernel WireGuard VPN driver. NetworkManager core knows the
+# WireGuard interface type and can drive it without these, but
+# any CLI / script management of tunnels needs them.
+wireguard-tools
+# Hardware-accelerated video decode (VA-API).
+#
+# va-driver-all: meta-package pulling the right VAAPI driver for
+# the GPU: intel-media-va-driver (Intel gen8+), i965-va-driver
+# (older Intel), mesa-va-drivers (AMD VCN, Mali, etc.). Without
+# any VA driver, cosmic-player and Chromium fall back to CPU
+# H.264/HEVC decode — battery drain + stuttering on 4K.
+va-driver-all
+# Intel iHD non-free driver: adds the codecs the free driver
+# lacks on gen 11+ chips (HEVC Main10 for HDR, VP9 Profile 2,
+# AV1 hardware decode on gen 12). amd64-only.
+${VAAPI_INTEL_NONFREE_PKG}
+# gstreamer1.0-vaapi: lets GStreamer pipelines (cosmic-player's
+# playbin) use VA-API. Without this the VA driver is installed
+# but cosmic-player doesn't actually negotiate hardware decode
+# because GstVaapiDecode isn't registered.
+gstreamer1.0-vaapi
+# v4l-utils: webcam diagnostics + tooling (v4l2-ctl, qv4l2).
+# Needed when troubleshooting "my webcam doesn't work".
+v4l-utils
+# libcamera-tools: modern camera stack used by newer Intel IPU6
+# webcams (Lenovo X1 Carbon Gen 11+, Dell XPS 13 Plus, Thinkpad
+# X13s). The kernel uvcvideo driver does not see these cameras;
+# libcamera does. Pulled by Chromium / Firefox in modern versions
+# for webcam access in browser.
+libcamera-tools
+# modemmanager: cellular modem daemon for laptops with built-in
+# WWAN (Lenovo X1 Carbon LTE, Dell XPS WWAN options). Empty no-op
+# when no modem is present. NetworkManager talks to it for
+# cellular connections.
+modemmanager
+# network-manager-config-connectivity-debian: enables NM's
+# captive-portal detection. Without it, public WiFi (airport,
+# hotel, cafe) doesn't trigger the "Sign in to network"
+# notification, leaving the user with no DNS and no clue why.
+network-manager-config-connectivity-debian
+# gnome-bluetooth-sendto: command line / D-Bus tool that bluez
+# uses for "send file to bluetooth device" from file managers
+# (right-click → Send To). Pulled in by drag-drop UX from
+# cosmic-files via the org.freedesktop.bluetooth.Sendto interface.
+gnome-bluetooth-sendto
+
 # --- Local document full-text search (apps/docs) ---
 # Recoll provides the Xapian-backed full-text index and the recollq /
 # recollindex / recoll CLIs. apps/docs wraps recollq + recollindex to
