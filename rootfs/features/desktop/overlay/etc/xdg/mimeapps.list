@@ -46,6 +46,28 @@ application/xml=com.clawos.Edit.desktop
 text/xml=com.clawos.Edit.desktop
 application/toml=com.clawos.Edit.desktop
 
+# --- Office documents (LibreOffice) ---
+application/vnd.oasis.opendocument.text=libreoffice-writer.desktop
+application/vnd.oasis.opendocument.text-template=libreoffice-writer.desktop
+application/msword=libreoffice-writer.desktop
+application/vnd.openxmlformats-officedocument.wordprocessingml.document=libreoffice-writer.desktop
+application/vnd.openxmlformats-officedocument.wordprocessingml.template=libreoffice-writer.desktop
+application/rtf=libreoffice-writer.desktop
+text/rtf=libreoffice-writer.desktop
+application/vnd.oasis.opendocument.spreadsheet=libreoffice-calc.desktop
+application/vnd.oasis.opendocument.spreadsheet-template=libreoffice-calc.desktop
+application/vnd.ms-excel=libreoffice-calc.desktop
+application/vnd.openxmlformats-officedocument.spreadsheetml.sheet=libreoffice-calc.desktop
+application/vnd.openxmlformats-officedocument.spreadsheetml.template=libreoffice-calc.desktop
+text/csv=libreoffice-calc.desktop
+application/vnd.oasis.opendocument.presentation=libreoffice-impress.desktop
+application/vnd.oasis.opendocument.presentation-template=libreoffice-impress.desktop
+application/vnd.ms-powerpoint=libreoffice-impress.desktop
+application/vnd.openxmlformats-officedocument.presentationml.presentation=libreoffice-impress.desktop
+application/vnd.openxmlformats-officedocument.presentationml.template=libreoffice-impress.desktop
+application/vnd.oasis.opendocument.graphics=libreoffice-draw.desktop
+application/vnd.oasis.opendocument.graphics-template=libreoffice-draw.desktop
+
 # --- Images (eog / Eye of GNOME) ---
 image/jpeg=org.gnome.eog.desktop
 image/png=org.gnome.eog.desktop
@@ -106,10 +128,17 @@ application/x-archive=org.gnome.FileRoller.desktop
 application/x-cpio=org.gnome.FileRoller.desktop
 application/x-iso9660-image=org.gnome.FileRoller.desktop
 application/vnd.android.package-archive=org.gnome.FileRoller.desktop
-application/vnd.debian.binary-package=org.gnome.FileRoller.desktop
 application/x-rpm=org.gnome.FileRoller.desktop
 application/java-archive=org.gnome.FileRoller.desktop
-application/x-deb=org.gnome.FileRoller.desktop
+
+# --- App packages / appstream (cosmic-store) ---
+application/vnd.debian.binary-package=com.clawos.Store.desktop
+application/x-debian-package=com.clawos.Store.desktop
+application/x-deb=com.clawos.Store.desktop
+application/vnd.flatpak.ref=com.clawos.Store.desktop
+application/vnd.flatpak.repo=com.clawos.Store.desktop
+x-scheme-handler/appstream=com.clawos.Store.desktop
+x-scheme-handler/mime=com.clawos.Store.desktop
 
 # --- Audio / video (cosmic-player) ---
 audio/mpeg=com.clawos.Player.desktop

@@ -66,17 +66,16 @@ enable_desktop_services() {
         systemctl enable cups.service >/dev/null 2>&1 || true
         systemctl enable cups-browsed.service >/dev/null 2>&1 || true
         systemctl enable thermald.service >/dev/null 2>&1 || true
-            # ModemManager handles cellular modems. On machines without one
-            # the service starts and exits idle, costing nothing.
-            systemctl enable ModemManager.service >/dev/null 2>&1 || true
-            # systemd-coredump is socket-activated by systemd; the package
-            # also drops a sysctl that points kernel.core_pattern at it
-            # — no enable needed. Keep this comment so future hands don't
-            # add a redundant systemctl enable here.
-            # geoclue is dbus-activated; no enable needed.
-            # xdg-desktop-portal is dbus-activated; no enable needed.
-            # colord is dbus-activated; no enable needed.
-            # at-spi2-core is dbus-activated; no enable needed.
+        # ModemManager handles cellular modems. On machines without one
+        # the service starts and exits idle, costing nothing.
+        systemctl enable ModemManager.service >/dev/null 2>&1 || true
+        # systemd-coredump is socket-activated by systemd; the package
+        # also drops a sysctl that points kernel.core_pattern at it
+        # — no enable needed. Keep this comment so future hands don't
+        # add a redundant systemctl enable here.
+        # geoclue, PackageKit, xdg-desktop-portal, colord and at-spi2-core
+        # are dbus-activated; no enable needed.
+        # ipp-usb/brltty are device/udev activated on matching hardware.
     fi
 }
 

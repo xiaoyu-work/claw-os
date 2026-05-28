@@ -16,13 +16,31 @@ Depends: claw-os-base (= __VERSION__), claw-os-systemd (= __VERSION__), adduser,
  libfontconfig1, libfreetype6, libexpat1, libpixman-1-0, libgtk-4-1,
  libpulse0, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good,
  gstreamer1.0-plugins-bad, gstreamer1.0-plugins-ugly, gstreamer1.0-libav,
- flatpak, fonts-inter, fonts-jetbrains-mono, fonts-noto-core, fonts-noto-cjk,
+ flatpak, packagekit, fonts-inter, fonts-jetbrains-mono, fonts-noto-core, fonts-noto-cjk,
  fonts-noto-color-emoji, adwaita-icon-theme, hicolor-icon-theme,
  bibata-cursor-theme, xkb-data, locales, plymouth, plymouth-themes,
- chromium, thunderbird, recoll
+ fcitx5, fcitx5-config-qt, fcitx5-frontend-gtk3, fcitx5-frontend-gtk4,
+ fcitx5-frontend-qt5, fcitx5-frontend-qt6, fcitx5-chinese-addons, fcitx5-mozc,
+ fcitx5-hangul, wtype, ydotool, systemd-timesyncd, udisks2, ntfs-3g,
+ exfatprogs, gvfs, gvfs-backends, gvfs-fuse, fwupd, avahi-daemon, libnss-mdns,
+ cups, cups-browsed, cups-filters, printer-driver-all, system-config-printer,
+ cups-pk-helper, simple-scan, sane-airscan, ipp-usb, sane-utils,
+ __THERMALD_DEP__unattended-upgrades, geoclue-2.0, fprintd, libpam-fprintd,
+ chromium, thunderbird, eog, evince, file-roller, gnome-calculator,
+ gnome-system-monitor, gnome-disk-utility, sound-theme-freedesktop,
+ libreoffice, deja-dup, gnome-logs, baobab, seahorse, gnome-font-viewer,
+ gnome-characters, cheese, copyq, wl-clipboard, orca, brltty,
+ xdg-desktop-portal, xdg-utils, systemd-zram-generator,
+ libcanberra-gtk3-module, at-spi2-core, colord, systemd-coredump,
+ network-manager-openvpn, network-manager-openvpn-gnome,
+ network-manager-l2tp, network-manager-l2tp-gnome, wireguard-tools,
+ va-driver-all, __VAAPI_INTEL_NONFREE_DEP__gstreamer1.0-vaapi, v4l-utils,
+ libcamera-tools, modemmanager, network-manager-config-connectivity-debian,
+ gnome-bluetooth-sendto, recoll
 Replaces: claw-os-base (<= __VERSION__)
 Description: Claw OS — graphical desktop environment
  Installs the Claw OS desktop shell and applications built from the vendored
  desktop workspace, including compositor, greeter, panel, launcher, settings,
  terminal, file manager, editor, store, initial setup, wallpapers, icon theme,
- xdg-desktop-portal integration, and graphical session wiring.
+ xdg-desktop-portal integration, office / media / printer / scanner utilities,
+ and graphical session wiring.

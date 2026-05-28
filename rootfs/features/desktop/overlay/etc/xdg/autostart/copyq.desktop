@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=CopyQ Clipboard History
+Comment=Start the clipboard history service
+Exec=copyq --start-server
+OnlyShowIn=COSMIC;GNOME;KDE;XFCE;
+X-GNOME-Autostart-enabled=true
+NoDisplay=true

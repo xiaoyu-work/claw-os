@@ -43,7 +43,11 @@ else
 fi
 
 mkdir -p "$STAGE_ROOT/DEBIAN" "$OUT_DIR"
+THERMALD_DEP="${THERMALD_PKG:+$THERMALD_PKG, }"
+VAAPI_INTEL_NONFREE_DEP="${VAAPI_INTEL_NONFREE_PKG:+$VAAPI_INTEL_NONFREE_PKG, }"
 sed -e "s/__VERSION__/$VERSION/g" -e "s/__ARCH__/$DEB_ARCH/g" \
+    -e "s/__THERMALD_DEP__/$THERMALD_DEP/g" \
+    -e "s/__VAAPI_INTEL_NONFREE_DEP__/$VAAPI_INTEL_NONFREE_DEP/g" \
     "$SCRIPT_DIR/claw-os-desktop/control" > "$STAGE_ROOT/DEBIAN/control"
 install -m 644 "$SCRIPT_DIR/claw-os-desktop/conffiles" "$STAGE_ROOT/DEBIAN/conffiles"
 install -m 755 "$SCRIPT_DIR/claw-os-desktop/postinst" "$STAGE_ROOT/DEBIAN/postinst"

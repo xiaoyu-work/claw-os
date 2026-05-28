@@ -36,6 +36,13 @@ polkit.addRule(function(action, subject) {
         return polkit.Result.YES;
     }
 
+    // App store: same UX for PackageKit-backed system packages and
+    // double-clicked .deb files. This is still restricted to active local
+    // sudo users; SSH and non-admin users keep upstream auth prompts.
+    if (action.id.indexOf("org.freedesktop.packagekit.") === 0) {
+        return polkit.Result.YES;
+    }
+
     // Power: suspend / hibernate / reboot / shutdown are already
     // default-yes for active sessions on most distros, but spell them
     // out so they survive any upstream tightening.
@@ -67,6 +74,14 @@ polkit.addRule(function(action, subject) {
     if (action.id.indexOf("org.freedesktop.udisks2.filesystem-mount") === 0 ||
         action.id.indexOf("org.freedesktop.udisks2.eject-media") === 0 ||
         action.id.indexOf("org.freedesktop.udisks2.power-off-drive") === 0) {
+        return polkit.Result.YES;
+    }
+
+    // Printer administration through system-config-printer / CUPS
+    // cupspkhelper. Local sudo users should be able to add a discovered
+    // printer, set it as default, or change options without a second auth
+    // dialog after login.
+    if (action.id.indexOf("org.opensuse.cupspkhelper.mechanism.") === 0) {
         return polkit.Result.YES;
     }
 

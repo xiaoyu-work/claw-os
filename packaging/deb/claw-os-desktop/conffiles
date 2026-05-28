@@ -1,4 +1,8 @@
+/etc/apt/apt.conf.d/20auto-upgrades
+/etc/polkit-1/rules.d/40-clawos.rules
 /etc/profile.d/claw-cursor.sh
+/etc/systemd/zram-generator.conf
+/etc/xdg/autostart/copyq.desktop
 /etc/xdg/mimeapps.list
 /etc/pam.d/cosmic-greeter
 /etc/greetd/cosmic-greeter.toml

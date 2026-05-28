@@ -119,10 +119,15 @@ gstreamer1.0-plugins-bad
 gstreamer1.0-plugins-ugly
 gstreamer1.0-libav
 
-# --- SSL + Flatpak (app store) ---
+# --- SSL + app store backends ---
 libssl-dev
 libflatpak-dev
 flatpak
+# PackageKit is the system-package backend used by cosmic-store when it is
+# built with the `packagekit` feature. Flatpak covers most user apps, but
+# a normal desktop also needs a GUI path for system packages and for
+# double-clicking local .deb files. PackageKit is dbus-activated.
+packagekit
 
 # --- bindgen targets for crates that wrap C libs ---
 libclang-dev
@@ -240,6 +245,22 @@ cups
 cups-browsed
 cups-filters
 printer-driver-all
+# system-config-printer is the missing GUI for CUPS: discover, add,
+# remove, rename and set default printers without going to the CUPS web
+# UI. cups-pk-helper provides the PolicyKit bridge it uses for privileged
+# printer changes when installed with --no-install-recommends.
+system-config-printer
+cups-pk-helper
+
+# --- Scanning (driverless + classic SANE) ---
+# simple-scan (Document Scanner) is the default GUI for flatbed / MFP
+# scanners. sane-airscan handles modern driverless eSCL / WSD scanners,
+# ipp-usb exposes USB multi-function printers/scanners as local IPP
+# devices, and sane-utils gives users scanimage for diagnostics.
+simple-scan
+sane-airscan
+ipp-usb
+sane-utils
 
 # --- Thermal management (Intel laptops, no-op elsewhere) ---
 # thermald implements Intel's Dynamic Platform Thermal Framework.
@@ -294,8 +315,9 @@ thunderbird
 # --- Default GUI utilities (round-out "normal desktop" baseline) ---
 # These fill the everyday-app gaps that COSMIC doesn't ship upstream
 # but every normal Linux desktop user expects to be present on first
-# boot. All Gtk4 / libadwaita so they sit visually next to the rest of
-# the desktop, all packaged in trixie, ~150 MB total.
+# boot. The core set is Gtk/libadwaita where possible; the office and
+# accessibility tools below are intentionally heavier because they close
+# real daily-use gaps.
 #
 # eog (Eye of GNOME): image viewer. Without it, double-clicking a
 # JPG/PNG/GIF/WEBP/BMP/TIFF/SVG in cosmic-files returns "no
@@ -332,6 +354,35 @@ gnome-disk-utility
 # changes, notification arrivals and other libcanberra-driven
 # events are silent. Tiny (~700KB) and harmless to ship by default.
 sound-theme-freedesktop
+
+# --- Office / consumer utility baseline ---
+# LibreOffice is heavy, but it closes the single most visible consumer
+# desktop gap: double-clicking .docx / .xlsx / .pptx / .odt / .ods / .odp
+# should open a real editor, not an archive viewer or "no app" dialog.
+libreoffice
+# deja-dup: simple backup/restore GUI.
+deja-dup
+# gnome-logs: journal viewer for users who should not have to learn
+# journalctl before reporting a crash.
+gnome-logs
+# baobab: graphical disk-usage analyzer.
+baobab
+# seahorse: GUI for passwords, keys and gnome-keyring contents.
+seahorse
+# Font and symbol pickers expected on a normal desktop.
+gnome-font-viewer
+gnome-characters
+# cheese: simple webcam test/capture app; pairs with v4l-utils and
+# libcamera-tools below so webcam troubleshooting has a GUI path too.
+cheese
+# Clipboard history. copyq provides the GUI/history store; wl-clipboard
+# supplies Wayland-native command-line clipboard tooling for scripts.
+copyq
+wl-clipboard
+# Accessibility frontends. at-spi2-core below supplies the bus; Orca is
+# the actual screen reader, and brltty covers braille displays.
+orca
+brltty
 
 # --- P0 desktop plumbing (boot-into-usable-system essentials) ---
 #
