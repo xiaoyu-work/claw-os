@@ -7,14 +7,138 @@
 # $XDG_CONFIG_HOME/mimeapps.list, which takes priority.
 #
 # This file is dropped by rootfs/features/desktop (overlay) so that a
-# freshly-installed ClawOS already has a sane browser + mail client
-# wired up.
+# freshly-installed ClawOS has sane vendor defaults for the common
+# MIME types — web, mail, text, images, PDFs, archives, media — without
+# the user having to "Open With → Always" the first time they
+# encounter each file type.
 
 [Default Applications]
+
+# --- Web (Chromium) ---
 x-scheme-handler/http=chromium.desktop
 x-scheme-handler/https=chromium.desktop
 x-scheme-handler/about=chromium.desktop
 x-scheme-handler/unknown=chromium.desktop
 text/html=chromium.desktop
 application/xhtml+xml=chromium.desktop
+
+# --- Mail (Thunderbird) ---
 x-scheme-handler/mailto=thunderbird.desktop
+
+# --- Text (cosmic-edit) ---
+text/plain=com.clawos.Edit.desktop
+text/markdown=com.clawos.Edit.desktop
+text/x-markdown=com.clawos.Edit.desktop
+application/json=com.clawos.Edit.desktop
+application/x-yaml=com.clawos.Edit.desktop
+text/x-yaml=com.clawos.Edit.desktop
+text/x-shellscript=com.clawos.Edit.desktop
+text/x-python=com.clawos.Edit.desktop
+text/x-rust=com.clawos.Edit.desktop
+text/x-c=com.clawos.Edit.desktop
+text/x-c++src=com.clawos.Edit.desktop
+text/x-java=com.clawos.Edit.desktop
+text/x-go=com.clawos.Edit.desktop
+text/css=com.clawos.Edit.desktop
+text/javascript=com.clawos.Edit.desktop
+application/javascript=com.clawos.Edit.desktop
+application/xml=com.clawos.Edit.desktop
+text/xml=com.clawos.Edit.desktop
+application/toml=com.clawos.Edit.desktop
+
+# --- Images (eog / Eye of GNOME) ---
+image/jpeg=org.gnome.eog.desktop
+image/png=org.gnome.eog.desktop
+image/gif=org.gnome.eog.desktop
+image/webp=org.gnome.eog.desktop
+image/bmp=org.gnome.eog.desktop
+image/tiff=org.gnome.eog.desktop
+image/svg+xml=org.gnome.eog.desktop
+image/x-portable-pixmap=org.gnome.eog.desktop
+image/x-portable-graymap=org.gnome.eog.desktop
+image/x-portable-bitmap=org.gnome.eog.desktop
+image/x-portable-anymap=org.gnome.eog.desktop
+image/x-xbitmap=org.gnome.eog.desktop
+image/x-xpixmap=org.gnome.eog.desktop
+image/x-icon=org.gnome.eog.desktop
+image/vnd.microsoft.icon=org.gnome.eog.desktop
+
+# --- PDF / documents (evince) ---
+application/pdf=org.gnome.Evince.desktop
+application/x-pdf=org.gnome.Evince.desktop
+application/x-bzpdf=org.gnome.Evince.desktop
+application/x-gzpdf=org.gnome.Evince.desktop
+application/x-xzpdf=org.gnome.Evince.desktop
+application/postscript=org.gnome.Evince.desktop
+application/x-bzpostscript=org.gnome.Evince.desktop
+application/x-gzpostscript=org.gnome.Evince.desktop
+image/x-eps=org.gnome.Evince.desktop
+application/x-dvi=org.gnome.Evince.desktop
+application/x-bzdvi=org.gnome.Evince.desktop
+application/x-gzdvi=org.gnome.Evince.desktop
+image/vnd.djvu+multipage=org.gnome.Evince.desktop
+application/x-cbr=org.gnome.Evince.desktop
+application/x-cbz=org.gnome.Evince.desktop
+application/x-cb7=org.gnome.Evince.desktop
+application/x-cbt=org.gnome.Evince.desktop
+application/oxps=org.gnome.Evince.desktop
+application/vnd.ms-xpsdocument=org.gnome.Evince.desktop
+
+# --- Archives (file-roller) ---
+application/zip=org.gnome.FileRoller.desktop
+application/x-7z-compressed=org.gnome.FileRoller.desktop
+application/x-rar=org.gnome.FileRoller.desktop
+application/x-rar-compressed=org.gnome.FileRoller.desktop
+application/x-tar=org.gnome.FileRoller.desktop
+application/x-bzip-compressed-tar=org.gnome.FileRoller.desktop
+application/x-compressed-tar=org.gnome.FileRoller.desktop
+application/x-xz-compressed-tar=org.gnome.FileRoller.desktop
+application/x-lzma-compressed-tar=org.gnome.FileRoller.desktop
+application/gzip=org.gnome.FileRoller.desktop
+application/x-gzip=org.gnome.FileRoller.desktop
+application/x-bzip=org.gnome.FileRoller.desktop
+application/x-bzip2=org.gnome.FileRoller.desktop
+application/x-xz=org.gnome.FileRoller.desktop
+application/x-lzma=org.gnome.FileRoller.desktop
+application/x-lzip=org.gnome.FileRoller.desktop
+application/x-lzip-compressed-tar=org.gnome.FileRoller.desktop
+application/x-archive=org.gnome.FileRoller.desktop
+application/x-cpio=org.gnome.FileRoller.desktop
+application/x-iso9660-image=org.gnome.FileRoller.desktop
+application/vnd.android.package-archive=org.gnome.FileRoller.desktop
+application/vnd.debian.binary-package=org.gnome.FileRoller.desktop
+application/x-rpm=org.gnome.FileRoller.desktop
+application/java-archive=org.gnome.FileRoller.desktop
+application/x-deb=org.gnome.FileRoller.desktop
+
+# --- Audio / video (cosmic-player) ---
+audio/mpeg=com.clawos.Player.desktop
+audio/mp4=com.clawos.Player.desktop
+audio/x-m4a=com.clawos.Player.desktop
+audio/flac=com.clawos.Player.desktop
+audio/ogg=com.clawos.Player.desktop
+audio/vorbis=com.clawos.Player.desktop
+audio/x-vorbis=com.clawos.Player.desktop
+audio/x-vorbis+ogg=com.clawos.Player.desktop
+audio/x-wav=com.clawos.Player.desktop
+audio/wav=com.clawos.Player.desktop
+audio/x-opus+ogg=com.clawos.Player.desktop
+audio/aac=com.clawos.Player.desktop
+audio/x-aac=com.clawos.Player.desktop
+audio/x-aiff=com.clawos.Player.desktop
+audio/x-ape=com.clawos.Player.desktop
+audio/x-matroska=com.clawos.Player.desktop
+audio/webm=com.clawos.Player.desktop
+video/mp4=com.clawos.Player.desktop
+video/x-matroska=com.clawos.Player.desktop
+video/webm=com.clawos.Player.desktop
+video/mpeg=com.clawos.Player.desktop
+video/quicktime=com.clawos.Player.desktop
+video/x-msvideo=com.clawos.Player.desktop
+video/x-ms-wmv=com.clawos.Player.desktop
+video/x-flv=com.clawos.Player.desktop
+video/3gpp=com.clawos.Player.desktop
+video/ogg=com.clawos.Player.desktop
+
+# --- Folders (cosmic-files) ---
+inode/directory=com.clawos.Files.desktop

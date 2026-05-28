@@ -291,6 +291,48 @@ chromium
 # Bound to x-scheme-handler/mailto in overlay/etc/xdg/mimeapps.list.
 thunderbird
 
+# --- Default GUI utilities (round-out "normal desktop" baseline) ---
+# These fill the everyday-app gaps that COSMIC doesn't ship upstream
+# but every normal Linux desktop user expects to be present on first
+# boot. All Gtk4 / libadwaita so they sit visually next to the rest of
+# the desktop, all packaged in trixie, ~150 MB total.
+#
+# eog (Eye of GNOME): image viewer. Without it, double-clicking a
+# JPG/PNG/GIF/WEBP/BMP/TIFF/SVG in cosmic-files returns "no
+# application available". Bound to image/* in mimeapps.list.
+# Ships /usr/share/applications/org.gnome.eog.desktop.
+eog
+# evince: PDF / DjVu / PostScript / TIFF / comic-book reader. Bound
+# to application/pdf etc. in mimeapps.list. Ships
+# /usr/share/applications/org.gnome.Evince.desktop.
+evince
+# file-roller: archive manager with GUI extract / create flow for
+# zip / tar / gz / bz2 / xz / 7z / rar / iso etc. Also wires up
+# the org.gnome.ArchiveManager1 D-Bus service so file managers
+# (including cosmic-files via gvfs) can dispatch extraction calls
+# to it. Bound to the common archive MIME types in mimeapps.list.
+# Ships /usr/share/applications/org.gnome.FileRoller.desktop.
+file-roller
+# gnome-calculator: GUI calculator with basic / advanced /
+# financial / programming modes. Ships
+# /usr/share/applications/org.gnome.Calculator.desktop.
+gnome-calculator
+# gnome-system-monitor: GUI process / CPU / memory / network /
+# filesystem viewer — the "Task Manager" most users expect.
+# Ships /usr/share/applications/org.gnome.SystemMonitor.desktop.
+gnome-system-monitor
+# gnome-disk-utility: GUI for partitioning, formatting USB sticks,
+# SMART health, image mount / write. cosmic-files only mounts; this
+# is the only graphical path to formatting a stick. Ships
+# /usr/share/applications/org.gnome.DiskUtility.desktop. Also pulls
+# in udisks2 (already in the list above) as the privileged backend.
+gnome-disk-utility
+# sound-theme-freedesktop: provides the default XDG sound theme
+# (/usr/share/sounds/freedesktop/). Without it cosmic-osd volume
+# changes, notification arrivals and other libcanberra-driven
+# events are silent. Tiny (~700KB) and harmless to ship by default.
+sound-theme-freedesktop
+
 # --- Local document full-text search (apps/docs) ---
 # Recoll provides the Xapian-backed full-text index and the recollq /
 # recollindex / recoll CLIs. apps/docs wraps recollq + recollindex to
