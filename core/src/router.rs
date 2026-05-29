@@ -171,6 +171,14 @@ fn dispatch_app(args: &[String]) -> Result<Option<String>, String> {
         return install_cmd(&args[1..]);
     }
 
+    // Special: `cos app create <id> [--kind cli|desktop|both]` —
+    // scaffold a new app directory (app.json + entry stub) so a
+    // developer starts from a valid, ready-to-edit skeleton instead of
+    // hand-writing the manifest. Pure file generation; no AI gate.
+    if app_name == "create" {
+        return create_cmd(&args[1..]);
+    }
+
     // Special: `cos app consent <sub> [<name>] [...]` — review / grant /
     // revoke a user's explicit approval of an App's manifest AI policy.
     // Lives in the `app` namespace because it is an inherently per-app
@@ -646,8 +654,199 @@ fn install_cmd(args: &[String]) -> Result<Option<String>, String> {
     Ok(Some(envelope.to_string()))
 }
 
-/// Generate (or refresh) the freedesktop `.desktop` launcher for an
-/// app that declares a `desktop` surface.
+/// `cos app create <id> [--kind cli|desktop|both] [--dir <parent>]
+/// [--force]` — scaffold a new app from a template.
+///
+/// Generates `<parent>/<id>/` (parent defaults to the current dir)
+/// containing:
+///   * `app.json` — a valid manifest for the chosen surface kind. For
+///     `cli`/`both` it includes a sample `operations` entry; for
+///     `desktop`/`both` it includes a `desktop` block so `cos app
+///     install` will emit a launcher.
+///   * `main.py` — a Python entry exposing `run(command, args)`. When a
+///     desktop surface is requested the stub branches on
+///     `gui.is_gui_launch()` to enter a GUI loop vs. handle an op.
+///
+/// The generated `app.json` is parsed back through
+/// `Manifest::from_json` + `validate()` before anything is written, so
+/// the scaffold can never produce a manifest the kernel would reject.
+fn create_cmd(args: &[String]) -> Result<Option<String>, String> {
+    let id = args
+        .iter()
+        .find(|a| !a.starts_with("--"))
+        .cloned()
+        .ok_or_else(|| {
+            "usage: cos app create <id> [--kind cli|desktop|both] [--dir <parent>] [--force]"
+                .to_string()
+        })?;
+    if !is_scaffold_id(&id) {
+        return Err(format!(
+            "invalid app id `{id}`: must match [a-z][a-z0-9_-]*"
+        ));
+    }
+
+    let kind = flag_value(args, "--kind").unwrap_or_else(|| "cli".to_string());
+    let (want_ops, want_desktop) = match kind.as_str() {
+        "cli" => (true, false),
+        "desktop" => (false, true),
+        "both" => (true, true),
+        other => {
+            return Err(format!(
+                "unknown --kind `{other}`: expected cli, desktop, or both"
+            ));
+        }
+    };
+    let force = args.iter().any(|a| a == "--force");
+    let parent = flag_value(args, "--dir")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let dest = parent.join(&id);
+
+    if dest.exists() {
+        if !force {
+            return Err(format!(
+                "destination `{}` already exists. Re-run with --force to overwrite.",
+                dest.display()
+            ));
+        }
+        std::fs::remove_dir_all(&dest)
+            .map_err(|e| format!("remove existing {}: {e}", dest.display()))?;
+    }
+
+    let manifest_body = scaffold_app_json(&id, want_ops, want_desktop);
+    // Fail before writing if the template wouldn't parse/validate.
+    let manifest = apps::AppManifest::from_json(&manifest_body)
+        .map_err(|e| format!("internal: generated manifest is invalid: {e}"))?;
+    manifest
+        .validate()
+        .map_err(|e| format!("internal: generated manifest failed validation: {e}"))?;
+    let entry_body = scaffold_main_py(&id, want_ops, want_desktop);
+
+    std::fs::create_dir_all(&dest)
+        .map_err(|e| format!("create {}: {e}", dest.display()))?;
+    let manifest_path = dest.join("app.json");
+    std::fs::write(&manifest_path, &manifest_body)
+        .map_err(|e| format!("write {}: {e}", manifest_path.display()))?;
+    let entry_path = dest.join("main.py");
+    std::fs::write(&entry_path, &entry_body)
+        .map_err(|e| format!("write {}: {e}", entry_path.display()))?;
+
+    let envelope = json!({
+        "app": id,
+        "created": true,
+        "kind": kind,
+        "dir": dest.display().to_string(),
+        "files": [
+            manifest_path.display().to_string(),
+            entry_path.display().to_string(),
+        ],
+        "next": format!("Edit the stubs, then run `cos app install {}`.", dest.display()),
+    });
+    Ok(Some(envelope.to_string()))
+}
+
+/// Read the value following a `--flag` in an argv slice, if present.
+fn flag_value(args: &[String], flag: &str) -> Option<String> {
+    args.iter()
+        .position(|a| a == flag)
+        .and_then(|i| args.get(i + 1))
+        .cloned()
+}
+
+/// Same id rule the manifest validator enforces (`[a-z][a-z0-9_-]*`),
+/// applied up front so we don't scaffold a tree the kernel rejects.
+fn is_scaffold_id(s: &str) -> bool {
+    let mut bytes = s.bytes();
+    match bytes.next() {
+        Some(b) if b.is_ascii_lowercase() => {}
+        _ => return false,
+    }
+    bytes.all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+}
+
+/// Build a valid `app.json` for the requested surfaces. Kept as a
+/// literal template (rather than serializing structs) so the output is
+/// human-friendly and easy for the developer to extend.
+fn scaffold_app_json(id: &str, want_ops: bool, want_desktop: bool) -> String {
+    let mut blocks: Vec<String> = Vec::new();
+    blocks.push(format!("  \"id\": \"{id}\""));
+    blocks.push("  \"version\": \"0.1.0\"".to_string());
+    blocks.push(format!("  \"name\": {{ \"en\": \"{id}\" }}"));
+    blocks.push(format!(
+        "  \"summary\": {{ \"en\": \"{id} — a Claw OS app.\" }}"
+    ));
+    blocks.push("  \"runtime\": \"python\"".to_string());
+    blocks.push("  \"entry\": \"main.py\"".to_string());
+
+    if want_ops {
+        blocks.push(
+            r#"  "operations": {
+    "greet": {
+      "label": { "en": "Print a friendly greeting (--name)" },
+      "args": [
+        { "name": "--name", "kind": "text", "required": false }
+      ],
+      "needs": []
+    }
+  }"#
+            .to_string(),
+        );
+    }
+
+    if want_desktop {
+        blocks.push(
+            r#"  "desktop": {
+    "exec": "--gui",
+    "categories": ["Utility"],
+    "single_instance": true
+  }"#
+            .to_string(),
+        );
+    }
+
+    format!("{{\n{}\n}}\n", blocks.join(",\n"))
+}
+
+/// Build a `main.py` entry stub exposing `run(command, args)`. When a
+/// desktop surface is requested the stub branches on the GUI launch
+/// signal so the same entry serves both the headless op and the window.
+fn scaffold_main_py(id: &str, want_ops: bool, want_desktop: bool) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("\"\"\"{id} — a Claw OS app.\n\n"));
+    out.push_str("The kernel calls run(command, args) for each invocation.\n");
+    out.push_str("\"\"\"\n\n");
+
+    if want_desktop {
+        out.push_str("from claw_os_sdk import gui\n\n\n");
+        out.push_str("def run_gui(ctx):\n");
+        out.push_str("    \"\"\"Draw your own window here (any toolkit). World A:\n");
+        out.push_str("    the OS does not own the UI. Use ctx.files for any file\n");
+        out.push_str("    arguments, and ctx.open_agent_overlay() to summon Claw.\n");
+        out.push_str("    \"\"\"\n");
+        out.push_str("    print(f\"[{ctx.app_id}] GUI launch; files={ctx.files}\")\n\n\n");
+    }
+
+    if want_ops {
+        out.push_str("def greet(args):\n");
+        out.push_str("    name = args.get(\"--name\", \"world\")\n");
+        out.push_str("    return {\"message\": f\"Hello, {name}!\"}\n\n\n");
+    }
+
+    out.push_str("def run(command, args):\n");
+    out.push_str("    \"\"\"Entry point called by cos.\"\"\"\n");
+    if want_desktop {
+        out.push_str("    if gui.is_gui_launch(command):\n");
+        out.push_str("        return run_gui(gui.context())\n");
+    }
+    if want_ops {
+        out.push_str("    if command == \"greet\":\n");
+        out.push_str("        return greet(args)\n");
+    }
+    out.push_str("    return {\"error\": f\"unknown command: {command}\"}\n");
+    out
+}
+
+
 ///
 /// Writes `<applications_dir>/com.clawos.<Id>.desktop` with
 /// `Exec=cos app <id> <exec> [%F]`. Routing the launch through
@@ -1049,7 +1248,7 @@ fn show_apps(
     let output = json!({
         "apps": app_list,
         "total": app_list.len(),
-        "hint": "Run: cos app <name> for app details, cos app <name> <command> [args] to execute. Install an App with: cos app install <source-dir>",
+        "hint": "Run: cos app <name> for app details, cos app <name> <command> [args] to execute. Scaffold a new App with: cos app create <id> [--kind cli|desktop|both]. Install an App with: cos app install <source-dir>",
     });
     Ok(Some(output.to_string()))
 }
@@ -2766,6 +2965,135 @@ mod tests {
     fn install_rejects_non_directory_source() {
         let err = install_cmd(&["/dev/null".into()]).unwrap_err();
         assert!(err.contains("not a directory"), "got: {err}");
+    }
+
+    #[test]
+    fn create_scaffolds_cli_app_without_desktop() {
+        let pid = std::process::id();
+        let parent = std::env::temp_dir().join(format!("cos-create-cli-{pid}"));
+        let _ = std::fs::remove_dir_all(&parent);
+        std::fs::create_dir_all(&parent).unwrap();
+
+        let v = parse(
+            create_cmd(&[
+                "mycli".into(),
+                "--dir".into(),
+                parent.display().to_string(),
+            ])
+            .unwrap(),
+        );
+        assert_eq!(v["created"], true);
+        assert_eq!(v["kind"], "cli");
+
+        let app_dir = parent.join("mycli");
+        let manifest = std::fs::read_to_string(app_dir.join("app.json")).unwrap();
+        // The generated manifest must parse + validate exactly as the
+        // kernel would at discover/install time.
+        let parsed = apps::AppManifest::from_json(&manifest).unwrap();
+        parsed.validate().unwrap();
+        assert!(parsed.operations.contains_key("greet"));
+        assert!(parsed.desktop.is_none(), "cli kind must omit desktop");
+
+        let entry = std::fs::read_to_string(app_dir.join("main.py")).unwrap();
+        assert!(entry.contains("def run(command, args):"));
+        assert!(!entry.contains("is_gui_launch"), "cli stub has no GUI branch");
+
+        let _ = std::fs::remove_dir_all(&parent);
+    }
+
+    #[test]
+    fn create_scaffolds_both_surfaces() {
+        let pid = std::process::id();
+        let parent = std::env::temp_dir().join(format!("cos-create-both-{pid}"));
+        let _ = std::fs::remove_dir_all(&parent);
+        std::fs::create_dir_all(&parent).unwrap();
+
+        let v = parse(
+            create_cmd(&[
+                "notes".into(),
+                "--kind".into(),
+                "both".into(),
+                "--dir".into(),
+                parent.display().to_string(),
+            ])
+            .unwrap(),
+        );
+        assert_eq!(v["kind"], "both");
+
+        let app_dir = parent.join("notes");
+        let parsed =
+            apps::AppManifest::from_json(&std::fs::read_to_string(app_dir.join("app.json")).unwrap())
+                .unwrap();
+        parsed.validate().unwrap();
+        assert!(parsed.operations.contains_key("greet"));
+        assert!(parsed.desktop.is_some(), "both kind must include desktop");
+
+        let entry = std::fs::read_to_string(app_dir.join("main.py")).unwrap();
+        assert!(entry.contains("gui.is_gui_launch(command)"));
+        assert!(entry.contains("from claw_os_sdk import gui"));
+
+        let _ = std::fs::remove_dir_all(&parent);
+    }
+
+    #[test]
+    fn create_desktop_kind_is_gui_only() {
+        let pid = std::process::id();
+        let parent = std::env::temp_dir().join(format!("cos-create-desktop-{pid}"));
+        let _ = std::fs::remove_dir_all(&parent);
+        std::fs::create_dir_all(&parent).unwrap();
+
+        create_cmd(&[
+            "viewer".into(),
+            "--kind".into(),
+            "desktop".into(),
+            "--dir".into(),
+            parent.display().to_string(),
+        ])
+        .unwrap();
+
+        let parsed = apps::AppManifest::from_json(
+            &std::fs::read_to_string(parent.join("viewer").join("app.json")).unwrap(),
+        )
+        .unwrap();
+        parsed.validate().unwrap();
+        assert!(parsed.operations.is_empty(), "desktop kind has no operations");
+        assert!(parsed.desktop.is_some());
+
+        let _ = std::fs::remove_dir_all(&parent);
+    }
+
+    #[test]
+    fn create_rejects_invalid_id() {
+        let err = create_cmd(&["Bad-ID".into()]).unwrap_err();
+        assert!(err.contains("invalid app id"), "got: {err}");
+    }
+
+    #[test]
+    fn create_rejects_unknown_kind() {
+        let err = create_cmd(&["x".into(), "--kind".into(), "wat".into()]).unwrap_err();
+        assert!(err.contains("unknown --kind"), "got: {err}");
+    }
+
+    #[test]
+    fn create_requires_id() {
+        let err = create_cmd(&[]).unwrap_err();
+        assert!(err.contains("usage:"), "got: {err}");
+    }
+
+    #[test]
+    fn create_refuses_existing_dir_without_force() {
+        let pid = std::process::id();
+        let parent = std::env::temp_dir().join(format!("cos-create-exists-{pid}"));
+        let _ = std::fs::remove_dir_all(&parent);
+        std::fs::create_dir_all(parent.join("dup")).unwrap();
+        let err = create_cmd(&[
+            "dup".into(),
+            "--dir".into(),
+            parent.display().to_string(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("already exists"), "got: {err}");
+        let _ = std::fs::remove_dir_all(&parent);
     }
 
     #[test]
