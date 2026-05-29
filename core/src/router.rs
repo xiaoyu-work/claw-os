@@ -26,6 +26,16 @@ fn apps_dir() -> PathBuf {
     PathBuf::from(env::var("COS_APPS_DIR").unwrap_or_else(|_| "/usr/lib/cos/apps".into()))
 }
 
+/// Directory where freedesktop `.desktop` launchers are written at
+/// `cos app install`. Overridable via `COS_APPLICATIONS_DIR` (used by
+/// tests and per-user installs); defaults to the system location the
+/// desktop shell's applibrary/launcher already scan.
+fn applications_dir() -> PathBuf {
+    PathBuf::from(
+        env::var("COS_APPLICATIONS_DIR").unwrap_or_else(|_| "/usr/share/applications".into()),
+    )
+}
+
 fn data_dir() -> String {
     crate::paths::data_dir().to_string_lossy().into_owned()
 }
@@ -184,6 +194,20 @@ fn dispatch_app(args: &[String]) -> Result<Option<String>, String> {
     // cos app <name> --schema → show all command schemas for this app
     if args.len() == 2 && args[1] == "--schema" {
         return show_app_schema(app_name, &discovered[app_name.as_str()]);
+    }
+
+    // cos app <name> <desktop.exec> [files...] → launch the GUI surface.
+    // Only apps that declare a `desktop` block respond to this; the
+    // generated `.desktop` invokes exactly this path so the GUI process
+    // is kernel-spawned (identity/audit/consent apply).
+    {
+        let app = &discovered[app_name.as_str()];
+        if let Some(desktop) = app.manifest.desktop.as_ref() {
+            if args.len() >= 2 && args[1] == desktop.exec {
+                let files: Vec<String> = args[2..].to_vec();
+                return launch_app_gui(app_name, desktop.exec.as_str(), &files, app);
+            }
+        }
     }
 
     let command = &args[1];
@@ -549,6 +573,23 @@ fn install_cmd(args: &[String]) -> Result<Option<String>, String> {
         "in_place": same_path,
     });
 
+    // If the app declares a `desktop` surface, emit a freedesktop
+    // launcher so it appears in the applibrary/launcher. The launcher's
+    // Exec routes through `cos app <id> <exec>` so the GUI process is
+    // kernel-spawned and inherits the app's identity/audit/consent.
+    match write_desktop_entry(&manifest) {
+        Ok(Some(path)) => {
+            envelope["desktop"] = json!({ "generated": true, "path": path });
+        }
+        Ok(None) => {}
+        Err(e) => {
+            // Non-fatal: the app is installed and usable headlessly even
+            // if the launcher couldn't be written (e.g. unwritable
+            // /usr/share/applications). Surface the reason for the operator.
+            envelope["desktop"] = json!({ "generated": false, "error": e });
+        }
+    }
+
     let needs_consent = manifest.ai.is_some();
     if !needs_consent {
         envelope["consent"] = json!({
@@ -603,6 +644,89 @@ fn install_cmd(args: &[String]) -> Result<Option<String>, String> {
         "path": consent::consent_path(&manifest.id).display().to_string(),
     });
     Ok(Some(envelope.to_string()))
+}
+
+/// Generate (or refresh) the freedesktop `.desktop` launcher for an
+/// app that declares a `desktop` surface.
+///
+/// Writes `<applications_dir>/com.clawos.<Id>.desktop` with
+/// `Exec=cos app <id> <exec> [%F]`. Routing the launch through
+/// `cos app <id> ...` (rather than exec-ing the app binary) is what
+/// makes the GUI process kernel-spawned, so `COS_APP_ID` identity,
+/// audit, and consent apply exactly as on the headless path.
+///
+/// Returns `Ok(None)` if the app has no `desktop` block. Best-effort
+/// runs `update-desktop-database` afterwards; failure there is ignored
+/// (the entry is still valid).
+fn write_desktop_entry(manifest: &apps::AppManifest) -> Result<Option<String>, String> {
+    let Some(desktop) = manifest.desktop.as_ref() else {
+        return Ok(None);
+    };
+
+    let id = &manifest.id;
+    let name = desktop
+        .name
+        .as_ref()
+        .map(|n| n.en_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| manifest.name.en_str());
+    let icon = desktop
+        .icon
+        .as_deref()
+        .or(manifest.icon.as_deref())
+        .unwrap_or(id);
+
+    // Field code: only request file arguments when the app declares
+    // MIME associations, otherwise launch with no arguments.
+    let exec_line = if desktop.mime_types.is_empty() {
+        format!("cos app {id} {} ", desktop.exec)
+    } else {
+        format!("cos app {id} {} %F", desktop.exec)
+    };
+    let exec_line = exec_line.trim_end().to_string();
+
+    // Categories: always tag ClawOS, then the app's own (validated to
+    // contain no ';' or control chars at manifest parse time).
+    let mut cats = vec!["ClawOS".to_string()];
+    cats.extend(desktop.categories.iter().cloned());
+
+    let mut entry = String::new();
+    entry.push_str("[Desktop Entry]\n");
+    entry.push_str("Type=Application\n");
+    entry.push_str("Version=1.0\n");
+    entry.push_str(&format!("Name={name}\n"));
+    if !manifest.summary.en_str().is_empty() {
+        entry.push_str(&format!("Comment={}\n", manifest.summary.en_str()));
+    }
+    entry.push_str(&format!("Exec={exec_line}\n"));
+    entry.push_str(&format!("Icon={icon}\n"));
+    entry.push_str("Terminal=false\n");
+    entry.push_str(&format!("Categories={};\n", cats.join(";")));
+    if !desktop.mime_types.is_empty() {
+        entry.push_str(&format!("MimeType={};\n", desktop.mime_types.join(";")));
+    }
+    if desktop.single_instance {
+        entry.push_str("SingleMainWindow=true\n");
+    }
+    // Provenance marker so the launcher / audit tooling can tell a
+    // Claw OS app entry from an ordinary system .desktop.
+    entry.push_str(&format!("X-CLAW-App-Id={id}\n"));
+
+    let dir = applications_dir();
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("create {}: {e}", dir.display()))?;
+    let file = dir.join(format!("com.clawos.{id}.desktop"));
+    std::fs::write(&file, entry).map_err(|e| format!("write {}: {e}", file.display()))?;
+
+    // Refresh the MIME/desktop cache so associations take effect without
+    // a relogin. Best-effort: a missing tool or read-only cache is fine.
+    let _ = std::process::Command::new("update-desktop-database")
+        .arg(&dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+
+    Ok(Some(file.display().to_string()))
 }
 
 /// Plain recursive directory copy. **Symlinks are rejected** with an
@@ -1016,6 +1140,35 @@ fn run_app_command(
             } else {
                 Err(e)
             }
+        }
+    }
+}
+
+/// `cos app <name> <desktop.exec> [files...]` — launch an app's desktop
+/// GUI surface. The GUI itself is "World A" (the app draws its own
+/// window in any toolkit), so this does **not** require `agent.invoke`;
+/// the kernel only interposes when the app later exercises a declared
+/// capability verb. We still audit the launch and route through the
+/// bridge so the process is kernel-spawned with `COS_APP_ID` set.
+fn launch_app_gui(
+    app_name: &str,
+    exec: &str,
+    files: &[String],
+    app: &apps::App,
+) -> Result<Option<String>, String> {
+    let start = Instant::now();
+    let audit = audit_path();
+    let data = data_dir();
+    let apps = apps_dir().to_string_lossy().to_string();
+
+    match bridge::launch_gui(&app.dir, exec, files, &data, &apps) {
+        Ok(()) => {
+            audit::log_entry(&audit, app_name, exec, files, start, "ok", None);
+            Ok(None)
+        }
+        Err(e) => {
+            audit::log_entry(&audit, app_name, exec, files, start, "error", Some(&e));
+            Err(e)
         }
     }
 }
@@ -2448,6 +2601,7 @@ mod tests {
                 tools: Vec::new(),
             }),
             session: None,
+            desktop: None,
             dependencies: serde_json::Value::Null,
         };
         let mut discovered = std::collections::BTreeMap::new();
@@ -2506,6 +2660,100 @@ mod tests {
             format!("# stub for {id}\n"),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn install_generates_desktop_entry_for_gui_app() {
+        let pid = std::process::id();
+        let src = std::env::temp_dir().join(format!("cos-install-gui-src-{pid}"));
+        let dst = std::env::temp_dir().join(format!("cos-install-gui-dst-{pid}"));
+        let apps_share = std::env::temp_dir().join(format!("cos-install-gui-apps-{pid}"));
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
+        let _ = std::fs::remove_dir_all(&apps_share);
+        write_min_app(
+            &src,
+            "notes",
+            r#"{
+              "id": "notes",
+              "version": "0.0.1",
+              "name": "Notes",
+              "desktop": {
+                "icon": "notes",
+                "categories": ["Utility"],
+                "mime_types": ["text/markdown"]
+              }
+            }"#,
+        );
+
+        let prev_apps = std::env::var_os("COS_APPS_DIR");
+        let prev_share = std::env::var_os("COS_APPLICATIONS_DIR");
+        std::env::set_var("COS_APPS_DIR", &dst);
+        std::env::set_var("COS_APPLICATIONS_DIR", &apps_share);
+        let v = parse(install_cmd(&[src.display().to_string()]).unwrap());
+        match prev_apps {
+            Some(x) => std::env::set_var("COS_APPS_DIR", x),
+            None => std::env::remove_var("COS_APPS_DIR"),
+        }
+        match prev_share {
+            Some(x) => std::env::set_var("COS_APPLICATIONS_DIR", x),
+            None => std::env::remove_var("COS_APPLICATIONS_DIR"),
+        }
+
+        assert_eq!(v["installed"], true);
+        assert_eq!(v["desktop"]["generated"], true);
+        let entry = apps_share.join("com.clawos.notes.desktop");
+        assert!(entry.is_file(), "expected {} to exist", entry.display());
+        let body = std::fs::read_to_string(&entry).unwrap();
+        assert!(
+            body.contains("Exec=cos app notes --gui %F"),
+            "Exec must route through `cos app`; got:\n{body}"
+        );
+        assert!(body.contains("Categories=ClawOS;Utility;"), "got:\n{body}");
+        assert!(body.contains("MimeType=text/markdown;"), "got:\n{body}");
+        assert!(body.contains("X-CLAW-App-Id=notes"), "got:\n{body}");
+
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
+        let _ = std::fs::remove_dir_all(&apps_share);
+    }
+
+    #[test]
+    fn install_skips_desktop_entry_for_headless_app() {
+        let pid = std::process::id();
+        let src = std::env::temp_dir().join(format!("cos-install-headless-src-{pid}"));
+        let dst = std::env::temp_dir().join(format!("cos-install-headless-dst-{pid}"));
+        let apps_share = std::env::temp_dir().join(format!("cos-install-headless-apps-{pid}"));
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
+        let _ = std::fs::remove_dir_all(&apps_share);
+        write_min_app(
+            &src,
+            "calc",
+            r#"{"id":"calc","version":"0.0.1","name":"Calc"}"#,
+        );
+
+        let prev_apps = std::env::var_os("COS_APPS_DIR");
+        let prev_share = std::env::var_os("COS_APPLICATIONS_DIR");
+        std::env::set_var("COS_APPS_DIR", &dst);
+        std::env::set_var("COS_APPLICATIONS_DIR", &apps_share);
+        let v = parse(install_cmd(&[src.display().to_string()]).unwrap());
+        match prev_apps {
+            Some(x) => std::env::set_var("COS_APPS_DIR", x),
+            None => std::env::remove_var("COS_APPS_DIR"),
+        }
+        match prev_share {
+            Some(x) => std::env::set_var("COS_APPLICATIONS_DIR", x),
+            None => std::env::remove_var("COS_APPLICATIONS_DIR"),
+        }
+
+        assert_eq!(v["installed"], true);
+        assert!(v.get("desktop").is_none(), "headless app must not emit a launcher");
+        assert!(!apps_share.join("com.clawos.calc.desktop").exists());
+
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
+        let _ = std::fs::remove_dir_all(&apps_share);
     }
 
     #[test]

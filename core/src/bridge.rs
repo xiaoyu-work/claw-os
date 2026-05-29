@@ -3,27 +3,21 @@ use std::process::{Command, Stdio};
 
 use crate::caps::manifest::Runtime;
 
-/// Run a Python app's main.py via subprocess.
+/// Build the Python launcher script shared by [`run_python_app`] (one-
+/// shot operations) and [`launch_gui`] (long-lived desktop surface).
 ///
-/// Spawns `python3 <app_dir>/main.py` with the command and args passed
-/// via a JSON payload on stdin. The app writes JSON to stdout.
-///
-/// Returns the raw JSON string from stdout, or an error.
-pub fn run_python_app(
-    app_dir: &Path,
+/// The script makes the `claw_os_sdk` + `cos_runtime` packages
+/// importable, loads the app's `main.py`, and calls `run(command,
+/// args)`. The GUI path passes the manifest's `desktop.exec` value as
+/// `command`; an op invocation passes the operation name.
+fn python_wrapper(
+    main_py: &Path,
     command: &str,
     args: &[String],
     data_dir: &str,
     apps_dir: &str,
-) -> Result<Option<String>, String> {
-    let main_py = app_dir.join("main.py");
-    if !main_py.is_file() {
-        return Err(format!("app has no main.py at {}", main_py.display()));
-    }
-
-    // Build a small Python wrapper that imports main.py and calls run().
-    // This avoids modifying the Python apps — they keep their existing interface.
-    let wrapper = format!(
+) -> Result<String, String> {
+    Ok(format!(
         r#"
 import importlib.util, json, sys, os
 os.environ.setdefault("COS_DATA_DIR", {data_dir})
@@ -75,7 +69,28 @@ if result is not None:
         command = serde_json::to_string(command)
             .map_err(|e| format!("failed to serialize command: {e}"))?,
         args = serde_json::to_string(args).map_err(|e| format!("failed to serialize args: {e}"))?,
-    );
+    ))
+}
+
+/// Run a Python app's main.py via subprocess.
+///
+/// Spawns `python3 <app_dir>/main.py` with the command and args passed
+/// via a JSON payload on stdin. The app writes JSON to stdout.
+///
+/// Returns the raw JSON string from stdout, or an error.
+pub fn run_python_app(
+    app_dir: &Path,
+    command: &str,
+    args: &[String],
+    data_dir: &str,
+    apps_dir: &str,
+) -> Result<Option<String>, String> {
+    let main_py = app_dir.join("main.py");
+    if !main_py.is_file() {
+        return Err(format!("app has no main.py at {}", main_py.display()));
+    }
+
+    let wrapper = python_wrapper(&main_py, command, args, data_dir, apps_dir)?;
 
     let python = if cfg!(windows) { "python" } else { "python3" };
 
@@ -294,6 +309,120 @@ pub fn run_app(
         Ok(None)
     } else {
         Ok(Some(trimmed.to_string()))
+    }
+}
+
+/// Launch an app's **desktop GUI surface**.
+///
+/// Unlike [`run_app`] (one-shot, stdout captured as a JSON envelope),
+/// this is a long-lived foreground launch: the app entry is spawned
+/// with `COS_APP_GUI=1`, given the manifest's `desktop.exec` value
+/// (default `--gui`) as its `COS_COMMAND`, inherits the parent's stdio,
+/// and runs its own event loop until the window closes.
+///
+/// Identity (`COS_APP_ID`) is set exactly as for the headless path, so
+/// audit / consent / policy enforcement apply unchanged. This is the
+/// reason the generated `.desktop` routes through `cos app <id> --gui`
+/// instead of exec-ing the app binary directly.
+///
+/// `exec` is the command the entry receives (the manifest's
+/// `desktop.exec`); `files` are the file paths passed by the launcher
+/// (`%F`). Returns once the GUI process exits.
+pub fn launch_gui(
+    app_dir: &Path,
+    exec: &str,
+    files: &[String],
+    data_dir: &str,
+    apps_dir: &str,
+) -> Result<(), String> {
+    let manifest_path = app_dir.join("app.json");
+    let (runtime, entry) = if manifest_path.is_file() {
+        let body = std::fs::read_to_string(&manifest_path)
+            .map_err(|e| format!("read {}: {}", manifest_path.display(), e))?;
+        let manifest = crate::apps::AppManifest::from_json(&body)
+            .map_err(|e| format!("parse {}: {}", manifest_path.display(), e))?;
+        let rt = manifest.runtime;
+        let entry = manifest
+            .entry
+            .unwrap_or_else(|| rt.default_entry().to_string());
+        (rt, entry)
+    } else {
+        (Runtime::Python, Runtime::Python.default_entry().to_string())
+    };
+
+    let app_id = app_dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string();
+
+    let mut cmd = if matches!(runtime, Runtime::Python) {
+        let main_py = app_dir.join("main.py");
+        if !main_py.is_file() {
+            return Err(format!("app has no main.py at {}", main_py.display()));
+        }
+        let wrapper = python_wrapper(&main_py, exec, files, data_dir, apps_dir)?;
+        let python = if cfg!(windows) { "python" } else { "python3" };
+        let mut c = Command::new(python);
+        c.arg("-c").arg(wrapper);
+        c
+    } else {
+        let entry_path = app_dir.join(&entry);
+        if !entry_path.is_file() {
+            return Err(format!("app entry not found: {}", entry_path.display()));
+        }
+        match runtime {
+            Runtime::Node => {
+                let mut c = Command::new("node");
+                c.arg(&entry_path);
+                c
+            }
+            Runtime::Shell => {
+                if cfg!(windows) {
+                    let mut c = Command::new("cmd");
+                    c.arg("/c").arg(&entry_path);
+                    c
+                } else {
+                    let mut c = Command::new("bash");
+                    c.arg(&entry_path);
+                    c
+                }
+            }
+            Runtime::Binary => Command::new(&entry_path),
+            Runtime::Python => unreachable!("python handled above"),
+        }
+    };
+
+    let args_json =
+        serde_json::to_string(files).map_err(|e| format!("failed to serialize files: {e}"))?;
+
+    // A GUI draws on Wayland/X, not stdout. Inherit the parent's stdio
+    // so the app's own logging is visible and so it stays attached as a
+    // long-lived foreground process until the window is closed.
+    let status = cmd
+        .stdin(Stdio::null())
+        .env("COS_APP_ID", &app_id)
+        .env("COS_APP_GUI", "1")
+        .env("COS_COMMAND", exec)
+        .env("COS_ARGS_JSON", &args_json)
+        .env("COS_DATA_DIR", data_dir)
+        .env("COS_APPS_DIR", apps_dir)
+        .env("DEBIAN_FRONTEND", "noninteractive")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("PAGER", "cat")
+        .env("GIT_PAGER", "cat")
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .envs(crate::config::as_env_vars())
+        .status()
+        .map_err(|e| format!("failed to launch {runtime:?} GUI: {e}"))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "GUI `{app_id}` exited with code {}",
+            status.code().unwrap_or(-1)
+        ))
     }
 }
 

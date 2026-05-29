@@ -129,6 +129,16 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<Session>,
 
+    /// Optional desktop GUI surface. Presence of this block is the
+    /// single signal that the app wants a graphical entry: at
+    /// `cos app install` the kernel emits a
+    /// `/usr/share/applications/com.clawos.<Id>.desktop` launcher whose
+    /// `Exec` routes through `cos app <id> <exec>` so the GUI process is
+    /// kernel-spawned (identity/audit/consent apply exactly as they do
+    /// for the headless path). Absent means the app is CLI/agent-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desktop: Option<Desktop>,
+
     /// Free-form dependency declarations. Preserved for forward
     /// compatibility — the bridge's package resolver consumes this.
     #[serde(default)]
@@ -435,6 +445,63 @@ pub struct SessionTool {
 }
 
 // ---------------------------------------------------------------------------
+// Desktop GUI surface
+// ---------------------------------------------------------------------------
+
+/// Desktop GUI surface for an app.
+///
+/// Declaring this block is the single lever a developer uses to say "I
+/// want a graphical entry". It does **not** wrap a UI toolkit — the app
+/// draws its own window in whatever toolkit/language it likes ("World
+/// A"). The block only drives `.desktop` launcher generation at install
+/// time and the kernel's long-lived `--gui` launch path.
+///
+/// The generated launcher's `Exec` is
+/// `cos app <id> <exec> %F`, so the GUI is kernel-spawned and inherits
+/// the same `COS_APP_ID` identity, audit, and consent machinery as the
+/// headless operation path. A hand-written `.desktop` that ran the app
+/// binary directly would bypass that — hence generation is mandatory.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Desktop {
+    /// Argument the kernel passes to the app entry when launched from
+    /// the desktop. Defaults to `--gui`. The app's entry inspects this
+    /// (or the `COS_APP_GUI=1` env the bridge sets) to enter its GUI
+    /// event loop instead of running a one-shot operation.
+    #[serde(default = "default_desktop_exec")]
+    pub exec: String,
+
+    /// Display name for the launcher entry. Falls back to the
+    /// manifest's top-level `name` when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<LocalizedText>,
+
+    /// Icon name (freedesktop icon-theme lookup) or absolute path.
+    /// Falls back to the manifest's top-level `icon`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+
+    /// Freedesktop menu categories. `ClawOS` is prepended automatically
+    /// at generation time, so apps only list their own (`Utility`,
+    /// `Development`, ...).
+    #[serde(default)]
+    pub categories: Vec<String>,
+
+    /// MIME types this app can open, surfaced as file associations in
+    /// the generated launcher.
+    #[serde(default)]
+    pub mime_types: Vec<String>,
+
+    /// Whether the launcher should reuse a running instance instead of
+    /// spawning a second process. Surfaced as `SingleMainWindow=true`.
+    #[serde(default)]
+    pub single_instance: bool,
+}
+
+fn default_desktop_exec() -> String {
+    "--gui".to_string()
+}
+
+// ---------------------------------------------------------------------------
 // Capability needs
 // ---------------------------------------------------------------------------
 
@@ -577,6 +644,11 @@ pub enum ManifestError {
         tool: String,
         idx: usize,
         verb: String,
+    },
+    #[error("manifest `desktop` block: {field}: {detail}")]
+    DesktopInvalid {
+        field: &'static str,
+        detail: String,
     },
 }
 
@@ -796,10 +868,59 @@ impl Manifest {
                 }
             }
         }
+
+        if let Some(desktop) = &self.desktop {
+            if let Some(name) = &desktop.name {
+                name.validate().map_err(|d| ManifestError::DesktopInvalid {
+                    field: "name",
+                    detail: d,
+                })?;
+            }
+            // `exec` and `icon` land verbatim on `.desktop` lines, so
+            // reject control characters (newlines especially — they
+            // could inject extra desktop-entry keys).
+            if desktop.exec.trim().is_empty() {
+                return Err(ManifestError::DesktopInvalid {
+                    field: "exec",
+                    detail: "must not be empty".into(),
+                });
+            }
+            if desktop.exec.chars().any(|c| c.is_control()) {
+                return Err(ManifestError::DesktopInvalid {
+                    field: "exec",
+                    detail: "must not contain control characters".into(),
+                });
+            }
+            if let Some(icon) = &desktop.icon {
+                if icon.chars().any(|c| c.is_control()) {
+                    return Err(ManifestError::DesktopInvalid {
+                        field: "icon",
+                        detail: "must not contain control characters".into(),
+                    });
+                }
+            }
+            // `;` is the freedesktop list separator; a value containing
+            // it (or a control char) would corrupt the generated file.
+            for cat in &desktop.categories {
+                if cat.is_empty() || cat.contains(';') || cat.chars().any(|c| c.is_control())
+                {
+                    return Err(ManifestError::DesktopInvalid {
+                        field: "categories",
+                        detail: format!("invalid category `{cat}`"),
+                    });
+                }
+            }
+            for mt in &desktop.mime_types {
+                if mt.is_empty() || mt.contains(';') || mt.chars().any(|c| c.is_control()) {
+                    return Err(ManifestError::DesktopInvalid {
+                        field: "mime_types",
+                        detail: format!("invalid mime type `{mt}`"),
+                    });
+                }
+            }
+        }
         Ok(())
     }
-
-    /// Resolve the operation's needs into concrete [`Cap`](super::cap::Cap)s
     /// for a specific invocation.
     ///
     /// `op_name` selects which operation; `args` is a map of arg name
@@ -1720,6 +1841,77 @@ mod tests {
         assert!(matches!(
             err,
             ManifestError::SessionAiNeedMissingPolicy { .. }
+        ));
+    }
+
+    #[test]
+    fn desktop_block_parses_with_defaults() {
+        let m = parse(
+            r#"{
+              "id": "notes",
+              "version": "0.1",
+              "name": "Notes",
+              "desktop": {}
+            }"#,
+        );
+        let d = m.desktop.expect("desktop block present");
+        assert_eq!(d.exec, "--gui");
+        assert!(!d.single_instance);
+        assert!(d.categories.is_empty());
+    }
+
+    #[test]
+    fn desktop_block_full_parses() {
+        let m = parse(
+            r#"{
+              "id": "notes",
+              "version": "0.1",
+              "name": "Notes",
+              "desktop": {
+                "exec": "--ui",
+                "name": "My Notes",
+                "icon": "notes",
+                "categories": ["Utility", "TextEditor"],
+                "mime_types": ["text/markdown"],
+                "single_instance": true
+              }
+            }"#,
+        );
+        let d = m.desktop.expect("desktop block present");
+        assert_eq!(d.exec, "--ui");
+        assert_eq!(d.name.unwrap().en_str(), "My Notes");
+        assert_eq!(d.categories, vec!["Utility", "TextEditor"]);
+        assert_eq!(d.mime_types, vec!["text/markdown"]);
+        assert!(d.single_instance);
+    }
+
+    #[test]
+    fn desktop_rejects_category_with_separator() {
+        let err = Manifest::from_json(
+            r#"{
+              "id": "notes",
+              "version": "0.1",
+              "name": "Notes",
+              "desktop": { "categories": ["Utility;Evil"] }
+            }"#,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ManifestError::DesktopInvalid { field: "categories", .. }
+        ));
+    }
+
+    #[test]
+    fn desktop_rejects_control_char_in_exec() {
+        let err = Manifest::from_json(
+            "{\"id\":\"notes\",\"version\":\"0.1\",\"name\":\"Notes\",\
+             \"desktop\":{\"exec\":\"--gui\\nExec=evil\"}}",
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ManifestError::DesktopInvalid { field: "exec", .. }
         ));
     }
 }
