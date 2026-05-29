@@ -142,7 +142,7 @@ version and refuse to run against incompatible kernels.
 | `wire/codegen.py` | Initial — emits Rust + Python; Node + Go are placeholder generators |
 | `rust/` | Moved from `crates/claw-bridge`; adds `ai`, `tools`. The `policy / fs / exec / pkg / notify / net` modules moved on into `cos-runtime/`. |
 | `python/` | Moved from `apps/_lib`; published as `claw-os-sdk`. The internal `policy` / `snapshot` helpers moved on into `cos-runtime/python/`. |
-| `node/` | Scaffold only — transport stub, hand-rolled API to come |
-| `go/`   | Scaffold only — transport stub, hand-rolled API to come |
+| `node/` | Built out — `ai`, `tools`, `gui` over wire v1, with tests |
+| `go/`   | Built out — `ai`, `tools`, `gui` over wire v1, with tests |
 
 See each language's `README.md` for usage.
