@@ -11,6 +11,8 @@ Public modules
   embed, image / audio / video).
 - :mod:`claw_os_sdk.tools`    — call other apps' verbs from inside an
   app (``tools.call``, ``tools.catalog``, ``tools.for_chat``).
+- :mod:`claw_os_sdk.gui`      — desktop GUI bootstrap: the kernel context
+  handed to an app launched via ``cos app <id> --gui`` (toolkit-agnostic).
 - :mod:`claw_os_sdk.serve`    — minimal stdio MCP server SDK for apps
   whose verb surface is exposed to the agent.
 - :mod:`claw_os_sdk.claw_os_session` — reference implementation for
@@ -33,7 +35,7 @@ implementation details of the claw-os bundled apps, not part of the
 public SDK surface.
 """
 
-from . import ai, serve, tools
+from . import ai, gui, serve, tools
 
-__all__ = ["ai", "serve", "tools"]
+__all__ = ["ai", "gui", "serve", "tools"]
 __version__ = "0.1.0"

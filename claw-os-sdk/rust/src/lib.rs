@@ -55,6 +55,7 @@ use serde::de::DeserializeOwned;
 pub mod ai;
 pub mod envelope;
 pub mod generated;
+pub mod gui;
 pub mod tools;
 
 /// Errors returned by every bridge call.
