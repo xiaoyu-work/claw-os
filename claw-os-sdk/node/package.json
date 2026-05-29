@@ -1,0 +1,29 @@
+{
+  "name": "@claw-os/sdk",
+  "version": "0.1.0",
+  "description": "Official Node.js SDK for Claw OS — typed, gated access to the kernel's AI and tool surfaces, plus the desktop GUI bootstrap.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/xiaoyu-work/claw-os.git",
+    "directory": "claw-os-sdk/node"
+  },
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.test.json && node --test dist-test/"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.0",
+    "typescript": "^5.4.0"
+  }
+}
