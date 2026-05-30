@@ -14,6 +14,49 @@ use wayland_client::protocol::wl_output::WlOutput;
 
 pub const DEFAULT_MENU_ITEM_HEIGHT: f32 = 36.;
 
+/// Claw Glass shared styling helpers for the greeter + lock screen.
+///
+/// These keep the login card, lock card, and the glass dropdown menus visually
+/// consistent: a frosted `radius_l` surface with a 1px brand-blue translucent
+/// hairline, and a brand-blue translucent selection highlight that is never
+/// gray.
+
+/// Frosted glass surface (`radius_l`) with a brand-blue translucent hairline.
+///
+/// Used for the floating login/unlock card and the glass dropdown menus.
+pub fn glass_surface_style(theme: &cosmic::Theme) -> widget::container::Style {
+    let cosmic = theme.cosmic();
+    widget::container::Style {
+        icon_color: Some(cosmic.on_bg_color().into()),
+        text_color: Some(cosmic.on_bg_color().into()),
+        background: Some(iced::Background::Color(cosmic.bg_component_color().into())),
+        border: iced::Border {
+            radius: cosmic.radius_l().into(),
+            width: 1.0,
+            color: cosmic.accent_color().with_alpha(0.20).into(),
+        },
+        ..Default::default()
+    }
+}
+
+/// Brand-blue translucent selection highlight (`radius_m`) for list rows.
+///
+/// Never gray — selection always reads as the Claw brand blue.
+pub fn glass_selection_style(theme: &cosmic::Theme) -> widget::container::Style {
+    let cosmic = theme.cosmic();
+    widget::container::Style {
+        background: Some(iced::Background::Color(
+            cosmic.accent_color().with_alpha(0.18).into(),
+        )),
+        border: iced::Border {
+            radius: cosmic.radius_m().into(),
+            width: 0.0,
+            color: iced::Color::TRANSPARENT,
+        },
+        ..Default::default()
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ActiveLayout {
     pub layout: String,

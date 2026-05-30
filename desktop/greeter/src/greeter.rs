@@ -518,26 +518,34 @@ impl App {
                 value: bool,
                 message: Message,
             ) -> Element<'a, Message> {
-                Element::from(
-                    widget::menu::menu_button(vec![
-                        if value {
-                            widget::icon::from_name("object-select-symbolic")
-                                .size(16)
-                                .icon()
-                                .width(Length::Fixed(16.0))
-                                .into()
-                        } else {
-                            widget::space::horizontal()
-                                .width(Length::Fixed(17.0))
-                                .into()
-                        },
-                        widget::space::horizontal().width(Length::Fixed(8.0)).into(),
-                        widget::text(label)
-                            .align_x(iced::alignment::Horizontal::Left)
-                            .into(),
-                    ])
-                    .on_press(message),
-                )
+                let button = widget::menu::menu_button(vec![
+                    if value {
+                        widget::icon::from_name("object-select-symbolic")
+                            .size(16)
+                            .icon()
+                            .width(Length::Fixed(16.0))
+                            .into()
+                    } else {
+                        widget::space::horizontal()
+                            .width(Length::Fixed(17.0))
+                            .into()
+                    },
+                    widget::space::horizontal().width(Length::Fixed(8.0)).into(),
+                    widget::text(label)
+                        .align_x(iced::alignment::Horizontal::Left)
+                        .into(),
+                ])
+                .on_press(message);
+                if value {
+                    // Brand-blue translucent selection highlight (never gray).
+                    Element::from(
+                        widget::container(button)
+                            .width(Length::Fill)
+                            .class(theme::Container::custom(common::glass_selection_style)),
+                    )
+                } else {
+                    Element::from(button)
+                }
             }
             let dropdown_menu = |items: Vec<_>| {
                 let item_cnt = items.len();
@@ -563,9 +571,9 @@ impl App {
                             text_color: Some(component.on.into()),
                             background: Some(Background::Color(component.base.into())),
                             border: Border {
-                                radius: 8.0.into(),
+                                radius: cosmic.radius_l().into(),
                                 width: 1.0,
-                                color: component.divider.into(),
+                                color: cosmic.accent_color().with_alpha(0.20).into(),
                             },
                             ..Default::default()
                         }
@@ -802,7 +810,7 @@ impl App {
                                 );
                             }
                             column = column.push(
-                                widget::container(widget::text::title4(&user_data.full_name))
+                                widget::container(widget::text::title3(&user_data.full_name))
                                     .width(Length::Fill)
                                     .align_x(Alignment::Center),
                             );
@@ -962,19 +970,9 @@ impl App {
                 iced::widget::row![left_element, right_element].align_y(Alignment::Start),
             )
             .layer(cosmic::cosmic_theme::Layer::Background)
-            .padding(16)
-            .class(cosmic::theme::Container::Custom(Box::new(
-                |theme: &cosmic::Theme| {
-                    // Use background appearance as the base
-                    let mut appearance = widget::container::Catalog::style(
-                        theme,
-                        &cosmic::theme::Container::Background,
-                    );
-                    appearance.border = iced::Border::default().rounded(16);
-                    appearance
-                },
-            )))
-            .class(cosmic::theme::Container::Background)
+            .padding(24)
+            // Frosted Claw Glass card: radius_l surface, brand-blue hairline.
+            .class(theme::Container::custom(common::glass_surface_style))
             .width(Length::Fixed(800.0))
             .into(),
             widget::space::vertical()
