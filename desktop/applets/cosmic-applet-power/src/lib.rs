@@ -272,7 +272,7 @@ impl cosmic::Application for Power {
                 power
             ]
             .align_x(Alignment::Start)
-            .padding([8, 0]);
+            .padding([space_xxs, 0]);
 
             self.core.applet.popup_container(content).into()
         } else {

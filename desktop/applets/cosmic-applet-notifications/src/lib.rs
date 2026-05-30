@@ -381,7 +381,10 @@ impl cosmic::Application for Notifications {
 
     fn view_window(&self, _id: window::Id) -> Element<'_, Message> {
         let Spacing {
-            space_xxs, space_s, ..
+            space_xxs,
+            space_xs,
+            space_s,
+            ..
         } = theme::active().cosmic().spacing;
 
         let do_not_disturb = padded_control(row![
@@ -404,8 +407,8 @@ impl cosmic::Application for Notifications {
                 )
                 .center_x(Length::Fill)
             ]
-            .padding([8, 0])
-            .spacing(12)
+            .padding([space_xxs, 0])
+            .spacing(space_xs)
         } else {
             let mut notifs: Vec<Element<_>> = Vec::with_capacity(self.cards.len());
             notifs.push(
@@ -446,11 +449,11 @@ impl cosmic::Application for Notifications {
                                 column!(
                                     if let Some(icon) = n.notification_icon() {
                                         row![icon.size(16), app_name, duration_since, close_notif]
-                                            .spacing(8)
+                                            .spacing(space_xxs)
                                             .align_y(Alignment::Center)
                                     } else {
                                         row![app_name, duration_since, close_notif]
-                                            .spacing(8)
+                                            .spacing(space_xxs)
                                             .align_y(Alignment::Center)
                                     },
                                     column![
@@ -514,7 +517,7 @@ impl cosmic::Application for Notifications {
             row!(
                 scrollable(
                     Column::with_children(notifs)
-                        .spacing(8)
+                        .spacing(space_xxs)
                         .height(Length::Shrink),
                 )
                 .height(Length::Shrink)
@@ -529,7 +532,7 @@ impl cosmic::Application for Notifications {
 
         let content = column![do_not_disturb, main_content]
             .align_x(Alignment::Start)
-            .padding([8, 0]);
+            .padding([space_xxs, 0]);
 
         self.core.applet.popup_container(content).into()
     }
