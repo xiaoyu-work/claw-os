@@ -72,8 +72,8 @@ impl<Msg> Widget<Msg, cosmic::Theme, cosmic::Renderer> for WorkspaceBar<'_, Msg>
             return layout::Node::new(limits.min());
         }
 
-        // TODO configurable
-        let spacing = 8.0;
+        // Claw Glass: generous, even gutters between workspace thumbnails.
+        let spacing = 12.0;
 
         let total_spacing = spacing * (self.children.len() - 1) as f32;
         let max_main = (self.axis.main(limits.max()) - total_spacing) / self.children.len() as f32;
