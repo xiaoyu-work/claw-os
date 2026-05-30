@@ -1,5 +1,6 @@
 mod app;
 mod config;
+mod glass;
 mod mcp;
 mod subscriptions;
 

@@ -574,11 +574,16 @@ impl cosmic::Application for CosmicNotifications {
                 .into();
         }
 
+        // Claw Glass spacing tokens — generous, token-driven rhythm.
+        let spacing = cosmic::theme::spacing();
+
         let (ids, notif_elems): (Vec<_>, Vec<_>) = self
             .cards
             .iter()
             .rev()
             .map(|n| {
+                // App-name / meta line — turned into a brand-blue accent moment
+                // (Claw Glass forbids dead gray meta text).
                 let app_name = text::caption(if n.app_name.len() > 24 {
                     Cow::from(format!(
                         "{:.26}...",
@@ -587,8 +592,14 @@ impl cosmic::Application for CosmicNotifications {
                 } else {
                     Cow::from(&n.app_name)
                 })
-                .width(Length::Fill);
+                .width(Length::Fill)
+                .class(cosmic::theme::Text::Custom(|t| {
+                    cosmic::iced::widget::text::Style {
+                        color: Some(t.cosmic().accent_color().into()),
+                    }
+                }));
 
+                // Quiet glass close control; emphasis comes on hover via theme.
                 let close_notif = button::custom(
                     icon::from_name("window-close-symbolic")
                         .size(16)
@@ -597,25 +608,38 @@ impl cosmic::Application for CosmicNotifications {
                 .on_press(Message::Dismissed(n.id))
                 .class(cosmic::theme::Button::Text);
 
+                // Header: leading app icon anchor · accent app-name · close.
+                let header = if let Some(icon) = n.notification_icon() {
+                    row![icon.size(20), app_name, close_notif]
+                        .spacing(spacing.space_xs)
+                        .align_y(Alignment::Center)
+                } else {
+                    row![app_name, close_notif]
+                        .spacing(spacing.space_xs)
+                        .align_y(Alignment::Center)
+                };
+
+                // Content: prominent semibold title (summary) over muted body.
+                let content = column![
+                    text::heading(n.summary.lines().next().unwrap_or_default())
+                        .width(Length::Fill),
+                    Element::from(rich_text(html_to_spans(&n.body)).size(12.0))
+                        .map(|_: ()| Message::Ignore)
+                ]
+                .spacing(spacing.space_xxxs)
+                .width(Length::Fill);
+
+                // Frosted Claw Glass toast card: radius_l, blue hairline, soft
+                // shadow, generous padding.
                 let e = Element::from(
-                    column!(
-                        if let Some(icon) = n.notification_icon() {
-                            row![icon.size(16), app_name, close_notif]
-                                .spacing(8)
-                                .align_y(Alignment::Center)
-                        } else {
-                            row![app_name, close_notif]
-                                .spacing(8)
-                                .align_y(Alignment::Center)
-                        },
-                        column![
-                            text::body(n.summary.lines().next().unwrap_or_default())
-                                .width(Length::Fill),
-                            Element::from(rich_text(html_to_spans(&n.body)).size(12.0))
-                                .map(|_: ()| Message::Ignore)
-                        ]
+                    container(
+                        column![header, content]
+                            .spacing(spacing.space_xs)
+                            .width(Length::Fill),
                     )
-                    .width(Length::Fill),
+                    .padding(spacing.space_m)
+                    .width(Length::Fill)
+                    .class(crate::glass::card_class()),
                 );
                 (n.id, e)
             })
