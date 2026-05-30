@@ -225,11 +225,29 @@ impl State {
                 .unwrap_or("dialog-authentication"),
         )
         .size(64);
+        // Claw Glass: group the password field + error into a frosted glass
+        // panel with a 1px brand-blue translucent hairline and generous padding,
+        // so the auth input reads as a bright glass field (never a gray box).
+        let spacing = cosmic::theme::active().cosmic().spacing;
+        let control = widget::container(widget::column::with_children(right_column).spacing(4))
+            .padding(spacing.space_xs)
+            .class(cosmic::theme::Container::custom(|theme| {
+                let cosmic = theme.cosmic();
+                widget::container::Style {
+                    background: Some(iced::Background::Color(cosmic.bg_component_color().into())),
+                    border: iced::Border {
+                        radius: cosmic.radius_m().into(),
+                        width: 1.0,
+                        color: cosmic.accent_color().with_alpha(0.20).into(),
+                    },
+                    ..Default::default()
+                }
+            }));
         widget::autosize::autosize(
             widget::dialog::dialog()
                 .title(&self.msg_authentication_required)
                 .body(&self.params.message)
-                .control(widget::column::with_children(right_column).spacing(4))
+                .control(control)
                 .icon(icon)
                 .primary_action(authenticate_button)
                 .secondary_action(cancel_button),
