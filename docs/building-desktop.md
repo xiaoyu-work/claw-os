@@ -79,3 +79,44 @@ VM is `arm64`, so you get an `arm64` image.
 5. (arm64 only) In *VM Settings → Options → Advanced*, set firmware to **UEFI**.
    amd64 images boot with either BIOS or UEFI.
 6. **Power on** the VM.
+
+## 3. Iterating without rebuilding the image
+
+You do **not** need to rebuild the whole `.vmdk` for most changes.
+
+### Python `cos` apps (`apps/`) — no build
+
+The kernel re-reads each app's `main.py` from disk on every
+`cos app <id> <op>` call, so there is no build and no restart. Edit
+`/usr/lib/cos/apps/<id>/main.py` in the running VM and the next command
+picks it up.
+
+### Rust desktop UI (`desktop/`) — recompile one crate, no full image
+
+The desktop components are compiled binaries (e.g. `cosmic-files`,
+`cosmic-store`, `cosmic-edit`, `cos-agent-ui`). Changing them needs a
+recompile, but only of the single crate — then drop the new binary into
+the running VM:
+
+```bash
+# On a Linux build host (or inside the VM), build just the one crate:
+cargo build --release -p cosmic-files      # or -p cos-agent-ui, etc.
+
+# Copy it into the running VM and replace the installed binary:
+scp target/release/cosmic-files user@vm:/tmp/
+ssh user@vm 'sudo install -m755 /tmp/cosmic-files /usr/bin/cosmic-files'
+```
+
+> App binaries live in `/usr/bin/` (e.g. `cosmic-files`); `cos-agent-ui`
+> and `cos-agent-bridge` live in `/usr/local/bin/`.
+
+Then reload only what changed:
+
+- A regular app (files, edit, store, agent-ui, …) → close and reopen its window.
+- A session-core component (`cosmic-comp`, `cosmic-session`,
+  `cosmic-greeter`, panel) → log out and back in, or restart
+  `graphical.target`.
+
+Rebuild the whole `.vmdk` only when you change the feature list, system
+overlay files, or want a clean distributable image.
+
