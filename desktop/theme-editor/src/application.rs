@@ -110,9 +110,25 @@ impl ThemeEditorApplication {
     }
 
     fn setup_css(&self) -> gtk4::CssProvider {
+        let display = gdk::Display::default().expect("Error initializing GTK CSS provider.");
+
+        // Claw Glass app chrome. Loaded from the bundled resource at USER
+        // priority so the `.claw-*`/`.claw-root` chrome rules sit above the
+        // dynamically-generated theme-preview provider below (which only
+        // targets the distinct preview classes, so there is no real collision).
+        let chrome_provider = gtk4::CssProvider::new();
+        chrome_provider.load_from_resource("/com/System76/CosmicThemeEditor/base.css");
+        gtk4::StyleContext::add_provider_for_display(
+            &display,
+            &chrome_provider,
+            gtk4::STYLE_PROVIDER_PRIORITY_USER,
+        );
+
+        // Live-preview provider: holds the generated theme CSS produced when the
+        // user clicks "Preview". Kept at APPLICATION priority.
         let provider = gtk4::CssProvider::new();
         gtk4::StyleContext::add_provider_for_display(
-            &gdk::Display::default().expect("Error initializing GTK CSS provider."),
+            &display,
             &provider,
             gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );

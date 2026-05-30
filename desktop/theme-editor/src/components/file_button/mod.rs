@@ -22,21 +22,13 @@ impl FileButton {
     pub fn new() -> Self {
         let button = cascade! {
             Button::with_label(&gettext("Load from Image"));
-            ..add_css_class("background-component");
-            ..add_css_class("padding-medium");
-            ..add_css_class("border-radius-medium");
+            ..add_css_class("claw-secondary");
         };
 
         let self_: Self = glib::Object::new(&[]).expect("Failed to create `FileButton`.");
         cascade! {
             &self_;
             ..append(&button);
-            ..add_css_class("background");
-            ..set_margin_top(4);
-            ..set_margin_bottom(4);
-            ..set_margin_start(4);
-            ..set_margin_end(4);
-
         };
         let imp = imp::FileButton::from_instance(&self_);
 
