@@ -1426,40 +1426,49 @@ fn page_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
 
 fn sidebar_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
     let cosmic = theme.cosmic();
+    // Claw Glass: a frosted translucent sidebar (like macOS Messages /
+    // Raycast) so the compositor's blur reads through it, rather than an
+    // opaque gray panel. Borderless — the separation comes from the blur
+    // + glass seam, not a hard divider line.
+    let mut fill = cosmic.bg_component_color();
+    fill.alpha = 0.55;
     cosmic::widget::container::Style {
-        text_color: Some(cosmic.primary.on.into()),
-        background: Some(Background::Color(Color::from(cosmic.primary.base))),
+        text_color: Some(cosmic.on_bg_color().into()),
+        background: Some(Background::Color(fill.into())),
         border: Border {
             radius: 0.0.into(),
             width: 0.0,
-            color: cosmic.primary.divider.into(),
+            color: Color::TRANSPARENT,
         },
         shadow: Shadow::default(),
-        icon_color: Some(cosmic.primary.on.into()),
+        icon_color: Some(cosmic.on_bg_color().into()),
         snap: true,
     }
 }
 
 fn input_card_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
     let cosmic = theme.cosmic();
-    // macOS chat composers (Messages, Mail) lean on a soft raised
-    // card: subtle accent-tinted border, neutral component fill, and
-    // a faint drop shadow so the input feels lifted off the page.
-    let radius = cosmic.corner_radii.radius_m;
+    // Claw Glass composer card (cf. ChatGPT / Claude desktop): a large
+    // frosted `radius_l` (16) surface with a 1px brand-blue translucent
+    // hairline and a soft drop shadow so the input lifts off the page.
+    // Depth from blur + shadow, not a heavy border.
+    let radius = cosmic.radius_l();
+    let mut fill = cosmic.bg_component_color();
+    fill.alpha = 0.60;
     cosmic::widget::container::Style {
-        text_color: Some(cosmic.background.component.on.into()),
-        background: Some(Background::Color(Color::from(cosmic.background.component.base))),
+        text_color: Some(cosmic.on_bg_color().into()),
+        background: Some(Background::Color(fill.into())),
         border: Border {
             radius: radius.into(),
             width: 1.0,
-            color: cosmic.background.divider.into(),
+            color: cosmic.accent_color().with_alpha(0.20).into(),
         },
         shadow: Shadow {
-            color: Color::from_rgba(0.0, 0.0, 0.0, 0.08),
-            offset: cosmic::iced::Vector::new(0.0, 1.0),
-            blur_radius: 4.0,
+            color: Color::from_rgba(0.0, 0.05, 0.18, 0.10),
+            offset: cosmic::iced::Vector::new(0.0, 2.0),
+            blur_radius: 16.0,
         },
-        icon_color: Some(cosmic.background.component.on.into()),
+        icon_color: Some(cosmic.on_bg_color().into()),
         snap: true,
     }
 }
@@ -1489,17 +1498,21 @@ fn user_pill_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
 
 fn active_pill_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
     let cosmic = theme.cosmic();
-    let radius = cosmic.corner_radii.radius_xl;
+    // Claw Glass "active" badge: a frosted pill with a brand-blue
+    // translucent hairline instead of a neutral gray divider.
+    let radius = cosmic.radius_xl();
+    let mut fill = cosmic.bg_component_color();
+    fill.alpha = 0.60;
     cosmic::widget::container::Style {
-        text_color: Some(cosmic.background.component.on.into()),
-        background: Some(Background::Color(Color::from(cosmic.background.component.base))),
+        text_color: Some(cosmic.on_bg_color().into()),
+        background: Some(Background::Color(fill.into())),
         border: Border {
             radius: radius.into(),
             width: 1.0,
-            color: cosmic.background.divider.into(),
+            color: cosmic.accent_color().with_alpha(0.20).into(),
         },
         shadow: Shadow::default(),
-        icon_color: Some(cosmic.background.component.on.into()),
+        icon_color: Some(cosmic.on_bg_color().into()),
         snap: true,
     }
 }
@@ -1556,24 +1569,30 @@ fn idle_dot_style(_theme: &cosmic::Theme) -> cosmic::widget::container::Style {
 
 fn tool_card_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
     let cosmic = theme.cosmic();
-    let radius = cosmic.corner_radii.radius_s;
+    // Claw Glass inset tool-call card: frosted component fill with a 1px
+    // brand-blue translucent hairline (never a neutral gray divider).
+    let radius = cosmic.radius_m();
+    let mut fill = cosmic.bg_component_color();
+    fill.alpha = 0.55;
     cosmic::widget::container::Style {
-        text_color: Some(cosmic.background.component.on.into()),
-        background: Some(Background::Color(Color::from(cosmic.background.component.base))),
+        text_color: Some(cosmic.on_bg_color().into()),
+        background: Some(Background::Color(fill.into())),
         border: Border {
             radius: radius.into(),
             width: 1.0,
-            color: cosmic.background.divider.into(),
+            color: cosmic.accent_color().with_alpha(0.20).into(),
         },
         shadow: Shadow::default(),
-        icon_color: Some(cosmic.background.component.on.into()),
+        icon_color: Some(cosmic.on_bg_color().into()),
         snap: true,
     }
 }
 
 fn tool_error_card_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
     let cosmic = theme.cosmic();
-    let radius = cosmic.corner_radii.radius_s;
+    // Destructive (semantic red) is kept, but the hard border is softened
+    // to a translucent hairline so it reads as a glass card, not a box.
+    let radius = cosmic.radius_m();
     cosmic::widget::container::Style {
         text_color: Some(cosmic.destructive.on.into()),
         background: Some(Background::Color(Color::from(cosmic.destructive.base))),
