@@ -1167,7 +1167,9 @@ impl SettingsApp {
         }
 
         let view = self
-            .page_container(settings::view_column(sections_column))
+            .page_container(
+                settings::view_column(sections_column).spacing(cosmic::theme::spacing().space_l),
+            )
             .apply(scrollable)
             .height(Length::Fill)
             .apply(|w| id_container(w, self.id()));
@@ -1175,6 +1177,7 @@ impl SettingsApp {
         column::with_capacity(2)
             .push(self.page_container(header))
             .push(view)
+            .spacing(cosmic::theme::spacing().space_s)
             .height(Length::Fill)
             .into()
     }
@@ -1369,6 +1372,7 @@ impl SettingsApp {
         column::with_capacity(2)
             .push(self.page_container(page_title(&self.pages.info[self.active_page])))
             .push(page_list)
+            .spacing(cosmic::theme::spacing().space_s)
             .height(Length::Fill)
             .into()
     }
