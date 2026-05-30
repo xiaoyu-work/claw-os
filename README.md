@@ -64,6 +64,10 @@ docker exec -it --user cos claw bash --login
 
 Desktop images are **experimental**.
 
+Build a bootable desktop VM disk image and load it in VMware — see
+[Building the Claw OS Desktop Image](docs/building-desktop.md) for the steps on
+Windows (WSL2), macOS, and Linux.
+
 ### Drive the OS
 
 ```bash
