@@ -1,0 +1,42 @@
+// Claw Glass — deep navy-blue glass terminal theme.
+// On-brand default for the Claw OS Terminal: cool-white grid on a navy glass
+// base, brand-blue (#005CFE) cursor, brand-aligned blue ANSI ramp. Tuned so the
+// terminal grid stays crisp and legible while the chrome reads as frosted glass.
+(
+    name: "Claw Glass",
+    foreground: "#E6EAF2",
+    background: "#0A0E17",
+    cursor: "#005CFE",
+    bright_foreground: "#FFFFFF",
+    dim_foreground: "#9AA2B2",
+    normal: (
+        black: "#11151F",
+        red: "#FF453A",
+        green: "#32D74B",
+        yellow: "#FFD60A",
+        blue: "#4C8DFF",
+        magenta: "#BF5AF2",
+        cyan: "#5AC8E0",
+        white: "#C8CEDA",
+    ),
+    bright: (
+        black: "#3A4255",
+        red: "#FF6B61",
+        green: "#5BE06E",
+        yellow: "#FFE54A",
+        blue: "#6FA8FF",
+        magenta: "#D08CFF",
+        cyan: "#7FE0F0",
+        white: "#F2F5FA",
+    ),
+    dim: (
+        black: "#0A0E17",
+        red: "#B33028",
+        green: "#239636",
+        yellow: "#B39600",
+        blue: "#1F4FA0",
+        magenta: "#8540A8",
+        cyan: "#3E8C9E",
+        white: "#8A91A0",
+    ),
+)

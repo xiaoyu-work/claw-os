@@ -3487,11 +3487,17 @@ impl Application for App {
 
     fn header_end(&self) -> Vec<Element<'_, Self::Message>> {
         vec![
-            widget::button::custom(icon_cache_get("list-add-symbolic", 16))
-                .on_press(Message::TabNew)
-                .padding(8)
-                .class(style::Button::Icon)
-                .into(),
+            // Claw Glass: ghost-glass icon button with a tooltip, matching the
+            // floating new-tab affordance from the reference terminal chrome.
+            widget::tooltip(
+                widget::button::custom(icon_cache_get("list-add-symbolic", 16))
+                    .on_press(Message::TabNew)
+                    .padding(8)
+                    .class(style::Button::Icon),
+                widget::text::body(fl!("new-tab")),
+                widget::tooltip::Position::Bottom,
+            )
+            .into(),
         ]
     }
 
@@ -3540,15 +3546,25 @@ impl Application for App {
                             .on_activate(Message::TabActivate)
                             .on_close(|entity| Message::TabClose(Some(entity))),
                     )
+                    // Claw Glass: frosted tab strip — rounded top corners (radius_l),
+                    // a faint brand-blue-tinted hairline, leaning on the compositor
+                    // blur for depth instead of a heavy boxed chrome.
                     .class(style::Container::Custom(Box::new(|theme| {
                         let cosmic = theme.cosmic();
+                        let radius_l = cosmic.radius_l();
+                        let mut hairline = cosmic.accent_color();
+                        hairline.alpha = 0.14;
                         cosmic::iced::widget::container::Style {
                             icon_color: Some(Color::from(cosmic.background.on)),
                             text_color: Some(Color::from(cosmic.background.on)),
                             background: Some(iced::Background::Color(
                                 cosmic.background.base.into(),
                             )),
-                            border: iced::Border::default(),
+                            border: iced::Border {
+                                radius: [radius_l[0], radius_l[1], 0.0, 0.0].into(),
+                                width: 1.0,
+                                color: hairline.into(),
+                            },
                             shadow: iced::Shadow::default(),
                             snap: true,
                         }
@@ -3683,8 +3699,36 @@ impl Application for App {
                 .padding(space_xxs)
                 .spacing(space_xxs);
 
-                tab_column = tab_column
-                    .push(widget::layer_container(find_widget).layer(cosmic_theme::Layer::Primary));
+                tab_column = tab_column.push(
+                    // Claw Glass: the find bar floats as a frosted card —
+                    // radius_l surface, a brand-blue-tinted hairline and a soft
+                    // drop shadow for elevation, rather than a docked gray strip.
+                    widget::container(find_widget)
+                        .padding(space_xxs)
+                        .class(style::Container::Custom(Box::new(|theme| {
+                            let cosmic = theme.cosmic();
+                            let mut hairline = cosmic.accent_color();
+                            hairline.alpha = 0.22;
+                            cosmic::iced::widget::container::Style {
+                                icon_color: Some(Color::from(cosmic.primary.on)),
+                                text_color: Some(Color::from(cosmic.primary.on)),
+                                background: Some(iced::Background::Color(
+                                    cosmic.primary.base.into(),
+                                )),
+                                border: iced::Border {
+                                    radius: cosmic.radius_l().into(),
+                                    width: 1.0,
+                                    color: hairline.into(),
+                                },
+                                shadow: iced::Shadow {
+                                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.25),
+                                    offset: iced::Vector::new(0.0, 4.0),
+                                    blur_radius: 16.0,
+                                },
+                                snap: false,
+                            }
+                        }))),
+                );
             } else {
                 // TODO
             }
