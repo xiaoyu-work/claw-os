@@ -1194,11 +1194,12 @@ impl cosmic::Application for CosmicAppLibrary {
         let content = body.align_x(Alignment::Center).width(Length::Fill);
 
         // Rounded translucent window — compositor handles the wallpaper
-        // underneath, so a low-alpha dark fill is enough to read as the
-        // "frosted glass" Launchpad surface. The whole surface is wrapped
-        // in a `mouse_area` so that clicks on empty space dismiss the
-        // launcher (or close an open context menu); buttons in the grid
-        // capture their own events first and don't propagate.
+        // underneath, so a low-alpha navy-blue fill is enough to read as the
+        // Claw Glass Launchpad surface (brand-blue tinted glass, not a neutral
+        // gray/black scrim). The whole surface is wrapped in a `mouse_area` so
+        // that clicks on empty space dismiss the launcher (or close an open
+        // context menu); buttons in the grid capture their own events first
+        // and don't propagate.
         let window = container(content)
             .height(Length::Fill)
             .width(Length::Fill)
@@ -1207,7 +1208,7 @@ impl cosmic::Application for CosmicAppLibrary {
                     text_color: Some(Color::from_rgb(0.97, 0.97, 0.99)),
                     icon_color: Some(Color::from_rgb(0.97, 0.97, 0.99)),
                     background: Some(iced::Background::Color(Color::from_rgba(
-                        0.04, 0.04, 0.07, 0.55,
+                        0.02, 0.06, 0.16, 0.55,
                     ))),
                     ..Default::default()
                 }
