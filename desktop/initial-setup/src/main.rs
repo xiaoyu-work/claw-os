@@ -469,21 +469,21 @@ impl Application for App {
             .padding([0, space_xl])
             .class(theme::Container::custom(|theme| {
                 let cosmic = theme.cosmic();
-                let corners = cosmic.corner_radii;
                 // base = solid bg color; we knock the alpha down to ~55% so
                 // the wallpaper bleeds through while widgets inside still
-                // read clearly. Border + soft shadow give the panel an edge
-                // so it doesn't melt into the photo.
+                // read clearly. Surface seeds are already blue-tinted glass.
+                // The hairline is brand-blue (accent @ 0.20) instead of a
+                // neutral divider so the whole panel reads as Claw Glass, and
+                // a soft drop shadow keeps it from melting into the photo.
                 let mut bg: Color = cosmic.background.base.into();
                 bg.a = 0.55;
-                let mut border_color: Color = cosmic.background.divider.into();
-                border_color.a = 0.45;
+                let border_color: Color = cosmic.accent_color().with_alpha(0.20).into();
                 container::Style {
                     text_color: Some(cosmic.background.on.into()),
                     icon_color: Some(cosmic.background.on.into()),
                     background: Some(Background::Color(bg)),
                     border: Border {
-                        radius: corners.radius_l.into(),
+                        radius: cosmic.radius_l().into(),
                         width: 1.0,
                         color: border_color,
                     },

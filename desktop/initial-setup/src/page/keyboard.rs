@@ -303,11 +303,7 @@ impl page::Page for Page {
                 //TODO: properly style this
                 let input_source = widget::button::custom(item)
                     .on_press(Message::Select(id))
-                    .class(if selected {
-                        theme::Button::Link
-                    } else {
-                        theme::Button::MenuRoot
-                    });
+                    .class(page::selection::list_row(selected));
 
                 list = list.add(input_source);
             }

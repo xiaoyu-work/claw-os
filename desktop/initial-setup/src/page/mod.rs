@@ -13,6 +13,7 @@ pub mod layout;
 pub mod location;
 pub mod new_apps;
 pub mod new_shortcuts;
+pub mod selection;
 pub mod user;
 pub mod wifi;
 pub mod workflow;
