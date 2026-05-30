@@ -214,17 +214,31 @@ fn workspace_item_appearance(
 ) -> cosmic::widget::button::Style {
     let cosmic = theme.cosmic();
     let mut appearance = cosmic::widget::button::Style::new();
-    appearance.border_radius = cosmic
-        .corner_radii
-        .radius_s
-        .map(|x| if x < 4.0 { x } else { x + 4.0 })
-        .into();
+    // Claw Glass: large frosted radius on the workspace thumbnail card.
+    appearance.border_radius = cosmic.radius_l().into();
+    // Frosted translucent fill behind the live capture.
+    appearance.background = Some(iced::Background::Color(cosmic.bg_component_color().into()));
     if is_active {
-        appearance.border_width = 4.0;
-        appearance.border_color = cosmic.accent.base.into();
+        // Brand-blue active ring — never gray. A crisp 2px accent stroke plus a
+        // faint accent wash makes the selected workspace the one loud element.
+        appearance.border_width = 2.0;
+        appearance.border_color = cosmic.accent_color().into();
+        appearance.background = Some(iced::Background::Color(
+            cosmic.accent_color().with_alpha(0.12).into(),
+        ));
+    } else {
+        // Inactive cards carry a faint blue hairline, never a gray box.
+        appearance.border_width = 1.0;
+        appearance.border_color = cosmic.accent_color().with_alpha(0.20).into();
     }
     if hovered {
-        appearance.background = Some(iced::Background::Color(cosmic.button.base.into()));
+        // Hover feedback is a brand-blue wash, never the gray `button.base`.
+        appearance.background = Some(iced::Background::Color(
+            cosmic
+                .accent_color()
+                .with_alpha(if is_active { 0.16 } else { 0.08 })
+                .into(),
+        ));
     }
     appearance
 }
@@ -276,12 +290,20 @@ fn workspace_item(
         )
     };
 
+    let is_active = workspace.is_active() && !has_workspace_drag;
+
+    let workspace_label = widget::text::body(fl!("workspace", number = workspace.info.name.as_str()))
+        .ellipsize(Ellipsize::Middle(EllipsizeHeightLimit::Lines(1)));
+    // Active workspace name reads in brand blue to reinforce selection;
+    // inactive names use the default on-background text.
+    let workspace_label = if is_active {
+        workspace_label.class(cosmic::theme::Text::Accent)
+    } else {
+        workspace_label
+    };
     let workspace_footer = row![
         widget::space::horizontal().width(Length::Fixed(32.0)),
-        widget::text::body(fl!("workspace", number = workspace.info.name.as_str()))
-            .ellipsize(Ellipsize::Middle(EllipsizeHeightLimit::Lines(1)))
-            .apply(widget::container)
-            .center_x(Length::Fill),
+        workspace_label.apply(widget::container).center_x(Length::Fill),
         pin_button(workspace),
     ];
 
@@ -296,7 +318,6 @@ fn workspace_item(
         .max_height(image_height + 28.0)
         .max_width(image_width);
 
-    let is_active = workspace.is_active() && !has_workspace_drag;
     // TODO editable name?
     let mut button = widget::button::custom(content)
         .selected(is_active)
@@ -476,32 +497,36 @@ fn workspaces_sidebar<'a>(
         WorkspaceLayout::Vertical => (Axis::Vertical, Length::Shrink, Length::Fill),
         WorkspaceLayout::Horizontal => (Axis::Horizontal, Length::Fill, Length::Shrink),
     };
+    let spacing = cosmic::theme::active().cosmic().spacing;
     let sidebar_entries_container =
-        widget::container(crate::widgets::workspace_bar(sidebar_entries, axis)).padding(8.0);
+        widget::container(crate::widgets::workspace_bar(sidebar_entries, axis))
+            .padding(spacing.space_xs);
 
     widget::container(
         widget::container(sidebar_entries_container)
             .width(width)
             .height(height)
             .class(cosmic::theme::Container::custom(|theme| {
+                let cosmic = theme.cosmic();
                 cosmic::iced::widget::container::Style {
-                    text_color: Some(theme.cosmic().on_bg_color().into()),
-                    icon_color: Some(theme.cosmic().on_bg_color().into()),
-                    background: Some(iced::Color::from(theme.cosmic().background.base).into()),
+                    text_color: Some(cosmic.on_bg_color().into()),
+                    icon_color: Some(cosmic.on_bg_color().into()),
+                    // Claw Glass: frosted translucent bar floating over the
+                    // blurred desktop — never an opaque gray field.
+                    background: Some(iced::Background::Color(cosmic.bg_component_color().into())),
                     border: Border {
-                        radius: theme
-                            .cosmic()
-                            .radius_s()
-                            .map(|x| if x < 4.0 { x } else { x + 8.0 })
-                            .into(),
-                        ..Default::default()
+                        // Large frosted radius for the floating overview bar.
+                        radius: cosmic.radius_l().into(),
+                        // 1px brand-blue tinted hairline; depth comes from blur.
+                        width: 1.0,
+                        color: cosmic.accent_color().with_alpha(0.20).into(),
                     },
                     shadow: Shadow::default(),
                     snap: true,
                 }
             })),
     )
-    .padding(8)
+    .padding(spacing.space_xs)
     .into()
 }
 
