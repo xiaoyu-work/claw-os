@@ -1,11 +1,11 @@
 Dark (
     (
         name: "cosmic-dark",
-        // macOS-style system blue (#0A84FF) — replaces the upstream COSMIC
-        // cyan-mint accent. Picked to match SF Symbols / Aqua control tint
-        // in dark mode.
+        // Claw brand blue (#005CFE) — the single accent across the whole
+        // "Claw Glass" design language (from the logo claw-dot). Replaces the
+        // macOS Aqua dark-mode blue so light and dark share one brand accent.
         blue: (
-            c: "#0A84FF",
+            c: "#005CFE",
         ),
         red: (
             c: "#FF453A",
@@ -16,20 +16,23 @@ Dark (
         yellow: (
             c: "#FFD60A",
         ),
+        // Claw Glass: dark variant is DEEP BLUE glass, not neutral charcoal.
+        // Surface seeds carry a navy-blue cast at the original luminance so
+        // dark frosted surfaces read as blue glass (per "不要灰暗").
         gray_1: (
-            c: "#1E1E1E",
+            c: "#161B2B",
         ),
         gray_2: (
-            c: "#292929",
+            c: "#1F2538",
         ),
         gray_3: (
-            c: "#2E2E2E",
+            c: "#242B40",
         ),
         neutral_1: (
-            c: "#000",
+            c: "#05070D",
         ),
         neutral_2: (
-            c: "#272727",
+            c: "#20263A",
         ),
         neutral_3: (
             c: "#424242",
