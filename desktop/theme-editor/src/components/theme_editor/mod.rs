@@ -32,6 +32,7 @@ impl ThemeEditor {
         cascade! {
             &self_;
             ..set_orientation(Orientation::Vertical);
+            ..add_css_class("claw-root");
         };
 
         let (background_color_box, background_color_button) =
@@ -52,118 +53,153 @@ impl ThemeEditor {
         view! {
             inner = Box {
                 set_orientation: Orientation::Vertical,
-                set_spacing: 4,
-                set_margin_top: 4,
-                set_margin_bottom: 4,
-                set_margin_start: 4,
-                set_margin_end: 4,
+                set_spacing: 16,
+                set_margin_top: 20,
+                set_margin_bottom: 20,
+                set_margin_start: 20,
+                set_margin_end: 20,
 
-                append: name = &Entry {
-                    set_placeholder_text: Some("Theme Name"),
-                    set_margin_top: 4,
-                    set_margin_bottom: 4,
-                    set_margin_start: 4,
-                    set_margin_end: 4,
-                    add_css_class: "background-component",
-                    add_css_class: "padding-medium",
-                    add_css_class: "border-radius-medium",
-                    set_width_request: 160,
-                },
-
+                // ---- Header: title + subtitle (ref1 "Appearance" treatment) --
                 append = &Box {
-                    set_orientation: Orientation::Horizontal,
-                    set_spacing: 4,
-                    set_margin_top: 4,
-                    set_margin_bottom: 4,
-                    set_margin_start: 4,
-                    set_margin_end: 4,
-
-                    append: lighten_elevated_surfaces = &Switch {
-                        set_active: imp.constraints.get().lighten,
-                        set_margin_top: 4,
-                        set_margin_bottom: 4,
-                        set_margin_start: 4,
-                        set_margin_end: 4,
-                        add_css_class: "background-component",
-
-                    },
+                    set_orientation: Orientation::Vertical,
+                    set_spacing: 2,
 
                     append = &Label {
-                        set_text: &gettext("Lighten Elevated Surfaces"),
-                    }
+                        set_xalign: 0.0,
+                        set_text: &gettext("Appearance"),
+                        add_css_class: "claw-app-title",
+                    },
+                    append = &Label {
+                        set_xalign: 0.0,
+                        set_wrap: true,
+                        set_text: &gettext("Craft a Claw OS theme — pick your colors and preview live."),
+                        add_css_class: "claw-app-subtitle",
+                    },
                 },
 
-                append: &background_color_box,
-                append: &primary_color_box,
-                append: &secondary_color_box,
-                append: &accent_color_box,
-                append: &accent_text_color_box,
-                append: &accent_nav_handle_color_box,
-                append: &destructive_color_box,
+                // ---- Card: Theme identity (name + elevation toggle) ----------
+                append = &Box {
+                    set_orientation: Orientation::Vertical,
+                    set_spacing: 12,
+                    add_css_class: "claw-card",
 
-                append: control_button_box = &Box {
-                    set_orientation: Orientation::Horizontal,
-                    set_spacing: 4,
+                    append = &Label {
+                        set_xalign: 0.0,
+                        set_text: &gettext("Theme"),
+                        add_css_class: "claw-section-title",
+                    },
+
+                    append: name = &Entry {
+                        set_placeholder_text: Some("Theme Name"),
+                        add_css_class: "claw-input",
+                        set_hexpand: true,
+                    },
+
+                    append = &Box {
+                        set_orientation: Orientation::Horizontal,
+                        set_spacing: 12,
+
+                        append = &Box {
+                            set_orientation: Orientation::Vertical,
+                            set_hexpand: true,
+                            append = &Label {
+                                set_xalign: 0.0,
+                                set_text: &gettext("Lighten Elevated Surfaces"),
+                                add_css_class: "claw-label",
+                            },
+                            append = &Label {
+                                set_xalign: 0.0,
+                                set_text: &gettext("Raise the brightness of layered glass panels."),
+                                add_css_class: "claw-section-caption",
+                            },
+                        },
+
+                        append: lighten_elevated_surfaces = &Switch {
+                            set_active: imp.constraints.get().lighten,
+                            set_valign: gtk4::Align::Center,
+                            add_css_class: "claw-switch",
+                        },
+                    },
+                },
+
+                // ---- Card: Colors (swatch grid) ------------------------------
+                append = &Box {
+                    set_orientation: Orientation::Vertical,
+                    set_spacing: 12,
+                    add_css_class: "claw-card",
+
+                    append = &Box {
+                        set_orientation: Orientation::Vertical,
+                        set_spacing: 2,
+                        append = &Label {
+                            set_xalign: 0.0,
+                            set_text: &gettext("Colors"),
+                            add_css_class: "claw-section-title",
+                        },
+                        append = &Label {
+                            set_xalign: 0.0,
+                            set_text: &gettext("Set each surface and accent color, or load a palette from an image."),
+                            add_css_class: "claw-section-caption",
+                        },
+                    },
+
+                    append: &background_color_box,
+                    append: &primary_color_box,
+                    append: &secondary_color_box,
+                    append: &accent_color_box,
+                    append: &accent_text_color_box,
+                    append: &accent_nav_handle_color_box,
+                    append: &destructive_color_box,
+
+                    append: control_button_box = &Box {
+                        set_orientation: Orientation::Horizontal,
+                        set_spacing: 10,
+                        set_margin_top: 4,
+
+                        append: file_button = &FileButton {},
+
+                        append = &Box { set_hexpand: true },
+
+                        append: preview_button = &Button {
+                            add_css_class: "claw-secondary",
+
+                            set_child = Some(&Label) {
+                                set_text: &gettext("Preview"),
+                            }
+                        },
+
+                        append: save_button = &Button {
+                            add_css_class: "claw-primary",
+
+                            set_child = Some(&Label) {
+                                set_text: &gettext("Save"),
+                            }
+                        },
+                    },
+                },
+                // ---- PREVIEW section -----------------------------------------
+                append = &Box {
+                    set_orientation: Orientation::Vertical,
+                    set_spacing: 2,
                     set_margin_top: 4,
-                    set_margin_bottom: 4,
-                    set_margin_start: 4,
-                    set_margin_end: 4,
 
-                    append: save_button = &Button {
-                        set_margin_top: 4,
-                        set_margin_bottom: 4,
-                        set_margin_start: 4,
-                        set_margin_end: 4,
-                        add_css_class: "background-component",
-                        add_css_class: "padding-medium",
-                        add_css_class: "border-radius-medium",
-
-                        set_child = Some(&Label) {
-                            set_text: &gettext("Save"),
-                        }
+                    append = &Label {
+                        set_xalign: 0.0,
+                        set_text: &gettext("Live Preview"),
+                        add_css_class: "claw-section-title",
                     },
-
-                    append: preview_button = &Button {
-                        set_margin_top: 4,
-                        set_margin_bottom: 4,
-                        set_margin_start: 4,
-                        set_margin_end: 4,
-                        add_css_class: "background-component",
-                        add_css_class: "padding-medium",
-                        add_css_class: "border-radius-medium",
-
-                        set_child = Some(&Label) {
-                            set_text: &gettext("Preview"),
-                        }
+                    append = &Label {
+                        set_xalign: 0.0,
+                        set_text: &gettext("See how surfaces, accents and buttons render in your theme."),
+                        add_css_class: "claw-section-caption",
                     },
-
-                    append: file_button = &FileButton {},
                 },
-
-
-                // PREVIEW
-                append: separator = &Separator {
-                    set_orientation: Orientation::Horizontal,
-                    set_margin_top: 8,
-                    set_margin_bottom: 8,
-                    set_margin_start: 8,
-                    set_margin_end: 8,
-                    add_css_class: "background-divider",
-               },
 
                 append = &Box {
                     set_orientation: Orientation::Horizontal,
-                    set_spacing: 4,
-                    set_margin_top: 4,
-                    set_margin_bottom: 4,
-                    set_margin_start: 4,
-                    set_margin_end: 4,
+                    set_spacing: 10,
 
                     append = &Button {
-                        set_margin_top: 4,
-                        set_margin_bottom: 4,
-                        set_margin_start: 4,
-                        set_margin_end: 4,
                         add_css_class: "destructive-action",
                         add_css_class: "padding-medium",
                         add_css_class: "border-radius-medium",
@@ -178,10 +214,6 @@ impl ThemeEditor {
                     },
 
                     append = &Button {
-                        set_margin_top: 4,
-                        set_margin_bottom: 4,
-                        set_margin_start: 4,
-                        set_margin_end: 4,
                         add_css_class: "suggested-action",
                         add_css_class: "padding-medium",
                         add_css_class: "border-radius-medium",
@@ -203,10 +235,7 @@ impl ThemeEditor {
                     add_css_class: "background",
                     add_css_class: "padding-medium",
                     add_css_class: "border-radius-medium",
-                    set_margin_top: 8,
-                    set_margin_bottom: 8,
-                    set_margin_start: 8,
-                    set_margin_end: 8,
+                    add_css_class: "claw-preview-frame",
 
                     append = &Label {
                         set_hexpand: true,
@@ -549,22 +578,23 @@ impl ThemeEditor {
             ColorButton::with_rgba(&rgba);
             ..set_title(label);
             ..set_use_alpha(true);
-            ..add_css_class("background-component");
+            ..set_valign(gtk4::Align::Center);
+            ..add_css_class("claw-swatch");
         };
         view! {
             color_box = Box {
                 set_orientation: Orientation::Horizontal,
-                set_spacing: 4,
-                set_margin_top: 4,
-                set_margin_bottom: 4,
-                set_margin_start: 4,
-                set_margin_end: 4,
+                set_spacing: 12,
+                add_css_class: "claw-swatch-cell",
 
                 append: &color_button,
 
                 append: accent_color_label = &Label {
+                    set_xalign: 0.0,
+                    set_hexpand: true,
+                    set_valign: gtk4::Align::Center,
                     set_text: label,
-                    add_css_class: "background-text",
+                    add_css_class: "claw-label",
                 }
             }
         };
