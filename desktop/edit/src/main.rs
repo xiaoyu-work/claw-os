@@ -91,6 +91,78 @@ pub fn monospace_attrs() -> cosmic_text::Attrs<'static> {
     cosmic_text::Attrs::new().family(Family::Monospace)
 }
 
+//
+// Claw Glass chrome styling (app-level).
+//
+// These small helpers translate the Claw Glass design language to the editor's
+// app chrome. Surface colors are pulled from the inherited theme tokens (never
+// hardcoded hex) so light/dark + compositor blur are inherited automatically;
+// we only apply translucency, brand-blue accents, hairlines, and the documented
+// radii here.
+
+/// A faint blue-tinted translucent hairline color from the active theme.
+fn glass_hairline(cosmic: &cosmic_theme::Theme) -> Color {
+    let mut color = cosmic.background.component.divider;
+    color.alpha *= 0.5;
+    color.into()
+}
+
+/// Frosted strip that hosts the tab bar + new-file button. Reads as glass with a
+/// single hairline beneath it, leaning on the compositor blur for depth instead
+/// of a heavy box.
+fn tab_bar_glass_style(theme: &cosmic::Theme) -> widget::container::Style {
+    let cosmic = theme.cosmic();
+    let mut bg = cosmic.background.base;
+    bg.alpha *= 0.55;
+    widget::container::Style {
+        background: Some(Background::Color(bg.into())),
+        border: cosmic::iced::Border {
+            // Hairline only on the bottom edge: separation via blur + a single line.
+            radius: cosmic.radius_l().into(),
+            width: 1.0,
+            color: glass_hairline(&cosmic),
+        },
+        ..Default::default()
+    }
+}
+
+/// Floating frosted card used by the find / replace bar. Large radius, hairline,
+/// soft glass fill — a quiet surface that floats over the editor.
+fn find_bar_glass_style(theme: &cosmic::Theme) -> widget::container::Style {
+    let cosmic = theme.cosmic();
+    let mut bg = cosmic.primary.base;
+    bg.alpha *= 0.80;
+    widget::container::Style {
+        background: Some(Background::Color(bg.into())),
+        border: cosmic::iced::Border {
+            radius: cosmic.radius_l().into(),
+            width: 1.0,
+            color: glass_hairline(&cosmic),
+        },
+        ..Default::default()
+    }
+}
+
+/// Brand-blue glass pill for the Vim mode status line.
+fn vim_status_glass_style(theme: &cosmic::Theme) -> widget::container::Style {
+    let cosmic = theme.cosmic();
+    let mut bg = cosmic.accent_color();
+    bg.alpha *= 0.16;
+    let mut border = cosmic.accent_color();
+    border.alpha *= 0.40;
+    widget::container::Style {
+        background: Some(Background::Color(bg.into())),
+        text_color: Some(cosmic.accent_color().into()),
+        border: cosmic::iced::Border {
+            // Pill per spec for chips/status.
+            radius: cosmic.radius_xl().into(),
+            width: 1.0,
+            color: border.into(),
+        },
+        ..Default::default()
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::var("COS_MCP_SERVER").as_deref() == Ok("1") {
         return mcp::run().map_err(|e| -> Box<dyn std::error::Error> { e.into() });
@@ -3356,34 +3428,45 @@ impl Application for App {
     fn view(&self) -> Element<'_, Message> {
         let cosmic_theme::Spacing {
             space_none,
+            space_xxxs,
             space_xxs,
+            space_xs,
             ..
         } = self.core().system_theme().cosmic().spacing;
 
         let mut tab_column = widget::column::with_capacity(3).padding([space_none, space_xxs]);
 
+        // Claw Glass tab strip: tab bar (brand-blue active tab, inherited from the
+        // shared toolkit style) + a glass new-file button, hosted on a frosted
+        // strip with a single hairline for quiet structure.
+        let tab_strip = widget::row::with_capacity(2)
+            .align_y(Alignment::Center)
+            .spacing(space_xxs)
+            .push(
+                widget::tab_bar::horizontal(&self.tab_model)
+                    .button_height(32)
+                    .enable_tab_drag(String::from("x-cosmic-edit/tab"))
+                    .on_reorder(Message::ReorderTab)
+                    .tab_drag_threshold(25.)
+                    .button_spacing(space_xxs)
+                    .close_icon(icon_cache_get("window-close-symbolic", 16))
+                    //TODO: this causes issues with small window sizes .minimum_button_width(240)
+                    .on_activate(Message::TabActivate)
+                    .on_close(Message::TabClose)
+                    .width(Length::Shrink),
+            )
+            .push(
+                button::custom(icon_cache_get("list-add-symbolic", 16))
+                    .on_press(Message::NewFile)
+                    .padding(space_xxs)
+                    .class(style::Button::Icon),
+            );
+
         tab_column = tab_column.push(
-            widget::row::with_capacity(2)
-                .align_y(Alignment::Center)
-                .push(
-                    widget::tab_bar::horizontal(&self.tab_model)
-                        .button_height(32)
-                        .enable_tab_drag(String::from("x-cosmic-edit/tab"))
-                        .on_reorder(Message::ReorderTab)
-                        .tab_drag_threshold(25.)
-                        .button_spacing(space_xxs)
-                        .close_icon(icon_cache_get("window-close-symbolic", 16))
-                        //TODO: this causes issues with small window sizes .minimum_button_width(240)
-                        .on_activate(Message::TabActivate)
-                        .on_close(Message::TabClose)
-                        .width(Length::Shrink),
-                )
-                .push(
-                    button::custom(icon_cache_get("list-add-symbolic", 16))
-                        .on_press(Message::NewFile)
-                        .padding(space_xxs)
-                        .class(style::Button::Icon),
-                ),
+            widget::container(tab_strip)
+                .padding([space_xxxs, space_xxs])
+                .width(Length::Fill)
+                .class(theme::Container::custom(tab_bar_glass_style)),
         );
 
         let tab_id = self.tab_model.active();
@@ -3442,7 +3525,11 @@ impl Application for App {
                             }
                         }
                     };
-                    tab_column = tab_column.push(widget::text(status).font(Font::MONOSPACE));
+                    tab_column = tab_column.push(
+                        widget::container(widget::text(status).font(Font::MONOSPACE))
+                            .padding([space_xxxs, space_xs])
+                            .class(theme::Container::custom(vim_status_glass_style)),
+                    );
                 }
             }
             Some(Tab::GitDiff(tab)) => {
@@ -3464,12 +3551,14 @@ impl Application for App {
                                     "{:4} {:4} + {}",
                                     "", new_line, text
                                 )))
-                                .style(|_theme| {
-                                    //TODO: theme this color
+                                .style(|theme| {
+                                    // Claw Glass: themed success glass wash, not a
+                                    // hardcoded pure-green field.
+                                    let cosmic = theme.cosmic();
+                                    let mut bg = cosmic.success.base;
+                                    bg.alpha *= 0.18;
                                     widget::container::Style {
-                                        background: Some(Background::Color(Color::from_rgb8(
-                                            0x00, 0x40, 0x00,
-                                        ))),
+                                        background: Some(Background::Color(bg.into())),
                                         ..Default::default()
                                     }
                                 })
@@ -3479,12 +3568,13 @@ impl Application for App {
                                     "{:4} {:4} - {}",
                                     old_line, "", text
                                 )))
-                                .style(|_theme| {
-                                    //TODO: theme this color
+                                .style(|theme| {
+                                    // Claw Glass: themed destructive glass wash.
+                                    let cosmic = theme.cosmic();
+                                    let mut bg = cosmic.destructive.base;
+                                    bg.alpha *= 0.18;
                                     widget::container::Style {
-                                        background: Some(Background::Color(Color::from_rgb8(
-                                            0x40, 0x00, 0x00,
-                                        ))),
+                                        background: Some(Background::Color(bg.into())),
                                         ..Default::default()
                                     }
                                 })
@@ -3620,8 +3710,11 @@ impl Application for App {
                 .spacing(space_xxs),
             );
 
-            tab_column = tab_column
-                .push(widget::layer_container(column).layer(cosmic_theme::Layer::Primary));
+            tab_column = tab_column.push(
+                widget::container(column)
+                    .padding(space_xxs)
+                    .class(theme::Container::custom(find_bar_glass_style)),
+            );
         }
 
         let content: Element<_> = tab_column.into();
