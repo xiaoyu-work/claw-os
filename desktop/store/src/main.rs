@@ -59,6 +59,8 @@ mod config;
 use editors_choice::EDITORS_CHOICE;
 mod editors_choice;
 
+mod glass;
+
 use gstreamer::GStreamerCodec;
 mod gstreamer;
 
