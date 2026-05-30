@@ -12,10 +12,9 @@ then get crossed off here.
 ### Background — what each store actually does
 
 Claw OS ships four memory stores. They are **not** redundant; each
-covers a different access pattern. The earlier draft confused
-"the curator writes to `USER.md`" — that is wrong; the curator
-writes to `MEMORY.md`. `USER.md` is reserved for **LLM-initiated**
-appends via the `cos_memory` tool.
+covers a different access pattern. The curator writes to `MEMORY.md`;
+`USER.md` is reserved for **LLM-initiated** appends via the
+`cos_memory` tool.
 
 | Store | Physical | Writer | When | Injected into prompt? | Read path |
 | --- | --- | --- | --- | --- | --- |
@@ -194,90 +193,10 @@ Suggested implementation order:
 
 ## System introspection — making the agent actually live in the OS
 
-### Problem
-
-The agent is supposed to be an OS-resident assistant on Linux/COSMIC,
-but for the first cut it could only answer roughly the same questions
-a shell user with read access to `/proc` could answer manually
-(`info`, `env`, `resources`, `uptime`, `proc`, `mounts`, `net`,
-`cgroup`). Everything else — *"which process is eating CPU right
-now"*, *"how hot is the chip"*, *"what just crashed"*, *"who's on
-port 8080"* — required ad-hoc shell pipelines via `cos_sandbox`,
-which is the LLM equivalent of telling a doctor to bring their own
-stethoscope.
-
-### Cause
-
-`core/src/sysinfo.rs` exposed only the cheapest `/proc` reads.
-Anything that needed (a) two-sample diffing (CPU%, IO/sec), (b)
-shelling out to a system tool (journalctl, systemctl, apt, dmesg,
-coredumpctl, who), or (c) parsing structured `/sys` hierarchies
-(thermal, power_supply, hwmon) was missing entirely.
-
-The `cos agent doctor` command was also CLI-only — even though it
-returns JSON and its `doctor_cmd` already matches the cos primitive
-signature, the LLM had no tool entry for it.
-
-### Done (Linux-only)
-
-`core/src/sysinfo.rs` now ships **24 sub-commands** under the
-`cos_sysinfo` tool:
-
-| Group | Commands |
-|---|---|
-| identity | `info`, `env`, `uptime`, `who`, `desktop` |
-| load / health | `resources`, `loadavg`, `sensors`, `cgroup` |
-| processes | `proc`, `top`, `threads`, `port` |
-| network | `net`, `net_rate` |
-| storage | `mounts`, `disk_io`, `largest_files` |
-| logs | `journal`, `dmesg` |
-| systemd | `services`, `failed_units`, `coredumps` |
-| packages | `pkg_updates` |
-
-Key behaviours:
-
-- **`top`** — two-sample `/proc/<pid>/stat` diff, returns a real
-  `cpu_percent` per process (configurable `--interval`, `--top`,
-  `--by cpu|mem`).
-- **`threads <pid>`** — walks `/proc/<pid>/task/`, returns per-TID
-  state and CPU.
-- **`port <port>`** — cross-references `/proc/net/{tcp,tcp6,udp,udp6}`
-  with `/proc/<pid>/fd/socket:[inode]` to map a port to owning PIDs.
-- **`sensors`** — reads `/sys/class/power_supply/` (battery state,
-  capacity, remaining-runtime estimate, AC adapters),
-  `/sys/class/thermal/` (thermal zones), and `/sys/class/hwmon/`
-  (fans + extra temps). All values in canonical SI / Celsius.
-- **`journal`** — wraps `journalctl -o json` with `--unit`,
-  `--since`, `--lines`, `--priority`, `--kernel`. Returns parsed
-  JSON entries with a stable schema (timestamp / unit / priority /
-  pid / comm / message).
-- **`services`** — wraps `systemctl list-units --output=json` with
-  `--failed-only`, `--type`, `--state`.
-- **`coredumps`** — `coredumpctl list --json=short` with a raw-text
-  fallback for older systemd.
-- **`disk_io` / `net_rate`** — two-sample `/proc/diskstats` and
-  `/proc/net/dev` for kB/s rates.
-- **`largest_files <path> [--top N --min-mb N]`** — bounded-size
-  min-heap walker; stays on one filesystem like `find -xdev`.
-
-Also: **`cos_doctor`** — a new top-level LLM tool that exposes
-`cos agent doctor` to the model. Flags only; the `command` arg is
-ignored (single-shot). Output JSON has the `status: ok|warn|fail`
-rollup the CLI already produces. Wired via the standard
-`PrimitiveSpec` pattern in `core/src/agent/tools/cos_proxy/mod.rs`.
-
-Files touched:
-- `core/src/sysinfo.rs` — +16 commands, +~1100 lines, +tests.
-- `core/src/agent/tools/cos_proxy/mod.rs` — extended `cos_sysinfo`
-  spec; added `cos_doctor` `PrimitiveSpec`.
-- `core/src/agent/doctor_cli.rs` — `doctor_primitive` shim.
-- `core/src/agent/tools/registry.rs` — assert `cos_doctor` is
-  registered.
-
-### Deferred / still open
-
-These are real gaps but are bigger architectural pieces that
-deserve their own PRs:
+`core/src/sysinfo.rs` backs the `cos_sysinfo` tool (process/network/
+storage/log/systemd/package reads) and `cos_doctor` exposes
+`cos agent doctor` to the model. The gaps below are bigger
+architectural pieces that each deserve their own PR:
 
 #### S1 — Full desktop state (windows, displays, clipboard)
 
