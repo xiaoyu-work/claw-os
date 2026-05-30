@@ -9,7 +9,7 @@ use cosmic::iced::keyboard::{Event as KeyEvent, Key, Modifiers};
 use cosmic::iced::mouse::{Event as MouseEvent, ScrollDelta};
 use cosmic::iced::window::{self, set_mode};
 use cosmic::iced::{
-    Alignment, Background, Border, Color, ContentFit, Length, Limits, Subscription,
+    Alignment, Color, ContentFit, Length, Limits, Subscription,
 };
 use cosmic::widget::menu::action::MenuAction;
 use cosmic::widget::{self, Slider, nav_bar, segmented_button};
@@ -37,6 +37,7 @@ mod menu;
 #[cfg(feature = "mpris-server")]
 mod mpris;
 mod project;
+mod style;
 mod thumbnail;
 mod video;
 #[cfg(feature = "xdg-portal")]
@@ -1651,21 +1652,26 @@ impl Application for App {
         };
 
         let Some(video) = &self.video_opt else {
-            //TODO: use space variables
-            let column = widget::column::with_capacity(4)
+            let card = widget::container(
+                widget::column::with_capacity(3)
+                    .align_x(Alignment::Center)
+                    .spacing(space_m)
+                    .push(widget::icon::from_name("folder-symbolic").size(64))
+                    .push(widget::text::body(fl!("no-video-or-audio-file-open")))
+                    .push(
+                        widget::button::suggested(fl!("open-file"))
+                            .on_press(Message::FileOpen),
+                    ),
+            )
+            .padding([space_m + space_s, space_m + space_s])
+            .class(style::now_playing_card());
+
+            let column = widget::column::with_capacity(3)
                 .align_x(Alignment::Center)
-                .spacing(24)
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .push(widget::space::vertical())
-                .push(
-                    widget::column::with_capacity(2)
-                        .align_x(Alignment::Center)
-                        .spacing(8)
-                        .push(widget::icon::from_name("folder-symbolic").size(64))
-                        .push(widget::text::body(fl!("no-video-or-audio-file-open"))),
-                )
-                .push(widget::button::suggested(fl!("open-file")).on_press(Message::FileOpen))
+                .push(card)
                 .push(widget::space::vertical());
 
             return widget::container(column)
@@ -1699,12 +1705,22 @@ impl Application for App {
             col = col.push(widget::space::vertical());
             if let Some(album_art) = &self.album_art_opt {
                 col = col.push(
-                    widget::image(widget::image::Handle::from_path(album_art.path()))
-                        .content_fit(ContentFit::ScaleDown)
-                        .width(Length::Fill),
+                    widget::container(
+                        widget::image(widget::image::Handle::from_path(album_art.path()))
+                            .content_fit(ContentFit::ScaleDown)
+                            .width(Length::Fill),
+                    )
+                    .padding(space_xxs)
+                    .class(style::now_playing_card()),
                 );
             } else {
-                col = col.push(widget::icon::from_name("audio-x-generic-symbolic").size(256));
+                col = col.push(
+                    widget::container(
+                        widget::icon::from_name("audio-x-generic-symbolic").size(256),
+                    )
+                    .padding(space_m)
+                    .class(style::now_playing_card()),
+                );
             }
             col = col.push(widget::space::vertical().height(space_s));
             if self.mpris_meta.title.is_empty() {
@@ -1823,23 +1839,8 @@ impl Application for App {
                 widget::row::with_children(vec![
                     widget::space::horizontal().into(),
                     widget::container(column)
-                        .padding(1)
-                        //TODO: move style to libcosmic
-                        .class(theme::Container::custom(|theme| {
-                            let cosmic = theme.cosmic();
-                            let component = &cosmic.background.component;
-                            widget::container::Style {
-                                icon_color: Some(component.on.into()),
-                                text_color: Some(component.on.into()),
-                                background: Some(Background::Color(component.base.into())),
-                                border: Border {
-                                    radius: 8.0.into(),
-                                    width: 1.0,
-                                    color: component.divider.into(),
-                                },
-                                ..Default::default()
-                            }
-                        }))
+                        .padding(space_xxs)
+                        .class(style::popover_card())
                         .width(Length::Fixed(240.0))
                         .into(),
                 ])
@@ -1964,31 +1965,37 @@ impl Application for App {
                     .on_press(Message::DropdownToggle(DropdownKind::Audio)),
                 );
             popup_items.push(
-                widget::container(row)
-                    .padding([space_xxs, space_xs])
-                    .class(theme::Container::WindowBackground)
-                    .into(),
+                widget::container(
+                    widget::container(row)
+                        .padding([space_xs, space_m])
+                        .class(style::control_bar()),
+                )
+                .padding([0, space_m, space_s, space_m])
+                .into(),
             );
 
             if self.core.is_condensed() {
                 popup_items.push(
                     widget::container(
-                        widget::row::with_capacity(3)
-                            .align_y(Alignment::Center)
-                            .spacing(space_xxs)
-                            .push(widget::text(format_time(self.position)).font(font::mono()))
-                            .push(
-                                Slider::new(0.0..=self.duration, self.position, Message::Seek)
-                                    .step(0.1)
-                                    .on_release(Message::SeekRelease),
-                            )
-                            .push(
-                                widget::text(format_time(self.duration - self.position))
-                                    .font(font::mono()),
-                            ),
+                        widget::container(
+                            widget::row::with_capacity(3)
+                                .align_y(Alignment::Center)
+                                .spacing(space_xxs)
+                                .push(widget::text(format_time(self.position)).font(font::mono()))
+                                .push(
+                                    Slider::new(0.0..=self.duration, self.position, Message::Seek)
+                                        .step(0.1)
+                                        .on_release(Message::SeekRelease),
+                                )
+                                .push(
+                                    widget::text(format_time(self.duration - self.position))
+                                        .font(font::mono()),
+                                ),
+                        )
+                        .padding([space_xs, space_m])
+                        .class(style::control_bar()),
                     )
-                    .padding([space_xxs, space_xs])
-                    .class(theme::Container::WindowBackground)
+                    .padding([0, space_m, space_s, space_m])
                     .into(),
                 );
             }
