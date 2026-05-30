@@ -2617,8 +2617,33 @@ impl App {
         .on_input(Message::SearchInput);
         row = row.push(search_input);
 
-        widget::container(row)
+        let toolbar = widget::container(row)
             .padding([space_xxs, space_xs])
+            .width(Length::Fill)
+            .class(theme::Container::custom(|theme| {
+                // Claw Glass: frosted glass toolbar.
+                let cosmic = theme.cosmic();
+                widget::container::Style {
+                    background: Some(cosmic::iced::Background::Color(
+                        cosmic.bg_component_color().into(),
+                    )),
+                    ..Default::default()
+                }
+            }));
+        // Claw Glass: brand-blue translucent hairline separating chrome from content.
+        let hairline = cosmic::iced::widget::rule::horizontal(1).class(theme::Rule::Custom(
+            Box::new(|theme| cosmic::iced::widget::rule::Style {
+                color: {
+                    let mut c = theme.cosmic().accent_color();
+                    c.alpha = 0.20;
+                    c.into()
+                },
+                radius: 0.0.into(),
+                fill_mode: cosmic::iced::widget::rule::FillMode::Full,
+                snap: true,
+            }),
+        ));
+        widget::column::with_children([toolbar.into(), hairline.into()])
             .width(Length::Fill)
             .into()
     }
@@ -7202,7 +7227,25 @@ impl Application for App {
             .padding([8, space_xs])
             .layer(cosmic_theme::Layer::Primary);
 
-        Some(container.into())
+        // Claw Glass: brand-blue translucent hairline above the footer status/path bar.
+        let hairline = cosmic::iced::widget::rule::horizontal(1).class(theme::Rule::Custom(
+            Box::new(|theme| cosmic::iced::widget::rule::Style {
+                color: {
+                    let mut c = theme.cosmic().accent_color();
+                    c.alpha = 0.20;
+                    c.into()
+                },
+                radius: 0.0.into(),
+                fill_mode: cosmic::iced::widget::rule::FillMode::Full,
+                snap: true,
+            }),
+        ));
+
+        Some(
+            widget::column::with_children([hairline.into(), container.into()])
+                .width(Length::Fill)
+                .into(),
+        )
     }
 
     fn header_start(&self) -> Vec<Element<'_, Self::Message>> {

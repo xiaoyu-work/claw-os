@@ -432,9 +432,14 @@ pub fn context_menu<'a>(
                 text_color: Some(component.on.into()),
                 background: Some(Background::Color(component.base.into())),
                 border: Border {
-                    radius: cosmic.radius_s().map(|x| x + 1.0).into(),
+                    radius: cosmic.radius_m().into(),
                     width: 1.0,
-                    color: component.divider.into(),
+                    // Claw Glass: brand-blue translucent hairline, never gray.
+                    color: {
+                        let mut c = cosmic.accent_color();
+                        c.alpha = 0.20;
+                        c.into()
+                    },
                 },
                 ..Default::default()
             }
@@ -840,9 +845,14 @@ pub fn location_context_menu<'a>(ancestor_index: usize) -> Element<'a, tab::Mess
                 text_color: Some(component.on.into()),
                 background: Some(Background::Color(component.base.into())),
                 border: Border {
-                    radius: cosmic.radius_s().map(|x| x + 1.0).into(),
+                    radius: cosmic.radius_m().into(),
                     width: 1.0,
-                    color: component.divider.into(),
+                    // Claw Glass: brand-blue translucent hairline, never gray.
+                    color: {
+                        let mut c = cosmic.accent_color();
+                        c.alpha = 0.20;
+                        c.into()
+                    },
                 },
                 ..Default::default()
             }

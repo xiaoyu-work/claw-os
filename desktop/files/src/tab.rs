@@ -166,11 +166,17 @@ fn button_appearance(
                 appearance.text_color = Some(Color::from(cosmic.on_accent_color()));
             }
         } else {
-            appearance.background = Some(Color::from(cosmic.bg_component_color()).into());
+            // Claw Glass: selection is a brand-blue translucent fill, never gray.
+            let mut selection = cosmic.accent_color();
+            selection.alpha = 0.22;
+            appearance.background = Some(Color::from(selection).into());
         }
     } else if highlighted {
         if accent {
-            appearance.background = Some(Color::from(cosmic.bg_component_color()).into());
+            // Claw Glass: hover is a faint brand-blue wash, never gray.
+            let mut hover = cosmic.accent_color();
+            hover.alpha = 0.10;
+            appearance.background = Some(Color::from(hover).into());
             appearance.icon_color = Some(Color::from(cosmic.on_bg_component_color()));
             appearance.text_color = Some(Color::from(cosmic.on_bg_component_color()));
             if cut {
@@ -179,7 +185,10 @@ fn button_appearance(
                 appearance.text_color = Some(Color::from(cosmic.on_bg_component_color()));
             }
         } else {
-            appearance.background = Some(Color::from(cosmic.bg_component_color()).into());
+            // Claw Glass: hover is a faint brand-blue wash, never gray.
+            let mut hover = cosmic.accent_color();
+            hover.alpha = 0.10;
+            appearance.background = Some(Color::from(hover).into());
         }
     } else if desktop {
         appearance.background = Some(Color::from(cosmic.bg_color()).into());
@@ -5036,8 +5045,19 @@ impl Tab {
                 fill_mode: rule::FillMode::Full,
                 snap: true,
             })));
-        let heading_rule = widget::container(rule::horizontal(1))
-            .padding([0, theme::active().cosmic().corner_radii.radius_xs[0] as u16]);
+        let heading_rule = widget::container(rule::horizontal(1).class(theme::Rule::Custom(
+            Box::new(|theme| rule::Style {
+                color: {
+                    let mut c = theme.cosmic().accent_color();
+                    c.alpha = 0.20;
+                    c.into()
+                },
+                radius: 0.0.into(),
+                fill_mode: rule::FillMode::Full,
+                snap: true,
+            }),
+        )))
+        .padding([0, theme::active().cosmic().corner_radii.radius_xs[0] as u16]);
 
         if let Some(edit_location) = &self.edit_location {
             let mut text_input = None;
@@ -6162,6 +6182,27 @@ impl Tab {
 
         let mut tab_column = widget::column::with_capacity(3);
         if let Some(location_view) = location_view_opt {
+            // Claw Glass: frosted location/path bar — translucent glass pane with a
+            // brand-blue translucent hairline and rounded (radius_l) corners.
+            let location_view = widget::container(location_view)
+                .padding([space_xxxs, space_xs])
+                .width(Length::Fill)
+                .class(theme::Container::custom(|theme| {
+                    let cosmic = theme.cosmic();
+                    let mut hairline = cosmic.accent_color();
+                    hairline.alpha = 0.20;
+                    widget::container::Style {
+                        background: Some(cosmic::iced::Background::Color(
+                            cosmic.bg_component_color().into(),
+                        )),
+                        border: cosmic::iced::Border {
+                            radius: cosmic.radius_l().into(),
+                            width: 1.0,
+                            color: hairline.into(),
+                        },
+                        ..Default::default()
+                    }
+                }));
             tab_column = tab_column.push(location_view);
         }
         if can_scroll {
@@ -7020,7 +7061,12 @@ fn text_editor_class(
                 border: cosmic::iced::Border {
                     radius: cosmic.corner_radii.radius_m.into(),
                     width: 2.0,
-                    color: container.component.divider.into(),
+                    color: {
+                        // Claw Glass: brand-blue translucent hairline, never gray.
+                        let mut c = cosmic.accent.base;
+                        c.alpha = 0.30;
+                        c.into()
+                    },
                 },
                 placeholder,
                 value,
