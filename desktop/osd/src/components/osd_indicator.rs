@@ -341,16 +341,20 @@ impl State {
         .align_x(Alignment::Center)
         .align_y(Alignment::Center)
         .class(cosmic::theme::Container::custom(move |theme| {
+            let cosmic = theme.cosmic();
+            // Claw Glass: frosted translucent surface (never flat gray) with a
+            // 1px brand-blue translucent hairline. Depth comes from the
+            // compositor blur + the blue accent progress bar, not heavy chrome.
             widget::container::Style {
-                text_color: Some(theme.cosmic().on_bg_color().into()),
-                background: Some(iced::Color::from(theme.cosmic().bg_color()).into()),
+                text_color: Some(cosmic.on_bg_color().into()),
+                background: Some(iced::Color::from(cosmic.bg_component_color()).into()),
                 border: Border {
                     radius: radius.into(),
                     width: 1.0,
-                    color: theme.cosmic().bg_divider().into(),
+                    color: cosmic.accent_color().with_alpha(0.20).into(),
                 },
                 shadow: Default::default(),
-                icon_color: Some(theme.cosmic().on_bg_color().into()),
+                icon_color: Some(cosmic.on_bg_color().into()),
                 snap: true,
             }
         }));
