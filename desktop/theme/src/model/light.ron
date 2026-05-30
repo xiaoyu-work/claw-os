@@ -1,13 +1,13 @@
 Light (
     (
         name: "cosmic-light",
-        // macOS-style system blue (#007AFF) — replaces the upstream COSMIC
-        // dark-teal accent. Matches Aqua control tint in light mode; the
-        // sibling semantic colors (red/green/yellow) follow the macOS
-        // system palette so destructive / success / warning surfaces feel
-        // native rather than COSMIC's pastel set.
+        // Claw brand blue (#005CFE) — the single accent across the whole
+        // "Claw Glass" design language (from the logo claw-dot). Replaces the
+        // macOS Aqua system blue; the sibling semantic colors
+        // (red/green/yellow) follow the macOS system palette so destructive /
+        // success / warning surfaces feel native.
         blue: (
-            c: "#007AFF",
+            c: "#005CFE",
         ),
         red: (
             c: "#FF3B30",
@@ -18,20 +18,23 @@ Light (
         yellow: (
             c: "#FFCC00",
         ),
+        // Claw Glass: surface seeds carry a faint cool-blue cast (not flat
+        // gray) at the original luminance so bright frosted surfaces read as
+        // blue glass while preserving text contrast.
         gray_1: (
-            c: "#DEDEDE",
+            c: "#DCE1EE",
         ),
         gray_2: (
-            c: "#E9E9E9",
+            c: "#E6EAF4",
         ),
         gray_3: (
-            c: "#F4F4F4",
+            c: "#F1F4FB",
         ),
         neutral_1: (
-            c: "#FFF",
+            c: "#FCFDFF",
         ),
         neutral_2: (
-            c: "#E4E4E4",
+            c: "#E1E5EF",
         ),
         neutral_3: (
             c: "#C9C9C9",
