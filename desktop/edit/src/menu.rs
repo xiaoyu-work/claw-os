@@ -156,18 +156,22 @@ pub fn context_menu<'a>(
         menu_item(fl!("select-all"), Action::SelectAll),
     ))
     .padding(1)
-    //TODO: move style to libcosmic
+    // Claw Glass popover: frosted surface, large radius, blue-tinted hairline.
     .style(|theme| {
         let cosmic = theme.cosmic();
         let component = &cosmic.background.component;
+        let mut base = component.base;
+        base.alpha *= 0.92;
+        let mut divider = component.divider;
+        divider.alpha *= 0.5;
         widget::container::Style {
             icon_color: Some(component.on.into()),
             text_color: Some(component.on.into()),
-            background: Some(Background::Color(component.base.into())),
+            background: Some(Background::Color(base.into())),
             border: Border {
-                radius: cosmic.radius_s().map(|x| x + 1.0).into(),
+                radius: cosmic.radius_l().into(),
                 width: 1.0,
-                color: component.divider.into(),
+                color: divider.into(),
             },
             ..Default::default()
         }
