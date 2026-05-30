@@ -18,6 +18,7 @@ use zbus::zvariant;
 
 use crate::app::CosmicPortal;
 use crate::wayland::WaylandHelper;
+use crate::widget::glass;
 use crate::widget::keyboard_wrapper::KeyboardWrapper;
 use crate::{PortalResponse, fl, subscription};
 
@@ -178,18 +179,39 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<'_, Msg> {
     for (i, ((id, label, choices, initial), choice_labels)) in
         choices.iter().zip(&args.choice_labels).enumerate()
     {
-        let label = text(label);
+        // Brand-blue accent-tinted choice label (loud content, quiet chrome).
+        let label = text(label).class(cosmic::theme::style::Text::Custom(|theme| {
+            cosmic::iced::core::widget::text::Style {
+                color: Some(theme.cosmic().accent_color().into()),
+            }
+        }));
         let active_choice = args
             .active_choices
             .get(id)
             .and_then(|choice_id| choices.iter().position(|(x, _)| x == choice_id));
         let dropdown = dropdown(choice_labels, active_choice, move |j| Msg::Choice(i, j));
-        options.push(row![label, dropdown].into());
+        options.push(
+            row![label, widget::space::horizontal(), dropdown]
+                .spacing(spacing.space_s as f32)
+                .align_y(Alignment::Center)
+                .into(),
+        );
     }
 
-    let options = Column::with_children(options)
-        .spacing(spacing.space_xxs as f32) // space_l
-        .align_x(Alignment::Center);
+    let has_choices = !options.is_empty();
+    let options = Column::with_children(options).spacing(spacing.space_s as f32);
+
+    // Group the choices into a frosted radius_l card with generous padding so
+    // the consent options read as one airy glass surface, never boxed rows.
+    let options: cosmic::Element<_> = if has_choices {
+        widget::container(options)
+            .padding(spacing.space_m as u16)
+            .width(cosmic::iced::Length::Fill)
+            .class(glass::frosted_card())
+            .into()
+    } else {
+        options.into()
+    };
 
     let icon = icon::Icon::from(
         icon::from_name(
@@ -203,7 +225,8 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<'_, Msg> {
 
     let control = column![text(args.body.as_str()), options].spacing(spacing.space_m as f32);
 
-    let cancel_button = button::text(
+    // Secondary = glass + hairline (button::standard); primary = brand-blue.
+    let cancel_button = button::standard(
         args.options
             .deny_label
             .clone()

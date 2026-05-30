@@ -46,7 +46,8 @@ impl<Msg: Clone + 'static> Widget<Msg, cosmic::Theme, cosmic::Renderer> for Outp
         _viewport: &cosmic::iced::core::Rectangle,
     ) {
         let cosmic = theme.cosmic();
-        let radius_s = cosmic.radius_s();
+        // Brand-blue accent selection ring on the live output preview (radius_m).
+        let radius_m = cosmic.radius_m();
         let mut accent = Color::from(cosmic.accent_color());
         // draw two rectangles if hovered
         let should_draw = {
@@ -64,7 +65,7 @@ impl<Msg: Clone + 'static> Widget<Msg, cosmic::Theme, cosmic::Renderer> for Outp
             Quad {
                 bounds,
                 border: Border {
-                    radius: radius_s.into(),
+                    radius: radius_m.into(),
                     width: 12.0,
                     color: accent,
                 },
@@ -80,7 +81,7 @@ impl<Msg: Clone + 'static> Widget<Msg, cosmic::Theme, cosmic::Renderer> for Outp
             Quad {
                 bounds,
                 border: Border {
-                    radius: radius_s.into(),
+                    radius: radius_m.into(),
                     width: 4.0,
                     color: accent,
                 },
