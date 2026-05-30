@@ -200,11 +200,7 @@ impl page::Page for Page {
                     ),
                 )
                 .on_press(Message::Select(i))
-                .class(if selected {
-                    theme::Button::Link
-                } else {
-                    theme::Button::MenuRoot
-                }),
+                .class(page::selection::list_row(selected)),
             );
             if first_opt.is_none() {
                 first_opt = Some(i);
