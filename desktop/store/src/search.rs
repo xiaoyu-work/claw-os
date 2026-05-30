@@ -8,7 +8,7 @@ use std::time::Instant;
 use cosmic::{
     Element, cosmic_theme,
     iced::{Alignment, Length},
-    theme, widget,
+    widget,
 };
 
 use crate::app_id::AppId;
@@ -296,7 +296,7 @@ impl SearchResult {
         .width(Length::Fixed(width as f32))
         .height(Length::Fixed(48.0 + (spacing.space_xxs as f32) * 2.0))
         .padding([spacing.space_xxs, spacing.space_s])
-        .class(theme::Container::Card)
+        .class(crate::glass::card_class())
         .into()
     }
 }

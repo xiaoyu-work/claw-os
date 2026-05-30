@@ -85,7 +85,7 @@ pub fn package_card_view<'a>(
         .width(width as f32)
         .height(height)
         .padding([spacing.space_xxs, spacing.space_s])
-        .class(theme::Container::Card)
+        .class(crate::glass::card_class())
         .into()
 }
 
@@ -383,7 +383,11 @@ impl App {
                         .into(),
                     ])
                     .align_y(Alignment::Center)
-                    .spacing(space_m),
+                    .spacing(space_m)
+                    .apply(widget::container)
+                    .padding(space_m)
+                    .width(Length::Fill)
+                    .class(crate::glass::hero_class()),
                 );
 
                 let sources_widget = widget::column::with_children(vec![if selected.sources.len()
@@ -482,6 +486,8 @@ impl App {
                         widget::container(widget::image(image.clone()))
                             .center_x(Length::Fill)
                             .center_y(image_height)
+                            .padding(space_xxs)
+                            .class(crate::glass::screenshot_class())
                             .into()
                     } else {
                         widget::space::horizontal()
@@ -683,7 +689,7 @@ impl App {
                                         .leading_icon(icon_cache_handle("go-previous-symbolic", 16))
                                         .on_press(Message::ExplorePage(None)),
                                 );
-                                column = column.push(widget::text::title4(explore_page.title()));
+                                column = column.push(widget::text::title3(explore_page.title()));
                                 //TODO: ensure explore_page matches
                                 match self.explore_results.get(&explore_page) {
                                     Some(results) => {
@@ -711,10 +717,22 @@ impl App {
                             None => {
                                 let explore_pages = ExplorePage::all();
                                 let mut column =
-                                    widget::column::with_capacity(explore_pages.len() * 2)
+                                    widget::column::with_capacity(explore_pages.len() + 1)
                                         .padding([0, space_s, space_m, space_s])
-                                        .spacing(space_xxs)
+                                        .spacing(space_m)
                                         .width(Length::Fill);
+
+                                // Featured spotlight: highlight the first
+                                // Editor's Choice app in an accent-tinted glass
+                                // hero at the top of the Explore home.
+                                if let Some(featured) = self
+                                    .explore_results
+                                    .get(&ExplorePage::EditorsChoice)
+                                    .and_then(|results| results.first())
+                                {
+                                    column = column.push(featured_hero(featured, &spacing));
+                                }
+
                                 for explore_page in explore_pages.iter() {
                                     //TODO: ensure explore_page matches
                                     match self.explore_results.get(explore_page) {
@@ -732,8 +750,11 @@ impl App {
                                             //TODO: adjust results length based on app size?
                                             let results_len = cmp::min(results.len(), max_results);
 
-                                            column = column.push(widget::row::with_children(vec![
-                                                widget::text::title4(explore_page.title()).into(),
+                                            // Section header sits tight above its
+                                            // grid; shelves breathe via the outer
+                                            // column's generous space_m rhythm.
+                                            let header = widget::row::with_children(vec![
+                                                widget::text::title3(explore_page.title()).into(),
                                                 widget::space::horizontal().into(),
                                                 widget::button::text(fl!("see-all"))
                                                     .trailing_icon(icon_cache_handle(
@@ -744,9 +765,10 @@ impl App {
                                                         *explore_page,
                                                     )))
                                                     .into(),
-                                            ]));
+                                            ])
+                                            .align_y(Alignment::Center);
 
-                                            column = column.push(SearchResult::grid_view(
+                                            let grid = SearchResult::grid_view(
                                                 &results[..results_len],
                                                 spacing,
                                                 grid_width,
@@ -756,7 +778,15 @@ impl App {
                                                         result_i,
                                                     )
                                                 },
-                                            ));
+                                            );
+
+                                            column = column.push(
+                                                widget::column::with_children(vec![
+                                                    header.into(),
+                                                    grid,
+                                                ])
+                                                .spacing(space_s),
+                                            );
                                         }
                                         _ => {}
                                     }
@@ -1044,6 +1074,56 @@ impl App {
             },
         }
     }
+}
+
+/// Accent-tinted featured spotlight for the Explore home. Showcases a single
+/// app (the first Editor's Choice pick) inside a Claw Glass hero card: large
+/// icon, brand-blue eyebrow label, name, summary and a filled action that opens
+/// the full Editor's Choice shelf. Clicking the card opens the app's detail.
+fn featured_hero<'a>(
+    result: &'a SearchResult,
+    spacing: &cosmic_theme::Spacing,
+) -> Element<'a, Message> {
+    let icon: Element<_> = match &result.icon_opt {
+        Some(icon) => widget::icon::icon(icon.clone())
+            .size(ICON_SIZE_DETAILS)
+            .into(),
+        None => widget::space::horizontal()
+            .width(Length::Fixed(ICON_SIZE_DETAILS as f32))
+            .into(),
+    };
+
+    let eyebrow = widget::text::caption(fl!("editors-choice")).class(theme::Text::Custom(|t| {
+        cosmic::iced::widget::text::Style {
+            color: Some(t.cosmic().accent_color().into()),
+        }
+    }));
+
+    let info_col = widget::column::with_children(vec![
+        eyebrow.into(),
+        widget::text::title2(&result.info.name).into(),
+        widget::text::body(&result.info.summary).into(),
+        widget::space::vertical()
+            .height(Length::Fixed(spacing.space_xs as f32))
+            .into(),
+        widget::button::suggested(fl!("see-all"))
+            .on_press(Message::ExplorePage(Some(ExplorePage::EditorsChoice)))
+            .into(),
+    ])
+    .spacing(spacing.space_xxs);
+
+    let row = widget::row::with_children(vec![icon, info_col.into()])
+        .spacing(spacing.space_l)
+        .align_y(Alignment::Center);
+
+    widget::mouse_area(
+        widget::container(row)
+            .padding(spacing.space_l)
+            .width(Length::Fill)
+            .class(crate::glass::hero_class()),
+    )
+    .on_press(Message::SelectExploreResult(ExplorePage::EditorsChoice, 0))
+    .into()
 }
 
 fn ask_claw_search_callout<'a>(query: &str) -> Element<'a, Message> {
