@@ -625,7 +625,10 @@ impl cosmic::Application for CosmicBatteryApplet {
 
     fn view_window(&self, _id: window::Id) -> Element<'_, Message> {
         let Spacing {
-            space_xxs, space_s, ..
+            space_xxs,
+            space_xs,
+            space_s,
+            ..
         } = theme::active().cosmic().spacing;
 
         let name = text::body(fl!("battery"));
@@ -651,7 +654,7 @@ impl cosmic::Application for CosmicBatteryApplet {
                         icon::from_name(&*self.icon_name).size(24).symbolic(true),
                         column![name, description]
                     ]
-                    .spacing(8)
+                    .spacing(space_xxs)
                     .align_y(Alignment::Center),
                 )
                 .into(),
@@ -773,7 +776,7 @@ impl cosmic::Application for CosmicBatteryApplet {
                             .width(Length::Fixed(40.0))
                             .align_x(Alignment::End)
                         ]
-                        .spacing(12),
+                        .spacing(space_xs),
                     )
                     .into(),
                 );
@@ -804,7 +807,7 @@ impl cosmic::Application for CosmicBatteryApplet {
                             .width(Length::Fixed(40.0))
                             .align_x(Alignment::End)
                         ]
-                        .spacing(12),
+                        .spacing(space_xs),
                     )
                     .into(),
                 );
@@ -915,7 +918,7 @@ impl cosmic::Application for CosmicBatteryApplet {
                                 column![text::body(&app.name), text::caption(&app.secondary)]
                                     .width(Length::Fill),
                             ]
-                            .spacing(8)
+                            .spacing(space_xxs)
                             .align_y(Alignment::Center),
                         )
                         .into(),
@@ -942,7 +945,7 @@ impl cosmic::Application for CosmicBatteryApplet {
 
         self.core
             .applet
-            .popup_container(Column::with_children(content).padding([8, 0]))
+            .popup_container(Column::with_children(content).padding([space_xxs, 0]))
             .into()
     }
 

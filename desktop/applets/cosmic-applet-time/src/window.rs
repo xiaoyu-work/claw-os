@@ -707,7 +707,10 @@ impl cosmic::Application for Window {
 
     fn view_window(&self, _id: window::Id) -> Element<'_, Message> {
         let Spacing {
-            space_xxs, space_s, ..
+            space_xxs,
+            space_xs,
+            space_s,
+            ..
         } = theme::active().cosmic().spacing;
 
         let datetime = self.create_datetime(&self.date_selected);
@@ -735,7 +738,7 @@ impl cosmic::Application for Window {
                 .padding(8)
                 .on_press(Message::NextMonth)
         ]
-        .spacing(8);
+        .spacing(space_xxs);
 
         let calendar = self.calendar_grid();
 
@@ -746,13 +749,13 @@ impl cosmic::Application for Window {
                 month_controls,
             ]
             .align_y(Alignment::Center)
-            .padding([12, 20]),
-            calendar.padding([0, 12].into()),
+            .padding([space_xs, space_s]),
+            calendar.padding([0, space_xs].into()),
             padded_control(divider::horizontal::default()).padding([space_xxs, space_s]),
             menu_button(text::body(fl!("datetime-settings")))
                 .on_press(Message::OpenDateTimeSettings),
         ]
-        .padding([8, 0]);
+        .padding([space_xxs, 0]);
 
         self.core
             .applet

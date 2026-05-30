@@ -548,7 +548,10 @@ impl cosmic::Application for Audio {
 
     fn view_window(&self, _id: window::Id) -> Element<'_, Message> {
         let Spacing {
-            space_xxs, space_s, ..
+            space_xxs,
+            space_xs,
+            space_s,
+            ..
         } = theme::active().cosmic().spacing;
 
         let sink = self
@@ -594,7 +597,7 @@ impl cosmic::Application for Audio {
                             .width(Length::FillPortion(1))
                             .align_x(Alignment::End)
                     ]
-                    .spacing(12)
+                    .spacing(space_xs)
                     .align_y(Alignment::Center)
                 ),
                 padded_control(
@@ -613,7 +616,7 @@ impl cosmic::Application for Audio {
                             .width(Length::FillPortion(1))
                             .align_x(Alignment::End)
                     ]
-                    .spacing(12)
+                    .spacing(space_xs)
                     .align_y(Alignment::Center)
                 ),
                 padded_control(divider::horizontal::default()).padding([space_xxs, space_s]),
@@ -714,7 +717,7 @@ impl cosmic::Application for Audio {
                 Row::with_children(control_elements)
                     .align_y(Alignment::Center)
                     .width(Length::FillPortion(control_cnt.saturating_add(1)))
-                    .spacing(8)
+                    .spacing(space_xxs)
                     .into(),
             );
 
@@ -724,7 +727,7 @@ impl cosmic::Application for Audio {
                 menu_button(
                     Row::with_children(elements)
                         .align_y(Alignment::Center)
-                        .spacing(8),
+                        .spacing(space_xxs),
                 )
                 .on_press(Message::MprisRequest(MprisRequest::Raise))
                 .padding(menu_control_padding()),
@@ -744,7 +747,7 @@ impl cosmic::Application for Audio {
             menu_button(text::body(fl!("sound-settings"))).on_press(Message::OpenSettings)
         ]
         .align_x(Alignment::Start)
-        .padding([8, 0]);
+        .padding([space_xxs, 0]);
 
         self.core.applet.popup_container(container(content)).into()
     }

@@ -302,7 +302,7 @@ impl cosmic::Application for Window {
             menu_button(text::body(fl!("window-management-settings")))
                 .on_press(Message::OpenSettings)
         ]
-        .padding([8, 0]);
+        .padding([space_xxs, 0]);
 
         self.core.applet.popup_container(content_list).into()
     }
