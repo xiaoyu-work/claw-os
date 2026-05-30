@@ -58,31 +58,63 @@ static SCROLLABLE: LazyLock<Id> = LazyLock::new(|| Id::new("scrollable"));
 pub(crate) static MENU_ID: LazyLock<SurfaceId> = LazyLock::new(SurfaceId::unique);
 const SCROLL_MIN: usize = 8;
 
+/// Frosted "Claw Glass" search pill for the launcher.
+///
+/// The pill floats over an arbitrary wallpaper like macOS Spotlight, so the
+/// glass keeps a luminance anchor (dark-enough fill in dark mode, light-enough
+/// in light mode) for readable contrast. Instead of a neutral gray/white frost
+/// we blend a small amount of the brand accent (`#005CFE`) into the fill, the
+/// foreground, and the hairline so the surface reads as brand-blue Claw Glass:
+/// a deep navy-blue glass in dark mode and a cool blue-white glass in light
+/// mode — never flat gray, never dead charcoal. Selection / focus is brand blue.
 fn spotlight_pill_appearance(theme: &cosmic::Theme) -> cosmic::widget::text_input::Appearance {
     let cosmic = theme.cosmic();
     let is_dark = theme.theme_type.is_dark();
-    let (fill, fill_alpha, border_alpha) = if is_dark {
-        (0.16_f32, 0.55_f32, 0.18_f32)
+    let accent = cosmic.accent_color();
+
+    // `base` = neutral luminance anchor (preserves contrast over any wallpaper),
+    // `tint` = how much brand accent to blend into the frost for the blue cast.
+    let (base, fill_alpha, border_alpha, tint) = if is_dark {
+        (0.16_f32, 0.58_f32, 0.24_f32, 0.16_f32)
     } else {
-        (0.98_f32, 0.62_f32, 0.32_f32)
+        (0.98_f32, 0.64_f32, 0.32_f32, 0.07_f32)
     };
+    // Blend a channel of the neutral anchor toward the matching accent channel.
+    let mix = |chan: f32| base * (1.0 - tint) + chan * tint;
+    let fill_color = Color::from_rgba(
+        mix(accent.red),
+        mix(accent.green),
+        mix(accent.blue),
+        fill_alpha,
+    );
+
+    // Foreground stays high-contrast but carries a faint blue cast so text and
+    // icons belong to the same glass family rather than reading neutral.
     let fg = if is_dark { 1.0_f32 } else { 0.05_f32 };
-    let fg_color = Color::from_rgba(fg, fg, fg, 1.0);
-    let placeholder = Color::from_rgba(fg, fg, fg, 0.55);
+    let fg_tint = if is_dark { 0.06_f32 } else { 0.10_f32 };
+    let fg_color = Color::from_rgba(
+        fg * (1.0 - fg_tint) + accent.red * fg_tint,
+        fg * (1.0 - fg_tint) + accent.green * fg_tint,
+        fg * (1.0 - fg_tint) + accent.blue * fg_tint,
+        1.0,
+    );
+    let placeholder = Color { a: 0.55, ..fg_color };
+    let icon_color = Color { a: 0.85, ..fg_color };
+
     cosmic::widget::text_input::Appearance {
-        background: cosmic::iced::Background::Color(Color::from_rgba(
-            fill, fill, fill, fill_alpha,
-        )),
+        background: cosmic::iced::Background::Color(fill_color),
         border_radius: cosmic.corner_radii.radius_xl.into(),
         border_offset: None,
         border_width: 1.0,
-        border_color: Color::from_rgba(1.0, 1.0, 1.0, border_alpha),
+        // Blue-tinted translucent hairline (brand accent), not white/gray.
+        border_color: accent.with_alpha(border_alpha).into(),
         label_color: fg_color,
         placeholder_color: placeholder,
         selected_text_color: cosmic.on_accent_color().into(),
-        icon_color: Some(Color::from_rgba(fg, fg, fg, 0.85)),
+        icon_color: Some(icon_color),
         text_color: Some(fg_color),
-        selected_fill: cosmic.accent_color().into(),
+        // Brand-blue text selection highlight.
+        selected_fill: accent.into(),
     }
 }
 
@@ -1277,12 +1309,20 @@ impl cosmic::Application for CosmicLauncher {
                         .class(Button::Custom {
                             active: Box::new(move |focused, theme| {
                                 let focused = is_focused || focused;
-                                let rad_s = theme.cosmic().corner_radii.radius_s;
-                                let a = if focused {
+                                let cosmic = theme.cosmic();
+                                let rad_s = cosmic.corner_radii.radius_s;
+                                let mut a = if focused {
                                     button::Catalog::hovered(theme, focused, focused, &Button::Text)
                                 } else {
                                     button::Catalog::active(theme, focused, focused, &Button::Text)
                                 };
+                                if focused {
+                                    // Brand-blue translucent selection highlight
+                                    // (Claw Glass selection is accent, never gray).
+                                    a.background = Some(cosmic::iced::Background::Color(
+                                        cosmic.accent_color().with_alpha(0.20).into(),
+                                    ));
+                                }
                                 button::Style {
                                     border_radius: rad_s.into(),
                                     outline_width: 0.0,
@@ -1291,14 +1331,22 @@ impl cosmic::Application for CosmicLauncher {
                             }),
                             hovered: Box::new(move |focused, theme| {
                                 let focused = is_focused || focused;
-                                let rad_s = theme.cosmic().corner_radii.radius_s;
+                                let cosmic = theme.cosmic();
+                                let rad_s = cosmic.corner_radii.radius_s;
 
-                                let text = button::Catalog::hovered(
+                                let mut text = button::Catalog::hovered(
                                     theme,
                                     focused,
                                     focused,
                                     &Button::Text,
                                 );
+                                // Brand-blue translucent hover/selection fill —
+                                // slightly stronger when this row is the active
+                                // selection, fainter on plain hover.
+                                let alpha = if focused { 0.24 } else { 0.12 };
+                                text.background = Some(cosmic::iced::Background::Color(
+                                    cosmic.accent_color().with_alpha(alpha).into(),
+                                ));
                                 button::Style {
                                     border_radius: rad_s.into(),
                                     outline_width: 0.0,
