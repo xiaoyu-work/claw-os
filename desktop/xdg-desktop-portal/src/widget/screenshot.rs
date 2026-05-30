@@ -270,14 +270,16 @@ where
                     .spacing(space_s)
                     .align_y(Alignment::Center),
                     divider::vertical::light().height(Length::Fixed(64.0)),
-                    button::custom(text(fl!("capture"))).on_press_maybe(
-                        if let Choice::Rectangle(r, ..) = choice {
-                            // Disable button on empty selection
-                            r.dimensions().is_some().then_some(on_capture)
-                        } else {
-                            Some(on_capture)
-                        }
-                    ),
+                    button::custom(text(fl!("capture")))
+                        .class(cosmic::theme::Button::Suggested)
+                        .on_press_maybe(
+                            if let Choice::Rectangle(r, ..) = choice {
+                                // Disable button on empty selection
+                                r.dimensions().is_some().then_some(on_capture)
+                            } else {
+                                Some(on_capture)
+                            }
+                        ),
                     divider::vertical::light().height(Length::Fixed(64.0)),
                     Element::from(dropdown(
                         save_locations.as_slice(),
@@ -300,12 +302,17 @@ where
             )
             .class(cosmic::theme::Container::Custom(Box::new(|theme| {
                 let theme = theme.cosmic();
+                // Frosted radius_l glass bar with a brand-blue hairline; depth
+                // comes from the compositor blur, not a heavy gray box.
+                let mut hairline: cosmic::iced::Color = theme.accent_color().into();
+                hairline.a = 0.20;
                 cosmic::iced::widget::container::Style {
-                    background: Some(Background::Color(theme.background.component.base.into())),
-                    text_color: Some(theme.background.component.on.into()),
+                    background: Some(Background::Color(theme.bg_component_color().into())),
+                    text_color: Some(theme.on_bg_color().into()),
                     border: Border {
-                        radius: theme.corner_radii.radius_s.into(),
-                        ..Default::default()
+                        radius: theme.radius_l().into(),
+                        width: 1.0,
+                        color: hairline,
                     },
                     ..Default::default()
                 }
