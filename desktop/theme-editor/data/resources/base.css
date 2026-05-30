@@ -1,0 +1,225 @@
+/*
+ * Claw Glass — Theme Editor app chrome.
+ *
+ * Applied at runtime as an app-level CSS provider (see application.rs).
+ * Scoped to `.claw-root` and custom `.claw-*` classes so it styles the editor
+ * chrome ONLY and never collides with the generated theme-preview classes
+ * (`background`, `primary-container`, …) that the live-preview pane renders.
+ *
+ * GTK4 CSS has no real backdrop blur, so "frosted glass" is approximated with
+ * translucent rgba surfaces + 1px blue-tinted hairlines + soft shadows; the
+ * Claw compositor's dual-Kawase blur completes the effect at runtime.
+ *
+ * One accent only: Claw brand blue #005CFE. Bright cool blue-white glass,
+ * never flat gray. Radii: cards 16, controls 10, chips/swatches pill.
+ */
+
+/* ---- palette ---------------------------------------------------------- */
+@define-color claw_accent           #005CFE;
+@define-color claw_accent_hover     #2C7BFF;
+@define-color claw_accent_soft      alpha(#005CFE, 0.12);
+@define-color claw_destructive      #FF3B30;
+@define-color claw_text             #0A1A2F;   /* deep navy ink */
+@define-color claw_text_muted       alpha(#0A1A2F, 0.55);
+@define-color claw_hairline         alpha(#005CFE, 0.14);
+@define-color claw_card             alpha(#FFFFFF, 0.66);
+@define-color claw_card_inset       alpha(#FFFFFF, 0.50);
+@define-color claw_control          alpha(#FFFFFF, 0.72);
+
+/* ---- root window: cool blue-white glass base -------------------------- */
+.claw-root {
+    background: linear-gradient(160deg, #FCFDFF 0%, #EEF3FF 100%);
+    color: @claw_text;
+    font-family: "Inter", "Inter Variable", sans-serif;
+}
+
+.claw-root scrolledwindow,
+.claw-root viewport {
+    background: transparent;
+}
+
+/* ---- title / section typography --------------------------------------- */
+.claw-app-title {
+    font-size: 19px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    color: @claw_text;
+}
+
+.claw-app-subtitle {
+    font-size: 12.5px;
+    font-weight: 400;
+    color: @claw_text_muted;
+}
+
+.claw-section-title {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: @claw_text;
+}
+
+.claw-section-caption {
+    font-size: 11.5px;
+    font-weight: 400;
+    color: @claw_text_muted;
+}
+
+.claw-label {
+    font-size: 12.5px;
+    font-weight: 500;
+    color: @claw_text;
+}
+
+/* ---- frosted grouped cards (radius 16) -------------------------------- */
+.claw-card {
+    background: @claw_card;
+    border: 1px solid @claw_hairline;
+    border-radius: 16px;
+    padding: 16px;
+    box-shadow: 0 1px 2px alpha(#0A1A2F, 0.04),
+                0 8px 24px alpha(#0A1A2F, 0.06);
+}
+
+/* ---- hairline divider ------------------------------------------------- */
+.claw-hairline {
+    background: @claw_hairline;
+    min-height: 1px;
+    border: none;
+}
+
+/* ---- text input (radius 10, brand-blue focus ring) -------------------- */
+.claw-input,
+.claw-root entry.claw-input {
+    background: @claw_control;
+    color: @claw_text;
+    border: 1px solid @claw_hairline;
+    border-radius: 10px;
+    padding: 9px 12px;
+    caret-color: @claw_accent;
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.claw-input:focus,
+.claw-input:focus-within,
+.claw-root entry.claw-input:focus-within {
+    border-color: @claw_accent;
+    box-shadow: 0 0 0 3px @claw_accent_soft;
+    outline: none;
+}
+
+/* ---- buttons ---------------------------------------------------------- */
+/* secondary = glass + hairline */
+.claw-root button.claw-secondary {
+    background: @claw_control;
+    color: @claw_text;
+    border: 1px solid @claw_hairline;
+    border-radius: 10px;
+    padding: 9px 16px;
+    font-weight: 500;
+    box-shadow: none;
+    transition: background 120ms ease, border-color 120ms ease;
+}
+.claw-root button.claw-secondary:hover {
+    background: alpha(#FFFFFF, 0.92);
+    border-color: @claw_accent_soft;
+}
+.claw-root button.claw-secondary:focus-visible {
+    box-shadow: 0 0 0 3px @claw_accent_soft;
+}
+
+/* primary = filled brand blue */
+.claw-root button.claw-primary {
+    background: @claw_accent;
+    color: #FFFFFF;
+    border: 1px solid alpha(#005CFE, 0.0);
+    border-radius: 10px;
+    padding: 9px 18px;
+    font-weight: 600;
+    box-shadow: 0 2px 8px alpha(#005CFE, 0.30);
+    transition: background 120ms ease, box-shadow 120ms ease;
+}
+.claw-root button.claw-primary:hover {
+    background: @claw_accent_hover;
+    box-shadow: 0 4px 14px alpha(#005CFE, 0.38);
+}
+.claw-root button.claw-primary:focus-visible {
+    box-shadow: 0 0 0 3px @claw_accent_soft, 0 2px 8px alpha(#005CFE, 0.30);
+}
+
+/* destructive = system red */
+.claw-root button.claw-destructive {
+    background: @claw_destructive;
+    color: #FFFFFF;
+    border: none;
+    border-radius: 10px;
+    padding: 9px 18px;
+    font-weight: 600;
+    box-shadow: 0 2px 8px alpha(#FF3B30, 0.28);
+}
+.claw-root button.claw-destructive:hover {
+    background: shade(#FF3B30, 1.06);
+}
+
+/* ---- color swatch chips (radius 10) ----------------------------------- */
+.claw-swatch-cell {
+    background: @claw_card_inset;
+    border: 1px solid @claw_hairline;
+    border-radius: 12px;
+    padding: 10px;
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.claw-swatch-cell:hover {
+    border-color: @claw_accent_soft;
+    box-shadow: 0 4px 12px alpha(#0A1A2F, 0.07);
+}
+
+.claw-root colorbutton.claw-swatch,
+.claw-root colorbutton.claw-swatch button {
+    border-radius: 10px;
+    border: 1px solid @claw_hairline;
+    min-width: 40px;
+    min-height: 28px;
+    box-shadow: inset 0 1px 1px alpha(#FFFFFF, 0.30);
+    transition: box-shadow 120ms ease;
+}
+.claw-root colorbutton.claw-swatch:hover button {
+    box-shadow: 0 0 0 3px @claw_accent_soft;
+}
+
+/* ---- switch: pill track, brand-blue when active ----------------------- */
+.claw-root switch.claw-switch {
+    border-radius: 100px;
+    background: alpha(#0A1A2F, 0.14);
+    border: 1px solid @claw_hairline;
+    min-width: 44px;
+}
+.claw-root switch.claw-switch:checked {
+    background: @claw_accent;
+    border-color: alpha(#005CFE, 0.0);
+}
+.claw-root switch.claw-switch slider {
+    border-radius: 100px;
+    background: #FFFFFF;
+    box-shadow: 0 1px 3px alpha(#0A1A2F, 0.25);
+}
+
+/* ---- headerbar: frosted, quiet --------------------------------------- */
+headerbar {
+    background: alpha(#FCFDFF, 0.72);
+    border-bottom: 1px solid @claw_hairline;
+    box-shadow: none;
+    color: @claw_text;
+}
+headerbar .title {
+    font-weight: 600;
+    color: @claw_text;
+}
+
+/* ---- live-preview wrapper -------------------------------------------- */
+.claw-preview-frame {
+    border-radius: 16px;
+    border: 1px solid @claw_hairline;
+    padding: 6px;
+    background: @claw_card_inset;
+    box-shadow: inset 0 1px 2px alpha(#0A1A2F, 0.05);
+}
