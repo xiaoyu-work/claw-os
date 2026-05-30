@@ -9,10 +9,8 @@ full details.
 The build produces a virtual disk under `build/`, e.g.
 `build/claw-os-vm-amd64.vmdk`, that you can boot in a VM.
 
-> **A real Linux host is required.** The build uses `debootstrap`, `chroot`,
-> `losetup`, `mount` and `mkfs`, which need a Linux kernel and root. It also
-> **builds natively only** — the image architecture must match the host
-> (`amd64` host → `amd64` image, `arm64` host → `arm64` image).
+> Requires a Linux host with root. Builds natively only — the image
+> architecture matches the host (`amd64` → `amd64`, `arm64` → `arm64`).
 
 ## 1. Build steps
 
