@@ -123,35 +123,50 @@ pub fn page_list_item<'a, Message: 'static + Clone>(
 ) -> Element<'a, Message> {
     let Spacing {
         space_xxs,
+        space_xs,
         space_s,
         space_m,
         ..
     } = cosmic::theme::spacing();
 
-    let mut builder = cosmic::widget::settings::item::builder(title);
-
     let description = description.into();
-
     let info = info.into();
 
+    // Leading brand-blue glass "icon tile" (iOS/macOS settings row pattern).
+    let icon_tile = container(icon::from_name(icon).size(20))
+        .padding(space_xs)
+        .class(crate::theme::icon_tile());
+
+    // Title + optional description stacked with a clear weight/size hierarchy.
+    let mut text_column = column::with_capacity(2).push(text::body(title));
+
     if !description.is_empty() {
-        builder = builder.description(description);
+        text_column = text_column.push(text::caption(description));
     }
 
-    builder
-        .icon(container(icon::from_name(icon).size(20)).padding(8))
-        .control(
-            row::with_capacity(2)
-                .push(text::body(info))
-                .push(container(icon::from_name("go-next-symbolic").size(20)).padding(8))
-                .align_y(Alignment::Center),
-        )
-        .padding(0)
-        .spacing(space_xxs)
+    let text_column = text_column.spacing(space_xxs).width(Length::Fill);
+
+    // Trailing value text (if any) + chevron affordance.
+    let mut trailing = row::with_capacity(2)
+        .align_y(Alignment::Center)
+        .spacing(space_xs);
+
+    if !info.is_empty() {
+        trailing = trailing.push(text::body(info));
+    }
+
+    trailing = trailing.push(icon::from_name("go-next-symbolic").size(16).icon());
+
+    row::with_capacity(3)
+        .push(icon_tile)
+        .push(text_column)
+        .push(trailing)
+        .align_y(Alignment::Center)
+        .spacing(space_m)
         .apply(container)
         .padding([space_s, space_m])
-        .align_x(Alignment::Center)
-        .class(theme::Container::List)
+        .align_y(Alignment::Center)
+        .class(crate::theme::frosted_card())
         .width(Length::Fill)
         .apply(button::custom)
         .padding(0)
