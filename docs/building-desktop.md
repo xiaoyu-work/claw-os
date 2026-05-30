@@ -18,7 +18,7 @@ The build produces a virtual disk under `build/`, e.g.
 
 ```bash
 sudo apt update
-sudo apt install -y debootstrap qemu-utils parted dosfstools rsync \
+sudo apt install -y git debootstrap qemu-utils parted dosfstools rsync \
                     util-linux e2fsprogs grub-efi-amd64-bin grub-pc-bin
 # On an arm64 host, use grub-efi-arm64-bin instead (and drop grub-pc-bin).
 ```
@@ -26,7 +26,6 @@ sudo apt install -y debootstrap qemu-utils parted dosfstools rsync \
 ### Get the source
 
 ```bash
-sudo apt install -y git
 git clone https://github.com/xiaoyu-work/claw-os.git
 cd claw-os
 ```
