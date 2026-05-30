@@ -2,6 +2,7 @@ use crate::app::CosmicPortal;
 use crate::fl;
 use crate::wayland::{CaptureSource, WaylandHelper};
 use crate::widget::keyboard_wrapper::KeyboardWrapper;
+use crate::widget::glass;
 use ashpd::desktop::screencast::SourceType;
 use ashpd::enumflags2::BitFlags;
 use cosmic::desktop::IconSourceExt;
@@ -299,13 +300,23 @@ fn output_button_appearance(
 ) -> widget::button::Style {
     let cosmic = theme.cosmic();
     let mut appearance = widget::button::Style::new();
-    appearance.border_radius = cosmic.corner_radii.radius_s.into();
+    // Controls use radius_m (10) in Claw Glass.
+    appearance.border_radius = cosmic.radius_m().into();
+    let mut accent = iced::Color::from(cosmic.accent_color());
     if is_active {
+        // Brand-blue ring + translucent brand-blue fill — never gray.
         appearance.border_width = 2.0;
-        appearance.border_color = cosmic.accent.base.into();
+        accent.a = 1.0;
+        appearance.border_color = accent;
+        let mut fill = accent;
+        fill.a = 0.16;
+        appearance.background = Some(iced::Background::Color(fill));
     }
     if hovered {
-        appearance.background = Some(iced::Background::Color(cosmic.button.base.into()));
+        // Brand-blue translucent hover wash (lighter when not selected).
+        let mut fill = iced::Color::from(cosmic.accent_color());
+        fill.a = if is_active { 0.22 } else { 0.10 };
+        appearance.background = Some(iced::Background::Color(fill));
     }
     appearance
 }
@@ -324,7 +335,15 @@ fn output_button<'a>(
     }));
     let mut row_children = vec![text.into()];
     if is_selected {
-        row_children.push(widget::text("✓").into());
+        row_children.push(
+            widget::text("✓")
+                .class(theme::style::Text::Custom(|theme| {
+                    iced::core::widget::text::Style {
+                        color: Some(theme.cosmic().accent_color().into()),
+                    }
+                }))
+                .into(),
+        );
     }
     let row = widget::row::with_children(row_children).spacing(12);
 
@@ -378,11 +397,29 @@ fn toplevel_button(
     let mut children = Vec::new();
     children.push(icon.as_cosmic_icon().icon().size(24).into());
     children.push(button.into());
-    // TODO
     if is_selected {
-        children.push(widget::text("✓").into());
+        // Brand-blue check marks the selected window row.
+        children.push(widget::space::horizontal().into());
+        children.push(
+            widget::text("✓")
+                .class(theme::style::Text::Custom(|theme| {
+                    iced::core::widget::text::Style {
+                        color: Some(theme.cosmic().accent_color().into()),
+                    }
+                }))
+                .into(),
+        );
     }
-    widget::row::with_children(children).spacing(12).into()
+    // Brand-blue translucent highlight for the selected row — never gray.
+    widget::container(
+        widget::row::with_children(children)
+            .spacing(12)
+            .align_y(iced::Alignment::Center),
+    )
+    .padding([6, 8])
+    .width(iced::Length::Fill)
+    .class(glass::selection_tile(is_selected))
+    .into()
 }
 
 pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<'_, Msg> {
@@ -446,7 +483,14 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<'_, Msg> {
     let unknown = fl!("unknown-application");
     let app_name = args.app_name.as_deref().unwrap_or(&unknown);
 
-    let control = widget::column::with_children(vec![tabs.into(), list]).spacing(8);
+    // Group the source picker into a frosted radius_l glass card with generous
+    // padding so outputs/windows read as one airy surface, never boxed chrome.
+    let list = widget::container(list)
+        .padding(12)
+        .width(iced::Length::Fill)
+        .class(glass::frosted_card());
+
+    let control = widget::column::with_children(vec![tabs.into(), list.into()]).spacing(12);
     autosize::autosize(
         KeyboardWrapper::new(
             widget::dialog()
