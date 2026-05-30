@@ -250,7 +250,7 @@ impl cosmic::Application for Window {
         } = theme::active().cosmic().spacing;
 
         let mut content_list =
-            widget::column::with_capacity(4 + self.active_layouts.len()).padding([8, 0]);
+            widget::column::with_capacity(4 + self.active_layouts.len()).padding([space_xxs, 0]);
         for (id, layout) in self.active_layouts.iter().enumerate() {
             let group = widget::column::with_capacity(2)
                 .push(widget::text::body(layout.description.as_str()))

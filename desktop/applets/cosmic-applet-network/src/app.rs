@@ -392,7 +392,7 @@ impl CosmicNetworkApplet {
 
         self.core
             .applet
-            .popup_container(content.padding([8, 0, 8, 0]))
+            .popup_container(content.padding([space_xxs, 0, space_xxs, 0]))
             .into()
     }
 
@@ -1650,8 +1650,8 @@ impl cosmic::Application for CosmicNetworkApplet {
                     text::body(fl!("airplane-mode-on")).into(),
                     text(fl!("turn-off-airplane-mode")).size(12).into(),
                 ])
-                .spacing(8)
-                .padding([0, 0, 8, 0])
+                .spacing(space_xxs)
+                .padding([0, 0, space_xxs, 0])
                 .align_x(Alignment::Center)
                 .width(Length::Fill),
             );

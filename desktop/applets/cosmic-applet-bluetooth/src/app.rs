@@ -317,7 +317,10 @@ impl cosmic::Application for CosmicBluetoothApplet {
 
     fn view_window(&self, _id: window::Id) -> Element<'_, Message> {
         let Spacing {
-            space_xxs, space_s, ..
+            space_xxs,
+            space_xs,
+            space_s,
+            ..
         } = theme::active().cosmic().spacing;
 
         let mut known_bluetooth = Vec::new();
@@ -335,7 +338,7 @@ impl cosmic::Application for CosmicBluetoothApplet {
                     .width(Length::Fill)
             ]
             .align_y(Alignment::Center)
-            .spacing(12);
+            .spacing(space_xs);
 
             if let Some(battery) = dev.battery_percent {
                 let icon = match battery {
@@ -407,7 +410,7 @@ impl cosmic::Application for CosmicBluetoothApplet {
                 .text_size(14)
         ),],]
         .align_x(Alignment::Center)
-        .padding([8, 0]);
+        .padding([space_xxs, 0]);
         if !known_bluetooth.is_empty() {
             content = content
                 .push(padded_control(divider::horizontal::default()).padding([space_xxs, space_s]));
@@ -494,7 +497,7 @@ impl cosmic::Application for CosmicBluetoothApplet {
                     text::body(dev.name.clone()).align_x(Alignment::Start),
                 ]
                 .align_y(Alignment::Center)
-                .spacing(12);
+                .spacing(space_xs);
                 visible_devices = visible_devices.push(
                     menu_button(row.width(Length::Fill))
                         .on_press(Message::Request(BluerRequest::PairDevice(dev.address))),

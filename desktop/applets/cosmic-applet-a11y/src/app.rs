@@ -363,7 +363,7 @@ impl cosmic::Application for CosmicA11yApplet {
             .push(hc_colors_toggle)
             .push(padded_control(divider::horizontal::default()).padding([space_xxs, space_s]))
             .push(menu_button(text::body(fl!("settings"))).on_press(Message::OpenSettings))
-            .padding([8, 0]);
+            .padding([space_xxs, 0]);
 
         self.core.applet.popup_container(content_list).into()
     }
