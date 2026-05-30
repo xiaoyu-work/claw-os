@@ -581,8 +581,11 @@ impl App {
                 );
             } else if let Some(error) = &self.common.error_opt {
                 column = column.push(
-                    widget::text(error)
-                        .class(theme::Text::Color(iced::Color::from_rgb(1.0, 0.0, 0.0))),
+                    widget::text(error).class(theme::Text::Custom(|theme| {
+                        iced::widget::text::Style {
+                            color: Some(theme.cosmic().destructive_text_color().into()),
+                        }
+                    })),
                 );
                 if !self.common.caps_lock {
                     column = column.push(widget::text(""));

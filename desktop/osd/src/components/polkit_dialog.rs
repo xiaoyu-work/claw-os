@@ -208,9 +208,11 @@ impl State {
         if self.retries > 0 {
             right_column.push(
                 widget::text::body(&self.msg_invalid_password)
-                    .class(cosmic::theme::Text::Color(iced::Color::from_rgb(
-                        1.0, 0.0, 0.0,
-                    )))
+                    .class(cosmic::theme::Text::Custom(|theme| {
+                        iced::widget::text::Style {
+                            color: Some(theme.cosmic().destructive_text_color().into()),
+                        }
+                    }))
                     .into(),
             );
         } else {
