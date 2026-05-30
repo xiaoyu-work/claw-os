@@ -23,9 +23,17 @@ sudo apt install -y debootstrap qemu-utils parted dosfstools rsync \
 # On an arm64 host, use grub-efi-arm64-bin instead (and drop grub-pc-bin).
 ```
 
+### Get the source
+
+```bash
+sudo apt install -y git
+git clone https://github.com/xiaoyu-work/claw-os.git
+cd claw-os
+```
+
 ### Build command
 
-From the repository root:
+Run from the repository root (the `claw-os` directory you just cloned):
 
 ```bash
 sudo FEATURES=base,cos-core,systemd,kernel,desktop,vmware,copilot-cli,grub-disk,vm,apt-source \
