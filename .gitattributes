@@ -1,0 +1,32 @@
+# Claw OS builds and runs on Linux, so all text files use LF line endings.
+# Forcing eol=lf here overrides a contributor's core.autocrlf=true, which
+# otherwise rewrites scripts to CRLF on Windows checkouts and breaks the
+# Linux/WSL build (`env: 'bash\r': No such file or directory`).
+* text=auto eol=lf
+
+# Shell scripts and other Linux-executed sources must stay LF.
+*.sh text eol=lf
+*.bash text eol=lf
+*.py text eol=lf
+*.service text eol=lf
+*.target text eol=lf
+*.desktop text eol=lf
+
+# Windows-only scripts keep CRLF.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary assets: never normalize.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.gif binary
+*.gz binary
+*.xz binary
+*.zst binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
