@@ -3,6 +3,7 @@
 
 use color_eyre::eyre::WrapErr;
 use cosmic::app::{Core, Settings, Task};
+use cosmic::cosmic_theme::palette::WithAlpha;
 use cosmic::cctk::wayland_protocols::xdg::shell::client::xdg_positioner::Gravity;
 use cosmic::iced::event::wayland::{OutputEvent, SessionLockEvent};
 use cosmic::iced::futures::{self, SinkExt};

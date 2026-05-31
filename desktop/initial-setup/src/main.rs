@@ -5,6 +5,7 @@ use std::any::TypeId;
 use std::path::Path;
 
 use cosmic::app::{Core, Settings, Task};
+use cosmic::cosmic_theme::palette::WithAlpha;
 use cosmic::iced::{Alignment, Background, Border, Color, ContentFit, Length, Shadow, Subscription};
 use cosmic::widget::container;
 use cosmic::{Application, Apply, Element, cosmic_theme, executor, theme, widget};

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use cosmic::{
+    cosmic_theme::palette::WithAlpha,
     iced::{Background, Border, Color, Shadow, Vector},
     theme,
 };

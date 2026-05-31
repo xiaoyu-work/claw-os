@@ -9,6 +9,7 @@ use color_eyre::eyre::WrapErr;
 use cosmic::app::{Core, Settings, Task};
 use cosmic::cctk::wayland_protocols::xdg::shell::client::xdg_positioner::Gravity;
 use cosmic::cosmic_config::{self, ConfigSet};
+use cosmic::cosmic_theme::palette::WithAlpha;
 use cosmic::cosmic_theme::{self, CosmicPalette};
 use cosmic::desktop::fde::{DesktopEntry, get_languages_from_env};
 use cosmic::iced::event::listen_with;

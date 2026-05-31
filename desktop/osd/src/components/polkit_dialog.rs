@@ -5,6 +5,7 @@
 use crate::fl;
 use crate::subscriptions::polkit_agent::PolkitError;
 use crate::subscriptions::polkit_agent_helper;
+use cosmic::cosmic_theme::palette::WithAlpha;
 use cosmic::iced::event::{PlatformSpecific, wayland};
 use cosmic::iced::platform_specific::shell::commands::layer_surface::{
     KeyboardInteractivity, Layer, destroy_layer_surface, get_layer_surface,

@@ -7,6 +7,7 @@
 //! blue-text-only `Button::Link` / `Button::MenuRoot` pairing so the whole row
 //! highlights, matching the analyzed onboarding references.
 
+use cosmic::cosmic_theme::palette::WithAlpha;
 use cosmic::iced::Background;
 use cosmic::theme;
 use cosmic::widget::button::Style;

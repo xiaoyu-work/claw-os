@@ -33,6 +33,7 @@ use std::env;
 use std::time::Instant;
 
 use cosmic::app::{Core, Settings, Task};
+use cosmic::cosmic_theme::palette::WithAlpha;
 use cosmic::iced::keyboard::{Key, key::Named};
 use cosmic::iced::{
     Alignment, Background, Border, Color, Length, Limits, Shadow, Subscription, event,

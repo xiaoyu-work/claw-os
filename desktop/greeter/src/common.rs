@@ -1,4 +1,5 @@
 use cosmic::app::{Core, Task};
+use cosmic::cosmic_theme::palette::WithAlpha;
 use cosmic::iced::core::SmolStr;
 use cosmic::iced::event::wayland::{Event as WaylandEvent, OutputEvent, SessionLockEvent};
 use cosmic::iced::event::{self};
