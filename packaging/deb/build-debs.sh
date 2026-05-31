@@ -91,13 +91,24 @@ find_bin() {
 # before giving up.
 ###############################################################################
 ensure_cargo() {
-    # 1. Make sure a `cargo` is on PATH. Probe the usual locations (incl. the
-    #    sudo-invoking user's home, since $HOME is /root under sudo).
+    # Resolve the sudo-invoking user's home up front. Under `sudo ./build.sh`,
+    # $HOME is /root but the Rust toolchain is usually installed in the
+    # invoking user's home (~/.rustup, ~/.cargo). cargo there is a rustup proxy
+    # that, when run as root, would look at /root/.rustup (empty) and fail with
+    # "rustup could not choose a version of cargo to run". Point RUSTUP_HOME at
+    # the user's toolchain so the existing install is reused (no second,
+    # root-owned toolchain). Leave CARGO_HOME at root's default so build caches
+    # are not written into the user's home as root.
+    local sudo_home=""
+    if [ -n "${SUDO_USER:-}" ]; then
+        sudo_home="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)"
+    fi
+    if [ -n "$sudo_home" ] && [ -z "${RUSTUP_HOME:-}" ] && [ -d "$sudo_home/.rustup" ]; then
+        export RUSTUP_HOME="$sudo_home/.rustup"
+    fi
+
+    # 1. Make sure a `cargo` is on PATH.
     if ! command -v cargo >/dev/null 2>&1; then
-        local sudo_home=""
-        if [ -n "${SUDO_USER:-}" ]; then
-            sudo_home="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)"
-        fi
         local dir
         for dir in \
             "$HOME/.cargo/bin" \
@@ -118,12 +129,20 @@ ensure_cargo() {
     # 2. Make sure cargo can actually run. When `cargo` is a rustup proxy with
     #    no default toolchain (e.g. installed via `apt install rustup`), it
     #    errors out: "rustup could not choose a version of cargo to run".
-    #    Self-heal by installing and selecting the stable toolchain.
+    #    Self-heal by installing and selecting the stable toolchain. rustup may
+    #    live next to cargo (same dir) even when not on PATH, so look there too.
     if ! cargo --version >/dev/null 2>&1; then
-        if command -v rustup >/dev/null 2>&1; then
+        local rustup_bin
+        rustup_bin="$(command -v rustup 2>/dev/null || true)"
+        if [ -z "$rustup_bin" ]; then
+            local cargo_dir
+            cargo_dir="$(dirname "$(command -v cargo)")"
+            [ -x "$cargo_dir/rustup" ] && rustup_bin="$cargo_dir/rustup"
+        fi
+        if [ -n "$rustup_bin" ]; then
             echo "  :: no default Rust toolchain configured — installing stable" >&2
-            rustup toolchain install stable >&2 || true
-            rustup default stable >&2 || true
+            "$rustup_bin" toolchain install stable >&2 || true
+            "$rustup_bin" default stable >&2 || true
         fi
     fi
     if ! cargo --version >/dev/null 2>&1; then
