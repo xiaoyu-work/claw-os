@@ -123,7 +123,8 @@ echo ":: attached $RAW at $LOOP (ESP=$ESP_DEV root=$ROOT_DEV)"
 # Set up cleanup early so any failure unmounts and detaches.
 cleanup() {
     set +e
-    [ -d "$MNT" ] && umount -R "$MNT" 2>/dev/null
+    # Lazy fallback: /sys is rbind'd (cgroup2 etc.) and can be "busy".
+    [ -d "$MNT" ] && { umount -R "$MNT" 2>/dev/null || umount -Rl "$MNT" 2>/dev/null; }
     [ -n "${LOOP:-}" ] && losetup -d "$LOOP" 2>/dev/null
 }
 trap cleanup EXIT
@@ -194,7 +195,17 @@ chroot "$MNT" update-grub
 
 # 11. Unwind.
 sync
-umount -R "$MNT"
+# Unmount the bind-mounted pseudo-filesystems first. /sys is rbind'd and so
+# carries cgroup2 (and other submounts) into $MNT/sys; those can report
+# "target is busy" under a plain `umount -R`, which would abort the build
+# (set -e) right before the raw->vmdk conversion. Detach them with a lazy
+# fallback. The real filesystems (root ext4 + ESP) are then unmounted
+# normally — NOT lazily — so the image is fully flushed before conversion.
+for pseudo in dev sys proc; do
+    umount -R "$MNT/$pseudo" 2>/dev/null || umount -Rl "$MNT/$pseudo" 2>/dev/null || true
+done
+umount "$MNT/boot/efi"
+umount "$MNT"
 losetup -d "$LOOP"
 LOOP=""
 trap - EXIT
