@@ -126,6 +126,20 @@ echo ":: arch:     $ARCH (deb=$DEB_ARCH, kernel=$KERNEL_PKG)"
 
 # 1. Bootstrap minimal Debian rootfs.
 echo ":: debootstrap --arch=$DEB_ARCH $SUITE -> $ROOTFS"
+# Guard: a previous run that was hard-killed (e.g. WSL OOM / VM restart)
+# never runs the EXIT trap below, so it can leave a half-populated $ROOTFS
+# with stale bind mounts. Re-running debootstrap over that dirty tree fails
+# with tar "... File exists" (exit 2). Always start from a clean directory:
+# lazily unmount any stray binds, then wipe it.
+if [ -e "$ROOTFS" ]; then
+    echo ":: existing rootfs found — cleaning stale mounts + tree before debootstrap"
+    for mp in "$ROOTFS/dev/pts" "$ROOTFS/dev" "$ROOTFS/sys" "$ROOTFS/proc" "$ROOTFS/run"; do
+        if mountpoint -q "$mp" 2>/dev/null; then
+            umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
+        fi
+    done
+    rm -rf "$ROOTFS"
+fi
 mkdir -p "$ROOTFS"
 debootstrap --extractor=ar --arch="$DEB_ARCH" "$SUITE" "$ROOTFS"
 
