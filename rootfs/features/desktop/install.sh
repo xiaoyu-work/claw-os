@@ -367,7 +367,15 @@ echo "  :: installing $(basename "$DESKTOP_DEB")"
 
 mkdir -p "$ROOTFS/var/cache/cos-debs"
 cp "$DESKTOP_DEB" "$ROOTFS/var/cache/cos-debs/"
-chroot "$ROOTFS" apt-get install -y --no-install-recommends \
+# The desktop deb ships some conffiles (e.g. /etc/apt/apt.conf.d/20auto-upgrades)
+# that already exist on the rootfs from the base overlay. dpkg would normally
+# stop at an interactive conffile prompt, but stdin is not a terminal inside the
+# chroot, so the prompt hits EOF and aborts. Force the non-interactive default
+# (keep the existing file: confdef + confold) and set the noninteractive frontend.
+DEBIAN_FRONTEND=noninteractive chroot "$ROOTFS" apt-get install -y \
+    --no-install-recommends \
+    -o Dpkg::Options::=--force-confdef \
+    -o Dpkg::Options::=--force-confold \
     "/var/cache/cos-debs/$(basename "$DESKTOP_DEB")"
 chroot "$ROOTFS" apt-get clean
 rm -rf "$ROOTFS/var/lib/apt/lists"/*

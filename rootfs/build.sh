@@ -180,6 +180,17 @@ cat > "$ROOTFS/etc/apt/apt.conf.d/81cos-no-pty" <<'EOF'
 Dpkg::Use-Pty "0";
 EOF
 
+# Make conffile conflicts non-interactive for the whole build. Some Claw OS
+# debs (e.g. claw-os-desktop) ship config files that already exist on the
+# rootfs from the base overlay (/etc/apt/apt.conf.d/20auto-upgrades). dpkg would
+# stop at an interactive "keep/replace?" conffile prompt, but stdin inside the
+# chroot is not a terminal, so the prompt hits EOF and the install aborts.
+# force-confdef + force-confold = take the default action (keep the existing
+# file) without prompting. Covers EVERY apt-get call in the build.
+cat > "$ROOTFS/etc/apt/apt.conf.d/82cos-confold" <<'EOF'
+Dpkg::Options { "--force-confdef"; "--force-confold"; };
+EOF
+
 # debootstrap writes a single-component sources.list (`main` only).
 # Claw OS needs `contrib` (e.g. some codec headers) and especially
 # `non-free-firmware` (Intel/Realtek/Broadcom Wi-Fi blobs, CPU
