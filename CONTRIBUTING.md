@@ -74,7 +74,9 @@ sudo ./build.sh vm
 sudo FORMATS="qcow2 vmdk vhdx" ./build.sh vm
 
 # VMware Fusion / Workstation build with VMware Tools guest integration
-# for guest resize / clipboard:
+# for guest resize / clipboard (preset wrapper sets the desktop features):
+sudo ./presets/desktop.sh
+# ...or spell out the equivalent FEATURES manually:
 sudo FEATURES=base,cos-core,systemd,kernel,desktop,vmware,copilot-cli,grub-disk,vm,apt-source \
      FORMATS=vmdk ./build.sh vm
 

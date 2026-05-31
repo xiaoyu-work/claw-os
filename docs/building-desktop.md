@@ -63,6 +63,19 @@ cd claw-os
 Run from the repository root (the `claw-os` directory you just cloned):
 
 ```bash
+sudo ./presets/desktop.sh
+```
+
+This preset sets the desktop feature set, `FORMATS=vmdk` and `SIZE=16G` for
+you, then calls `./build.sh vm`. See [`presets/README.md`](../presets/README.md)
+for the `wsl` and `docker` presets too.
+
+Output: `build/claw-os-vm-<arch>.vmdk`.
+
+<details>
+<summary>Manual equivalent (if you want to tweak features/format/size)</summary>
+
+```bash
 sudo FEATURES=base,cos-core,systemd,kernel,desktop,vmware,copilot-cli,grub-disk,vm,apt-source \
      FORMATS=vmdk SIZE=16G ./build.sh vm
 ```
@@ -70,13 +83,10 @@ sudo FEATURES=base,cos-core,systemd,kernel,desktop,vmware,copilot-cli,grub-disk,
 - `FORMATS` — output format: `vmdk` (VMware), `vhdx` (Hyper-V), `qcow2` (QEMU), or `raw`.
 - `SIZE` — virtual disk size (sparse, so the file is much smaller).
 
-Output: `build/claw-os-vm-<arch>.vmdk`.
+`FORMATS` and `SIZE` also work with the preset, e.g.
+`sudo FORMATS=vhdx ./presets/desktop.sh` for Hyper-V.
 
-> **Shortcut:** rather than typing the full `FEATURES=…` string, run the preset
-> wrapper `sudo ./presets/desktop.sh`. It sets the desktop feature set,
-> `FORMATS=vmdk` and `SIZE=16G` for you, then calls `./build.sh vm`. See
-> [`presets/README.md`](../presets/README.md) for the `wsl` and `docker`
-> presets too.
+</details>
 
 A from-scratch build takes roughly **1–2 hours** and is mostly silent while it
 compiles (V8 for `cos-browser`, then the COSMIC desktop crates) — long quiet
