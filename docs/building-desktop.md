@@ -33,6 +33,7 @@ for you — see note below):
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 . "$HOME/.cargo/env"
+rustup default stable          # make sure a default toolchain is selected
 ```
 
 > You do **not** run `cargo` yourself. `./build.sh` compiles the core
@@ -41,8 +42,11 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 > slow). The desktop crates (`cosmic-*`, `cos-agent-ui`) are compiled
 > separately inside the image's chroot, which installs its own toolchain —
 > the host Rust above is only for the core binaries. When building under
-> `sudo`, the toolchain is still found via `$SUDO_USER`'s home, so a
-> normal user-level rustup install is enough.
+> `sudo`, the build reuses `$SUDO_USER`'s toolchain (it points `RUSTUP_HOME`
+> at your `~/.rustup`), so a normal user-level rustup install is enough — you
+> do not need a second, root-owned toolchain. Confirm your install works with
+> `cargo --version` (no `sudo`); if that prints *"rustup could not choose a
+> version of cargo to run"*, run `rustup default stable`.
 
 ### Get the source
 
@@ -64,6 +68,20 @@ sudo FEATURES=base,cos-core,systemd,kernel,desktop,vmware,copilot-cli,grub-disk,
 - `SIZE` — virtual disk size (sparse, so the file is much smaller).
 
 Output: `build/claw-os-vm-<arch>.vmdk`.
+
+> **What to expect / how long it takes.** A from-scratch build runs for
+> roughly **1–2 hours** and is mostly silent during the compile stages — this
+> is normal, it is not stuck:
+> 1. `debootstrap` + base apt + Node/pip — a few minutes.
+> 2. `cos-core`: compiles `cos` + `clawd` — a few minutes.
+> 3. `browser`: compiles `cos-browser`, which **bundles V8 — 20–40 min** with
+>    little output. This is the slowest core step; let it run.
+> 4. `desktop`: compiles the COSMIC crates + agent UI inside the chroot —
+>    **30–60 min**.
+> 5. Disk assembly (`vm`) — a few minutes.
+>
+> The build detaches itself from the terminal (see below), so it will not be
+> stopped by terminal job control; long silent periods are just compilation.
 
 ### Linux
 
@@ -95,19 +113,20 @@ Run the prerequisites and build command above directly on a Debian/Ubuntu machin
    ```
    - `${PIPESTATUS[0]}` is the real `build.sh` exit code — with `| tee`, a
      plain `$?` only reports `tee`'s status.
-   - The build runs apt fully non-interactively with the dpkg pty disabled
-     (`Dpkg::Use-Pty "0"` + `DEBIAN_FRONTEND=noninteractive`), so it will **not**
-     stop on its own at *"Processing triggers …"* the way older builds did.
-   - If the build *does* freeze with no output, it was suspended (`SIGTSTP`),
-     usually from a stray `Ctrl-Z` in the build window. Find the stopped
-     process group and resume it:
-     ```bash
-     ps -eo pid,pgid,stat,cmd | awk '$3 ~ /T/'   # look for STAT containing T
-     sudo kill -CONT -<pgid>                      # note the leading '-' (whole group)
-     ```
-   - For a long build that survives a closed terminal, run it inside `tmux`
-     (`sudo apt install -y tmux`, `tmux new -s build`, detach with
-     `Ctrl-b d`, reattach with `tmux attach -t build`).
+   - **The build can no longer be suspended by the terminal.** `build.sh`
+     re-execs itself under `setsid` (detaching from the controlling terminal)
+     and runs apt fully non-interactively with the dpkg pty disabled
+     (`Dpkg::Use-Pty "0"` + `DEBIAN_FRONTEND=noninteractive`). Earlier builds
+     would wedge in process state `T` (every process stopped, looking "hung" at
+     *"Processing triggers …"* with no key pressed) because WSL2's tty layer
+     delivers a spurious `SIGTSTP` to the foreground process group while apt
+     drives its progress pty. Detaching from the terminal removes that failure
+     mode entirely.
+   - If you are on an **old checkout** and the build still freezes with every
+     process in state `T+` (check with
+     `ps -eo pid,pgid,stat,cmd | awk '$3 ~ /T/'`), `git pull` to get the fix,
+     or resume the stuck run with `sudo kill -CONT -<pgid>` (note the leading
+     `-` — it signals the whole process group).
 
 > On a **Windows-on-ARM** PC, WSL is `arm64`, so you can only build the `arm64`
 > image — and VMware has no Windows-on-ARM build. Use Hyper-V (`FORMATS=vhdx`)
@@ -119,6 +138,21 @@ macOS cannot run `debootstrap`/`chroot`/loop devices natively. Run the build
 inside a **Linux VM** (UTM, VMware Fusion, Lima, …) or a privileged Linux
 container, then follow the **Linux** steps inside it. On Apple Silicon the Linux
 VM is `arm64`, so you get an `arm64` image.
+
+### Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| Build dies partway through `debootstrap` / extraction when run from `/mnt/c/...` | The Windows drive mount (drvfs) can't create device nodes / hardlinks / Unix permissions `debootstrap` needs | Build from the WSL **native** filesystem (`~/workspace/...`), not `/mnt/c` |
+| Build "hangs" with no output; `ps` shows processes in state **`T`/`T+`** at an apt/dpkg step | WSL2's tty layer sends a spurious `SIGTSTP` to the foreground process group (or a stray `Ctrl-Z`) | Fixed in current `build.sh` (it `setsid`-detaches + disables apt's pty). On an old checkout: `git pull`, or resume now with `sudo kill -CONT -<pgid>` |
+| `error: cos binary not built` / `rustup could not choose a version of cargo to run` | No Rust toolchain, or a rustup proxy with **no default toolchain** (e.g. `apt install rustup`) | Install rustup and `rustup default stable`. Verify with `cargo --version` (no `sudo`) |
+| `sudo rustup: command not found` but the build still fails on rustup | Your rustup is a **user-level** install (`~/.cargo/bin`), not on root's `PATH`; under `sudo` it reads the empty `/root/.rustup` | Current `build.sh` reuses your toolchain automatically (`RUSTUP_HOME=$SUDO_USER/.rustup`). On an old checkout, pass it through: `sudo RUSTUP_HOME="$HOME/.rustup" FEATURES=… ./build.sh vm` |
+| `env: 'bash\r': No such file or directory` | Scripts were checked out with CRLF line endings on Windows | Ensure `.gitattributes` is present and re-checkout: `git rm --cached -r . && git reset --hard` |
+| Build looks frozen for 20–60 min during `browser` or `desktop` | Compiling V8 (`cos-browser`) and the COSMIC crates — both are genuinely slow and quiet | Wait; see **What to expect** above. Watch progress with `tail -f /tmp/claw-build.log` |
+
+> The rootfs build is **not** resumable feature-by-feature: each run starts
+> from a fresh `debootstrap`. After fixing a failure, remove the partial rootfs
+> and re-run: `sudo rm -rf build/claw-os-rootfs`.
 
 ## 2. Load it in VMware
 
