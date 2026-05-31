@@ -72,6 +72,12 @@ sudo FEATURES=base,cos-core,systemd,kernel,desktop,vmware,copilot-cli,grub-disk,
 
 Output: `build/claw-os-vm-<arch>.vmdk`.
 
+> **Shortcut:** rather than typing the full `FEATURES=…` string, run the preset
+> wrapper `sudo ./presets/desktop.sh`. It sets the desktop feature set,
+> `FORMATS=vmdk` and `SIZE=16G` for you, then calls `./build.sh vm`. See
+> [`presets/README.md`](../presets/README.md) for the `wsl` and `docker`
+> presets too.
+
 A from-scratch build takes roughly **1–2 hours** and is mostly silent while it
 compiles (V8 for `cos-browser`, then the COSMIC desktop crates) — long quiet
 periods are normal, not a hang.
