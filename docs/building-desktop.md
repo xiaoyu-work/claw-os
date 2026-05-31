@@ -85,9 +85,14 @@ Output: `build/claw-os-vm-<arch>.vmdk`.
 
 ### Linux
 
-Run the prerequisites and build command above directly on a Debian/Ubuntu machine.
+Run the **Prerequisites** and **Build command** above directly on a
+Debian/Ubuntu machine.
 
 ### Windows (WSL2)
+
+WSL2 **is** a Linux build — the steps are identical to **Linux** above. Just
+run the same **Prerequisites** and **Build command** inside your WSL distro,
+with these three WSL-specific points:
 
 1. Install a Debian or Ubuntu WSL2 distro:
    ```powershell
@@ -96,37 +101,17 @@ Run the prerequisites and build command above directly on a Debian/Ubuntu machin
 2. **Clone into the Linux filesystem, not `/mnt/c`.** `debootstrap` creates
    device nodes and hardlinks that the Windows drive mount (drvfs) cannot
    represent, so a build under `/mnt/c/...` fails partway through. Work from
-   your WSL home instead:
-   ```bash
-   mkdir -p ~/workspace && cd ~/workspace
-   git clone https://github.com/xiaoyu-work/claw-os.git
-   cd claw-os
-   ```
-   Then run the **Prerequisites** and **Build command** steps inside WSL.
-   The output disk is reachable from Windows at
-   `\\wsl$\Ubuntu\home\<user>\workspace\claw-os\build\`.
-3. Run the build so it can't be paused or interrupted by a stray key:
+   your WSL home (`~/workspace/...`) instead. The output disk is then reachable
+   from Windows at `\\wsl$\Ubuntu\home\<user>\workspace\claw-os\build\`.
+3. Capture the log and read the real exit code (`| tee` otherwise masks it):
    ```bash
    sudo FEATURES=base,cos-core,systemd,kernel,desktop,vmware,copilot-cli,grub-disk,vm,apt-source \
         FORMATS=vmdk SIZE=16G ./build.sh vm 2>&1 | tee /tmp/claw-build.log
-   echo "BUILD EXIT = ${PIPESTATUS[0]}"
+   echo "BUILD EXIT = ${PIPESTATUS[0]}"   # real build.sh status, not tee's
    ```
-   - `${PIPESTATUS[0]}` is the real `build.sh` exit code — with `| tee`, a
-     plain `$?` only reports `tee`'s status.
-   - **The build can no longer be suspended by the terminal.** `build.sh`
-     re-execs itself under `setsid` (detaching from the controlling terminal)
-     and runs apt fully non-interactively with the dpkg pty disabled
-     (`Dpkg::Use-Pty "0"` + `DEBIAN_FRONTEND=noninteractive`). Earlier builds
-     would wedge in process state `T` (every process stopped, looking "hung" at
-     *"Processing triggers …"* with no key pressed) because WSL2's tty layer
-     delivers a spurious `SIGTSTP` to the foreground process group while apt
-     drives its progress pty. Detaching from the terminal removes that failure
-     mode entirely.
-   - If you are on an **old checkout** and the build still freezes with every
-     process in state `T+` (check with
-     `ps -eo pid,pgid,stat,cmd | awk '$3 ~ /T/'`), `git pull` to get the fix,
-     or resume the stuck run with `sudo kill -CONT -<pgid>` (note the leading
-     `-` — it signals the whole process group).
+   `build.sh` automatically detaches from the terminal (`setsid`) and runs apt
+   non-interactively, so the build can't be suspended by WSL2's tty layer — see
+   the **Troubleshooting** `T`-state row if you are on an old checkout.
 
 > On a **Windows-on-ARM** PC, WSL is `arm64`, so you can only build the `arm64`
 > image — and VMware has no Windows-on-ARM build. Use Hyper-V (`FORMATS=vhdx`)
