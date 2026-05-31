@@ -15,6 +15,14 @@
 
 set -euo pipefail
 
+# Never let apt/dpkg or any feature install.sh prompt on (or grab) the
+# controlling terminal. Without this, apt's default pty (Dpkg::Use-Pty) does
+# terminal job-control which under WSL2 delivers SIGTTOU/SIGTTIN to our
+# foreground process group and STOPS the whole build (processes wedge in state
+# `T`, looking "hung" at "Processing triggers …" with no key ever pressed).
+# Exported here so it propagates to every child feature install.sh too.
+export DEBIAN_FRONTEND=noninteractive
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 ROOTFS="$PROJECT_DIR/build/claw-os-rootfs"
@@ -128,6 +136,14 @@ Acquire::http::Timeout "30";
 Acquire::https::Timeout "30";
 DPkg::Lock::Timeout "60";
 EOF
+# Disable apt's pseudo-terminal for dpkg/maintainer scripts. The pty performs
+# terminal job-control (tcsetpgrp) that, under WSL2, sends SIGTTOU/SIGTTIN to
+# the build's process group and stops it (state `T`). Setting this in the
+# chroot's apt config covers EVERY apt-get call — chroot_apt_get below AND the
+# direct `chroot apt-get` calls in feature install.sh scripts.
+cat > "$ROOTFS/etc/apt/apt.conf.d/81cos-no-pty" <<'EOF'
+Dpkg::Use-Pty "0";
+EOF
 
 # debootstrap writes a single-component sources.list (`main` only).
 # Claw OS needs `contrib` (e.g. some codec headers) and especially
@@ -175,8 +191,19 @@ chroot_apt_get() {
     local max_attempts=3
     local delay=5
     local rc=0
+    # Run apt fully non-interactively and DETACHED from the controlling
+    # terminal:
+    #   * DEBIAN_FRONTEND=noninteractive — never prompt via debconf.
+    #   * -o Dpkg::Use-Pty=0 — do NOT allocate a pty for maintainer scripts.
+    #     apt's default pty does terminal job-control (tcsetpgrp), which under
+    #     WSL2 delivers SIGTTOU/SIGTTIN to our foreground process group and
+    #     STOPS the whole build (processes wedge in state `T`, looking "hung"
+    #     at "Processing triggers …" with no key ever pressed).
+    #   * < /dev/null — give children no terminal to read from, so nothing can
+    #     block on / grab the tty.
     while true; do
-        if chroot "$ROOTFS" apt-get "$@"; then
+        if DEBIAN_FRONTEND=noninteractive \
+            chroot "$ROOTFS" apt-get -o Dpkg::Use-Pty=0 "$@" < /dev/null; then
             return 0
         fi
         rc=$?

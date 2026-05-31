@@ -95,9 +95,12 @@ Run the prerequisites and build command above directly on a Debian/Ubuntu machin
    ```
    - `${PIPESTATUS[0]}` is the real `build.sh` exit code — with `| tee`, a
      plain `$?` only reports `tee`'s status.
-   - Do **not** press `Ctrl-Z` in the build window: it sends `SIGTSTP` and
-     suspends the build (it looks frozen with no output). If that happens,
-     find the stopped process group and resume it:
+   - The build runs apt fully non-interactively with the dpkg pty disabled
+     (`Dpkg::Use-Pty "0"` + `DEBIAN_FRONTEND=noninteractive`), so it will **not**
+     stop on its own at *"Processing triggers …"* the way older builds did.
+   - If the build *does* freeze with no output, it was suspended (`SIGTSTP`),
+     usually from a stray `Ctrl-Z` in the build window. Find the stopped
+     process group and resume it:
      ```bash
      ps -eo pid,pgid,stat,cmd | awk '$3 ~ /T/'   # look for STAT containing T
      sudo kill -CONT -<pgid>                      # note the leading '-' (whole group)
