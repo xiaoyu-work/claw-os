@@ -16,12 +16,33 @@ The build produces a virtual disk under `build/`, e.g.
 
 ### Prerequisites (Debian/Ubuntu host)
 
+System tools for the rootfs/disk pipeline:
+
 ```bash
 sudo apt update
-sudo apt install -y git debootstrap qemu-utils parted dosfstools rsync \
+sudo apt install -y git build-essential pkg-config \
+                    debootstrap qemu-utils parted dosfstools rsync \
                     util-linux e2fsprogs grub-efi-amd64-bin grub-pc-bin
 # On an arm64 host, use grub-efi-arm64-bin instead (and drop grub-pc-bin).
 ```
+
+A **Rust toolchain** on the host, used to compile the `cos` / `clawd` /
+`cos-browser` binaries that go into the image (the build invokes `cargo`
+for you — see note below):
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+. "$HOME/.cargo/env"
+```
+
+> You do **not** run `cargo` yourself. `./build.sh` compiles the core
+> binaries automatically the first time they're missing (`cos` + `clawd`
+> come from one crate; `cos-browser` bundles V8, so its first build is
+> slow). The desktop crates (`cosmic-*`, `cos-agent-ui`) are compiled
+> separately inside the image's chroot, which installs its own toolchain —
+> the host Rust above is only for the core binaries. When building under
+> `sudo`, the toolchain is still found via `$SUDO_USER`'s home, so a
+> normal user-level rustup install is enough.
 
 ### Get the source
 
@@ -54,8 +75,36 @@ Run the prerequisites and build command above directly on a Debian/Ubuntu machin
    ```powershell
    wsl --install -d Ubuntu
    ```
-2. Open the distro, then clone the repo and run the **Prerequisites** and
-   **Build command** steps above inside WSL.
+2. **Clone into the Linux filesystem, not `/mnt/c`.** `debootstrap` creates
+   device nodes and hardlinks that the Windows drive mount (drvfs) cannot
+   represent, so a build under `/mnt/c/...` fails partway through. Work from
+   your WSL home instead:
+   ```bash
+   mkdir -p ~/workspace && cd ~/workspace
+   git clone https://github.com/xiaoyu-work/claw-os.git
+   cd claw-os
+   ```
+   Then run the **Prerequisites** and **Build command** steps inside WSL.
+   The output disk is reachable from Windows at
+   `\\wsl$\Ubuntu\home\<user>\workspace\claw-os\build\`.
+3. Run the build so it can't be paused or interrupted by a stray key:
+   ```bash
+   sudo FEATURES=base,cos-core,systemd,kernel,desktop,vmware,copilot-cli,grub-disk,vm,apt-source \
+        FORMATS=vmdk SIZE=16G ./build.sh vm 2>&1 | tee /tmp/claw-build.log
+   echo "BUILD EXIT = ${PIPESTATUS[0]}"
+   ```
+   - `${PIPESTATUS[0]}` is the real `build.sh` exit code — with `| tee`, a
+     plain `$?` only reports `tee`'s status.
+   - Do **not** press `Ctrl-Z` in the build window: it sends `SIGTSTP` and
+     suspends the build (it looks frozen with no output). If that happens,
+     find the stopped process group and resume it:
+     ```bash
+     ps -eo pid,pgid,stat,cmd | awk '$3 ~ /T/'   # look for STAT containing T
+     sudo kill -CONT -<pgid>                      # note the leading '-' (whole group)
+     ```
+   - For a long build that survives a closed terminal, run it inside `tmux`
+     (`sudo apt install -y tmux`, `tmux new -s build`, detach with
+     `Ctrl-b d`, reattach with `tmux attach -t build`).
 
 > On a **Windows-on-ARM** PC, WSL is `arm64`, so you can only build the `arm64`
 > image — and VMware has no Windows-on-ARM build. Use Hyper-V (`FORMATS=vhdx`)

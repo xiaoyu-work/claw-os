@@ -83,6 +83,60 @@ find_bin() {
 }
 
 ###############################################################################
+# Helper: make sure `cargo` is on PATH.
+#
+# This script normally runs as part of `sudo ./build.sh`, so $HOME is /root
+# and a rustup toolchain installed under the invoking user's home is not on
+# PATH. Probe the usual locations (including the sudo-invoking user's home)
+# before giving up.
+###############################################################################
+ensure_cargo() {
+    command -v cargo >/dev/null 2>&1 && return 0
+    local sudo_home=""
+    if [ -n "${SUDO_USER:-}" ]; then
+        sudo_home="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)"
+    fi
+    local dir
+    for dir in \
+        "$HOME/.cargo/bin" \
+        "/root/.cargo/bin" \
+        "${sudo_home:+$sudo_home/.cargo/bin}"; do
+        [ -n "$dir" ] && [ -x "$dir/cargo" ] && { export PATH="$dir:$PATH"; return 0; }
+    done
+    echo "error: cargo not found — the Rust toolchain is required to build the" >&2
+    echo "       cos / clawd / cos-browser binaries. Install it with:" >&2
+    echo "         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y" >&2
+    echo "         . \"\$HOME/.cargo/env\"" >&2
+    echo "       (when building under sudo, the toolchain is still found via" >&2
+    echo "       \$SUDO_USER's home, so a normal user-level rustup install is fine)." >&2
+    exit 1
+}
+
+###############################################################################
+# Helper: locate a built binary, compiling its crate on demand if missing.
+#
+# build-debs.sh assembles already-built binaries; CI compiles them as
+# separate cached steps before calling the rootfs build. A local
+# `./build.sh` has no such step, so compile on demand here the first time a
+# required binary is absent. Native release build — lands in target/release/,
+# which find_bin picks up as its fallback. No-op in CI (binaries already
+# present, so find_bin succeeds and cargo never runs).
+#
+#   $1 = binary name to locate   $2 = cargo package to build if missing
+###############################################################################
+ensure_bin() {
+    local bin="$1" pkg="$2" path
+    if path="$(find_bin "$bin")"; then
+        echo "$path"
+        return 0
+    fi
+    ensure_cargo
+    echo "  :: $bin not built — compiling (cargo build --release -p $pkg)" >&2
+    ( cd "$PROJECT_DIR" && cargo build --release -p "$pkg" ) >&2
+    find_bin "$bin"
+}
+
+###############################################################################
 # Helper: render control file with __VERSION__ and __ARCH__ substituted.
 ###############################################################################
 render_control() {
@@ -111,12 +165,13 @@ install -m 644 "$SCRIPT_DIR/claw-os-base/conffiles" "$BASE_STAGE/DEBIAN/conffile
 install -m 755 "$SCRIPT_DIR/claw-os-base/postinst" "$BASE_STAGE/DEBIAN/postinst"
 
 # Binary: cos.
-COS_BIN="$(find_bin cos)" || { echo "error: cos binary not built" >&2; exit 1; }
+COS_BIN="$(ensure_bin cos cos)" || { echo "error: cos binary not built" >&2; exit 1; }
 echo "  :: cos          <- $COS_BIN"
 install -m 755 "$COS_BIN" "$BASE_STAGE/usr/local/bin/cos"
 
-# Binary: clawd (system agent daemon).
-CLAWD_BIN="$(find_bin clawd)" || { echo "error: clawd binary not built" >&2; exit 1; }
+# Binary: clawd (system agent daemon). Same crate as cos (`-p cos` builds
+# both bins), so building cos above already produced it.
+CLAWD_BIN="$(ensure_bin clawd cos)" || { echo "error: clawd binary not built" >&2; exit 1; }
 echo "  :: clawd        <- $CLAWD_BIN"
 install -m 755 "$CLAWD_BIN" "$BASE_STAGE/usr/local/bin/clawd"
 
@@ -231,7 +286,7 @@ mkdir -p "$BROWSER_STAGE/usr/lib/cos/services/browser"
 
 render_control "$SCRIPT_DIR/claw-os-browser/control" "$BROWSER_STAGE/DEBIAN/control"
 
-COS_BROWSER_BIN="$(find_bin cos-browser)" || {
+COS_BROWSER_BIN="$(ensure_bin cos-browser cos-browser)" || {
     echo "error: cos-browser binary not built" >&2; exit 1; }
 echo "  :: cos-browser  <- $COS_BROWSER_BIN"
 install -m 755 "$COS_BROWSER_BIN" "$BROWSER_STAGE/usr/local/bin/cos-browser"
