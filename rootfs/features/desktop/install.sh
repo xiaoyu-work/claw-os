@@ -28,7 +28,7 @@ DESKTOP_PACKAGE_ROOT_CHROOT="/build/claw-os-desktop-root"
 if [ "${DESKTOP_SKIP:-0}" = "1" ]; then
     if [ -d "$FEATURE_DIR/overlay" ] && [ -n "$(ls -A "$FEATURE_DIR/overlay" 2>/dev/null)" ]; then
         echo "  :: applying desktop overlay"
-        cp -a "$FEATURE_DIR/overlay/." "$ROOTFS/"
+        cp -a --no-preserve=ownership "$FEATURE_DIR/overlay/." "$ROOTFS/"
     fi
     echo "  :: DESKTOP_SKIP=1 — runtime deps + overlay applied, build skipped"
     echo "  :: NOTE: login chain not wired (greeter binary missing). Re-run"
@@ -40,7 +40,7 @@ rm -rf "$DESKTOP_PACKAGE_ROOT"
 mkdir -p "$DESKTOP_PACKAGE_ROOT"
 if [ -d "$FEATURE_DIR/overlay" ] && [ -n "$(ls -A "$FEATURE_DIR/overlay" 2>/dev/null)" ]; then
     echo "  :: staging desktop overlay"
-    cp -a "$FEATURE_DIR/overlay/." "$DESKTOP_PACKAGE_ROOT/"
+    cp -a --no-preserve=ownership "$FEATURE_DIR/overlay/." "$DESKTOP_PACKAGE_ROOT/"
     # /etc/environment is owned by the base system on many Debian installs.
     # The desktop package merges cursor defaults into it from postinst instead
     # of trying to own the file directly.

@@ -43,7 +43,7 @@ fi
 # ---------------------------------------------------------------------------
 if [ -d "$FEATURE_DIR/overlay" ] && [ -n "$(ls -A "$FEATURE_DIR/overlay" 2>/dev/null)" ]; then
     echo "  :: applying claw-mail-ai overlay"
-    cp -a "$FEATURE_DIR/overlay/." "$ROOTFS/"
+    cp -a --no-preserve=ownership "$FEATURE_DIR/overlay/." "$ROOTFS/"
     # Make sure the launcher we drop in is executable.
     if [ -f "$ROOTFS/usr/lib/cos/claw-mail-ai-host" ]; then
         chmod 0755 "$ROOTFS/usr/lib/cos/claw-mail-ai-host"

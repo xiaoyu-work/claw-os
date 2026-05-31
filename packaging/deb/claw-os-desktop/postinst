@@ -123,10 +123,13 @@ if [ "$1" = "configure" ]; then
     enable_desktop_services
     enable_fingerprint_auth
     if command -v systemd-sysusers >/dev/null 2>&1; then
-        systemd-sysusers
+        systemd-sysusers || true
     fi
     if command -v systemd-tmpfiles >/dev/null 2>&1; then
-        systemd-tmpfiles --create
+        # Non-fatal: in a build chroot tmpfiles can fail on unsafe path
+        # transitions / missing devices, but it re-runs on every real boot.
+        # A build-time hiccup must not abort package configuration.
+        systemd-tmpfiles --create || true
     fi
     generate_default_locales
     command -v plymouth-set-default-theme >/dev/null 2>&1 && \

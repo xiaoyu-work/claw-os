@@ -145,7 +145,14 @@ debootstrap --extractor=ar --arch="$DEB_ARCH" "$SUITE" "$ROOTFS"
 
 # 2. Apply global overlay (config files, cos-init, etc.).
 echo ":: applying global overlay"
-cp -a "$SCRIPT_DIR/overlay/." "$ROOTFS/"
+# --no-preserve=ownership: the overlay is a git checkout, so every file is
+# owned by the build user (uid != 0). Plain `cp -a` would stamp that uid onto
+# shared system dirs it overlaps (/etc, /var, /var/log, ...), which then leaks
+# into the final image via rsync --numeric-ids and makes systemd-tmpfiles fail
+# ("unsafe path transition ... owned by 1000"). Drop ownership so everything
+# lands root:root; mode/timestamps/symlinks are still preserved.
+cp -a --no-preserve=ownership "$SCRIPT_DIR/overlay/." "$ROOTFS/"
+chown 0:0 "$ROOTFS"
 
 # 2b. Bind-mount kernel pseudofs and propagate resolv.conf into the chroot.
 # Needed by chroot operations more involved than a plain `apt-get install`:
