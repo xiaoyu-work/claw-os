@@ -181,7 +181,9 @@ fcitx5-hangul
 # supports it). Good for typing into focused windows.
 # ydotool: low-level libevdev / uinput; works regardless of compositor
 # protocol support but needs the ydotoold system service running. We
-# enable that unit in rootfs/features/systemd/install.sh.
+# enable that unit in rootfs/features/systemd/install.sh. Not in trixie
+# main — pulled from trixie-backports (enabled in rootfs/build.sh); the
+# backports 1.0.x package bundles both the ydotool CLI and ydotoold.
 wtype
 ydotool
 

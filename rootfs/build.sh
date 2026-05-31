@@ -170,13 +170,16 @@ EOF
 # Claw OS needs `contrib` (e.g. some codec headers) and especially
 # `non-free-firmware` (Intel/Realtek/Broadcom Wi-Fi blobs, CPU
 # microcode). `non-free` covers anything still parked there that
-# trixie hasn't migrated. Overwrite both the legacy file and the
-# deb822 file (whichever debootstrap chose to use), so apt sees the
-# extra components on the very first `apt-get update`.
+# trixie hasn't migrated. `*-backports` provides packages dropped from
+# trixie main (e.g. ydotool, only in trixie-backports). Overwrite both
+# the legacy file and the deb822 file (whichever debootstrap chose to
+# use), so apt sees the extra components on the very first
+# `apt-get update`.
 echo ":: enabling contrib / non-free-firmware / non-free components"
 cat > "$ROOTFS/etc/apt/sources.list" <<EOF
 deb http://deb.debian.org/debian $SUITE main contrib non-free-firmware non-free
 deb http://deb.debian.org/debian $SUITE-updates main contrib non-free-firmware non-free
+deb http://deb.debian.org/debian $SUITE-backports main contrib non-free-firmware non-free
 deb http://security.debian.org/debian-security $SUITE-security main contrib non-free-firmware non-free
 EOF
 # Newer debootstrap variants emit /etc/apt/sources.list.d/debian.sources
@@ -185,7 +188,7 @@ if [ -f "$ROOTFS/etc/apt/sources.list.d/debian.sources" ]; then
     cat > "$ROOTFS/etc/apt/sources.list.d/debian.sources" <<EOF
 Types: deb
 URIs: http://deb.debian.org/debian
-Suites: $SUITE $SUITE-updates
+Suites: $SUITE $SUITE-updates $SUITE-backports
 Components: main contrib non-free-firmware non-free
 Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 
@@ -266,9 +269,16 @@ for f in "${FEATURE_LIST[@]}"; do
         done < <(grep -vE '^\s*(#|$)' "$feature_dir/packages.txt" || true)
         if [ -n "${pkgs// /}" ]; then
             echo "  :: apt install$pkgs"
-            chroot_apt_get update -qq
-            chroot_apt_get install -y --no-install-recommends $pkgs
-            chroot_apt_get clean
+            # NB: chroot_apt_get is a function whose body uses if/while, so a
+            # non-zero return does NOT trip the caller's `set -e` (a known bash
+            # errexit gotcha). Check explicitly and abort, otherwise a feature
+            # whose packages fail to install would silently continue into its
+            # install.sh and fail later with a confusing error.
+            chroot_apt_get update -qq \
+                || { echo "error: feature '$f': apt-get update failed" >&2; exit 1; }
+            chroot_apt_get install -y --no-install-recommends $pkgs \
+                || { echo "error: feature '$f': failed to install packages.txt packages" >&2; exit 1; }
+            chroot_apt_get clean || true
             rm -rf "$ROOTFS/var/lib/apt/lists"/*
         fi
     fi
