@@ -15,11 +15,32 @@
 
 set -euo pipefail
 
-# Never let apt/dpkg or any feature install.sh prompt on (or grab) the
-# controlling terminal. Without this, apt's default pty (Dpkg::Use-Pty) does
-# terminal job-control which under WSL2 delivers SIGTTOU/SIGTTIN to our
-# foreground process group and STOPS the whole build (processes wedge in state
-# `T`, looking "hung" at "Processing triggers …" with no key ever pressed).
+# ---------------------------------------------------------------------------
+# Detach from the controlling terminal (root-cause fix for "build randomly
+# stops / hangs" on WSL2).
+#
+# Symptom: the build wedges with every process in state `T+` (stopped, still
+# the terminal's *foreground* group) at an apt/dpkg step — "no key was ever
+# pressed". A foreground group is stopped only by SIGTSTP/SIGSTOP, and WSL2's
+# tty/pty layer can spuriously deliver SIGTSTP to the build's process group
+# while apt/dpkg drives its progress pty (tcsetpgrp). Disabling apt's pty
+# (Dpkg::Use-Pty 0, below) helps but is not sufficient on its own.
+#
+# The only airtight fix is to give the build NO controlling terminal at all:
+# with no tty there is nothing that can generate a job-control stop signal.
+# Re-exec ourselves under setsid with stdin from /dev/null. stdout/stderr are
+# inherited unchanged, so `... | tee build.log` and the caller's
+# ${PIPESTATUS[0]} keep working. Skipped when stdin is not a tty (e.g. CI),
+# where there is no controlling terminal to detach from.
+if [ -z "${COS_BUILD_DETACHED:-}" ] && [ -t 0 ] && command -v setsid >/dev/null 2>&1; then
+    export COS_BUILD_DETACHED=1
+    exec setsid -w "$0" "$@" < /dev/null
+fi
+
+# Never let apt/dpkg or any feature install.sh prompt on (or grab) a terminal.
+# Combined with the detach above and the Dpkg::Use-Pty drop-in written into the
+# chroot below, this keeps every apt invocation fully non-interactive so it can
+# neither block on a prompt nor be suspended by terminal job control.
 # Exported here so it propagates to every child feature install.sh too.
 export DEBIAN_FRONTEND=noninteractive
 
