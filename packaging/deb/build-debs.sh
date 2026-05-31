@@ -91,25 +91,47 @@ find_bin() {
 # before giving up.
 ###############################################################################
 ensure_cargo() {
-    command -v cargo >/dev/null 2>&1 && return 0
-    local sudo_home=""
-    if [ -n "${SUDO_USER:-}" ]; then
-        sudo_home="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)"
+    # 1. Make sure a `cargo` is on PATH. Probe the usual locations (incl. the
+    #    sudo-invoking user's home, since $HOME is /root under sudo).
+    if ! command -v cargo >/dev/null 2>&1; then
+        local sudo_home=""
+        if [ -n "${SUDO_USER:-}" ]; then
+            sudo_home="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)"
+        fi
+        local dir
+        for dir in \
+            "$HOME/.cargo/bin" \
+            "/root/.cargo/bin" \
+            "${sudo_home:+$sudo_home/.cargo/bin}"; do
+            [ -n "$dir" ] && [ -x "$dir/cargo" ] && { export PATH="$dir:$PATH"; break; }
+        done
     fi
-    local dir
-    for dir in \
-        "$HOME/.cargo/bin" \
-        "/root/.cargo/bin" \
-        "${sudo_home:+$sudo_home/.cargo/bin}"; do
-        [ -n "$dir" ] && [ -x "$dir/cargo" ] && { export PATH="$dir:$PATH"; return 0; }
-    done
-    echo "error: cargo not found — the Rust toolchain is required to build the" >&2
-    echo "       cos / clawd / cos-browser binaries. Install it with:" >&2
-    echo "         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y" >&2
-    echo "         . \"\$HOME/.cargo/env\"" >&2
-    echo "       (when building under sudo, the toolchain is still found via" >&2
-    echo "       \$SUDO_USER's home, so a normal user-level rustup install is fine)." >&2
-    exit 1
+    if ! command -v cargo >/dev/null 2>&1; then
+        echo "error: cargo not found — the Rust toolchain is required to build the" >&2
+        echo "       cos / clawd / cos-browser binaries. Install it with:" >&2
+        echo "         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y" >&2
+        echo "         . \"\$HOME/.cargo/env\"" >&2
+        echo "       (when building under sudo, the toolchain is still found via" >&2
+        echo "       \$SUDO_USER's home, so a normal user-level rustup install is fine)." >&2
+        exit 1
+    fi
+    # 2. Make sure cargo can actually run. When `cargo` is a rustup proxy with
+    #    no default toolchain (e.g. installed via `apt install rustup`), it
+    #    errors out: "rustup could not choose a version of cargo to run".
+    #    Self-heal by installing and selecting the stable toolchain.
+    if ! cargo --version >/dev/null 2>&1; then
+        if command -v rustup >/dev/null 2>&1; then
+            echo "  :: no default Rust toolchain configured — installing stable" >&2
+            rustup toolchain install stable >&2 || true
+            rustup default stable >&2 || true
+        fi
+    fi
+    if ! cargo --version >/dev/null 2>&1; then
+        echo "error: cargo is present but cannot run. If it is a rustup proxy with" >&2
+        echo "       no default toolchain, set one with:  rustup default stable" >&2
+        exit 1
+    fi
+    return 0
 }
 
 ###############################################################################
