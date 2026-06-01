@@ -468,34 +468,7 @@ impl Application for App {
             .align_x(Alignment::Center)
             .apply(widget::container)
             .padding([0, space_xl])
-            .class(theme::Container::custom(|theme| {
-                let cosmic = theme.cosmic();
-                // base = solid bg color; we knock the alpha down to ~55% so
-                // the wallpaper bleeds through while widgets inside still
-                // read clearly. Surface seeds are already blue-tinted glass.
-                // The hairline is brand-blue (accent @ 0.20) instead of a
-                // neutral divider so the whole panel reads as Claw Glass, and
-                // a soft drop shadow keeps it from melting into the photo.
-                let mut bg: Color = cosmic.background.base.into();
-                bg.a = 0.55;
-                let border_color: Color = cosmic.accent_color().with_alpha(0.20).into();
-                container::Style {
-                    text_color: Some(cosmic.background.on.into()),
-                    icon_color: Some(cosmic.background.on.into()),
-                    background: Some(Background::Color(bg)),
-                    border: Border {
-                        radius: cosmic.radius_l().into(),
-                        width: 1.0,
-                        color: border_color,
-                    },
-                    shadow: Shadow {
-                        color: Color { r: 0.0, g: 0.0, b: 0.0, a: 0.25 },
-                        offset: cosmic::iced::Vector { x: 0.0, y: 6.0 },
-                        blur_radius: 24.0,
-                    },
-                    snap: true,
-                }
-            }));
+            .class(theme::Container::custom(glass_card_style));
 
         let centered = widget::container(card)
             .width(Length::Fill)
@@ -518,6 +491,7 @@ impl Application for App {
             None => widget::container(centered)
                 .width(Length::Fill)
                 .height(Length::Fill)
+                .class(theme::Container::custom(glass_backdrop_style))
                 .into(),
         }
     }
@@ -551,6 +525,75 @@ impl Application for App {
             text_color: cosmic.on_bg_color().into(),
             icon_color: cosmic.on_bg_color().into(),
         })
+    }
+}
+
+/// Full-window backdrop painted when no wallpaper is available (e.g. on a
+/// fresh image before cosmic-bg starts). Instead of falling through to the
+/// compositor's flat clear color — which read as a dull gray field behind the
+/// translucent wizard card — we lay down an on-brand "Claw Glass" gradient:
+/// a deep blue-tinted vertical wash that gives the frosted card something
+/// premium to float over. Derived from the active theme so it tracks light
+/// vs dark automatically (cool blue-white vs deep navy).
+fn glass_backdrop_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
+    let cosmic = theme.cosmic();
+    let base: Color = cosmic.background.base.into();
+    let accent: Color = cosmic.accent_color().into();
+
+    let mix = |a: Color, b: Color, t: f32| Color {
+        r: a.r + (b.r - a.r) * t,
+        g: a.g + (b.g - a.g) * t,
+        b: a.b + (b.b - a.b) * t,
+        a: 1.0,
+    };
+
+    // Top carries a faint brand-blue glow; the body sits at the base surface;
+    // the bottom darkens slightly for a soft vignette that grounds the card.
+    let top = mix(base, accent, 0.18);
+    let mid = base;
+    let bottom = Color { r: base.r * 0.82, g: base.g * 0.82, b: base.b * 0.86, a: 1.0 };
+
+    // ~160° → a gentle top-to-bottom diagonal wash.
+    let gradient = cosmic::iced::gradient::Linear::new(2.79_f32)
+        .add_stop(0.0, top)
+        .add_stop(0.55, mid)
+        .add_stop(1.0, bottom);
+
+    container::Style {
+        text_color: Some(cosmic.background.on.into()),
+        icon_color: Some(cosmic.background.on.into()),
+        background: Some(gradient.into()),
+        border: Border::default(),
+        shadow: Shadow::default(),
+        snap: true,
+    }
+}
+
+/// The floating wizard card: a frosted-glass panel consistent with the rest of
+/// the Claw Glass desktop (cf. the agent UI composer / sidebar). Uses the
+/// system frosted component fill at ~62% so the backdrop bleeds through, a 1px
+/// brand-blue translucent hairline, and a soft layered drop shadow — depth from
+/// blur + shadow, not a heavy border.
+fn glass_card_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
+    let cosmic = theme.cosmic();
+    let mut fill = cosmic.bg_component_color();
+    fill.alpha = 0.62;
+
+    container::Style {
+        text_color: Some(cosmic.on_bg_color().into()),
+        icon_color: Some(cosmic.on_bg_color().into()),
+        background: Some(Background::Color(fill.into())),
+        border: Border {
+            radius: cosmic.radius_l().into(),
+            width: 1.0,
+            color: cosmic.accent_color().with_alpha(0.25).into(),
+        },
+        shadow: Shadow {
+            color: Color { r: 0.0, g: 0.02, b: 0.10, a: 0.30 },
+            offset: cosmic::iced::Vector { x: 0.0, y: 8.0 },
+            blur_radius: 32.0,
+        },
+        snap: true,
     }
 }
 
