@@ -10,7 +10,7 @@ list.
 
 | Preset | Command | Produces |
 | --- | --- | --- |
-| **Desktop VM** | `sudo ./presets/desktop.sh` | Bootable COSMIC desktop VM image (`vmdk`, 16G) for VMware. Full graphical Claw OS. |
+| **Desktop VM** | `sudo ./presets/desktop.sh` | Bootable COSMIC desktop VM image (`vmdk`, 50G) for VMware. Full graphical Claw OS. |
 | **WSL** | `sudo ./presets/wsl.sh` | WSL2 root filesystem tarball — headless Claw OS inside Windows. |
 | **Docker** | `./presets/docker.sh` | Headless Claw OS Docker image (container runtime). |
 

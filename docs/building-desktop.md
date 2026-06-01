@@ -66,7 +66,7 @@ Run from the repository root (the `claw-os` directory you just cloned):
 sudo ./presets/desktop.sh
 ```
 
-This preset sets the desktop feature set, `FORMATS=vmdk` and `SIZE=16G` for
+This preset sets the desktop feature set, `FORMATS=vmdk` and `SIZE=50G` for
 you, then calls `./build.sh vm`. See [`presets/README.md`](../presets/README.md)
 for the `wsl` and `docker` presets too.
 
@@ -77,7 +77,7 @@ Output: `build/claw-os-vm-<arch>.vmdk`.
 
 ```bash
 sudo FEATURES=base,cos-core,systemd,kernel,desktop,vmware,copilot-cli,grub-disk,vm,apt-source \
-     FORMATS=vmdk SIZE=16G ./build.sh vm
+     FORMATS=vmdk SIZE=50G ./build.sh vm
 ```
 
 - `FORMATS` — output format: `vmdk` (VMware), `vhdx` (Hyper-V), `qcow2` (QEMU), or `raw`.
