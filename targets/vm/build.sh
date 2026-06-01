@@ -169,6 +169,15 @@ EOF
 mount --rbind /dev  "$MNT/dev"
 mount --rbind /sys  "$MNT/sys"
 mount -t proc proc  "$MNT/proc"
+# Confine these binds to this chroot's propagation. /dev (and its /dev/pts
+# submount) is `shared` on the host; the recursive `umount -Rl` in the unwind
+# below would otherwise propagate the unmount back to the host peer group and
+# detach the host's /dev/pts, breaking PTY allocation host-wide ("sudo: unable
+# to open pty") until `wsl --shutdown`. Make them private (recursively) so the
+# cleanup only affects this image.
+mount --make-rprivate "$MNT/dev"
+mount --make-rprivate "$MNT/sys"
+mount --make-rprivate "$MNT/proc"
 
 # 10. Install GRUB.
 #     amd64 → BIOS + UEFI (hybrid). The bios_grub partition makes the
@@ -204,6 +213,9 @@ sync
 for pseudo in dev sys proc; do
     umount -R "$MNT/$pseudo" 2>/dev/null || umount -Rl "$MNT/$pseudo" 2>/dev/null || true
 done
+# Restore host /dev/pts/ptmx mode in case the chroot reset it (see make-rprivate
+# note above) — keeps host PTY allocation working after the build.
+[ -e /dev/pts/ptmx ] && chmod 666 /dev/pts/ptmx 2>/dev/null || true
 umount "$MNT/boot/efi"
 umount "$MNT"
 losetup -d "$LOOP"

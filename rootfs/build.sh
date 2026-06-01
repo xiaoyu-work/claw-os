@@ -168,6 +168,17 @@ mount --bind /proc "$ROOTFS/proc"
 mount --bind /sys "$ROOTFS/sys"
 mount --bind /dev "$ROOTFS/dev"
 mount --bind /dev/pts "$ROOTFS/dev/pts"
+# Detach these binds from the host's mount-propagation peer groups. The host's
+# /dev/pts is `shared`, so our bind joins the same peer group; later unmounting
+# it (especially the `umount -l` lazy fallback in cleanup) would PROPAGATE back
+# to the host peer and tear down the host's /dev/pts. That leaves the host
+# unable to allocate new PTYs — the "sudo: unable to open pty" failure seen
+# after every build, only cured by `wsl --shutdown`. Marking the mounts private
+# (recursively, so /dev/pts under /dev is covered) confines all later unmounts
+# to this chroot.
+mount --make-rprivate "$ROOTFS/proc"
+mount --make-rprivate "$ROOTFS/sys"
+mount --make-rprivate "$ROOTFS/dev"
 if [ -e /etc/resolv.conf ]; then
     cp -L /etc/resolv.conf "$ROOTFS/etc/resolv.conf"
 fi
@@ -239,6 +250,10 @@ cleanup_chroot_mounts() {
             umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
         fi
     done
+    # Belt-and-suspenders: if anything in the chroot clobbered the host's
+    # /dev/pts/ptmx mode (some devpts reconfigurations reset it to 000),
+    # restore it so the host can still allocate PTYs.
+    [ -e /dev/pts/ptmx ] && chmod 666 /dev/pts/ptmx 2>/dev/null || true
 }
 trap cleanup_chroot_mounts EXIT
 

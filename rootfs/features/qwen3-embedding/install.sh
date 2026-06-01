@@ -60,6 +60,13 @@ if [ "${COS_QWEN3_SKIP_ORT_GENAI:-0}" != "1" ]; then
         mount --bind /dev/pts "$ROOTFS/dev/pts"
         MOUNTED_BY_US+=("$ROOTFS/dev/pts")
     fi
+    # Detach our binds from the host's propagation peer groups so the lazy
+    # `umount -l` in cleanup_mounts cannot propagate back and tear down the
+    # host's shared /dev/pts (which would break host PTY allocation —
+    # "sudo: unable to open pty" — until `wsl --shutdown`).
+    for mp in proc sys dev; do
+        mountpoint -q "$ROOTFS/$mp" && mount --make-rprivate "$ROOTFS/$mp" || true
+    done
     if [ -e /etc/resolv.conf ]; then
         cp -L /etc/resolv.conf "$ROOTFS/etc/resolv.conf"
     fi
