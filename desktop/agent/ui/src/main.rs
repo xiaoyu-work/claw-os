@@ -91,15 +91,17 @@ pub enum Message {
     InputChanged(String),
     /// User pressed Enter or clicked Send. Captures the current input.
     Submit,
-    /// Token delta from the SSE stream.
-    StreamDelta(String),
+    /// Token delta from the SSE stream. First field is the stream
+    /// generation (see `App::stream_generation`) so stale deltas from a
+    /// superseded stream are ignored.
+    StreamDelta(u64, String),
     /// Terminal envelope from the stream — currently unused beyond
     /// flipping `streaming` off.
-    StreamDone(serde_json::Value),
+    StreamDone(u64, serde_json::Value),
     /// Bridge-side or subprocess error during a streamed reply.
-    StreamError(String),
+    StreamError(u64, String),
     /// SSE connection closed (clean or otherwise). Tail of every stream.
-    StreamEnded,
+    StreamEnded(u64),
     /// User pressed Esc — only meaningful in overlay mode.
     EscapePressed,
     /// Markdown link clicked in a rendered assistant message.
@@ -316,6 +318,12 @@ pub struct App {
     /// this separately from `active` so the user can switch tabs
     /// mid-stream without breaking the delta accumulator.
     streaming_session: Option<usize>,
+    /// Monotonic id bumped on every `submit()`. Each streaming message
+    /// carries the generation it was started under; handlers drop any whose
+    /// generation no longer matches the current one, so a superseded
+    /// stream's trailing events can never finalize or append to a newer
+    /// stream's session.
+    stream_generation: u64,
 
     input: String,
     streaming: bool,
@@ -367,6 +375,7 @@ impl Application for App {
             sessions: Vec::new(),
             active: 0,
             streaming_session: None,
+            stream_generation: 0,
             input: flags.query.clone().unwrap_or_default(),
             streaming: false,
             error: None,
@@ -433,8 +442,9 @@ impl Application for App {
 
             Message::Submit => self.submit(),
 
-            Message::StreamDelta(chunk) => {
-                if let Some(idx) = self.streaming_session
+            Message::StreamDelta(generation, chunk) => {
+                if generation == self.stream_generation
+                    && let Some(idx) = self.streaming_session
                     && let Some(sess) = self.sessions.get_mut(idx)
                     && let Some(last) = sess.messages.last_mut()
                     && last.role() == ChatRole::Assistant
@@ -444,20 +454,26 @@ impl Application for App {
                 Task::none()
             }
 
-            Message::StreamDone(envelope) => {
-                self.capture_remote_session(&envelope);
-                self.finalize_stream();
+            Message::StreamDone(generation, envelope) => {
+                if generation == self.stream_generation {
+                    self.capture_remote_session(&envelope);
+                    self.finalize_stream();
+                }
                 Task::none()
             }
 
-            Message::StreamError(msg) => {
-                self.finalize_stream();
-                self.error = Some(msg);
+            Message::StreamError(generation, msg) => {
+                if generation == self.stream_generation {
+                    self.finalize_stream();
+                    self.error = Some(msg);
+                }
                 Task::none()
             }
 
-            Message::StreamEnded => {
-                self.finalize_stream();
+            Message::StreamEnded(generation) => {
+                if generation == self.stream_generation {
+                    self.finalize_stream();
+                }
                 Task::none()
             }
 
@@ -736,6 +752,8 @@ impl App {
         self.error = None;
         self.streaming = true;
         self.streaming_session = Some(self.active);
+        self.stream_generation = self.stream_generation.wrapping_add(1);
+        let generation = self.stream_generation;
 
         let remote_id = self
             .active_session()
@@ -775,20 +793,28 @@ impl App {
                         let mut stream = std::pin::pin!(stream);
                         while let Some(item) = stream.next().await {
                             let msg = match item {
-                                Ok(StreamEvent::Delta(t)) => Message::StreamDelta(t),
-                                Ok(StreamEvent::Done(v)) => Message::StreamDone(v),
-                                Ok(StreamEvent::Error(e)) => Message::StreamError(e),
-                                Err(e) => Message::StreamError(format!("{e:#}")),
+                                Ok(StreamEvent::Delta(t)) => Message::StreamDelta(generation, t),
+                                Ok(StreamEvent::Done(v)) => Message::StreamDone(generation, v),
+                                Ok(StreamEvent::Error(e)) => Message::StreamError(generation, e),
+                                Err(e) => Message::StreamError(generation, format!("{e:#}")),
                             };
+                            let terminal = matches!(msg, Message::StreamError(..));
                             if tx.send(msg).await.is_err() {
                                 return;
                             }
+                            if terminal {
+                                // An error ends this stream; the StreamError
+                                // handler finalizes. Returning here (rather than
+                                // falling through to StreamEnded) means a single
+                                // stream emits exactly one terminal event.
+                                return;
+                            }
                         }
-                        let _ = tx.send(Message::StreamEnded).await;
+                        let _ = tx.send(Message::StreamEnded(generation)).await;
                     }
                     Err(e) => {
                         let _ = tx
-                            .send(Message::StreamError(format!("{e:#}")))
+                            .send(Message::StreamError(generation, format!("{e:#}")))
                             .await;
                     }
                 }

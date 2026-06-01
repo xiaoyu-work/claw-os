@@ -58,7 +58,12 @@ where
 {
     async_stream::stream! {
         let mut byte_stream = std::pin::pin!(byte_stream);
-        let mut buffer = String::new();
+        // Accumulate raw bytes: `reqwest`'s `bytes_stream()` splits at
+        // arbitrary network boundaries, so a chunk can end in the middle of
+        // a multi-byte UTF-8 character. We never decode a partial chunk —
+        // only whole `\n\n`-delimited event blocks, which (the separator
+        // being ASCII) always end on a code-point boundary.
+        let mut buffer: Vec<u8> = Vec::new();
         while let Some(chunk) = byte_stream.next().await {
             let chunk = match chunk {
                 Ok(b) => b,
@@ -67,24 +72,29 @@ where
                     return;
                 }
             };
-            match std::str::from_utf8(&chunk) {
-                Ok(s) => buffer.push_str(s),
-                Err(_) => {
-                    yield Err(anyhow::anyhow!("non-utf8 chunk on SSE stream"));
-                    return;
-                }
-            }
+            buffer.extend_from_slice(&chunk);
 
             loop {
-                let Some(sep) = buffer.find("\n\n") else { break };
-                let block = buffer[..sep].to_string();
-                buffer.drain(..sep + 2);
-                if let Some(event) = parse_block(&block) {
+                let Some(sep) = find_subslice(&buffer, b"\n\n") else { break };
+                let block: Vec<u8> = buffer.drain(..sep + 2).collect();
+                // `block` is one complete event (lines + trailing `\n\n`);
+                // lossily decode so genuinely corrupt bytes become U+FFFD
+                // instead of aborting the whole reply.
+                let text = String::from_utf8_lossy(&block[..sep]);
+                if let Some(event) = parse_block(text.as_ref()) {
                     yield Ok(event);
                 }
             }
         }
     }
+}
+
+/// Index of the first occurrence of `needle` in `haystack`, or `None`.
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 fn parse_block(block: &str) -> Option<StreamEvent> {
@@ -150,5 +160,29 @@ mod tests {
             .map(|r| r.unwrap())
             .collect();
         assert_eq!(collected.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn handles_multibyte_char_split_across_chunks() {
+        // "😀" encodes as F0 9F 98 80. Split the stream inside those bytes so
+        // the first chunk ends mid-character — the old per-chunk from_utf8
+        // would abort the whole reply here.
+        let full = "event: delta\ndata: {\"text\":\"😀\"}\n\n".as_bytes().to_vec();
+        let mid = full.len() - 6; // between the emoji's 2nd and 3rd byte
+        let a = Bytes::copy_from_slice(&full[..mid]);
+        let b = Bytes::copy_from_slice(&full[mid..]);
+        let s = stream::iter(vec![
+            Ok::<_, reqwest::Error>(a),
+            Ok::<_, reqwest::Error>(b),
+        ]);
+        let decoded = sse_decode(s);
+        let collected: Vec<_> = decoded
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(collected.len(), 1);
+        assert!(matches!(&collected[0], StreamEvent::Delta(t) if t == "😀"));
     }
 }
