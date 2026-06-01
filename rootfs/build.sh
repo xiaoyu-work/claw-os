@@ -243,6 +243,26 @@ Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 EOF
 fi
 
+# Always track the newest officially-maintained kernel, firmware, CPU
+# microcode and matching headers from `$SUITE-backports` for the broadest
+# possible hardware/driver coverage (closer to an Ubuntu HWE stack), while
+# the rest of the system stays on the stable `$SUITE` release. Backports is
+# `NotAutomatic` (default priority 100), so without this pin apt would keep
+# installing the older stable kernel. Priority 600 (> main's 500) flips just
+# these hardware-enablement packages to backports; everything else is
+# untouched. This file lands before any feature installs the kernel, so the
+# very first `apt-get install ${KERNEL_PKG}` already resolves to backports.
+mkdir -p "$ROOTFS/etc/apt/preferences.d"
+cat > "$ROOTFS/etc/apt/preferences.d/90-backports-hardware-enablement" <<EOF
+Package: linux-image-* linux-headers-* linux-image-amd64 linux-image-arm64 linux-headers-amd64 linux-headers-arm64
+Pin: release a=$SUITE-backports
+Pin-Priority: 600
+
+Package: firmware-* *-firmware intel-microcode amd64-microcode
+Pin: release a=$SUITE-backports
+Pin-Priority: 600
+EOF
+
 cleanup_chroot_mounts() {
     # Unmount in reverse order, lazy fallback for stray references.
     for mp in "$ROOTFS/dev/pts" "$ROOTFS/dev" "$ROOTFS/sys" "$ROOTFS/proc"; do

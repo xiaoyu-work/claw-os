@@ -1,3 +1,8 @@
+# ${KERNEL_PKG} resolves to the backports kernel: the global APT pin in
+# rootfs/build.sh (preferences.d/90-backports-hardware-enablement) gives
+# linux-image-*/linux-headers-* from $SUITE-backports priority 600, so this
+# meta package pulls the newest officially-maintained kernel for maximum
+# hardware/driver coverage.
 ${KERNEL_PKG}
 initramfs-tools
 
