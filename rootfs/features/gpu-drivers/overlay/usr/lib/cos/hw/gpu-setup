@@ -208,6 +208,134 @@ cmd_detect() {
     esac
 }
 
+# ---------------------------------------------------------------------------
+# Bare-metal post-install tuning: PRIME render offload for hybrid laptops and
+# Secure Boot key enrolment for the DKMS-signed module.
+# ---------------------------------------------------------------------------
+
+# True when the machine booted with UEFI Secure Boot enabled.
+secureboot_enabled() {
+    if command -v mokutil >/dev/null 2>&1; then
+        mokutil --sb-state 2>/dev/null | grep -qi 'SecureBoot enabled'
+        return
+    fi
+    # Fallback: read the EFI variable directly (its last byte is 1 when on).
+    local f
+    f="$(ls /sys/firmware/efi/efivars/SecureBoot-* 2>/dev/null | head -1 || true)"
+    [ -n "$f" ] || return 1
+    [ "$(tail -c1 "$f" 2>/dev/null | od -An -tu1 | tr -d ' ')" = "1" ]
+}
+
+# True on a hybrid-graphics laptop: an integrated Intel/AMD GPU *and* a
+# discrete NVIDIA GPU. There the iGPU should keep driving the display (best
+# battery + reliable Wayland) and NVIDIA is used on demand via PRIME render
+# offload. A desktop with only an NVIDIA card is not hybrid (NVIDIA primary).
+gpu_is_hybrid() {
+    command -v lspci >/dev/null 2>&1 || return 1
+    local gpus
+    gpus="$(lspci -nn 2>/dev/null | grep -iE 'VGA compatible controller|3D controller|Display controller' || true)"
+    grep -qi 'nvidia' <<<"$gpus" || return 1
+    grep -qiE 'intel|amd|ati|advanced micro devices' <<<"$gpus"
+}
+
+# Locate the DKMS Machine Owner Key certificate Debian uses to sign modules.
+# Echoes the path, or nothing if not found.
+dkms_mok_cert() {
+    local c
+    for c in /var/lib/dkms/mok.pub /var/lib/shim-signed/mok/MOK.der; do
+        [ -f "$c" ] && { echo "$c"; return 0; }
+    done
+    return 1
+}
+
+# Configure the NVIDIA module for Wayland (COSMIC needs KMS) and, on a hybrid
+# laptop, enable runtime dGPU power management and ship a `prime-run` offload
+# wrapper. Writes a modprobe drop-in; the caller rebuilds the initramfs.
+configure_prime_offload() {
+    local conf=/etc/modprobe.d/cos-nvidia.conf
+    {
+        echo "# Managed by Claw OS (gpu-setup). KMS is required for the NVIDIA"
+        echo "# driver to drive a Wayland/COSMIC session."
+        echo "options nvidia-drm modeset=1 fbdev=1"
+    } >"$conf"
+
+    if gpu_is_hybrid; then
+        # Let the dGPU power down when idle — the big battery win on Optimus
+        # laptops where the Intel/AMD iGPU runs the desktop.
+        echo "options nvidia NVreg_DynamicPowerManagement=0x02" >>"$conf"
+
+        # `prime-run <cmd>` launches one app on the NVIDIA GPU while the rest
+        # of the session stays on the power-sipping iGPU.
+        cat >/usr/bin/prime-run <<'PRIMEEOF'
+#!/bin/sh
+# Run one program on the discrete NVIDIA GPU via PRIME render offload.
+export __NV_PRIME_RENDER_OFFLOAD=1
+export __NV_PRIME_RENDER_OFFLOAD_PROVIDER=NVIDIA-G0
+export __GLX_VENDOR_LIBRARY_NAME=nvidia
+export __VK_LAYER_NV_optimus=NVIDIA_only
+exec "$@"
+PRIMEEOF
+        chmod 0755 /usr/bin/prime-run
+        log ":: hybrid graphics — iGPU stays primary; run 'prime-run <app>' for the NVIDIA GPU."
+    fi
+}
+
+# On a Secure Boot machine the DKMS-built nvidia module is signed with a local
+# Machine Owner Key that must be *enrolled* once via a reboot. Queue that
+# enrolment and print human-readable next steps (incl. the one-time password)
+# to stdout so the wizard/CLI can show them. Never fatal — the driver is still
+# installed; only loading is gated until the key is trusted.
+maybe_enroll_secureboot() {
+    secureboot_enabled || return 0
+
+    local cert
+    cert="$(dkms_mok_cert || true)"
+    if [ -z "$cert" ]; then
+        log ":: Secure Boot is on but no DKMS signing key was found; the NVIDIA"
+        log "   module may fail to load until you sign it (see dkms/mokutil docs)."
+        return 0
+    fi
+
+    if mokutil --test-key "$cert" 2>/dev/null | grep -qi 'already enrolled'; then
+        log ":: Secure Boot key already enrolled — the signed module will load."
+        return 0
+    fi
+
+    # head -c reads a fixed number of bytes from /dev/urandom (no SIGPIPE), so
+    # this is safe under 'set -o pipefail'. $RANDOM is the portable fallback.
+    local pw
+    pw="$(head -c 9 /dev/urandom | base64 | tr -dc 'A-HJ-NP-Za-hj-np-z2-9' | cut -c1-8)"
+    [ "${#pw}" -ge 6 ] || pw="$(printf 'cos%05d' "$((RANDOM % 100000))")"
+
+    if printf '%s\n%s\n' "$pw" "$pw" | mokutil --import "$cert" >/dev/null 2>&1; then
+        local notef=/var/lib/cos/gpu/secureboot-enroll.txt
+        mkdir -p "$(dirname "$notef")"
+        # tee → stdout (captured by the wizard) AND a file the MOTD can show.
+        {
+            echo "ACTION REQUIRED — Secure Boot key enrolment"
+            echo
+            echo "Secure Boot is enabled, so the NVIDIA driver was signed with a"
+            echo "local key that must be approved once:"
+            echo
+            echo "  1. Reboot."
+            echo "  2. At the blue 'MOK Management' screen pick 'Enroll MOK' ->"
+            echo "     'Continue' -> 'Yes'."
+            echo "  3. Enter this one-time password when prompted:"
+            echo
+            echo "         $pw"
+            echo
+            echo "  4. The machine reboots into Claw OS with NVIDIA active."
+            echo
+            echo "(Miss the screen? Just run 'sudo claw-gpu-setup install' again.)"
+        } | tee "$notef"
+        return 0
+    fi
+
+    log ":: Could not queue Secure Boot enrolment (mokutil --import failed)."
+    log "   Disable Secure Boot in firmware, or enrol $cert manually with mokutil."
+    return 0
+}
+
 # Install the proprietary NVIDIA stack on bare metal. amd64 only.
 install_nvidia_baremetal() {
     if nvidia_proprietary_active; then
@@ -222,19 +350,30 @@ install_nvidia_baremetal() {
     # linux-headers-amd64 is the meta-package; the global APT pin keeps it
     # on the backports kernel so DKMS rebuilds the module on every kernel
     # bump. firmware-misc-nonfree carries assorted NVIDIA firmware blobs.
+    # dkms is installed first (it's a dependency) so its Machine Owner Key
+    # exists before the nvidia module builds, which lets DKMS sign the module
+    # for Secure Boot automatically.
     apt-get install -y --no-install-recommends \
         linux-headers-amd64 \
         dkms \
         nvidia-driver \
         firmware-misc-nonfree
 
+    # KMS + (on laptops) PRIME render offload and dGPU power management.
+    configure_prime_offload
+
     # The nvidia-driver package already drops a nouveau blacklist via
     # /etc/modprobe.d/nvidia-blacklists-nouveau.conf and triggers an
-    # initramfs rebuild, but regenerate defensively so the change is live
-    # on the next boot regardless of trigger ordering.
+    # initramfs rebuild, but regenerate defensively so the blacklist and our
+    # modprobe options are live on the next boot regardless of trigger order.
     if command -v update-initramfs >/dev/null 2>&1; then
         update-initramfs -u || true
     fi
+
+    # On a Secure Boot machine the signed module still needs its key enrolled
+    # via a one-time reboot. This prints the step-by-step + password to stdout
+    # (captured by the wizard) when enrollment is queued; it is never fatal.
+    maybe_enroll_secureboot
 
     log ":: done. Reboot to switch from nouveau to the NVIDIA driver."
 }
@@ -286,6 +425,20 @@ cmd_motd() {
     local dir=/run/motd.d
     local out="$dir/40-cos-gpu.motd"
     mkdir -p "$dir"
+
+    # A queued-but-not-yet-enrolled Secure Boot key trumps everything else:
+    # the freshly installed NVIDIA module will not load until it is approved.
+    local enrollf=/var/lib/cos/gpu/secureboot-enroll.txt
+    if [ -f "$enrollf" ] && secureboot_enabled; then
+        local cert
+        cert="$(dkms_mok_cert || true)"
+        if [ -n "$cert" ] && ! mokutil --test-key "$cert" 2>/dev/null | grep -qi 'already enrolled'; then
+            printf 'NVIDIA driver installed but Secure Boot key not yet enrolled. See %s\n' "$enrollf" >"$out"
+            return
+        fi
+        rm -f "$enrollf"
+    fi
+
     local action env
     action="$(recommend)"
     env="$(detect_env)"

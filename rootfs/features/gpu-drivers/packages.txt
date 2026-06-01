@@ -7,3 +7,8 @@
 # /usr/lib/cos/hw/gpu-setup only on machines that actually have an NVIDIA
 # GPU, never unconditionally baked into the image.
 pciutils
+
+# mokutil lets the helper detect UEFI Secure Boot and enrol the Machine
+# Owner Key that signs the DKMS-built NVIDIA module, so the proprietary
+# driver loads on Secure Boot machines (the default on most modern laptops).
+mokutil

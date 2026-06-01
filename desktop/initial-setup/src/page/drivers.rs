@@ -64,8 +64,9 @@ pub enum Message {
     Detected(Option<Detection>),
     /// User clicked the Install button.
     Install,
-    /// `pkexec gpu-setup install` finished.
-    Installed(Result<(), String>),
+    /// `pkexec gpu-setup install` finished. On success it may carry a
+    /// post-install note (e.g. Secure Boot key-enrolment steps) to show.
+    Installed(Result<Option<String>, String>),
 }
 
 impl From<Message> for super::Message {
@@ -88,6 +89,8 @@ pub struct Page {
     installing: bool,
     /// Set once an install has completed successfully this session.
     installed_ok: bool,
+    /// Post-install note to surface (e.g. Secure Boot enrolment steps).
+    post_note: Option<String>,
     /// Last install error, surfaced inline.
     last_error: Option<String>,
 }
@@ -116,9 +119,10 @@ impl Page {
                 };
                 return cosmic::task::future(fut);
             }
-            Message::Installed(Ok(())) => {
+            Message::Installed(Ok(note)) => {
                 self.installing = false;
                 self.installed_ok = true;
+                self.post_note = note;
                 if let Some(d) = self.detection.as_mut() {
                     d.action = "already".to_string();
                     d.installed = true;
@@ -230,6 +234,11 @@ impl page::Page for Page {
                         widget::text::body(fl!("drivers-page", "install-ok")).into(),
                     ]));
                 }
+                if let Some(note) = &self.post_note {
+                    section = section.add(widget::settings::item_row(vec![
+                        widget::text::body(note.clone()).into(),
+                    ]));
+                }
                 if let Some(err) = &self.last_error {
                     section = section.add(widget::settings::item_row(vec![
                         widget::text::body(format!(
@@ -273,11 +282,14 @@ fn detect_blocking() -> Option<Detection> {
 
 /// Privileged install via polkit. A generous timeout: pulling nvidia-driver +
 /// building the DKMS module against the kernel headers can take a few minutes.
-fn install_blocking() -> Result<(), String> {
+/// On success, any stdout the helper prints (e.g. Secure Boot key-enrolment
+/// steps) is returned as a note to display.
+fn install_blocking() -> Result<Option<String>, String> {
     match cos_runtime::exec::run(&["pkexec", HELPER, "install"], Some(1800)) {
         Ok(r) if r.exit_code == 0 => {
             tracing::info!("gpu-setup install succeeded");
-            Ok(())
+            let note = r.stdout.trim();
+            Ok((!note.is_empty()).then(|| note.to_string()))
         }
         Ok(r) => {
             let mut summary = r.stderr.trim().to_string();
