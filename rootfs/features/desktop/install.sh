@@ -116,11 +116,31 @@ EOF
         apt-get install -y git-lfs
     fi
 
-    # The build runs as root in a repo owned by the invoking user (uid 1000);
-    # mark it safe so git doesn't refuse with "dubious ownership".
+    # 'git lfs pull' must reach the remote, which needs the user's credentials:
+    # an SSH key + known_hosts for git@github.com remotes, or a credential
+    # helper / gh token for https remotes. The build runs as root (via sudo),
+    # and root has neither — so pulling as root fails regardless of how the repo
+    # was cloned ("ssh_askpass ... Host key verification failed" for SSH,
+    # auth prompts for HTTPS). Run the LFS commands as the repo's OWNER instead,
+    # so whatever transport + auth the user already set up just works for both.
+    repo_owner="$(stat -c '%U' "$PROJECT_DIR")"
+    run_as_owner() {
+        if [ "$(id -un)" = "$repo_owner" ]; then
+            "$@"
+        elif command -v runuser >/dev/null 2>&1; then
+            runuser -u "$repo_owner" -- "$@"
+        else
+            sudo -H -u "$repo_owner" -- "$@"
+        fi
+    }
+
+    # Mark the tree safe for both identities (root and the owner) so neither
+    # git invocation refuses with "dubious ownership".
     git config --global --add safe.directory "$PROJECT_DIR" 2>/dev/null || true
-    git -C "$PROJECT_DIR" lfs install --local
-    git -C "$PROJECT_DIR" lfs pull
+    run_as_owner git config --global --add safe.directory "$PROJECT_DIR" 2>/dev/null || true
+
+    run_as_owner git -C "$PROJECT_DIR" lfs install --local
+    run_as_owner git -C "$PROJECT_DIR" lfs pull
 
     if lfs_is_pointer "$LFS_CANARY"; then
         echo "  error: 'git lfs pull' did not materialize $LFS_CANARY" >&2
