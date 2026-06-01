@@ -78,6 +78,59 @@ done
 }
 
 # ---------------------------------------------------------------------------
+# 1.5. Materialize Git LFS assets.
+#
+# Several desktop assets are tracked with Git LFS (see desktop/**/.gitattributes
+# `filter=lfs`): the cosmic-initial-setup city database
+# (initial-setup/res/cities.bitcode-*), wallpapers, the greeter background,
+# app icons and fonts. A clone made on a machine without git-lfs leaves these
+# as ~130-byte *pointer stubs* on disk. The build then happily compiles those
+# stubs into the binaries via include_bytes!/copies them into the image — so
+# the city search returns nothing, wallpapers are blank, etc. — and nothing
+# fails loudly. Detect that here and pull the real objects before building.
+# ---------------------------------------------------------------------------
+lfs_is_pointer() {
+    # Git LFS pointer files begin with "version https://git-lfs.github.com/...".
+    head -c 64 "$1" 2>/dev/null | grep -q '^version https://git-lfs'
+}
+
+# Canary: the city database is always present and is the asset whose breakage
+# is hardest to spot (silent empty timezone list). If it is real, every other
+# LFS object pulled in the same clone is real too.
+LFS_CANARY="$DESKTOP_SRC/initial-setup/res/cities.bitcode-v0-6"
+if [ -f "$LFS_CANARY" ] && lfs_is_pointer "$LFS_CANARY"; then
+    echo "  :: Git LFS assets are unfetched pointer stubs — materializing"
+
+    if [ ! -d "$PROJECT_DIR/.git" ]; then
+        cat >&2 <<EOF
+  error: $LFS_CANARY is a Git LFS pointer but $PROJECT_DIR is not a git
+         checkout, so 'git lfs pull' cannot fetch the real data. Re-clone
+         with git-lfs installed, or provide a tree with materialized assets.
+EOF
+        exit 1
+    fi
+
+    if ! git lfs version >/dev/null 2>&1; then
+        echo "  :: installing git-lfs"
+        apt-get update
+        apt-get install -y git-lfs
+    fi
+
+    # The build runs as root in a repo owned by the invoking user (uid 1000);
+    # mark it safe so git doesn't refuse with "dubious ownership".
+    git config --global --add safe.directory "$PROJECT_DIR" 2>/dev/null || true
+    git -C "$PROJECT_DIR" lfs install --local
+    git -C "$PROJECT_DIR" lfs pull
+
+    if lfs_is_pointer "$LFS_CANARY"; then
+        echo "  error: 'git lfs pull' did not materialize $LFS_CANARY" >&2
+        echo "         (still a pointer stub). Check network / LFS quota." >&2
+        exit 1
+    fi
+    echo "  :: Git LFS assets materialized"
+fi
+
+# ---------------------------------------------------------------------------
 # 2. Build the desktop inside the chroot so binaries link against rootfs
 #    glibc, not the host's.
 #
