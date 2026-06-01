@@ -344,8 +344,12 @@ install_nvidia_baremetal() {
     fi
     log ":: installing NVIDIA proprietary driver (this downloads a few hundred MB)…"
 
+    # stdout is reserved for the post-install note (the Secure Boot enrolment
+    # steps printed by maybe_enroll_secureboot via tee). Everything else —
+    # apt/dpkg chatter and initramfs output — goes to stderr so it never
+    # pollutes that note when the wizard captures stdout.
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update -qq
+    apt-get update -qq 1>&2
 
     # linux-headers-amd64 is the meta-package; the global APT pin keeps it
     # on the backports kernel so DKMS rebuilds the module on every kernel
@@ -357,7 +361,7 @@ install_nvidia_baremetal() {
         linux-headers-amd64 \
         dkms \
         nvidia-driver \
-        firmware-misc-nonfree
+        firmware-misc-nonfree 1>&2
 
     # KMS + (on laptops) PRIME render offload and dGPU power management.
     configure_prime_offload
@@ -367,7 +371,7 @@ install_nvidia_baremetal() {
     # initramfs rebuild, but regenerate defensively so the blacklist and our
     # modprobe options are live on the next boot regardless of trigger order.
     if command -v update-initramfs >/dev/null 2>&1; then
-        update-initramfs -u || true
+        update-initramfs -u 1>&2 || true
     fi
 
     # On a Secure Boot machine the signed module still needs its key enrolled
