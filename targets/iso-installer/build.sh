@@ -63,7 +63,7 @@ done
 #    Includes apt-source so the installed system can apt upgrade out of
 #    the box, AND grub-disk so Calamares finds grub-install/efibootmgr.
 "$PROJECT_DIR/rootfs/build.sh" \
-    --features base,cos-core,systemd,kernel,grub-disk,live,installer,apt-source
+    --features base,cos-core,systemd,kernel,grub-disk,live,installer,gpu-drivers,apt-source
 
 # 2. Apply iso-installer overlay if any.
 if [ -d "$SCRIPT_DIR/overlay" ]; then

@@ -122,7 +122,7 @@ jobs:
       # Build the headless Claw OS rootfs ONCE. The Docker image and WSL
       # tarball both consume this same tree.
       - name: Build headless rootfs (shared with Docker + WSL)
-        run: sudo ./rootfs/build.sh --features base,cos-core,browser,systemd,apt-source,qwen3-embedding
+        run: sudo ./rootfs/build.sh --features base,cos-core,browser,systemd,gpu-drivers,apt-source,qwen3-embedding
 
       # Docker-specific prep on the shared rootfs:
       #   - Add the default `cos` user (uid 1000, NOPASSWD sudo).
@@ -265,7 +265,7 @@ jobs:
         run: cargo build --release -p claw-semantic --target aarch64-unknown-linux-gnu
 
       - name: Build arm64 headless rootfs
-        run: sudo ARCH=arm64 ./rootfs/build.sh --features base,cos-core,browser,systemd,apt-source,qwen3-embedding
+        run: sudo ARCH=arm64 ./rootfs/build.sh --features base,cos-core,browser,systemd,gpu-drivers,apt-source,qwen3-embedding
 
       - name: Prep rootfs for Docker (cos user + overlay scratch dirs)
         run: |

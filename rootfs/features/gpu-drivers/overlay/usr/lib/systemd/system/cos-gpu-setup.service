@@ -1,0 +1,24 @@
+[Unit]
+Description=Claw OS — detect GPU and surface driver status
+Documentation=https://github.com/xiaoyu-work/claw-os
+# Run late in boot so lspci + any loaded GPU driver are visible. PCI is
+# enumerated early, so plain ordering after local-fs is enough; we avoid the
+# deprecated systemd-udev-settle.service.
+After=local-fs.target
+Before=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Detection + MOTD only. This NEVER auto-installs a driver: on bare metal the
+# user opts in through the desktop wizard or `claw-gpu-setup install`, and in
+# WSL/containers a kernel-mode driver must not be installed inside the guest
+# at all. The service just makes the GPU status visible (journal + MOTD) so a
+# headless WSL/Docker user knows what to do.
+ExecStart=/usr/lib/cos/hw/gpu-setup motd
+ExecStartPost=/usr/lib/cos/hw/gpu-setup detect
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -71,7 +71,7 @@ fi
 #    FEATURES is overridable. Example, build a desktop VMware image:
 #       FEATURES=base,cos-core,systemd,kernel,desktop,vmware,copilot-cli,grub-disk,vm,apt-source \
 #       SIZE=16G FORMATS=vhdx ./targets/vm/build.sh
-FEATURES="${FEATURES:-base,cos-core,systemd,kernel,grub-disk,vm,apt-source}"
+FEATURES="${FEATURES:-base,cos-core,systemd,kernel,grub-disk,vm,gpu-drivers,apt-source}"
 echo ":: features: $FEATURES"
 "$PROJECT_DIR/rootfs/build.sh" --features "$FEATURES"
 

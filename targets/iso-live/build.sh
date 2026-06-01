@@ -65,7 +65,7 @@ done
 #    Note: rootfs/features/live/install.sh detects whether `desktop` was
 #    already applied and, if so, layers a greetd [initial_session] block
 #    for autologin into a Wayland session.
-FEATURES="${FEATURES:-base,cos-core,systemd,kernel,live,apt-source}"
+FEATURES="${FEATURES:-base,cos-core,systemd,kernel,live,gpu-drivers,apt-source}"
 echo ":: features: $FEATURES"
 "$PROJECT_DIR/rootfs/build.sh" --features "$FEATURES"
 

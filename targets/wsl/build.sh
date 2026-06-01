@@ -25,7 +25,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ROOTFS="$PROJECT_DIR/build/claw-os-rootfs"
-FEATURES="${FEATURES:-base,cos-core,browser,systemd,apt-source,qwen3-embedding}"
+FEATURES="${FEATURES:-base,cos-core,browser,systemd,gpu-drivers,apt-source,qwen3-embedding}"
 
 source "$PROJECT_DIR/scripts/lib/arch.sh"
 source "$PROJECT_DIR/scripts/lib/add-cos-user.sh"

@@ -294,6 +294,18 @@ impl Application for App {
                     }
                 }
 
+                page::Message::Drivers(message) => {
+                    if let Some(page) = self.pages.get_mut(&TypeId::of::<page::drivers::Page>()) {
+                        return page
+                            .as_any()
+                            .downcast_mut::<page::drivers::Page>()
+                            .unwrap()
+                            .update(message)
+                            .map(Message::PageMessage)
+                            .map(cosmic::Action::App);
+                    }
+                }
+
                 page::Message::WiFi(message) => {
                     if let Some(page) = self.pages.get_mut(&TypeId::of::<page::wifi::Page>()) {
                         return page

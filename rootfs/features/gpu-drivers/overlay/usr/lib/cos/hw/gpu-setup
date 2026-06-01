@@ -1,0 +1,321 @@
+#!/usr/bin/env bash
+# /usr/lib/cos/hw/gpu-setup — environment-aware GPU driver setup for Claw OS.
+#
+# Claw OS ships the open GPU stack (nouveau/amdgpu/i915-xe + signed firmware)
+# out of the box, which lights up every modern GPU at a basic level. This
+# helper handles the one thing that genuinely cannot be pre-installed for
+# everyone: NVIDIA's *proprietary* driver (full 3D, CUDA, NVENC). It must be
+# installed only on machines that actually have an NVIDIA GPU, and only when
+# that GPU is a real PCI device (bare metal) — inside WSL or a container the
+# GPU is virtualised and the kernel module lives outside the guest.
+#
+# Usage:
+#   gpu-setup detect [--json]   read-only; print what we found + the
+#                               recommended action (safe for any user)
+#   gpu-setup install           privileged; perform the env-appropriate action
+#                               (apt install on bare metal; no-op + verify in
+#                               WSL/containers). Run via pkexec from the GUI.
+#   gpu-setup motd              write /run/motd.d/40-cos-gpu.motd (used by the
+#                               first-boot service so headless WSL/Docker users
+#                               see the GPU status on login)
+#
+# Exit status of `detect`/`install` is 0 on success, non-zero on error.
+
+set -euo pipefail
+
+log() { printf '%s\n' "$*" >&2; }
+
+# ---------------------------------------------------------------------------
+# Environment + hardware detection (all read-only).
+# ---------------------------------------------------------------------------
+
+# baremetal | wsl | container
+detect_env() {
+    if grep -qiE '(microsoft|wsl)' /proc/version 2>/dev/null || [ -e /dev/dxg ]; then
+        echo wsl
+        return
+    fi
+    if [ -f /.dockerenv ] || [ "${container:-}" = docker ] || [ "${container:-}" = lxc ] \
+        || grep -qaE '(docker|containerd|buildkit|lxc|podman)' /proc/1/cgroup 2>/dev/null; then
+        echo container
+        return
+    fi
+    echo baremetal
+}
+
+# Print the host's dpkg architecture (amd64 / arm64 / …).
+host_arch() {
+    if command -v dpkg >/dev/null 2>&1; then
+        dpkg --print-architecture
+    else
+        case "$(uname -m)" in
+            x86_64) echo amd64 ;;
+            aarch64) echo arm64 ;;
+            *) uname -m ;;
+        esac
+    fi
+}
+
+# Echo nvidia|amd|intel|other|none for the primary display GPU.
+detect_gpu_vendor() {
+    if command -v lspci >/dev/null 2>&1; then
+        local line
+        line="$(lspci -nn 2>/dev/null | grep -iE 'VGA compatible controller|3D controller|Display controller' || true)"
+        if [ -n "$line" ]; then
+            if grep -qi 'nvidia' <<<"$line"; then echo nvidia; return; fi
+            if grep -qiE 'amd|ati|advanced micro devices' <<<"$line"; then echo amd; return; fi
+            if grep -qi 'intel' <<<"$line"; then echo intel; return; fi
+            echo other
+            return
+        fi
+    fi
+    # No PCI view (typical inside WSL/containers). /dev/dxg is NOT a usable
+    # signal here — WSL2 exposes it for every GPU vendor (Intel/AMD/NVIDIA),
+    # so only claim NVIDIA on a positive NVIDIA-specific signal.
+    if nvidia_present_no_pci; then
+        echo nvidia
+        return
+    fi
+    echo none
+}
+
+# True when an NVIDIA GPU is present without a scannable PCI bus (WSL /
+# container). Relies only on NVIDIA-specific surfaces, never /dev/dxg.
+nvidia_present_no_pci() {
+    [ -e /dev/nvidia0 ] || [ -e /dev/nvidiactl ] && return 0
+    # WSL injects libcuda only when the Windows host has an NVIDIA driver.
+    ls /usr/lib/wsl/lib/libcuda.so* >/dev/null 2>&1 && return 0
+    nvidia_runtime_visible && return 0
+    return 1
+}
+
+# Human-readable name of the NVIDIA GPU, best-effort.
+nvidia_name() {
+    local n=""
+    if command -v lspci >/dev/null 2>&1; then
+        n="$(lspci -nn 2>/dev/null \
+            | grep -iE 'VGA compatible controller|3D controller|Display controller' \
+            | grep -i nvidia | head -1 | sed 's/.*controller[^:]*: //I')"
+    fi
+    if [ -z "$n" ] && command -v nvidia-smi >/dev/null 2>&1; then
+        n="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || true)"
+    fi
+    [ -n "$n" ] && echo "$n" || echo "NVIDIA GPU"
+}
+
+# Is the *proprietary* NVIDIA stack already active?
+nvidia_proprietary_active() {
+    lsmod 2>/dev/null | grep -q '^nvidia ' && return 0
+    dpkg -s nvidia-driver >/dev/null 2>&1 && return 0
+    return 1
+}
+
+# Can the userspace CUDA/NVML stack already see the GPU? (true in a
+# correctly-set-up WSL/container, or on bare metal with the driver loaded.)
+# In WSL the tool lives at /usr/lib/wsl/lib/nvidia-smi, off the default PATH.
+nvidia_runtime_visible() {
+    local smi
+    for smi in nvidia-smi /usr/lib/wsl/lib/nvidia-smi; do
+        if command -v "$smi" >/dev/null 2>&1 || [ -x "$smi" ]; then
+            "$smi" -L >/dev/null 2>&1 && return 0
+        fi
+    done
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# Decide the recommended action for the current machine.
+# Echoes one of:
+#   none            nothing to do (no NVIDIA, or open stack is the right answer)
+#   install_kmod    bare metal NVIDIA, proprietary driver not yet installed
+#   already         proprietary driver already installed
+#   wsl_ready       WSL/container, GPU already visible via host passthrough
+#   wsl_missing     WSL/container, NVIDIA expected but not visible (host setup)
+#   unsupported_arch NVIDIA present but proprietary driver unavailable on arch
+# ---------------------------------------------------------------------------
+recommend() {
+    local env vendor
+    env="$(detect_env)"
+    vendor="$(detect_gpu_vendor)"
+
+    if [ "$vendor" != "nvidia" ]; then
+        echo none
+        return
+    fi
+
+    case "$env" in
+        wsl|container)
+            if nvidia_runtime_visible; then echo wsl_ready; else echo wsl_missing; fi
+            ;;
+        baremetal)
+            if nvidia_proprietary_active; then
+                echo already
+            elif [ "$(host_arch)" != "amd64" ]; then
+                # Debian's nvidia-driver is amd64-only; arm64 (Tegra etc.)
+                # needs vendor-specific stacks we don't ship.
+                echo unsupported_arch
+            else
+                echo install_kmod
+            fi
+            ;;
+        *)
+            echo none
+            ;;
+    esac
+}
+
+# JSON-escape a string for the small fixed set of fields we emit.
+json_escape() {
+    local s=$1
+    s=${s//\\/\\\\}
+    s=${s//\"/\\\"}
+    printf '%s' "$s"
+}
+
+# ---------------------------------------------------------------------------
+# Commands.
+# ---------------------------------------------------------------------------
+
+cmd_detect() {
+    local json=0
+    [ "${1:-}" = "--json" ] && json=1
+
+    local env vendor action name installed visible
+    env="$(detect_env)"
+    vendor="$(detect_gpu_vendor)"
+    action="$(recommend)"
+    name=""
+    [ "$vendor" = "nvidia" ] && name="$(nvidia_name)"
+    nvidia_proprietary_active && installed=true || installed=false
+    nvidia_runtime_visible && visible=true || visible=false
+
+    if [ "$json" = 1 ]; then
+        printf '{"env":"%s","gpu":"%s","gpu_name":"%s","action":"%s","installed":%s,"runtime_visible":%s}\n' \
+            "$(json_escape "$env")" "$(json_escape "$vendor")" "$(json_escape "$name")" \
+            "$(json_escape "$action")" "$installed" "$visible"
+        return 0
+    fi
+
+    echo "Environment : $env"
+    echo "GPU vendor  : $vendor${name:+ ($name)}"
+    case "$action" in
+        none)             echo "Status      : nothing to do — the open driver stack is the right choice here." ;;
+        install_kmod)     echo "Status      : NVIDIA GPU found — the proprietary driver can be installed for full 3D + CUDA." ;;
+        already)          echo "Status      : the proprietary NVIDIA driver is already installed." ;;
+        wsl_ready)        echo "Status      : NVIDIA GPU is visible through host passthrough — CUDA is ready, no driver install needed." ;;
+        wsl_missing)      echo "Status      : NVIDIA expected but not visible. Install the NVIDIA driver on the Windows host (WSL) or pass --gpus all (Docker)." ;;
+        unsupported_arch) echo "Status      : NVIDIA GPU found, but the proprietary driver is not available on this CPU architecture." ;;
+    esac
+}
+
+# Install the proprietary NVIDIA stack on bare metal. amd64 only.
+install_nvidia_baremetal() {
+    if nvidia_proprietary_active; then
+        log ":: NVIDIA proprietary driver already installed — nothing to do."
+        return 0
+    fi
+    log ":: installing NVIDIA proprietary driver (this downloads a few hundred MB)…"
+
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq
+
+    # linux-headers-amd64 is the meta-package; the global APT pin keeps it
+    # on the backports kernel so DKMS rebuilds the module on every kernel
+    # bump. firmware-misc-nonfree carries assorted NVIDIA firmware blobs.
+    apt-get install -y --no-install-recommends \
+        linux-headers-amd64 \
+        dkms \
+        nvidia-driver \
+        firmware-misc-nonfree
+
+    # The nvidia-driver package already drops a nouveau blacklist via
+    # /etc/modprobe.d/nvidia-blacklists-nouveau.conf and triggers an
+    # initramfs rebuild, but regenerate defensively so the change is live
+    # on the next boot regardless of trigger ordering.
+    if command -v update-initramfs >/dev/null 2>&1; then
+        update-initramfs -u || true
+    fi
+
+    log ":: done. Reboot to switch from nouveau to the NVIDIA driver."
+}
+
+cmd_install() {
+    if [ "$(id -u)" -ne 0 ]; then
+        log "error: 'gpu-setup install' must run as root (use: pkexec $0 install)"
+        exit 1
+    fi
+
+    local env action
+    env="$(detect_env)"
+    action="$(recommend)"
+
+    case "$action" in
+        install_kmod)
+            install_nvidia_baremetal
+            ;;
+        already)
+            log ":: NVIDIA proprietary driver already installed — nothing to do."
+            ;;
+        wsl_ready)
+            log ":: GPU is already usable via host passthrough ($env) — no in-guest driver to install."
+            log "   CUDA libraries are provided by the host; nothing to do."
+            ;;
+        wsl_missing)
+            log ":: No GPU visible in this $env guest."
+            if [ "$env" = wsl ]; then
+                log "   Install the latest NVIDIA driver on the *Windows host*; WSL picks it up automatically."
+            else
+                log "   Run the container with the NVIDIA Container Toolkit on the host and '--gpus all'."
+            fi
+            log "   (A kernel-mode driver must NOT be installed inside this guest.)"
+            exit 1
+            ;;
+        unsupported_arch)
+            log ":: NVIDIA GPU found, but the proprietary driver is not packaged for $(host_arch)."
+            exit 1
+            ;;
+        none|*)
+            log ":: No NVIDIA GPU detected — the open driver stack is already optimal. Nothing to do."
+            ;;
+    esac
+}
+
+# Write a one-line MOTD hint so headless (WSL/Docker) users see GPU status on
+# login. Kept terse; only speaks up when there's something worth saying.
+cmd_motd() {
+    local dir=/run/motd.d
+    local out="$dir/40-cos-gpu.motd"
+    mkdir -p "$dir"
+    local action env
+    action="$(recommend)"
+    env="$(detect_env)"
+    case "$action" in
+        install_kmod)
+            printf 'NVIDIA GPU detected. Run `sudo claw-gpu-setup install` for the proprietary driver (full 3D + CUDA).\n' >"$out"
+            ;;
+        wsl_missing)
+            if [ "$env" = wsl ]; then
+                printf 'NVIDIA GPU not visible. Install the NVIDIA driver on the Windows host to enable CUDA in WSL.\n' >"$out"
+            else
+                printf 'NVIDIA GPU not visible. Start this container with the NVIDIA Container Toolkit and --gpus all.\n' >"$out"
+            fi
+            ;;
+        *)
+            # Nothing useful to say — remove any stale hint.
+            rm -f "$out"
+            ;;
+    esac
+}
+
+case "${1:-detect}" in
+    detect)  shift; cmd_detect "${1:-}" ;;
+    install) cmd_install ;;
+    motd)    cmd_motd ;;
+    -h|--help|help)
+        sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+        ;;
+    *)
+        log "error: unknown command '${1:-}'. Try: detect | install | motd"
+        exit 1
+        ;;
+esac
