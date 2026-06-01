@@ -246,12 +246,17 @@ fi
 # Always track the newest officially-maintained kernel, firmware, CPU
 # microcode and matching headers from `$SUITE-backports` for the broadest
 # possible hardware/driver coverage (closer to an Ubuntu HWE stack), while
-# the rest of the system stays on the stable `$SUITE` release. Backports is
-# `NotAutomatic` (default priority 100), so without this pin apt would keep
-# installing the older stable kernel. Priority 600 (> main's 500) flips just
-# these hardware-enablement packages to backports; everything else is
-# untouched. This file lands before any feature installs the kernel, so the
-# very first `apt-get install ${KERNEL_PKG}` already resolves to backports.
+# the rest of the system stays on the stable `$SUITE` release. A backports
+# kernel ships newer DRM drivers, so we also pin the userspace half of GPU
+# support — Mesa (GL/EGL/Vulkan/VA-API) plus libdrm/libgbm — so the
+# COSMIC/Wayland desktop can actually light up the latest Intel/AMD GPUs.
+# Backports is `NotAutomatic` (default priority 100), so without this pin
+# apt would keep installing the older stable kernel/Mesa. Priority 600
+# (> main's 500) flips just these hardware-enablement packages to backports;
+# everything else is untouched, and if backports has no candidate apt falls
+# back to stable (the pin only bites when a backports version exists). This
+# file lands before any feature installs the kernel, so the very first
+# `apt-get install ${KERNEL_PKG}` already resolves to backports.
 mkdir -p "$ROOTFS/etc/apt/preferences.d"
 cat > "$ROOTFS/etc/apt/preferences.d/90-backports-hardware-enablement" <<EOF
 Package: linux-image-* linux-headers-* linux-image-amd64 linux-image-arm64 linux-headers-amd64 linux-headers-arm64
@@ -259,6 +264,10 @@ Pin: release a=$SUITE-backports
 Pin-Priority: 600
 
 Package: firmware-* *-firmware intel-microcode amd64-microcode
+Pin: release a=$SUITE-backports
+Pin-Priority: 600
+
+Package: mesa-* libgl1* libglx-mesa0 libegl-mesa0 libegl1 libgles2 libgbm1 libglapi-mesa libdrm* libvulkan1 vulkan-* *-va-driver* intel-media-va-driver* gstreamer1.0-vaapi
 Pin: release a=$SUITE-backports
 Pin-Priority: 600
 EOF
