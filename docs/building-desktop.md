@@ -25,7 +25,7 @@ System tools for the rootfs/disk pipeline:
 ```bash
 sudo apt update
 sudo apt install -y git build-essential pkg-config \
-                    debootstrap qemu-utils parted dosfstools rsync \
+                    debootstrap qemu-utils parted dosfstools mtools rsync \
                     util-linux e2fsprogs grub-efi-amd64-bin grub-pc-bin
 # On an arm64 host, use grub-efi-arm64-bin instead (and drop grub-pc-bin).
 ```

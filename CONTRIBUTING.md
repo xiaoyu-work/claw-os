@@ -65,7 +65,7 @@ qemu-system-x86_64 -m 2G -bios /usr/share/ovmf/OVMF.fd \
 
 ```bash
 # Host requirements (Debian/Ubuntu):
-sudo apt install qemu-utils parted dosfstools rsync
+sudo apt install qemu-utils parted dosfstools mtools rsync
 
 # Produces build/claw-os-vm.qcow2 (hybrid BIOS+UEFI bootable)
 sudo ./build.sh vm
