@@ -31,6 +31,7 @@ pub async fn run(options: ServerOptions) -> Result<(), String> {
     audit::install_runtime_hook();
     context::refresh_builtin_sources(&state);
     spawn_agent_worker();
+    spawn_heartbeat();
     loop {
         let (stream, _addr) = listener
             .accept()
@@ -58,6 +59,18 @@ fn spawn_agent_worker() {
             tracing::error!(error = %err, "clawd agent worker stopped");
         }
     });
+}
+
+/// Spawn the system-vitals heartbeat — the cheap, always-on reflex loop
+/// that samples kernel vitals, emits `context.event`s on threshold
+/// crossings (which the trigger engine may turn into agent jobs), and
+/// drives the `cron` / `triggers` schedulers so the daemon is its own
+/// clock. The heartbeat never calls the LLM itself. See
+/// [`super::heartbeat`].
+fn spawn_heartbeat() {
+    let cfg = super::heartbeat::HeartbeatConfig::from_env();
+    let shutdown = Arc::new(AtomicBool::new(false));
+    tokio::spawn(super::heartbeat::run_loop(cfg, shutdown));
 }
 
 async fn handle_client(
