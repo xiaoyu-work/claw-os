@@ -66,9 +66,64 @@ fn rules_dir() -> PathBuf {
 fn cursor_path() -> PathBuf {
     triggers_dir().join(".cursor")
 }
+fn seeded_sentinel_path() -> PathBuf {
+    triggers_dir().join(".seeded")
+}
 fn rule_path(id: &str) -> PathBuf {
     rules_dir().join(format!("{id}.json"))
 }
+
+/// Seed a few **disabled** example rules on first use, so proactivity is
+/// discoverable out of the box (M ships its heartbeat with a default
+/// prompt; we ship example rules that react to the system-vitals
+/// heartbeat events). They are disabled by design — turning the agent
+/// loose to act on system events is the operator's explicit choice
+/// (`cos triggers enable <id>`). A sentinel ensures we seed exactly once
+/// and never recreate a rule the user has deleted.
+fn ensure_seeded() {
+    let sentinel = seeded_sentinel_path();
+    if sentinel.exists() {
+        return;
+    }
+    // Mark seeded first (best-effort): even if a write below fails we do
+    // not want to retry every invocation and fight the user.
+    let _ = fs::create_dir_all(rules_dir());
+    let _ = fs::write(&sentinel, "1");
+
+    let defaults = [
+        TriggerRule {
+            id: "diagnose-low-memory".into(),
+            enabled: false,
+            source: Some(SOURCE_HEARTBEAT.into()),
+            event_type: Some("memory_low.critical".into()),
+            contains: None,
+            prompt: "System memory is critically low. Investigate which processes are consuming the most memory (use cos_sysinfo / cos_proc), summarise the likely cause, and suggest concrete remediation. Do not kill anything without approval.".into(),
+            max_turns: Some(8),
+            last_fired_ms: None,
+        },
+        TriggerRule {
+            id: "diagnose-high-load".into(),
+            enabled: false,
+            source: Some(SOURCE_HEARTBEAT.into()),
+            event_type: Some("load_high.critical".into()),
+            contains: None,
+            prompt: "System load is critically high. Identify the top CPU consumers and recent journal errors, then report the likely cause and a safe remediation. Do not change system state without approval.".into(),
+            max_turns: Some(8),
+            last_fired_ms: None,
+        },
+    ];
+    for rule in defaults {
+        // Don't clobber an existing rule of the same id.
+        if !rule_path(&rule.id).exists() {
+            let _ = save_rule(&rule);
+        }
+    }
+}
+
+/// Source tag emitted by the clawd heartbeat (see `clawd::heartbeat`).
+/// Duplicated as a literal here to avoid a dependency cycle; kept in sync
+/// with `clawd::heartbeat::SOURCE`.
+const SOURCE_HEARTBEAT: &str = "heartbeat";
 
 /// Filesystem-safe rule id (mirrors the cron / skills conventions).
 fn sanitize_id(id: &str) -> Option<String> {
@@ -111,6 +166,7 @@ fn positional_or_id(args: &[String]) -> Option<String> {
 
 /// CLI entry — dispatched from the router under `cos triggers`.
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
+    ensure_seeded();
     match command {
         "add" => cmd_add(args),
         "list" => cmd_list(),

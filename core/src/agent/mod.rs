@@ -2666,7 +2666,7 @@ async fn stream_cmd_async(
     use std::io::Write;
 
     let extra = cfg.system_prompt_path.as_deref().map(std::path::Path::new);
-    let system = crate::agent::prompt::build_system_prompt(extra);
+    let system = crate::agent::prompt::build_system_prompt_for(extra, Some(user_prompt));
 
     let request = ChatRequest {
         model: cfg.model.clone(),
