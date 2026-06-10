@@ -30,6 +30,7 @@ pub mod service;
 pub mod session;
 pub mod sysinfo;
 pub mod trace;
+pub mod triggers;
 pub mod watch;
 
 #[cfg(test)]

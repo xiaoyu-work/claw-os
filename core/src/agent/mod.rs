@@ -7166,6 +7166,8 @@ fn mcp_cmd(args: &[String]) -> Result<Value, String> {
                         env: s.env.clone(),
                         cwd: s.cwd.clone(),
                         timeout_secs: s.timeout_secs,
+                        url: None,
+                        bearer_env: None,
                     };
                     let mut throwaway_registry =
                         crate::agent::tools::registry::ToolRegistry::new();

@@ -12,19 +12,20 @@
 //!   to execute their inverse JSON, because doing so would mean
 //!   teaching the rollback engine arbitrary verbs.
 //! - Credential variants (`CredentialStore`, `CredentialRevoke`) are
-//!   stubbed in Phase 3: the [`Outcome`] reports them as `Skipped` so
-//!   downstream sees them, and the credential-namespace work in Phase
-//!   4 will fill in the actual restore.
+//!   undone by re-storing / deleting the value via
+//!   [`crate::credential::rollback_restore`] /
+//!   [`crate::credential::rollback_delete`]. Tier/TTL metadata is not
+//!   captured in the log, so a restored credential comes back at the
+//!   default tier with no expiry.
 //!
 //! ## Idempotency
 //!
-//! Rollback is *not* idempotent today. Calling `rollback(sid)` twice
-//! will undo the original work the first time and try to undo the
-//! "now-rolled-back" state the second time, which generally fails
-//! cleanly (the file is back to its prior state, the inverse blobs
-//! still exist, etc.) but is not a defined operation. A future
-//! `mutations.jsonl` "rolled-back marker" line could fix this; we'll
-//! add it when a real workflow demands it.
+//! Rollback is idempotent. Each successfully-undone mutation `seq` is
+//! recorded in a per-session sidecar marker (`<session_dir>/rolled_back.json`);
+//! a subsequent `rollback(sid)` skips those entries and reports them as
+//! `AlreadyDone` rather than replaying their inverse (which is not a
+//! defined operation). The append-only `mutations.jsonl` is never
+//! mutated — the marker is a separate file.
 
 use std::fs;
 use std::path::PathBuf;
@@ -79,9 +80,26 @@ pub fn rollback(sid: &SessionId) -> Result<Vec<Outcome>, SessionError> {
     let mut entries = store::iter_mutations(sid)?;
     entries.reverse();
 
+    // Idempotency: a prior pass may already have undone some seqs.
+    // Replaying an inverse twice is not a defined operation, so we skip
+    // anything recorded in the per-session rolled-back marker and report
+    // it as AlreadyDone. The append-only mutations.jsonl is untouched;
+    // the marker is a sidecar (see `rolled_back_path`).
+    let mut done = load_rolled_back(sid);
+    let mut newly_done: Vec<u64> = Vec::new();
+
     let mut out = Vec::with_capacity(entries.len());
     for rec in entries {
         let seq = rec.seq;
+        if done.contains(&seq) {
+            out.push(Outcome {
+                seq,
+                verb: verb_label(&rec.mutation),
+                status: Status::AlreadyDone,
+                detail: "already rolled back in a prior pass".to_string(),
+            });
+            continue;
+        }
         let outcome = match rec.mutation {
             Mutation::FsWrite { path, prev_blob } => {
                 // Replaying an `fs.write` inverse touches the same
@@ -138,22 +156,59 @@ pub fn rollback(sid: &SessionId) -> Result<Vec<Outcome>, SessionError> {
                     },
                 }
             }
-            Mutation::CredentialStore { namespace, name, .. } => Outcome {
-                seq,
-                verb: "credential.store",
-                status: Status::Skipped,
-                detail: format!(
-                    "credential rollback not implemented (Phase 4): {namespace}/{name}"
-                ),
-            },
-            Mutation::CredentialRevoke { namespace, name, .. } => Outcome {
-                seq,
-                verb: "credential.revoke",
-                status: Status::Skipped,
-                detail: format!(
-                    "credential rollback not implemented (Phase 4): {namespace}/{name}"
-                ),
-            },
+            Mutation::CredentialStore {
+                namespace,
+                name,
+                prev_value,
+            } => {
+                // Undo a store: restore the prior value if there was one,
+                // otherwise delete the key the store created.
+                let (res, action) = match prev_value {
+                    Some(value) => (
+                        crate::credential::rollback_restore(&namespace, &name, &value),
+                        "restored prior value",
+                    ),
+                    None => (
+                        crate::credential::rollback_delete(&namespace, &name),
+                        "removed (was newly created)",
+                    ),
+                };
+                match res {
+                    Ok(()) => Outcome {
+                        seq,
+                        verb: "credential.store",
+                        status: Status::Restored,
+                        detail: format!("{namespace}/{name}: {action}"),
+                    },
+                    Err(e) => Outcome {
+                        seq,
+                        verb: "credential.store",
+                        status: Status::Failed,
+                        detail: format!("{namespace}/{name}: {e}"),
+                    },
+                }
+            }
+            Mutation::CredentialRevoke {
+                namespace,
+                name,
+                value,
+            } => {
+                // Undo a revoke: re-store the saved value.
+                match crate::credential::rollback_restore(&namespace, &name, &value) {
+                    Ok(()) => Outcome {
+                        seq,
+                        verb: "credential.revoke",
+                        status: Status::Restored,
+                        detail: format!("{namespace}/{name}: re-stored"),
+                    },
+                    Err(e) => Outcome {
+                        seq,
+                        verb: "credential.revoke",
+                        status: Status::Failed,
+                        detail: format!("{namespace}/{name}: {e}"),
+                    },
+                }
+            }
             Mutation::Opaque { verb, .. } => Outcome {
                 seq,
                 verb: "opaque",
@@ -161,9 +216,60 @@ pub fn rollback(sid: &SessionId) -> Result<Vec<Outcome>, SessionError> {
                 detail: format!("opaque mutation '{verb}' — manual review"),
             },
         };
+        if matches!(outcome.status, Status::Restored | Status::AlreadyDone) {
+            newly_done.push(seq);
+        }
         out.push(outcome);
     }
+
+    // Persist the seqs we just undid so a re-run is a no-op. Best-effort:
+    // a failed marker write only costs idempotency, not correctness.
+    if !newly_done.is_empty() {
+        for s in newly_done {
+            done.insert(s);
+        }
+        let _ = save_rolled_back(sid, &done);
+    }
     Ok(out)
+}
+
+/// Stable verb label for a mutation, used when reporting an entry that a
+/// prior pass already rolled back (so we don't have to run its arm).
+fn verb_label(m: &Mutation) -> &'static str {
+    match m {
+        Mutation::FsWrite { .. } => "fs.write",
+        Mutation::FsDelete { .. } => "fs.delete",
+        Mutation::FsRename { .. } => "fs.rename",
+        Mutation::CredentialStore { .. } => "credential.store",
+        Mutation::CredentialRevoke { .. } => "credential.revoke",
+        Mutation::Opaque { .. } => "opaque",
+        _ => "unknown",
+    }
+}
+
+/// Per-session sidecar listing the mutation seqs already undone. Kept
+/// separate from the append-only `mutations.jsonl`.
+fn rolled_back_path(sid: &SessionId) -> PathBuf {
+    store::session_dir(sid).join("rolled_back.json")
+}
+
+/// Load the set of already-rolled-back seqs. Missing or corrupt file →
+/// empty set (we'd rather re-attempt an undo than wrongly skip one).
+fn load_rolled_back(sid: &SessionId) -> std::collections::BTreeSet<u64> {
+    match fs::read_to_string(rolled_back_path(sid)) {
+        Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
+        Err(_) => std::collections::BTreeSet::new(),
+    }
+}
+
+/// Persist the set of rolled-back seqs.
+fn save_rolled_back(
+    sid: &SessionId,
+    done: &std::collections::BTreeSet<u64>,
+) -> Result<(), SessionError> {
+    let path = rolled_back_path(sid);
+    let data = serde_json::to_string(done).map_err(SessionError::Encode)?;
+    fs::write(&path, data).map_err(|e| SessionError::io(path.clone(), e))
 }
 
 fn undo_fs_write(

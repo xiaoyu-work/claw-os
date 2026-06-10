@@ -1529,6 +1529,52 @@ fn cmd_store(args: &[String]) -> Result<Value, String> {
     Ok(result)
 }
 
+/// Re-store a credential value as part of a session rollback (the undo
+/// of a `credential.revoke`, or of a `credential.store` that overwrote a
+/// prior value). Reuses the normal AES-256-GCM at-rest encryption and
+/// the atomic 0600 write so the restored entry is indistinguishable from
+/// one written by `cos credential store`.
+///
+/// Tier / TTL / refresh metadata is not captured in the mutation log, so
+/// the restored entry uses the default tier (0) and no expiry.
+///
+/// Security note: the value being restored already lived in this
+/// session's own (session-private) mutation log, so restoring it grants
+/// no access the session did not already have — hence no extra caps gate.
+pub fn rollback_restore(namespace: &str, name: &str, value: &str) -> Result<(), String> {
+    let dir = namespace_dir(namespace);
+    fs::create_dir_all(&dir).map_err(|e| format!("failed to create credentials dir: {e}"))?;
+    let (value_b64, nonce_b64) = encrypt_value(value.as_bytes());
+    let stored_at = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let cred = StoredCredential {
+        name: name.to_string(),
+        namespace: namespace.to_string(),
+        value_b64,
+        nonce_b64: Some(nonce_b64),
+        min_tier: 0,
+        stored_at,
+        stored_by: Some("session-rollback".to_string()),
+        expires_at: None,
+        refresh_cmd: None,
+    };
+    let path = dir.join(format!("{name}.json"));
+    let data =
+        serde_json::to_string_pretty(&cred).map_err(|e| format!("failed to serialize: {e}"))?;
+    write_credential_atomic(&path, &data)
+}
+
+/// Delete a credential entry as part of a session rollback (the undo of a
+/// `credential.store` that created a brand-new key). No-op if the entry
+/// is already gone.
+pub fn rollback_delete(namespace: &str, name: &str) -> Result<(), String> {
+    let path = namespace_dir(namespace).join(format!("{name}.json"));
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("failed to delete credential {namespace}/{name}: {e}")),
+    }
+}
+
 /// Load a credential value.
 ///
 /// Usage: cos credential load <name> [--namespace NS] [--fd N]

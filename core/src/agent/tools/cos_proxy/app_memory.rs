@@ -202,7 +202,13 @@ impl Tool for CosAppMemoryTool {
 
         match join {
             Ok(Ok(v)) => {
-                ToolResult::ok(serde_json::to_string(&v).unwrap_or_else(|_| v.to_string()))
+                // App memory holds content apps recorded from external
+                // sources; wrap as untrusted prior-session data.
+                let body = serde_json::to_string(&v).unwrap_or_else(|_| v.to_string());
+                ToolResult::ok(crate::agent::safety::untrusted::wrap_untrusted(
+                    crate::agent::safety::untrusted::MEMORY_TAG,
+                    &body,
+                ))
             }
             Ok(Err(msg)) => ToolResult::err(msg),
             Err(e) => ToolResult::err(format!("cos_app_memory panicked: {e}")),

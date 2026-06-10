@@ -45,6 +45,116 @@ pub const MODEL_NAME: &str = "text-embedding-3-small";
 // Factory
 // =====================================================================
 
+/// Built-in, dependency-free embedder — the always-available fallback
+/// when neither the bundled Qwen3 ONNX stack nor a configured
+/// cloud/local provider is present (previously this case left semantic
+/// recall disabled entirely).
+///
+/// It feature-hashes word tokens **and** character trigrams into a
+/// fixed-dimension, L2-normalised vector, so cosine similarity captures
+/// lexical and sub-word overlap (shared words, typos, morphological
+/// variants). This is **not** transformer-quality semantic embedding —
+/// it won't relate paraphrases that share no tokens — but it makes
+/// `cos_recall_semantic` work out of the box, fully locally, with zero
+/// model files. Configure `[embed].provider` (or install the Qwen3
+/// stack) for true semantic embeddings.
+pub struct HashingEmbedder {
+    dim: usize,
+}
+
+impl Default for HashingEmbedder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl HashingEmbedder {
+    /// Model tag persisted in `semantic.db`. Bumping this invalidates
+    /// existing built-in-embedder rows (the store's stickiness check
+    /// surfaces the mismatch loudly).
+    pub const MODEL: &'static str = "builtin-hash-v1";
+
+    pub fn new() -> Self {
+        Self { dim: 256 }
+    }
+
+    fn embed_one(&self, text: &str) -> Vec<f32> {
+        let mut v = vec![0f32; self.dim];
+        let lower = text.to_lowercase();
+        // Whole-word tokens.
+        for tok in lower
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|t| !t.is_empty())
+        {
+            add_feature(&mut v, self.dim, tok.as_bytes());
+        }
+        // Character trigrams — fuzzy sub-word / typo overlap.
+        let chars: Vec<char> = lower.chars().collect();
+        for w in chars.windows(3) {
+            let tri: String = w.iter().collect();
+            add_feature(&mut v, self.dim, tri.as_bytes());
+        }
+        // L2-normalise so cosine similarity is well-behaved.
+        let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if norm > 0.0 {
+            for x in &mut v {
+                *x /= norm;
+            }
+        }
+        v
+    }
+}
+
+/// Feature-hash one token into `v`, picking a sign from the high bit so
+/// distinct tokens colliding on the same index don't always reinforce.
+fn add_feature(v: &mut [f32], dim: usize, feat: &[u8]) {
+    let h = fnv1a(feat);
+    let idx = (h % dim as u64) as usize;
+    let sign = if (h >> 63) & 1 == 1 { -1.0 } else { 1.0 };
+    v[idx] += sign;
+}
+
+/// FNV-1a 64-bit — small, fast, dependency-free, good enough for
+/// feature hashing (not used for anything security-sensitive).
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+#[async_trait]
+impl Embedder for HashingEmbedder {
+    fn name(&self) -> &str {
+        "builtin-hash"
+    }
+    fn model(&self) -> &str {
+        Self::MODEL
+    }
+    fn is_configured(&self) -> bool {
+        true
+    }
+    async fn embed(&self, request: EmbedRequest) -> Result<EmbedResponse, EmbedError> {
+        let embeddings: Vec<Vec<f32>> = request.inputs.iter().map(|t| self.embed_one(t)).collect();
+        let total: u32 = request
+            .inputs
+            .iter()
+            .map(|t| t.split_whitespace().count() as u32)
+            .sum();
+        Ok(EmbedResponse {
+            embeddings,
+            model: Self::MODEL.to_string(),
+            dim: self.dim,
+            usage: EmbedUsage {
+                prompt_tokens: total,
+                total_tokens: total,
+            },
+        })
+    }
+}
+
 /// Build the configured embedder, if any. Returns `Ok(None)` when
 /// embedding is disabled (`provider="none"`) or when `provider="auto"`
 /// but the bundled local Qwen3 stack is not available. Returns an
@@ -100,9 +210,9 @@ fn system_local_default(cfg: &EmbedConfig) -> Result<Option<Box<dyn Embedder>>, 
         Ok(Some(Box::new(embedder)))
     } else {
         tracing::debug!(
-            "embed: provider=auto but bundled local Qwen3 embedding stack is unavailable — embeddings require explicit setup"
+            "embed: bundled Qwen3 stack unavailable — falling back to the built-in hashing embedder so semantic recall works out of the box (set [embed].provider for transformer-quality embeddings)"
         );
-        Ok(None)
+        Ok(Some(Box::new(HashingEmbedder::new())))
     }
 }
 

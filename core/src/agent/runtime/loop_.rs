@@ -921,6 +921,8 @@ fn configured_specs(
             env: s.env.clone(),
             cwd: s.cwd.clone(),
             timeout_secs: s.timeout_secs,
+            url: None,
+            bearer_env: None,
         })
         .collect()
 }
@@ -2834,6 +2836,8 @@ mod tests {
             env: std::collections::HashMap::new(),
             cwd: None,
             timeout_secs: 30,
+            url: None,
+            bearer_env: None,
         }
     }
 

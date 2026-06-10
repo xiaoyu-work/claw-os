@@ -185,7 +185,7 @@ pub async fn run_turn(
     // via `dispatch_calls`; others serialise. See that helper for the
     // ordering guarantees.
     let (result_blocks, pending_stop) =
-        dispatch_calls(tools, hook_ctx, &tool_calls, progress.as_ref()).await;
+        dispatch_calls(tools, hook_ctx, &tool_calls, session_id, progress.as_ref()).await;
     messages.push(Message {
         role: Role::User,
         content: result_blocks,
@@ -317,7 +317,7 @@ pub async fn run_turn_streaming(
     }
 
     let (result_blocks, pending_stop) =
-        dispatch_calls(tools, hook_ctx, &tool_calls, progress.as_ref()).await;
+        dispatch_calls(tools, hook_ctx, &tool_calls, session_id, progress.as_ref()).await;
     messages.push(Message {
         role: Role::User,
         content: result_blocks,
@@ -373,7 +373,34 @@ fn extract_text(response: &ChatResponse) -> String {
     out
 }
 
-async fn dispatch_tool(registry: &ToolRegistry, call: &ToolCall) -> ToolResult {
+/// Inject the runtime's real `session_id` into session-scoped tools so
+/// the model can't write to the wrong session file. `cos_todo` persists
+/// per-session under `<data>/agent/todos/<session_id>.json`; when the
+/// model omits the id the tool defaults to `"default"` and silently
+/// writes to the wrong list (see `tools::todo`). When the runtime knows
+/// the session id we override whatever the model supplied.
+fn effective_tool_input(call: &ToolCall, session_id: Option<&str>) -> serde_json::Value {
+    const SESSION_SCOPED_TOOLS: &[&str] = &["cos_todo"];
+    match session_id {
+        Some(sid) if !sid.is_empty() && SESSION_SCOPED_TOOLS.contains(&call.name.as_str()) => {
+            let mut input = call.input.clone();
+            if let serde_json::Value::Object(ref mut map) = input {
+                map.insert(
+                    "session_id".to_string(),
+                    serde_json::Value::String(sid.to_string()),
+                );
+            }
+            input
+        }
+        _ => call.input.clone(),
+    }
+}
+
+async fn dispatch_tool(
+    registry: &ToolRegistry,
+    call: &ToolCall,
+    session_id: Option<&str>,
+) -> ToolResult {
     // Per-call approval gate. Skip the await entirely when the tool
     // is not configured under any of the three sets. `is_classified`
     // is one O(1) HashSet lookup that covers
@@ -425,7 +452,7 @@ async fn dispatch_tool(registry: &ToolRegistry, call: &ToolCall) -> ToolResult {
                 .scope(
                     g,
                     crate::agent::tools::delegate::PARENT_APPROVAL
-                        .scope(a, tool.exec(call.input.clone())),
+                        .scope(a, tool.exec(effective_tool_input(call, session_id))),
                 )
                 .await
         }
@@ -481,6 +508,7 @@ async fn dispatch_one(
     tools: &ToolRegistry,
     hook_ctx: Option<&HookContext>,
     call: &ToolCall,
+    session_id: Option<&str>,
     progress: &dyn ProgressSink,
 ) -> DispatchOutcome {
     let (effective_call, decision_error) = apply_pre_hook(hook_ctx, call);
@@ -491,7 +519,7 @@ async fn dispatch_one(
     let result = if let Some(reason) = decision_error {
         ToolResult::err(reason)
     } else {
-        dispatch_tool(tools, &effective_call).await
+        dispatch_tool(tools, &effective_call, session_id).await
     };
     let latency_ms = started.elapsed().as_millis() as u64;
 
@@ -530,6 +558,7 @@ async fn dispatch_calls(
     tools: &ToolRegistry,
     hook_ctx: Option<&HookContext>,
     tool_calls: &[ToolCall],
+    session_id: Option<&str>,
     progress: &dyn ProgressSink,
 ) -> (Vec<ContentBlock>, Option<String>) {
     // Partition into parallel-safe vs serial groups, preserving the
@@ -555,7 +584,7 @@ async fn dispatch_calls(
         let futs = parallel.iter().map(|&i| {
             let call = &tool_calls[i];
             async move {
-                let outcome = dispatch_one(tools, hook_ctx, call, progress).await;
+                let outcome = dispatch_one(tools, hook_ctx, call, session_id, progress).await;
                 (i, outcome)
             }
         });
@@ -571,7 +600,7 @@ async fn dispatch_calls(
     // fs writes) then run with the latest state. Matches the
     // expected mental model: "do the safe reads, then the writes".
     for i in serial {
-        let outcome = dispatch_one(tools, hook_ctx, &tool_calls[i], progress).await;
+        let outcome = dispatch_one(tools, hook_ctx, &tool_calls[i], session_id, progress).await;
         slots[i] = Some(outcome);
     }
 
@@ -1114,7 +1143,7 @@ mod tests {
         let tool_calls = calls(&[("id-1", "w1"), ("id-2", "w1")]);
         let p = Arc::new(RecordingProgress::default());
         let (blocks, stop) =
-            dispatch_calls(&registry, None, &tool_calls, p.as_ref() as &dyn progress::ProgressSink)
+            dispatch_calls(&registry, None, &tool_calls, None, p.as_ref() as &dyn progress::ProgressSink)
                 .await;
         assert!(stop.is_none());
         assert_eq!(blocks.len(), 2);
@@ -1148,7 +1177,7 @@ mod tests {
         let p = progress::null_progress();
         let started = std::time::Instant::now();
         let (blocks, _) =
-            dispatch_calls(&registry, None, &tool_calls, p.as_ref() as &dyn progress::ProgressSink)
+            dispatch_calls(&registry, None, &tool_calls, None, p.as_ref() as &dyn progress::ProgressSink)
                 .await;
         let elapsed = started.elapsed();
         assert_eq!(blocks.len(), 3);
@@ -1177,7 +1206,7 @@ mod tests {
         let p = progress::null_progress();
         let started = std::time::Instant::now();
         let _ =
-            dispatch_calls(&registry, None, &tool_calls, p.as_ref() as &dyn progress::ProgressSink)
+            dispatch_calls(&registry, None, &tool_calls, None, p.as_ref() as &dyn progress::ProgressSink)
                 .await;
         let elapsed = started.elapsed();
         assert!(
@@ -1211,7 +1240,7 @@ mod tests {
         let tool_calls = calls(&[("id-w1", "w1"), ("id-r1", "r1"), ("id-w2", "w2")]);
         let p = progress::null_progress();
         let (blocks, _) =
-            dispatch_calls(&registry, None, &tool_calls, p.as_ref() as &dyn progress::ProgressSink)
+            dispatch_calls(&registry, None, &tool_calls, None, p.as_ref() as &dyn progress::ProgressSink)
                 .await;
         let ids: Vec<&str> = blocks
             .iter()

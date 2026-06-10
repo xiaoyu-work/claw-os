@@ -120,7 +120,11 @@ impl Tool for CosRecallSemanticTool {
                             "namespace": ns,
                             "hits": hits.iter().map(hit_to_json).collect::<Vec<_>>(),
                         });
-                        ToolResult::ok(serde_json::to_string(&v).unwrap_or_else(|_| v.to_string()))
+                        let body = serde_json::to_string(&v).unwrap_or_else(|_| v.to_string());
+                        ToolResult::ok(crate::agent::safety::untrusted::wrap_untrusted(
+                            crate::agent::safety::untrusted::MEMORY_TAG,
+                            &body,
+                        ))
                     }
                     Err(e) => ToolResult::err(format!("cos_recall_semantic search: {e}")),
                 }

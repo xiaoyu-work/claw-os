@@ -19,6 +19,7 @@ use crate::mem_bridge;
 use crate::perms;
 use crate::service;
 use crate::sysinfo;
+use crate::triggers;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -112,6 +113,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         "checkpoint" => dispatch_builtin(args, "checkpoint", checkpoint::run),
         "credential" => dispatch_builtin(args, "credential", credential::run),
         "cron" => dispatch_builtin(args, "cron", cron::run),
+        "triggers" => dispatch_builtin(args, "triggers", triggers::run),
         "ai" => dispatch_builtin(args, "ai", ai::run),
         "agent" => dispatch_agent(args),
         "model" => dispatch_builtin(args, "model", model::run),

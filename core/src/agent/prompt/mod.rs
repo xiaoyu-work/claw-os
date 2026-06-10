@@ -53,10 +53,17 @@ When you respond:
 pub fn build_system_prompt(extra_path: Option<&Path>) -> String {
     let mut out = String::from(SYSTEM_SCAFFOLD);
 
-    // Auto-injected notes (MEMORY.md, USER.md).
+    // Auto-injected notes (MEMORY.md, USER.md). These are prior-session
+    // / curator-derived content (some of it summarised from web pages and
+    // app results) and must enter the prompt as UNTRUSTED data — a kernel-
+    // resident agent must not obey instructions a payload smuggled into a
+    // remembered note. See `agent::safety::untrusted`.
     if let Some(notes) = NotesStore::system_default().assemble_for_prompt() {
         out.push_str("\n\n---\n\n");
-        out.push_str(&notes);
+        out.push_str(&crate::agent::safety::untrusted::wrap_untrusted(
+            crate::agent::safety::untrusted::MEMORY_TAG,
+            &notes,
+        ));
     }
 
     // Auto-injected due nudges. Reads `data_dir/agent/nudges.json`

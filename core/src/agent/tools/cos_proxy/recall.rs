@@ -173,7 +173,15 @@ impl Tool for CosRecallTool {
 
         match join {
             Ok(Ok(v)) => {
-                ToolResult::ok(serde_json::to_string(&v).unwrap_or_else(|_| v.to_string()))
+                // Recalled history is prior-session content (it can quote
+                // web pages, emails, or app output the agent ingested).
+                // Wrap it so an injected instruction can't be read as a
+                // command to this agent.
+                let body = serde_json::to_string(&v).unwrap_or_else(|_| v.to_string());
+                ToolResult::ok(crate::agent::safety::untrusted::wrap_untrusted(
+                    crate::agent::safety::untrusted::MEMORY_TAG,
+                    &body,
+                ))
             }
             Ok(Err(msg)) => ToolResult::err(msg),
             Err(e) => ToolResult::err(format!("cos_recall panicked: {e}")),
