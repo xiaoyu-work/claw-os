@@ -151,6 +151,15 @@ pub fn deregister_session(session_id: &str) {
     }
 }
 
+/// Public cross-uid-safe aliveness check for a pid. Returns `true` when
+/// the process exists (including when it belongs to another uid). Used
+/// by the agent job recovery path to decide whether a job stuck in
+/// `running/` belongs to a worker that is still alive or to one that
+/// crashed. See [`is_alive`] for the EPERM rationale.
+pub fn is_pid_alive(pid: u32) -> bool {
+    is_alive(pid)
+}
+
 /// Cross-uid safe aliveness check. `kill(pid, 0)` alone returns
 /// -1/EPERM for a pid that exists but belongs to a different uid,
 /// which the old code interpreted as "process is gone" — that

@@ -50,6 +50,12 @@ use serde_json::{json, Value};
 
 use crate::paths::agent_jobs_dir;
 
+/// Maximum number of times a job may be recovered from `running/` after
+/// its worker died before we give up and fail it (see
+/// [`Store::recover_orphaned_jobs`]). Stops a job that crashes every
+/// worker from looping forever and starving the queue.
+const MAX_RECOVERIES: u32 = 3;
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -130,6 +136,19 @@ pub struct Job {
     /// own (typically empty) config.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_home: Option<String>,
+    /// How many times this job has been recovered from `running/` after
+    /// the worker executing it died (see [`Store::recover_orphaned_jobs`]).
+    /// Bounds crash-loop blast radius: a job that repeatedly kills its
+    /// worker is failed instead of requeued once this exceeds
+    /// [`MAX_RECOVERIES`]. Defaults to 0; absent in old on-disk files.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub recovery_count: u32,
+}
+
+/// serde skip predicate for the common `recovery_count == 0` case so
+/// existing job files stay byte-compatible.
+fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
 }
 
 impl Job {
@@ -157,6 +176,7 @@ impl Job {
             model: None,
             owner_uid,
             owner_home,
+            recovery_count: 0,
         }
     }
 
@@ -411,8 +431,108 @@ impl Store {
         Ok(None)
     }
 
-    /// Mark a running job finished. Atomically rewrites the file in
-    /// `running/`, then renames into `done/`.
+    /// Recover jobs stranded in `running/` by a worker that died before
+    /// finishing them (crash, `kill -9`, OOM, power loss, container
+    /// restart). Without this, such a job sits in `running/` forever:
+    /// `claim_one` only ever looks at `pending/`, so the work is never
+    /// retried and `cos agent task <id>` blocks until its deadline.
+    ///
+    /// For each `running/` job we check whether its `worker_pid` is still
+    /// alive (cross-uid-safe via [`crate::proc::is_pid_alive`]):
+    ///   * **Alive** — another worker (or this run's predecessor that is
+    ///     somehow still up) owns it; leave it untouched.
+    ///   * **Dead / no pid recorded** — the owning worker is gone. Move
+    ///     the job back to `pending/` (status reset to `Pending`, the
+    ///     stale `worker_pid` / `started_at` cleared) so a worker can
+    ///     re-claim it. A `recovery_count` guards against a poison job
+    ///     that crashes every worker: after [`MAX_RECOVERIES`] attempts
+    ///     it is failed into `done/` with an explanatory error instead
+    ///     of being requeued forever.
+    ///
+    /// Intended to run once at worker start-up, before the claim loop.
+    /// Returns `(requeued, failed)` counts for logging. Best-effort: a
+    /// single malformed job file is skipped, not fatal.
+    pub fn recover_orphaned_jobs(&self) -> io::Result<(usize, usize)> {
+        let running = self.bucket_dir(JobStatus::Running);
+        let mut requeued = 0usize;
+        let mut failed = 0usize;
+
+        let entries: Vec<PathBuf> = match fs::read_dir(&running) {
+            Ok(rd) => rd
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("json"))
+                .collect(),
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok((0, 0)),
+            Err(e) => return Err(e),
+        };
+
+        for path in entries {
+            let id = match path.file_stem().and_then(|s| s.to_str()) {
+                Some(s) => s.to_string(),
+                None => continue,
+            };
+            // Serialise against claim_one/cancel for this id so we can't
+            // requeue a job another worker is mid-claim on.
+            let _lock = match self.lock_for_id(&id) {
+                Ok(l) => l,
+                Err(_) => continue,
+            };
+            // Re-read under the lock; it may have moved since the listing.
+            let raw = match fs::read_to_string(&path) {
+                Ok(s) => s,
+                Err(e) if e.kind() == ErrorKind::NotFound => continue,
+                Err(e) => return Err(e),
+            };
+            let mut job: Job = match serde_json::from_str(&raw) {
+                Ok(j) => j,
+                Err(e) => {
+                    tracing::warn!("agent recovery: skipping malformed running job {path:?}: {e}");
+                    continue;
+                }
+            };
+
+            // Owner still alive ⇒ not an orphan; leave it be.
+            if let Some(pid) = job.worker_pid {
+                if crate::proc::is_pid_alive(pid) {
+                    continue;
+                }
+            }
+
+            job.recovery_count = job.recovery_count.saturating_add(1);
+            job.worker_pid = None;
+            job.started_at = None;
+
+            if job.recovery_count > MAX_RECOVERIES {
+                // Poison job: it has already taken down a worker
+                // MAX_RECOVERIES times. Fail it rather than risk an
+                // endless crash loop that starves every other job.
+                job.status = JobStatus::Error;
+                job.error = Some(format!(
+                    "job abandoned after {} interrupted run(s) (worker died mid-execution each time)",
+                    job.recovery_count - 1
+                ));
+                job.finished_at = Some(now_iso());
+                write_json_atomic(&path, &job)?;
+                let done = self.path_for(JobStatus::Ok, &id);
+                fs::rename(&path, &done)?;
+                let _ = finish_durable_session(&job);
+                crate::clawd::audit::record_task_event("clawd.task.abandoned", &job);
+                failed += 1;
+                continue;
+            }
+
+            // Requeue: reset to pending and move back to pending/.
+            job.status = JobStatus::Pending;
+            write_json_atomic(&path, &job)?;
+            let pending = self.path_for(JobStatus::Pending, &id);
+            fs::rename(&path, &pending)?;
+            crate::clawd::audit::record_task_event("clawd.task.recovered", &job);
+            requeued += 1;
+        }
+
+        Ok((requeued, failed))
+    }
     pub fn finish(&self, mut job: Job, outcome: FinishOutcome) -> io::Result<Job> {
         let running_path = self.path_for(JobStatus::Running, &job.id);
         match outcome {
@@ -975,6 +1095,21 @@ fn run_worker_loop_inner(
 ) -> Result<Value, String> {
     crate::clawd::audit::install_runtime_hook();
     let store = Store::open_default().map_err(|e| e.to_string())?;
+    // Reclaim jobs stranded in running/ by a previously-crashed worker
+    // before we start claiming new ones. This is what makes a daemon
+    // restart self-healing: interrupted jobs get retried (or failed if
+    // they keep killing the worker) instead of hanging forever.
+    match store.recover_orphaned_jobs() {
+        Ok((requeued, failed)) if requeued > 0 || failed > 0 => {
+            tracing::info!(
+                requeued,
+                failed,
+                "agent service worker: recovered orphaned jobs from a prior crash"
+            );
+        }
+        Ok(_) => {}
+        Err(e) => tracing::warn!("agent service worker: orphan recovery failed: {e}"),
+    }
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1398,6 +1533,83 @@ mod tests {
             .join("running")
             .join(format!("{}.json", job.id))
             .is_file());
+    }
+
+    /// A job stranded in running/ by a dead worker is requeued to
+    /// pending/ with worker_pid/started_at cleared and recovery_count
+    /// incremented, so a fresh worker can re-claim it.
+    #[test]
+    fn recover_requeues_job_whose_worker_is_dead() {
+        let dir = fresh_root();
+        let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+        let job = store.submit("interrupted work".into(), None, None, None, None).unwrap();
+        let claimed = store.claim_one().unwrap().unwrap();
+        // Simulate the worker dying: overwrite the running file with a
+        // pid that is certainly not alive (0 is treated as dead).
+        let running = dir.path().join("running").join(format!("{}.json", claimed.id));
+        let mut stranded: Job =
+            serde_json::from_str(&std::fs::read_to_string(&running).unwrap()).unwrap();
+        stranded.worker_pid = Some(0);
+        std::fs::write(&running, serde_json::to_string_pretty(&stranded).unwrap()).unwrap();
+
+        let (requeued, failed) = store.recover_orphaned_jobs().unwrap();
+        assert_eq!((requeued, failed), (1, 0));
+
+        // Back in pending/, reset for re-claiming.
+        let (bucket, recovered) = store.locate(&job.id).unwrap().unwrap();
+        assert_eq!(bucket, JobStatus::Pending);
+        assert_eq!(recovered.status, JobStatus::Pending);
+        assert!(recovered.worker_pid.is_none());
+        assert!(recovered.started_at.is_none());
+        assert_eq!(recovered.recovery_count, 1);
+        assert!(store.claim_one().unwrap().is_some(), "recovered job must be re-claimable");
+    }
+
+    /// A job whose worker is still alive must NOT be touched by recovery.
+    #[test]
+    fn recover_leaves_job_with_live_worker_alone() {
+        let dir = fresh_root();
+        let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+        let job = store.submit("in flight".into(), None, None, None, None).unwrap();
+        // claim_one stamps the current (live) process pid.
+        let _claimed = store.claim_one().unwrap().unwrap();
+        let (requeued, failed) = store.recover_orphaned_jobs().unwrap();
+        assert_eq!((requeued, failed), (0, 0));
+        let (bucket, _) = store.locate(&job.id).unwrap().unwrap();
+        assert_eq!(bucket, JobStatus::Running, "live job must stay running");
+    }
+
+    /// A poison job that keeps killing its worker is failed (not requeued)
+    /// once recovery_count exceeds MAX_RECOVERIES, so it can't starve the
+    /// queue in an endless crash loop.
+    #[test]
+    fn recover_fails_poison_job_after_max_recoveries() {
+        let dir = fresh_root();
+        let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+        let job = store.submit("poison".into(), None, None, None, None).unwrap();
+        let claimed = store.claim_one().unwrap().unwrap();
+        // Pre-set recovery_count at the cap with a dead worker, so the
+        // next recovery pass tips it over MAX_RECOVERIES → fail.
+        let running = dir.path().join("running").join(format!("{}.json", claimed.id));
+        let mut stranded: Job =
+            serde_json::from_str(&std::fs::read_to_string(&running).unwrap()).unwrap();
+        stranded.worker_pid = Some(0);
+        stranded.recovery_count = MAX_RECOVERIES;
+        std::fs::write(&running, serde_json::to_string_pretty(&stranded).unwrap()).unwrap();
+
+        let (requeued, failed) = store.recover_orphaned_jobs().unwrap();
+        assert_eq!((requeued, failed), (0, 1));
+        let (bucket, done) = store.locate(&job.id).unwrap().unwrap();
+        assert_eq!(bucket, JobStatus::Ok); // done bucket
+        assert_eq!(done.status, JobStatus::Error);
+        assert!(done.error.as_deref().unwrap().contains("abandoned"));
+    }
+
+    #[test]
+    fn recover_is_noop_with_empty_running_bucket() {
+        let dir = fresh_root();
+        let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+        assert_eq!(store.recover_orphaned_jobs().unwrap(), (0, 0));
     }
 
     #[test]
