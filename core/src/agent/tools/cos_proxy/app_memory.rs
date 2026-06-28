@@ -267,6 +267,15 @@ mod tests {
         CosAppMemoryTool::new(MemoryDb::open_in_memory().unwrap())
     }
 
+    /// `exec` wraps every payload in the untrusted-memory boundary
+    /// (prompt-injection defense), so the JSON body is no longer the
+    /// whole string. Pull the object back out for assertions.
+    fn parse_untrusted_json(wrapped: &str) -> Value {
+        let start = wrapped.find('{').expect("json object start");
+        let end = wrapped.rfind('}').expect("json object end");
+        serde_json::from_str(&wrapped[start..=end]).expect("parse wrapped json body")
+    }
+
     async fn seed(tool: &CosAppMemoryTool, entries: &[(&str, &str, Option<&str>)]) {
         for (source, text, kind) in entries {
             let entry = AppMemoryEntry {
@@ -380,7 +389,7 @@ mod tests {
         // Roundtrip via list to grab an id without depending on insert ordering.
         let listed = t.exec(json!({"command": "list", "source": "calendar"})).await;
         assert!(!listed.is_error, "list failed: {}", listed.content);
-        let v: Value = serde_json::from_str(&listed.content).unwrap();
+        let v: Value = parse_untrusted_json(&listed.content);
         let id = v["rows"][0]["id"].as_i64().expect("row id");
         let r = t.exec(json!({"command": "show", "id": id})).await;
         assert!(!r.is_error);

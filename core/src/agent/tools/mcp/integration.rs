@@ -634,7 +634,14 @@ mod tests {
         };
         let r = render_call_result("mcp_x_y", res);
         assert!(!r.is_error);
-        assert_eq!(r.content, "hello\n\nworld");
+        // MCP results are wrapped in an untrusted-data boundary
+        // (prompt-injection defense); the concatenated body lives inside.
+        assert!(r.content.contains("hello\n\nworld"), "content: {}", r.content);
+        assert!(
+            r.content.contains("<untrusted_tool_result>"),
+            "content: {}",
+            r.content
+        );
     }
 
     #[test]
@@ -647,7 +654,12 @@ mod tests {
         };
         let r = render_call_result("mcp_x_y", res);
         assert!(r.is_error);
-        assert_eq!(r.content, "boom");
+        assert!(r.content.contains("boom"), "content: {}", r.content);
+        assert!(
+            r.content.contains("<untrusted_tool_result>"),
+            "content: {}",
+            r.content
+        );
     }
 
     #[test]
@@ -810,7 +822,14 @@ mod tests {
         let dyn_tool = registry.get(registered_name).expect("tool registered");
         let result = dyn_tool.exec(json!({})).await;
         assert!(!result.is_error, "tool call should succeed: {:?}", result);
-        assert_eq!(result.content, "pong");
+        // The remote result is wrapped in the untrusted-tool-result
+        // boundary before it reaches the agent loop.
+        assert!(result.content.contains("pong"), "content: {}", result.content);
+        assert!(
+            result.content.contains("<untrusted_tool_result>"),
+            "content: {}",
+            result.content
+        );
 
         drop(client);
         let _ = server_task.await;
