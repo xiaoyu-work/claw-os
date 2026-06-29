@@ -52,6 +52,32 @@ if [ -d "$FEATURE_DIR/overlay" ] && [ -n "$(ls -A "$FEATURE_DIR/overlay" 2>/dev/
 fi
 
 # ---------------------------------------------------------------------------
+# 0b. Disk-space preflight.
+#
+# The cargo build needs ~15 GB and the installed desktop adds ~16 GB into the
+# package root, all on the filesystem holding $ROOTFS. If that fills mid-build
+# the failure surfaces an hour later as a cryptic copy error — and on WSL2 a
+# full dynamic VHDX returns "Input/output error" (EIO) rather than ENOSPC, so
+# `install` dies with "error copying ...: Input/output error" at the final
+# binary. Fail fast and loudly here instead.
+# ---------------------------------------------------------------------------
+DESKTOP_MIN_FREE_GB="${DESKTOP_MIN_FREE_GB:-30}"
+avail_kb="$(df -Pk "$ROOTFS" | awk 'NR==2 {print $4}')"
+avail_gb=$(( avail_kb / 1024 / 1024 ))
+if [ "$avail_gb" -lt "$DESKTOP_MIN_FREE_GB" ]; then
+    cat >&2 <<EOF
+  error: only ${avail_gb} GB free on the filesystem holding $ROOTFS
+         the desktop build needs ~${DESKTOP_MIN_FREE_GB} GB (cargo cache + ~16 GB install root).
+         Free up space and re-run. On WSL2, a full virtual disk shows up as
+         "Input/output error" mid-copy — expand or compact the WSL VHDX, or
+         clear space on the host drive backing it. Override the threshold with
+         DESKTOP_MIN_FREE_GB if you know what you are doing.
+EOF
+    exit 1
+fi
+echo "  :: disk preflight ok (${avail_gb} GB free, need ~${DESKTOP_MIN_FREE_GB} GB)"
+
+# ---------------------------------------------------------------------------
 # 1. Validate source tree.
 # ---------------------------------------------------------------------------
 
