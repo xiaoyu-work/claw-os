@@ -27,14 +27,21 @@ pub const DEFAULT_MENU_ITEM_HEIGHT: f32 = 36.;
 /// Used for the floating login/unlock card and the glass dropdown menus.
 pub fn glass_surface_style(theme: &cosmic::Theme) -> widget::container::Style {
     let cosmic = theme.cosmic();
+    let mut fill = cosmic.bg_component_color();
+    fill.alpha = 0.62;
     widget::container::Style {
         icon_color: Some(cosmic.on_bg_color().into()),
         text_color: Some(cosmic.on_bg_color().into()),
-        background: Some(iced::Background::Color(cosmic.bg_component_color().into())),
+        background: Some(iced::Background::Color(fill.into())),
         border: iced::Border {
             radius: cosmic.radius_l().into(),
             width: 1.0,
-            color: cosmic.accent_color().with_alpha(0.20).into(),
+            color: cosmic.accent_color().with_alpha(0.25).into(),
+        },
+        shadow: iced::Shadow {
+            color: iced::Color { r: 0.0, g: 0.02, b: 0.10, a: 0.30 },
+            offset: iced::Vector { x: 0.0, y: 8.0 },
+            blur_radius: 32.0,
         },
         ..Default::default()
     }

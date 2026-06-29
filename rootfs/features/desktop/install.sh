@@ -385,11 +385,10 @@ install -Dm0644 "$DESKTOP_SRC/greeter/cosmic-greeter.toml" \
 #      execs cosmic-session (no human user yet) or exits 0 so greetd
 #      falls through to [default_session] (wizard already ran).
 #
-# Inside the cosmic-session started by the wrapper, the autostart entry
-# /etc/xdg/autostart/com.clawos.InitialSetup.desktop auto-launches the
-# wizard. When the wizard's Finish handler runs `loginctl terminate-user
-# cosmic-initial-setup`, the session dies and greetd advances to
-# cosmic-greeter for normal login as the user the wizard just created.
+# The firstboot-session wrapper kiosk-launches the wizard directly
+# (`cosmic-comp cosmic-initial-setup`). When the wizard's Finish handler runs
+# `loginctl terminate-user cosmic-initial-setup`, the session dies and greetd
+# advances to cosmic-greeter for normal login as the user the wizard created.
 # ---------------------------------------------------------------------------
 echo "  :: staging first-boot wizard greetd config"
 if ! grep -q '^\[initial_session\]' "$DESKTOP_PACKAGE_ROOT/etc/greetd/cosmic-greeter.toml"; then
@@ -400,6 +399,13 @@ command = "/usr/lib/cos/firstboot-session"
 user = "cosmic-initial-setup"
 EOF
 fi
+
+# Drive the wizard ONLY via the firstboot-session kiosk above. The upstream
+# autostart entry (/etc/xdg/autostart/com.clawos.InitialSetup.desktop) would
+# also relaunch the wizard inside every normal cosmic-session — so the first
+# real login lands on the desktop and the wizard pops on top of it. Remove it
+# so logging in goes straight to a working desktop.
+rm -f "$DESKTOP_PACKAGE_ROOT/etc/xdg/autostart/com.clawos.InitialSetup.desktop"
 
 # Create the cosmic-greeter system user + its runtime/state dirs from the
 # sysusers.d / tmpfiles.d that `just install` already dropped. Package postinst
