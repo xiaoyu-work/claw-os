@@ -232,7 +232,7 @@ impl Store {
         self.bucket_dir(status).join(format!("{id}.json"))
     }
 
-    pub fn stream_path(&self, id: &str) -> PathBuf {
+    fn stream_path(&self, id: &str) -> PathBuf {
         self.root.join("streams").join(format!("{id}.jsonl"))
     }
 
@@ -241,6 +241,7 @@ impl Store {
         id: &str,
         event: &crate::agent::llm::StreamEvent,
     ) -> io::Result<()> {
+        validate_job_id(id)?;
         let value = json!({
             "ts": chrono::Utc::now(),
             "event": event,
@@ -250,6 +251,7 @@ impl Store {
     }
 
     pub fn read_stream_events(&self, id: &str, cursor: usize) -> io::Result<(usize, Vec<Value>)> {
+        validate_job_id(id)?;
         let path = self.stream_path(id);
         let raw = match fs::read_to_string(&path) {
             Ok(raw) => raw,
@@ -279,6 +281,7 @@ impl Store {
     /// Returns the bucket the file currently lives in plus the parsed
     /// Job, or `Ok(None)` if no file exists in any bucket.
     pub fn locate(&self, id: &str) -> io::Result<Option<(JobStatus, Job)>> {
+        validate_job_id(id)?;
         for bucket in [JobStatus::Pending, JobStatus::Running, JobStatus::Ok] {
             let p = self.path_for(bucket, id);
             match fs::read_to_string(&p) {
@@ -445,6 +448,16 @@ impl Store {
                     // We won — load, mutate, rewrite atomically.
                     let s = fs::read_to_string(&dst)?;
                     let mut job: Job = serde_json::from_str(&s).map_err(io_other)?;
+                    validate_job_id(&job.id)?;
+                    if job.id != id {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!(
+                                "job id `{}` does not match queue filename `{id}`",
+                                job.id
+                            ),
+                        ));
+                    }
                     job.status = JobStatus::Running;
                     job.started_at = Some(now_iso());
                     job.worker_pid = Some(std::process::id());
@@ -562,6 +575,7 @@ impl Store {
         Ok((requeued, failed))
     }
     pub fn finish(&self, mut job: Job, outcome: FinishOutcome) -> io::Result<Job> {
+        validate_job_id(&job.id)?;
         let running_path = self.path_for(JobStatus::Running, &job.id);
         match outcome {
             FinishOutcome::Ok {
@@ -687,6 +701,7 @@ impl Store {
     /// across two different destinations. The sentinel inode is
     /// stable across rename storms.
     fn lock_for_id(&self, id: &str) -> io::Result<JobLock> {
+        validate_job_id(id)?;
         let lock_dir = self.root.join("locks");
         fs::create_dir_all(&lock_dir)?;
         let lock_path = lock_dir.join(format!("{id}.lock"));
@@ -712,6 +727,21 @@ fn job_visible_to(job: &Job, owner_uid: Option<u32>) -> bool {
         None => true,
         Some(uid) => job.owner_uid == Some(uid),
     }
+}
+
+fn validate_job_id(id: &str) -> io::Result<()> {
+    if id.is_empty()
+        || id.len() > 128
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid job id: {id}"),
+        ));
+    }
+    Ok(())
 }
 
 /// RAII guard for per-job flock taken by `Store::lock_for_id`.

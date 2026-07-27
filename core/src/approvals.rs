@@ -159,6 +159,20 @@ fn short_id() -> String {
     format!("{:012x}", h.finish() & 0xFFFFFFFFFFFF)
 }
 
+fn validate_approval_id(id: &str) -> Result<(), String> {
+    let Some(suffix) = id.strip_prefix("ap-") else {
+        return Err(format!("invalid approval id: {id}"));
+    };
+    if suffix.len() != 12
+        || !suffix
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(format!("invalid approval id: {id}"));
+    }
+    Ok(())
+}
+
 /// Atomically write `data` to `path`. Writes go through a sibling
 /// `.tmp.<nonce>` file, are fsynced, and are then renamed over the
 /// final path. On Linux + POSIX this guarantees a reader sees either
@@ -319,6 +333,7 @@ fn resolve(
     note: Option<String>,
     owner_uid: Option<u32>,
 ) -> Result<Resolved, String> {
+    validate_approval_id(id)?;
     ensure_dirs().map_err(|e| format!("approvals dir: {e}"))?;
     let pending = pending_dir().join(format!("{id}.json"));
     if let Some(uid) = owner_uid {
@@ -446,6 +461,7 @@ pub fn list_recent_for_owner(limit: usize, owner_uid: Option<u32>) -> Vec<Resolv
 }
 
 pub fn lookup_pending(id: &str) -> Option<Request> {
+    validate_approval_id(id).ok()?;
     let p = pending_dir().join(format!("{id}.json"));
     let data = fs::read_to_string(&p).ok()?;
     serde_json::from_str(&data).ok()
@@ -539,6 +555,7 @@ fn list_dir(dir: &Path) -> Vec<PathBuf> {
 /// Block-polling waiter. Used by requesters who want a synchronous
 /// answer. Polls every 200 ms, gives up after `timeout`.
 pub fn wait(id: &str, timeout: Duration) -> Result<Decision, String> {
+    validate_approval_id(id)?;
     let deadline = Instant::now() + timeout;
     let poll = Duration::from_millis(200);
     loop {
