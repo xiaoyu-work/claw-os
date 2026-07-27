@@ -330,13 +330,40 @@ pub async fn attach_server(
     for (k, v) in &spec.env {
         command.env(k, v);
     }
-    if let Some(cwd) = &spec.cwd {
+    if let Some(home) = crate::paths::current_home_override() {
+        let canonical_home = home
+            .canonicalize()
+            .map_err(|e| format!("canonicalize MCP owner home {}: {e}", home.display()))?;
+        let cwd = match &spec.cwd {
+            Some(cwd) => {
+                let canonical = cwd
+                    .canonicalize()
+                    .map_err(|e| format!("canonicalize MCP cwd {}: {e}", cwd.display()))?;
+                if !canonical.starts_with(&canonical_home) {
+                    return Err(format!(
+                        "MCP cwd {} escapes owner home {}",
+                        canonical.display(),
+                        canonical_home.display()
+                    ));
+                }
+                canonical
+            }
+            None => canonical_home,
+        };
+        command
+            .current_dir(cwd)
+            .env("HOME", &home)
+            .env("COS_HOME", &home)
+            .env("COS_DATA_DIR", crate::paths::user_data_dir())
+            .env("COS_CAPS_DATA_DIR", crate::paths::caps_data_dir());
+    } else if let Some(cwd) = &spec.cwd {
         command.current_dir(cwd);
     }
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    crate::bridge::apply_routed_identity(command.as_std_mut())?;
     let mut child = command
         .spawn()
         .map_err(|e| format!("spawn `{}`: {e}", spec.command))?;
@@ -536,9 +563,19 @@ fn safe_env_allowlist() -> Vec<(String, String)> {
             out.push(((*k).to_string(), v));
         }
     }
-    for (k, v) in std::env::vars() {
-        if k.starts_with("COS_") {
-            out.push((k, v));
+    const SAFE_COS: &[&str] = &[
+        "COS_SESSION",
+        "COS_TRACE_ID",
+        "COS_SPAN_ID",
+        "COS_BIN",
+        "COS_VERSION",
+        "COS_SDK_PYTHON_DIR",
+        "COS_SNAPSHOT",
+        "COS_PERMS_MODE",
+    ];
+    for key in SAFE_COS {
+        if let Ok(value) = std::env::var(key) {
+            out.push(((*key).to_string(), value));
         }
     }
     out

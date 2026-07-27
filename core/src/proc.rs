@@ -83,7 +83,9 @@ fn registry_path() -> PathBuf {
 /// registry path `cos` writes to. Lives here so the resolution logic
 /// in [`proc_dir`] has exactly one definition.
 pub(crate) fn registry_path_for_caps() -> PathBuf {
-    registry_path()
+    crate::paths::caps_data_dir()
+        .join("proc")
+        .join("registry.json")
 }
 
 fn load_registry() -> Registry {

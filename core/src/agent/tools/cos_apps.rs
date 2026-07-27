@@ -153,7 +153,13 @@ fn apps_root() -> PathBuf {
 }
 
 fn data_dir() -> String {
-    crate::paths::data_dir().to_string_lossy().into_owned()
+    if crate::paths::is_routed_job()
+        || crate::paths::current_owner_uid_override().is_some()
+    {
+        crate::paths::user_data_dir().to_string_lossy().into_owned()
+    } else {
+        crate::paths::data_dir().to_string_lossy().into_owned()
+    }
 }
 
 #[async_trait]
@@ -237,7 +243,9 @@ impl Tool for CosAppTool {
         let data = data_dir();
         let apps = apps_root().to_string_lossy().to_string();
 
-        if crate::paths::current_owner_uid_override().is_some() {
+        if crate::paths::is_routed_job()
+            || crate::paths::current_owner_uid_override().is_some()
+        {
             return match tokio::task::block_in_place(|| {
                 crate::bridge::run_python_app(&app_dir, &command, &args, &data, &apps)
             }) {

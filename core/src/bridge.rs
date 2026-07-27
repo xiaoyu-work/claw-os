@@ -3,6 +3,138 @@ use std::process::{Command, Stdio};
 
 use crate::caps::manifest::Runtime;
 
+fn reset_app_environment(command: &mut Command) {
+    const SAFE_KEYS: &[&str] = &[
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LC_MESSAGES",
+        "TZ",
+        "TERM",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
+        "DISPLAY",
+        "WAYLAND_DISPLAY",
+        "XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "XAUTHORITY",
+        "PULSE_SERVER",
+        "COS_SESSION",
+        "COS_TRACE_ID",
+        "COS_SPAN_ID",
+        "COS_BIN",
+        "COS_VERSION",
+        "COS_SDK_PYTHON_DIR",
+        "COS_SNAPSHOT",
+        "COS_PERMS_MODE",
+    ];
+    let preserved = SAFE_KEYS
+        .iter()
+        .filter_map(|key| std::env::var(key).ok().map(|value| ((*key).to_string(), value)))
+        .collect::<Vec<_>>();
+    command.env_clear();
+    command.envs(preserved);
+}
+
+#[cfg(unix)]
+pub(crate) fn apply_routed_identity(command: &mut Command) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::process::CommandExt;
+
+    let Some(uid) = crate::paths::current_owner_uid_override() else {
+        if crate::paths::is_routed_job() || unsafe { libc::geteuid() } == 0 {
+            return Err("refusing to launch an App as root without an owner identity".to_string());
+        }
+        return Ok(());
+    };
+    if uid == 0 {
+        return Err("refusing to launch an App as root".to_string());
+    }
+    let home = crate::paths::current_home_override()
+        .ok_or_else(|| format!("missing home directory for App owner uid {uid}"))?;
+    let metadata = std::fs::metadata(&home)
+        .map_err(|err| format!("inspect App owner home {}: {err}", home.display()))?;
+    if metadata.uid() != uid {
+        return Err(format!(
+            "App owner home {} belongs to uid {}, expected {uid}",
+            home.display(),
+            metadata.uid()
+        ));
+    }
+    let (gid, username) = account_for_uid(uid)?;
+    command.env("USER", &username).env("LOGNAME", username);
+    let euid = unsafe { libc::geteuid() } as u32;
+    if euid != 0 && euid != uid {
+        return Err(format!(
+            "cannot launch App for uid {uid} from process uid {euid}"
+        ));
+    }
+    unsafe {
+        command.pre_exec(move || {
+            if euid == 0 {
+                if libc::setgroups(0, std::ptr::null()) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::setgid(gid) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::setuid(uid) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn account_for_uid(uid: u32) -> Result<(u32, String), String> {
+    use std::ffi::CStr;
+
+    const BUF_SIZE: usize = 16 * 1024;
+    let mut buf = vec![0 as libc::c_char; BUF_SIZE];
+    let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut result: *mut libc::passwd = std::ptr::null_mut();
+    let rc = unsafe {
+        libc::getpwuid_r(
+            uid as libc::uid_t,
+            &mut pwd,
+            buf.as_mut_ptr(),
+            buf.len(),
+            &mut result,
+        )
+    };
+    if rc != 0 || result.is_null() {
+        return Err(format!("passwd lookup failed for App owner uid {uid}"));
+    }
+    if pwd.pw_name.is_null() {
+        return Err(format!("passwd entry for App owner uid {uid} has no name"));
+    }
+    let username = unsafe { CStr::from_ptr(pwd.pw_name) }
+        .to_str()
+        .map_err(|_| format!("passwd name for App owner uid {uid} is not UTF-8"))?
+        .to_string();
+    Ok((pwd.pw_gid as u32, username))
+}
+
+#[cfg(not(unix))]
+pub(crate) fn apply_routed_identity(_command: &mut Command) -> Result<(), String> {
+    if crate::paths::current_owner_uid_override().is_some() {
+        return Err("routed App privilege dropping requires Unix".to_string());
+    }
+    Ok(())
+}
+
 /// Build the Python launcher script shared by [`run_python_app`] (one-
 /// shot operations) and [`launch_gui`] (long-lived desktop surface).
 ///
@@ -104,6 +236,7 @@ pub fn run_python_app(
         .to_string();
 
     let mut command = Command::new(python);
+    reset_app_environment(&mut command);
     command
         .arg("-c")
         .arg(&wrapper)
@@ -120,11 +253,14 @@ pub fn run_python_app(
         .env("NPM_CONFIG_YES", "true")
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .env("COS_APP_ID", &app_id)
+        .env("COS_DATA_DIR", data_dir)
+        .env("COS_CAPS_DATA_DIR", crate::paths::caps_data_dir())
         // Pass config values so Python apps use config.json instead of hardcoded defaults
         .envs(crate::config::as_env_vars());
     if let Some(home) = crate::paths::current_home_override() {
         command.env("HOME", &home).env("COS_HOME", home);
     }
+    apply_routed_identity(&mut command)?;
     let child = command
         .spawn()
         .map_err(|e| format!("failed to spawn python3: {e}"))?;
@@ -260,17 +396,16 @@ pub fn run_app(
         Runtime::Binary => Command::new(&entry_path),
         Runtime::Python => unreachable!("python handled above"),
     };
+    reset_app_environment(&mut cmd);
 
-    if let Some(home) = crate::paths::current_home_override() {
-        cmd.env("HOME", &home).env("COS_HOME", home);
-    }
-    let child = cmd
+    cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("COS_COMMAND", command)
         .env("COS_ARGS_JSON", &args_json)
         .env("COS_DATA_DIR", data_dir)
+        .env("COS_CAPS_DATA_DIR", crate::paths::caps_data_dir())
         .env("COS_APPS_DIR", apps_dir)
         .env(
             "COS_APP_ID",
@@ -283,7 +418,12 @@ pub fn run_app(
         .env("GIT_PAGER", "cat")
         .env("PIP_NO_INPUT", "1")
         .env("NPM_CONFIG_YES", "true")
-        .envs(crate::config::as_env_vars())
+        .envs(crate::config::as_env_vars());
+    if let Some(home) = crate::paths::current_home_override() {
+        cmd.env("HOME", &home).env("COS_HOME", home);
+    }
+    apply_routed_identity(&mut cmd)?;
+    let child = cmd
         .spawn()
         .map_err(|e| format!("failed to spawn {runtime:?} app: {e}"))?;
 
@@ -400,14 +540,14 @@ pub fn launch_gui(
             Runtime::Python => unreachable!("python handled above"),
         }
     };
+    reset_app_environment(&mut cmd);
 
     let args_json =
         serde_json::to_string(files).map_err(|e| format!("failed to serialize files: {e}"))?;
-
     // A GUI draws on Wayland/X, not stdout. Inherit the parent's stdio
     // so the app's own logging is visible and so it stays attached as a
     // long-lived foreground process until the window is closed.
-    let status = cmd
+    cmd
         .stdin(Stdio::null())
         .env("COS_APP_ID", &app_id)
         .env("COS_APP_GUI", "1")
@@ -420,7 +560,13 @@ pub fn launch_gui(
         .env("PAGER", "cat")
         .env("GIT_PAGER", "cat")
         .env("PYTHONDONTWRITEBYTECODE", "1")
-        .envs(crate::config::as_env_vars())
+        .env("COS_CAPS_DATA_DIR", crate::paths::caps_data_dir())
+        .envs(crate::config::as_env_vars());
+    if let Some(home) = crate::paths::current_home_override() {
+        cmd.env("HOME", &home).env("COS_HOME", home);
+    }
+    apply_routed_identity(&mut cmd)?;
+    let status = cmd
         .status()
         .map_err(|e| format!("failed to launch {runtime:?} GUI: {e}"))?;
 

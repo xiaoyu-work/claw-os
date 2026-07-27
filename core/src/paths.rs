@@ -61,6 +61,7 @@ use std::path::{Path, PathBuf};
 tokio::task_local! {
     static HOME_OVERRIDE: PathBuf;
     static OWNER_UID_OVERRIDE: u32;
+    static ROUTED_JOB_OVERRIDE: bool;
 }
 
 /// Run `fut` with `home` installed as the per-task user-home override
@@ -83,6 +84,13 @@ where
         .await
 }
 
+pub async fn with_routed_job<F, R>(fut: F) -> R
+where
+    F: Future<Output = R>,
+{
+    ROUTED_JOB_OVERRIDE.scope(true, fut).await
+}
+
 /// Snapshot of the currently active home override (`None` outside any
 /// `with_home_override` scope). Exposed for crates that need to mirror
 /// the override into subprocess `HOME` env vars (e.g. when spawning a
@@ -93,6 +101,10 @@ pub fn current_home_override() -> Option<PathBuf> {
 
 pub fn current_owner_uid_override() -> Option<u32> {
     OWNER_UID_OVERRIDE.try_with(|uid| *uid).ok()
+}
+
+pub fn is_routed_job() -> bool {
+    ROUTED_JOB_OVERRIDE.try_with(|value| *value).unwrap_or(false)
 }
 
 /// Resolve the effective user home directory:
@@ -153,6 +165,12 @@ pub fn data_dir() -> PathBuf {
         return PathBuf::from(v);
     }
     user_data_dir()
+}
+
+pub fn caps_data_dir() -> PathBuf {
+    std::env::var_os("COS_CAPS_DATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(data_dir)
 }
 
 pub fn cache_dir() -> PathBuf {

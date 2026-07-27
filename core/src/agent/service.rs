@@ -1308,6 +1308,10 @@ async fn install_shutdown_listener(shutdown: Arc<AtomicBool>) {
 }
 
 async fn run_one_job(job: &Job) -> FinishOutcome {
+    crate::paths::with_routed_job(run_one_routed_job(job)).await
+}
+
+async fn run_one_routed_job(job: &Job) -> FinishOutcome {
     // If the job carries an owner_home (clawd-routed jobs from a
     // non-daemon user), load THAT user's config into a task-local
     // override AND redirect every per-user path resolver

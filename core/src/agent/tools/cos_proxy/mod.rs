@@ -151,7 +151,8 @@ impl Tool for CosPrimitiveTool {
         // current task so credential, memory and config lookups cannot fall
         // back to root. Unrouted CLI calls still use the blocking pool.
         let primitive = self.primitive;
-        if crate::paths::current_owner_uid_override().is_some()
+        if crate::paths::is_routed_job()
+            || crate::paths::current_owner_uid_override().is_some()
             || crate::paths::current_home_override().is_some()
         {
             return match tokio::task::block_in_place(|| primitive(&command, &args)) {

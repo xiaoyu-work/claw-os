@@ -103,7 +103,7 @@ pub struct Resolved {
 // ---------------------------------------------------------------------------
 
 fn root() -> PathBuf {
-    crate::paths::data_dir().join("approvals")
+    crate::paths::caps_data_dir().join("approvals")
 }
 
 fn pending_dir() -> PathBuf {

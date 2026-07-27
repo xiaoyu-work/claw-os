@@ -96,7 +96,8 @@ impl Drop for ActiveSession {
     }
 }
 
-type SessionTable = Mutex<HashMap<String, ActiveSession>>;
+type SessionKey = (u32, String);
+type SessionTable = Mutex<HashMap<SessionKey, ActiveSession>>;
 /// Per-app exclusion for the lazy-open path. The session table mutex
 /// is held only for hash-map probes; the actual spawn + handshake
 /// happens with this per-app lock held, so a tight burst of
@@ -105,7 +106,7 @@ type SessionTable = Mutex<HashMap<String, ActiveSession>>;
 /// by `app_id` and grows monotonically (one entry per app the agent
 /// ever touches in this process — bounded by the number of
 /// installed apps, so a memory non-issue).
-type OpenLocks = std::sync::Mutex<HashMap<String, Arc<Mutex<()>>>>;
+type OpenLocks = std::sync::Mutex<HashMap<SessionKey, Arc<Mutex<()>>>>;
 
 fn manager() -> &'static SessionTable {
     static MANAGER: OnceLock<SessionTable> = OnceLock::new();
@@ -117,11 +118,31 @@ fn open_locks() -> &'static OpenLocks {
     LOCKS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
 
-fn app_open_lock(app_id: &str) -> Arc<Mutex<()>> {
+fn app_open_lock(key: &SessionKey) -> Arc<Mutex<()>> {
     let mut map = open_locks().lock().unwrap_or_else(|p| p.into_inner());
-    map.entry(app_id.to_string())
+    map.entry(key.clone())
         .or_insert_with(|| Arc::new(Mutex::new(())))
         .clone()
+}
+
+fn session_key(app_id: &str) -> Result<SessionKey, String> {
+    let uid = match crate::paths::current_owner_uid_override() {
+        Some(uid) => uid,
+        None => {
+            #[cfg(unix)]
+            {
+                unsafe { libc::geteuid() as u32 }
+            }
+            #[cfg(not(unix))]
+            {
+                return Err("App sessions require a Unix owner identity".to_string());
+            }
+        }
+    };
+    if uid == 0 {
+        return Err("refusing to open an App session as root".to_string());
+    }
+    Ok((uid, app_id.to_string()))
 }
 
 // ---------------------------------------------------------------------------
@@ -238,6 +259,7 @@ async fn bring_up_app(
     command
         .env("COS_APP_ID", app_id)
         .env("COS_DATA_DIR", &data_dir)
+        .env("COS_CAPS_DATA_DIR", crate::paths::caps_data_dir())
         .env("COS_APPS_DIR", &apps_dir_str)
         .env("PYTHONPATH", &pythonpath)
         .env("PYTHONDONTWRITEBYTECODE", "1")
@@ -256,6 +278,7 @@ async fn bring_up_app(
     if let Some(home) = crate::paths::current_home_override() {
         command.env("HOME", &home).env("COS_HOME", home);
     }
+    crate::bridge::apply_routed_identity(command.as_std_mut())?;
 
     let mut child = command
         .spawn()
@@ -398,9 +421,10 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 /// fine — sessions are infrequent and the spawn happens off-thread
 /// via tokio's blocking pool inside `Command::spawn`).
 async fn get_or_open(app_id: &str) -> Result<Arc<McpClient>, String> {
+    let key = session_key(app_id)?;
     {
         let table = manager().lock().await;
-        if let Some(s) = table.get(app_id) {
+        if let Some(s) = table.get(&key) {
             return Ok(s.client.clone());
         }
     }
@@ -419,14 +443,15 @@ async fn get_or_open(app_id: &str) -> Result<Arc<McpClient>, String> {
 /// whole probe-then-spawn-then-insert sequence so exactly one child
 /// is created per app per process.
 async fn open_session(app_id: &str) -> Result<(Arc<McpClient>, usize), String> {
-    let lock = app_open_lock(app_id);
+    let key = session_key(app_id)?;
+    let lock = app_open_lock(&key);
     let _open_guard = lock.lock().await;
 
     // Re-probe under the per-app lock — another racer may have just
     // finished the spawn we were blocked on.
     {
         let table = manager().lock().await;
-        if let Some(s) = table.get(app_id) {
+        if let Some(s) = table.get(&key) {
             return Ok((s.client.clone(), s.tool_count));
         }
     }
@@ -440,7 +465,7 @@ async fn open_session(app_id: &str) -> Result<(Arc<McpClient>, usize), String> {
         bring_up_app(app_id, &app_dir, &manifest, DEFAULT_TIMEOUT).await?;
     let mut table = manager().lock().await;
     table.insert(
-        app_id.to_string(),
+        key,
         ActiveSession {
             client: client.clone(),
             child: Some(child),
@@ -460,9 +485,12 @@ async fn open_session(app_id: &str) -> Result<(Arc<McpClient>, usize), String> {
 /// session will return `ConnectionClosed` once the child's stdio is
 /// torn down.
 async fn close_session(app_id: &str) -> bool {
+    let Ok(key) = session_key(app_id) else {
+        return false;
+    };
     let removed = {
         let mut table = manager().lock().await;
-        table.remove(app_id)
+        table.remove(&key)
     };
     let was_present = removed.is_some();
     // Explicit drop here to make the lifetime obvious — the Drop
@@ -476,7 +504,11 @@ fn apps_root() -> PathBuf {
 }
 
 fn data_dir_string() -> String {
-    crate::paths::data_dir().to_string_lossy().into_owned()
+    if crate::paths::current_owner_uid_override().is_some() {
+        crate::paths::user_data_dir().to_string_lossy().into_owned()
+    } else {
+        crate::paths::data_dir().to_string_lossy().into_owned()
+    }
 }
 
 /// Environment variables an app-session child needs at a minimum:
