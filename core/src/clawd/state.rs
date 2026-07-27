@@ -31,6 +31,7 @@ pub struct TransactionHandle {
     pub session_id: SessionId,
     pub purpose: String,
     pub started_at: DateTime<Utc>,
+    pub owner_uid: u32,
     pub lease: LeaseGuard,
 }
 
@@ -39,6 +40,7 @@ pub struct TransactionSummary {
     pub id: String,
     pub purpose: String,
     pub started_at: DateTime<Utc>,
+    pub owner_uid: u32,
 }
 
 impl DaemonState {
@@ -99,24 +101,66 @@ impl DaemonState {
         Ok(())
     }
 
-    pub fn take_transaction(&self, id: &str) -> Option<TransactionHandle> {
-        self.inner
+    pub fn require_transaction_owner(
+        &self,
+        id: &str,
+        owner_uid: Option<u32>,
+    ) -> Result<(), String> {
+        let transactions = self
+            .inner
             .transactions
             .lock()
-            .expect("clawd transaction lock poisoned")
-            .remove(id)
+            .expect("clawd transaction lock poisoned");
+        let handle = transactions
+            .get(id)
+            .ok_or_else(|| format!("transaction is not active: {id}"))?;
+        if let Some(uid) = owner_uid {
+            if handle.owner_uid != uid {
+                return Err(format!("transaction is not owned by uid {uid}"));
+            }
+        }
+        Ok(())
     }
 
-    pub fn list_transactions(&self) -> Vec<TransactionSummary> {
+    pub fn take_transaction_for_owner(
+        &self,
+        id: &str,
+        owner_uid: Option<u32>,
+    ) -> Result<Option<TransactionHandle>, String> {
+        let mut transactions = self
+            .inner
+            .transactions
+            .lock()
+            .expect("clawd transaction lock poisoned");
+        let Some(handle) = transactions.get(id) else {
+            return Ok(None);
+        };
+        if let Some(uid) = owner_uid {
+            if handle.owner_uid != uid {
+                return Err(format!("transaction is not owned by uid {uid}"));
+            }
+        }
+        Ok(transactions.remove(id))
+    }
+
+    pub fn list_transactions_for_owner(
+        &self,
+        owner_uid: Option<u32>,
+    ) -> Vec<TransactionSummary> {
         self.inner
             .transactions
             .lock()
             .expect("clawd transaction lock poisoned")
             .values()
+            .filter(|handle| match owner_uid {
+                None => true,
+                Some(uid) => handle.owner_uid == uid,
+            })
             .map(|handle| TransactionSummary {
                 id: handle.session_id.as_str().to_string(),
                 purpose: handle.purpose.clone(),
                 started_at: handle.started_at,
+                owner_uid: handle.owner_uid,
             })
             .collect()
     }

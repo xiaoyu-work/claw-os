@@ -253,6 +253,9 @@ async fn bring_up_app(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(home) = crate::paths::current_home_override() {
+        command.env("HOME", &home).env("COS_HOME", home);
+    }
 
     let mut child = command
         .spawn()

@@ -62,6 +62,8 @@ pub struct Request {
     pub session: String,
     pub reason: String,
     pub requested_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_uid: Option<u32>,
     /// Process that asked. Helps the user distinguish "the file
     /// manager I just opened" from "some background cron job."
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -230,6 +232,17 @@ pub fn submit(
     reason: impl Into<String>,
     requester: Option<String>,
 ) -> Result<String, String> {
+    submit_owned(verb, scope, session, reason, requester, None)
+}
+
+pub fn submit_owned(
+    verb: Verb,
+    scope: Scope,
+    session: impl Into<String>,
+    reason: impl Into<String>,
+    requester: Option<String>,
+    owner_uid: Option<u32>,
+) -> Result<String, String> {
     ensure_dirs().map_err(|e| format!("approvals dir: {e}"))?;
     let req = Request {
         id: format!("ap-{}", short_id()),
@@ -238,6 +251,7 @@ pub fn submit(
         session: session.into(),
         reason: reason.into(),
         requested_at: now_secs(),
+        owner_uid,
         requester,
     };
     let path = pending_dir().join(format!("{}.json", req.id));
@@ -253,7 +267,14 @@ pub fn approve(
     decided_by: Option<String>,
     note: Option<String>,
 ) -> Result<Resolved, String> {
-    resolve(id, Outcome::Approved, Some(duration), decided_by, note)
+    resolve(
+        id,
+        Outcome::Approved,
+        Some(duration),
+        decided_by,
+        note,
+        None,
+    )
 }
 
 pub fn deny(
@@ -261,7 +282,33 @@ pub fn deny(
     decided_by: Option<String>,
     note: Option<String>,
 ) -> Result<Resolved, String> {
-    resolve(id, Outcome::Denied, None, decided_by, note)
+    resolve(id, Outcome::Denied, None, decided_by, note, None)
+}
+
+pub fn approve_for_owner(
+    id: &str,
+    duration: GrantDuration,
+    decided_by: Option<String>,
+    note: Option<String>,
+    owner_uid: Option<u32>,
+) -> Result<Resolved, String> {
+    resolve(
+        id,
+        Outcome::Approved,
+        Some(duration),
+        decided_by,
+        note,
+        owner_uid,
+    )
+}
+
+pub fn deny_for_owner(
+    id: &str,
+    decided_by: Option<String>,
+    note: Option<String>,
+    owner_uid: Option<u32>,
+) -> Result<Resolved, String> {
+    resolve(id, Outcome::Denied, None, decided_by, note, owner_uid)
 }
 
 fn resolve(
@@ -270,9 +317,17 @@ fn resolve(
     duration: Option<GrantDuration>,
     decided_by: Option<String>,
     note: Option<String>,
+    owner_uid: Option<u32>,
 ) -> Result<Resolved, String> {
     ensure_dirs().map_err(|e| format!("approvals dir: {e}"))?;
     let pending = pending_dir().join(format!("{id}.json"));
+    if let Some(uid) = owner_uid {
+        let request =
+            lookup_pending(id).ok_or_else(|| format!("no pending request with id `{id}`"))?;
+        if request.owner_uid != Some(uid) {
+            return Err(format!("permission request is not owned by uid {uid}"));
+        }
+    }
 
     // Atomically claim the request: rename `pending/<id>.json` out of
     // the pending directory into our process-private scratch path.
@@ -306,6 +361,14 @@ fn resolve(
     };
     let request: Request =
         serde_json::from_str(&data).map_err(|e| format!("parse claimed {id}: {e}"))?;
+    if !request_visible_to(&request, owner_uid) {
+        fs::rename(&scratch, &pending)
+            .map_err(|e| format!("restore unauthorized pending {id}: {e}"))?;
+        return Err(format!(
+            "permission request is not owned by uid {}",
+            owner_uid.expect("owner filter is set when visibility fails")
+        ));
+    }
 
     let decision = Decision {
         outcome,
@@ -346,22 +409,33 @@ fn outcome_dir_name(o: Outcome) -> &'static str {
 // ---------------------------------------------------------------------------
 
 pub fn list_pending() -> Vec<Request> {
+    list_pending_for_owner(None)
+}
+
+pub fn list_pending_for_owner(owner_uid: Option<u32>) -> Vec<Request> {
     list_dir(&pending_dir())
         .into_iter()
         .filter_map(|p| {
             let data = fs::read_to_string(&p).ok()?;
             serde_json::from_str::<Request>(&data).ok()
         })
+        .filter(|request| request_visible_to(request, owner_uid))
         .collect()
 }
 
 pub fn list_recent(limit: usize) -> Vec<Resolved> {
+    list_recent_for_owner(limit, None)
+}
+
+pub fn list_recent_for_owner(limit: usize, owner_uid: Option<u32>) -> Vec<Resolved> {
     let mut out = Vec::new();
     for dir in [approved_dir(), consumed_dir(), denied_dir()] {
         for p in list_dir(&dir) {
             if let Ok(data) = fs::read_to_string(&p) {
                 if let Ok(r) = serde_json::from_str::<Resolved>(&data) {
-                    out.push(r);
+                    if request_visible_to(&r.request, owner_uid) {
+                        out.push(r);
+                    }
                 }
             }
         }
@@ -377,12 +451,28 @@ pub fn lookup_pending(id: &str) -> Option<Request> {
     serde_json::from_str(&data).ok()
 }
 
+fn request_visible_to(request: &Request, owner_uid: Option<u32>) -> bool {
+    match owner_uid {
+        None => true,
+        Some(uid) => request.owner_uid == Some(uid),
+    }
+}
+
 /// Return an approved grant for `session`/`verb`/`scope`, consuming it
 /// atomically when it was approved for `once`.
 pub fn consume_matching_grant(
     session: &str,
     verb: Verb,
     requested_scope: &Scope,
+) -> Result<Option<GrantDuration>, String> {
+    consume_matching_grant_for_owner(session, verb, requested_scope, None)
+}
+
+pub fn consume_matching_grant_for_owner(
+    session: &str,
+    verb: Verb,
+    requested_scope: &Scope,
+    owner_uid: Option<u32>,
 ) -> Result<Option<GrantDuration>, String> {
     ensure_dirs().map_err(|e| format!("approvals dir: {e}"))?;
     for path in list_dir(&approved_dir()) {
@@ -393,6 +483,9 @@ pub fn consume_matching_grant(
             continue;
         };
         if resolved.request.session != session {
+            continue;
+        }
+        if owner_uid.is_some() && resolved.request.owner_uid != owner_uid {
             continue;
         }
         if Verb::parse(&resolved.request.verb) != Some(verb) {

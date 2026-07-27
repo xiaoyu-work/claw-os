@@ -85,6 +85,7 @@ pub fn record_cap_decision(entry: &Value) {
         "reason": entry.get("reason").cloned().unwrap_or(Value::Null),
         "hint": entry.get("hint").cloned().unwrap_or(Value::Null),
         "mode": entry.get("mode").cloned().unwrap_or(Value::Null),
+        "owner_uid": entry.get("owner_uid").cloned().unwrap_or(Value::Null),
     });
     let _ = append(record);
 }
@@ -102,6 +103,7 @@ pub fn record_approval_request(request: &ApprovalRequest) {
         "scope": &request.scope,
         "reason": &request.reason,
         "requester": &request.requester,
+        "owner_uid": request.owner_uid,
     });
     let _ = append(record);
 }
@@ -120,6 +122,7 @@ pub fn record_approval_decision(resolved: &ResolvedApproval) {
         "outcome": resolved.decision.outcome,
         "duration": resolved.decision.duration,
         "decided_by": &resolved.decision.decided_by,
+        "owner_uid": resolved.request.owner_uid,
     });
     let _ = append(record);
 }
@@ -138,11 +141,24 @@ pub fn record_task_event(event: &'static str, job: &Job) {
         "provider": &job.provider,
         "model": &job.model,
         "error": &job.error,
+        "owner_uid": job.owner_uid,
     });
     let _ = append(record);
 }
 
 pub fn query(params: Value) -> Result<Value, String> {
+    query_with_owner(params, None)
+}
+
+pub fn query_for_client(
+    params: Value,
+    client: &ClientIdentity,
+) -> Result<Value, String> {
+    let uid = client.require_uid()?;
+    query_with_owner(params, (uid != 0).then_some(uid))
+}
+
+fn query_with_owner(params: Value, owner_uid: Option<u32>) -> Result<Value, String> {
     let limit = params
         .get("limit")
         .and_then(Value::as_u64)
@@ -155,7 +171,7 @@ pub fn query(params: Value) -> Result<Value, String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    let operations = recent_operations(limit, source.as_deref())?;
+    let operations = recent_operations(limit, source.as_deref(), owner_uid)?;
     Ok(json!({
         "schema": 1,
         "path": crate::paths::system_operations_log_path(),
@@ -166,7 +182,7 @@ pub fn query(params: Value) -> Result<Value, String> {
 }
 
 pub fn context_payload(limit: usize) -> Value {
-    let operations = recent_operations(limit, None).unwrap_or_default();
+    let operations = recent_operations(limit, None, None).unwrap_or_default();
     json!({
         "path": crate::paths::system_operations_log_path(),
         "recent": operations,
@@ -185,7 +201,11 @@ fn append(record: Value) -> Result<(), String> {
     })
 }
 
-fn recent_operations(limit: usize, source: Option<&str>) -> Result<Vec<Value>, String> {
+fn recent_operations(
+    limit: usize,
+    source: Option<&str>,
+    owner_uid: Option<u32>,
+) -> Result<Vec<Value>, String> {
     let path = crate::paths::system_operations_log_path();
     let data = match fs::read_to_string(&path) {
         Ok(data) => data,
@@ -207,12 +227,29 @@ fn recent_operations(limit: usize, source: Option<&str>) -> Result<Vec<Value>, S
                 continue;
             }
         }
+        if !operation_visible_to(&value, owner_uid) {
+            continue;
+        }
         if out.len() == limit {
             out.pop_front();
         }
         out.push_back(value);
     }
     Ok(out.into_iter().collect())
+}
+
+fn operation_visible_to(value: &Value, owner_uid: Option<u32>) -> bool {
+    let Some(uid) = owner_uid else {
+        return true;
+    };
+    value
+        .pointer("/client/uid")
+        .and_then(Value::as_u64)
+        .is_some_and(|value| value == uid as u64)
+        || value
+            .get("owner_uid")
+            .and_then(Value::as_u64)
+            .is_some_and(|value| value == uid as u64)
 }
 
 #[cfg(test)]

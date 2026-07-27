@@ -198,6 +198,7 @@ mkdir -p "$BASE_STAGE/usr/lib/cos/skills"
 mkdir -p "$BASE_STAGE/usr/lib/cos/init"
 mkdir -p "$BASE_STAGE/usr/lib/cos/python"
 mkdir -p "$BASE_STAGE/usr/share/applications"
+mkdir -p "$BASE_STAGE/usr/share/polkit-1/actions"
 mkdir -p "$BASE_STAGE/etc/cos"
 
 # Control + maintainer scripts.
@@ -215,6 +216,18 @@ install -m 755 "$COS_BIN" "$BASE_STAGE/usr/local/bin/cos"
 CLAWD_BIN="$(ensure_bin clawd cos)" || { echo "error: clawd binary not built" >&2; exit 1; }
 echo "  :: clawd        <- $CLAWD_BIN"
 install -m 755 "$CLAWD_BIN" "$BASE_STAGE/usr/local/bin/clawd"
+
+# Narrow pkexec target used by the desktop approval applet. It can only
+# submit one approval decision to clawd and never exposes the general cos CLI
+# as root.
+APPROVAL_HELPER_BIN="$(ensure_bin claw-approval-helper cos)" || {
+    echo "error: claw-approval-helper binary not built" >&2; exit 1; }
+echo "  :: claw-approval-helper <- $APPROVAL_HELPER_BIN"
+install -m 755 "$APPROVAL_HELPER_BIN" \
+    "$BASE_STAGE/usr/local/bin/claw-approval-helper"
+install -m 644 \
+    "$PROJECT_DIR/rootfs/overlay/usr/share/polkit-1/actions/org.clawos.approval.policy" \
+    "$BASE_STAGE/usr/share/polkit-1/actions/org.clawos.approval.policy"
 
 # Binaries: claw-semantic-daemon + claw-semantic CLI.
 # Both are optional — the OS still works without them (Recoll covers

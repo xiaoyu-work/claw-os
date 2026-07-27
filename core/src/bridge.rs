@@ -103,7 +103,8 @@ pub fn run_python_app(
         .unwrap_or("")
         .to_string();
 
-    let child = Command::new(python)
+    let mut command = Command::new(python);
+    command
         .arg("-c")
         .arg(&wrapper)
         .stdin(Stdio::null())
@@ -120,7 +121,11 @@ pub fn run_python_app(
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .env("COS_APP_ID", &app_id)
         // Pass config values so Python apps use config.json instead of hardcoded defaults
-        .envs(crate::config::as_env_vars())
+        .envs(crate::config::as_env_vars());
+    if let Some(home) = crate::paths::current_home_override() {
+        command.env("HOME", &home).env("COS_HOME", home);
+    }
+    let child = command
         .spawn()
         .map_err(|e| format!("failed to spawn python3: {e}"))?;
 
@@ -256,6 +261,9 @@ pub fn run_app(
         Runtime::Python => unreachable!("python handled above"),
     };
 
+    if let Some(home) = crate::paths::current_home_override() {
+        cmd.env("HOME", &home).env("COS_HOME", home);
+    }
     let child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

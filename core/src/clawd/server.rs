@@ -37,7 +37,13 @@ pub async fn run(options: ServerOptions) -> Result<(), String> {
             .accept()
             .await
             .map_err(|err| format!("failed to accept clawd client: {err}"))?;
-        let client = ClientIdentity::from_stream(&stream);
+        let client = match ClientIdentity::from_stream(&stream) {
+            Ok(client) => client,
+            Err(err) => {
+                tracing::warn!(error = %err, "rejecting clawd client without peer credentials");
+                continue;
+            }
+        };
         let state = state.clone();
         tokio::spawn(async move {
             if let Err(err) = handle_client(stream, state, client).await {
@@ -150,6 +156,7 @@ async fn dispatch_result(
     state: &DaemonState,
     client: &ClientIdentity,
 ) -> Result<Value, String> {
+    authorize_command(&request.command, client)?;
     match request.command.as_str() {
         "daemon.health" => Ok(json!({
             "status": "ok",
@@ -162,32 +169,74 @@ async fn dispatch_result(
             "daemon": "clawd",
             "started_at": state.started_at(),
             "uptime_ms": state.uptime_millis(),
-            "tasks": tasks::counts()?,
-            "context": context::snapshot(state)?,
-            "transactions": transactions::list(state)?,
+            "tasks": tasks::counts(client)?,
+            "context": context::snapshot_for_client(state, client)?,
+            "transactions": transactions::list(state, client)?,
         })),
         "task.submit" => tasks::submit(request.params, client).await,
-        "task.list" => tasks::list(request.params),
-        "task.get" => tasks::get(request.params),
-        "task.cancel" => tasks::cancel(request.params),
-        "task.stream" | "task.result" => tasks::result(request.params).await,
-        "context.snapshot" => context::snapshot(state),
-        "context.sources" => context::sources(state),
+        "task.list" => tasks::list(request.params, client),
+        "task.get" | "task.status" => tasks::get(request.params, client),
+        "task.cancel" => tasks::cancel(request.params, client),
+        "task.stream" | "task.result" => tasks::result(request.params, client).await,
+        "task.count" => tasks::counts(client),
+        "context.snapshot" => context::snapshot_for_client(state, client),
+        "context.sources" => context::sources_for_client(state, client),
         "context.update" => context::update(state, request.params),
         "context.event.append" => context_events::append(request.params, client),
-        "context.event.query" => context_events::query(request.params),
-        "permission.pending" => permissions::pending(request.params),
-        "permission.recent" => permissions::recent(request.params),
-        "permission.request" => permissions::request(request.params),
-        "permission.decide" => permissions::decide(request.params),
-        "system.operations" => system_journal::query(request.params),
-        "memory.history" => memory::history(request.params),
-        "memory.sessions" => memory::sessions(request.params),
-        "transaction.begin" => transactions::begin(state, request.params),
-        "transaction.list" => transactions::list(state),
-        "transaction.commit" => transactions::commit(state, request.params),
-        "transaction.rollback" => transactions::rollback(state, request.params),
+        "context.event.query" => context_events::query_for_client(request.params, client),
+        "permission.pending" => permissions::pending(request.params, client),
+        "permission.recent" => permissions::recent(request.params, client),
+        "permission.request" => permissions::request(request.params, client),
+        "permission.decide" => permissions::decide(request.params, client),
+        "system.operations" => system_journal::query_for_client(request.params, client),
+        "memory.history" => memory::history(request.params, client),
+        "memory.sessions" => memory::sessions(request.params, client),
+        "transaction.begin" => transactions::begin(state, request.params, client),
+        "transaction.list" => transactions::list(state, client),
+        "transaction.commit" => transactions::commit(state, request.params, client),
+        "transaction.rollback" => transactions::rollback(state, request.params, client),
         other => Err(format!("unknown clawd command: {other}")),
+    }
+}
+
+fn authorize_command(command: &str, client: &ClientIdentity) -> Result<(), String> {
+    let uid = client.require_uid()?;
+    if uid == 0 {
+        return Ok(());
+    }
+
+    let allowed = matches!(
+        command,
+        "daemon.health"
+            | "daemon.status"
+            | "task.submit"
+            | "task.list"
+            | "task.get"
+            | "task.status"
+            | "task.cancel"
+            | "task.stream"
+            | "task.result"
+            | "task.count"
+            | "memory.history"
+            | "memory.sessions"
+            | "permission.pending"
+            | "permission.recent"
+            | "permission.request"
+            | "permission.decide"
+            | "context.snapshot"
+            | "context.sources"
+            | "context.event.append"
+            | "context.event.query"
+            | "system.operations"
+            | "transaction.begin"
+            | "transaction.list"
+            | "transaction.commit"
+            | "transaction.rollback"
+    );
+    if allowed {
+        Ok(())
+    } else {
+        Err(format!("clawd command requires root: {command}"))
     }
 }
 

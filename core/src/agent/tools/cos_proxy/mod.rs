@@ -146,8 +146,21 @@ impl Tool for CosPrimitiveTool {
             .unwrap_or_default();
 
         // cos primitives are sync and may do file IO / spawn processes.
-        // Run them on the blocking pool so we don't stall the async runtime.
+        // A clawd-routed job carries Tokio task-local user/config overrides;
+        // spawn_blocking does not inherit those. Keep routed calls on the
+        // current task so credential, memory and config lookups cannot fall
+        // back to root. Unrouted CLI calls still use the blocking pool.
         let primitive = self.primitive;
+        if crate::paths::current_owner_uid_override().is_some()
+            || crate::paths::current_home_override().is_some()
+        {
+            return match tokio::task::block_in_place(|| primitive(&command, &args)) {
+                Ok(value) => ToolResult::ok(
+                    serde_json::to_string(&value).unwrap_or_else(|_| value.to_string()),
+                ),
+                Err(message) => ToolResult::err(message),
+            };
+        }
         let join = tokio::task::spawn_blocking(move || primitive(&command, &args)).await;
 
         match join {

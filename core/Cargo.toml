@@ -16,6 +16,10 @@ path = "src/main.rs"
 name = "clawd"
 path = "src/bin/clawd.rs"
 
+[[bin]]
+name = "claw-approval-helper"
+path = "src/bin/claw-approval-helper.rs"
+
 [features]
 default = []
 

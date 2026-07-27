@@ -59,6 +59,7 @@ gnome-keyring
 # first launch.
 libpam-gnome-keyring
 polkitd
+pkexec
 udev
 xdg-user-dirs
 accountsservice

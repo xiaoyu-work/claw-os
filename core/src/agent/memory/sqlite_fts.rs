@@ -340,6 +340,20 @@ impl MemoryDb {
         Ok(n)
     }
 
+    pub fn has_session(&self, session_id: &str) -> Result<bool, MemoryError> {
+        let conn = self.lock_conn()?;
+        let present = conn.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM messages WHERE session_id = ?
+                 UNION ALL
+                 SELECT 1 FROM session_titles WHERE session_id = ?
+             )",
+            params![session_id, session_id],
+            |row| row.get::<_, i64>(0),
+        )?;
+        Ok(present != 0)
+    }
+
     /// Delete every message in `session_id`. FTS index is kept in sync via
     /// the `messages_ad` trigger. Returns rows deleted.
     #[allow(dead_code)]

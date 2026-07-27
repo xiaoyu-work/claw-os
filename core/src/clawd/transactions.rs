@@ -5,9 +5,15 @@ use std::str::FromStr;
 use crate::caps::Role;
 use crate::session::{self, RollbackOutcome, SessionId, Status as SessionStatus};
 
+use super::client_identity::ClientIdentity;
 use super::state::{DaemonState, TransactionHandle};
 
-pub fn begin(state: &DaemonState, params: Value) -> Result<Value, String> {
+pub fn begin(
+    state: &DaemonState,
+    params: Value,
+    client: &ClientIdentity,
+) -> Result<Value, String> {
+    let owner_uid = client.require_uid()?;
     let purpose = required_string(&params, "purpose")?;
     let session_id = session::create(&purpose).map_err(|err| err.to_string())?;
     session::update_meta(&session_id, |meta| {
@@ -24,6 +30,7 @@ pub fn begin(state: &DaemonState, params: Value) -> Result<Value, String> {
         session_id: session_id.clone(),
         purpose: purpose.clone(),
         started_at: Utc::now(),
+        owner_uid,
         lease,
     })?;
 
@@ -31,12 +38,13 @@ pub fn begin(state: &DaemonState, params: Value) -> Result<Value, String> {
         "id": session_id.as_str(),
         "purpose": purpose,
         "status": "running",
+        "owner_uid": owner_uid,
     }))
 }
 
-pub fn list(state: &DaemonState) -> Result<Value, String> {
+pub fn list(state: &DaemonState, client: &ClientIdentity) -> Result<Value, String> {
     let transactions = state
-        .list_transactions()
+        .list_transactions_for_owner(owner_filter(client)?)
         .into_iter()
         .map(|tx| {
             json!({
@@ -44,6 +52,7 @@ pub fn list(state: &DaemonState) -> Result<Value, String> {
                 "purpose": tx.purpose,
                 "started_at": tx.started_at,
                 "status": "running",
+                "owner_uid": tx.owner_uid,
             })
         })
         .collect::<Vec<_>>();
@@ -51,11 +60,15 @@ pub fn list(state: &DaemonState) -> Result<Value, String> {
     Ok(json!({ "transactions": transactions }))
 }
 
-pub fn commit(state: &DaemonState, params: Value) -> Result<Value, String> {
+pub fn commit(
+    state: &DaemonState,
+    params: Value,
+    client: &ClientIdentity,
+) -> Result<Value, String> {
     let id = required_string(&params, "id")?;
     let session_id = parse_session_id(&id)?;
     let handle = state
-        .take_transaction(session_id.as_str())
+        .take_transaction_for_owner(session_id.as_str(), owner_filter(client)?)?
         .ok_or_else(|| format!("transaction is not active: {}", session_id.as_str()))?;
 
     session::end(&handle.session_id, SessionStatus::Done).map_err(|err| err.to_string())?;
@@ -67,25 +80,36 @@ pub fn commit(state: &DaemonState, params: Value) -> Result<Value, String> {
     }))
 }
 
-pub fn rollback(state: &DaemonState, params: Value) -> Result<Value, String> {
+pub fn rollback(
+    state: &DaemonState,
+    params: Value,
+    client: &ClientIdentity,
+) -> Result<Value, String> {
     let id = required_string(&params, "id")?;
     let session_id = parse_session_id(&id)?;
+    let owner_uid = owner_filter(client)?;
+    state.require_transaction_owner(session_id.as_str(), owner_uid)?;
     let _scope = super::session_scope::ProcSessionGuard::enter(&session_id, "clawd-rollback")
         .map_err(|err| format!("transaction rollback session scope: {err}"))?;
-    let handle = state.take_transaction(session_id.as_str());
+    let handle = state
+        .take_transaction_for_owner(session_id.as_str(), owner_uid)?
+        .ok_or_else(|| format!("transaction is not active: {}", session_id.as_str()))?;
     let rolled_back = session::rollback(&session_id).map_err(|err| err.to_string())?;
     let entries = rolled_back.into_iter().map(entry_value).collect::<Vec<_>>();
 
-    if let Some(handle) = handle {
-        session::end(&handle.session_id, SessionStatus::Failed).map_err(|err| err.to_string())?;
-        drop(handle);
-    }
+    session::end(&handle.session_id, SessionStatus::Failed).map_err(|err| err.to_string())?;
+    drop(handle);
 
     Ok(json!({
         "id": session_id.as_str(),
         "status": "rolled_back",
         "entries": entries,
     }))
+}
+
+fn owner_filter(client: &ClientIdentity) -> Result<Option<u32>, String> {
+    let uid = client.require_uid()?;
+    Ok((uid != 0).then_some(uid))
 }
 
 fn entry_value(entry: RollbackOutcome) -> Value {

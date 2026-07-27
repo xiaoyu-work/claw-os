@@ -294,6 +294,18 @@ impl Store {
         Ok(None)
     }
 
+    /// Locate a job visible to `owner_uid`. `None` is the privileged
+    /// all-owners view; `Some(uid)` excludes legacy ownerless jobs.
+    pub fn locate_for_owner(
+        &self,
+        id: &str,
+        owner_uid: Option<u32>,
+    ) -> io::Result<Option<(JobStatus, Job)>> {
+        Ok(self
+            .locate(id)?
+            .filter(|(_, job)| job_visible_to(job, owner_uid)))
+    }
+
     /// Persist a new pending job. Returns the job (with assigned id).
     /// `owner_uid`/`owner_home` carry the submitting peer's identity
     /// resolved via `SO_PEERCRED` + `getpwuid_r` so the worker can
@@ -362,6 +374,22 @@ impl Store {
             }
         }
         Ok(out)
+    }
+
+    /// List jobs visible to `owner_uid`, applying the limit after
+    /// ownership filtering so other users' newer jobs cannot hide results.
+    pub fn list_bucket_for_owner(
+        &self,
+        bucket: JobStatus,
+        limit: Option<usize>,
+        owner_uid: Option<u32>,
+    ) -> io::Result<Vec<Job>> {
+        let mut jobs = self.list_bucket(bucket, None)?;
+        jobs.retain(|job| job_visible_to(job, owner_uid));
+        if let Some(limit) = limit {
+            jobs.truncate(limit);
+        }
+        Ok(jobs)
     }
 
     /// Atomically claim one pending job: rename pending/<id>.json →
@@ -568,6 +596,17 @@ impl Store {
     ///   - `Ok(None)` if the job was already running, already done, or
     ///     missing entirely
     pub fn cancel_pending(&self, id: &str) -> io::Result<Option<Job>> {
+        self.cancel_pending_for_owner(id, None)
+    }
+
+    /// Cancel a pending job only when it is visible to `owner_uid`.
+    /// The ownership check happens under the same per-id lock as the
+    /// state transition, so an unauthorized caller cannot mutate the job.
+    pub fn cancel_pending_for_owner(
+        &self,
+        id: &str,
+        owner_uid: Option<u32>,
+    ) -> io::Result<Option<Job>> {
         // Per-id exclusive lock prevents claim_one and cancel_pending
         // from both succeeding for the same id. Without it, a worker
         // could claim_one the file while we still read it from
@@ -580,6 +619,9 @@ impl Store {
         match fs::read_to_string(&src) {
             Ok(s) => {
                 let mut job: Job = serde_json::from_str(&s).map_err(io_other)?;
+                if !job_visible_to(&job, owner_uid) {
+                    return Ok(None);
+                }
                 job.status = JobStatus::Cancelled;
                 job.finished_at = Some(now_iso());
                 write_json_atomic(&src, &job)?;
@@ -591,6 +633,7 @@ impl Store {
             Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e),
         }
+
     }
 
     /// Delete done/ entries older than `older_than` (mtime-based) OR
@@ -661,6 +704,13 @@ impl Store {
             }
         }
         Ok(JobLock { file: f })
+    }
+}
+
+fn job_visible_to(job: &Job, owner_uid: Option<u32>) -> bool {
+    match owner_uid {
+        None => true,
+        Some(uid) => job.owner_uid == Some(uid),
     }
 }
 
@@ -1110,7 +1160,11 @@ fn run_worker_loop_inner(
         Ok(_) => {}
         Err(e) => tracing::warn!("agent service worker: orphan recovery failed: {e}"),
     }
-    let runtime = tokio::runtime::Builder::new_current_thread()
+    // Routed tool calls use `block_in_place` so synchronous primitives keep
+    // the current task-local user/config context without starving unrelated
+    // runtime work. That API requires Tokio's multi-thread scheduler.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
         .enable_all()
         .build()
         .map_err(|e| format!("tokio runtime: {e}"))?;
@@ -1247,11 +1301,12 @@ async fn run_one_job(job: &Job) -> FinishOutcome {
     if let Some(home) = job.owner_home.as_deref() {
         let home_path = std::path::PathBuf::from(home);
         let cfg = crate::config::intern_for_home(&home_path);
-        crate::paths::with_home_override(
-            home_path,
-            crate::config::with_override(cfg, run_one_job_inner(job)),
-        )
-        .await
+        let run = crate::config::with_override(cfg, run_one_job_inner(job));
+        match job.owner_uid {
+            Some(0) => run.await,
+            Some(uid) => crate::paths::with_user_override(uid, home_path, run).await,
+            None => crate::paths::with_home_override(home_path, run).await,
+        }
     } else {
         run_one_job_inner(job).await
     }

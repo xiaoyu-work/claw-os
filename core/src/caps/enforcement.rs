@@ -242,7 +242,12 @@ fn require_impl(
 }
 
 fn approved_grant_covers(session_id: &str, verb: Verb, scope: &Scope) -> bool {
-    match crate::approvals::consume_matching_grant(session_id, verb, scope) {
+    match crate::approvals::consume_matching_grant_for_owner(
+        session_id,
+        verb,
+        scope,
+        crate::paths::current_owner_uid_override(),
+    ) {
         Ok(Some(_duration)) => true,
         Ok(None) => false,
         Err(err) => {
@@ -300,6 +305,7 @@ fn build_cap_audit_record(
         "reason":          reason,
         "hint":            hint,
         "mode":            mode.as_str(),
+        "owner_uid":       crate::paths::current_owner_uid_override(),
     })
 }
 

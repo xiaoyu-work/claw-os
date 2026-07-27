@@ -237,8 +237,15 @@ impl Tool for CosAppTool {
         let data = data_dir();
         let apps = apps_root().to_string_lossy().to_string();
 
-        // bridge::run_python_app does process IO; off-load to the
-        // blocking pool to avoid stalling the async runtime.
+        if crate::paths::current_owner_uid_override().is_some() {
+            return match tokio::task::block_in_place(|| {
+                crate::bridge::run_python_app(&app_dir, &command, &args, &data, &apps)
+            }) {
+                Ok(Some(text)) => ToolResult::ok(text),
+                Ok(None) => ToolResult::ok(String::new()),
+                Err(message) => ToolResult::err(message),
+            };
+        }
         let join = tokio::task::spawn_blocking(move || {
             crate::bridge::run_python_app(&app_dir, &command, &args, &data, &apps)
         })
@@ -598,6 +605,15 @@ impl Tool for CosAppRun {
         let apps = apps_root().to_string_lossy().to_string();
         let app_dir_clone = app_dir.clone();
         let cmd = command.clone();
+        if crate::paths::current_owner_uid_override().is_some() {
+            return match tokio::task::block_in_place(|| {
+                crate::bridge::run_python_app(&app_dir_clone, &cmd, &args, &data, &apps)
+            }) {
+                Ok(Some(text)) => ToolResult::ok(text),
+                Ok(None) => ToolResult::ok(String::new()),
+                Err(message) => ToolResult::err(message),
+            };
+        }
         let join = tokio::task::spawn_blocking(move || {
             crate::bridge::run_python_app(&app_dir_clone, &cmd, &args, &data, &apps)
         })
