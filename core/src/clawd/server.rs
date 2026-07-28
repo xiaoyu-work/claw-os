@@ -33,30 +33,44 @@ pub async fn run(options: ServerOptions) -> Result<(), String> {
     let state = DaemonState::new();
     audit::install_runtime_hook();
     context::refresh_builtin_sources(&state);
-    spawn_agent_worker();
+    let worker = spawn_agent_worker();
     spawn_heartbeat();
-    loop {
-        let (stream, _addr) = listener
-            .accept()
-            .await
-            .map_err(|err| format!("failed to accept clawd client: {err}"))?;
-        let client = match ClientIdentity::from_stream(&stream) {
-            Ok(client) => client,
-            Err(err) => {
-                tracing::warn!(error = %err, "rejecting clawd client without peer credentials");
-                continue;
+    let serve = async move {
+        loop {
+            let (stream, _addr) = listener
+                .accept()
+                .await
+                .map_err(|err| format!("failed to accept clawd client: {err}"))?;
+            let client = match ClientIdentity::from_stream(&stream) {
+                Ok(client) => client,
+                Err(err) => {
+                    tracing::warn!(error = %err, "rejecting clawd client without peer credentials");
+                    continue;
+                }
+            };
+            let state = state.clone();
+            tokio::spawn(async move {
+                if let Err(err) = handle_client(stream, state, client).await {
+                    tracing::warn!(error = %err, "clawd client handler failed");
+                }
+            });
+        }
+        #[allow(unreachable_code)]
+        Ok::<(), String>(())
+    };
+    tokio::select! {
+        result = worker => {
+            match result {
+                Ok(Ok(_)) => Err("clawd agent worker exited unexpectedly".to_string()),
+                Ok(Err(error)) => Err(format!("clawd agent worker failed: {error}")),
+                Err(error) => Err(format!("clawd agent worker panicked: {error}")),
             }
-        };
-        let state = state.clone();
-        tokio::spawn(async move {
-            if let Err(err) = handle_client(stream, state, client).await {
-                tracing::warn!(error = %err, "clawd client handler failed");
-            }
-        });
+        }
+        result = serve => result,
     }
 }
 
-fn spawn_agent_worker() {
+fn spawn_agent_worker() -> tokio::task::JoinHandle<Result<Value, String>> {
     let shutdown = Arc::new(AtomicBool::new(false));
     tokio::task::spawn_blocking(move || {
         let options = WorkerOptions {
@@ -64,10 +78,8 @@ fn spawn_agent_worker() {
             poll_ms: 500,
             max_jobs: None,
         };
-        if let Err(err) = service::run_worker_loop(options, shutdown) {
-            tracing::error!(error = %err, "clawd agent worker stopped");
-        }
-    });
+        service::run_worker_loop(options, shutdown)
+    })
 }
 
 /// Spawn the system-vitals heartbeat — the cheap, always-on reflex loop

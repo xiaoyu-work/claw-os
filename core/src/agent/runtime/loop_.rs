@@ -143,6 +143,32 @@ pub async fn ask_with_stream(
         sink,
         progress,
         Vec::new(),
+        None,
+    )
+    .await
+}
+
+pub async fn ask_with_stream_scoped(
+    provider: Arc<dyn Provider>,
+    cfg: &AgentConfig,
+    user_prompt: &str,
+    tools: &ToolRegistry,
+    db: Option<(&MemoryDb, &str)>,
+    sink: Arc<dyn StreamSink>,
+    progress: Arc<dyn ProgressSink>,
+    interrupt_scope: &str,
+) -> Result<AskResult, AgentError> {
+    ask_inner_streaming(
+        provider,
+        cfg,
+        user_prompt,
+        tools,
+        db,
+        None,
+        sink,
+        progress,
+        Vec::new(),
+        Some(interrupt_scope),
     )
     .await
 }
@@ -197,6 +223,45 @@ pub async fn ask_with_stream_continuation(
         sink,
         progress,
         prior,
+        None,
+    )
+    .await
+}
+
+pub async fn ask_with_stream_continuation_scoped(
+    provider: Arc<dyn Provider>,
+    cfg: &AgentConfig,
+    user_prompt: &str,
+    tools: &ToolRegistry,
+    db: &MemoryDb,
+    session_id: &str,
+    history_limit: usize,
+    sink: Arc<dyn StreamSink>,
+    progress: Arc<dyn ProgressSink>,
+    interrupt_scope: &str,
+) -> Result<AskResult, AgentError> {
+    let limit = if history_limit == 0 { 200 } else { history_limit };
+    let prior = match db.recent(session_id, limit) {
+        Ok(rows) => rows_to_messages(&rows),
+        Err(e) => {
+            tracing::warn!(
+                "memory: failed to load prior history for session {session_id}: {e}; \
+                 continuing without context"
+            );
+            Vec::new()
+        }
+    };
+    ask_inner_streaming(
+        provider,
+        cfg,
+        user_prompt,
+        tools,
+        Some((db, session_id)),
+        None,
+        sink,
+        progress,
+        prior,
+        Some(interrupt_scope),
     )
     .await
 }
@@ -382,8 +447,13 @@ async fn ask_inner(
     let hook_registry = hooks::global_registry();
     let _hooks_auto_guard =
         hooks_config::load_and_register(&crate::paths::agent_hooks_path(), hook_registry.clone());
+    let hook_session_id = if session_id.is_empty() {
+        interrupt_handle.session_id()
+    } else {
+        &session_id
+    };
     let hook_ctx_base = hooks::HookContext::new(
-        interrupt_handle.session_id().to_string(),
+        hook_session_id.to_string(),
         provider.name(),
         cfg.model.clone(),
     );
@@ -602,6 +672,7 @@ async fn ask_inner_streaming(
     sink: Arc<dyn StreamSink>,
     progress: Arc<dyn ProgressSink>,
     initial_messages: Vec<Message>,
+    interrupt_scope: Option<&str>,
 ) -> Result<AskResult, AgentError> {
     let redactor: Option<Redactor> = if cfg.redact_memory_enabled {
         Some(Redactor::default_set())
@@ -644,7 +715,9 @@ async fn ask_inner_streaming(
     let llm_tools = tools.as_llm_tools();
     let session_id = recorder.map(|(_, sid)| sid.to_string()).unwrap_or_default();
 
-    let interrupt_handle = if session_id.is_empty() {
+    let interrupt_handle = if let Some(scope) = interrupt_scope {
+        interrupt::register(scope)
+    } else if session_id.is_empty() {
         interrupt::register(format!("ephemeral-{}", uuid::Uuid::new_v4().simple()))
     } else {
         interrupt::register(session_id.clone())
@@ -657,8 +730,13 @@ async fn ask_inner_streaming(
     let hook_registry = hooks::global_registry();
     let _hooks_auto_guard =
         hooks_config::load_and_register(&crate::paths::agent_hooks_path(), hook_registry.clone());
+    let hook_session_id = if session_id.is_empty() {
+        interrupt_handle.session_id()
+    } else {
+        &session_id
+    };
     let hook_ctx_base = hooks::HookContext::new(
-        interrupt_handle.session_id().to_string(),
+        hook_session_id.to_string(),
         provider.name(),
         cfg.model.clone(),
     );

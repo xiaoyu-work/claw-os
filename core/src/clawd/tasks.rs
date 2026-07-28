@@ -206,11 +206,17 @@ pub fn cancel(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     let id = required_string(&params, "id")?;
     let store = Store::open_default().map_err(|err| err.to_string())?;
     let owner_uid = owner_filter(client)?;
-    if let Some(job) = store
-        .cancel_pending_for_owner(&id, owner_uid)
+    if let Some((job, immediate)) = store
+        .request_cancel_for_owner(&id, owner_uid)
         .map_err(|err| err.to_string())?
     {
-        return Ok(job_value(job));
+        if !immediate {
+            crate::agent::runtime::interrupt::signal(&id);
+        }
+        let mut value = job_value(job);
+        value["cancelled"] = json!(immediate);
+        value["cancel_requested"] = json!(!immediate);
+        return Ok(value);
     }
 
     let Some((_status, job)) = store
@@ -224,7 +230,7 @@ pub fn cancel(params: Value, client: &ClientIdentity) -> Result<Value, String> {
         "id": job.id,
         "status": job.status,
         "cancelled": false,
-        "reason": "only pending tasks can be cancelled",
+        "reason": "task is already terminal",
     }))
 }
 

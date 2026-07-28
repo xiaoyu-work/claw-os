@@ -21,9 +21,8 @@
 //!   - `work [--once] [--poll-ms N] [--max-jobs N]` runs the worker
 //!     loop. `--once` processes exactly one pending job and exits;
 //!     `--max-jobs N` exits after N (default: forever).
-//!   - `cancel <job_id>` moves a still-pending job into `done/` with
-//!     `status: cancelled`. Running jobs are not interrupted (no
-//!     out-of-band cancellation in v1).
+//!   - `cancel <job_id>` moves a pending job directly into `done/`, or
+//!     marks a running job for interruption and signals its live agent loop.
 //!   - `prune [--older-than-days N] [--keep-last N]` GC's
 //!     `done/`. Defaults: keep the last 100, drop anything finished
 //!     more than 30 days ago.
@@ -111,6 +110,8 @@ pub struct Job {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worker_pid: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cancel_requested_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -169,6 +170,7 @@ impl Job {
             started_at: None,
             finished_at: None,
             worker_pid: None,
+            cancel_requested_at: None,
             response: None,
             error: None,
             turns_used: None,
@@ -540,9 +542,25 @@ impl Store {
                 }
             }
 
+            if job.cancel_requested_at.is_some() {
+                job.status = JobStatus::Cancelled;
+                job.worker_pid = None;
+                job.finished_at = Some(now_iso());
+                write_json_atomic(&path, &job)?;
+                let done = self.path_for(JobStatus::Ok, &id);
+                fs::rename(&path, &done)?;
+                let _ = finish_durable_session(&job);
+                crate::clawd::audit::record_task_event(
+                    "clawd.task.cancelled",
+                    &job,
+                );
+                continue;
+            }
+
             job.recovery_count = job.recovery_count.saturating_add(1);
             job.worker_pid = None;
             job.started_at = None;
+            job.cancel_requested_at = None;
 
             if job.recovery_count > MAX_RECOVERIES {
                 // Poison job: it has already taken down a worker
@@ -574,9 +592,18 @@ impl Store {
 
         Ok((requeued, failed))
     }
-    pub fn finish(&self, mut job: Job, outcome: FinishOutcome) -> io::Result<Job> {
+    pub fn finish(&self, job: Job, outcome: FinishOutcome) -> io::Result<Job> {
         validate_job_id(&job.id)?;
+        let _lock = self.lock_for_id(&job.id)?;
         let running_path = self.path_for(JobStatus::Running, &job.id);
+        let raw = fs::read_to_string(&running_path)?;
+        let mut job: Job = serde_json::from_str(&raw).map_err(io_other)?;
+        validate_job_id(&job.id)?;
+        let outcome = if job.cancel_requested_at.is_some() {
+            FinishOutcome::Cancelled
+        } else {
+            outcome
+        };
         match outcome {
             FinishOutcome::Ok {
                 response,
@@ -593,6 +620,10 @@ impl Store {
             FinishOutcome::Error(msg) => {
                 job.status = JobStatus::Error;
                 job.error = Some(msg);
+            }
+            FinishOutcome::Cancelled => {
+                job.status = JobStatus::Cancelled;
+                job.error = Some("cancelled by user".to_string());
             }
         }
         job.finished_at = Some(now_iso());
@@ -647,7 +678,68 @@ impl Store {
             Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e),
         }
+    }
 
+    pub fn request_cancel_for_owner(
+        &self,
+        id: &str,
+        owner_uid: Option<u32>,
+    ) -> io::Result<Option<(Job, bool)>> {
+        let _lock = self.lock_for_id(id)?;
+        let pending = self.path_for(JobStatus::Pending, id);
+        let done = self.path_for(JobStatus::Ok, id);
+        match fs::read_to_string(&pending) {
+            Ok(raw) => {
+                let mut job: Job = serde_json::from_str(&raw).map_err(io_other)?;
+                if !job_visible_to(&job, owner_uid) {
+                    return Ok(None);
+                }
+                job.status = JobStatus::Cancelled;
+                job.cancel_requested_at = Some(now_iso());
+                job.finished_at = Some(now_iso());
+                write_json_atomic(&pending, &job)?;
+                fs::rename(&pending, &done)?;
+                finish_durable_session(&job)?;
+                crate::clawd::audit::record_task_event("clawd.task.cancelled", &job);
+                return Ok(Some((job, true)));
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+
+        let running = self.path_for(JobStatus::Running, id);
+        match fs::read_to_string(&running) {
+            Ok(raw) => {
+                let mut job: Job = serde_json::from_str(&raw).map_err(io_other)?;
+                if !job_visible_to(&job, owner_uid) {
+                    return Ok(None);
+                }
+                if job.cancel_requested_at.is_none() {
+                    job.cancel_requested_at = Some(now_iso());
+                    write_json_atomic(&running, &job)?;
+                    crate::clawd::audit::record_task_event(
+                        "clawd.task.cancel-requested",
+                        &job,
+                    );
+                }
+                Ok(Some((job, false)))
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn cancellation_requested(&self, id: &str) -> io::Result<bool> {
+        validate_job_id(id)?;
+        let path = self.path_for(JobStatus::Running, id);
+        match fs::read_to_string(path) {
+            Ok(raw) => {
+                let job: Job = serde_json::from_str(&raw).map_err(io_other)?;
+                Ok(job.cancel_requested_at.is_some())
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error),
+        }
     }
 
     /// Delete done/ entries older than `older_than` (mtime-based) OR
@@ -774,6 +866,7 @@ pub enum FinishOutcome {
         model: String,
     },
     Error(String),
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -876,6 +969,7 @@ fn job_to_summary(job: &Job) -> Value {
         "id": job.id,
         "status": job.status.as_str(),
         "created_at": job.created_at,
+        "cancel_requested": job.cancel_requested_at.is_some(),
         "preview": job.preview(80),
     })
 }
@@ -1094,18 +1188,22 @@ fn cmd_cancel(args: &[String]) -> Result<Value, String> {
         .filter(|s| !s.trim().is_empty())
         .ok_or("usage: cos agent service cancel <job_id>")?;
     let store = Store::open_default().map_err(|e| e.to_string())?;
-    match store.cancel_pending(id).map_err(|e| e.to_string())? {
-        Some(job) => Ok(json!({
-            "status": "cancelled",
-            "job_id": job.id,
-        })),
+    match store.request_cancel_for_owner(id, None).map_err(|e| e.to_string())? {
+        Some((job, immediate)) => {
+            if !immediate {
+                crate::agent::runtime::interrupt::signal(id);
+            }
+            Ok(json!({
+                "status": if immediate { "cancelled" } else { "cancel_requested" },
+                "job_id": job.id,
+            }))
+        }
         None => {
-            // Either it never existed, or it was already running/done.
-            // Distinguish by locate().
+            // Either it never existed or it was already terminal.
             match store.locate(id).map_err(|e| e.to_string())? {
                 Some((_, job)) => Ok(json!({
                     "status": "not_cancelled",
-                    "reason": "already_progressed",
+                    "reason": "already_terminal",
                     "job_id": job.id,
                     "current_status": job.status.as_str(),
                 })),
@@ -1221,7 +1319,13 @@ fn run_worker_loop_inner(
         }
         match store.claim_one().map_err(|e| e.to_string())? {
             Some(job) => {
-                let outcome = runtime.block_on(run_one_job(&job));
+                let mut outcome = runtime.block_on(run_one_job(&job));
+                if store
+                    .cancellation_requested(&job.id)
+                    .unwrap_or(false)
+                {
+                    outcome = FinishOutcome::Cancelled;
+                }
                 match store.finish(job.clone(), outcome) {
                     Ok(finished) => summaries.push(json!({
                         "job_id": finished.id,
@@ -1312,7 +1416,33 @@ async fn install_shutdown_listener(shutdown: Arc<AtomicBool>) {
 }
 
 async fn run_one_job(job: &Job) -> FinishOutcome {
-    crate::paths::with_routed_job(run_one_routed_job(job)).await
+    let run = crate::paths::with_routed_job(run_one_routed_job(job));
+    tokio::pin!(run);
+    tokio::select! {
+        outcome = &mut run => outcome,
+        _ = wait_for_cancellation(&job.id) => {
+            loop {
+                crate::agent::runtime::interrupt::signal(&job.id);
+                tokio::select! {
+                    _ = &mut run => break,
+                    _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                }
+            }
+            FinishOutcome::Cancelled
+        }
+    }
+}
+
+async fn wait_for_cancellation(job_id: &str) {
+    loop {
+        let cancelled = Store::open_default()
+            .and_then(|store| store.cancellation_requested(job_id))
+            .unwrap_or(false);
+        if cancelled {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 async fn run_one_routed_job(job: &Job) -> FinishOutcome {
@@ -1385,7 +1515,7 @@ async fn run_one_job_inner(job: &Job) -> FinishOutcome {
                 // Replay prior turns so multi-turn task.stream sessions (the
                 // desktop agent UI is the main caller) see continuous context
                 // instead of treating every job.submit as a fresh exchange.
-                loop_::ask_with_stream_continuation(
+                loop_::ask_with_stream_continuation_scoped(
                     provider.clone(),
                     &cfg,
                     &job.prompt,
@@ -1397,11 +1527,12 @@ async fn run_one_job_inner(job: &Job) -> FinishOutcome {
                         job_id: job.id.clone(),
                     }),
                     crate::agent::runtime::progress::null_progress(),
+                    &job.id,
                 )
                 .await
             }
             Err(_) => {
-                loop_::ask_with_stream(
+                loop_::ask_with_stream_scoped(
                     provider.clone(),
                     &cfg,
                     &job.prompt,
@@ -1411,12 +1542,13 @@ async fn run_one_job_inner(job: &Job) -> FinishOutcome {
                         job_id: job.id.clone(),
                     }),
                     crate::agent::runtime::progress::null_progress(),
+                    &job.id,
                 )
                 .await
             }
         }
     } else {
-        loop_::ask_with_stream(
+        loop_::ask_with_stream_scoped(
             provider.clone(),
             &cfg,
             &job.prompt,
@@ -1426,6 +1558,7 @@ async fn run_one_job_inner(job: &Job) -> FinishOutcome {
                 job_id: job.id.clone(),
             }),
             crate::agent::runtime::progress::null_progress(),
+            &job.id,
         )
         .await
     };
