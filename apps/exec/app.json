@@ -14,12 +14,17 @@
       "label": { "en": "Run a shell command" },
       "summary": { "en": "Start a process to run the command you specified and capture its output." },
       "args": [
-        { "name": "command", "kind": "name", "required": true }
+        { "name": "command", "kind": "name", "required": true },
+        { "name": "shell", "kind": "bool", "required": false, "default": false }
       ],
       "needs": [
         {
           "verb": "proc.spawn",
-          "scope": { "kind": "from-arg", "arg": "command" },
+          "scope": {
+            "kind": "from-arg-or-wild",
+            "arg": "command",
+            "wild_when": "shell"
+          },
           "why": { "en": "Start a new process to run the command you asked to run." }
         }
       ]

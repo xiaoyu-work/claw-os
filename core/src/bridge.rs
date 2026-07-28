@@ -429,7 +429,9 @@ fn constrained_caps(parent: &CapSet, needs: Vec<&Need>) -> CapSet {
                         .cloned(),
                 );
             }
-            ScopeBinding::FromArg { .. } | ScopeBinding::FromArgMap { .. } => {}
+            ScopeBinding::FromArg { .. }
+            | ScopeBinding::FromArgMap { .. }
+            | ScopeBinding::FromArgOrWild { .. } => {}
         }
     }
     caps
@@ -484,6 +486,26 @@ fn constrained_operation_caps(
                 )
                 .cloned()
                 .map(|scope| Cap::new(need.verb, scope)),
+            ScopeBinding::FromArgOrWild { arg, wild_when } => {
+                if values
+                    .get(wild_when)
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    Some(Cap::new(need.verb, Scope::Wild))
+                } else {
+                    operation
+                        .args
+                        .iter()
+                        .find(|decl| decl.name == *arg)
+                        .and_then(|decl| {
+                            values
+                                .get(arg)
+                                .and_then(|value| scope_for_arg(decl.kind, value))
+                        })
+                        .map(|scope| Cap::new(need.verb, scope))
+                }
+            }
         };
         if let Some(requested) = requested {
             if parent.covers(&requested) {
@@ -552,6 +574,15 @@ fn parse_operation_args(
     let mut positional = positionals.into_iter();
     for decl in &operation.args {
         if values.contains_key(&decl.name) {
+            continue;
+        }
+        if decl.kind == ArgKind::Bool {
+            values.insert(
+                decl.name.clone(),
+                decl.default
+                    .clone()
+                    .unwrap_or(serde_json::Value::Bool(false)),
+            );
             continue;
         }
         if let Some(raw) = positional.next() {

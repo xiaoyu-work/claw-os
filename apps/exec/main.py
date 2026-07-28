@@ -3,7 +3,6 @@
 import fcntl
 import json
 import os
-import shlex
 import shutil
 import signal
 import subprocess
@@ -57,30 +56,6 @@ def _parse_timeout(args):
         else:
             remaining.append(arg)
     return timeout, remaining, None
-
-
-def _first_shell_binary(tokens):
-    """Best-effort: return the first real binary token from a shell-style
-    argv stream, skipping leading ``VAR=value`` assignments and shell
-    builtins that introduce another command (``env``, ``exec``).
-
-    Used so ``--shell foo=bar mybin --x`` checks ``proc.spawn
-    name=mybin`` rather than ``name=/bin/bash``.
-    """
-    SKIP_LEADING = {"env", "exec", "command", "nohup", "time", "sudo", "doas"}
-    for tok in tokens:
-        if not tok:
-            continue
-        # leading VAR=value env-overrides
-        if "=" in tok and not tok.startswith("-") and "/" not in tok.split("=", 1)[0]:
-            head = tok.split("=", 1)[0]
-            if head and all(c.isalnum() or c == "_" for c in head) and not head[0].isdigit():
-                continue
-        # the bash builtin words that just introduce another command
-        if tok in SKIP_LEADING:
-            continue
-        return tok
-    return ""
 
 
 def _drain_bounded(stream, cap):
@@ -205,11 +180,9 @@ def cmd_run(args):
 
     SECURITY notes
     --------------
-    * ``--shell``: when set, the resolved scope is ``proc.spawn
-      name=<first real token of the script>`` (not ``/bin/bash``)
-      so a wild grant to bash is not implied. If no real binary
-      can be parsed out (e.g. pure pipeline / control flow), we
-      require a ``proc.spawn`` wild capability.
+    * ``--shell``: arbitrary shell syntax can execute substitutions,
+      functions, pipelines and commands not represented by the first token,
+      so it always requires a ``proc.spawn`` wild capability.
     * Child environment is scrubbed (``scrub_env``) so the spawned
       process never sees ``OPENAI_API_KEY``, ``GITHUB_TOKEN``, AWS
       creds, etc. — credentials belong to the agent, not to whatever
@@ -223,30 +196,25 @@ def cmd_run(args):
         return {"error": err}
 
     shell = False
-    if "--shell" in args:
-        shell = True
-        args = [a for a in args if a != "--shell"]
+    filtered_args = []
+    for arg in args:
+        if arg == "--shell":
+            shell = True
+        elif arg.startswith("--shell="):
+            value = arg.split("=", 1)[1].strip().lower()
+            if value not in {"1", "true", "yes", "on", "0", "false", "no", "off"}:
+                return {"error": f"invalid --shell value: {value}"}
+            shell = value in {"1", "true", "yes", "on"}
+        else:
+            filtered_args.append(arg)
+    args = filtered_args
 
     if not args:
         return {"error": "no command specified"}
 
     if shell:
         joined = " ".join(args)
-        # Best-effort lex so we can pin the cap to the real program
-        # name, not /bin/bash. shlex may fail on a script with odd
-        # quoting, in which case we fall back to whitespace tokens.
-        try:
-            lex_tokens = shlex.split(joined, comments=False, posix=True)
-        except ValueError:
-            lex_tokens = joined.split()
-        program = _first_shell_binary(lex_tokens)
-        if program:
-            policy.require("proc.spawn", name=program)
-        else:
-            # Pure shell expression with no obvious binary token —
-            # require an explicit wild grant rather than silently
-            # falling back to bash's own name.
-            policy.require("proc.spawn", wild=True)
+        policy.require("proc.spawn", wild=True)
         command = ["/bin/bash", "-c", joined]
     else:
         command = args

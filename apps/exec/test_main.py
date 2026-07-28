@@ -237,16 +237,9 @@ class TestCmdStartScratchNaming(unittest.TestCase):
 class TestShellScope(unittest.TestCase):
     """Regression coverage for CR-2 (``cos exec run --shell`` scope).
 
-    The old code passed ``name=/bin/bash`` (or ``/bin/sh``) to
-    ``policy.require("proc.spawn", ...)`` whenever the caller used
-    ``--shell``. That meant a single ``proc.spawn name=/bin/bash``
-    grant let the agent execute *any* shell command via
-    ``--shell``, defeating per-binary scoping.
-
-    The fix parses the first real command token out of the shell
-    string and uses *that* as the spawn name (with ``wild=True`` as a
-    last resort when the parse yields nothing). These tests assert
-    the policy check sees the user-visible command, not the shell.
+    Shell syntax can execute substitutions, functions and pipelines not
+    represented by any first token, so every shell invocation must require
+    an explicit wildcard spawn grant.
     """
 
     def setUp(self) -> None:
@@ -279,10 +272,7 @@ class TestShellScope(unittest.TestCase):
 
         return FakeProc()
 
-    def test_shell_run_scopes_to_first_real_binary(self):
-        """``--shell 'echo hi'`` must require ``proc.spawn name=echo``,
-        **not** ``proc.spawn name=/bin/bash``.
-        """
+    def test_shell_run_requires_wild(self):
         captured, spy = self._capture()
         # Bypass the bounded-Popen drain path with a stub that mimics
         # its successful return so we never spawn a real shell here.
@@ -294,17 +284,9 @@ class TestShellScope(unittest.TestCase):
 
         spawns = [c for c in captured if c["verb"] == "proc.spawn"]
         self.assertTrue(spawns, "cmd_run --shell never reached proc.spawn check")
-        names = [c.get("name") for c in spawns]
-        self.assertNotIn(
-            "/bin/bash",
-            names,
-            "CR-2 regression: --shell scoped to /bin/bash, granting wild shell access",
-        )
-        self.assertNotIn("/bin/sh", names)
-        self.assertIn("echo", names, f"expected proc.spawn name=echo, got {names}")
+        self.assertTrue(any(c.get("wild") is True for c in spawns))
 
-    def test_shell_run_skips_env_var_assignment(self):
-        """``--shell 'FOO=bar python3 script.py'`` must scope to ``python3``."""
+    def test_shell_run_with_env_assignment_still_requires_wild(self):
         captured, spy = self._capture()
         with mock.patch.object(self.main.policy, "require", side_effect=spy), mock.patch(
             "main._run_bounded",
@@ -313,12 +295,7 @@ class TestShellScope(unittest.TestCase):
             self.main.cmd_run(["--shell", "FOO=bar python3 -c 'print(1)'"])
 
         spawns = [c for c in captured if c["verb"] == "proc.spawn"]
-        names = [c.get("name") for c in spawns]
-        self.assertIn(
-            "python3",
-            names,
-            f"shell scope should skip VAR=val prefix and pick python3, got {names}",
-        )
+        self.assertTrue(any(c.get("wild") is True for c in spawns))
 
     def test_shell_run_falls_back_to_wild_for_unparseable(self):
         """Pure shell builtins / empty command — fall back to ``wild=True``

@@ -530,6 +530,10 @@ fn render_app_detail(app: &crate::apps::App) -> String {
                         crate::caps::manifest::ScopeBinding::FromArgMap { arg, .. } => {
                             format!("from-arg-map({arg})")
                         }
+                        crate::caps::manifest::ScopeBinding::FromArgOrWild {
+                            arg,
+                            wild_when,
+                        } => format!("from-arg-or-wild({arg}, {wild_when})"),
                         crate::caps::manifest::ScopeBinding::Fixed { scope } => scope.to_string(),
                         crate::caps::manifest::ScopeBinding::Wild => "*".to_string(),
                     };

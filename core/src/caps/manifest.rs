@@ -533,6 +533,7 @@ pub enum ScopeBinding {
         arg: String,
         values: BTreeMap<String, Scope>,
     },
+    FromArgOrWild { arg: String, wild_when: String },
     Fixed { scope: Scope },
     Wild,
 }
@@ -803,6 +804,36 @@ impl Manifest {
                             });
                         }
                     }
+                    ScopeBinding::FromArgOrWild { arg, wild_when } => {
+                        let bound = seen_args.get(arg.as_str()).ok_or_else(|| {
+                            ManifestError::NeedRefsUndeclaredArg {
+                                op: op_name.clone(),
+                                idx,
+                                arg: arg.clone(),
+                            }
+                        })?;
+                        if !bound.kind.binds_to_scope() {
+                            return Err(ManifestError::NeedArgKindMismatch {
+                                op: op_name.clone(),
+                                idx,
+                                verb: need.verb.as_str().to_string(),
+                                arg: arg.clone(),
+                                kind: bound.kind,
+                            });
+                        }
+                        if !seen_args
+                            .get(wild_when.as_str())
+                            .is_some_and(|arg| arg.kind == ArgKind::Bool)
+                        {
+                            return Err(ManifestError::NeedInvalid {
+                                op: op_name.clone(),
+                                idx,
+                                detail: format!(
+                                    "wild_when `{wild_when}` must reference a bool arg"
+                                ),
+                            });
+                        }
+                    }
                     ScopeBinding::Fixed { scope: _ } => {}
                     ScopeBinding::Wild => {}
                 }
@@ -897,6 +928,36 @@ impl Manifest {
                                     tool: tool.name.clone(),
                                     idx,
                                     detail: "from-arg-map values must not be empty".to_string(),
+                                });
+                            }
+                        }
+                        ScopeBinding::FromArgOrWild { arg, wild_when } => {
+                            let bound = seen_args.get(arg.as_str()).ok_or_else(|| {
+                                ManifestError::SessionNeedRefsUndeclaredArg {
+                                    tool: tool.name.clone(),
+                                    idx,
+                                    arg: arg.clone(),
+                                }
+                            })?;
+                            if !bound.kind.binds_to_scope() {
+                                return Err(ManifestError::SessionNeedArgKindMismatch {
+                                    tool: tool.name.clone(),
+                                    idx,
+                                    verb: need.verb.as_str().to_string(),
+                                    arg: arg.clone(),
+                                    kind: bound.kind,
+                                });
+                            }
+                            if !seen_args
+                                .get(wild_when.as_str())
+                                .is_some_and(|arg| arg.kind == ArgKind::Bool)
+                            {
+                                return Err(ManifestError::SessionNeedInvalid {
+                                    tool: tool.name.clone(),
+                                    idx,
+                                    detail: format!(
+                                        "wild_when `{wild_when}` must reference a bool arg"
+                                    ),
                                 });
                             }
                         }
@@ -1025,6 +1086,39 @@ impl Manifest {
                         }
                     })?
                 }
+                ScopeBinding::FromArgOrWild { arg, wild_when } => {
+                    if args
+                        .get(wild_when)
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false)
+                    {
+                        Scope::Wild
+                    } else {
+                        let value = args.get(arg).ok_or_else(|| {
+                            ManifestError::NeedInvalid {
+                                op: op_name.to_string(),
+                                idx,
+                                detail: format!("arg `{arg}` not supplied at call time"),
+                            }
+                        })?;
+                        let decl = op
+                            .args
+                            .iter()
+                            .find(|decl| decl.name == *arg)
+                            .ok_or_else(|| ManifestError::NeedRefsUndeclaredArg {
+                                op: op_name.to_string(),
+                                idx,
+                                arg: arg.clone(),
+                            })?;
+                        scope_from_arg_value(decl.kind, value).ok_or_else(|| {
+                            ManifestError::NeedInvalid {
+                                op: op_name.to_string(),
+                                idx,
+                                detail: format!("arg `{arg}` cannot populate a scope"),
+                            }
+                        })?
+                    }
+                }
                 ScopeBinding::Fixed { scope } => scope.clone(),
                 ScopeBinding::Wild => Scope::Wild,
             };
@@ -1106,6 +1200,41 @@ impl Manifest {
                             detail: format!("arg `{arg}` has unmapped value `{value}`"),
                         }
                     })?
+                }
+                ScopeBinding::FromArgOrWild { arg, wild_when } => {
+                    if args
+                        .get(wild_when)
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false)
+                    {
+                        Scope::Wild
+                    } else {
+                        let value = args.get(arg).ok_or_else(|| {
+                            ManifestError::SessionNeedInvalid {
+                                tool: tool_name.to_string(),
+                                idx,
+                                detail: format!("arg `{arg}` not supplied at call time"),
+                            }
+                        })?;
+                        let decl = tool
+                            .args
+                            .iter()
+                            .find(|decl| decl.name == *arg)
+                            .ok_or_else(|| {
+                                ManifestError::SessionNeedRefsUndeclaredArg {
+                                    tool: tool_name.to_string(),
+                                    idx,
+                                    arg: arg.clone(),
+                                }
+                            })?;
+                        scope_from_arg_value(decl.kind, value).ok_or_else(|| {
+                            ManifestError::SessionNeedInvalid {
+                                tool: tool_name.to_string(),
+                                idx,
+                                detail: format!("arg `{arg}` cannot populate a scope"),
+                            }
+                        })?
+                    }
                 }
                 ScopeBinding::Fixed { scope } => scope.clone(),
                 ScopeBinding::Wild => Scope::Wild,

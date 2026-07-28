@@ -269,6 +269,18 @@ fn need_allows_cap(
             ScopeBinding::FromArgMap { values, .. } => {
                 values.values().any(|scope| scope == &cap.scope)
             }
+            ScopeBinding::FromArgOrWild { arg, .. } => {
+                matches!(&cap.scope, Scope::Wild)
+                    || args
+                        .iter()
+                        .find(|decl| decl.name == *arg)
+                        .is_some_and(|decl| match decl.kind {
+                            ArgKind::Path => matches!(&cap.scope, Scope::Path(_)),
+                            ArgKind::Host => matches!(&cap.scope, Scope::Host(_)),
+                            ArgKind::Name => matches!(&cap.scope, Scope::Name(_)),
+                            ArgKind::Text | ArgKind::Number | ArgKind::Bool => false,
+                        })
+            }
         }
     }
 
