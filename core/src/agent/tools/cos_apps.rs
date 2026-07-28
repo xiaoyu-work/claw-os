@@ -24,7 +24,7 @@
 //! [`CosAppCatalog`] and [`CosAppRun`] at the bottom of this file:
 //! they re-scan the apps dir on every call and dispatch by name.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -162,6 +162,15 @@ fn data_dir() -> String {
     }
 }
 
+fn manifest_schema_at(app_dir: &Path) -> Result<String, String> {
+    let path = app_dir.join("app.json");
+    let body = std::fs::read_to_string(&path)
+        .map_err(|error| format!("read {}: {error}", path.display()))?;
+    let manifest = Manifest::from_json(&body)
+        .map_err(|error| format!("parse {}: {error}", path.display()))?;
+    Ok(crate::apps::manifest_schema(&manifest).to_string())
+}
+
 #[async_trait]
 impl Tool for CosAppTool {
     fn name(&self) -> &'static str {
@@ -240,6 +249,12 @@ impl Tool for CosAppTool {
 
         let app_name = self.app.to_string();
         let app_dir = apps_root().join(&app_name);
+        if command == "__schema__" {
+            return match manifest_schema_at(&app_dir) {
+                Ok(schema) => ToolResult::ok(schema),
+                Err(error) => ToolResult::err(error),
+            };
+        }
         let data = data_dir();
         let apps = apps_root().to_string_lossy().to_string();
 
@@ -600,13 +615,18 @@ impl Tool for CosAppRun {
             ));
         }
 
-        if command != "__schema__" {
-            if let Err(denial) = crate::caps::require(
-                crate::caps::Verb::AGENT_INVOKE,
-                crate::caps::Scope::name(&app_name),
-            ) {
-                return ToolResult::err(denial.summary());
-            }
+        if command == "__schema__" {
+            return match manifest_schema_at(&app_dir) {
+                Ok(schema) => ToolResult::ok(schema),
+                Err(error) => ToolResult::err(error),
+            };
+        }
+
+        if let Err(denial) = crate::caps::require(
+            crate::caps::Verb::AGENT_INVOKE,
+            crate::caps::Scope::name(&app_name),
+        ) {
+            return ToolResult::err(denial.summary());
         }
 
         let data = data_dir();

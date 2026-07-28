@@ -77,6 +77,9 @@ struct ActiveSession {
     child: Option<Child>,
     /// For diagnostics + tool count surfaced through `open`.
     tool_count: usize,
+    /// Keeps the kernel-attested App session registered for the lifetime of
+    /// the MCP child.
+    _identity: crate::bridge::AppIdentitySession,
 }
 
 impl Drop for ActiveSession {
@@ -96,7 +99,7 @@ impl Drop for ActiveSession {
     }
 }
 
-type SessionKey = (u32, String);
+type SessionKey = (u32, String, String);
 type SessionTable = Mutex<HashMap<SessionKey, ActiveSession>>;
 /// Per-app exclusion for the lazy-open path. The session table mutex
 /// is held only for hash-map probes; the actual spawn + handshake
@@ -142,7 +145,9 @@ fn session_key(app_id: &str) -> Result<SessionKey, String> {
     if uid == 0 {
         return Err("refusing to open an App session as root".to_string());
     }
-    Ok((uid, app_id.to_string()))
+    let parent = crate::proc::current_session_info_for_caps()
+        .ok_or_else(|| "App session requires a registered parent session".to_string())?;
+    Ok((uid, parent.session_id, app_id.to_string()))
 }
 
 // ---------------------------------------------------------------------------
@@ -177,7 +182,7 @@ async fn bring_up_app(
     app_dir: &Path,
     manifest: &Manifest,
     timeout_dur: Duration,
-) -> Result<(Arc<McpClient>, Child, usize), String> {
+) -> Result<(Arc<McpClient>, Child, usize, crate::bridge::AppIdentitySession), String> {
     let session = manifest
         .session
         .as_ref()
@@ -248,6 +253,7 @@ async fn bring_up_app(
     let pythonpath = path_parts.join(pathsep());
 
     let mut command = build_command(manifest.runtime, &entry_abs);
+    let mut app_session = crate::bridge::AppIdentitySession::for_mcp(app_id, manifest)?;
     // Wipe inherited env then reinstate the bare minimum + the
     // `COS_*` configuration variables. App-internal env from
     // `crate::config::as_env_vars()` is the curated subset the
@@ -258,6 +264,7 @@ async fn bring_up_app(
     }
     command
         .env("COS_APP_ID", app_id)
+        .env("COS_SESSION", app_session.id())
         .env("COS_DATA_DIR", &data_dir)
         .env("COS_CAPS_DATA_DIR", crate::paths::caps_data_dir())
         .env("COS_APPS_DIR", &apps_dir_str)
@@ -283,14 +290,28 @@ async fn bring_up_app(
     let mut child = command
         .spawn()
         .map_err(|e| format!("spawn `{app_id}` session: {e}"))?;
-    let stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "child stdin unavailable".to_string())?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "child stdout unavailable".to_string())?;
+    let Some(child_pid) = child.id() else {
+        kill_and_reap_child(child);
+        return Err(format!("spawned `{app_id}` session has no pid"));
+    };
+    if let Err(error) = app_session.bind_process(child_pid) {
+        kill_and_reap_child(child);
+        return Err(error);
+    }
+    let stdin = match child.stdin.take() {
+        Some(stdin) => stdin,
+        None => {
+            kill_and_reap_child(child);
+            return Err("child stdin unavailable".to_string());
+        }
+    };
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            kill_and_reap_child(child);
+            return Err("child stdout unavailable".to_string());
+        }
+    };
     // Pipe + prefix child stderr so per-app log lines are
     // attributable and don't corrupt the parent's TUI/log stream.
     if let Some(stderr) = child.stderr.take() {
@@ -363,7 +384,7 @@ async fn bring_up_app(
         }
     };
 
-    Ok((client, child, listed_count))
+    Ok((client, child, listed_count, app_session))
 }
 
 /// Best-effort kill + detached reap of a child process. Used on
@@ -380,30 +401,35 @@ fn kill_and_reap_child(mut child: Child) {
 }
 
 fn build_command(runtime: Runtime, entry: &Path) -> Command {
+    let runner = crate::bridge::app_runner_path();
     match runtime {
         Runtime::Python => {
             let bin = if cfg!(windows) { "python" } else { "python3" };
-            let mut c = Command::new(bin);
-            c.arg(entry);
+            let mut c = Command::new(&runner);
+            c.arg("--").arg(bin).arg(entry);
             c
         }
         Runtime::Node => {
-            let mut c = Command::new("node");
-            c.arg(entry);
+            let mut c = Command::new(&runner);
+            c.arg("--").arg("node").arg(entry);
             c
         }
         Runtime::Shell => {
             if cfg!(windows) {
-                let mut c = Command::new("cmd");
-                c.arg("/c").arg(entry);
+                let mut c = Command::new(&runner);
+                c.arg("--").arg("cmd").arg("/c").arg(entry);
                 c
             } else {
-                let mut c = Command::new("bash");
-                c.arg(entry);
+                let mut c = Command::new(&runner);
+                c.arg("--").arg("bash").arg(entry);
                 c
             }
         }
-        Runtime::Binary => Command::new(entry),
+        Runtime::Binary => {
+            let mut c = Command::new(&runner);
+            c.arg("--").arg(entry);
+            c
+        }
     }
 }
 
@@ -461,7 +487,7 @@ async fn open_session(app_id: &str) -> Result<(Arc<McpClient>, usize), String> {
         .map_err(|e| format!("read manifest for `{app_id}`: {e}"))?;
     let manifest = Manifest::from_json(&manifest_text)
         .map_err(|e| format!("parse manifest for `{app_id}`: {e}"))?;
-    let (client, child, listed) =
+    let (client, child, listed, identity) =
         bring_up_app(app_id, &app_dir, &manifest, DEFAULT_TIMEOUT).await?;
     let mut table = manager().lock().await;
     table.insert(
@@ -470,6 +496,7 @@ async fn open_session(app_id: &str) -> Result<(Arc<McpClient>, usize), String> {
             client: client.clone(),
             child: Some(child),
             tool_count: listed,
+            _identity: identity,
         },
     );
     Ok((client, listed))

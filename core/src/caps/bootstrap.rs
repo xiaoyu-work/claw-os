@@ -1,5 +1,6 @@
-//! Auto-bootstrap a user-CLI session when `cos` is invoked
-//! interactively (or by any tool) without an upstream `COS_SESSION`.
+//! Auto-bootstrap a user-CLI session when `cos` is invoked from a
+//! terminal, or as the non-interactive `cos app ...` desktop launcher,
+//! without an upstream `COS_SESSION`.
 //!
 //! ## Why
 //!
@@ -41,6 +42,7 @@
 //! environment.
 
 use std::env;
+use std::io::IsTerminal;
 
 use crate::caps::role::Role;
 use crate::caps::scope::Scope;
@@ -65,19 +67,42 @@ impl Drop for SessionGuard {
 /// (because `COS_SESSION` was already set by an upstream caller).
 ///
 /// The session row is written through [`crate::proc::register_session`],
-/// which resolves to `$HOME/.local/share/cos/proc/registry.json` for
-/// the cos CLI (a per-user, XDG-compliant location — same pattern as
-/// the agent config and credentials store, commit 271ef962). clawd's
-/// systemd unit explicitly sets `COS_DATA_DIR=/var/lib/cos` so the
-/// system daemon's task registrations remain isolated from any user
-/// CLI session.
+/// which resolves beneath `COS_CAPS_DATA_DIR` when set, otherwise
+/// beneath the normal per-process data dir. Routed clawd jobs pass
+/// the same capability-state directory to App and MCP children.
 ///
 /// On registry-write failure this function returns `None` and **does
 /// not** demote to permissive mode — see the module docs.
 ///
 /// Idempotent: if invoked twice the second call no-ops.
-pub fn bootstrap_user_cli_session() -> Option<SessionGuard> {
+pub fn bootstrap_user_cli_session(args: &[String]) -> Option<SessionGuard> {
+    bootstrap_user_cli_session_impl(
+        args,
+        std::io::stdin().is_terminal() || std::io::stderr().is_terminal(),
+    )
+}
+
+fn bootstrap_user_cli_session_impl(
+    args: &[String],
+    interactive_terminal: bool,
+) -> Option<SessionGuard> {
     if env::var_os("COS_SESSION").is_some_and(|v| !v.is_empty()) {
+        return None;
+    }
+    let is_app_launcher = is_safe_noninteractive_app_launcher(args);
+    if env::var_os("COS_APP_ID").is_some()
+        || env::var_os("COS_MCP_SERVER").is_some()
+        || crate::caps::enforcement::process_has_no_new_privs()
+        || matches!(
+            args.first().map(String::as_str),
+            Some("ai" | "__policy" | "__memory")
+        )
+        || (!interactive_terminal && !is_app_launcher)
+    {
+        tracing::warn!(
+            target: "cos::caps::bootstrap",
+            "refusing to auto-bootstrap an untrusted CLI session"
+        );
         return None;
     }
 
@@ -109,6 +134,8 @@ pub fn bootstrap_user_cli_session() -> Option<SessionGuard> {
         priority: None,
         caps: Some(caps),
         role: Some(Role::Admin.name().to_string()),
+        app_id: None,
+        pending_bind: false,
         start_time_ticks: None,
     };
 
@@ -133,6 +160,34 @@ pub fn bootstrap_user_cli_session() -> Option<SessionGuard> {
             None
         }
     }
+}
+
+fn is_safe_noninteractive_app_launcher(args: &[String]) -> bool {
+    if args.first().map(String::as_str) != Some("app") {
+        return false;
+    }
+    let (Some(app_id), Some(operation)) = (args.get(1), args.get(2)) else {
+        return false;
+    };
+    let apps_dir = std::env::var_os("COS_APPS_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("/usr/lib/cos/apps"));
+    let apps = crate::apps::discover(&apps_dir);
+    let Some(app) = apps.get(app_id) else {
+        return false;
+    };
+    if app
+        .manifest
+        .desktop
+        .as_ref()
+        .is_some_and(|desktop| desktop.exec == *operation)
+    {
+        return true;
+    }
+    app.manifest
+        .operations
+        .get(operation)
+        .is_some_and(|operation| operation.needs.is_empty())
 }
 
 /// Generate a fresh, collision-resistant suffix for the CLI session
@@ -187,7 +242,7 @@ mod tests {
         let prev = env::var("COS_SESSION").ok();
         env::set_var("COS_SESSION", "outer-session-id");
 
-        let guard = bootstrap_user_cli_session();
+        let guard = bootstrap_user_cli_session_impl(&["agent".into()], true);
         assert!(guard.is_none(), "should not bootstrap when COS_SESSION is set");
         assert_eq!(env::var("COS_SESSION").unwrap(), "outer-session-id");
 
@@ -204,7 +259,9 @@ mod tests {
         env::remove_var("COS_SESSION");
         env::remove_var("COS_PERMS_MODE");
 
-        let guard = bootstrap_user_cli_session().expect("bootstrap should succeed");
+        let guard =
+            bootstrap_user_cli_session_impl(&["agent".into()], true)
+                .expect("bootstrap should succeed");
         let sid = env::var("COS_SESSION").expect("COS_SESSION should be set");
         assert!(sid.starts_with("cli-"), "session id format: {sid}");
 
@@ -274,7 +331,7 @@ mod tests {
         env::remove_var("COS_SESSION");
         env::remove_var("COS_PERMS_MODE");
 
-        let guard = bootstrap_user_cli_session()
+        let guard = bootstrap_user_cli_session_impl(&["agent".into()], true)
             .expect("bootstrap should succeed in per-user data dir");
         let sid = env::var("COS_SESSION").expect("COS_SESSION should be set");
 
@@ -328,7 +385,9 @@ mod tests {
         env::remove_var("COS_SESSION");
         env::set_var("COS_PERMS_MODE", "strict");
 
-        let guard = bootstrap_user_cli_session().expect("bootstrap should succeed");
+        let guard =
+            bootstrap_user_cli_session_impl(&["agent".into()], true)
+                .expect("bootstrap should succeed");
         // require() must see the per-user row.
         use crate::caps::Verb;
         let result = crate::caps::require(Verb::AGENT_INVOKE, Scope::Wild);

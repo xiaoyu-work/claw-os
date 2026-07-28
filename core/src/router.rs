@@ -2010,94 +2010,32 @@ fn show_app_command_schema(
     command: &str,
     app: &apps::App,
 ) -> Result<Option<String>, String> {
-    // Call the Python app with __schema__ to get live schema
-    let data_dir = data_dir();
-    let apps = apps_dir().to_string_lossy().to_string();
-
-    match bridge::run_python_app(&app.dir, "__schema__", &[], &data_dir, &apps) {
-        Ok(Some(output)) => {
-            if let Ok(schema) = serde_json::from_str::<Value>(&output) {
-                if let Some(cmd_schema) = schema.get(command) {
-                    let desc = app
-                        .manifest
-                        .operations
-                        .get(command)
-                        .map(|op| op.summary.current().to_string())
-                        .unwrap_or_else(|| "No description".to_string());
-                    let mut result = json!({
-                        "command": format!("cos app {app_name} {command}"),
-                        "description": desc,
-                    });
-                    if let Some(params) = cmd_schema.get("parameters") {
-                        result["parameters"] = params.clone();
-                    }
-                    if let Some(example) = cmd_schema.get("example") {
-                        result["example"] = example.clone();
-                    }
-                    return Ok(Some(result.to_string()));
-                }
-            }
-            // Schema returned but command not found in it
-            let desc = app
-                .manifest
-                .operations
-                .get(command)
-                .map(|op| op.summary.current().to_string())
-                .unwrap_or_else(|| "No description".to_string());
-            Ok(Some(
-                json!({
-                    "command": format!("cos app {app_name} {command}"),
-                    "description": desc,
-                })
-                .to_string(),
-            ))
-        }
-        _ => {
-            // App doesn't support __schema__ — return basic info
-            let desc = app
-                .manifest
-                .operations
-                .get(command)
-                .map(|op| op.summary.current().to_string())
-                .unwrap_or_else(|| "No description".to_string());
-            Ok(Some(
-                json!({
-                    "command": format!("cos app {app_name} {command}"),
-                    "description": desc,
-                })
-                .to_string(),
-            ))
-        }
-    }
+    let operation = app
+        .manifest
+        .operations
+        .get(command)
+        .ok_or_else(|| format!("unknown App operation: {app_name} {command}"))?;
+    let schema = apps::operation_schema(operation);
+    Ok(Some(
+        json!({
+            "command": format!("cos app {app_name} {command}"),
+            "description": schema["description"].clone(),
+            "parameters": schema["parameters"].clone(),
+        })
+        .to_string(),
+    ))
 }
 
 fn show_app_schema(app_name: &str, app: &apps::App) -> Result<Option<String>, String> {
-    let data_dir = data_dir();
-    let apps = apps_dir().to_string_lossy().to_string();
-
-    // Try to get live schema from the app
-    let live_schema = match bridge::run_python_app(&app.dir, "__schema__", &[], &data_dir, &apps) {
-        Ok(Some(output)) => serde_json::from_str::<Value>(&output).ok(),
-        _ => None,
-    };
-
     let mut commands = Vec::new();
     for (cmd_name, op) in &app.manifest.operations {
-        let mut entry = json!({
+        let schema = apps::operation_schema(op);
+        let entry = json!({
             "command": cmd_name,
             "label": op.label.current(),
             "description": op.summary.current(),
+            "parameters": schema["parameters"].clone(),
         });
-        if let Some(ref schema) = live_schema {
-            if let Some(cmd_schema) = schema.get(cmd_name.as_str()) {
-                if let Some(params) = cmd_schema.get("parameters") {
-                    entry["parameters"] = params.clone();
-                }
-                if let Some(example) = cmd_schema.get("example") {
-                    entry["example"] = example.clone();
-                }
-            }
-        }
         commands.push(entry);
     }
 

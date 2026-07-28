@@ -65,6 +65,7 @@ fn default_log_path() -> PathBuf {
 /// `cos agent serve` entry point — invoked from
 /// [`crate::agent::run`]'s match arm.
 pub fn serve(args: &[String]) -> Result<Value, String> {
+    let _detached_session_guard = DetachedSessionGuard::from_env();
     let mut bind: String = "127.0.0.1".to_string();
     let mut port: u16 = 7878;
     let mut token_override: Option<String> = None;
@@ -269,7 +270,6 @@ fn spawn_detached(
 
     let exe = std::env::current_exe()
         .map_err(|e| format!("locate current exe: {e}"))?;
-
     // Re-pass every original flag except --detach/-d (and inject
     // --foreground so the child runs the normal serve path).
     let mut child_args: Vec<String> = vec!["agent".into(), "serve".into(), "--foreground".into()];
@@ -282,19 +282,17 @@ fn spawn_detached(
             _ => child_args.push(a.clone()),
         }
     }
+    let detached_session = register_detached_session(&child_args)?;
+    let mut pending_session =
+        PendingDetachedSessionGuard::new(detached_session.clone());
 
     let mut cmd = std::process::Command::new(&exe);
     cmd.args(&child_args)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_clone))
-        .stderr(Stdio::from(log));
-    // Clear the parent's session so the child can bootstrap its own
-    // proc-registry session via [`crate::caps::bootstrap`]. If we let
-    // the child inherit COS_SESSION, the parent's `SessionGuard::Drop`
-    // (running just before `spawn_detached` returns) will deregister
-    // the row out from under the daemon, leaving every gated call
-    // (sysinfo, etc.) failing with "no active session".
-    cmd.env_remove("COS_SESSION");
+        .stderr(Stdio::from(log))
+        .env("COS_SESSION", &detached_session)
+        .env("COS_DETACHED_SESSION", &detached_session);
 
     #[cfg(unix)]
     {
@@ -313,17 +311,24 @@ fn spawn_detached(
         }
     }
 
-    let child = cmd
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("spawn detached: {e}"))?;
     let child_pid = child.id();
+    if let Err(error) =
+        crate::proc::bind_session_process(&detached_session, child_pid)
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!("bind detached session: {error}"));
+    }
 
     // Wait for the child to either bind successfully (writes its own
     // PID file) or exit fast (we read the log tail for context).
     let deadline = Instant::now() + Duration::from_secs(6);
     loop {
         if let Some(p) = read_pid_file() {
-            if p as u32 == child_pid || process_alive(p) {
+            if p as u32 == child_pid && process_alive(p) {
                 // Bound successfully.
                 let token = match auth::load_or_generate_token() {
                     Ok(t) => t,
@@ -334,6 +339,7 @@ fn spawn_detached(
                 } else {
                     format!("http://{bind}:{port}/?t={token}")
                 };
+                pending_session.disarm();
                 return Ok(json!({
                     "status": "running",
                     "pid": p,
@@ -347,7 +353,27 @@ fn spawn_detached(
             }
         }
         // Child died?
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let tail = tail_log(&log_path, 40);
+                return Err(format!(
+                    "cos agent serve failed to start (pid {child_pid}, status {status}). \
+                     Last log lines from {}:\n{}",
+                    log_path.display(),
+                    tail
+                ));
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "inspect detached process {child_pid}: {error}"
+                ));
+            }
+            Ok(None) => {}
+        }
         if !process_alive(child_pid as i32) {
+            let _ = child.wait();
             let tail = tail_log(&log_path, 40);
             return Err(format!(
                 "cos agent serve failed to start (pid {child_pid} exited). \
@@ -357,6 +383,8 @@ fn spawn_detached(
             ));
         }
         if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
             return Err(format!(
                 "cos agent serve did not become ready within 6s. \
                  Check log: {}",
@@ -498,6 +526,104 @@ impl Drop for PidGuard {
             }
         }
     }
+}
+
+struct DetachedSessionGuard {
+    session_id: Option<String>,
+}
+
+impl DetachedSessionGuard {
+    fn from_env() -> Self {
+        Self {
+            session_id: std::env::var("COS_DETACHED_SESSION")
+                .ok()
+                .filter(|session| !session.is_empty()),
+        }
+    }
+}
+
+impl Drop for DetachedSessionGuard {
+    fn drop(&mut self) {
+        if let Some(session_id) = self.session_id.take() {
+            crate::proc::deregister_current_process_session(
+                &session_id,
+                "agent-web",
+            );
+        }
+    }
+}
+
+struct PendingDetachedSessionGuard {
+    session_id: Option<String>,
+}
+
+impl PendingDetachedSessionGuard {
+    fn new(session_id: String) -> Self {
+        Self {
+            session_id: Some(session_id),
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.session_id = None;
+    }
+}
+
+impl Drop for PendingDetachedSessionGuard {
+    fn drop(&mut self) {
+        if let Some(session_id) = self.session_id.take() {
+            crate::proc::deregister_session(&session_id);
+        }
+    }
+}
+
+fn register_detached_session(command: &[String]) -> Result<String, String> {
+    let parent = crate::proc::current_session_info_for_caps().ok_or_else(|| {
+        "detached agent serve requires a registered parent session".to_string()
+    })?;
+    crate::caps::enforcement::require_current_session_identity(
+        &parent.session_id,
+        parent.pid,
+    )
+    .map_err(|error| {
+        format!("detached agent parent identity check failed: {error}")
+    })?;
+    if parent.app_id.is_some() {
+        return Err(
+            "an App session cannot detach the system Agent web service"
+                .to_string(),
+        );
+    }
+    let caps = parent.caps.clone().ok_or_else(|| {
+        "detached agent parent session has no capabilities".to_string()
+    })?;
+    let session_id = format!("agent-web-{}", uuid::Uuid::new_v4().simple());
+    let pid = std::process::id();
+    let info = crate::proc::SessionInfo {
+        session_id: session_id.clone(),
+        pid,
+        command: command.to_vec(),
+        started_at: chrono::Utc::now().to_rfc3339(),
+        stdout_path: String::new(),
+        stderr_path: String::new(),
+        group: Some("agent-web".to_string()),
+        parent: Some(parent.session_id),
+        workdir: std::env::current_dir()
+            .ok()
+            .map(|path| path.to_string_lossy().into_owned()),
+        exit_code: None,
+        ended_at: None,
+        tier: parent.tier,
+        scope: parent.scope,
+        priority: parent.priority,
+        caps: Some(caps),
+        role: parent.role,
+        app_id: None,
+        pending_bind: false,
+        start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
+    };
+    crate::proc::register_session(info)?;
+    Ok(session_id)
 }
 
 fn try_open_browser(url: &str) -> Result<(), String> {

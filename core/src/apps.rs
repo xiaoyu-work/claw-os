@@ -2,6 +2,10 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use serde_json::{json, Value};
+
+use crate::caps::manifest::{Arg, ArgKind, Manifest, Operation};
+
 /// An app manifest loaded from `app.json`. There is one manifest format
 /// — [`caps::manifest::Manifest`](crate::caps::manifest::Manifest) — and
 /// the loader rejects anything that doesn't validate.
@@ -71,4 +75,46 @@ pub fn discover(apps_dir: &Path) -> BTreeMap<String, App> {
     }
 
     apps
+}
+
+/// Build the stable, non-executing schema for an App manifest. Schema
+/// introspection must never run third-party entrypoint code.
+pub fn manifest_schema(manifest: &Manifest) -> Value {
+    let commands: serde_json::Map<String, Value> = manifest
+        .operations
+        .iter()
+        .map(|(name, operation)| (name.clone(), operation_schema(operation)))
+        .collect();
+    Value::Object(commands)
+}
+
+pub fn operation_schema(operation: &Operation) -> Value {
+    let parameters = operation
+        .args
+        .iter()
+        .map(arg_schema)
+        .collect::<Vec<_>>();
+    json!({
+        "description": operation.summary.current(),
+        "parameters": parameters,
+    })
+}
+
+fn arg_schema(arg: &Arg) -> Value {
+    let value_type = match arg.kind {
+        ArgKind::Path | ArgKind::Host | ArgKind::Name | ArgKind::Text => "string",
+        ArgKind::Number => "number",
+        ArgKind::Bool => "boolean",
+    };
+    let mut schema = json!({
+        "name": arg.name,
+        "type": value_type,
+        "required": arg.required,
+        "description": arg.label.current(),
+        "kind": "positional",
+    });
+    if let Some(default) = &arg.default {
+        schema["default"] = default.clone();
+    }
+    schema
 }

@@ -82,8 +82,8 @@ pub fn run(command: &str, args: &[String]) -> Result<serde_json::Value, String> 
 
 /// Implements `cos ai tool <name> --app <id> [--args <json>|--args-file <p>]`.
 ///
-/// Identity is enforced via the same helper `cos ai chat` uses —
-/// `--app` must match `COS_APP_ID` from the kernel-spawned env.
+/// Identity is enforced via the same helper `cos ai chat` uses:
+/// env claim, registered `app_id`, and nearest App ancestry must agree.
 fn tool_cmd(args: &[String]) -> Result<serde_json::Value, String> {
     let mut name: Option<String> = None;
     let mut app: Option<String> = None;
@@ -203,4 +203,3 @@ mod tests {
         assert!(err.contains("--app"), "got: {err}");
     }
 }
-

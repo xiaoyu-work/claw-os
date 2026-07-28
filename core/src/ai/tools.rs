@@ -201,9 +201,9 @@ pub struct ToolResult {
 ///   2. Capability check via `caps::require(verb, scope-derived-from-args)`.
 ///   3. Tool-specific impl.
 ///
-/// Identity enforcement (matching `--app` against `COS_APP_ID`) is the
-/// caller's responsibility — `cos ai tool`'s dispatcher does it before
-/// reaching this function so it is shared with `cos ai chat`.
+/// Identity enforcement is the caller's responsibility — `cos ai tool`
+/// validates the env claim, registered App session, and process ancestry
+/// before reaching this function, sharing the gate with `cos ai chat`.
 pub fn execute(
     tool_name: &str,
     app_id: &str,

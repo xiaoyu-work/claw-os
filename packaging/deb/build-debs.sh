@@ -229,6 +229,11 @@ install -m 644 \
     "$PROJECT_DIR/rootfs/overlay/usr/share/polkit-1/actions/org.clawos.approval.policy" \
     "$BASE_STAGE/usr/share/polkit-1/actions/org.clawos.approval.policy"
 
+APP_RUNNER_BIN="$(ensure_bin claw-app-runner cos)" || {
+    echo "error: claw-app-runner binary not built" >&2; exit 1; }
+echo "  :: claw-app-runner     <- $APP_RUNNER_BIN"
+install -m 755 "$APP_RUNNER_BIN" "$BASE_STAGE/usr/local/bin/claw-app-runner"
+
 # Binaries: claw-semantic-daemon + claw-semantic CLI.
 # Both are optional — the OS still works without them (Recoll covers
 # the keyword layer); a missing binary just disables the semantic

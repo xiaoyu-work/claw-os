@@ -49,6 +49,14 @@ pub struct SessionInfo {
     /// Has no enforcement effect — `caps` is the source of truth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
+    /// Kernel-attested App identity for child App sessions. `None` for
+    /// ordinary user, agent and system sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<String>,
+    /// True while the launcher has registered the App identity but has
+    /// not yet bound it to the spawned process.
+    #[serde(default)]
+    pub pending_bind: bool,
     /// Linux kernel clock ticks at which the process started
     /// (`/proc/<pid>/stat` field 22). Used to detect pid-recycle
     /// — kernels reuse pids, so an aliveness check on `pid` alone
@@ -65,14 +73,12 @@ struct Registry {
     sessions: Vec<SessionInfo>,
 }
 
-/// Resolve the `proc/` directory used by `cos` for session-registry
-/// state. Delegates to [`crate::paths::data_dir`] which already
-/// applies the user-vs-system split: the cos CLI lands in
-/// `$HOME/.local/share/cos/proc/`, clawd lands in
-/// `/var/lib/cos/proc/` because its systemd unit pins
-/// `COS_DATA_DIR=/var/lib/cos`.
+/// Resolve the `proc/` directory used for capability session state.
+/// `COS_CAPS_DATA_DIR` can pin routed user jobs and their App/MCP
+/// children to the same registry even when their general data dirs
+/// differ.
 fn proc_dir() -> PathBuf {
-    crate::paths::data_dir().join("proc")
+    crate::paths::caps_data_dir().join("proc")
 }
 
 fn registry_path() -> PathBuf {
@@ -83,9 +89,44 @@ fn registry_path() -> PathBuf {
 /// registry path `cos` writes to. Lives here so the resolution logic
 /// in [`proc_dir`] has exactly one definition.
 pub(crate) fn registry_path_for_caps() -> PathBuf {
-    crate::paths::caps_data_dir()
-        .join("proc")
-        .join("registry.json")
+    registry_path()
+}
+
+pub fn current_session_info_for_caps() -> Option<SessionInfo> {
+    let session_id = std::env::var("COS_SESSION").ok()?;
+    let path = registry_path_for_caps();
+    let data = crate::filelock::read_locked(&path).ok()??;
+    let registry: Registry = serde_json::from_str(&data).ok()?;
+    registry
+        .sessions
+        .into_iter()
+        .find(|session| session.session_id == session_id)
+}
+
+/// True only after the current process has been bound to an App session
+/// carrying the expected identity. Used by `claw-app-runner` to keep
+/// third-party entrypoint code from running during the pid-binding window.
+pub fn current_app_session_is_bound(expected_app_id: &str) -> bool {
+    let Some(session) = current_session_info_for_caps() else {
+        return false;
+    };
+    if session.app_id.as_deref() != Some(expected_app_id)
+        || session.pending_bind
+        || session.pid != std::process::id()
+    {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let Some(expected_start) = session.start_time_ticks else {
+            return false;
+        };
+        return read_start_time_ticks(session.pid) == Some(expected_start);
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        true
+    }
 }
 
 fn load_registry() -> Registry {
@@ -96,17 +137,9 @@ fn load_registry() -> Registry {
     }
 }
 
-fn save_registry(reg: &Registry) {
-    if let Ok(data) = serde_json::to_string_pretty(reg) {
-        let _ = crate::filelock::write_locked(&registry_path(), &data);
-    }
-}
-
-/// Atomic read-modify-write on the proc registry. Concurrent spawn /
-/// status / wait calls all do load_registry + mutate + save_registry,
-/// which is the classic lost-update race — parallel `cos proc spawn`
-/// invocations (the default sub-agent pattern in claw-os) routinely
-/// lost one session row each. Funnel mutations through here.
+/// Atomic read-modify-write on the proc registry. Every mutation goes
+/// through this helper so a stale reader cannot overwrite a concurrent
+/// spawn, bind, status update, or cleanup.
 fn update_registry<F>(transform: F) -> Result<(), String>
 where
     F: FnOnce(Registry) -> Registry,
@@ -114,7 +147,8 @@ where
     let _ = fs::create_dir_all(proc_dir());
     crate::filelock::update_locked::<_, String>(&registry_path(), |existing| {
         let reg: Registry = match existing {
-            Some(s) => serde_json::from_str(&s).unwrap_or_default(),
+            Some(s) => serde_json::from_str(&s)
+                .map_err(|e| format!("parse proc registry: {e}"))?,
             None => Registry::default(),
         };
         let next = transform(reg);
@@ -131,25 +165,90 @@ where
 /// data dir on first call. Best-effort: returns `Err` only if the
 /// registry write itself failed.
 pub fn register_session(info: SessionInfo) -> Result<(), String> {
-    let _ = fs::create_dir_all(proc_dir());
-    let mut reg = load_registry();
-    reg.sessions.push(info);
-
-    let data = serde_json::to_string_pretty(&reg)
-        .map_err(|e| format!("serialize registry: {e}"))?;
-    crate::filelock::write_locked(&registry_path(), &data)
-        .map_err(|e| format!("write registry: {e}"))
+    update_registry(|mut registry| {
+        registry
+            .sessions
+            .retain(|session| session.session_id != info.session_id);
+        registry.sessions.push(info);
+        registry
+    })
 }
 
 /// Remove a session row by id. No-op if it is not present.
 /// Counterpart to [`register_session`], called on process exit by
 /// the CLI session guard so the registry doesn't accumulate ghosts.
 pub fn deregister_session(session_id: &str) {
-    let mut reg = load_registry();
-    let before = reg.sessions.len();
-    reg.sessions.retain(|s| s.session_id != session_id);
-    if reg.sessions.len() != before {
-        save_registry(&reg);
+    let _ = update_registry(|mut registry| {
+        registry
+            .sessions
+            .retain(|session| session.session_id != session_id);
+        registry
+    });
+}
+
+/// Remove a session only when it is still bound to the calling process
+/// and carries the expected group label. This lets a detached child clean
+/// up its own row without turning an inherited environment variable into
+/// an arbitrary session-deletion primitive.
+pub fn deregister_current_process_session(
+    session_id: &str,
+    expected_group: &str,
+) {
+    let pid = std::process::id();
+    let current_start = read_start_time_ticks(pid);
+    let _ = update_registry(|mut registry| {
+        registry.sessions.retain(|session| {
+            if session.session_id != session_id
+                || session.pid != pid
+                || session.group.as_deref() != Some(expected_group)
+            {
+                return true;
+            }
+            #[cfg(target_os = "linux")]
+            {
+                session.start_time_ticks != current_start
+                    || current_start.is_none()
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                false
+            }
+        });
+        registry
+    });
+}
+
+pub fn bind_session_process(session_id: &str, pid: u32) -> Result<(), String> {
+    if pid == 0 {
+        return Err("cannot bind a session to pid 0".to_string());
+    }
+    let start_time_ticks = read_start_time_ticks(pid);
+    #[cfg(target_os = "linux")]
+    if start_time_ticks.is_none() {
+        return Err(format!(
+            "cannot bind session `{session_id}` to missing process {pid}"
+        ));
+    }
+    let mut found = false;
+    update_registry(|mut registry| {
+        if let Some(session) = registry
+            .sessions
+            .iter_mut()
+            .find(|session| session.session_id == session_id)
+        {
+            session.pid = pid;
+            session.start_time_ticks = start_time_ticks;
+            session.pending_bind = false;
+            session.exit_code = None;
+            session.ended_at = None;
+            found = true;
+        }
+        registry
+    })?;
+    if found {
+        Ok(())
+    } else {
+        Err(format!("session not found while binding process: {session_id}"))
     }
 }
 
@@ -246,6 +345,22 @@ fn is_alive_for_info(info: &SessionInfo) -> bool {
         },
         None => true,
     }
+}
+
+fn pending_bind_is_fresh(info: &SessionInfo) -> bool {
+    if !info.pending_bind || info.app_id.is_none() || info.pid != 0 {
+        return false;
+    }
+    let Ok(started) = chrono::DateTime::parse_from_rfc3339(&info.started_at)
+    else {
+        return false;
+    };
+    let age = chrono::Utc::now().signed_duration_since(started);
+    age >= chrono::Duration::zero() && age <= chrono::Duration::seconds(30)
+}
+
+fn registry_session_is_active(info: &SessionInfo) -> bool {
+    pending_bind_is_fresh(info) || is_alive_for_info(info)
 }
 
 /// Crate-internal: read field 22 (`starttime`) of `/proc/<pid>/stat`.
@@ -744,6 +859,8 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         priority: priority.clone(),
         caps: cap_set.clone(),
         role: role_name.clone(),
+        app_id: None,
+        pending_bind: false,
         start_time_ticks,
     };
 
@@ -818,14 +935,35 @@ fn cmd_status(args: &[String]) -> Result<Value, String> {
         .position(|s| &s.session_id == sid)
         .ok_or_else(|| format!("session not found: {sid}"))?;
 
+    let binding = pending_bind_is_fresh(&reg.sessions[idx]);
     let alive = is_alive_for_info(&reg.sessions[idx]);
-    let status = if alive { "running" } else { "exited" };
+    let status = if binding {
+        "binding"
+    } else if alive {
+        "running"
+    } else {
+        "exited"
+    };
 
     // Auto-capture ended_at when process is first detected as dead
-    if !alive && reg.sessions[idx].ended_at.is_none() {
+    if !binding && !alive && reg.sessions[idx].ended_at.is_none() {
         let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let sid = sid.to_string();
+        let now_for_registry = now.clone();
+        update_registry(|mut latest| {
+            if let Some(info) = latest
+                .sessions
+                .iter_mut()
+                .find(|info| info.session_id == sid)
+            {
+                if info.ended_at.is_none() && !registry_session_is_active(info)
+                {
+                    info.ended_at = Some(now_for_registry);
+                }
+            }
+            latest
+        })?;
         reg.sessions[idx].ended_at = Some(now);
-        save_registry(&reg);
     }
 
     let info = &reg.sessions[idx];
@@ -1026,7 +1164,7 @@ fn cmd_kill(args: &[String]) -> Result<Value, String> {
 
 fn cmd_list(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::PROC_OBSERVE, Scope::wild()).map_err(|v| v.to_string())?;
-    let mut reg = load_registry();
+    let reg = load_registry();
     let mut group_filter: Option<&str> = None;
 
     let mut i = 0;
@@ -1055,7 +1193,13 @@ fn cmd_list(args: &[String]) -> Result<Value, String> {
                 "session_id": s.session_id,
                 "pid": s.pid,
                 "command": s.command,
-                "status": if is_alive(s.pid) { "running" } else { "exited" },
+                "status": if pending_bind_is_fresh(s) {
+                    "binding"
+                } else if is_alive_for_info(s) {
+                    "running"
+                } else {
+                    "exited"
+                },
                 "started_at": s.started_at,
             });
             if let Some(ref g) = s.group {
@@ -1077,9 +1221,12 @@ fn cmd_list(args: &[String]) -> Result<Value, String> {
         })
         .collect();
 
-    // Prune dead sessions from registry
-    reg.sessions.retain(|s| is_alive(s.pid));
-    save_registry(&reg);
+    // Prune only from the latest registry snapshot. A stale list read must
+    // not overwrite a concurrent App bind or newly registered session.
+    update_registry(|mut latest| {
+        latest.sessions.retain(registry_session_is_active);
+        latest
+    })?;
 
     Ok(json!({ "sessions": infos, "count": infos.len() }))
 }
@@ -1159,16 +1306,25 @@ fn cmd_wait(args: &[String]) -> Result<Value, String> {
         let all_dead = targets.iter().all(|(_, pid)| !is_alive(*pid));
         if all_dead {
             // Auto-capture ended_at for all exited sessions
-            let mut reg = load_registry();
             let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-            for (sid, _) in &targets {
-                if let Some(info) = reg.sessions.iter_mut().find(|s| &s.session_id == sid) {
-                    if info.ended_at.is_none() {
-                        info.ended_at = Some(now.clone());
+            let target_ids = targets
+                .iter()
+                .map(|(sid, _)| sid.clone())
+                .collect::<Vec<_>>();
+            update_registry(|mut latest| {
+                for sid in &target_ids {
+                    if let Some(info) =
+                        latest.sessions.iter_mut().find(|s| &s.session_id == sid)
+                    {
+                        if info.ended_at.is_none()
+                            && !registry_session_is_active(info)
+                        {
+                            info.ended_at = Some(now.clone());
+                        }
                     }
                 }
-            }
-            save_registry(&reg);
+                latest
+            })?;
 
             // Build results with output tails for each exited session
             let reg = load_registry();
@@ -1291,14 +1447,35 @@ fn cmd_result(args: &[String]) -> Result<Value, String> {
         .position(|s| &s.session_id == sid)
         .ok_or_else(|| format!("session not found: {sid}"))?;
 
+    let binding = pending_bind_is_fresh(&reg.sessions[idx]);
     let alive = is_alive_for_info(&reg.sessions[idx]);
-    let status = if alive { "running" } else { "exited" };
+    let status = if binding {
+        "binding"
+    } else if alive {
+        "running"
+    } else {
+        "exited"
+    };
 
     // Auto-capture ended_at if process is dead and not yet recorded
-    if !alive && reg.sessions[idx].ended_at.is_none() {
+    if !binding && !alive && reg.sessions[idx].ended_at.is_none() {
         let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let sid = sid.to_string();
+        let now_for_registry = now.clone();
+        update_registry(|mut latest| {
+            if let Some(info) = latest
+                .sessions
+                .iter_mut()
+                .find(|info| info.session_id == sid)
+            {
+                if info.ended_at.is_none() && !registry_session_is_active(info)
+                {
+                    info.ended_at = Some(now_for_registry);
+                }
+            }
+            latest
+        })?;
         reg.sessions[idx].ended_at = Some(now);
-        save_registry(&reg);
     }
 
     let info = &reg.sessions[idx];
@@ -1489,10 +1666,10 @@ fn cmd_renice(args: &[String]) -> Result<Value, String> {
     let sid = session_id.ok_or("usage: cos proc renice <session-id> --priority <level>")?;
     let prio = priority.ok_or("--priority is required")?;
 
-    let mut reg = load_registry();
+    let reg = load_registry();
     let info = reg
         .sessions
-        .iter_mut()
+        .iter()
         .find(|s| s.session_id == sid)
         .ok_or_else(|| format!("session not found: {sid}"))?;
 
@@ -1521,8 +1698,16 @@ fn cmd_renice(args: &[String]) -> Result<Value, String> {
             return Err(format!("renice failed: {stderr}"));
         }
 
-        info.priority = Some(prio.clone());
-        save_registry(&reg);
+        let sid_for_registry = sid.to_string();
+        let prio_for_registry = prio.clone();
+        update_registry(|mut latest| {
+            if let Some(info) = latest.sessions.iter_mut().find(|info| {
+                info.session_id == sid_for_registry && info.pid == pid
+            }) {
+                info.priority = Some(prio_for_registry);
+            }
+            latest
+        })?;
 
         Ok(json!({
             "session_id": sid,
@@ -1682,6 +1867,8 @@ mod tests {
             priority: None,
             caps: None,
             role: None,
+            app_id: None,
+            pending_bind: false,
             start_time_ticks: Some(real_start),
         };
         assert!(

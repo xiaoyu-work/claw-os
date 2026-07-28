@@ -55,6 +55,8 @@ impl ProcSessionGuard {
             priority: None,
             caps: Some(caps),
             role: Some(role.name().to_string()),
+            app_id: None,
+            pending_bind: false,
             start_time_ticks: None,
         };
         register_session(info)?;

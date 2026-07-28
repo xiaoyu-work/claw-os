@@ -57,12 +57,11 @@
 //!
 //! Per `docs/app-ai-integration.md` §3, an App's identity is established
 //! **only** when the kernel itself spawns the App (`cos app <id> <op>`).
-//! `core/src/bridge.rs` injects `COS_APP_ID=<id>` into the child env at
-//! that moment; subprocesses of the App inherit it. We refuse the call
-//! unless `COS_APP_ID` is set in our env **and** matches the `--app`
-//! argument byte-for-byte. The `--app` flag alone is never trusted —
-//! anyone with shell access could pass any string. This makes
-//! cross-App impersonation impossible without the kernel's complicity.
+//! `core/src/bridge.rs` creates a registered App session, binds it to the
+//! spawned PID, and injects both `COS_SESSION` and `COS_APP_ID`. A call is
+//! accepted only when the env claim, registry `app_id`, and nearest App
+//! process ancestry all agree with `--app`. No environment variable is
+//! trusted as an identity boundary by itself.
 
 use serde_json::{json, Value};
 
@@ -165,7 +164,7 @@ pub fn chat_cmd(args: &[String]) -> Result<Value, String> {
     }
 
     let app = app.ok_or_else(|| "--app is required".to_string())?;
-    enforce_identity(&app, std::env::var("COS_APP_ID").ok().as_deref())?;
+    enforce_identity_for(&app)?;
 
     let prompt_text: Option<String> = match (prompt, prompt_file) {
         (Some(p), _) => Some(p),
@@ -201,9 +200,9 @@ pub fn chat_cmd(args: &[String]) -> Result<Value, String> {
 /// Verify the caller is the App they claim to be.
 ///
 /// `arg_app` is the `--app <id>` value parsed from the CLI; `env_app`
-/// is the current process's `COS_APP_ID` (or `None` if unset). The
-/// only way `COS_APP_ID` reaches a process is via `bridge.rs` when
-/// the kernel spawns an installed App — see the module doc above.
+/// is the current process's `COS_APP_ID` claim (or `None` if unset).
+/// [`enforce_identity_for`] additionally verifies the registered App
+/// session and process ancestry.
 ///
 /// A bare-process invocation (no `COS_APP_ID`) is rejected with a
 /// dev-friendly hint; an env value that disagrees with `--app` is
@@ -212,13 +211,11 @@ fn enforce_identity(arg_app: &str, env_app: Option<&str>) -> Result<(), String> 
     match env_app {
         None => Err(format!(
             "`cos ai chat` must be invoked by the kernel via `cos app {arg_app} <op>`. \
-             COS_APP_ID is not set, so the kernel cannot attest the caller's identity. \
-             For local development, set COS_APP_ID={arg_app} before invoking."
+             COS_APP_ID is not set, so the claimed App identity is missing."
         )),
         Some(env) if env != arg_app => Err(format!(
             "identity mismatch: --app={arg_app} but COS_APP_ID={env}. \
-             An App may only request AI calls for itself; the kernel-injected \
-             COS_APP_ID is the source of truth."
+             An App may only request AI calls for its registered identity."
         )),
         Some(_) => Ok(()),
     }
@@ -228,7 +225,20 @@ fn enforce_identity(arg_app: &str, env_app: Option<&str>) -> Result<(), String> 
 /// that want the same identity enforcement as `cos ai chat`. Reads
 /// `COS_APP_ID` from the current process env.
 pub fn enforce_identity_for(arg_app: &str) -> Result<(), String> {
-    enforce_identity(arg_app, std::env::var("COS_APP_ID").ok().as_deref())
+    enforce_identity(arg_app, std::env::var("COS_APP_ID").ok().as_deref())?;
+    let session = crate::proc::current_session_info_for_caps()
+        .ok_or_else(|| "App identity session is not registered".to_string())?;
+    if session.app_id.as_deref() != Some(arg_app) {
+        return Err(format!(
+            "App identity mismatch: session `{}` is registered for {:?}, not `{arg_app}`",
+            session.session_id, session.app_id
+        ));
+    }
+    crate::caps::require(
+        crate::caps::Verb::AGENT_INVOKE,
+        crate::caps::Scope::name(arg_app),
+    )
+    .map_err(|denial| format!("App identity ancestry check failed: {}", denial.summary()))
 }
 
 /// Parse `--tools` value (e.g. `"fs.read_text,kv.get"`) into a clean
