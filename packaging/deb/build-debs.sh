@@ -234,6 +234,11 @@ APP_RUNNER_BIN="$(ensure_bin claw-app-runner cos)" || {
 echo "  :: claw-app-runner     <- $APP_RUNNER_BIN"
 install -m 755 "$APP_RUNNER_BIN" "$BASE_STAGE/usr/local/bin/claw-app-runner"
 
+MAIL_AI_HOST_BIN="$(ensure_bin claw-mail-ai-host cos)" || {
+    echo "error: claw-mail-ai-host binary not built" >&2; exit 1; }
+echo "  :: claw-mail-ai-host   <- $MAIL_AI_HOST_BIN"
+install -m 755 "$MAIL_AI_HOST_BIN" "$BASE_STAGE/usr/lib/cos/claw-mail-ai-host"
+
 # Binaries: claw-semantic-daemon + claw-semantic CLI.
 # Both are optional — the OS still works without them (Recoll covers
 # the keyword layer); a missing binary just disables the semantic

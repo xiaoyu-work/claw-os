@@ -45,6 +45,57 @@ pub async fn register(
     }))
 }
 
+pub async fn register_native(
+    params: Value,
+    client: &ClientIdentity,
+) -> Result<Value, String> {
+    let app_id = required_string(&params, "app_id")?;
+    require_trusted_native_launcher(client)?;
+    let uid = client.require_uid()?;
+    let home = client.require_home_dir()?;
+    let apps_dir = std::path::PathBuf::from(
+        std::env::var("COS_APPS_DIR").unwrap_or_else(|_| "/usr/lib/cos/apps".to_string()),
+    );
+    let app = crate::apps::find(&apps_dir, &app_id)
+        .ok_or_else(|| format!("App `{app_id}` is not installed"))?;
+    let mut caps = native_manifest_caps(&app.manifest)?;
+    caps.insert(Cap::new(Verb::AGENT_INVOKE, Scope::name(&app_id)));
+    let session_id = format!("app-{}", uuid::Uuid::new_v4().simple());
+    let role = crate::caps::Role::Worker;
+    let info = SessionInfo {
+        session_id: session_id.clone(),
+        pid: 0,
+        command: vec![format!("native host for {app_id}")],
+        started_at: chrono::Utc::now().to_rfc3339(),
+        stdout_path: String::new(),
+        stderr_path: String::new(),
+        group: Some("app".to_string()),
+        parent: None,
+        workdir: Some(app.dir.to_string_lossy().into_owned()),
+        exit_code: None,
+        ended_at: None,
+        tier: Some(role.credential_tier()),
+        scope: Some("native-host".to_string()),
+        priority: None,
+        caps: Some(caps),
+        transient_caps: None,
+        role: Some(role.name().to_string()),
+        app_id: Some(app_id.clone()),
+        pending_bind: true,
+        start_time_ticks: None,
+    };
+    let proc_dir = crate::paths::with_user_override(uid, home, async move {
+        crate::proc::register_session(info)?;
+        Ok::<_, String>(crate::paths::proc_data_dir())
+    })
+    .await?;
+    Ok(json!({
+        "session_id": session_id,
+        "proc_data_dir": proc_dir,
+        "app_id": app_id,
+    }))
+}
+
 pub async fn register_mcp(
     params: Value,
     client: &ClientIdentity,
@@ -217,6 +268,7 @@ fn validate_manifest_caps(
             {
                 continue;
             }
+
             let allowed = if session_only {
                 manifest
                     .session
@@ -246,6 +298,29 @@ fn validate_manifest_caps(
         }
         Ok(())
     }
+
+fn native_manifest_caps(manifest: &Manifest) -> Result<CapSet, String> {
+    let mut caps = CapSet::new();
+    for operation in manifest.operations.values() {
+        for need in &operation.needs {
+            let scope = match &need.scope {
+                ScopeBinding::Fixed { scope } => scope.clone(),
+                ScopeBinding::Wild => Scope::Wild,
+                ScopeBinding::FromArg { .. }
+                | ScopeBinding::FromArgMap { .. }
+                | ScopeBinding::FromArgOrWild { .. } => {
+                    return Err(format!(
+                        "native host App `{}` has argument-bound capability {}",
+                        manifest.id,
+                        need.verb.as_str()
+                    ));
+                }
+            };
+            caps.insert(Cap::new(need.verb, scope));
+        }
+    }
+    Ok(caps)
+}
 
 fn need_allows_cap(
     need: &crate::caps::Need,
@@ -293,6 +368,78 @@ fn require_trusted_launcher(client: &ClientIdentity) -> Result<(), String> {
         return Err("App processes cannot manage App sessions".to_string());
     }
     Ok(())
+}
+
+fn require_trusted_native_launcher(client: &ClientIdentity) -> Result<(), String> {
+    require_trusted_launcher(client)?;
+    let pid = client
+        .pid
+        .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
+    let launcher = process_executable(pid)
+        .ok_or_else(|| "native App launcher executable is unavailable".to_string())?;
+    if launcher != std::path::Path::new("/usr/lib/cos/claw-mail-ai-host")
+        || !root_owned_file(&launcher)
+    {
+        return Err(format!(
+            "native App launcher must be the root-owned mail-ai host, got `{}`",
+            launcher.display()
+        ));
+    }
+    let parent = process_parent_pid(pid)
+        .and_then(process_executable)
+        .ok_or_else(|| "native App launcher parent is unavailable".to_string())?;
+    let trusted_parent = (parent == std::path::Path::new("/usr/bin/thunderbird")
+        || parent.starts_with("/usr/lib/thunderbird")
+        || parent.starts_with("/usr/lib/thunderbird-esr"))
+        && root_owned_file(&parent);
+    if !trusted_parent {
+        return Err(format!(
+            "native App launcher parent must be root-owned Thunderbird, got `{}`",
+            parent.display()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn process_executable(pid: u32) -> Option<std::path::PathBuf> {
+    std::fs::read_link(format!("/proc/{pid}/exe")).ok()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn process_executable(_pid: u32) -> Option<std::path::PathBuf> {
+    None
+}
+
+#[cfg(unix)]
+fn root_owned_file(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    std::fs::metadata(path)
+        .map(|metadata| {
+            metadata.is_file()
+                && metadata.uid() == 0
+                && metadata.permissions().mode() & 0o022 == 0
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn root_owned_file(_path: &std::path::Path) -> bool {
+    false
+}
+
+#[cfg(target_os = "linux")]
+fn process_parent_pid(pid: u32) -> Option<u32> {
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    status.lines().find_map(|line| {
+        line.strip_prefix("PPid:")
+            .and_then(|value| value.trim().parse::<u32>().ok())
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn process_parent_pid(_pid: u32) -> Option<u32> {
+    None
 }
 
 fn required_string(params: &Value, key: &str) -> Result<String, String> {

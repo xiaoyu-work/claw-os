@@ -19,7 +19,10 @@ audit log are uniform with the rest of `apps/`.
 
 Two surfaces share these verbs:
 
-1. **The Thunderbird extension** — via `native_host.py` (Native Messaging).
+1. **The Thunderbird extension** — via the dedicated kernel
+   `claw-mail-ai-host` launcher, which registers the `mail-ai` App
+   identity before starting
+   `native_host.py` over Native Messaging.
 2. **The cos CLI** — `cos app mail-ai <verb> …`, so the same logic is
    testable from the command line and reachable by other agents.
 
@@ -82,8 +85,8 @@ System-wide install lives at `rootfs/features/claw-mail-ai/`. It drops:
   `allowed_extensions` array pins the extension ID
   `claw-mail-ai@claw.os`.
 - `/usr/lib/cos/mail-ai/{native_host.py, main.py, _lib/…}`
-  — a self-contained copy of this app so the host can be invoked
-  without the source tree.
+  — a self-contained copy of this app. The root-owned
+  `/usr/lib/cos/claw-mail-ai-host` binary invokes it.
 - `/etc/thunderbird/policies/policies.json`
   — `ExtensionSettings` that pins the extension as system-installed
   and non-removable, and disables Mozilla telemetry.
@@ -94,8 +97,9 @@ For local dev, see `tools/install-mail-ai.sh`.
 
 App developers never see provider SDKs, model names, or API keys.
 The machine owner configures one provider in `/etc/cos/agent.toml`;
-every app's call uses that. `claw_os_sdk.ai.chat()` is the only sanctioned
-path, and `cos app lint` enforces it at install time.
+every app's call uses that. External email content is authorized with
+`ai.chat.untrusted`; `claw_os_sdk.ai.chat(origin="external-content")`
+is the only sanctioned path.
 
 This means the same extension code runs against Claude, GPT-4o, a
 local Llama 3, or any future provider, without any code change inside

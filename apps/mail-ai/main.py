@@ -122,7 +122,7 @@ def _safe_loads(s: str) -> dict | None:
 
 def _ai_call(prompt: str, *, system: str, max_units: int) -> dict:
     """Single chokepoint for every model call in this app."""
-    policy.require("ai.chat", wild=True)
+    policy.require("ai.chat.untrusted", wild=True)
     try:
         response = ai.chat(
             prompt=prompt,

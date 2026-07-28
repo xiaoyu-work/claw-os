@@ -14,9 +14,10 @@ needs a way in), because for mail-ai the **only** caller is the
 MailExtension itself. The extension is the user-driven half; the
 Python verbs are pure compute.
 
-Capability / budget / safety enforcement all happen inside
-``main._ai_call()`` via ``cos_runtime.policy`` and ``claw_os_sdk.ai``, so this host
-does not need its own gate.
+The root-owned ``claw-mail-ai-host`` binary registers the ``mail-ai``
+App session before starting this process. Capability, budget, and safety
+enforcement then happen inside ``main._ai_call()`` via
+``cos_runtime.policy`` and ``claw_os_sdk.ai``.
 """
 
 from __future__ import annotations
@@ -54,9 +55,6 @@ if _HERE not in sys.path:
 
 def _bootstrap_sdk_path() -> None:
     candidates = []
-    env_override = os.environ.get("CLAW_PYTHON_LIB")
-    if env_override:
-        candidates.append(env_override)
     # Walk up from this file looking for the source-checkout SDK path.
     cur = _HERE
     for _ in range(6):

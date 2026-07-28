@@ -145,6 +145,27 @@ impl AppSessionControl {
 }
 
 impl AppIdentitySession {
+    pub fn for_native_host(app_id: &str) -> Result<Self, String> {
+        let result = clawd_app_session_request(
+            "app_session.register_native",
+            serde_json::json!({"app_id": app_id}),
+        )?;
+        let session_id = result
+            .get("session_id")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| "clawd native App session response omitted session_id".to_string())?;
+        let proc_data_dir = result
+            .get("proc_data_dir")
+            .and_then(serde_json::Value::as_str)
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| "clawd native App session response omitted proc_data_dir".to_string())?;
+        Ok(Self {
+            session_id,
+            backend: AppSessionBackend::Clawd { proc_data_dir },
+        })
+    }
+
     /// Register the least-privileged identity for one manifest operation.
     pub fn for_operation(
         app_dir: &Path,
@@ -158,6 +179,7 @@ impl AppIdentitySession {
                     .to_string(),
             );
         }
+
         let manifest = load_manifest(app_dir)?;
         let (parent, parent_caps) = Self::parent_identity()?;
         if parent.app_id.is_some() {
@@ -342,6 +364,108 @@ impl AppIdentitySession {
             backend: self.backend.clone(),
         }
     }
+}
+
+pub fn run_native_app_host(
+    app_id: &str,
+    app_dir: &Path,
+    program: &std::ffi::OsStr,
+    args: &[std::ffi::OsString],
+) -> Result<(), String> {
+    if app_id != "mail-ai" {
+        return Err("native App host is restricted to mail-ai".to_string());
+    }
+    let app_dir = app_dir
+        .canonicalize()
+        .map_err(|error| format!("canonicalize native App directory: {error}"))?;
+    if app_dir != Path::new("/usr/lib/cos/mail-ai") {
+        return Err(format!(
+            "native mail-ai host must run from /usr/lib/cos/mail-ai, got {}",
+            app_dir.display()
+        ));
+    }
+    let program_path = Path::new(program)
+        .canonicalize()
+        .map_err(|error| format!("canonicalize native App program: {error}"))?;
+    let expected_python = Path::new("/usr/bin/python3")
+        .canonicalize()
+        .map_err(|error| format!("canonicalize /usr/bin/python3: {error}"))?;
+    let isolated = args.first().and_then(|value| value.to_str()) == Some("-I");
+    let host_arg = args.get(1).map(std::path::PathBuf::from);
+    let expected_host = app_dir.join("native_host.py");
+    if program_path != expected_python
+        || !isolated
+        || host_arg.as_deref() != Some(expected_host.as_path())
+    {
+        return Err("native mail-ai host command does not match the installed launcher".to_string());
+    }
+    let runner = Path::new("/usr/local/bin/claw-app-runner")
+        .canonicalize()
+        .map_err(|error| format!("canonicalize native App runner: {error}"))?;
+    validate_root_owned_executable(&runner)?;
+    validate_root_owned_executable(&program_path)?;
+    validate_root_owned_executable(&expected_host)?;
+    let manifest_id = manifest_app_id(&app_dir)?;
+    if manifest_id != app_id {
+        return Err(format!(
+            "native host App id `{app_id}` does not match manifest `{manifest_id}`"
+        ));
+    }
+    let mut app_session = AppIdentitySession::for_native_host(app_id)?;
+    let mut command = Command::new(&runner);
+    command.arg("--").arg(&program_path);
+    reset_app_environment(&mut command);
+    command
+        .args(args)
+        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+        .env("COS_BIN", "/usr/local/bin/cos")
+        .env("COS_APPS_DIR", "/usr/lib/cos/apps")
+        .env("COS_SDK_PYTHON_DIR", "/usr/lib/cos/python")
+        .env("PYTHONNOUSERSITE", "1")
+        .env_remove("CLAW_APP_RUNNER_BIN")
+        .env_remove("CLAW_PYTHON_LIB")
+        .env("COS_APP_ID", app_id)
+        .env("COS_SESSION", app_session.id())
+        .env("COS_PROC_DATA_DIR", app_session.proc_data_dir())
+        .env("COS_DATA_DIR", crate::paths::user_data_dir());
+    apply_routed_identity(&mut command)?;
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("spawn native App host: {error}"))?;
+    bind_child_session(&mut app_session, &mut child)?;
+    let status = child
+        .wait()
+        .map_err(|error| format!("wait for native App host: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "native App host exited with code {}",
+            status.code().unwrap_or(-1)
+        ))
+    }
+}
+
+#[cfg(unix)]
+fn validate_root_owned_executable(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let metadata = std::fs::metadata(path)
+        .map_err(|error| format!("inspect {}: {error}", path.display()))?;
+    if !metadata.is_file()
+        || metadata.uid() != 0
+        || metadata.permissions().mode() & 0o022 != 0
+    {
+        return Err(format!(
+            "native App executable must be root-owned and not group/world-writable: {}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_root_owned_executable(_path: &Path) -> Result<(), String> {
+    Err("native App host requires Unix ownership checks".to_string())
 }
 
 fn set_app_session_transient_caps(

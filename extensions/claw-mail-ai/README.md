@@ -5,9 +5,9 @@ Thunderbird UI. Every model call routes through the host's `cos ai chat`
 verb so capability gating, audit logging, and budget enforcement work
 the same way they do for any other claw-os app.
 
-The extension never embeds a model. It speaks **Native Messaging** to a
-Python host (`apps/mail-ai/native_host.py`) which forwards each verb to
-the `apps/mail-ai/main.py` dispatcher.
+The extension never embeds a model. It speaks **Native Messaging**
+through the dedicated kernel `claw-mail-ai-host` launcher, which registers the restricted
+`mail-ai` identity before starting `apps/mail-ai/native_host.py`.
 
 ## What it adds
 

@@ -25,7 +25,7 @@
       },
       "needs": [
         {
-          "verb": "ai.chat",
+          "verb": "ai.chat.untrusted",
           "scope": { "kind": "wild" },
           "why": { "en": "Send the email body to a model and get back a structured summary." }
         },
@@ -42,7 +42,7 @@
       },
       "needs": [
         {
-          "verb": "ai.chat",
+          "verb": "ai.chat.untrusted",
           "scope": { "kind": "wild" },
           "why": { "en": "Send the thread context to a model and get back three reply drafts." }
         }
@@ -54,7 +54,7 @@
       },
       "needs": [
         {
-          "verb": "ai.chat",
+          "verb": "ai.chat.untrusted",
           "scope": { "kind": "wild" },
           "why": { "en": "Send the intent and current draft to a model and get back a completion." }
         }
@@ -66,7 +66,7 @@
       },
       "needs": [
         {
-          "verb": "ai.chat",
+          "verb": "ai.chat.untrusted",
           "scope": { "kind": "wild" },
           "why": { "en": "Send the source text and target language to a model for translation." }
         }
@@ -78,7 +78,7 @@
       },
       "needs": [
         {
-          "verb": "ai.chat",
+          "verb": "ai.chat.untrusted",
           "scope": { "kind": "wild" },
           "why": { "en": "Send the sender / subject / snippet to a model and get back a category + tags." }
         },
@@ -95,7 +95,7 @@
       },
       "needs": [
         {
-          "verb": "ai.chat",
+          "verb": "ai.chat.untrusted",
           "scope": { "kind": "wild" },
           "why": { "en": "Send the question and surrounding messages to a model for a grounded answer." }
         }

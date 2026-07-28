@@ -211,6 +211,9 @@ async fn dispatch_result(
         "memory.sessions" => memory::sessions(request.params, client),
         "scheduler.run" => scheduler::run(request.params, client).await,
         "app_session.register" => app_sessions::register(request.params, client).await,
+        "app_session.register_native" => {
+            app_sessions::register_native(request.params, client).await
+        }
         "mcp_session.register" => app_sessions::register_mcp(request.params, client).await,
         "app_session.bind" => app_sessions::bind(request.params, client).await,
         "app_session.set_transient" => {
@@ -249,6 +252,7 @@ fn authorize_command(command: &str, client: &ClientIdentity) -> Result<(), Strin
             | "memory.sessions"
             | "scheduler.run"
             | "app_session.register"
+            | "app_session.register_native"
             | "mcp_session.register"
             | "app_session.bind"
             | "app_session.set_transient"
