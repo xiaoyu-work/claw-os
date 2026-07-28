@@ -9,8 +9,8 @@
 # Target path resolution (Linux-native, no hardcoded /home/<user>):
 #   1. First positional argument, if given.
 #   2. $COS_HOME, if set.
-#   3. $HOME, if set.
-#   4. Fall back to /root (root's standard home).
+#   3. The first existing human user's passwd home.
+#   4. If no human user exists yet, defer without creating a directory.
 #
 # Behaviour:
 #   - Idempotent (no-op if the target is already a mount).
@@ -23,7 +23,47 @@
 
 set -e
 
-TARGET="${1:-${COS_HOME:-${HOME:-/root}}}"
+TARGET="${1:-${COS_HOME:-}}"
+
+if [ -z "$TARGET" ]; then
+    account=$(awk -F: \
+        '$3 >= 1000 && $3 < 65534 && $7 !~ /(nologin|false)$/ { print; exit }' \
+        /etc/passwd)
+    if [ -z "$account" ]; then
+        printf '{"overlay": "deferred", "reason": "no human user exists yet"}\n'
+        exit 0
+    fi
+    IFS=: read -r _ _ target_uid target_gid _ TARGET _ <<EOF
+$account
+EOF
+else
+    target_uid=
+    target_gid=
+    case "$TARGET" in
+        /home/*)
+            account=$(awk -F: -v home="$TARGET" '$6 == home { print; exit }' /etc/passwd)
+            if [ -z "$account" ]; then
+                printf '{"overlay": "deferred", "path": "%s", "reason": "home owner does not exist yet"}\n' "$TARGET"
+                exit 0
+            fi
+            IFS=: read -r _ _ target_uid target_gid _ _ _ <<EOF
+$account
+EOF
+            ;;
+    esac
+fi
+
+case "$TARGET" in
+    /root|/home/*) ;;
+    *)
+        printf '{"overlay": "failed", "path": "%s", "error": "target must be /root or a local /home path"}\n' "$TARGET"
+        exit 0
+        ;;
+esac
+if [ -L "$TARGET" ]; then
+    printf '{"overlay": "failed", "path": "%s", "error": "target must not be a symlink"}\n' "$TARGET"
+    exit 0
+fi
 
 OVERLAY_DIR="/var/lib/cos/overlay"
 BASE="$OVERLAY_DIR/base"
@@ -40,14 +80,16 @@ if [ "$(uname)" != "Linux" ] || ! command -v mount >/dev/null 2>&1; then
 fi
 
 mkdir -p "$TARGET"
-
-# Capture the target's existing ownership (e.g. cos:cos created by
-# useradd) — once we mount the overlay on top, the mount point's
-# metadata is taken from upperdir, so upper must match or the target
-# user can't write to their own home. Falls back to root:root if the
-# target wasn't pre-created (e.g. /root on a fresh image).
-target_uid=$(stat -c '%u' "$TARGET" 2>/dev/null || echo 0)
-target_gid=$(stat -c '%g' "$TARGET" 2>/dev/null || echo 0)
+if [ "$(readlink -f "$TARGET")" != "$TARGET" ]; then
+    printf '{"overlay": "failed", "path": "%s", "error": "target path is not canonical"}\n' "$TARGET"
+    exit 0
+fi
+if [ -n "${target_uid:-}" ]; then
+    chown "$target_uid:$target_gid" "$TARGET"
+else
+    target_uid=$(stat -c '%u' "$TARGET")
+    target_gid=$(stat -c '%g' "$TARGET")
+fi
 
 # Detect overlay-backed rootfs (Debian live media). On those, upper/work
 # must live on a non-overlay filesystem — use tmpfs at /run/cos-overlay.

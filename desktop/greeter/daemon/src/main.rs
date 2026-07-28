@@ -3,6 +3,10 @@ use cosmic_greeter_daemon::{UserData, UserFilter};
 use std::error::Error;
 use std::ffi::CString;
 use std::future::pending;
+use std::fs;
+use std::io::Write;
+use std::path::Path;
+use std::process::Command;
 use std::{env, io};
 use tracing::metadata::LevelFilter;
 use tracing::warn;
@@ -64,6 +68,7 @@ enum GreeterError {
     ZBus(zbus::Error),
     Ron(String),
     RunAsUser(String),
+    HomeSetup(String),
 }
 
 struct GreeterProxy;
@@ -94,6 +99,91 @@ impl GreeterProxy {
 
         //TODO: is ron the best choice for passing around background data?
         ron::to_string(&user_datas).map_err(|err| GreeterError::Ron(err.to_string()))
+    }
+
+    fn initial_setup_end(&mut self, new_user: String) -> Result<(), GreeterError> {
+        let user = pwd::Passwd::iter()
+            .find(|user| user.name == new_user)
+            .ok_or_else(|| GreeterError::HomeSetup(format!("unknown user `{new_user}`")))?;
+        if user.uid < 1000 || user.uid >= 65534 {
+            return Err(GreeterError::HomeSetup(format!(
+                "refusing non-human uid {}",
+                user.uid
+            )));
+        }
+        let home = Path::new(&*user.dir);
+        if !home.is_absolute() || !home.starts_with("/home") {
+            return Err(GreeterError::HomeSetup(format!(
+                "refusing unexpected home {}",
+                home.display()
+            )));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let metadata = fs::metadata(home).map_err(|error| {
+                GreeterError::HomeSetup(format!("inspect {}: {error}", home.display()))
+            })?;
+            if !metadata.is_dir() || metadata.uid() != user.uid {
+                return Err(GreeterError::HomeSetup(format!(
+                    "home {} is not owned by uid {}",
+                    home.display(),
+                    user.uid
+                )));
+            }
+        }
+
+        let config = Path::new("/etc/default/cos-home");
+        if let Ok(existing) = fs::read_to_string(config) {
+            if let Some(current) = existing.lines().find_map(|line| {
+                line.trim()
+                    .strip_prefix("COS_HOME=")
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+            }) {
+                if current != home.to_string_lossy() {
+                    return Err(GreeterError::HomeSetup(format!(
+                        "cos-home is already configured for {current}"
+                    )));
+                }
+            }
+        }
+        let tmp = config.with_extension(format!("tmp.{}", std::process::id()));
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o644);
+        }
+        let mut file = options
+            .open(&tmp)
+            .map_err(|error| GreeterError::HomeSetup(format!("create {}: {error}", tmp.display())))?;
+        writeln!(
+            file,
+            "# Written by cosmic-initial-setup after creating the first user.\nCOS_HOME={}",
+            home.display()
+        )
+        .map_err(|error| GreeterError::HomeSetup(format!("write {}: {error}", tmp.display())))?;
+        file.sync_all()
+            .map_err(|error| GreeterError::HomeSetup(format!("sync {}: {error}", tmp.display())))?;
+        fs::rename(&tmp, config)
+            .map_err(|error| GreeterError::HomeSetup(format!("commit {}: {error}", config.display())))?;
+        fs::File::open(config.parent().unwrap_or(Path::new("/etc/default")))
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| GreeterError::HomeSetup(format!("sync /etc/default: {error}")))?;
+
+        let status = Command::new("/usr/bin/systemctl")
+            .args(["restart", "cos-home-setup.service"])
+            .status()
+            .map_err(|error| GreeterError::HomeSetup(format!("start cos-home setup: {error}")))?;
+        if !status.success() {
+            return Err(GreeterError::HomeSetup(format!(
+                "cos-home-setup.service exited with {}",
+                status.code().unwrap_or(-1)
+            )));
+        }
+        Ok(())
     }
 }
 

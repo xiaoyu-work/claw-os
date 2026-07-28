@@ -169,7 +169,7 @@ impl super::Page for Page {
 
     fn apply_settings(&mut self) -> cosmic::Task<super::Message> {
         let username = std::mem::take(&mut self.username);
-        let full_name = std::mem::take(&mut self.username);
+        let full_name = std::mem::take(&mut self.full_name);
         let password = std::mem::take(&mut self.password);
         let icon_file = self
             .profile_icon_path
@@ -206,9 +206,12 @@ impl super::Page for Page {
                     _ = user.set_icon_file(&icon_file).await;
                     _ = user.set_account_type(1).await;
 
-                    // Ask the greeter to move account files to the new user's home directory.
+                    // Ask the root greeter daemon to target and restart
+                    // the home-overlay service for the newly created user.
                     if let Ok(mut client) = crate::greeter::GreeterProxy::new(&conn).await {
-                        _ = client.initial_setup_end(username).await;
+                        if let Err(why) = client.initial_setup_end(username).await {
+                            tracing::error!(?why, "failed to configure first-user home overlay");
+                        }
                     }
                 }
 
