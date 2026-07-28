@@ -57,6 +57,8 @@ BANNER_LINES = [
 # --- helpers -----------------------------------------------------------
 
 def _camel(name: str) -> str:
+    if "_" not in name and "-" not in name and name[:1].isupper():
+        return name
     parts = name.replace("-", "_").split("_")
     return "".join(p.capitalize() for p in parts if p)
 
@@ -113,6 +115,8 @@ def load_schemas() -> list[tuple[str, dict]]:
 # --- rust --------------------------------------------------------------
 
 def rust_type(schema: dict, defs: dict, ctx: str) -> str:
+    if "x-rust-type" in schema:
+        return schema["x-rust-type"]
     if "$ref" in schema:
         ref = schema["$ref"].split("/")[-1]
         return _camel(ref)
@@ -131,6 +135,8 @@ def rust_type(schema: dict, defs: dict, ctx: str) -> str:
             mx = schema.get("maximum")
             if mn is not None and mx is not None and 0 <= mn and mx <= 255:
                 return "u8"
+            if mn is not None and mn >= 0:
+                return "u64"
             return "i64"
         return "String"
     t = schema.get("type")
@@ -146,6 +152,8 @@ def rust_type(schema: dict, defs: dict, ctx: str) -> str:
         mx = schema.get("maximum")
         if mn is not None and mx is not None and 0 <= mn and mx <= 255:
             return "u8"
+        if mn is not None and mn >= 0:
+            return "u64"
         return "i64"
     if t == "number":
         return "f64"
@@ -327,21 +335,37 @@ def py_typed_dict(name: str, schema: dict, defs: dict, out: list[str]) -> None:
     required = set(schema.get("required", []))
     title = schema.get("title", name)
     description = schema.get("description", "")
+    public_name = _camel(name)
+    required_props = [(pname, pschema) for pname, pschema in props.items() if pname in required]
+    optional_props = [(pname, pschema) for pname, pschema in props.items() if pname not in required]
     out.append("")
-    out.append(f"class {_camel(name)}(TypedDict, total=False):")
+    if required_props and optional_props:
+        base_name = f"_{public_name}Required"
+        out.append(f"class {base_name}(TypedDict):")
+        for pname, pschema in required_props:
+            ty = py_type(pschema, defs, f"{name}_{pname}")
+            out.append(f"    {pname}: {ty}")
+        out.append("")
+        out.append(f"class {public_name}({base_name}, total=False):")
+        fields = optional_props
+    elif required_props:
+        out.append(f"class {public_name}(TypedDict):")
+        fields = required_props
+    else:
+        out.append(f"class {public_name}(TypedDict, total=False):")
+        fields = optional_props
     out.append(f'    """{title}.')
     if description:
         out.append("")
         for line in textwrap.wrap(description, 76):
             out.append(f"    {line}")
     out.append('    """')
-    if not props:
+    if not fields:
         out.append("    pass")
         return
-    for pname, pschema in props.items():
+    for pname, pschema in fields:
         ty = py_type(pschema, defs, f"{name}_{pname}")
-        marker = "  # required" if pname in required else ""
-        out.append(f"    {pname}: {ty}{marker}")
+        out.append(f"    {pname}: {ty}")
 
 
 def emit_python(schemas: list[tuple[str, dict]]) -> str:
@@ -484,6 +508,8 @@ def emit_ts(schemas: list[tuple[str, dict]]) -> str:
 # --- go ----------------------------------------------------------------
 
 def go_type(schema: dict, defs: dict, ctx: str) -> str:
+    if "x-go-type" in schema:
+        return schema["x-go-type"]
     if "$ref" in schema:
         ref = schema["$ref"].split("/")[-1]
         return _camel(ref)
@@ -497,7 +523,7 @@ def go_type(schema: dict, defs: dict, ctx: str) -> str:
     if t == "string":
         return "string"
     if t == "integer":
-        return "int64"
+        return "uint64" if schema.get("minimum", -1) >= 0 else "int64"
     if t == "number":
         return "float64"
     if t == "boolean":

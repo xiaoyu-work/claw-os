@@ -29,72 +29,51 @@ use crate::{cos_call_json, BridgeError};
 /// Token / unit accounting for a single call.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Usage {
-    #[serde(default)]
     pub input_tokens: u32,
-    #[serde(default)]
     pub output_tokens: u32,
-    #[serde(default)]
-    pub units: u32,
+    pub units: u64,
 }
 
 /// Snapshot of the app's budget *after* this call.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Budget {
-    #[serde(default)]
     pub period: String,
-    #[serde(default)]
-    pub units_used: u32,
-    #[serde(default)]
-    pub units_cap: u32,
+    pub units_used: u64,
+    pub units_cap: u64,
 }
 
 /// Safety / review metadata.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Review {
-    #[serde(default)]
     pub safety: String,
-    #[serde(default)]
     pub prompt_redacted: bool,
-    #[serde(default)]
-    pub response_blocked: bool,
 }
 
 /// A tool call the model proposed but the kernel did **not** execute.
 /// Apps decide whether to fulfil it by re-calling [`crate::tools::call`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProposedToolCall {
-    #[serde(default)]
     pub id: String,
     pub name: String,
-    #[serde(default)]
     pub input: serde_json::Value,
 }
 
 /// Parsed reply from `cos ai chat`. See `wire/v1/ai.schema.json`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AiResponse {
-    #[serde(default)]
     pub text: String,
-    #[serde(default)]
     pub model: String,
-    #[serde(default)]
     pub provider: String,
-    #[serde(default)]
     pub verb: String,
     #[serde(default)]
-    pub embedding: Vec<f64>,
+    pub embedding: Vec<f32>,
     #[serde(default)]
     pub output_path: Option<String>,
-    #[serde(default)]
     pub usage: Usage,
-    #[serde(default)]
     pub budget: Budget,
-    #[serde(default)]
     pub review: Review,
     #[serde(default)]
     pub tool_calls: Vec<ProposedToolCall>,
-    #[serde(default)]
-    pub raw: serde_json::Value,
 }
 
 // ---------------------------------------------------------------------------
@@ -141,7 +120,7 @@ pub enum AiError {
 #[derive(Debug, Default, Clone)]
 pub struct ChatOpts {
     origin: Option<String>,
-    max_units: Option<u32>,
+    max_units: Option<u64>,
     system: Option<String>,
     app_id: Option<String>,
     tools: Option<Vec<String>>,
@@ -149,7 +128,7 @@ pub struct ChatOpts {
 
 impl ChatOpts {
     pub fn origin(mut self, o: impl Into<String>)    -> Self { self.origin = Some(o.into()); self }
-    pub fn max_units(mut self, n: u32)               -> Self { self.max_units = Some(n); self }
+    pub fn max_units(mut self, n: u64)               -> Self { self.max_units = Some(n); self }
     pub fn system(mut self, s: impl Into<String>)    -> Self { self.system = Some(s.into()); self }
     pub fn app(mut self, id: impl Into<String>)      -> Self { self.app_id = Some(id.into()); self }
     pub fn tools<I, S>(mut self, tools: I) -> Self
@@ -341,18 +320,16 @@ fn parse_response(value: serde_json::Value, modality: Modality) -> Result<AiResp
     if let Some(err) = value.get("error").and_then(|v| v.as_str()) {
         return Err(classify_ai_error(err, &value));
     }
-    // Map raw envelope onto AiResponse using strongly-typed deser
-    // where possible. Surfacing a decode error here matters: the
+    // Decode the kernel reply into the wire-aligned response type.
+    // Surfacing a decode error here matters: the
     // previous `unwrap_or_default()` silently substituted an empty
     // AiResponse, masking schema drift (e.g. the kernel renaming
     // `embedding` to `vector`) as "the call succeeded but somehow
     // returned nothing". Make the failure mode loud instead.
-    let mut resp: AiResponse =
-        serde_json::from_value(value.clone()).map_err(|e| {
+    let resp: AiResponse =
+        serde_json::from_value(value).map_err(|e| {
             AiError::Unavailable(format!("ai response decode failed: {e}"))
         })?;
-    // Preserve raw for callers that want provider-native fields back.
-    resp.raw = value;
     // ai.embed's prompt-vector lives at `embedding`; ai.chat puts the
     // text at `text`. Modality name is informational.
     let _ = modality;

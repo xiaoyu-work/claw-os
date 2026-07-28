@@ -2,62 +2,113 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://claw-os.dev/wire/v1/ai.schema.json",
   "title": "AI request / reply",
-  "description": "Shape of the data payload returned by `cos ai chat|embed|image-generate`. Apps call this via SDK helpers (claw_os_sdk.ai.chat / ai.embed / ai.image_generate). The kernel emits the same fields whether the call was synchronous or streamed (terminating reply).",
+  "description": "Shape returned by `cos ai chat`. The kernel derives the modality and capability verb from the request flags.",
   "type": "object",
-  "required": ["verb"],
+  "required": ["text", "model", "provider", "verb", "usage", "budget", "review"],
   "additionalProperties": true,
   "properties": {
-    "verb":     { "type": "string", "enum": ["ai.chat", "ai.embed", "ai.image_generate", "ai.tool"], "description": "Which AI verb produced this reply." },
-    "text":     { "type": "string", "description": "Assistant text (ai.chat only)." },
-    "model":    { "type": "string", "description": "Provider model id actually used (e.g. \"gpt-4o-mini\")." },
-    "provider": { "type": "string", "description": "Provider name (e.g. \"openai\", \"anthropic\")." },
+    "text": {
+      "type": "string",
+      "description": "Text result, or an empty string for vector/file-output modalities."
+    },
+    "model": {
+      "type": "string",
+      "description": "Provider model id actually used."
+    },
+    "provider": {
+      "type": "string",
+      "description": "Provider name actually used."
+    },
+    "verb": {
+      "type": "string",
+      "enum": [
+        "ai.chat",
+        "ai.chat.untrusted",
+        "ai.embed",
+        "ai.image.generate",
+        "ai.image.analyze",
+        "ai.vision.analyze",
+        "ai.audio.tts",
+        "ai.audio.stt",
+        "ai.video.generate",
+        "ai.video.analyze"
+      ],
+      "description": "Capability verb derived by the kernel for this call."
+    },
     "embedding": {
       "type": "array",
-      "items": { "type": "number" },
-      "description": "Single embedding vector (ai.embed). For batch input, kernel returns an array of arrays under `embeddings`."
+      "items": {
+        "type": "number",
+        "x-rust-type": "f32",
+        "x-go-type": "float32"
+      },
+      "description": "Embedding vector for ai.embed; omitted for other modalities."
     },
-    "embeddings": { "type": "array", "items": { "type": "array", "items": { "type": "number" } } },
-    "output_path": { "type": "string", "description": "Filesystem path where the kernel wrote the generated artifact (image generation)." },
+    "output_path": {
+      "type": "string",
+      "description": "Filesystem path containing a generated binary artifact."
+    },
     "usage": {
       "type": "object",
-      "description": "Token / unit accounting for this single call.",
+      "required": ["input_tokens", "output_tokens", "units"],
+      "additionalProperties": false,
+      "description": "Token and unit accounting for this call.",
       "properties": {
-        "input_tokens":  { "type": "integer", "minimum": 0 },
-        "output_tokens": { "type": "integer", "minimum": 0 },
-        "units":         { "type": "number",  "description": "Provider-agnostic cost units, billed against the app budget." }
+        "input_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "x-rust-type": "u32",
+          "x-go-type": "uint32"
+        },
+        "output_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "x-rust-type": "u32",
+          "x-go-type": "uint32"
+        },
+        "units": { "type": "integer", "minimum": 0 }
       }
     },
     "budget": {
       "type": "object",
-      "description": "Snapshot of the app's budget *after* this call.",
+      "required": ["period", "units_used", "units_cap"],
+      "additionalProperties": false,
+      "description": "App budget snapshot after the call.",
       "properties": {
-        "period":     { "type": "string", "description": "Reset window, e.g. \"monthly\"." },
-        "units_used": { "type": "number" },
-        "units_cap":  { "type": "number" }
+        "period": { "type": "string" },
+        "units_used": { "type": "integer", "minimum": 0 },
+        "units_cap": { "type": "integer", "minimum": 0 }
       }
     },
     "review": {
       "type": "object",
-      "description": "Safety / review metadata.",
+      "required": ["safety", "prompt_redacted"],
+      "additionalProperties": false,
+      "description": "Safety policy actually applied by the kernel.",
       "properties": {
-        "safety":           { "type": "string", "enum": ["strict", "balanced", "off"] },
-        "prompt_redacted":  { "type": "boolean" },
-        "response_blocked": { "type": "boolean" }
+        "safety": {
+          "type": "string",
+          "enum": ["strict", "standard", "minimal"]
+        },
+        "prompt_redacted": { "type": "boolean" }
       }
     },
     "tool_calls": {
       "type": "array",
-      "description": "Catalog tool invocations the model requested in this turn. Each entry includes name, args, result (if executed kernel-side).",
-      "items": {
-        "type": "object",
-        "required": ["name"],
-        "properties": {
-          "name":   { "type": "string" },
-          "args":   { "type": "object" },
-          "result": {}
-        }
+      "description": "Tool calls proposed by the model. The kernel does not execute them inline.",
+      "items": { "$ref": "#/$defs/AiToolCall" }
+    }
+  },
+  "$defs": {
+    "AiToolCall": {
+      "type": "object",
+      "required": ["id", "name", "input"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "input": {}
       }
-    },
-    "raw": { "description": "Provider-native response object, included only when env var COS_AI_RAW=1." }
+    }
   }
 }

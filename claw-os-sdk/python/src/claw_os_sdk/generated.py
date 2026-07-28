@@ -29,60 +29,57 @@ def check_wire_version(envelope: Mapping[str, object]) -> None:
         )
 
 
-class Ai(TypedDict, total=False):
-    """AI request / reply.
-
-    Shape of the data payload returned by `cos ai chat|embed|image-generate`.
-    Apps call this via SDK helpers (claw_os_sdk.ai.chat / ai.embed /
-    ai.image_generate). The kernel emits the same fields whether the call was
-    synchronous or streamed (terminating reply).
-    """
-    verb: str  # required
+class _AiRequired(TypedDict):
     text: str
     model: str
     provider: str
-    embedding: List[float]
-    embeddings: List[List[float]]
-    output_path: str
+    verb: str
     usage: "AiUsage"
     budget: "AiBudget"
     review: "AiReview"
-    tool_calls: List["AiToolCalls"]
-    raw: Any
 
-class AiUsage(TypedDict, total=False):
+class Ai(_AiRequired, total=False):
+    """AI request / reply.
+
+    Shape returned by `cos ai chat`. The kernel derives the modality and
+    capability verb from the request flags.
+    """
+    embedding: List[float]
+    output_path: str
+    tool_calls: List["AiToolCall"]
+
+class AiUsage(TypedDict):
     """ai_usage.
 
-    Token / unit accounting for this single call.
+    Token and unit accounting for this call.
     """
     input_tokens: int
     output_tokens: int
-    units: float
+    units: int
 
-class AiBudget(TypedDict, total=False):
+class AiBudget(TypedDict):
     """ai_budget.
 
-    Snapshot of the app's budget *after* this call.
+    App budget snapshot after the call.
     """
     period: str
-    units_used: float
-    units_cap: float
+    units_used: int
+    units_cap: int
 
-class AiReview(TypedDict, total=False):
+class AiReview(TypedDict):
     """ai_review.
 
-    Safety / review metadata.
+    Safety policy actually applied by the kernel.
     """
     safety: str
     prompt_redacted: bool
-    response_blocked: bool
 
-class AiToolCalls(TypedDict, total=False):
-    """ai_tool_calls.
+class AiToolCall(TypedDict):
+    """AiToolCall.
     """
-    name: str  # required
-    args: Dict[str, Any]
-    result: Any
+    id: str
+    name: str
+    input: Any
 
 class App(TypedDict, total=False):
     """App-verb invocation reply.
@@ -95,22 +92,29 @@ class App(TypedDict, total=False):
     verb: str
     app: str
 
-class Envelope(TypedDict, total=False):
+class _EnvelopeRequired(TypedDict):
+    ok: bool
+    wire_version: int
+
+class Envelope(_EnvelopeRequired, total=False):
     """Envelope.
 
     Common wrapper around every wire v1 reply. Forward-compatible target shape —
     the current kernel still emits flat per-command shapes that SDKs adapt to
     this envelope.
     """
-    ok: bool  # required
-    wire_version: int  # required
     audit_id: str
     data: Dict[str, Any]
     error: str
     code: str
     detail: Dict[str, Any]
 
-class Manifest(TypedDict, total=False):
+class _ManifestRequired(TypedDict):
+    id: str
+    version: str
+    name: "Localizedtext"
+
+class Manifest(_ManifestRequired, total=False):
     """App manifest (app.json).
 
     The manifest every app under COS_APPS_DIR must provide. The kernel parses
@@ -118,9 +122,6 @@ class Manifest(TypedDict, total=False):
     operations, optional MCP session tools, optional desktop GUI surface,
     capability needs, and AI policy.
     """
-    id: str  # required
-    version: str  # required
-    name: "Localizedtext"  # required
     summary: "Localizedtext"
     icon: str
     runtime: str
@@ -131,69 +132,79 @@ class Manifest(TypedDict, total=False):
     desktop: "Desktop"
     dependencies: Dict[str, Any]
 
-class Localizedtext(TypedDict, total=False):
+class Localizedtext(TypedDict):
     """localizedText.
 
     Localized string map. The `en` key is required; other locales (zh-CN, ...)
     are optional fallbacks.
     """
-    en: str  # required
+    en: str
 
-class Operation(TypedDict, total=False):
+class _OperationRequired(TypedDict):
+    label: "Localizedtext"
+
+class Operation(_OperationRequired, total=False):
     """operation.
 
     A one-shot operation: its inputs and the capabilities it needs.
     """
-    label: "Localizedtext"  # required
     summary: "Localizedtext"
     args: List["Arg"]
     needs: List["Need"]
 
-class Arg(TypedDict, total=False):
+class _ArgRequired(TypedDict):
+    name: str
+    kind: str
+
+class Arg(_ArgRequired, total=False):
     """arg.
     """
-    name: str  # required
-    kind: str  # required
     required: bool
     default: Any
     label: "Localizedtext"
 
-class Need(TypedDict, total=False):
+class Need(TypedDict):
     """need.
 
     A single capability request: verb + scope binding + human reason.
     """
-    verb: str  # required
-    scope: "Scopebinding"  # required
-    why: "Localizedtext"  # required
+    verb: str
+    scope: "Scopebinding"
+    why: "Localizedtext"
 
-class Scopebinding(TypedDict, total=False):
+class _ScopebindingRequired(TypedDict):
+    kind: str
+
+class Scopebinding(_ScopebindingRequired, total=False):
     """scopeBinding.
 
     How an operation's scope is determined at invocation time. kind=from-arg
     reads a named arg at call time; kind=fixed hard-codes a scope; kind=wild is
     an explicit wildcard (no implicit '*').
     """
-    kind: str  # required
     arg: str
     scope: "Scope"
 
-class Scope(TypedDict, total=False):
+class _ScopeRequired(TypedDict):
+    kind: str
+
+class Scope(_ScopeRequired, total=False):
     """scope.
 
     A concrete capability scope. value is a glob for path/host/name, the self-
     reference string for self-ref, and absent for wild.
     """
-    kind: str  # required
     value: str
 
-class Aipolicy(TypedDict, total=False):
+class _AipolicyRequired(TypedDict):
+    budget: "Aibudget"
+
+class Aipolicy(_AipolicyRequired, total=False):
     """aiPolicy.
 
     Budget + safety envelope under which the app may exercise ai.* verbs. Apps
     never pick the model; the OS owns the provider.
     """
-    budget: "Aibudget"  # required
     safety: str
     origins: List[str]
     tools: List[str]
@@ -213,14 +224,16 @@ class Session(TypedDict, total=False):
     transport: str
     tools: List["Sessiontool"]
 
-class Sessiontool(TypedDict, total=False):
+class _SessiontoolRequired(TypedDict):
+    name: str
+    summary: "Localizedtext"
+
+class Sessiontool(_SessiontoolRequired, total=False):
     """sessionTool.
 
     One MCP-callable tool. Mirrors operation: args + needs drive the model's
     view and the kernel's enforcement.
     """
-    name: str  # required
-    summary: "Localizedtext"  # required
     args: List["Arg"]
     needs: List["Need"]
 
@@ -237,41 +250,42 @@ class Desktop(TypedDict, total=False):
     mime_types: List[str]
     single_instance: bool
 
-class Perms(TypedDict, total=False):
+class _PermsRequired(TypedDict):
+    decision: str
+    verb: str
+
+class Perms(_PermsRequired, total=False):
     """Permissions request / reply.
 
     Shape of the success-path data field returned by policy checks. Apps call
     this via SDK helpers (e.g. cos_runtime.policy.check).
     """
-    decision: str  # required
-    verb: str  # required
     scope: Any
     reason: str
     hint: str
     granted: bool
 
-class Tool(TypedDict, total=False):
+class Tool(TypedDict):
     """Catalog tool invocation reply.
 
-    Shape returned by `cos ai tool <name> --app <id> --args '<json>'`. Catalog
-    tools are reusable functions exposed in the AI tool catalog. They differ
-    from app verbs in that the AI plans them automatically.
+    Shape returned by `cos ai tool <name> --app <id> --args '<json>'`.
     """
-    tool: str  # required
+    tool: str
+    app_id: str
+    status: str
     result: Any
-    audit_id: str
 
 def validate_ai_verb(value: str) -> None:
     """Raise ValueError if value is not in the ai.verb
     enum. Mirrors generated::validate_ai_verb."""
-    allowed = ['ai.chat', 'ai.embed', 'ai.image_generate', 'ai.tool']
+    allowed = ['ai.chat', 'ai.chat.untrusted', 'ai.embed', 'ai.image.generate', 'ai.image.analyze', 'ai.vision.analyze', 'ai.audio.tts', 'ai.audio.stt', 'ai.video.generate', 'ai.video.analyze']
     if value not in allowed:
         raise ValueError(f"invalid ai.verb value: {value!r}")
 
 def validate_ai_review_safety(value: str) -> None:
     """Raise ValueError if value is not in the ai_review.safety
     enum. Mirrors generated::validate_ai_review_safety."""
-    allowed = ['strict', 'balanced', 'off']
+    allowed = ['strict', 'standard', 'minimal']
     if value not in allowed:
         raise ValueError(f"invalid ai_review.safety value: {value!r}")
 
@@ -288,4 +302,11 @@ def validate_perms_decision(value: str) -> None:
     allowed = ['allow', 'deny', 'prompt']
     if value not in allowed:
         raise ValueError(f"invalid perms.decision value: {value!r}")
+
+def validate_tool_status(value: str) -> None:
+    """Raise ValueError if value is not in the tool.status
+    enum. Mirrors generated::validate_tool_status."""
+    allowed = ['ok']
+    if value not in allowed:
+        raise ValueError(f"invalid tool.status value: {value!r}")
 

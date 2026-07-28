@@ -31,81 +31,57 @@ pub fn check_wire_version(seen: i64) -> Result<(), String> {
 }
 
 /// AI request / reply
-/// Shape of the data payload returned by `cos ai chat|embed|image-generate`. Apps
-/// call this via SDK helpers (claw_os_sdk.ai.chat / ai.embed /
-/// ai.image_generate). The kernel emits the same fields whether the call was
-/// synchronous or streamed (terminating reply).
+/// Shape returned by `cos ai chat`. The kernel derives the modality and
+/// capability verb from the request flags.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Ai {
+    pub text: String,
+    pub model: String,
+    pub provider: String,
     pub verb: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub embedding: Option<Vec<f64>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub embeddings: Option<Vec<Vec<f64>>>,
+    pub embedding: Option<Vec<f32>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_path: Option<String>,
+    pub usage: AiUsage,
+    pub budget: AiBudget,
+    pub review: AiReview,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub usage: Option<AiUsage>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub budget: Option<AiBudget>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub review: Option<AiReview>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_calls: Option<Vec<AiToolCalls>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub raw: Option<serde_json::Value>,
+    pub tool_calls: Option<Vec<AiToolCall>>,
 }
 
 /// ai_usage
-/// Token / unit accounting for this single call.
+/// Token and unit accounting for this call.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AiUsage {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input_tokens: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output_tokens: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub units: Option<f64>,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    pub units: u64,
 }
 
 /// ai_budget
-/// Snapshot of the app's budget *after* this call.
+/// App budget snapshot after the call.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AiBudget {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub period: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub units_used: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub units_cap: Option<f64>,
+    pub period: String,
+    pub units_used: u64,
+    pub units_cap: u64,
 }
 
 /// ai_review
-/// Safety / review metadata.
+/// Safety policy actually applied by the kernel.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AiReview {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub safety: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prompt_redacted: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub response_blocked: Option<bool>,
+    pub safety: String,
+    pub prompt_redacted: bool,
 }
 
-/// ai_tool_calls
+/// AiToolCall
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct AiToolCalls {
+pub struct AiToolCall {
+    pub id: String,
     pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub args: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub result: Option<serde_json::Value>,
+    pub input: serde_json::Value,
 }
 
 /// App-verb invocation reply
@@ -255,7 +231,7 @@ pub struct Aipolicy {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Aibudget {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub monthly_units: Option<i64>,
+    pub monthly_units: Option<u64>,
 }
 
 /// session
@@ -320,16 +296,13 @@ pub struct Perms {
 }
 
 /// Catalog tool invocation reply
-/// Shape returned by `cos ai tool <name> --app <id> --args '<json>'`. Catalog
-/// tools are reusable functions exposed in the AI tool catalog. They differ from
-/// app verbs in that the AI plans them automatically.
+/// Shape returned by `cos ai tool <name> --app <id> --args '<json>'`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Tool {
     pub tool: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub result: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub audit_id: Option<String>,
+    pub app_id: String,
+    pub status: String,
+    pub result: serde_json::Value,
 }
 
 /// Reject values outside the ai.verb enum.
@@ -337,7 +310,7 @@ pub struct Tool {
 /// The wire schema lists a closed set of allowed values; a kernel
 /// that emits an unknown one should not be silently accepted.
 pub fn validate_ai_verb(value: &str) -> Result<(), String> {
-    const ALLOWED: &[&str] = &["ai.chat", "ai.embed", "ai.image_generate", "ai.tool"];
+    const ALLOWED: &[&str] = &["ai.chat", "ai.chat.untrusted", "ai.embed", "ai.image.generate", "ai.image.analyze", "ai.vision.analyze", "ai.audio.tts", "ai.audio.stt", "ai.video.generate", "ai.video.analyze"];
     if ALLOWED.iter().any(|a| *a == value) {
         Ok(())
     } else {
@@ -350,7 +323,7 @@ pub fn validate_ai_verb(value: &str) -> Result<(), String> {
 /// The wire schema lists a closed set of allowed values; a kernel
 /// that emits an unknown one should not be silently accepted.
 pub fn validate_ai_review_safety(value: &str) -> Result<(), String> {
-    const ALLOWED: &[&str] = &["strict", "balanced", "off"];
+    const ALLOWED: &[&str] = &["strict", "standard", "minimal"];
     if ALLOWED.iter().any(|a| *a == value) {
         Ok(())
     } else {
@@ -381,6 +354,19 @@ pub fn validate_perms_decision(value: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("invalid perms.decision value: {value}"))
+    }
+}
+
+/// Reject values outside the tool.status enum.
+///
+/// The wire schema lists a closed set of allowed values; a kernel
+/// that emits an unknown one should not be silently accepted.
+pub fn validate_tool_status(value: &str) -> Result<(), String> {
+    const ALLOWED: &[&str] = &["ok"];
+    if ALLOWED.iter().any(|a| *a == value) {
+        Ok(())
+    } else {
+        Err(format!("invalid tool.status value: {value}"))
     }
 }
 

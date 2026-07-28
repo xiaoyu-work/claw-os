@@ -78,7 +78,7 @@ type AiResponse struct {
 	Model      string
 	Provider   string
 	Verb       string
-	Embedding  []float64
+	Embedding  []float32
 	OutputPath string
 	Usage      AiUsage
 	Budget     AiBudget
@@ -292,8 +292,8 @@ func classifyError(env map[string]any) error {
 func parseBudget(blk map[string]any) AiBudget {
 	return AiBudget{
 		Period:    asString(blk["period"]),
-		UnitsUsed: asFloat(blk["units_used"]),
-		UnitsCap:  asFloat(blk["units_cap"]),
+		UnitsUsed: asUint64(blk["units_used"]),
+		UnitsCap:  asUint64(blk["units_cap"]),
 	}
 }
 
@@ -301,10 +301,10 @@ func parseResponse(env map[string]any) *AiResponse {
 	usage := asMap(env["usage"])
 	review := asMap(env["review"])
 
-	var embedding []float64
+	var embedding []float32
 	if raw, ok := env["embedding"].([]any); ok {
 		for _, x := range raw {
-			embedding = append(embedding, asFloat(x))
+			embedding = append(embedding, float32(asFloat(x)))
 		}
 	}
 
@@ -331,9 +331,9 @@ func parseResponse(env map[string]any) *AiResponse {
 		Embedding:  embedding,
 		OutputPath: asString(env["output_path"]),
 		Usage: AiUsage{
-			InputTokens:  asInt(usage["input_tokens"]),
-			OutputTokens: asInt(usage["output_tokens"]),
-			Units:        asFloat(usage["units"]),
+			InputTokens:  asUint32(usage["input_tokens"]),
+			OutputTokens: asUint32(usage["output_tokens"]),
+			Units:        asUint64(usage["units"]),
 		},
 		Budget: parseBudget(asMap(env["budget"])),
 		Review: AiReview{
