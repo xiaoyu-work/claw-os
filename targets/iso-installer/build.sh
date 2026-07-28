@@ -39,7 +39,7 @@ fi
 
 # Host tooling.
 missing=""
-for tool in mksquashfs xorriso grub-mkrescue mformat; do
+for tool in mksquashfs unsquashfs xorriso grub-mkrescue mformat; do
     command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
 done
 if [ -n "$missing" ]; then
@@ -84,11 +84,16 @@ echo ":: initrd: $INITRD"
 rm -rf "$ISO_BUILD"
 mkdir -p "$ISO_BUILD/live" "$ISO_BUILD/boot/grub"
 
-# 5. Squashfs (exclude /boot to avoid double-shipping the kernel).
+# 5. Squashfs.
+#
+# The live medium still carries convenient copies at /live/vmlinuz and
+# /live/initrd.img, but the installer payload must retain the complete
+# target /boot tree. Calamares unpacks this squashfs onto disk before
+# running update-grub; excluding /boot produced an installed system with
+# no kernel and an empty GRUB menu.
 echo ":: mksquashfs (this takes a few minutes)"
 mksquashfs "$ROOTFS" "$ISO_BUILD/live/filesystem.squashfs" \
     -comp zstd -Xcompression-level 19 \
-    -e boot \
     -noappend
 
 cp "$KERNEL" "$ISO_BUILD/live/vmlinuz"
@@ -128,6 +133,15 @@ for f in live/filesystem.squashfs live/vmlinuz live/initrd.img boot/grub/grub.cf
         exit 1
     fi
 done
+SQUASHFS_LIST=$(unsquashfs -ll "$ISO_BUILD/live/filesystem.squashfs")
+if ! grep -qE '/boot/vmlinuz-[^/]+$' <<<"$SQUASHFS_LIST"; then
+    echo "error: installer squashfs does not contain a target kernel under /boot" >&2
+    exit 1
+fi
+if ! grep -qE '/boot/initrd\\.img-[^/]+$' <<<"$SQUASHFS_LIST"; then
+    echo "error: installer squashfs does not contain a target initrd under /boot" >&2
+    exit 1
+fi
 
 # 8. Build ISO.
 echo ":: building $ARCH ISO via grub-mkrescue"
