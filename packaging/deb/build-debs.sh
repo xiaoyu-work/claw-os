@@ -28,8 +28,8 @@ source "$PROJECT_DIR/scripts/lib/arch.sh"
 OUT_DIR="$PROJECT_DIR/build/debs"
 STAGE_DIR="$PROJECT_DIR/build/deb-staging"
 
-# Version: read from core/Cargo.toml — same source of truth as rootfs build.
-VERSION="$(grep '^version' "$PROJECT_DIR/core/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')"
+source "$PROJECT_DIR/scripts/lib/package-version.sh"
+VERSION="$(package_version "$PROJECT_DIR")"
 
 DPKG_DEB="$(command -v dpkg-deb || true)"
 if [ -z "$DPKG_DEB" ]; then

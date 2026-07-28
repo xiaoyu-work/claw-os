@@ -31,6 +31,11 @@ The .debs are built **from already-compiled binaries** — `dpkg-deb --build`
 just assembles staging trees. CI builds `cos` (musl) and `cos-browser`
 (glibc) first, then invokes `packaging/deb/build-debs.sh`.
 
+Package versions are generated as `<semver>+git<commit-count>.g<sha>`.
+Pull-request artifacts use a lower-sorting `~pr...` suffix. Local dirty
+trees must set `COS_PACKAGE_VERSION` explicitly to avoid reusing a stale
+commit-derived package filename.
+
 ```bash
 # Build binaries for the host architecture (amd64 shown here).
 cargo build --release -p cos --target x86_64-unknown-linux-musl

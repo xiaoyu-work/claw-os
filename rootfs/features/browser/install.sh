@@ -12,12 +12,16 @@ set -euo pipefail
 
 DEBS_DIR="$PROJECT_DIR/build/debs"
 
-if ! ls "$DEBS_DIR/claw-os-browser_"*.deb >/dev/null 2>&1; then
+BROWSER_DEB="$DEBS_DIR/claw-os-browser_${COS_VERSION}_${DEB_ARCH:-amd64}.deb"
+if [ ! -f "$BROWSER_DEB" ]; then
     echo "  :: claw-os-browser.deb not found — building it"
     "$PROJECT_DIR/packaging/deb/build-debs.sh"
 fi
 
-BROWSER_DEB="$(ls "$DEBS_DIR/claw-os-browser_"*"_${DEB_ARCH:-amd64}.deb" | head -1)"
+if [ ! -f "$BROWSER_DEB" ]; then
+    echo "error: expected package missing after build: $BROWSER_DEB" >&2
+    exit 1
+fi
 echo "  :: installing $(basename "$BROWSER_DEB")"
 
 # Remove the overlay copy so dpkg can claim the file.

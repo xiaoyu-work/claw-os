@@ -116,10 +116,12 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-# Read version from Cargo.toml (single source of truth).
-COS_VERSION=$(grep '^version' "$PROJECT_DIR/core/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+# Build a Debian-monotonic rolling version from semver + git commit count + SHA.
+source "$PROJECT_DIR/scripts/lib/package-version.sh"
+COS_VERSION="$(package_version "$PROJECT_DIR")"
+COS_PACKAGE_VERSION="$COS_VERSION"
 
-export ROOTFS PROJECT_DIR SCRIPT_DIR SUITE COS_VERSION ARCH DEB_ARCH KERNEL_PKG
+export ROOTFS PROJECT_DIR SCRIPT_DIR SUITE COS_VERSION COS_PACKAGE_VERSION ARCH DEB_ARCH KERNEL_PKG
 
 echo ":: features: ${FEATURE_LIST[*]}"
 echo ":: arch:     $ARCH (deb=$DEB_ARCH, kernel=$KERNEL_PKG)"

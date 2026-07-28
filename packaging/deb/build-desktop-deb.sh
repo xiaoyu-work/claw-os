@@ -19,7 +19,8 @@ source "$PROJECT_DIR/scripts/lib/arch.sh"
 
 STAGE_ROOT="$1"
 OUT_DIR="$PROJECT_DIR/build/debs"
-VERSION="$(grep '^version' "$PROJECT_DIR/core/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')"
+source "$PROJECT_DIR/scripts/lib/package-version.sh"
+VERSION="$(package_version "$PROJECT_DIR")"
 
 if [ ! -d "$STAGE_ROOT" ]; then
     echo "error: desktop package root not found: $STAGE_ROOT" >&2

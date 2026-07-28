@@ -12,12 +12,16 @@ set -euo pipefail
 
 DEBS_DIR="$PROJECT_DIR/build/debs"
 
-if ! ls "$DEBS_DIR/claw-os-systemd_"*.deb >/dev/null 2>&1; then
+SYSTEMD_DEB="$DEBS_DIR/claw-os-systemd_${COS_VERSION}_all.deb"
+if [ ! -f "$SYSTEMD_DEB" ]; then
     echo "  :: claw-os-systemd.deb not found — building it"
     "$PROJECT_DIR/packaging/deb/build-debs.sh"
 fi
 
-SYSTEMD_DEB="$(ls "$DEBS_DIR/claw-os-systemd_"*"_all.deb" | head -1)"
+if [ ! -f "$SYSTEMD_DEB" ]; then
+    echo "error: expected package missing after build: $SYSTEMD_DEB" >&2
+    exit 1
+fi
 echo "  :: installing $(basename "$SYSTEMD_DEB")"
 
 mkdir -p "$ROOTFS/var/cache/cos-debs"
