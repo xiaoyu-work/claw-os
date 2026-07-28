@@ -38,6 +38,7 @@ from typing import Iterable, Mapping, Optional, Sequence, Tuple
 # extend per-invocation when they need more (e.g. ``COS_BIN``).
 DEFAULT_ENV_ALLOWLIST: Tuple[str, ...] = (
     "HOME",
+    "COS_HOME",
     "USER",
     "LOGNAME",
     "PATH",
@@ -48,6 +49,9 @@ DEFAULT_ENV_ALLOWLIST: Tuple[str, ...] = (
     "TZ",
     "COS_SESSION",
     "COS_DATA_DIR",
+    "COS_PROC_DATA_DIR",
+    "COS_APP_ID",
+    "COS_PERMS_MODE",
     "COS_BIN",
     "COS_VERSION",
     # Windows-specific minimal set so subprocess works there too.

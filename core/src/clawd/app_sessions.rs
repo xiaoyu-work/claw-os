@@ -199,12 +199,13 @@ fn validate_manifest_caps(
         let Some(caps) = caps else {
             return Ok(());
         };
-        let manifest_path = std::path::PathBuf::from(
+        let apps_dir = std::path::PathBuf::from(
             std::env::var("COS_APPS_DIR")
                 .unwrap_or_else(|_| "/usr/lib/cos/apps".to_string()),
-        )
-        .join(app_id)
-        .join("app.json");
+        );
+        let manifest_path = crate::apps::find(&apps_dir, app_id)
+            .map(|app| app.dir.join("app.json"))
+            .ok_or_else(|| format!("App `{app_id}` is not installed"))?;
         let body = std::fs::read_to_string(&manifest_path)
             .map_err(|error| format!("read {}: {error}", manifest_path.display()))?;
         let manifest = Manifest::from_json(&body)

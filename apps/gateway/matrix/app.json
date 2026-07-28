@@ -1,16 +1,101 @@
 {
-  "name": "gateway-matrix",
+  "id": "gateway-matrix",
   "version": "0.1.0",
-  "description": "Matrix gateway. `send` posts a text message to a room via the Client-Server REST API. `start`/`stop` (sync/long-poll) not yet implemented.",
-  "runtime": "python",
-  "commands": {
-    "start": "Connect to a Matrix homeserver and stream events (NOT IMPLEMENTED)",
-    "stop": "Stop a running gateway service (NOT IMPLEMENTED)",
-    "status": "Show running state",
-    "send": "Send a text message to a room (positional: room_id text)"
+  "name": {
+    "en": "Matrix Gateway"
   },
-  "dependencies": {
-    "credentials": ["matrix_access_token", "matrix_homeserver"],
-    "engines": []
+  "summary": {
+    "en": "Matrix gateway. send posts text messages to rooms through the Client-Server REST API; sync start and stop are not implemented."
+  },
+  "runtime": "python",
+  "operations": {
+    "send": {
+      "label": {
+        "en": "Send a message through this gateway"
+      },
+      "args": [
+        {
+          "name": "room_id",
+          "kind": "name",
+          "required": true
+        },
+        {
+          "name": "text",
+          "kind": "text",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "net.dial",
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Connect to the remote gateway service to perform the send operation."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/matrix_access_token"
+            }
+          },
+          "why": {
+            "en": "Read the configured matrix_access_token secret required by this gateway."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/matrix_homeserver"
+            }
+          },
+          "why": {
+            "en": "Read the configured matrix_homeserver secret required by this gateway."
+          }
+        },
+        {
+          "verb": "memory.write",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "self-ref",
+              "value": "gateway-matrix"
+            }
+          },
+          "why": {
+            "en": "Remember the successful send so the agent can recall it later."
+          }
+        }
+      ]
+    },
+    "status": {
+      "label": {
+        "en": "Show gateway configuration and status"
+      },
+      "args": [],
+      "needs": [
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/matrix_homeserver"
+            }
+          },
+          "why": {
+            "en": "Read the configured matrix_homeserver secret required by this gateway."
+          }
+        }
+      ]
+    }
   }
 }

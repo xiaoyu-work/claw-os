@@ -210,7 +210,7 @@ def _send(
             headers=headers,
             body=body,
             timeout=20,
-            verb_id="gateway.larksuite.send",
+            verb_id="net.dial",
         )
         raw = raw_resp.decode("utf-8", errors="replace")
         try:

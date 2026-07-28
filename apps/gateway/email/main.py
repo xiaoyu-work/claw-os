@@ -21,7 +21,7 @@ Credentials needed:
                           falls back to ``smtp_user``.
 
 Stdlib only. Policy gating routes via
-``policy.require("gateway.email.send", host=smtp_host)`` before any
+``policy.require("net.dial", host=smtp_host)`` before any
 login or send.
 """
 
@@ -218,7 +218,7 @@ def _send(to: str, subject: str, body: str, cc: str = "") -> dict:
     # send the password.
     if policy is not None:
         try:
-            policy.require("gateway.email.send", host=cfg["host"])
+            policy.require("net.dial", host=cfg["host"])
         except Exception as e:
             denial = getattr(e, "denial", None)
             return {

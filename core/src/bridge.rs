@@ -28,6 +28,22 @@ fn app_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     command
 }
 
+fn manifest_app_id(app_dir: &Path) -> Result<String, String> {
+    let path = app_dir.join("app.json");
+    match std::fs::read_to_string(&path) {
+        Ok(body) => crate::apps::AppManifest::from_json(&body)
+            .map(|manifest| manifest.id)
+            .map_err(|error| format!("parse {}: {error}", path.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => app_dir
+            .file_name()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| format!("App directory has no UTF-8 id: {}", app_dir.display())),
+        Err(error) => Err(format!("read {}: {error}", path.display())),
+    }
+}
+
 pub(crate) struct AppIdentitySession {
     session_id: String,
     backend: AppSessionBackend,
@@ -907,14 +923,7 @@ pub fn run_python_app(
 
     let python = if cfg!(windows) { "python" } else { "python3" };
 
-    // The directory name is the canonical app id (the manifest loader
-    // enforces this — see apps::discover). The Python helpers read
-    // `COS_APP_ID` to identify which app is calling them.
-    let app_id = app_dir
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_string();
+    let app_id = manifest_app_id(app_dir)?;
     let mut app_session =
         AppIdentitySession::for_operation(app_dir, &app_id, command, args)?;
 
@@ -1081,11 +1090,7 @@ pub fn run_app(
         Runtime::Binary => app_command(&entry_path),
         Runtime::Python => unreachable!("python handled above"),
     };
-    let app_id = app_dir
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| format!("App directory has no UTF-8 id: {}", app_dir.display()))?
-        .to_string();
+    let app_id = manifest_app_id(app_dir)?;
     let mut app_session =
         AppIdentitySession::for_operation(app_dir, &app_id, command, args)?;
     reset_app_environment(&mut cmd);
@@ -1189,11 +1194,7 @@ pub fn launch_gui(
         (Runtime::Python, Runtime::Python.default_entry().to_string())
     };
 
-    let app_id = app_dir
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_string();
+    let app_id = manifest_app_id(app_dir)?;
     let mut app_session = AppIdentitySession::for_gui(app_dir, &app_id, exec)?;
 
     let mut cmd = if matches!(runtime, Runtime::Python) {

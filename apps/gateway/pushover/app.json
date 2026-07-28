@@ -1,24 +1,113 @@
 {
-  "name": "gateway-pushover",
+  "id": "gateway-pushover",
   "version": "0.1.0",
-  "description": "Outbound-only Pushover (pushover.net) push-notification gateway. send POSTs a notification to a user/group token via api.pushover.net/1/messages.json.",
-  "language": "python",
-  "entry": "main.py",
-  "runtime": {
-    "python": ">=3.10"
+  "name": {
+    "en": "Pushover Gateway"
   },
-  "credentials": [
-    {
-      "name": "pushover_app_token",
-      "description": "Pushover application API token (from pushover.net → Your Applications). Format: 30-char alphanumeric. Override with env COS_PUSHOVER_APP_TOKEN."
+  "summary": {
+    "en": "Outbound-only Pushover push-notification gateway. send POSTs notifications to a user or group through the Pushover API."
+  },
+  "runtime": "python",
+  "operations": {
+    "send": {
+      "label": {
+        "en": "Send a message through this gateway"
+      },
+      "args": [
+        {
+          "name": "text",
+          "kind": "text",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "net.dial",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "host",
+              "value": "api.pushover.net"
+            }
+          },
+          "why": {
+            "en": "Connect to the remote gateway service to perform the send operation."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/pushover_app_token"
+            }
+          },
+          "why": {
+            "en": "Read the configured pushover_app_token secret required by this gateway."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/pushover_user_key"
+            }
+          },
+          "why": {
+            "en": "Read the configured pushover_user_key secret required by this gateway."
+          }
+        },
+        {
+          "verb": "memory.write",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "self-ref",
+              "value": "gateway-pushover"
+            }
+          },
+          "why": {
+            "en": "Remember the successful send so the agent can recall it later."
+          }
+        }
+      ]
     },
-    {
-      "name": "pushover_user_key",
-      "description": "Default Pushover user or group key (the recipient). Format: 30-char alphanumeric. Can be overridden per-call. Override with env COS_PUSHOVER_USER_KEY."
+    "status": {
+      "label": {
+        "en": "Show gateway configuration and status"
+      },
+      "args": [],
+      "needs": [
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/pushover_app_token"
+            }
+          },
+          "why": {
+            "en": "Read the configured pushover_app_token secret required by this gateway."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/pushover_user_key"
+            }
+          },
+          "why": {
+            "en": "Read the configured pushover_user_key secret required by this gateway."
+          }
+        }
+      ]
     }
-  ],
-  "scopes": [
-    "credential:pushover_app_token",
-    "credential:pushover_user_key"
-  ]
+  }
 }

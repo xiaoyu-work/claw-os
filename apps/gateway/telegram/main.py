@@ -18,7 +18,7 @@ Phase 9 implementation, hardened in the post-incident sweep:
 
 * All outbound HTTP funnels through
   :func:`apps.gateway._shared.safe_egress.safe_urlopen` which enforces
-  ``policy.require("gateway.telegram.send", host="api.telegram.org")``
+  ``policy.require("net.dial", host="api.telegram.org")``
   and refuses to follow 30x redirects.
 
 Wiring:
@@ -230,7 +230,7 @@ def _api_call(token: str, method: str, params: dict, timeout: float) -> dict:
         headers=headers,
         body=body,
         timeout=timeout,
-        verb_id="gateway.telegram.send",
+        verb_id="net.dial",
     )
     payload = json.loads(raw.decode("utf-8"))
     if not payload.get("ok"):
@@ -259,7 +259,7 @@ def _ask_agent(chat_id: object, text: str) -> str:
     except Exception:  # pragma: no cover - missing only outside kernel
         _policy = None
     if _policy is not None:
-        _policy.require("gateway.telegram.recv", name=str(chat_id))
+        _policy.require("data.inbox.write", name=str(chat_id))
 
     if not _rate_limiter().try_consume(str(chat_id)):
         raise inbound.RateLimited(

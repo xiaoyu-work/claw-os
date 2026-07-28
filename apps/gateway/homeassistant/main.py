@@ -195,7 +195,7 @@ def _post_service(domain: str, service: str, payload: dict) -> dict:
             headers=headers,
             body=body,
             timeout=20,
-            verb_id="gateway.homeassistant.send",
+            verb_id="net.dial",
         )
         raw = raw_resp.decode("utf-8", errors="replace")
         try:

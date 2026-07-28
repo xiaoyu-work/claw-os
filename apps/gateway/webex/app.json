@@ -1,19 +1,92 @@
 {
-  "name": "gateway-webex",
+  "id": "gateway-webex",
   "version": "0.1.0",
-  "description": "Outbound-only Webex (Cisco Webex App / Webex Teams) gateway via REST API. send POSTs a Markdown or text message to a room, person email, or person id.",
-  "language": "python",
-  "entry": "main.py",
-  "runtime": {
-    "python": ">=3.10"
+  "name": {
+    "en": "Webex Gateway"
   },
-  "credentials": [
-    {
-      "name": "webex_bot_token",
-      "description": "Webex bot access token (from developer.webex.com → My Webex Apps → Create a Bot). Format: 'NjY...' (env override: COS_WEBEX_BOT_TOKEN)"
+  "summary": {
+    "en": "Outbound-only Webex gateway via REST API. send POSTs Markdown or text messages to a room, person email, or person ID."
+  },
+  "runtime": "python",
+  "operations": {
+    "send": {
+      "label": {
+        "en": "Send a message through this gateway"
+      },
+      "args": [
+        {
+          "name": "recipient",
+          "kind": "name",
+          "required": true
+        },
+        {
+          "name": "text",
+          "kind": "text",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "net.dial",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "host",
+              "value": "webexapis.com"
+            }
+          },
+          "why": {
+            "en": "Connect to the remote gateway service to perform the send operation."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/webex_bot_token"
+            }
+          },
+          "why": {
+            "en": "Read the configured webex_bot_token secret required by this gateway."
+          }
+        },
+        {
+          "verb": "memory.write",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "self-ref",
+              "value": "gateway-webex"
+            }
+          },
+          "why": {
+            "en": "Remember the successful send so the agent can recall it later."
+          }
+        }
+      ]
+    },
+    "status": {
+      "label": {
+        "en": "Show gateway configuration and status"
+      },
+      "args": [],
+      "needs": [
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/webex_bot_token"
+            }
+          },
+          "why": {
+            "en": "Read the configured webex_bot_token secret required by this gateway."
+          }
+        }
+      ]
     }
-  ],
-  "scopes": [
-    "credential:webex_bot_token"
-  ]
+  }
 }

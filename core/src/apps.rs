@@ -24,7 +24,9 @@ impl App {
     }
 }
 
-/// Scan `apps_dir` for subdirectories containing a valid `app.json`.
+/// Recursively scan `apps_dir` for directories containing a valid
+/// `app.json`. A nested path is normalized with `-` separators, so
+/// `gateway/slack/app.json` must declare `id: "gateway-slack"`.
 ///
 /// Apps whose manifest fails to parse or validate are silently skipped
 /// — keeping a broken app installed must never poison discovery for
@@ -32,19 +34,35 @@ impl App {
 /// see why a specific app is missing.
 pub fn discover(apps_dir: &Path) -> BTreeMap<String, App> {
     let mut apps = BTreeMap::new();
+    discover_dir(apps_dir, apps_dir, 0, &mut apps);
+    apps
+}
 
-    let entries = match fs::read_dir(apps_dir) {
-        Ok(e) => e,
-        Err(_) => return apps,
+pub fn find(apps_dir: &Path, app_id: &str) -> Option<App> {
+    discover(apps_dir).remove(app_id)
+}
+
+fn discover_dir(root: &Path, dir: &Path, depth: usize, apps: &mut BTreeMap<String, App>) {
+    if depth > 8 {
+        return;
+    }
+    let mut entries = match fs::read_dir(dir) {
+        Ok(entries) => entries.flatten().collect::<Vec<_>>(),
+        Err(_) => return,
     };
+    entries.sort_by_key(|entry| entry.path());
 
-    for entry in entries.flatten() {
+    for entry in entries {
         let path = entry.path();
-        if !path.is_dir() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() || file_type.is_symlink() {
             continue;
         }
         let manifest_path = path.join("app.json");
         if !manifest_path.is_file() {
+            discover_dir(root, &path, depth + 1, apps);
             continue;
         }
         let data = match fs::read_to_string(&manifest_path) {
@@ -55,26 +73,54 @@ pub fn discover(apps_dir: &Path) -> BTreeMap<String, App> {
             Ok(m) => m,
             Err(_) => continue,
         };
-        // The directory name is the canonical lookup key; we require it
-        // to match the manifest's declared id so authors can't ship a
-        // mismatched pair that confuses routing.
-        let dir_name = match path.file_name().and_then(|s| s.to_str()) {
-            Some(n) => n,
+        let normalized_id = match normalized_relative_id(root, &path) {
+            Some(id) => id,
             None => continue,
         };
-        if dir_name != manifest.id {
+        if normalized_id != manifest.id {
             continue;
         }
-        apps.insert(
-            manifest.id.clone(),
-            App {
-                manifest,
-                dir: path,
-            },
-        );
+        let replace = apps
+            .get(&manifest.id)
+            .map(|existing| relative_depth(root, &path) < relative_depth(root, &existing.dir))
+            .unwrap_or(true);
+        if replace {
+            apps.insert(
+                manifest.id.clone(),
+                App {
+                    manifest,
+                    dir: path,
+                },
+            );
+        }
     }
+}
 
-    apps
+fn relative_depth(root: &Path, path: &Path) -> usize {
+    path.strip_prefix(root)
+        .map(|relative| relative.components().count())
+        .unwrap_or(usize::MAX)
+}
+
+fn normalized_relative_id(root: &Path, path: &Path) -> Option<String> {
+    let relative = path.strip_prefix(root).ok()?;
+    let parts = relative
+        .components()
+        .map(|component| component.as_os_str().to_str())
+        .collect::<Option<Vec<_>>>()?;
+    if parts.is_empty()
+        || parts.iter().any(|part| {
+            part.is_empty()
+                || !part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase()
+                        || byte.is_ascii_digit()
+                        || matches!(byte, b'-' | b'_'))
+        })
+    {
+        return None;
+    }
+    Some(parts.join("-"))
 }
 
 /// Build the stable, non-executing schema for an App manifest. Schema

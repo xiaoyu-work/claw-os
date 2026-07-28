@@ -1,14 +1,140 @@
 {
-  "name": "gateway-ntfy",
+  "id": "gateway-ntfy",
   "version": "0.1.0",
-  "description": "ntfy.sh push-notification gateway. POSTs plain-text bodies to <server>/<topic> with optional Bearer / Basic auth and ntfy headers (Title/Priority/Tags). Stdlib-only.",
-  "runtime": "python",
-  "commands": {
-    "send": "Send a notification to a topic (positional: topic text)",
-    "status": "Show whether the default server / topic / token are configured"
+  "name": {
+    "en": "ntfy Gateway"
   },
-  "dependencies": {
-    "credentials": ["ntfy_server", "ntfy_default_topic", "ntfy_token"],
-    "engines": []
+  "summary": {
+    "en": "ntfy.sh push-notification gateway. POSTs plain-text bodies to a configured server and topic with optional authentication and ntfy headers."
+  },
+  "runtime": "python",
+  "operations": {
+    "send": {
+      "label": {
+        "en": "Send a message through this gateway"
+      },
+      "args": [
+        {
+          "name": "topic",
+          "kind": "name",
+          "required": false
+        },
+        {
+          "name": "text",
+          "kind": "text",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "net.dial",
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Connect to the remote gateway service to perform the send operation."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/ntfy_server"
+            }
+          },
+          "why": {
+            "en": "Read the configured ntfy_server secret required by this gateway."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/ntfy_default_topic"
+            }
+          },
+          "why": {
+            "en": "Read the configured ntfy_default_topic secret required by this gateway."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/ntfy_token"
+            }
+          },
+          "why": {
+            "en": "Read the configured ntfy_token secret required by this gateway."
+          }
+        },
+        {
+          "verb": "memory.write",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "self-ref",
+              "value": "gateway-ntfy"
+            }
+          },
+          "why": {
+            "en": "Remember the successful send so the agent can recall it later."
+          }
+        }
+      ]
+    },
+    "status": {
+      "label": {
+        "en": "Show gateway configuration and status"
+      },
+      "args": [],
+      "needs": [
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/ntfy_server"
+            }
+          },
+          "why": {
+            "en": "Read the configured ntfy_server secret required by this gateway."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/ntfy_default_topic"
+            }
+          },
+          "why": {
+            "en": "Read the configured ntfy_default_topic secret required by this gateway."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/ntfy_token"
+            }
+          },
+          "why": {
+            "en": "Read the configured ntfy_token secret required by this gateway."
+          }
+        }
+      ]
+    }
   }
 }

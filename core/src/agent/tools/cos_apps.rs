@@ -248,7 +248,14 @@ impl Tool for CosAppTool {
         }
 
         let app_name = self.app.to_string();
-        let app_dir = apps_root().join(&app_name);
+        let app_dir = match crate::apps::find(&apps_root(), &app_name) {
+            Some(app) => app.dir,
+            None => {
+                return ToolResult::err(format!(
+                    "no app named `{app_name}` installed. Try `cos_app_catalog list`."
+                ));
+            }
+        };
         if command == "__schema__" {
             return match manifest_schema_at(&app_dir) {
                 Ok(schema) => ToolResult::ok(schema),
@@ -615,12 +622,14 @@ impl Tool for CosAppRun {
             ));
         }
 
-        let app_dir = apps_root().join(&app_name);
-        if !app_dir.join("app.json").is_file() {
-            return ToolResult::err(format!(
-                "no app named `{app_name}` installed. Try `cos_app_catalog list`."
-            ));
-        }
+        let app_dir = match crate::apps::find(&apps_root(), &app_name) {
+            Some(app) => app.dir,
+            None => {
+                return ToolResult::err(format!(
+                    "no app named `{app_name}` installed. Try `cos_app_catalog list`."
+                ));
+            }
+        };
 
         if command == "__schema__" {
             return match manifest_schema_at(&app_dir) {

@@ -25,7 +25,7 @@ raw :mod:`urllib.request` API does not:
    redirect-SSRF jumping-off point.
 
 4. **Policy gating.** Every call routes through
-   ``cos_runtime.policy.require(verb_id, host=hostname)``. The kernel
+   ``cos_runtime.policy.require("net.dial", host=hostname)``. The kernel
    is the source of truth on whether *this* session can talk to
    *that* host; the helper raises :class:`PermissionDenied` otherwise.
 
@@ -200,9 +200,8 @@ def safe_urlopen(
                  logged anywhere in this module.
         body:    Optional request body bytes.
         timeout: Socket timeout in seconds.
-        verb_id: The kernel verb identifier this call represents
-                 (e.g. ``gateway.slack.send``). Forwarded to
-                 ``policy.require``.
+        verb_id: Legacy call-site label retained for source compatibility.
+                 Authorization always uses the kernel's ``net.dial`` verb.
 
     Returns:
         ``(status_code, response_headers_dict, response_body_bytes)``.
@@ -223,7 +222,8 @@ def safe_urlopen(
         raise EgressBlocked(
             "cos_runtime.policy unavailable; refusing outbound request"
         )
-    policy.require(verb_id, host=host)
+    _ = verb_id
+    policy.require("net.dial", host=host)
 
     req = urllib.request.Request(
         url, data=body, method=method.upper(), headers=dict(headers or {})

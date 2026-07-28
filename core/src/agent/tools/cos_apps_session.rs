@@ -572,7 +572,9 @@ async fn open_session(app_id: &str) -> Result<(Arc<McpClient>, usize), String> {
         table.remove(&key)
     };
     drop(stale);
-    let app_dir = apps_root().join(app_id);
+    let app_dir = crate::apps::find(&apps_root(), app_id)
+        .map(|app| app.dir)
+        .ok_or_else(|| format!("App `{app_id}` is not installed"))?;
     let manifest_path = app_dir.join("app.json");
     let manifest_text = std::fs::read_to_string(&manifest_path)
         .map_err(|e| format!("read manifest for `{app_id}`: {e}"))?;
@@ -1136,7 +1138,9 @@ impl Tool for CosAppSessionClose {
 }
 
 fn manifest_tool_names(app_id: &str) -> Result<Vec<String>, String> {
-    let manifest_path = apps_root().join(app_id).join("app.json");
+    let manifest_path = crate::apps::find(&apps_root(), app_id)
+        .map(|app| app.dir.join("app.json"))
+        .ok_or_else(|| format!("App `{app_id}` is not installed"))?;
     let text = std::fs::read_to_string(&manifest_path)
         .map_err(|e| format!("read manifest: {e}"))?;
     let manifest = Manifest::from_json(&text).map_err(|e| format!("parse manifest: {e}"))?;

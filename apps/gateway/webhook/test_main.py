@@ -155,7 +155,7 @@ class PrivateHostBlockingTests(unittest.TestCase):
             safe_egress.safe_urlopen(
                 "GET",
                 "http://169.254.169.254/latest/meta-data/",
-                verb_id="gateway.webhook.send",
+                verb_id="net.dial",
             )
 
     def test_loopback_is_blocked(self):
@@ -163,7 +163,7 @@ class PrivateHostBlockingTests(unittest.TestCase):
             safe_egress.safe_urlopen(
                 "GET",
                 "http://127.0.0.1:8080/admin",
-                verb_id="gateway.webhook.send",
+                verb_id="net.dial",
             )
 
     def test_file_scheme_is_blocked(self):
@@ -171,7 +171,7 @@ class PrivateHostBlockingTests(unittest.TestCase):
             safe_egress.safe_urlopen(
                 "GET",
                 "file:///etc/passwd",
-                verb_id="gateway.webhook.send",
+                verb_id="net.dial",
             )
 
 

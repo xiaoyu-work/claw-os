@@ -1,24 +1,109 @@
 {
-  "name": "gateway-larksuite",
+  "id": "gateway-larksuite",
   "version": "0.1.0",
-  "description": "Outbound-only Lark / Feishu (飞书) custom-bot gateway. send POSTs a text, post (rich-text), or interactive-card message to a custom-bot webhook URL with optional HMAC-SHA256 signing.",
-  "language": "python",
-  "entry": "main.py",
-  "runtime": {
-    "python": ">=3.10"
+  "name": {
+    "en": "Lark / Feishu Gateway"
   },
-  "credentials": [
-    {
-      "name": "lark_webhook_url",
-      "description": "Lark / Feishu custom-bot webhook URL (https://open.feishu.cn/open-apis/bot/v2/hook/<id> or https://open.larksuite.com/open-apis/bot/v2/hook/<id>). Override with env COS_LARK_WEBHOOK_URL."
+  "summary": {
+    "en": "Outbound-only Lark / Feishu custom-bot gateway. send POSTs text, rich-text, or interactive-card messages with optional HMAC-SHA256 signing."
+  },
+  "runtime": "python",
+  "operations": {
+    "send": {
+      "label": {
+        "en": "Send a message through this gateway"
+      },
+      "args": [
+        {
+          "name": "text",
+          "kind": "text",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "net.dial",
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Connect to the remote gateway service to perform the send operation."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/lark_webhook_url"
+            }
+          },
+          "why": {
+            "en": "Read the configured lark_webhook_url secret required by this gateway."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/lark_secret"
+            }
+          },
+          "why": {
+            "en": "Read the configured lark_secret secret required by this gateway."
+          }
+        },
+        {
+          "verb": "memory.write",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "self-ref",
+              "value": "gateway-larksuite"
+            }
+          },
+          "why": {
+            "en": "Remember the successful send so the agent can recall it later."
+          }
+        }
+      ]
     },
-    {
-      "name": "lark_secret",
-      "description": "Optional shared secret for HMAC-SHA256 sign mode. When present every request includes timestamp + sign in the body. Override with env COS_LARK_SECRET."
+    "status": {
+      "label": {
+        "en": "Show gateway configuration and status"
+      },
+      "args": [],
+      "needs": [
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/lark_webhook_url"
+            }
+          },
+          "why": {
+            "en": "Read the configured lark_webhook_url secret required by this gateway."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/lark_secret"
+            }
+          },
+          "why": {
+            "en": "Read the configured lark_secret secret required by this gateway."
+          }
+        }
+      ]
     }
-  ],
-  "scopes": [
-    "credential:lark_webhook_url",
-    "credential:lark_secret"
-  ]
+  }
 }

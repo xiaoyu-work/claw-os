@@ -1,24 +1,109 @@
 {
-  "name": "gateway-dingtalk",
+  "id": "gateway-dingtalk",
   "version": "0.1.0",
-  "description": "Outbound-only DingTalk (DingDing / 钉钉) robot gateway. send POSTs a text or markdown message to a custom robot webhook URL with optional HMAC-SHA256 sign.",
-  "language": "python",
-  "entry": "main.py",
-  "runtime": {
-    "python": ">=3.10"
+  "name": {
+    "en": "DingTalk Gateway"
   },
-  "credentials": [
-    {
-      "name": "dingtalk_webhook_url",
-      "description": "DingTalk custom-robot webhook URL (https://oapi.dingtalk.com/robot/send?access_token=...). Override with env COS_DINGTALK_WEBHOOK_URL."
+  "summary": {
+    "en": "Outbound-only DingTalk robot gateway. send POSTs text or Markdown messages to a custom robot webhook with optional HMAC-SHA256 signing."
+  },
+  "runtime": "python",
+  "operations": {
+    "send": {
+      "label": {
+        "en": "Send a message through this gateway"
+      },
+      "args": [
+        {
+          "name": "text",
+          "kind": "text",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "net.dial",
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Connect to the remote gateway service to perform the send operation."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/dingtalk_webhook_url"
+            }
+          },
+          "why": {
+            "en": "Read the configured dingtalk_webhook_url secret required by this gateway."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/dingtalk_secret"
+            }
+          },
+          "why": {
+            "en": "Read the configured dingtalk_secret secret required by this gateway."
+          }
+        },
+        {
+          "verb": "memory.write",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "self-ref",
+              "value": "gateway-dingtalk"
+            }
+          },
+          "why": {
+            "en": "Remember the successful send so the agent can recall it later."
+          }
+        }
+      ]
     },
-    {
-      "name": "dingtalk_secret",
-      "description": "Optional shared secret for HMAC-SHA256 sign mode. When present, every request is signed with timestamp + secret. Override with env COS_DINGTALK_SECRET."
+    "status": {
+      "label": {
+        "en": "Show gateway configuration and status"
+      },
+      "args": [],
+      "needs": [
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/dingtalk_webhook_url"
+            }
+          },
+          "why": {
+            "en": "Read the configured dingtalk_webhook_url secret required by this gateway."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/dingtalk_secret"
+            }
+          },
+          "why": {
+            "en": "Read the configured dingtalk_secret secret required by this gateway."
+          }
+        }
+      ]
     }
-  ],
-  "scopes": [
-    "credential:dingtalk_webhook_url",
-    "credential:dingtalk_secret"
-  ]
+  }
 }
