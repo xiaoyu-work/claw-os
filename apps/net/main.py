@@ -6,8 +6,12 @@ import os
 import urllib.error
 import urllib.parse
 import urllib.request
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from cos_runtime import policy
+from _shared.safe_http import open_url
 
 USER_AGENT = "cos/" + os.environ.get("COS_VERSION", "0.1.0")
 DEFAULT_TIMEOUT = int(os.environ.get("COS_NET_TIMEOUT", "30"))
@@ -72,27 +76,9 @@ def _parse_header(header_str):
     return key.strip(), value.strip()
 
 
-def _host_from_url(url):
-    """Extract the host[:port] from a URL for capability scoping."""
-    try:
-        parsed = urllib.parse.urlparse(url)
-    except ValueError:
-        return None
-    if not parsed.hostname:
-        return None
-    if parsed.port:
-        return f"{parsed.hostname}:{parsed.port}"
-    return parsed.hostname
-
-
 def cmd_fetch(args):
     parser = _build_fetch_parser()
     opts = parser.parse_args(args)
-
-    host = _host_from_url(opts.url)
-    if host is None:
-        return {"error": f"invalid URL: {opts.url}"}
-    policy.require("net.dial", host=host)
 
     headers = {"User-Agent": USER_AGENT}
     for h in opts.header:
@@ -113,7 +99,7 @@ def cmd_fetch(args):
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=opts.timeout) as resp:
+        with open_url(req, timeout=opts.timeout)[0] as resp:
             raw, truncated = _read_bounded(resp, MAX_RESPONSE_BYTES)
             resp_headers = dict(resp.getheaders())
             body = raw.decode("utf-8", errors="replace")
@@ -135,6 +121,8 @@ def cmd_fetch(args):
         return {"error": body or str(e), "status": e.code}
     except urllib.error.URLError as e:
         return {"error": str(e.reason)}
+    except policy.PolicyError:
+        raise
     except Exception as e:
         return {"error": str(e)}
 
@@ -142,10 +130,6 @@ def cmd_fetch(args):
 def cmd_download(args):
     parser = _build_download_parser()
     opts = parser.parse_args(args)
-
-    host = _host_from_url(opts.url)
-    if host is None:
-        return {"error": f"invalid URL: {opts.url}"}
 
     output_path = opts.output
     if output_path is None:
@@ -157,14 +141,13 @@ def cmd_download(args):
     # the caller doesn't have fs.write on.
     output_path = os.path.realpath(output_path)
 
-    policy.require("net.dial", host=host)
     policy.require("fs.write", path=output_path)
 
     headers = {"User-Agent": USER_AGENT}
     req = urllib.request.Request(opts.url, headers=headers)
 
     try:
-        with urllib.request.urlopen(req, timeout=DEFAULT_TIMEOUT) as resp:
+        with open_url(req, timeout=DEFAULT_TIMEOUT)[0] as resp:
             parent = os.path.dirname(output_path)
             if parent:
                 os.makedirs(parent, exist_ok=True)
@@ -194,6 +177,8 @@ def cmd_download(args):
         return {"error": str(e), "status": e.code}
     except urllib.error.URLError as e:
         return {"error": str(e.reason)}
+    except policy.PolicyError:
+        raise
     except Exception as e:
         return {"error": str(e)}
 

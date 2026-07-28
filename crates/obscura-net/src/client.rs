@@ -10,6 +10,7 @@ use url::Url;
 
 use crate::cookies::CookieJar;
 use crate::interceptor::{InterceptAction, RequestInterceptor};
+use crate::url_policy::authorize_http_url;
 
 #[derive(Debug, Clone)]
 pub struct Response {
@@ -63,59 +64,10 @@ pub enum ResourceType {
 pub type RequestCallback = Arc<dyn Fn(&RequestInfo) + Send + Sync>;
 pub type ResponseCallback = Arc<dyn Fn(&RequestInfo, &Response) + Send + Sync>;
 
-fn validate_url(url: &Url) -> Result<(), ObscuraNetError> {
-    let scheme = url.scheme();
-    if scheme != "http" && scheme != "https" && scheme != "file" {
-        return Err(ObscuraNetError::Network(format!(
-            "Forbidden URL scheme '{}' - only http, https, and file are allowed",
-            scheme
-        )));
-    }
-
-    if scheme == "file" {
-        return Ok(());
-    }
-
-    if let Some(host) = url.host() {
-        match host {
-            url::Host::Ipv4(ip) => {
-                if ip.is_loopback()
-                    || ip.is_private()
-                    || ip.is_link_local()
-                    || ip.is_broadcast()
-                    || ip.is_documentation()
-                {
-                    return Err(ObscuraNetError::Network(format!(
-                        "Access to private/internal IP address {} is not allowed",
-                        ip
-                    )));
-                }
-            }
-            url::Host::Ipv6(ip) => {
-                if ip.is_loopback() || ip.is_unicast_link_local() {
-                    return Err(ObscuraNetError::Network(format!(
-                        "Access to private/internal IPv6 address {} is not allowed",
-                        ip
-                    )));
-                }
-            }
-            url::Host::Domain(domain) => {
-                let lower_domain = domain.to_lowercase();
-                if lower_domain == "localhost"
-                    || lower_domain.ends_with(".localhost")
-                    || lower_domain == "127.0.0.1"
-                    || lower_domain == "::1"
-                {
-                    return Err(ObscuraNetError::Network(format!(
-                        "Access to localhost domain '{}' is not allowed",
-                        domain
-                    )));
-                }
-            }
-        }
-    }
-
-    Ok(())
+fn same_origin(left: &Url, right: &Url) -> bool {
+    left.scheme() == right.scheme()
+        && left.host_str() == right.host_str()
+        && left.port_or_known_default() == right.port_or_known_default()
 }
 
 async fn fetch_file_url(url: &Url) -> Result<Response, ObscuraNetError> {
@@ -154,7 +106,6 @@ async fn fetch_file_url(url: &Url) -> Result<Response, ObscuraNetError> {
 }
 
 pub struct ObscuraHttpClient {
-    client: tokio::sync::OnceCell<Client>,
     proxy_url: Option<String>,
     pub cookie_jar: Arc<CookieJar>,
     pub user_agent: RwLock<String>,
@@ -178,7 +129,6 @@ impl ObscuraHttpClient {
 
     pub fn with_options(cookie_jar: Arc<CookieJar>, proxy_url: Option<&str>) -> Self {
         ObscuraHttpClient {
-            client: tokio::sync::OnceCell::new(),
             proxy_url: proxy_url.map(|s| s.to_string()),
             cookie_jar,
             user_agent: RwLock::new(
@@ -194,22 +144,36 @@ impl ObscuraHttpClient {
         }
     }
 
-    async fn get_client(&self) -> &Client {
-        self.client.get_or_init(|| async {
-            let mut builder = Client::builder()
-                .redirect(Policy::none())
-                .timeout(Duration::from_secs(30))
-                .danger_accept_invalid_certs(false)
-;
-
-            if let Some(ref proxy) = self.proxy_url {
-                if let Ok(p) = reqwest::Proxy::all(proxy.as_str()) {
-                    builder = builder.proxy(p);
-                }
+    fn client_for(
+        &self,
+        url: &Url,
+        addresses: &[std::net::SocketAddr],
+    ) -> Result<Client, ObscuraNetError> {
+        let mut builder = Client::builder()
+            .redirect(Policy::none())
+            .no_proxy()
+            .timeout(Duration::from_secs(30))
+            .danger_accept_invalid_certs(false);
+        if let Some(ref proxy) = self.proxy_url {
+            if std::env::var_os("COS_SESSION").is_some() {
+                return Err(ObscuraNetError::Network(
+                    "proxies are disabled for policy-bound browser sessions".to_string(),
+                ));
             }
-
-            builder.build().expect("failed to build HTTP client")
-        }).await
+            if let Ok(proxy) = reqwest::Proxy::all(proxy.as_str()) {
+                builder = builder.proxy(proxy);
+            }
+        } else if let Some(host) = url.host() {
+            let host = match host {
+                url::Host::Domain(host) => host.to_string(),
+                url::Host::Ipv4(ip) => ip.to_string(),
+                url::Host::Ipv6(ip) => ip.to_string(),
+            };
+            builder = builder.resolve_to_addrs(&host, addresses);
+        }
+        builder
+            .build()
+            .map_err(|error| ObscuraNetError::Network(error.to_string()))
     }
 
     pub async fn fetch(&self, url: &Url) -> Result<Response, ObscuraNetError> {
@@ -226,8 +190,6 @@ impl ObscuraHttpClient {
         url: &Url,
         initial_body: Option<Vec<u8>>,
     ) -> Result<Response, ObscuraNetError> {
-        validate_url(url)?;
-
         if url.scheme() == "file" {
             return fetch_file_url(url).await;
         }
@@ -250,10 +212,12 @@ impl ObscuraHttpClient {
         }
 
         let mut current_url = url.clone();
+        let original_url = url.clone();
         let mut redirects = Vec::new();
         let max_redirects = 20;
 
         for _redirect_count in 0..max_redirects {
+            let addresses = authorize_http_url(&current_url)?;
             let request_info = RequestInfo {
                 url: current_url.clone(),
                 method: method.to_string(),
@@ -335,15 +299,25 @@ impl ObscuraHttpClient {
             }
 
             for (k, v) in self.extra_headers.read().await.iter() {
+                if !same_origin(&original_url, &current_url)
+                    && matches!(
+                        k.to_ascii_lowercase().as_str(),
+                        "authorization" | "cookie" | "proxy-authorization"
+                    )
+                {
+                    continue;
+                }
                 if let (Ok(name), Ok(val)) = (
                     HeaderName::from_bytes(k.as_bytes()),
                     HeaderValue::from_str(v),
                 ) {
                     headers.insert(name, val);
                 }
+
             }
 
-            let mut req_builder = self.get_client().await.request(method.clone(), current_url.as_str())
+            let client = self.client_for(&current_url, &addresses)?;
+            let mut req_builder = client.request(method.clone(), current_url.as_str())
                 .headers(headers);
 
             if let Some(ref b) = body {
@@ -385,7 +359,6 @@ impl ObscuraHttpClient {
                     let next_url = current_url.join(location_str).map_err(|e| {
                         ObscuraNetError::Network(format!("Invalid redirect URL: {}", e))
                     })?;
-                    validate_url(&next_url)?;
                     redirects.push(current_url.clone());
                     current_url = next_url;
                     if status == reqwest::StatusCode::MOVED_PERMANENTLY

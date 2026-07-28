@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use deno_core::op2;
 use deno_core::OpState;
@@ -281,16 +281,6 @@ fn op_console_msg(state: &OpState, #[string] level: &str, #[string] msg: &str) {
     }
 }
 
-static SHARED_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-
-fn get_shared_client() -> &'static reqwest::Client {
-    SHARED_HTTP_CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .build()
-            .expect("failed to build shared reqwest::Client")
-    })
-}
-
 #[op2(async)]
 #[string]
 async fn op_fetch_url(
@@ -304,18 +294,32 @@ async fn op_fetch_url(
 ) -> Result<String, deno_error::JsErrorBox> {
     tracing::debug!("op_fetch_url called: {} {} (intercept check pending)", method, url);
 
-    if let Ok(parsed_url) = url::Url::parse(&url) {
-        if let Err(e) = validate_fetch_url(&parsed_url) {
+    let parsed_url = match url::Url::parse(&url) {
+        Ok(url) => url,
+        Err(error) => {
             return Ok(serde_json::json!({
                 "status": 0,
                 "body": "",
                 "url": url,
                 "headers": {},
                 "blocked": true,
-                "error": e,
-            }).to_string());
+                "error": error.to_string(),
+            }).to_string())
         }
-    }
+    };
+    let resolved = match validate_fetch_url(&parsed_url) {
+        Ok(addresses) => addresses,
+        Err(error) => {
+            return Ok(serde_json::json!({
+                "status": 0,
+                "body": "",
+                "url": url,
+                "headers": {},
+                "blocked": true,
+                "error": error,
+            }).to_string())
+        }
+    };
 
     let (cookie_jar, in_flight, intercept_tx) = {
         let state_borrow = state.borrow();
@@ -385,7 +389,20 @@ async fn op_fetch_url(
         }
     }
 
-    let client = get_shared_client();
+    let mut client_builder = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy();
+    if let Some(host) = parsed_url.host() {
+        let host = match host {
+            url::Host::Domain(host) => host.to_string(),
+            url::Host::Ipv4(ip) => ip.to_string(),
+            url::Host::Ipv6(ip) => ip.to_string(),
+        };
+        client_builder = client_builder.resolve_to_addrs(&host, &resolved);
+    }
+    let client = client_builder
+        .build()
+        .map_err(|error| deno_error::JsErrorBox::generic(error.to_string()))?;
 
     let request_origin = url::Url::parse(&url)
         .ok()
@@ -487,6 +504,17 @@ async fn op_fetch_url(
     }
 
     let status = response.status().as_u16();
+    if response.status().is_redirection() {
+        return Ok(serde_json::json!({
+            "status": status,
+            "body": "",
+            "url": url,
+            "headers": {},
+            "blocked": true,
+            "error": "redirects from page fetch/XHR are blocked unless the browser policy layer can authorize each hop",
+        })
+        .to_string());
+    }
 
     if let Some(ref jar) = cookie_jar {
         if let Ok(parsed_url) = url::Url::parse(&url) {
@@ -521,6 +549,17 @@ async fn op_fetch_url(
             })
             .to_string());
         }
+    }
+    if is_cross_origin && mode == "no-cors" {
+        return Ok(serde_json::json!({
+            "status": 0,
+            "body": "",
+            "bodyBase64": "",
+            "url": url,
+            "headers": {},
+            "opaque": true,
+        })
+        .to_string());
     }
 
     let resp_bytes = response
@@ -558,59 +597,94 @@ fn glob_match(pattern: &str, url: &str) -> bool {
     url == pattern
 }
 
-fn validate_fetch_url(url: &url::Url) -> Result<(), String> {
+fn validate_fetch_url(url: &url::Url) -> Result<Vec<std::net::SocketAddr>, String> {
+    use std::net::ToSocketAddrs;
+
     let scheme = url.scheme();
-    if scheme != "http" && scheme != "https" && scheme != "file" {
+    if scheme != "http" && scheme != "https" {
         return Err(format!(
-            "Forbidden URL scheme '{}' - only http, https, and file are allowed",
+            "Forbidden URL scheme '{}' - only http and https are allowed",
             scheme
         ));
     }
-
-    if scheme == "file" {
-        return Ok(());
+    let host = match url.host() {
+        Some(url::Host::Domain(host)) => host.to_string(),
+        Some(url::Host::Ipv4(ip)) => ip.to_string(),
+        Some(url::Host::Ipv6(ip)) => ip.to_string(),
+        None => return Err("URL has no host".to_string()),
+    };
+    if matches!(host.to_ascii_lowercase().as_str(), "localhost" | "ip6-localhost") {
+        return Err(format!("Access to localhost domain '{host}' is not allowed"));
     }
-
-    if let Some(host) = url.host() {
-        match host {
-            url::Host::Ipv4(ip) => {
-                if ip.is_loopback()
-                    || ip.is_private()
-                    || ip.is_link_local()
-                    || ip.is_broadcast()
-                    || ip.is_documentation()
-                {
-                    return Err(format!(
-                        "Access to private/internal IP address {} is not allowed",
-                        ip
-                    ));
-                }
-            }
-            url::Host::Ipv6(ip) => {
-                if ip.is_loopback() || ip.is_unicast_link_local() {
-                    return Err(format!(
-                        "Access to private/internal IPv6 address {} is not allowed",
-                        ip
-                    ));
-                }
-            }
-            url::Host::Domain(domain) => {
-                let lower_domain = domain.to_lowercase();
-                if lower_domain == "localhost"
-                    || lower_domain.ends_with(".localhost")
-                    || lower_domain == "127.0.0.1"
-                    || lower_domain == "::1"
-                {
-                    return Err(format!(
-                        "Access to localhost domain '{}' is not allowed",
-                        domain
-                    ));
-                }
-            }
+    let port = url.port_or_known_default().unwrap_or(443);
+    if std::env::var_os("COS_SESSION").is_some() {
+        authorize_fetch_scope(url, &host)?;
+    }
+    let addresses: Vec<std::net::SocketAddr> = (host.as_str(), port)
+        .to_socket_addrs()
+        .map_err(|error| format!("DNS lookup failed: {error}"))?
+        .collect();
+    if addresses.is_empty() {
+        return Err(format!("DNS lookup returned no addresses for {host}"));
+    }
+    for address in &addresses {
+        if blocked_fetch_ip(address.ip()) {
+            return Err(format!(
+                "Access to private/internal address {} is not allowed",
+                address.ip()
+            ));
         }
     }
+    Ok(addresses)
+}
 
+fn authorize_fetch_scope(url: &url::Url, host: &str) -> Result<(), String> {
+    let scope = match url.port() {
+        Some(port) if host.contains(':') => format!("[{host}]:{port}"),
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_string(),
+    };
+    let output = std::process::Command::new("/usr/local/bin/cos")
+        .args(["__policy", "check", "net.dial", "--host", &scope])
+        .output()
+        .map_err(|error| format!("net.dial authorization failed: {error}"))?;
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("invalid net.dial response: {error}"))?;
+    if !output.status.success()
+        || value.get("decision").and_then(serde_json::Value::as_str) != Some("allow")
+    {
+        return Err(format!("net.dial denied for {scope}"));
+    }
     Ok(())
+}
+
+fn blocked_fetch_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(ip) => {
+            let octets = ip.octets();
+            ip.is_loopback()
+                || ip.is_private()
+                || ip.is_link_local()
+                || ip.is_multicast()
+                || ip.is_broadcast()
+                || ip.is_unspecified()
+                || ip.is_documentation()
+                || (octets[0] == 100 && (octets[1] & 0b1100_0000) == 64)
+                || (octets[0] == 192 && octets[1] == 0 && octets[2] == 0)
+                || (octets[0] == 192 && octets[1] == 88 && octets[2] == 99)
+                || (octets[0] == 198 && (octets[1] & 0b1111_1110) == 18)
+        }
+        std::net::IpAddr::V6(ip) => {
+            ip.is_loopback()
+                || ip.is_multicast()
+                || ip.is_unspecified()
+                || (ip.segments()[0] & 0xfe00) == 0xfc00
+                || (ip.segments()[0] & 0xffc0) == 0xfe80
+                || ip.to_ipv4_mapped().is_some_and(|mapped| {
+                    blocked_fetch_ip(std::net::IpAddr::V4(mapped))
+                })
+        }
+    }
 }
 
 #[op2]

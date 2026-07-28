@@ -28,6 +28,7 @@ import urllib.request
 # of the cos-browser child's environment.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from _shared.env_scrub import scrub_env  # noqa: E402
+from _shared.safe_http import open_url  # noqa: E402
 
 from claw_os_sdk import ai  # noqa: E402
 from cos_runtime import memory, policy  # noqa: E402
@@ -177,13 +178,15 @@ def _urllib_fallback(url, max_length):
     try:
         req = urllib.request.Request(url, method="GET")
         req.add_header("User-Agent", USER_AGENT)
-        resp = urllib.request.urlopen(req, timeout=TIMEOUT)
+        resp = open_url(req, timeout=TIMEOUT, initial_authorized=True)[0]
         html = resp.read().decode("utf-8", errors="replace")
         final_url = resp.url
     except urllib.error.HTTPError as e:
         return {"error": f"HTTP {e.code}: {e.reason}", "url": url}
     except urllib.error.URLError as e:
         return {"error": f"could not fetch: {e.reason}", "url": url}
+    except policy.PolicyError:
+        raise
     except Exception as e:
         return {"error": str(e), "url": url}
 
@@ -253,7 +256,6 @@ def _cmd_read(args):
     if host is None:
         return {"error": f"invalid URL: {url}"}
     policy.require("net.dial", host=host)
-
     try:
         timeout_secs = int(flags["timeout"])
     except (TypeError, ValueError):
@@ -544,7 +546,6 @@ def _cmd_submit(args):
     host = _host_of(url)
     if host is None:
         return {"error": f"invalid URL: {url}"}
-    policy.require("net.dial", host=host)
 
     raw = flags["data"] or ""
     method = (flags["method"] or "POST").upper()
@@ -569,13 +570,15 @@ def _cmd_submit(args):
         req.add_header("User-Agent", USER_AGENT)
         if content_type:
             req.add_header("Content-Type", content_type)
-        resp = urllib.request.urlopen(req, timeout=timeout_secs)
+        resp = open_url(req, timeout=timeout_secs)[0]
         body = resp.read().decode("utf-8", errors="replace")
         return {"url": resp.url, "status": resp.status, "body": _truncate(body, DEFAULT_MAX_LENGTH)}
     except urllib.error.HTTPError as e:
         return {"error": f"HTTP {e.code}: {e.reason}", "url": url}
     except urllib.error.URLError as e:
         return {"error": f"could not submit: {e.reason}", "url": url}
+    except policy.PolicyError:
+        raise
     except Exception as e:
         return {"error": str(e), "url": url}
 

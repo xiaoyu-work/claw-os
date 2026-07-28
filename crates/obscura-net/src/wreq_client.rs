@@ -11,6 +11,8 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 #[cfg(feature = "stealth")]
 use url::Url;
+#[cfg(feature = "stealth")]
+use crate::url_policy::authorize_http_url;
 
 #[cfg(feature = "stealth")]
 use crate::cookies::CookieJar;
@@ -20,6 +22,13 @@ use crate::client::{Response, ObscuraNetError};
 #[cfg(feature = "stealth")]
 pub const STEALTH_USER_AGENT: &str =
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36";
+
+#[cfg(feature = "stealth")]
+fn same_origin(left: &Url, right: &Url) -> bool {
+    left.scheme() == right.scheme()
+        && left.host_str() == right.host_str()
+        && left.port_or_known_default() == right.port_or_known_default()
+}
 
 #[cfg(feature = "stealth")]
 pub struct StealthHttpClient {
@@ -69,10 +78,18 @@ impl StealthHttpClient {
     }
 
     pub async fn fetch(&self, url: &Url) -> Result<Response, ObscuraNetError> {
+        let transport_disabled = true;
+        if transport_disabled {
+            return Err(ObscuraNetError::Network(
+                "stealth transport is disabled until it supports pinned DNS policy".to_string(),
+            ));
+        }
         let mut current_url = url.clone();
+        let original_url = url.clone();
         let mut redirects = Vec::new();
 
         for _ in 0..20 {
+            let _ = authorize_http_url(&current_url)?;
             let mut req = self.client.get(current_url.as_str());
 
             let cookie_header = self.cookie_jar.get_cookie_header(&current_url);
@@ -81,6 +98,14 @@ impl StealthHttpClient {
             }
 
             for (k, v) in self.extra_headers.read().await.iter() {
+                if !same_origin(&original_url, &current_url)
+                    && matches!(
+                        k.to_ascii_lowercase().as_str(),
+                        "authorization" | "cookie" | "proxy-authorization"
+                    )
+                {
+                    continue;
+                }
                 req = req.header(k.as_str(), v.as_str());
             }
 

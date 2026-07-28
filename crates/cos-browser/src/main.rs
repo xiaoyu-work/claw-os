@@ -168,6 +168,9 @@ async fn main() -> anyhow::Result<()> {
 
     match args.command {
         Some(Command::Serve { port, proxy, user_agent, stealth, workers }) => {
+            if stealth {
+                anyhow::bail!("--stealth is disabled until its transport supports pinned DNS policy");
+            }
             print_banner(port);
             if let Some(ref proxy) = proxy {
                 tracing::info!("Using proxy: {}", proxy);
@@ -192,13 +195,19 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Some(Command::Fetch { url, dump, selector, wait, timeout, wait_until, user_agent, stealth, eval, quiet }) => {
+            if stealth {
+                anyhow::bail!("--stealth is disabled until its transport supports pinned DNS policy");
+            }
             run_fetch(&url, dump, selector, wait, timeout, &wait_until, user_agent, stealth, eval, quiet).await?;
         }
         Some(Command::Scrape { urls, eval, concurrency, format, timeout }) => {
             run_parallel_scrape(urls, eval, concurrency.get(), &format, timeout).await?;
         }
         Some(Command::Screenshot { url, output, width, height, full_page, timeout }) => {
-            run_screenshot(&url, &output, width, height, full_page, timeout).await?;
+            let _ = (url, output, width, height, full_page, timeout);
+            anyhow::bail!(
+                "web screenshot is disabled until Chromium navigation supports per-hop authorization"
+            );
         }
         None => {
             print_banner(args.port);
@@ -937,6 +946,7 @@ async fn run_screenshot(
         "--disable-gpu",
         "--hide-scrollbars",
         "--disable-dev-shm-usage",
+        "--no-proxy-server",
         &screenshot_arg,
         &window_size_arg,
         // `--` terminates chromium's option parsing so a URL that
@@ -945,6 +955,26 @@ async fn run_screenshot(
         "--",
         url_str,
     ];
+    let host = match validated_url.host() {
+        Some(url::Host::Domain(host)) => host.to_string(),
+        Some(url::Host::Ipv4(ip)) => ip.to_string(),
+        Some(url::Host::Ipv6(ip)) => format!("[{ip}]"),
+        None => anyhow::bail!("screenshot URL has no host"),
+    };
+    let pinned_ip = resolved_before
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("screenshot URL resolved to no addresses"))?;
+    let resolver_rules = format!(
+        "MAP {} {}, MAP * ~NOTFOUND",
+        host,
+        match pinned_ip {
+            std::net::IpAddr::V4(ip) => ip.to_string(),
+            std::net::IpAddr::V6(ip) => format!("[{ip}]"),
+        }
+    );
+    let resolver_arg = format!("--host-resolver-rules={resolver_rules}");
+    let mut args = args;
+    args.insert(args.len() - 2, &resolver_arg);
 
     let started = Instant::now();
     let result = tokio::time::timeout(

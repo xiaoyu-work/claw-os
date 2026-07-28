@@ -100,8 +100,10 @@ impl Page {
 
     async fn do_fetch(&self, url: &Url) -> Result<Response, ObscuraNetError> {
         #[cfg(feature = "stealth")]
-        if let Some(ref stealth) = self.stealth_client {
-            return stealth.fetch(url).await;
+        if self.stealth_client.is_some() {
+            return Err(ObscuraNetError::Network(
+                "stealth transport is disabled until it supports pinned DNS policy".to_string(),
+            ));
         }
         self.http_client.fetch(url).await
     }
