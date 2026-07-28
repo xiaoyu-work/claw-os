@@ -9,7 +9,7 @@
 # See rootfs/features/README.md for the feature contract.
 #
 # Usage:
-#   sudo ./rootfs/build.sh [--features f1,f2,f3]
+#   sudo ./rootfs/build.sh [--features f1,f2,f3] [--reuse-if-matching]
 #
 # Default features: base,cos-core,browser  (matches the legacy behaviour).
 
@@ -47,7 +47,10 @@ export DEBIAN_FRONTEND=noninteractive
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 ROOTFS="$PROJECT_DIR/build/claw-os-rootfs"
+STAMP_PATH="$PROJECT_DIR/build/claw-os-rootfs.stamp"
 SUITE="trixie"
+STAMP_SCHEMA=1
+BUILDER_INPUTS_VERSION=1
 
 # Architecture mapping ($ARCH, $DEB_ARCH, $KERNEL_PKG, …). Defaults to host
 # arch when $ARCH is unset.
@@ -55,15 +58,18 @@ source "$PROJECT_DIR/scripts/lib/arch.sh"
 
 DEFAULT_FEATURES="base,cos-core,browser"
 FEATURES="$DEFAULT_FEATURES"
+REUSE_IF_MATCHING=0
 
 usage() {
     cat <<EOF
-Usage: $0 [--features <list>]
+Usage: $0 [--features <list>] [--reuse-if-matching]
 
 Build a Debian rootfs at $ROOTFS by composing features.
 
 Options:
   --features <list>   Comma-separated feature names (default: $DEFAULT_FEATURES)
+  --reuse-if-matching Reuse an existing rootfs only when its complete
+                      build stamp exactly matches every current input.
   -h, --help          Show this help
 
 Available features:
@@ -84,6 +90,10 @@ while [ $# -gt 0 ]; do
             ;;
         --features=*)
             FEATURES="${1#--features=}"
+            shift
+            ;;
+        --reuse-if-matching)
+            REUSE_IF_MATCHING=1
             shift
             ;;
         -h|--help)
@@ -121,10 +131,151 @@ source "$PROJECT_DIR/scripts/lib/package-version.sh"
 COS_VERSION="$(package_version "$PROJECT_DIR")"
 COS_PACKAGE_VERSION="$COS_VERSION"
 
+source_hash() {
+    if git -C "$PROJECT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        git -C "$PROJECT_DIR" ls-files -co --exclude-standard -z \
+            | LC_ALL=C sort -z \
+            | tar -C "$PROJECT_DIR" --null -T - --sort=name \
+                --mtime='@0' --owner=0 --group=0 --numeric-owner -cf - \
+            | sha256sum | awk '{print $1}'
+        return
+    fi
+    (
+        cd "$PROJECT_DIR"
+        find . \
+            -path './build' -prune -o \
+            -path '*/target' -prune -o \
+            \( -type f -o -type l \) -print0 \
+            | LC_ALL=C sort -z \
+            | tar --null -T - --sort=name \
+                --mtime='@0' --owner=0 --group=0 --numeric-owner -cf -
+    ) | sha256sum | awk '{print $1}'
+}
+
+SOURCE_HASH="$(source_hash)"
+SOURCE_COMMIT="$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo none)"
+if git -C "$PROJECT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    SOURCE_STATUS_HASH="$(
+        git -C "$PROJECT_DIR" status --porcelain=v1 -z --untracked-files=normal \
+            | sha256sum | awk '{print $1}'
+    )"
+else
+    SOURCE_STATUS_HASH="$SOURCE_HASH"
+fi
+ORT_GENAI_VERSION="$(
+    sed -n 's/^pub const ORT_GENAI_KNOWN_GOOD_VERSION: &str = "\(.*\)";/\1/p' \
+        "$PROJECT_DIR/core/src/engine_pkg/mod.rs" | head -1
+)"
+
+artifact_hash() {
+    {
+        if [ -d "$PROJECT_DIR/build/debs" ]; then
+            find "$PROJECT_DIR/build/debs" -maxdepth 1 -type f -name '*.deb' -print0
+        fi
+        key_file="${COS_APT_PUBLIC_KEY_FILE:-$PROJECT_DIR/packaging/apt-repo/claw-os-archive-keyring.gpg}"
+        if [ -f "$key_file" ]; then
+            printf '%s\0' "$key_file"
+        fi
+    } | LC_ALL=C sort -z | {
+        found=0
+        while IFS= read -r -d '' path; do
+            found=1
+            printf '%s\0' "$path"
+            sha256sum "$path"
+        done
+        if [ "$found" = "0" ]; then
+            printf 'none\n'
+        fi
+    } | sha256sum | awk '{print $1}'
+}
+
+ENVIRONMENT_HASH="$(
+    {
+        printf 'COS_QWEN3_SKIP_ORT_GENAI=%s\0' "${COS_QWEN3_SKIP_ORT_GENAI:-0}"
+        printf 'COS_QWEN3_HF_REPO=%s\0' "${COS_QWEN3_HF_REPO:-}"
+        printf 'COS_QWEN3_HF_REVISION=%s\0' "${COS_QWEN3_HF_REVISION:-}"
+        printf 'COS_QWEN3_MODEL_NAME=%s\0' "${COS_QWEN3_MODEL_NAME:-}"
+        printf 'COS_QWEN3_MODEL_VERSION=%s\0' "${COS_QWEN3_MODEL_VERSION:-}"
+        printf 'COS_QWEN3_FILES=%s\0' "${COS_QWEN3_FILES:-}"
+        printf 'COS_QWEN3_ORT_GENAI_VERSION=%s\0' "${COS_QWEN3_ORT_GENAI_VERSION:-}"
+        printf 'COS_APT_REPO_URL=%s\0' "${COS_APT_REPO_URL:-}"
+        printf 'COS_APT_REPO_SUITE=%s\0' "${COS_APT_REPO_SUITE:-}"
+        printf 'COS_APT_PUBLIC_KEY_FILE=%s\0' "${COS_APT_PUBLIC_KEY_FILE:-}"
+        printf 'COS_APT_PUBLIC_KEY_URL=%s\0' "${COS_APT_PUBLIC_KEY_URL:-}"
+        printf 'COS_APT_PUBLIC_KEY_FINGERPRINT=%s\0' "${COS_APT_PUBLIC_KEY_FINGERPRINT:-}"
+    } | sha256sum | awk '{print $1}'
+)"
+
+stamp_content() {
+    artifact="$(artifact_hash)"
+    cat <<EOF
+schema=$STAMP_SCHEMA
+status=complete
+builder_inputs_version=$BUILDER_INPUTS_VERSION
+arch=$ARCH
+deb_arch=$DEB_ARCH
+suite=$SUITE
+features=$FEATURES
+source_commit=$SOURCE_COMMIT
+source_hash=$SOURCE_HASH
+artifact_hash=$artifact
+environment_hash=$ENVIRONMENT_HASH
+cos_package_version=$COS_PACKAGE_VERSION
+qwen_ort_genai_version=${ORT_GENAI_VERSION:-unknown}
+qwen_skip_ort_genai=${COS_QWEN3_SKIP_ORT_GENAI:-0}
+EOF
+}
+STAMP_CONTENT="$(stamp_content)"
+
 export ROOTFS PROJECT_DIR SCRIPT_DIR SUITE COS_VERSION COS_PACKAGE_VERSION ARCH DEB_ARCH KERNEL_PKG
+
+rootfs_mounts() {
+    findmnt -rn -o TARGET 2>/dev/null \
+        | awk -v root="$ROOTFS" \
+            '$0 == root || index($0, root "/") == 1 { print length($0) "\t" $0 }' \
+        | sort -rn \
+        | cut -f2-
+}
+
+rootfs_overlay_dependents() {
+    findmnt -rn -t overlay -o TARGET,OPTIONS 2>/dev/null \
+        | awk -v lower="$ROOTFS" '
+            index($0, "lowerdir=" lower) || index($0, ":" lower) {
+                print $1
+            }
+        '
+}
 
 echo ":: features: ${FEATURE_LIST[*]}"
 echo ":: arch:     $ARCH (deb=$DEB_ARCH, kernel=$KERNEL_PKG)"
+echo ":: source:   $SOURCE_HASH"
+
+if [ -n "$(rootfs_overlay_dependents)" ]; then
+    echo "error: rootfs is still referenced by target overlay mounts:" >&2
+    rootfs_overlay_dependents >&2
+    echo "       unmount stale Docker/WSL staging before rebuilding" >&2
+    exit 1
+fi
+
+REUSE_MOUNTS_CLEAN=1
+if [ -n "$(rootfs_mounts)" ]; then
+    REUSE_MOUNTS_CLEAN=0
+fi
+if [ "$REUSE_IF_MATCHING" = "1" ] \
+        && [ -d "$ROOTFS" ] \
+        && [ ! -L "$ROOTFS" ] \
+        && [ "$(stat -c '%u' "$ROOTFS")" = "0" ] \
+        && [ "$REUSE_MOUNTS_CLEAN" = "1" ] \
+        && [ -f "$STAMP_PATH" ] \
+        && printf '%s\n' "$STAMP_CONTENT" | cmp -s - "$STAMP_PATH"; then
+    echo ":: reusing matching rootfs at $ROOTFS"
+    exit 0
+fi
+
+if [ "$REUSE_IF_MATCHING" = "1" ] && [ -e "$ROOTFS" ]; then
+    echo ":: existing rootfs stamp is missing or stale — rebuilding"
+fi
+rm -f "$STAMP_PATH"
 
 # 1. Bootstrap minimal Debian rootfs.
 echo ":: debootstrap --arch=$DEB_ARCH $SUITE -> $ROOTFS"
@@ -135,11 +286,14 @@ echo ":: debootstrap --arch=$DEB_ARCH $SUITE -> $ROOTFS"
 # lazily unmount any stray binds, then wipe it.
 if [ -e "$ROOTFS" ]; then
     echo ":: existing rootfs found — cleaning stale mounts + tree before debootstrap"
-    for mp in "$ROOTFS/dev/pts" "$ROOTFS/dev" "$ROOTFS/sys" "$ROOTFS/proc" "$ROOTFS/run"; do
-        if mountpoint -q "$mp" 2>/dev/null; then
-            umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
-        fi
-    done
+    while IFS= read -r mp; do
+        [ -n "$mp" ] || continue
+        umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
+    done < <(rootfs_mounts)
+    if [ -n "$(rootfs_mounts)" ]; then
+        echo "error: unable to clear stale mounts below $ROOTFS" >&2
+        exit 1
+    fi
     rm -rf "$ROOTFS"
 fi
 mkdir -p "$ROOTFS"
@@ -275,12 +429,11 @@ Pin-Priority: 600
 EOF
 
 cleanup_chroot_mounts() {
-    # Unmount in reverse order, lazy fallback for stray references.
-    for mp in "$ROOTFS/dev/pts" "$ROOTFS/dev" "$ROOTFS/sys" "$ROOTFS/proc"; do
-        if mountpoint -q "$mp"; then
-            umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
-        fi
-    done
+    # Unmount every nested feature/chroot bind, deepest path first.
+    while IFS= read -r mp; do
+        [ -n "$mp" ] || continue
+        umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
+    done < <(rootfs_mounts)
     # Belt-and-suspenders: if anything in the chroot clobbered the host's
     # /dev/pts/ptmx mode (some devpts reconfigurations reset it to 000),
     # restore it so the host can still allocate PTYs.
@@ -372,4 +525,35 @@ for f in "${FEATURE_LIST[@]}"; do
     fi
 done
 
+cleanup_chroot_mounts
+trap - EXIT
+if [ -n "$(rootfs_mounts)" ]; then
+    echo "error: rootfs build left nested mounts; refusing complete stamp" >&2
+    rootfs_mounts >&2
+    exit 1
+fi
+FINAL_SOURCE_HASH="$(source_hash)"
+if [ "$FINAL_SOURCE_HASH" != "$SOURCE_HASH" ]; then
+    if git -C "$PROJECT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        final_status_hash="$(
+            git -C "$PROJECT_DIR" status --porcelain=v1 -z --untracked-files=normal \
+                | sha256sum | awk '{print $1}'
+        )"
+    else
+        final_status_hash="$FINAL_SOURCE_HASH"
+    fi
+    if [ "$final_status_hash" != "$SOURCE_STATUS_HASH" ]; then
+        echo "error: source tree changed during rootfs build; refusing complete stamp" >&2
+        exit 1
+    fi
+    echo ":: source content was materialized by clean filters (for example Git LFS)"
+    SOURCE_HASH="$FINAL_SOURCE_HASH"
+fi
+STAMP_CONTENT="$(stamp_content)"
+mkdir -p "$(dirname "$STAMP_PATH")"
+printf '%s\n' "$STAMP_CONTENT" > "$STAMP_PATH.tmp"
+chmod 0644 "$STAMP_PATH.tmp"
+mv -f "$STAMP_PATH.tmp" "$STAMP_PATH"
+
 echo ":: done — rootfs at $ROOTFS"
+echo ":: stamp — $STAMP_PATH"

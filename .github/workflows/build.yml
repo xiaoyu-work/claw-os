@@ -175,30 +175,34 @@ jobs:
             sudo ./rootfs/build.sh --features base,cos-core,browser,systemd,gpu-drivers,apt-source,qwen3-embedding
           fi
 
-      # Docker-specific prep on the shared rootfs:
+      # Docker-specific prep on a private staging copy:
       #   - Add the default `cos` user (uid 1000, NOPASSWD sudo).
       #   - Pre-create /var/lib/cos/overlay/{base,upper,work} chowned to cos
       #     so cos-home-setup.service can prepare the non-root agent home
       #     when systemd boots the container.
-      # Both steps are idempotent; targets/wsl/build.sh below re-runs the user
-      # add as a no-op when it sees the user already exists.
-      - name: Prep rootfs for Docker (cos user + overlay scratch dirs)
+      - name: Stage rootfs for Docker (cos user + overlay scratch dirs)
         run: |
           sudo bash -c '
             set -euo pipefail
             export ROOTFS="$PWD/build/claw-os-rootfs"
+            export DOCKER_ROOTFS="$PWD/build/claw-os-docker-rootfs-amd64"
+            export DOCKER_UPPER="$PWD/build/.claw-os-docker-upper-amd64"
+            export DOCKER_WORK="$PWD/build/.claw-os-docker-work-amd64"
             export PROJECT_DIR="$PWD"
+            mountpoint -q "$DOCKER_ROOTFS" 2>/dev/null && umount "$DOCKER_ROOTFS" || true
+            rm -rf "$DOCKER_ROOTFS" "$DOCKER_UPPER" "$DOCKER_WORK"
+            mkdir -p "$DOCKER_ROOTFS" "$DOCKER_UPPER" "$DOCKER_WORK"
+            mount -t overlay overlay \
+              -o "lowerdir=$ROOTFS,upperdir=$DOCKER_UPPER,workdir=$DOCKER_WORK" \
+              "$DOCKER_ROOTFS"
             source "$PROJECT_DIR/scripts/lib/add-cos-user.sh"
-            add_cos_user "$ROOTFS"
-            chroot "$ROOTFS" /bin/bash -c "
+            add_cos_user "$DOCKER_ROOTFS"
+            chroot "$DOCKER_ROOTFS" /bin/bash -c "
               set -e
               mkdir -p /var/lib/cos/overlay/base /var/lib/cos/overlay/upper /var/lib/cos/overlay/work
               chown -R cos:cos /var/lib/cos/overlay
             "
           '
-
-      - name: Fix rootfs permissions for Docker build context
-        run: sudo chmod -R a+rX build/claw-os-rootfs
 
       # Docker build (FROM scratch — no base image)
       - name: Set up Docker Buildx
@@ -224,21 +228,46 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push Docker amd64 image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: targets/docker/Dockerfile
-          platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
-          load: ${{ github.event_name == 'pull_request' }}
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}-amd64
-          labels: ${{ steps.meta.outputs.labels }}
+        env:
+          DOCKER_LABELS: ${{ steps.meta.outputs.labels }}
+        run: |
+          label_args=()
+          while IFS= read -r label; do
+            [ -n "$label" ] && label_args+=(--label "$label")
+          done <<< "$DOCKER_LABELS"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            output_flag=--output=type=cacheonly
+          else
+            output_flag=--push
+          fi
+          sudo tar --numeric-owner -cf - \
+            targets/docker/Dockerfile build/claw-os-docker-rootfs-amd64 \
+            | docker buildx build \
+                --platform linux/amd64 \
+                --file targets/docker/Dockerfile \
+                --build-arg ROOTFS_DIR=build/claw-os-docker-rootfs-amd64 \
+                --tag "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}-amd64" \
+                "${label_args[@]}" "$output_flag" -
+
+      - name: Remove Docker amd64 staging
+        if: always()
+        run: |
+          sudo umount build/claw-os-docker-rootfs-amd64 2>/dev/null || true
+          sudo rm -rf build/claw-os-docker-rootfs-amd64 \
+            build/.claw-os-docker-upper-amd64 build/.claw-os-docker-work-amd64
+          docker buildx prune --all --force || true
 
       # WSL packaging — same amd64 rootfs we just shipped to Docker, plus the
       # WSL-specific overlay (/etc/wsl.conf). targets/wsl/build.sh detects
       # the existing rootfs and skips the rootfs rebuild.
       - name: Package WSL amd64 rootfs tarball
-        run: sudo ./targets/wsl/build.sh
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            FEATURES=base,cos-core,browser,systemd,gpu-drivers,qwen3-embedding
+          else
+            FEATURES=base,cos-core,browser,systemd,gpu-drivers,apt-source,qwen3-embedding
+          fi
+          sudo FEATURES="$FEATURES" ./targets/wsl/build.sh
 
       - name: Fix build/ ownership for non-sudo steps
         run: sudo chown -R "$(id -u):$(id -g)" build
@@ -326,23 +355,29 @@ jobs:
       - name: Build arm64 headless rootfs
         run: sudo ARCH=arm64 ./rootfs/build.sh --features base,cos-core,browser,systemd,gpu-drivers,apt-source,qwen3-embedding
 
-      - name: Prep rootfs for Docker (cos user + overlay scratch dirs)
+      - name: Stage rootfs for Docker (cos user + overlay scratch dirs)
         run: |
           sudo bash -c '
             set -euo pipefail
             export ROOTFS="$PWD/build/claw-os-rootfs"
+            export DOCKER_ROOTFS="$PWD/build/claw-os-docker-rootfs-arm64"
+            export DOCKER_UPPER="$PWD/build/.claw-os-docker-upper-arm64"
+            export DOCKER_WORK="$PWD/build/.claw-os-docker-work-arm64"
             export PROJECT_DIR="$PWD"
+            mountpoint -q "$DOCKER_ROOTFS" 2>/dev/null && umount "$DOCKER_ROOTFS" || true
+            rm -rf "$DOCKER_ROOTFS" "$DOCKER_UPPER" "$DOCKER_WORK"
+            mkdir -p "$DOCKER_ROOTFS" "$DOCKER_UPPER" "$DOCKER_WORK"
+            mount -t overlay overlay \
+              -o "lowerdir=$ROOTFS,upperdir=$DOCKER_UPPER,workdir=$DOCKER_WORK" \
+              "$DOCKER_ROOTFS"
             source "$PROJECT_DIR/scripts/lib/add-cos-user.sh"
-            add_cos_user "$ROOTFS"
-            chroot "$ROOTFS" /bin/bash -c "
+            add_cos_user "$DOCKER_ROOTFS"
+            chroot "$DOCKER_ROOTFS" /bin/bash -c "
               set -e
               mkdir -p /var/lib/cos/overlay/base /var/lib/cos/overlay/upper /var/lib/cos/overlay/work
               chown -R cos:cos /var/lib/cos/overlay
             "
           '
-
-      - name: Fix rootfs permissions for Docker build context
-        run: sudo chmod -R a+rX build/claw-os-rootfs
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -366,17 +401,32 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push Docker arm64 image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: targets/docker/Dockerfile
-          platforms: linux/arm64
-          push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}-arm64
-          labels: ${{ steps.meta.outputs.labels }}
+        env:
+          DOCKER_LABELS: ${{ steps.meta.outputs.labels }}
+        run: |
+          label_args=()
+          while IFS= read -r label; do
+            [ -n "$label" ] && label_args+=(--label "$label")
+          done <<< "$DOCKER_LABELS"
+          sudo tar --numeric-owner -cf - \
+            targets/docker/Dockerfile build/claw-os-docker-rootfs-arm64 \
+            | docker buildx build \
+                --platform linux/arm64 \
+                --file targets/docker/Dockerfile \
+                --build-arg ROOTFS_DIR=build/claw-os-docker-rootfs-arm64 \
+                --tag "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}-arm64" \
+                "${label_args[@]}" --push -
+
+      - name: Remove Docker arm64 staging
+        if: always()
+        run: |
+          sudo umount build/claw-os-docker-rootfs-arm64 2>/dev/null || true
+          sudo rm -rf build/claw-os-docker-rootfs-arm64 \
+            build/.claw-os-docker-upper-arm64 build/.claw-os-docker-work-arm64
+          docker buildx prune --all --force || true
 
       - name: Package WSL arm64 rootfs tarball
-        run: sudo ARCH=arm64 ./targets/wsl/build.sh
+        run: sudo ARCH=arm64 FEATURES=base,cos-core,browser,systemd,gpu-drivers,apt-source,qwen3-embedding ./targets/wsl/build.sh
 
       - name: Fix build/ ownership for non-sudo steps
         run: sudo chown -R "$(id -u):$(id -g)" build

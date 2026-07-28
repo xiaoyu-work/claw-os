@@ -18,10 +18,9 @@
 #   FEATURES   Rootfs feature set (default: headless Claw OS runtime)
 #
 # This script:
-#   1. Builds the rootfs at $PROJECT_DIR/build/claw-os-rootfs (if missing).
-#   2. Adds the default cos user and pre-creates /var/lib/cos/overlay/{base,
-#      upper,work} owned by cos so cos-home-setup.service can prepare the
-#      agent home at boot.
+#   1. Builds or strictly reuses the stamped immutable base rootfs.
+#   2. Copies it to a Docker-only staging tree, then adds the default cos
+#      user and overlay scratch directories there.
 #   3. Invokes `docker build` on the Dockerfile.
 
 set -euo pipefail
@@ -31,10 +30,14 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ROOTFS="$PROJECT_DIR/build/claw-os-rootfs"
 FEATURES="${FEATURES:-base,cos-core,browser,systemd,gpu-drivers,apt-source,qwen3-embedding}"
 
+source "$PROJECT_DIR/scripts/lib/arch.sh"
 source "$PROJECT_DIR/scripts/lib/add-cos-user.sh"
 
 DOCKERFILE="$SCRIPT_DIR/Dockerfile"
 TAG="${TAG:-claw-os}"
+DOCKER_ROOTFS="$PROJECT_DIR/build/claw-os-docker-rootfs-${ARCH_SUFFIX}"
+DOCKER_UPPER="$PROJECT_DIR/build/.claw-os-docker-upper-${ARCH_SUFFIX}"
+DOCKER_WORK="$PROJECT_DIR/build/.claw-os-docker-work-${ARCH_SUFFIX}"
 
 if [ ! -f "$DOCKERFILE" ]; then
     echo "error: dockerfile not found: $DOCKERFILE" >&2
@@ -49,28 +52,34 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-if [ ! -d "$ROOTFS" ]; then
-    echo ":: rootfs missing — building (this takes a few minutes)"
-    "$PROJECT_DIR/rootfs/build.sh" --features "$FEATURES"
-else
-    echo ":: using existing rootfs at $ROOTFS"
-    echo "   (rebuild from scratch: sudo rm -rf $ROOTFS && sudo $0)"
+if mountpoint -q "$DOCKER_ROOTFS" 2>/dev/null; then
+    umount "$DOCKER_ROOTFS" 2>/dev/null || umount -l "$DOCKER_ROOTFS"
 fi
+rm -rf "$DOCKER_ROOTFS" "$DOCKER_UPPER" "$DOCKER_WORK"
 
-if [[ ",$FEATURES," == *,qwen3-embedding,* ]]; then
-    echo ":: ensuring qwen3-embedding feature"
-    ROOTFS="$ROOTFS" PROJECT_DIR="$PROJECT_DIR" \
-        "$PROJECT_DIR/rootfs/features/qwen3-embedding/install.sh"
-fi
+"$PROJECT_DIR/rootfs/build.sh" --reuse-if-matching --features "$FEATURES"
+
+echo ":: creating Docker staging rootfs at $DOCKER_ROOTFS"
+mkdir -p "$DOCKER_ROOTFS" "$DOCKER_UPPER" "$DOCKER_WORK"
+mount -t overlay overlay \
+    -o "lowerdir=$ROOTFS,upperdir=$DOCKER_UPPER,workdir=$DOCKER_WORK" \
+    "$DOCKER_ROOTFS"
+cleanup_docker_staging() {
+    if mountpoint -q "$DOCKER_ROOTFS" 2>/dev/null; then
+        umount "$DOCKER_ROOTFS" 2>/dev/null || umount -l "$DOCKER_ROOTFS" 2>/dev/null || true
+    fi
+    rm -rf "$DOCKER_ROOTFS" "$DOCKER_UPPER" "$DOCKER_WORK"
+}
+trap cleanup_docker_staging EXIT
 
 echo ":: prepping rootfs — cos user + overlay scratch dirs"
-add_cos_user "$ROOTFS"
+add_cos_user "$DOCKER_ROOTFS"
 
 # Pre-create the overlay scratch dirs and chown them to cos so setup-home.sh
 # can prepare the non-root agent home at boot. The overlay mount itself still
 # needs CAP_SYS_ADMIN and is skipped with a JSON warning when absent — that's
 # the documented behaviour for unprivileged containers.
-chroot "$ROOTFS" /bin/bash -c '
+chroot "$DOCKER_ROOTFS" /bin/bash -c '
     set -e
     mkdir -p /var/lib/cos/overlay/base \
              /var/lib/cos/overlay/upper \
@@ -79,4 +88,6 @@ chroot "$ROOTFS" /bin/bash -c '
 '
 
 cd "$PROJECT_DIR"
-exec docker build -f "$DOCKERFILE" -t "$TAG" "$@" .
+docker build \
+    --build-arg "ROOTFS_DIR=build/$(basename "$DOCKER_ROOTFS")" \
+    -f "$DOCKERFILE" -t "$TAG" "$@" .
