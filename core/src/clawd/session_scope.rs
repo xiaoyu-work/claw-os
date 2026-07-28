@@ -23,8 +23,7 @@ impl ProcSessionGuard {
         let caps = session_caps(session_id)?;
         let role = session::get_meta(session_id)
             .ok()
-            .and_then(|meta| meta.role)
-            .unwrap_or(Role::Admin);
+            .and_then(|meta| meta.role);
 
         session::update_meta(session_id, |meta| {
             if meta.status.is_active() {
@@ -50,12 +49,12 @@ impl ProcSessionGuard {
                 .map(|path| path.to_string_lossy().to_string()),
             exit_code: None,
             ended_at: None,
-            tier: None,
+            tier: role.map(Role::credential_tier),
             scope: Some("clawd-task".to_string()),
             priority: None,
             caps: Some(caps),
             transient_caps: None,
-            role: Some(role.name().to_string()),
+            role: role.map(|value| value.name().to_string()),
             app_id: None,
             pending_bind: false,
             start_time_ticks: None,

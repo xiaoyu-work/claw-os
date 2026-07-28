@@ -529,6 +529,10 @@ pub struct Need {
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ScopeBinding {
     FromArg { arg: String },
+    FromArgMap {
+        arg: String,
+        values: BTreeMap<String, Scope>,
+    },
     Fixed { scope: Scope },
     Wild,
 }
@@ -783,6 +787,22 @@ impl Manifest {
                             });
                         }
                     }
+                    ScopeBinding::FromArgMap { arg, values } => {
+                        if !seen_args.contains_key(arg.as_str()) {
+                            return Err(ManifestError::NeedRefsUndeclaredArg {
+                                op: op_name.clone(),
+                                idx,
+                                arg: arg.clone(),
+                            });
+                        }
+                        if values.is_empty() {
+                            return Err(ManifestError::NeedInvalid {
+                                op: op_name.clone(),
+                                idx,
+                                detail: "from-arg-map values must not be empty".to_string(),
+                            });
+                        }
+                    }
                     ScopeBinding::Fixed { scope: _ } => {}
                     ScopeBinding::Wild => {}
                 }
@@ -859,6 +879,24 @@ impl Manifest {
                                     verb: need.verb.as_str().to_string(),
                                     arg: arg.clone(),
                                     kind: a.kind,
+                                });
+                            }
+                        }
+                        ScopeBinding::FromArgMap { arg, values } => {
+                            if !seen_args.contains_key(arg.as_str()) {
+                                return Err(
+                                    ManifestError::SessionNeedRefsUndeclaredArg {
+                                        tool: tool.name.clone(),
+                                        idx,
+                                        arg: arg.clone(),
+                                    },
+                                );
+                            }
+                            if values.is_empty() {
+                                return Err(ManifestError::SessionNeedInvalid {
+                                    tool: tool.name.clone(),
+                                    idx,
+                                    detail: "from-arg-map values must not be empty".to_string(),
                                 });
                             }
                         }
@@ -970,6 +1008,23 @@ impl Manifest {
                         }
                     })?
                 }
+                ScopeBinding::FromArgMap { arg, values } => {
+                    let value = args
+                        .get(arg)
+                        .and_then(serde_json::Value::as_str)
+                        .ok_or_else(|| ManifestError::NeedInvalid {
+                            op: op_name.to_string(),
+                            idx,
+                            detail: format!("arg `{arg}` must be a string"),
+                        })?;
+                    values.get(value).cloned().ok_or_else(|| {
+                        ManifestError::NeedInvalid {
+                            op: op_name.to_string(),
+                            idx,
+                            detail: format!("arg `{arg}` has unmapped value `{value}`"),
+                        }
+                    })?
+                }
                 ScopeBinding::Fixed { scope } => scope.clone(),
                 ScopeBinding::Wild => Scope::Wild,
             };
@@ -1032,6 +1087,23 @@ impl Manifest {
                                 "arg `{arg}` value is not a {kind:?}",
                                 kind = arg_decl.kind
                             ),
+                        }
+                    })?
+                }
+                ScopeBinding::FromArgMap { arg, values } => {
+                    let value = args
+                        .get(arg)
+                        .and_then(serde_json::Value::as_str)
+                        .ok_or_else(|| ManifestError::SessionNeedInvalid {
+                            tool: tool_name.to_string(),
+                            idx,
+                            detail: format!("arg `{arg}` must be a string"),
+                        })?;
+                    values.get(value).cloned().ok_or_else(|| {
+                        ManifestError::SessionNeedInvalid {
+                            tool: tool_name.to_string(),
+                            idx,
+                            detail: format!("arg `{arg}` has unmapped value `{value}`"),
                         }
                     })?
                 }

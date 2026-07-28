@@ -122,6 +122,17 @@ impl Role {
         }
     }
 
+    /// Legacy credential tier corresponding to this capability role.
+    /// Lower numbers are more privileged.
+    pub fn credential_tier(self) -> u8 {
+        match self {
+            Role::Kernel | Role::Admin => 0,
+            Role::AgentHost | Role::Automator => 1,
+            Role::Worker | Role::Curator | Role::Connector => 2,
+            Role::Observer => 3,
+        }
+    }
+
     /// Verbs included in this role. Combine with scopes to form a
     /// concrete [`CapSet`].
     pub fn verbs(self) -> &'static [Verb] {

@@ -129,7 +129,7 @@ fn bootstrap_user_cli_session_impl(
             .map(|p| p.to_string_lossy().to_string()),
         exit_code: None,
         ended_at: None,
-        tier: None,
+        tier: Some(Role::Admin.credential_tier()),
         scope: None,
         priority: None,
         caps: Some(caps),

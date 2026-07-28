@@ -24,6 +24,9 @@ pub async fn register(
     info.pending_bind = true;
     info.start_time_ticks = None;
     info.transient_caps = None;
+    info.tier = info
+        .tier
+        .map(|tier| tier.max(crate::caps::Role::Worker.credential_tier()));
     validate_manifest_caps(
         info.app_id.as_deref().unwrap_or_default(),
         info.caps.as_ref(),
@@ -263,6 +266,9 @@ fn need_allows_cap(
                     ArgKind::Name => matches!(&cap.scope, Scope::Name(_)),
                     ArgKind::Text | ArgKind::Number | ArgKind::Bool => false,
                 }),
+            ScopeBinding::FromArgMap { values, .. } => {
+                values.values().any(|scope| scope == &cap.scope)
+            }
         }
     }
 

@@ -251,7 +251,9 @@ impl AppIdentitySession {
                 .map(|path| path.to_string_lossy().into_owned()),
             exit_code: None,
             ended_at: None,
-            tier: parent.tier,
+            tier: parent
+                .tier
+                .map(|tier| tier.max(crate::caps::Role::Worker.credential_tier())),
             scope: parent.scope,
             priority: parent.priority,
             caps: Some(caps),
@@ -427,7 +429,7 @@ fn constrained_caps(parent: &CapSet, needs: Vec<&Need>) -> CapSet {
                         .cloned(),
                 );
             }
-            ScopeBinding::FromArg { .. } => {}
+            ScopeBinding::FromArg { .. } | ScopeBinding::FromArgMap { .. } => {}
         }
     }
     caps
@@ -469,6 +471,18 @@ fn constrained_operation_caps(
                         .get(arg)
                         .and_then(|value| scope_for_arg(decl.kind, value))
                 })
+                .map(|scope| Cap::new(need.verb, scope)),
+            ScopeBinding::FromArgMap {
+                arg,
+                values: mappings,
+            } => mappings
+                .get(
+                    values
+                        .get(arg)
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default(),
+                )
+                .cloned()
                 .map(|scope| Cap::new(need.verb, scope)),
         };
         if let Some(requested) = requested {

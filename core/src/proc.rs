@@ -777,6 +777,9 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
             let path_s = scope_path.as_deref().map(crate::caps::Scope::path);
             let host_s = scope_host.as_deref().map(crate::caps::Scope::host);
             let name_s = scope_name.as_deref().map(crate::caps::Scope::name);
+            if tier.is_none() {
+                tier = Some(role.credential_tier());
+            }
             Some(role.caps_with_scopes(path_s, host_s, name_s))
         }
         (None, Some(list)) => {
