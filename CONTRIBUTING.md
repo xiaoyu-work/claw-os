@@ -122,7 +122,9 @@ artifacts. On pushes to `main`, the matching apt repository is published
 to GitHub Pages and consumable as:
 
 ```bash
-echo "deb [trusted=yes] https://xiaoyu-work.github.io/claw-os trixie main" \
+curl -fsSL https://xiaoyu-work.github.io/claw-os/claw-os-archive-keyring.gpg \
+  | sudo tee /usr/share/keyrings/claw-os-archive-keyring.gpg >/dev/null
+echo "deb [signed-by=/usr/share/keyrings/claw-os-archive-keyring.gpg] https://xiaoyu-work.github.io/claw-os trixie main" \
   | sudo tee /etc/apt/sources.list.d/claw-os.list
 sudo apt update
 sudo apt install claw-os-base

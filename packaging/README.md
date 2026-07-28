@@ -43,7 +43,7 @@ cargo build --release -p cos-browser --target x86_64-unknown-linux-gnu
 # -> build/debs/claw-os-systemd_<version>_all.deb
 
 # Build apt repo
-./packaging/apt-repo/build-repo.sh
+GPG_KEY_ID=<signing-key-fingerprint> ./packaging/apt-repo/build-repo.sh
 # -> build/apt-repo/dists/trixie/main/binary-amd64/Packages.gz
 # -> build/apt-repo/dists/trixie/main/binary-arm64/Packages.gz
 # -> build/apt-repo/pool/main/c/claw-os-{base,browser,systemd}/*.deb
@@ -57,13 +57,18 @@ CI publishes the repo to GitHub Pages. The default URL hard-coded in the
 End-user setup on a non-Claw-OS Debian/Ubuntu machine:
 
 ```bash
-echo "deb [trusted=yes] https://xiaoyu-work.github.io/claw-os trixie main" \
+curl -fsSL https://xiaoyu-work.github.io/claw-os/claw-os-archive-keyring.gpg \
+  | sudo tee /usr/share/keyrings/claw-os-archive-keyring.gpg >/dev/null
+echo "deb [signed-by=/usr/share/keyrings/claw-os-archive-keyring.gpg] https://xiaoyu-work.github.io/claw-os trixie main" \
   | sudo tee /etc/apt/sources.list.d/claw-os.list
 sudo apt update
 sudo apt install claw-os-base
 ```
 
-> Note: package signing is **not yet enabled**. The current build emits an
-> unsigned `Release` file; the apt-source feature uses `[trusted=yes]`.
-> When a signing key is provisioned in CI, this README and the apt-source
-> feature will be updated to use `[signed-by=...]`.
+Repository builds require `GPG_KEY_ID` and refuse to emit unsigned metadata.
+GitHub Actions imports the private key from the
+`CLAW_OS_APT_SIGNING_PRIVATE_KEY` secret; the corresponding public key is
+embedded in Claw OS images and published beside the repository.
+Local rootfs builds should set `COS_APT_PUBLIC_KEY_FILE` to a trusted
+binary export of that public key. Download fallback is available only when
+`COS_APT_PUBLIC_KEY_FINGERPRINT` is supplied explicitly.

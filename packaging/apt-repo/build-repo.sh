@@ -6,9 +6,9 @@
 #
 #   build/apt-repo/
 #   ├── dists/trixie/
-#   │   ├── InRelease           (signed Release, omitted if no GPG key)
+#   │   ├── InRelease           (clear-signed Release)
 #   │   ├── Release             (always)
-#   │   ├── Release.gpg         (detached signature, omitted if no GPG key)
+#   │   ├── Release.gpg         (detached signature)
 #   │   └── main/
 #   │       ├── binary-amd64/Packages{,.gz}    (if amd64 .debs present)
 #   │       ├── binary-arm64/Packages{,.gz}    (if arm64 .debs present)
@@ -23,7 +23,7 @@
 # build-debs.sh twice (once on an amd64 host, once on an arm64 host)
 # into the same build/debs/ directory and produce a single multi-arch repo.
 #
-# The repo is unsigned by default. Set GPG_KEY_ID to enable signing.
+# GPG_KEY_ID is mandatory. Publishing an unsigned repository is forbidden.
 
 set -euo pipefail
 
@@ -36,6 +36,7 @@ BRAND_ASSETS_DIR="$PROJECT_DIR/assets/brand"
 SUITE="${SUITE:-trixie}"
 COMPONENT="main"
 GPG_KEY_ID="${GPG_KEY_ID:-}"
+GPG_PASSPHRASE="${GPG_PASSPHRASE:-}"
 
 if [ ! -d "$DEBS_DIR" ] || [ -z "$(ls "$DEBS_DIR"/*.deb 2>/dev/null)" ]; then
     echo "error: no .debs in $DEBS_DIR — run packaging/deb/build-debs.sh first" >&2
@@ -44,6 +45,18 @@ fi
 
 if ! command -v apt-ftparchive >/dev/null 2>&1; then
     echo "error: apt-ftparchive not found. Install it with: apt-get install apt-utils" >&2
+    exit 1
+fi
+if ! command -v gpg >/dev/null 2>&1; then
+    echo "error: gpg not found. Install it with: apt-get install gnupg" >&2
+    exit 1
+fi
+if [ -z "$GPG_KEY_ID" ]; then
+    echo "error: GPG_KEY_ID is required; refusing to build an unsigned apt repository" >&2
+    exit 1
+fi
+if ! gpg --batch --list-secret-keys "$GPG_KEY_ID" >/dev/null 2>&1; then
+    echo "error: signing secret key $GPG_KEY_ID is not available" >&2
     exit 1
 fi
 
@@ -134,19 +147,23 @@ apt-ftparchive -c="$REPO_DIR/apt-ftparchive-release.conf" \
 
 rm -f "$REPO_DIR/apt-ftparchive-release.conf"
 
-# Sign the repo if a key is configured.
-if [ -n "$GPG_KEY_ID" ]; then
-    echo ":: signing with GPG key $GPG_KEY_ID"
-    gpg --batch --yes --default-key "$GPG_KEY_ID" --detach-sign \
-        --armor -o "dists/$SUITE/Release.gpg" "dists/$SUITE/Release"
-    gpg --batch --yes --default-key "$GPG_KEY_ID" --clearsign \
-        -o "dists/$SUITE/InRelease" "dists/$SUITE/Release"
-    # Export the public key so users can fetch + trust it.
-    gpg --armor --export "$GPG_KEY_ID" > "$REPO_DIR/claw-os.gpg"
-    echo "  :: signed; public key at $REPO_DIR/claw-os.gpg"
-else
-    echo "  :: GPG_KEY_ID not set — repo is unsigned (use [trusted=yes])"
+# Sign Release in both formats and publish the exact binary keyring that
+# Claw OS images pin with signed-by=.
+echo ":: signing with GPG key $GPG_KEY_ID"
+gpg_args=(--batch --yes --pinentry-mode loopback --default-key "$GPG_KEY_ID")
+if [ -n "$GPG_PASSPHRASE" ]; then
+    gpg_args+=(--passphrase "$GPG_PASSPHRASE")
 fi
+gpg "${gpg_args[@]}" --detach-sign \
+    --armor -o "dists/$SUITE/Release.gpg" "dists/$SUITE/Release"
+gpg "${gpg_args[@]}" --clearsign \
+    -o "dists/$SUITE/InRelease" "dists/$SUITE/Release"
+gpg --batch --export "$GPG_KEY_ID" > "$REPO_DIR/claw-os-archive-keyring.gpg"
+gpg --batch --armor --export "$GPG_KEY_ID" > "$REPO_DIR/claw-os-archive-keyring.asc"
+test -s "dists/$SUITE/InRelease"
+test -s "dists/$SUITE/Release.gpg"
+test -s "$REPO_DIR/claw-os-archive-keyring.gpg"
+echo "  :: signed; public key at $REPO_DIR/claw-os-archive-keyring.gpg"
 
 # GitHub Pages homepage. Keep this at the repo root so the APT paths remain
 # stable: /dists/... and /pool/... are still served beside the marketing page.
