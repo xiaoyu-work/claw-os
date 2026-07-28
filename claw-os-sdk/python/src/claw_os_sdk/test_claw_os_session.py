@@ -1,9 +1,8 @@
 """Tests for the ``claw_os_session`` recording helpers — focus on
 the concurrency / atomicity guarantees called out in the bug audit:
 :func:`_atomic_write_json` must produce a file containing exactly one
-full payload no matter how many threads race on it, and the JSONL
-sidecar counter must stay consistent with the number of appended
-lines."""
+full payload no matter how many threads race on it. JSONL sequence
+allocation uses the log itself as the sole source of truth."""
 
 import json
 import os

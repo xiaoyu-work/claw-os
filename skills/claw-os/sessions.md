@@ -138,7 +138,7 @@ Mutation variants (kebab-case `kind` discriminator):
 | `kind`              | extra fields                                  | undoable how                                        |
 |---------------------|-----------------------------------------------|-----------------------------------------------------|
 | `fs-write`          | `path`, `prev_blob` (nullable string)         | restore bytes from `files/inverse/<prev_blob>.bin`; if null, delete the file (it didn't exist before) |
-| `fs-delete`         | `path`, `prev_blob` (string)                  | recreate file from blob                              |
+| `fs-delete`         | `path`, `blob_id` (string)                    | recreate file from blob                              |
 | `fs-rename`         | `from`, `to`                                  | rename `to` back to `from`                           |
 | `credential-store`  | `namespace`, `key`                            | revoke (Phase 4)                                     |
 | `credential-revoke` | `namespace`, `key`, `prev_blob` (string)      | restore (Phase 4)                                    |
@@ -151,9 +151,11 @@ scheme.
 
 ## Cross-runtime handover
 
-This is the load-bearing claim: **a third-party Python (or Node, or Go)
-agent can attach to a session our `cos agent` runtime started, read its
-turns, and append new ones — without ever shelling out to `cos`.**
+This is the load-bearing claim: **a third-party runtime can attach to a
+session our `cos agent` runtime started, read its turns, and append new
+ones — without ever shelling out to `cos`.** Python is the shipped
+reference implementation; other runtimes must implement the same
+protocol before writing.
 
 The contract is exactly the file format above. We ship a reference
 implementation at [`claw-os-sdk/python/src/claw_os_sdk/claw_os_session.py`](../../claw-os-sdk/python/src/claw_os_sdk/claw_os_session.py)
@@ -167,6 +169,19 @@ implementation at [`claw-os-sdk/python/src/claw_os_sdk/claw_os_session.py`](../.
   write happen atomically,
 - records `fs-write` / `fs-delete` / `fs-rename` / `opaque` mutations
   with proper inverse-blob stashing.
+
+JSONL is the only sequence source of truth; there is no counter
+sidecar. Every writer must, under the same exclusive flock:
+
+1. Validate complete records have contiguous `seq` values `0..N-1`.
+2. Repair only one invalid trailing fragment by truncating it; any
+   complete corrupt/missing/duplicate sequence is fatal.
+3. Treat a valid final JSON record without `\n` as complete and add the
+   separator.
+4. Append `seq=N` with a full-write loop and fsync before unlocking.
+
+Readers take a shared flock and tolerate only an invalid trailing
+fragment. Mid-file corruption is surfaced rather than silently skipped.
 
 Minimal example:
 

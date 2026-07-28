@@ -34,7 +34,6 @@
 //!   matches how `audit.rs` and `trace.rs` are structured today.
 
 use std::fs;
-use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 
 use serde::de::DeserializeOwned;
@@ -129,6 +128,9 @@ pub enum SessionError {
 
     #[error("encode: {0}")]
     Encode(#[from] serde_json::Error),
+
+    #[error("corrupt JSONL {path}: {detail}")]
+    Corrupt { path: PathBuf, detail: String },
 }
 
 impl SessionError {
@@ -414,29 +416,34 @@ fn read_json<T: DeserializeOwned>(path: &PathBuf) -> Result<T> {
     serde_json::from_str(&text).map_err(|e| SessionError::decode(path.clone(), e))
 }
 
-/// Count + append a JSONL line under a single exclusive `flock`.
+/// Validate + append a JSONL line under a single exclusive `flock`.
 ///
 /// The `build` closure receives the assigned seq (one greater than
-/// the count of non-empty lines currently in the file) and returns
+/// the last validated record) and returns
 /// the serialized line to write. Doing count + write under one lock
 /// is **the** correctness property of this module: it prevents two
 /// concurrent `append_turn` calls from minting the same seq.
 ///
-/// On non-Unix platforms (no `flock`) the function still works but
-/// without true mutual exclusion; this is the same trade-off
-/// [`crate::filelock`] makes for non-Linux builds.
 fn append_jsonl_with_seq<F>(path: &PathBuf, build: F) -> Result<u64>
 where
     F: FnOnce(u64) -> std::result::Result<String, serde_json::Error>,
 {
-    use std::io::{Seek, SeekFrom, Write};
+    use std::io::{Read, Seek, SeekFrom, Write};
+
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        return Err(SessionError::Lock(
+            "durable-session JSONL writes require flock(2)".to_string(),
+        ));
+    }
 
     if let Some(parent) = path.parent() {
         crate::storage::ensure_private_dir(parent)
             .map_err(|e| SessionError::io(parent.to_path_buf(), e))?;
     }
     let mut options = std::fs::OpenOptions::new();
-    options.create(true).read(true).append(true);
+    options.create(true).read(true).write(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -461,31 +468,31 @@ where
         }
     }
 
-    // Count non-empty lines while we hold the exclusive lock.
     file.seek(SeekFrom::Start(0))
         .map_err(|e| SessionError::io(path.clone(), e))?;
-    let mut reader = BufReader::new(&file);
-    let mut buf = String::new();
-    let mut count: u64 = 0;
-    loop {
-        buf.clear();
-        match reader.read_line(&mut buf) {
-            Ok(0) => break,
-            Ok(_) => {
-                if !buf.trim_end().is_empty() {
-                    count += 1;
-                }
-            }
-            Err(e) => return Err(SessionError::io(path.clone(), e)),
-        }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|e| SessionError::io(path.clone(), e))?;
+    let scan = scan_jsonl(path, &bytes, true)?;
+    if let Some(len) = scan.truncate_to {
+        file.set_len(len as u64)
+            .map_err(|e| SessionError::io(path.clone(), e))?;
+    } else if scan.append_newline {
+        file.seek(SeekFrom::End(0))
+            .map_err(|e| SessionError::io(path.clone(), e))?;
+        file.write_all(b"\n")
+            .map_err(|e| SessionError::io(path.clone(), e))?;
     }
-    drop(reader);
 
+    let count = scan.records.len() as u64;
     let line = build(count).map_err(SessionError::Encode)?;
+    validate_jsonl_record(path, line.as_bytes(), count)?;
 
-    // File was opened with O_APPEND, so the write always lands at
-    // the current end-of-file regardless of where we seeked above.
-    writeln!(&mut file, "{}", line).map_err(|e| SessionError::io(path.clone(), e))?;
+    file.seek(SeekFrom::End(0))
+        .map_err(|e| SessionError::io(path.clone(), e))?;
+    file.write_all(line.as_bytes())
+        .and_then(|_| file.write_all(b"\n"))
+        .map_err(|e| SessionError::io(path.clone(), e))?;
     file.flush().map_err(|e| SessionError::io(path.clone(), e))?;
     // Persist the new line to disk *before* releasing the lock.
     // Without `sync_data()` a `cos agent undo` started by the next
@@ -497,6 +504,11 @@ where
     // entry — the file already exists.
     file.sync_data()
         .map_err(|e| SessionError::io(path.clone(), e))?;
+    if let Some(parent) = path.parent() {
+        fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|e| SessionError::io(parent.to_path_buf(), e))?;
+    }
 
     #[cfg(unix)]
     {
@@ -511,11 +523,8 @@ where
 
 /// Read a JSONL log into a Vec.
 ///
-/// IO errors *are* propagated — earlier revisions silently dropped
-/// them via `map_while(Result::ok)`, which masked truncation and
-/// partial-write recovery problems. Lines that parse as JSON but
-/// don't deserialize to `T` are still skipped (best-effort recovery
-/// from a crash mid-line is by design).
+/// IO and mid-file corruption are propagated. Only one invalid trailing
+/// fragment is tolerated as a recoverable crash tail.
 ///
 /// `session_dir` is passed in so we can raise `NotFound` for a
 /// missing session (vs. an empty log inside a real session).
@@ -531,23 +540,108 @@ fn read_jsonl<T: DeserializeOwned>(path: &PathBuf, dir: PathBuf) -> Result<Vec<T
                 .to_string(),
         ));
     }
-    let file = fs::File::open(path).map_err(|e| SessionError::io(path.clone(), e))?;
-    let reader = BufReader::new(file);
-    let mut out = Vec::new();
-    for line in reader.lines() {
-        let line = line.map_err(|e| SessionError::io(path.clone(), e))?;
-        if line.is_empty() {
-            continue;
-        }
-        // A crash mid-write can leave one trailing partial line.
-        // Skip lines that fail to deserialize — readers want
-        // best-effort recovery — but do **not** swallow the IO
-        // error that produced an empty line in the first place.
-        if let Ok(v) = serde_json::from_str::<T>(&line) {
-            out.push(v);
+    use std::io::Read;
+    let mut file = fs::File::open(path).map_err(|e| SessionError::io(path.clone(), e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_SH) } != 0 {
+            return Err(SessionError::Lock(format!(
+                "flock LOCK_SH {}: {}",
+                path.display(),
+                std::io::Error::last_os_error()
+            )));
         }
     }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|e| SessionError::io(path.clone(), e))?;
+    let scan = scan_jsonl(path, &bytes, true)?;
+    let mut out = Vec::new();
+    for record in scan.records {
+        let value = serde_json::from_slice::<T>(&record).map_err(|error| {
+            SessionError::Corrupt {
+                path: path.clone(),
+                detail: format!("record schema mismatch: {error}"),
+            }
+        })?;
+        out.push(value);
+    }
     Ok(out)
+}
+
+struct JsonlScan {
+    records: Vec<Vec<u8>>,
+    truncate_to: Option<usize>,
+    append_newline: bool,
+}
+
+fn scan_jsonl(path: &PathBuf, bytes: &[u8], tolerate_partial_tail: bool) -> Result<JsonlScan> {
+    let mut records = Vec::new();
+    let mut start = 0usize;
+    while let Some(relative_end) = bytes[start..].iter().position(|byte| *byte == b'\n') {
+        let end = start + relative_end;
+        let line = &bytes[start..end];
+        validate_jsonl_record(path, line, records.len() as u64)?;
+        records.push(line.to_vec());
+        start = end + 1;
+    }
+
+    let tail = &bytes[start..];
+    if tail.is_empty() {
+        return Ok(JsonlScan {
+            records,
+            truncate_to: None,
+            append_newline: false,
+        });
+    }
+    match serde_json::from_slice::<Value>(tail) {
+        Ok(_) => {
+            validate_jsonl_record(path, tail, records.len() as u64)?;
+            records.push(tail.to_vec());
+            Ok(JsonlScan {
+                records,
+                truncate_to: None,
+                append_newline: true,
+            })
+        }
+        Err(_) if tolerate_partial_tail => Ok(JsonlScan {
+            records,
+            truncate_to: Some(start),
+            append_newline: false,
+        }),
+        Err(error) => Err(SessionError::Corrupt {
+            path: path.clone(),
+            detail: format!("invalid trailing JSON: {error}"),
+        }),
+    }
+}
+
+fn validate_jsonl_record(path: &PathBuf, line: &[u8], expected_seq: u64) -> Result<()> {
+    if line.is_empty() {
+        return Err(SessionError::Corrupt {
+            path: path.clone(),
+            detail: format!("empty record at seq {expected_seq}"),
+        });
+    }
+    let value: Value = serde_json::from_slice(line).map_err(|error| SessionError::Corrupt {
+        path: path.clone(),
+        detail: format!("invalid JSON at seq {expected_seq}: {error}"),
+    })?;
+    let seq = value
+        .get("seq")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| SessionError::Corrupt {
+            path: path.clone(),
+            detail: format!("record at seq {expected_seq} has no unsigned seq"),
+        })?;
+    if seq != expected_seq {
+        return Err(SessionError::Corrupt {
+            path: path.clone(),
+            detail: format!("expected seq {expected_seq}, found {seq}"),
+        });
+    }
+    Ok(())
 }
 
 // `Lease` IO is owned by `session::lease` (Phase 2). This module

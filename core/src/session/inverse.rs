@@ -96,6 +96,15 @@ pub fn write_blob(sid: &SessionId, bytes: &[u8]) -> Result<String, SessionError>
         fs::rename(&tmp, &path).map_err(|e| SessionError::io(path.clone(), e))?;
         crate::storage::set_private_file(&path)
             .map_err(|e| SessionError::io(path.clone(), e))?;
+        fs::File::open(&dir)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|e| SessionError::io(dir.clone(), e))?;
+        let parent = dir
+            .parent()
+            .ok_or_else(|| SessionError::NotFound("inverse parent".to_string()))?;
+        fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|e| SessionError::io(parent.to_path_buf(), e))?;
         return Ok(id);
     }
     Err(SessionError::Lock(
