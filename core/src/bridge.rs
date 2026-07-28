@@ -30,6 +30,102 @@ fn app_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
 
 pub(crate) struct AppIdentitySession {
     session_id: String,
+    backend: AppSessionBackend,
+}
+
+#[derive(Clone)]
+enum AppSessionBackend {
+    Local {
+        proc_data_dir: std::path::PathBuf,
+    },
+    Clawd {
+        proc_data_dir: std::path::PathBuf,
+    },
+}
+
+#[derive(Clone)]
+pub(crate) struct AppSessionControl {
+    session_id: String,
+    backend: AppSessionBackend,
+}
+
+pub(crate) struct McpProcSession {
+    session_id: String,
+    proc_data_dir: std::path::PathBuf,
+}
+
+impl McpProcSession {
+    pub fn for_current_parent(command: &str) -> Result<Option<Self>, String> {
+        #[cfg(unix)]
+        if crate::paths::current_owner_uid_override().is_none()
+            && unsafe { libc::geteuid() } != 0
+        {
+            let parent = crate::proc::current_session_info_for_caps()
+                .ok_or_else(|| "MCP launch requires a registered parent session".to_string())?;
+            let result = clawd_app_session_request(
+                "mcp_session.register",
+                serde_json::json!({
+                    "parent": parent,
+                    "command": command,
+                }),
+            )?;
+            let session_id = result
+                .get("session_id")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| "clawd MCP session response omitted session_id".to_string())?;
+            let proc_data_dir = result
+                .get("proc_data_dir")
+                .and_then(serde_json::Value::as_str)
+                .map(std::path::PathBuf::from)
+                .ok_or_else(|| "clawd MCP session response omitted proc_data_dir".to_string())?;
+            return Ok(Some(Self {
+                session_id,
+                proc_data_dir,
+            }));
+        }
+        Ok(None)
+    }
+
+    pub fn id(&self) -> &str {
+        &self.session_id
+    }
+
+    pub fn proc_data_dir(&self) -> &Path {
+        &self.proc_data_dir
+    }
+
+    pub fn bind_process(&self, pid: u32) -> Result<(), String> {
+        clawd_app_session_request(
+            "app_session.bind",
+            serde_json::json!({
+                "session_id": self.session_id,
+                "pid": pid,
+            }),
+        )
+        .map(|_| ())
+    }
+}
+
+impl Drop for McpProcSession {
+    fn drop(&mut self) {
+        if let Err(error) = clawd_app_session_request(
+            "app_session.deregister",
+            serde_json::json!({"session_id": self.session_id}),
+        ) {
+            tracing::warn!(
+                session_id = %self.session_id,
+                error = %error,
+                "failed to deregister MCP child session through clawd"
+            );
+        }
+    }
+}
+
+impl AppSessionControl {
+    pub fn set_transient_caps(&self, caps: Option<CapSet>) -> Result<(), String> {
+        set_app_session_transient_caps(&self.session_id, &self.backend, caps)
+    }
 }
 
 impl AppIdentitySession {
@@ -48,13 +144,24 @@ impl AppIdentitySession {
         }
         let manifest = load_manifest(app_dir)?;
         let (parent, parent_caps) = Self::parent_identity()?;
+        if parent.app_id.is_some() {
+            return Err(
+                "nested App launches are not supported by the trusted launcher"
+                    .to_string(),
+            );
+        }
         let caps = match (operation, manifest.as_ref()) {
             (_, None) => CapSet::new(),
             (_, Some(manifest)) => {
                 let operation = manifest.operations.get(operation).ok_or_else(|| {
                     format!("app `{app_id}` manifest has no operation `{operation}`")
                 })?;
-                constrained_operation_caps(&parent_caps, operation, args)
+                constrained_operation_caps(
+                    &parent_caps,
+                    false,
+                    operation,
+                    args,
+                )?
             }
         };
         Self::register(
@@ -70,6 +177,12 @@ impl AppIdentitySession {
     pub fn for_gui(app_dir: &Path, app_id: &str, exec: &str) -> Result<Self, String> {
         let manifest = load_manifest(app_dir)?;
         let (parent, parent_caps) = Self::parent_identity()?;
+        if parent.app_id.is_some() {
+            return Err(
+                "nested App launches are not supported by the trusted launcher"
+                    .to_string(),
+            );
+        }
         let needs = manifest
             .iter()
             .flat_map(|manifest| manifest.operations.values())
@@ -88,20 +201,19 @@ impl AppIdentitySession {
     /// Register an MCP identity with the constrained union of all session-tool needs.
     pub fn for_mcp(app_id: &str, manifest: &Manifest) -> Result<Self, String> {
         let (parent, parent_caps) = Self::parent_identity()?;
-        let needs = manifest
-            .session
-            .as_ref()
-            .into_iter()
-            .flat_map(|session| session.tools.iter())
-            .flat_map(|tool| tool.needs.iter())
-            .collect();
-        let caps = constrained_caps(&parent_caps, needs);
+        if parent.app_id.is_some() {
+            return Err(
+                "nested App launches are not supported by the trusted launcher"
+                    .to_string(),
+            );
+        }
+        let _ = manifest;
         Self::register(
             parent,
             parent_caps,
             app_id,
             &format!("cos app {app_id} session"),
-            caps,
+            CapSet::new(),
         )
     }
 
@@ -143,13 +255,24 @@ impl AppIdentitySession {
             scope: parent.scope,
             priority: parent.priority,
             caps: Some(caps),
+            transient_caps: None,
             role: parent.role,
             app_id: Some(app_id.to_string()),
             pending_bind: true,
             start_time_ticks: None,
         };
-        register_session(info)?;
-        Ok(Self { session_id })
+        let backend = if use_clawd_app_session_backend() {
+            register_app_session_with_clawd(&info)?
+        } else {
+            register_session(info)?;
+            AppSessionBackend::Local {
+                proc_data_dir: crate::paths::proc_data_dir(),
+            }
+        };
+        Ok(Self {
+            session_id,
+            backend,
+        })
     }
 
     fn parent_identity() -> Result<(SessionInfo, CapSet), String> {
@@ -167,7 +290,110 @@ impl AppIdentitySession {
     }
 
     pub fn bind_process(&mut self, pid: u32) -> Result<(), String> {
-        crate::proc::bind_session_process(&self.session_id, pid)
+        match &self.backend {
+            AppSessionBackend::Local { .. } => {
+                crate::proc::bind_session_process(&self.session_id, pid)
+            }
+            AppSessionBackend::Clawd { .. } => {
+                clawd_app_session_request(
+                    "app_session.bind",
+                    serde_json::json!({
+                        "session_id": self.session_id,
+                        "pid": pid,
+                    }),
+                )
+                .map(|_| ())
+            }
+        }
+    }
+
+    pub fn set_transient_caps(&self, caps: Option<CapSet>) -> Result<(), String> {
+        set_app_session_transient_caps(&self.session_id, &self.backend, caps)
+    }
+
+    pub fn proc_data_dir(&self) -> &Path {
+        match &self.backend {
+            AppSessionBackend::Local { proc_data_dir }
+            | AppSessionBackend::Clawd { proc_data_dir } => proc_data_dir,
+        }
+    }
+
+    pub fn control(&self) -> AppSessionControl {
+        AppSessionControl {
+            session_id: self.session_id.clone(),
+            backend: self.backend.clone(),
+        }
+    }
+}
+
+fn set_app_session_transient_caps(
+    session_id: &str,
+    backend: &AppSessionBackend,
+    caps: Option<CapSet>,
+) -> Result<(), String> {
+    match backend {
+        AppSessionBackend::Local { .. } => {
+            crate::proc::set_app_session_transient_caps(session_id, caps)
+        }
+        AppSessionBackend::Clawd { .. } => {
+            clawd_app_session_request(
+                "app_session.set_transient",
+                serde_json::json!({
+                    "session_id": session_id,
+                    "caps": caps,
+                }),
+            )
+            .map(|_| ())
+        }
+    }
+}
+
+fn use_clawd_app_session_backend() -> bool {
+    #[cfg(unix)]
+    {
+        crate::paths::current_owner_uid_override().is_none()
+            && unsafe { libc::geteuid() } != 0
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+fn register_app_session_with_clawd(
+    info: &SessionInfo,
+) -> Result<AppSessionBackend, String> {
+    let result = clawd_app_session_request(
+        "app_session.register",
+        serde_json::json!({"session": info}),
+    )?;
+    let proc_data_dir = result
+        .get("proc_data_dir")
+        .and_then(serde_json::Value::as_str)
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| "clawd App session response omitted proc_data_dir".to_string())?;
+    Ok(AppSessionBackend::Clawd { proc_data_dir })
+}
+
+fn clawd_app_session_request(
+    command: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let response = crate::clawd::client::request_blocking(
+        crate::paths::clawd_socket_path(),
+        crate::clawd::protocol::Request {
+            id: None,
+            command: command.to_string(),
+            params,
+        },
+    )?;
+    if response.ok {
+        Ok(response.result.unwrap_or(serde_json::Value::Null))
+    } else {
+        Err(response
+            .error
+            .map(|error| error.message)
+            .unwrap_or_else(|| format!("clawd {command} failed")))
     }
 }
 
@@ -209,21 +435,29 @@ fn constrained_caps(parent: &CapSet, needs: Vec<&Need>) -> CapSet {
 
 fn constrained_operation_caps(
     parent: &CapSet,
+    parent_is_app: bool,
     operation: &Operation,
     args: &[String],
-) -> CapSet {
+) -> Result<CapSet, String> {
     let values = parse_operation_args(operation, args);
     let mut caps = CapSet::new();
     for need in &operation.needs {
         let requested = match &need.scope {
             ScopeBinding::Fixed { scope } => Some(Cap::new(need.verb, scope.clone())),
             ScopeBinding::Wild => {
-                caps.extend(
-                    parent
-                        .iter()
-                        .filter(|cap| cap.verb == need.verb)
-                        .cloned(),
-                );
+                let inherited = parent
+                    .iter()
+                    .filter(|cap| cap.verb == need.verb)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if inherited.is_empty() && !parent_is_app {
+                    let requested = Cap::new(need.verb, Scope::Wild);
+                    crate::caps::require(requested.verb, requested.scope.clone())
+                        .map_err(|denial| denial.summary())?;
+                    caps.insert(requested);
+                } else {
+                    caps.extend(inherited);
+                }
                 None
             }
             ScopeBinding::FromArg { arg } => operation
@@ -240,10 +474,14 @@ fn constrained_operation_caps(
         if let Some(requested) = requested {
             if parent.covers(&requested) {
                 caps.insert(requested);
+            } else if !parent_is_app {
+                crate::caps::require(requested.verb, requested.scope.clone())
+                    .map_err(|denial| denial.summary())?;
+                caps.insert(requested);
             }
         }
     }
-    caps
+    Ok(caps)
 }
 
 fn parse_operation_args(
@@ -366,7 +604,21 @@ fn bind_child_session(
 
 impl Drop for AppIdentitySession {
     fn drop(&mut self) {
-        deregister_session(&self.session_id);
+        match &self.backend {
+            AppSessionBackend::Local { .. } => deregister_session(&self.session_id),
+            AppSessionBackend::Clawd { .. } => {
+                if let Err(error) = clawd_app_session_request(
+                    "app_session.deregister",
+                    serde_json::json!({"session_id": self.session_id}),
+                ) {
+                    tracing::warn!(
+                        session_id = %self.session_id,
+                        error = %error,
+                        "failed to deregister App session through clawd"
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -444,6 +696,7 @@ pub(crate) fn apply_routed_identity(command: &mut Command) -> Result<(), String>
         }
         None
     };
+    let expected_parent = unsafe { libc::getpid() };
     unsafe {
         command.pre_exec(move || {
             if let Some((uid, gid, euid)) = identity {
@@ -461,6 +714,15 @@ pub(crate) fn apply_routed_identity(command: &mut Command) -> Result<(), String>
             }
             #[cfg(target_os = "linux")]
             {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::getppid() != expected_parent {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        "App launcher exited before child setup completed",
+                    ));
+                }
                 if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
                     return Err(std::io::Error::last_os_error());
                 }
@@ -631,7 +893,7 @@ pub fn run_python_app(
         .env("COS_APP_ID", &app_id)
         .env("COS_SESSION", app_session.id())
         .env("COS_DATA_DIR", data_dir)
-        .env("COS_CAPS_DATA_DIR", crate::paths::caps_data_dir())
+        .env("COS_PROC_DATA_DIR", app_session.proc_data_dir())
         // Pass config values so Python apps use config.json instead of hardcoded defaults
         .envs(crate::config::as_env_vars());
     if let Some(home) = crate::paths::current_home_override() {
@@ -790,7 +1052,7 @@ pub fn run_app(
         .env("COS_COMMAND", command)
         .env("COS_ARGS_JSON", &args_json)
         .env("COS_DATA_DIR", data_dir)
-        .env("COS_CAPS_DATA_DIR", crate::paths::caps_data_dir())
+        .env("COS_PROC_DATA_DIR", app_session.proc_data_dir())
         .env("COS_APPS_DIR", apps_dir)
         .env("COS_APP_ID", &app_id)
         .env("COS_SESSION", app_session.id())
@@ -946,7 +1208,7 @@ pub fn launch_gui(
         .env("PAGER", "cat")
         .env("GIT_PAGER", "cat")
         .env("PYTHONDONTWRITEBYTECODE", "1")
-        .env("COS_CAPS_DATA_DIR", crate::paths::caps_data_dir())
+        .env("COS_PROC_DATA_DIR", app_session.proc_data_dir())
         .envs(crate::config::as_env_vars());
     if let Some(home) = crate::paths::current_home_override() {
         cmd.env("HOME", &home).env("COS_HOME", home);

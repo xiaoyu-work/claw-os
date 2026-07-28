@@ -159,8 +159,10 @@ type Result<T> = std::result::Result<T, SessionError>;
 pub fn create(purpose: impl Into<String>) -> Result<SessionId> {
     let id = SessionId::generate();
     let dir = session_dir(&id);
-    fs::create_dir_all(&dir).map_err(|e| SessionError::io(dir.clone(), e))?;
-    fs::create_dir_all(files_dir(&id)).map_err(|e| SessionError::io(files_dir(&id), e))?;
+    crate::storage::ensure_private_dir(&dir)
+        .map_err(|e| SessionError::io(dir.clone(), e))?;
+    crate::storage::ensure_private_dir(&files_dir(&id))
+        .map_err(|e| SessionError::io(files_dir(&id), e))?;
 
     let meta = SessionMeta::fresh(id.clone(), purpose);
     write_json(&meta_path(&id), &meta)?;
@@ -424,13 +426,20 @@ where
     use std::io::{Seek, SeekFrom, Write};
 
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| SessionError::io(parent.to_path_buf(), e))?;
+        crate::storage::ensure_private_dir(parent)
+            .map_err(|e| SessionError::io(parent.to_path_buf(), e))?;
     }
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .read(true)
-        .append(true)
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).read(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
         .open(path)
+        .map_err(|e| SessionError::io(path.clone(), e))?;
+    crate::storage::set_private_file(path)
         .map_err(|e| SessionError::io(path.clone(), e))?;
 
     #[cfg(unix)]

@@ -1755,6 +1755,7 @@ mod tests {
             scope: None,
             priority: None,
             caps: Some(caps),
+            transient_caps: None,
             role: Some(Role::Observer.name().to_string()),
             app_id: None,
             pending_bind: false,

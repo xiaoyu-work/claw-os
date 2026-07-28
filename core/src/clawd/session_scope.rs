@@ -54,6 +54,7 @@ impl ProcSessionGuard {
             scope: Some("clawd-task".to_string()),
             priority: None,
             caps: Some(caps),
+            transient_caps: None,
             role: Some(role.name().to_string()),
             app_id: None,
             pending_bind: false,

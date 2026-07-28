@@ -29,9 +29,7 @@ struct Registry {
 }
 
 fn proc_registry_path() -> PathBuf {
-    crate::paths::caps_data_dir()
-        .join("proc")
-        .join("registry.json")
+    crate::proc::registry_path_for_caps()
 }
 
 fn load_proc_registry(path: &PathBuf) -> Registry {

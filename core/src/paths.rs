@@ -173,6 +173,16 @@ pub fn caps_data_dir() -> PathBuf {
         .unwrap_or_else(data_dir)
 }
 
+pub fn proc_data_dir() -> PathBuf {
+    if let Some(path) = std::env::var_os("COS_PROC_DATA_DIR") {
+        return PathBuf::from(path);
+    }
+    if let Some(uid) = current_owner_uid_override() {
+        return PathBuf::from("/run/cos/caps").join(uid.to_string());
+    }
+    data_dir()
+}
+
 pub fn cache_dir() -> PathBuf {
     from_env_or_default("COS_CACHE_DIR", "/var/cache/cos", "cache")
 }

@@ -6,6 +6,7 @@ After=basic.target
 [Service]
 Type=simple
 Group=sudo
+UMask=0077
 ExecStart=/usr/local/bin/clawd --socket /run/cos/clawd.sock
 Restart=on-failure
 RestartSec=3
@@ -22,11 +23,11 @@ Environment=CLAWD_SOCKET_MODE=0660
 Environment=CLAWD_HEARTBEAT=on
 Environment=CLAWD_HEARTBEAT_INTERVAL_SECS=60
 RuntimeDirectory=cos
-RuntimeDirectoryMode=0750
+RuntimeDirectoryMode=0751
 StateDirectory=cos
-StateDirectoryMode=0755
+StateDirectoryMode=0700
 LogsDirectory=cos
-LogsDirectoryMode=0755
+LogsDirectoryMode=0700
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 NoNewPrivileges=true
 PrivateTmp=true

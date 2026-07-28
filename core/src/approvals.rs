@@ -129,11 +129,11 @@ fn scratch_dir() -> PathBuf {
 }
 
 fn ensure_dirs() -> std::io::Result<()> {
-    fs::create_dir_all(pending_dir())?;
-    fs::create_dir_all(approved_dir())?;
-    fs::create_dir_all(denied_dir())?;
-    fs::create_dir_all(consumed_dir())?;
-    fs::create_dir_all(scratch_dir())?;
+    crate::storage::ensure_private_dir(&pending_dir())?;
+    crate::storage::ensure_private_dir(&approved_dir())?;
+    crate::storage::ensure_private_dir(&denied_dir())?;
+    crate::storage::ensure_private_dir(&consumed_dir())?;
+    crate::storage::ensure_private_dir(&scratch_dir())?;
     Ok(())
 }
 
@@ -191,7 +191,7 @@ fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
     let parent = path.parent().ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no parent")
     })?;
-    fs::create_dir_all(parent)?;
+    crate::storage::ensure_private_dir(parent)?;
 
     let leaf = path.file_name().and_then(|s| s.to_str()).unwrap_or("anon");
     // Hidden tmp name so partial writes never appear in directory
@@ -200,7 +200,14 @@ fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
     let tmp_path = parent.join(format!(".{leaf}.tmp.{}", short_id()));
 
     {
-        let mut f = fs::File::create(&tmp_path)?;
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut f = options.open(&tmp_path)?;
         f.write_all(data)?;
         // fsync the data + metadata of the tmp file before linking
         // it into place under the user-visible name.
@@ -216,6 +223,7 @@ fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
         let _ = fs::remove_file(&tmp_path);
         return Err(e);
     }
+    crate::storage::set_private_file(path)?;
 
     // Best-effort: fsync the parent directory so the rename
     // survives a crash. Not all filesystems require this but it

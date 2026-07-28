@@ -67,7 +67,7 @@ impl Drop for SessionGuard {
 /// (because `COS_SESSION` was already set by an upstream caller).
 ///
 /// The session row is written through [`crate::proc::register_session`],
-/// which resolves beneath `COS_CAPS_DATA_DIR` when set, otherwise
+/// which resolves beneath `COS_PROC_DATA_DIR` when set, otherwise
 /// beneath the normal per-process data dir. Routed clawd jobs pass
 /// the same capability-state directory to App and MCP children.
 ///
@@ -133,6 +133,7 @@ fn bootstrap_user_cli_session_impl(
         scope: None,
         priority: None,
         caps: Some(caps),
+        transient_caps: None,
         role: Some(Role::Admin.name().to_string()),
         app_id: None,
         pending_bind: false,

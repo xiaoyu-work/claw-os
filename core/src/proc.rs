@@ -45,6 +45,10 @@ pub struct SessionInfo {
     /// operations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caps: Option<crate::caps::CapSet>,
+    /// Call-scoped capabilities temporarily installed for a serialized
+    /// App MCP request. Cleared when the request finishes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transient_caps: Option<crate::caps::CapSet>,
     /// Role label used to generate `caps`, kept for audit / display.
     /// Has no enforcement effect — `caps` is the source of truth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -74,15 +78,81 @@ struct Registry {
 }
 
 /// Resolve the `proc/` directory used for capability session state.
-/// `COS_CAPS_DATA_DIR` can pin routed user jobs and their App/MCP
+/// `COS_PROC_DATA_DIR` can pin routed user jobs and their App/MCP
 /// children to the same registry even when their general data dirs
 /// differ.
 fn proc_dir() -> PathBuf {
-    crate::paths::caps_data_dir().join("proc")
+    crate::paths::proc_data_dir().join("proc")
 }
 
 fn registry_path() -> PathBuf {
+    #[cfg(target_os = "linux")]
+    if crate::paths::current_owner_uid_override().is_none()
+        && unsafe { libc::geteuid() } != 0
+        && crate::caps::enforcement::process_has_no_new_privs()
+    {
+        let uid = unsafe { libc::geteuid() as u32 };
+        return PathBuf::from("/run/cos/caps")
+            .join(uid.to_string())
+            .join("proc")
+            .join("registry.json");
+    }
+    if let Some(path) = bound_app_registry_path() {
+        return path;
+    }
     proc_dir().join("registry.json")
+}
+
+fn bound_app_registry_path() -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        let uid = unsafe { libc::geteuid() as u32 };
+        let path = PathBuf::from("/run/cos/caps")
+            .join(uid.to_string())
+            .join("proc")
+            .join("registry.json");
+        let data = fs::read_to_string(&path).ok()?;
+        let registry: Registry = serde_json::from_str(&data).ok()?;
+        let caller = std::process::id();
+        if registry.sessions.iter().any(|session| {
+            session.app_id.is_some()
+                && !session.pending_bind
+                && session.pid != 0
+                && session
+                    .start_time_ticks
+                    .is_some_and(|expected| {
+                        read_start_time_ticks(session.pid) == Some(expected)
+                    })
+                && process_descends_from(caller, session.pid)
+        }) {
+            return Some(path);
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn process_descends_from(mut child: u32, ancestor: u32) -> bool {
+    for _ in 0..64 {
+        if child == ancestor {
+            return true;
+        }
+        if child <= 1 {
+            return false;
+        }
+        let status = match fs::read_to_string(format!("/proc/{child}/status")) {
+            Ok(status) => status,
+            Err(_) => return false,
+        };
+        let Some(parent) = status.lines().find_map(|line| {
+            line.strip_prefix("PPid:")
+                .and_then(|value| value.trim().parse::<u32>().ok())
+        }) else {
+            return false;
+        };
+        child = parent;
+    }
+    false
 }
 
 /// Public alias used by [`crate::caps::enforcement`] to read the same
@@ -103,14 +173,23 @@ pub fn current_session_info_for_caps() -> Option<SessionInfo> {
         .find(|session| session.session_id == session_id)
 }
 
-/// True only after the current process has been bound to an App session
-/// carrying the expected identity. Used by `claw-app-runner` to keep
-/// third-party entrypoint code from running during the pid-binding window.
-pub fn current_app_session_is_bound(expected_app_id: &str) -> bool {
+pub(crate) fn session_info_by_id(session_id: &str) -> Option<SessionInfo> {
+    let data = crate::filelock::read_locked(&registry_path()).ok()??;
+    let registry: Registry = serde_json::from_str(&data).ok()?;
+    registry
+        .sessions
+        .into_iter()
+        .find(|session| session.session_id == session_id)
+}
+
+/// True only after the current process has been bound to the expected
+/// session identity. Used by the launcher shim to keep third-party code
+/// from running during the pid-binding window.
+pub fn current_session_is_bound(expected_app_id: Option<&str>) -> bool {
     let Some(session) = current_session_info_for_caps() else {
         return false;
     };
-    if session.app_id.as_deref() != Some(expected_app_id)
+    if session.app_id.as_deref() != expected_app_id
         || session.pending_bind
         || session.pid != std::process::id()
     {
@@ -144,17 +223,36 @@ fn update_registry<F>(transform: F) -> Result<(), String>
 where
     F: FnOnce(Registry) -> Registry,
 {
-    let _ = fs::create_dir_all(proc_dir());
-    crate::filelock::update_locked::<_, String>(&registry_path(), |existing| {
-        let reg: Registry = match existing {
-            Some(s) => serde_json::from_str(&s)
-                .map_err(|e| format!("parse proc registry: {e}"))?,
-            None => Registry::default(),
-        };
-        let next = transform(reg);
-        serde_json::to_string_pretty(&next).map_err(|e| format!("serialize: {e}"))
-    })
-    .map_err(|e| e.to_string())
+    let proc_dir = proc_dir();
+    if let Some(uid) = crate::paths::current_owner_uid_override() {
+        let caps_root = crate::paths::proc_data_dir();
+        crate::storage::ensure_routed_caps_dir(&caps_root, uid)
+            .map_err(|e| format!("prepare routed caps dir: {e}"))?;
+    } else {
+        crate::storage::ensure_private_dir(&proc_dir)
+            .map_err(|e| format!("create proc registry dir: {e}"))?;
+    }
+    let path = registry_path();
+    let owner_uid = crate::paths::current_owner_uid_override();
+    crate::filelock::update_locked_with_prepare::<_, String, _>(
+        &path,
+        |existing| {
+            let reg: Registry = match existing {
+                Some(s) => serde_json::from_str(&s)
+                    .map_err(|e| format!("parse proc registry: {e}"))?,
+                None => Registry::default(),
+            };
+            let next = transform(reg);
+            serde_json::to_string_pretty(&next)
+                .map_err(|e| format!("serialize: {e}"))
+        },
+        |tmp| match owner_uid {
+            Some(uid) => crate::storage::set_group_readable_file(tmp, uid),
+            None => crate::storage::set_private_file(tmp),
+        },
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// Register a freshly-built [`SessionInfo`] into the on-disk registry.
@@ -249,6 +347,29 @@ pub fn bind_session_process(session_id: &str, pid: u32) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("session not found while binding process: {session_id}"))
+    }
+}
+
+pub fn set_app_session_transient_caps(
+    session_id: &str,
+    caps: Option<crate::caps::CapSet>,
+) -> Result<(), String> {
+    let mut found = false;
+    update_registry(|mut registry| {
+        if let Some(session) = registry.sessions.iter_mut().find(|session| {
+            session.session_id == session_id && session.app_id.is_some()
+        }) {
+            session.transient_caps = caps;
+            found = true;
+        }
+        registry
+    })?;
+    if found {
+        Ok(())
+    } else {
+        Err(format!(
+            "App session not found while updating transient caps: {session_id}"
+        ))
     }
 }
 
@@ -820,7 +941,8 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     }
 
     // Inject session ID so child process can be identified by policy module
-    cmd.env("COS_SESSION", &sid);
+    cmd.env("COS_SESSION", &sid)
+        .env("COS_PROC_DATA_DIR", crate::paths::proc_data_dir());
 
     #[cfg(unix)]
     unsafe {
@@ -858,6 +980,7 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         scope: scope.clone(),
         priority: priority.clone(),
         caps: cap_set.clone(),
+        transient_caps: None,
         role: role_name.clone(),
         app_id: None,
         pending_bind: false,
@@ -1866,6 +1989,7 @@ mod tests {
             scope: None,
             priority: None,
             caps: None,
+            transient_caps: None,
             role: None,
             app_id: None,
             pending_bind: false,

@@ -215,7 +215,7 @@ impl Store {
         // them keeps the hot path (claim_one / cancel_pending /
         // submit) lock-free at start-up.
         for sub in ["pending", "running", "done", "locks", "streams"] {
-            fs::create_dir_all(root.join(sub))?;
+            crate::storage::ensure_private_dir(&root.join(sub))?;
         }
         Ok(Self { root })
     }
@@ -703,13 +703,17 @@ impl Store {
     fn lock_for_id(&self, id: &str) -> io::Result<JobLock> {
         validate_job_id(id)?;
         let lock_dir = self.root.join("locks");
-        fs::create_dir_all(&lock_dir)?;
+        crate::storage::ensure_private_dir(&lock_dir)?;
         let lock_path = lock_dir.join(format!("{id}.lock"));
-        let f = fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(false)
-            .open(&lock_path)?;
+        let mut options = fs::OpenOptions::new();
+        options.create(true).write(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let f = options.open(&lock_path)?;
+        crate::storage::set_private_file(&lock_path)?;
         #[cfg(unix)]
         {
             use std::os::unix::io::AsRawFd;

@@ -12,17 +12,16 @@ fn main() {
     let argv = args.collect::<Vec<_>>();
     let app_id = std::env::var("COS_APP_ID")
         .ok()
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| fail("claw-app-runner requires COS_APP_ID"));
+        .filter(|value| !value.is_empty());
 
     for _ in 0..500 {
-        if cos::proc::current_app_session_is_bound(&app_id) {
+        if cos::proc::current_session_is_bound(app_id.as_deref()) {
             let error = std::process::Command::new(&program).args(&argv).exec();
-            fail(&format!("failed to exec App entrypoint: {error}"));
+            fail(&format!("failed to exec session entrypoint: {error}"));
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
-    fail("App identity session was not bound before launch timeout");
+    fail("process session was not bound before launch timeout");
 }
 
 #[cfg(not(unix))]

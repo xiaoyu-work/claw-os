@@ -64,7 +64,8 @@ pub fn new_blob_id() -> String {
 /// store API without an extra error type.
 pub fn write_blob(sid: &SessionId, bytes: &[u8]) -> Result<String, SessionError> {
     let dir = inverse_root(sid);
-    fs::create_dir_all(&dir).map_err(|e| SessionError::io(dir.clone(), e))?;
+    crate::storage::ensure_private_dir(&dir)
+        .map_err(|e| SessionError::io(dir.clone(), e))?;
 
     // Try a few times in the astronomically unlikely case of a UUID
     // collision (existing files we'd otherwise clobber).
@@ -77,8 +78,24 @@ pub fn write_blob(sid: &SessionId, bytes: &[u8]) -> Result<String, SessionError>
         // Atomic-ish: write to .tmp then rename. We don't need
         // filelock here because the filename is unique per blob.
         let tmp = dir.join(format!("{id}.bin.tmp"));
-        fs::write(&tmp, bytes).map_err(|e| SessionError::io(tmp.clone(), e))?;
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(&tmp)
+            .map_err(|e| SessionError::io(tmp.clone(), e))?;
+        use std::io::Write;
+        file.write_all(bytes)
+            .map_err(|e| SessionError::io(tmp.clone(), e))?;
+        file.sync_all()
+            .map_err(|e| SessionError::io(tmp.clone(), e))?;
         fs::rename(&tmp, &path).map_err(|e| SessionError::io(path.clone(), e))?;
+        crate::storage::set_private_file(&path)
+            .map_err(|e| SessionError::io(path.clone(), e))?;
         return Ok(id);
     }
     Err(SessionError::Lock(

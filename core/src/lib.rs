@@ -28,6 +28,7 @@ pub mod mem_bridge;
 pub mod sandbox;
 pub mod service;
 pub mod session;
+pub mod storage;
 pub mod sysinfo;
 pub mod trace;
 pub mod triggers;

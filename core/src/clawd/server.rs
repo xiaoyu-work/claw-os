@@ -11,7 +11,10 @@ use tokio::net::{UnixListener, UnixStream};
 use super::client_identity::ClientIdentity;
 use super::protocol::{encode_response, Request, Response};
 use super::state::DaemonState;
-use super::{audit, context, context_events, memory, permissions, system_journal, tasks, transactions};
+use super::{
+    app_sessions, audit, context, context_events, memory, permissions,
+    system_journal, tasks, transactions,
+};
 
 #[derive(Debug, Clone)]
 pub struct ServerOptions {
@@ -191,6 +194,15 @@ async fn dispatch_result(
         "system.operations" => system_journal::query_for_client(request.params, client),
         "memory.history" => memory::history(request.params, client),
         "memory.sessions" => memory::sessions(request.params, client),
+        "app_session.register" => app_sessions::register(request.params, client).await,
+        "mcp_session.register" => app_sessions::register_mcp(request.params, client).await,
+        "app_session.bind" => app_sessions::bind(request.params, client).await,
+        "app_session.set_transient" => {
+            app_sessions::set_transient(request.params, client).await
+        }
+        "app_session.deregister" => {
+            app_sessions::deregister(request.params, client).await
+        }
         "transaction.begin" => transactions::begin(state, request.params, client),
         "transaction.list" => transactions::list(state, client),
         "transaction.commit" => transactions::commit(state, request.params, client),
@@ -219,6 +231,11 @@ fn authorize_command(command: &str, client: &ClientIdentity) -> Result<(), Strin
             | "task.count"
             | "memory.history"
             | "memory.sessions"
+            | "app_session.register"
+            | "mcp_session.register"
+            | "app_session.bind"
+            | "app_session.set_transient"
+            | "app_session.deregister"
             | "permission.pending"
             | "permission.recent"
             | "permission.request"

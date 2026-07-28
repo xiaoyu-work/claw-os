@@ -241,6 +241,12 @@ fn spawn_detached(
     port: u16,
     log_override: Option<&std::path::Path>,
 ) -> Result<Value, String> {
+    if crate::paths::current_owner_uid_override().is_some() {
+        return Err(
+            "detached agent serve cannot be started from a routed job"
+                .to_string(),
+        );
+    }
     // Refuse to start a second daemon if one is already alive — the
     // user almost certainly forgot to `--stop` first.
     if let Some(pid) = read_pid_file() {
@@ -255,15 +261,23 @@ fn spawn_detached(
     }
 
     let dir = auth::token_dir();
-    fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+    crate::storage::ensure_private_dir(&dir)
+        .map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
     let log_path = log_override
         .map(PathBuf::from)
         .unwrap_or_else(default_log_path);
-    let log = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
+    let mut log_options = fs::OpenOptions::new();
+    log_options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        log_options.mode(0o600);
+    }
+    let log = log_options
         .open(&log_path)
         .map_err(|e| format!("open log {}: {e}", log_path.display()))?;
+    crate::storage::set_private_file(&log_path)
+        .map_err(|e| format!("chmod log {}: {e}", log_path.display()))?;
     let log_clone = log
         .try_clone()
         .map_err(|e| format!("dup log fd: {e}"))?;
@@ -292,6 +306,7 @@ fn spawn_detached(
         .stdout(Stdio::from(log_clone))
         .stderr(Stdio::from(log))
         .env("COS_SESSION", &detached_session)
+        .env("COS_PROC_DATA_DIR", crate::paths::proc_data_dir())
         .env("COS_DETACHED_SESSION", &detached_session);
 
     #[cfg(unix)]
@@ -472,9 +487,19 @@ fn report_status() -> Result<Value, String> {
 
 fn write_pid_file(pid: u32) -> Result<(), String> {
     let dir = auth::token_dir();
-    fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+    crate::storage::ensure_private_dir(&dir)
+        .map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
     let path = pid_path();
-    let mut f = fs::File::create(&path).map_err(|e| format!("create {}: {e}", path.display()))?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut f = options
+        .open(&path)
+        .map_err(|e| format!("create {}: {e}", path.display()))?;
     f.write_all(format!("{pid}\n").as_bytes())
         .map_err(|e| format!("write {}: {e}", path.display()))?;
     Ok(())
@@ -617,6 +642,7 @@ fn register_detached_session(command: &[String]) -> Result<String, String> {
         scope: parent.scope,
         priority: parent.priority,
         caps: Some(caps),
+        transient_caps: None,
         role: parent.role,
         app_id: None,
         pending_bind: false,

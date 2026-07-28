@@ -35,16 +35,25 @@ pub fn load_or_generate_token() -> Result<String, String> {
 
 pub fn persist_token(hex: &str) -> Result<String, String> {
     let dir = token_dir();
-    fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+    crate::storage::ensure_private_dir(&dir)
+        .map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
     let path = token_path();
-    let mut f = fs::File::create(&path).map_err(|e| format!("create {}: {e}", path.display()))?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut f = options
+        .open(&path)
+        .map_err(|e| format!("create {}: {e}", path.display()))?;
     f.write_all(hex.as_bytes())
         .map_err(|e| format!("write {}: {e}", path.display()))?;
     drop(f);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+        let _ = crate::storage::set_private_file(&path);
     }
     Ok(hex.to_string())
 }

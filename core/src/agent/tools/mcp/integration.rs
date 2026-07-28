@@ -97,6 +97,7 @@ pub struct McpServerHandle {
     /// For diagnostics; not used past construction.
     name: String,
     tool_count: usize,
+    _proc_session: Option<crate::bridge::McpProcSession>,
 }
 
 impl McpServerHandle {
@@ -318,8 +319,18 @@ pub async fn attach_server(
     if spec.url.is_some() {
         return attach_http_server(spec, registry).await;
     }
-    let mut command = tokio::process::Command::new(&spec.command);
-    command.args(&spec.args);
+    let proc_session =
+        crate::bridge::McpProcSession::for_current_parent(&spec.command)?;
+    let mut command = if proc_session.is_some() {
+        let mut command =
+            tokio::process::Command::new(crate::bridge::app_runner_path());
+        command.arg("--").arg(&spec.command).args(&spec.args);
+        command
+    } else {
+        let mut command = tokio::process::Command::new(&spec.command);
+        command.args(&spec.args);
+        command
+    };
     // Wipe inherited environment then re-add an explicit allowlist.
     // The order is: env_clear → allowlist from os::env → spec.env
     // overlay. Caller-provided values win on collision.
@@ -329,6 +340,11 @@ pub async fn attach_server(
     }
     for (k, v) in &spec.env {
         command.env(k, v);
+    }
+    if let Some(session) = proc_session.as_ref() {
+        command
+            .env("COS_SESSION", session.id())
+            .env("COS_PROC_DATA_DIR", session.proc_data_dir());
     }
     if let Some(home) = crate::paths::current_home_override() {
         let canonical_home = home
@@ -355,7 +371,7 @@ pub async fn attach_server(
             .env("HOME", &home)
             .env("COS_HOME", &home)
             .env("COS_DATA_DIR", crate::paths::user_data_dir())
-            .env("COS_CAPS_DATA_DIR", crate::paths::caps_data_dir());
+            .env("COS_PROC_DATA_DIR", crate::paths::proc_data_dir());
     } else if let Some(cwd) = &spec.cwd {
         command.current_dir(cwd);
     }
@@ -367,6 +383,16 @@ pub async fn attach_server(
     let mut child = command
         .spawn()
         .map_err(|e| format!("spawn `{}`: {e}", spec.command))?;
+    if let Some(session) = proc_session.as_ref() {
+        let Some(pid) = child.id() else {
+            kill_and_reap(child);
+            return Err("spawned MCP server has no pid".to_string());
+        };
+        if let Err(error) = session.bind_process(pid) {
+            kill_and_reap(child);
+            return Err(format!("bind MCP child session: {error}"));
+        }
+    }
     let stdin = child
         .stdin
         .take()
@@ -465,6 +491,7 @@ pub async fn attach_server(
         child: Some(child),
         name: spec.name.clone(),
         tool_count: registered,
+        _proc_session: proc_session,
     })
 }
 
@@ -539,6 +566,7 @@ pub async fn attach_http_server(
         child: None,
         name: spec.name.clone(),
         tool_count: registered,
+        _proc_session: None,
     })
 }
 

@@ -70,15 +70,12 @@ pub fn read_locked(path: &Path) -> Result<Option<String>, String> {
 /// Parent directories are created automatically.
 pub fn write_locked(path: &Path, data: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
 
     let lock_path = lock_sentinel_path(path);
-    let lock_file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&lock_path)
+    let lock_file = open_private(&lock_path, false, false)
         .map_err(|e| format!("open lock {}: {e}", lock_path.display()))?;
 
     #[cfg(unix)]
@@ -98,11 +95,7 @@ pub fn write_locked(path: &Path, data: &str) -> Result<(), String> {
     // parent directory so the directory entry is durable too.
     let tmp_path = path.with_extension("tmp");
     {
-        let mut tmp = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&tmp_path)
+        let mut tmp = open_private(&tmp_path, true, false)
             .map_err(|e| format!("open tmp {}: {e}", tmp_path.display()))?;
         tmp.write_all(data.as_bytes())
             .map_err(|e| format!("write {}: {e}", tmp_path.display()))?;
@@ -110,6 +103,8 @@ pub fn write_locked(path: &Path, data: &str) -> Result<(), String> {
             .map_err(|e| format!("fsync {}: {e}", tmp_path.display()))?;
     }
     fs::rename(&tmp_path, path).map_err(|e| format!("rename {}: {e}", path.display()))?;
+    crate::storage::set_private_file(path)
+        .map_err(|e| format!("chmod {}: {e}", path.display()))?;
     if let Some(parent) = path.parent() {
         let _ = sync_dir(parent);
     }
@@ -143,14 +138,13 @@ fn sync_dir(_dir: &Path) -> std::io::Result<()> {
 
 /// Append a line to a file under an exclusive lock.
 /// Used for append-only logs (audit.jsonl, watch history).
-pub fn append_locked(path: &Path, line: &str) -> Result<(), String> {    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+pub fn append_locked(path: &Path, line: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
 
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
+    let mut file = open_private(path, false, true)
         .map_err(|e| format!("open {}: {e}", path.display()))?;
 
     #[cfg(unix)]
@@ -225,17 +219,25 @@ pub fn update_locked<F, E>(path: &Path, transform: F) -> Result<(), UpdateLockEr
 where
     F: FnOnce(Option<String>) -> std::result::Result<String, E>,
 {
+    update_locked_with_prepare(path, transform, crate::storage::set_private_file)
+}
+
+pub fn update_locked_with_prepare<F, E, P>(
+    path: &Path,
+    transform: F,
+    prepare_tmp: P,
+) -> Result<(), UpdateLockError<E>>
+where
+    F: FnOnce(Option<String>) -> std::result::Result<String, E>,
+    P: FnOnce(&Path) -> std::io::Result<()>,
+{
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| UpdateLockError::Io(format!("mkdir {}: {e}", parent.display())))?;
     }
 
     let lock_path = lock_sentinel_path(path);
-    let lock_file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&lock_path)
+    let lock_file = open_private(&lock_path, false, false)
         .map_err(|e| UpdateLockError::Io(format!("open lock {}: {e}", lock_path.display())))?;
 
     #[cfg(unix)]
@@ -265,17 +267,15 @@ where
 
     let tmp_path = path.with_extension("tmp");
     {
-        let mut tmp = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&tmp_path)
+        let mut tmp = open_private(&tmp_path, true, false)
             .map_err(|e| UpdateLockError::Io(format!("open tmp {}: {e}", tmp_path.display())))?;
         tmp.write_all(new_data.as_bytes())
             .map_err(|e| UpdateLockError::Io(format!("write {}: {e}", tmp_path.display())))?;
         tmp.sync_all()
             .map_err(|e| UpdateLockError::Io(format!("fsync {}: {e}", tmp_path.display())))?;
     }
+    prepare_tmp(&tmp_path)
+        .map_err(|e| UpdateLockError::Io(format!("secure {}: {e}", tmp_path.display())))?;
     fs::rename(&tmp_path, path)
         .map_err(|e| UpdateLockError::Io(format!("rename {}: {e}", path.display())))?;
     if let Some(parent) = path.parent() {
@@ -301,6 +301,23 @@ fn lock_sentinel_path(path: &Path) -> std::path::PathBuf {
     let mut s: std::ffi::OsString = path.as_os_str().to_os_string();
     s.push(".lock");
     std::path::PathBuf::from(s)
+}
+
+fn open_private(path: &Path, truncate: bool, append: bool) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options
+        .write(true)
+        .create(true)
+        .truncate(truncate)
+        .append(append);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(path)?;
+    crate::storage::set_private_file(path)?;
+    Ok(file)
 }
 
 #[cfg(test)]

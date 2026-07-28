@@ -254,13 +254,18 @@ fn append_record(record: &Value) -> Result<(), String> {
 
 fn append_durable(path: &Path, line: &str) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+        crate::storage::ensure_private_dir(parent)?;
     }
 
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
+    let mut options = fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    crate::storage::set_private_file(path)?;
 
     #[cfg(unix)]
     {

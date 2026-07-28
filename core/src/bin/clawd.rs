@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use cos::clawd::{config, server};
 
 fn main() {
+    cos::storage::set_private_umask();
     tracing_subscriber::fmt::init();
 
     let mut socket_path = None;
@@ -45,6 +46,11 @@ fn main() {
         socket_path: socket_path.unwrap_or_else(config::socket_path),
         socket_mode: socket_mode.unwrap_or_else(config::socket_mode),
     };
+
+    if let Err(err) = cos::storage::harden_clawd_state() {
+        eprintln!("clawd: failed to secure persistent state: {err}");
+        std::process::exit(1);
+    }
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

@@ -76,16 +76,6 @@ impl Mode {
         }
     }
 
-    #[cfg(target_os = "linux")]
-    pub(crate) fn process_has_no_new_privs() -> bool {
-        unsafe { libc::prctl(libc::PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) != 0 }
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    pub(crate) fn process_has_no_new_privs() -> bool {
-        false
-    }
-
     /// Stable kebab-case label for logs and audit records.
     pub(crate) fn as_str(self) -> &'static str {
         match self {
@@ -93,6 +83,16 @@ impl Mode {
             Mode::Strict => "strict",
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn process_has_no_new_privs() -> bool {
+    unsafe { libc::prctl(libc::PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) != 0 }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn process_has_no_new_privs() -> bool {
+    false
 }
 
 // ---------------------------------------------------------------------------
@@ -110,6 +110,8 @@ struct SessionRow {
     pid: u32,
     #[serde(default)]
     caps: Option<CapSet>,
+    #[serde(default)]
+    transient_caps: Option<CapSet>,
     #[serde(default)]
     app_id: Option<String>,
     #[serde(default)]
@@ -344,8 +346,8 @@ fn require_impl(
         );
     }
 
-    let caps = match session.caps.as_ref() {
-        Some(c) => c,
+    let mut caps = match session.caps.as_ref() {
+        Some(c) => c.clone(),
         None => {
             return match mode {
                 Mode::Permissive => Ok(()),
@@ -356,14 +358,19 @@ fn require_impl(
             }
         }
     };
+    if let Some(transient) = session.transient_caps.as_ref() {
+        caps.extend(transient.iter().cloned());
+    }
 
     if caps.covers(&requested) {
         Ok(())
-    } else if approved_grant_covers(session_id, verb, &scope) {
+    } else if session.app_id.is_none()
+        && approved_grant_covers(session_id, verb, &scope)
+    {
         Ok(())
     } else if caps.verbs().contains(&verb) {
         // Verb is held but at a scope that doesn't cover this request.
-        Err(Denial::scope_out_of_range(verb, scope, caps))
+        Err(Denial::scope_out_of_range(verb, scope, &caps))
     } else {
         Err(Denial::verb_not_granted(verb, scope))
     }

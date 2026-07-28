@@ -44,17 +44,18 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::process::{Child, Command};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 use tokio::time::timeout;
 
 use crate::agent::llm::run_log::{record as record_run, LlmRunRecord};
-use crate::agent::tools::mcp::client::McpClient;
+use crate::agent::tools::mcp::client::{ClientError, McpClient};
 use crate::agent::tools::mcp::protocol::{
     ClientCapabilities, Implementation, PROTOCOL_VERSION,
 };
@@ -79,7 +80,12 @@ struct ActiveSession {
     tool_count: usize,
     /// Keeps the kernel-attested App session registered for the lifetime of
     /// the MCP child.
-    _identity: crate::bridge::AppIdentitySession,
+    identity: crate::bridge::AppIdentitySession,
+    /// Serializes grant + RPC + revoke so concurrent tool calls cannot
+    /// exercise each other's transient capabilities.
+    call_lock: Arc<Mutex<()>>,
+    child_pid: u32,
+    poisoned: Arc<AtomicBool>,
 }
 
 impl Drop for ActiveSession {
@@ -266,7 +272,7 @@ async fn bring_up_app(
         .env("COS_APP_ID", app_id)
         .env("COS_SESSION", app_session.id())
         .env("COS_DATA_DIR", &data_dir)
-        .env("COS_CAPS_DATA_DIR", crate::paths::caps_data_dir())
+        .env("COS_PROC_DATA_DIR", app_session.proc_data_dir())
         .env("COS_APPS_DIR", &apps_dir_str)
         .env("PYTHONPATH", &pythonpath)
         .env("PYTHONDONTWRITEBYTECODE", "1")
@@ -438,8 +444,9 @@ fn build_command(runtime: Runtime, entry: &Path) -> Command {
 // ---------------------------------------------------------------------------
 
 /// Default per-call timeout. App session calls share the same upper
-/// bound as MCP catalog calls; long-running work should use the
-/// app-defined `start_task`/`poll` pattern, not a single long call.
+/// bound as MCP catalog calls. Capability-bearing work must finish
+/// within the request; grants are cleared as soon as the response is
+/// received.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Return the active client for `app_id`, opening the session lazily
@@ -448,13 +455,93 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 /// via tokio's blocking pool inside `Command::spawn`).
 async fn get_or_open(app_id: &str) -> Result<Arc<McpClient>, String> {
     let key = session_key(app_id)?;
-    {
-        let table = manager().lock().await;
+    let stale = {
+        let mut table = manager().lock().await;
         if let Some(s) = table.get(&key) {
-            return Ok(s.client.clone());
+            if !s.poisoned.load(Ordering::SeqCst) {
+                return Ok(s.client.clone());
+            }
+        }
+        table.remove(&key)
+    };
+    drop(stale);
+    open_session(app_id).await.map(|(c, _)| c)
+}
+
+struct ActiveCallGuard {
+    control: crate::bridge::AppSessionControl,
+    child_pid: u32,
+    completed: bool,
+    poisoned: Arc<AtomicBool>,
+    _lock: OwnedMutexGuard<()>,
+}
+
+impl ActiveCallGuard {
+    fn mark_completed(&mut self) {
+        self.completed = true;
+    }
+}
+
+impl Drop for ActiveCallGuard {
+    fn drop(&mut self) {
+        let clear = self.control.set_transient_caps(None);
+        if let Err(error) = &clear {
+            tracing::warn!(
+                child_pid = self.child_pid,
+                error = %error,
+                "failed to clear App MCP transient capabilities; killing session"
+            );
+        }
+        if !self.completed || clear.is_err() {
+            self.poisoned.store(true, Ordering::SeqCst);
+            #[cfg(unix)]
+            unsafe {
+                libc::kill(self.child_pid as i32, libc::SIGKILL);
+            }
         }
     }
-    open_session(app_id).await.map(|(c, _)| c)
+}
+
+async fn begin_active_session_call(
+    app_id: &str,
+    caps: &[crate::caps::Cap],
+) -> Result<ActiveCallGuard, String> {
+    let key = session_key(app_id)?;
+    let (control, child_pid, call_lock, poisoned) = {
+        let table = manager().lock().await;
+        let session = table
+            .get(&key)
+            .ok_or_else(|| format!("App session `{app_id}` is not open"))?;
+        (
+            session.identity.control(),
+            session.child_pid,
+            session.call_lock.clone(),
+            session.poisoned.clone(),
+        )
+    };
+    let lock = call_lock.lock_owned().await;
+    if let Err(error) = control.set_transient_caps(Some(
+        crate::caps::CapSet::from_caps(caps.iter().cloned()),
+    )) {
+        let clear_error = control.set_transient_caps(None).err();
+        #[cfg(unix)]
+        unsafe {
+            libc::kill(child_pid as i32, libc::SIGKILL);
+        }
+        return Err(match clear_error {
+            Some(clear) => format!(
+                "{error}; transient state was uncertain and cleanup failed: {clear}"
+            ),
+            None => error,
+        });
+    }
+    Ok(ActiveCallGuard {
+        control,
+        child_pid,
+        completed: false,
+        poisoned,
+        _lock: lock,
+    })
 }
 
 /// Explicitly bring up `app_id`. Returns `(client, tool_count)`.
@@ -475,12 +562,16 @@ async fn open_session(app_id: &str) -> Result<(Arc<McpClient>, usize), String> {
 
     // Re-probe under the per-app lock — another racer may have just
     // finished the spawn we were blocked on.
-    {
-        let table = manager().lock().await;
+    let stale = {
+        let mut table = manager().lock().await;
         if let Some(s) = table.get(&key) {
-            return Ok((s.client.clone(), s.tool_count));
+            if !s.poisoned.load(Ordering::SeqCst) {
+                return Ok((s.client.clone(), s.tool_count));
+            }
         }
-    }
+        table.remove(&key)
+    };
+    drop(stale);
     let app_dir = apps_root().join(app_id);
     let manifest_path = app_dir.join("app.json");
     let manifest_text = std::fs::read_to_string(&manifest_path)
@@ -489,6 +580,9 @@ async fn open_session(app_id: &str) -> Result<(Arc<McpClient>, usize), String> {
         .map_err(|e| format!("parse manifest for `{app_id}`: {e}"))?;
     let (client, child, listed, identity) =
         bring_up_app(app_id, &app_dir, &manifest, DEFAULT_TIMEOUT).await?;
+    let child_pid = child
+        .id()
+        .ok_or_else(|| format!("App session `{app_id}` lost its pid"))?;
     let mut table = manager().lock().await;
     table.insert(
         key,
@@ -496,7 +590,10 @@ async fn open_session(app_id: &str) -> Result<(Arc<McpClient>, usize), String> {
             client: client.clone(),
             child: Some(child),
             tool_count: listed,
-            _identity: identity,
+            identity,
+            call_lock: Arc::new(Mutex::new(())),
+            child_pid,
+            poisoned: Arc::new(AtomicBool::new(false)),
         },
     );
     Ok((client, listed))
@@ -784,6 +881,16 @@ impl Tool for AppSessionTool {
                 ));
             }
         };
+        let mut active_call = match begin_active_session_call(&self.app_id, &caps).await {
+            Ok(guard) => guard,
+            Err(error) => {
+                close_session(&self.app_id).await;
+                return ToolResult::err(format!(
+                    "could not grant App `{}` call capabilities: {error}",
+                    self.app_id
+                ));
+            }
+        };
 
         // 3) Forward tools/call.
         let arguments = match input {
@@ -810,12 +917,14 @@ impl Tool for AppSessionTool {
                     Some(&msg),
                     started.elapsed(),
                 );
+                drop(active_call);
+                close_session(&self.app_id).await;
                 return ToolResult::err(msg);
             }
         };
-
         match res {
             Ok(call_result) => {
+                active_call.mark_completed();
                 let (content, is_error) = render_call_result(call_result);
                 emit_audit(
                     &self.app_id,
@@ -833,6 +942,12 @@ impl Tool for AppSessionTool {
                 }
             }
             Err(e) => {
+                if matches!(e, ClientError::Server { .. }) {
+                    active_call.mark_completed();
+                } else {
+                    drop(active_call);
+                    close_session(&self.app_id).await;
+                }
                 let msg = format!(
                     "app `{}` tool `{}` failed: {e}",
                     self.app_id, self.manifest_tool_name
