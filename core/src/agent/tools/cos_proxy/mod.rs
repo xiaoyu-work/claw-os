@@ -198,9 +198,9 @@ struct PrimitiveSpec {
 const PRIMITIVES: &[PrimitiveSpec] = &[
     PrimitiveSpec {
         name: "cos_sandbox",
-        description: "Run commands inside a lightweight Linux-namespace sandbox \
-                      (PID/mount/optional network isolation, mem/cpu/pids limits, \
-                      seccomp profile). Use for any user-supplied or \
+        description: "Run commands inside a fail-closed bubblewrap+cgroup sandbox \
+                      (network denied and root/workspace read-only by default; mandatory \
+                      mem/cpu/pids/timeout/output limits and seccomp). Use for any user-supplied or \
                       model-generated shell command.",
         primitive: crate::sandbox::run,
         commands: &["exec"],

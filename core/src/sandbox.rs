@@ -3,16 +3,13 @@
 /// Exposed only as an agent tool (`cos_sandbox` in
 /// `crate::agent::tools::cos_proxy`), not as a user-facing CLI
 /// primitive. The agent uses this to run model-generated or
-/// otherwise untrusted commands under `unshare(1)` + cgroup v2
-/// + seccomp.
+/// otherwise untrusted commands under bubblewrap + cgroup v2 + seccomp.
 ///
 /// Only one operation is supported: `exec`. Persistent sandboxes
 /// (create/destroy/list) were a legacy surface area; they
 /// never spawned a real init process and have been removed.
 ///
-/// On non-Linux platforms the implementation falls back to a
-/// plain subprocess so dev builds compile — production cos
-/// always runs on Linux.
+/// Unsupported platforms and missing isolation primitives fail closed.
 use serde_json::{json, Value};
 use std::process::{Command, Stdio};
 
@@ -26,6 +23,12 @@ struct ResourceLimits {
     seccomp_profile: Option<String>, // e.g. "minimal", "network", "full"
 }
 
+const DEFAULT_MEMORY_LIMIT: &str = "512M";
+const DEFAULT_CPU_PERCENT: u32 = 100;
+const DEFAULT_PIDS_MAX: u32 = 64;
+const DEFAULT_TIMEOUT_SECS: u32 = 300;
+const MAX_OUTPUT_BYTES: u64 = 1_048_576;
+
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     match command {
         "exec" => cmd_exec(args),
@@ -37,20 +40,22 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 ///
 /// Args mirror the agent tool schema in
 /// `agent::tools::cos_proxy::PRIMITIVES`:
-///   [--no-network] [--ro] [--workspace DIR]
+///   [--network] [--rw] [--workspace DIR]
 ///   [--mem LIMIT] [--cpu PERCENT] [--pids MAX]
 ///   [--timeout SECS] [--seccomp-profile minimal|network|full]
 ///   -- <command> [args...]
 fn cmd_exec(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::PROC_SPAWN, Scope::wild()).map_err(|v| v.to_string())?;
-    let mut network = true;
-    let mut read_only = false;
-    let mut workspace = crate::config::get().home.clone();
-    let mut mem_limit: Option<String> = None; // e.g. "512M", "1G"
-    let mut cpu_percent: Option<u32> = None; // e.g. 50 = 50%
-    let mut pids_max: Option<u32> = None; // e.g. 100
-    let mut timeout_secs: Option<u32> = None; // e.g. 300
-    let mut seccomp_profile: Option<String> = None; // e.g. "minimal", "network", "full"
+    let mut network = false;
+    let mut read_only = true;
+    let mut workspace = crate::paths::current_home_override()
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|| crate::config::get().home.clone());
+    let mut mem_limit = Some(DEFAULT_MEMORY_LIMIT.to_string());
+    let mut cpu_percent = Some(DEFAULT_CPU_PERCENT);
+    let mut pids_max = Some(DEFAULT_PIDS_MAX);
+    let mut timeout_secs = Some(DEFAULT_TIMEOUT_SECS);
+    let mut seccomp_profile = Some("minimal".to_string());
     let mut cmd_start = None;
 
     let mut i = 0;
@@ -60,8 +65,16 @@ fn cmd_exec(args: &[String]) -> Result<Value, String> {
                 network = false;
                 i += 1;
             }
+            "--network" => {
+                network = true;
+                i += 1;
+            }
             "--ro" => {
                 read_only = true;
+                i += 1;
+            }
+            "--rw" => {
+                read_only = false;
                 i += 1;
             }
             "--workspace" if i + 1 < args.len() => {
@@ -69,6 +82,7 @@ fn cmd_exec(args: &[String]) -> Result<Value, String> {
                 i += 2;
             }
             "--mem" if i + 1 < args.len() => {
+                validate_memory_limit(&args[i + 1])?;
                 mem_limit = Some(args[i + 1].clone());
                 i += 2;
             }
@@ -78,6 +92,9 @@ fn cmd_exec(args: &[String]) -> Result<Value, String> {
                         .parse::<u32>()
                         .map_err(|_| format!("invalid cpu value: {}", args[i + 1]))?,
                 );
+                if !matches!(cpu_percent, Some(1..=100)) {
+                    return Err("cpu percent must be between 1 and 100".to_string());
+                }
                 i += 2;
             }
             "--pids" if i + 1 < args.len() => {
@@ -86,6 +103,9 @@ fn cmd_exec(args: &[String]) -> Result<Value, String> {
                         .parse::<u32>()
                         .map_err(|_| format!("invalid pids value: {}", args[i + 1]))?,
                 );
+                if !matches!(pids_max, Some(1..=1024)) {
+                    return Err("pids limit must be between 1 and 1024".to_string());
+                }
                 i += 2;
             }
             "--timeout" if i + 1 < args.len() => {
@@ -94,8 +114,12 @@ fn cmd_exec(args: &[String]) -> Result<Value, String> {
                         .parse::<u32>()
                         .map_err(|_| format!("invalid timeout value: {}", args[i + 1]))?,
                 );
+                if !matches!(timeout_secs, Some(1..=3600)) {
+                    return Err("timeout must be between 1 and 3600 seconds".to_string());
+                }
                 i += 2;
             }
+
             "--seccomp-profile" if i + 1 < args.len() => {
                 let profile = args[i + 1].to_lowercase();
                 if !["minimal", "network", "full"].contains(&profile.as_str()) {
@@ -121,6 +145,20 @@ fn cmd_exec(args: &[String]) -> Result<Value, String> {
     }
 
     let command_args = &args[cmd_idx..];
+    let workspace_scope = Scope::path(format!(
+        "{}/**",
+        workspace.trim_end_matches('/')
+    ));
+    require_or_json(Verb::FS_READ, workspace_scope.clone())
+        .map_err(|value| value.to_string())?;
+    if !read_only {
+        require_or_json(Verb::FS_WRITE, workspace_scope)
+            .map_err(|value| value.to_string())?;
+    }
+    if network {
+        require_or_json(Verb::NET_DIAL, Scope::Wild)
+            .map_err(|value| value.to_string())?;
+    }
     let limits = ResourceLimits {
         mem_limit,
         cpu_percent,
@@ -136,11 +174,32 @@ fn cmd_exec(args: &[String]) -> Result<Value, String> {
 
     #[cfg(not(target_os = "linux"))]
     {
-        exec_fallback(command_args, &workspace, &limits)
+        let _ = (command_args, workspace, limits);
+        Err("sandbox isolation requires Linux".to_string())
     }
 }
 
-/// Linux: use unshare(1) for namespace isolation + systemd-run for cgroup limits.
+fn validate_memory_limit(value: &str) -> Result<(), String> {
+    let (number, multiplier) = match value.as_bytes().last().copied() {
+        Some(b'K' | b'k') => (&value[..value.len() - 1], 1024_u64),
+        Some(b'M' | b'm') => (&value[..value.len() - 1], 1024_u64.pow(2)),
+        Some(b'G' | b'g') => (&value[..value.len() - 1], 1024_u64.pow(3)),
+        Some(_) => (value, 1),
+        None => return Err("memory limit must not be empty".to_string()),
+    };
+    let bytes = number
+        .parse::<u64>()
+        .ok()
+        .and_then(|number| number.checked_mul(multiplier))
+        .ok_or_else(|| format!("invalid memory limit: {value}"))?;
+    if !(16 * 1024 * 1024..=4 * 1024 * 1024 * 1024).contains(&bytes) {
+        return Err("memory limit must be between 16M and 4G".to_string());
+    }
+    Ok(())
+}
+
+/// Linux: require bubblewrap namespace isolation inside a transient
+/// systemd service with cgroup limits.
 #[cfg(target_os = "linux")]
 fn exec_linux(
     command_args: &[String],
@@ -149,80 +208,29 @@ fn exec_linux(
     workspace: &str,
     limits: &ResourceLimits,
 ) -> Result<Value, String> {
-    let has_limits = limits.mem_limit.is_some()
-        || limits.cpu_percent.is_some()
-        || limits.pids_max.is_some()
-        || limits.timeout_secs.is_some()
-        || limits.seccomp_profile.is_some();
-
-    // If resource limits are set, use systemd-run which handles cgroup v2
-    if has_limits {
-        return exec_linux_with_cgroup(command_args, network, read_only, workspace, limits);
+    if command_args.is_empty() {
+        return Err("no command specified".to_string());
     }
-
-    // Otherwise, use plain unshare for lightweight namespace isolation
-    let mut unshare_args = vec![
-        "--pid".to_string(),
-        "--fork".to_string(),
-        "--mount-proc".to_string(),
-        "--mount".to_string(),
-    ];
-
-    if !network {
-        unshare_args.push("--net".to_string());
+    for tool in ["bwrap", "systemd-run"] {
+        if !command_exists(tool) {
+            return Err(format!(
+                "sandbox isolation unavailable: required tool `{tool}` is missing"
+            ));
+        }
     }
-
-    // Read-only: remount root as read-only via bind mount.
-    // Uses the mount namespace (already created by --mount) to remount ro.
-    if read_only {
-        // Chain: unshare creates mount ns → remount / as ro → exec command
-        let parts_str: String = command_args
-            .iter()
-            .map(|a| shell_escape(a))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let full_cmd = format!("mount -o remount,ro,bind / && {}", parts_str);
-        unshare_args.push("--".to_string());
-        unshare_args.push("sh".to_string());
-        unshare_args.push("-c".to_string());
-        unshare_args.push(full_cmd);
-    } else {
-        unshare_args.push("--".to_string());
-        unshare_args.extend_from_slice(command_args);
+    if !std::path::Path::new("/sys/fs/cgroup/cgroup.controllers").is_file() {
+        return Err("sandbox isolation unavailable: cgroup v2 is not mounted".to_string());
     }
+    exec_linux_with_cgroup(command_args, network, read_only, workspace, limits)
+}
 
-    // Pipe drainage + reap happen together via `wait_with_output`,
-    // which spawns internal threads to keep stdout/stderr from
-    // back-pressuring the child. The old `wait()` + `read_to_string`
-    // pattern deadlocked any sandboxed command that produced more
-    // than the kernel pipe buffer (~64 KiB on Linux): the child
-    // blocked on a full pipe, never exited, and our `wait()` never
-    // returned. Same deadlock the bridge dispatcher had.
-    let child = Command::new("unshare")
-        .args(&unshare_args)
-        .current_dir(workspace)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("failed to spawn sandbox: {e}"))?;
-
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("sandbox wait failed: {e}"))?;
-    let status = output.status;
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-
-    Ok(json!({
-        "exit_code": status.code().unwrap_or(-1),
-        "stdout": stdout,
-        "stderr": stderr,
-        "isolated": true,
-        "network": network,
-        "read_only": read_only,
-        "workspace": workspace,
-    }))
+#[cfg(target_os = "linux")]
+fn command_exists(command: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|paths| {
+        std::env::split_paths(&paths)
+            .map(|path| path.join(command))
+            .any(|path| path.is_file())
+    })
 }
 
 /// Linux: use systemd-run for cgroup v2 resource limits + namespace isolation.
@@ -242,18 +250,24 @@ fn exec_linux(
 /// constructs strings; it does not invoke systemd-run, so the
 /// platform doesn't matter for its correctness.
 #[cfg(unix)]
-fn build_systemd_run_args(
+fn build_systemd_run_args_for_identity(
     scope_name: &str,
     command_args: &[String],
     network: bool,
     read_only: bool,
     workspace: &str,
     limits: &ResourceLimits,
+    run_uid: u32,
+    run_gid: u32,
 ) -> Vec<String> {
     let mut sr_args = vec![
-        "--scope".to_string(),
+        "--wait".to_string(),
+        "--collect".to_string(),
+        "--pipe".to_string(),
         format!("--unit={scope_name}"),
         "--quiet".to_string(),
+        format!("--uid={run_uid}"),
+        format!("--gid={run_gid}"),
     ];
 
     // systemd-run accepts each property as TWO argv elements: the
@@ -289,11 +303,10 @@ fn build_systemd_run_args(
         sr_args.push(format!("RuntimeMaxSec={secs}"));
     }
 
-    // Read-only filesystem via systemd property
-    if read_only {
-        sr_args.push("-p".to_string());
-        sr_args.push("ReadOnlyPaths=/".to_string());
-    }
+    sr_args.push("-p".to_string());
+    sr_args.push("NoNewPrivileges=yes".to_string());
+    sr_args.push("-p".to_string());
+    sr_args.push("RestrictSUIDSGID=yes".to_string());
 
     // Seccomp syscall filter via systemd property
     if let Some(ref profile) = limits.seccomp_profile {
@@ -303,20 +316,78 @@ fn build_systemd_run_args(
         }
     }
 
-    // Set working directory to workspace
-    sr_args.push("-p".to_string());
-    sr_args.push(format!("WorkingDirectory={workspace}"));
-
-    // Wrap the actual command in unshare for namespace isolation
+    // Bubblewrap builds a minimal read-only root and exposes only the
+    // selected workspace at /workspace.
     sr_args.push("--".to_string());
-    sr_args.push("unshare".to_string());
-    sr_args.push("--pid".to_string());
-    sr_args.push("--fork".to_string());
-    sr_args.push("--mount-proc".to_string());
-    sr_args.push("--mount".to_string());
-    if !network {
-        sr_args.push("--net".to_string());
+    sr_args.push("bwrap".to_string());
+    sr_args.extend([
+        "--die-with-parent".to_string(),
+        "--new-session".to_string(),
+        "--unshare-all".to_string(),
+    ]);
+    if network {
+        sr_args.push("--share-net".to_string());
     }
+    sr_args.extend([
+        "--cap-drop".to_string(),
+        "ALL".to_string(),
+        "--ro-bind".to_string(),
+        "/usr".to_string(),
+        "/usr".to_string(),
+        "--symlink".to_string(),
+        "usr/bin".to_string(),
+        "/bin".to_string(),
+        "--symlink".to_string(),
+        "usr/sbin".to_string(),
+        "/sbin".to_string(),
+        "--symlink".to_string(),
+        "usr/lib".to_string(),
+        "/lib".to_string(),
+        "--symlink".to_string(),
+        "usr/lib64".to_string(),
+        "/lib64".to_string(),
+        "--ro-bind".to_string(),
+        "/etc".to_string(),
+        "/etc".to_string(),
+        "--proc".to_string(),
+        "/proc".to_string(),
+        "--dev".to_string(),
+        "/dev".to_string(),
+        "--tmpfs".to_string(),
+        "/tmp".to_string(),
+        "--tmpfs".to_string(),
+        "/run".to_string(),
+        "--dir".to_string(),
+        "/var".to_string(),
+        "--dir".to_string(),
+        "/home".to_string(),
+        "--dir".to_string(),
+        "/root".to_string(),
+        "--dir".to_string(),
+        "/workspace".to_string(),
+        "--remount-ro".to_string(),
+        "/".to_string(),
+    ]);
+    sr_args.push(if read_only {
+        "--ro-bind".to_string()
+    } else {
+        "--bind".to_string()
+    });
+    sr_args.push(workspace.to_string());
+    sr_args.push("/workspace".to_string());
+    sr_args.extend([
+        "--chdir".to_string(),
+        "/workspace".to_string(),
+        "--setenv".to_string(),
+        "HOME".to_string(),
+        "/workspace".to_string(),
+        "--setenv".to_string(),
+        "COS_HOME".to_string(),
+        "/workspace".to_string(),
+        "--setenv".to_string(),
+        "PATH".to_string(),
+        "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".to_string(),
+    ]);
     sr_args.push("--".to_string());
     sr_args.extend_from_slice(command_args);
     sr_args
@@ -330,24 +401,55 @@ fn exec_linux_with_cgroup(
     workspace: &str,
     limits: &ResourceLimits,
 ) -> Result<Value, String> {
+    let workspace = std::fs::canonicalize(workspace)
+        .map_err(|error| format!("invalid sandbox workspace: {error}"))?;
+    if !workspace.is_dir() {
+        return Err("sandbox workspace must be a directory".to_string());
+    }
+    if let Some(home) = crate::paths::current_home_override() {
+        let home = home
+            .canonicalize()
+            .map_err(|error| format!("invalid sandbox owner home: {error}"))?;
+        if !workspace.starts_with(&home) {
+            return Err(format!(
+                "sandbox workspace {} escapes owner home {}",
+                workspace.display(),
+                home.display()
+            ));
+        }
+    }
+    let (run_uid, run_gid) = sandbox_identity()?;
     let scope_name = format!("cos-sandbox-{}", short_id());
-    let sr_args = build_systemd_run_args(&scope_name, command_args, network, read_only, workspace, limits);
+    let workspace_string = workspace.to_string_lossy().into_owned();
+    let sr_args = build_systemd_run_args_for_identity(
+        &scope_name,
+        command_args,
+        network,
+        read_only,
+        &workspace_string,
+        limits,
+        run_uid,
+        run_gid,
+    );
 
-    let child = Command::new("systemd-run")
+    let mut command = Command::new("systemd-run");
+    command
         .args(&sr_args)
-        .current_dir(workspace)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    command.env_clear().env(
+        "PATH",
+        "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    );
+    let child = command
         .spawn()
         .map_err(|e| format!("failed to spawn sandbox (systemd-run): {e}"))?;
 
-    // wait_with_output drains stdout/stderr concurrently with the
-    // reap so commands producing > pipe-buffer bytes (64 KiB) don't
-    // deadlock the parent. See the matching comment in exec_linux.
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("sandbox wait failed: {e}"))?;
+    let timeout = std::time::Duration::from_secs(
+        limits.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS) as u64,
+    );
+    let output = wait_bounded(child, timeout, &scope_name)?;
     let status = output.status;
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
@@ -355,7 +457,9 @@ fn exec_linux_with_cgroup(
     // Check if killed by cgroup (exit code 137 = OOM, etc.)
     let exit_code = status.code().unwrap_or(-1);
     let mut killed_by = None;
-    if exit_code == 137 {
+    if output.timed_out {
+        killed_by = Some("timeout");
+    } else if exit_code == 137 {
         killed_by = Some("OOM (memory limit exceeded)");
     } else if exit_code == 124 || stderr.contains("RuntimeMaxSec") {
         killed_by = Some("timeout (RuntimeMaxSec exceeded)");
@@ -367,10 +471,13 @@ fn exec_linux_with_cgroup(
         "stderr": stderr,
         "isolated": true,
         "network": network,
-        "read_only": read_only,
-        "workspace": workspace,
+        "read_only_root": true,
+        "workspace_read_only": read_only,
+        "workspace": workspace_string,
         "cgroup": true,
         "scope": scope_name,
+        "stdout_truncated": output.stdout_truncated,
+        "stderr_truncated": output.stderr_truncated,
     });
 
     if let Some(mem) = &limits.mem_limit {
@@ -393,6 +500,146 @@ fn exec_linux_with_cgroup(
     Ok(result)
 }
 
+#[cfg(all(test, unix))]
+fn build_systemd_run_args(
+    scope_name: &str,
+    command_args: &[String],
+    network: bool,
+    read_only: bool,
+    workspace: &str,
+    limits: &ResourceLimits,
+) -> Vec<String> {
+    build_systemd_run_args_for_identity(
+        scope_name,
+        command_args,
+        network,
+        read_only,
+        workspace,
+        limits,
+        1000,
+        1000,
+    )
+}
+
+#[cfg(target_os = "linux")]
+struct BoundedOutput {
+    status: std::process::ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    stdout_truncated: bool,
+    stderr_truncated: bool,
+    timed_out: bool,
+}
+
+#[cfg(target_os = "linux")]
+fn wait_bounded(
+    mut child: std::process::Child,
+    timeout: std::time::Duration,
+    scope_name: &str,
+) -> Result<BoundedOutput, String> {
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "sandbox stdout unavailable".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "sandbox stderr unavailable".to_string())?;
+    let stdout_reader = std::thread::spawn(move || read_bounded(stdout));
+    let stderr_reader = std::thread::spawn(move || read_bounded(stderr));
+    let deadline = std::time::Instant::now() + timeout;
+    let mut timed_out = false;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Ok(None) => {
+                timed_out = true;
+                let _ = Command::new("systemctl")
+                    .args(["kill", "--kill-whom=all", "--signal=KILL", scope_name])
+                    .status();
+                let _ = child.kill();
+                break child
+                    .wait()
+                    .map_err(|error| format!("sandbox wait after timeout: {error}"))?;
+            }
+            Err(error) => return Err(format!("sandbox wait failed: {error}")),
+        }
+    };
+    let (stdout, stdout_truncated) = stdout_reader
+        .join()
+        .map_err(|_| "sandbox stdout reader panicked".to_string())??;
+    let (stderr, stderr_truncated) = stderr_reader
+        .join()
+        .map_err(|_| "sandbox stderr reader panicked".to_string())??;
+    Ok(BoundedOutput {
+        status,
+        stdout,
+        stderr,
+        stdout_truncated,
+        stderr_truncated,
+        timed_out,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn read_bounded(reader: impl std::io::Read) -> Result<(Vec<u8>, bool), String> {
+    use std::io::Read;
+
+    let mut reader = reader;
+    let mut kept = Vec::new();
+    let mut buffer = [0_u8; 16 * 1024];
+    let mut total = 0_u64;
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .map_err(|error| format!("sandbox output read failed: {error}"))?;
+        if read == 0 {
+            break;
+        }
+        total = total.saturating_add(read as u64);
+        if kept.len() < MAX_OUTPUT_BYTES as usize {
+            let remaining = MAX_OUTPUT_BYTES as usize - kept.len();
+            kept.extend_from_slice(&buffer[..read.min(remaining)]);
+        }
+    }
+    Ok((kept, total > MAX_OUTPUT_BYTES))
+}
+
+#[cfg(target_os = "linux")]
+fn sandbox_identity() -> Result<(u32, u32), String> {
+    let uid = crate::paths::current_owner_uid_override()
+        .unwrap_or_else(|| unsafe { libc::geteuid() as u32 });
+    if uid == 0 {
+        return Err("refusing to run sandbox payload as root".to_string());
+    }
+    let gid = primary_gid(uid)?;
+    Ok((uid, gid))
+}
+
+#[cfg(target_os = "linux")]
+fn primary_gid(uid: u32) -> Result<u32, String> {
+    const BUFFER_SIZE: usize = 16 * 1024;
+    let mut buffer = vec![0 as libc::c_char; BUFFER_SIZE];
+    let mut passwd: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut result: *mut libc::passwd = std::ptr::null_mut();
+    let code = unsafe {
+        libc::getpwuid_r(
+            uid as libc::uid_t,
+            &mut passwd,
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut result,
+        )
+    };
+    if code != 0 || result.is_null() {
+        return Err(format!("passwd lookup failed for sandbox uid {uid}"));
+    }
+    Ok(passwd.pw_gid as u32)
+}
+
 fn short_id() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let t = SystemTime::now()
@@ -400,23 +647,6 @@ fn short_id() -> String {
         .unwrap_or_default()
         .as_nanos();
     format!("{:x}", t & 0xFFFFFFFF)
-}
-
-/// Escape a string for safe inclusion in a POSIX shell command.
-/// Wraps in single quotes, escaping embedded single quotes.
-#[cfg(target_os = "linux")]
-fn shell_escape(s: &str) -> String {
-    if s.is_empty() {
-        return "''".to_string();
-    }
-    // If the string contains no special chars, return as-is
-    if s.chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | ':' | '='))
-    {
-        return s.to_string();
-    }
-    // Wrap in single quotes; replace ' with '\''
-    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 /// Generate a seccomp BPF filter JSON for use with systemd's SystemCallFilter.
@@ -433,89 +663,28 @@ fn shell_escape(s: &str) -> String {
 fn seccomp_syscall_filter(profile: &str) -> Option<String> {
     match profile {
         "minimal" => {
-            // Allow only essential syscalls for computation
-            Some("~@clock @debug @module @mount @obsolete @raw-io @reboot @swap @privileged".into())
+            // Bubblewrap needs namespace/mount setup before it drops all
+            // capabilities. Block kernel/host control syscall groups that
+            // remain dangerous after setup.
+            Some("~@clock @debug @module @obsolete @raw-io @reboot @swap".into())
         }
         "network" => {
             // Allow everything except dangerous system-level calls
-            Some("~@clock @debug @module @mount @obsolete @raw-io @reboot @swap".into())
+            Some("~@clock @debug @module @obsolete @raw-io @reboot @swap".into())
         }
         "full" => None, // No filtering
         _ => None,
     }
 }
 
-/// Fallback for non-Linux: basic subprocess execution with timeout.
+/// Unsupported platforms fail closed; never execute a plain subprocess.
 #[cfg(not(target_os = "linux"))]
 fn exec_fallback(
-    command_args: &[String],
-    workspace: &str,
-    limits: &ResourceLimits,
+    _command_args: &[String],
+    _workspace: &str,
+    _limits: &ResourceLimits,
 ) -> Result<Value, String> {
-    if command_args.is_empty() {
-        return Err("no command specified".into());
-    }
-
-    let mut child = Command::new(&command_args[0])
-        .args(&command_args[1..])
-        .current_dir(workspace)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("failed to spawn: {e}"))?;
-
-    // Simple timeout: poll in a loop. On timeout we still drain
-    // stdout/stderr after killing the child so partial output is
-    // reported.
-    if let Some(secs) = limits.timeout_secs {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs as u64);
-        loop {
-            match child.try_wait() {
-                Ok(Some(_status)) => break,
-                Ok(None) => {
-                    if std::time::Instant::now() > deadline {
-                        let _ = child.kill();
-                        // After kill the writer side of each pipe
-                        // is closed, so wait_with_output completes
-                        // promptly (drainer threads see EOF).
-                        let output = child
-                            .wait_with_output()
-                            .map_err(|e| format!("wait_with_output after kill: {e}"))?;
-                        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-                        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-                        return Ok(json!({
-                            "exit_code": -1,
-                            "killed_by": "timeout",
-                            "stdout": stdout,
-                            "stderr": stderr,
-                            "isolated": false,
-                        }));
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                }
-                Err(e) => return Err(format!("wait failed: {e}")),
-            }
-        }
-    }
-
-    // Normal path: try_wait already saw the child exit (or we never
-    // entered the timeout loop). wait_with_output reaps and drains
-    // pipes concurrently to avoid the >64 KiB pipe-buffer deadlock.
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("wait failed: {e}"))?;
-    let status = output.status;
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-
-    Ok(json!({
-        "exit_code": status.code().unwrap_or(-1),
-        "stdout": stdout,
-        "stderr": stderr,
-        "isolated": false,
-        "note": "namespace/cgroup isolation requires Linux",
-    }))
+    Err("sandbox isolation requires Linux".to_string())
 }
 
 #[cfg(all(test, unix))]
@@ -597,94 +766,56 @@ mod tests {
             "/sandbox/ws-1",
             &mk_limits(None, None, None, None),
         );
-        assert!(contains_window(&args, "-p", "WorkingDirectory=/sandbox/ws-1"), "missing WorkingDirectory pair: {args:?}");
-        assert!(contains_window(&args, "-p", "ReadOnlyPaths=/"), "missing ReadOnlyPaths pair: {args:?}");
+        assert!(
+            args.windows(3).any(|window| {
+                window[0] == "--ro-bind"
+                    && window[1] == "/sandbox/ws-1"
+                    && window[2] == "/workspace"
+            }),
+            "missing read-only workspace bind: {args:?}"
+        );
         no_packed_p_flag(&args);
     }
 
-    /// With no limits at all there should still be no `-p X=Y`
-    /// elements and the trailing argv must dispatch unshare ->
-    /// command_args correctly.
+    /// With no optional limits the trailing argv still dispatches through
+    /// bubblewrap and keeps the root filesystem minimal.
     #[test]
-    fn systemd_run_args_no_limits_dispatches_unshare_command() {
+    fn systemd_run_args_no_limits_dispatches_bwrap_command() {
         let args = build_systemd_run_args(
             "scope-empty",
             &["true".to_string()],
-            true, // network on -> no --net
+            true,
             false,
             "/tmp",
             &mk_limits(None, None, None, None),
         );
         no_packed_p_flag(&args);
-        // The argv must end in `-- unshare ... -- true`
-        let pos_unshare = args.iter().position(|s| s == "unshare").expect("unshare in argv");
-        // Two `--` separators: one before unshare, one before command.
+        let pos_bwrap = args.iter().position(|s| s == "bwrap").expect("bwrap in argv");
         let dash_dash_count = args.iter().filter(|s| s.as_str() == "--").count();
         assert!(dash_dash_count >= 2, "expected two `--` separators, got {dash_dash_count}: {args:?}");
         assert!(args.iter().any(|s| s == "true"), "missing trailing command: {args:?}");
-        // Network on: `--net` MUST be absent.
-        assert!(!args.iter().any(|s| s == "--net"), "network=true should suppress --net: {args:?}");
-        let _ = pos_unshare;
+        assert!(args.iter().any(|s| s == "--share-net"));
+        let _ = pos_bwrap;
     }
 
     #[test]
-    fn systemd_run_args_network_off_adds_net_namespace() {
+    fn systemd_run_args_network_off_keeps_private_net_namespace() {
         let args = build_systemd_run_args(
             "scope-net-off",
             &["true".to_string()],
-            false, // network off -> --net present
+            false,
             false,
             "/tmp",
             &mk_limits(None, None, None, None),
         );
-        assert!(args.iter().any(|s| s == "--net"), "network=false must add --net: {args:?}");
+        assert!(!args.iter().any(|s| s == "--share-net"));
+        assert!(args.iter().any(|s| s == "--unshare-all"));
     }
 
-    /// Regression for the wait()+read_to_string deadlock that
-    /// previously hung the sandbox dispatcher on any command
-    /// producing more than ~64 KiB of stdout (one Linux pipe
-    /// buffer). Exercise the non-Linux fallback path because it
-    /// runs without root / namespace privileges and is reachable on
-    /// the macOS / Linux dev workstations where this test executes.
-    /// The fallback shares the same wait_with_output pattern as the
-    /// Linux production paths, so a pass here proves the pattern
-    /// fix is correct.
-    ///
-    /// We spawn `sh -c 'head -c 524288 /dev/zero | tr "\\0" "x"'`
-    /// to produce a deterministic 512 KiB of stdout (8x the pipe
-    /// buffer). Before the fix this would block forever; we wrap
-    /// the whole thing in a 10-second mpsc deadline.
     #[cfg(not(target_os = "linux"))]
     #[test]
-    fn fallback_drains_large_stdout_without_deadlock() {
-        use std::sync::mpsc;
-        use std::thread;
-        use std::time::Duration;
-
-        let (tx, rx) = mpsc::channel();
-        thread::spawn(move || {
-            let res = exec_fallback(
-                &[
-                    "sh".to_string(),
-                    "-c".to_string(),
-                    "head -c 524288 /dev/zero | tr '\\0' 'x'".to_string(),
-                ],
-                "/tmp",
-                &mk_limits(None, None, None, None),
-            );
-            let _ = tx.send(res);
-        });
-        let res = rx
-            .recv_timeout(Duration::from_secs(10))
-            .expect("sandbox fallback deadlocked on >64 KiB stdout — wait_with_output not in effect");
-        let v = res.expect("fallback returned Err");
-        let stdout = v["stdout"].as_str().unwrap_or("");
-        assert_eq!(
-            stdout.len(),
-            524288,
-            "expected 512 KiB stdout, got {} bytes",
-            stdout.len()
-        );
-        assert_eq!(v["exit_code"].as_i64(), Some(0));
+    fn fallback_refuses_plain_subprocess_execution() {
+        let result = exec_fallback(&["true".to_string()], "/tmp", &mk_limits(None, None, None, None));
+        assert!(result.is_err());
     }
 }

@@ -9,3 +9,4 @@ curl
 ca-certificates
 sqlite3
 jq
+bubblewrap

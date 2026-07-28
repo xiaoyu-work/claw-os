@@ -5,7 +5,7 @@ Priority: optional
 Architecture: __ARCH__
 Maintainer: Claw OS <noreply@github.com>
 Homepage: https://github.com/xiaoyu-work/claw-os
-Depends: bash, coreutils, ca-certificates
+Depends: bash, coreutils, ca-certificates, bubblewrap, systemd
 Recommends: nodejs (>= 24), python3, python3-pip, git, ripgrep, curl, jq, sqlite3
 Description: Claw OS — agent-native operating system core
  Claw OS is a Debian-based Linux distribution designed for AI agents.
