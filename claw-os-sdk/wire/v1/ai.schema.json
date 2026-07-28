@@ -2,14 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://claw-os.dev/wire/v1/ai.schema.json",
   "title": "AI request / reply",
-  "description": "Shape returned by `cos ai chat`. The kernel derives the modality and capability verb from the request flags.",
+  "description": "Stable text-chat reply returned by `cos ai chat`.",
   "type": "object",
   "required": ["text", "model", "provider", "verb", "usage", "budget", "review"],
   "additionalProperties": true,
   "properties": {
     "text": {
       "type": "string",
-      "description": "Text result, or an empty string for vector/file-output modalities."
+      "description": "Assistant text returned by the configured provider."
     },
     "model": {
       "type": "string",
@@ -23,30 +23,9 @@
       "type": "string",
       "enum": [
         "ai.chat",
-        "ai.chat.untrusted",
-        "ai.embed",
-        "ai.image.generate",
-        "ai.image.analyze",
-        "ai.vision.analyze",
-        "ai.audio.tts",
-        "ai.audio.stt",
-        "ai.video.generate",
-        "ai.video.analyze"
+        "ai.chat.untrusted"
       ],
       "description": "Capability verb derived by the kernel for this call."
-    },
-    "embedding": {
-      "type": "array",
-      "items": {
-        "type": "number",
-        "x-rust-type": "f32",
-        "x-go-type": "float32"
-      },
-      "description": "Embedding vector for ai.embed; omitted for other modalities."
-    },
-    "output_path": {
-      "type": "string",
-      "description": "Filesystem path containing a generated binary artifact."
     },
     "usage": {
       "type": "object",

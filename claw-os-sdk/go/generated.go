@@ -21,15 +21,12 @@ func CheckWireVersion(seen int) error {
 }
 
 // Ai — AI request / reply.
-// Shape returned by `cos ai chat`. The kernel derives the modality and
-// capability verb from the request flags.
+// Stable text-chat reply returned by `cos ai chat`.
 type Ai struct {
 	Text string `json:"text"`
 	Model string `json:"model"`
 	Provider string `json:"provider"`
 	Verb string `json:"verb"`
-	Embedding []float32 `json:"embedding,omitempty"`
-	OutputPath string `json:"output_path,omitempty"`
 	Usage AiUsage `json:"usage"`
 	Budget AiBudget `json:"budget"`
 	Review AiReview `json:"review"`
@@ -230,7 +227,7 @@ type Tool struct {
 // ValidateAiVerb reports an error if value is not in the ai.verb enum.
 func ValidateAiVerb(value string) error {
 	switch value {
-	case "ai.chat", "ai.chat.untrusted", "ai.embed", "ai.image.generate", "ai.image.analyze", "ai.vision.analyze", "ai.audio.tts", "ai.audio.stt", "ai.video.generate", "ai.video.analyze":
+	case "ai.chat", "ai.chat.untrusted":
 		return nil
 	}
 	return fmt.Errorf("invalid ai.verb value: %q", value)

@@ -330,11 +330,8 @@ impl Modality {
         }
     }
 
-    /// True for modalities the provider trait already supports today
-    /// (`provider.chat(...)`). Everything else is gated through the
-    /// same caps + budget + audit pipeline but errors out at the
-    /// provider step with [`AiError::ModalityNotSupported`] until the
-    /// provider trait grows the relevant entry points.
+    /// True for the stable App-facing modalities. Other selectors are
+    /// rejected before app lookup, consent, capability, or budget work.
     fn is_chat_like(self) -> bool {
         matches!(self, Modality::Chat | Modality::ChatUntrusted)
     }
@@ -681,6 +678,11 @@ impl Drop for BudgetReservation {
 /// [`chat`] can map them to a stable `denial_reason` for the audit
 /// stream before the caller sees them.
 async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
+    let modality = Modality::derive(req)?;
+    if !modality.is_chat_like() {
+        return Err(AiError::ModalityNotSupported(modality.label()));
+    }
+
     // 1. Locate the app and its AI policy.
     let app = lookup_app(&req.app_id)?;
     let manifest_policy = app
@@ -728,10 +730,6 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
         });
     }
 
-    // 2. Derive the modality from the request shape. This is the
-    //    "what is the caller trying to do" decision; everything below
-    //    flows from it.
-    let modality = Modality::derive(req)?;
     let verb = modality.verb();
 
     // 3. Parse and validate origin against the manifest's allowlist.
@@ -798,16 +796,6 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
         }
         _ => (None, false),
     };
-
-    // 9. Dispatch by modality. Only chat-like modalities are wired
-    //    through to a Provider today; everything else short-circuits
-    //    with `ModalityNotSupported` AFTER the caps/budget/safety/
-    //    audit machinery has run, so the abuse-detection story works
-    //    even before providers grow new entry points.
-    if !modality.is_chat_like() {
-        // Reservation auto-refunds on drop.
-        return Err(AiError::ModalityNotSupported(modality.label()));
-    }
 
     let prompt = prompt_for_provider
         .ok_or(AiError::MissingInput {

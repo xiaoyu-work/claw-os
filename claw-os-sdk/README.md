@@ -16,7 +16,7 @@ claw-os-sdk/
 │   │   ├── README.md           protocol overview
 │   │   ├── envelope.schema.json    common envelope shape
 │   │   ├── perms.schema.json       capability decision envelope
-│   │   ├── ai.schema.json          cos ai chat / tool / embed / ...
+│   │   ├── ai.schema.json          AI wire schema (kernel protocol)
 │   │   ├── tool.schema.json        catalog tool invocation
 │   │   ├── app.schema.json         cos app <id> <verb>
 │   │   └── manifest.schema.json    app.json schema
@@ -30,7 +30,7 @@ claw-os-sdk/
 │   └── src/
 │       ├── lib.rs               top-level re-exports + transport
 │       ├── envelope.rs          common envelope parse / error
-│       ├── ai.rs                ai::chat / ai::embed / ai::image_generate / ...
+│       ├── ai.rs                stable chat + unsupported compatibility shims
 │       ├── tools.rs             tools::call / tools::catalog
 │       └── generated.rs         codegen output (envelope types)
 │
@@ -96,6 +96,17 @@ The reason for the subprocess transport: **identity, audit, and
 session context are inherited from process ancestry** (kernel-spawned
 parent → app process → cos child). A pure-library binding can't claim
 "App X is making this call" without that lineage.
+
+## AI support
+
+Across Rust, Python, Node, and Go, the stable hand-written AI surface is
+`chat` / `chat-untrusted`. Supplying origin `external-content`
+automatically selects `ai.chat.untrusted`.
+
+The existing embed, image, vision, audio, and video helper names and
+signatures remain for compatibility. They are deprecated, experimental,
+and currently unsupported, and always return a language-specific typed
+unsupported error before invoking `cos`.
 
 A v2 socket transport is planned (see `wire/v2-design.md`) to bring
 per-call latency down from ~50 ms to µs-class, but the same envelopes

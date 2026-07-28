@@ -29,7 +29,7 @@ def handle_summarize(args):
 
 | Module                  | Purpose                                                                |
 |-------------------------|------------------------------------------------------------------------|
-| `claw_os_sdk.ai`        | `cos ai chat / embed / image-generate / vision-analyze / audio-tts / ...` |
+| `claw_os_sdk.ai`        | Stable `chat` / `chat-untrusted` access through `cos ai chat`.          |
 | `claw_os_sdk.tools`     | `cos ai tool <name>` — fulfil catalog tools the model proposed.        |
 | `claw_os_sdk.serve`     | `App.run(...)` — boilerplate for an app's main loop.                   |
 | `claw_os_sdk.claw_os_session` | Read / observe `COS_SESSION` from inside an app.                 |
@@ -38,6 +38,14 @@ def handle_summarize(args):
 Capability gating (`policy.require`) and COW snapshots live in the
 internal **`cos_runtime`** package; they are implementation details of
 the claw-os bundled apps, not part of the public SDK surface.
+
+## AI support
+
+- **Stable:** `ai.chat`. Passing `origin="external-content"`
+  automatically selects `ai.chat.untrusted`.
+- **Compatibility only:** embed, image, vision, audio, and video helpers
+  retain their signatures but are deprecated, experimental, and currently
+  unsupported. They raise `ai.AiUnsupported` before invoking `cos`.
 
 ## Configuration
 

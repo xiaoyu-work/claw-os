@@ -5,6 +5,13 @@ language binding and the `cos` kernel binary. It is what every SDK
 ultimately speaks; what users call from their app code is a
 language-idiomatic wrapper over this protocol.
 
+## Stable AI surface
+
+Wire v1 exposes text chat only: `ai.chat` and the hardened
+`ai.chat.untrusted` variant selected by `origin=external-content`.
+Embed, image, vision, audio, and video selectors are experimental and
+currently unsupported; compatibility helpers fail before invoking `cos`.
+
 ## Transport
 
 **v1 uses a subprocess transport.** A request is encoded as `cos`

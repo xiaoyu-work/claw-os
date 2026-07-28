@@ -31,18 +31,13 @@ pub fn check_wire_version(seen: i64) -> Result<(), String> {
 }
 
 /// AI request / reply
-/// Shape returned by `cos ai chat`. The kernel derives the modality and
-/// capability verb from the request flags.
+/// Stable text-chat reply returned by `cos ai chat`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Ai {
     pub text: String,
     pub model: String,
     pub provider: String,
     pub verb: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub embedding: Option<Vec<f32>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output_path: Option<String>,
     pub usage: AiUsage,
     pub budget: AiBudget,
     pub review: AiReview,
@@ -310,7 +305,7 @@ pub struct Tool {
 /// The wire schema lists a closed set of allowed values; a kernel
 /// that emits an unknown one should not be silently accepted.
 pub fn validate_ai_verb(value: &str) -> Result<(), String> {
-    const ALLOWED: &[&str] = &["ai.chat", "ai.chat.untrusted", "ai.embed", "ai.image.generate", "ai.image.analyze", "ai.vision.analyze", "ai.audio.tts", "ai.audio.stt", "ai.video.generate", "ai.video.analyze"];
+    const ALLOWED: &[&str] = &["ai.chat", "ai.chat.untrusted"];
     if ALLOWED.iter().any(|a| *a == value) {
         Ok(())
     } else {

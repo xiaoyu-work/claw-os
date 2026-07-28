@@ -7,22 +7,18 @@
 //! loop / memory / skills / hooks / recall). Apps get raw LLM
 //! access plus the App–AI Gate; they do not get the Agent.
 //!
-//! The gate ([`crate::ai::gate`]) enforces, in order: modality
-//! derivation, capability check, manifest model glob + prompt origin
+//! The gate ([`crate::ai::gate`]) enforces, in order: request
+//! classification, capability check, manifest model glob + prompt origin
 //! allowlist, per-app monthly budget, safety profile, audit. The
 //! **modality** (and therefore the caps verb required) is derived
 //! from the request shape — Apps never pass a verb directly:
 //!
 //!   - `--prompt` (text only)                       → `ai.chat`
 //!   - `--prompt` + `--origin external-content`     → `ai.chat.untrusted`
-//!   - `--embed --prompt <text>`                    → `ai.embed`
-//!   - `--prompt <text> --image-output <path>`      → `ai.image.generate`
-//!   - `--image-input <path>`                       → `ai.image.analyze`
-//!   - `--image-input <p> --prompt <q>`             → `ai.vision.analyze`
-//!   - `--prompt <text> --audio-output <path>`      → `ai.audio.tts`
-//!   - `--audio-input <path>`                       → `ai.audio.stt`
-//!   - `--prompt <text> --video-output <path>`      → `ai.video.generate`
-//!   - `--video-input <path>`                       → `ai.video.analyze`
+//!
+//! Embed, image, vision, audio, and video selectors are reserved for an
+//! experimental future surface and currently return an explicit
+//! unsupported error before app policy, consent, caps, or budget work.
 //!
 //! Flags:
 //!   --app <id>           App requesting the call (required).
@@ -31,13 +27,8 @@
 //!   --origin <kind>      trusted | user-input | external-content (default: trusted).
 //!   --max-units <N>      Cap units for this call.
 //!   --system <text>      Optional system prompt.
-//!   --embed              Request an embedding (vector) instead of text.
-//!   --image-input <p>    Image to analyse.
-//!   --image-output <p>   Path the gate writes the generated image to.
-//!   --audio-input <p>    Audio to transcribe.
-//!   --audio-output <p>   Path the gate writes synthesised speech to.
-//!   --video-input <p>    Video to analyse.
-//!   --video-output <p>   Path the gate writes the generated video to.
+//!   --embed / --*-input / --*-output
+//!                        Experimental selectors; currently unsupported.
 //!   --tools <list>       Comma-separated catalog tool names to expose
 //!                        to the model (e.g. `fs.read_text,kv.get`).
 //!                        Each name is resolved against
@@ -161,6 +152,31 @@ pub fn chat_cmd(args: &[String]) -> Result<Value, String> {
             }
             other => return Err(format!("unknown flag for `cos ai chat`: {other}")),
         }
+    }
+
+    let unsupported = if embed {
+        Some("embed")
+    } else if image_output.is_some() {
+        Some("image_generate")
+    } else if image_input.is_some() && prompt.is_some() {
+        Some("vision_analyze")
+    } else if image_input.is_some() {
+        Some("image_analyze")
+    } else if audio_output.is_some() {
+        Some("audio_tts")
+    } else if audio_input.is_some() {
+        Some("audio_stt")
+    } else if video_output.is_some() {
+        Some("video_generate")
+    } else if video_input.is_some() {
+        Some("video_analyze")
+    } else {
+        None
+    };
+    if let Some(modality) = unsupported {
+        return Err(format!(
+            "modality `{modality}` is currently unsupported; only chat/chat-untrusted are stable"
+        ));
     }
 
     let app = app.ok_or_else(|| "--app is required".to_string())?;

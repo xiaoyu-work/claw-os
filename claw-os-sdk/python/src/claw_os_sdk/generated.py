@@ -41,11 +41,8 @@ class _AiRequired(TypedDict):
 class Ai(_AiRequired, total=False):
     """AI request / reply.
 
-    Shape returned by `cos ai chat`. The kernel derives the modality and
-    capability verb from the request flags.
+    Stable text-chat reply returned by `cos ai chat`.
     """
-    embedding: List[float]
-    output_path: str
     tool_calls: List["AiToolCall"]
 
 class AiUsage(TypedDict):
@@ -278,7 +275,7 @@ class Tool(TypedDict):
 def validate_ai_verb(value: str) -> None:
     """Raise ValueError if value is not in the ai.verb
     enum. Mirrors generated::validate_ai_verb."""
-    allowed = ['ai.chat', 'ai.chat.untrusted', 'ai.embed', 'ai.image.generate', 'ai.image.analyze', 'ai.vision.analyze', 'ai.audio.tts', 'ai.audio.stt', 'ai.video.generate', 'ai.video.analyze']
+    allowed = ['ai.chat', 'ai.chat.untrusted']
     if value not in allowed:
         raise ValueError(f"invalid ai.verb value: {value!r}")
 

@@ -3,11 +3,12 @@
 Official **Node.js** SDK for [Claw OS](https://github.com/xiaoyu-work/claw-os).
 
 This package is the AI-facing surface a Node app uses to reach the
-kernel's AI features, call other apps' tools, and bootstrap a desktop
-GUI. Like the Python and Rust SDKs, it is a **thin client over wire
-protocol v1**: every call shells out to the `cos` binary, which enforces
-capabilities, prompt-origin allowlists, monthly budget, the safety
-pipeline, and audit before any model or computer operation runs.
+kernel's stable chat features, call other apps' tools, and bootstrap a
+desktop GUI. Like the Python and Rust SDKs, it is a **thin client over
+wire protocol v1**: supported operations shell out to the `cos` binary,
+which enforces capabilities, prompt-origin allowlists, monthly budget,
+the safety pipeline, and audit before any model or computer operation
+runs.
 
 ## Install
 
@@ -19,7 +20,7 @@ npm install @claw-os/sdk
 
 | Module       | What                                                          | Equivalent CLI                       |
 |--------------|---------------------------------------------------------------|--------------------------------------|
-| `ai`         | Gated model access (chat, embed, image/audio/video, vision)   | `cos ai chat --app <id>`             |
+| `ai`         | Stable gated `chat` / `chat-untrusted` access                | `cos ai chat --app <id>`             |
 | `tools`      | Call catalog tools the model proposes (`call`, `catalog`)     | `cos ai tool <name> --app <id>`      |
 | `gui`        | Desktop GUI bootstrap (kernel context, agent overlay)         | launched via `cos app <id> --gui`    |
 | `transport`  | The subprocess transport + error types (advanced)             | —                                    |
@@ -54,6 +55,14 @@ export function run(command: string, args: Record<string, unknown>) {
 }
 ```
 
+## AI support
+
+- **Stable:** `ai.chat`. Setting `origin: "external-content"`
+  automatically selects `ai.chat.untrusted`.
+- **Compatibility only:** embed, image, vision, audio, and video helpers
+  retain their signatures but are deprecated, experimental, and currently
+  unsupported. They throw `ai.AiUnsupported` before invoking `cos`.
+
 ### What you never do
 
 - **Name a verb or pick a model.** You describe what you want; the gate
@@ -73,6 +82,7 @@ All errors extend `transport.BridgeError`:
   refused the call; `.payload` carries the structured kernel envelope.
 - `ai.AiUnavailable` / `tools.ToolUnavailable` — transport failure
   (binary missing, timeout, non-JSON output).
+- `ai.AiUnsupported` — a multimodal compatibility shim was called.
 - `tools.ToolDenied` — capability / unknown-tool / arg-shape refusal.
 
 ## Binary resolution

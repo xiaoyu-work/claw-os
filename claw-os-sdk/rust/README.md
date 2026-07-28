@@ -9,7 +9,7 @@ The official Rust SDK for Claw OS. Use this crate to talk to the
 
 | Module    | Purpose                                                                        |
 |-----------|--------------------------------------------------------------------------------|
-| `ai`      | `cos ai chat / embed / image-generate / vision-analyze / audio-tts / ...`      |
+| `ai`      | Stable `chat` / `chat-untrusted` access through `cos ai chat`.                 |
 | `policy`  | Capability checks before every gated side effect.                              |
 | `tools`   | `cos ai tool <name>` — fulfil catalog tools the model proposed.                |
 | `fs`      | `cos app fs ls / read / write / stat / search / recent`                        |
@@ -43,6 +43,15 @@ fn summarise_email(body: &str) -> Result<String, Box<dyn std::error::Error>> {
     Ok(response.text)
 }
 ```
+
+## AI support
+
+- **Stable:** `ai::chat`. Setting origin to `"external-content"`
+  automatically selects `ai.chat.untrusted`.
+- **Compatibility only:** embed, image, vision, audio, and video helpers
+  retain their signatures but are deprecated, experimental, and currently
+  unsupported. They return `AiError::UnsupportedModality` before invoking
+  `cos`.
 
 ## Configuration
 

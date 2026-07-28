@@ -1,13 +1,9 @@
 """AI helper for Claw OS Python apps.
 
-Every Python app that needs to talk to a model (LLM, embedding,
-image-gen, TTS, STT, vision, video) must go through this helper. The
-helper shells out to ``cos ai chat --app <id>`` — the single,
-authoritative entry point for AI requests of every modality. The
-kernel derives the modality (and the underlying caps verb) from the
-shape of the request, then runs capability check, prompt-origin
-allowlist, per-month budget, the safety pipeline, and audit before
-letting any model see the prompt.
+``chat`` is the stable model API and shells out to
+``cos ai chat --app <id>``. The kernel derives ``ai.chat`` or
+``ai.chat.untrusted`` from the prompt origin, then runs capability
+checks, budget, safety, and audit before a model sees the prompt.
 
 ``cos ai chat`` is deliberately separate from ``cos agent chat``.
 ``cos agent`` is the kernel's *own* Agent product (REPL, memory,
@@ -15,24 +11,15 @@ skills, hooks, sessions, recall). Apps must not use it. ``cos ai``
 is the App-developer-facing primitive: raw, gated LLM access with
 no loop and no kernel state.
 
-Apps **never** name a verb. They describe what they want and the
-gate picks the verb. The helpers here are the supported Python
-surface for each modality:
-
-    ai.chat(prompt, ...)                  → ai.chat / ai.chat.untrusted
-    ai.embed(prompt, ...)                 → ai.embed
-    ai.image_generate(prompt, output=..)  → ai.image.generate
-    ai.image_analyze(image=...)           → ai.image.analyze
-    ai.vision_analyze(prompt, image=..)   → ai.vision.analyze
-    ai.audio_tts(prompt, output=...)      → ai.audio.tts
-    ai.audio_stt(audio=...)               → ai.audio.stt
-    ai.video_generate(prompt, output=...) → ai.video.generate
-    ai.video_analyze(video=..., prompt=)  → ai.video.analyze
+Apps **never** name a verb. ``embed``, image, vision, audio, and video
+helpers retain their signatures as deprecated, experimental
+compatibility shims. They are currently unsupported and always raise
+``AiUnsupported`` before invoking ``cos``.
 
 Apps also do **not** pick the model. The machine owner configures one
 provider/model in ``/etc/cos/agent.toml`` and every app's call uses
-that. The helpers expose ``origin``, ``max_units``, and prompt /
-artifact arguments — never a ``model`` argument.
+that. ``chat`` exposes ``origin``, ``max_units``, and prompt controls,
+never a ``model`` argument.
 
 Typical usage::
 
@@ -99,6 +86,17 @@ class AiError(Exception):
 
 class AiUnavailable(AiError):
     """The ``cos`` binary could not be invoked or returned garbage."""
+
+
+class AiUnsupported(AiError):
+    """An experimental compatibility modality is currently unsupported."""
+
+    def __init__(self, modality: str):
+        self.modality = modality
+        super().__init__(
+            f"{modality}: currently unsupported; "
+            "only chat/chat-untrusted are stable"
+        )
 
 
 class AiDenied(AiError):
@@ -168,8 +166,6 @@ class AiResponse:
     model: str
     provider: str
     verb: str = ""
-    embedding: List[float] = field(default_factory=list)
-    output_path: Optional[str] = None
     usage: Usage = field(default_factory=Usage)
     budget: Budget = field(default_factory=Budget)
     review: Review = field(default_factory=Review)
@@ -229,17 +225,8 @@ def embed(
     max_units: Optional[int] = None,
     app_id: Optional[str] = None,
 ) -> AiResponse:
-    """Embed text into a vector. Result vector lives at ``response.embedding``."""
-    if not prompt or not prompt.strip():
-        raise AiError("embed: prompt must be non-empty")
-    return _dispatch(
-        modality="embed",
-        prompt=prompt,
-        origin=origin,
-        max_units=max_units,
-        app_id=app_id,
-        embed=True,
-    )
+    """Deprecated experimental compatibility shim; currently unsupported."""
+    raise AiUnsupported("embed")
 
 
 def image_generate(
@@ -250,17 +237,8 @@ def image_generate(
     max_units: Optional[int] = None,
     app_id: Optional[str] = None,
 ) -> AiResponse:
-    """Generate an image from a prompt; the gate writes it to ``output``."""
-    if not prompt or not prompt.strip():
-        raise AiError("image_generate: prompt must be non-empty")
-    return _dispatch(
-        modality="image.generate",
-        prompt=prompt,
-        origin=origin,
-        max_units=max_units,
-        app_id=app_id,
-        image_output=output,
-    )
+    """Deprecated experimental compatibility shim; currently unsupported."""
+    raise AiUnsupported("image.generate")
 
 
 def image_analyze(
@@ -270,15 +248,8 @@ def image_analyze(
     max_units: Optional[int] = None,
     app_id: Optional[str] = None,
 ) -> AiResponse:
-    """Caption / classify an image with no prompt. Use ``vision_analyze`` for Q&A."""
-    return _dispatch(
-        modality="image.analyze",
-        prompt=None,
-        origin=origin,
-        max_units=max_units,
-        app_id=app_id,
-        image_input=image,
-    )
+    """Deprecated experimental compatibility shim; currently unsupported."""
+    raise AiUnsupported("image.analyze")
 
 
 def vision_analyze(
@@ -290,18 +261,8 @@ def vision_analyze(
     system: Optional[str] = None,
     app_id: Optional[str] = None,
 ) -> AiResponse:
-    """Answer a textual question about an image."""
-    if not prompt or not prompt.strip():
-        raise AiError("vision_analyze: prompt must be non-empty")
-    return _dispatch(
-        modality="vision.analyze",
-        prompt=prompt,
-        origin=origin,
-        max_units=max_units,
-        system=system,
-        app_id=app_id,
-        image_input=image,
-    )
+    """Deprecated experimental compatibility shim; currently unsupported."""
+    raise AiUnsupported("vision.analyze")
 
 
 def audio_tts(
@@ -312,17 +273,8 @@ def audio_tts(
     max_units: Optional[int] = None,
     app_id: Optional[str] = None,
 ) -> AiResponse:
-    """Synthesize speech from text; the gate writes the audio to ``output``."""
-    if not prompt or not prompt.strip():
-        raise AiError("audio_tts: prompt must be non-empty")
-    return _dispatch(
-        modality="audio.tts",
-        prompt=prompt,
-        origin=origin,
-        max_units=max_units,
-        app_id=app_id,
-        audio_output=output,
-    )
+    """Deprecated experimental compatibility shim; currently unsupported."""
+    raise AiUnsupported("audio.tts")
 
 
 def audio_stt(
@@ -332,15 +284,8 @@ def audio_stt(
     max_units: Optional[int] = None,
     app_id: Optional[str] = None,
 ) -> AiResponse:
-    """Transcribe an audio file. Transcript lives at ``response.text``."""
-    return _dispatch(
-        modality="audio.stt",
-        prompt=None,
-        origin=origin,
-        max_units=max_units,
-        app_id=app_id,
-        audio_input=audio,
-    )
+    """Deprecated experimental compatibility shim; currently unsupported."""
+    raise AiUnsupported("audio.stt")
 
 
 def video_generate(
@@ -351,17 +296,8 @@ def video_generate(
     max_units: Optional[int] = None,
     app_id: Optional[str] = None,
 ) -> AiResponse:
-    """Generate a video from a prompt; the gate writes it to ``output``."""
-    if not prompt or not prompt.strip():
-        raise AiError("video_generate: prompt must be non-empty")
-    return _dispatch(
-        modality="video.generate",
-        prompt=prompt,
-        origin=origin,
-        max_units=max_units,
-        app_id=app_id,
-        video_output=output,
-    )
+    """Deprecated experimental compatibility shim; currently unsupported."""
+    raise AiUnsupported("video.generate")
 
 
 def video_analyze(
@@ -372,15 +308,8 @@ def video_analyze(
     max_units: Optional[int] = None,
     app_id: Optional[str] = None,
 ) -> AiResponse:
-    """Describe or answer a question about a video file."""
-    return _dispatch(
-        modality="video.analyze",
-        prompt=prompt,
-        origin=origin,
-        max_units=max_units,
-        app_id=app_id,
-        video_input=video,
-    )
+    """Deprecated experimental compatibility shim; currently unsupported."""
+    raise AiUnsupported("video.analyze")
 
 
 def budget(app_id: Optional[str] = None) -> Budget:
@@ -438,21 +367,9 @@ def _dispatch(
     max_units: Optional[int],
     app_id: Optional[str],
     system: Optional[str] = None,
-    embed: bool = False,
-    image_input: Optional[str] = None,
-    image_output: Optional[str] = None,
-    audio_input: Optional[str] = None,
-    audio_output: Optional[str] = None,
-    video_input: Optional[str] = None,
-    video_output: Optional[str] = None,
     tools: Optional[List[str]] = None,
 ) -> AiResponse:
-    """Build the `cos ai chat` command line and parse the envelope.
-
-    All public helpers funnel through here. The kernel-side gate
-    derives the caps verb from the flag combination — we never name
-    one. ``modality`` is only used for error messages on this side.
-    """
+    """Build the stable ``cos ai chat`` command and parse its envelope."""
     app = app_id or os.environ.get("COS_APP_ID")
     if not app:
         raise AiError(
@@ -466,20 +383,6 @@ def _dispatch(
         cmd.extend(["--max-units", str(max_units)])
     if system is not None:
         cmd.extend(["--system", system])
-    if embed:
-        cmd.append("--embed")
-    if image_input is not None:
-        cmd.extend(["--image-input", image_input])
-    if image_output is not None:
-        cmd.extend(["--image-output", image_output])
-    if audio_input is not None:
-        cmd.extend(["--audio-input", audio_input])
-    if audio_output is not None:
-        cmd.extend(["--audio-output", audio_output])
-    if video_input is not None:
-        cmd.extend(["--video-input", video_input])
-    if video_output is not None:
-        cmd.extend(["--video-output", video_output])
     if tools:
         cmd.extend(["--tools", ",".join(tools)])
 
@@ -518,7 +421,6 @@ def _parse_response(env: Mapping[str, Any]) -> AiResponse:
     usage = env.get("usage") or {}
     budget_blk = env.get("budget") or {}
     review = env.get("review") or {}
-    embedding_raw = env.get("embedding") or []
     raw_calls = env.get("tool_calls") or []
     parsed_calls: List[ProposedToolCall] = []
     if isinstance(raw_calls, list):
@@ -537,8 +439,6 @@ def _parse_response(env: Mapping[str, Any]) -> AiResponse:
         model=env.get("model", ""),
         provider=env.get("provider", ""),
         verb=env.get("verb", ""),
-        embedding=[float(x) for x in embedding_raw] if isinstance(embedding_raw, list) else [],
-        output_path=env.get("output_path"),
         usage=Usage(
             input_tokens=int(usage.get("input_tokens", 0) or 0),
             output_tokens=int(usage.get("output_tokens", 0) or 0),

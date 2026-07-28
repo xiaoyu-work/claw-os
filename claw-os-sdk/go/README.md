@@ -3,11 +3,12 @@
 Official **Go** SDK for [Claw OS](https://github.com/xiaoyu-work/claw-os).
 
 This module is the AI-facing surface a Go app uses to reach the kernel's
-AI features, call other apps' tools, and bootstrap a desktop GUI. Like
-the Python, Rust, and Node SDKs, it is a **thin client over wire protocol
-v1**: every call shells out to the `cos` binary, which enforces
-capabilities, prompt-origin allowlists, monthly budget, the safety
-pipeline, and audit before any model or computer operation runs.
+stable chat features, call other apps' tools, and bootstrap a desktop
+GUI. Like the Python, Rust, and Node SDKs, it is a **thin client over
+wire protocol v1**: supported operations shell out to the `cos` binary,
+which enforces capabilities, prompt-origin allowlists, monthly budget,
+the safety pipeline, and audit before any model or computer operation
+runs.
 
 ## Install
 
@@ -23,7 +24,7 @@ import clawossdk "github.com/xiaoyu-work/claw-os-sdk/go"
 
 | Area          | Functions                                                          | Equivalent CLI                    |
 |---------------|--------------------------------------------------------------------|-----------------------------------|
-| AI            | `Chat`, `Embed`, `ImageGenerate`/`ImageAnalyze`, `VisionAnalyze`, `AudioTTS`/`AudioSTT`, `VideoGenerate`/`VideoAnalyze`, `Budget` | `cos ai chat --app <id>`          |
+| AI            | Stable `Chat` / chat-untrusted access; multimodal compatibility shims; `Budget` | `cos ai chat --app <id>`          |
 | Tools         | `CallTool`, `Catalog`, `ForChat`                                   | `cos ai tool <name> --app <id>`   |
 | GUI           | `IsGUILaunch`, `Context`, `(*GuiContext).OpenAgentOverlay`         | launched via `cos app <id> --gui` |
 | Transport     | `CosBinary`, error types (advanced)                                | —                                 |
@@ -66,6 +67,14 @@ func run(command string, args map[string]any) (any, error) {
 }
 ```
 
+## AI support
+
+- **Stable:** `Chat`. Setting `Origin: "external-content"`
+  automatically selects `ai.chat.untrusted`.
+- **Compatibility only:** embed, image, vision, audio, and video helpers
+  retain their signatures but are deprecated, experimental, and currently
+  unsupported. They return `*AiUnsupportedError` before invoking `cos`.
+
 ### What you never do
 
 - **Name a verb or pick a model.** You describe what you want; the gate
@@ -86,6 +95,7 @@ Each domain returns typed errors you can switch on:
   envelope.
 - `*AiUnavailableError` / `*ToolUnavailableError` — transport failure
   (binary missing, timeout, non-JSON output).
+- `*AiUnsupportedError` — a multimodal compatibility shim was called.
 - `*ToolDeniedError` — capability / unknown-tool / arg-shape refusal.
 
 ## Binary resolution

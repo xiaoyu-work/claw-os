@@ -9,16 +9,13 @@ export const EXPECTED_WIRE_VERSION = 1 as const;
 
 /**
  * AI request / reply.
- * Shape returned by `cos ai chat`. The kernel derives the modality and
- * capability verb from the request flags.
+ * Stable text-chat reply returned by `cos ai chat`.
  */
 export interface Ai {
   text: string;
   model: string;
   provider: string;
-  verb: "ai.chat" | "ai.chat.untrusted" | "ai.embed" | "ai.image.generate" | "ai.image.analyze" | "ai.vision.analyze" | "ai.audio.tts" | "ai.audio.stt" | "ai.video.generate" | "ai.video.analyze";
-  embedding?: number[];
-  output_path?: string;
+  verb: "ai.chat" | "ai.chat.untrusted";
   usage: AiUsage;
   budget: AiBudget;
   review: AiReview;
@@ -149,7 +146,7 @@ export interface Arg {
  * A single capability request: verb + scope binding + human reason.
  */
 export interface Need {
-  verb: "fs.read" | "fs.write" | "fs.delete" | "fs.exec" | "fs.watch" | "fs.meta" | "net.dial" | "net.listen" | "net.raw" | "net.resolve" | "proc.spawn" | "proc.signal" | "proc.observe" | "sys.observe" | "sys.service" | "sys.package" | "sys.mount" | "sys.time" | "sys.power" | "sys.kernel" | "secret.read" | "secret.write" | "secret.grant" | "agent.spawn" | "agent.invoke" | "agent.observe" | "agent.delegate" | "data.kv.read" | "data.kv.write" | "data.kv.delete" | "data.db.read" | "data.db.write" | "data.log.read" | "data.log.write" | "data.inbox.read" | "data.inbox.write" | "memory.write" | "memory.read" | "ipc.publish" | "ipc.subscribe" | "ipc.invoke" | "ui.notify" | "ui.prompt" | "ui.window" | "ui.input" | "device.audio" | "device.camera" | "device.microphone" | "device.location" | "device.sensor" | "device.usb" | "time.cron" | "time.delay" | "ai.chat" | "ai.chat.untrusted" | "ai.embed" | "ai.image.generate" | "ai.image.analyze" | "ai.audio.tts" | "ai.audio.stt" | "ai.vision.analyze" | "ai.video.generate" | "ai.video.analyze" | "ai.bypass" | "desktop.launch" | "browser.tabs.read" | "browser.nav" | "browser.dom.read" | "browser.dom.write" | "browser.input.secret" | "browser.eval";
+  verb: "fs.read" | "fs.write" | "fs.delete" | "fs.exec" | "fs.watch" | "fs.meta" | "net.dial" | "net.listen" | "net.raw" | "net.resolve" | "proc.spawn" | "proc.signal" | "proc.observe" | "sys.observe" | "sys.service" | "sys.package" | "sys.mount" | "sys.time" | "sys.power" | "sys.kernel" | "secret.read" | "secret.write" | "secret.grant" | "agent.spawn" | "agent.invoke" | "agent.observe" | "agent.delegate" | "data.kv.read" | "data.kv.write" | "data.kv.delete" | "data.db.read" | "data.db.write" | "data.log.read" | "data.log.write" | "data.inbox.read" | "data.inbox.write" | "memory.write" | "memory.read" | "ipc.publish" | "ipc.subscribe" | "ipc.invoke" | "ui.notify" | "ui.prompt" | "ui.window" | "ui.input" | "device.audio" | "device.camera" | "device.microphone" | "device.location" | "device.sensor" | "device.usb" | "time.cron" | "time.delay" | "ai.chat" | "ai.chat.untrusted" | "desktop.launch" | "browser.tabs.read" | "browser.nav" | "browser.dom.read" | "browser.dom.write" | "browser.input.secret" | "browser.eval";
   scope: Scopebinding;
   why: Localizedtext;
 }
