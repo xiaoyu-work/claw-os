@@ -79,7 +79,7 @@ fn query_with_owner(params: Value, owner_uid: Option<u32>) -> Result<Value, Stri
     }))
 }
 
-fn event_visible_to(event: &Value, owner_uid: Option<u32>) -> bool {
+pub(crate) fn event_visible_to(event: &Value, owner_uid: Option<u32>) -> bool {
     let Some(uid) = owner_uid else {
         return true;
     };

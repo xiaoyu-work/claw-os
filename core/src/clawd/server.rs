@@ -13,7 +13,7 @@ use super::protocol::{encode_response, Request, Response};
 use super::state::DaemonState;
 use super::{
     app_sessions, audit, context, context_events, memory, permissions,
-    system_journal, tasks, transactions,
+    scheduler, system_journal, tasks, transactions,
 };
 
 #[derive(Debug, Clone)]
@@ -89,6 +89,9 @@ fn spawn_agent_worker() -> tokio::task::JoinHandle<Result<Value, String>> {
 /// clock. The heartbeat never calls the LLM itself. See
 /// [`super::heartbeat`].
 fn spawn_heartbeat() {
+    if let Err(error) = crate::cron::cleanup_runtime_credentials() {
+        tracing::error!(error = %error, "failed to clean stale cron credentials");
+    }
     let cfg = super::heartbeat::HeartbeatConfig::from_env();
     let shutdown = Arc::new(AtomicBool::new(false));
     tokio::spawn(super::heartbeat::run_loop(cfg, shutdown));
@@ -206,6 +209,7 @@ async fn dispatch_result(
         "system.operations" => system_journal::query_for_client(request.params, client),
         "memory.history" => memory::history(request.params, client),
         "memory.sessions" => memory::sessions(request.params, client),
+        "scheduler.run" => scheduler::run(request.params, client).await,
         "app_session.register" => app_sessions::register(request.params, client).await,
         "mcp_session.register" => app_sessions::register_mcp(request.params, client).await,
         "app_session.bind" => app_sessions::bind(request.params, client).await,
@@ -243,6 +247,7 @@ fn authorize_command(command: &str, client: &ClientIdentity) -> Result<(), Strin
             | "task.count"
             | "memory.history"
             | "memory.sessions"
+            | "scheduler.run"
             | "app_session.register"
             | "mcp_session.register"
             | "app_session.bind"

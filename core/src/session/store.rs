@@ -159,15 +159,21 @@ type Result<T> = std::result::Result<T, SessionError>;
 pub fn create(purpose: impl Into<String>) -> Result<SessionId> {
     let id = SessionId::generate();
     let dir = session_dir(&id);
-    crate::storage::ensure_private_dir(&dir)
-        .map_err(|e| SessionError::io(dir.clone(), e))?;
-    crate::storage::ensure_private_dir(&files_dir(&id))
-        .map_err(|e| SessionError::io(files_dir(&id), e))?;
+    let created = (|| {
+        crate::storage::ensure_private_dir(&dir)
+            .map_err(|e| SessionError::io(dir.clone(), e))?;
+        crate::storage::ensure_private_dir(&files_dir(&id))
+            .map_err(|e| SessionError::io(files_dir(&id), e))?;
 
-    let meta = SessionMeta::fresh(id.clone(), purpose);
-    write_json(&meta_path(&id), &meta)?;
-    write_json(&caps_path(&id), &CapSet::new())?;
-    Ok(id)
+        let meta = SessionMeta::fresh(id.clone(), purpose);
+        write_json(&meta_path(&id), &meta)?;
+        write_json(&caps_path(&id), &CapSet::new())?;
+        Ok(id.clone())
+    })();
+    if created.is_err() {
+        let _ = fs::remove_dir_all(&dir);
+    }
+    created
 }
 
 /// All session metadata currently on disk, in arbitrary order. Skips

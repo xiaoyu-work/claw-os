@@ -10,6 +10,7 @@ pub mod heartbeat;
 pub mod memory;
 pub mod permissions;
 pub mod protocol;
+pub mod scheduler;
 pub mod server;
 pub mod session_scope;
 pub mod state;

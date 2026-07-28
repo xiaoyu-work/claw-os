@@ -103,6 +103,50 @@ pub fn current_owner_uid_override() -> Option<u32> {
     OWNER_UID_OVERRIDE.try_with(|uid| *uid).ok()
 }
 
+pub fn verified_home_for_uid(uid: u32) -> Result<PathBuf, String> {
+    #[cfg(unix)]
+    {
+        use std::ffi::CStr;
+        use std::os::unix::ffi::OsStringExt;
+        use std::os::unix::fs::MetadataExt;
+
+        const BUFFER_SIZE: usize = 16 * 1024;
+        let mut buffer = vec![0 as libc::c_char; BUFFER_SIZE];
+        let mut passwd: libc::passwd = unsafe { std::mem::zeroed() };
+        let mut result: *mut libc::passwd = std::ptr::null_mut();
+        let code = unsafe {
+            libc::getpwuid_r(
+                uid,
+                &mut passwd,
+                buffer.as_mut_ptr(),
+                buffer.len(),
+                &mut result,
+            )
+        };
+        if code != 0 || result.is_null() || passwd.pw_dir.is_null() {
+            return Err(format!("home directory is unavailable for uid {uid}"));
+        }
+        let bytes = unsafe { CStr::from_ptr(passwd.pw_dir) }.to_bytes().to_vec();
+        if bytes.is_empty() {
+            return Err(format!("home directory is unavailable for uid {uid}"));
+        }
+        let home = PathBuf::from(OsString::from_vec(bytes))
+            .canonicalize()
+            .map_err(|error| format!("canonicalize home for uid {uid}: {error}"))?;
+        let metadata = std::fs::metadata(&home)
+            .map_err(|error| format!("inspect home for uid {uid}: {error}"))?;
+        if !metadata.is_dir() || metadata.uid() != uid {
+            return Err(format!("configured home for uid {uid} is not owned by that uid"));
+        }
+        Ok(home)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = uid;
+        Err("account home resolution requires Unix".to_string())
+    }
+}
+
 pub fn is_routed_job() -> bool {
     ROUTED_JOB_OVERRIDE.try_with(|value| *value).unwrap_or(false)
 }

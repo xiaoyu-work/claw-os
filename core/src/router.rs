@@ -41,6 +41,59 @@ fn data_dir() -> String {
     crate::paths::data_dir().to_string_lossy().into_owned()
 }
 
+fn run_cron(command: &str, args: &[String]) -> Result<Value, String> {
+    run_scheduler_command("cron", command, args, cron::run)
+}
+
+fn run_triggers(command: &str, args: &[String]) -> Result<Value, String> {
+    run_scheduler_command("triggers", command, args, triggers::run)
+}
+
+fn run_scheduler_command(
+    subsystem: &str,
+    command: &str,
+    args: &[String],
+    local: fn(&str, &[String]) -> Result<Value, String>,
+) -> Result<Value, String> {
+    if !should_proxy_scheduler_command() {
+        return local(command, args);
+    }
+    let request = crate::clawd::protocol::Request {
+        id: None,
+        command: "scheduler.run".to_string(),
+        params: json!({
+            "subsystem": subsystem,
+            "command": command,
+            "args": args,
+        }),
+    };
+    let response =
+        crate::clawd::client::request_blocking(crate::paths::clawd_socket_path(), request)?;
+    if response.ok {
+        response
+            .result
+            .ok_or_else(|| "clawd scheduler response had no result".to_string())
+    } else {
+        Err(response
+            .error
+            .map(|error| error.message)
+            .unwrap_or_else(|| "clawd scheduler request failed".to_string()))
+    }
+}
+
+fn should_proxy_scheduler_command() -> bool {
+    #[cfg(unix)]
+    {
+        crate::paths::current_owner_uid_override().is_none()
+            && unsafe { libc::geteuid() } != 0
+            && !crate::caps::enforcement::process_has_no_new_privs()
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
 fn audit_path() -> PathBuf {
     Path::new(&data_dir()).join("logs").join("audit.jsonl")
 }
@@ -112,8 +165,8 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         "service" => dispatch_builtin(args, "service", service::run),
         "checkpoint" => dispatch_builtin(args, "checkpoint", checkpoint::run),
         "credential" => dispatch_builtin(args, "credential", credential::run),
-        "cron" => dispatch_builtin(args, "cron", cron::run),
-        "triggers" => dispatch_builtin(args, "triggers", triggers::run),
+        "cron" => dispatch_builtin(args, "cron", run_cron),
+        "triggers" => dispatch_builtin(args, "triggers", run_triggers),
         "ai" => dispatch_builtin(args, "ai", ai::run),
         "agent" => dispatch_agent(args),
         "model" => dispatch_builtin(args, "model", model::run),

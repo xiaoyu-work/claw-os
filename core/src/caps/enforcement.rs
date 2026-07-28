@@ -141,11 +141,20 @@ pub(crate) fn require_current_session_identity(
     session_id: &str,
     session_pid: u32,
 ) -> Result<(), String> {
-    if std::env::var("COS_SESSION").ok().as_deref() != Some(session_id) {
+    if crate::proc::current_session_id().as_deref() != Some(session_id) {
         return Err("COS_SESSION does not match the selected registry row".to_string());
     }
     if session_pid == 0 {
         return Err("registered session process is not bound".to_string());
+    }
+    if let Some(session) = crate::proc::current_trusted_session_for_caps() {
+        if session.session_id == session_id
+            && session.pid == session_pid
+            && session_pid == std::process::id()
+        {
+            return Ok(());
+        }
+        return Err("trusted task session identity does not match the caller".to_string());
     }
     let registry = load_registry();
     let session = registry
@@ -285,7 +294,7 @@ fn app_session_process_is_current(session: &SessionRow) -> bool {
 /// `COS_CAPS_AUDIT=0`.
 pub fn require(verb: Verb, scope: Scope) -> Result<(), Denial> {
     let mode = Mode::from_env();
-    let session_id = std::env::var("COS_SESSION").ok();
+    let session_id = crate::proc::current_session_id();
     let result = require_impl(verb, scope.clone(), mode, session_id.as_deref());
     crate::audit::log_cap_decision(build_cap_audit_record(
         verb,
@@ -303,8 +312,6 @@ fn require_impl(
     mode: Mode,
     session_id: Option<&str>,
 ) -> Result<(), Denial> {
-    let requested = Cap::new(verb, scope.clone());
-
     let session_id = match session_id {
         Some(s) if !s.is_empty() => s,
         _ => {
@@ -315,6 +322,23 @@ fn require_impl(
             }
         }
     };
+
+    if let Some(session) = crate::proc::current_trusted_session_for_caps() {
+        if session.session_id != session_id {
+            return Err(Denial::no_session(verb, scope).with_hint(
+                "trusted task session does not match the selected session id",
+            ));
+        }
+        return authorize_session_caps(
+            session_id,
+            verb,
+            scope,
+            mode,
+            session.caps.as_ref(),
+            session.transient_caps.as_ref(),
+            session.app_id.is_some(),
+        );
+    }
 
     let registry = load_registry();
     let session = match registry
@@ -346,7 +370,28 @@ fn require_impl(
         );
     }
 
-    let mut caps = match session.caps.as_ref() {
+    authorize_session_caps(
+        session_id,
+        verb,
+        scope,
+        mode,
+        session.caps.as_ref(),
+        session.transient_caps.as_ref(),
+        session.app_id.is_some(),
+    )
+}
+
+fn authorize_session_caps(
+    session_id: &str,
+    verb: Verb,
+    scope: Scope,
+    mode: Mode,
+    caps: Option<&CapSet>,
+    transient_caps: Option<&CapSet>,
+    is_app: bool,
+) -> Result<(), Denial> {
+    let requested = Cap::new(verb, scope.clone());
+    let mut caps = match caps {
         Some(c) => c.clone(),
         None => {
             return match mode {
@@ -358,15 +403,13 @@ fn require_impl(
             }
         }
     };
-    if let Some(transient) = session.transient_caps.as_ref() {
+    if let Some(transient) = transient_caps {
         caps.extend(transient.iter().cloned());
     }
 
     if caps.covers(&requested) {
         Ok(())
-    } else if session.app_id.is_none()
-        && approved_grant_covers(session_id, verb, &scope)
-    {
+    } else if !is_app && approved_grant_covers(session_id, verb, &scope) {
         Ok(())
     } else if caps.verbs().contains(&verb) {
         // Verb is held but at a scope that doesn't cover this request.

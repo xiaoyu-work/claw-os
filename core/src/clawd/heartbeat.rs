@@ -47,6 +47,7 @@ use std::time::{Duration, Instant};
 use serde_json::json;
 
 use super::client_identity::ClientIdentity;
+use crate::caps::{Cap, CapSet, Role, Scope, Verb};
 
 /// Source tag stamped on every heartbeat-emitted `context.event`. Trigger
 /// rules match on this to react to system conditions.
@@ -268,31 +269,20 @@ fn emit_signal(sig: &Signal) {
     }
 }
 
-/// Drive the scheduler ticks so the daemon is its own clock — no
-/// external systemd timer required for `cron` / `triggers`. Best-effort;
-/// errors are logged, never fatal.
-fn drive_schedulers() {
-    match crate::cron::run("tick", &[]) {
-        Ok(_) => {}
-        Err(e) => tracing::debug!(error = %e, "heartbeat: cron tick failed"),
-    }
-    match crate::triggers::run("tick", &[]) {
-        Ok(_) => {}
-        Err(e) => tracing::debug!(error = %e, "heartbeat: triggers tick failed"),
-    }
+/// One heartbeat beat: sample, evaluate, and emit while respecting
+/// cooldowns. Scheduler execution has its own supervised loop so a long
+/// proactive job cannot stop vitals sampling.
+pub fn beat(cfg: &HeartbeatConfig, cooldowns: &mut CooldownState, now: Instant) {
+    beat_vitals(cfg, cooldowns, now);
 }
 
-/// One heartbeat beat: sample, evaluate, emit (respecting cooldown), then
-/// drive schedulers. Split out from the loop so it is unit-testable and
-/// so a single beat can be triggered on demand.
-pub fn beat(cfg: &HeartbeatConfig, cooldowns: &mut CooldownState, now: Instant) {
+fn beat_vitals(cfg: &HeartbeatConfig, cooldowns: &mut CooldownState, now: Instant) {
     let vitals = sample();
     for sig in evaluate(&vitals, cfg) {
         if cooldowns.allow(sig.key, cfg.cooldown, now) {
             emit_signal(&sig);
         }
     }
-    drive_schedulers();
 }
 
 /// Run the heartbeat loop until `shutdown` flips. Intended to be spawned
@@ -307,6 +297,14 @@ pub async fn run_loop(cfg: HeartbeatConfig, shutdown: Arc<AtomicBool>) {
         interval_secs = cfg.interval.as_secs(),
         "heartbeat started — system-vitals reflex loop"
     );
+    let scheduler_interval = cfg.interval;
+    tokio::join!(
+        run_loop_scoped(cfg, Arc::clone(&shutdown)),
+        run_scheduler_loop(scheduler_interval, shutdown),
+    );
+}
+
+async fn run_loop_scoped(cfg: HeartbeatConfig, shutdown: Arc<AtomicBool>) {
     let mut cooldowns = CooldownState::default();
     let mut ticker = tokio::time::interval(cfg.interval);
     // Skip missed ticks rather than bursting to catch up after a stall.
@@ -317,8 +315,110 @@ pub async fn run_loop(cfg: HeartbeatConfig, shutdown: Arc<AtomicBool>) {
             tracing::info!("heartbeat stopping");
             return;
         }
-        // The sample + emit + tick work is cheap and sync; run it inline.
-        beat(&cfg, &mut cooldowns, Instant::now());
+        beat_vitals(&cfg, &mut cooldowns, Instant::now());
+    }
+}
+
+async fn run_scheduler_loop(interval: Duration, shutdown: Arc<AtomicBool>) {
+    let scheduler = match SchedulerSession::register() {
+        Ok(session) => session,
+        Err(error) => {
+            tracing::error!(error = %error, "heartbeat scheduler session unavailable");
+            return;
+        }
+    };
+    tokio::join!(
+        run_scheduler_subsystem(
+            "cron",
+            scheduler.id.clone(),
+            interval,
+            Arc::clone(&shutdown),
+        ),
+        run_scheduler_subsystem("triggers", scheduler.id.clone(), interval, shutdown),
+    );
+}
+
+async fn run_scheduler_subsystem(
+    subsystem: &'static str,
+    session_id: String,
+    interval: Duration,
+    shutdown: Arc<AtomicBool>,
+) {
+    let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        ticker.tick().await;
+        if shutdown.load(Ordering::Relaxed) {
+            break;
+        }
+        drive_scheduler_blocking(subsystem, session_id.clone()).await;
+    }
+}
+
+async fn drive_scheduler_blocking(subsystem: &'static str, session_id: String) {
+    let result = tokio::task::spawn_blocking(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .map_err(|error| format!("create heartbeat scheduler runtime: {error}"))?;
+        runtime.block_on(crate::proc::with_session_override(session_id, async {
+            match subsystem {
+                "cron" => crate::cron::run("tick", &[]).map(|_| ()),
+                "triggers" => crate::triggers::run("tick", &[]).map(|_| ()),
+                _ => unreachable!(),
+            }
+        }))
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            tracing::warn!(subsystem, error = %error, "heartbeat scheduler executor failed")
+        }
+        Err(error) => {
+            tracing::warn!(subsystem, error = %error, "heartbeat scheduler task failed")
+        }
+    }
+}
+
+struct SchedulerSession {
+    id: String,
+}
+
+impl SchedulerSession {
+    fn register() -> Result<Self, String> {
+        let id = format!("scheduler-{}", uuid::Uuid::new_v4().simple());
+        let mut caps = CapSet::new();
+        caps.insert(Cap::new(Verb::SYS_KERNEL, Scope::Wild));
+        let info = crate::proc::SessionInfo {
+            session_id: id.clone(),
+            pid: std::process::id(),
+            command: vec!["clawd-heartbeat".to_string()],
+            started_at: chrono::Utc::now().to_rfc3339(),
+            stdout_path: String::new(),
+            stderr_path: String::new(),
+            group: Some("scheduler".to_string()),
+            parent: None,
+            workdir: None,
+            exit_code: None,
+            ended_at: None,
+            tier: Some(Role::Kernel.credential_tier()),
+            scope: Some("scheduler".to_string()),
+            priority: None,
+            caps: Some(caps),
+            transient_caps: None,
+            role: Some(Role::Kernel.name().to_string()),
+            app_id: None,
+            pending_bind: false,
+            start_time_ticks: crate::proc::read_start_time_ticks_pub(std::process::id()),
+        };
+        crate::proc::register_session(info)?;
+        Ok(Self { id })
+    }
+}
+
+impl Drop for SchedulerSession {
+    fn drop(&mut self) {
+        crate::proc::deregister_session(&self.id);
     }
 }
 

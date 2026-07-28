@@ -149,6 +149,12 @@ pub struct SessionMeta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<Role>,
 
+    /// Credential tier captured when the durable session was created.
+    /// Kept separate from `role` because capability intersection may
+    /// preserve a weaker owner tier than the role's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_tier: Option<u8>,
+
     /// Parent session, if this one was spawned by a sub-agent
     /// delegation. `None` for top-level user-initiated sessions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -180,6 +186,7 @@ impl SessionMeta {
             id,
             purpose: purpose.into(),
             role: None,
+            credential_tier: None,
             parent_session: None,
             status: Status::Pending,
             budget: Budget::default(),
@@ -233,6 +240,7 @@ mod tests {
             id: SessionId::generate(),
             purpose: "整理发票".into(),
             role: Some(Role::Automator),
+            credential_tier: Some(Role::Automator.credential_tier()),
             parent_session: Some(SessionId::generate()),
             status: Status::Running,
             budget: Budget {

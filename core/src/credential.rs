@@ -1243,9 +1243,9 @@ fn tier_grants_access(session_tier: u8, min_tier: u8) -> bool {
 ///     credentials (none exist in practice), so a missing/corrupt registry can
 ///     never silently elevate.
 fn effective_session_tier() -> u8 {
-    match std::env::var("COS_SESSION") {
-        Err(_) => 0,
-        Ok(_) => policy::current_tier().unwrap_or(u8::MAX),
+    match crate::proc::current_session_id() {
+        None => 0,
+        Some(_) => policy::current_tier().unwrap_or(u8::MAX),
     }
 }
 
@@ -1537,7 +1537,7 @@ fn store_credential_record(
     // Encrypt with AES-256-GCM
     let (value_b64, nonce_b64) = encrypt_value(value.as_bytes());
 
-    let session = std::env::var("COS_SESSION").ok();
+    let session = crate::proc::current_session_id();
     let now = chrono::Utc::now();
     let stored_at = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
@@ -2596,6 +2596,77 @@ pub fn try_load(name: &str, namespace: &str) -> Result<Option<String>, String> {
     // Trusted kernel accessor used to construct providers on behalf of a
     // session. User/App-facing reads must go through `cmd_load`.
     read_credential_value(name, namespace, false).map(Some)
+}
+
+pub fn load_for_scheduler(
+    name: &str,
+    namespace: &str,
+    home: &Path,
+    owner_uid: u32,
+    session_tier: u8,
+) -> Result<String, String> {
+    credential_scope(namespace, name)?;
+    let home = home
+        .canonicalize()
+        .map_err(|error| format!("canonicalize scheduled credential home: {error}"))?;
+    let path = home
+        .join(".local")
+        .join("share")
+        .join("cos")
+        .join("credentials")
+        .join(namespace)
+        .join(format!("{name}.json"));
+    let data = read_owner_credential(&path, &home, owner_uid)?;
+    let credential: StoredCredential = serde_json::from_str(&data)
+        .map_err(|error| format!("failed to parse scheduled credential: {error}"))?;
+    if !tier_grants_access(session_tier, credential.min_tier) {
+        return Err(format!(
+            "insufficient tier for scheduled credential {namespace}/{name}"
+        ));
+    }
+    if is_expired(&credential.expires_at) {
+        return Err(format!("credential '{name}' has expired"));
+    }
+    String::from_utf8(decrypt_value(&credential)?)
+        .map_err(|error| format!("credential is not valid UTF-8: {error}"))
+}
+
+#[cfg(target_os = "linux")]
+fn read_owner_credential(path: &Path, home: &Path, owner_uid: u32) -> Result<String, String> {
+    use std::io::Read;
+    use std::os::unix::io::AsRawFd;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+
+    const MAX_CREDENTIAL_FILE_BYTES: u64 = 1024 * 1024;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|error| format!("failed to open scheduled credential: {error}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("inspect scheduled credential: {error}"))?;
+    if !metadata.is_file() || metadata.uid() != owner_uid {
+        return Err("scheduled credential is not a regular owner-controlled file".to_string());
+    }
+    let target = fs::canonicalize(format!("/proc/self/fd/{}", file.as_raw_fd()))
+        .map_err(|error| format!("resolve scheduled credential: {error}"))?;
+    if !target.starts_with(home) {
+        return Err("scheduled credential escapes the owner home".to_string());
+    }
+    let mut data = String::new();
+    file.take(MAX_CREDENTIAL_FILE_BYTES + 1)
+        .read_to_string(&mut data)
+        .map_err(|error| format!("failed to read scheduled credential: {error}"))?;
+    if data.len() as u64 > MAX_CREDENTIAL_FILE_BYTES {
+        return Err("scheduled credential file exceeds 1 MiB".to_string());
+    }
+    Ok(data)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_owner_credential(_path: &Path, _home: &Path, _owner_uid: u32) -> Result<String, String> {
+    Err("scheduled credential loading requires Linux".to_string())
 }
 
 #[cfg(test)]

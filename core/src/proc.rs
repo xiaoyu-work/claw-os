@@ -13,6 +13,38 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::caps::{require_or_json, Scope, Verb};
 
+tokio::task_local! {
+    static SESSION_OVERRIDE: String;
+    static TRUSTED_SESSION_OVERRIDE: SessionInfo;
+}
+
+pub async fn with_session_override<F, R>(session_id: String, future: F) -> R
+where
+    F: std::future::Future<Output = R>,
+{
+    SESSION_OVERRIDE.scope(session_id, future).await
+}
+
+pub async fn with_trusted_session_override<F, R>(session: SessionInfo, future: F) -> R
+where
+    F: std::future::Future<Output = R>,
+{
+    TRUSTED_SESSION_OVERRIDE.scope(session, future).await
+}
+
+pub fn current_session_id() -> Option<String> {
+    TRUSTED_SESSION_OVERRIDE
+        .try_with(|session| session.session_id.clone())
+        .ok()
+        .or_else(|| {
+            SESSION_OVERRIDE
+                .try_with(|value| value.clone())
+                .ok()
+        })
+        .or_else(|| std::env::var("COS_SESSION").ok())
+        .filter(|value| !value.is_empty())
+}
+
 const MAX_OUTPUT_BYTES: usize = 2_000_000;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -92,10 +124,14 @@ fn registry_path() -> PathBuf {
         && crate::caps::enforcement::process_has_no_new_privs()
     {
         let uid = unsafe { libc::geteuid() as u32 };
-        return PathBuf::from("/run/cos/caps")
-            .join(uid.to_string())
-            .join("proc")
-            .join("registry.json");
+        let routed = PathBuf::from("/run/cos/caps").join(uid.to_string());
+        if std::env::var_os("COS_PROC_DATA_DIR")
+            .map(PathBuf::from)
+            .as_deref()
+            == Some(routed.as_path())
+        {
+            return routed.join("proc").join("registry.json");
+        }
     }
     if let Some(path) = bound_app_registry_path() {
         return path;
@@ -163,7 +199,10 @@ pub(crate) fn registry_path_for_caps() -> PathBuf {
 }
 
 pub fn current_session_info_for_caps() -> Option<SessionInfo> {
-    let session_id = std::env::var("COS_SESSION").ok()?;
+    if let Ok(session) = TRUSTED_SESSION_OVERRIDE.try_with(Clone::clone) {
+        return Some(session);
+    }
+    let session_id = current_session_id()?;
     let path = registry_path_for_caps();
     let data = crate::filelock::read_locked(&path).ok()??;
     let registry: Registry = serde_json::from_str(&data).ok()?;
@@ -171,6 +210,10 @@ pub fn current_session_info_for_caps() -> Option<SessionInfo> {
         .sessions
         .into_iter()
         .find(|session| session.session_id == session_id)
+}
+
+pub(crate) fn current_trusted_session_for_caps() -> Option<SessionInfo> {
+    TRUSTED_SESSION_OVERRIDE.try_with(Clone::clone).ok()
 }
 
 pub(crate) fn session_info_by_id(session_id: &str) -> Option<SessionInfo> {
@@ -223,19 +266,46 @@ fn update_registry<F>(transform: F) -> Result<(), String>
 where
     F: FnOnce(Registry) -> Registry,
 {
-    let proc_dir = proc_dir();
-    if let Some(uid) = crate::paths::current_owner_uid_override() {
-        let caps_root = crate::paths::proc_data_dir();
-        crate::storage::ensure_routed_caps_dir(&caps_root, uid)
-            .map_err(|e| format!("prepare routed caps dir: {e}"))?;
-    } else {
-        crate::storage::ensure_private_dir(&proc_dir)
-            .map_err(|e| format!("create proc registry dir: {e}"))?;
-    }
     let path = registry_path();
     let owner_uid = crate::paths::current_owner_uid_override();
+    prepare_registry_path(&path, owner_uid)?;
+    update_registry_path(&path, owner_uid, transform)
+}
+
+fn owner_registry_path(uid: u32) -> PathBuf {
+    PathBuf::from("/run/cos/caps")
+        .join(uid.to_string())
+        .join("proc")
+        .join("registry.json")
+}
+
+fn prepare_registry_path(path: &std::path::Path, owner_uid: Option<u32>) -> Result<(), String> {
+    if let Some(uid) = owner_uid {
+        let root = path
+            .parent()
+            .and_then(std::path::Path::parent)
+            .ok_or_else(|| "owner registry path is invalid".to_string())?;
+        crate::storage::ensure_routed_caps_dir(root, uid)
+            .map_err(|error| format!("prepare routed caps dir: {error}"))
+    } else {
+        let parent = path
+            .parent()
+            .ok_or_else(|| "registry path has no parent".to_string())?;
+        crate::storage::ensure_private_dir(parent)
+            .map_err(|error| format!("create proc registry dir: {error}"))
+    }
+}
+
+fn update_registry_path<F>(
+    path: &std::path::Path,
+    owner_uid: Option<u32>,
+    transform: F,
+) -> Result<(), String>
+where
+    F: FnOnce(Registry) -> Registry,
+{
     crate::filelock::update_locked_with_prepare::<_, String, _>(
-        &path,
+        path,
         |existing| {
             let reg: Registry = match existing {
                 Some(s) => serde_json::from_str(&s)
@@ -255,6 +325,15 @@ where
     Ok(())
 }
 
+fn update_owner_registry<F>(uid: u32, transform: F) -> Result<(), String>
+where
+    F: FnOnce(Registry) -> Registry,
+{
+    let path = owner_registry_path(uid);
+    prepare_registry_path(&path, Some(uid))?;
+    update_registry_path(&path, Some(uid), transform)
+}
+
 /// Register a freshly-built [`SessionInfo`] into the on-disk registry.
 ///
 /// Used by interactive entry points (e.g. the user-CLI session
@@ -272,11 +351,30 @@ pub fn register_session(info: SessionInfo) -> Result<(), String> {
     })
 }
 
+pub fn register_session_for_owner(info: SessionInfo, uid: u32) -> Result<(), String> {
+    update_owner_registry(uid, |mut registry| {
+        registry
+            .sessions
+            .retain(|session| session.session_id != info.session_id);
+        registry.sessions.push(info);
+        registry
+    })
+}
+
 /// Remove a session row by id. No-op if it is not present.
 /// Counterpart to [`register_session`], called on process exit by
 /// the CLI session guard so the registry doesn't accumulate ghosts.
 pub fn deregister_session(session_id: &str) {
     let _ = update_registry(|mut registry| {
+        registry
+            .sessions
+            .retain(|session| session.session_id != session_id);
+        registry
+    });
+}
+
+pub fn deregister_session_for_owner(session_id: &str, uid: u32) {
+    let _ = update_owner_registry(uid, |mut registry| {
         registry
             .sessions
             .retain(|session| session.session_id != session_id);
@@ -314,6 +412,44 @@ pub fn deregister_current_process_session(
         });
         registry
     });
+}
+
+pub fn bind_session_process_for_owner(
+    session_id: &str,
+    pid: u32,
+    uid: u32,
+) -> Result<(), String> {
+    if pid == 0 {
+        return Err("cannot bind a session to pid 0".to_string());
+    }
+    let start_time_ticks = read_start_time_ticks(pid);
+    #[cfg(target_os = "linux")]
+    if start_time_ticks.is_none() {
+        return Err(format!(
+            "cannot bind session `{session_id}` to missing process {pid}"
+        ));
+    }
+    let mut found = false;
+    update_owner_registry(uid, |mut registry| {
+        if let Some(session) = registry
+            .sessions
+            .iter_mut()
+            .find(|session| session.session_id == session_id)
+        {
+            session.pid = pid;
+            session.start_time_ticks = start_time_ticks;
+            session.pending_bind = false;
+            session.exit_code = None;
+            session.ended_at = None;
+            found = true;
+        }
+        registry
+    })?;
+    if found {
+        Ok(())
+    } else {
+        Err(format!("session not found while binding process: {session_id}"))
+    }
 }
 
 pub fn bind_session_process(session_id: &str, pid: u32) -> Result<(), String> {
@@ -469,7 +605,10 @@ fn is_alive_for_info(info: &SessionInfo) -> bool {
 }
 
 fn pending_bind_is_fresh(info: &SessionInfo) -> bool {
-    if !info.pending_bind || info.app_id.is_none() || info.pid != 0 {
+    if !info.pending_bind
+        || info.pid != 0
+        || !matches!(info.group.as_deref(), Some("app" | "mcp" | "cron"))
+    {
         return false;
     }
     let Ok(started) = chrono::DateTime::parse_from_rfc3339(&info.started_at)
@@ -639,6 +778,53 @@ fn caller_uid() -> u32 {
     {
         0
     }
+}
+
+#[cfg(unix)]
+fn primary_gid(uid: u32) -> Result<u32, String> {
+    const BUFFER_SIZE: usize = 16 * 1024;
+    let mut buffer = vec![0 as libc::c_char; BUFFER_SIZE];
+    let mut passwd: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut result: *mut libc::passwd = std::ptr::null_mut();
+    let code = unsafe {
+        libc::getpwuid_r(
+            uid,
+            &mut passwd,
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut result,
+        )
+    };
+    if code != 0 || result.is_null() {
+        return Err(format!("passwd lookup failed for uid {uid}"));
+    }
+    Ok(passwd.pw_gid)
+}
+
+fn validate_session_identifier(session_id: &str) -> Result<(), String> {
+    if session_id.is_empty()
+        || session_id.len() > 128
+        || !session_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(
+            "session id must contain only alphanumerics, '-' or '_' (max 128 bytes)"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn open_process_output(path: &std::path::Path) -> std::io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    options.open(path)
 }
 
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
@@ -882,8 +1068,44 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     drop(reg_check);
 
     let sid = session_id.unwrap_or_else(|| format!("proc-{}", short_id()));
+    validate_session_identifier(&sid)?;
     let dir = proc_dir();
-    let _ = fs::create_dir_all(&dir);
+    fs::create_dir_all(&dir)
+        .map_err(|error| format!("create proc directory {}: {error}", dir.display()))?;
+
+    #[cfg(unix)]
+    let routed_identity = match crate::paths::current_owner_uid_override() {
+        Some(uid) if uid != 0 => {
+            let home = crate::paths::verified_home_for_uid(uid)?;
+            let gid = primary_gid(uid)?;
+            let euid = unsafe { libc::geteuid() as u32 };
+            if euid != 0 && euid != uid {
+                return Err(format!("cannot spawn routed owner uid {uid} as uid {euid}"));
+            }
+            if isolated_workspace {
+                return Err(
+                    "isolated proc workspaces are unavailable for routed user jobs".to_string(),
+                );
+            }
+            if let Some(path) = workdir.as_deref() {
+                let canonical = PathBuf::from(path)
+                    .canonicalize()
+                    .map_err(|error| format!("canonicalize proc workdir: {error}"))?;
+                if !canonical.starts_with(&home) {
+                    return Err(format!(
+                        "proc workdir {} escapes owner home {}",
+                        canonical.display(),
+                        home.display()
+                    ));
+                }
+                workdir = Some(canonical.to_string_lossy().into_owned());
+            } else {
+                workdir = Some(home.to_string_lossy().into_owned());
+            }
+            Some((uid, gid, home))
+        }
+        _ => None,
+    };
 
     // Handle isolated workspace
     if isolated_workspace {
@@ -899,10 +1121,16 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     let stdout_path = dir.join(format!("{sid}.stdout"));
     let stderr_path = dir.join(format!("{sid}.stderr"));
 
-    let stdout_file =
-        fs::File::create(&stdout_path).map_err(|e| format!("failed to create stdout file: {e}"))?;
-    let stderr_file =
-        fs::File::create(&stderr_path).map_err(|e| format!("failed to create stderr file: {e}"))?;
+    let stdout_file = open_process_output(&stdout_path)
+        .map_err(|e| format!("failed to create stdout file: {e}"))?;
+    let stderr_file = match open_process_output(&stderr_path) {
+        Ok(file) => file,
+        Err(error) => {
+            drop(stdout_file);
+            let _ = fs::remove_file(&stdout_path);
+            return Err(format!("failed to create stderr file: {error}"));
+        }
+    };
 
     // Apply process priority via nice (Unix only)
     #[cfg(unix)]
@@ -942,6 +1170,10 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     if let Some(ref wd) = workdir {
         cmd.current_dir(wd);
     }
+    #[cfg(unix)]
+    if let Some((_, _, home)) = routed_identity.as_ref() {
+        cmd.env("HOME", home).env("COS_HOME", home);
+    }
 
     // Inject session ID so child process can be identified by policy module
     cmd.env("COS_SESSION", &sid)
@@ -950,8 +1182,27 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     #[cfg(unix)]
     unsafe {
         use std::os::unix::process::CommandExt;
-        cmd.pre_exec(|| {
-            libc::setsid();
+        let identity = routed_identity
+            .as_ref()
+            .map(|(uid, gid, _)| (*uid, *gid));
+        let euid = libc::geteuid() as u32;
+        cmd.pre_exec(move || {
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if let Some((uid, gid)) = identity {
+                if euid == 0
+                    && (libc::setgroups(0, std::ptr::null()) != 0
+                        || libc::setgid(gid) != 0
+                        || libc::setuid(uid) != 0)
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
             Ok(())
         });
     }

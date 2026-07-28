@@ -1009,7 +1009,7 @@ fn emit_audit(
     error: Option<&str>,
     duration: Duration,
 ) {
-    let session_id = std::env::var("COS_SESSION").ok();
+    let session_id = crate::proc::current_session_id();
     let mut rec = LlmRunRecord::from_tool_call(
         tool_name,
         app_id,

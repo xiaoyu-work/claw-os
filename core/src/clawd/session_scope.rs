@@ -21,9 +21,11 @@ impl ProcSessionGuard {
         let previous_session = env::var_os("COS_SESSION");
         let session_id_string = session_id.as_str().to_string();
         let caps = session_caps(session_id)?;
-        let role = session::get_meta(session_id)
-            .ok()
-            .and_then(|meta| meta.role);
+        let meta = session::get_meta(session_id).map_err(|err| err.to_string())?;
+        let role = meta.role;
+        let credential_tier = meta
+            .credential_tier
+            .or_else(|| role.map(Role::credential_tier));
 
         session::update_meta(session_id, |meta| {
             if meta.status.is_active() {
@@ -49,7 +51,7 @@ impl ProcSessionGuard {
                 .map(|path| path.to_string_lossy().to_string()),
             exit_code: None,
             ended_at: None,
-            tier: role.map(Role::credential_tier),
+            tier: credential_tier,
             scope: Some("clawd-task".to_string()),
             priority: None,
             caps: Some(caps),
