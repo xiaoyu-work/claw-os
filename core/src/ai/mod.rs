@@ -20,8 +20,10 @@
 //!       * per-app cap from the manifest (`AiBudget::monthly_units`)
 //!       * per-user aggregate cap at `$HOME/.config/cos/ai/budget.json`
 //!         (opt-in: missing file or `monthly_units == 0` ⇒ no cap)
-//!      Reserved pre-call and finalised after the provider returns;
-//!      either ceiling tripping hard-denies the call.
+//!      A conservative input+maximum-output bound is reserved pre-call;
+//!      settlement atomically releases that reservation and records actual
+//!      usage. Cap checks include every in-flight reservation, and either
+//!      ceiling tripping hard-denies the call.
 //!   6. Safety — `Strict` redacts secrets in the prompt before
 //!      sending it upstream. `Minimal` is audit-only.
 //!   7. Audit — every accepted and denied call is logged.
