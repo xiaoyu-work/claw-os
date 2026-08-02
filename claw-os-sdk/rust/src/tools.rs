@@ -53,6 +53,32 @@ pub struct CatalogEntry {
     pub returns_schema: serde_json::Value,
 }
 
+fn cos_tool_json(
+    name: &str,
+    argv: Vec<OsString>,
+) -> Result<serde_json::Value, ToolError> {
+    match cos_call_json("tool", name, argv) {
+        Ok(value) => Ok(value),
+        Err(BridgeError::AppError {
+            message,
+            code,
+            ..
+        }) => {
+            let mut payload = serde_json::json!({ "error": &message });
+            if let Some(code) = code.clone() {
+                payload["code"] = serde_json::Value::String(code);
+            }
+            Err(ToolError::Denied {
+                name: name.to_string(),
+                message,
+                code,
+                payload,
+            })
+        }
+        Err(error) => Err(ToolError::Bridge(error)),
+    }
+}
+
 /// Execute a catalog tool with the given JSON args. The kernel
 /// resolves `name` against the catalog, runs the implementation under
 /// the app's caps grant, and returns the result.
@@ -74,7 +100,7 @@ pub fn call(name: &str, args: &serde_json::Value) -> Result<ToolResult, ToolErro
         "--args".into(), args_json.into(),
     ];
 
-    let value = cos_call_json("tool", name, argv)?;
+    let value = cos_tool_json(name, argv)?;
     if let Some(err) = value.get("error").and_then(|v| v.as_str()) {
         return Err(ToolError::Denied {
             name: name.to_string(),
@@ -94,7 +120,7 @@ pub fn call(name: &str, args: &serde_json::Value) -> Result<ToolResult, ToolErro
 /// Return the live global catalog from the argument-free `cos ai tools`.
 pub fn catalog() -> Result<Vec<CatalogEntry>, ToolError> {
     let argv: Vec<OsString> = vec!["ai".into(), "tools".into()];
-    let value = cos_call_json("tool", "catalog", argv)?;
+    let value = cos_tool_json("catalog", argv)?;
     let rows = value
         .get("tools")
         .and_then(serde_json::Value::as_array)

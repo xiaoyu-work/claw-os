@@ -294,7 +294,22 @@ fn dispatch(prompt: &str, opts: ChatOpts) -> Result<AiResponse, AiError> {
         argv.push(tools.join(",").into());
     }
 
-    let value = cos_call_json("ai", "chat", argv)?;
+    let value = match cos_call_json("ai", "chat", argv) {
+        Ok(value) => value,
+        Err(BridgeError::AppError {
+            message,
+            code,
+            ..
+        }) => {
+            let mut payload = serde_json::json!({ "error": &message });
+            if let Some(code) = code {
+                payload["code"] = serde_json::Value::String(code);
+            }
+            let message = payload["error"].as_str().unwrap_or("AI request denied");
+            return Err(classify_ai_error(message, &payload));
+        }
+        Err(error) => return Err(AiError::Bridge(error)),
+    };
     parse_response(value)
 }
 
@@ -338,7 +353,7 @@ fn classify_ai_error(message: &str, payload: &serde_json::Value) -> AiError {
         .map(str::to_string);
     let lower = message.to_lowercase();
     if let Some(c) = code.as_deref() {
-        match c {
+        match c.to_ascii_uppercase().as_str() {
             "BUDGET_EXCEEDED" => return AiError::BudgetExceeded(message.to_string()),
             "SAFETY_VIOLATION" => return AiError::SafetyViolation(message.to_string()),
             _ => {}

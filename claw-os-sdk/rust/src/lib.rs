@@ -108,7 +108,9 @@ impl BridgeError {
     pub fn is_denied(&self) -> bool {
         matches!(
             self,
-            BridgeError::AppError { code: Some(c), .. } if c == "denied"
+            BridgeError::AppError { code: Some(c), .. }
+                if c.eq_ignore_ascii_case("denied")
+                    || c.eq_ignore_ascii_case("permission_denied")
         )
     }
 }
