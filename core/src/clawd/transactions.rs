@@ -130,7 +130,7 @@ pub fn commit(
     }))
 }
 
-pub fn rollback(
+pub async fn rollback(
     state: &DaemonState,
     params: Value,
     client: &ClientIdentity,
@@ -139,8 +139,21 @@ pub fn rollback(
     let session_id = parse_session_id(&id)?;
     let owner_uid = owner_filter(client)?;
     state.require_transaction_owner(session_id.as_str(), owner_uid)?;
-    let _scope = super::session_scope::ProcSessionGuard::enter(&session_id, "clawd-rollback")
+    let session_info =
+        super::session_scope::trusted_session_info(&session_id, "clawd-rollback")
         .map_err(|err| format!("transaction rollback session scope: {err}"))?;
+    crate::proc::with_trusted_session_override(
+        session_info,
+        async { rollback_scoped(state, session_id, owner_uid) },
+    )
+    .await
+}
+
+fn rollback_scoped(
+    state: &DaemonState,
+    session_id: SessionId,
+    owner_uid: Option<u32>,
+) -> Result<Value, String> {
     let handle = state
         .take_transaction_for_owner(session_id.as_str(), owner_uid)?
         .ok_or_else(|| format!("transaction is not active: {}", session_id.as_str()))?;

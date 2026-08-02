@@ -649,7 +649,9 @@ impl Tool for CosAppRun {
         let apps = apps_root().to_string_lossy().to_string();
         let app_dir_clone = app_dir.clone();
         let cmd = command.clone();
-        if crate::paths::current_owner_uid_override().is_some() {
+        if crate::paths::is_routed_job()
+            || crate::paths::current_owner_uid_override().is_some()
+        {
             return match tokio::task::block_in_place(|| {
                 crate::bridge::run_python_app(&app_dir_clone, &cmd, &args, &data, &apps)
             }) {

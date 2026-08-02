@@ -1481,12 +1481,20 @@ async fn run_one_routed_job(job: &Job) -> FinishOutcome {
 }
 
 async fn run_one_job_inner(job: &Job) -> FinishOutcome {
-    use crate::agent::runtime::loop_;
-
-    let _session_guard = match enter_job_session(job) {
-        Ok(guard) => guard,
+    let session = match job_session_info(job) {
+        Ok(session) => session,
         Err(err) => return FinishOutcome::Error(format!("session unavailable: {err}")),
     };
+    match session {
+        Some(session) => {
+            crate::proc::with_trusted_session_override(session, run_one_job_scoped(job)).await
+        }
+        None => run_one_job_scoped(job).await,
+    }
+}
+
+async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
+    use crate::agent::runtime::loop_;
 
     // Apply per-job max-turns override on a clone of the global cfg
     // so other jobs in the same worker process aren't affected.
@@ -1590,9 +1598,7 @@ impl crate::agent::llm::accumulate::StreamSink for JobStreamSink {
     }
 }
 
-fn enter_job_session(
-    job: &Job,
-) -> Result<Option<crate::clawd::session_scope::ProcSessionGuard>, String> {
+fn job_session_info(job: &Job) -> Result<Option<crate::proc::SessionInfo>, String> {
     let Some(session_id) = job.session_id.as_deref() else {
         return Ok(None);
     };
@@ -1602,7 +1608,7 @@ fn enter_job_session(
     if !crate::session::session_dir(&sid).exists() {
         return Ok(None);
     }
-    crate::clawd::session_scope::ProcSessionGuard::enter(&sid, "clawd-agent-worker").map(Some)
+    crate::clawd::session_scope::trusted_session_info(&sid, "clawd-agent-worker").map(Some)
 }
 
 fn parse_status(s: &str) -> Result<JobStatus, String> {

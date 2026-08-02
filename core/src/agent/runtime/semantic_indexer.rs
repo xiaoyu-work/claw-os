@@ -78,21 +78,30 @@ impl SemanticIndexer {
         let namespace = format!("session/{session_id}");
         let key = format!("{role}-{msg_id}");
         let role_owned = role.to_string();
+        let trusted_session = crate::proc::current_trusted_session_for_caps();
         crate::agent::runtime::background::spawn(async move {
-            match store.index(&namespace, &key, &text).await {
-                Ok(_) => {
-                    tracing::trace!(
-                        "semantic: indexed {role_owned} msg {msg_id} (session={session_id})"
-                    );
+            let run = async move {
+                match store.index(&namespace, &key, &text).await {
+                    Ok(_) => {
+                        tracing::trace!(
+                            "semantic: indexed {role_owned} msg {msg_id} (session={session_id})"
+                        );
+                    }
+                    Err(SemanticError::Disabled) => {
+                        // The store was built with embedder=None — nothing to do.
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "semantic: index failed for {key} (session={session_id}): {e}"
+                        );
+                    }
                 }
-                Err(SemanticError::Disabled) => {
-                    // The store was built with embedder=None — nothing to do.
+            };
+            match trusted_session {
+                Some(session) => {
+                    crate::proc::with_trusted_session_override(session, run).await
                 }
-                Err(e) => {
-                    tracing::warn!(
-                        "semantic: index failed for {key} (session={session_id}): {e}"
-                    );
-                }
+                None => run.await,
             }
         });
     }

@@ -225,7 +225,7 @@ async fn dispatch_result(
         "transaction.begin" => transactions::begin(state, request.params, client),
         "transaction.list" => transactions::list(state, client),
         "transaction.commit" => transactions::commit(state, request.params, client),
-        "transaction.rollback" => transactions::rollback(state, request.params, client),
+        "transaction.rollback" => transactions::rollback(state, request.params, client).await,
         other => Err(format!("unknown clawd command: {other}")),
     }
 }

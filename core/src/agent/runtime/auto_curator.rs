@@ -89,8 +89,21 @@ impl AutoCurator {
     pub fn spawn_curate(self: &Arc<Self>, session_id: String) {
         let curator = self.curator.clone();
         let db = self.db.clone();
+        let trusted_session = crate::proc::current_trusted_session_for_caps();
         crate::agent::runtime::background::spawn(async move {
-            match curator.curate_session(&db, &session_id, false).await {
+            let curate_session_id = session_id.clone();
+            let run = async move {
+                curator
+                    .curate_session(&db, &curate_session_id, false)
+                    .await
+            };
+            let result = match trusted_session {
+                Some(session) => {
+                    crate::proc::with_trusted_session_override(session, run).await
+                }
+                None => run.await,
+            };
+            match result {
                 Ok(outcome) => {
                     if outcome.skipped_no_new_messages {
                         tracing::trace!(
