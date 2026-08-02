@@ -1387,6 +1387,30 @@ fn write_credential_atomic(path: &Path, data: &str) -> Result<(), String> {
     with_write_lock(path, || write_credential_atomic_unlocked(path, data))
 }
 
+/// Remove a credential while excluding both refreshers and atomic writers.
+/// Lock order deliberately matches refresh (`refresh -> write`) so revoke
+/// cannot deadlock with a refresh command that persists a rotated token.
+fn remove_credential_atomic(path: &Path) -> Result<bool, String> {
+    with_refresh_lock(path, || {
+        with_write_lock(path, || {
+            match fs::remove_file(path) {
+                Ok(()) => {
+                    if let Some(parent) = path.parent() {
+                        std::fs::File::open(parent)
+                            .and_then(|directory| directory.sync_all())
+                            .map_err(|error| {
+                                format!("fsync credential directory {}: {error}", parent.display())
+                            })?;
+                    }
+                    Ok(true)
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+                Err(error) => Err(format!("remove {}: {error}", path.display())),
+            }
+        })
+    })
+}
+
 /// Inner of [`write_credential_atomic`] — does the tmp+rename+fsync dance but
 /// does NOT acquire the per-credential write lock. Caller is responsible for
 /// synchronization.
@@ -1616,11 +1640,9 @@ pub fn rollback_restore(namespace: &str, name: &str, value: &str) -> Result<(), 
 /// is already gone.
 pub fn rollback_delete(namespace: &str, name: &str) -> Result<(), String> {
     let path = namespace_dir(namespace).join(format!("{name}.json"));
-    match fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(format!("failed to delete credential {namespace}/{name}: {e}")),
-    }
+    remove_credential_atomic(&path)
+        .map(|_| ())
+        .map_err(|error| format!("failed to delete credential {namespace}/{name}: {error}"))
 }
 
 /// Load a credential value.
@@ -1889,11 +1911,11 @@ fn cmd_revoke(args: &[String]) -> Result<Value, String> {
     require_secret(Verb::SECRET_WRITE, credential_scope(&namespace, name)?)?;
     let path = namespace_dir(&namespace).join(format!("{name}.json"));
 
-    if !path.is_file() {
+    if !remove_credential_atomic(&path)
+        .map_err(|error| format!("failed to revoke credential: {error}"))?
+    {
         return Err(format!("credential not found: {name}"));
     }
-
-    fs::remove_file(&path).map_err(|e| format!("failed to revoke credential: {e}"))?;
 
     Ok(json!({
         "revoked": name,
