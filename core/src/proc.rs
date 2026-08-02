@@ -845,6 +845,17 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 
 fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::PROC_SPAWN, Scope::wild()).map_err(|v| v.to_string())?;
+    let parent_info = current_session_info_for_caps()
+        .ok_or_else(|| "proc spawn requires a registered parent session".to_string())?;
+    crate::caps::enforcement::require_current_session_identity(
+        &parent_info.session_id,
+        parent_info.pid,
+    )
+    .map_err(|error| format!("proc parent identity check failed: {error}"))?;
+    let parent_caps = parent_info
+        .caps
+        .clone()
+        .ok_or_else(|| "proc parent session has no capabilities".to_string())?;
     let mut session_id = None;
     let mut group = None;
     let mut parent = None;
@@ -938,6 +949,16 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         return Err("no command specified".into());
     }
 
+    if let Some(requested_parent) = parent.as_deref() {
+        if requested_parent != parent_info.session_id.as_str() {
+            return Err(format!(
+                "proc parent `{requested_parent}` does not match current session `{}`",
+                parent_info.session_id
+            ));
+        }
+    }
+    parent = Some(parent_info.session_id.clone());
+
     let command_args = &args[cmd_start..];
 
     // Validate tier value (0-3 only)
@@ -960,6 +981,9 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
                     "unknown role `{name}`; valid: observer, worker, curator, connector, automator, agent-host, admin"
                 )
             })?;
+            if role == crate::caps::Role::Kernel {
+                return Err("the kernel role cannot be assigned to a child process".to_string());
+            }
             let path_s = scope_path.as_deref().map(crate::caps::Scope::path);
             let host_s = scope_host.as_deref().map(crate::caps::Scope::host);
             let name_s = scope_name.as_deref().map(crate::caps::Scope::name);
@@ -999,67 +1023,46 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         (None, None) => None,
     };
 
-    // Enforce inheritance rules when parent is set
-    if let Some(ref parent_sid) = parent {
-        let reg = load_registry();
-        if let Some(parent_info) = reg.sessions.iter().find(|s| &s.session_id == parent_sid) {
-            // Tier inheritance: child tier must be >= parent tier (more restricted)
-            if let (Some(parent_tier), Some(child_tier)) = (parent_info.tier, tier) {
-                if child_tier < parent_tier {
-                    return Err(format!(
-                        "cannot escalate tier: parent '{}' has tier {} but child requested tier {}. Child tier must be >= parent tier.",
-                        parent_sid, parent_tier, child_tier
-                    ));
-                }
-            }
-            // If parent has tier but child doesn't specify, inherit parent's tier
-            if parent_info.tier.is_some() && tier.is_none() {
-                tier = parent_info.tier;
-            }
-
-            // Scope inheritance: child scope must be within parent scope
-            if let (Some(ref parent_scope), Some(ref child_scope)) = (&parent_info.scope, &scope) {
-                if !child_scope.starts_with(parent_scope.as_str()) {
-                    return Err(format!(
-                        "cannot widen scope: parent '{}' is scoped to '{}' but child requested scope '{}'",
-                        parent_sid, parent_scope, child_scope
-                    ));
-                }
-            }
-            // If parent has scope but child doesn't specify, inherit parent's scope
-            if parent_info.scope.is_some() && scope.is_none() {
-                scope = parent_info.scope.clone();
-            }
-
-            // CapSet inheritance: child caps must be a subset of parent caps.
-            // If parent has caps but the child requested none, the child
-            // inherits the parent's full set (the most-restricted thing we
-            // can do without breaking the chain).
-            if let (Some(parent_caps), Some(ref child_caps)) =
-                (parent_info.caps.as_ref(), cap_set.as_ref())
-            {
-                if !parent_caps.covers_all(child_caps) {
-                    return Err(format!(
-                        "cannot widen caps: parent '{}' does not cover every cap the child requested",
-                        parent_sid
-                    ));
-                }
-            }
+    match (parent_info.tier, tier) {
+        (Some(parent_tier), Some(child_tier)) if child_tier < parent_tier => {
+            return Err(format!(
+                "cannot escalate tier: parent '{}' has tier {} but child requested tier {}",
+                parent_info.session_id, parent_tier, child_tier
+            ));
         }
+        (Some(parent_tier), None) => tier = Some(parent_tier),
+        (None, Some(_)) => {
+            return Err("cannot assign a child credential tier when the parent has none".to_string());
+        }
+        _ => {}
     }
 
-    let cap_set = match (cap_set, parent.as_ref()) {
-        (Some(c), _) => Some(c),
-        (None, Some(parent_sid)) => {
-            // Inherit parent caps verbatim if child didn't specify.
-            let reg = load_registry();
-            reg.sessions
-                .iter()
-                .find(|s| &s.session_id == parent_sid)
-                .and_then(|p| p.caps.clone())
+    if let (Some(parent_scope), Some(child_scope)) = (&parent_info.scope, &scope) {
+        if !child_scope.starts_with(parent_scope.as_str()) {
+            return Err(format!(
+                "cannot widen scope: parent '{}' is scoped to '{}' but child requested '{}'",
+                parent_info.session_id, parent_scope, child_scope
+            ));
         }
-        (None, None) => None,
+    } else if scope.is_none() {
+        scope = parent_info.scope.clone();
+    }
+
+    let cap_set = match cap_set {
+        Some(requested) => {
+            if !parent_caps.covers_all(&requested) {
+                return Err(format!(
+                    "cannot widen caps: parent '{}' does not cover every requested child capability",
+                    parent_info.session_id
+                ));
+            }
+            Some(requested)
+        }
+        None => Some(parent_caps),
     };
+    if role_name.is_none() {
+        role_name = parent_info.role.clone();
+    }
 
     // Guardrails: check for rapid respawn and destructive commands
     let reg_check = load_registry();
