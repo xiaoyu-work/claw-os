@@ -48,7 +48,7 @@ jobs:
             ${{ runner.os }}-cargo-test-
 
       - name: Clippy lint (cos)
-        run: cd core && cargo clippy --target x86_64-unknown-linux-musl -- -D warnings 2>&1 || true
+        run: cd core && cargo clippy --target x86_64-unknown-linux-musl -- -D warnings
 
       - name: Run cos tests
         # `--test-threads=1` because many tests in `cos` mutate process-wide
