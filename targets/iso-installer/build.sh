@@ -138,7 +138,7 @@ if ! grep -qE '/boot/vmlinuz-[^/]+$' <<<"$SQUASHFS_LIST"; then
     echo "error: installer squashfs does not contain a target kernel under /boot" >&2
     exit 1
 fi
-if ! grep -qE '/boot/initrd\\.img-[^/]+$' <<<"$SQUASHFS_LIST"; then
+if ! grep -qE '/boot/initrd\.img-[^/]+$' <<<"$SQUASHFS_LIST"; then
     echo "error: installer squashfs does not contain a target initrd under /boot" >&2
     exit 1
 fi
