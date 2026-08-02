@@ -3,6 +3,7 @@
 
 use std::any::TypeId;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use cosmic::app::{Core, Settings, Task};
 use cosmic::cosmic_theme::palette::WithAlpha;
@@ -22,6 +23,37 @@ mod page;
 
 const COSMIC_SETUP_DONE_PATH: &str = ".config/cosmic-initial-setup-done";
 const GNOME_SETUP_DONE_PATH: &str = ".config/gnome-initial-setup-done";
+static RESUME_EXIT_PENDING: AtomicBool = AtomicBool::new(false);
+
+fn setup_marker_finishes_launch(marker: &Path) -> bool {
+    if !marker.exists() {
+        return false;
+    }
+    let is_oem = pwd::Passwd::current_user()
+        .is_some_and(|user| user.name == "cosmic-initial-setup");
+    if !is_oem {
+        return true;
+    }
+    let terminated = cos_runtime::exec::run(
+        &["loginctl", "terminate-user", "cosmic-initial-setup"],
+        None,
+    )
+    .is_ok_and(|result| result.exit_code == 0);
+    if terminated {
+        return true;
+    }
+    eprintln!(
+        "cosmic-initial-setup: completed setup marker exists but OEM session termination failed; retrying in UI"
+    );
+    if let Err(error) = std::fs::remove_file(marker) {
+        eprintln!(
+            "cosmic-initial-setup: failed to remove stale completion marker {}: {error}",
+            marker.display()
+        );
+    }
+    RESUME_EXIT_PENDING.store(true, Ordering::Relaxed);
+    false
+}
 
 /// Runs application with these settings
 #[rustfmt::skip]
@@ -34,7 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[allow(deprecated)]
     let home_dir = std::env::home_dir().unwrap();
 
-    if home_dir.join(COSMIC_SETUP_DONE_PATH).exists() {
+    if setup_marker_finishes_launch(&home_dir.join(COSMIC_SETUP_DONE_PATH)) {
         return Ok(());
     }
 
@@ -93,6 +125,8 @@ pub enum Message {
     None,
     Exit,
     Finish,
+    SetupMarked(Result<(), String>),
+    SessionEnded(Result<(), String>),
     PageMessage(page::Message),
     PageOpen(usize),
 }
@@ -103,6 +137,10 @@ pub struct App {
     pages: IndexMap<TypeId, Box<dyn Page + 'static>>,
     page_i: usize,
     oem_mode: bool,
+    user_creation_complete: bool,
+    settings_applied: bool,
+    finishing: bool,
+    finish_error: Option<String>,
     wifi_exists: bool,
     /// Wallpaper for the wizard background, when one is available on disk.
     /// Loaded once at init from the system default path; absence (e.g. in
@@ -117,6 +155,120 @@ const WIZARD_WALLPAPER_PATHS: &[&str] = &[
     "/usr/share/backgrounds/cosmic/claw-default.jpg",
     "/usr/share/backgrounds/cosmic/claw-default.png",
 ];
+
+fn configured_first_user_exists() -> bool {
+    let Ok(config) = std::fs::read_to_string("/etc/default/cos-home") else {
+        return false;
+    };
+    let Some(home) = config.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("COS_HOME=")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }) else {
+        return false;
+    };
+    pwd::Passwd::iter().any(|user| {
+        user.uid >= 1000
+            && user.uid < 65534
+            && &*user.dir == home
+            && std::fs::metadata(home).is_ok_and(|metadata| {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    metadata.is_dir() && metadata.uid() == user.uid
+                }
+                #[cfg(not(unix))]
+                {
+                    metadata.is_dir()
+                }
+            })
+            && page::user::accept_committed_transaction(&user.name)
+    })
+}
+
+impl App {
+    fn apply_remaining_settings(&mut self) -> Task<Message> {
+        if self.settings_applied {
+            return cosmic::Task::future(async {
+                Message::SetupMarked(write_setup_marker().await).into()
+            });
+        }
+        let user_page = TypeId::of::<page::user::Page>();
+        let tasks = self
+            .pages
+            .iter_mut()
+            .filter_map(|(type_id, page)| {
+                (*type_id != user_page && page.completed()).then(|| {
+                    page.apply_settings()
+                        .map(Message::PageMessage)
+                        .map(cosmic::Action::App)
+                })
+            })
+            .collect::<Vec<_>>()
+            .apply(Task::batch);
+        tasks.chain(cosmic::Task::future(async {
+            Message::SetupMarked(write_setup_marker().await).into()
+        }))
+    }
+}
+
+fn setup_marker_path() -> Result<std::path::PathBuf, String> {
+    #[allow(deprecated)]
+    let home = std::env::home_dir().ok_or("HOME is unavailable")?;
+    Ok(home.join(COSMIC_SETUP_DONE_PATH))
+}
+
+async fn write_setup_marker() -> Result<(), String> {
+    let marker = setup_marker_path()?;
+    let marker = marker.to_string_lossy().into_owned();
+    tokio::task::spawn_blocking(move || {
+        cos_runtime::fs::write(&marker, "").map_err(|why| why.to_string())
+    })
+    .await
+    .map_err(|why| format!("setup marker task failed: {why}"))?
+}
+
+async fn terminate_oem_session() -> Result<(), String> {
+    let marker = setup_marker_path()?.to_string_lossy().into_owned();
+    let command_result = match tokio::task::spawn_blocking(move || {
+        match cos_runtime::exec::run(
+            &["loginctl", "terminate-user", "cosmic-initial-setup"],
+            None,
+        ) {
+            Ok(result) if result.exit_code == 0 => Ok(()),
+            Ok(result) => {
+                let detail = result.stderr.trim();
+                if detail.is_empty() {
+                    Err(format!("loginctl exited with status {}", result.exit_code))
+                } else {
+                    Err(format!("loginctl failed: {detail}"))
+                }
+            }
+            Err(why) => Err(format!("run loginctl terminate-user: {why}")),
+        }
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(why) => Err(format!("session termination task failed: {why}")),
+    };
+    if let Err(error) = command_result {
+        let cleanup_marker = marker.clone();
+        let cleanup = tokio::task::spawn_blocking(move || {
+            cos_runtime::fs::rm(&cleanup_marker).map_err(|why| why.to_string())
+        })
+        .await
+        .map_err(|why| format!("marker cleanup task failed: {why}"))?;
+        return match cleanup {
+            Ok(()) => Err(error),
+            Err(cleanup) => Err(format!(
+                "{error}; removing setup marker also failed: {cleanup}"
+            )),
+        };
+    }
+    Ok(())
+}
 
 /// Implement [`Application`] to integrate with COSMIC.
 impl Application for App {
@@ -153,10 +305,22 @@ impl Application for App {
         // edge-to-edge while still preserving the 1px window border.
         core.window.content_container = false;
 
+        let oem_mode = matches!(mode, page::AppMode::NewInstall { create_user: true });
+        let resume_exit = RESUME_EXIT_PENDING.load(Ordering::Relaxed);
+        let user_creation_complete =
+            oem_mode && (resume_exit || configured_first_user_exists());
+        let mut pages = page::pages(mode);
+        if user_creation_complete {
+            pages.shift_remove(&TypeId::of::<page::user::Page>());
+        }
         let mut app = App {
             core,
-            oem_mode: matches!(mode, page::AppMode::NewInstall { create_user: true }),
-            pages: page::pages(mode),
+            oem_mode,
+            user_creation_complete,
+            settings_applied: resume_exit,
+            finishing: false,
+            finish_error: None,
+            pages,
             page_i: 0,
             wifi_exists: true, // TODO: Detect
             wallpaper: WIZARD_WALLPAPER_PATHS
@@ -166,7 +330,7 @@ impl Application for App {
                 .map(widget::image::Handle::from_path),
         };
 
-        let tasks = app
+        let mut tasks = app
             .pages
             .values_mut()
             .map(|page| {
@@ -183,6 +347,9 @@ impl Application for App {
             .chain(cosmic::iced::window::latest().and_then(|id| {
                 cosmic::iced::window::set_mode::<cosmic::Action<Message>>(id, cosmic::iced::window::Mode::Fullscreen)
             }));
+        if resume_exit {
+            tasks = tasks.chain(app.update(Message::Finish));
+        }
 
         (app, tasks)
     }
@@ -258,17 +425,32 @@ impl Application for App {
                     }
                 }
 
-                page::Message::User(message) => {
-                    if let Some(page) = self.pages.get_mut(&TypeId::of::<page::user::Page>()) {
-                        return page
-                            .as_any()
-                            .downcast_mut::<page::user::Page>()
-                            .unwrap()
-                            .update(message)
-                            .map(Message::PageMessage)
-                            .map(cosmic::Action::App);
+                page::Message::User(message) => match message {
+                    page::user::Message::Applied(result) => match result {
+                        Ok(()) => {
+                            self.user_creation_complete = true;
+                            return self.apply_remaining_settings();
+                        }
+                        Err(why) => {
+                            tracing::error!(error = %why, "first-user transaction failed");
+                            self.finishing = false;
+                            self.finish_error = Some(why);
+                        }
+                    },
+                    other => {
+                        if let Some(page) =
+                            self.pages.get_mut(&TypeId::of::<page::user::Page>())
+                        {
+                            return page
+                                .as_any()
+                                .downcast_mut::<page::user::Page>()
+                                .unwrap()
+                                .update(other)
+                                .map(Message::PageMessage)
+                                .map(cosmic::Action::App);
+                        }
                     }
-                }
+                },
 
                 page::Message::A11y(message) => {
                     if let Some(page) = self.pages.get_mut(&TypeId::of::<page::a11y::Page>()) {
@@ -320,6 +502,9 @@ impl Application for App {
             },
 
             Message::PageOpen(page_i) => {
+                if self.finishing {
+                    return Task::none();
+                }
                 if let Some((_, page)) = self.pages.get_index_mut(page_i) {
                     self.page_i = page_i;
                     return page
@@ -330,66 +515,54 @@ impl Application for App {
             }
 
             Message::Finish => {
-                let mark_initial_setup_finish = cosmic::Task::future(async {
-                    #[allow(deprecated)]
-                    let home = std::env::home_dir().unwrap();
-                    let marker = home.join(COSMIC_SETUP_DONE_PATH);
-                    let marker_str = marker.to_string_lossy().into_owned();
-                    let bridge_res = tokio::task::spawn_blocking(move || {
-                        cos_runtime::fs::write(&marker_str, "")
-                    })
-                    .await;
-                    if let Ok(Err(why)) = bridge_res {
-                        if why.is_denied() {
-                            tracing::warn!(?why, "fs.write setup-done marker denied by claw-os-sdk");
-                        } else {
-                            tracing::error!(?why, "fs.write setup-done marker failed");
-                        }
-                    }
-                })
-                .discard();
-
-                let mut tasks = self
-                    .pages
-                    .values_mut()
-                    .filter_map(|page| {
-                        page.completed().then(|| {
-                            page.apply_settings()
-                                .map(Message::PageMessage)
-                                .map(cosmic::Action::App)
-                        })
-                    })
-                    .chain(std::iter::once(mark_initial_setup_finish))
-                    .collect::<Vec<_>>()
-                    .apply(Task::batch);
-
-                if self.oem_mode {
-                    // Automatically log out from the OEM mode after tasks are finished.
-                    tasks = tasks.chain(
-                        cosmic::Task::future(async {
-                            let bridge_res = tokio::task::spawn_blocking(|| {
-                                cos_runtime::exec::run(
-                                    &["loginctl", "terminate-user", "cosmic-initial-setup"],
-                                    None,
-                                )
-                            })
-                            .await;
-                            if let Ok(Err(why)) = bridge_res {
-                                if why.is_denied() {
-                                    tracing::warn!(
-                                        ?why,
-                                        "exec.run loginctl terminate-user denied by claw-os-sdk"
-                                    );
-                                } else {
-                                    tracing::error!(?why, "exec.run loginctl terminate-user failed");
-                                }
-                            }
-                        })
-                        .discard(),
-                    );
+                if self.finishing {
+                    return Task::none();
                 }
+                self.finishing = true;
+                self.finish_error = None;
+                if self.oem_mode
+                    && !self.user_creation_complete
+                    && let Some(page) =
+                        self.pages.get_mut(&TypeId::of::<page::user::Page>())
+                {
+                    if !page.completed() {
+                        self.finishing = false;
+                        self.finish_error =
+                            Some("Create the first user before finishing setup.".to_string());
+                        return Task::none();
+                    }
+                    return page
+                        .apply_settings()
+                        .map(Message::PageMessage)
+                        .map(cosmic::Action::App);
+                }
+                return self.apply_remaining_settings();
+            }
 
-                return tasks.chain(cosmic::Task::done(Message::Exit.into()));
+            Message::SetupMarked(result) => {
+                self.settings_applied = true;
+                match result {
+                    Ok(()) if self.oem_mode => {
+                        return cosmic::Task::future(async {
+                            Message::SessionEnded(terminate_oem_session().await).into()
+                        });
+                    }
+                    Ok(()) => return cosmic::Task::done(Message::Exit.into()),
+                    Err(why) => {
+                        tracing::error!(error = %why, "failed to mark initial setup complete");
+                        self.finishing = false;
+                        self.finish_error = Some(why);
+                    }
+                }
+            }
+
+            Message::SessionEnded(result) => match result {
+                Ok(()) => return cosmic::Task::done(Message::Exit.into()),
+                Err(why) => {
+                    tracing::error!(error = %why, "failed to end first-boot session");
+                    self.finishing = false;
+                    self.finish_error = Some(why);
+                }
             }
 
             Message::Exit => {
@@ -421,7 +594,7 @@ impl Application for App {
             .optional()
             .then(|| widget::button::link(fl!("skip")).on_press(Message::PageOpen(self.page_i + 1)))
             .or_else(|| {
-                page.skippable().then(|| {
+                (!self.oem_mode && page.skippable()).then(|| {
                     widget::button::link(fl!("skip-setup-and-close")).on_press(Message::Finish)
                 })
             });
@@ -441,13 +614,13 @@ impl Application for App {
         if let Some(page_i) = self.page_i.checked_add(1) {
             if self.pages.get_index(page_i).is_some() {
                 let mut next = widget::button::suggested(fl!("next"));
-                if page.completed() {
+                if page.completed() && !self.finishing {
                     next = next.on_press(Message::PageOpen(page_i));
                 }
                 button_row = button_row.push(next);
             } else {
                 let mut finish = widget::button::suggested(fl!("finish"));
-                if page.completed() {
+                if page.completed() && !self.finishing {
                     finish = finish.on_press(Message::Finish);
                 }
                 button_row = button_row.push(finish);
@@ -472,6 +645,11 @@ impl Application for App {
             .push(title)
             .push(widget::space::vertical().height(space_l))
             .push(content)
+            .push_maybe(
+                self.finish_error
+                    .as_ref()
+                    .map(|error| widget::text::body(error.clone())),
+            )
             .push(widget::space::vertical().height(space_m))
             .push(button_row)
             .push(widget::space::vertical().height(space_l))
