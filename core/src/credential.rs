@@ -1228,6 +1228,24 @@ fn tier_grants_access(session_tier: u8, min_tier: u8) -> bool {
     session_tier <= min_tier
 }
 
+fn require_credential_access(
+    cred: &StoredCredential,
+    namespace: &str,
+    name: &str,
+    current_tier: u8,
+) -> Result<(), String> {
+    if cred.name != name || cred.namespace != namespace {
+        return Err("credential metadata does not match its storage path".to_string());
+    }
+    if !tier_grants_access(current_tier, cred.min_tier) {
+        return Err(format!(
+            "insufficient tier: credential '{}' requires tier {} or stronger (lower number), current session has tier {}",
+            name, cred.min_tier, current_tier
+        ));
+    }
+    Ok(())
+}
+
 /// Resolve the *effective* tier for the current request, fail-closed.
 ///
 /// Previous behaviour was `policy::current_tier().unwrap_or(0)` which silently
@@ -1699,12 +1717,7 @@ fn cmd_load(args: &[String]) -> Result<Value, String> {
     // Tier check (named helper makes the direction obvious; fail-closed on
     // missing/corrupt policy registry).
     let current_tier = effective_session_tier();
-    if !tier_grants_access(current_tier, cred.min_tier) {
-        return Err(format!(
-            "insufficient tier: credential '{}' requires tier {} or stronger (lower number), current session has tier {}",
-            name, cred.min_tier, current_tier
-        ));
-    }
+    require_credential_access(&cred, &namespace, name, current_tier)?;
 
     // Check expiry.
     if is_expired(&cred.expires_at) {
@@ -1727,6 +1740,12 @@ fn cmd_load(args: &[String]) -> Result<Value, String> {
                     })?;
                 let fresh_cred: StoredCredential = serde_json::from_str(&fresh_data)
                     .map_err(|e| format!("failed to parse credential: {e}"))?;
+                require_credential_access(
+                    &fresh_cred,
+                    &namespace,
+                    name,
+                    current_tier,
+                )?;
 
                 if !is_expired(&fresh_cred.expires_at) {
                     // Another caller already refreshed under the lock.
@@ -1759,6 +1778,12 @@ fn cmd_load(args: &[String]) -> Result<Value, String> {
                 {
                     let after: StoredCredential = serde_json::from_str(&after_data)
                         .map_err(|e| format!("failed to parse refreshed credential: {e}"))?;
+                    require_credential_access(
+                        &after,
+                        &namespace,
+                        name,
+                        current_tier,
+                    )?;
                     if after.value_b64 != fresh_cred.value_b64
                         || after.nonce_b64 != fresh_cred.nonce_b64
                         || !is_expired(&after.expires_at)
