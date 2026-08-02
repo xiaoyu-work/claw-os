@@ -780,6 +780,55 @@ fn caller_uid() -> u32 {
     }
 }
 
+fn signal_owner_uid() -> u32 {
+    crate::paths::current_owner_uid_override().unwrap_or_else(caller_uid)
+}
+
+fn validate_signal_target(info: &SessionInfo, process_group: bool) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        let expected_start = info.start_time_ticks.ok_or_else(|| {
+            format!(
+                "session `{}` has no process start-time identity",
+                info.session_id
+            )
+        })?;
+        if read_start_time_ticks(info.pid) != Some(expected_start) {
+            return Err(format!(
+                "session `{}` process {} is missing or its PID was recycled",
+                info.session_id, info.pid
+            ));
+        }
+        let expected_uid = signal_owner_uid();
+        if read_real_uid(info.pid) != Some(expected_uid) {
+            return Err(format!(
+                "session `{}` process {} is not owned by uid {}",
+                info.session_id, info.pid, expected_uid
+            ));
+        }
+        if process_group {
+            if read_pgrp(info.pid) != Some(info.pid as i64) {
+                return Err(format!(
+                    "session `{}` process {} is not its process-group leader",
+                    info.session_id, info.pid
+                ));
+            }
+            if let Err(foreign) = pgrp_uid_scope_check(info.pid, expected_uid) {
+                return Err(format!(
+                    "session `{}` process group contains foreign processes: {:?}",
+                    info.session_id, foreign
+                ));
+            }
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (info, process_group);
+        Err("identity-safe process signaling requires Linux".to_string())
+    }
+}
+
 #[cfg(unix)]
 fn primary_gid(uid: u32) -> Result<u32, String> {
     const BUFFER_SIZE: usize = 16 * 1024;
@@ -1488,31 +1537,39 @@ fn cmd_kill(args: &[String]) -> Result<Value, String> {
         // recycled-pid intruder is in that pgrp we must NOT signal
         // it. We skip any session whose pgrp contains a foreign UID
         // and report the reason in the JSON response.
-        let me = caller_uid();
         let mut killed = Vec::new();
         let mut skipped = Vec::new();
         for info in &group_sessions {
-            match pgrp_uid_scope_check(info.pid, me) {
+            match validate_signal_target(info, true) {
                 Ok(()) => {
-                    kill_process(info.pid);
-                    killed.push(json!({
-                        "session_id": info.session_id,
-                        "pid": info.pid,
-                    }));
+                    match kill_process(info.pid) {
+                        Ok(()) => killed.push(json!({
+                            "session_id": info.session_id,
+                            "pid": info.pid,
+                        })),
+                        Err(error) => skipped.push(json!({
+                            "session_id": info.session_id,
+                            "pid": info.pid,
+                            "reason": "signal_failed",
+                            "error": error,
+                        })),
+                    }
                 }
-                Err(foreign) => {
-                    let foreign_json: Vec<Value> = foreign
-                        .into_iter()
-                        .map(|(pid, uid)| json!({ "pid": pid, "uid": uid }))
-                        .collect();
+                Err(error) => {
                     skipped.push(json!({
                         "session_id": info.session_id,
                         "pid": info.pid,
-                        "reason": "uid_scope_violation",
-                        "foreign": foreign_json,
+                        "reason": "identity_mismatch",
+                        "error": error,
                     }));
                 }
             }
+        }
+        if killed.is_empty() {
+            return Err(format!(
+                "no process in group `{group_name}` passed identity checks: {}",
+                serde_json::to_string(&skipped).unwrap_or_else(|_| "unknown".to_string())
+            ));
         }
         let mut resp = json!({
             "group": group_name,
@@ -1533,7 +1590,8 @@ fn cmd_kill(args: &[String]) -> Result<Value, String> {
         .find(|s| &s.session_id == sid)
         .ok_or_else(|| format!("session not found: {sid}"))?;
 
-    kill_process(info.pid);
+    validate_signal_target(info, true)?;
+    kill_process(info.pid)?;
 
     Ok(json!({
         "session_id": sid,
@@ -1611,19 +1669,29 @@ fn cmd_list(args: &[String]) -> Result<Value, String> {
     Ok(json!({ "sessions": infos, "count": infos.len() }))
 }
 
-fn kill_process(pid: u32) {
+fn kill_process(pid: u32) -> Result<(), String> {
     #[cfg(unix)]
-    unsafe {
+    {
         // Negative PID sends signal to the process group (works with setsid)
-        libc::kill(-(pid as i32), libc::SIGTERM);
-        // Also signal the individual process in case it wasn't a session leader
-        libc::kill(pid as i32, libc::SIGTERM);
+        if unsafe { libc::kill(-(pid as i32), libc::SIGTERM) } != 0 {
+            return Err(format!(
+                "failed to signal process group {pid}: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(())
     }
     #[cfg(not(unix))]
     {
-        let _ = Command::new("taskkill")
+        let status = Command::new("taskkill")
             .args(["/PID", &pid.to_string(), "/F"])
-            .output();
+            .status()
+            .map_err(|error| format!("failed to start taskkill: {error}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("taskkill exited with {}", status.code().unwrap_or(-1)))
+        }
     }
 }
 
@@ -1776,6 +1844,7 @@ fn cmd_signal(args: &[String]) -> Result<Value, String> {
         .ok_or_else(|| format!("session not found: {sid}"))?;
 
     let pid = info.pid;
+    validate_signal_target(info, false)?;
 
     #[cfg(unix)]
     {
@@ -1793,7 +1862,10 @@ fn cmd_signal(args: &[String]) -> Result<Value, String> {
         };
         let ret = unsafe { libc::kill(pid as i32, signum) };
         if ret != 0 {
-            return Err(format!("failed to send signal {signal_name} to pid {pid}"));
+            return Err(format!(
+                "failed to send signal {signal_name} to pid {pid}: {}",
+                std::io::Error::last_os_error()
+            ));
         }
     }
 
