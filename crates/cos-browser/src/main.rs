@@ -44,6 +44,9 @@ enum Command {
         port: u16,
 
         #[arg(long)]
+        auth_token_file: Option<std::path::PathBuf>,
+
+        #[arg(long)]
         proxy: Option<String>,
 
         #[arg(long)]
@@ -149,7 +152,7 @@ fn print_banner(port: u16) {
   \_____\____/_____/                                            
 
   Claw OS browser engine v0.1.0 (vendored from Obscura)
-  CDP server: ws://127.0.0.1:{}/devtools/browser
+  CDP server: ws://127.0.0.1:{}/devtools/browser (authentication required)
 "#, port);
 }
 
@@ -167,10 +170,18 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     match args.command {
-        Some(Command::Serve { port, proxy, user_agent, stealth, workers }) => {
+        Some(Command::Serve {
+            port,
+            auth_token_file,
+            proxy,
+            user_agent,
+            stealth,
+            workers,
+        }) => {
             if stealth {
                 anyhow::bail!("--stealth is disabled until its transport supports pinned DNS policy");
             }
+            let auth_token = load_auth_token(auth_token_file.as_deref())?;
             print_banner(port);
             if let Some(ref proxy) = proxy {
                 tracing::info!("Using proxy: {}", proxy);
@@ -189,9 +200,24 @@ async fn main() -> anyhow::Result<()> {
 
             if workers > 1 {
                 tracing::info!("{} worker processes", workers);
-                run_multi_worker_serve(port, workers, proxy, stealth, user_agent).await?;
+                run_multi_worker_serve(
+                    port,
+                    workers,
+                    proxy,
+                    stealth,
+                    user_agent,
+                    auth_token,
+                )
+                .await?;
             } else {
-                obscura_cdp::start_with_full_options(port, proxy, stealth, user_agent).await?;
+                obscura_cdp::start_with_authenticated_options(
+                    port,
+                    proxy,
+                    stealth,
+                    user_agent,
+                    auth_token,
+                )
+                .await?;
             }
         }
         Some(Command::Fetch { url, dump, selector, wait, timeout, wait_until, user_agent, stealth, eval, quiet }) => {
@@ -210,15 +236,48 @@ async fn main() -> anyhow::Result<()> {
             );
         }
         None => {
+            let auth_token = load_auth_token(None)?;
             print_banner(args.port);
             if let Some(ref proxy) = args.proxy {
                 tracing::info!("Using proxy: {}", proxy);
             }
-            obscura_cdp::start_with_options(args.port, args.proxy, false).await?;
+            obscura_cdp::start_with_authenticated_options(
+                args.port,
+                args.proxy,
+                false,
+                args.user_agent,
+                auth_token,
+            )
+            .await?;
         }
     }
 
     Ok(())
+}
+
+fn load_auth_token(path: Option<&std::path::Path>) -> anyhow::Result<String> {
+    let token = match path {
+        Some(path) => Some(
+            std::fs::read_to_string(path)
+                .map_err(|err| anyhow::anyhow!("read CDP auth token {}: {err}", path.display()))?,
+        ),
+        None => std::env::var("COS_BROWSER_AUTH_TOKEN").ok(),
+    };
+    let token = token
+        .ok_or_else(|| anyhow::anyhow!(
+            "CDP auth is required; pass --auth-token-file or set COS_BROWSER_AUTH_TOKEN"
+        ))?
+        .trim()
+        .to_string();
+    if token.len() < 32
+        || token.len() > 256
+        || !token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        anyhow::bail!("CDP auth token must be 32-256 URL-safe ASCII characters");
+    }
+    Ok(token)
 }
 
 async fn run_multi_worker_serve(
@@ -227,6 +286,7 @@ async fn run_multi_worker_serve(
     proxy: Option<String>,
     stealth: bool,
     user_agent: Option<String>,
+    auth_token: String,
 ) -> anyhow::Result<()> {
     use tokio::net::TcpListener;
     use tokio::io::AsyncWriteExt as _;
@@ -251,6 +311,7 @@ async fn run_multi_worker_serve(
             })?;
         let mut cmd = std::process::Command::new(&exe);
         cmd.arg("serve").arg("--port").arg(worker_port.to_string());
+        cmd.env("COS_BROWSER_AUTH_TOKEN", &auth_token);
         if let Some(ref p) = proxy {
             cmd.arg("--proxy").arg(p);
         }

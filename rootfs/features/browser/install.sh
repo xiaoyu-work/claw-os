@@ -24,9 +24,6 @@ if [ ! -f "$BROWSER_DEB" ]; then
 fi
 echo "  :: installing $(basename "$BROWSER_DEB")"
 
-# Remove the overlay copy so dpkg can claim the file.
-rm -f "$ROOTFS/usr/lib/cos/services/browser/service.json"
-
 mkdir -p "$ROOTFS/var/cache/cos-debs"
 cp "$BROWSER_DEB" "$ROOTFS/var/cache/cos-debs/"
 chroot "$ROOTFS" apt-get install -y --no-install-recommends \

@@ -70,41 +70,6 @@ fn same_origin(left: &Url, right: &Url) -> bool {
         && left.port_or_known_default() == right.port_or_known_default()
 }
 
-async fn fetch_file_url(url: &Url) -> Result<Response, ObscuraNetError> {
-    let path = url
-        .to_file_path()
-        .map_err(|_| ObscuraNetError::Network("Invalid file URL".to_string()))?;
-    let body = tokio::fs::read(&path)
-        .await
-        .map_err(|e| ObscuraNetError::Network(format!("Failed to read file: {}", e)))?;
-
-    let mut headers = HashMap::new();
-    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-        let ct = match ext.to_lowercase().as_str() {
-            "html" | "htm" => "text/html",
-            "css" => "text/css",
-            "js" | "mjs" => "application/javascript",
-            "json" => "application/json",
-            "png" => "image/png",
-            "jpg" | "jpeg" => "image/jpeg",
-            "gif" => "image/gif",
-            "svg" => "image/svg+xml",
-            "webp" => "image/webp",
-            "ico" => "image/x-icon",
-            _ => "application/octet-stream",
-        };
-        headers.insert("content-type".to_string(), ct.to_string());
-    }
-
-    Ok(Response {
-        url: url.clone(),
-        status: 200,
-        headers,
-        body,
-        redirected_from: Vec::new(),
-    })
-}
-
 pub struct ObscuraHttpClient {
     proxy_url: Option<String>,
     pub cookie_jar: Arc<CookieJar>,
@@ -190,10 +155,6 @@ impl ObscuraHttpClient {
         url: &Url,
         initial_body: Option<Vec<u8>>,
     ) -> Result<Response, ObscuraNetError> {
-        if url.scheme() == "file" {
-            return fetch_file_url(url).await;
-        }
-
         let mut method = initial_method;
         let mut body = initial_body;
         if self.block_trackers {

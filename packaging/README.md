@@ -11,7 +11,7 @@ packaging/
 ├── deb/                       Debian package definitions
 │   ├── build-debs.sh          Build all .debs into build/debs/
 │   ├── claw-os-base/          The cos binary + apps/skills
-│   ├── claw-os-browser/       cos-browser (Obscura) + service config
+│   ├── claw-os-browser/       cos-browser (Obscura) package metadata
 │   └── claw-os-systemd/       systemd unit files for system boot targets
 └── apt-repo/
     └── build-repo.sh          Assemble build/apt-repo/ from build/debs/
@@ -22,7 +22,7 @@ packaging/
 | Package | Contains | Architecture | Depends |
 |---|---|---|---|
 | `claw-os-base` | `cos`, `clawd`, `cos-init`, apps, skills, `/etc/cos/*`, `setup-home.sh` | `amd64`, `arm64` | `bash`, `coreutils`, `ca-certificates` |
-| `claw-os-browser` | `cos-browser`, `cos-browser-worker`, `browser/service.json` | `amd64`, `arm64` | `claw-os-base (= ${binary:Version})`, `chromium` |
+| `claw-os-browser` | `cos-browser`, `cos-browser-worker` | `amd64`, `arm64` | `claw-os-base (= ${binary:Version})`, `chromium` |
 | `claw-os-systemd` | `clawd.service`, `cos-home-setup.service`, `cos-browser.service`, `/etc/default/cos-home` | `all` | `claw-os-base (= ${binary:Version})`, `systemd` |
 
 ## Build

@@ -15,6 +15,12 @@ pub async fn handle(
         "navigate" => {
             let url = params.get("url").and_then(|v| v.as_str())
                 .ok_or("url required")?;
+            if url::Url::parse(url)
+                .map(|parsed| parsed.scheme() == "file")
+                .unwrap_or(false)
+            {
+                return Err("file:// navigation is not permitted".to_string());
+            }
 
             let wait_until = params.get("waitUntil")
                 .and_then(|v| {

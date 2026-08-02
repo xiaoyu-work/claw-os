@@ -346,7 +346,6 @@ echo "===> staging claw-os-browser"
 BROWSER_STAGE="$STAGE_DIR/claw-os-browser"
 mkdir -p "$BROWSER_STAGE/DEBIAN"
 mkdir -p "$BROWSER_STAGE/usr/local/bin"
-mkdir -p "$BROWSER_STAGE/usr/lib/cos/services/browser"
 
 render_control "$SCRIPT_DIR/claw-os-browser/control" "$BROWSER_STAGE/DEBIAN/control"
 
@@ -360,9 +359,6 @@ if [ -f "$COS_BROWSER_WORKER" ]; then
     echo "  :: cos-browser-worker  <- $COS_BROWSER_WORKER"
     install -m 755 "$COS_BROWSER_WORKER" "$BROWSER_STAGE/usr/local/bin/cos-browser-worker"
 fi
-
-install -m 644 "$PROJECT_DIR/rootfs/overlay/usr/lib/cos/services/browser/service.json" \
-    "$BROWSER_STAGE/usr/lib/cos/services/browser/service.json"
 
 echo "  :: dpkg-deb --build claw-os-browser"
 $FAKEROOT $DPKG_DEB --root-owner-group --build "$BROWSER_STAGE" \

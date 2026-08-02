@@ -9,9 +9,10 @@ Depends: claw-os-base (= __VERSION__), chromium, libnss3, libxss1, libasound2, l
 Description: Claw OS — cos-browser engine (vendored Obscura)
  The cos-browser engine drives a headless Chromium via the Chrome
  DevTools Protocol, exposing it as `cos app web` and `cos browser`
- subcommands. This package installs the `cos-browser` binary and its
- service definition.
+ subcommands. This package installs the `cos-browser` and
+ `cos-browser-worker` binaries.
  .
  The CDP server (`cos-browser serve --port 9222`) is opt-in via the
  systemd unit shipped in `claw-os-systemd`. Install both packages and
- `systemctl enable --now cos-browser.service` to expose CDP at boot.
+ `systemctl enable --now cos-browser.service` to expose an authenticated
+ loopback CDP endpoint at boot.

@@ -6,12 +6,36 @@ Wants=cos-home-setup.service network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/cos-browser serve --port 9222
+User=cos-browser
+Group=cos-browser
+DynamicUser=yes
+RuntimeDirectory=cos-browser
+RuntimeDirectoryMode=0700
+StateDirectory=cos-browser
+StateDirectoryMode=0700
+CacheDirectory=cos-browser
+CacheDirectoryMode=0700
+Environment=HOME=/var/lib/cos-browser
+ExecStartPre=/bin/sh -c 'umask 077; od -An -N32 -tx1 /dev/urandom | tr -d "[:space:]" > /run/cos-browser/auth-token'
+ExecStart=/usr/local/bin/cos-browser serve --port 9222 --auth-token-file /run/cos-browser/auth-token
 Restart=on-failure
 RestartSec=5
-# cos-browser drives chromium; in containers/VMs without a user namespace
-# it commonly needs root to launch the chromium child. Override with a
-# drop-in if your target has a non-root user with the right capabilities.
+UMask=0077
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
 
 [Install]
 WantedBy=multi-user.target
