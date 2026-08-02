@@ -5,7 +5,7 @@
     "en": "Email Gateway"
   },
   "summary": {
-    "en": "Outbound-only SMTP email gateway. send delivers a one-shot text email through the configured SMTP server."
+    "en": "Outbound-only SMTP email gateway with mandatory TLS. send delivers a one-shot text email through the configured SMTP server."
   },
   "runtime": "python",
   "operations": {

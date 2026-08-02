@@ -5,12 +5,10 @@ the configured SMTP server. Inbound (IMAP polling) is still a stub.
 
 TLS strategy (hardened in the post-incident sweep):
   * port 465  -> implicit TLS (smtplib.SMTP_SSL)
-  * port 587  -> STARTTLS upgrade after EHLO. STARTTLS is **forced**:
-                 if the server doesn't advertise it (which a MITM
-                 actively strips it from EHLO would simulate), the
-                 send aborts rather than fall back to cleartext.
-  * port 25   -> plain unencrypted (only useful on internal relays,
-                 and the kernel must explicitly authorise the host).
+  * every other port -> mandatory STARTTLS upgrade after EHLO. If the
+                        server doesn't advertise it (which a MITM
+                        stripping STARTTLS would simulate), the send
+                        aborts before authentication or message data.
 
 Credentials needed:
   * ``smtp_host``     -- hostname (env override: COS_SMTP_HOST)
@@ -156,6 +154,8 @@ def _load_config() -> tuple[dict | None, str | None]:
             return None, f"smtp_port not an integer: {port_str!r}"
     else:
         port = DEFAULT_PORT
+    if not 1 <= port <= 65535:
+        return None, "smtp_port must be between 1 and 65535"
     from_addr, _ = _env_or_credential("COS_SMTP_FROM", "smtp_from")
     if not from_addr:
         from_addr = user
@@ -203,6 +203,12 @@ class _StartTLSUnavailable(smtplib.SMTPException):
     credentials in cleartext."""
 
 
+def _tls_context() -> ssl.SSLContext:
+    context = ssl.create_default_context()
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    return context
+
+
 def _send(to: str, subject: str, body: str, cc: str = "") -> dict:
     if not to or not str(to).strip():
         return {"ok": False, "error": "to required"}
@@ -235,32 +241,21 @@ def _send(to: str, subject: str, body: str, cc: str = "") -> dict:
     try:
         if cfg["port"] == 465:
             # Implicit TLS.
-            ctx = ssl.create_default_context()
+            ctx = _tls_context()
             with smtplib.SMTP_SSL(cfg["host"], cfg["port"], context=ctx, timeout=30) as smtp:
                 smtp.login(cfg["user"], cfg["password"])
                 smtp.send_message(msg, from_addr=cfg["from"], to_addrs=recipients)
         else:
             with smtplib.SMTP(cfg["host"], cfg["port"], timeout=30) as smtp:
                 smtp.ehlo()
-                if cfg["port"] == 587:
-                    # STARTTLS is mandatory on 587 — even if the server
-                    # claims (or a MITM forges) that it doesn't support
-                    # it, we refuse to keep going in cleartext.
-                    if not smtp.has_extn("starttls"):
-                        raise _StartTLSUnavailable(
-                            f"server {cfg['host']!r} did not advertise "
-                            "STARTTLS on the submission port; refusing "
-                            "to send credentials in cleartext"
-                        )
-                    smtp.starttls(context=ssl.create_default_context())
-                    smtp.ehlo()
-                elif cfg["port"] == 25:
-                    # Plain port 25 is an internal-relay-only mode.
-                    # We still try STARTTLS opportunistically when the
-                    # server offers it, but don't force it.
-                    if smtp.has_extn("starttls"):
-                        smtp.starttls(context=ssl.create_default_context())
-                        smtp.ehlo()
+                if not smtp.has_extn("starttls"):
+                    raise _StartTLSUnavailable(
+                        f"server {cfg['host']!r} did not advertise "
+                        f"STARTTLS on port {cfg['port']}; refusing "
+                        "to send credentials or message data in cleartext"
+                    )
+                smtp.starttls(context=_tls_context())
+                smtp.ehlo()
                 smtp.login(cfg["user"], cfg["password"])
                 smtp.send_message(msg, from_addr=cfg["from"], to_addrs=recipients)
     except smtplib.SMTPException as e:
@@ -269,6 +264,7 @@ def _send(to: str, subject: str, body: str, cc: str = "") -> dict:
             "platform": PLATFORM,
             "host": cfg["host"],
             "port": cfg["port"],
+            "tls": "implicit" if cfg["port"] == 465 else "starttls",
             "error": f"SMTP error: {e}",
         }
     except (socket.gaierror, OSError) as e:
@@ -277,6 +273,7 @@ def _send(to: str, subject: str, body: str, cc: str = "") -> dict:
             "platform": PLATFORM,
             "host": cfg["host"],
             "port": cfg["port"],
+            "tls": "implicit" if cfg["port"] == 465 else "starttls",
             "error": f"network error: {e}",
         }
     return {
@@ -284,6 +281,7 @@ def _send(to: str, subject: str, body: str, cc: str = "") -> dict:
         "platform": PLATFORM,
         "host": cfg["host"],
         "port": cfg["port"],
+        "tls": "implicit" if cfg["port"] == 465 else "starttls",
         "from": cfg["from"],
         "to": recipients,
         "subject": str(subject),
@@ -313,6 +311,9 @@ def _status() -> dict:
         "configured": cfg is not None,
         "host": cfg["host"] if cfg else None,
         "port": cfg["port"] if cfg else None,
+        "tls": (
+            "implicit" if cfg and cfg["port"] == 465 else "starttls" if cfg else None
+        ),
         "from": cfg["from"] if cfg else None,
         "config_error": err,
         "note": "Outbound-only mode. IMAP polling loop not yet implemented.",
