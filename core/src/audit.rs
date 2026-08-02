@@ -193,9 +193,9 @@ pub fn log_event(audit_path: &Path, mut entry: serde_json::Value) {
 ///   "verb":            "ai.chat.untrusted",
 ///   "scope": {                                  // structured scope
 ///     "kind":  "name",
-///     "value": "claude-*"
+///     "value": "<configured-model>"
 ///   },
-///   "target_resource": "claude-*",              // flattened scope
+///   "target_resource": "<configured-model>",    // flattened scope
 ///   "decision":        "allow",                 // allow | deny
 ///   "reason":          null,                    // DenialReason kind
 ///   "hint":            null,                    // optional hint

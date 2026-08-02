@@ -75,10 +75,7 @@
         },
         {
           "verb": "ai.chat.untrusted",
-          "scope": {
-            "kind": "fixed",
-            "scope": { "kind": "name", "value": "claude-*" }
-          },
+          "scope": { "kind": "wild" },
           "why": { "en": "Send the document text to a model so it can be summarised for you." }
         },
         {
@@ -101,10 +98,7 @@
         },
         {
           "verb": "ai.chat.untrusted",
-          "scope": {
-            "kind": "fixed",
-            "scope": { "kind": "name", "value": "claude-*" }
-          },
+          "scope": { "kind": "wild" },
           "why": { "en": "Send the content to a model so it can be explained for you." }
         }
       ]
@@ -123,10 +117,7 @@
         },
         {
           "verb": "ai.chat.untrusted",
-          "scope": {
-            "kind": "fixed",
-            "scope": { "kind": "name", "value": "claude-*" }
-          },
+          "scope": { "kind": "wild" },
           "why": { "en": "Send the content to a model to be rewritten per your instruction." }
         }
       ]
