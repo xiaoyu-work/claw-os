@@ -21,6 +21,10 @@ cos credential bundle openai-config --keys OPENAI_KEY,OPENAI_ORG
 cos credential load-bundle openai-config
 ```
 
+Bundle scope does not replace member scope: creating a bundle requires
+`secret.grant` for every listed credential, and loading it requires
+`secret.read` for every member before any value is decrypted.
+
 Credentials are auto-injected into services registered with `--credentials`:
 ```bash
 cos service register --name my-agent --command "python agent.py" --credentials OPENAI_KEY,DB_URL

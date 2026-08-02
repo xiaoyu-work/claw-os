@@ -2065,6 +2065,12 @@ fn cmd_bundle(args: &[String]) -> Result<Value, String> {
         validate_credential_component("credential name", key)?;
     }
     require_secret(Verb::SECRET_GRANT, bundle_scope(&namespace, bundle_name)?)?;
+    for key in &key_list {
+        require_secret(
+            Verb::SECRET_GRANT,
+            credential_scope(&namespace, key)?,
+        )?;
+    }
 
     let dir = bundles_dir(&namespace);
     fs::create_dir_all(&dir).map_err(|e| format!("failed to create bundles dir: {e}"))?;
@@ -2120,6 +2126,17 @@ fn cmd_load_bundle(args: &[String]) -> Result<Value, String> {
         return Err("bundle metadata does not match its storage path".to_string());
     }
 
+    // A bundle is grouping metadata, not an authority container. Authorize
+    // every member before reading any file so bundle scope can never widen a
+    // session's per-secret grants or produce a partial authorization oracle.
+    for key in &manifest.keys {
+        validate_credential_component("credential name", key)?;
+        require_secret(
+            Verb::SECRET_READ,
+            credential_scope(&namespace, key)?,
+        )?;
+    }
+
     let mut credentials = serde_json::Map::new();
     let mut errors = serde_json::Map::new();
     let current_tier = effective_session_tier();
@@ -2157,6 +2174,13 @@ fn cmd_load_bundle(args: &[String]) -> Result<Value, String> {
                 continue;
             }
         };
+        if cred.name != *key || cred.namespace != namespace {
+            errors.insert(
+                key.clone(),
+                Value::String("credential metadata does not match its storage path".into()),
+            );
+            continue;
+        }
 
         // Check tier
         if !tier_grants_access(current_tier, cred.min_tier) {
