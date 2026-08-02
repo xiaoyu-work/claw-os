@@ -138,6 +138,7 @@ pub fn record_task_event(event: &'static str, job: &Job) {
         "status": job.status.as_str(),
         "session_id": &job.session_id,
         "worker_pid": job.worker_pid,
+        "worker_start_time_ticks": job.worker_start_time_ticks,
         "provider": &job.provider,
         "model": &job.model,
         "error": &job.error,

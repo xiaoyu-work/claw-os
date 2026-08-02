@@ -52,6 +52,8 @@ struct TaskAudit<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     worker_pid: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    worker_start_time_ticks: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     provider: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     model: Option<&'a str>,
@@ -147,6 +149,7 @@ pub fn record_task_event(event: &'static str, job: &crate::agent::service::Job) 
         status: job.status.as_str(),
         session_id: job.session_id.as_deref(),
         worker_pid: job.worker_pid,
+        worker_start_time_ticks: job.worker_start_time_ticks,
         provider: job.provider.as_deref(),
         model: job.model.as_deref(),
         error: job.error.as_deref(),

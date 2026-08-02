@@ -110,6 +110,8 @@ pub struct Job {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worker_pid: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_start_time_ticks: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cancel_requested_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response: Option<String>,
@@ -170,6 +172,7 @@ impl Job {
             started_at: None,
             finished_at: None,
             worker_pid: None,
+            worker_start_time_ticks: None,
             cancel_requested_at: None,
             response: None,
             error: None,
@@ -399,7 +402,7 @@ impl Store {
 
     /// Atomically claim one pending job: rename pending/<id>.json →
     /// running/<id>.json, then rewrite the file with `status =
-    /// Running` + `started_at` + `worker_pid`. Returns Ok(None) when
+    /// Running` + `started_at` + worker PID/start-time identity. Returns Ok(None) when
     /// no pending jobs exist or every candidate was lost to another
     /// worker.
     pub fn claim_one(&self) -> io::Result<Option<Job>> {
@@ -462,7 +465,10 @@ impl Store {
                     }
                     job.status = JobStatus::Running;
                     job.started_at = Some(now_iso());
-                    job.worker_pid = Some(std::process::id());
+                    let worker_pid = std::process::id();
+                    job.worker_pid = Some(worker_pid);
+                    job.worker_start_time_ticks =
+                        crate::proc::read_start_time_ticks_pub(worker_pid);
                     write_json_atomic(&dst, &job)?;
                     crate::clawd::audit::record_task_event("clawd.task.started", &job);
                     return Ok(Some(job));
@@ -480,10 +486,11 @@ impl Store {
     /// `claim_one` only ever looks at `pending/`, so the work is never
     /// retried and `cos agent task <id>` blocks until its deadline.
     ///
-    /// For each `running/` job we check whether its `worker_pid` is still
-    /// alive (cross-uid-safe via [`crate::proc::is_pid_alive`]):
-    ///   * **Alive** — another worker (or this run's predecessor that is
-    ///     somehow still up) owns it; leave it untouched.
+    /// For each `running/` job we verify both `worker_pid` and the kernel
+    /// process start-time captured at claim:
+    ///   * **Exact match** — another worker still owns it; leave untouched.
+    ///   * **PID alive but identity missing/unreadable** — fail closed rather
+    ///     than requeue and risk executing the job twice.
     ///   * **Dead / no pid recorded** — the owning worker is gone. Move
     ///     the job back to `pending/` (status reset to `Pending`, the
     ///     stale `worker_pid` / `started_at` cleared) so a worker can
@@ -535,16 +542,47 @@ impl Store {
                 }
             };
 
-            // Owner still alive ⇒ not an orphan; leave it be.
+            let mut unverifiable_identity = false;
+            // Owner still alive with the exact same process identity ⇒ not
+            // an orphan; leave it be.
             if let Some(pid) = job.worker_pid {
-                if crate::proc::is_pid_alive(pid) {
-                    continue;
+                match job.worker_start_time_ticks {
+                    Some(expected) => match crate::proc::read_start_time_ticks_pub(pid) {
+                        Some(current) if current == expected => continue,
+                        Some(_) => {}
+                        None if crate::proc::is_pid_alive(pid) => {
+                            unverifiable_identity = true;
+                        }
+                        None => {}
+                    },
+                    None if crate::proc::is_pid_alive(pid) => {
+                        unverifiable_identity = true;
+                    }
+                    None => {}
                 }
+            }
+            if unverifiable_identity {
+                job.status = JobStatus::Error;
+                job.error = Some(
+                    "worker PID is alive but its start-time identity is unavailable; \
+                     refusing to retry a potentially active job"
+                        .to_string(),
+                );
+                job.finished_at = Some(now_iso());
+                write_json_atomic(&path, &job)?;
+                let done = self.path_for(JobStatus::Ok, &id);
+                fs::rename(&path, &done)?;
+                let _ = finish_durable_session(&job);
+                crate::clawd::audit::record_task_event(
+                    "clawd.task.worker_identity_unverifiable",
+                    &job,
+                );
+                failed += 1;
+                continue;
             }
 
             if job.cancel_requested_at.is_some() {
                 job.status = JobStatus::Cancelled;
-                job.worker_pid = None;
                 job.finished_at = Some(now_iso());
                 write_json_atomic(&path, &job)?;
                 let done = self.path_for(JobStatus::Ok, &id);
@@ -558,9 +596,6 @@ impl Store {
             }
 
             job.recovery_count = job.recovery_count.saturating_add(1);
-            job.worker_pid = None;
-            job.started_at = None;
-            job.cancel_requested_at = None;
 
             if job.recovery_count > MAX_RECOVERIES {
                 // Poison job: it has already taken down a worker
@@ -582,11 +617,17 @@ impl Store {
             }
 
             // Requeue: reset to pending and move back to pending/.
+            let mut audit_job = job.clone();
+            audit_job.status = JobStatus::Pending;
             job.status = JobStatus::Pending;
+            job.worker_pid = None;
+            job.worker_start_time_ticks = None;
+            job.started_at = None;
+            job.cancel_requested_at = None;
             write_json_atomic(&path, &job)?;
             let pending = self.path_for(JobStatus::Pending, &id);
             fs::rename(&path, &pending)?;
-            crate::clawd::audit::record_task_event("clawd.task.recovered", &job);
+            crate::clawd::audit::record_task_event("clawd.task.recovered", &audit_job);
             requeued += 1;
         }
 
