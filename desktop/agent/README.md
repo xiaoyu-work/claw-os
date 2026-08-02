@@ -58,12 +58,14 @@ The bridge no longer serves a static SPA — the previous React
 frontend was retired in favour of `cos-agent-ui`. Every UI surface
 talks only to the `/api/*` endpoints.
 
-## Port discovery
+## Endpoint discovery
 
 The bridge binds an ephemeral port when `COS_AGENT_BRIDGE_PORT` is
-unset (the systemd default) and writes the bound port to
-`$XDG_RUNTIME_DIR/cos-agent-bridge.port`. The native UI and the
-`cos app agent` launcher both read this file to discover the URL.
+unset (the systemd default), generates a random bearer token, and
+atomically writes both values to
+`$XDG_RUNTIME_DIR/cos-agent-bridge/endpoint.json` with mode `0600`.
+The native UI and `cos app agent` launcher read this file and attach
+the token to every bridge request.
 
 ## License
 

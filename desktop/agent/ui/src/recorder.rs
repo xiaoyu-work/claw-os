@@ -28,6 +28,8 @@ use std::thread::JoinHandle;
 use anyhow::{Context, Result, anyhow};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
+use crate::bridge::BridgeEndpoint;
+
 /// Target sample rate for the WAV upload. Most STT backends expect
 /// 16 kHz; uploading higher only wastes bandwidth.
 const TARGET_RATE: u32 = 16_000;
@@ -246,10 +248,14 @@ pub struct VoiceResponse {
 /// response. The bridge returns a placeholder transcript when no
 /// STT backend is wired — we surface that to the user as a tip
 /// rather than dropping it silently into the input.
-pub async fn upload(port: u16, wav: Vec<u8>) -> Result<VoiceResponse> {
-    let url = format!("http://127.0.0.1:{port}/api/voice/upload");
+pub async fn upload(endpoint: BridgeEndpoint, wav: Vec<u8>) -> Result<VoiceResponse> {
+    let url = format!(
+        "http://127.0.0.1:{}/api/voice/upload",
+        endpoint.port
+    );
     let resp = reqwest::Client::new()
         .post(&url)
+        .bearer_auth(&endpoint.token)
         .header("Content-Type", "audio/wav")
         .body(wav)
         .send()

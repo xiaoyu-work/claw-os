@@ -1,10 +1,8 @@
 //! Discovery and request shapes for `cos-agent-bridge`.
 //!
 //! The bridge is a sibling process under `desktop/agent/bridge/`.
-//! It listens on `127.0.0.1:<port>` and writes the bound port to
-//! `$XDG_RUNTIME_DIR/cos-agent-bridge.port` so other clients (this
-//! UI, the future global hotkey overlay, the legacy React app) can
-//! find it without command-line wiring.
+//! It listens on `127.0.0.1:<port>` and writes the bound port plus a
+//! bearer token to a private discovery file under `$XDG_RUNTIME_DIR`.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -12,11 +10,11 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-/// Maximum age of the port file before we assume the bridge is dead.
+/// Maximum age of the endpoint file before we assume the bridge is dead.
 /// Today we don't actually check mtime — kept here for the future
 /// "bridge appears down" UI banner.
 #[allow(dead_code)]
-pub const PORT_FILE_STALE_AFTER: Duration = Duration::from_secs(86_400);
+pub const ENDPOINT_FILE_STALE_AFTER: Duration = Duration::from_secs(86_400);
 
 /// Wire format for `POST /api/chat`. Matches the React shape.
 #[derive(Debug, Clone, Serialize)]
@@ -105,28 +103,88 @@ struct HistoryEnvelope {
     messages: Vec<HistoryMessage>,
 }
 
-/// Read the port file the bridge dropped at boot.
-pub fn read_bridge_port() -> Result<u16> {
+#[derive(Clone, Deserialize)]
+pub struct BridgeEndpoint {
+    pub port: u16,
+    pub token: String,
+}
+
+/// Read and validate the private endpoint file the bridge published at boot.
+pub fn read_bridge_endpoint() -> Result<BridgeEndpoint> {
     let dir = std::env::var("XDG_RUNTIME_DIR")
         .ok()
         .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    let path = dir.join("cos-agent-bridge.port");
-    let s = std::fs::read_to_string(&path)
-        .with_context(|| format!("reading bridge port file at {}", path.display()))?;
-    let port: u16 = s.trim().parse().with_context(|| "parsing bridge port")?;
-    Ok(port)
+        .map(|dir| dir.join("cos-agent-bridge"))
+        .context("XDG_RUNTIME_DIR is required for bridge discovery")?;
+    if !dir.is_absolute() {
+        anyhow::bail!("bridge runtime directory must be absolute");
+    }
+    let path = dir.join("endpoint.json");
+    let dir_metadata = std::fs::symlink_metadata(&dir)
+        .with_context(|| format!("inspecting bridge runtime directory {}", dir.display()))?;
+    if dir_metadata.file_type().is_symlink() || !dir_metadata.is_dir() {
+        anyhow::bail!(
+            "bridge runtime path is not a real directory: {}",
+            dir.display()
+        );
+    }
+    let metadata = std::fs::symlink_metadata(&path)
+        .with_context(|| format!("inspecting bridge endpoint {}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        anyhow::bail!("bridge endpoint is not a regular file: {}", path.display());
+    }
+    if metadata.len() == 0 || metadata.len() > 4096 {
+        anyhow::bail!("bridge endpoint has an invalid size");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if dir_metadata.mode() & 0o077 != 0 || metadata.mode() & 0o077 != 0 {
+            anyhow::bail!(
+                "bridge discovery state {} is accessible by another user",
+                path.display()
+            );
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let current_uid = std::fs::metadata("/proc/self")
+                .context("inspecting Agent UI process identity")?
+                .uid();
+            if dir_metadata.uid() != current_uid || metadata.uid() != current_uid {
+                anyhow::bail!("bridge discovery state belongs to another user");
+            }
+        }
+    }
+    let endpoint: BridgeEndpoint = serde_json::from_slice(
+        &std::fs::read(&path)
+            .with_context(|| format!("reading bridge endpoint {}", path.display()))?,
+    )
+    .context("decoding bridge endpoint")?;
+    if endpoint.port == 0
+        || endpoint.token.len() < 32
+        || endpoint.token.len() > 256
+        || !endpoint
+            .token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        anyhow::bail!("bridge endpoint contains invalid credentials");
+    }
+    Ok(endpoint)
 }
 
 /// Resolve a path relative to the bridge into a full URL.
-pub fn bridge_url(port: u16, path: &str) -> String {
-    format!("http://127.0.0.1:{port}{path}")
+pub fn bridge_url(endpoint: &BridgeEndpoint, path: &str) -> String {
+    format!("http://127.0.0.1:{}{path}", endpoint.port)
 }
 
 /// `GET /api/sessions` — list persisted conversations newest-first.
-pub async fn fetch_sessions(port: u16) -> Result<Vec<SessionSummary>> {
-    let url = bridge_url(port, "/api/sessions");
-    let response = reqwest::get(&url)
+pub async fn fetch_sessions(endpoint: BridgeEndpoint) -> Result<Vec<SessionSummary>> {
+    let url = bridge_url(&endpoint, "/api/sessions");
+    let response = reqwest::Client::new()
+        .get(&url)
+        .bearer_auth(&endpoint.token)
+        .send()
         .await
         .with_context(|| format!("GET {url}"))?;
     if !response.status().is_success() {
@@ -140,10 +198,16 @@ pub async fn fetch_sessions(port: u16) -> Result<Vec<SessionSummary>> {
 }
 
 /// `GET /api/sessions/:id/history` — full transcript for `session_id`.
-pub async fn fetch_history(port: u16, session_id: &str) -> Result<Vec<HistoryMessage>> {
+pub async fn fetch_history(
+    endpoint: BridgeEndpoint,
+    session_id: &str,
+) -> Result<Vec<HistoryMessage>> {
     let path = format!("/api/sessions/{session_id}/history");
-    let url = bridge_url(port, &path);
-    let response = reqwest::get(&url)
+    let url = bridge_url(&endpoint, &path);
+    let response = reqwest::Client::new()
+        .get(&url)
+        .bearer_auth(&endpoint.token)
+        .send()
         .await
         .with_context(|| format!("GET {url}"))?;
     if !response.status().is_success() {
@@ -155,4 +219,3 @@ pub async fn fetch_history(port: u16, session_id: &str) -> Result<Vec<HistoryMes
         .context("decoding history envelope")?;
     Ok(envelope.messages)
 }
-

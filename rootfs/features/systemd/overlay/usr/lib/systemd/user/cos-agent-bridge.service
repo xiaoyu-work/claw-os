@@ -12,23 +12,33 @@ Type=simple
 ExecStart=/usr/local/bin/cos-agent-bridge
 Restart=on-failure
 RestartSec=3
-# Default port = 0 (kernel-assigned). The bound port is published to
-# $XDG_RUNTIME_DIR/cos-agent-bridge.port for launchers to discover.
+# Default port = 0 (kernel-assigned). The authenticated endpoint is
+# published inside a private runtime directory for launchers to discover.
 # Override via drop-in if a fixed port is required.
 Environment=COS_BIN=/usr/local/bin/cos
 Environment=CLAWD_SOCKET=/run/cos/clawd.sock
+RuntimeDirectory=cos-agent-bridge
+RuntimeDirectoryMode=0700
+UMask=0077
 # Hardening: bridge is local-only, never exec, never write outside its
 # own runtime dir.
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictAddressFamilies=AF_UNIX AF_INET
 NoNewPrivileges=true
+PrivateDevices=true
 PrivateTmp=true
 ProtectSystem=strict
-# Need read access to ~/.config/cos for the cos agent subprocess to find
-# its provider config.
-ProtectHome=read-only
-# The bridge writes the port file under XDG_RUNTIME_DIR (%t for user
-# units).
-ReadWritePaths=%t
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+LockPersonality=true
+RestrictRealtime=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+# The bridge writes only its authenticated discovery file here.
+ReadWritePaths=%t/cos-agent-bridge
 
 [Install]
 WantedBy=graphical-session.target

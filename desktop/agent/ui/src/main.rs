@@ -3,8 +3,8 @@
 //! Replaces the React + WebView app under `desktop/agent/web/`. The
 //! bridge under `desktop/agent/bridge/` stays in place during this
 //! transition and serves as the single contract: this UI POSTs to
-//! `http://127.0.0.1:<port>/api/chat` and consumes the same SSE
-//! stream the React app did.
+//! the authenticated `http://127.0.0.1:<port>/api/chat` endpoint and
+//! consumes the same SSE stream the React app did.
 //!
 //! Two visual modes:
 //!
@@ -49,8 +49,8 @@ mod recorder;
 mod sse;
 
 use crate::bridge::{
-    ChatRequest, HistoryMessage, SessionSummary, StreamEvent, ToolCallView, ToolResultView,
-    fetch_history, fetch_sessions, read_bridge_port,
+    BridgeEndpoint, ChatRequest, HistoryMessage, SessionSummary, StreamEvent, ToolCallView,
+    ToolResultView, fetch_history, fetch_sessions, read_bridge_endpoint,
 };
 use crate::recorder::Recorder;
 
@@ -309,7 +309,7 @@ impl LocalSession {
 pub struct App {
     core: Core,
     flags: Flags,
-    bridge_port: Option<u16>,
+    bridge_endpoint: Option<BridgeEndpoint>,
     bridge_error: Option<String>,
 
     sessions: Vec<LocalSession>,
@@ -359,8 +359,8 @@ impl Application for App {
             core.window.show_minimize = false;
         }
 
-        let (bridge_port, bridge_error) = match read_bridge_port() {
-            Ok(p) => (Some(p), None),
+        let (bridge_endpoint, bridge_error) = match read_bridge_endpoint() {
+            Ok(endpoint) => (Some(endpoint), None),
             Err(e) => {
                 warn!("cos-agent-bridge unreachable: {e:#}");
                 (None, Some(format!("Bridge unavailable: {e}")))
@@ -370,7 +370,7 @@ impl Application for App {
         let mut app = App {
             core,
             flags: flags.clone(),
-            bridge_port,
+            bridge_endpoint,
             bridge_error,
             sessions: Vec::new(),
             active: 0,
@@ -392,10 +392,10 @@ impl Application for App {
         // the sidebar starts populated with the user's prior chats.
         // Standalone-only — the overlay is a one-shot launcher.
         let fetch_sessions = if !flags.overlay {
-            if let Some(p) = app.bridge_port {
+            if let Some(endpoint) = app.bridge_endpoint.clone() {
                 cosmic::Task::perform(
                     async move {
-                        fetch_sessions(p)
+                        fetch_sessions(endpoint)
                             .await
                             .map_err(|err| format!("{err:#}"))
                     },
@@ -673,13 +673,13 @@ impl App {
             sess.history = HistoryState::Loaded;
             return Task::none();
         };
-        let Some(port) = self.bridge_port else {
+        let Some(endpoint) = self.bridge_endpoint.clone() else {
             return Task::none();
         };
         sess.history = HistoryState::Loading;
         cosmic::Task::perform(
             async move {
-                let result = fetch_history(port, &remote_id)
+                let result = fetch_history(endpoint, &remote_id)
                     .await
                     .map_err(|err| format!("{err:#}"));
                 Message::HistoryFetched {
@@ -739,7 +739,7 @@ impl App {
         if prompt.is_empty() || self.streaming {
             return Task::none();
         }
-        let Some(port) = self.bridge_port else {
+        let Some(endpoint) = self.bridge_endpoint.clone() else {
             self.error = Some(
                 self.bridge_error
                     .clone()
@@ -788,7 +788,7 @@ impl App {
             move |mut tx: cosmic::iced::futures::channel::mpsc::Sender<Message>| async move {
                 use futures::SinkExt;
                 use futures_util::StreamExt;
-                match sse::open_chat_stream(port, request).await {
+                match sse::open_chat_stream(endpoint, request).await {
                     Ok(stream) => {
                         let mut stream = std::pin::pin!(stream);
                         while let Some(item) = stream.next().await {
@@ -977,8 +977,8 @@ impl App {
             .padding(spacing.space_xs)
             .width(Length::Fill);
 
-        let model_caption = match self.bridge_port {
-            Some(port) => format!("Bridge :{port}"),
+        let model_caption = match self.bridge_endpoint.as_ref() {
+            Some(endpoint) => format!("Bridge :{}", endpoint.port),
             None => "Bridge offline".into(),
         };
 
@@ -1109,7 +1109,7 @@ impl App {
             },
             VoiceState::Recording(rec) => {
                 self.voice = VoiceState::Processing;
-                let Some(port) = self.bridge_port else {
+                let Some(endpoint) = self.bridge_endpoint.clone() else {
                     self.voice = VoiceState::Idle;
                     self.error = Some(
                         self.bridge_error
@@ -1131,7 +1131,7 @@ impl App {
                                 return Message::VoiceError(format!("recorder task: {e}"));
                             }
                         };
-                        match recorder::upload(port, wav).await {
+                        match recorder::upload(endpoint, wav).await {
                             Ok(resp) => Message::VoiceTranscribed {
                                 text: resp.text,
                                 placeholder: resp.placeholder,

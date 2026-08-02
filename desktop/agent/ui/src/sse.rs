@@ -21,20 +21,23 @@ use futures_util::StreamExt;
 use reqwest::Client;
 use serde_json::Value;
 
-use crate::bridge::{bridge_url, ChatRequest, DeltaPayload, ErrorPayload, StreamEvent};
+use crate::bridge::{
+    BridgeEndpoint, ChatRequest, DeltaPayload, ErrorPayload, StreamEvent, bridge_url,
+};
 
 /// Open an SSE stream against the bridge and return a `Stream` of
 /// decoded `StreamEvent`s. Drops on completion or transport error.
 pub async fn open_chat_stream(
-    port: u16,
+    endpoint: BridgeEndpoint,
     request: ChatRequest,
 ) -> Result<impl Stream<Item = Result<StreamEvent>>> {
-    let url = bridge_url(port, "/api/chat");
+    let url = bridge_url(&endpoint, "/api/chat");
     let client = Client::builder()
         .build()
         .context("building reqwest client")?;
     let response = client
         .post(&url)
+        .bearer_auth(&endpoint.token)
         .header("Accept", "text/event-stream")
         .header("Content-Type", "application/json")
         .json(&request)

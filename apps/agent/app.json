@@ -11,7 +11,7 @@
   "runtime": "python",
   "operations": {
     "open": {
-      "label": { "en": "Open the Agent window (windowed chromium against cos-agent-bridge)" },
+      "label": { "en": "Open the native Agent window" },
       "args": [],
       "needs": []
     },
@@ -21,7 +21,7 @@
       "needs": []
     },
     "url": {
-      "label": { "en": "Print the URL of the local bridge (http://127.0.0.1:PORT/)" },
+      "label": { "en": "Return the authenticated local bridge endpoint" },
       "args": [],
       "needs": []
     }
