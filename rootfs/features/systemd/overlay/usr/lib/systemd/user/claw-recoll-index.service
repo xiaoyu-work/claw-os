@@ -2,6 +2,8 @@
 Description=ClawOS: Recoll real-time document indexing (inotify)
 Documentation=man:recollindex(1) man:recoll.conf(5)
 ConditionPathIsExecutable=/usr/bin/recollindex
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -15,8 +17,6 @@ IOWeight=30
 Nice=15
 Restart=on-failure
 RestartSec=30
-StartLimitIntervalSec=300
-StartLimitBurst=5
 
 [Install]
 WantedBy=default.target
