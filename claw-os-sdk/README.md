@@ -71,7 +71,9 @@ claw-os-sdk/
 
 Every SDK in every language is a **thin client** over the same
 **wire protocol v1**, which is the JSON envelope that `cos` (the
-kernel CLI) reads from argv and writes to stdout.
+kernel CLI) writes to stdout. Routing flags use argv; AI prompt and
+system bodies use private `0600` temporary files so they never appear
+in `/proc/*/cmdline`.
 
 ```
 ┌──────────────────────┐
@@ -84,7 +86,7 @@ kernel CLI) reads from argv and writes to stdout.
 │  - typed structs (generated from wire/v1/*.schema.json)  │
 │  - language-idiomatic API surface                        │
 └──────────┬───────────────────────────────────────────────┘
-           │ subprocess: cos ai chat --app <id> --prompt …
+           │ subprocess: cos ai chat --app <id> --prompt-file <0600 temp>
            ▼
 ┌──────────────────────────────────────────────────────────┐
 │  cos                  (Rust binary, in /usr/bin)         │

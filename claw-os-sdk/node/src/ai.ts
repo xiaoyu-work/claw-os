@@ -16,6 +16,10 @@
 //   const res = ai.chat("Summarise this", { origin: "external-content" });
 //   console.log(res.text, res.usage.units);
 
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import {
   BridgeError,
   Denied,
@@ -229,23 +233,36 @@ function resolveApp(modality: string, appId?: string): string {
 function dispatch(a: DispatchArgs): AiResponse {
   const app = resolveApp(a.modality, a.appId);
   const argv = ["ai", "chat", "--app", app, "--origin", a.origin];
-  if (a.prompt != null) argv.push("--prompt", a.prompt);
-  if (a.maxUnits != null) argv.push("--max-units", String(a.maxUnits));
-  if (a.system != null) argv.push("--system", a.system);
-  if (a.tools && a.tools.length) argv.push("--tools", a.tools.join(","));
-
-  let outcome;
+  const privateDir = mkdtempSync(join(tmpdir(), "claw-ai-"));
   try {
-    outcome = cosCallJson(`cos ai ${a.modality}`, argv);
-  } catch (e) {
-    if (e instanceof Unavailable) throw new AiUnavailable(e.message);
-    throw e;
+    if (a.prompt != null) {
+      const promptPath = join(privateDir, "prompt");
+      writeFileSync(promptPath, a.prompt, { encoding: "utf8", mode: 0o600, flag: "wx" });
+      argv.push("--prompt-file", promptPath);
+    }
+    if (a.maxUnits != null) argv.push("--max-units", String(a.maxUnits));
+    if (a.system != null) {
+      const systemPath = join(privateDir, "system");
+      writeFileSync(systemPath, a.system, { encoding: "utf8", mode: 0o600, flag: "wx" });
+      argv.push("--system-file", systemPath);
+    }
+    if (a.tools && a.tools.length) argv.push("--tools", a.tools.join(","));
+
+    let outcome;
+    try {
+      outcome = cosCallJson(`cos ai ${a.modality}`, argv);
+    } catch (e) {
+      if (e instanceof Unavailable) throw new AiUnavailable(e.message);
+      throw e;
+    }
+    const env = asObject(outcome.envelope);
+    if (outcome.status !== 0 || hasError(outcome.envelope)) {
+      raiseForError(env);
+    }
+    return parseResponse(env);
+  } finally {
+    rmSync(privateDir, { recursive: true, force: true });
   }
-  const env = asObject(outcome.envelope);
-  if (outcome.status !== 0 || hasError(outcome.envelope)) {
-    raiseForError(env);
-  }
-  return parseResponse(env);
 }
 
 function raiseForError(env: Record<string, unknown>): never {

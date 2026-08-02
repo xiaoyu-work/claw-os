@@ -16,6 +16,10 @@
 //! ```
 
 use std::ffi::OsString;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
@@ -202,6 +206,58 @@ pub fn video_analyze(_video: &str, _prompt: Option<&str>, _opts: ChatOpts) -> Re
 // Internals
 // ---------------------------------------------------------------------------
 
+struct PrivateInputFile {
+    path: PathBuf,
+}
+
+impl PrivateInputFile {
+    fn new(label: &str, contents: &str) -> Result<Self, AiError> {
+        static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
+        let sequence = NEXT_FILE.fetch_add(1, Ordering::Relaxed);
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!(
+            "claw-ai-{}-{nonce}-{sequence}-{label}",
+            std::process::id()
+        ));
+        let mut options = OpenOptions::new();
+        options.create_new(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(&path)
+            .map_err(|error| AiError::Unavailable(format!("create private {label}: {error}")))?;
+        if let Err(error) = file
+            .write_all(contents.as_bytes())
+            .and_then(|_| file.sync_all())
+        {
+            drop(file);
+            let _ = std::fs::remove_file(&path);
+            return Err(AiError::Unavailable(format!(
+                "write private {label}: {error}"
+            )));
+        }
+        Ok(Self { path })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for PrivateInputFile {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_file(&self.path) {
+            eprintln!("claw-os-sdk: failed to remove private AI input file: {error}");
+        }
+    }
+}
+
 fn dispatch(prompt: &str, opts: ChatOpts) -> Result<AiResponse, AiError> {
     let app = opts
         .app_id
@@ -218,12 +274,20 @@ fn dispatch(prompt: &str, opts: ChatOpts) -> Result<AiResponse, AiError> {
         "--app".into(), app.into(),
         "--origin".into(), origin.into(),
     ];
-    argv.push("--prompt".into()); argv.push(prompt.into());
+    let prompt_file = PrivateInputFile::new("prompt", prompt)?;
+    argv.push("--prompt-file".into());
+    argv.push(prompt_file.path().as_os_str().to_owned());
     if let Some(n) = opts.max_units {
         argv.push("--max-units".into()); argv.push(n.to_string().into());
     }
-    if let Some(s) = &opts.system {
-        argv.push("--system".into()); argv.push(s.into());
+    let system_file = opts
+        .system
+        .as_deref()
+        .map(|system| PrivateInputFile::new("system", system))
+        .transpose()?;
+    if let Some(file) = &system_file {
+        argv.push("--system-file".into());
+        argv.push(file.path().as_os_str().to_owned());
     }
     if let Some(tools) = &opts.tools {
         argv.push("--tools".into());

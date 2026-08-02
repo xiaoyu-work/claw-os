@@ -19,6 +19,7 @@
 package clawossdk
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -215,6 +216,35 @@ func resolveApp(modality, appID string) (string, error) {
 	return app, nil
 }
 
+func writePrivateInput(name, value string) (string, func(), error) {
+	file, err := os.CreateTemp("", "claw-ai-"+name+"-*")
+	if err != nil {
+		return "", nil, err
+	}
+	path := file.Name()
+	cleanup := func() { _ = os.Remove(path) }
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		cleanup()
+		return "", nil, err
+	}
+	if _, err := file.WriteString(value); err != nil {
+		_ = file.Close()
+		cleanup()
+		return "", nil, err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		cleanup()
+		return "", nil, err
+	}
+	if err := file.Close(); err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	return path, cleanup, nil
+}
+
 func dispatch(a dispatchArgs) (*AiResponse, error) {
 	origin := a.opts.Origin
 	if origin == "" {
@@ -226,14 +256,30 @@ func dispatch(a dispatchArgs) (*AiResponse, error) {
 	}
 
 	argv := []string{"ai", "chat", "--app", app, "--origin", origin}
+	cleanups := make([]func(), 0, 2)
+	defer func() {
+		for i := len(cleanups) - 1; i >= 0; i-- {
+			cleanups[i]()
+		}
+	}()
 	if a.prompt != nil {
-		argv = append(argv, "--prompt", *a.prompt)
+		path, cleanup, err := writePrivateInput("prompt", *a.prompt)
+		if err != nil {
+			return nil, &AiUnavailableError{Msg: fmt.Sprintf("write private prompt: %v", err)}
+		}
+		cleanups = append(cleanups, cleanup)
+		argv = append(argv, "--prompt-file", path)
 	}
 	if a.opts.MaxUnits != 0 {
 		argv = append(argv, "--max-units", strconv.Itoa(a.opts.MaxUnits))
 	}
 	if a.opts.System != "" {
-		argv = append(argv, "--system", a.opts.System)
+		path, cleanup, err := writePrivateInput("system", a.opts.System)
+		if err != nil {
+			return nil, &AiUnavailableError{Msg: fmt.Sprintf("write private system prompt: %v", err)}
+		}
+		cleanups = append(cleanups, cleanup)
+		argv = append(argv, "--system-file", path)
 	}
 	if len(a.opts.Tools) > 0 {
 		argv = append(argv, "--tools", strings.Join(a.opts.Tools, ","))

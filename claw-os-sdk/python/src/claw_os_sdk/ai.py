@@ -53,6 +53,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional
 
@@ -376,28 +377,39 @@ def _dispatch(
             f"{modality}: app_id is required (pass app_id= or set COS_APP_ID)"
         )
 
-    cmd = [_cos_binary(), "ai", "chat", "--app", app, "--origin", origin]
-    if prompt is not None:
-        cmd.extend(["--prompt", prompt])
-    if max_units is not None:
-        cmd.extend(["--max-units", str(max_units)])
-    if system is not None:
-        cmd.extend(["--system", system])
-    if tools:
-        cmd.extend(["--tools", ",".join(tools)])
+    with tempfile.TemporaryDirectory(prefix="claw-ai-") as private_dir:
+        cmd = [_cos_binary(), "ai", "chat", "--app", app, "--origin", origin]
 
-    try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=_DEFAULT_TIMEOUT_S,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise AiUnavailable(
-            f"cos ai {modality} timed out after {_DEFAULT_TIMEOUT_S}s"
-        ) from exc
+        def add_private_file(flag: str, name: str, value: str) -> None:
+            path = os.path.join(private_dir, name)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as output:
+                output.write(value)
+                output.flush()
+                os.fsync(output.fileno())
+            cmd.extend([flag, path])
+
+        if prompt is not None:
+            add_private_file("--prompt-file", "prompt", prompt)
+        if max_units is not None:
+            cmd.extend(["--max-units", str(max_units)])
+        if system is not None:
+            add_private_file("--system-file", "system", system)
+        if tools:
+            cmd.extend(["--tools", ",".join(tools)])
+
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=_DEFAULT_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise AiUnavailable(
+                f"cos ai {modality} timed out after {_DEFAULT_TIMEOUT_S}s"
+            ) from exc
     payload_text = (proc.stdout or "").strip() or (proc.stderr or "").strip()
     if not payload_text:
         raise AiUnavailable(

@@ -24,6 +24,7 @@
 //!   --app <id>           App requesting the call (required).
 //!   --prompt <text>      Text portion of the request (modality-dependent).
 //!   --prompt-file <p>    Read prompt body from a file.
+//!   --system-file <p>    Read the optional system prompt from a file.
 //!   --origin <kind>      trusted | user-input | external-content (default: trusted).
 //!   --max-units <N>      Cap units for this call.
 //!   --system <text>      Optional system prompt.
@@ -65,6 +66,7 @@ pub fn chat_cmd(args: &[String]) -> Result<Value, String> {
     let mut origin = "trusted".to_string();
     let mut max_units: Option<u64> = None;
     let mut system: Option<String> = None;
+    let mut system_file: Option<String> = None;
     let mut embed = false;
     let mut image_input: Option<std::path::PathBuf> = None;
     let mut image_output: Option<std::path::PathBuf> = None;
@@ -113,6 +115,10 @@ pub fn chat_cmd(args: &[String]) -> Result<Value, String> {
             }
             "--system" => {
                 system = args.get(i + 1).cloned();
+                i += 2;
+            }
+            "--system-file" => {
+                system_file = args.get(i + 1).cloned();
                 i += 2;
             }
             "--embed" => {
@@ -183,10 +189,24 @@ pub fn chat_cmd(args: &[String]) -> Result<Value, String> {
     enforce_identity_for(&app)?;
 
     let prompt_text: Option<String> = match (prompt, prompt_file) {
-        (Some(p), _) => Some(p),
+        (Some(_), Some(_)) => {
+            return Err("--prompt and --prompt-file are mutually exclusive".to_string());
+        }
+        (Some(p), None) => Some(p),
         (None, Some(path)) => Some(
             std::fs::read_to_string(&path)
                 .map_err(|e| format!("--prompt-file {path}: {e}"))?,
+        ),
+        (None, None) => None,
+    };
+    let system_text: Option<String> = match (system, system_file) {
+        (Some(_), Some(_)) => {
+            return Err("--system and --system-file are mutually exclusive".to_string());
+        }
+        (Some(value), None) => Some(value),
+        (None, Some(path)) => Some(
+            std::fs::read_to_string(&path)
+                .map_err(|e| format!("--system-file {path}: {e}"))?,
         ),
         (None, None) => None,
     };
@@ -195,7 +215,7 @@ pub fn chat_cmd(args: &[String]) -> Result<Value, String> {
         app_id: app,
         origin,
         prompt: prompt_text,
-        system,
+        system: system_text,
         max_units,
         embed,
         image_input,
