@@ -27,10 +27,10 @@ pub async fn run(options: ServerOptions) -> Result<(), String> {
     let listener = UnixListener::bind(&options.socket_path)
         .map_err(|err| format!("failed to bind {}: {err}", options.socket_path.display()))?;
     set_socket_permissions(&options.socket_path, options.socket_mode)?;
+    let state = DaemonState::try_new()?;
 
     tracing::info!(socket = %options.socket_path.display(), "clawd listening");
 
-    let state = DaemonState::new();
     audit::install_runtime_hook();
     context::refresh_builtin_sources(&state);
     let worker = spawn_agent_worker();

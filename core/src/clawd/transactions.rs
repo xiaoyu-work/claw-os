@@ -16,23 +16,66 @@ pub fn begin(
     let owner_uid = client.require_uid()?;
     let purpose = required_string(&params, "purpose")?;
     let session_id = session::create(&purpose).map_err(|err| err.to_string())?;
-    session::update_meta(&session_id, |meta| {
-        meta.creator_runtime = Some("clawd".to_string());
+    if let Err(error) = session::update_meta(&session_id, |meta| {
+        meta.creator_runtime = Some("clawd-transaction-pending".to_string());
         meta.role = Some(Role::Observer);
+        meta.owner_uid = Some(owner_uid);
         meta.status = SessionStatus::Running;
-    })
-    .map_err(|err| err.to_string())?;
+    }) {
+        return Err(fail_new_session(
+            &session_id,
+            "initialize transaction metadata",
+            error.to_string(),
+        ));
+    }
     let caps = super::system_caps::readonly_task_caps();
-    session::set_caps(&session_id, &caps).map_err(|err| err.to_string())?;
+    if let Err(error) = session::set_caps(&session_id, &caps) {
+        return Err(fail_new_session(
+            &session_id,
+            "set transaction capabilities",
+            error.to_string(),
+        ));
+    }
 
-    let lease = session::try_acquire(&session_id).map_err(|err| err.to_string())?;
-    state.insert_transaction(TransactionHandle {
+    let lease = match session::try_acquire(&session_id) {
+        Ok(lease) => lease,
+        Err(error) => {
+            return Err(fail_new_session(
+                &session_id,
+                "acquire transaction lease",
+                error.to_string(),
+            ));
+        }
+    };
+    if let Err(error) = session::update_meta(&session_id, |meta| {
+        meta.creator_runtime = Some("clawd-transaction".to_string());
+        meta.status = SessionStatus::Running;
+    }) {
+        drop(lease);
+        let cleanup = session::end(&session_id, SessionStatus::Failed);
+        return Err(match cleanup {
+            Ok(()) => format!("activate transaction metadata: {error}"),
+            Err(cleanup) => format!(
+                "activate transaction metadata: {error}; marking session failed: {cleanup}"
+            ),
+        });
+    }
+    let handle = TransactionHandle {
         session_id: session_id.clone(),
         purpose: purpose.clone(),
         started_at: Utc::now(),
         owner_uid,
         lease,
-    })?;
+    };
+    if let Err(error) = state.insert_transaction(handle) {
+        let cleanup = session::end(&session_id, SessionStatus::Failed);
+        return Err(match cleanup {
+            Ok(()) => error,
+            Err(cleanup) => format!(
+                "{error}; marking orphaned transaction session failed: {cleanup}"
+            ),
+        });
+    }
 
     Ok(json!({
         "id": session_id.as_str(),
@@ -71,7 +114,14 @@ pub fn commit(
         .take_transaction_for_owner(session_id.as_str(), owner_filter(client)?)?
         .ok_or_else(|| format!("transaction is not active: {}", session_id.as_str()))?;
 
-    session::end(&handle.session_id, SessionStatus::Done).map_err(|err| err.to_string())?;
+    if let Err(error) = session::end(&handle.session_id, SessionStatus::Done) {
+        return Err(restore_handle_after_error(
+            state,
+            handle,
+            "commit",
+            error.to_string(),
+        ));
+    }
     drop(handle);
 
     Ok(json!({
@@ -94,10 +144,46 @@ pub fn rollback(
     let handle = state
         .take_transaction_for_owner(session_id.as_str(), owner_uid)?
         .ok_or_else(|| format!("transaction is not active: {}", session_id.as_str()))?;
-    let rolled_back = session::rollback(&session_id).map_err(|err| err.to_string())?;
+    let rolled_back = match session::rollback(&session_id) {
+        Ok(rolled_back) => rolled_back,
+        Err(error) => {
+            return Err(restore_handle_after_error(
+                state,
+                handle,
+                "rollback",
+                error.to_string(),
+            ));
+        }
+    };
+    let incomplete = rolled_back
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry.status,
+                crate::session::RollbackStatus::Failed
+                    | crate::session::RollbackStatus::Skipped
+            )
+        })
+        .map(|entry| format!("{}#{}: {}", entry.verb, entry.seq, entry.detail))
+        .collect::<Vec<_>>();
+    if !incomplete.is_empty() {
+        return Err(restore_handle_after_error(
+            state,
+            handle,
+            "rollback",
+            format!("incomplete entries: {}", incomplete.join("; ")),
+        ));
+    }
     let entries = rolled_back.into_iter().map(entry_value).collect::<Vec<_>>();
 
-    session::end(&handle.session_id, SessionStatus::Failed).map_err(|err| err.to_string())?;
+    if let Err(error) = session::end(&handle.session_id, SessionStatus::Failed) {
+        return Err(restore_handle_after_error(
+            state,
+            handle,
+            "finish rollback",
+            error.to_string(),
+        ));
+    }
     drop(handle);
 
     Ok(json!({
@@ -105,6 +191,27 @@ pub fn rollback(
         "status": "rolled_back",
         "entries": entries,
     }))
+}
+
+fn fail_new_session(session_id: &SessionId, stage: &str, error: String) -> String {
+    match session::end(session_id, SessionStatus::Failed) {
+        Ok(()) => format!("{stage}: {error}"),
+        Err(cleanup) => format!("{stage}: {error}; marking session failed: {cleanup}"),
+    }
+}
+
+fn restore_handle_after_error(
+    state: &DaemonState,
+    handle: TransactionHandle,
+    operation: &str,
+    error: String,
+) -> String {
+    match state.insert_transaction(handle) {
+        Ok(()) => format!("transaction {operation} failed: {error}"),
+        Err(restore) => {
+            format!("transaction {operation} failed: {error}; restoring handle failed: {restore}")
+        }
+    }
 }
 
 fn owner_filter(client: &ClientIdentity) -> Result<Option<u32>, String> {

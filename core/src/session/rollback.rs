@@ -77,6 +77,7 @@ pub enum Status {
 /// from a "we won't lose the log" perspective even though the
 /// individual replays are not idempotent (see module docs).
 pub fn rollback(sid: &SessionId) -> Result<Vec<Outcome>, SessionError> {
+    let _rollback_lock = RollbackLock::acquire(sid)?;
     let mut entries = store::iter_mutations(sid)?;
     entries.reverse();
 
@@ -85,8 +86,20 @@ pub fn rollback(sid: &SessionId) -> Result<Vec<Outcome>, SessionError> {
     // anything recorded in the per-session rolled-back marker and report
     // it as AlreadyDone. The append-only mutations.jsonl is untouched;
     // the marker is a sidecar (see `rolled_back_path`).
-    let mut done = load_rolled_back(sid);
-    let mut newly_done: Vec<u64> = Vec::new();
+    let mut done = load_rolled_back(sid)?;
+    if let Some(uncertain_seq) = load_uncertain(sid)? {
+        if done.contains(&uncertain_seq) {
+            clear_uncertain(sid)?;
+        } else {
+            return Err(SessionError::Corrupt {
+                path: uncertain_path(sid),
+                detail: format!(
+                    "rollback of mutation seq {uncertain_seq} may have been applied; \
+                     automatic replay is disabled until an operator reconciles it"
+                ),
+            });
+        }
+    }
 
     let mut out = Vec::with_capacity(entries.len());
     for rec in entries {
@@ -100,6 +113,7 @@ pub fn rollback(sid: &SessionId) -> Result<Vec<Outcome>, SessionError> {
             });
             continue;
         }
+        save_uncertain(sid, seq)?;
         let outcome = match rec.mutation {
             Mutation::FsWrite { path, prev_blob } => {
                 // Replaying an `fs.write` inverse touches the same
@@ -217,18 +231,13 @@ pub fn rollback(sid: &SessionId) -> Result<Vec<Outcome>, SessionError> {
             },
         };
         if matches!(outcome.status, Status::Restored | Status::AlreadyDone) {
-            newly_done.push(seq);
+            done.insert(seq);
+            save_rolled_back(sid, &done)?;
+            clear_uncertain(sid)?;
+        } else if outcome.status == Status::Skipped {
+            clear_uncertain(sid)?;
         }
         out.push(outcome);
-    }
-
-    // Persist the seqs we just undid so a re-run is a no-op. Best-effort:
-    // a failed marker write only costs idempotency, not correctness.
-    if !newly_done.is_empty() {
-        for s in newly_done {
-            done.insert(s);
-        }
-        let _ = save_rolled_back(sid, &done);
     }
     Ok(out)
 }
@@ -253,12 +262,67 @@ fn rolled_back_path(sid: &SessionId) -> PathBuf {
     store::session_dir(sid).join("rolled_back.json")
 }
 
-/// Load the set of already-rolled-back seqs. Missing or corrupt file →
-/// empty set (we'd rather re-attempt an undo than wrongly skip one).
-fn load_rolled_back(sid: &SessionId) -> std::collections::BTreeSet<u64> {
-    match fs::read_to_string(rolled_back_path(sid)) {
-        Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
-        Err(_) => std::collections::BTreeSet::new(),
+fn uncertain_path(sid: &SessionId) -> PathBuf {
+    store::session_dir(sid).join("rollback_in_progress.json")
+}
+
+fn rollback_lock_path(sid: &SessionId) -> PathBuf {
+    store::session_dir(sid).join("rollback.lock")
+}
+
+struct RollbackLock {
+    file: fs::File,
+}
+
+impl RollbackLock {
+    fn acquire(sid: &SessionId) -> Result<Self, SessionError> {
+        let path = rollback_lock_path(sid);
+        let mut options = fs::OpenOptions::new();
+        options.create(true).read(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+            #[cfg(target_os = "linux")]
+            options.custom_flags(libc::O_NOFOLLOW);
+        }
+        let file = options
+            .open(&path)
+            .map_err(|source| SessionError::io(path.clone(), source))?;
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+                return Err(SessionError::io(path, std::io::Error::last_os_error()));
+            }
+        }
+        Ok(Self { file })
+    }
+}
+
+impl Drop for RollbackLock {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            let _ = unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
+        }
+    }
+}
+
+/// Load the set of already-rolled-back seqs. Missing is empty; malformed
+/// state is an error because replaying an already-applied inverse is unsafe.
+fn load_rolled_back(
+    sid: &SessionId,
+) -> Result<std::collections::BTreeSet<u64>, SessionError> {
+    let path = rolled_back_path(sid);
+    match fs::read_to_string(&path) {
+        Ok(text) => serde_json::from_str(&text)
+            .map_err(|source| SessionError::Decode { path, source }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(std::collections::BTreeSet::new())
+        }
+        Err(source) => Err(SessionError::io(path, source)),
     }
 }
 
@@ -269,7 +333,41 @@ fn save_rolled_back(
 ) -> Result<(), SessionError> {
     let path = rolled_back_path(sid);
     let data = serde_json::to_string(done).map_err(SessionError::Encode)?;
-    fs::write(&path, data).map_err(|e| SessionError::io(path.clone(), e))
+    crate::filelock::write_locked(&path, &data).map_err(SessionError::Lock)
+}
+
+fn load_uncertain(sid: &SessionId) -> Result<Option<u64>, SessionError> {
+    let path = uncertain_path(sid);
+    match fs::read_to_string(&path) {
+        Ok(text) => serde_json::from_str(&text)
+            .map(Some)
+            .map_err(|source| SessionError::Decode { path, source }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(SessionError::io(path, source)),
+    }
+}
+
+fn save_uncertain(sid: &SessionId, seq: u64) -> Result<(), SessionError> {
+    let path = uncertain_path(sid);
+    let data = serde_json::to_string(&seq).map_err(SessionError::Encode)?;
+    crate::filelock::write_locked(&path, &data).map_err(SessionError::Lock)
+}
+
+fn clear_uncertain(sid: &SessionId) -> Result<(), SessionError> {
+    let path = uncertain_path(sid);
+    match fs::remove_file(&path) {
+        Ok(()) => {
+            let parent = path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .to_path_buf();
+            fs::File::open(&parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|source| SessionError::io(path, source))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(SessionError::io(path, source)),
+    }
 }
 
 fn undo_fs_write(

@@ -155,6 +155,11 @@ pub struct SessionMeta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential_tier: Option<u8>,
 
+    /// OS uid that owns this durable session when it represents a
+    /// user-scoped daemon object such as a clawd transaction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_uid: Option<u32>,
+
     /// Parent session, if this one was spawned by a sub-agent
     /// delegation. `None` for top-level user-initiated sessions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -187,6 +192,7 @@ impl SessionMeta {
             purpose: purpose.into(),
             role: None,
             credential_tier: None,
+            owner_uid: None,
             parent_session: None,
             status: Status::Pending,
             budget: Budget::default(),
@@ -241,6 +247,7 @@ mod tests {
             purpose: "整理发票".into(),
             role: Some(Role::Automator),
             credential_tier: Some(Role::Automator.credential_tier()),
+            owner_uid: Some(1000),
             parent_session: Some(SessionId::generate()),
             status: Status::Running,
             budget: Budget {
