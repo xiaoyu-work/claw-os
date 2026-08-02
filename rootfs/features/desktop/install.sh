@@ -280,6 +280,17 @@ chroot "$ROOTFS" env \
     # no working desktop. See desktop/justfile recipe `install rootdir="" prefix="/usr/local"`.
     just install "$DESKTOP_PACKAGE_ROOT" /usr
 
+    # Install the canonical full COSMIC session entry explicitly at the
+    # package boundary. `desktop/comp` also carries a same-named bare-session
+    # file for standalone compositor installs; relying on recursive install
+    # order can therefore leave display managers pointing at cosmic-service
+    # instead of the full start-cosmic session.
+    install -Dm0644 session/data/cosmic.desktop \
+        "$DESKTOP_PACKAGE_ROOT/usr/share/wayland-sessions/cosmic.desktop"
+    test -x "$DESKTOP_PACKAGE_ROOT/usr/bin/start-cosmic"
+    grep -qx "Exec=/usr/bin/start-cosmic" \
+        "$DESKTOP_PACKAGE_ROOT/usr/share/wayland-sessions/cosmic.desktop"
+
     # ----------------------------------------------------------------------
     # ClawOS Agent UI + bridge — separate workspace (no justfile) under
     # desktop/agent/. com.clawos.Agent.desktop expects /usr/local/bin/cos-agent-ui

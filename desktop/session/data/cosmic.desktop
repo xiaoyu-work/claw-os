@@ -3,5 +3,6 @@ Name=ClawOS
 Comment=This session logs you into the ClawOS desktop
 Comment[sv]=Denna session loggar in dig till skrivbordsmiljön ClawOS
 Exec=/usr/bin/start-cosmic
+TryExec=/usr/bin/start-cosmic
 Type=Application
 DesktopNames=COSMIC
