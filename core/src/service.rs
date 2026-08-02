@@ -137,6 +137,57 @@ fn log_path(name: &str) -> PathBuf {
     service_runtime_dir(name).join("service.log")
 }
 
+fn lifecycle_lock_path(name: &str) -> PathBuf {
+    service_runtime_dir(name).join("lifecycle.lock")
+}
+
+struct ServiceLifecycleLock {
+    file: fs::File,
+}
+
+impl ServiceLifecycleLock {
+    fn acquire(name: &str) -> Result<Self, String> {
+        let dir = service_runtime_dir(name);
+        fs::create_dir_all(&dir)
+            .map_err(|error| format!("create service runtime directory: {error}"))?;
+        let path = lifecycle_lock_path(name);
+        let mut options = fs::OpenOptions::new();
+        options.create(true).read(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+            #[cfg(target_os = "linux")]
+            options.custom_flags(libc::O_NOFOLLOW);
+        }
+        let file = options
+            .open(&path)
+            .map_err(|error| format!("open service lifecycle lock {}: {error}", path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+                return Err(format!(
+                    "lock service lifecycle {}: {}",
+                    path.display(),
+                    std::io::Error::last_os_error()
+                ));
+            }
+        }
+        Ok(Self { file })
+    }
+}
+
+impl Drop for ServiceLifecycleLock {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            let _ = unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // PID helpers
 // ---------------------------------------------------------------------------
@@ -419,29 +470,128 @@ fn read_log_tail(name: &str, n: usize) -> String {
 // Process control
 // ---------------------------------------------------------------------------
 
-fn kill_pid(pid: u32) {
-    #[cfg(unix)]
-    unsafe {
-        libc::kill(pid as i32, libc::SIGTERM);
+#[cfg(target_os = "linux")]
+struct ServiceProcess {
+    pid: u32,
+    pidfd: std::os::fd::OwnedFd,
+}
+
+#[cfg(target_os = "linux")]
+impl ServiceProcess {
+    fn open(pid: u32, recorded_start: Option<u64>) -> Result<Self, String> {
+        use std::os::fd::FromRawFd;
+
+        let expected_start = recorded_start.ok_or_else(|| {
+            "refusing to signal a legacy PID file without Linux start-time identity".to_string()
+        })?;
+        if crate::proc::read_start_time_ticks_pub(pid) != Some(expected_start) {
+            return Err("service process exited or its PID was recycled".to_string());
+        }
+        let raw_fd =
+            unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::pid_t, 0) as libc::c_int };
+        if raw_fd < 0 {
+            return Err(format!(
+                "pidfd_open({pid}) failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let pidfd = unsafe { std::os::fd::OwnedFd::from_raw_fd(raw_fd) };
+        if crate::proc::read_start_time_ticks_pub(pid) != Some(expected_start) {
+            return Err("service process changed identity while opening pidfd".to_string());
+        }
+        Ok(Self { pid, pidfd })
     }
-    #[cfg(not(unix))]
-    {
-        let _ = Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/F"])
-            .output();
+
+    /// Returns true when the signal was delivered, false if the process
+    /// already exited. A pidfd can never target a later process that reused
+    /// the numeric PID.
+    fn send_signal(&self, signal: libc::c_int) -> Result<bool, String> {
+        use std::os::fd::AsRawFd;
+
+        let result = unsafe {
+            libc::syscall(
+                libc::SYS_pidfd_send_signal,
+                self.pidfd.as_raw_fd(),
+                signal,
+                std::ptr::null::<libc::siginfo_t>(),
+                0,
+            )
+        };
+        if result == 0 {
+            return Ok(true);
+        }
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            Ok(false)
+        } else {
+            Err(format!(
+                "pidfd_send_signal({}, {signal}) failed: {error}",
+                self.pid
+            ))
+        }
+    }
+
+    fn terminate(&self) -> Result<bool, String> {
+        self.send_signal(libc::SIGTERM)
+    }
+
+    fn force_kill(&self) -> Result<bool, String> {
+        self.send_signal(libc::SIGKILL)
+    }
+
+    fn wait_for_exit(&self, timeout: Duration) -> Result<bool, String> {
+        use std::os::fd::AsRawFd;
+
+        let deadline = Instant::now() + timeout;
+        let mut descriptor = libc::pollfd {
+            fd: self.pidfd.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let timeout_ms = remaining.as_millis().min(i32::MAX as u128) as i32;
+            descriptor.revents = 0;
+            let result = unsafe { libc::poll(&mut descriptor, 1, timeout_ms) };
+            if result > 0 {
+                if descriptor.revents & (libc::POLLIN | libc::POLLHUP) != 0 {
+                    return Ok(true);
+                }
+                return Err(format!(
+                    "poll pidfd for {} returned unexpected events {:#x}",
+                    self.pid, descriptor.revents
+                ));
+            }
+            if result == 0 {
+                return Ok(false);
+            }
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::Interrupted {
+                return Err(format!("poll pidfd for {} failed: {error}", self.pid));
+            }
+        }
     }
 }
 
-fn send_sigkill(pid: u32) {
-    #[cfg(unix)]
-    unsafe {
-        libc::kill(pid as i32, libc::SIGKILL);
+#[cfg(not(target_os = "linux"))]
+struct ServiceProcess;
+
+#[cfg(not(target_os = "linux"))]
+impl ServiceProcess {
+    fn open(_pid: u32, _recorded_start: Option<u64>) -> Result<Self, String> {
+        Err("safe service signaling requires Linux pidfd support".to_string())
     }
-    #[cfg(not(unix))]
-    {
-        let _ = Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/F"])
-            .output();
+
+    fn terminate(&self) -> Result<bool, String> {
+        Err("safe service signaling requires Linux pidfd support".to_string())
+    }
+
+    fn force_kill(&self) -> Result<bool, String> {
+        Err("safe service signaling requires Linux pidfd support".to_string())
+    }
+
+    fn wait_for_exit(&self, _timeout: Duration) -> Result<bool, String> {
+        Err("safe service signaling requires Linux pidfd support".to_string())
     }
 }
 
@@ -550,19 +700,9 @@ fn build_shell_command(command: &str) -> (String, Vec<String>) {
     }
 }
 
-/// Wait for a process to exit within `timeout_secs`, polling every 100ms.
-/// Returns (exited, exit_code).
-fn wait_for_exit(pid: u32, timeout_secs: u64) -> (bool, Option<i32>) {
-    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
-    loop {
-        if !is_alive(pid) {
-            return (true, None);
-        }
-        if Instant::now() >= deadline {
-            return (false, None);
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
+/// Wait for the identity-pinned process to exit using pidfd readiness.
+fn wait_for_exit(process: &ServiceProcess, timeout_secs: u64) -> Result<bool, String> {
+    process.wait_for_exit(Duration::from_secs(timeout_secs))
 }
 
 // ---------------------------------------------------------------------------
@@ -592,6 +732,12 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 /// Sequence: pre_start → spawn → health-wait → post_start
 fn cmd_start(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::SYS_SERVICE, Scope::wild()).map_err(|v| v.to_string())?;
+    let name = args.first().ok_or("usage: cos service start <name>")?;
+    let _lifecycle_lock = ServiceLifecycleLock::acquire(name)?;
+    cmd_start_locked(args)
+}
+
+fn cmd_start_locked(args: &[String]) -> Result<Value, String> {
     let name = args.first().ok_or("usage: cos service start <name>")?;
     let def = find_service(name)?;
 
@@ -788,24 +934,36 @@ fn cmd_start(args: &[String]) -> Result<Value, String> {
 /// **PID-recycle safety:** before issuing any signal we verify the
 /// pid on file still identifies the process we originally spawned by
 /// comparing the recorded `starttime` (clock ticks) against
-/// `/proc/<pid>/stat` field 22. If the pid has been recycled into an
-/// unrelated process — anything from a system daemon to another
-/// user's editor — we refuse to send SIGTERM/SIGKILL, clear the
-/// stale pid file, and return an explicit `"pid_recycled"` status
-/// instead. Legacy pid files written by older cos (no embedded
-/// starttime) fall back to the basic `kill(pid, 0)` aliveness check,
-/// preserving prior behaviour.
+/// `/proc/<pid>/stat` field 22, then open a Linux pidfd and re-check
+/// the start time. All later liveness checks and signals use that pidfd,
+/// which remains bound to the original process even if the numeric PID
+/// is later reused. Legacy pid files without start-time identity are
+/// refused rather than signalled.
 fn cmd_stop(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::SYS_SERVICE, Scope::wild()).map_err(|v| v.to_string())?;
+    let name = args.first().ok_or("usage: cos service stop <name>")?;
+    let _lifecycle_lock = ServiceLifecycleLock::acquire(name)?;
+    cmd_stop_locked(args)
+}
+
+fn cmd_stop_locked(args: &[String]) -> Result<Value, String> {
     let name = args.first().ok_or("usage: cos service stop <name>")?;
 
     let (pid, recorded_start) = read_pid(name)
         .ok_or_else(|| format!("service {name} is not running (no PID file)"))?;
 
-    // Identity-qualified aliveness. If false, EITHER the process
-    // exited (stale pid file) OR a recycled pid now belongs to
-    // someone else — both must short-circuit before any kill().
-    if !crate::proc::is_alive_with_start_time(pid, recorded_start) {
+    let expected_start = recorded_start.ok_or_else(|| {
+        format!(
+            "refusing to stop service {name}: legacy PID file has no start-time identity"
+        )
+    })?;
+    let current_start = crate::proc::read_start_time_ticks_pub(pid);
+    if current_start != Some(expected_start) {
+        if current_start.is_none() && is_alive(pid) {
+            return Err(format!(
+                "refusing to stop service {name}: cannot verify /proc/{pid}/stat"
+            ));
+        }
         clear_pid(name);
         let reason = if is_alive(pid) {
             // PID is alive but starttime mismatches → recycled.
@@ -821,6 +979,27 @@ fn cmd_stop(args: &[String]) -> Result<Value, String> {
             "note": "no signal was sent; stale PID file cleared",
         }));
     }
+    let process = match ServiceProcess::open(pid, Some(expected_start)) {
+        Ok(process) => process,
+        Err(error) => {
+            let current_start = crate::proc::read_start_time_ticks_pub(pid);
+            if current_start != Some(expected_start) {
+                if current_start.is_none() && is_alive(pid) {
+                    return Err(format!(
+                        "refusing to stop service {name}: {error}; process identity is unreadable"
+                    ));
+                }
+                clear_pid(name);
+                return Ok(json!({
+                    "name": name,
+                    "status": if current_start.is_some() { "pid_recycled" } else { "already_exited" },
+                    "pid": pid,
+                    "note": "no signal was sent; stale PID file cleared",
+                }));
+            }
+            return Err(format!("refusing to stop service {name}: {error}"));
+        }
+    };
 
     let def = find_service(name).ok();
     let hooks = def.as_ref().and_then(|d| d.lifecycle.as_ref());
@@ -854,28 +1033,27 @@ fn cmd_stop(args: &[String]) -> Result<Value, String> {
         }));
     }
 
-    // 4. Send SIGTERM
-    kill_pid(pid);
+    // 4. Send SIGTERM through the identity-pinned pidfd.
+    let term_sent = process.terminate()?;
     steps.push(json!({
         "step": "sigterm",
-        "status": "sent",
+        "status": if term_sent { "sent" } else { "already_exited" },
     }));
 
     // 5. Wait stop_timeout_secs for process to exit
     let wait_start = Instant::now();
-    let (exited, exit_code) = wait_for_exit(pid, stop_timeout);
+    let exited = wait_for_exit(&process, stop_timeout)?;
     let wait_duration = wait_start.elapsed().as_millis() as u64;
 
     if exited {
         steps.push(json!({
             "step": "wait_exit",
             "status": "exited",
-            "exit_code": exit_code,
             "duration_ms": wait_duration,
         }));
     } else {
         // 6. If still alive after stop_timeout → send SIGKILL
-        send_sigkill(pid);
+        let kill_sent = process.force_kill()?;
         steps.push(json!({
             "step": "wait_exit",
             "status": "timeout",
@@ -883,10 +1061,13 @@ fn cmd_stop(args: &[String]) -> Result<Value, String> {
         }));
         steps.push(json!({
             "step": "sigkill",
-            "status": "sent",
+            "status": if kill_sent { "sent" } else { "already_exited" },
         }));
-        // Brief wait after SIGKILL
-        std::thread::sleep(Duration::from_millis(500));
+        if !wait_for_exit(&process, 2)? {
+            return Err(format!(
+                "service {name} did not exit after SIGKILL; PID file retained"
+            ));
+        }
     }
 
     // 7. Run post_stop hook (if configured)
@@ -909,12 +1090,16 @@ fn cmd_stop(args: &[String]) -> Result<Value, String> {
 /// Restart a service (stop then start).
 fn cmd_restart(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::SYS_SERVICE, Scope::wild()).map_err(|v| v.to_string())?;
-    let _name = args.first().ok_or("usage: cos service restart <name>")?;
+    let name = args.first().ok_or("usage: cos service restart <name>")?;
+    let _lifecycle_lock = ServiceLifecycleLock::acquire(name)?;
 
-    // Stop (ignore errors — service may not be running)
-    let _ = cmd_stop(args);
+    if let Err(error) = cmd_stop_locked(args) {
+        if !error.contains("is not running (no PID file)") {
+            return Err(format!("restart aborted because stop failed: {error}"));
+        }
+    }
     std::thread::sleep(std::time::Duration::from_secs(1));
-    cmd_start(args)
+    cmd_start_locked(args)
 }
 
 /// Stop all running services in reverse dependency order.
