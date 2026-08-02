@@ -13,6 +13,11 @@ the user's logged-in session.
 | `content.js`    | Per-frame DOM helper. Owns the per-page element ref table, executes `query` / `click` / `fill` / `snapshot`. |
 | `popup.html` + `popup.js` | Toolbar popup showing live state and a STOP button. |
 
+DOM read operations deliberately omit current values from editable controls.
+Responses contain labels, refs, sensitivity classification, and a
+`value_present` boolean, but never password, OTP, payment, hidden-token, or
+ordinary typed input values.
+
 ## Loading
 
 In production this extension is pre-installed via Chromium managed policy

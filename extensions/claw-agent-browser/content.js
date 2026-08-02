@@ -43,17 +43,201 @@
   }
   setInterval(pruneRefs, PRUNE_INTERVAL_MS);
 
+  const SECRET_HINT =
+    /\b(?:password|passwd|pwd|secret|token|api key|access key|private key|auth code|authentication code|one time|otp|pin|cvv|cvc|security code|ssn|social security|credit card|card number)\b/;
+  const BUTTON_INPUT_TYPES = new Set(["button", "submit", "reset", "image"]);
+  const NON_TEXT_INPUT_TYPES = new Set([
+    ...BUTTON_INPUT_TYPES,
+    "checkbox",
+    "radio",
+  ]);
+  const TEXT_BLOCK_TAGS = new Set([
+    "address", "article", "aside", "blockquote", "div", "dl", "fieldset",
+    "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4",
+    "h5", "h6", "header", "hr", "li", "main", "nav", "ol", "p", "pre",
+    "section", "table", "tbody", "td", "tfoot", "th", "thead", "tr", "ul",
+  ]);
+
+  function normaliseHint(value) {
+    return String(value || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+  }
+
   function isSecretField(el) {
-    if (!(el instanceof HTMLInputElement)) return false;
-    const t = (el.type || "").toLowerCase();
-    if (t === "password") return true;
-    const ac = (el.getAttribute("autocomplete") || "").toLowerCase();
+    if (!(el instanceof Element)) return false;
+    const tag = (el.tagName || "").toLowerCase();
+    const type = tag === "input"
+      ? (el.getAttribute("type") || "text").toLowerCase()
+      : "";
+    if (type === "password" || type === "hidden") return true;
+
+    const autocomplete = (el.getAttribute("autocomplete") || "")
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean);
+    if (autocomplete.some((value) =>
+      value === "current-password" ||
+      value === "new-password" ||
+      value === "one-time-code" ||
+      value === "webauthn" ||
+      value.startsWith("cc-")
+    )) {
+      return true;
+    }
+    if (
+      el.hasAttribute("data-private") ||
+      el.hasAttribute("data-sensitive") ||
+      el.hasAttribute("data-secret")
+    ) {
+      return true;
+    }
+
+    const role = (el.getAttribute("role") || "").toLowerCase();
+    const fieldLike =
+      ["input", "textarea", "select"].includes(tag) ||
+      el.isContentEditable ||
+      ["textbox", "searchbox", "combobox", "spinbutton"].includes(role);
+    if (!fieldLike) return false;
+
+    const hint = normaliseHint([
+      el.id,
+      el.getAttribute("name"),
+      el.getAttribute("aria-label"),
+      el.getAttribute("placeholder"),
+      el.getAttribute("data-testid"),
+    ].filter(Boolean).join(" "));
+    return SECRET_HINT.test(hint);
+  }
+
+  function isEditableValueElement(el) {
+    if (!(el instanceof Element)) return false;
+    if (el instanceof HTMLInputElement) {
+      const type = (el.type || "text").toLowerCase();
+      return !NON_TEXT_INPUT_TYPES.has(type);
+    }
     return (
-      ac === "current-password" ||
-      ac === "new-password" ||
-      ac === "one-time-code" ||
-      ac.startsWith("cc-")
+      el instanceof HTMLTextAreaElement ||
+      el instanceof HTMLSelectElement ||
+      el.isContentEditable
     );
+  }
+
+  function hasEditableValue(el) {
+    if (!isEditableValueElement(el)) return false;
+    if (el.isContentEditable) {
+      return !!(el.innerText || el.textContent || "").trim();
+    }
+    if (el instanceof HTMLSelectElement) {
+      return el.selectedIndex >= 0;
+    }
+    return !!String(el.value || "").trim();
+  }
+
+  function redactCurrentValueEcho(el, text) {
+    let result = String(text || "");
+    if (!result || !isEditableValueElement(el)) return result;
+
+    const values = [];
+    if (el.isContentEditable) {
+      values.push((el.innerText || el.textContent || "").trim());
+    } else if (el instanceof HTMLSelectElement) {
+      values.push(String(el.value || "").trim());
+      const option = el.selectedOptions && el.selectedOptions[0];
+      if (option) values.push((option.textContent || "").trim());
+    } else {
+      values.push(String(el.value || "").trim());
+    }
+    for (const value of values.filter(Boolean)) {
+      if (result.trim() === value) return "[redacted input]";
+      if (value.length >= 3) {
+        result = result.split(value).join("[redacted input]");
+      }
+    }
+    return result;
+  }
+
+  function explicitAccessibleName(el) {
+    const direct =
+      el.getAttribute("aria-label") ||
+      el.getAttribute("alt") ||
+      el.getAttribute("title") ||
+      el.getAttribute("placeholder") ||
+      "";
+    if (direct) return redactCurrentValueEcho(el, direct);
+    if (el.labels && el.labels.length) {
+      return redactCurrentValueEcho(el, Array.from(el.labels)
+        .map((label) => safeRenderedText(label, 120))
+        .filter(Boolean)
+        .join(" "));
+    }
+    return "";
+  }
+
+  function safeRenderedText(root, limit) {
+    let output = "";
+    let visited = 0;
+
+    function append(value) {
+      if (!value || output.length >= limit) return;
+      output += String(value).slice(0, limit - output.length);
+    }
+
+    function walk(node) {
+      if (!node || output.length >= limit) return;
+      if (++visited > AX_MAX_NODES) return;
+      if (node.nodeType === Node.TEXT_NODE) {
+        append(node.nodeValue || "");
+        return;
+      }
+      if (!(node instanceof Element)) return;
+
+      const tag = (node.tagName || "").toLowerCase();
+      if (["script", "style", "noscript", "template"].includes(tag)) return;
+      if (tag === "input" && (node.type || "").toLowerCase() === "hidden") return;
+
+      const cs = node.ownerDocument && node.ownerDocument.defaultView
+        ? node.ownerDocument.defaultView.getComputedStyle(node)
+        : null;
+      if (cs && (cs.display === "none" || cs.visibility === "hidden" || +cs.opacity === 0)) {
+        return;
+      }
+
+      if (isSecretField(node)) {
+        if (
+          hasEditableValue(node) ||
+          (node.textContent || "").trim()
+        ) {
+          append(" [redacted sensitive field] ");
+        }
+        return;
+      }
+      if (isEditableValueElement(node)) {
+        if (hasEditableValue(node)) append(" [redacted input] ");
+        return;
+      }
+      if (
+        node instanceof HTMLInputElement &&
+        BUTTON_INPUT_TYPES.has((node.type || "").toLowerCase())
+      ) {
+        append(node.getAttribute("aria-label") || node.type || "button");
+        return;
+      }
+
+      const block = TEXT_BLOCK_TAGS.has(tag);
+      if (block || tag === "br") append("\n");
+      for (const child of node.childNodes) walk(child);
+      if (block) append("\n");
+    }
+
+    walk(root);
+    return output
+      .split("\n")
+      .map((line) => line.replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+      .join("\n")
+      .slice(0, limit);
   }
 
   function visible(el) {
@@ -68,12 +252,13 @@
 
   function summarise(el) {
     const tag = (el.tagName || "").toLowerCase();
-    const text =
-      (el.textContent || el.value || "").trim().replace(/\s+/g, " ").slice(0, 240);
+    const text = safeRenderedText(el, 240);
+    const secret = isSecretField(el);
     const attrs = {};
     for (const name of ["id", "name", "type", "role", "aria-label", "placeholder", "href", "autocomplete"]) {
+      if (secret && (name === "aria-label" || name === "placeholder")) continue;
       const v = el.getAttribute && el.getAttribute(name);
-      if (v) attrs[name] = v;
+      if (v) attrs[name] = redactCurrentValueEcho(el, v);
     }
     const r = el.getBoundingClientRect();
     return {
@@ -83,7 +268,8 @@
       attrs,
       rect: { x: r.x | 0, y: r.y | 0, w: r.width | 0, h: r.height | 0 },
       visible: visible(el),
-      secret: isSecretField(el),
+      secret,
+      value_present: hasEditableValue(el),
     };
   }
 
@@ -94,24 +280,36 @@
     if (budget.bytes >= AX_MAX_BYTES)  { budget.truncated = true; return null; }
     const tag = (root.tagName || "").toLowerCase();
     if (tag === "script" || tag === "style" || tag === "noscript" || tag === "template") return null;
-    const role = root.getAttribute("role") || implicitRole(tag);
-    const name =
-      root.getAttribute("aria-label") ||
-      root.getAttribute("alt") ||
-      root.getAttribute("title") ||
-      (root.matches && root.matches("input,select,textarea,button,a")
-        ? (root.value || root.textContent || "").trim().slice(0, 120)
-        : "");
+    if (tag === "input" && (root.type || "").toLowerCase() === "hidden") return null;
+    const secret = isSecretField(root);
+    const role = root.getAttribute("role") || implicitRole(tag) || (secret ? "sensitive" : "");
+    const name = secret
+      ? ""
+      : (
+        explicitAccessibleName(root) ||
+        (root.matches && root.matches("button,a")
+          ? safeRenderedText(root, 120)
+          : "") ||
+        (root instanceof HTMLInputElement &&
+        BUTTON_INPUT_TYPES.has((root.type || "").toLowerCase())
+          ? (root.type || "button")
+          : "")
+      );
     const node = {
       role,
       tag,
       name: name ? name.replace(/\s+/g, " ").slice(0, 240) : "",
       ref: makeRef(root),
     };
+    if (isEditableValueElement(root)) {
+      node.secret = secret;
+      node.value_present = hasEditableValue(root);
+    }
     budget.nodes++;
     // Approximate byte cost — role/tag/name + JSON overhead. We don't
     // need exactness; we only need a hard ceiling.
     budget.bytes += (node.role || "").length + node.tag.length + node.name.length + node.ref.length + 32;
+    if (secret) return node;
     if (root.children && root.children.length) {
       const kids = [];
       for (const c of root.children) {
@@ -205,9 +403,7 @@
           kind: "text",
           title: document.title || "",
           url: location.href,
-          text: (document.body && document.body.innerText
-            ? document.body.innerText
-            : "").slice(0, 50000),
+          text: document.body ? safeRenderedText(document.body, 50000) : "",
         };
       }
       const budget = { nodes: 0, bytes: 0, truncated: false };

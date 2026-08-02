@@ -80,10 +80,17 @@ to the right socket connection.
 | dom.fill_secret   | `browser.input.secret`        | admin                          | host      |
 | eval              | `browser.eval`                | admin                          | host      |
 
-Secret-field detection runs in `content.js` (`isSecretField`):
-`input[type=password]` OR `autocomplete ∈ {current-password, new-password,
-one-time-code, cc-*}`.  `dom.fill` rejects secret fields server-side; only
-`dom.fill_secret` (gated on `browser.input.secret`, admin-only) accepts them.
+Read operations never serialize live values from input, textarea, select, or
+contenteditable controls. `dom.query` and accessibility snapshots expose only
+labels plus `value_present`; text snapshots replace populated editable regions
+with a redaction marker. This protects custom controls even when heuristics do
+not recognize their purpose.
+
+Secret-field detection runs in `content.js` (`isSecretField`) and additionally
+classifies password/hidden inputs, password/OTP/payment autocomplete tokens,
+explicit private-data attributes, and credential-like field names or labels.
+`dom.fill` rejects those fields; only `dom.fill_secret` (gated on
+`browser.input.secret`, admin-only) accepts them.
 
 ## File layout
 
