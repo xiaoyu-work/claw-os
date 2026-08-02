@@ -423,6 +423,10 @@ install -m 644 "$DEFAULTS_SRC/cos-home" \
 USER_UNITS_SRC="$PROJECT_DIR/rootfs/features/systemd/overlay/usr/lib/systemd/user"
 install -m 644 "$USER_UNITS_SRC/cos-agent-bridge.service" \
     "$SYSTEMD_STAGE/usr/lib/systemd/user/cos-agent-bridge.service"
+install -m 644 "$USER_UNITS_SRC/claw-recoll-index.service" \
+    "$SYSTEMD_STAGE/usr/lib/systemd/user/claw-recoll-index.service"
+install -m 644 "$USER_UNITS_SRC/claw-semantic.service" \
+    "$SYSTEMD_STAGE/usr/lib/systemd/user/claw-semantic.service"
 
 echo "  :: dpkg-deb --build claw-os-systemd"
 $FAKEROOT $DPKG_DEB --root-owner-group --build "$SYSTEMD_STAGE" \

@@ -43,6 +43,20 @@ else
 fi
 echo "  :: cos-browser.service installed (not enabled by default)"
 
+# User indexers are global default.target services, so they also run for
+# headless/SSH user managers. Their ConditionPathIsExecutable directives
+# make missing optional binaries a clean skip.
+mkdir -p "$ROOTFS/etc/systemd/user/default.target.wants"
+for unit in claw-recoll-index.service claw-semantic.service; do
+    if [ -f "$ROOTFS/usr/lib/systemd/user/$unit" ]; then
+        ln -sf "/usr/lib/systemd/user/$unit" \
+            "$ROOTFS/etc/systemd/user/default.target.wants/$unit"
+    else
+        echo "error: expected user unit missing: $unit" >&2
+        exit 1
+    fi
+done
+
 if [ -L "$ROOTFS/etc/systemd/system/multi-user.target.wants/clawd.service" ]; then
     echo "  :: clawd.service enabled as system daemon"
 else

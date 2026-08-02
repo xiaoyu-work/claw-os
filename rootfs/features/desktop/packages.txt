@@ -514,7 +514,7 @@ gnome-bluetooth-sendto
 # AI agent. Defaults to indexing ~/Documents ~/Desktop ~/Downloads
 # (see overlay/etc/skel/.recoll/recoll.conf for the seeded user config).
 # Real-time monitoring is enabled out of the box via the systemd --user
-# unit claw-recoll-index.service (overlay/etc/systemd/user/), which runs
+# unit claw-recoll-index.service (/usr/lib/systemd/user/), which runs
 # `recollindex -m` and uses inotify to keep the index current on every
 # create / modify / delete.
 # Pulls in poppler-utils, antiword, unrtf, etc. as recommends for the

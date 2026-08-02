@@ -1,27 +1,17 @@
 [Unit]
 Description=ClawOS: semantic (embedding) document index daemon
 Documentation=man:claw-semantic(1)
-PartOf=graphical-session.target
-After=graphical-session.target
-# Run *after* the Recoll keyword indexer so they don't compete for IO
-# during the first login.
 After=claw-recoll-index.service
 ConditionPathIsExecutable=/usr/local/bin/claw-semantic-daemon
 
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/claw-semantic-daemon
-
-# Resource caps — phase 1 stub is cheap, but the future fastembed-rs
-# ONNX runtime can pin ~1 vCPU per embed call and load ~50 MB of
-# weights. Headroom set generously; bound hard at MemoryMax to keep
-# the desktop alive.
 MemoryHigh=1G
 MemoryMax=2G
 CPUWeight=40
 IOWeight=40
 Nice=12
-
 Restart=on-failure
 RestartSec=30
 StartLimitIntervalSec=300

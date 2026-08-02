@@ -9,6 +9,10 @@ the single `apps/docs` AI surface.
 | Keyword  | `claw-recoll-index.service` | Xapian TF-IDF (`~/.recoll/`) | Exact terms, names, numbers, code | Doesn't understand intent or synonyms |
 | Semantic | `claw-semantic.service`     | Vector store (`~/.local/state/`) | "Find my Sequoia pitch"       | Slower, heavier, fuzzy on exact strings |
 
+Both are globally enabled systemd user units under `default.target`, not
+`graphical-session.target`, so indexing also runs for SSH/headless user
+sessions. Each unit skips cleanly when its optional binary is absent.
+
 ## Components — semantic side
 
 ```
@@ -28,7 +32,7 @@ the single `apps/docs` AI surface.
                 │ Embedder → Vector store            │
                 └────────────────────────────────────┘
                               │
-                  /usr/bin/claw-semantic (CLI)
+                  /usr/local/bin/claw-semantic (CLI)
 ```
 
 The crate (`crates/claw-semantic`) is built around three traits so any
