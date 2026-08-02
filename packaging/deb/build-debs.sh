@@ -56,12 +56,36 @@ rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR" "$OUT_DIR"
 
 ###############################################################################
-# Helper: locate a built binary across known target dirs.
+# Helper: verify and locate a built binary across known target dirs.
 #
 # Order: prefer the $ARCH-specific Rust target (musl, then gnu, then plain
 # release/), then unsuffixed release/ as a final fallback (when cargo was
-# invoked without --target on a native build).
+# invoked without --target on a native build). Every candidate is checked
+# against the target Debian architecture before it can enter a package.
 ###############################################################################
+binary_matches_arch() {
+    local path="$1" expected_machine machine magic
+    magic="$(od -An -tx1 -N4 "$path" 2>/dev/null | tr -d ' \n')"
+    if [ "$magic" != "7f454c46" ]; then
+        echo "  :: ignoring non-ELF binary candidate: $path" >&2
+        return 1
+    fi
+    machine="$(od -An -tx1 -j18 -N2 "$path" 2>/dev/null | tr -d ' \n')"
+    case "$DEB_ARCH" in
+        amd64) expected_machine=3e00 ;;
+        arm64) expected_machine=b700 ;;
+        *)
+            echo "error: no ELF machine mapping for Debian arch $DEB_ARCH" >&2
+            return 1
+            ;;
+    esac
+    if [ "$machine" != "$expected_machine" ]; then
+        echo "  :: ignoring wrong-architecture binary ($machine != $expected_machine): $path" >&2
+        return 1
+    fi
+    return 0
+}
+
 find_bin() {
     local name="$1"
     local gnu_target="${RUST_TARGET/-musl/-gnu}"
@@ -74,7 +98,7 @@ find_bin() {
         "$PROJECT_DIR/core/target/release/$name" \
         "$PROJECT_DIR/desktop/agent/target/$RUST_TARGET/release/$name" \
         "$PROJECT_DIR/desktop/agent/target/release/$name"; do
-        if [ -f "$candidate" ]; then
+        if [ -f "$candidate" ] && binary_matches_arch "$candidate"; then
             echo "$candidate"
             return 0
         fi
@@ -159,9 +183,10 @@ ensure_cargo() {
 # build-debs.sh assembles already-built binaries; CI compiles them as
 # separate cached steps before calling the rootfs build. A local
 # `./build.sh` has no such step, so compile on demand here the first time a
-# required binary is absent. Native release build — lands in target/release/,
-# which find_bin picks up as its fallback. No-op in CI (binaries already
-# present, so find_bin succeeds and cargo never runs).
+# required binary is absent. The build always names `$RUST_TARGET`, so a
+# cross-enabled packaging run cannot silently produce a host-architecture
+# binary. No-op in CI (binaries already present, so find_bin succeeds and
+# cargo never runs).
 #
 #   $1 = binary name to locate   $2 = cargo package to build if missing
 ###############################################################################
@@ -172,8 +197,8 @@ ensure_bin() {
         return 0
     fi
     ensure_cargo
-    echo "  :: $bin not built — compiling (cargo build --release -p $pkg)" >&2
-    ( cd "$PROJECT_DIR" && cargo build --release -p "$pkg" ) >&2
+    echo "  :: $bin not built — compiling (cargo build --release --target $RUST_TARGET -p $pkg)" >&2
+    ( cd "$PROJECT_DIR" && cargo build --release --target "$RUST_TARGET" -p "$pkg" ) >&2
     find_bin "$bin"
 }
 
@@ -355,7 +380,7 @@ echo "  :: cos-browser  <- $COS_BROWSER_BIN"
 install -m 755 "$COS_BROWSER_BIN" "$BROWSER_STAGE/usr/local/bin/cos-browser"
 
 COS_BROWSER_WORKER="$(dirname "$COS_BROWSER_BIN")/cos-browser-worker"
-if [ -f "$COS_BROWSER_WORKER" ]; then
+if [ -f "$COS_BROWSER_WORKER" ] && binary_matches_arch "$COS_BROWSER_WORKER"; then
     echo "  :: cos-browser-worker  <- $COS_BROWSER_WORKER"
     install -m 755 "$COS_BROWSER_WORKER" "$BROWSER_STAGE/usr/local/bin/cos-browser-worker"
 fi
