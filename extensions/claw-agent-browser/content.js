@@ -5,10 +5,14 @@
 // across multiple verbs without re-querying.
 
 (() => {
+  if (window !== window.top) return;
   if (window.__clawAgentInstalled) return;
   window.__clawAgentInstalled = true;
 
-  const REF_PREFIX = "el#";
+  const refNonce = new Uint8Array(16);
+  crypto.getRandomValues(refNonce);
+  const REF_PREFIX =
+    "doc#" + Array.from(refNonce, (byte) => byte.toString(16).padStart(2, "0")).join("") + ":el#";
   // axTree caps — protect callers from pathological pages.
   const AX_MAX_NODES = 10_000;
   const AX_MAX_BYTES = 16 * 1024 * 1024;

@@ -13,6 +13,11 @@ the user's logged-in session.
 | `content.js`    | Per-frame DOM helper. Owns the per-page element ref table, executes `query` / `click` / `fill` / `snapshot`. |
 | `popup.html` + `popup.js` | Toolbar popup showing live state and a STOP button. |
 
+DOM messages are sent only to frame `0`, and the content script exits if it is
+ever injected into a child frame. Element refs therefore cannot collide across
+iframes or authorize actions against a different embedded origin. A random
+per-document ref nonce also makes refs fail closed after navigation.
+
 DOM read operations deliberately omit current values from editable controls.
 Responses contain labels, refs, sensitivity classification, and a
 `value_present` boolean, but never password, OTP, payment, hidden-token, or

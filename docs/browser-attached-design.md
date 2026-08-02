@@ -109,7 +109,7 @@ apps/browser-attached/
   README.md
 
 extensions/claw-agent-browser/
-  manifest.json    # MV3, content_scripts: <all_urls>
+  manifest.json    # MV3, top-frame content_scripts: <all_urls>
   background.js    # SW, owns native port, dispatches verbs
   content.js       # per-frame DOM helper, secret-field detection
   popup.html       # tiny status / STOP UI
@@ -175,9 +175,13 @@ tools/
   re-render all invalidate refs.  Callers should re-`dom.query` rather than
   cache.
 
-- **Cross-origin iframes**: the content script is injected into every frame
-  via `all_frames: true`, but routing a verb to a specific frame is not yet
-  in scope — `dom.query` only reaches the top frame for the MVP.
+- **Cross-origin iframes**: DOM verbs are intentionally pinned to frame `0`,
+  and the content script is installed only in the top document. This prevents
+  a top-page host grant and a frame-local ref from acting on unrelated
+  embedded origins. Refs also carry a random per-document nonce so a stale ref
+  cannot collide with the same local sequence number after navigation.
+  Supporting iframe automation requires explicit frame refs plus a separate
+  capability check for each frame origin.
 
 - **Firefox**: the manifest is MV3 + `chrome.*`; Firefox 115+ supports MV3
   but uses `browser.*`.  A `webextension-polyfill` shim covers this with no
