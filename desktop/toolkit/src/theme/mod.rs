@@ -143,11 +143,11 @@ pub fn system_light() -> Theme {
 /// Loads the preferred system theme from `cosmic-config`.
 pub fn system_preference() -> Theme {
     let Ok(mode_config) = ThemeMode::config() else {
-        return Theme::dark();
+        return Theme::light();
     };
 
     let Ok(is_dark) = ThemeMode::is_dark(&mode_config) else {
-        return Theme::dark();
+        return Theme::light();
     };
     if is_dark {
         system_dark()

@@ -763,7 +763,7 @@ impl Theme {
             }
         }
 
-        Self::dark_default()
+        Self::light_default()
     }
 }
 
