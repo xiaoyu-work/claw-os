@@ -7,7 +7,7 @@ use cosmic::{
     applet::padded_control,
     cosmic_theme::Spacing,
     iced::{
-        Length, Subscription,
+        Background, Border, Length, Subscription,
         platform_specific::shell::wayland::commands::popup::{destroy_popup, get_popup},
         time, window,
     },
@@ -142,32 +142,36 @@ impl cosmic::Application for AgentActivity {
     }
 
     fn view(&self) -> Element<'_, Message> {
-        // Stay quiet when there are no active tasks; switch to a
-        // running-process icon when something is alive. Same numeric
-        // badge convention as approval-gate.
+        let Spacing {
+            space_xxs, space_xs, ..
+        } = theme::active().cosmic().spacing;
+
         let active = self
             .tasks
             .iter()
             .filter(|t| t.status == "running" || t.status == "pending")
             .count();
-        let icon = if active == 0 {
-            "system-run-symbolic"
+
+        // The panel slot is the desktop's single always-visible answer to
+        // "is the agent doing anything right now?", so it reads as a
+        // sentence rather than a bare icon: a state dot plus a label.
+        let (state, label) = if self.last_error.is_some() {
+            (AgentState::Offline, fl!("panel-offline"))
+        } else if active == 0 {
+            (AgentState::Idle, fl!("panel-idle"))
         } else {
-            "media-playback-start-symbolic"
+            (AgentState::Busy, fl!("panel-busy", count = active))
         };
-        let btn = self
-            .core
-            .applet
-            .icon_button(icon)
-            .on_press(Message::TogglePopup);
-        if active == 0 {
-            btn.into()
-        } else {
-            row![btn, text(format!("{}", active)).size(11)]
-                .align_y(cosmic::iced::core::Alignment::Center)
-                .spacing(2)
-                .into()
-        }
+
+        let content = row![status_dot(state), self.core.applet.text(label)]
+            .align_y(cosmic::iced::core::Alignment::Center)
+            .spacing(space_xxs);
+
+        button::custom(content)
+            .padding([0, space_xs])
+            .class(cosmic::theme::Button::AppletIcon)
+            .on_press(Message::TogglePopup)
+            .into()
     }
 
     fn view_window(&self, _id: window::Id) -> Element<'_, Message> {
@@ -222,9 +226,44 @@ impl cosmic::Application for AgentActivity {
     }
 }
 
+/// Coarse agent health as shown in the panel. Finer-grained per-task
+/// status stays in the popup — the panel only needs to answer
+/// "idle / working / broken" at a glance.
+#[derive(Clone, Copy)]
+enum AgentState {
+    Idle,
+    Busy,
+    Offline,
+}
+
+/// Small filled circle preceding the panel label, coloured by state.
+/// Sized to match the status dots used elsewhere in the shell.
+fn status_dot(state: AgentState) -> Element<'static, Message> {
+    const SIZE: f32 = 8.0;
+
+    container(horizontal_space().width(Length::Fixed(SIZE)))
+        .height(Length::Fixed(SIZE))
+        .class(theme::Container::custom(move |t| {
+            let cosmic = t.cosmic();
+            let color = match state {
+                AgentState::Idle => cosmic.palette.neutral_6,
+                AgentState::Busy => cosmic.accent_color(),
+                AgentState::Offline => cosmic.destructive_color(),
+            };
+            container::Style {
+                background: Some(Background::Color(color.into())),
+                border: Border {
+                    radius: (SIZE / 2.0).into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        }))
+        .into()
+}
+
 fn render_card(t: &Task, space_xxs: u16, space_xs: u16) -> Element<'_, Message> {
-    let status_label = match t.status.as_str() {
-        "pending" => fl!("status-pending"),
+    let status_label = match t.status.as_str() {        "pending" => fl!("status-pending"),
         "running" => fl!("status-running"),
         "paused" => fl!("status-paused"),
         "done" => fl!("status-done"),
