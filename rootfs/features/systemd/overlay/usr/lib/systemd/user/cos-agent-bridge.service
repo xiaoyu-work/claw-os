@@ -20,14 +20,16 @@ Environment=CLAWD_SOCKET=/run/cos/clawd.sock
 RuntimeDirectory=cos-agent-bridge
 RuntimeDirectoryMode=0700
 UMask=0077
-# Hardening: bridge is local-only, never exec, never write outside its
-# own runtime dir.
+# Hardening: bridge is local-only. Voice transcription executes `cos`
+# with the user's configured STT provider, so configuration/credentials
+# are readable while mutable Agent data is limited to its own data/cache
+# directories.
 RestrictAddressFamilies=AF_UNIX AF_INET
 NoNewPrivileges=true
 PrivateDevices=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=true
+ProtectHome=read-only
 ProtectControlGroups=true
 ProtectKernelLogs=true
 ProtectKernelModules=true
@@ -37,8 +39,10 @@ RestrictRealtime=true
 MemoryDenyWriteExecute=true
 CapabilityBoundingSet=
 AmbientCapabilities=
-# The bridge writes only its authenticated discovery file here.
-ReadWritePaths=%t/cos-agent-bridge
+# Discovery/audio staging plus the audit/provider state written by
+# `cos model transcribe`. A leading `-` keeps first boot working before
+# the optional data/cache directories exist.
+ReadWritePaths=%t/cos-agent-bridge -%h/.local/share/cos -%h/.cache/cos
 
 [Install]
 WantedBy=graphical-session.target
