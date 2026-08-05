@@ -1,90 +1,125 @@
-//! Microphone capture for voice input.
-//!
-//! Replaces the React `useAudioRecording` hook (which used the
-//! browser's MediaRecorder + getUserMedia). We use `cpal` for
-//! cross-platform capture and `hound` to encode the raw samples into
-//! a 16 kHz mono PCM WAV in memory, then upload them to the bridge's
-//! `/api/voice/upload` endpoint with `Content-Type: audio/wav`.
-//!
-//! Design notes:
-//!
-//! * `cpal::Stream` is `!Send`. We park it on a dedicated std::thread
-//!   that owns the stream and an accumulating sample buffer. A oneshot
-//!   `std::sync::mpsc::channel` is the stop signal — when the main
-//!   thread drops the recorder, the audio thread tears down cleanly.
-//!
-//! * 16 kHz mono i16 is what most STT models want (Whisper, Vosk,
-//!   etc.) and matches the bridge's documented contract. We resample
-//!   in software by choosing the cheapest input format the device
-//!   offers (typically f32, sometimes i16) and converting frame-by-
-//!   frame; if the device's native rate isn't 16 kHz we downsample
-//!   with a simple decimating filter — good enough for speech.
+//! Bounded microphone capture and bridge voice upload.
 
 use std::io::Cursor;
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
-use crate::bridge::BridgeEndpoint;
+use crate::bridge::{BridgeEndpoint, bridge_url};
 
-/// Target sample rate for the WAV upload. Most STT backends expect
-/// 16 kHz; uploading higher only wastes bandwidth.
-const TARGET_RATE: u32 = 16_000;
+pub const TARGET_RATE: u32 = 16_000;
+pub const MAX_RECORDING_SECS: u64 = 120;
+const MAX_SOURCE_RATE: u32 = 192_000;
+const MAX_OUTPUT_SAMPLES: usize = TARGET_RATE as usize * MAX_RECORDING_SECS as usize;
 
-/// In-progress recording handle. Drop or call [`Recorder::stop`] to
-/// finalize.
+#[derive(Debug, Clone, Copy)]
+pub struct RecordingMetrics {
+    pub elapsed: Duration,
+    pub peak: f32,
+    pub samples: usize,
+}
+
+#[derive(Debug)]
+struct SharedMetrics {
+    started: Instant,
+    peak_bits: AtomicU32,
+    samples: AtomicUsize,
+    stream_error: Mutex<Option<String>>,
+}
+
+enum CaptureCommand {
+    Finish,
+    Cancel,
+}
+
 pub struct Recorder {
-    stop_tx: Option<mpsc::Sender<()>>,
+    stop_tx: Option<mpsc::Sender<CaptureCommand>>,
     join: Option<JoinHandle<Result<Vec<u8>>>>,
+    metrics: Arc<SharedMetrics>,
 }
 
 impl std::fmt::Debug for Recorder {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Recorder").finish_non_exhaustive()
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Recorder")
+            .field("metrics", &self.metrics())
+            .finish_non_exhaustive()
     }
 }
 
 impl Recorder {
-    /// Start capturing from the default input device. Returns
-    /// immediately; samples accumulate on a background thread until
-    /// [`Self::stop`] is called.
     pub fn start() -> Result<Self> {
         let (stop_tx, stop_rx) = mpsc::channel();
         let (ready_tx, ready_rx) = mpsc::channel::<Result<()>>();
-
+        let metrics = Arc::new(SharedMetrics {
+            started: Instant::now(),
+            peak_bits: AtomicU32::new(0.0f32.to_bits()),
+            samples: AtomicUsize::new(0),
+            stream_error: Mutex::new(None),
+        });
+        let capture_metrics = Arc::clone(&metrics);
         let join = std::thread::Builder::new()
             .name("cos-agent-ui:recorder".into())
-            .spawn(move || run_capture(stop_rx, ready_tx))
+            .spawn(move || {
+                let failure_tx = ready_tx.clone();
+                let result = run_capture(stop_rx, ready_tx, capture_metrics);
+                if let Err(error) = &result {
+                    let _ = failure_tx.send(Err(anyhow!(error.to_string())));
+                }
+                result
+            })
             .context("spawn audio capture thread")?;
 
-        // Block briefly to surface device-open errors synchronously
-        // (e.g. "no input device" or "permission denied"). 5s upper
-        // bound is generous — cpal's device open is typically <50ms.
-        match ready_rx.recv_timeout(std::time::Duration::from_secs(5)) {
-            Ok(Ok(())) => Ok(Recorder {
+        match ready_rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(Ok(())) => Ok(Self {
                 stop_tx: Some(stop_tx),
                 join: Some(join),
+                metrics,
             }),
-            Ok(Err(e)) => {
-                // The thread will exit on its own; just wait briefly.
+            Ok(Err(error)) => {
                 let _ = join.join();
-                Err(e)
+                Err(error)
             }
-            Err(_) => Err(anyhow!("audio thread did not signal readiness in time")),
+            Err(mpsc::RecvTimeoutError::Disconnected) => match join.join() {
+                Ok(Err(error)) => Err(error),
+                Ok(Ok(_)) => Err(anyhow!("audio thread exited before reporting readiness")),
+                Err(_) => Err(anyhow!("audio thread panicked")),
+            },
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let _ = stop_tx.send(CaptureCommand::Cancel);
+                Err(anyhow!("audio thread did not signal readiness in time"))
+            }
         }
     }
 
-    /// Stop recording and return the encoded WAV bytes.
-    ///
-    /// Blocks until the audio thread has finished encoding — should
-    /// be called from `tokio::task::spawn_blocking` (or a background
-    /// thread) rather than directly from the UI event loop.
+    pub fn metrics(&self) -> RecordingMetrics {
+        RecordingMetrics {
+            elapsed: self
+                .metrics
+                .started
+                .elapsed()
+                .min(Duration::from_secs(MAX_RECORDING_SECS)),
+            peak: f32::from_bits(
+                self.metrics
+                    .peak_bits
+                    .swap(0.0f32.to_bits(), Ordering::Relaxed),
+            ),
+            samples: self.metrics.samples.load(Ordering::Relaxed),
+        }
+    }
+
+    pub fn stream_error(&self) -> Option<String> {
+        self.metrics.stream_error.lock().ok()?.clone()
+    }
+
     pub fn stop(mut self) -> Result<Vec<u8>> {
         if let Some(tx) = self.stop_tx.take() {
-            let _ = tx.send(());
+            let _ = tx.send(CaptureCommand::Finish);
         }
         let join = self
             .join
@@ -92,12 +127,25 @@ impl Recorder {
             .ok_or_else(|| anyhow!("recorder already consumed"))?;
         join.join().map_err(|_| anyhow!("audio thread panicked"))?
     }
+
+    pub fn cancel(mut self) -> Result<()> {
+        if let Some(tx) = self.stop_tx.take() {
+            let _ = tx.send(CaptureCommand::Cancel);
+        }
+        let join = self
+            .join
+            .take()
+            .ok_or_else(|| anyhow!("recorder already consumed"))?;
+        join.join()
+            .map_err(|_| anyhow!("audio thread panicked"))??;
+        Ok(())
+    }
 }
 
 impl Drop for Recorder {
     fn drop(&mut self) {
         if let Some(tx) = self.stop_tx.take() {
-            let _ = tx.send(());
+            let _ = tx.send(CaptureCommand::Cancel);
         }
         if let Some(join) = self.join.take() {
             let _ = join.join();
@@ -106,14 +154,14 @@ impl Drop for Recorder {
 }
 
 fn run_capture(
-    stop_rx: mpsc::Receiver<()>,
+    stop_rx: mpsc::Receiver<CaptureCommand>,
     ready_tx: mpsc::Sender<Result<()>>,
+    metrics: Arc<SharedMetrics>,
 ) -> Result<Vec<u8>> {
     let host = cpal::default_host();
     let device = host
         .default_input_device()
         .ok_or_else(|| anyhow!("no default input device"))?;
-
     let supported = device
         .default_input_config()
         .context("query default input config")?;
@@ -121,120 +169,217 @@ fn run_capture(
     let source_rate = supported.sample_rate().0;
     let channels = supported.channels() as usize;
     let config: cpal::StreamConfig = supported.into();
-
-    let samples: Arc<Mutex<Vec<i16>>> = Arc::new(Mutex::new(Vec::with_capacity(
-        TARGET_RATE as usize * 30,
+    let source_limit = source_rate.min(MAX_SOURCE_RATE) as usize * MAX_RECORDING_SECS as usize;
+    let samples = Arc::new(Mutex::new(Vec::<f32>::with_capacity(
+        (source_rate as usize * 30).min(source_limit),
     )));
-    let samples_for_cb = Arc::clone(&samples);
-
-    // The downsampler is a coarse decimator. For source_rate/TARGET_RATE
-    // ratios that aren't whole numbers we accumulate a fractional
-    // counter and emit a sample whenever it crosses 1.0. This is
-    // sufficient for speech-band signals; STT models do their own
-    // proper resampling internally if they care.
-    let ratio = source_rate as f64 / TARGET_RATE as f64;
-    let down_counter = Arc::new(Mutex::new(0.0f64));
-    let down_counter_cb = Arc::clone(&down_counter);
-    let err_fn = |e| tracing::warn!("audio stream error: {e}");
 
     let stream = match sample_format {
-        cpal::SampleFormat::F32 => device
-            .build_input_stream(
+        cpal::SampleFormat::F32 => {
+            let samples = Arc::clone(&samples);
+            let callback_metrics = Arc::clone(&metrics);
+            let error_metrics = Arc::clone(&metrics);
+            device.build_input_stream(
                 &config,
-                move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    let mut buf = samples_for_cb.lock().unwrap();
-                    let mut counter = down_counter_cb.lock().unwrap();
-                    for frame in data.chunks(channels) {
-                        // Mix down to mono by averaging channels.
-                        let sum: f32 = frame.iter().copied().sum();
-                        let mono = sum / channels as f32;
-                        *counter += 1.0;
-                        if *counter >= ratio {
-                            *counter -= ratio;
-                            let clipped = mono.clamp(-1.0, 1.0);
-                            buf.push((clipped * i16::MAX as f32) as i16);
-                        }
-                    }
+                move |data: &[f32], _| {
+                    collect_frames(
+                        data,
+                        channels,
+                        source_limit,
+                        &samples,
+                        &callback_metrics,
+                        |s| s,
+                    )
                 },
-                err_fn,
+                move |error| set_stream_error(&error_metrics, error.to_string()),
                 None,
             )
-            .context("build f32 input stream")?,
-        cpal::SampleFormat::I16 => device
-            .build_input_stream(
+        }
+        cpal::SampleFormat::I16 => {
+            let samples = Arc::clone(&samples);
+            let callback_metrics = Arc::clone(&metrics);
+            let error_metrics = Arc::clone(&metrics);
+            device.build_input_stream(
                 &config,
-                move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                    let mut buf = samples_for_cb.lock().unwrap();
-                    let mut counter = down_counter_cb.lock().unwrap();
-                    for frame in data.chunks(channels) {
-                        let sum: i32 = frame.iter().map(|&s| s as i32).sum();
-                        let mono = (sum / channels as i32) as i16;
-                        *counter += 1.0;
-                        if *counter >= ratio {
-                            *counter -= ratio;
-                            buf.push(mono);
-                        }
-                    }
+                move |data: &[i16], _| {
+                    collect_frames(
+                        data,
+                        channels,
+                        source_limit,
+                        &samples,
+                        &callback_metrics,
+                        |s| s as f32 / i16::MAX as f32,
+                    )
                 },
-                err_fn,
+                move |error| set_stream_error(&error_metrics, error.to_string()),
                 None,
             )
-            .context("build i16 input stream")?,
-        cpal::SampleFormat::U16 => device
-            .build_input_stream(
+        }
+        cpal::SampleFormat::U16 => {
+            let samples = Arc::clone(&samples);
+            let callback_metrics = Arc::clone(&metrics);
+            let error_metrics = Arc::clone(&metrics);
+            device.build_input_stream(
                 &config,
-                move |data: &[u16], _: &cpal::InputCallbackInfo| {
-                    let mut buf = samples_for_cb.lock().unwrap();
-                    let mut counter = down_counter_cb.lock().unwrap();
-                    for frame in data.chunks(channels) {
-                        let sum: i32 = frame.iter().map(|&s| s as i32 - 32_768).sum();
-                        let mono = (sum / channels as i32) as i16;
-                        *counter += 1.0;
-                        if *counter >= ratio {
-                            *counter -= ratio;
-                            buf.push(mono);
-                        }
-                    }
+                move |data: &[u16], _| {
+                    collect_frames(
+                        data,
+                        channels,
+                        source_limit,
+                        &samples,
+                        &callback_metrics,
+                        |s| (s as f32 - 32_768.0) / 32_768.0,
+                    )
                 },
-                err_fn,
+                move |error| set_stream_error(&error_metrics, error.to_string()),
                 None,
             )
-            .context("build u16 input stream")?,
+        }
         other => return Err(anyhow!("unsupported sample format: {other:?}")),
-    };
+    }
+    .context("build input stream")?;
 
     stream.play().context("start audio stream")?;
     let _ = ready_tx.send(Ok(()));
-
-    // Park until the controller drops or signals stop.
-    let _ = stop_rx.recv();
+    let finish = loop {
+        match stop_rx.recv_timeout(Duration::from_millis(50)) {
+            Ok(CaptureCommand::Finish) => break true,
+            Ok(CaptureCommand::Cancel) | Err(mpsc::RecvTimeoutError::Disconnected) => break false,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+        if metrics.started.elapsed() >= Duration::from_secs(MAX_RECORDING_SECS)
+            || metrics.samples.load(Ordering::Relaxed) >= source_limit
+        {
+            break true;
+        }
+        if metrics
+            .stream_error
+            .lock()
+            .is_ok_and(|error| error.is_some())
+        {
+            break true;
+        }
+    };
     drop(stream);
 
+    if !finish {
+        return Ok(Vec::new());
+    }
+
+    if let Some(error) = metrics
+        .stream_error
+        .lock()
+        .ok()
+        .and_then(|error| error.clone())
+    {
+        return Err(anyhow!("audio stream error: {error}"));
+    }
     let captured = std::mem::take(&mut *samples.lock().unwrap());
-    encode_wav(&captured)
+    let resampled = resample_to_16k(&captured, source_rate)?;
+    encode_wav(&resampled)
+}
+
+fn collect_frames<T: Copy>(
+    data: &[T],
+    channels: usize,
+    limit: usize,
+    samples: &Arc<Mutex<Vec<f32>>>,
+    metrics: &Arc<SharedMetrics>,
+    convert: impl Fn(T) -> f32,
+) {
+    let mut output = samples.lock().unwrap();
+    if output.len() >= limit {
+        return;
+    }
+    let mut peak = 0.0f32;
+    for frame in data.chunks(channels) {
+        if output.len() >= limit || frame.len() < channels {
+            break;
+        }
+        let mono = frame.iter().copied().map(&convert).sum::<f32>() / channels as f32;
+        let mono = mono.clamp(-1.0, 1.0);
+        peak = peak.max(mono.abs());
+        output.push(mono);
+    }
+    metrics.samples.store(output.len(), Ordering::Relaxed);
+    metrics.peak_bits.store(peak.to_bits(), Ordering::Relaxed);
+}
+
+fn set_stream_error(metrics: &SharedMetrics, error: String) {
+    if let Ok(mut slot) = metrics.stream_error.lock() {
+        *slot = Some(error);
+    }
+}
+
+fn resample_to_16k(input: &[f32], source_rate: u32) -> Result<Vec<i16>> {
+    if source_rate == 0 {
+        return Err(anyhow!("invalid input sample rate"));
+    }
+    if input.is_empty() {
+        return Err(anyhow!("no audio samples captured"));
+    }
+
+    let mut filtered = Vec::new();
+    let source = if source_rate > TARGET_RATE {
+        let window = ((source_rate as f64 / TARGET_RATE as f64).ceil() as usize).max(2);
+        filtered.reserve(input.len());
+        let mut sum = 0.0f64;
+        for (index, sample) in input.iter().copied().enumerate() {
+            sum += sample as f64;
+            if index >= window {
+                sum -= input[index - window] as f64;
+            }
+            filtered.push((sum / (index + 1).min(window) as f64) as f32);
+        }
+        filtered.as_slice()
+    } else {
+        input
+    };
+
+    let output_len = ((source.len() as u64 * TARGET_RATE as u64) / source_rate as u64)
+        .max(1)
+        .min(MAX_OUTPUT_SAMPLES as u64) as usize;
+    let step = source_rate as f64 / TARGET_RATE as f64;
+    let mut output = Vec::with_capacity(output_len);
+    for index in 0..output_len {
+        let position = index as f64 * step;
+        let left = position.floor() as usize;
+        let right = (left + 1).min(source.len() - 1);
+        let fraction = (position - left as f64) as f32;
+        let sample =
+            source[left.min(source.len() - 1)] * (1.0 - fraction) + source[right] * fraction;
+        output.push((sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16);
+    }
+    if output.is_empty() {
+        return Err(anyhow!("no audio samples captured"));
+    }
+    Ok(output)
 }
 
 fn encode_wav(samples: &[i16]) -> Result<Vec<u8>> {
+    if samples.is_empty() {
+        return Err(anyhow!("no audio samples captured"));
+    }
+    if samples.len() > MAX_OUTPUT_SAMPLES {
+        return Err(anyhow!("recording exceeds the 120 second limit"));
+    }
     let spec = hound::WavSpec {
         channels: 1,
         sample_rate: TARGET_RATE,
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
     };
-    let mut cursor = Cursor::new(Vec::<u8>::new());
+    let mut cursor = Cursor::new(Vec::new());
     {
-        let mut writer = hound::WavWriter::new(&mut cursor, spec)
-            .context("create WAV writer")?;
-        for &s in samples {
-            writer.write_sample(s).context("write WAV sample")?;
+        let mut writer = hound::WavWriter::new(&mut cursor, spec).context("create WAV writer")?;
+        for sample in samples {
+            writer.write_sample(*sample).context("write WAV sample")?;
         }
         writer.finalize().context("finalize WAV")?;
     }
     Ok(cursor.into_inner())
 }
 
-/// Response shape from `POST /api/voice/upload` (matches
-/// `bridge/src/routes/voice.rs::VoiceResponse`).
 #[derive(Debug, serde::Deserialize)]
 pub struct VoiceResponse {
     pub text: String,
@@ -244,16 +389,21 @@ pub struct VoiceResponse {
     pub error: Option<String>,
 }
 
-/// POST a recorded WAV blob to the bridge and decode the JSON
-/// response. The bridge returns a placeholder transcript when no
-/// STT backend is wired — we surface that to the user as a tip
-/// rather than dropping it silently into the input.
+#[derive(Debug, serde::Deserialize)]
+struct VoiceErrorResponse {
+    error: String,
+    #[serde(default)]
+    hint: Option<String>,
+}
+
 pub async fn upload(endpoint: BridgeEndpoint, wav: Vec<u8>) -> Result<VoiceResponse> {
-    let url = format!(
-        "http://127.0.0.1:{}/api/voice/upload",
-        endpoint.port
-    );
-    let resp = reqwest::Client::new()
+    let url = bridge_url(&endpoint, "/api/voice/upload");
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(135))
+        .build()
+        .context("build voice upload client")?;
+    let response = client
         .post(&url)
         .bearer_auth(&endpoint.token)
         .header("Content-Type", "audio/wav")
@@ -261,15 +411,57 @@ pub async fn upload(endpoint: BridgeEndpoint, wav: Vec<u8>) -> Result<VoiceRespo
         .send()
         .await
         .context("POST /api/voice/upload")?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(anyhow!("voice upload failed ({status}): {body}"));
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        if let Ok(error) = serde_json::from_str::<VoiceErrorResponse>(&body) {
+            let detail = error
+                .hint
+                .filter(|hint| !hint.trim().is_empty())
+                .map(|hint| format!("{} — {hint}", error.error))
+                .unwrap_or(error.error);
+            return Err(anyhow!("voice upload failed ({status}): {detail}"));
+        }
+        return Err(anyhow!(
+            "voice upload failed ({status}): {}",
+            body.chars().take(512).collect::<String>()
+        ));
     }
-    let json: VoiceResponse = resp
-        .json()
+    let response = response
+        .json::<VoiceResponse>()
         .await
         .context("decode voice upload response")?;
-    Ok(json)
+    if let Some(error) = response.error.as_deref().filter(|error| !error.is_empty()) {
+        return Err(anyhow!(error.to_string()));
+    }
+    Ok(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resamples_above_and_below_target_rate() {
+        let high = vec![0.5; 48_000];
+        let low = vec![0.5; 8_000];
+        assert_eq!(resample_to_16k(&high, 48_000).unwrap().len(), 16_000);
+        assert_eq!(resample_to_16k(&low, 8_000).unwrap().len(), 16_000);
+    }
+
+    #[test]
+    fn rejects_empty_and_limits_output() {
+        assert!(resample_to_16k(&[], 48_000).is_err());
+        let oversized = vec![0i16; MAX_OUTPUT_SAMPLES + 1];
+        assert!(encode_wav(&oversized).is_err());
+    }
+
+    #[test]
+    fn writes_pcm_wav() {
+        let wav = encode_wav(&[0, i16::MAX, i16::MIN]).unwrap();
+        let reader = hound::WavReader::new(Cursor::new(wav)).unwrap();
+        assert_eq!(reader.spec().sample_rate, TARGET_RATE);
+        assert_eq!(reader.spec().channels, 1);
+        assert_eq!(reader.duration(), 3);
+    }
 }
