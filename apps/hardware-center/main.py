@@ -1,0 +1,71 @@
+"""hardware-center — structured system-wide hardware inventory."""
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _shared.env_scrub import scrub_env  # noqa: E402
+
+from cos_runtime import policy  # noqa: E402
+
+
+COMMANDS = frozenset(
+    {"summary", "cpu", "gpu", "pci", "usb", "memory", "storage", "drivers", "thermal"}
+)
+TIMEOUT_SECS = int(os.environ.get("CLAW_HARDWARE_CENTER_TIMEOUT", "180"))
+
+
+def _cos_binary():
+    return os.environ.get("COS_BIN") or shutil.which("cos")
+
+
+def _broker(action):
+    cos_bin = _cos_binary()
+    if not cos_bin:
+        return {"error": "cos binary not found; Hardware Center broker unavailable"}
+    try:
+        result = subprocess.run(
+            [cos_bin, "__hardware", action],
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT_SECS,
+            stdin=subprocess.DEVNULL,
+            env=scrub_env(),
+            check=False,
+        )
+    except (FileNotFoundError, PermissionError) as exc:
+        return {"error": str(exc)}
+    except subprocess.TimeoutExpired:
+        return {"error": f"Hardware Center broker exceeded {TIMEOUT_SECS}s"}
+    payload_text = (result.stdout or "").strip() or (result.stderr or "").strip()
+    try:
+        payload = json.loads(payload_text) if payload_text else {}
+    except json.JSONDecodeError:
+        return {"error": "Hardware Center broker returned invalid JSON"}
+    if result.returncode != 0 and "error" not in payload:
+        payload["error"] = f"Hardware Center broker exited {result.returncode}"
+    return payload
+
+
+def run(command, args):
+    if command == "__schema__":
+        return _schema()
+    if command not in COMMANDS:
+        return {"error": f"unknown command: {command}"}
+    if args:
+        return {"error": f"{command} takes no arguments"}
+    policy.require("sys.observe", name="hardware")
+    return _broker(command)
+
+
+def _schema():
+    return {
+        command: {
+            "description": f"Inspect {command} hardware information",
+            "parameters": [],
+        }
+        for command in sorted(COMMANDS)
+    }

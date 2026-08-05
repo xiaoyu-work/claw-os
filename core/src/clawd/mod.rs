@@ -11,6 +11,7 @@ pub mod context_events;
 pub mod crash;
 pub mod desktop;
 pub mod desktop_wayland;
+pub mod hardware;
 pub mod heartbeat;
 pub mod memory;
 pub mod network;

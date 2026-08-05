@@ -42,6 +42,7 @@ pub fn readonly_task_caps() -> CapSet {
         "doc",
         "docs",
         "fs",
+        "hardware-center",
         "kv",
         "launcher",
         "log",

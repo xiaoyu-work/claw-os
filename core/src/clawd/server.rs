@@ -13,8 +13,8 @@ use super::protocol::{encode_response, Request, Response};
 use super::state::DaemonState;
 use super::{
     app_sessions, audio, audit, bluetooth, context, context_events, crash, desktop, memory, network,
-    packages, permissions, power, scheduler, snapshots, storage, system_journal, systemd, tasks,
-    transactions,
+    hardware, packages, permissions, power, scheduler, snapshots, storage, system_journal, systemd,
+    tasks, transactions,
 };
 
 #[derive(Debug, Clone)]
@@ -214,6 +214,7 @@ async fn dispatch_result(
         "system.bluetooth.control" => bluetooth::control(request.params, client).await,
         "system.crash.inspect" => crash::inspect(request.params, client).await,
         "system.desktop.control" => desktop::control(request.params, client).await,
+        "system.hardware.inspect" => hardware::inspect(request.params, client).await,
         "system.network.control" => network::control(request.params, client).await,
         "system.package.install" => packages::install(request.params, client).await,
         "system.package.control" => packages::control(request.params, client).await,
@@ -268,6 +269,7 @@ fn authorize_command(command: &str, client: &ClientIdentity) -> Result<(), Strin
             | "system.bluetooth.control"
             | "system.crash.inspect"
             | "system.desktop.control"
+            | "system.hardware.inspect"
             | "system.network.control"
             | "system.package.install"
             | "system.package.control"

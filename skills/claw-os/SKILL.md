@@ -61,6 +61,7 @@ Permission roles and app capability gates are documented in [permissions.md](per
 | `audio-manager` | PipeWire/WirePlumber volume, mute, routes, and profiles |
 | `bluetooth-manager` | BlueZ discovery, pairing, connection, trust, and power |
 | `fs` | File operations, search, metadata |
+| `hardware-center` | CPU, GPU, PCI, USB, memory, storage, driver, and thermal inventory |
 | `exec` | Command execution |
 | `web` | URL → Markdown (JS rendered) |
 | `search` | Web and image search (Google/Brave) |

@@ -272,6 +272,25 @@ change requires the critical unscoped `sys.power` capability plus an explicit
 no-reply logind request, so suspend/reboot/poweroff is recorded even if the
 machine transitions before the normal clawd response audit completes.
 
+## Hardware Center
+
+```bash
+cos app hardware-center summary
+cos app hardware-center cpu
+cos app hardware-center gpu
+cos app hardware-center usb
+cos app hardware-center memory
+cos app hardware-center drivers
+cos app hardware-center thermal
+```
+
+Hardware Center combines kernel sysfs/proc data with bounded lscpu, lspci,
+lsblk, and dmidecode enrichment. It reports bound drivers, IOMMU groups,
+firmware identity, DIMM metadata, USB authorization, CPU vulnerability state,
+temperatures, and fans under the read-only `sys.observe:hardware` scope.
+Individual provider failures remain explicit inside `summary` rather than
+silently producing an empty healthy-looking section.
+
 ## Package Management
 
 ```bash

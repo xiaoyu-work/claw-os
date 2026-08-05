@@ -495,6 +495,25 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__hardware" {
+        let action = args
+            .get(1)
+            .ok_or_else(|| "internal hardware command required".to_string())?;
+        if args.len() != 2 {
+            return Err("internal hardware commands do not accept arguments".to_string());
+        }
+        let session = env::var("COS_SESSION")
+            .map_err(|_| "internal hardware command requires COS_SESSION".to_string())?;
+        let value = request_clawd(
+            "system.hardware.inspect",
+            json!({
+                "session": session,
+                "action": action,
+            }),
+        )?;
+        return Ok(Some(value.to_string()));
+    }
+
     // "app" namespace → route to Python apps
     if name == "app" {
         return dispatch_app(&args[1..]);
