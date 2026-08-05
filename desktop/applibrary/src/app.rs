@@ -355,14 +355,17 @@ impl CosmicAppLibrary {
         let spacing = theme::spacing();
         grid_columns_for_width(
             self.width,
-            f32::from(spacing.space_xxl) * 4.0,
+            f32::from(spacing.space_xxl) * 2.0,
             f32::from(spacing.space_s),
         )
     }
 }
 
-const MAX_GRID_COLUMNS: usize = 7;
-const MIN_GRID_CELL_WIDTH: f32 = 172.0;
+const MAX_GRID_COLUMNS: usize = 9;
+/// Width of one grid cell: the 120 px application button plus its `space_xs`
+/// padding on each side. Keep this in step with `ApplicationButton`, or the
+/// column count stops matching what the row actually lays out.
+const MIN_GRID_CELL_WIDTH: f32 = 144.0;
 
 fn grid_columns_for_width(width: f32, horizontal_padding: f32, spacing: f32) -> usize {
     let available = (width - horizontal_padding).max(MIN_GRID_CELL_WIDTH);
@@ -388,13 +391,15 @@ fn scroll_ratio(index: usize, total: usize, columns: usize) -> f32 {
 fn launchpad_glass_style(theme: &cosmic::Theme) -> container::Style {
     let cosmic = theme.cosmic();
     let mut background: Color = cosmic.background.base.into();
-    // App labels sit directly on this scrim over an arbitrary wallpaper, so
-    // keep it opaque enough to hold contrast; high contrast drops blending
-    // entirely rather than relying on the wallpaper behind it.
+    // The compositor already blurs the wallpaper behind this surface, so the
+    // scrim only has to anchor luminance far enough for the app labels that
+    // sit directly on it - anything heavier just hides the blur it is layered
+    // over. High contrast drops blending entirely rather than relying on the
+    // wallpaper behind it.
     background.a = match (cosmic.is_high_contrast, cosmic.is_dark) {
         (true, _) => 1.0,
-        (false, true) => 0.82,
-        (false, false) => 0.78,
+        (false, true) => 0.52,
+        (false, false) => 0.45,
     };
 
     container::Style {
@@ -1422,17 +1427,22 @@ mod tests {
     use super::{MAX_GRID_COLUMNS, grid_columns_for_width, scroll_ratio};
 
     #[test]
-    fn grid_columns_remain_seven_on_wide_outputs() {
-        assert_eq!(
-            grid_columns_for_width(1920.0, 256.0, 16.0),
-            MAX_GRID_COLUMNS
-        );
+    fn grid_columns_fill_wide_outputs() {
+        assert_eq!(grid_columns_for_width(1920.0, 128.0, 16.0), MAX_GRID_COLUMNS);
     }
 
     #[test]
     fn grid_columns_shrink_on_narrow_outputs() {
-        assert!(grid_columns_for_width(800.0, 256.0, 16.0) < MAX_GRID_COLUMNS);
-        assert_eq!(grid_columns_for_width(100.0, 256.0, 16.0), 1);
+        assert!(grid_columns_for_width(800.0, 128.0, 16.0) < MAX_GRID_COLUMNS);
+        assert_eq!(grid_columns_for_width(100.0, 128.0, 16.0), 1);
+    }
+
+    /// A cell is the 120 px button plus `space_xs` either side. If the two
+    /// drift apart the row lays out a different number of columns than the
+    /// keyboard navigation believes are on screen.
+    #[test]
+    fn grid_cell_matches_the_application_button() {
+        assert_eq!(super::MIN_GRID_CELL_WIDTH, 120.0 + 12.0 * 2.0);
     }
 
     #[test]

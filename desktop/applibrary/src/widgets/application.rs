@@ -52,7 +52,7 @@ impl<'a, Message: Clone + 'static> ApplicationButton<'a, Message> {
         on_cancel: Option<Message>,
     ) -> Self {
         let cosmic::cosmic_theme::Spacing {
-            space_xxs, space_s, ..
+            space_xxs, space_xs, ..
         } = theme::active().cosmic().spacing;
 
         let (source_icon, source_suffix_len) = match source {
@@ -93,15 +93,15 @@ impl<'a, Message: Clone + 'static> ApplicationButton<'a, Message> {
                     icon_handle
                         .clone()
                         .icon()
-                        .width(Length::Fixed(96.0))
-                        .height(Length::Fixed(96.0)),
+                        .width(Length::Fixed(84.0))
+                        .height(Length::Fixed(84.0)),
                     container(text(name).size(13.0).width(Length::Shrink))
                         .align_x(Horizontal::Center)
                         .width(Length::Fill)
-                        .height(Length::Fixed(36.0))
+                        .height(Length::Fixed(34.0))
                 ]
-                .width(Length::Fixed(140.0))
-                .height(Length::Fixed(148.0))
+                .width(Length::Fixed(120.0))
+                .height(Length::Fixed(126.0))
                 .spacing(space_xxs)
                 .align_x(Alignment::Center)
                 .width(Length::Fill),
@@ -110,7 +110,7 @@ impl<'a, Message: Clone + 'static> ApplicationButton<'a, Message> {
             .selected(selected)
             .width(Length::FillPortion(1))
             .class(theme::Button::IconVertical)
-            .padding(space_s)
+            .padding(space_xs)
             .on_press_maybe(on_pressed.clone()),
         )
         .drag_icon(move |_| {
@@ -118,8 +118,8 @@ impl<'a, Message: Clone + 'static> ApplicationButton<'a, Message> {
                 icon_handle
                     .clone()
                     .icon()
-                    .width(Length::Fixed(96.0))
-                    .height(Length::Fixed(96.0))
+                    .width(Length::Fixed(84.0))
+                    .height(Length::Fixed(84.0))
                     .into(),
                 tree::State::None,
                 cosmic::iced::Vector::ZERO,
