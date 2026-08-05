@@ -326,7 +326,7 @@ fn help_doc() -> Value {
         "modalities": {
             "llm":       "Conversational LLM (under [agent]). Required for `cos agent ask`/`chat`.",
             "tts":       "Text-to-speech (under [tts]). Used by voice output / `cos agent voice`.",
-            "stt":       "Speech-to-text (under [stt]). Used by voice input / `cos agent transcribe`.",
+            "stt":       "Speech-to-text (under [stt]). Used by voice input / `cos model transcribe`.",
             "imagegen":  "Image generation (under [imagegen]). Used by `cos agent image`.",
             "embed":     "Text embeddings (under [embed]). Used by semantic memory / `cos agent recall`.",
             "all":       "Walk every modality in order, prompting before each.",
@@ -1166,7 +1166,7 @@ mod media {
             name: "stt",
             config_block: "stt",
             headline: "cos agent setup stt — speech-to-text wizard",
-            next_command_hint: "cos agent transcribe path/to/audio.wav",
+            next_command_hint: "cos model transcribe path/to/audio.wav",
             default_provider: "openai",
             providers: &[
                 ProviderChoice {
@@ -1192,14 +1192,6 @@ mod media {
                     default_env: "MISTRAL_API_KEY",
                     sample_models: &["voxtral-mini-2507", "voxtral-small-2507"],
                     default_model: "voxtral-mini-2507",
-                },
-                ProviderChoice {
-                    name: "xai",
-                    label: "xAI",
-                    needs_credential: true,
-                    default_env: "XAI_API_KEY",
-                    sample_models: &["grok-2-stt"],
-                    default_model: "grok-2-stt",
                 },
             ],
         };

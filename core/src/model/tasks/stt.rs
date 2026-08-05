@@ -97,7 +97,7 @@ pub fn build_default() -> Result<Option<Box<dyn SpeechToText>>, String> {
 pub fn build_from(cfg: &SttConfig) -> Result<Option<Box<dyn SpeechToText>>, String> {
     match cfg.provider.as_str() {
         "none" | "" => Ok(None),
-        "openai" | "xai" | "deepseek" | "openrouter" | "ollama" => {
+        "openai" | "groq" | "mistral" | "deepseek" | "openrouter" | "ollama" => {
             Ok(Some(Box::new(OpenAICompatStt::from_config(cfg))))
         }
         other => Err(format!("unknown stt provider: {other}")),
@@ -109,6 +109,16 @@ pub fn build_from(cfg: &SttConfig) -> Result<Option<Box<dyn SpeechToText>>, Stri
 // =====================================================================
 
 const DEFAULT_OPENAI_BASE: &str = "https://api.openai.com/v1";
+const DEFAULT_GROQ_BASE: &str = "https://api.groq.com/openai/v1";
+const DEFAULT_MISTRAL_BASE: &str = "https://api.mistral.ai/v1";
+
+fn default_base_url(provider: &str) -> &'static str {
+    match provider {
+        "groq" => DEFAULT_GROQ_BASE,
+        "mistral" => DEFAULT_MISTRAL_BASE,
+        _ => DEFAULT_OPENAI_BASE,
+    }
+}
 
 pub struct OpenAICompatStt {
     alias: String,
@@ -127,7 +137,7 @@ impl OpenAICompatStt {
             .base_url
             .clone()
             .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| DEFAULT_OPENAI_BASE.to_string());
+            .unwrap_or_else(|| default_base_url(&cfg.provider).to_string());
         let base_url = base_url.trim_end_matches('/').to_string();
 
         let api_key = crate::agent::llm::providers::openai_compat::resolve_api_key(
@@ -347,6 +357,21 @@ mod tests {
         let mut c = SttConfig::default();
         c.provider = "unknown".into();
         assert!(build_from(&c).is_err());
+    }
+
+    #[test]
+    fn advertised_stt_providers_build_with_their_default_endpoints() {
+        for (provider, expected) in [
+            ("openai", DEFAULT_OPENAI_BASE),
+            ("groq", DEFAULT_GROQ_BASE),
+            ("mistral", DEFAULT_MISTRAL_BASE),
+        ] {
+            let mut c = cfg();
+            c.provider = provider.into();
+            c.base_url = None;
+            assert!(build_from(&c).is_ok(), "{provider} should be supported");
+            assert_eq!(OpenAICompatStt::from_config(&c).base_url, expected);
+        }
     }
 
     #[test]
