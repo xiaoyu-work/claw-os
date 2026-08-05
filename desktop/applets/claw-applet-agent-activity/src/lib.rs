@@ -14,7 +14,7 @@
 
 mod app;
 mod localize;
-mod tasks;
+pub mod tasks;
 
 use crate::localize::localize;
 

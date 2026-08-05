@@ -271,6 +271,8 @@ pub struct Desktop {
     pub mime_types: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub single_instance: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panel_applet: Option<bool>,
 }
 
 /// Permissions request / reply

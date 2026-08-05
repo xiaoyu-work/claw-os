@@ -1,0 +1,14 @@
+[Desktop Entry]
+Name=Desktop Widgets
+Comment=Calendar, AI tasks, system health, and smart suggestions
+Type=Application
+Exec=cos app widget-rail open
+Terminal=false
+Categories=ClawOS;
+Keywords=ClawOS;Applet;Widgets;Calendar;Tasks;System;Suggestions;
+Icon=view-grid-symbolic
+StartupNotify=true
+NoDisplay=true
+X-CosmicApplet=true
+X-CosmicShrinkable=false
+X-OverflowPriority=100

@@ -396,7 +396,7 @@ pub fn run_native_app_host(
     let mut app_session = AppIdentitySession::for_native_host(app_id)?;
     let mut command = Command::new(&runner);
     command.arg("--").arg(&program_path);
-    reset_app_environment(&mut command);
+    reset_app_environment(&mut command, false);
     command
         .args(args)
         .env("PATH", "/usr/local/bin:/usr/bin:/bin")
@@ -775,45 +775,73 @@ impl Drop for AppIdentitySession {
     }
 }
 
-fn reset_app_environment(command: &mut Command) {
-    const SAFE_KEYS: &[&str] = &[
-        "PATH",
-        "HOME",
-        "USER",
-        "LOGNAME",
-        "SHELL",
-        "LANG",
-        "LC_ALL",
-        "LC_CTYPE",
-        "LC_MESSAGES",
-        "TZ",
-        "TERM",
-        "TMPDIR",
-        "TEMP",
-        "TMP",
-        "DISPLAY",
-        "WAYLAND_DISPLAY",
-        "XDG_RUNTIME_DIR",
-        "DBUS_SESSION_BUS_ADDRESS",
-        "XAUTHORITY",
-        "PULSE_SERVER",
-        "COS_SESSION",
-        "COS_TRACE_ID",
-        "COS_SPAN_ID",
-        "COS_BIN",
-        "COS_VERSION",
-        "COS_SDK_PYTHON_DIR",
-        "COS_SNAPSHOT",
-        "COS_PERMS_MODE",
-    ];
-    let preserved = SAFE_KEYS
+const SAFE_APP_ENV_KEYS: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LC_MESSAGES",
+    "TZ",
+    "TERM",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "XDG_RUNTIME_DIR",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "XAUTHORITY",
+    "PULSE_SERVER",
+    "COS_SESSION",
+    "COS_TRACE_ID",
+    "COS_SPAN_ID",
+    "COS_BIN",
+    "COS_VERSION",
+    "COS_SDK_PYTHON_DIR",
+    "COS_SNAPSHOT",
+    "COS_PERMS_MODE",
+];
+
+const PANEL_APPLET_ENV_KEYS: &[&str] = &[
+    "WAYLAND_SOCKET",
+    "X_PRIVILEGED_WAYLAND_SOCKET",
+    "COSMIC_PANEL_NAME",
+    "COSMIC_PANEL_OUTPUT",
+    "COSMIC_PANEL_SPACING",
+    "COSMIC_PANEL_ANCHOR",
+    "COSMIC_PANEL_BACKGROUND",
+    "COSMIC_PANEL_PADDING_OVERLAP",
+    "COSMIC_PANEL_SIZE",
+];
+
+fn preserved_app_environment<F>(
+    panel_applet: bool,
+    mut value_for: F,
+) -> Vec<(String, String)>
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    let panel_keys: &[&str] = if panel_applet {
+        PANEL_APPLET_ENV_KEYS
+    } else {
+        &[]
+    };
+    SAFE_APP_ENV_KEYS
         .iter()
+        .chain(panel_keys)
         .filter_map(|key| {
-            std::env::var(key)
-                .ok()
-                .map(|value| ((*key).to_string(), value))
+            value_for(key).map(|value| ((*key).to_string(), value))
         })
-        .collect::<Vec<_>>();
+        .collect()
+}
+
+fn reset_app_environment(command: &mut Command, panel_applet: bool) {
+    let preserved =
+        preserved_app_environment(panel_applet, |key| std::env::var(key).ok());
     command.env_clear();
     command.envs(preserved);
 }
@@ -1023,7 +1051,7 @@ pub fn run_python_app(
     let mut app_session = AppIdentitySession::for_operation(app_dir, &app_id, command, args)?;
 
     let mut command = app_command(python);
-    reset_app_environment(&mut command);
+    reset_app_environment(&mut command, false);
     command
         .arg("-c")
         .arg(&wrapper)
@@ -1187,7 +1215,7 @@ pub fn run_app(
     };
     let app_id = manifest_app_id(app_dir)?;
     let mut app_session = AppIdentitySession::for_operation(app_dir, &app_id, command, args)?;
-    reset_app_environment(&mut cmd);
+    reset_app_environment(&mut cmd, false);
 
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -1273,18 +1301,26 @@ pub fn launch_gui(
     apps_dir: &str,
 ) -> Result<(), String> {
     let manifest_path = app_dir.join("app.json");
-    let (runtime, entry) = if manifest_path.is_file() {
+    let (runtime, entry, panel_applet) = if manifest_path.is_file() {
         let body = std::fs::read_to_string(&manifest_path)
             .map_err(|e| format!("read {}: {}", manifest_path.display(), e))?;
         let manifest = crate::apps::AppManifest::from_json(&body)
             .map_err(|e| format!("parse {}: {}", manifest_path.display(), e))?;
         let rt = manifest.runtime;
+        let panel_applet = manifest
+            .desktop
+            .as_ref()
+            .is_some_and(|desktop| desktop.panel_applet);
         let entry = manifest
             .entry
             .unwrap_or_else(|| rt.default_entry().to_string());
-        (rt, entry)
+        (rt, entry, panel_applet)
     } else {
-        (Runtime::Python, Runtime::Python.default_entry().to_string())
+        (
+            Runtime::Python,
+            Runtime::Python.default_entry().to_string(),
+            false,
+        )
     };
 
     let app_id = manifest_app_id(app_dir)?;
@@ -1326,7 +1362,7 @@ pub fn launch_gui(
             Runtime::Python => unreachable!("python handled above"),
         }
     };
-    reset_app_environment(&mut cmd);
+    reset_app_environment(&mut cmd, panel_applet);
 
     let args_json =
         serde_json::to_string(files).map_err(|e| format!("failed to serialize files: {e}"))?;
@@ -1381,6 +1417,41 @@ mod tests {
         // Shell + Binary just need to be non-empty.
         assert!(!Runtime::Shell.default_entry().is_empty());
         assert!(!Runtime::Binary.default_entry().is_empty());
+    }
+
+    #[test]
+    fn panel_environment_requires_explicit_manifest_opt_in() {
+        let filter = |panel_applet| {
+            preserved_app_environment(panel_applet, |key| Some(key.to_string()))
+                .into_iter()
+                .collect::<std::collections::HashMap<_, _>>()
+        };
+
+        let normal = filter(false);
+        assert_eq!(normal.len(), SAFE_APP_ENV_KEYS.len());
+        for key in SAFE_APP_ENV_KEYS {
+            assert!(normal.contains_key(*key), "normal launch dropped {key}");
+        }
+        for key in PANEL_APPLET_ENV_KEYS {
+            assert!(
+                !normal.contains_key(*key),
+                "normal launch inherited panel-only {key}"
+            );
+        }
+
+        let panel = filter(true);
+        assert_eq!(
+            panel.len(),
+            SAFE_APP_ENV_KEYS.len() + PANEL_APPLET_ENV_KEYS.len()
+        );
+        for key in PANEL_APPLET_ENV_KEYS {
+            assert!(
+                panel.contains_key(*key),
+                "opted-in panel applet dropped {key}"
+            );
+        }
+        assert!(!panel.contains_key("COSMIC_PANEL_UNRELATED"));
+        assert!(!panel.contains_key("AWS_SECRET_ACCESS_KEY"));
     }
 
     #[test]

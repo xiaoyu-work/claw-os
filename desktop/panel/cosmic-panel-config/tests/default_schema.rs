@@ -59,10 +59,11 @@ fn as_value<T: serde::Serialize>(value: &T) -> ron::Value {
 fn shipped_schema_parses() {
     assert_eq!(
         parse::<Vec<String>>("com.clawos.Panel", "entries"),
-        vec!["Panel".to_string(), "Dock".to_string()],
+        vec!["Panel".to_string(), "Dock".to_string(), "WidgetRail".to_string(),],
     );
 
-    for entry in ["com.clawos.Panel.Panel", "com.clawos.Panel.Dock"] {
+    for entry in ["com.clawos.Panel.Panel", "com.clawos.Panel.Dock", "com.clawos.Panel.WidgetRail"]
+    {
         let _ = shipped_panel(entry);
     }
 }
@@ -135,6 +136,29 @@ fn dock_layout() {
     // the dock wants a rounded rectangle.
     let radius = parse::<u32>(entry, "border_radius");
     assert_eq!(radius, 32, "the panel renderer halves this into a 16px radius");
+}
+
+/// The widget rail is a floating, nonexclusive right-side surface. Its applet
+/// paints the individual glass cards, so the panel wrapper must stay clear.
+#[test]
+fn widget_rail_layout() {
+    use cosmic_panel_config::CosmicPanelBackground;
+
+    let entry = "com.clawos.Panel.WidgetRail";
+    assert_eq!(parse::<PanelAnchor>(entry, "anchor"), PanelAnchor::Right);
+    assert_eq!(parse::<PanelSize>(entry, "size"), PanelSize::Custom(328));
+    assert_eq!(parse::<u16>(entry, "margin"), 24);
+    assert!(!parse::<bool>(entry, "exclusive_zone"));
+    assert!(!parse::<bool>(entry, "expand_to_edges"));
+    assert_eq!(
+        parse::<CosmicPanelBackground>(entry, "background"),
+        CosmicPanelBackground::Color([0.0, 0.0, 0.0])
+    );
+    assert_eq!(parse::<f32>(entry, "opacity"), 0.0);
+    assert_eq!(
+        parse::<Option<Vec<String>>>(entry, "plugins_center"),
+        Some(vec!["com.clawos.AppletWidgetRail".to_string()])
+    );
 }
 
 /// `CosmicPanelContainerConfig::default()` is only consulted when the

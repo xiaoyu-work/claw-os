@@ -159,7 +159,8 @@
         "icon": { "type": "string", "description": "Icon name (XDG icon theme) or path for the .desktop Icon= field. Defaults to com.clawos.<Id>." },
         "categories": { "type": "array", "items": { "type": "string" }, "description": "XDG menu categories (e.g. [\"Utility\"]). ClawOS is always prepended." },
         "mime_types": { "type": "array", "items": { "type": "string" }, "description": "MIME types this app can open (generates MimeType= + file associations)." },
-        "single_instance": { "type": "boolean", "description": "If true, the launcher reuses a running instance instead of spawning a new one." }
+        "single_instance": { "type": "boolean", "description": "If true, the launcher reuses a running instance instead of spawning a new one." },
+        "panel_applet": { "type": "boolean", "description": "If true, the GUI is intentionally hosted by cosmic-panel and may inherit its restricted Wayland socket and layout environment." }
       }
     }
   }

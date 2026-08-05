@@ -8,6 +8,10 @@
 
 use serde::Deserialize;
 use std::process::Command;
+use std::time::Duration;
+use tokio::{process::Command as TokioCommand, time::timeout};
+
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// One row in the `cos agent ls` response.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -88,6 +92,20 @@ pub fn load_tasks() -> Result<Vec<Task>, LoadError> {
         .args(["agent", "ls"])
         .output()
         .map_err(|e| LoadError(format!("spawn cos: {e}")))?;
+    parse_tasks_output(output)
+}
+
+pub async fn load_tasks_async() -> Result<Vec<Task>, LoadError> {
+    let mut command = TokioCommand::new(cos_binary());
+    command.args(["agent", "ls"]).kill_on_drop(true);
+    let output = timeout(COMMAND_TIMEOUT, command.output())
+        .await
+        .map_err(|_| LoadError("cos agent ls timed out".to_string()))?
+        .map_err(|e| LoadError(format!("spawn cos: {e}")))?;
+    parse_tasks_output(output)
+}
+
+fn parse_tasks_output(output: std::process::Output) -> Result<Vec<Task>, LoadError> {
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(LoadError(if err.is_empty() {

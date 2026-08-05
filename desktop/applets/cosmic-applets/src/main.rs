@@ -7,12 +7,20 @@ fn main() -> cosmic::iced::Result {
     tracing_subscriber::fmt().with_env_filter("warn").init();
     let _ = tracing_log::LogTracer::init();
 
-    let Some(applet) = std::env::args().next() else {
+    let mut args = std::env::args();
+    let Some(executable) = args.next() else {
         return Ok(());
     };
 
-    let start = applet.rfind('/').map_or(0, |v| v + 1);
-    let cmd = &applet.as_str()[start..];
+    let start = executable.rfind('/').map_or(0, |v| v + 1);
+    let invoked_as = &executable[start..];
+    let requested;
+    let cmd = if invoked_as == "cosmic-applets" {
+        requested = args.next();
+        requested.as_deref().unwrap_or(invoked_as)
+    } else {
+        invoked_as
+    };
 
     tracing::info!("Starting `{cmd}` with version {VERSION}");
 
@@ -33,6 +41,7 @@ fn main() -> cosmic::iced::Result {
         "cosmic-applet-input-sources" => cosmic_applet_input_sources::run(),
         "claw-applet-approval-gate" => claw_applet_approval_gate::run(),
         "claw-applet-agent-activity" => claw_applet_agent_activity::run(),
+        "claw-applet-widget-rail" => claw_applet_widget_rail::run(),
         "cosmic-panel-button" => cosmic_panel_button::run(),
         _ => Ok(()),
     }

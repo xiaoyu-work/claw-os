@@ -1,0 +1,69 @@
+{
+  "id": "widget-rail",
+  "version": "0.1.0",
+  "name": {
+    "en": "Desktop Widgets"
+  },
+  "summary": {
+    "en": "Calendar, AI tasks, system health, and smart suggestions."
+  },
+  "icon": "view-grid-symbolic",
+  "runtime": "shell",
+  "entry": "main.sh",
+  "operations": {
+    "open": {
+      "label": {
+        "en": "Open the desktop widget rail"
+      },
+      "needs": [
+        {
+          "verb": "data.db.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "calendar"
+            }
+          },
+          "why": {
+            "en": "Read local calendar events for the Today card."
+          }
+        },
+        {
+          "verb": "sys.observe",
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Observe system resource usage for the System Health card."
+          }
+        },
+        {
+          "verb": "agent.observe",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "tasks"
+            }
+          },
+          "why": {
+            "en": "Read the agent task list for the AI Tasks card."
+          }
+        }
+      ]
+    }
+  },
+  "desktop": {
+    "exec": "open",
+    "name": {
+      "en": "Desktop Widgets"
+    },
+    "icon": "view-grid-symbolic",
+    "categories": [
+      "Utility"
+    ],
+    "single_instance": true,
+    "panel_applet": true
+  }
+}

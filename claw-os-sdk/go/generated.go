@@ -201,6 +201,7 @@ type Desktop struct {
 	Categories []string `json:"categories,omitempty"`
 	MimeTypes []string `json:"mime_types,omitempty"`
 	SingleInstance bool `json:"single_instance,omitempty"`
+	PanelApplet bool `json:"panel_applet,omitempty"`
 }
 
 // Perms — Permissions request / reply.

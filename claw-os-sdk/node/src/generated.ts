@@ -227,6 +227,7 @@ export interface Desktop {
   categories?: string[];
   mime_types?: string[];
   single_instance?: boolean;
+  panel_applet?: boolean;
 }
 
 /**

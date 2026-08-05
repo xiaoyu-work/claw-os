@@ -246,6 +246,7 @@ class Desktop(TypedDict, total=False):
     categories: List[str]
     mime_types: List[str]
     single_instance: bool
+    panel_applet: bool
 
 class _PermsRequired(TypedDict):
     decision: str

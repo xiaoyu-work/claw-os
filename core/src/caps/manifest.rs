@@ -495,6 +495,13 @@ pub struct Desktop {
     /// spawning a second process. Surfaced as `SingleMainWindow=true`.
     #[serde(default)]
     pub single_instance: bool,
+
+    /// Whether this GUI is intentionally hosted by `cosmic-panel` and may
+    /// inherit the panel's restricted Wayland socket and layout environment.
+    /// Leave false for ordinary GUI apps so panel credentials cannot leak
+    /// through launches triggered by panel buttons.
+    #[serde(default)]
+    pub panel_applet: bool,
 }
 
 fn default_desktop_exec() -> String {
@@ -2058,7 +2065,32 @@ mod tests {
         let d = m.desktop.expect("desktop block present");
         assert_eq!(d.exec, "--gui");
         assert!(!d.single_instance);
+        assert!(!d.panel_applet);
         assert!(d.categories.is_empty());
+    }
+
+    #[test]
+    fn desktop_panel_applet_round_trips() {
+        let m = parse(
+            r#"{
+              "id": "widget",
+              "version": "0.1",
+              "name": "Widget",
+              "desktop": {
+                "panel_applet": true
+              }
+            }"#,
+        );
+        assert!(m.desktop.as_ref().expect("desktop block present").panel_applet);
+
+        let json = serde_json::to_string(&m).expect("serialize manifest");
+        let back = Manifest::from_json(&json).expect("parse serialized manifest");
+        assert!(
+            back.desktop
+                .as_ref()
+                .expect("desktop block present")
+                .panel_applet
+        );
     }
 
     #[test]

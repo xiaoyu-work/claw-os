@@ -1,0 +1,20 @@
+[package]
+name = "claw-applet-widget-rail"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+
+[dependencies]
+claw-applet-agent-activity = { path = "../claw-applet-agent-activity" }
+i18n-embed-fl.workspace = true
+i18n-embed.workspace = true
+jiff = "0.2"
+libcosmic.workspace = true
+rusqlite = { version = "0.39.0", features = ["bundled"] }
+rust-embed.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio.workspace = true
+tracing-log.workspace = true
+tracing-subscriber.workspace = true
+tracing.workspace = true

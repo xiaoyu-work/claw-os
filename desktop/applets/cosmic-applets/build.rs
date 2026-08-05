@@ -46,6 +46,12 @@ fn main() {
             "claw-applet-approval-gate-keywords",
         ),
         (
+            "com.clawos.AppletWidgetRail",
+            "claw-applet-widget-rail",
+            "claw-applet-widget-rail-comment",
+            "claw-applet-widget-rail-keywords",
+        ),
+        (
             "com.clawos.AppletAudio",
             "cosmic-applet-audio",
             "cosmic-applet-audio-comment",
