@@ -724,6 +724,10 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     }
 }
 
+fn require_service(name: &str) -> Result<(), String> {
+    require_or_json(Verb::SYS_SERVICE, Scope::name(name)).map_err(|v| v.to_string())
+}
+
 // ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
@@ -731,8 +735,8 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 /// Start a service by name.
 /// Sequence: pre_start → spawn → health-wait → post_start
 fn cmd_start(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::SYS_SERVICE, Scope::wild()).map_err(|v| v.to_string())?;
     let name = args.first().ok_or("usage: cos service start <name>")?;
+    require_service(name)?;
     let _lifecycle_lock = ServiceLifecycleLock::acquire(name)?;
     cmd_start_locked(args)
 }
@@ -822,7 +826,7 @@ fn cmd_start_locked(args: &[String]) -> Result<Value, String> {
     // Inject credentials as environment variables
     let mut injected_creds: Vec<String> = Vec::new();
     for cred_name in &def.credentials {
-        match crate::credential::run("load", &[cred_name.clone()]) {
+        match crate::credential::run("load", std::slice::from_ref(cred_name)) {
             Ok(v) => {
                 if let Some(val) = v["value"].as_str() {
                     cmd.env(cred_name, val);
@@ -940,8 +944,8 @@ fn cmd_start_locked(args: &[String]) -> Result<Value, String> {
 /// is later reused. Legacy pid files without start-time identity are
 /// refused rather than signalled.
 fn cmd_stop(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::SYS_SERVICE, Scope::wild()).map_err(|v| v.to_string())?;
     let name = args.first().ok_or("usage: cos service stop <name>")?;
+    require_service(name)?;
     let _lifecycle_lock = ServiceLifecycleLock::acquire(name)?;
     cmd_stop_locked(args)
 }
@@ -1089,8 +1093,8 @@ fn cmd_stop_locked(args: &[String]) -> Result<Value, String> {
 
 /// Restart a service (stop then start).
 fn cmd_restart(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::SYS_SERVICE, Scope::wild()).map_err(|v| v.to_string())?;
     let name = args.first().ok_or("usage: cos service restart <name>")?;
+    require_service(name)?;
     let _lifecycle_lock = ServiceLifecycleLock::acquire(name)?;
 
     if let Err(error) = cmd_stop_locked(args) {
@@ -1125,7 +1129,7 @@ fn cmd_stop_all(_args: &[String]) -> Result<Value, String> {
     let mut results: Vec<Value> = Vec::new();
 
     for name in &running {
-        let result = cmd_stop(&[name.clone()]);
+        let result = cmd_stop(std::slice::from_ref(name));
         match result {
             Ok(v) => results.push(v),
             Err(e) => results.push(json!({
@@ -1183,8 +1187,8 @@ fn reverse_dependency_order(services: &BTreeMap<String, ServiceDef>) -> Vec<Stri
 
 /// Show detailed status for a service.
 fn cmd_status(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::SYS_SERVICE, Scope::wild()).map_err(|v| v.to_string())?;
     let name = args.first().ok_or("usage: cos service status <name>")?;
+    require_service(name)?;
     let def = find_service(name)?;
 
     let pid_pair = read_pid(name);
@@ -1219,8 +1223,8 @@ fn cmd_status(args: &[String]) -> Result<Value, String> {
 
 /// Health check a service, optionally auto-restarting if unhealthy.
 fn cmd_health(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::SYS_SERVICE, Scope::wild()).map_err(|v| v.to_string())?;
     let name = args.first().ok_or("usage: cos service health <name>")?;
+    require_service(name)?;
     let def = find_service(name)?;
     let auto_restart = !args.contains(&"--no-restart".to_string());
 
@@ -1294,10 +1298,10 @@ fn cmd_list(_args: &[String]) -> Result<Value, String> {
 
 /// Show service logs.
 fn cmd_logs(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::SYS_SERVICE, Scope::wild()).map_err(|v| v.to_string())?;
     let name = args
         .first()
         .ok_or("usage: cos service logs <name> [--tail N]")?;
+    require_service(name)?;
 
     let mut tail_n = DEFAULT_LOG_TAIL;
     let mut i = 1;
@@ -1336,7 +1340,6 @@ fn cmd_logs(args: &[String]) -> Result<Value, String> {
 
 /// Register a new service by creating a service.json in the services directory.
 fn cmd_register(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::SYS_SERVICE, Scope::wild()).map_err(|v| v.to_string())?;
     let mut name: Option<String> = None;
     let mut command: Option<String> = None;
     let mut workdir: Option<String> = None;
@@ -1433,6 +1436,7 @@ fn cmd_register(args: &[String]) -> Result<Value, String> {
     {
         return Err("service name must be alphanumeric (hyphens and underscores allowed)".into());
     }
+    require_service(&name)?;
 
     let health = health_url.map(|url| HealthConfig {
         url: Some(url),

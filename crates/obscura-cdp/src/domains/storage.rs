@@ -1,6 +1,8 @@
 use serde_json::{json, Value};
 
 use crate::dispatch::CdpContext;
+use obscura_browser::BrowserContext;
+use std::sync::Arc;
 
 pub async fn handle(
     method: &str,
@@ -8,9 +10,10 @@ pub async fn handle(
     ctx: &mut CdpContext,
     _session_id: &Option<String>,
 ) -> Result<Value, String> {
+    let context = context_for_request(params, ctx, _session_id)?;
     match method {
         "getCookies" => {
-            let cookies = ctx.default_context.cookie_jar.get_all_cookies();
+            let cookies = context.cookie_jar.get_all_cookies();
             let cdp_cookies: Vec<Value> = cookies
                 .iter()
                 .map(|c| {
@@ -45,7 +48,11 @@ pub async fn handle(
                         Some(n) => n.to_string(),
                         None => continue,
                     };
-                    let value = c.get("value").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let value = c
+                        .get("value")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
 
                     let domain = c
                         .get("domain")
@@ -62,7 +69,7 @@ pub async fn handle(
                     let expires = c.get("expires").and_then(|v| v.as_f64());
                     if let Some(exp) = expires {
                         if exp > 0.0 && exp < now {
-                            ctx.default_context.cookie_jar.delete_cookie(&name, &domain);
+                            context.cookie_jar.delete_cookie(&name, &domain);
                             continue;
                         }
                     }
@@ -72,21 +79,19 @@ pub async fn handle(
                         .and_then(|v| v.as_str())
                         .unwrap_or("/")
                         .to_string();
-                    let secure =
-                        c.get("secure").and_then(|v| v.as_bool()).unwrap_or(false);
-                    let http_only =
-                        c.get("httpOnly").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let secure = c.get("secure").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let http_only = c.get("httpOnly").and_then(|v| v.as_bool()).unwrap_or(false);
 
-                    ctx.default_context.cookie_jar.set_cookies_from_cdp(vec![
-                        obscura_net::CookieInfo {
+                    context
+                        .cookie_jar
+                        .set_cookies_from_cdp(vec![obscura_net::CookieInfo {
                             name,
                             value,
                             domain,
                             path,
                             secure,
                             http_only,
-                        },
-                    ]);
+                        }]);
                 }
             }
             Ok(json!({}))
@@ -106,12 +111,29 @@ pub async fn handle(
                 .unwrap_or_default();
 
             if !name.is_empty() {
-                ctx.default_context
-                    .cookie_jar
-                    .delete_cookie(name, &domain);
+                context.cookie_jar.delete_cookie(name, &domain);
             }
             Ok(json!({}))
         }
         _ => Ok(json!({})),
     }
+}
+
+fn context_for_request(
+    params: &Value,
+    ctx: &CdpContext,
+    session_id: &Option<String>,
+) -> Result<Arc<BrowserContext>, String> {
+    if let Some(context_id) = params
+        .get("browserContextId")
+        .and_then(|value| value.as_str())
+    {
+        return ctx
+            .get_browser_context(Some(context_id))
+            .ok_or_else(|| format!("Browser context not found: {context_id}"));
+    }
+    if let Some(page) = ctx.get_session_page(session_id) {
+        return Ok(page.context.clone());
+    }
+    Ok(ctx.default_context.clone())
 }

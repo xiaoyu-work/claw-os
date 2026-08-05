@@ -63,7 +63,7 @@ fn failed_run(
         stdout_tail: None,
         stderr_tail: Some(error.to_string()),
         duration_ms: Some(
-            end.signed_duration_since(start.clone())
+            end.signed_duration_since(*start)
                 .num_milliseconds()
                 .max(0) as u64,
         ),
@@ -410,7 +410,7 @@ fn item_matches(item: &str, value: u32, min: u32, max: u32) -> bool {
         if value < start || value > end {
             return false;
         }
-        return (value - start) % step == 0;
+        return (value - start).is_multiple_of(step);
     }
 
     // Range: N-M
@@ -571,7 +571,7 @@ fn load_run_logs(job_id: &str, limit: usize) -> Result<Vec<CronRunResult>, Strin
         .collect();
 
     // Sort by filename descending (newest first)
-    entries.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.file_name()));
     entries.truncate(limit);
 
     let mut results = Vec::new();
@@ -966,7 +966,6 @@ fn wait_with_timeout_inner(
     timeout_secs: u64,
     run_identity: Option<(u32, Option<u64>)>,
 ) -> CronRunResult {
-    use std::io::Read;
     use std::sync::{Arc, Mutex};
     use std::thread;
 
@@ -976,7 +975,7 @@ fn wait_with_timeout_inner(
     /// 2 KiB tail we eventually keep — plenty of headroom for the
     /// `tail_string` window — and continue draining the pipe past
     /// the cap so the writer doesn't wedge on a full pipe.
-    const STREAM_CAP_BYTES: usize = 1 * 1024 * 1024;
+    const STREAM_CAP_BYTES: usize = 1024 * 1024;
 
     let deadline = if timeout_secs == u64::MAX {
         None
@@ -1279,7 +1278,7 @@ fn pid_alive(pid: u32) -> bool {
             return true;
         }
         let err = std::io::Error::last_os_error();
-        return err.raw_os_error() == Some(libc::EPERM);
+        err.raw_os_error() == Some(libc::EPERM)
     }
     #[cfg(not(unix))]
     {
@@ -1715,7 +1714,7 @@ fn cmd_status(args: &[String]) -> Result<Value, String> {
     let job = load_job(id)?;
     require_job_owner(&job, current_owner()?.uid)?;
 
-    Ok(serde_json::to_value(&job).map_err(|e| format!("failed to serialize job: {e}"))?)
+    serde_json::to_value(&job).map_err(|e| format!("failed to serialize job: {e}"))
 }
 
 /// Enable a disabled job.
@@ -1911,8 +1910,8 @@ fn cmd_run(args: &[String]) -> Result<Value, String> {
                 }
                 Ok(current)
             })?;
-            return Ok(serde_json::to_value(&result)
-                .map_err(|e| format!("failed to serialize result: {e}"))?);
+            return serde_json::to_value(&result)
+                .map_err(|e| format!("failed to serialize result: {e}"));
         }
     }
 
@@ -2463,14 +2462,17 @@ mod tests {
     static CRON_INIT: Once = Once::new();
     static CRON_LOCK: Mutex<()> = Mutex::new(());
 
-    fn cron_setup() -> std::sync::MutexGuard<'static, ()> {
-        let guard = CRON_LOCK.lock().unwrap();
+    fn cron_setup() -> (
+        std::sync::MutexGuard<'static, ()>,
+        crate::test_env::TestSessionGuard,
+    ) {
+        let guard = CRON_LOCK.lock().unwrap_or_else(|error| error.into_inner());
         CRON_INIT.call_once(|| {
             let dir = std::env::temp_dir().join(format!("cos-test-shared-{}", std::process::id()));
             let _ = fs::create_dir_all(&dir);
             std::env::set_var("COS_DATA_DIR", &dir);
         });
-        std::env::remove_var("COS_SESSION");
+        let session = crate::test_env::TestSessionGuard::admin(&crate::paths::data_dir());
         // Clean up jobs and logs between tests
         let jdir = jobs_dir();
         if jdir.is_dir() {
@@ -2480,7 +2482,7 @@ mod tests {
         if ldir.is_dir() {
             let _ = fs::remove_dir_all(&ldir);
         }
-        guard
+        (guard, session)
     }
 
     #[test]

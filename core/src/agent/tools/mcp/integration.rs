@@ -235,7 +235,7 @@ impl Tool for McpRemoteTool {
             }
         };
         match res {
-            Ok(call_result) => render_call_result(&self.name, call_result),
+            Ok(call_result) => render_call_result(self.name, call_result),
             Err(e) => ToolResult::err(format!(
                 "MCP `{}` failed: {}",
                 self.name,
@@ -352,9 +352,9 @@ pub async fn attach_server(
             .map_err(|e| format!("canonicalize MCP owner home {}: {e}", home.display()))?;
         let cwd = match &spec.cwd {
             Some(cwd) => {
-                let canonical = cwd
+                let canonical = std::path::Path::new(cwd)
                     .canonicalize()
-                    .map_err(|e| format!("canonicalize MCP cwd {}: {e}", cwd.display()))?;
+                    .map_err(|e| format!("canonicalize MCP cwd {cwd}: {e}"))?;
                 if !canonical.starts_with(&canonical_home) {
                     return Err(format!(
                         "MCP cwd {} escapes owner home {}",

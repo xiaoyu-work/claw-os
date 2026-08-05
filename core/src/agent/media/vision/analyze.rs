@@ -174,7 +174,7 @@ pub async fn fetch_image(url: &str, timeout: Duration) -> Result<(Vec<u8>, Image
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|h| h.to_str().ok())
-        .map(|s| ImageMime::from_str(s));
+        .map(ImageMime::from_str);
     let bytes = super::super::util::read_bytes_capped(
         resp,
         super::super::util::MAX_BINARY_BODY_BYTES,

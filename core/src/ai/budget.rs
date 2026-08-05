@@ -221,7 +221,7 @@ impl Store {
         // Saturate on overflow so a giant `units` value (which the
         // gate already saturates to u64::MAX for safety) reliably
         // trips the cap check instead of wrapping to a small number.
-        let new_units = cur_units.checked_add(units).unwrap_or(u64::MAX);
+        let new_units = cur_units.saturating_add(units);
         if cap_units > 0 && new_units > cap_units {
             return Err(BudgetError::OverUnitCap {
                 app: app.to_string(),

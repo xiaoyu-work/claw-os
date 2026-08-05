@@ -62,6 +62,14 @@ jobs:
       - name: Run cos-browser tests
         run: cargo test -p cos-browser
 
+      - name: Install Python test dependencies
+        run: python3 -m pip install --disable-pip-version-check pytest
+
+      - name: Run Python tests
+        env:
+          PYTHONPATH: claw-os-sdk/python/src:cos-runtime/python/src
+        run: python3 -m pytest -q apps adapters claw-os-sdk/python/src cos-runtime/python/src
+
   prepare-apt-key:
     needs: test
     runs-on: ubuntu-latest

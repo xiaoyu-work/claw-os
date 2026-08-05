@@ -231,10 +231,9 @@ pub async fn deregister(
 
 fn validate_app_session(info: &SessionInfo) -> Result<(), String> {
     if !info.session_id.starts_with("app-")
-        || !info
+        || info
             .app_id
-            .as_deref()
-            .is_some_and(|value| !value.is_empty())
+            .as_deref().is_none_or(|value| value.is_empty())
         || info.group.as_deref() != Some("app")
     {
         return Err("invalid App session identity".to_string());

@@ -68,7 +68,7 @@ fn redact_url_creds(arg: &str) -> Option<String> {
     // Stop scanning at the first path/query/fragment delimiter to
     // avoid pulling in '@' from inside a path.
     let stop = userinfo
-        .find(|c: char| c == '/' || c == '?' || c == '#' || c == ' ')
+        .find(['/', '?', '#', ' '])
         .unwrap_or(usize::MAX);
     if stop != usize::MAX {
         return None;

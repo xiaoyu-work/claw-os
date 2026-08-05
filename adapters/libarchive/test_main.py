@@ -13,6 +13,8 @@ import tempfile
 import textwrap
 import unittest
 
+from test_support import load_local_module
+
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -95,16 +97,16 @@ class LibarchiveAdapterTests(unittest.TestCase):
         self.file_b = root / "b.txt"
         self.file_b.write_text("hi2")
 
-        if "main" in sys.modules:
-            del sys.modules["main"]
-        import main  # noqa: F401
-        self.main = sys.modules["main"]
+        self.main = load_local_module(
+            HERE / "main.py",
+            "claw_test_libarchive_adapter_main",
+        )
         self.main.app._initialized = True
 
     def tearDown(self) -> None:
         for k in ("CLAW_BSDTAR_BIN", "BSDTAR_ARGS_LOG", "BSDTAR_EXIT"):
             os.environ.pop(k, None)
-        sys.modules.pop("main", None)
+        sys.modules.pop("claw_test_libarchive_adapter_main", None)
 
     def test_tools_list_reports_three_tools(self) -> None:
         reply = _rpc(self.main.app, "tools/list")

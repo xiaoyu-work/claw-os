@@ -637,14 +637,13 @@ fn cmd_set_enabled(args: &[String], enabled: bool) -> Result<Value, String> {
     let id =
         positional_or_id(args).ok_or_else(|| format!("usage: cos triggers {verb} <id>"))?;
     let owner = current_owner()?;
-    if enabled {
-        if !owner
+    if enabled
+        && !owner
             .caps
             .covers(&Cap::new(Verb::AGENT_SPAWN, Scope::Wild))
         {
             return Err("trigger owner lacks agent.spawn:*".to_string());
         }
-    }
     let rule = update_rule(&id, |mut rule| {
         let unclaimed = !rule.enabled && rule.owner_caps.is_none() && is_claimable_seed(&rule);
         if !unclaimed {

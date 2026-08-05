@@ -34,7 +34,7 @@
 //!   matches how `audit.rs` and `trace.rs` are structured today.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -162,8 +162,7 @@ pub fn create(purpose: impl Into<String>) -> Result<SessionId> {
     let id = SessionId::generate();
     let dir = session_dir(&id);
     let created = (|| {
-        crate::storage::ensure_private_dir(&dir)
-            .map_err(|e| SessionError::io(dir.clone(), e))?;
+        crate::storage::ensure_private_dir(&dir).map_err(|e| SessionError::io(dir.clone(), e))?;
         crate::storage::ensure_private_dir(&files_dir(&id))
             .map_err(|e| SessionError::io(files_dir(&id), e))?;
 
@@ -250,8 +249,8 @@ pub fn update_meta<F: FnOnce(&mut SessionMeta)>(sid: &SessionId, f: F) -> Result
     let mut closure = Some(f);
     filelock::update_locked(&path, |current| {
         let current = current.ok_or_else(|| SessionError::NotFound(sid.to_string()))?;
-        let mut meta: SessionMeta = serde_json::from_str(&current)
-            .map_err(|e| SessionError::decode(path.clone(), e))?;
+        let mut meta: SessionMeta =
+            serde_json::from_str(&current).map_err(|e| SessionError::decode(path.clone(), e))?;
         let f = closure.take().expect("closure called at most once");
         f(&mut meta);
         serde_json::to_string_pretty(&meta).map_err(SessionError::Encode)
@@ -318,8 +317,9 @@ pub fn write_state(sid: &SessionId, runtime: &str, value: Value) -> Result<()> {
     let value_holder = std::cell::RefCell::new(Some(value));
     filelock::update_locked(&path, |current| {
         let mut all: Value = match current {
-            Some(text) if !text.is_empty() => serde_json::from_str(&text)
-                .map_err(|e| SessionError::decode(path.clone(), e))?,
+            Some(text) if !text.is_empty() => {
+                serde_json::from_str(&text).map_err(|e| SessionError::decode(path.clone(), e))?
+            }
             _ => Value::Object(serde_json::Map::new()),
         };
         if !all.is_object() {
@@ -398,12 +398,12 @@ pub fn iter_mutations(sid: &SessionId) -> Result<Vec<MutationRecord>> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn write_json<T: serde::Serialize>(path: &PathBuf, value: &T) -> Result<()> {
+fn write_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
     let data = serde_json::to_string_pretty(value)?;
     filelock::write_locked(path, &data).map_err(SessionError::Lock)
 }
 
-fn read_json<T: DeserializeOwned>(path: &PathBuf) -> Result<T> {
+fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
     let raw = filelock::read_locked(path).map_err(SessionError::Lock)?;
     let Some(text) = raw else {
         return Err(SessionError::NotFound(
@@ -413,7 +413,7 @@ fn read_json<T: DeserializeOwned>(path: &PathBuf) -> Result<T> {
                 .to_string(),
         ));
     };
-    serde_json::from_str(&text).map_err(|e| SessionError::decode(path.clone(), e))
+    serde_json::from_str(&text).map_err(|e| SessionError::decode(path.to_path_buf(), e))
 }
 
 /// Validate + append a JSONL line under a single exclusive `flock`.
@@ -452,8 +452,7 @@ where
     let mut file = options
         .open(path)
         .map_err(|e| SessionError::io(path.clone(), e))?;
-    crate::storage::set_private_file(path)
-        .map_err(|e| SessionError::io(path.clone(), e))?;
+    crate::storage::set_private_file(path).map_err(|e| SessionError::io(path.clone(), e))?;
 
     #[cfg(unix)]
     {
@@ -493,7 +492,8 @@ where
     file.write_all(line.as_bytes())
         .and_then(|_| file.write_all(b"\n"))
         .map_err(|e| SessionError::io(path.clone(), e))?;
-    file.flush().map_err(|e| SessionError::io(path.clone(), e))?;
+    file.flush()
+        .map_err(|e| SessionError::io(path.clone(), e))?;
     // Persist the new line to disk *before* releasing the lock.
     // Without `sync_data()` a `cos agent undo` started by the next
     // process can read a turn from the page cache that the kernel
@@ -559,11 +559,10 @@ fn read_jsonl<T: DeserializeOwned>(path: &PathBuf, dir: PathBuf) -> Result<Vec<T
     let scan = scan_jsonl(path, &bytes, true)?;
     let mut out = Vec::new();
     for record in scan.records {
-        let value = serde_json::from_slice::<T>(&record).map_err(|error| {
-            SessionError::Corrupt {
+        let value =
+            serde_json::from_slice::<T>(&record).map_err(|error| SessionError::Corrupt {
                 path: path.clone(),
                 detail: format!("record schema mismatch: {error}"),
-            }
         })?;
         out.push(value);
     }
@@ -576,13 +575,22 @@ struct JsonlScan {
     append_newline: bool,
 }
 
-fn scan_jsonl(path: &PathBuf, bytes: &[u8], tolerate_partial_tail: bool) -> Result<JsonlScan> {
+fn scan_jsonl(path: &Path, bytes: &[u8], tolerate_partial_tail: bool) -> Result<JsonlScan> {
     let mut records = Vec::new();
     let mut start = 0usize;
     while let Some(relative_end) = bytes[start..].iter().position(|byte| *byte == b'\n') {
         let end = start + relative_end;
         let line = &bytes[start..end];
-        validate_jsonl_record(path, line, records.len() as u64)?;
+        if let Err(error) = validate_jsonl_record(path, line, records.len() as u64) {
+            if tolerate_partial_tail && end + 1 == bytes.len() {
+                return Ok(JsonlScan {
+                    records,
+                    truncate_to: Some(start),
+                    append_newline: false,
+                });
+            }
+            return Err(error);
+        }
         records.push(line.to_vec());
         start = end + 1;
     }
@@ -611,33 +619,33 @@ fn scan_jsonl(path: &PathBuf, bytes: &[u8], tolerate_partial_tail: bool) -> Resu
             append_newline: false,
         }),
         Err(error) => Err(SessionError::Corrupt {
-            path: path.clone(),
+            path: path.to_path_buf(),
             detail: format!("invalid trailing JSON: {error}"),
         }),
     }
 }
 
-fn validate_jsonl_record(path: &PathBuf, line: &[u8], expected_seq: u64) -> Result<()> {
+fn validate_jsonl_record(path: &Path, line: &[u8], expected_seq: u64) -> Result<()> {
     if line.is_empty() {
         return Err(SessionError::Corrupt {
-            path: path.clone(),
+            path: path.to_path_buf(),
             detail: format!("empty record at seq {expected_seq}"),
         });
     }
     let value: Value = serde_json::from_slice(line).map_err(|error| SessionError::Corrupt {
-        path: path.clone(),
+        path: path.to_path_buf(),
         detail: format!("invalid JSON at seq {expected_seq}: {error}"),
     })?;
     let seq = value
         .get("seq")
         .and_then(Value::as_u64)
         .ok_or_else(|| SessionError::Corrupt {
-            path: path.clone(),
+            path: path.to_path_buf(),
             detail: format!("record at seq {expected_seq} has no unsigned seq"),
         })?;
     if seq != expected_seq {
         return Err(SessionError::Corrupt {
-            path: path.clone(),
+            path: path.to_path_buf(),
             detail: format!("expected seq {expected_seq}, found {seq}"),
         });
     }

@@ -168,7 +168,7 @@ fn bound_app_registry_path() -> Option<PathBuf> {
 }
 
 #[cfg(target_os = "linux")]
-fn process_descends_from(mut child: u32, ancestor: u32) -> bool {
+pub(crate) fn process_descends_from(mut child: u32, ancestor: u32) -> bool {
     for _ in 0..64 {
         if child == ancestor {
             return true;
@@ -243,7 +243,7 @@ pub fn current_session_is_bound(expected_app_id: Option<&str>) -> bool {
         let Some(expected_start) = session.start_time_ticks else {
             return false;
         };
-        return read_start_time_ticks(session.pid) == Some(expected_start);
+        read_start_time_ticks(session.pid) == Some(expected_start)
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -541,7 +541,7 @@ fn is_alive(pid: u32) -> bool {
             return true;
         }
         let err = std::io::Error::last_os_error();
-        return err.raw_os_error() == Some(libc::EPERM);
+        err.raw_os_error() == Some(libc::EPERM)
     }
     #[cfg(not(unix))]
     {
@@ -708,7 +708,7 @@ fn pids_in_pgrp(leader_pid: u32) -> Vec<u32> {
             Err(_) => continue,
         };
         if let Some(pgrp) = read_pgrp(pid) {
-            if pgrp as i64 == leader_pid as i64 {
+            if pgrp == leader_pid as i64 {
                 out.push(pid);
             }
         }

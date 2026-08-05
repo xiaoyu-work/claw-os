@@ -195,7 +195,9 @@ unsafe impl Sync for OrtGenaiSyms {}
 impl OrtGenaiSyms {
     /// Resolve every symbol against `lib`.
     ///
-    /// SAFETY: `lib` must point at a real `libonnxruntime-genai`
+    /// # Safety
+    ///
+    /// `lib` must point at a real `libonnxruntime-genai`
     /// produced by an upstream onnxruntime-genai build. Each symbol
     /// must match the C signature declared above. Both invariants are
     /// honored by the official prebuilt releases that `cos engine`

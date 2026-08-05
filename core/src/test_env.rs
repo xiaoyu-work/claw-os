@@ -9,6 +9,10 @@
 #![cfg(test)]
 
 use std::sync::{Mutex, MutexGuard};
+use std::{ffi::OsString, path::Path};
+
+use crate::caps::{Cap, Role, Scope, Verb};
+use crate::proc::SessionInfo;
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -41,6 +45,94 @@ impl Drop for PermissiveModeGuard {
         match self.prev.take() {
             Some(v) => std::env::set_var("COS_PERMS_MODE", v),
             None => std::env::remove_var("COS_PERMS_MODE"),
+        }
+    }
+}
+
+pub(crate) struct TestSessionGuard {
+    session_id: String,
+    previous_session: Option<OsString>,
+    previous_proc_dir: Option<OsString>,
+}
+
+pub(crate) struct TestEnvVarGuard {
+    name: &'static str,
+    previous: Option<OsString>,
+}
+
+impl TestEnvVarGuard {
+    pub(crate) fn set(name: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+        let previous = std::env::var_os(name);
+        std::env::set_var(name, value);
+        Self { name, previous }
+    }
+}
+
+impl Drop for TestEnvVarGuard {
+    fn drop(&mut self) {
+        match self.previous.take() {
+            Some(value) => std::env::set_var(self.name, value),
+            None => std::env::remove_var(self.name),
+        }
+    }
+}
+
+impl TestSessionGuard {
+    pub(crate) fn admin(proc_dir: &Path) -> Self {
+        let previous_session = std::env::var_os("COS_SESSION");
+        let previous_proc_dir = std::env::var_os("COS_PROC_DATA_DIR");
+        std::env::set_var("COS_PROC_DATA_DIR", proc_dir);
+
+        let session_id = format!("test-parent-{}", uuid::Uuid::new_v4().simple());
+        let role = Role::Admin;
+        let mut caps =
+            role.caps_with_scopes(Some(Scope::Wild), Some(Scope::Wild), Some(Scope::Wild));
+        caps.insert(Cap::new(Verb::SYS_KERNEL, Scope::Wild));
+        crate::proc::register_session(SessionInfo {
+            session_id: session_id.clone(),
+            pid: std::process::id(),
+            command: vec!["cargo test".to_string()],
+            started_at: chrono::Utc::now().to_rfc3339(),
+            stdout_path: String::new(),
+            stderr_path: String::new(),
+            group: Some("test".to_string()),
+            parent: None,
+            workdir: std::env::current_dir()
+                .ok()
+                .map(|path| path.to_string_lossy().into_owned()),
+            exit_code: None,
+            ended_at: None,
+            tier: Some(role.credential_tier()),
+            scope: Some("test".to_string()),
+            priority: None,
+            caps: Some(caps),
+            transient_caps: None,
+            role: Some(role.name().to_string()),
+            app_id: None,
+            pending_bind: false,
+            start_time_ticks: crate::proc::read_start_time_ticks_pub(std::process::id()),
+        })
+        .expect("register test parent session");
+        std::env::set_var("COS_SESSION", &session_id);
+
+        Self {
+            session_id,
+            previous_session,
+            previous_proc_dir,
+        }
+    }
+}
+
+impl Drop for TestSessionGuard {
+    fn drop(&mut self) {
+        crate::proc::deregister_session(&self.session_id);
+        match self.previous_session.take() {
+            Some(value) => std::env::set_var("COS_SESSION", value),
+            None => std::env::remove_var("COS_SESSION"),
+        }
+        match self.previous_proc_dir.take() {
+            Some(value) => std::env::set_var("COS_PROC_DATA_DIR", value),
+            None => std::env::remove_var("COS_PROC_DATA_DIR"),
         }
     }
 }

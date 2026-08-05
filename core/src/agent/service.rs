@@ -357,7 +357,7 @@ impl Store {
             let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
             entries.push((mtime, path));
         }
-        entries.sort_by(|a, b| b.0.cmp(&a.0));
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.0));
         let mut out = Vec::with_capacity(entries.len());
         for (_, p) in entries.into_iter() {
             if let Some(lim) = limit {
@@ -424,7 +424,7 @@ impl Store {
             candidates.push((mtime, path));
         }
         // Oldest first — FIFO by submission time.
-        candidates.sort_by(|a, b| a.0.cmp(&b.0));
+        candidates.sort_by_key(|a| a.0);
 
         for (_, src) in candidates {
             let id = match src.file_stem().and_then(|s| s.to_str()) {
@@ -802,7 +802,7 @@ impl Store {
             entries.push((mtime, path));
         }
         // Newest first; first `keep_last` are always retained.
-        entries.sort_by(|a, b| b.0.cmp(&a.0));
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.0));
         let now = std::time::SystemTime::now();
         let mut removed = 0usize;
         for (i, (mtime, p)) in entries.into_iter().enumerate() {
@@ -810,11 +810,10 @@ impl Store {
                 continue;
             }
             let age = now.duration_since(mtime).unwrap_or(Duration::ZERO);
-            if age >= older_than {
-                if fs::remove_file(&p).is_ok() {
+            if age >= older_than
+                && fs::remove_file(&p).is_ok() {
                     removed += 1;
                 }
-            }
         }
         Ok(removed)
     }
@@ -1204,7 +1203,7 @@ fn cmd_result(args: &[String]) -> Result<Value, String> {
         match store.locate(&id).map_err(|e| e.to_string())? {
             Some((bucket, job)) => {
                 if bucket == JobStatus::Ok {
-                    return Ok(serde_json::to_value(&job).map_err(|e| e.to_string())?);
+                    return serde_json::to_value(&job).map_err(|e| e.to_string());
                 }
                 if Instant::now() >= deadline {
                     return Err(format!(

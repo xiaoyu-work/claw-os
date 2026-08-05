@@ -1012,7 +1012,7 @@ fn recent_files_snapshot(
             break;
         }
     }
-    entries.sort_by(|left, right| right.modified_epoch_ms.cmp(&left.modified_epoch_ms));
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.modified_epoch_ms));
     let count = entries.len();
     let truncated = truncated || count > limit;
     let files = entries

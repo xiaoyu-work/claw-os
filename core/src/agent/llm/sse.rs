@@ -237,11 +237,7 @@ impl SseParser {
         for raw in self.pending_lines.drain(..) {
             let (field, value) = parse_field_line(&raw);
             // Per spec: strip a leading single space from value.
-            let value = if value.starts_with(' ') {
-                &value[1..]
-            } else {
-                value
-            };
+            let value = value.strip_prefix(' ').unwrap_or(value);
             match field {
                 "event" => event_name = Some(value.to_string()),
                 "data" => data_lines.push(value.to_string()),

@@ -7,10 +7,11 @@ abort rather than fall back to cleartext authentication.
 
 from __future__ import annotations
 
-import importlib.util
 import os
 import sys
 import unittest
+
+from test_support import load_local_module
 
 # Make ``apps/gateway/`` importable so ``from _shared import …`` works.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -28,10 +29,11 @@ def _load_main():
     """Load this gateway's main.py under a unique module name so it
     can coexist with the other gateway test modules in one pytest run."""
     path = os.path.join(os.path.dirname(__file__), "main.py")
-    spec = importlib.util.spec_from_file_location("gateway_email_main", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    return load_local_module(
+        path,
+        "gateway_email_main",
+        clear_modules=("_shared",),
+    )
 
 
 main = _load_main()

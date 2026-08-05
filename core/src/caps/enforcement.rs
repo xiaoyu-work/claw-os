@@ -232,10 +232,10 @@ fn validate_process_identity(
     }
 }
 
-fn nearest_app_session<'a>(
-    registry: &'a Registry,
+fn nearest_app_session(
+    registry: &Registry,
     caller_pid: u32,
-) -> Result<Option<&'a SessionRow>, ()> {
+) -> Result<Option<&SessionRow>, ()> {
     if !registry
         .sessions
         .iter()
@@ -407,9 +407,9 @@ fn authorize_session_caps(
         caps.extend(transient.iter().cloned());
     }
 
-    if caps.covers(&requested) {
-        Ok(())
-    } else if !is_app && approved_grant_covers(session_id, verb, &scope) {
+    if caps.covers(&requested)
+        || (!is_app && approved_grant_covers(session_id, verb, &scope))
+    {
         Ok(())
     } else if caps.verbs().contains(&verb) {
         // Verb is held but at a scope that doesn't cover this request.

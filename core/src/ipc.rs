@@ -70,6 +70,7 @@ fn acquire_dir_lock(lock_path: &std::path::Path) -> Result<fs::File, String> {
     let file = fs::OpenOptions::new()
         .create(true)
         .write(true)
+        .truncate(false)
         .open(lock_path)
         .map_err(|e| format!("failed to open lock file: {e}"))?;
     unsafe {
@@ -222,10 +223,7 @@ fn cmd_recv(args: &[String]) -> Result<Value, String> {
         // already uses the same dir lock to serialize ID allocation.
         let lock_acquired = if dir.exists() {
             let lock_path = dir.join(".lock");
-            match acquire_dir_lock(&lock_path) {
-                Ok(g) => Some(g),
-                Err(_) => None,
-            }
+            acquire_dir_lock(&lock_path).ok()
         } else {
             None
         };
@@ -347,7 +345,7 @@ fn is_pid_alive(pid: u32) -> bool {
         // EPERM => process exists but is not signalable by us. Treat
         // as alive so we never reclaim another user's lock.
         let err = std::io::Error::last_os_error();
-        return err.raw_os_error() == Some(libc::EPERM);
+        err.raw_os_error() == Some(libc::EPERM)
     }
     #[cfg(not(unix))]
     {

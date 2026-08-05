@@ -678,7 +678,7 @@ impl Manifest {
             return Ok(());
         };
         for name in &policy.tools {
-            if !catalog.iter().any(|c| *c == name.as_str()) {
+            if !catalog.contains(&name.as_str()) {
                 return Err(ManifestError::AiUnknownTool {
                     name: name.clone(),
                 });

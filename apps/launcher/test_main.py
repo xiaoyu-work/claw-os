@@ -9,6 +9,7 @@ paths are integration-tested separately on a real Claw OS host.
 
 import json
 import os
+import pathlib
 import sys
 import tempfile
 import unittest
@@ -36,7 +37,13 @@ sys.path.insert(
     ),
 )  # for `from cos_runtime import policy`
 
-import main  # noqa: E402
+from test_support import load_local_module
+
+main = load_local_module(
+    pathlib.Path(__file__).with_name("main.py"),
+    "claw_test_launcher_main",
+    clear_modules=("_shared",),
+)
 
 
 # ---------------------------------------------------------------------------

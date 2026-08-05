@@ -142,7 +142,7 @@ impl Redactor {
         r
     }
 
-    pub fn with_patterns(patterns: Vec<Pattern>) -> Self {
+    fn with_patterns(patterns: Vec<Pattern>) -> Self {
         Self {
             patterns,
             redact_emails: false,

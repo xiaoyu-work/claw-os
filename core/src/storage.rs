@@ -147,7 +147,7 @@ fn harden_private_tree(root: &Path) -> io::Result<()> {
 fn set_dir_mode(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
-        return fs::set_permissions(path, fs::Permissions::from_mode(0o700));
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))
     }
     #[cfg(not(unix))]
     {

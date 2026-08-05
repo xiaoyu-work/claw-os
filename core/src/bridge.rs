@@ -51,12 +51,8 @@ pub(crate) struct AppIdentitySession {
 
 #[derive(Clone)]
 enum AppSessionBackend {
-    Local {
-        proc_data_dir: std::path::PathBuf,
-    },
-    Clawd {
-        proc_data_dir: std::path::PathBuf,
-    },
+    Local { proc_data_dir: std::path::PathBuf },
+    Clawd { proc_data_dir: std::path::PathBuf },
 }
 
 #[derive(Clone)]
@@ -73,9 +69,7 @@ pub(crate) struct McpProcSession {
 impl McpProcSession {
     pub fn for_current_parent(command: &str) -> Result<Option<Self>, String> {
         #[cfg(unix)]
-        if crate::paths::current_owner_uid_override().is_none()
-            && unsafe { libc::geteuid() } != 0
-        {
+        if crate::paths::current_owner_uid_override().is_none() && unsafe { libc::geteuid() } != 0 {
             let parent = crate::proc::current_session_info_for_caps()
                 .ok_or_else(|| "MCP launch requires a registered parent session".to_string())?;
             let result = clawd_app_session_request(
@@ -175,8 +169,7 @@ impl AppIdentitySession {
     ) -> Result<Self, String> {
         if operation == "__schema__" {
             return Err(
-                "App schema is generated from app.json and does not execute App code"
-                    .to_string(),
+                "App schema is generated from app.json and does not execute App code".to_string(),
             );
         }
 
@@ -184,8 +177,7 @@ impl AppIdentitySession {
         let (parent, parent_caps) = Self::parent_identity()?;
         if parent.app_id.is_some() {
             return Err(
-                "nested App launches are not supported by the trusted launcher"
-                    .to_string(),
+                "nested App launches are not supported by the trusted launcher".to_string(),
             );
         }
         let caps = match (operation, manifest.as_ref()) {
@@ -194,12 +186,7 @@ impl AppIdentitySession {
                 let operation = manifest.operations.get(operation).ok_or_else(|| {
                     format!("app `{app_id}` manifest has no operation `{operation}`")
                 })?;
-                constrained_operation_caps(
-                    &parent_caps,
-                    false,
-                    operation,
-                    args,
-                )?
+                constrained_operation_caps(&parent_caps, false, operation, args)?
             }
         };
         Self::register(
@@ -217,8 +204,7 @@ impl AppIdentitySession {
         let (parent, parent_caps) = Self::parent_identity()?;
         if parent.app_id.is_some() {
             return Err(
-                "nested App launches are not supported by the trusted launcher"
-                    .to_string(),
+                "nested App launches are not supported by the trusted launcher".to_string(),
             );
         }
         let needs = manifest
@@ -241,8 +227,7 @@ impl AppIdentitySession {
         let (parent, parent_caps) = Self::parent_identity()?;
         if parent.app_id.is_some() {
             return Err(
-                "nested App launches are not supported by the trusted launcher"
-                    .to_string(),
+                "nested App launches are not supported by the trusted launcher".to_string(),
             );
         }
         let _ = manifest;
@@ -262,10 +247,7 @@ impl AppIdentitySession {
         command: &str,
         mut caps: CapSet,
     ) -> Result<Self, String> {
-        crate::caps::enforcement::require_current_session_identity(
-            &parent.session_id,
-            parent.pid,
-        )
+        crate::caps::enforcement::require_current_session_identity(&parent.session_id, parent.pid)
         .map_err(|err| format!("App parent session identity check failed: {err}"))?;
         let invoke = Cap::new(Verb::AGENT_INVOKE, Scope::name(app_id));
         if !parent_caps.covers(&invoke) {
@@ -334,16 +316,14 @@ impl AppIdentitySession {
             AppSessionBackend::Local { .. } => {
                 crate::proc::bind_session_process(&self.session_id, pid)
             }
-            AppSessionBackend::Clawd { .. } => {
-                clawd_app_session_request(
+            AppSessionBackend::Clawd { .. } => clawd_app_session_request(
                     "app_session.bind",
                     serde_json::json!({
                         "session_id": self.session_id,
                         "pid": pid,
                     }),
                 )
-                .map(|_| ())
-            }
+            .map(|_| ()),
         }
     }
 
@@ -397,7 +377,9 @@ pub fn run_native_app_host(
         || !isolated
         || host_arg.as_deref() != Some(expected_host.as_path())
     {
-        return Err("native mail-ai host command does not match the installed launcher".to_string());
+        return Err(
+            "native mail-ai host command does not match the installed launcher".to_string(),
+        );
     }
     let runner = Path::new("/usr/local/bin/claw-app-runner")
         .canonicalize()
@@ -449,12 +431,9 @@ pub fn run_native_app_host(
 #[cfg(unix)]
 fn validate_root_owned_executable(path: &Path) -> Result<(), String> {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
-    let metadata = std::fs::metadata(path)
-        .map_err(|error| format!("inspect {}: {error}", path.display()))?;
-    if !metadata.is_file()
-        || metadata.uid() != 0
-        || metadata.permissions().mode() & 0o022 != 0
-    {
+    let metadata =
+        std::fs::metadata(path).map_err(|error| format!("inspect {}: {error}", path.display()))?;
+    if !metadata.is_file() || metadata.uid() != 0 || metadata.permissions().mode() & 0o022 != 0 {
         return Err(format!(
             "native App executable must be root-owned and not group/world-writable: {}",
             path.display()
@@ -477,24 +456,25 @@ fn set_app_session_transient_caps(
         AppSessionBackend::Local { .. } => {
             crate::proc::set_app_session_transient_caps(session_id, caps)
         }
-        AppSessionBackend::Clawd { .. } => {
-            clawd_app_session_request(
+        AppSessionBackend::Clawd { .. } => clawd_app_session_request(
                 "app_session.set_transient",
                 serde_json::json!({
                     "session_id": session_id,
                     "caps": caps,
                 }),
             )
-            .map(|_| ())
-        }
+        .map(|_| ()),
     }
 }
 
 fn use_clawd_app_session_backend() -> bool {
+    #[cfg(test)]
+    if std::env::var_os("COS_TEST_LOCAL_APP_SESSIONS").is_some() {
+        return false;
+    }
     #[cfg(unix)]
     {
-        crate::paths::current_owner_uid_override().is_none()
-            && unsafe { libc::geteuid() } != 0
+        crate::paths::current_owner_uid_override().is_none() && unsafe { libc::geteuid() } != 0
     }
     #[cfg(not(unix))]
     {
@@ -502,13 +482,9 @@ fn use_clawd_app_session_backend() -> bool {
     }
 }
 
-fn register_app_session_with_clawd(
-    info: &SessionInfo,
-) -> Result<AppSessionBackend, String> {
-    let result = clawd_app_session_request(
-        "app_session.register",
-        serde_json::json!({"session": info}),
-    )?;
+fn register_app_session_with_clawd(info: &SessionInfo) -> Result<AppSessionBackend, String> {
+    let result =
+        clawd_app_session_request("app_session.register", serde_json::json!({"session": info}))?;
     let proc_data_dir = result
         .get("proc_data_dir")
         .and_then(serde_json::Value::as_str)
@@ -544,8 +520,8 @@ fn load_manifest(app_dir: &Path) -> Result<Option<Manifest>, String> {
     if !path.is_file() {
         return Ok(None);
     }
-    let body = std::fs::read_to_string(&path)
-        .map_err(|err| format!("read {}: {err}", path.display()))?;
+    let body =
+        std::fs::read_to_string(&path).map_err(|err| format!("read {}: {err}", path.display()))?;
     Manifest::from_json(&body)
         .map(Some)
         .map_err(|err| format!("parse {}: {err}", path.display()))
@@ -562,12 +538,7 @@ fn constrained_caps(parent: &CapSet, needs: Vec<&Need>) -> CapSet {
                 }
             }
             ScopeBinding::Wild => {
-                caps.extend(
-                    parent
-                        .iter()
-                        .filter(|cap| cap.verb == need.verb)
-                        .cloned(),
-                );
+                caps.extend(parent.iter().filter(|cap| cap.verb == need.verb).cloned());
             }
             ScopeBinding::FromArg { .. }
             | ScopeBinding::FromArgMap { .. }
@@ -675,12 +646,9 @@ fn parse_operation_args(
                 .map(|(name, value)| (name, Some(value)))
                 .unwrap_or((flag, None));
             let name = match_arg_name(operation, name);
-            if let Some(decl) = name.and_then(|name| {
-                operation
-                    .args
-                    .iter()
-                    .find(|decl| decl.name == name)
-            }) {
+            if let Some(decl) =
+                name.and_then(|name| operation.args.iter().find(|decl| decl.name == name))
+            {
                 let raw = inline.map(str::to_string).or_else(|| {
                     if decl.kind != ArgKind::Bool {
                         args.get(index + 1)
@@ -840,7 +808,11 @@ fn reset_app_environment(command: &mut Command) {
     ];
     let preserved = SAFE_KEYS
         .iter()
-        .filter_map(|key| std::env::var(key).ok().map(|value| ((*key).to_string(), value)))
+        .filter_map(|key| {
+            std::env::var(key)
+                .ok()
+                .map(|value| ((*key).to_string(), value))
+        })
         .collect::<Vec<_>>();
     command.env_clear();
     command.envs(preserved);
@@ -1048,8 +1020,7 @@ pub fn run_python_app(
     let python = if cfg!(windows) { "python" } else { "python3" };
 
     let app_id = manifest_app_id(app_dir)?;
-    let mut app_session =
-        AppIdentitySession::for_operation(app_dir, &app_id, command, args)?;
+    let mut app_session = AppIdentitySession::for_operation(app_dir, &app_id, command, args)?;
 
     let mut command = app_command(python);
     reset_app_environment(&mut command);
@@ -1215,12 +1186,10 @@ pub fn run_app(
         Runtime::Python => unreachable!("python handled above"),
     };
     let app_id = manifest_app_id(app_dir)?;
-    let mut app_session =
-        AppIdentitySession::for_operation(app_dir, &app_id, command, args)?;
+    let mut app_session = AppIdentitySession::for_operation(app_dir, &app_id, command, args)?;
     reset_app_environment(&mut cmd);
 
-    cmd
-        .stdin(Stdio::null())
+    cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("COS_COMMAND", command)
@@ -1364,8 +1333,7 @@ pub fn launch_gui(
     // A GUI draws on Wayland/X, not stdout. Inherit the parent's stdio
     // so the app's own logging is visible and so it stays attached as a
     // long-lived foreground process until the window is closed.
-    cmd
-        .stdin(Stdio::null())
+    cmd.stdin(Stdio::null())
         .env("COS_APP_ID", &app_id)
         .env("COS_SESSION", app_session.id())
         .env("COS_APP_GUI", "1")
@@ -1498,6 +1466,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn run_python_app_handles_stdout_larger_than_pipe_buffer() {
+        let _env = crate::test_env::lock_env();
         // Skip if python3 isn't on PATH (some minimal CI images).
         if std::process::Command::new("python3")
             .arg("--version")
@@ -1515,6 +1484,19 @@ mod tests {
             "def run(command, args):\n    return {\"data\": \"x\" * 262144}\n",
         )
         .unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let _session = crate::test_env::TestSessionGuard::admin(state.path());
+        let _local_sessions =
+            crate::test_env::TestEnvVarGuard::set("COS_TEST_LOCAL_APP_SESSIONS", "1");
+        let runner = state.path().join("claw-app-runner");
+        std::fs::write(
+            &runner,
+            "#!/bin/sh\n[ \"$1\" = \"--\" ] && shift\nexec \"$@\"\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&runner, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let _runner = crate::test_env::TestEnvVarGuard::set("CLAW_APP_RUNNER_BIN", &runner);
 
         // Hard timeout: any deadlock regresses this into a 10s failure
         // rather than a session-killing hang.
@@ -1529,7 +1511,11 @@ mod tests {
             .expect("run_python_app deadlocked on >64KB stdout");
         let _ = t.join();
         let out = result.expect("run_python_app errored").expect("got json");
-        assert!(out.len() >= 262_144, "payload truncated, got {} bytes", out.len());
+        assert!(
+            out.len() >= 262_144,
+            "payload truncated, got {} bytes",
+            out.len()
+        );
         assert!(out.contains("\"data\""), "json missing data field");
 
         let _ = std::fs::remove_dir_all(&tmp);

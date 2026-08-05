@@ -81,6 +81,26 @@ fn run_scheduler_command(
     }
 }
 
+fn request_clawd(command: &str, params: Value) -> Result<Value, String> {
+    let request = crate::clawd::protocol::Request {
+        id: None,
+        command: command.to_string(),
+        params,
+    };
+    let response =
+        crate::clawd::client::request_blocking(crate::paths::clawd_socket_path(), request)?;
+    if response.ok {
+        response
+            .result
+            .ok_or_else(|| format!("clawd {command} response had no result"))
+    } else {
+        Err(response
+            .error
+            .map(|error| error.message)
+            .unwrap_or_else(|| format!("clawd {command} request failed")))
+    }
+}
+
 fn should_proxy_scheduler_command() -> bool {
     #[cfg(unix)]
     {
@@ -151,6 +171,29 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
             .get(1)
             .ok_or_else(|| "internal memory command required".to_string())?;
         let value = mem_bridge::run(command, &args[2..])?;
+        return Ok(Some(value.to_string()));
+    }
+
+    if name == "__package" {
+        let command = args
+            .get(1)
+            .ok_or_else(|| "internal package command required".to_string())?;
+        if command != "install" {
+            return Err(format!("unknown internal package command: {command}"));
+        }
+        let package = args
+            .get(2)
+            .ok_or_else(|| "internal package install requires a package name".to_string())?;
+        crate::clawd::packages::validate_package_name(package)?;
+        let session = env::var("COS_SESSION")
+            .map_err(|_| "internal package install requires COS_SESSION".to_string())?;
+        let value = request_clawd(
+            "system.package.install",
+            json!({
+                "session": session,
+                "package": package,
+            }),
+        )?;
         return Ok(Some(value.to_string()));
     }
 
@@ -1068,7 +1111,7 @@ fn consent_cmd(
                     Some(p) => p,
                     None => continue,
                 };
-                let stored = consent::load(id).map_err(|e| e)?;
+                let stored = consent::load(id)?;
                 let (status, changed): (&str, Vec<String>) = match &stored {
                     None => ("missing", Vec::new()),
                     Some(c) => match consent::freshness(policy, c) {
@@ -1103,7 +1146,7 @@ fn consent_cmd(
             let app = args
                 .get(1)
                 .ok_or_else(|| "usage: cos app consent show <app>".to_string())?;
-            let stored = consent::load(app).map_err(|e| e)?;
+            let stored = consent::load(app)?;
             Ok(Some(
                 json!({
                     "app": app,

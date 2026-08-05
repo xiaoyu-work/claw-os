@@ -531,7 +531,7 @@ pub fn forget_source(
     store: Option<&Arc<SemanticStore>>,
     source: &str,
 ) -> Result<usize, MemoryError> {
-    validate_source(source).map_err(|m| MemoryError::Poisoned(m))?;
+    validate_source(source).map_err(MemoryError::Poisoned)?;
     let n = db.clear_session(&session_id_for(source))?;
     if let Some(s) = store {
         if let Err(e) = s.clear_namespace(&semantic_namespace_for(source)) {

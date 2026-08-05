@@ -1,10 +1,13 @@
 """Tests for exec app output size limits and cmd_start scratch naming."""
 
 import os
+import pathlib
 import sys
 import tempfile
 import unittest
 from unittest import mock
+
+from test_support import load_local_module
 
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(
@@ -121,18 +124,19 @@ class TestCmdStartScratchNaming(unittest.TestCase):
         # PROC_DIR resolves to a writable spot we can inspect.
         self.tmp = tempfile.TemporaryDirectory()
         os.environ["COS_DATA_DIR"] = self.tmp.name
-        # Force a fresh import each setUp so PROC_DIR picks up the env.
-        sys.modules.pop("main", None)
+        self.main = load_local_module(
+            pathlib.Path(__file__).with_name("main.py"),
+            "claw_test_exec_main",
+            clear_modules=("_shared",),
+        )
 
     def tearDown(self) -> None:
-        sys.modules.pop("main", None)
+        sys.modules.pop("claw_test_exec_main", None)
         os.environ.pop("COS_DATA_DIR", None)
         self.tmp.cleanup()
 
     def _import_main(self):
-        import main  # type: ignore[import-not-found]
-
-        return main
+        return self.main
 
     def test_intermediate_filenames_use_uuid_not_parent_pid(self) -> None:
         """Drive cmd_start with mocked policy + Popen; assert the
@@ -154,7 +158,7 @@ class TestCmdStartScratchNaming(unittest.TestCase):
             pid = 424242
 
         with mock.patch.object(main.policy, "require", return_value=None), mock.patch(
-            "main.subprocess.Popen", return_value=FakeProc()
+            "claw_test_exec_main.subprocess.Popen", return_value=FakeProc()
         ), mock.patch("builtins.open", side_effect=tracking_open):
             out = main.cmd_start(["/usr/bin/true"])
 
@@ -217,9 +221,9 @@ class TestCmdStartScratchNaming(unittest.TestCase):
         with mock.patch.object(main.policy, "require", return_value=None), mock.patch(
             "builtins.open", side_effect=tracking_open
         ):
-            with mock.patch("main.subprocess.Popen", return_value=FakeProc1()):
+            with mock.patch("claw_test_exec_main.subprocess.Popen", return_value=FakeProc1()):
                 main.cmd_start(["/usr/bin/true"])
-            with mock.patch("main.subprocess.Popen", return_value=FakeProc2()):
+            with mock.patch("claw_test_exec_main.subprocess.Popen", return_value=FakeProc2()):
                 main.cmd_start(["/usr/bin/true"])
 
         scratch_names = {
@@ -245,13 +249,14 @@ class TestShellScope(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         os.environ["COS_DATA_DIR"] = self.tmp.name
-        sys.modules.pop("main", None)
-        import main  # type: ignore[import-not-found]
-
-        self.main = main
+        self.main = load_local_module(
+            pathlib.Path(__file__).with_name("main.py"),
+            "claw_test_exec_main",
+            clear_modules=("_shared",),
+        )
 
     def tearDown(self) -> None:
-        sys.modules.pop("main", None)
+        sys.modules.pop("claw_test_exec_main", None)
         os.environ.pop("COS_DATA_DIR", None)
         self.tmp.cleanup()
 
@@ -277,7 +282,7 @@ class TestShellScope(unittest.TestCase):
         # Bypass the bounded-Popen drain path with a stub that mimics
         # its successful return so we never spawn a real shell here.
         with mock.patch.object(self.main.policy, "require", side_effect=spy), mock.patch(
-            "main._run_bounded",
+            "claw_test_exec_main._run_bounded",
             return_value=(0, "hi\n", "", False, False, None),
         ):
             self.main.cmd_run(["--shell", "echo hi"])
@@ -289,7 +294,7 @@ class TestShellScope(unittest.TestCase):
     def test_shell_run_with_env_assignment_still_requires_wild(self):
         captured, spy = self._capture()
         with mock.patch.object(self.main.policy, "require", side_effect=spy), mock.patch(
-            "main._run_bounded",
+            "claw_test_exec_main._run_bounded",
             return_value=(0, "", "", False, False, None),
         ):
             self.main.cmd_run(["--shell", "FOO=bar python3 -c 'print(1)'"])
@@ -303,7 +308,7 @@ class TestShellScope(unittest.TestCase):
         """
         captured, spy = self._capture()
         with mock.patch.object(self.main.policy, "require", side_effect=spy), mock.patch(
-            "main._run_bounded",
+            "claw_test_exec_main._run_bounded",
             return_value=(0, "", "", False, False, None),
         ):
             self.main.cmd_run(["--shell", ""])

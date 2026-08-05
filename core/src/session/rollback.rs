@@ -252,7 +252,6 @@ fn verb_label(m: &Mutation) -> &'static str {
         Mutation::CredentialStore { .. } => "credential.store",
         Mutation::CredentialRevoke { .. } => "credential.revoke",
         Mutation::Opaque { .. } => "opaque",
-        _ => "unknown",
     }
 }
 

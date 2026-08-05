@@ -1390,7 +1390,7 @@ pub(crate) mod wire {
                     // success-on-DONE).
                     if matches!(ev, Ok(StreamEvent::Done { .. })) {
                         self.report_success_once();
-                    } else if matches!(ev, Err(_)) && !self.accounted {
+                    } else if ev.is_err() && !self.accounted {
                         self.report_failure_once(
                             crate::agent::llm::credential_pool::FailureClass::Transient,
                         );

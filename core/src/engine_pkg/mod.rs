@@ -753,14 +753,12 @@ async fn run_online_install(
         // `COS_ENGINE_TRUST_UNVERIFIED=1` env var is an emergency
         // override for operators rescuing themselves from a publisher
         // outage; setting it is logged.
-        if let Err(msg) = check_digest_requirement(
+        check_digest_requirement(
             &engine,
             &release.tag_name,
             &asset.name,
             expected_sha.as_deref(),
-        ) {
-            return Err(msg);
-        }
+        )?;
         if expected_sha.is_none() {
             tracing::warn!(
                 target: "cos::engine_pkg",

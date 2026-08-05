@@ -55,7 +55,9 @@ impl OrtSyms {
     /// Resolve every symbol against `lib`. Returns the first
     /// libloading error if any is missing.
     ///
-    /// SAFETY: `lib` must point at a real `libonnxruntime` produced by
+    /// # Safety
+    ///
+    /// `lib` must point at a real `libonnxruntime` produced by
     /// an upstream onnxruntime build. The C ABI signature of the
     /// resolved symbol must match the declaration above. Both
     /// invariants are honored by the official onnxruntime prebuilt

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import importlib.util
 import io
 import os
 import sys
 import unittest
 import urllib.error
 import urllib.request
+
+from test_support import load_local_module
 
 # Make ``apps/gateway/`` importable so ``from _shared import …`` works
 # when we drive ``main`` directly.
@@ -27,10 +28,11 @@ def _load_main():
     """Load this gateway's main.py under a unique module name so it
     can coexist with the other gateway test modules in one pytest run."""
     path = os.path.join(os.path.dirname(__file__), "main.py")
-    spec = importlib.util.spec_from_file_location("gateway_webhook_main", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    return load_local_module(
+        path,
+        "gateway_webhook_main",
+        clear_modules=("_shared",),
+    )
 
 
 main = _load_main()

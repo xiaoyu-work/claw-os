@@ -114,11 +114,11 @@ if [ -z "$(ls -A "$BASE" 2>/dev/null)" ] && [ -d "$TARGET" ]; then
     cp -a "$TARGET/." "$BASE/" 2>/dev/null || true
 fi
 
-if mount -t overlay overlay \
+if mount_error=$(mount -t overlay overlay \
     -o "lowerdir=$BASE,upperdir=$UPPER,workdir=$WORK" \
-    "$TARGET" 2>/tmp/cos-overlay-error; then
+    "$TARGET" 2>&1); then
     printf '{"overlay": "mounted", "path": "%s", "upper": "%s"}\n' "$TARGET" "$UPPER"
 else
     printf '{"overlay": "failed", "path": "%s", "error": "%s", "warning": "checkpoints disabled — run with --privileged or --cap-add SYS_ADMIN"}\n' \
-        "$TARGET" "$(cat /tmp/cos-overlay-error)"
+        "$TARGET" "$mount_error"
 fi

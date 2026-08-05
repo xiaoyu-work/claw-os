@@ -481,7 +481,7 @@ impl MemoryDb {
             })
             .map(|n| n as usize)
             .unwrap_or(0);
-        let mut count_since = |cutoff: i64| -> usize {
+        let count_since = |cutoff: i64| -> usize {
             conn.query_row(
                 "SELECT COUNT(*) FROM messages WHERE ts_ms >= ?",
                 params![cutoff],
@@ -507,14 +507,13 @@ impl MemoryDb {
         let (oldest_ts_ms, newest_ts_ms) = if total_messages == 0 {
             (None, None)
         } else {
-            let row = conn
+            conn
                 .query_row("SELECT MIN(ts_ms), MAX(ts_ms) FROM messages", [], |r| {
                     let lo: Option<i64> = r.get(0)?;
                     let hi: Option<i64> = r.get(1)?;
                     Ok((lo, hi))
                 })
-                .unwrap_or((None, None));
-            row
+                .unwrap_or((None, None))
         };
         Ok(MemoryStats {
             total_messages,
@@ -556,7 +555,7 @@ impl MemoryDb {
                 |r| r.get::<_, String>(0),
             )
             .optional()?;
-        let mut count_since = |cutoff: i64| -> usize {
+        let count_since = |cutoff: i64| -> usize {
             conn.query_row(
                 "SELECT COUNT(*) FROM messages
                   WHERE session_id = ? AND ts_ms >= ?",

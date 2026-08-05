@@ -152,8 +152,7 @@ impl EnginesIndex {
             if !was_ok {
                 // Surface the closure error through the file-lock
                 // wrapper so we don't overwrite the file on failure.
-                return Err(RegistryError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                return Err(RegistryError::Io(std::io::Error::other(
                     "update_with closure failed",
                 )));
             }

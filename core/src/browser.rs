@@ -165,7 +165,7 @@ fn is_process_alive(pid: u32) -> bool {
         // launcher "reclaim" the PID file and SIGTERM whatever pid
         // the kernel recycled to next.
         let err = std::io::Error::last_os_error();
-        return err.raw_os_error() == Some(libc::EPERM);
+        err.raw_os_error() == Some(libc::EPERM)
     }
     #[cfg(not(unix))]
     {

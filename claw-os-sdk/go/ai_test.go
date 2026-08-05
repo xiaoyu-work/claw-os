@@ -1,6 +1,7 @@
 package clawossdk
 
 import (
+	"slices"
 	"testing"
 )
 
@@ -49,7 +50,7 @@ func TestChatBuildsArgvAndParses(t *testing.T) {
 			t.Fatalf("argv[%d] = %q, want %q (full %v)", i, argv[i], w, argv)
 		}
 	}
-	if !contains(argv, "--prompt") || !contains(argv, "--max-units") || !contains(argv, "--tools") {
+	if !slices.Contains(argv, "--prompt-file") || !slices.Contains(argv, "--max-units") || !slices.Contains(argv, "--tools") {
 		t.Fatalf("missing expected flags: %v", argv)
 	}
 }

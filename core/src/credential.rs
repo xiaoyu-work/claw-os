@@ -691,7 +691,7 @@ fn machine_id_path() -> PathBuf {
 ///   * Linux:   `getrandom(2)`
 ///   * macOS / BSD: `getentropy(3)` (limited to 256 bytes per call)
 ///   * Other Unix: `/dev/urandom` blocking read
-fn os_random_bytes(buf: &mut [u8]) -> Result<(), std::io::Error> {
+pub(crate) fn os_random_bytes(buf: &mut [u8]) -> Result<(), std::io::Error> {
     #[cfg(target_os = "linux")]
     {
         let ret =
@@ -699,7 +699,7 @@ fn os_random_bytes(buf: &mut [u8]) -> Result<(), std::io::Error> {
         if ret as isize == buf.len() as isize {
             return Ok(());
         }
-        return Err(std::io::Error::last_os_error());
+        Err(std::io::Error::last_os_error())
     }
     #[cfg(any(
         target_os = "macos",
@@ -1573,7 +1573,7 @@ fn store_credential_record(
     ttl: Option<u64>,
     refresh_cmd: Option<String>,
 ) -> Result<Value, String> {
-    let dir = namespace_dir(&namespace);
+    let dir = namespace_dir(namespace);
     fs::create_dir_all(&dir).map_err(|e| format!("failed to create credentials dir: {e}"))?;
 
     // Encrypt with AES-256-GCM
@@ -1752,13 +1752,13 @@ fn cmd_load(args: &[String]) -> Result<Value, String> {
                     let value_bytes = decrypt_value(&fresh_cred)?;
                     let value = String::from_utf8(value_bytes)
                         .map_err(|e| format!("credential is not valid UTF-8: {e}"))?;
-                    return Ok(build_load_result(
+                    return build_load_result(
                         name,
                         &fresh_cred,
                         value,
                         Some(false),
                         fd_target,
-                    )?);
+                    );
                 }
 
                 let refresh_cmd_owned = fresh_cred

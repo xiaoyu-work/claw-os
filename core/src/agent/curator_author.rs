@@ -340,7 +340,7 @@ fn strip_accidental_frontmatter(body: &str) -> String {
 /// `\\` escapes; multi-line values are folded into a single line
 /// (skill metadata isn't expected to be multi-paragraph).
 fn yaml_escape(s: &str) -> String {
-    let single_line = s.replace('\n', " ").replace('\r', " ");
+    let single_line = s.replace(['\n', '\r'], " ");
     let needs_quote = single_line
         .chars()
         .any(|c| matches!(c, ':' | '#' | '"' | '\'' | '\\' | '\t'))

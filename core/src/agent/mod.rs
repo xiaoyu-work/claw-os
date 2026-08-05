@@ -671,19 +671,15 @@ fn hooks_cmd(args: &[String]) -> Result<Value, String> {
 /// `cos agent hooks enable --kind logging` both work.
 fn parse_kind_arg(rest: &[String]) -> Result<String, String> {
     let mut iter = rest.iter();
-    while let Some(a) = iter.next() {
-        match a.as_str() {
-            "--kind" => {
-                return iter
-                    .next()
-                    .cloned()
-                    .ok_or_else(|| "--kind requires a value".to_string());
-            }
-            s if !s.starts_with("--") => return Ok(s.to_string()),
-            other => return Err(format!("unexpected flag: {other}")),
-        }
+    match iter.next().map(String::as_str) {
+        Some("--kind") => iter
+            .next()
+            .cloned()
+            .ok_or_else(|| "--kind requires a value".to_string()),
+        Some(value) if !value.starts_with("--") => Ok(value.to_string()),
+        Some(other) => Err(format!("unexpected flag: {other}")),
+        None => Err("missing hook kind (positional or --kind <kind>)".to_string()),
     }
-    Err("missing hook kind (positional or --kind <kind>)".to_string())
 }
 
 /// `cos agent semantic <subcmd>` — vector-memory operations.
@@ -729,10 +725,8 @@ fn semantic_cmd(args: &[String]) -> Result<Value, String> {
             // Surface a hint if the embedder model differs from what is
             // pinned in the corpus — that's the exact "you need to clear
             // before re-indexing" situation.
-            let model_drift = match (&embedder_model, &pinned) {
-                (Some(a), Some(b)) if a != b => true,
-                _ => false,
-            };
+            let model_drift =
+                matches!((&embedder_model, &pinned), (Some(a), Some(b)) if a != b);
             Ok(json!({
                 "status": if configured { "ok" } else { "disabled" },
                 "path": path.display().to_string(),
@@ -2443,7 +2437,7 @@ fn prompt_cmd(args: &[String]) -> Result<Value, String> {
     use std::path::PathBuf;
 
     let sub = args.first().map(|s| s.as_str()).unwrap_or("show");
-    if sub != "show" && sub != "build" && sub != "" {
+    if sub != "show" && sub != "build" && !sub.is_empty() {
         return Err(format!(
             "unknown prompt subcommand: {sub}. try: show [--extra <path>] [--raw] | build [--extra <path>] [--raw]"
         ));
@@ -3218,7 +3212,7 @@ fn override_cmd(args: &[String]) -> Result<Value, String> {
             let app = args
                 .get(1)
                 .ok_or_else(|| "usage: cos agent override show <app>".to_string())?;
-            let ovr = overrides::load(app).map_err(|e| e)?;
+            let ovr = overrides::load(app)?;
             Ok(json!({
                 "app": app,
                 "path": overrides::override_path(app).display().to_string(),
@@ -3253,7 +3247,7 @@ fn override_cmd(args: &[String]) -> Result<Value, String> {
                 .ok_or_else(|| {
                     format!("app `{app}` has no `ai` block — nothing to override")
                 })?;
-            let ovr = overrides::load(app).map_err(|e| e)?;
+            let ovr = overrides::load(app)?;
             let disabled = ovr.as_ref().map(|o| o.disabled).unwrap_or(false);
             let effective = overrides::apply_to_policy(manifest_policy, ovr.as_ref());
             Ok(json!({
@@ -3352,7 +3346,6 @@ async fn chat_cmd_async(
     let stdin = std::io::stdin();
     let mut input = String::new();
     let mut prompt_seq: u32 = 0;
-    let mut clean_exit = false;
 
     /// Stream sink shared across turns — re-used so allocation
     /// happens once. Each turn calls `reset()` before invoking
@@ -3500,7 +3493,7 @@ async fn chat_cmd_async(
 
     let sink_obj = Arc::new(ChatSink::new(!stdout_is_tty));
 
-    loop {
+    let clean_exit = loop {
         // Prompt user (to stderr so stdout stays clean for
         // assistant text).
         {
@@ -3518,8 +3511,7 @@ async fn chat_cmd_async(
         if n == 0 {
             // EOF
             let _ = writeln!(stderr.lock(), "\n[eof]");
-            clean_exit = true;
-            break;
+            break true;
         }
 
         let line = input.trim();
@@ -3533,8 +3525,7 @@ async fn chat_cmd_async(
             let cmd = parts.next().unwrap_or("");
             match cmd {
                 "quit" | "exit" | "q" => {
-                    clean_exit = true;
-                    break;
+                    break true;
                 }
                 "help" | "?" => {
                     let mut e = stderr.lock();
@@ -3667,7 +3658,7 @@ async fn chat_cmd_async(
                 // Don't break — let the user retry / clear / quit.
             }
         }
-    }
+    };
 
     Ok(json!({
         "status": if clean_exit { "ok" } else { "interrupted" },
@@ -3733,11 +3724,12 @@ fn providers_cmd(args: &[String]) -> Result<Value, String> {
         let probe_cfg = if is_active {
             cfg.agent.clone()
         } else {
-            let mut c = crate::config::AgentConfig::default();
-            c.provider = name.to_string();
-            c.api_key_credential = canonical_credential.map(String::from);
-            c.api_key_env = canonical_env.map(String::from);
-            c
+            crate::config::AgentConfig {
+                provider: name.to_string(),
+                api_key_credential: canonical_credential.map(String::from),
+                api_key_env: canonical_env.map(String::from),
+                ..Default::default()
+            }
         };
 
         let configured = match llm::registry::build(name, &active_model, &probe_cfg) {
@@ -4649,7 +4641,7 @@ fn todo_cmd_at(
     args: &[String],
     store: &crate::agent::tools::todo::TodoStore,
 ) -> Result<Value, String> {
-    use crate::agent::tools::todo::{TodoItem, TodoList, TodoStatus};
+    use crate::agent::tools::todo::{TodoItem, TodoStatus};
 
     let sub = args.first().map(|s| s.as_str()).unwrap_or("path");
     match sub {
@@ -6145,7 +6137,7 @@ fn list_media_outputs(
         rows.push((mtime, path, meta.len(), ext));
     }
     // Newest first.
-    rows.sort_by(|a, b| b.0.cmp(&a.0));
+    rows.sort_by_key(|row| std::cmp::Reverse(row.0));
     rows.truncate(limit);
     let files: Vec<Value> = rows
         .into_iter()
@@ -6826,7 +6818,7 @@ fn osv_check_cmd(args: &[String]) -> Result<Value, String> {
     }
     let mut total_vulns = 0u64;
     let mut results = Vec::new();
-    for (pkg, vulns) in pkgs.iter().zip(by_idx.into_iter()) {
+    for (pkg, vulns) in pkgs.iter().zip(by_idx) {
         total_vulns += vulns.len() as u64;
         if !vulns.is_empty() {
             results.push(json!({

@@ -676,7 +676,7 @@ impl Tool for CosAppRun {
 
 fn is_valid_app_id(s: &str) -> bool {
     !s.is_empty()
-        && s.chars().next().map_or(false, |c| c.is_ascii_lowercase())
+        && s.chars().next().is_some_and(|c| c.is_ascii_lowercase())
         && s.chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
 }

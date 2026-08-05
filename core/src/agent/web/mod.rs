@@ -345,10 +345,7 @@ fn spawn_detached(
         if let Some(p) = read_pid_file() {
             if p as u32 == child_pid && process_alive(p) {
                 // Bound successfully.
-                let token = match auth::load_or_generate_token() {
-                    Ok(t) => t,
-                    Err(_) => String::new(),
-                };
+                let token = auth::load_or_generate_token().unwrap_or_default();
                 let url = if token.is_empty() {
                     format!("http://{bind}:{port}/")
                 } else {

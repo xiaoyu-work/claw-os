@@ -129,7 +129,7 @@ pub fn match_label(reply: &str, labels: &[&str]) -> Option<String> {
     // surrounding sentence punctuation. This is a small forgiveness
     // for models that append a period despite the system prompt.
     let stripped: String = cleaned
-        .trim_end_matches(|c: char| matches!(c, '.' | '!' | '?' | ':' | ','))
+        .trim_end_matches(['.', '!', '?', ':', ','])
         .to_string();
     if stripped != cleaned {
         for label in labels {

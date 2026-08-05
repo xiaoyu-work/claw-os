@@ -56,9 +56,7 @@ use tokio::time::timeout;
 
 use crate::agent::llm::run_log::{record as record_run, LlmRunRecord};
 use crate::agent::tools::mcp::client::{ClientError, McpClient};
-use crate::agent::tools::mcp::protocol::{
-    ClientCapabilities, Implementation, PROTOCOL_VERSION,
-};
+use crate::agent::tools::mcp::protocol::{ClientCapabilities, Implementation, PROTOCOL_VERSION};
 use crate::agent::tools::mcp::transport::StdioTransport;
 use crate::caps::manifest::{Manifest, Runtime, SessionTransport};
 
@@ -188,7 +186,15 @@ async fn bring_up_app(
     app_dir: &Path,
     manifest: &Manifest,
     timeout_dur: Duration,
-) -> Result<(Arc<McpClient>, Child, usize, crate::bridge::AppIdentitySession), String> {
+) -> Result<
+    (
+        Arc<McpClient>,
+        Child,
+        usize,
+        crate::bridge::AppIdentitySession,
+    ),
+    String,
+> {
     let session = manifest
         .session
         .as_ref()
@@ -253,8 +259,10 @@ async fn bring_up_app(
     // (`<repo>/claw-os-sdk/python/src` and
     // `<repo>/cos-runtime/python/src`).
     let py_dirs = resolve_python_pkg_dirs(&apps_dir);
-    let mut path_parts: Vec<String> =
-        py_dirs.iter().map(|p| p.to_string_lossy().to_string()).collect();
+    let mut path_parts: Vec<String> = py_dirs
+        .iter()
+        .map(|p| p.to_string_lossy().to_string())
+        .collect();
     path_parts.push(apps_dir_str.clone());
     let pythonpath = path_parts.join(pathsep());
 
@@ -520,18 +528,18 @@ async fn begin_active_session_call(
         )
     };
     let lock = call_lock.lock_owned().await;
-    if let Err(error) = control.set_transient_caps(Some(
-        crate::caps::CapSet::from_caps(caps.iter().cloned()),
-    )) {
+    if let Err(error) =
+        control.set_transient_caps(Some(crate::caps::CapSet::from_caps(caps.iter().cloned())))
+    {
         let clear_error = control.set_transient_caps(None).err();
         #[cfg(unix)]
         unsafe {
             libc::kill(child_pid as i32, libc::SIGKILL);
         }
         return Err(match clear_error {
-            Some(clear) => format!(
-                "{error}; transient state was uncertain and cleanup failed: {clear}"
-            ),
+            Some(clear) => {
+                format!("{error}; transient state was uncertain and cleanup failed: {clear}")
+            }
             None => error,
         });
     }
@@ -644,8 +652,20 @@ fn data_dir_string() -> String {
 /// by [`bring_up_app`]'s `env_clear`.
 fn safe_session_env_allowlist() -> Vec<(String, String)> {
     const ALWAYS: &[&str] = &[
-        "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES",
-        "TZ", "TERM", "TMPDIR", "TEMP", "TMP",
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LC_MESSAGES",
+        "TZ",
+        "TERM",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
     ];
     let mut out = Vec::with_capacity(ALWAYS.len());
     for k in ALWAYS {
@@ -725,10 +745,7 @@ pub struct AppSessionTool {
 }
 
 impl AppSessionTool {
-    fn from_manifest_tool(
-        manifest: Arc<Manifest>,
-        tool_idx: usize,
-    ) -> Self {
+    fn from_manifest_tool(manifest: Arc<Manifest>, tool_idx: usize) -> Self {
         let session = manifest
             .session
             .as_ref()
@@ -801,10 +818,7 @@ fn build_schema(args: &[crate::caps::manifest::Arg]) -> Value {
             Value::Array(required.into_iter().map(Value::String).collect()),
         );
     }
-    schema.insert(
-        "additionalProperties".to_string(),
-        Value::Bool(false),
-    );
+    schema.insert("additionalProperties".to_string(), Value::Bool(false));
     Value::Object(schema)
 }
 
@@ -877,10 +891,7 @@ impl Tool for AppSessionTool {
                     Some(&e),
                     started.elapsed(),
                 );
-                return ToolResult::err(format!(
-                    "could not bring up app `{}`: {e}",
-                    self.app_id
-                ));
+                return ToolResult::err(format!("could not bring up app `{}`: {e}", self.app_id));
             }
         };
         let mut active_call = match begin_active_session_call(&self.app_id, &caps).await {
@@ -934,7 +945,11 @@ impl Tool for AppSessionTool {
                     verb_csv(&caps).as_str(),
                     "allowed",
                     None,
-                    if is_error { Some(content.as_str()) } else { None },
+                    if is_error {
+                        Some(content.as_str())
+                    } else {
+                        None
+                    },
                     started.elapsed(),
                 );
                 if is_error {
@@ -1141,8 +1156,8 @@ fn manifest_tool_names(app_id: &str) -> Result<Vec<String>, String> {
     let manifest_path = crate::apps::find(&apps_root(), app_id)
         .map(|app| app.dir.join("app.json"))
         .ok_or_else(|| format!("App `{app_id}` is not installed"))?;
-    let text = std::fs::read_to_string(&manifest_path)
-        .map_err(|e| format!("read manifest: {e}"))?;
+    let text =
+        std::fs::read_to_string(&manifest_path).map_err(|e| format!("read manifest: {e}"))?;
     let manifest = Manifest::from_json(&text).map_err(|e| format!("parse manifest: {e}"))?;
     Ok(manifest
         .session
@@ -1223,6 +1238,19 @@ mod tests {
         .unwrap();
     }
 
+    fn install_test_app_runner(root: &Path) -> crate::test_env::TestEnvVarGuard {
+        use std::os::unix::fs::PermissionsExt;
+
+        let runner = root.join("claw-app-runner");
+        std::fs::write(
+            &runner,
+            "#!/bin/sh\n[ \"$1\" = \"--\" ] && shift\nexec \"$@\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&runner, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_env::TestEnvVarGuard::set("CLAW_APP_RUNNER_BIN", runner)
+    }
+
     #[test]
     fn register_all_emits_one_tool_per_manifest_entry_plus_meta() {
         let _g = env_lock();
@@ -1278,7 +1306,10 @@ mod tests {
         let required = schema["required"].as_array().unwrap();
         assert_eq!(required.len(), 1);
         assert_eq!(required[0].as_str(), Some("key"));
-        assert_eq!(schema["properties"]["ttl"]["default"], serde_json::json!(60));
+        assert_eq!(
+            schema["properties"]["ttl"]["default"],
+            serde_json::json!(60)
+        );
         assert_eq!(schema["properties"]["key"]["type"], "string");
         assert_eq!(schema["properties"]["ttl"]["type"], "number");
     }
@@ -1318,12 +1349,20 @@ mod tests {
         std::env::set_var("COS_APPS_DIR", &apps_dir);
         std::env::set_var("COS_DATA_DIR", data.path());
         std::env::set_var("COS_CAPS_MODE", "permissive");
+        let _session = crate::test_env::TestSessionGuard::admin(data.path());
+        let _local_sessions =
+            crate::test_env::TestEnvVarGuard::set("COS_TEST_LOCAL_APP_SESSIONS", "1");
+        let _runner = install_test_app_runner(data.path());
 
         // Make sure no stale entry from a previous test run survives.
         let _ = close_session("kv").await;
 
         let opened = open_session("kv").await.expect("open kv");
-        assert!(opened.1 >= 5, "kv should advertise ≥5 tools, got {}", opened.1);
+        assert!(
+            opened.1 >= 5,
+            "kv should advertise ≥5 tools, got {}",
+            opened.1
+        );
 
         // 1) set, get — verify in-memory state survives.
         let r = opened
@@ -1341,19 +1380,10 @@ mod tests {
         let text = first_text(&r);
         assert!(text.contains("42"), "kv.get returned: {text}");
 
-        // 2) list — confirms the cached dict is the same instance
-        // across calls (the previous set/get hit it).
-        let r = opened
-            .0
-            .call_tool("kv.list", None)
-            .await
-            .expect("list");
+        let r = opened.0.call_tool("kv.list", None).await.expect("list");
         let text = first_text(&r);
         assert!(text.contains("\"x\""), "kv.list returned: {text}");
 
-        // 3) close → re-open → list should now be empty *only if* the
-        // server reloads from disk. The pilot persists to a JSON
-        // file in $COS_DATA_DIR, so re-opening should still see "x".
         let closed = close_session("kv").await;
         assert!(closed);
         let opened2 = open_session("kv").await.expect("re-open kv");
@@ -1368,7 +1398,6 @@ mod tests {
             "post-restart get should re-load value: {text}"
         );
 
-        // Clean up so subsequent tests start fresh.
         let _ = close_session("kv").await;
 
         match prev_apps {
@@ -1405,7 +1434,10 @@ mod tests {
             .unwrap()
             .join("apps");
         if !apps_dir.join("kv").join("server.py").is_file() {
-            eprintln!("skip open_race_single_child: {} not present", apps_dir.display());
+            eprintln!(
+                "skip open_race_single_child: {} not present",
+                apps_dir.display()
+            );
             return;
         }
         if std::process::Command::new("python3")
@@ -1424,6 +1456,10 @@ mod tests {
         std::env::set_var("COS_APPS_DIR", &apps_dir);
         std::env::set_var("COS_DATA_DIR", data.path());
         std::env::set_var("COS_CAPS_MODE", "permissive");
+        let _session = crate::test_env::TestSessionGuard::admin(data.path());
+        let _local_sessions =
+            crate::test_env::TestEnvVarGuard::set("COS_TEST_LOCAL_APP_SESSIONS", "1");
+        let _runner = install_test_app_runner(data.path());
 
         let _ = close_session("kv").await;
 

@@ -286,7 +286,7 @@ impl TtsProvider for MiniMaxTts {
 /// — MiniMax's payload can be ~1 MB so use a tight inner loop and
 /// avoid an alloc for the iterator state.
 pub fn decode_hex(s: &str) -> Result<Vec<u8>, String> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err(format!("hex length must be even, got {}", s.len()));
     }
     let bytes = s.as_bytes();

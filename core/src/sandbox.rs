@@ -169,7 +169,7 @@ fn cmd_exec(args: &[String]) -> Result<Value, String> {
 
     #[cfg(target_os = "linux")]
     {
-        return exec_linux(command_args, network, read_only, &workspace, &limits);
+        exec_linux(command_args, network, read_only, &workspace, &limits)
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -586,8 +586,6 @@ fn wait_bounded(
 
 #[cfg(target_os = "linux")]
 fn read_bounded(reader: impl std::io::Read) -> Result<(Vec<u8>, bool), String> {
-    use std::io::Read;
-
     let mut reader = reader;
     let mut kept = Vec::new();
     let mut buffer = [0_u8; 16 * 1024];

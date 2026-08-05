@@ -400,7 +400,7 @@ fn host_match(pat: &str, target: &str) -> bool {
     // Host: reverse-label glob.
     let pl: Vec<&str> = ph.split('.').collect();
     let tl: Vec<&str> = th.split('.').collect();
-    if pl.iter().any(|s| *s == "**") {
+    if pl.contains(&"**") {
         // `**` somewhere in pattern — defer to generic glob.
         return glob_segs(&pl, &tl);
     }

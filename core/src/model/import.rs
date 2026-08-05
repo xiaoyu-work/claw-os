@@ -306,7 +306,7 @@ fn import_directory(cfg: &ImportConfig) -> Result<ImportedModel, ImportError> {
         tree_hasher.update(rel_str.as_bytes());
         tree_hasher.update(&[0u8]);
         tree_hasher.update(file_sha.as_bytes());
-        tree_hasher.update(&[b'\n']);
+        tree_hasher.update(b"\n");
         files_list.push(rel_str);
     }
     let tree_sha = tree_hasher.finalize_hex();

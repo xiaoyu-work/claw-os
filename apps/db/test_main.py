@@ -1,6 +1,7 @@
 """Tests for db app query row limits."""
 
 import os
+import pathlib
 import sqlite3
 import tempfile
 import unittest
@@ -26,8 +27,15 @@ sys.path.insert(
 _tmpdir = tempfile.mkdtemp()
 os.environ["COS_DATA_DIR"] = _tmpdir
 
-import main as db_main
-from main import cmd_query, MAX_ROWS
+from test_support import load_local_module
+
+db_main = load_local_module(
+    pathlib.Path(__file__).with_name("main.py"),
+    "claw_test_db_main",
+    clear_modules=("_shared",),
+)
+cmd_query = db_main.cmd_query
+MAX_ROWS = db_main.MAX_ROWS
 
 
 class TestCmdQueryTruncation(unittest.TestCase):

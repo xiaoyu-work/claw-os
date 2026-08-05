@@ -1,6 +1,7 @@
 """Tests for net app response size limits."""
 
 import os
+import pathlib
 import sys
 import unittest
 
@@ -20,7 +21,14 @@ sys.path.insert(
     ),
 )  # for `from cos_runtime import …`
 
-from main import MAX_RESPONSE_BYTES
+from test_support import load_local_module
+
+net_main = load_local_module(
+    pathlib.Path(__file__).with_name("main.py"),
+    "claw_test_net_main",
+    clear_modules=("_shared",),
+)
+MAX_RESPONSE_BYTES = net_main.MAX_RESPONSE_BYTES
 
 
 class TestFetchTruncationLogic(unittest.TestCase):

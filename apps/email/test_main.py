@@ -3,6 +3,7 @@
 import base64
 import json
 import os
+import pathlib
 import sys
 import unittest
 from unittest.mock import MagicMock, patch
@@ -23,13 +24,18 @@ sys.path.insert(
     ),
 )  # for `from cos_runtime import …`
 
-from main import (
-    _detect_provider,
-    _parse_gmail_message,
-    _parse_outlook_message,
-    _resolve_provider,
-    run,
+from test_support import load_local_module
+
+email_main = load_local_module(
+    pathlib.Path(__file__).with_name("main.py"),
+    "claw_test_email_main",
+    clear_modules=("_shared",),
 )
+_detect_provider = email_main._detect_provider
+_parse_gmail_message = email_main._parse_gmail_message
+_parse_outlook_message = email_main._parse_outlook_message
+_resolve_provider = email_main._resolve_provider
+run = email_main.run
 
 # ---------------------------------------------------------------------------
 # Helpers — clear all provider env vars between tests
@@ -167,7 +173,7 @@ class TestSendCommand(unittest.TestCase):
         result = run("send", ["--to", "x@y.com", "--subject", "hi"])
         self.assertIn("error", result)
 
-    @patch("main.smtplib.SMTP")
+    @patch("claw_test_email_main.smtplib.SMTP")
     def test_send_smtp_success(self, mock_smtp_cls):
         os.environ["SMTP_HOST"] = "mail.example.com"
         os.environ["SMTP_PORT"] = "587"
@@ -190,7 +196,7 @@ class TestSendCommand(unittest.TestCase):
         mock_server.login.assert_called_once_with("user", "pass")
         mock_server.send_message.assert_called_once()
 
-    @patch("main.smtplib.SMTP")
+    @patch("claw_test_email_main.smtplib.SMTP")
     def test_send_smtp_with_cc(self, mock_smtp_cls):
         os.environ["SMTP_HOST"] = "localhost"
         os.environ["SMTP_PORT"] = "25"
@@ -214,7 +220,7 @@ class TestSendCommand(unittest.TestCase):
         msg = mock_server.send_message.call_args[0][0]
         self.assertEqual(msg["Cc"], "z@y.com")
 
-    @patch("main.smtplib.SMTP")
+    @patch("claw_test_email_main.smtplib.SMTP")
     def test_send_smtp_no_starttls_on_port_25(self, mock_smtp_cls):
         os.environ["SMTP_HOST"] = "localhost"
         os.environ["SMTP_PORT"] = "25"
@@ -230,7 +236,7 @@ class TestSendCommand(unittest.TestCase):
         self.assertTrue(result.get("sent"))
         mock_server.starttls.assert_not_called()
 
-    @patch("main.smtplib.SMTP")
+    @patch("claw_test_email_main.smtplib.SMTP")
     def test_send_smtp_no_login_without_credentials(self, mock_smtp_cls):
         os.environ["SMTP_HOST"] = "localhost"
         os.environ["SMTP_PORT"] = "25"
@@ -246,7 +252,7 @@ class TestSendCommand(unittest.TestCase):
         self.assertTrue(result.get("sent"))
         mock_server.login.assert_not_called()
 
-    @patch("main._gmail_request")
+    @patch("claw_test_email_main._gmail_request")
     def test_send_gmail_success(self, mock_req):
         os.environ["GMAIL_ACCESS_TOKEN"] = "test-token"
         mock_req.return_value = {"id": "msg123", "threadId": "t1", "labelIds": ["SENT"]}
@@ -265,7 +271,7 @@ class TestSendCommand(unittest.TestCase):
         self.assertEqual(result["id"], "msg123")
         mock_req.assert_called_once()
 
-    @patch("main._outlook_request")
+    @patch("claw_test_email_main._outlook_request")
     def test_send_outlook_success(self, mock_req):
         os.environ["MICROSOFT_ACCESS_TOKEN"] = "test-token"
         mock_req.return_value = {}
@@ -283,7 +289,7 @@ class TestSendCommand(unittest.TestCase):
         self.assertEqual(result["provider"], "outlook")
         mock_req.assert_called_once()
 
-    @patch("main._outlook_request")
+    @patch("claw_test_email_main._outlook_request")
     def test_send_outlook_with_cc(self, mock_req):
         os.environ["MICROSOFT_ACCESS_TOKEN"] = "test-token"
         mock_req.return_value = {}
@@ -328,7 +334,7 @@ class TestSearchCommand(unittest.TestCase):
         self.assertIn("error", result)
         self.assertIn("search requires gmail or outlook provider", result["error"])
 
-    @patch("main._gmail_request")
+    @patch("claw_test_email_main._gmail_request")
     def test_search_gmail(self, mock_req):
         os.environ["GMAIL_ACCESS_TOKEN"] = "tok"
         # First call: list messages, subsequent calls: get each message
@@ -369,7 +375,7 @@ class TestSearchCommand(unittest.TestCase):
         self.assertTrue(result["emails"][0]["unread"])
         self.assertFalse(result["emails"][1]["unread"])
 
-    @patch("main._outlook_request")
+    @patch("claw_test_email_main._outlook_request")
     def test_search_outlook(self, mock_req):
         os.environ["MICROSOFT_ACCESS_TOKEN"] = "tok"
         mock_req.return_value = {
@@ -416,7 +422,7 @@ class TestListCommand(unittest.TestCase):
         self.assertIn("error", result)
         self.assertIn("list requires gmail or outlook provider", result["error"])
 
-    @patch("main._gmail_request")
+    @patch("claw_test_email_main._gmail_request")
     def test_list_gmail(self, mock_req):
         os.environ["GMAIL_ACCESS_TOKEN"] = "tok"
         mock_req.side_effect = [
@@ -439,7 +445,7 @@ class TestListCommand(unittest.TestCase):
         self.assertEqual(result["provider"], "gmail")
         self.assertEqual(result["count"], 1)
 
-    @patch("main._outlook_request")
+    @patch("claw_test_email_main._outlook_request")
     def test_list_outlook_unread(self, mock_req):
         os.environ["MICROSOFT_ACCESS_TOKEN"] = "tok"
         mock_req.return_value = {"value": []}
@@ -475,7 +481,7 @@ class TestReadCommand(unittest.TestCase):
         self.assertIn("error", result)
         self.assertIn("read requires gmail or outlook provider", result["error"])
 
-    @patch("main._gmail_request")
+    @patch("claw_test_email_main._gmail_request")
     def test_read_gmail(self, mock_req):
         os.environ["GMAIL_ACCESS_TOKEN"] = "tok"
         body_b64 = base64.urlsafe_b64encode(b"Hello world").decode()
@@ -511,7 +517,7 @@ class TestReadCommand(unittest.TestCase):
         self.assertEqual(len(result["attachments"]), 1)
         self.assertEqual(result["attachments"][0]["name"], "doc.pdf")
 
-    @patch("main._outlook_request")
+    @patch("claw_test_email_main._outlook_request")
     def test_read_outlook(self, mock_req):
         os.environ["MICROSOFT_ACCESS_TOKEN"] = "tok"
         mock_req.return_value = {
@@ -589,7 +595,7 @@ class TestApiErrors(unittest.TestCase):
     def tearDown(self):
         _clear_provider_env()
 
-    @patch("main._gmail_request")
+    @patch("claw_test_email_main._gmail_request")
     def test_gmail_send_api_error(self, mock_req):
         os.environ["GMAIL_ACCESS_TOKEN"] = "tok"
         mock_req.return_value = {"error": "Invalid token", "status": 401}
@@ -601,7 +607,7 @@ class TestApiErrors(unittest.TestCase):
         self.assertIn("error", result)
         self.assertEqual(result["status"], 401)
 
-    @patch("main._outlook_request")
+    @patch("claw_test_email_main._outlook_request")
     def test_outlook_search_api_error(self, mock_req):
         os.environ["MICROSOFT_ACCESS_TOKEN"] = "tok"
         mock_req.return_value = {"error": "Forbidden", "status": 403}
