@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Claw OS Agent — native libcosmic UI (replaces the React + WebView app)."
+description = "ClawOS Agent — native libcosmic UI (replaces the React + WebView app)."
 
 [[bin]]
 name = "cos-agent-ui"
@@ -17,6 +17,9 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+i18n-embed = { version = "0.16", features = ["fluent-system", "desktop-requester"] }
+i18n-embed-fl = "0.10"
+rust-embed = "8.11"
 
 reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls", "json", "multipart"] }
 futures = "0.3"
@@ -45,6 +48,8 @@ features = [
     "wgpu",
     "wayland",
     "markdown",
+    "single-instance",
+    "xdg-portal",
 ]
 
 [profile.release]
