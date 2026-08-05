@@ -45,6 +45,7 @@ pub fn readonly_task_caps() -> CapSet {
         "doc",
         "docs",
         "event-center",
+        "firewall-manager",
         "fs",
         "hardware-center",
         "kv",

@@ -386,6 +386,25 @@ authorizes repository, source-tree, and restore-destination roots. Restore only
 targets an empty or new directory; forgetting and retention/prune require
 explicit confirmation and never delete volumes.
 
+## Firewall Manager
+
+```bash
+cos app firewall-manager status
+cos app firewall-manager add allow input tcp 22 --remote 192.0.2.0/24 --interface eth0
+cos app firewall-manager add deny input tcp 22 --remote 0.0.0.0/0
+cos app firewall-manager delete <rule-id>
+cos app firewall-manager clear --confirm
+cos app firewall-manager restore <backup-token> --confirm
+```
+
+Firewall Manager owns only the dedicated `inet claw_agent` table and never
+flushes distribution or administrator tables. Rules are generated from
+validated direction/protocol/port/CIDR/interface fields, checked and applied as
+one nft transaction, then verified by managed rule comments. Every mutation
+persists a previous-state token; failed persistence rolls live rules back, and
+manual restore requires the exact current revision. clawd reapplies persisted
+managed rules after reboot. Mutations require `net.firewall:manage`.
+
 ## Package Management
 
 ```bash

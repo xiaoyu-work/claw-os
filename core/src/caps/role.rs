@@ -472,6 +472,7 @@ const ADMIN_VERBS: &[Verb] = &[
     Verb::NET_LISTEN,
     Verb::NET_RAW,
     Verb::NET_MANAGE,
+    Verb::NET_FIREWALL,
     Verb::UI_WINDOW,
     Verb::UI_INPUT,
     Verb::CLIPBOARD_READ,

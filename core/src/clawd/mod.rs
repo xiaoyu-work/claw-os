@@ -15,6 +15,7 @@ pub mod crash;
 pub mod desktop;
 pub mod desktop_wayland;
 pub mod event_center;
+pub mod firewall;
 pub mod hardware;
 pub mod heartbeat;
 pub mod memory;

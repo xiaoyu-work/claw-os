@@ -163,6 +163,14 @@ pub const CATALOG: &[CapMeta] = &[
         "📶",
         Risk::High,
     ),
+    CapMeta::new(
+        Verb::NET_FIREWALL,
+        ScopeKind::Name,
+        LocalizedStr::new("Manage host firewall rules"),
+        LocalizedStr::new("Add, remove, clear, or restore scoped nftables rules in Claw's dedicated firewall table."),
+        "🧱",
+        Risk::Critical,
+    ),
 
     // -- Processes -----------------------------------------------------------
     CapMeta::new(
