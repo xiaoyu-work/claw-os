@@ -10,6 +10,8 @@ use crate::session;
 use super::client_identity::ClientIdentity;
 
 pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+    let owner_uid = client.require_uid()?;
+    let owner_home = client.require_home_dir()?;
     let prompt = required_string(&params, "prompt")?;
     let session_id = params
         .get("session_id")
@@ -24,15 +26,31 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
         .transpose()?;
     let store = Store::open_default().map_err(|err| err.to_string())?;
     let session_id = match session_id {
-        Some(session_id) => Some(session_id),
+        Some(session_id) => {
+            if owner_uid != 0 {
+                let db = crate::agent::memory::sqlite_fts::MemoryDb::open(
+                    crate::paths::clawd_user_memory_db_path(owner_uid),
+                )
+                .map_err(|err| format!("open memory: {err}"))?;
+                if !db
+                    .has_session(&session_id)
+                    .map_err(|err| format!("read memory session: {err}"))?
+                {
+                    return Err(format!("task session not found: {session_id}"));
+                }
+            }
+            Some(session_id)
+        }
         None => Some(create_task_session(&prompt)?),
     };
-    let owner_uid = client.uid;
-    let owner_home = client
-        .home_dir()
-        .map(|p| p.to_string_lossy().into_owned());
     let job = store
-        .submit(prompt, session_id, max_turns, owner_uid, owner_home)
+        .submit(
+            prompt,
+            session_id,
+            max_turns,
+            Some(owner_uid),
+            Some(owner_home.to_string_lossy().into_owned()),
+        )
         .map_err(|err| err.to_string())?;
     Ok(job_value(job))
 }
@@ -59,26 +77,27 @@ fn preview(value: &str, max: usize) -> String {
     }
 }
 
-pub fn list(params: Value) -> Result<Value, String> {
+pub fn list(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     let store = Store::open_default().map_err(|err| err.to_string())?;
+    let owner_uid = owner_filter(client)?;
     let status = optional_status(&params)?;
     let limit = optional_limit(&params)?;
     let mut jobs = Vec::new();
 
     match status {
         Some(JobStatus::Pending) => {
-            collect_jobs(&store, JobStatus::Pending, status, limit, &mut jobs)?
+            collect_jobs(&store, JobStatus::Pending, status, limit, owner_uid, &mut jobs)?
         }
         Some(JobStatus::Running) => {
-            collect_jobs(&store, JobStatus::Running, status, limit, &mut jobs)?
+            collect_jobs(&store, JobStatus::Running, status, limit, owner_uid, &mut jobs)?
         }
         Some(JobStatus::Ok | JobStatus::Error | JobStatus::Cancelled) => {
-            collect_jobs(&store, JobStatus::Ok, status, limit, &mut jobs)?
+            collect_jobs(&store, JobStatus::Ok, status, limit, owner_uid, &mut jobs)?
         }
         None => {
-            collect_jobs(&store, JobStatus::Pending, None, limit, &mut jobs)?;
-            collect_jobs(&store, JobStatus::Running, None, limit, &mut jobs)?;
-            collect_jobs(&store, JobStatus::Ok, None, limit, &mut jobs)?;
+            collect_jobs(&store, JobStatus::Pending, None, limit, owner_uid, &mut jobs)?;
+            collect_jobs(&store, JobStatus::Running, None, limit, owner_uid, &mut jobs)?;
+            collect_jobs(&store, JobStatus::Ok, None, limit, owner_uid, &mut jobs)?;
         }
     }
 
@@ -89,24 +108,28 @@ pub fn list(params: Value) -> Result<Value, String> {
     Ok(json!({ "jobs": jobs }))
 }
 
-pub fn get(params: Value) -> Result<Value, String> {
+pub fn get(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     let id = required_string(&params, "id")?;
     let store = Store::open_default().map_err(|err| err.to_string())?;
-    let Some((_status, job)) = store.locate(&id).map_err(|err| err.to_string())? else {
+    let Some((_status, job)) = store
+        .locate_for_owner(&id, owner_filter(client)?)
+        .map_err(|err| err.to_string())?
+    else {
         return Err(format!("task not found: {id}"));
     };
     Ok(job_value(job))
 }
 
-pub async fn result(params: Value) -> Result<Value, String> {
+pub async fn result(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     let id = required_string(&params, "id")?;
+    let owner_uid = owner_filter(client)?;
     let cursor = params
         .get("cursor")
         .and_then(Value::as_u64)
         .map(|value| usize::try_from(value).map_err(|_| format!("cursor is too large: {value}")))
         .transpose()?;
     if let Some(cursor) = cursor {
-        return stream_events(id, cursor, &params).await;
+        return stream_events(id, cursor, &params, owner_uid).await;
     }
 
     let timeout_ms = params
@@ -117,7 +140,10 @@ pub async fn result(params: Value) -> Result<Value, String> {
     let store = Store::open_default().map_err(|err| err.to_string())?;
 
     loop {
-        let Some((_status, job)) = store.locate(&id).map_err(|err| err.to_string())? else {
+        let Some((_status, job)) = store
+            .locate_for_owner(&id, owner_uid)
+            .map_err(|err| err.to_string())?
+        else {
             return Err(format!("task not found: {id}"));
         };
         if matches!(
@@ -135,7 +161,12 @@ pub async fn result(params: Value) -> Result<Value, String> {
     }
 }
 
-async fn stream_events(id: String, mut cursor: usize, params: &Value) -> Result<Value, String> {
+async fn stream_events(
+    id: String,
+    mut cursor: usize,
+    params: &Value,
+    owner_uid: Option<u32>,
+) -> Result<Value, String> {
     let timeout_ms = params
         .get("timeout_ms")
         .and_then(Value::as_u64)
@@ -144,13 +175,16 @@ async fn stream_events(id: String, mut cursor: usize, params: &Value) -> Result<
     let store = Store::open_default().map_err(|err| err.to_string())?;
 
     loop {
+        let Some((_status, job)) = store
+            .locate_for_owner(&id, owner_uid)
+            .map_err(|err| err.to_string())?
+        else {
+            return Err(format!("task not found: {id}"));
+        };
         let (next_cursor, events) = store
             .read_stream_events(&id, cursor)
             .map_err(|err| err.to_string())?;
         cursor = next_cursor;
-        let Some((_status, job)) = store.locate(&id).map_err(|err| err.to_string())? else {
-            return Err(format!("task not found: {id}"));
-        };
         let terminal = matches!(
             job.status,
             JobStatus::Ok | JobStatus::Error | JobStatus::Cancelled
@@ -168,14 +202,27 @@ async fn stream_events(id: String, mut cursor: usize, params: &Value) -> Result<
     }
 }
 
-pub fn cancel(params: Value) -> Result<Value, String> {
+pub fn cancel(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     let id = required_string(&params, "id")?;
     let store = Store::open_default().map_err(|err| err.to_string())?;
-    if let Some(job) = store.cancel_pending(&id).map_err(|err| err.to_string())? {
-        return Ok(job_value(job));
+    let owner_uid = owner_filter(client)?;
+    if let Some((job, immediate)) = store
+        .request_cancel_for_owner(&id, owner_uid)
+        .map_err(|err| err.to_string())?
+    {
+        if !immediate {
+            crate::agent::runtime::interrupt::signal(&id);
+        }
+        let mut value = job_value(job);
+        value["cancelled"] = json!(immediate);
+        value["cancel_requested"] = json!(!immediate);
+        return Ok(value);
     }
 
-    let Some((_status, job)) = store.locate(&id).map_err(|err| err.to_string())? else {
+    let Some((_status, job)) = store
+        .locate_for_owner(&id, owner_uid)
+        .map_err(|err| err.to_string())?
+    else {
         return Err(format!("task not found: {id}"));
     };
 
@@ -183,16 +230,25 @@ pub fn cancel(params: Value) -> Result<Value, String> {
         "id": job.id,
         "status": job.status,
         "cancelled": false,
-        "reason": "only pending tasks can be cancelled",
+        "reason": "task is already terminal",
     }))
 }
 
-pub fn counts() -> Result<Value, String> {
+pub fn counts(client: &ClientIdentity) -> Result<Value, String> {
     let store = Store::open_default().map_err(|err| err.to_string())?;
-    let (pending, running, done_total) = store.counts().map_err(|err| err.to_string())?;
+    let owner_uid = owner_filter(client)?;
+    let pending = store
+        .list_bucket_for_owner(JobStatus::Pending, None, owner_uid)
+        .map_err(|err| err.to_string())?
+        .len();
+    let running = store
+        .list_bucket_for_owner(JobStatus::Running, None, owner_uid)
+        .map_err(|err| err.to_string())?
+        .len();
     let done = store
-        .list_bucket(JobStatus::Ok, None)
+        .list_bucket_for_owner(JobStatus::Ok, None, owner_uid)
         .map_err(|err| err.to_string())?;
+    let done_total = done.len();
     let ok = done
         .iter()
         .filter(|job| job.status == JobStatus::Ok)
@@ -221,10 +277,11 @@ fn collect_jobs(
     bucket: JobStatus,
     status_filter: Option<JobStatus>,
     limit: usize,
+    owner_uid: Option<u32>,
     out: &mut Vec<Value>,
 ) -> Result<(), String> {
     for job in store
-        .list_bucket(bucket, Some(limit))
+        .list_bucket_for_owner(bucket, Some(limit), owner_uid)
         .map_err(|err| err.to_string())?
     {
         if status_filter.is_some_and(|status| status != job.status) {
@@ -233,6 +290,11 @@ fn collect_jobs(
         out.push(job_value(job));
     }
     Ok(())
+}
+
+fn owner_filter(client: &ClientIdentity) -> Result<Option<u32>, String> {
+    let uid = client.require_uid()?;
+    Ok((uid != 0).then_some(uid))
 }
 
 fn job_value(job: Job) -> Value {

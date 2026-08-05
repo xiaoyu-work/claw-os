@@ -13,6 +13,38 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::caps::{require_or_json, Scope, Verb};
 
+tokio::task_local! {
+    static SESSION_OVERRIDE: String;
+    static TRUSTED_SESSION_OVERRIDE: SessionInfo;
+}
+
+pub async fn with_session_override<F, R>(session_id: String, future: F) -> R
+where
+    F: std::future::Future<Output = R>,
+{
+    SESSION_OVERRIDE.scope(session_id, future).await
+}
+
+pub async fn with_trusted_session_override<F, R>(session: SessionInfo, future: F) -> R
+where
+    F: std::future::Future<Output = R>,
+{
+    TRUSTED_SESSION_OVERRIDE.scope(session, future).await
+}
+
+pub fn current_session_id() -> Option<String> {
+    TRUSTED_SESSION_OVERRIDE
+        .try_with(|session| session.session_id.clone())
+        .ok()
+        .or_else(|| {
+            SESSION_OVERRIDE
+                .try_with(|value| value.clone())
+                .ok()
+        })
+        .or_else(|| std::env::var("COS_SESSION").ok())
+        .filter(|value| !value.is_empty())
+}
+
 const MAX_OUTPUT_BYTES: usize = 2_000_000;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -45,10 +77,22 @@ pub struct SessionInfo {
     /// operations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caps: Option<crate::caps::CapSet>,
+    /// Call-scoped capabilities temporarily installed for a serialized
+    /// App MCP request. Cleared when the request finishes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transient_caps: Option<crate::caps::CapSet>,
     /// Role label used to generate `caps`, kept for audit / display.
     /// Has no enforcement effect — `caps` is the source of truth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
+    /// Kernel-attested App identity for child App sessions. `None` for
+    /// ordinary user, agent and system sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<String>,
+    /// True while the launcher has registered the App identity but has
+    /// not yet bound it to the spawned process.
+    #[serde(default)]
+    pub pending_bind: bool,
     /// Linux kernel clock ticks at which the process started
     /// (`/proc/<pid>/stat` field 22). Used to detect pid-recycle
     /// — kernels reuse pids, so an aliveness check on `pid` alone
@@ -65,18 +109,86 @@ struct Registry {
     sessions: Vec<SessionInfo>,
 }
 
-/// Resolve the `proc/` directory used by `cos` for session-registry
-/// state. Delegates to [`crate::paths::data_dir`] which already
-/// applies the user-vs-system split: the cos CLI lands in
-/// `$HOME/.local/share/cos/proc/`, clawd lands in
-/// `/var/lib/cos/proc/` because its systemd unit pins
-/// `COS_DATA_DIR=/var/lib/cos`.
+/// Resolve the `proc/` directory used for capability session state.
+/// `COS_PROC_DATA_DIR` can pin routed user jobs and their App/MCP
+/// children to the same registry even when their general data dirs
+/// differ.
 fn proc_dir() -> PathBuf {
-    crate::paths::data_dir().join("proc")
+    crate::paths::proc_data_dir().join("proc")
 }
 
 fn registry_path() -> PathBuf {
+    #[cfg(target_os = "linux")]
+    if crate::paths::current_owner_uid_override().is_none()
+        && unsafe { libc::geteuid() } != 0
+        && crate::caps::enforcement::process_has_no_new_privs()
+    {
+        let uid = unsafe { libc::geteuid() as u32 };
+        let routed = PathBuf::from("/run/cos/caps").join(uid.to_string());
+        if std::env::var_os("COS_PROC_DATA_DIR")
+            .map(PathBuf::from)
+            .as_deref()
+            == Some(routed.as_path())
+        {
+            return routed.join("proc").join("registry.json");
+        }
+    }
+    if let Some(path) = bound_app_registry_path() {
+        return path;
+    }
     proc_dir().join("registry.json")
+}
+
+fn bound_app_registry_path() -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        let uid = unsafe { libc::geteuid() as u32 };
+        let path = PathBuf::from("/run/cos/caps")
+            .join(uid.to_string())
+            .join("proc")
+            .join("registry.json");
+        let data = fs::read_to_string(&path).ok()?;
+        let registry: Registry = serde_json::from_str(&data).ok()?;
+        let caller = std::process::id();
+        if registry.sessions.iter().any(|session| {
+            session.app_id.is_some()
+                && !session.pending_bind
+                && session.pid != 0
+                && session
+                    .start_time_ticks
+                    .is_some_and(|expected| {
+                        read_start_time_ticks(session.pid) == Some(expected)
+                    })
+                && process_descends_from(caller, session.pid)
+        }) {
+            return Some(path);
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn process_descends_from(mut child: u32, ancestor: u32) -> bool {
+    for _ in 0..64 {
+        if child == ancestor {
+            return true;
+        }
+        if child <= 1 {
+            return false;
+        }
+        let status = match fs::read_to_string(format!("/proc/{child}/status")) {
+            Ok(status) => status,
+            Err(_) => return false,
+        };
+        let Some(parent) = status.lines().find_map(|line| {
+            line.strip_prefix("PPid:")
+                .and_then(|value| value.trim().parse::<u32>().ok())
+        }) else {
+            return false;
+        };
+        child = parent;
+    }
+    false
 }
 
 /// Public alias used by [`crate::caps::enforcement`] to read the same
@@ -84,6 +196,59 @@ fn registry_path() -> PathBuf {
 /// in [`proc_dir`] has exactly one definition.
 pub(crate) fn registry_path_for_caps() -> PathBuf {
     registry_path()
+}
+
+pub fn current_session_info_for_caps() -> Option<SessionInfo> {
+    if let Ok(session) = TRUSTED_SESSION_OVERRIDE.try_with(Clone::clone) {
+        return Some(session);
+    }
+    let session_id = current_session_id()?;
+    let path = registry_path_for_caps();
+    let data = crate::filelock::read_locked(&path).ok()??;
+    let registry: Registry = serde_json::from_str(&data).ok()?;
+    registry
+        .sessions
+        .into_iter()
+        .find(|session| session.session_id == session_id)
+}
+
+pub(crate) fn current_trusted_session_for_caps() -> Option<SessionInfo> {
+    TRUSTED_SESSION_OVERRIDE.try_with(Clone::clone).ok()
+}
+
+pub(crate) fn session_info_by_id(session_id: &str) -> Option<SessionInfo> {
+    let data = crate::filelock::read_locked(&registry_path()).ok()??;
+    let registry: Registry = serde_json::from_str(&data).ok()?;
+    registry
+        .sessions
+        .into_iter()
+        .find(|session| session.session_id == session_id)
+}
+
+/// True only after the current process has been bound to the expected
+/// session identity. Used by the launcher shim to keep third-party code
+/// from running during the pid-binding window.
+pub fn current_session_is_bound(expected_app_id: Option<&str>) -> bool {
+    let Some(session) = current_session_info_for_caps() else {
+        return false;
+    };
+    if session.app_id.as_deref() != expected_app_id
+        || session.pending_bind
+        || session.pid != std::process::id()
+    {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let Some(expected_start) = session.start_time_ticks else {
+            return false;
+        };
+        read_start_time_ticks(session.pid) == Some(expected_start)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        true
+    }
 }
 
 fn load_registry() -> Registry {
@@ -94,31 +259,79 @@ fn load_registry() -> Registry {
     }
 }
 
-fn save_registry(reg: &Registry) {
-    if let Ok(data) = serde_json::to_string_pretty(reg) {
-        let _ = crate::filelock::write_locked(&registry_path(), &data);
-    }
-}
-
-/// Atomic read-modify-write on the proc registry. Concurrent spawn /
-/// status / wait calls all do load_registry + mutate + save_registry,
-/// which is the classic lost-update race — parallel `cos proc spawn`
-/// invocations (the default sub-agent pattern in claw-os) routinely
-/// lost one session row each. Funnel mutations through here.
+/// Atomic read-modify-write on the proc registry. Every mutation goes
+/// through this helper so a stale reader cannot overwrite a concurrent
+/// spawn, bind, status update, or cleanup.
 fn update_registry<F>(transform: F) -> Result<(), String>
 where
     F: FnOnce(Registry) -> Registry,
 {
-    let _ = fs::create_dir_all(proc_dir());
-    crate::filelock::update_locked::<_, String>(&registry_path(), |existing| {
-        let reg: Registry = match existing {
-            Some(s) => serde_json::from_str(&s).unwrap_or_default(),
-            None => Registry::default(),
-        };
-        let next = transform(reg);
-        serde_json::to_string_pretty(&next).map_err(|e| format!("serialize: {e}"))
-    })
-    .map_err(|e| e.to_string())
+    let path = registry_path();
+    let owner_uid = crate::paths::current_owner_uid_override();
+    prepare_registry_path(&path, owner_uid)?;
+    update_registry_path(&path, owner_uid, transform)
+}
+
+fn owner_registry_path(uid: u32) -> PathBuf {
+    PathBuf::from("/run/cos/caps")
+        .join(uid.to_string())
+        .join("proc")
+        .join("registry.json")
+}
+
+fn prepare_registry_path(path: &std::path::Path, owner_uid: Option<u32>) -> Result<(), String> {
+    if let Some(uid) = owner_uid {
+        let root = path
+            .parent()
+            .and_then(std::path::Path::parent)
+            .ok_or_else(|| "owner registry path is invalid".to_string())?;
+        crate::storage::ensure_routed_caps_dir(root, uid)
+            .map_err(|error| format!("prepare routed caps dir: {error}"))
+    } else {
+        let parent = path
+            .parent()
+            .ok_or_else(|| "registry path has no parent".to_string())?;
+        crate::storage::ensure_private_dir(parent)
+            .map_err(|error| format!("create proc registry dir: {error}"))
+    }
+}
+
+fn update_registry_path<F>(
+    path: &std::path::Path,
+    owner_uid: Option<u32>,
+    transform: F,
+) -> Result<(), String>
+where
+    F: FnOnce(Registry) -> Registry,
+{
+    crate::filelock::update_locked_with_prepare::<_, String, _>(
+        path,
+        |existing| {
+            let reg: Registry = match existing {
+                Some(s) => serde_json::from_str(&s)
+                    .map_err(|e| format!("parse proc registry: {e}"))?,
+                None => Registry::default(),
+            };
+            let next = transform(reg);
+            serde_json::to_string_pretty(&next)
+                .map_err(|e| format!("serialize: {e}"))
+        },
+        |tmp| match owner_uid {
+            Some(uid) => crate::storage::set_group_readable_file(tmp, uid),
+            None => crate::storage::set_private_file(tmp),
+        },
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn update_owner_registry<F>(uid: u32, transform: F) -> Result<(), String>
+where
+    F: FnOnce(Registry) -> Registry,
+{
+    let path = owner_registry_path(uid);
+    prepare_registry_path(&path, Some(uid))?;
+    update_registry_path(&path, Some(uid), transform)
 }
 
 /// Register a freshly-built [`SessionInfo`] into the on-disk registry.
@@ -129,26 +342,180 @@ where
 /// data dir on first call. Best-effort: returns `Err` only if the
 /// registry write itself failed.
 pub fn register_session(info: SessionInfo) -> Result<(), String> {
-    let _ = fs::create_dir_all(proc_dir());
-    let mut reg = load_registry();
-    reg.sessions.push(info);
+    update_registry(|mut registry| {
+        registry
+            .sessions
+            .retain(|session| session.session_id != info.session_id);
+        registry.sessions.push(info);
+        registry
+    })
+}
 
-    let data = serde_json::to_string_pretty(&reg)
-        .map_err(|e| format!("serialize registry: {e}"))?;
-    crate::filelock::write_locked(&registry_path(), &data)
-        .map_err(|e| format!("write registry: {e}"))
+pub fn register_session_for_owner(info: SessionInfo, uid: u32) -> Result<(), String> {
+    update_owner_registry(uid, |mut registry| {
+        registry
+            .sessions
+            .retain(|session| session.session_id != info.session_id);
+        registry.sessions.push(info);
+        registry
+    })
 }
 
 /// Remove a session row by id. No-op if it is not present.
 /// Counterpart to [`register_session`], called on process exit by
 /// the CLI session guard so the registry doesn't accumulate ghosts.
 pub fn deregister_session(session_id: &str) {
-    let mut reg = load_registry();
-    let before = reg.sessions.len();
-    reg.sessions.retain(|s| s.session_id != session_id);
-    if reg.sessions.len() != before {
-        save_registry(&reg);
+    let _ = update_registry(|mut registry| {
+        registry
+            .sessions
+            .retain(|session| session.session_id != session_id);
+        registry
+    });
+}
+
+pub fn deregister_session_for_owner(session_id: &str, uid: u32) {
+    let _ = update_owner_registry(uid, |mut registry| {
+        registry
+            .sessions
+            .retain(|session| session.session_id != session_id);
+        registry
+    });
+}
+
+/// Remove a session only when it is still bound to the calling process
+/// and carries the expected group label. This lets a detached child clean
+/// up its own row without turning an inherited environment variable into
+/// an arbitrary session-deletion primitive.
+pub fn deregister_current_process_session(
+    session_id: &str,
+    expected_group: &str,
+) {
+    let pid = std::process::id();
+    let current_start = read_start_time_ticks(pid);
+    let _ = update_registry(|mut registry| {
+        registry.sessions.retain(|session| {
+            if session.session_id != session_id
+                || session.pid != pid
+                || session.group.as_deref() != Some(expected_group)
+            {
+                return true;
+            }
+            #[cfg(target_os = "linux")]
+            {
+                session.start_time_ticks != current_start
+                    || current_start.is_none()
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                false
+            }
+        });
+        registry
+    });
+}
+
+pub fn bind_session_process_for_owner(
+    session_id: &str,
+    pid: u32,
+    uid: u32,
+) -> Result<(), String> {
+    if pid == 0 {
+        return Err("cannot bind a session to pid 0".to_string());
     }
+    let start_time_ticks = read_start_time_ticks(pid);
+    #[cfg(target_os = "linux")]
+    if start_time_ticks.is_none() {
+        return Err(format!(
+            "cannot bind session `{session_id}` to missing process {pid}"
+        ));
+    }
+    let mut found = false;
+    update_owner_registry(uid, |mut registry| {
+        if let Some(session) = registry
+            .sessions
+            .iter_mut()
+            .find(|session| session.session_id == session_id)
+        {
+            session.pid = pid;
+            session.start_time_ticks = start_time_ticks;
+            session.pending_bind = false;
+            session.exit_code = None;
+            session.ended_at = None;
+            found = true;
+        }
+        registry
+    })?;
+    if found {
+        Ok(())
+    } else {
+        Err(format!("session not found while binding process: {session_id}"))
+    }
+}
+
+pub fn bind_session_process(session_id: &str, pid: u32) -> Result<(), String> {
+    if pid == 0 {
+        return Err("cannot bind a session to pid 0".to_string());
+    }
+    let start_time_ticks = read_start_time_ticks(pid);
+    #[cfg(target_os = "linux")]
+    if start_time_ticks.is_none() {
+        return Err(format!(
+            "cannot bind session `{session_id}` to missing process {pid}"
+        ));
+    }
+    let mut found = false;
+    update_registry(|mut registry| {
+        if let Some(session) = registry
+            .sessions
+            .iter_mut()
+            .find(|session| session.session_id == session_id)
+        {
+            session.pid = pid;
+            session.start_time_ticks = start_time_ticks;
+            session.pending_bind = false;
+            session.exit_code = None;
+            session.ended_at = None;
+            found = true;
+        }
+        registry
+    })?;
+    if found {
+        Ok(())
+    } else {
+        Err(format!("session not found while binding process: {session_id}"))
+    }
+}
+
+pub fn set_app_session_transient_caps(
+    session_id: &str,
+    caps: Option<crate::caps::CapSet>,
+) -> Result<(), String> {
+    let mut found = false;
+    update_registry(|mut registry| {
+        if let Some(session) = registry.sessions.iter_mut().find(|session| {
+            session.session_id == session_id && session.app_id.is_some()
+        }) {
+            session.transient_caps = caps;
+            found = true;
+        }
+        registry
+    })?;
+    if found {
+        Ok(())
+    } else {
+        Err(format!(
+            "App session not found while updating transient caps: {session_id}"
+        ))
+    }
+}
+
+/// Public cross-uid-safe aliveness check for a pid. Returns `true` when
+/// the process exists (including when it belongs to another uid). Used
+/// by the agent job recovery path to decide whether a job stuck in
+/// `running/` belongs to a worker that is still alive or to one that
+/// crashed. See [`is_alive`] for the EPERM rationale.
+pub fn is_pid_alive(pid: u32) -> bool {
+    is_alive(pid)
 }
 
 /// Cross-uid safe aliveness check. `kill(pid, 0)` alone returns
@@ -174,7 +541,7 @@ fn is_alive(pid: u32) -> bool {
             return true;
         }
         let err = std::io::Error::last_os_error();
-        return err.raw_os_error() == Some(libc::EPERM);
+        err.raw_os_error() == Some(libc::EPERM)
     }
     #[cfg(not(unix))]
     {
@@ -235,6 +602,25 @@ fn is_alive_for_info(info: &SessionInfo) -> bool {
         },
         None => true,
     }
+}
+
+fn pending_bind_is_fresh(info: &SessionInfo) -> bool {
+    if !info.pending_bind
+        || info.pid != 0
+        || !matches!(info.group.as_deref(), Some("app" | "mcp" | "cron"))
+    {
+        return false;
+    }
+    let Ok(started) = chrono::DateTime::parse_from_rfc3339(&info.started_at)
+    else {
+        return false;
+    };
+    let age = chrono::Utc::now().signed_duration_since(started);
+    age >= chrono::Duration::zero() && age <= chrono::Duration::seconds(30)
+}
+
+fn registry_session_is_active(info: &SessionInfo) -> bool {
+    pending_bind_is_fresh(info) || is_alive_for_info(info)
 }
 
 /// Crate-internal: read field 22 (`starttime`) of `/proc/<pid>/stat`.
@@ -322,7 +708,7 @@ fn pids_in_pgrp(leader_pid: u32) -> Vec<u32> {
             Err(_) => continue,
         };
         if let Some(pgrp) = read_pgrp(pid) {
-            if pgrp as i64 == leader_pid as i64 {
+            if pgrp == leader_pid as i64 {
                 out.push(pid);
             }
         }
@@ -394,6 +780,102 @@ fn caller_uid() -> u32 {
     }
 }
 
+fn signal_owner_uid() -> u32 {
+    crate::paths::current_owner_uid_override().unwrap_or_else(caller_uid)
+}
+
+fn validate_signal_target(info: &SessionInfo, process_group: bool) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        let expected_start = info.start_time_ticks.ok_or_else(|| {
+            format!(
+                "session `{}` has no process start-time identity",
+                info.session_id
+            )
+        })?;
+        if read_start_time_ticks(info.pid) != Some(expected_start) {
+            return Err(format!(
+                "session `{}` process {} is missing or its PID was recycled",
+                info.session_id, info.pid
+            ));
+        }
+        let expected_uid = signal_owner_uid();
+        if read_real_uid(info.pid) != Some(expected_uid) {
+            return Err(format!(
+                "session `{}` process {} is not owned by uid {}",
+                info.session_id, info.pid, expected_uid
+            ));
+        }
+        if process_group {
+            if read_pgrp(info.pid) != Some(info.pid as i64) {
+                return Err(format!(
+                    "session `{}` process {} is not its process-group leader",
+                    info.session_id, info.pid
+                ));
+            }
+            if let Err(foreign) = pgrp_uid_scope_check(info.pid, expected_uid) {
+                return Err(format!(
+                    "session `{}` process group contains foreign processes: {:?}",
+                    info.session_id, foreign
+                ));
+            }
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (info, process_group);
+        Err("identity-safe process signaling requires Linux".to_string())
+    }
+}
+
+#[cfg(unix)]
+fn primary_gid(uid: u32) -> Result<u32, String> {
+    const BUFFER_SIZE: usize = 16 * 1024;
+    let mut buffer = vec![0 as libc::c_char; BUFFER_SIZE];
+    let mut passwd: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut result: *mut libc::passwd = std::ptr::null_mut();
+    let code = unsafe {
+        libc::getpwuid_r(
+            uid,
+            &mut passwd,
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut result,
+        )
+    };
+    if code != 0 || result.is_null() {
+        return Err(format!("passwd lookup failed for uid {uid}"));
+    }
+    Ok(passwd.pw_gid)
+}
+
+fn validate_session_identifier(session_id: &str) -> Result<(), String> {
+    if session_id.is_empty()
+        || session_id.len() > 128
+        || !session_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(
+            "session id must contain only alphanumerics, '-' or '_' (max 128 bytes)"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn open_process_output(path: &std::path::Path) -> std::io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    options.open(path)
+}
+
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     match command {
         "spawn" => cmd_spawn(args),
@@ -412,6 +894,17 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 
 fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::PROC_SPAWN, Scope::wild()).map_err(|v| v.to_string())?;
+    let parent_info = current_session_info_for_caps()
+        .ok_or_else(|| "proc spawn requires a registered parent session".to_string())?;
+    crate::caps::enforcement::require_current_session_identity(
+        &parent_info.session_id,
+        parent_info.pid,
+    )
+    .map_err(|error| format!("proc parent identity check failed: {error}"))?;
+    let parent_caps = parent_info
+        .caps
+        .clone()
+        .ok_or_else(|| "proc parent session has no capabilities".to_string())?;
     let mut session_id = None;
     let mut group = None;
     let mut parent = None;
@@ -505,6 +998,16 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         return Err("no command specified".into());
     }
 
+    if let Some(requested_parent) = parent.as_deref() {
+        if requested_parent != parent_info.session_id.as_str() {
+            return Err(format!(
+                "proc parent `{requested_parent}` does not match current session `{}`",
+                parent_info.session_id
+            ));
+        }
+    }
+    parent = Some(parent_info.session_id.clone());
+
     let command_args = &args[cmd_start..];
 
     // Validate tier value (0-3 only)
@@ -527,9 +1030,15 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
                     "unknown role `{name}`; valid: observer, worker, curator, connector, automator, agent-host, admin"
                 )
             })?;
+            if role == crate::caps::Role::Kernel {
+                return Err("the kernel role cannot be assigned to a child process".to_string());
+            }
             let path_s = scope_path.as_deref().map(crate::caps::Scope::path);
             let host_s = scope_host.as_deref().map(crate::caps::Scope::host);
             let name_s = scope_name.as_deref().map(crate::caps::Scope::name);
+            if tier.is_none() {
+                tier = Some(role.credential_tier());
+            }
             Some(role.caps_with_scopes(path_s, host_s, name_s))
         }
         (None, Some(list)) => {
@@ -563,67 +1072,46 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         (None, None) => None,
     };
 
-    // Enforce inheritance rules when parent is set
-    if let Some(ref parent_sid) = parent {
-        let reg = load_registry();
-        if let Some(parent_info) = reg.sessions.iter().find(|s| &s.session_id == parent_sid) {
-            // Tier inheritance: child tier must be >= parent tier (more restricted)
-            if let (Some(parent_tier), Some(child_tier)) = (parent_info.tier, tier) {
-                if child_tier < parent_tier {
-                    return Err(format!(
-                        "cannot escalate tier: parent '{}' has tier {} but child requested tier {}. Child tier must be >= parent tier.",
-                        parent_sid, parent_tier, child_tier
-                    ));
-                }
-            }
-            // If parent has tier but child doesn't specify, inherit parent's tier
-            if parent_info.tier.is_some() && tier.is_none() {
-                tier = parent_info.tier;
-            }
-
-            // Scope inheritance: child scope must be within parent scope
-            if let (Some(ref parent_scope), Some(ref child_scope)) = (&parent_info.scope, &scope) {
-                if !child_scope.starts_with(parent_scope.as_str()) {
-                    return Err(format!(
-                        "cannot widen scope: parent '{}' is scoped to '{}' but child requested scope '{}'",
-                        parent_sid, parent_scope, child_scope
-                    ));
-                }
-            }
-            // If parent has scope but child doesn't specify, inherit parent's scope
-            if parent_info.scope.is_some() && scope.is_none() {
-                scope = parent_info.scope.clone();
-            }
-
-            // CapSet inheritance: child caps must be a subset of parent caps.
-            // If parent has caps but the child requested none, the child
-            // inherits the parent's full set (the most-restricted thing we
-            // can do without breaking the chain).
-            if let (Some(parent_caps), Some(ref child_caps)) =
-                (parent_info.caps.as_ref(), cap_set.as_ref())
-            {
-                if !parent_caps.covers_all(child_caps) {
-                    return Err(format!(
-                        "cannot widen caps: parent '{}' does not cover every cap the child requested",
-                        parent_sid
-                    ));
-                }
-            }
+    match (parent_info.tier, tier) {
+        (Some(parent_tier), Some(child_tier)) if child_tier < parent_tier => {
+            return Err(format!(
+                "cannot escalate tier: parent '{}' has tier {} but child requested tier {}",
+                parent_info.session_id, parent_tier, child_tier
+            ));
         }
+        (Some(parent_tier), None) => tier = Some(parent_tier),
+        (None, Some(_)) => {
+            return Err("cannot assign a child credential tier when the parent has none".to_string());
+        }
+        _ => {}
     }
 
-    let cap_set = match (cap_set, parent.as_ref()) {
-        (Some(c), _) => Some(c),
-        (None, Some(parent_sid)) => {
-            // Inherit parent caps verbatim if child didn't specify.
-            let reg = load_registry();
-            reg.sessions
-                .iter()
-                .find(|s| &s.session_id == parent_sid)
-                .and_then(|p| p.caps.clone())
+    if let (Some(parent_scope), Some(child_scope)) = (&parent_info.scope, &scope) {
+        if !child_scope.starts_with(parent_scope.as_str()) {
+            return Err(format!(
+                "cannot widen scope: parent '{}' is scoped to '{}' but child requested '{}'",
+                parent_info.session_id, parent_scope, child_scope
+            ));
         }
-        (None, None) => None,
+    } else if scope.is_none() {
+        scope = parent_info.scope.clone();
+    }
+
+    let cap_set = match cap_set {
+        Some(requested) => {
+            if !parent_caps.covers_all(&requested) {
+                return Err(format!(
+                    "cannot widen caps: parent '{}' does not cover every requested child capability",
+                    parent_info.session_id
+                ));
+            }
+            Some(requested)
+        }
+        None => Some(parent_caps),
     };
+    if role_name.is_none() {
+        role_name = parent_info.role.clone();
+    }
 
     // Guardrails: check for rapid respawn and destructive commands
     let reg_check = load_registry();
@@ -632,8 +1120,44 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     drop(reg_check);
 
     let sid = session_id.unwrap_or_else(|| format!("proc-{}", short_id()));
+    validate_session_identifier(&sid)?;
     let dir = proc_dir();
-    let _ = fs::create_dir_all(&dir);
+    fs::create_dir_all(&dir)
+        .map_err(|error| format!("create proc directory {}: {error}", dir.display()))?;
+
+    #[cfg(unix)]
+    let routed_identity = match crate::paths::current_owner_uid_override() {
+        Some(uid) if uid != 0 => {
+            let home = crate::paths::verified_home_for_uid(uid)?;
+            let gid = primary_gid(uid)?;
+            let euid = unsafe { libc::geteuid() as u32 };
+            if euid != 0 && euid != uid {
+                return Err(format!("cannot spawn routed owner uid {uid} as uid {euid}"));
+            }
+            if isolated_workspace {
+                return Err(
+                    "isolated proc workspaces are unavailable for routed user jobs".to_string(),
+                );
+            }
+            if let Some(path) = workdir.as_deref() {
+                let canonical = PathBuf::from(path)
+                    .canonicalize()
+                    .map_err(|error| format!("canonicalize proc workdir: {error}"))?;
+                if !canonical.starts_with(&home) {
+                    return Err(format!(
+                        "proc workdir {} escapes owner home {}",
+                        canonical.display(),
+                        home.display()
+                    ));
+                }
+                workdir = Some(canonical.to_string_lossy().into_owned());
+            } else {
+                workdir = Some(home.to_string_lossy().into_owned());
+            }
+            Some((uid, gid, home))
+        }
+        _ => None,
+    };
 
     // Handle isolated workspace
     if isolated_workspace {
@@ -649,10 +1173,16 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     let stdout_path = dir.join(format!("{sid}.stdout"));
     let stderr_path = dir.join(format!("{sid}.stderr"));
 
-    let stdout_file =
-        fs::File::create(&stdout_path).map_err(|e| format!("failed to create stdout file: {e}"))?;
-    let stderr_file =
-        fs::File::create(&stderr_path).map_err(|e| format!("failed to create stderr file: {e}"))?;
+    let stdout_file = open_process_output(&stdout_path)
+        .map_err(|e| format!("failed to create stdout file: {e}"))?;
+    let stderr_file = match open_process_output(&stderr_path) {
+        Ok(file) => file,
+        Err(error) => {
+            drop(stdout_file);
+            let _ = fs::remove_file(&stdout_path);
+            return Err(format!("failed to create stderr file: {error}"));
+        }
+    };
 
     // Apply process priority via nice (Unix only)
     #[cfg(unix)]
@@ -692,15 +1222,39 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     if let Some(ref wd) = workdir {
         cmd.current_dir(wd);
     }
+    #[cfg(unix)]
+    if let Some((_, _, home)) = routed_identity.as_ref() {
+        cmd.env("HOME", home).env("COS_HOME", home);
+    }
 
     // Inject session ID so child process can be identified by policy module
-    cmd.env("COS_SESSION", &sid);
+    cmd.env("COS_SESSION", &sid)
+        .env("COS_PROC_DATA_DIR", crate::paths::proc_data_dir());
 
     #[cfg(unix)]
     unsafe {
         use std::os::unix::process::CommandExt;
-        cmd.pre_exec(|| {
-            libc::setsid();
+        let identity = routed_identity
+            .as_ref()
+            .map(|(uid, gid, _)| (*uid, *gid));
+        let euid = libc::geteuid() as u32;
+        cmd.pre_exec(move || {
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if let Some((uid, gid)) = identity {
+                if euid == 0
+                    && (libc::setgroups(0, std::ptr::null()) != 0
+                        || libc::setgid(gid) != 0
+                        || libc::setuid(uid) != 0)
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
             Ok(())
         });
     }
@@ -732,7 +1286,10 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         scope: scope.clone(),
         priority: priority.clone(),
         caps: cap_set.clone(),
+        transient_caps: None,
         role: role_name.clone(),
+        app_id: None,
+        pending_bind: false,
         start_time_ticks,
     };
 
@@ -807,14 +1364,35 @@ fn cmd_status(args: &[String]) -> Result<Value, String> {
         .position(|s| &s.session_id == sid)
         .ok_or_else(|| format!("session not found: {sid}"))?;
 
+    let binding = pending_bind_is_fresh(&reg.sessions[idx]);
     let alive = is_alive_for_info(&reg.sessions[idx]);
-    let status = if alive { "running" } else { "exited" };
+    let status = if binding {
+        "binding"
+    } else if alive {
+        "running"
+    } else {
+        "exited"
+    };
 
     // Auto-capture ended_at when process is first detected as dead
-    if !alive && reg.sessions[idx].ended_at.is_none() {
+    if !binding && !alive && reg.sessions[idx].ended_at.is_none() {
         let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let sid = sid.to_string();
+        let now_for_registry = now.clone();
+        update_registry(|mut latest| {
+            if let Some(info) = latest
+                .sessions
+                .iter_mut()
+                .find(|info| info.session_id == sid)
+            {
+                if info.ended_at.is_none() && !registry_session_is_active(info)
+                {
+                    info.ended_at = Some(now_for_registry);
+                }
+            }
+            latest
+        })?;
         reg.sessions[idx].ended_at = Some(now);
-        save_registry(&reg);
     }
 
     let info = &reg.sessions[idx];
@@ -959,31 +1537,39 @@ fn cmd_kill(args: &[String]) -> Result<Value, String> {
         // recycled-pid intruder is in that pgrp we must NOT signal
         // it. We skip any session whose pgrp contains a foreign UID
         // and report the reason in the JSON response.
-        let me = caller_uid();
         let mut killed = Vec::new();
         let mut skipped = Vec::new();
         for info in &group_sessions {
-            match pgrp_uid_scope_check(info.pid, me) {
+            match validate_signal_target(info, true) {
                 Ok(()) => {
-                    kill_process(info.pid);
-                    killed.push(json!({
-                        "session_id": info.session_id,
-                        "pid": info.pid,
-                    }));
+                    match kill_process(info.pid) {
+                        Ok(()) => killed.push(json!({
+                            "session_id": info.session_id,
+                            "pid": info.pid,
+                        })),
+                        Err(error) => skipped.push(json!({
+                            "session_id": info.session_id,
+                            "pid": info.pid,
+                            "reason": "signal_failed",
+                            "error": error,
+                        })),
+                    }
                 }
-                Err(foreign) => {
-                    let foreign_json: Vec<Value> = foreign
-                        .into_iter()
-                        .map(|(pid, uid)| json!({ "pid": pid, "uid": uid }))
-                        .collect();
+                Err(error) => {
                     skipped.push(json!({
                         "session_id": info.session_id,
                         "pid": info.pid,
-                        "reason": "uid_scope_violation",
-                        "foreign": foreign_json,
+                        "reason": "identity_mismatch",
+                        "error": error,
                     }));
                 }
             }
+        }
+        if killed.is_empty() {
+            return Err(format!(
+                "no process in group `{group_name}` passed identity checks: {}",
+                serde_json::to_string(&skipped).unwrap_or_else(|_| "unknown".to_string())
+            ));
         }
         let mut resp = json!({
             "group": group_name,
@@ -1004,7 +1590,8 @@ fn cmd_kill(args: &[String]) -> Result<Value, String> {
         .find(|s| &s.session_id == sid)
         .ok_or_else(|| format!("session not found: {sid}"))?;
 
-    kill_process(info.pid);
+    validate_signal_target(info, true)?;
+    kill_process(info.pid)?;
 
     Ok(json!({
         "session_id": sid,
@@ -1015,7 +1602,7 @@ fn cmd_kill(args: &[String]) -> Result<Value, String> {
 
 fn cmd_list(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::PROC_OBSERVE, Scope::wild()).map_err(|v| v.to_string())?;
-    let mut reg = load_registry();
+    let reg = load_registry();
     let mut group_filter: Option<&str> = None;
 
     let mut i = 0;
@@ -1044,7 +1631,13 @@ fn cmd_list(args: &[String]) -> Result<Value, String> {
                 "session_id": s.session_id,
                 "pid": s.pid,
                 "command": s.command,
-                "status": if is_alive(s.pid) { "running" } else { "exited" },
+                "status": if pending_bind_is_fresh(s) {
+                    "binding"
+                } else if is_alive_for_info(s) {
+                    "running"
+                } else {
+                    "exited"
+                },
                 "started_at": s.started_at,
             });
             if let Some(ref g) = s.group {
@@ -1066,26 +1659,39 @@ fn cmd_list(args: &[String]) -> Result<Value, String> {
         })
         .collect();
 
-    // Prune dead sessions from registry
-    reg.sessions.retain(|s| is_alive(s.pid));
-    save_registry(&reg);
+    // Prune only from the latest registry snapshot. A stale list read must
+    // not overwrite a concurrent App bind or newly registered session.
+    update_registry(|mut latest| {
+        latest.sessions.retain(registry_session_is_active);
+        latest
+    })?;
 
     Ok(json!({ "sessions": infos, "count": infos.len() }))
 }
 
-fn kill_process(pid: u32) {
+fn kill_process(pid: u32) -> Result<(), String> {
     #[cfg(unix)]
-    unsafe {
+    {
         // Negative PID sends signal to the process group (works with setsid)
-        libc::kill(-(pid as i32), libc::SIGTERM);
-        // Also signal the individual process in case it wasn't a session leader
-        libc::kill(pid as i32, libc::SIGTERM);
+        if unsafe { libc::kill(-(pid as i32), libc::SIGTERM) } != 0 {
+            return Err(format!(
+                "failed to signal process group {pid}: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(())
     }
     #[cfg(not(unix))]
     {
-        let _ = Command::new("taskkill")
+        let status = Command::new("taskkill")
             .args(["/PID", &pid.to_string(), "/F"])
-            .output();
+            .status()
+            .map_err(|error| format!("failed to start taskkill: {error}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("taskkill exited with {}", status.code().unwrap_or(-1)))
+        }
     }
 }
 
@@ -1148,16 +1754,25 @@ fn cmd_wait(args: &[String]) -> Result<Value, String> {
         let all_dead = targets.iter().all(|(_, pid)| !is_alive(*pid));
         if all_dead {
             // Auto-capture ended_at for all exited sessions
-            let mut reg = load_registry();
             let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-            for (sid, _) in &targets {
-                if let Some(info) = reg.sessions.iter_mut().find(|s| &s.session_id == sid) {
-                    if info.ended_at.is_none() {
-                        info.ended_at = Some(now.clone());
+            let target_ids = targets
+                .iter()
+                .map(|(sid, _)| sid.clone())
+                .collect::<Vec<_>>();
+            update_registry(|mut latest| {
+                for sid in &target_ids {
+                    if let Some(info) =
+                        latest.sessions.iter_mut().find(|s| &s.session_id == sid)
+                    {
+                        if info.ended_at.is_none()
+                            && !registry_session_is_active(info)
+                        {
+                            info.ended_at = Some(now.clone());
+                        }
                     }
                 }
-            }
-            save_registry(&reg);
+                latest
+            })?;
 
             // Build results with output tails for each exited session
             let reg = load_registry();
@@ -1229,6 +1844,7 @@ fn cmd_signal(args: &[String]) -> Result<Value, String> {
         .ok_or_else(|| format!("session not found: {sid}"))?;
 
     let pid = info.pid;
+    validate_signal_target(info, false)?;
 
     #[cfg(unix)]
     {
@@ -1246,7 +1862,10 @@ fn cmd_signal(args: &[String]) -> Result<Value, String> {
         };
         let ret = unsafe { libc::kill(pid as i32, signum) };
         if ret != 0 {
-            return Err(format!("failed to send signal {signal_name} to pid {pid}"));
+            return Err(format!(
+                "failed to send signal {signal_name} to pid {pid}: {}",
+                std::io::Error::last_os_error()
+            ));
         }
     }
 
@@ -1280,14 +1899,35 @@ fn cmd_result(args: &[String]) -> Result<Value, String> {
         .position(|s| &s.session_id == sid)
         .ok_or_else(|| format!("session not found: {sid}"))?;
 
+    let binding = pending_bind_is_fresh(&reg.sessions[idx]);
     let alive = is_alive_for_info(&reg.sessions[idx]);
-    let status = if alive { "running" } else { "exited" };
+    let status = if binding {
+        "binding"
+    } else if alive {
+        "running"
+    } else {
+        "exited"
+    };
 
     // Auto-capture ended_at if process is dead and not yet recorded
-    if !alive && reg.sessions[idx].ended_at.is_none() {
+    if !binding && !alive && reg.sessions[idx].ended_at.is_none() {
         let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let sid = sid.to_string();
+        let now_for_registry = now.clone();
+        update_registry(|mut latest| {
+            if let Some(info) = latest
+                .sessions
+                .iter_mut()
+                .find(|info| info.session_id == sid)
+            {
+                if info.ended_at.is_none() && !registry_session_is_active(info)
+                {
+                    info.ended_at = Some(now_for_registry);
+                }
+            }
+            latest
+        })?;
         reg.sessions[idx].ended_at = Some(now);
-        save_registry(&reg);
     }
 
     let info = &reg.sessions[idx];
@@ -1478,10 +2118,10 @@ fn cmd_renice(args: &[String]) -> Result<Value, String> {
     let sid = session_id.ok_or("usage: cos proc renice <session-id> --priority <level>")?;
     let prio = priority.ok_or("--priority is required")?;
 
-    let mut reg = load_registry();
+    let reg = load_registry();
     let info = reg
         .sessions
-        .iter_mut()
+        .iter()
         .find(|s| s.session_id == sid)
         .ok_or_else(|| format!("session not found: {sid}"))?;
 
@@ -1510,8 +2150,16 @@ fn cmd_renice(args: &[String]) -> Result<Value, String> {
             return Err(format!("renice failed: {stderr}"));
         }
 
-        info.priority = Some(prio.clone());
-        save_registry(&reg);
+        let sid_for_registry = sid.to_string();
+        let prio_for_registry = prio.clone();
+        update_registry(|mut latest| {
+            if let Some(info) = latest.sessions.iter_mut().find(|info| {
+                info.session_id == sid_for_registry && info.pid == pid
+            }) {
+                info.priority = Some(prio_for_registry);
+            }
+            latest
+        })?;
 
         Ok(json!({
             "session_id": sid,
@@ -1670,7 +2318,10 @@ mod tests {
             scope: None,
             priority: None,
             caps: None,
+            transient_caps: None,
             role: None,
+            app_id: None,
+            pending_bind: false,
             start_time_ticks: Some(real_start),
         };
         assert!(

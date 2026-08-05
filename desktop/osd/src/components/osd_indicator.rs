@@ -3,6 +3,7 @@
 
 use crate::components::app::DisplayMode;
 use crate::config;
+use cosmic::cosmic_theme::palette::WithAlpha;
 use cosmic::cctk::sctk::seat::input_method_v3::Rectangle;
 use cosmic::iced::platform_specific::shell::commands::layer_surface::{
     Anchor, KeyboardInteractivity, Layer, destroy_layer_surface, get_layer_surface,

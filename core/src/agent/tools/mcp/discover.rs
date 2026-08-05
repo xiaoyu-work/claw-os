@@ -127,6 +127,8 @@ pub struct AgentApiManifest {
     pub transport: String,
 
     /// Executable to invoke. Resolved against `PATH` unless absolute.
+    /// Optional — not required for `mcp+http` servers.
+    #[serde(default)]
     pub command: String,
 
     /// Arguments passed to the executable, in order. `${manifest_dir}`
@@ -159,6 +161,16 @@ pub struct AgentApiManifest {
     /// can read it later without re-parsing.
     #[serde(default)]
     pub ai: Option<AiHints>,
+
+    /// Remote endpoint for `transport: "mcp+http"` / `"mcp+streamable-http"`
+    /// servers. Ignored for stdio.
+    #[serde(default)]
+    pub url: Option<String>,
+
+    /// Env var name holding a bearer token for an authenticated remote
+    /// server. The token value is never stored in the manifest.
+    #[serde(default)]
+    pub bearer_env: Option<String>,
 }
 
 /// Optional `ai` block in a manifest.
@@ -202,7 +214,7 @@ pub enum ManifestError {
     },
     #[error("{path}: unsupported schema `{schema}` (expected `{SCHEMA}`)")]
     Schema { path: PathBuf, schema: String },
-    #[error("{path}: unsupported transport `{transport}` (only `mcp+stdio`)")]
+    #[error("{path}: unsupported transport `{transport}` (supported: `mcp+stdio`, `mcp+http`)")]
     Transport { path: PathBuf, transport: String },
     #[error("{path}: missing required field `{field}`")]
     MissingField { path: PathBuf, field: &'static str },
@@ -277,7 +289,9 @@ fn spec_from_manifest(
             schema: m.schema,
         });
     }
-    if m.transport != "mcp+stdio" {
+    let is_http = matches!(m.transport.as_str(), "mcp+http" | "mcp+streamable-http");
+    let is_stdio = m.transport == "mcp+stdio";
+    if !is_http && !is_stdio {
         return Err(ManifestError::Transport {
             path: path.to_path_buf(),
             transport: m.transport,
@@ -295,10 +309,16 @@ fn spec_from_manifest(
             field: "name",
         });
     }
-    if m.command.is_empty() {
+    if is_stdio && m.command.is_empty() {
         return Err(ManifestError::MissingField {
             path: path.to_path_buf(),
             field: "command",
+        });
+    }
+    if is_http && m.url.as_deref().unwrap_or("").trim().is_empty() {
+        return Err(ManifestError::MissingField {
+            path: path.to_path_buf(),
+            field: "url",
         });
     }
     if !m.enabled {
@@ -358,6 +378,8 @@ fn spec_from_manifest(
         env,
         cwd,
         timeout_secs: m.timeout_secs,
+        url: if is_http { m.url } else { None },
+        bearer_env: m.bearer_env,
     }))
 }
 
@@ -584,7 +606,7 @@ mod tests {
         let p = dir.path().join("bad.json");
         write(
             &p,
-            r#"{"id":"x","name":"x","transport":"mcp+http","command":"true"}"#,
+            r#"{"id":"x","name":"x","transport":"mcp+carrier-pigeon","command":"true"}"#,
         );
         let err = load_manifest(&p).unwrap_err();
         assert!(matches!(err, ManifestError::Transport { .. }), "got {err:?}");

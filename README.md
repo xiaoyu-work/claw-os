@@ -7,7 +7,7 @@
   <img src="assets/brand/clawos-wordmark.png" alt="Claw OS" width="240">
 </p>
 
-<p align="center"><strong>The first agent native operating system.</strong></p>
+<p align="center"><strong>The first agent-native operating system — where the AI is part of the system, not an app on top of it.</strong></p>
 
 <p align="center">
   <a href="https://xiaoyu-work.github.io/claw-os"><img alt="Website" src="https://img.shields.io/badge/website-xiaoyu--work.github.io%2Fclaw--os-2563eb?style=flat-square"></a>
@@ -16,17 +16,20 @@
   <a href="https://github.com/xiaoyu-work/claw-os/releases"><img alt="Release" src="https://img.shields.io/github/v/release/xiaoyu-work/claw-os?include_prereleases&style=flat-square"></a>
 </p>
 
-Claw OS is a complete Linux-based environment designed for AI agents. It keeps the normal Linux system visible while adding structured OS primitives, scoped permissions, credentials, jobs, and local model runtime management through `cos`.
+Claw OS is a complete Linux-based environment where the AI agent is a **system-level layer**, not an application running on top of one. The agent runs as a privileged system daemon (`clawd`) with direct, scoped access to the kernel, processes, logs, network, and every installed app — so it can reason about and act on the whole machine, the way an operator would, instead of being trapped inside a single app's sandbox.
 
 ## Why it is agent-native
 
-Claw OS is built around the idea that an agent should not control a computer through fragile shell guesses alone. It gives the agent explicit operating-system interfaces:
+Agent-native is the whole bet: the next operating system is one where the assistant is not a tab you open but the layer the system runs through. Here that means:
 
-- **Structured primitives** — apps, files, browser reads, system info, package search, credentials, jobs, and model runtimes are exposed through predictable `cos` commands.
-- **Machine-readable results** — primitives return structured output so an agent can inspect state without scraping human UI.
-- **Scoped permissions** — risky actions go through capability checks and approvals instead of granting broad access by default.
-- **Built-in agent entry points** — `cos agent setup`, `cos agent ask`, and `cos agent chat` are first-class OS commands.
-- **Local runtime support** — `cos model` and `cos engine` manage on-device inference where available.
+- **The AI is part of the system, not an app on top of it.** It runs as a privileged system service, not in a sandbox, so you can just ask the things an app could never reach — *"why is my network so slow?"*, *"why did that app just crash?"*, *"why can't I get online?"*, *"what's eating my disk?"* — and it actually looks at your processes, logs, network, and resources to answer.
+- **One agent across every app.** Instead of a separate, siloed assistant inside each app, a single agent spans the whole machine — it can drive several apps in one request (read a document, draft an email, post a notification) and reasons from real system state, not just one app's view.
+- **It remembers.** The agent has persistent memory across conversations: what you did in your apps, what changed on the system, your preferences, and context that carries from one app to the next — so you never re-explain yourself. It's your memory; you can review it and forget any of it, down to a single app.
+- **Local-first.** The system's intelligence belongs on your own machine, not someone else's servers. As edge hardware (CPU / GPU / NPU) matures, fully on-device "edge AI" becomes the default; today it runs local models where your hardware can handle it and falls back to cloud AI APIs where it can't — without changing how you use it.
+- **Apps open up to the agent.** Every app publishes what it can do, and the agent decides which to use. Developers expose their app to the system agent through the [`claw-os-sdk`](claw-os-sdk/) (Rust, Python, Node, Go).
+- **Safe by construction.** Every privileged action goes through a capability check and your approval, so "system-level" never means "unrestricted" — looking, changing, and touching the kernel are each gated separately. Primitives return structured, machine-readable data instead of scraped UI, and setting up, asking, chatting, and diagnosing are first-class parts of the OS.
+
+What runs today is the foundation for that future: the system-level agent, its persistent memory, the local-first runtime, the scoped permission model, the cross-app session store, and the app SDK are already here.
 
 ## Quick Start
 
@@ -79,8 +82,9 @@ cos app web read https://example.com   # fetch URL → {url, title, text, links}
 
 ```bash
 cos agent setup                               # configure providers and credentials
-cos agent ask "find the largest files and tell me why"
-cos agent chat                                 # interactive REPL
+cos agent ask "why is my network so slow right now?"
+cos agent ask "why did my last app crash?"
+cos agent chat                                 # interactive REPL with cross-app memory
 ```
 
 ## License

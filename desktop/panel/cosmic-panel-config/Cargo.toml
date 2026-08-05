@@ -19,3 +19,6 @@ xdg-shell-wrapper-config = { path = "../xdg-shell-wrapper-config", optional = tr
 # xdg-shell-wrapper-config = { git = "https://github.com/pop-os/xdg-shell-wrapper", optional = true }
 sctk.workspace = true
 sctk.optional = true
+
+[dev-dependencies]
+ron = "0.12"

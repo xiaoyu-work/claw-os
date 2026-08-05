@@ -133,6 +133,32 @@ impl NotesStore {
     /// Same as [`assemble_for_prompt`] with an explicit per-file cap.
     /// Exposed for tests; production callers should use the default.
     pub fn assemble_for_prompt_with_cap(&self, cap_chars: usize) -> Option<String> {
+        self.assemble_for_prompt_relevant(None, cap_chars)
+    }
+
+    /// Assemble notes for the prompt, selecting MEMORY.md entries by
+    /// relevance to `query` when the file exceeds `cap_chars`.
+    ///
+    /// ## Tiers
+    ///
+    /// - **USER.md** — always-on in full (persona / preferences), capped.
+    /// - **MEMORY.md** headings, prose, and any line containing
+    ///   [`ALWAYS_TAG`] (case-insensitive) — always-on.
+    /// - Other MEMORY.md bullet entries — *contextual*: under budget every
+    ///   entry is kept (byte-identical to the old wholesale behaviour, so
+    ///   the common case is unchanged and risk-free); over budget only the
+    ///   entries most relevant to `query` are kept (or, when `query` is
+    ///   `None`, the earliest entries), with a marker noting how many were
+    ///   dropped. The full file remains available via `cos_memory read`.
+    ///
+    /// Replacing blind truncation with relevance selection means a large,
+    /// long-lived `MEMORY.md` no longer silently drops potentially-relevant
+    /// facts just because they sit past the byte cap.
+    pub fn assemble_for_prompt_relevant(
+        &self,
+        query: Option<&str>,
+        cap_chars: usize,
+    ) -> Option<String> {
         let mut out = String::new();
         for name in ALL_KNOWN {
             if let Ok(Some(text)) = self.read(name) {
@@ -140,14 +166,23 @@ impl NotesStore {
                 if trimmed.is_empty() {
                     continue;
                 }
-                let capped = truncate_for_prompt(trimmed, cap_chars);
+                // USER.md is the always-on persona tier: keep it whole
+                // (capped). MEMORY.md goes through relevance selection.
+                let selected = if name == &MEMORY_FILE {
+                    select_memory_for_prompt(trimmed, query, cap_chars)
+                } else {
+                    truncate_for_prompt(trimmed, cap_chars).into_owned()
+                };
+                if selected.trim().is_empty() {
+                    continue;
+                }
                 if !out.is_empty() {
                     out.push_str("\n\n");
                 }
                 out.push_str("# ");
                 out.push_str(name);
                 out.push_str("\n\n");
-                out.push_str(&capped);
+                out.push_str(&selected);
             }
         }
         if out.is_empty() {
@@ -156,6 +191,124 @@ impl NotesStore {
             Some(out)
         }
     }
+}
+
+/// Marker that pins a `MEMORY.md` entry to the always-on tier — it is
+/// injected every turn regardless of relevance. Case-insensitive.
+pub const ALWAYS_TAG: &str = "[always]";
+
+/// Is this line a contextual bullet entry (rankable / droppable), as
+/// opposed to a pinned structural line (heading, prose, or an entry
+/// explicitly tagged always-on)?
+fn is_contextual_bullet(line: &str) -> bool {
+    let t = line.trim_start();
+    let is_bullet = t.starts_with("- ") || t.starts_with("* ");
+    is_bullet && !line.to_ascii_lowercase().contains(ALWAYS_TAG)
+}
+
+/// Tokenise into lowercase alphanumeric words of length >= 3 (drops
+/// punctuation and trivially-short tokens). Used by the lexical relevance
+/// scorer below.
+fn tokenize(text: &str) -> std::collections::HashSet<String> {
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.chars().count() >= 3)
+        .map(|w| w.to_string())
+        .collect()
+}
+
+/// Relevance of a memory `entry` to the current `query`: the number of
+/// distinct query tokens that also appear in the entry. Deterministic,
+/// synchronous, dependency-free — good enough to decide *which* facts to
+/// drop under budget pressure. (A semantic embedder could replace this
+/// scorer later without changing the selection logic.)
+fn lexical_relevance(query_tokens: &std::collections::HashSet<String>, entry: &str) -> usize {
+    if query_tokens.is_empty() {
+        return 0;
+    }
+    let entry_tokens = tokenize(entry);
+    query_tokens.iter().filter(|t| entry_tokens.contains(*t)).count()
+}
+
+/// Select which of `memory.md`'s contextual entries to inject, keeping
+/// all pinned (structural / always-on) lines and filling the remaining
+/// budget with the entries most relevant to `query`.
+///
+/// Fast path: when the whole file fits in `cap_chars` it is returned
+/// unchanged — so existing small-memory behaviour is byte-for-byte
+/// preserved and relevance logic only engages under real budget pressure.
+fn select_memory_for_prompt(content: &str, query: Option<&str>, cap_chars: usize) -> String {
+    if content.chars().count() <= cap_chars {
+        return content.to_string();
+    }
+
+    let lines: Vec<&str> = content.lines().collect();
+    let contextual_idx: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| is_contextual_bullet(l))
+        .map(|(i, _)| i)
+        .collect();
+
+    // Pinned lines (everything not a contextual bullet) are always kept.
+    let pinned_chars: usize = lines
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !contextual_idx.contains(i))
+        .map(|(_, l)| l.chars().count() + 1) // +1 for the newline
+        .sum();
+
+    let mut remaining = cap_chars.saturating_sub(pinned_chars);
+    // Reserve room for the omission marker so appending it later can't
+    // push us back over `cap` and trigger the safety-truncate (which
+    // would chop selected-but-late entries out of the document-order
+    // reassembly). Only reserve when there are contextual entries that
+    // could be dropped.
+    const OMIT_MARKER_RESERVE: usize = 160;
+    if !contextual_idx.is_empty() {
+        remaining = remaining.saturating_sub(OMIT_MARKER_RESERVE.min(remaining));
+    }
+
+    // Rank contextual entries: by relevance to the query (desc), then by
+    // original position (asc) for a stable, readable result. With no
+    // query, score is 0 for all → pure original order (bullet-aligned
+    // truncation, never a mid-line cut).
+    let query_tokens = query.map(tokenize).unwrap_or_default();
+    let mut ranked: Vec<(usize, usize)> = contextual_idx
+        .iter()
+        .map(|&i| (i, lexical_relevance(&query_tokens, lines[i])))
+        .collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+
+    let mut keep: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    for (idx, _score) in ranked {
+        let cost = lines[idx].chars().count() + 1;
+        if cost <= remaining {
+            keep.insert(idx);
+            remaining -= cost;
+        }
+    }
+
+    let dropped = contextual_idx.len() - keep.len();
+
+    // Reassemble in original document order for readability.
+    let mut out = String::new();
+    for (i, line) in lines.iter().enumerate() {
+        let is_ctx = contextual_idx.contains(&i);
+        if !is_ctx || keep.contains(&i) {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    if dropped > 0 {
+        out.push_str(&format!(
+            "\n[\u{2026}] ({dropped} less-relevant memory entries omitted for this turn; full memory via `cos_memory read MEMORY.md`)\n"
+        ));
+    }
+
+    // Degenerate safety net: if pinned content alone blew the budget,
+    // hard-cap the whole thing.
+    truncate_for_prompt(out.trim_end(), cap_chars).into_owned()
 }
 
 /// Cap a note to at most `cap_chars` characters. If the input is
@@ -335,6 +488,51 @@ mod tests {
         let out = truncate_for_prompt(s, 32);
         assert_eq!(out, "hello world");
         assert!(matches!(out, std::borrow::Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn select_memory_fast_path_returns_identical_under_budget() {
+        // Under budget ⇒ byte-for-byte unchanged (zero-risk common case).
+        let mem = "# notes\n- [fact] a\n- [fact] b\n";
+        assert_eq!(select_memory_for_prompt(mem, Some("anything"), 10_000), mem);
+    }
+
+    #[test]
+    fn select_memory_keeps_relevant_bullets_over_budget() {
+        // Many bullets, tiny budget, a query that matches one of them.
+        // The relevant bullet must survive; an irrelevant one must be
+        // dropped; the omission marker must appear.
+        let mut mem = String::from("## Curated facts (auto)\n");
+        for i in 0..40 {
+            mem.push_str(&format!("- [fact] unrelated filler entry number {i}\n"));
+        }
+        mem.push_str("- [fact] the user's deployment database is named orchard\n");
+        // Budget big enough for a few lines but not all 41.
+        let out = select_memory_for_prompt(&mem, Some("what is the database called"), 400);
+        assert!(
+            out.contains("orchard"),
+            "the query-relevant entry must be retained, got:\n{out}"
+        );
+        assert!(
+            out.contains("omitted for this turn"),
+            "expected an omission marker when entries were dropped"
+        );
+        assert!(out.chars().count() <= 400 + 200, "result should respect the cap");
+    }
+
+    #[test]
+    fn select_memory_pins_always_tagged_entries() {
+        // An [always] entry must survive even with zero query relevance
+        // and a budget that forces most contextual bullets out.
+        let mut mem = String::from("## facts\n- [always] operator name is Dana\n");
+        for i in 0..50 {
+            mem.push_str(&format!("- [fact] filler entry {i} about widgets\n"));
+        }
+        let out = select_memory_for_prompt(&mem, Some("zzz no match"), 300);
+        assert!(
+            out.contains("operator name is Dana"),
+            "[always]-tagged entry must always be kept, got:\n{out}"
+        );
     }
 
     #[test]

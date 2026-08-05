@@ -2,6 +2,7 @@
 
 import base64
 import os
+import pathlib
 import tempfile
 import unittest
 
@@ -30,15 +31,20 @@ sys.path.insert(
 # exercise their own logic rather than the kernel boundary.
 os.environ.setdefault("COS_PERMS_MODE", "permissive")
 
-from main import (
-    MAX_READ_BYTES,
-    MAX_READ_BYTES_BINARY,
-    cmd_copy,
-    cmd_move,
-    cmd_read,
-    cmd_read_bytes,
-    cmd_rename,
+from test_support import load_local_module
+
+fs_main = load_local_module(
+    pathlib.Path(__file__).with_name("main.py"),
+    "claw_test_fs_main",
+    clear_modules=("_shared",),
 )
+MAX_READ_BYTES = fs_main.MAX_READ_BYTES
+MAX_READ_BYTES_BINARY = fs_main.MAX_READ_BYTES_BINARY
+cmd_copy = fs_main.cmd_copy
+cmd_move = fs_main.cmd_move
+cmd_read = fs_main.cmd_read
+cmd_read_bytes = fs_main.cmd_read_bytes
+cmd_rename = fs_main.cmd_rename
 
 
 class TestCmdReadTruncation(unittest.TestCase):
@@ -291,7 +297,7 @@ class TestWriteBytes(unittest.TestCase):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def test_round_trip_base64(self):
-        from main import cmd_write_bytes
+        cmd_write_bytes = fs_main.cmd_write_bytes
         data = bytes(range(256))
         encoded = base64.b64encode(data).decode("ascii")
         dst = os.path.join(self.tmpdir, "out.bin")
@@ -302,7 +308,7 @@ class TestWriteBytes(unittest.TestCase):
             self.assertEqual(f.read(), data)
 
     def test_creates_missing_parents(self):
-        from main import cmd_write_bytes
+        cmd_write_bytes = fs_main.cmd_write_bytes
         nested = os.path.join(self.tmpdir, "a", "b", "c", "out.bin")
         encoded = base64.b64encode(b"hi").decode("ascii")
         result = cmd_write_bytes([nested, "--content", encoded])
@@ -310,14 +316,14 @@ class TestWriteBytes(unittest.TestCase):
         self.assertTrue(os.path.exists(nested))
 
     def test_invalid_base64_returns_error(self):
-        from main import cmd_write_bytes
+        cmd_write_bytes = fs_main.cmd_write_bytes
         dst = os.path.join(self.tmpdir, "out.bin")
         result = cmd_write_bytes([dst, "--content", "!@#$%^not-base64"])
         self.assertIn("error", result)
         self.assertFalse(os.path.exists(dst))
 
     def test_requires_path(self):
-        from main import cmd_write_bytes
+        cmd_write_bytes = fs_main.cmd_write_bytes
         with self.assertRaises(Exception):
             cmd_write_bytes([])
 
@@ -361,8 +367,6 @@ class TestSymlinkEscape(unittest.TestCase):
         link = os.path.join(self.tmpdir, "shortcut")
         os.symlink(self.secret_path, link)
 
-        import main as fs_main
-
         captured = {}
         original = fs_main.policy.require
 
@@ -389,8 +393,6 @@ class TestSymlinkEscape(unittest.TestCase):
         link = os.path.join(self.tmpdir, "shortcut2")
         os.symlink(self.secret_path, link)
 
-        import main as fs_main
-
         captured = {}
         original = fs_main.policy.require
 
@@ -411,7 +413,7 @@ class TestSymlinkEscape(unittest.TestCase):
         link = os.path.join(self.tmpdir, "link_to_secret")
         os.symlink(self.secret_path, link)
 
-        from main import _open_nofollow
+        _open_nofollow = fs_main._open_nofollow
 
         with self.assertRaises(OSError):
             _open_nofollow(link, os.O_RDONLY)

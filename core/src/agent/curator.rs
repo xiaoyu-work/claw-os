@@ -219,7 +219,7 @@ pub fn derive_description(user_msg: &str) -> String {
     // lack sentence terminators panic with `byte index N is not a char
     // boundary`. See agent::util::char_safe_truncate.
     let end = collapsed
-        .find(|c: char| matches!(c, '.' | '?' | '!'))
+        .find(['.', '?', '!'])
         .map(|i| i + 1)
         .unwrap_or(collapsed.len().min(200));
     let s = crate::agent::util::char_safe_truncate(collapsed, end);
@@ -332,7 +332,7 @@ pub fn looks_like_acceptance(content: &str) -> bool {
         return true;
     }
     // Standalone single-word reactions (allow trailing punctuation).
-    let stripped = trimmed.trim_end_matches(|c: char| matches!(c, '.' | '!' | '?' | ',' | ' '));
+    let stripped = trimmed.trim_end_matches(['.', '!', '?', ',', ' ']);
     matches!(
         stripped,
         "thanks" | "thank you" | "perfect" | "great" | "awesome" | "amazing"

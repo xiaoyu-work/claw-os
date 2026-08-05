@@ -27,7 +27,7 @@
 
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::hash::{BuildHasher, Hash, Hasher};
+use std::hash::BuildHasher;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex as AsyncMutex;
@@ -360,9 +360,7 @@ fn exchange_lock_for(fingerprint: u64) -> Arc<AsyncMutex<()>> {
 fn token_fingerprint(github_token: &str) -> u64 {
     static HASHER: OnceLock<std::collections::hash_map::RandomState> = OnceLock::new();
     let state = HASHER.get_or_init(std::collections::hash_map::RandomState::new);
-    let mut h = state.build_hasher();
-    github_token.hash(&mut h);
-    h.finish()
+    state.hash_one(github_token)
 }
 
 /// Pull the Copilot API base URL out of the token string. The token's

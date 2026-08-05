@@ -1,6 +1,8 @@
 """Tests for the pkg app — search & show parsing and arg handling."""
 
+import json
 import os
+import pathlib
 import sys
 import unittest
 from unittest import mock
@@ -21,16 +23,23 @@ sys.path.insert(
     ),
 )  # for `from cos_runtime import …`
 
-import main  # noqa: E402
-from main import (  # noqa: E402
-    DEFAULT_SEARCH_LIMIT,
-    MAX_SEARCH_LIMIT,
-    _parse_apt_show,
-    _parse_search_args,
-    cmd_search,
-    cmd_show,
-    run,
+from test_support import load_local_module
+
+main = load_local_module(
+    pathlib.Path(__file__).with_name("main.py"),
+    "claw_test_pkg_main",
+    clear_modules=("_shared",),
 )
+DEFAULT_SEARCH_LIMIT = main.DEFAULT_SEARCH_LIMIT
+MAX_SEARCH_LIMIT = main.MAX_SEARCH_LIMIT
+_apt_install = main._apt_install
+_parse_apt_show = main._parse_apt_show
+_parse_search_args = main._parse_search_args
+_valid_package_name = main._valid_package_name
+cmd_need = main.cmd_need
+cmd_search = main.cmd_search
+cmd_show = main.cmd_show
+run = main.run
 
 
 def _allow_policy():
@@ -82,6 +91,34 @@ class ParseSearchArgsTests(unittest.TestCase):
     def test_missing_limit_value_rejected(self):
         with self.assertRaises(ValueError):
             _parse_search_args(["foo", "--limit"])
+
+
+class PackageInstallTests(unittest.TestCase):
+    def test_package_name_validation_rejects_options(self):
+        self.assertTrue(_valid_package_name("python3-venv"))
+        self.assertTrue(_valid_package_name("curl:amd64"))
+        self.assertFalse(_valid_package_name("-oDpkg::Pre-Invoke::=id"))
+        self.assertFalse(_valid_package_name("../curl"))
+
+    def test_need_rejects_invalid_package_before_policy_check(self):
+        with mock.patch.object(main.policy, "require") as require:
+            result = cmd_need(["-oDpkg::Pre-Invoke::=id"])
+        self.assertIn("error", result)
+        require.assert_not_called()
+
+    def test_install_uses_hidden_clawd_broker(self):
+        payload = json.dumps({"package": "curl", "installed": True})
+        with mock.patch.dict(os.environ, {"COS_BIN": "/usr/local/bin/cos"}), mock.patch.object(
+            main.subprocess,
+            "run",
+            return_value=_fake_completed(stdout=payload),
+        ) as runner:
+            installed, failed, errors = _apt_install(["curl"])
+        self.assertEqual(installed, ["curl"])
+        self.assertEqual(failed, [])
+        self.assertEqual(errors, {})
+        argv = runner.call_args[0][0]
+        self.assertEqual(argv, ["/usr/local/bin/cos", "__package", "install", "curl"])
 
 
 # ---------------------------------------------------------------------------

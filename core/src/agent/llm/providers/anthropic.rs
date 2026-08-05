@@ -1177,7 +1177,7 @@ pub(crate) mod wire {
                     // any prior error is charged as Transient.
                     if matches!(ev, Ok(StreamEvent::Done { .. })) {
                         self.report_success_once();
-                    } else if matches!(ev, Err(_)) {
+                    } else if ev.is_err() {
                         self.report_failure_once(
                             crate::agent::llm::credential_pool::FailureClass::Transient,
                         );

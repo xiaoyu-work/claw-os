@@ -21,54 +21,46 @@ func CheckWireVersion(seen int) error {
 }
 
 // Ai — AI request / reply.
-// Shape of the data payload returned by `cos ai chat|embed|image-generate`. Apps
-// call this via SDK helpers (claw_os_sdk.ai.chat / ai.embed /
-// ai.image_generate). The kernel emits the same fields whether the call was
-// synchronous or streamed (terminating reply).
+// Stable text-chat reply returned by `cos ai chat`.
 type Ai struct {
+	Text string `json:"text"`
+	Model string `json:"model"`
+	Provider string `json:"provider"`
 	Verb string `json:"verb"`
-	Text string `json:"text,omitempty"`
-	Model string `json:"model,omitempty"`
-	Provider string `json:"provider,omitempty"`
-	Embedding []float64 `json:"embedding,omitempty"`
-	Embeddings [][]float64 `json:"embeddings,omitempty"`
-	OutputPath string `json:"output_path,omitempty"`
-	Usage *AiUsage `json:"usage,omitempty"`
-	Budget *AiBudget `json:"budget,omitempty"`
-	Review *AiReview `json:"review,omitempty"`
-	ToolCalls []AiToolCalls `json:"tool_calls,omitempty"`
-	Raw *interface{} `json:"raw,omitempty"`
+	Usage AiUsage `json:"usage"`
+	Budget AiBudget `json:"budget"`
+	Review AiReview `json:"review"`
+	ToolCalls []AiToolCall `json:"tool_calls,omitempty"`
 }
 
 // AiUsage — ai_usage.
-// Token / unit accounting for this single call.
+// Token and unit accounting for this call.
 type AiUsage struct {
-	InputTokens int64 `json:"input_tokens,omitempty"`
-	OutputTokens int64 `json:"output_tokens,omitempty"`
-	Units float64 `json:"units,omitempty"`
+	InputTokens uint32 `json:"input_tokens"`
+	OutputTokens uint32 `json:"output_tokens"`
+	Units uint64 `json:"units"`
 }
 
 // AiBudget — ai_budget.
-// Snapshot of the app's budget *after* this call.
+// App budget snapshot after the call.
 type AiBudget struct {
-	Period string `json:"period,omitempty"`
-	UnitsUsed float64 `json:"units_used,omitempty"`
-	UnitsCap float64 `json:"units_cap,omitempty"`
+	Period string `json:"period"`
+	UnitsUsed uint64 `json:"units_used"`
+	UnitsCap uint64 `json:"units_cap"`
 }
 
 // AiReview — ai_review.
-// Safety / review metadata.
+// Safety policy actually applied by the kernel.
 type AiReview struct {
-	Safety string `json:"safety,omitempty"`
-	PromptRedacted bool `json:"prompt_redacted,omitempty"`
-	ResponseBlocked bool `json:"response_blocked,omitempty"`
+	Safety string `json:"safety"`
+	PromptRedacted bool `json:"prompt_redacted"`
 }
 
-// AiToolCalls — ai_tool_calls.
-type AiToolCalls struct {
+// AiToolCall — AiToolCall.
+type AiToolCall struct {
+	Id string `json:"id"`
 	Name string `json:"name"`
-	Args map[string]interface{} `json:"args,omitempty"`
-	Result *interface{} `json:"result,omitempty"`
+	Input interface{} `json:"input"`
 }
 
 // App — App-verb invocation reply.
@@ -178,7 +170,7 @@ type Aipolicy struct {
 
 // Aibudget — aiBudget.
 type Aibudget struct {
-	MonthlyUnits int64 `json:"monthly_units,omitempty"`
+	MonthlyUnits uint64 `json:"monthly_units,omitempty"`
 }
 
 // Session — session.
@@ -224,19 +216,18 @@ type Perms struct {
 }
 
 // Tool — Catalog tool invocation reply.
-// Shape returned by `cos ai tool <name> --app <id> --args '<json>'`. Catalog
-// tools are reusable functions exposed in the AI tool catalog. They differ from
-// app verbs in that the AI plans them automatically.
+// Shape returned by `cos ai tool <name> --app <id> --args '<json>'`.
 type Tool struct {
 	Tool string `json:"tool"`
-	Result *interface{} `json:"result,omitempty"`
-	AuditId string `json:"audit_id,omitempty"`
+	AppId string `json:"app_id"`
+	Status string `json:"status"`
+	Result interface{} `json:"result"`
 }
 
 // ValidateAiVerb reports an error if value is not in the ai.verb enum.
 func ValidateAiVerb(value string) error {
 	switch value {
-	case "ai.chat", "ai.embed", "ai.image_generate", "ai.tool":
+	case "ai.chat", "ai.chat.untrusted":
 		return nil
 	}
 	return fmt.Errorf("invalid ai.verb value: %q", value)
@@ -245,7 +236,7 @@ func ValidateAiVerb(value string) error {
 // ValidateAiReviewSafety reports an error if value is not in the ai_review.safety enum.
 func ValidateAiReviewSafety(value string) error {
 	switch value {
-	case "strict", "balanced", "off":
+	case "strict", "standard", "minimal":
 		return nil
 	}
 	return fmt.Errorf("invalid ai_review.safety value: %q", value)
@@ -267,4 +258,13 @@ func ValidatePermsDecision(value string) error {
 		return nil
 	}
 	return fmt.Errorf("invalid perms.decision value: %q", value)
+}
+
+// ValidateToolStatus reports an error if value is not in the tool.status enum.
+func ValidateToolStatus(value string) error {
+	switch value {
+	case "ok":
+		return nil
+	}
+	return fmt.Errorf("invalid tool.status value: %q", value)
 }

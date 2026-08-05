@@ -4,7 +4,7 @@
 //! embeds (stubbed in Phase 1), and writes to the vector store.
 //! Then subscribes to inotify and reflects each create/modify/delete.
 //!
-//! Run via systemd --user (see overlay/etc/systemd/user/claw-semantic.service).
+//! Run via systemd --user (see the systemd feature's claw-semantic.service).
 
 use anyhow::{Context, Result};
 use claw_semantic::{

@@ -883,19 +883,28 @@ where
                     .map(Into::into),
                 );
 
-                // Frosted glass: if the layer client opted in via
-                // ext_background_effect_v1 and the compositor has
-                // experimental_blur enabled, append a blur element
-                // BEHIND the layer surface.
+                // Frosted glass: append a dual-Kawase blur element BEHIND the
+                // layer surface when the compositor has experimental_blur on
+                // and either (a) the client opted in via
+                // ext_background_effect_v1, or (b) the surface is a cosmic-panel
+                // panel/dock. cosmic-panel renders its bar at <1.0 opacity but
+                // does not request a blur region, so without (b) the bar would
+                // be a flat translucent tint rather than true frosted glass.
+                // Matching by namespace keeps every other layer surface (the
+                // cosmic-bg wallpaper, notifications, the launcher, …) un-blurred
+                // unless it explicitly asks for it.
                 if shell.appearance_config().experimental_blur {
-                    let has_blur = with_states(layer.wl_surface(), |states| {
-                        states
-                            .cached_state
-                            .get::<BackgroundEffectSurfaceCachedState>()
-                            .current()
-                            .blur_region
-                            .is_some()
-                    });
+                    let ns = layer.namespace();
+                    let is_panel = ns == "Panel" || ns == "Dock";
+                    let has_blur = is_panel
+                        || with_states(layer.wl_surface(), |states| {
+                            states
+                                .cached_state
+                                .get::<BackgroundEffectSurfaceCachedState>()
+                                .current()
+                                .blur_region
+                                .is_some()
+                        });
                     if has_blur {
                         let logical_bbox = layer.bbox();
                         let mut blur_rect: Rectangle<i32, Physical> = Rectangle::new(

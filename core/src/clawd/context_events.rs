@@ -11,6 +11,11 @@ const MAX_QUERY_LIMIT: usize = 5_000;
 
 pub fn append(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     let source = required_string(&params, "source")?;
+    if let Some(uid) = client.uid {
+        if uid != 0 && (source == super::heartbeat::SOURCE || source.starts_with("clawd.")) {
+            return Err(format!("reserved context event source: {source}"));
+        }
+    }
     let event_type = required_string(&params, "event_type")?;
     let ts = optional_timestamp(&params, "ts")?.unwrap_or_else(Utc::now);
     let received_at = Utc::now();
@@ -42,8 +47,20 @@ pub fn append(params: Value, client: &ClientIdentity) -> Result<Value, String> {
 }
 
 pub fn query(params: Value) -> Result<Value, String> {
+    query_with_owner(params, None)
+}
+
+pub fn query_for_client(
+    params: Value,
+    client: &ClientIdentity,
+) -> Result<Value, String> {
+    let uid = client.require_uid()?;
+    query_with_owner(params, (uid != 0).then_some(uid))
+}
+
+fn query_with_owner(params: Value, owner_uid: Option<u32>) -> Result<Value, String> {
     let filters = QueryFilters::from_params(&params)?;
-    let events = query_events(&filters)?;
+    let events = query_events(&filters, owner_uid)?;
 
     Ok(json!({
         "schema": 1,
@@ -60,6 +77,18 @@ pub fn query(params: Value) -> Result<Value, String> {
         },
         "events": events,
     }))
+}
+
+pub(crate) fn event_visible_to(event: &Value, owner_uid: Option<u32>) -> bool {
+    let Some(uid) = owner_uid else {
+        return true;
+    };
+    event
+        .pointer("/client/uid")
+        .and_then(Value::as_u64)
+        .is_some_and(|value| value == uid as u64)
+        || (event.get("source").and_then(Value::as_str) == Some(super::heartbeat::SOURCE)
+            && event.pointer("/client/uid").is_none())
 }
 
 pub fn context_payload(limit: usize) -> Value {
@@ -143,7 +172,10 @@ impl QueryFilters {
     }
 }
 
-fn query_events(filters: &QueryFilters) -> Result<Vec<Value>, String> {
+fn query_events(
+    filters: &QueryFilters,
+    owner_uid: Option<u32>,
+) -> Result<Vec<Value>, String> {
     let path = crate::paths::context_events_log_path();
     let data = match fs::read_to_string(&path) {
         Ok(data) => data,
@@ -165,6 +197,9 @@ fn query_events(filters: &QueryFilters) -> Result<Vec<Value>, String> {
             continue;
         };
         if !matches_filters(&value, ts, filters) {
+            continue;
+        }
+        if !event_visible_to(&value, owner_uid) {
             continue;
         }
         matched.push((ts, value));
@@ -219,13 +254,18 @@ fn append_record(record: &Value) -> Result<(), String> {
 
 fn append_durable(path: &Path, line: &str) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+        crate::storage::ensure_private_dir(parent)?;
     }
 
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
+    let mut options = fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    crate::storage::set_private_file(path)?;
 
     #[cfg(unix)]
     {

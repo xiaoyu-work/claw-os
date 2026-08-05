@@ -68,6 +68,8 @@ pub struct Request {
     pub session: String,
     pub reason: String,
     #[serde(default)]
+    pub owner_uid: Option<u32>,
+    #[serde(default)]
     pub requester: Option<String>,
     pub requested_at: u64,
     #[serde(default)]
@@ -112,21 +114,31 @@ async fn decide(
     decision: &str,
     duration: Option<GrantDuration>,
 ) -> Result<String, LoadError> {
-    let mut params = json!({
-        "id": id,
-        "decision": decision,
-        "decided_by": "claw-applet-approval-gate",
-    });
+    let mut command = tokio::process::Command::new("pkexec");
+    command
+        .arg("/usr/local/bin/claw-approval-helper")
+        .arg("--id")
+        .arg(id)
+        .arg("--decision")
+        .arg(decision);
     if let Some(duration) = duration {
-        let duration = serde_json::to_value(duration)
-            .map_err(|e| LoadError(format!("encode grant duration: {e}")))?;
-        params
-            .as_object_mut()
-            .expect("params is an object")
-            .insert("duration".into(), duration);
+        let duration = match duration {
+            GrantDuration::Once => "once",
+            GrantDuration::Session => "session",
+            GrantDuration::Forever => "forever",
+        };
+        command.arg("--duration").arg(duration);
     }
-    let value = clawd_request("permission.decide", params).await?;
-    Ok(value.to_string())
+    let output = command
+        .output()
+        .await
+        .map_err(|e| LoadError(format!("launch approval helper: {e}")))?;
+    if !output.status.success() {
+        return Err(LoadError(
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 #[derive(Debug, Serialize)]

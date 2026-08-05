@@ -39,6 +39,7 @@ import datetime as _dt
 import errno
 import fcntl
 import json
+import math
 import os
 import pathlib
 import re
@@ -100,6 +101,10 @@ class Lease:
     heartbeat_at: str
 
 
+class SessionCorruptError(RuntimeError):
+    """A durable-session JSONL log violates the shared seq protocol."""
+
+
 # ---------------------------------------------------------------------------
 # IO helpers
 # ---------------------------------------------------------------------------
@@ -125,17 +130,12 @@ def _atomic_write_json(path: pathlib.Path, payload) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     suffix = f".tmp.{os.getpid()}.{threading.get_native_id()}.{uuid.uuid4().hex}"
     tmp = path.with_suffix(path.suffix + suffix)
-    data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    _validate_json_value(payload)
+    data = json.dumps(payload, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
-        os.write(fd, data)
-        try:
-            os.fsync(fd)
-        except OSError:
-            # fsync may fail on filesystems that don't support it
-            # (e.g. some test FUSE mounts); the rename still
-            # provides at-least-once durability semantics.
-            pass
+        _write_all(fd, data)
+        os.fsync(fd)
     finally:
         os.close(fd)
     os.replace(tmp, path)
@@ -158,100 +158,185 @@ def _read_json(path: pathlib.Path):
         return json.load(f)
 
 
-def _count_path(path: pathlib.Path) -> pathlib.Path:
-    """Sidecar counter file for ``path``. Holds the canonical line count
-    for the JSONL file so we can append in O(1) instead of re-scanning
-    the entire file on every call.
-    """
-    return path.with_suffix(path.suffix + ".count")
-
-
-def _read_sidecar_count(path: pathlib.Path) -> _t.Optional[int]:
-    """Return the cached line count for ``path`` (sidecar), or ``None``
-    if no sidecar exists / it's unreadable. Treats any malformed
-    sidecar as missing — the caller will fall back to a one-time scan.
-    """
-    cp = _count_path(path)
-    try:
-        with open(cp, "rb") as f:
-            raw = f.read().strip()
-    except FileNotFoundError:
-        return None
-    except OSError:
-        return None
-    if not raw:
-        return None
-    try:
-        return int(raw)
-    except ValueError:
-        return None
-
-
-def _write_sidecar_count(path: pathlib.Path, count: int) -> None:
-    """Atomically update the sidecar counter (write + rename)."""
-    cp = _count_path(path)
-    tmp = cp.with_suffix(cp.suffix + f".tmp.{os.getpid()}.{threading.get_native_id()}.{uuid.uuid4().hex}")
-    try:
-        with open(tmp, "wb") as f:
-            f.write(str(count).encode("ascii"))
-        os.replace(tmp, cp)
-    except OSError:
-        # Best-effort: a missing sidecar just forces the next caller
-        # to rescan once. Don't let a sidecar failure poison the
-        # actual append.
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-
-
-def _count_lines(path: pathlib.Path) -> int:
-    """Return the current number of newline-terminated lines in
-    ``path``. Prefers a sidecar counter for O(1) reads; falls back to a
-    one-time linear scan if no sidecar yet exists (e.g. for files
-    written by a peer process before this code shipped).
-    """
-    if not path.exists():
-        return 0
-    cached = _read_sidecar_count(path)
-    if cached is not None:
-        return cached
-    n = 0
-    with open(path, "rb") as f:
-        for _ in f:
-            n += 1
-    # Best-effort: bootstrap the sidecar so subsequent calls are O(1).
-    _write_sidecar_count(path, n)
-    return n
-
-
 def _append_jsonl_with_seq(path: pathlib.Path, record: dict, seq_field: str = "seq") -> int:
-    """Atomic count+append under flock; mirrors `store::append_jsonl_with_seq`.
+    """Validate and append under flock; mirrors Rust's session store.
 
-    Returns the seq number assigned. The same file lock that observes the
-    line count covers the append, so two writers cannot collide on seq.
-
-    On success we fsync the JSONL fd, write the updated sidecar count,
-    and release the lock. A crash between the JSONL write and the
-    sidecar update leaves the sidecar one entry stale; the next reader
-    will detect the mismatch by trying to read a record that doesn't
-    yet exist and re-bootstrap from scratch.
+    JSONL is the only sequence source of truth. Under the same exclusive
+    lock we verify strict ``seq == 0..N-1``, repair only an invalid
+    trailing fragment, allocate ``N``, write the complete line, and
+    fsync before unlocking.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o644)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
-        seq = _count_lines(path)
+        os.fchmod(fd, 0o600)
+        records, truncate_to, append_newline = _scan_jsonl_fd(fd, path)
+        if truncate_to is not None:
+            os.ftruncate(fd, truncate_to)
+        elif append_newline:
+            os.lseek(fd, 0, os.SEEK_END)
+            _write_all(fd, b"\n")
+        seq = len(records)
         record = dict(record)
         record[seq_field] = seq
-        line = json.dumps(record, separators=(",", ":")) + "\n"
-        os.write(fd, line.encode("utf-8"))
-        try:
-            os.fsync(fd)
-        except OSError:
-            pass
-        _write_sidecar_count(path, seq + 1)
+        _validate_json_value(record)
+        line = json.dumps(record, separators=(",", ":"), allow_nan=False) + "\n"
+        _validate_jsonl_record(path, line[:-1].encode("utf-8"), seq)
+        os.lseek(fd, 0, os.SEEK_END)
+        _write_all(fd, line.encode("utf-8"))
+        os.fsync(fd)
+        _fsync_directory(path.parent)
         return seq
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
+def _write_all(fd: int, payload: bytes) -> None:
+    view = memoryview(payload)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError(errno.EIO, "short write to durable-session log")
+        view = view[written:]
+
+
+def _read_all(fd: int) -> bytes:
+    os.lseek(fd, 0, os.SEEK_SET)
+    chunks: _t.List[bytes] = []
+    while True:
+        chunk = os.read(fd, 1024 * 1024)
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
+
+
+def _fsync_directory(path: pathlib.Path) -> None:
+    fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _reject_json_constant(value: str):
+    raise ValueError(f"non-finite JSON number: {value}")
+
+
+def _parse_json_int(value: str) -> int:
+    if value == "-0":
+        raise ValueError("JSON integer -0 is not accepted by serde_json as u64 seq")
+    parsed = int(value)
+    if parsed < -(1 << 63) or parsed > (1 << 64) - 1:
+        raise ValueError(f"JSON integer out of serde_json range: {value}")
+    return parsed
+
+
+def _parse_json_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError(f"non-finite JSON number: {value}")
+    return parsed
+
+
+def _validate_json_value(value) -> None:
+    if value is None or isinstance(value, (str, bool)):
+        return
+    if isinstance(value, int):
+        if value < -(1 << 63) or value > (1 << 64) - 1:
+            raise ValueError(f"JSON integer out of serde_json range: {value}")
+        return
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"non-finite JSON number: {value}")
+        return
+    if isinstance(value, list):
+        for item in value:
+            _validate_json_value(item)
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise ValueError("JSON object keys must be strings")
+            _validate_json_value(item)
+        return
+    raise ValueError(f"value is not JSON serializable: {type(value).__name__}")
+
+
+def _validate_jsonl_record(path: pathlib.Path, line: bytes, expected_seq: int) -> dict:
+    if not line:
+        raise SessionCorruptError(f"{path}: empty record at seq {expected_seq}")
+    try:
+        decoded = line.decode("utf-8")
+        record = json.loads(
+            decoded,
+            parse_constant=_reject_json_constant,
+            parse_int=_parse_json_int,
+            parse_float=_parse_json_float,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise SessionCorruptError(
+            f"{path}: invalid JSON at seq {expected_seq}: {exc}"
+        ) from exc
+    if not isinstance(record, dict):
+        raise SessionCorruptError(f"{path}: record at seq {expected_seq} is not an object")
+    seq = record.get("seq")
+    if isinstance(seq, bool) or not isinstance(seq, int) or seq < 0:
+        raise SessionCorruptError(
+            f"{path}: record at seq {expected_seq} has no unsigned seq"
+        )
+    if seq != expected_seq:
+        raise SessionCorruptError(
+            f"{path}: expected seq {expected_seq}, found {seq}"
+        )
+    return record
+
+
+def _scan_jsonl_fd(
+    fd: int, path: pathlib.Path
+) -> _t.Tuple[_t.List[dict], _t.Optional[int], bool]:
+    data = _read_all(fd)
+    records: _t.List[dict] = []
+    start = 0
+    while True:
+        end = data.find(b"\n", start)
+        if end < 0:
+            break
+        records.append(_validate_jsonl_record(path, data[start:end], len(records)))
+        start = end + 1
+
+    tail = data[start:]
+    if not tail:
+        return records, None, False
+    try:
+        record = _validate_jsonl_record(path, tail, len(records))
+    except SessionCorruptError as exc:
+        try:
+            tail.decode("utf-8")
+            json.loads(
+                tail,
+                parse_constant=_reject_json_constant,
+                parse_int=_parse_json_int,
+                parse_float=_parse_json_float,
+            )
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            return records, start, False
+        raise exc
+    records.append(record)
+    return records, None, True
+
+
+def _read_jsonl(path: pathlib.Path) -> _t.List[dict]:
+    if not path.exists():
+        return []
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH)
+        records, _, _ = _scan_jsonl_fd(fd, path)
+        return records
     finally:
         try:
             fcntl.flock(fd, fcntl.LOCK_UN)
@@ -351,29 +436,18 @@ class Session:
     def turns(self) -> _t.List[dict]:
         """Return every turn, oldest first. Tolerates a trailing half-line.
 
-        For very large turn logs prefer :meth:`iter_turns`, which yields
-        one record at a time instead of holding the whole file in RAM.
+        Validation is performed against one shared-locked snapshot.
         """
         return list(self.iter_turns())
 
     def iter_turns(self) -> _t.Iterator[dict]:
-        """Yield turns lazily, oldest first. Skips half-written tail
-        lines per the Phase 1.5 contract. The yielded dicts are
-        independent of the file — safe to mutate.
+        """Yield validated turns, oldest first.
+
+        A single invalid trailing fragment is ignored; corruption in
+        any complete record raises :class:`SessionCorruptError`.
         """
         path = self.dir / "turns.jsonl"
-        if not path.exists():
-            return
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                try:
-                    yield json.loads(stripped)
-                except json.JSONDecodeError:
-                    # Half-written tail line — skip per Phase 1.5 contract.
-                    continue
+        yield from _read_jsonl(path)
 
     def append_turn(
         self,
@@ -414,25 +488,13 @@ class Session:
     # ------------------------------------------------------------------
 
     def mutations(self) -> _t.List[dict]:
-        """Return every mutation, oldest first. See :meth:`iter_mutations`
-        for a streaming alternative when the file is large.
-        """
+        """Return every mutation from one validated, shared-locked snapshot."""
         return list(self.iter_mutations())
 
     def iter_mutations(self) -> _t.Iterator[dict]:
-        """Yield mutation records lazily, oldest first."""
+        """Yield validated mutation records lazily, oldest first."""
         path = self.dir / "mutations.jsonl"
-        if not path.exists():
-            return
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                try:
-                    yield json.loads(stripped)
-                except json.JSONDecodeError:
-                    continue
+        yield from _read_jsonl(path)
 
     def record_fs_write(
         self,
@@ -454,9 +516,9 @@ class Session:
         prev_bytes: bytes,
         runtime: _t.Optional[str] = None,
     ) -> int:
-        prev_blob = self._stash_blob(prev_bytes)
+        blob_id = self._stash_blob(prev_bytes)
         return self._record(
-            {"kind": "fs-delete", "path": path, "prev_blob": prev_blob},
+            {"kind": "fs-delete", "path": path, "blob_id": blob_id},
             runtime=runtime,
         )
 
@@ -509,16 +571,15 @@ class Session:
         tmp = target.with_suffix(
             f".bin.tmp.{os.getpid()}.{threading.get_native_id()}.{uuid.uuid4().hex}"
         )
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
-            os.write(fd, payload)
-            try:
-                os.fsync(fd)
-            except OSError:
-                pass
+            _write_all(fd, payload)
+            os.fsync(fd)
         finally:
             os.close(fd)
         os.replace(tmp, target)
+        _fsync_directory(blob_dir)
+        _fsync_directory(blob_dir.parent)
         return blob_id
 
     def _record(self, mutation: dict, *, runtime: _t.Optional[str]) -> int:
@@ -532,6 +593,7 @@ __all__ = [
     "Session",
     "Meta",
     "Lease",
+    "SessionCorruptError",
     "data_dir",
     "sessions_root",
     "session_dir",

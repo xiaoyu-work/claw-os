@@ -1,6 +1,7 @@
 """Tests for the calendar app."""
 
 import os
+import pathlib
 import sys
 import tempfile
 import unittest
@@ -21,7 +22,14 @@ sys.path.insert(
     ),
 )  # for `from cos_runtime import …`
 
-from main import run
+from test_support import load_local_module
+
+calendar_main = load_local_module(
+    pathlib.Path(__file__).with_name("main.py"),
+    "claw_test_calendar_main",
+    clear_modules=("_shared",),
+)
+run = calendar_main.run
 
 
 def _setup_local():
@@ -282,28 +290,24 @@ class TestProviderDetection(unittest.TestCase):
         _setup_local()
 
     def test_defaults_to_local(self):
-        from main import _detect_provider
-        self.assertEqual(_detect_provider(), "local")
+        self.assertEqual(calendar_main._detect_provider(), "local")
 
     def test_explicit_overrides(self):
-        from main import _detect_provider
-        self.assertEqual(_detect_provider("google"), "google")
-        self.assertEqual(_detect_provider("outlook"), "outlook")
-        self.assertEqual(_detect_provider("local"), "local")
+        self.assertEqual(calendar_main._detect_provider("google"), "google")
+        self.assertEqual(calendar_main._detect_provider("outlook"), "outlook")
+        self.assertEqual(calendar_main._detect_provider("local"), "local")
 
     def test_detects_google_token(self):
-        from main import _detect_provider
         os.environ["GOOGLE_CALENDAR_TOKEN"] = "fake"
         try:
-            self.assertEqual(_detect_provider(), "google")
+            self.assertEqual(calendar_main._detect_provider(), "google")
         finally:
             del os.environ["GOOGLE_CALENDAR_TOKEN"]
 
     def test_detects_outlook_token(self):
-        from main import _detect_provider
         os.environ["MICROSOFT_ACCESS_TOKEN"] = "fake"
         try:
-            self.assertEqual(_detect_provider(), "outlook")
+            self.assertEqual(calendar_main._detect_provider(), "outlook")
         finally:
             del os.environ["MICROSOFT_ACCESS_TOKEN"]
 

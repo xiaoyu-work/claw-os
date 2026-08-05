@@ -67,11 +67,10 @@ impl App {
 
             Message::AskClaw => {
                 let ctx = if let Some(selected) = &self.selected_opt {
-                    let safe_name = selected.info.name.replace('"', "\\\"");
                     format!(
                         r#"{{"app":"cosmic-store","view":"app","app_id":"{}","name":"{}"}}"#,
-                        selected.id.raw().replace('"', "\\\""),
-                        safe_name,
+                        escape_json_str(selected.id.raw()),
+                        escape_json_str(&selected.info.name),
                     )
                 } else if let Some(page) = self.explore_page_opt {
                     format!(

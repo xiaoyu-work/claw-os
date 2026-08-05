@@ -758,6 +758,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cosmic-config",
+ "ron",
  "serde",
  "smithay-client-toolkit",
  "tracing",

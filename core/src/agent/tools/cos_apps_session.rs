@@ -44,20 +44,19 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::process::{Child, Command};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 use tokio::time::timeout;
 
 use crate::agent::llm::run_log::{record as record_run, LlmRunRecord};
-use crate::agent::tools::mcp::client::McpClient;
-use crate::agent::tools::mcp::protocol::{
-    ClientCapabilities, Implementation, PROTOCOL_VERSION,
-};
+use crate::agent::tools::mcp::client::{ClientError, McpClient};
+use crate::agent::tools::mcp::protocol::{ClientCapabilities, Implementation, PROTOCOL_VERSION};
 use crate::agent::tools::mcp::transport::StdioTransport;
 use crate::caps::manifest::{Manifest, Runtime, SessionTransport};
 
@@ -77,6 +76,14 @@ struct ActiveSession {
     child: Option<Child>,
     /// For diagnostics + tool count surfaced through `open`.
     tool_count: usize,
+    /// Keeps the kernel-attested App session registered for the lifetime of
+    /// the MCP child.
+    identity: crate::bridge::AppIdentitySession,
+    /// Serializes grant + RPC + revoke so concurrent tool calls cannot
+    /// exercise each other's transient capabilities.
+    call_lock: Arc<Mutex<()>>,
+    child_pid: u32,
+    poisoned: Arc<AtomicBool>,
 }
 
 impl Drop for ActiveSession {
@@ -96,7 +103,8 @@ impl Drop for ActiveSession {
     }
 }
 
-type SessionTable = Mutex<HashMap<String, ActiveSession>>;
+type SessionKey = (u32, String, String);
+type SessionTable = Mutex<HashMap<SessionKey, ActiveSession>>;
 /// Per-app exclusion for the lazy-open path. The session table mutex
 /// is held only for hash-map probes; the actual spawn + handshake
 /// happens with this per-app lock held, so a tight burst of
@@ -105,7 +113,7 @@ type SessionTable = Mutex<HashMap<String, ActiveSession>>;
 /// by `app_id` and grows monotonically (one entry per app the agent
 /// ever touches in this process — bounded by the number of
 /// installed apps, so a memory non-issue).
-type OpenLocks = std::sync::Mutex<HashMap<String, Arc<Mutex<()>>>>;
+type OpenLocks = std::sync::Mutex<HashMap<SessionKey, Arc<Mutex<()>>>>;
 
 fn manager() -> &'static SessionTable {
     static MANAGER: OnceLock<SessionTable> = OnceLock::new();
@@ -117,11 +125,33 @@ fn open_locks() -> &'static OpenLocks {
     LOCKS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
 
-fn app_open_lock(app_id: &str) -> Arc<Mutex<()>> {
+fn app_open_lock(key: &SessionKey) -> Arc<Mutex<()>> {
     let mut map = open_locks().lock().unwrap_or_else(|p| p.into_inner());
-    map.entry(app_id.to_string())
+    map.entry(key.clone())
         .or_insert_with(|| Arc::new(Mutex::new(())))
         .clone()
+}
+
+fn session_key(app_id: &str) -> Result<SessionKey, String> {
+    let uid = match crate::paths::current_owner_uid_override() {
+        Some(uid) => uid,
+        None => {
+            #[cfg(unix)]
+            {
+                unsafe { libc::geteuid() as u32 }
+            }
+            #[cfg(not(unix))]
+            {
+                return Err("App sessions require a Unix owner identity".to_string());
+            }
+        }
+    };
+    if uid == 0 {
+        return Err("refusing to open an App session as root".to_string());
+    }
+    let parent = crate::proc::current_session_info_for_caps()
+        .ok_or_else(|| "App session requires a registered parent session".to_string())?;
+    Ok((uid, parent.session_id, app_id.to_string()))
 }
 
 // ---------------------------------------------------------------------------
@@ -156,7 +186,15 @@ async fn bring_up_app(
     app_dir: &Path,
     manifest: &Manifest,
     timeout_dur: Duration,
-) -> Result<(Arc<McpClient>, Child, usize), String> {
+) -> Result<
+    (
+        Arc<McpClient>,
+        Child,
+        usize,
+        crate::bridge::AppIdentitySession,
+    ),
+    String,
+> {
     let session = manifest
         .session
         .as_ref()
@@ -221,12 +259,15 @@ async fn bring_up_app(
     // (`<repo>/claw-os-sdk/python/src` and
     // `<repo>/cos-runtime/python/src`).
     let py_dirs = resolve_python_pkg_dirs(&apps_dir);
-    let mut path_parts: Vec<String> =
-        py_dirs.iter().map(|p| p.to_string_lossy().to_string()).collect();
+    let mut path_parts: Vec<String> = py_dirs
+        .iter()
+        .map(|p| p.to_string_lossy().to_string())
+        .collect();
     path_parts.push(apps_dir_str.clone());
     let pythonpath = path_parts.join(pathsep());
 
     let mut command = build_command(manifest.runtime, &entry_abs);
+    let mut app_session = crate::bridge::AppIdentitySession::for_mcp(app_id, manifest)?;
     // Wipe inherited env then reinstate the bare minimum + the
     // `COS_*` configuration variables. App-internal env from
     // `crate::config::as_env_vars()` is the curated subset the
@@ -237,7 +278,9 @@ async fn bring_up_app(
     }
     command
         .env("COS_APP_ID", app_id)
+        .env("COS_SESSION", app_session.id())
         .env("COS_DATA_DIR", &data_dir)
+        .env("COS_PROC_DATA_DIR", app_session.proc_data_dir())
         .env("COS_APPS_DIR", &apps_dir_str)
         .env("PYTHONPATH", &pythonpath)
         .env("PYTHONDONTWRITEBYTECODE", "1")
@@ -253,18 +296,36 @@ async fn bring_up_app(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(home) = crate::paths::current_home_override() {
+        command.env("HOME", &home).env("COS_HOME", home);
+    }
+    crate::bridge::apply_routed_identity(command.as_std_mut())?;
 
     let mut child = command
         .spawn()
         .map_err(|e| format!("spawn `{app_id}` session: {e}"))?;
-    let stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "child stdin unavailable".to_string())?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "child stdout unavailable".to_string())?;
+    let Some(child_pid) = child.id() else {
+        kill_and_reap_child(child);
+        return Err(format!("spawned `{app_id}` session has no pid"));
+    };
+    if let Err(error) = app_session.bind_process(child_pid) {
+        kill_and_reap_child(child);
+        return Err(error);
+    }
+    let stdin = match child.stdin.take() {
+        Some(stdin) => stdin,
+        None => {
+            kill_and_reap_child(child);
+            return Err("child stdin unavailable".to_string());
+        }
+    };
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            kill_and_reap_child(child);
+            return Err("child stdout unavailable".to_string());
+        }
+    };
     // Pipe + prefix child stderr so per-app log lines are
     // attributable and don't corrupt the parent's TUI/log stream.
     if let Some(stderr) = child.stderr.take() {
@@ -337,7 +398,7 @@ async fn bring_up_app(
         }
     };
 
-    Ok((client, child, listed_count))
+    Ok((client, child, listed_count, app_session))
 }
 
 /// Best-effort kill + detached reap of a child process. Used on
@@ -354,30 +415,35 @@ fn kill_and_reap_child(mut child: Child) {
 }
 
 fn build_command(runtime: Runtime, entry: &Path) -> Command {
+    let runner = crate::bridge::app_runner_path();
     match runtime {
         Runtime::Python => {
             let bin = if cfg!(windows) { "python" } else { "python3" };
-            let mut c = Command::new(bin);
-            c.arg(entry);
+            let mut c = Command::new(&runner);
+            c.arg("--").arg(bin).arg(entry);
             c
         }
         Runtime::Node => {
-            let mut c = Command::new("node");
-            c.arg(entry);
+            let mut c = Command::new(&runner);
+            c.arg("--").arg("node").arg(entry);
             c
         }
         Runtime::Shell => {
             if cfg!(windows) {
-                let mut c = Command::new("cmd");
-                c.arg("/c").arg(entry);
+                let mut c = Command::new(&runner);
+                c.arg("--").arg("cmd").arg("/c").arg(entry);
                 c
             } else {
-                let mut c = Command::new("bash");
-                c.arg(entry);
+                let mut c = Command::new(&runner);
+                c.arg("--").arg("bash").arg(entry);
                 c
             }
         }
-        Runtime::Binary => Command::new(entry),
+        Runtime::Binary => {
+            let mut c = Command::new(&runner);
+            c.arg("--").arg(entry);
+            c
+        }
     }
 }
 
@@ -386,8 +452,9 @@ fn build_command(runtime: Runtime, entry: &Path) -> Command {
 // ---------------------------------------------------------------------------
 
 /// Default per-call timeout. App session calls share the same upper
-/// bound as MCP catalog calls; long-running work should use the
-/// app-defined `start_task`/`poll` pattern, not a single long call.
+/// bound as MCP catalog calls. Capability-bearing work must finish
+/// within the request; grants are cleared as soon as the response is
+/// received.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Return the active client for `app_id`, opening the session lazily
@@ -395,13 +462,94 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 /// fine — sessions are infrequent and the spawn happens off-thread
 /// via tokio's blocking pool inside `Command::spawn`).
 async fn get_or_open(app_id: &str) -> Result<Arc<McpClient>, String> {
-    {
-        let table = manager().lock().await;
-        if let Some(s) = table.get(app_id) {
-            return Ok(s.client.clone());
+    let key = session_key(app_id)?;
+    let stale = {
+        let mut table = manager().lock().await;
+        if let Some(s) = table.get(&key) {
+            if !s.poisoned.load(Ordering::SeqCst) {
+                return Ok(s.client.clone());
+            }
+        }
+        table.remove(&key)
+    };
+    drop(stale);
+    open_session(app_id).await.map(|(c, _)| c)
+}
+
+struct ActiveCallGuard {
+    control: crate::bridge::AppSessionControl,
+    child_pid: u32,
+    completed: bool,
+    poisoned: Arc<AtomicBool>,
+    _lock: OwnedMutexGuard<()>,
+}
+
+impl ActiveCallGuard {
+    fn mark_completed(&mut self) {
+        self.completed = true;
+    }
+}
+
+impl Drop for ActiveCallGuard {
+    fn drop(&mut self) {
+        let clear = self.control.set_transient_caps(None);
+        if let Err(error) = &clear {
+            tracing::warn!(
+                child_pid = self.child_pid,
+                error = %error,
+                "failed to clear App MCP transient capabilities; killing session"
+            );
+        }
+        if !self.completed || clear.is_err() {
+            self.poisoned.store(true, Ordering::SeqCst);
+            #[cfg(unix)]
+            unsafe {
+                libc::kill(self.child_pid as i32, libc::SIGKILL);
+            }
         }
     }
-    open_session(app_id).await.map(|(c, _)| c)
+}
+
+async fn begin_active_session_call(
+    app_id: &str,
+    caps: &[crate::caps::Cap],
+) -> Result<ActiveCallGuard, String> {
+    let key = session_key(app_id)?;
+    let (control, child_pid, call_lock, poisoned) = {
+        let table = manager().lock().await;
+        let session = table
+            .get(&key)
+            .ok_or_else(|| format!("App session `{app_id}` is not open"))?;
+        (
+            session.identity.control(),
+            session.child_pid,
+            session.call_lock.clone(),
+            session.poisoned.clone(),
+        )
+    };
+    let lock = call_lock.lock_owned().await;
+    if let Err(error) =
+        control.set_transient_caps(Some(crate::caps::CapSet::from_caps(caps.iter().cloned())))
+    {
+        let clear_error = control.set_transient_caps(None).err();
+        #[cfg(unix)]
+        unsafe {
+            libc::kill(child_pid as i32, libc::SIGKILL);
+        }
+        return Err(match clear_error {
+            Some(clear) => {
+                format!("{error}; transient state was uncertain and cleanup failed: {clear}")
+            }
+            None => error,
+        });
+    }
+    Ok(ActiveCallGuard {
+        control,
+        child_pid,
+        completed: false,
+        poisoned,
+        _lock: lock,
+    })
 }
 
 /// Explicitly bring up `app_id`. Returns `(client, tool_count)`.
@@ -416,32 +564,46 @@ async fn get_or_open(app_id: &str) -> Result<Arc<McpClient>, String> {
 /// whole probe-then-spawn-then-insert sequence so exactly one child
 /// is created per app per process.
 async fn open_session(app_id: &str) -> Result<(Arc<McpClient>, usize), String> {
-    let lock = app_open_lock(app_id);
+    let key = session_key(app_id)?;
+    let lock = app_open_lock(&key);
     let _open_guard = lock.lock().await;
 
     // Re-probe under the per-app lock — another racer may have just
     // finished the spawn we were blocked on.
-    {
-        let table = manager().lock().await;
-        if let Some(s) = table.get(app_id) {
-            return Ok((s.client.clone(), s.tool_count));
+    let stale = {
+        let mut table = manager().lock().await;
+        if let Some(s) = table.get(&key) {
+            if !s.poisoned.load(Ordering::SeqCst) {
+                return Ok((s.client.clone(), s.tool_count));
+            }
         }
-    }
-    let app_dir = apps_root().join(app_id);
+        table.remove(&key)
+    };
+    drop(stale);
+    let app_dir = crate::apps::find(&apps_root(), app_id)
+        .map(|app| app.dir)
+        .ok_or_else(|| format!("App `{app_id}` is not installed"))?;
     let manifest_path = app_dir.join("app.json");
     let manifest_text = std::fs::read_to_string(&manifest_path)
         .map_err(|e| format!("read manifest for `{app_id}`: {e}"))?;
     let manifest = Manifest::from_json(&manifest_text)
         .map_err(|e| format!("parse manifest for `{app_id}`: {e}"))?;
-    let (client, child, listed) =
+    let (client, child, listed, identity) =
         bring_up_app(app_id, &app_dir, &manifest, DEFAULT_TIMEOUT).await?;
+    let child_pid = child
+        .id()
+        .ok_or_else(|| format!("App session `{app_id}` lost its pid"))?;
     let mut table = manager().lock().await;
     table.insert(
-        app_id.to_string(),
+        key,
         ActiveSession {
             client: client.clone(),
             child: Some(child),
             tool_count: listed,
+            identity,
+            call_lock: Arc::new(Mutex::new(())),
+            child_pid,
+            poisoned: Arc::new(AtomicBool::new(false)),
         },
     );
     Ok((client, listed))
@@ -457,9 +619,12 @@ async fn open_session(app_id: &str) -> Result<(Arc<McpClient>, usize), String> {
 /// session will return `ConnectionClosed` once the child's stdio is
 /// torn down.
 async fn close_session(app_id: &str) -> bool {
+    let Ok(key) = session_key(app_id) else {
+        return false;
+    };
     let removed = {
         let mut table = manager().lock().await;
-        table.remove(app_id)
+        table.remove(&key)
     };
     let was_present = removed.is_some();
     // Explicit drop here to make the lifetime obvious — the Drop
@@ -473,7 +638,11 @@ fn apps_root() -> PathBuf {
 }
 
 fn data_dir_string() -> String {
-    crate::paths::data_dir().to_string_lossy().into_owned()
+    if crate::paths::current_owner_uid_override().is_some() {
+        crate::paths::user_data_dir().to_string_lossy().into_owned()
+    } else {
+        crate::paths::data_dir().to_string_lossy().into_owned()
+    }
 }
 
 /// Environment variables an app-session child needs at a minimum:
@@ -483,8 +652,20 @@ fn data_dir_string() -> String {
 /// by [`bring_up_app`]'s `env_clear`.
 fn safe_session_env_allowlist() -> Vec<(String, String)> {
     const ALWAYS: &[&str] = &[
-        "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES",
-        "TZ", "TERM", "TMPDIR", "TEMP", "TMP",
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LC_MESSAGES",
+        "TZ",
+        "TERM",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
     ];
     let mut out = Vec::with_capacity(ALWAYS.len());
     for k in ALWAYS {
@@ -564,10 +745,7 @@ pub struct AppSessionTool {
 }
 
 impl AppSessionTool {
-    fn from_manifest_tool(
-        manifest: Arc<Manifest>,
-        tool_idx: usize,
-    ) -> Self {
+    fn from_manifest_tool(manifest: Arc<Manifest>, tool_idx: usize) -> Self {
         let session = manifest
             .session
             .as_ref()
@@ -640,10 +818,7 @@ fn build_schema(args: &[crate::caps::manifest::Arg]) -> Value {
             Value::Array(required.into_iter().map(Value::String).collect()),
         );
     }
-    schema.insert(
-        "additionalProperties".to_string(),
-        Value::Bool(false),
-    );
+    schema.insert("additionalProperties".to_string(), Value::Bool(false));
     Value::Object(schema)
 }
 
@@ -716,8 +891,15 @@ impl Tool for AppSessionTool {
                     Some(&e),
                     started.elapsed(),
                 );
+                return ToolResult::err(format!("could not bring up app `{}`: {e}", self.app_id));
+            }
+        };
+        let mut active_call = match begin_active_session_call(&self.app_id, &caps).await {
+            Ok(guard) => guard,
+            Err(error) => {
+                close_session(&self.app_id).await;
                 return ToolResult::err(format!(
-                    "could not bring up app `{}`: {e}",
+                    "could not grant App `{}` call capabilities: {error}",
                     self.app_id
                 ));
             }
@@ -748,12 +930,14 @@ impl Tool for AppSessionTool {
                     Some(&msg),
                     started.elapsed(),
                 );
+                drop(active_call);
+                close_session(&self.app_id).await;
                 return ToolResult::err(msg);
             }
         };
-
         match res {
             Ok(call_result) => {
+                active_call.mark_completed();
                 let (content, is_error) = render_call_result(call_result);
                 emit_audit(
                     &self.app_id,
@@ -761,7 +945,11 @@ impl Tool for AppSessionTool {
                     verb_csv(&caps).as_str(),
                     "allowed",
                     None,
-                    if is_error { Some(content.as_str()) } else { None },
+                    if is_error {
+                        Some(content.as_str())
+                    } else {
+                        None
+                    },
                     started.elapsed(),
                 );
                 if is_error {
@@ -771,6 +959,12 @@ impl Tool for AppSessionTool {
                 }
             }
             Err(e) => {
+                if matches!(e, ClientError::Server { .. }) {
+                    active_call.mark_completed();
+                } else {
+                    drop(active_call);
+                    close_session(&self.app_id).await;
+                }
                 let msg = format!(
                     "app `{}` tool `{}` failed: {e}",
                     self.app_id, self.manifest_tool_name
@@ -832,7 +1026,7 @@ fn emit_audit(
     error: Option<&str>,
     duration: Duration,
 ) {
-    let session_id = std::env::var("COS_SESSION").ok();
+    let session_id = crate::proc::current_session_id();
     let mut rec = LlmRunRecord::from_tool_call(
         tool_name,
         app_id,
@@ -959,9 +1153,11 @@ impl Tool for CosAppSessionClose {
 }
 
 fn manifest_tool_names(app_id: &str) -> Result<Vec<String>, String> {
-    let manifest_path = apps_root().join(app_id).join("app.json");
-    let text = std::fs::read_to_string(&manifest_path)
-        .map_err(|e| format!("read manifest: {e}"))?;
+    let manifest_path = crate::apps::find(&apps_root(), app_id)
+        .map(|app| app.dir.join("app.json"))
+        .ok_or_else(|| format!("App `{app_id}` is not installed"))?;
+    let text =
+        std::fs::read_to_string(&manifest_path).map_err(|e| format!("read manifest: {e}"))?;
     let manifest = Manifest::from_json(&text).map_err(|e| format!("parse manifest: {e}"))?;
     Ok(manifest
         .session
@@ -1042,6 +1238,19 @@ mod tests {
         .unwrap();
     }
 
+    fn install_test_app_runner(root: &Path) -> crate::test_env::TestEnvVarGuard {
+        use std::os::unix::fs::PermissionsExt;
+
+        let runner = root.join("claw-app-runner");
+        std::fs::write(
+            &runner,
+            "#!/bin/sh\n[ \"$1\" = \"--\" ] && shift\nexec \"$@\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&runner, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_env::TestEnvVarGuard::set("CLAW_APP_RUNNER_BIN", runner)
+    }
+
     #[test]
     fn register_all_emits_one_tool_per_manifest_entry_plus_meta() {
         let _g = env_lock();
@@ -1097,7 +1306,10 @@ mod tests {
         let required = schema["required"].as_array().unwrap();
         assert_eq!(required.len(), 1);
         assert_eq!(required[0].as_str(), Some("key"));
-        assert_eq!(schema["properties"]["ttl"]["default"], serde_json::json!(60));
+        assert_eq!(
+            schema["properties"]["ttl"]["default"],
+            serde_json::json!(60)
+        );
         assert_eq!(schema["properties"]["key"]["type"], "string");
         assert_eq!(schema["properties"]["ttl"]["type"], "number");
     }
@@ -1137,12 +1349,20 @@ mod tests {
         std::env::set_var("COS_APPS_DIR", &apps_dir);
         std::env::set_var("COS_DATA_DIR", data.path());
         std::env::set_var("COS_CAPS_MODE", "permissive");
+        let _session = crate::test_env::TestSessionGuard::admin(data.path());
+        let _local_sessions =
+            crate::test_env::TestEnvVarGuard::set("COS_TEST_LOCAL_APP_SESSIONS", "1");
+        let _runner = install_test_app_runner(data.path());
 
         // Make sure no stale entry from a previous test run survives.
         let _ = close_session("kv").await;
 
         let opened = open_session("kv").await.expect("open kv");
-        assert!(opened.1 >= 5, "kv should advertise ≥5 tools, got {}", opened.1);
+        assert!(
+            opened.1 >= 5,
+            "kv should advertise ≥5 tools, got {}",
+            opened.1
+        );
 
         // 1) set, get — verify in-memory state survives.
         let r = opened
@@ -1160,19 +1380,10 @@ mod tests {
         let text = first_text(&r);
         assert!(text.contains("42"), "kv.get returned: {text}");
 
-        // 2) list — confirms the cached dict is the same instance
-        // across calls (the previous set/get hit it).
-        let r = opened
-            .0
-            .call_tool("kv.list", None)
-            .await
-            .expect("list");
+        let r = opened.0.call_tool("kv.list", None).await.expect("list");
         let text = first_text(&r);
         assert!(text.contains("\"x\""), "kv.list returned: {text}");
 
-        // 3) close → re-open → list should now be empty *only if* the
-        // server reloads from disk. The pilot persists to a JSON
-        // file in $COS_DATA_DIR, so re-opening should still see "x".
         let closed = close_session("kv").await;
         assert!(closed);
         let opened2 = open_session("kv").await.expect("re-open kv");
@@ -1187,7 +1398,6 @@ mod tests {
             "post-restart get should re-load value: {text}"
         );
 
-        // Clean up so subsequent tests start fresh.
         let _ = close_session("kv").await;
 
         match prev_apps {
@@ -1224,7 +1434,10 @@ mod tests {
             .unwrap()
             .join("apps");
         if !apps_dir.join("kv").join("server.py").is_file() {
-            eprintln!("skip open_race_single_child: {} not present", apps_dir.display());
+            eprintln!(
+                "skip open_race_single_child: {} not present",
+                apps_dir.display()
+            );
             return;
         }
         if std::process::Command::new("python3")
@@ -1243,6 +1456,10 @@ mod tests {
         std::env::set_var("COS_APPS_DIR", &apps_dir);
         std::env::set_var("COS_DATA_DIR", data.path());
         std::env::set_var("COS_CAPS_MODE", "permissive");
+        let _session = crate::test_env::TestSessionGuard::admin(data.path());
+        let _local_sessions =
+            crate::test_env::TestEnvVarGuard::set("COS_TEST_LOCAL_APP_SESSIONS", "1");
+        let _runner = install_test_app_runner(data.path());
 
         let _ = close_session("kv").await;
 

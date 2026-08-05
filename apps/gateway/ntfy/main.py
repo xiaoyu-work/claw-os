@@ -272,7 +272,7 @@ def _send(
             headers=headers,
             body=body_text,
             timeout=20,
-            verb_id="gateway.ntfy.send",
+            verb_id="net.dial",
         )
         raw = raw_resp.decode("utf-8", errors="replace")
         try:

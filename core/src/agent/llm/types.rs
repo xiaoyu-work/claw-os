@@ -79,18 +79,15 @@ pub struct Tool {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ToolChoice {
+    #[default]
     Auto,
     None,
     Required,
     Tool { name: String },
 }
 
-impl Default for ToolChoice {
-    fn default() -> Self {
-        Self::Auto
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatRequest {

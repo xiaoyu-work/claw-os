@@ -24,3 +24,8 @@ seconds-ago = { $n }s ago
 minutes-ago = { $n }m ago
 hours-ago = { $n }h ago
 days-ago = { $n }d ago
+
+# Top-panel label. Mirrors the "AI: Idle" status shown in the shell design.
+panel-idle = AI: Idle
+panel-busy = AI: Working ({ $count })
+panel-offline = AI: Offline

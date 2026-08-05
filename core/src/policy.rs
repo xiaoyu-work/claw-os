@@ -29,9 +29,7 @@ struct Registry {
 }
 
 fn proc_registry_path() -> PathBuf {
-    crate::paths::data_dir()
-        .join("proc")
-        .join("registry.json")
+    crate::proc::registry_path_for_caps()
 }
 
 fn load_proc_registry(path: &PathBuf) -> Registry {
@@ -44,7 +42,7 @@ fn load_proc_registry(path: &PathBuf) -> Registry {
 /// Returns the current `COS_SESSION`'s legacy tier, or `None` if no
 /// session context is set or the session has no tier assigned.
 pub fn current_tier() -> Option<u8> {
-    let sid = std::env::var("COS_SESSION").ok()?;
+    let sid = crate::proc::current_session_id()?;
     let reg = load_proc_registry(&proc_registry_path());
     reg.sessions
         .iter()

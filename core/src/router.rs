@@ -19,6 +19,7 @@ use crate::mem_bridge;
 use crate::perms;
 use crate::service;
 use crate::sysinfo;
+use crate::triggers;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -38,6 +39,79 @@ fn applications_dir() -> PathBuf {
 
 fn data_dir() -> String {
     crate::paths::data_dir().to_string_lossy().into_owned()
+}
+
+fn run_cron(command: &str, args: &[String]) -> Result<Value, String> {
+    run_scheduler_command("cron", command, args, cron::run)
+}
+
+fn run_triggers(command: &str, args: &[String]) -> Result<Value, String> {
+    run_scheduler_command("triggers", command, args, triggers::run)
+}
+
+fn run_scheduler_command(
+    subsystem: &str,
+    command: &str,
+    args: &[String],
+    local: fn(&str, &[String]) -> Result<Value, String>,
+) -> Result<Value, String> {
+    if !should_proxy_scheduler_command() {
+        return local(command, args);
+    }
+    let request = crate::clawd::protocol::Request {
+        id: None,
+        command: "scheduler.run".to_string(),
+        params: json!({
+            "subsystem": subsystem,
+            "command": command,
+            "args": args,
+        }),
+    };
+    let response =
+        crate::clawd::client::request_blocking(crate::paths::clawd_socket_path(), request)?;
+    if response.ok {
+        response
+            .result
+            .ok_or_else(|| "clawd scheduler response had no result".to_string())
+    } else {
+        Err(response
+            .error
+            .map(|error| error.message)
+            .unwrap_or_else(|| "clawd scheduler request failed".to_string()))
+    }
+}
+
+fn request_clawd(command: &str, params: Value) -> Result<Value, String> {
+    let request = crate::clawd::protocol::Request {
+        id: None,
+        command: command.to_string(),
+        params,
+    };
+    let response =
+        crate::clawd::client::request_blocking(crate::paths::clawd_socket_path(), request)?;
+    if response.ok {
+        response
+            .result
+            .ok_or_else(|| format!("clawd {command} response had no result"))
+    } else {
+        Err(response
+            .error
+            .map(|error| error.message)
+            .unwrap_or_else(|| format!("clawd {command} request failed")))
+    }
+}
+
+fn should_proxy_scheduler_command() -> bool {
+    #[cfg(unix)]
+    {
+        crate::paths::current_owner_uid_override().is_none()
+            && unsafe { libc::geteuid() } != 0
+            && !crate::caps::enforcement::process_has_no_new_privs()
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
 }
 
 fn audit_path() -> PathBuf {
@@ -100,6 +174,29 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__package" {
+        let command = args
+            .get(1)
+            .ok_or_else(|| "internal package command required".to_string())?;
+        if command != "install" {
+            return Err(format!("unknown internal package command: {command}"));
+        }
+        let package = args
+            .get(2)
+            .ok_or_else(|| "internal package install requires a package name".to_string())?;
+        crate::clawd::packages::validate_package_name(package)?;
+        let session = env::var("COS_SESSION")
+            .map_err(|_| "internal package install requires COS_SESSION".to_string())?;
+        let value = request_clawd(
+            "system.package.install",
+            json!({
+                "session": session,
+                "package": package,
+            }),
+        )?;
+        return Ok(Some(value.to_string()));
+    }
+
     // "app" namespace → route to Python apps
     if name == "app" {
         return dispatch_app(&args[1..]);
@@ -111,7 +208,8 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         "service" => dispatch_builtin(args, "service", service::run),
         "checkpoint" => dispatch_builtin(args, "checkpoint", checkpoint::run),
         "credential" => dispatch_builtin(args, "credential", credential::run),
-        "cron" => dispatch_builtin(args, "cron", cron::run),
+        "cron" => dispatch_builtin(args, "cron", run_cron),
+        "triggers" => dispatch_builtin(args, "triggers", run_triggers),
         "ai" => dispatch_builtin(args, "ai", ai::run),
         "agent" => dispatch_agent(args),
         "model" => dispatch_builtin(args, "model", model::run),
@@ -1013,7 +1111,7 @@ fn consent_cmd(
                     Some(p) => p,
                     None => continue,
                 };
-                let stored = consent::load(id).map_err(|e| e)?;
+                let stored = consent::load(id)?;
                 let (status, changed): (&str, Vec<String>) = match &stored {
                     None => ("missing", Vec::new()),
                     Some(c) => match consent::freshness(policy, c) {
@@ -1048,7 +1146,7 @@ fn consent_cmd(
             let app = args
                 .get(1)
                 .ok_or_else(|| "usage: cos app consent show <app>".to_string())?;
-            let stored = consent::load(app).map_err(|e| e)?;
+            let stored = consent::load(app)?;
             Ok(Some(
                 json!({
                     "app": app,
@@ -1430,7 +1528,7 @@ fn builtin_apps() -> Vec<(
             ("tick", "Process all due jobs (called by scheduler every minute)"),
         ]),
         ("ai", "App-facing AI gate — single-shot LLM / embedding / image / audio / video calls scoped to one installed App. Distinct from `cos agent`: this is the App-developer-facing primitive, not the kernel Agent product.", vec![
-            ("chat", "One-shot App-gated AI call: cos ai chat --app <id> [--prompt <text>] [--prompt-file <p>] [--origin trusted|user-input|external-content] [--max-units N] [--system <text>] [--embed] [--image-input <p>|--image-output <p>] [--audio-input <p>|--audio-output <p>] [--video-input <p>|--video-output <p>]. Modality (chat/embed/image/audio/vision/video) is auto-derived from the request shape; verbs are never passed at the CLI. Apps do not pick the model — the OS owner configures it in /etc/cos/agent.toml."),
+            ("chat", "Stable one-shot App-gated text chat: cos ai chat --app <id> [--prompt <text>|--prompt-file <p>] [--origin trusted|user-input|external-content] [--max-units N] [--system <text>|--system-file <p>]. external-content selects ai.chat.untrusted. Embed/image/vision/audio/video selectors are experimental and currently return unsupported."),
             ("tool", "Invoke one App-facing Tool by name: cos ai tool <name> --app <id> [--args <json>|--args-file <p>]. The kernel checks the App's caps grants, runs the Tool, and writes one audit row per call. List tools with `cos ai tools`."),
             ("tools", "Print the catalog of App-facing Tools (name, summary, verb, stability, JSON-Schema for args and return). Used by App authors and LLM function-call spec generators."),
         ]),
@@ -2008,94 +2106,32 @@ fn show_app_command_schema(
     command: &str,
     app: &apps::App,
 ) -> Result<Option<String>, String> {
-    // Call the Python app with __schema__ to get live schema
-    let data_dir = data_dir();
-    let apps = apps_dir().to_string_lossy().to_string();
-
-    match bridge::run_python_app(&app.dir, "__schema__", &[], &data_dir, &apps) {
-        Ok(Some(output)) => {
-            if let Ok(schema) = serde_json::from_str::<Value>(&output) {
-                if let Some(cmd_schema) = schema.get(command) {
-                    let desc = app
-                        .manifest
-                        .operations
-                        .get(command)
-                        .map(|op| op.summary.current().to_string())
-                        .unwrap_or_else(|| "No description".to_string());
-                    let mut result = json!({
-                        "command": format!("cos app {app_name} {command}"),
-                        "description": desc,
-                    });
-                    if let Some(params) = cmd_schema.get("parameters") {
-                        result["parameters"] = params.clone();
-                    }
-                    if let Some(example) = cmd_schema.get("example") {
-                        result["example"] = example.clone();
-                    }
-                    return Ok(Some(result.to_string()));
-                }
-            }
-            // Schema returned but command not found in it
-            let desc = app
-                .manifest
-                .operations
-                .get(command)
-                .map(|op| op.summary.current().to_string())
-                .unwrap_or_else(|| "No description".to_string());
-            Ok(Some(
-                json!({
-                    "command": format!("cos app {app_name} {command}"),
-                    "description": desc,
-                })
-                .to_string(),
-            ))
-        }
-        _ => {
-            // App doesn't support __schema__ — return basic info
-            let desc = app
-                .manifest
-                .operations
-                .get(command)
-                .map(|op| op.summary.current().to_string())
-                .unwrap_or_else(|| "No description".to_string());
-            Ok(Some(
-                json!({
-                    "command": format!("cos app {app_name} {command}"),
-                    "description": desc,
-                })
-                .to_string(),
-            ))
-        }
-    }
+    let operation = app
+        .manifest
+        .operations
+        .get(command)
+        .ok_or_else(|| format!("unknown App operation: {app_name} {command}"))?;
+    let schema = apps::operation_schema(operation);
+    Ok(Some(
+        json!({
+            "command": format!("cos app {app_name} {command}"),
+            "description": schema["description"].clone(),
+            "parameters": schema["parameters"].clone(),
+        })
+        .to_string(),
+    ))
 }
 
 fn show_app_schema(app_name: &str, app: &apps::App) -> Result<Option<String>, String> {
-    let data_dir = data_dir();
-    let apps = apps_dir().to_string_lossy().to_string();
-
-    // Try to get live schema from the app
-    let live_schema = match bridge::run_python_app(&app.dir, "__schema__", &[], &data_dir, &apps) {
-        Ok(Some(output)) => serde_json::from_str::<Value>(&output).ok(),
-        _ => None,
-    };
-
     let mut commands = Vec::new();
     for (cmd_name, op) in &app.manifest.operations {
-        let mut entry = json!({
+        let schema = apps::operation_schema(op);
+        let entry = json!({
             "command": cmd_name,
             "label": op.label.current(),
             "description": op.summary.current(),
+            "parameters": schema["parameters"].clone(),
         });
-        if let Some(ref schema) = live_schema {
-            if let Some(cmd_schema) = schema.get(cmd_name.as_str()) {
-                if let Some(params) = cmd_schema.get("parameters") {
-                    entry["parameters"] = params.clone();
-                }
-                if let Some(example) = cmd_schema.get("example") {
-                    entry["example"] = example.clone();
-                }
-            }
-        }
         commands.push(entry);
     }
 

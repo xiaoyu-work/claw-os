@@ -177,7 +177,7 @@ def _send(to: str, text: str) -> dict:
             headers=headers,
             body=body,
             timeout=20,
-            verb_id="gateway.sms.send",
+            verb_id="net.dial",
         )
         raw = raw_resp.decode("utf-8", errors="replace")
         try:

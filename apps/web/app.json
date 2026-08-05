@@ -85,10 +85,7 @@
         },
         {
           "verb": "ai.chat.untrusted",
-          "scope": {
-            "kind": "fixed",
-            "scope": { "kind": "name", "value": "claude-*" }
-          },
+          "scope": { "kind": "wild" },
           "why": { "en": "Send the fetched page text to a model so it can be summarised for you." }
         },
         {

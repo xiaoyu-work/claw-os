@@ -14,28 +14,73 @@ a degradation we silently absorb.
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import time
 
 
 def _runtime_dir():
-    return os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
+    base = os.environ.get("XDG_RUNTIME_DIR")
+    if not base or not os.path.isabs(base):
+        return None
+    return os.path.join(base, "cos-agent-bridge")
 
 
-def _port_file():
-    return os.path.join(_runtime_dir(), "cos-agent-bridge.port")
+def _endpoint_file():
+    runtime_dir = _runtime_dir()
+    return os.path.join(runtime_dir, "endpoint.json") if runtime_dir else None
 
 
-def _read_port(timeout=0.5):
-    """Read the bridge's bound port, optionally polling until timeout."""
-    path = _port_file()
+def _read_endpoint(timeout=0.5):
+    """Read the bridge's private endpoint, optionally polling until timeout."""
+    path = _endpoint_file()
+    if path is None:
+        return None
     deadline = time.monotonic() + timeout
     while True:
         try:
-            with open(path, "r") as f:
-                return int(f.read().strip())
-        except (FileNotFoundError, ValueError):
+            runtime_metadata = os.stat(os.path.dirname(path), follow_symlinks=False)
+            if (
+                not stat.S_ISDIR(runtime_metadata.st_mode)
+                or runtime_metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(runtime_metadata.st_mode) & 0o077
+            ):
+                return None
+            flags = (
+                os.O_RDONLY
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+            )
+            fd = os.open(path, flags)
+            try:
+                metadata = os.fstat(fd)
+                if (
+                    not stat.S_ISREG(metadata.st_mode)
+                    or metadata.st_uid != os.geteuid()
+                    or stat.S_IMODE(metadata.st_mode) & 0o077
+                    or metadata.st_size <= 0
+                    or metadata.st_size > 4096
+                ):
+                    return None
+                with os.fdopen(fd, "r", encoding="utf-8") as endpoint_file:
+                    fd = -1
+                    endpoint = json.load(endpoint_file)
+            finally:
+                if fd >= 0:
+                    os.close(fd)
+            port = endpoint.get("port")
+            token = endpoint.get("token")
+            if (
+                isinstance(port, int)
+                and 1 <= port <= 65535
+                and isinstance(token, str)
+                and 32 <= len(token) <= 256
+                and all(char.isascii() and (char.isalnum() or char in "-_") for char in token)
+            ):
+                return endpoint
+            return None
+        except (FileNotFoundError, OSError, ValueError, TypeError, json.JSONDecodeError):
             if time.monotonic() >= deadline:
                 return None
             time.sleep(0.1)
@@ -62,13 +107,13 @@ def _start_bridge():
         return False
 
 
-def _ensure_port():
-    """Return the bridge port, starting the unit on demand if needed."""
-    port = _read_port(timeout=0.5)
-    if port is not None:
-        return port
+def _ensure_endpoint():
+    """Return the bridge endpoint, starting the unit on demand if needed."""
+    endpoint = _read_endpoint(timeout=0.5)
+    if endpoint is not None:
+        return endpoint
     _start_bridge()
-    return _read_port(timeout=5.0)
+    return _read_endpoint(timeout=5.0)
 
 
 def _find_native_ui():
@@ -81,8 +126,8 @@ def _exec_native(extra_args):
 
     execv collapses cos → python → cos-agent-ui into one PID so the
     .desktop launcher's lifecycle tracks the actual window. The
-    native binary reads the bridge port from the port file itself, so
-    we don't need _ensure_port() on the happy path.
+    native binary reads the authenticated bridge endpoint itself, so
+    we don't need _ensure_endpoint() on the happy path.
     """
     native = _find_native_ui()
     if not native:
@@ -98,11 +143,16 @@ def _exec_native(extra_args):
 
 
 def _cmd_url(_args):
-    """Print http://127.0.0.1:PORT/. Useful for scripting + debugging."""
-    port = _ensure_port()
-    if port is None:
+    """Return the authenticated local endpoint for scripting and debugging."""
+    endpoint = _ensure_endpoint()
+    if endpoint is None:
         return {"error": "cos-agent-bridge is not running"}
-    return {"url": f"http://127.0.0.1:{port}/", "port": port}
+    port = endpoint["port"]
+    return {
+        "url": f"http://127.0.0.1:{port}/api/",
+        "port": port,
+        "authorization": "Bearer " + endpoint["token"],
+    }
 
 
 def _cmd_open(_args):
@@ -152,7 +202,7 @@ def _schema():
             "example": "cos app agent overlay --query 'find my budget spreadsheet'",
         },
         "url": {
-            "description": "Print the URL of the local cos-agent-bridge",
+            "description": "Return the authenticated local cos-agent-bridge endpoint",
             "parameters": [],
             "example": "cos app agent url",
         },

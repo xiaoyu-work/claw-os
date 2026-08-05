@@ -207,6 +207,153 @@ impl Transport for StdioTransport {
 /// memory limit that would matter operationally.
 pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
+/// Streamable-HTTP / SSE transport for connecting to a **remote** MCP
+/// server (the MCP 2025 "Streamable HTTP" transport). This is the gap
+/// that kept ClawOS from using hosted MCP servers — stdio only reaches
+/// local subprocesses.
+///
+/// `send` POSTs a JSON-RPC frame to the endpoint; the server answers
+/// either with a single `application/json` body or a
+/// `text/event-stream` carrying one-or-more messages. Every response
+/// frame is queued and surfaced through `recv`, so the client/server
+/// modules keep speaking the same framed send/recv contract regardless
+/// of transport. The server-assigned `Mcp-Session-Id` is captured from
+/// the response headers and echoed on every subsequent request, as the
+/// spec requires.
+pub struct HttpTransport {
+    client: reqwest::Client,
+    url: reqwest::Url,
+    /// Optional bearer token for authenticated servers (OAuth /
+    /// static-token hubs). Sent as `Authorization: Bearer <token>`.
+    bearer: Option<String>,
+    /// Session id assigned by the server on the first response.
+    session_id: Mutex<Option<String>>,
+    tx: mpsc::UnboundedSender<Frame>,
+    rx: Mutex<mpsc::UnboundedReceiver<Frame>>,
+}
+
+impl HttpTransport {
+    /// Build a transport pointed at `url`. `bearer` is an optional
+    /// pre-shared / OAuth access token.
+    pub fn new(url: reqwest::Url, bearer: Option<String>) -> Result<Self, TransportError> {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .map_err(|e| TransportError::Io(e.to_string()))?;
+        let (tx, rx) = mpsc::unbounded_channel();
+        Ok(Self {
+            client,
+            url,
+            bearer,
+            session_id: Mutex::new(None),
+            tx,
+            rx: Mutex::new(rx),
+        })
+    }
+
+    /// Parse an SSE body into individual JSON-RPC frames. Collects
+    /// `data:` lines per event (a blank line ends an event); multi-line
+    /// `data` is joined with `\n`. Non-`data` fields (`event:`, `id:`,
+    /// comments) are ignored.
+    fn push_sse_frames(body: &str, tx: &mpsc::UnboundedSender<Frame>) {
+        let mut data = String::new();
+        for line in body.lines() {
+            if let Some(rest) = line.strip_prefix("data:") {
+                let rest = rest.strip_prefix(' ').unwrap_or(rest);
+                if !data.is_empty() {
+                    data.push('\n');
+                }
+                data.push_str(rest);
+            } else if line.trim().is_empty() {
+                if !data.trim().is_empty() {
+                    let _ = tx.send(std::mem::take(&mut data));
+                } else {
+                    data.clear();
+                }
+            }
+        }
+        if !data.trim().is_empty() {
+            let _ = tx.send(data);
+        }
+    }
+}
+
+/// Drain an HTTP response body to a `String`, refusing to buffer more
+/// than 16 MiB so a hostile server can't OOM the agent.
+async fn read_capped_http_body(resp: reqwest::Response) -> Result<String, TransportError> {
+    use futures_util::StreamExt;
+    const CAP: usize = 16 * 1024 * 1024;
+    let mut stream = resp.bytes_stream();
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| TransportError::Io(e.to_string()))?;
+        if buf.len().saturating_add(chunk.len()) > CAP {
+            return Err(TransportError::Decode("http response exceeded 16 MiB".into()));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    String::from_utf8(buf).map_err(|e| TransportError::Decode(format!("non-utf8 body: {e}")))
+}
+
+#[async_trait]
+impl Transport for HttpTransport {
+    async fn send(&self, frame: Frame) -> Result<(), TransportError> {
+        let mut req = self
+            .client
+            .post(self.url.clone())
+            .header("content-type", "application/json")
+            .header("accept", "application/json, text/event-stream")
+            .body(frame);
+        if let Some(b) = &self.bearer {
+            req = req.header("authorization", format!("Bearer {b}"));
+        }
+        if let Some(s) = self.session_id.lock().await.as_ref() {
+            req = req.header("mcp-session-id", s.clone());
+        }
+
+        let resp = req.send().await.map_err(|e| TransportError::Io(e.to_string()))?;
+
+        // Capture the server-assigned session id (first response wins;
+        // re-set if the server rotates it).
+        if let Some(v) = resp
+            .headers()
+            .get("mcp-session-id")
+            .and_then(|v| v.to_str().ok())
+        {
+            *self.session_id.lock().await = Some(v.to_string());
+        }
+
+        let status = resp.status();
+        let ctype = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let body = read_capped_http_body(resp).await?;
+
+        if !status.is_success() {
+            let preview: String = body.chars().take(256).collect();
+            return Err(TransportError::Io(format!("http {status}: {preview}")));
+        }
+
+        if ctype.contains("text/event-stream") {
+            Self::push_sse_frames(&body, &self.tx);
+        } else if !body.trim().is_empty() {
+            // application/json single response (or unspecified). A 202
+            // with empty body — a server ack of a notification — queues
+            // nothing, which is correct.
+            let _ = self.tx.send(body);
+        }
+        Ok(())
+    }
+
+    async fn recv(&self) -> Result<Option<Frame>, TransportError> {
+        let mut rx = self.rx.lock().await;
+        Ok(rx.recv().await)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -40,11 +40,7 @@ pub struct UsageBucket {
 
 impl UsageBucket {
     pub fn average_duration_ms(&self) -> Option<u64> {
-        if self.calls == 0 {
-            None
-        } else {
-            Some(self.total_duration_ms / self.calls)
-        }
+        self.total_duration_ms.checked_div(self.calls)
     }
 
     pub fn total_tokens(&self) -> u64 {

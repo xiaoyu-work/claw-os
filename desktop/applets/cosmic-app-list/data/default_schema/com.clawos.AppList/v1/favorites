@@ -1,8 +1,11 @@
 [
+    "com.clawos.Agent",
     "chromium",
+    "thunderbird",
+    "com.clawos.Term",
     "com.clawos.Files",
     "com.clawos.Edit",
-    "com.clawos.Term",
+    "com.clawos.Player",
     "com.clawos.Store",
     "com.clawos.Settings",
 ]

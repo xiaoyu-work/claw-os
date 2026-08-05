@@ -65,6 +65,9 @@ pub enum Mode {
 
 impl Mode {
     fn from_env() -> Self {
+        if process_has_no_new_privs() {
+            return Mode::Strict;
+        }
         match std::env::var("COS_PERMS_MODE").as_deref() {
             Ok("permissive") => Mode::Permissive,
             // Includes the explicit "strict" value and any other value
@@ -82,6 +85,16 @@ impl Mode {
     }
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn process_has_no_new_privs() -> bool {
+    unsafe { libc::prctl(libc::PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) != 0 }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn process_has_no_new_privs() -> bool {
+    false
+}
+
 // ---------------------------------------------------------------------------
 // Registry view (read-only subset of proc.rs's SessionInfo)
 // ---------------------------------------------------------------------------
@@ -97,6 +110,14 @@ struct SessionRow {
     pid: u32,
     #[serde(default)]
     caps: Option<CapSet>,
+    #[serde(default)]
+    transient_caps: Option<CapSet>,
+    #[serde(default)]
+    app_id: Option<String>,
+    #[serde(default)]
+    pending_bind: bool,
+    #[serde(default)]
+    start_time_ticks: Option<u64>,
 }
 
 #[derive(Deserialize, Default)]
@@ -116,6 +137,147 @@ fn load_registry() -> Registry {
         .unwrap_or_default()
 }
 
+pub(crate) fn require_current_session_identity(
+    session_id: &str,
+    session_pid: u32,
+) -> Result<(), String> {
+    if crate::proc::current_session_id().as_deref() != Some(session_id) {
+        return Err("COS_SESSION does not match the selected registry row".to_string());
+    }
+    if session_pid == 0 {
+        return Err("registered session process is not bound".to_string());
+    }
+    if let Some(session) = crate::proc::current_trusted_session_for_caps() {
+        if session.session_id == session_id
+            && session.pid == session_pid
+            && session_pid == std::process::id()
+        {
+            return Ok(());
+        }
+        return Err("trusted task session identity does not match the caller".to_string());
+    }
+    let registry = load_registry();
+    let session = registry
+        .sessions
+        .iter()
+        .find(|session| session.session_id == session_id)
+        .ok_or_else(|| format!("session `{session_id}` is not registered"))?;
+    if session.pid != session_pid {
+        return Err(format!(
+            "session `{session_id}` changed process binding from {session_pid} to {}",
+            session.pid
+        ));
+    }
+    validate_process_identity(&registry, session, std::process::id(), true)
+}
+
+fn validate_process_identity(
+    registry: &Registry,
+    session: &SessionRow,
+    caller_pid: u32,
+    strict: bool,
+) -> Result<(), String> {
+    if session.pending_bind || (session.app_id.is_some() && session.pid == 0) {
+        return Err("App session process has not been bound yet".to_string());
+    }
+    if let Some(app_id) = session.app_id.as_deref() {
+        if std::env::var("COS_APP_ID").ok().as_deref() != Some(app_id) {
+            return Err(format!(
+                "COS_APP_ID does not match registered App identity `{app_id}`"
+            ));
+        }
+        if !app_session_process_is_current(session) {
+            return Err(format!(
+                "registered App process {} no longer matches its start time",
+                session.pid
+            ));
+        }
+    }
+
+    if session.pid != 0 && caller_pid != session.pid {
+        match pid_ancestry::is_descendant_of(caller_pid, session.pid) {
+            AncestryResult::Yes => {}
+            AncestryResult::No => {
+                return Err(format!(
+                    "process {caller_pid} is not descended from registered session process {}",
+                    session.pid
+                ));
+            }
+            AncestryResult::Unsupported if strict => {
+                return Err(
+                    "pid-ancestry checking is not implemented on this platform"
+                        .to_string(),
+                );
+            }
+            AncestryResult::Unsupported => {}
+        }
+    }
+
+    match nearest_app_session(registry, caller_pid) {
+        Ok(Some(nearest)) if nearest.session_id != session.session_id => {
+            Err(format!(
+                "process {caller_pid} is bound to nearer App session `{}` ({}) \
+                 and cannot select ancestor session `{}`",
+                nearest.session_id,
+                nearest.app_id.as_deref().unwrap_or("unknown"),
+                session.session_id
+            ))
+        }
+        Ok(_) => Ok(()),
+        Err(()) if strict => Err(
+            "could not determine the nearest App identity in the process tree"
+                .to_string(),
+        ),
+        Err(()) => Ok(()),
+    }
+}
+
+fn nearest_app_session(
+    registry: &Registry,
+    caller_pid: u32,
+) -> Result<Option<&SessionRow>, ()> {
+    if !registry
+        .sessions
+        .iter()
+        .any(|session| session.app_id.is_some() && app_session_process_is_current(session))
+    {
+        return Ok(None);
+    }
+    let mut current = caller_pid;
+    for _ in 0..64 {
+        if let Some(session) = registry.sessions.iter().find(|session| {
+            session.app_id.is_some()
+                && !session.pending_bind
+                && session.pid == current
+                && app_session_process_is_current(session)
+        }) {
+            return Ok(Some(session));
+        }
+        if current <= 1 {
+            return Ok(None);
+        }
+        current = pid_ancestry::parent_pid(current).ok_or(())?;
+    }
+    Err(())
+}
+
+fn app_session_process_is_current(session: &SessionRow) -> bool {
+    if session.pid == 0 {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let Some(expected) = session.start_time_ticks else {
+            return false;
+        };
+        crate::proc::read_start_time_ticks_pub(session.pid) == Some(expected)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        true
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -132,7 +294,7 @@ fn load_registry() -> Registry {
 /// `COS_CAPS_AUDIT=0`.
 pub fn require(verb: Verb, scope: Scope) -> Result<(), Denial> {
     let mode = Mode::from_env();
-    let session_id = std::env::var("COS_SESSION").ok();
+    let session_id = crate::proc::current_session_id();
     let result = require_impl(verb, scope.clone(), mode, session_id.as_deref());
     crate::audit::log_cap_decision(build_cap_audit_record(
         verb,
@@ -150,8 +312,6 @@ fn require_impl(
     mode: Mode,
     session_id: Option<&str>,
 ) -> Result<(), Denial> {
-    let requested = Cap::new(verb, scope.clone());
-
     let session_id = match session_id {
         Some(s) if !s.is_empty() => s,
         _ => {
@@ -162,6 +322,23 @@ fn require_impl(
             }
         }
     };
+
+    if let Some(session) = crate::proc::current_trusted_session_for_caps() {
+        if session.session_id != session_id {
+            return Err(Denial::no_session(verb, scope).with_hint(
+                "trusted task session does not match the selected session id",
+            ));
+        }
+        return authorize_session_caps(
+            session_id,
+            verb,
+            scope,
+            mode,
+            session.caps.as_ref(),
+            session.transient_caps.as_ref(),
+            session.app_id.is_some(),
+        );
+    }
 
     let registry = load_registry();
     let session = match registry
@@ -180,44 +357,42 @@ fn require_impl(
         }
     };
 
-    // PID-ancestry check: the caller must live in the session's process
-    // tree. This is the OS-level defence against COS_SESSION spoofing.
-    // We perform this check on every platform where we know how to
-    // walk the process tree. On unsupported platforms we **fail
-    // closed** in strict mode rather than silently skipping the
-    // check — a stolen `COS_SESSION` should not become "free admin"
-    // just because the user is on a less-tested OS.
     let caller_pid = std::process::id();
-    if session.pid != 0 && caller_pid != session.pid {
-        match pid_ancestry::is_descendant_of(caller_pid, session.pid) {
-            AncestryResult::Yes => {}
-            AncestryResult::No => {
-                return Err(
-                    Denial::pid_ancestry_mismatch(verb, scope, caller_pid, session.pid).with_hint(
-                        "the COS_SESSION env var does not match the process tree; \
-                     do not set it manually",
-                    ),
-                );
-            }
-            AncestryResult::Unsupported => {
-                if matches!(mode, Mode::Strict) {
-                    return Err(Denial::pid_ancestry_mismatch(
-                        verb,
-                        scope,
-                        caller_pid,
-                        session.pid,
-                    )
-                    .with_hint(
-                        "pid-ancestry checking is not implemented on this platform; \
-                         strict-mode caps refuse to skip the check",
-                    ));
-                }
-            }
-        }
+    if let Err(error) = validate_process_identity(
+        &registry,
+        session,
+        caller_pid,
+        matches!(mode, Mode::Strict),
+    ) {
+        return Err(
+            Denial::pid_ancestry_mismatch(verb, scope, caller_pid, session.pid)
+                .with_hint(error),
+        );
     }
 
-    let caps = match session.caps.as_ref() {
-        Some(c) => c,
+    authorize_session_caps(
+        session_id,
+        verb,
+        scope,
+        mode,
+        session.caps.as_ref(),
+        session.transient_caps.as_ref(),
+        session.app_id.is_some(),
+    )
+}
+
+fn authorize_session_caps(
+    session_id: &str,
+    verb: Verb,
+    scope: Scope,
+    mode: Mode,
+    caps: Option<&CapSet>,
+    transient_caps: Option<&CapSet>,
+    is_app: bool,
+) -> Result<(), Denial> {
+    let requested = Cap::new(verb, scope.clone());
+    let mut caps = match caps {
+        Some(c) => c.clone(),
         None => {
             return match mode {
                 Mode::Permissive => Ok(()),
@@ -228,21 +403,29 @@ fn require_impl(
             }
         }
     };
+    if let Some(transient) = transient_caps {
+        caps.extend(transient.iter().cloned());
+    }
 
-    if caps.covers(&requested) {
-        Ok(())
-    } else if approved_grant_covers(session_id, verb, &scope) {
+    if caps.covers(&requested)
+        || (!is_app && approved_grant_covers(session_id, verb, &scope))
+    {
         Ok(())
     } else if caps.verbs().contains(&verb) {
         // Verb is held but at a scope that doesn't cover this request.
-        Err(Denial::scope_out_of_range(verb, scope, caps))
+        Err(Denial::scope_out_of_range(verb, scope, &caps))
     } else {
         Err(Denial::verb_not_granted(verb, scope))
     }
 }
 
 fn approved_grant_covers(session_id: &str, verb: Verb, scope: &Scope) -> bool {
-    match crate::approvals::consume_matching_grant(session_id, verb, scope) {
+    match crate::approvals::consume_matching_grant_for_owner(
+        session_id,
+        verb,
+        scope,
+        crate::paths::current_owner_uid_override(),
+    ) {
         Ok(Some(_duration)) => true,
         Ok(None) => false,
         Err(err) => {
@@ -300,6 +483,7 @@ fn build_cap_audit_record(
         "reason":          reason,
         "hint":            hint,
         "mode":            mode.as_str(),
+        "owner_uid":       crate::paths::current_owner_uid_override(),
     })
 }
 
@@ -344,6 +528,13 @@ mod pid_ancestry {
             }
         }
         AncestryResult::No
+    }
+
+    pub(super) fn parent_pid(pid: u32) -> Option<u32> {
+        if !PPID_SUPPORTED {
+            return None;
+        }
+        read_ppid(pid)
     }
 
     #[cfg(target_os = "linux")]

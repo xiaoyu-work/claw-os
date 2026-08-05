@@ -16,12 +16,34 @@ The build produces a virtual disk under `build/`, e.g.
 
 ### Prerequisites (Debian/Ubuntu host)
 
+> **On Windows?** This is just a normal Linux build run inside WSL2. Install a
+> Debian/Ubuntu WSL2 distro first (`wsl --install -d Ubuntu`), then run every
+> step below inside it.
+
+System tools for the rootfs/disk pipeline:
+
 ```bash
 sudo apt update
-sudo apt install -y git debootstrap qemu-utils parted dosfstools rsync \
+sudo apt install -y git build-essential pkg-config \
+                    debootstrap qemu-utils parted dosfstools mtools rsync \
                     util-linux e2fsprogs grub-efi-amd64-bin grub-pc-bin
 # On an arm64 host, use grub-efi-arm64-bin instead (and drop grub-pc-bin).
 ```
+
+A **Rust toolchain** on the host, used to compile the `cos` / `clawd` /
+`cos-browser` binaries that go into the image:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+. "$HOME/.cargo/env"
+rustup default stable          # make sure a default toolchain is selected
+```
+
+> You do **not** run `cargo` yourself — `./build.sh` compiles the core binaries
+> on demand (`cos` + `clawd` come from one crate; `cos-browser` bundles V8).
+> The desktop crates are built separately inside the image's chroot with their
+> own toolchain. Under `sudo` the build reuses your user-level toolchain
+> (`RUSTUP_HOME=$SUDO_USER/.rustup`), so one normal rustup install is enough.
 
 ### Get the source
 
@@ -30,43 +52,53 @@ git clone https://github.com/xiaoyu-work/claw-os.git
 cd claw-os
 ```
 
+> **On WSL2:** clone into the Linux filesystem (e.g. `~/workspace`), **not**
+> `/mnt/c/...`. `debootstrap` needs device nodes and hardlinks that the Windows
+> drive mount (drvfs) cannot represent, so a build under `/mnt/c` fails partway
+> through. The finished disk is reachable from Windows at
+> `\\wsl$\Ubuntu\home\<user>\workspace\claw-os\build\`.
+
 ### Build command
 
 Run from the repository root (the `claw-os` directory you just cloned):
 
 ```bash
+sudo ./presets/desktop.sh
+```
+
+This preset sets the desktop feature set, `FORMATS=vmdk` and `SIZE=50G` for
+you, then calls `./build.sh vm`. See [`presets/README.md`](../presets/README.md)
+for the `wsl` and `docker` presets too.
+
+Output: `build/claw-os-vm-<arch>.vmdk`.
+
+<details>
+<summary>Manual equivalent (if you want to tweak features/format/size)</summary>
+
+```bash
 sudo FEATURES=base,cos-core,systemd,kernel,desktop,vmware,copilot-cli,grub-disk,vm,apt-source \
-     FORMATS=vmdk SIZE=16G ./build.sh vm
+     FORMATS=vmdk SIZE=50G ./build.sh vm
 ```
 
 - `FORMATS` — output format: `vmdk` (VMware), `vhdx` (Hyper-V), `qcow2` (QEMU), or `raw`.
 - `SIZE` — virtual disk size (sparse, so the file is much smaller).
 
-Output: `build/claw-os-vm-<arch>.vmdk`.
+`FORMATS` and `SIZE` also work with the preset, e.g.
+`sudo FORMATS=vhdx ./presets/desktop.sh` for Hyper-V.
 
-### Linux
+</details>
 
-Run the prerequisites and build command above directly on a Debian/Ubuntu machine.
-
-### Windows (WSL2)
-
-1. Install a Debian or Ubuntu WSL2 distro:
-   ```powershell
-   wsl --install -d Ubuntu
-   ```
-2. Open the distro, then clone the repo and run the **Prerequisites** and
-   **Build command** steps above inside WSL.
+A from-scratch build takes roughly **1–2 hours** and is mostly silent while it
+compiles (V8 for `cos-browser`, then the COSMIC desktop crates) — long quiet
+periods are normal, not a hang.
 
 > On a **Windows-on-ARM** PC, WSL is `arm64`, so you can only build the `arm64`
 > image — and VMware has no Windows-on-ARM build. Use Hyper-V (`FORMATS=vhdx`)
 > instead, or build the `amd64` image on an x86 machine.
 
-### macOS
-
-macOS cannot run `debootstrap`/`chroot`/loop devices natively. Run the build
-inside a **Linux VM** (UTM, VMware Fusion, Lima, …) or a privileged Linux
-container, then follow the **Linux** steps inside it. On Apple Silicon the Linux
-VM is `arm64`, so you get an `arm64` image.
+> **macOS** cannot run `debootstrap`/`chroot`/loop devices natively — run the
+> steps above inside a Linux VM (UTM, VMware Fusion, Lima, …). On Apple Silicon
+> that VM is `arm64`, so you get an `arm64` image.
 
 ## 2. Load it in VMware
 
@@ -119,4 +151,3 @@ Then reload only what changed:
 
 Rebuild the whole `.vmdk` only when you change the feature list, system
 overlay files, or want a clean distributable image.
-

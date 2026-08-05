@@ -3,7 +3,9 @@
 Say what you need, not how to install it.
 """
 
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -24,6 +26,24 @@ MAX_SEARCH_LIMIT = 100
 # helpers should be near-instant.
 QUERY_TIMEOUT_SECS = 60
 INSTALL_TIMEOUT_SECS = int(os.environ.get("CLAW_PKG_INSTALL_TIMEOUT", "900"))
+PACKAGE_NAME_RE = re.compile(
+    r"^[a-z0-9][a-z0-9+.-]*(?::[a-z0-9][a-z0-9-]*)?$"
+)
+
+
+def _valid_package_name(package):
+    return (
+        isinstance(package, str)
+        and len(package) <= 255
+        and PACKAGE_NAME_RE.fullmatch(package) is not None
+    )
+
+
+def _cos_binary():
+    explicit = os.environ.get("COS_BIN")
+    if explicit:
+        return explicit
+    return shutil.which("cos")
 
 
 def _dpkg_check(package):
@@ -44,13 +64,25 @@ def _dpkg_check(package):
 
 
 def _apt_install(packages):
-    """Install packages via apt-get. Returns (installed, failed) lists."""
+    """Install packages through clawd. Returns installed, failed, errors."""
     installed = []
     failed = []
+    errors = {}
+    cos_bin = _cos_binary()
+    if not cos_bin:
+        return [], list(packages), {
+            pkg: "cos binary not found; privileged package broker unavailable"
+            for pkg in packages
+        }
+
     for pkg in packages:
+        if not _valid_package_name(pkg):
+            failed.append(pkg)
+            errors[pkg] = "invalid Debian package name"
+            continue
         try:
             result = subprocess.run(
-                ["apt-get", "install", "-y", pkg],
+                [cos_bin, "__package", "install", pkg],
                 capture_output=True,
                 text=True,
                 timeout=INSTALL_TIMEOUT_SECS,
@@ -58,17 +90,31 @@ def _apt_install(packages):
                 env=scrub_env(),
                 check=False,
             )
-            if result.returncode == 0:
+            payload_text = (result.stdout or "").strip()
+            payload = json.loads(payload_text) if payload_text else {}
+            if result.returncode == 0 and payload.get("installed") is True:
                 installed.append(pkg)
             else:
                 failed.append(pkg)
-        except PermissionError:
+                errors[pkg] = (
+                    payload.get("error")
+                    or payload.get("stderr_tail")
+                    or (result.stderr or "").strip()
+                    or f"package broker exited {result.returncode}"
+                )
+        except PermissionError as exc:
             failed.append(pkg)
-        except FileNotFoundError:
+            errors[pkg] = str(exc)
+        except FileNotFoundError as exc:
             failed.append(pkg)
+            errors[pkg] = str(exc)
         except subprocess.TimeoutExpired:
             failed.append(pkg)
-    return installed, failed
+            errors[pkg] = f"package broker exceeded {INSTALL_TIMEOUT_SECS}s"
+        except json.JSONDecodeError:
+            failed.append(pkg)
+            errors[pkg] = "package broker returned invalid JSON"
+    return installed, failed, errors
 
 
 def cmd_need(args):
@@ -77,6 +123,8 @@ def cmd_need(args):
         return {"error": "need requires at least one package name"}
 
     for pkg in args:
+        if not _valid_package_name(pkg):
+            return {"error": f"invalid Debian package name: {pkg!r}"}
         policy.require("sys.package", name=pkg)
 
     already_present = []
@@ -90,14 +138,18 @@ def cmd_need(args):
 
     installed = []
     failed = []
+    errors = {}
     if to_install:
-        installed, failed = _apt_install(to_install)
+        installed, failed, errors = _apt_install(to_install)
 
-    return {
+    response = {
         "installed": installed,
         "already_present": already_present,
         "failed": failed,
     }
+    if errors:
+        response["errors"] = errors
+    return response
 
 
 def cmd_has(args):
@@ -106,6 +158,8 @@ def cmd_has(args):
         return {"error": "has requires a name argument"}
 
     name = args[0]
+    if not name or name.startswith("-") or "/" in name or "\x00" in name:
+        return {"error": f"invalid package or command name: {name!r}"}
     policy.require("sys.observe", name=f"package:{name}")
 
     # Check dpkg first
@@ -263,6 +317,8 @@ def cmd_show(args):
         return {"error": "show requires a package name"}
 
     name = args[0]
+    if not _valid_package_name(name):
+        return {"name": name, "found": False, "error": "invalid Debian package name"}
     policy.require("sys.observe", name=f"package:{name}")
 
     try:

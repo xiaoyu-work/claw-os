@@ -3,6 +3,7 @@ use crate::subscriptions::launcher;
 use crate::{components, fl};
 use clap::Parser;
 use cosmic::app::{Core, CosmicFlags, Settings, Task};
+use cosmic::cosmic_theme::palette::WithAlpha;
 use cosmic::cctk::sctk;
 use cosmic::cctk::sctk::shell::wlr_layer;
 use cosmic::dbus_activation::Details;

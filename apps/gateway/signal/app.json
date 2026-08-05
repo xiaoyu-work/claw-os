@@ -1,24 +1,114 @@
 {
-  "name": "gateway-signal",
+  "id": "gateway-signal",
   "version": "0.1.0",
-  "description": "Outbound-only Signal gateway via signal-cli-rest-api. send POSTs a text message via the local signal-cli-rest-api server.",
-  "language": "python",
-  "entry": "main.py",
-  "runtime": {
-    "python": ">=3.10"
+  "name": {
+    "en": "Signal Gateway"
   },
-  "credentials": [
-    {
-      "name": "signal_base_url",
-      "description": "signal-cli-rest-api base URL, e.g. http://localhost:8080 (env override: COS_SIGNAL_BASE_URL)"
+  "summary": {
+    "en": "Outbound-only Signal gateway via signal-cli-rest-api. send POSTs text messages through the configured local REST server."
+  },
+  "runtime": "python",
+  "operations": {
+    "send": {
+      "label": {
+        "en": "Send a message through this gateway"
+      },
+      "args": [
+        {
+          "name": "recipient",
+          "kind": "name",
+          "required": true
+        },
+        {
+          "name": "text",
+          "kind": "text",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "net.dial",
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Connect to the remote gateway service to perform the send operation."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/signal_base_url"
+            }
+          },
+          "why": {
+            "en": "Read the configured signal_base_url secret required by this gateway."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/signal_number"
+            }
+          },
+          "why": {
+            "en": "Read the configured signal_number secret required by this gateway."
+          }
+        },
+        {
+          "verb": "memory.write",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "self-ref",
+              "value": "gateway-signal"
+            }
+          },
+          "why": {
+            "en": "Remember the successful send so the agent can recall it later."
+          }
+        }
+      ]
     },
-    {
-      "name": "signal_number",
-      "description": "Linked Signal account phone in E.164 (env override: COS_SIGNAL_NUMBER)"
+    "status": {
+      "label": {
+        "en": "Show gateway configuration and status"
+      },
+      "args": [],
+      "needs": [
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/signal_base_url"
+            }
+          },
+          "why": {
+            "en": "Read the configured signal_base_url secret required by this gateway."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/signal_number"
+            }
+          },
+          "why": {
+            "en": "Read the configured signal_number secret required by this gateway."
+          }
+        }
+      ]
     }
-  ],
-  "scopes": [
-    "credential:signal_base_url",
-    "credential:signal_number"
-  ]
+  }
 }

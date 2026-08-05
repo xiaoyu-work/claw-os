@@ -60,7 +60,7 @@ fn main() {
     // through one (typical for `cos agent setup`, `cos agent chat`,
     // and other commands a human runs straight from a shell). The
     // guard cleans up its registry row on Drop.
-    let _session_guard = caps::bootstrap_user_cli_session();
+    let _session_guard = caps::bootstrap_user_cli_session(&args);
 
     let result = router::dispatch(&args);
 

@@ -9,63 +9,55 @@ export const EXPECTED_WIRE_VERSION = 1 as const;
 
 /**
  * AI request / reply.
- * Shape of the data payload returned by `cos ai chat|embed|image-generate`.
- * Apps call this via SDK helpers (claw_os_sdk.ai.chat / ai.embed /
- * ai.image_generate). The kernel emits the same fields whether the call was
- * synchronous or streamed (terminating reply).
+ * Stable text-chat reply returned by `cos ai chat`.
  */
 export interface Ai {
-  verb: "ai.chat" | "ai.embed" | "ai.image_generate" | "ai.tool";
-  text?: string;
-  model?: string;
-  provider?: string;
-  embedding?: number[];
-  embeddings?: number[][];
-  output_path?: string;
-  usage?: AiUsage;
-  budget?: AiBudget;
-  review?: AiReview;
-  tool_calls?: AiToolCalls[];
-  raw?: unknown;
+  text: string;
+  model: string;
+  provider: string;
+  verb: "ai.chat" | "ai.chat.untrusted";
+  usage: AiUsage;
+  budget: AiBudget;
+  review: AiReview;
+  tool_calls?: AiToolCall[];
 }
 
 /**
  * ai_usage.
- * Token / unit accounting for this single call.
+ * Token and unit accounting for this call.
  */
 export interface AiUsage {
-  input_tokens?: number;
-  output_tokens?: number;
-  units?: number;
+  input_tokens: number;
+  output_tokens: number;
+  units: number;
 }
 
 /**
  * ai_budget.
- * Snapshot of the app's budget *after* this call.
+ * App budget snapshot after the call.
  */
 export interface AiBudget {
-  period?: string;
-  units_used?: number;
-  units_cap?: number;
+  period: string;
+  units_used: number;
+  units_cap: number;
 }
 
 /**
  * ai_review.
- * Safety / review metadata.
+ * Safety policy actually applied by the kernel.
  */
 export interface AiReview {
-  safety?: "strict" | "balanced" | "off";
-  prompt_redacted?: boolean;
-  response_blocked?: boolean;
+  safety: "strict" | "standard" | "minimal";
+  prompt_redacted: boolean;
 }
 
 /**
- * ai_tool_calls.
+ * AiToolCall.
  */
-export interface AiToolCalls {
+export interface AiToolCall {
+  id: string;
   name: string;
-  args?: Record<string, unknown>;
-  result?: unknown;
+  input: unknown;
 }
 
 /**
@@ -154,7 +146,7 @@ export interface Arg {
  * A single capability request: verb + scope binding + human reason.
  */
 export interface Need {
-  verb: "fs.read" | "fs.write" | "fs.delete" | "fs.exec" | "fs.watch" | "fs.meta" | "net.dial" | "net.listen" | "net.raw" | "net.resolve" | "proc.spawn" | "proc.signal" | "proc.observe" | "sys.observe" | "sys.service" | "sys.package" | "sys.mount" | "sys.time" | "sys.power" | "sys.kernel" | "secret.read" | "secret.write" | "secret.grant" | "agent.spawn" | "agent.invoke" | "agent.observe" | "agent.delegate" | "data.kv.read" | "data.kv.write" | "data.kv.delete" | "data.db.read" | "data.db.write" | "data.log.read" | "data.log.write" | "data.inbox.read" | "data.inbox.write" | "memory.write" | "memory.read" | "ipc.publish" | "ipc.subscribe" | "ipc.invoke" | "ui.notify" | "ui.prompt" | "ui.window" | "ui.input" | "device.audio" | "device.camera" | "device.microphone" | "device.location" | "device.sensor" | "device.usb" | "time.cron" | "time.delay" | "ai.chat" | "ai.chat.untrusted" | "ai.embed" | "ai.image.generate" | "ai.image.analyze" | "ai.audio.tts" | "ai.audio.stt" | "ai.vision.analyze" | "ai.video.generate" | "ai.video.analyze" | "ai.bypass" | "desktop.launch" | "browser.tabs.read" | "browser.nav" | "browser.dom.read" | "browser.dom.write" | "browser.input.secret" | "browser.eval";
+  verb: "fs.read" | "fs.write" | "fs.delete" | "fs.exec" | "fs.watch" | "fs.meta" | "net.dial" | "net.listen" | "net.raw" | "net.resolve" | "proc.spawn" | "proc.signal" | "proc.observe" | "sys.observe" | "sys.service" | "sys.package" | "sys.mount" | "sys.time" | "sys.power" | "sys.kernel" | "secret.read" | "secret.write" | "secret.grant" | "agent.spawn" | "agent.invoke" | "agent.observe" | "agent.delegate" | "data.kv.read" | "data.kv.write" | "data.kv.delete" | "data.db.read" | "data.db.write" | "data.log.read" | "data.log.write" | "data.inbox.read" | "data.inbox.write" | "memory.write" | "memory.read" | "ipc.publish" | "ipc.subscribe" | "ipc.invoke" | "ui.notify" | "ui.prompt" | "ui.window" | "ui.input" | "device.audio" | "device.camera" | "device.microphone" | "device.location" | "device.sensor" | "device.usb" | "time.cron" | "time.delay" | "ai.chat" | "ai.chat.untrusted" | "desktop.launch" | "browser.tabs.read" | "browser.nav" | "browser.dom.read" | "browser.dom.write" | "browser.input.secret" | "browser.eval";
   scope: Scopebinding;
   why: Localizedtext;
 }
@@ -253,13 +245,12 @@ export interface Perms {
 
 /**
  * Catalog tool invocation reply.
- * Shape returned by `cos ai tool <name> --app <id> --args '<json>'`. Catalog
- * tools are reusable functions exposed in the AI tool catalog. They differ
- * from app verbs in that the AI plans them automatically.
+ * Shape returned by `cos ai tool <name> --app <id> --args '<json>'`.
  */
 export interface Tool {
   tool: string;
-  result?: unknown;
-  audit_id?: string;
+  app_id: string;
+  status: "ok";
+  result: unknown;
 }
 

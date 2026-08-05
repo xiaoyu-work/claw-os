@@ -1,10 +1,13 @@
 """Tests for exec app output size limits and cmd_start scratch naming."""
 
 import os
+import pathlib
 import sys
 import tempfile
 import unittest
 from unittest import mock
+
+from test_support import load_local_module
 
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(
@@ -121,18 +124,19 @@ class TestCmdStartScratchNaming(unittest.TestCase):
         # PROC_DIR resolves to a writable spot we can inspect.
         self.tmp = tempfile.TemporaryDirectory()
         os.environ["COS_DATA_DIR"] = self.tmp.name
-        # Force a fresh import each setUp so PROC_DIR picks up the env.
-        sys.modules.pop("main", None)
+        self.main = load_local_module(
+            pathlib.Path(__file__).with_name("main.py"),
+            "claw_test_exec_main",
+            clear_modules=("_shared",),
+        )
 
     def tearDown(self) -> None:
-        sys.modules.pop("main", None)
+        sys.modules.pop("claw_test_exec_main", None)
         os.environ.pop("COS_DATA_DIR", None)
         self.tmp.cleanup()
 
     def _import_main(self):
-        import main  # type: ignore[import-not-found]
-
-        return main
+        return self.main
 
     def test_intermediate_filenames_use_uuid_not_parent_pid(self) -> None:
         """Drive cmd_start with mocked policy + Popen; assert the
@@ -154,7 +158,7 @@ class TestCmdStartScratchNaming(unittest.TestCase):
             pid = 424242
 
         with mock.patch.object(main.policy, "require", return_value=None), mock.patch(
-            "main.subprocess.Popen", return_value=FakeProc()
+            "claw_test_exec_main.subprocess.Popen", return_value=FakeProc()
         ), mock.patch("builtins.open", side_effect=tracking_open):
             out = main.cmd_start(["/usr/bin/true"])
 
@@ -217,9 +221,9 @@ class TestCmdStartScratchNaming(unittest.TestCase):
         with mock.patch.object(main.policy, "require", return_value=None), mock.patch(
             "builtins.open", side_effect=tracking_open
         ):
-            with mock.patch("main.subprocess.Popen", return_value=FakeProc1()):
+            with mock.patch("claw_test_exec_main.subprocess.Popen", return_value=FakeProc1()):
                 main.cmd_start(["/usr/bin/true"])
-            with mock.patch("main.subprocess.Popen", return_value=FakeProc2()):
+            with mock.patch("claw_test_exec_main.subprocess.Popen", return_value=FakeProc2()):
                 main.cmd_start(["/usr/bin/true"])
 
         scratch_names = {
@@ -237,28 +241,22 @@ class TestCmdStartScratchNaming(unittest.TestCase):
 class TestShellScope(unittest.TestCase):
     """Regression coverage for CR-2 (``cos exec run --shell`` scope).
 
-    The old code passed ``name=/bin/bash`` (or ``/bin/sh``) to
-    ``policy.require("proc.spawn", ...)`` whenever the caller used
-    ``--shell``. That meant a single ``proc.spawn name=/bin/bash``
-    grant let the agent execute *any* shell command via
-    ``--shell``, defeating per-binary scoping.
-
-    The fix parses the first real command token out of the shell
-    string and uses *that* as the spawn name (with ``wild=True`` as a
-    last resort when the parse yields nothing). These tests assert
-    the policy check sees the user-visible command, not the shell.
+    Shell syntax can execute substitutions, functions and pipelines not
+    represented by any first token, so every shell invocation must require
+    an explicit wildcard spawn grant.
     """
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         os.environ["COS_DATA_DIR"] = self.tmp.name
-        sys.modules.pop("main", None)
-        import main  # type: ignore[import-not-found]
-
-        self.main = main
+        self.main = load_local_module(
+            pathlib.Path(__file__).with_name("main.py"),
+            "claw_test_exec_main",
+            clear_modules=("_shared",),
+        )
 
     def tearDown(self) -> None:
-        sys.modules.pop("main", None)
+        sys.modules.pop("claw_test_exec_main", None)
         os.environ.pop("COS_DATA_DIR", None)
         self.tmp.cleanup()
 
@@ -279,46 +277,30 @@ class TestShellScope(unittest.TestCase):
 
         return FakeProc()
 
-    def test_shell_run_scopes_to_first_real_binary(self):
-        """``--shell 'echo hi'`` must require ``proc.spawn name=echo``,
-        **not** ``proc.spawn name=/bin/bash``.
-        """
+    def test_shell_run_requires_wild(self):
         captured, spy = self._capture()
         # Bypass the bounded-Popen drain path with a stub that mimics
         # its successful return so we never spawn a real shell here.
         with mock.patch.object(self.main.policy, "require", side_effect=spy), mock.patch(
-            "main._run_bounded",
+            "claw_test_exec_main._run_bounded",
             return_value=(0, "hi\n", "", False, False, None),
         ):
             self.main.cmd_run(["--shell", "echo hi"])
 
         spawns = [c for c in captured if c["verb"] == "proc.spawn"]
         self.assertTrue(spawns, "cmd_run --shell never reached proc.spawn check")
-        names = [c.get("name") for c in spawns]
-        self.assertNotIn(
-            "/bin/bash",
-            names,
-            "CR-2 regression: --shell scoped to /bin/bash, granting wild shell access",
-        )
-        self.assertNotIn("/bin/sh", names)
-        self.assertIn("echo", names, f"expected proc.spawn name=echo, got {names}")
+        self.assertTrue(any(c.get("wild") is True for c in spawns))
 
-    def test_shell_run_skips_env_var_assignment(self):
-        """``--shell 'FOO=bar python3 script.py'`` must scope to ``python3``."""
+    def test_shell_run_with_env_assignment_still_requires_wild(self):
         captured, spy = self._capture()
         with mock.patch.object(self.main.policy, "require", side_effect=spy), mock.patch(
-            "main._run_bounded",
+            "claw_test_exec_main._run_bounded",
             return_value=(0, "", "", False, False, None),
         ):
             self.main.cmd_run(["--shell", "FOO=bar python3 -c 'print(1)'"])
 
         spawns = [c for c in captured if c["verb"] == "proc.spawn"]
-        names = [c.get("name") for c in spawns]
-        self.assertIn(
-            "python3",
-            names,
-            f"shell scope should skip VAR=val prefix and pick python3, got {names}",
-        )
+        self.assertTrue(any(c.get("wild") is True for c in spawns))
 
     def test_shell_run_falls_back_to_wild_for_unparseable(self):
         """Pure shell builtins / empty command — fall back to ``wild=True``
@@ -326,7 +308,7 @@ class TestShellScope(unittest.TestCase):
         """
         captured, spy = self._capture()
         with mock.patch.object(self.main.policy, "require", side_effect=spy), mock.patch(
-            "main._run_bounded",
+            "claw_test_exec_main._run_bounded",
             return_value=(0, "", "", False, False, None),
         ):
             self.main.cmd_run(["--shell", ""])

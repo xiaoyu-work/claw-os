@@ -9,16 +9,48 @@
 # See rootfs/features/README.md for the feature contract.
 #
 # Usage:
-#   sudo ./rootfs/build.sh [--features f1,f2,f3]
+#   sudo ./rootfs/build.sh [--features f1,f2,f3] [--reuse-if-matching]
 #
 # Default features: base,cos-core,browser  (matches the legacy behaviour).
 
 set -euo pipefail
 
+# ---------------------------------------------------------------------------
+# Detach from the controlling terminal (root-cause fix for "build randomly
+# stops / hangs" on WSL2).
+#
+# Symptom: the build wedges with every process in state `T+` (stopped, still
+# the terminal's *foreground* group) at an apt/dpkg step — "no key was ever
+# pressed". A foreground group is stopped only by SIGTSTP/SIGSTOP, and WSL2's
+# tty/pty layer can spuriously deliver SIGTSTP to the build's process group
+# while apt/dpkg drives its progress pty (tcsetpgrp). Disabling apt's pty
+# (Dpkg::Use-Pty 0, below) helps but is not sufficient on its own.
+#
+# The only airtight fix is to give the build NO controlling terminal at all:
+# with no tty there is nothing that can generate a job-control stop signal.
+# Re-exec ourselves under setsid with stdin from /dev/null. stdout/stderr are
+# inherited unchanged, so `... | tee build.log` and the caller's
+# ${PIPESTATUS[0]} keep working. Skipped when stdin is not a tty (e.g. CI),
+# where there is no controlling terminal to detach from.
+if [ -z "${COS_BUILD_DETACHED:-}" ] && [ -t 0 ] && command -v setsid >/dev/null 2>&1; then
+    export COS_BUILD_DETACHED=1
+    exec setsid -w "$0" "$@" < /dev/null
+fi
+
+# Never let apt/dpkg or any feature install.sh prompt on (or grab) a terminal.
+# Combined with the detach above and the Dpkg::Use-Pty drop-in written into the
+# chroot below, this keeps every apt invocation fully non-interactive so it can
+# neither block on a prompt nor be suspended by terminal job control.
+# Exported here so it propagates to every child feature install.sh too.
+export DEBIAN_FRONTEND=noninteractive
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 ROOTFS="$PROJECT_DIR/build/claw-os-rootfs"
+STAMP_PATH="$PROJECT_DIR/build/claw-os-rootfs.stamp"
 SUITE="trixie"
+STAMP_SCHEMA=1
+BUILDER_INPUTS_VERSION=1
 
 # Architecture mapping ($ARCH, $DEB_ARCH, $KERNEL_PKG, …). Defaults to host
 # arch when $ARCH is unset.
@@ -26,15 +58,18 @@ source "$PROJECT_DIR/scripts/lib/arch.sh"
 
 DEFAULT_FEATURES="base,cos-core,browser"
 FEATURES="$DEFAULT_FEATURES"
+REUSE_IF_MATCHING=0
 
 usage() {
     cat <<EOF
-Usage: $0 [--features <list>]
+Usage: $0 [--features <list>] [--reuse-if-matching]
 
 Build a Debian rootfs at $ROOTFS by composing features.
 
 Options:
   --features <list>   Comma-separated feature names (default: $DEFAULT_FEATURES)
+  --reuse-if-matching Reuse an existing rootfs only when its complete
+                      build stamp exactly matches every current input.
   -h, --help          Show this help
 
 Available features:
@@ -55,6 +90,10 @@ while [ $# -gt 0 ]; do
             ;;
         --features=*)
             FEATURES="${1#--features=}"
+            shift
+            ;;
+        --reuse-if-matching)
+            REUSE_IF_MATCHING=1
             shift
             ;;
         -h|--help)
@@ -87,22 +126,189 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-# Read version from Cargo.toml (single source of truth).
-COS_VERSION=$(grep '^version' "$PROJECT_DIR/core/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+# Build a Debian-monotonic rolling version from semver + git commit count + SHA.
+source "$PROJECT_DIR/scripts/lib/package-version.sh"
+COS_VERSION="$(package_version "$PROJECT_DIR")"
+COS_PACKAGE_VERSION="$COS_VERSION"
 
-export ROOTFS PROJECT_DIR SCRIPT_DIR SUITE COS_VERSION ARCH DEB_ARCH KERNEL_PKG
+source_hash() {
+    if git -C "$PROJECT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        git -C "$PROJECT_DIR" ls-files -co --exclude-standard -z \
+            | LC_ALL=C sort -z \
+            | tar -C "$PROJECT_DIR" --null -T - --sort=name \
+                --mtime='@0' --owner=0 --group=0 --numeric-owner -cf - \
+            | sha256sum | awk '{print $1}'
+        return
+    fi
+    (
+        cd "$PROJECT_DIR"
+        find . \
+            -path './build' -prune -o \
+            -path '*/target' -prune -o \
+            \( -type f -o -type l \) -print0 \
+            | LC_ALL=C sort -z \
+            | tar --null -T - --sort=name \
+                --mtime='@0' --owner=0 --group=0 --numeric-owner -cf -
+    ) | sha256sum | awk '{print $1}'
+}
+
+SOURCE_HASH="$(source_hash)"
+SOURCE_COMMIT="$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo none)"
+if git -C "$PROJECT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    SOURCE_STATUS_HASH="$(
+        git -C "$PROJECT_DIR" status --porcelain=v1 -z --untracked-files=normal \
+            | sha256sum | awk '{print $1}'
+    )"
+else
+    SOURCE_STATUS_HASH="$SOURCE_HASH"
+fi
+ORT_GENAI_VERSION="$(
+    sed -n 's/^pub const ORT_GENAI_KNOWN_GOOD_VERSION: &str = "\(.*\)";/\1/p' \
+        "$PROJECT_DIR/core/src/engine_pkg/mod.rs" | head -1
+)"
+
+artifact_hash() {
+    {
+        if [ -d "$PROJECT_DIR/build/debs" ]; then
+            find "$PROJECT_DIR/build/debs" -maxdepth 1 -type f -name '*.deb' -print0
+        fi
+        key_file="${COS_APT_PUBLIC_KEY_FILE:-$PROJECT_DIR/packaging/apt-repo/claw-os-archive-keyring.gpg}"
+        if [ -f "$key_file" ]; then
+            printf '%s\0' "$key_file"
+        fi
+    } | LC_ALL=C sort -z | {
+        found=0
+        while IFS= read -r -d '' path; do
+            found=1
+            printf '%s\0' "$path"
+            sha256sum "$path"
+        done
+        if [ "$found" = "0" ]; then
+            printf 'none\n'
+        fi
+    } | sha256sum | awk '{print $1}'
+}
+
+ENVIRONMENT_HASH="$(
+    {
+        printf 'COS_QWEN3_SKIP_ORT_GENAI=%s\0' "${COS_QWEN3_SKIP_ORT_GENAI:-0}"
+        printf 'COS_QWEN3_HF_REPO=%s\0' "${COS_QWEN3_HF_REPO:-}"
+        printf 'COS_QWEN3_HF_REVISION=%s\0' "${COS_QWEN3_HF_REVISION:-}"
+        printf 'COS_QWEN3_MODEL_NAME=%s\0' "${COS_QWEN3_MODEL_NAME:-}"
+        printf 'COS_QWEN3_MODEL_VERSION=%s\0' "${COS_QWEN3_MODEL_VERSION:-}"
+        printf 'COS_QWEN3_FILES=%s\0' "${COS_QWEN3_FILES:-}"
+        printf 'COS_QWEN3_ORT_GENAI_VERSION=%s\0' "${COS_QWEN3_ORT_GENAI_VERSION:-}"
+        printf 'COS_APT_REPO_URL=%s\0' "${COS_APT_REPO_URL:-}"
+        printf 'COS_APT_REPO_SUITE=%s\0' "${COS_APT_REPO_SUITE:-}"
+        printf 'COS_APT_PUBLIC_KEY_FILE=%s\0' "${COS_APT_PUBLIC_KEY_FILE:-}"
+        printf 'COS_APT_PUBLIC_KEY_URL=%s\0' "${COS_APT_PUBLIC_KEY_URL:-}"
+        printf 'COS_APT_PUBLIC_KEY_FINGERPRINT=%s\0' "${COS_APT_PUBLIC_KEY_FINGERPRINT:-}"
+    } | sha256sum | awk '{print $1}'
+)"
+
+stamp_content() {
+    artifact="$(artifact_hash)"
+    cat <<EOF
+schema=$STAMP_SCHEMA
+status=complete
+builder_inputs_version=$BUILDER_INPUTS_VERSION
+arch=$ARCH
+deb_arch=$DEB_ARCH
+suite=$SUITE
+features=$FEATURES
+source_commit=$SOURCE_COMMIT
+source_hash=$SOURCE_HASH
+artifact_hash=$artifact
+environment_hash=$ENVIRONMENT_HASH
+cos_package_version=$COS_PACKAGE_VERSION
+qwen_ort_genai_version=${ORT_GENAI_VERSION:-unknown}
+qwen_skip_ort_genai=${COS_QWEN3_SKIP_ORT_GENAI:-0}
+EOF
+}
+STAMP_CONTENT="$(stamp_content)"
+
+export ROOTFS PROJECT_DIR SCRIPT_DIR SUITE COS_VERSION COS_PACKAGE_VERSION ARCH DEB_ARCH KERNEL_PKG
+
+rootfs_mounts() {
+    findmnt -rn -o TARGET 2>/dev/null \
+        | awk -v root="$ROOTFS" \
+            '$0 == root || index($0, root "/") == 1 { print length($0) "\t" $0 }' \
+        | sort -rn \
+        | cut -f2-
+}
+
+rootfs_overlay_dependents() {
+    findmnt -rn -t overlay -o TARGET,OPTIONS 2>/dev/null \
+        | awk -v lower="$ROOTFS" '
+            index($0, "lowerdir=" lower) || index($0, ":" lower) {
+                print $1
+            }
+        '
+}
 
 echo ":: features: ${FEATURE_LIST[*]}"
 echo ":: arch:     $ARCH (deb=$DEB_ARCH, kernel=$KERNEL_PKG)"
+echo ":: source:   $SOURCE_HASH"
+
+if [ -n "$(rootfs_overlay_dependents)" ]; then
+    echo "error: rootfs is still referenced by target overlay mounts:" >&2
+    rootfs_overlay_dependents >&2
+    echo "       unmount stale Docker/WSL staging before rebuilding" >&2
+    exit 1
+fi
+
+REUSE_MOUNTS_CLEAN=1
+if [ -n "$(rootfs_mounts)" ]; then
+    REUSE_MOUNTS_CLEAN=0
+fi
+if [ "$REUSE_IF_MATCHING" = "1" ] \
+        && [ -d "$ROOTFS" ] \
+        && [ ! -L "$ROOTFS" ] \
+        && [ "$(stat -c '%u' "$ROOTFS")" = "0" ] \
+        && [ "$REUSE_MOUNTS_CLEAN" = "1" ] \
+        && [ -f "$STAMP_PATH" ] \
+        && printf '%s\n' "$STAMP_CONTENT" | cmp -s - "$STAMP_PATH"; then
+    echo ":: reusing matching rootfs at $ROOTFS"
+    exit 0
+fi
+
+if [ "$REUSE_IF_MATCHING" = "1" ] && [ -e "$ROOTFS" ]; then
+    echo ":: existing rootfs stamp is missing or stale — rebuilding"
+fi
+rm -f "$STAMP_PATH"
 
 # 1. Bootstrap minimal Debian rootfs.
 echo ":: debootstrap --arch=$DEB_ARCH $SUITE -> $ROOTFS"
+# Guard: a previous run that was hard-killed (e.g. WSL OOM / VM restart)
+# never runs the EXIT trap below, so it can leave a half-populated $ROOTFS
+# with stale bind mounts. Re-running debootstrap over that dirty tree fails
+# with tar "... File exists" (exit 2). Always start from a clean directory:
+# lazily unmount any stray binds, then wipe it.
+if [ -e "$ROOTFS" ]; then
+    echo ":: existing rootfs found — cleaning stale mounts + tree before debootstrap"
+    while IFS= read -r mp; do
+        [ -n "$mp" ] || continue
+        umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
+    done < <(rootfs_mounts)
+    if [ -n "$(rootfs_mounts)" ]; then
+        echo "error: unable to clear stale mounts below $ROOTFS" >&2
+        exit 1
+    fi
+    rm -rf "$ROOTFS"
+fi
 mkdir -p "$ROOTFS"
 debootstrap --extractor=ar --arch="$DEB_ARCH" "$SUITE" "$ROOTFS"
 
 # 2. Apply global overlay (config files, cos-init, etc.).
 echo ":: applying global overlay"
-cp -a "$SCRIPT_DIR/overlay/." "$ROOTFS/"
+# --no-preserve=ownership: the overlay is a git checkout, so every file is
+# owned by the build user (uid != 0). Plain `cp -a` would stamp that uid onto
+# shared system dirs it overlaps (/etc, /var, /var/log, ...), which then leaks
+# into the final image via rsync --numeric-ids and makes systemd-tmpfiles fail
+# ("unsafe path transition ... owned by 1000"). Drop ownership so everything
+# lands root:root; mode/timestamps/symlinks are still preserved.
+cp -a --no-preserve=ownership "$SCRIPT_DIR/overlay/." "$ROOTFS/"
+chown 0:0 "$ROOTFS"
 
 # 2b. Bind-mount kernel pseudofs and propagate resolv.conf into the chroot.
 # Needed by chroot operations more involved than a plain `apt-get install`:
@@ -118,6 +324,17 @@ mount --bind /proc "$ROOTFS/proc"
 mount --bind /sys "$ROOTFS/sys"
 mount --bind /dev "$ROOTFS/dev"
 mount --bind /dev/pts "$ROOTFS/dev/pts"
+# Detach these binds from the host's mount-propagation peer groups. The host's
+# /dev/pts is `shared`, so our bind joins the same peer group; later unmounting
+# it (especially the `umount -l` lazy fallback in cleanup) would PROPAGATE back
+# to the host peer and tear down the host's /dev/pts. That leaves the host
+# unable to allocate new PTYs — the "sudo: unable to open pty" failure seen
+# after every build, only cured by `wsl --shutdown`. Marking the mounts private
+# (recursively, so /dev/pts under /dev is covered) confines all later unmounts
+# to this chroot.
+mount --make-rprivate "$ROOTFS/proc"
+mount --make-rprivate "$ROOTFS/sys"
+mount --make-rprivate "$ROOTFS/dev"
 if [ -e /etc/resolv.conf ]; then
     cp -L /etc/resolv.conf "$ROOTFS/etc/resolv.conf"
 fi
@@ -128,18 +345,40 @@ Acquire::http::Timeout "30";
 Acquire::https::Timeout "30";
 DPkg::Lock::Timeout "60";
 EOF
+# Disable apt's pseudo-terminal for dpkg/maintainer scripts. The pty performs
+# terminal job-control (tcsetpgrp) that, under WSL2, sends SIGTTOU/SIGTTIN to
+# the build's process group and stops it (state `T`). Setting this in the
+# chroot's apt config covers EVERY apt-get call — chroot_apt_get below AND the
+# direct `chroot apt-get` calls in feature install.sh scripts.
+cat > "$ROOTFS/etc/apt/apt.conf.d/81cos-no-pty" <<'EOF'
+Dpkg::Use-Pty "0";
+EOF
+
+# Make conffile conflicts non-interactive for the whole build. Some Claw OS
+# debs (e.g. claw-os-desktop) ship config files that already exist on the
+# rootfs from the base overlay (/etc/apt/apt.conf.d/20auto-upgrades). dpkg would
+# stop at an interactive "keep/replace?" conffile prompt, but stdin inside the
+# chroot is not a terminal, so the prompt hits EOF and the install aborts.
+# force-confdef + force-confold = take the default action (keep the existing
+# file) without prompting. Covers EVERY apt-get call in the build.
+cat > "$ROOTFS/etc/apt/apt.conf.d/82cos-confold" <<'EOF'
+Dpkg::Options { "--force-confdef"; "--force-confold"; };
+EOF
 
 # debootstrap writes a single-component sources.list (`main` only).
 # Claw OS needs `contrib` (e.g. some codec headers) and especially
 # `non-free-firmware` (Intel/Realtek/Broadcom Wi-Fi blobs, CPU
 # microcode). `non-free` covers anything still parked there that
-# trixie hasn't migrated. Overwrite both the legacy file and the
-# deb822 file (whichever debootstrap chose to use), so apt sees the
-# extra components on the very first `apt-get update`.
+# trixie hasn't migrated. `*-backports` provides packages dropped from
+# trixie main (e.g. ydotool, only in trixie-backports). Overwrite both
+# the legacy file and the deb822 file (whichever debootstrap chose to
+# use), so apt sees the extra components on the very first
+# `apt-get update`.
 echo ":: enabling contrib / non-free-firmware / non-free components"
 cat > "$ROOTFS/etc/apt/sources.list" <<EOF
 deb http://deb.debian.org/debian $SUITE main contrib non-free-firmware non-free
 deb http://deb.debian.org/debian $SUITE-updates main contrib non-free-firmware non-free
+deb http://deb.debian.org/debian $SUITE-backports main contrib non-free-firmware non-free
 deb http://security.debian.org/debian-security $SUITE-security main contrib non-free-firmware non-free
 EOF
 # Newer debootstrap variants emit /etc/apt/sources.list.d/debian.sources
@@ -148,7 +387,7 @@ if [ -f "$ROOTFS/etc/apt/sources.list.d/debian.sources" ]; then
     cat > "$ROOTFS/etc/apt/sources.list.d/debian.sources" <<EOF
 Types: deb
 URIs: http://deb.debian.org/debian
-Suites: $SUITE $SUITE-updates
+Suites: $SUITE $SUITE-updates $SUITE-backports
 Components: main contrib non-free-firmware non-free
 Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 
@@ -160,13 +399,45 @@ Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 EOF
 fi
 
+# Always track the newest officially-maintained kernel, firmware, CPU
+# microcode and matching headers from `$SUITE-backports` for the broadest
+# possible hardware/driver coverage (closer to an Ubuntu HWE stack), while
+# the rest of the system stays on the stable `$SUITE` release. A backports
+# kernel ships newer DRM drivers, so we also pin the userspace half of GPU
+# support — Mesa (GL/EGL/Vulkan/VA-API) plus libdrm/libgbm — so the
+# COSMIC/Wayland desktop can actually light up the latest Intel/AMD GPUs.
+# Backports is `NotAutomatic` (default priority 100), so without this pin
+# apt would keep installing the older stable kernel/Mesa. Priority 600
+# (> main's 500) flips just these hardware-enablement packages to backports;
+# everything else is untouched, and if backports has no candidate apt falls
+# back to stable (the pin only bites when a backports version exists). This
+# file lands before any feature installs the kernel, so the very first
+# `apt-get install ${KERNEL_PKG}` already resolves to backports.
+mkdir -p "$ROOTFS/etc/apt/preferences.d"
+cat > "$ROOTFS/etc/apt/preferences.d/90-backports-hardware-enablement" <<EOF
+Package: linux-image-* linux-headers-* linux-image-amd64 linux-image-arm64 linux-headers-amd64 linux-headers-arm64
+Pin: release a=$SUITE-backports
+Pin-Priority: 600
+
+Package: firmware-* *-firmware intel-microcode amd64-microcode
+Pin: release a=$SUITE-backports
+Pin-Priority: 600
+
+Package: mesa-* libgl1* libglx-mesa0 libegl-mesa0 libegl1 libgles2 libgbm1 libglapi-mesa libdrm* libvulkan1 vulkan-* *-va-driver* intel-media-va-driver* gstreamer1.0-vaapi
+Pin: release a=$SUITE-backports
+Pin-Priority: 600
+EOF
+
 cleanup_chroot_mounts() {
-    # Unmount in reverse order, lazy fallback for stray references.
-    for mp in "$ROOTFS/dev/pts" "$ROOTFS/dev" "$ROOTFS/sys" "$ROOTFS/proc"; do
-        if mountpoint -q "$mp"; then
-            umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
-        fi
-    done
+    # Unmount every nested feature/chroot bind, deepest path first.
+    while IFS= read -r mp; do
+        [ -n "$mp" ] || continue
+        umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
+    done < <(rootfs_mounts)
+    # Belt-and-suspenders: if anything in the chroot clobbered the host's
+    # /dev/pts/ptmx mode (some devpts reconfigurations reset it to 000),
+    # restore it so the host can still allocate PTYs.
+    [ -e /dev/pts/ptmx ] && chmod 666 /dev/pts/ptmx 2>/dev/null || true
 }
 trap cleanup_chroot_mounts EXIT
 
@@ -175,8 +446,19 @@ chroot_apt_get() {
     local max_attempts=3
     local delay=5
     local rc=0
+    # Run apt fully non-interactively and DETACHED from the controlling
+    # terminal:
+    #   * DEBIAN_FRONTEND=noninteractive — never prompt via debconf.
+    #   * -o Dpkg::Use-Pty=0 — do NOT allocate a pty for maintainer scripts.
+    #     apt's default pty does terminal job-control (tcsetpgrp), which under
+    #     WSL2 delivers SIGTTOU/SIGTTIN to our foreground process group and
+    #     STOPS the whole build (processes wedge in state `T`, looking "hung"
+    #     at "Processing triggers …" with no key ever pressed).
+    #   * < /dev/null — give children no terminal to read from, so nothing can
+    #     block on / grab the tty.
     while true; do
-        if chroot "$ROOTFS" apt-get "$@"; then
+        if DEBIAN_FRONTEND=noninteractive \
+            chroot "$ROOTFS" apt-get -o Dpkg::Use-Pty=0 "$@" < /dev/null; then
             return 0
         fi
         rc=$?
@@ -218,9 +500,16 @@ for f in "${FEATURE_LIST[@]}"; do
         done < <(grep -vE '^\s*(#|$)' "$feature_dir/packages.txt" || true)
         if [ -n "${pkgs// /}" ]; then
             echo "  :: apt install$pkgs"
-            chroot_apt_get update -qq
-            chroot_apt_get install -y --no-install-recommends $pkgs
-            chroot_apt_get clean
+            # NB: chroot_apt_get is a function whose body uses if/while, so a
+            # non-zero return does NOT trip the caller's `set -e` (a known bash
+            # errexit gotcha). Check explicitly and abort, otherwise a feature
+            # whose packages fail to install would silently continue into its
+            # install.sh and fail later with a confusing error.
+            chroot_apt_get update -qq \
+                || { echo "error: feature '$f': apt-get update failed" >&2; exit 1; }
+            chroot_apt_get install -y --no-install-recommends $pkgs \
+                || { echo "error: feature '$f': failed to install packages.txt packages" >&2; exit 1; }
+            chroot_apt_get clean || true
             rm -rf "$ROOTFS/var/lib/apt/lists"/*
         fi
     fi
@@ -236,4 +525,35 @@ for f in "${FEATURE_LIST[@]}"; do
     fi
 done
 
+cleanup_chroot_mounts
+trap - EXIT
+if [ -n "$(rootfs_mounts)" ]; then
+    echo "error: rootfs build left nested mounts; refusing complete stamp" >&2
+    rootfs_mounts >&2
+    exit 1
+fi
+FINAL_SOURCE_HASH="$(source_hash)"
+if [ "$FINAL_SOURCE_HASH" != "$SOURCE_HASH" ]; then
+    if git -C "$PROJECT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        final_status_hash="$(
+            git -C "$PROJECT_DIR" status --porcelain=v1 -z --untracked-files=normal \
+                | sha256sum | awk '{print $1}'
+        )"
+    else
+        final_status_hash="$FINAL_SOURCE_HASH"
+    fi
+    if [ "$final_status_hash" != "$SOURCE_STATUS_HASH" ]; then
+        echo "error: source tree changed during rootfs build; refusing complete stamp" >&2
+        exit 1
+    fi
+    echo ":: source content was materialized by clean filters (for example Git LFS)"
+    SOURCE_HASH="$FINAL_SOURCE_HASH"
+fi
+STAMP_CONTENT="$(stamp_content)"
+mkdir -p "$(dirname "$STAMP_PATH")"
+printf '%s\n' "$STAMP_CONTENT" > "$STAMP_PATH.tmp"
+chmod 0644 "$STAMP_PATH.tmp"
+mv -f "$STAMP_PATH.tmp" "$STAMP_PATH"
+
 echo ":: done — rootfs at $ROOTFS"
+echo ":: stamp — $STAMP_PATH"

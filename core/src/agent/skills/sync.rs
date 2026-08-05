@@ -1,6 +1,6 @@
 //! Local-archive skill installer.
 //!
-//! Lays a `.zip` skill bundle down at
+//! Lays a `.zip` or `.tar.gz` skill bundle down at
 //! `<agent_skills_dir>/<skill-id>/`. **No network.** Caller passes
 //! the path to the archive; the skill id is read from the bundled
 //! `SKILL.md` frontmatter (`name:` field). The id is sanitised to a
@@ -20,10 +20,11 @@
 //! On any failure the staging directory is removed so partially-
 //! extracted skills never linger.
 //!
-//! Tar.gz is intentionally not supported here yet — every sample
-//! `agentskills.io` bundle in the wild ships as a `.zip`. Wire it
-//! up the same way `engine_pkg::install_local::extract` already
-//! does once a real tar.gz bundle shows up.
+//! Both `.zip` and `.tar.gz` / `.tgz` bundles are supported. Hub assets
+//! (see [`crate::agent::skills::hub`]) ship as `.tar.gz`; local
+//! `agentskills.io` bundles are `.zip`. Both extractors enforce the same
+//! zip-slip / path-depth / per-entry / total-size caps and reject any
+//! non-regular-file entry (symlinks, hard links, devices).
 
 use std::fs::{self, File};
 use std::io::{self, Read};
@@ -67,9 +68,7 @@ pub enum SyncError {
     Zip(#[from] zip::result::ZipError),
     #[error("archive does not exist: {0}")]
     ArchiveMissing(PathBuf),
-    #[error(
-        "unsupported archive format: {0} (only .zip is supported today; tar.gz can be added later)"
-    )]
+    #[error("unsupported archive format: {0} (supported: .zip, .tar.gz, .tgz)")]
     UnsupportedFormat(String),
     #[error("archive is empty after extraction")]
     EmptyArchive,
@@ -167,12 +166,19 @@ pub fn install_into_with_policy(
     if !archive.exists() {
         return Err(SyncError::ArchiveMissing(archive.to_path_buf()));
     }
-    let ext = archive
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(str::to_ascii_lowercase)
-        .unwrap_or_default();
-    if ext != "zip" {
+    let fname = archive
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let is_tar_gz = fname.ends_with(".tar.gz") || fname.ends_with(".tgz");
+    let is_zip = fname.ends_with(".zip");
+    if !is_zip && !is_tar_gz {
+        let ext = archive
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_default();
         return Err(SyncError::UnsupportedFormat(ext));
     }
 
@@ -201,7 +207,11 @@ pub fn install_into_with_policy(
     let mut backup: Option<PathBuf> = None;
 
     let result = (|| -> Result<SyncResult, SyncError> {
-        let extracted = extract_zip(archive, &staging)?;
+        let extracted = if is_tar_gz {
+            extract_tar_gz(archive, &staging)?
+        } else {
+            extract_zip(archive, &staging)?
+        };
         if extracted.files == 0 {
             return Err(SyncError::EmptyArchive);
         }
@@ -456,6 +466,127 @@ fn extract_zip(archive: &Path, dest: &Path) -> Result<ExtractStats, SyncError> {
     Ok(ExtractStats { files })
 }
 
+/// Extract a gzip-compressed tarball with the same safety envelope as
+/// [`extract_zip`]: entry-count cap, path-depth cap, per-entry and total
+/// uncompressed-size caps, zip-slip rejection, and a hard refusal of any
+/// non-regular-file entry (symlinks, hard links, devices) so a hostile
+/// bundle can't plant a link that subsequent writes follow out of `dest`.
+/// Hub assets ship as `.tar.gz`, so this is the path hub installs take.
+fn extract_tar_gz(archive: &Path, dest: &Path) -> Result<ExtractStats, SyncError> {
+    let file = File::open(archive)?;
+    let decoder = flate2::read::GzDecoder::new(file);
+    let mut tar = tar::Archive::new(decoder);
+    let dest_canon = dest.canonicalize().unwrap_or_else(|_| dest.to_path_buf());
+
+    let mut files = 0usize;
+    let mut entry_count = 0usize;
+    let mut total_uncompressed: u64 = 0;
+
+    for entry in tar.entries()? {
+        let mut entry = entry?;
+        entry_count += 1;
+        if entry_count > MAX_ZIP_ENTRIES {
+            return Err(SyncError::ZipTooManyEntries {
+                count: entry_count,
+                cap: MAX_ZIP_ENTRIES,
+            });
+        }
+
+        let raw_name = entry.path()?.to_path_buf();
+
+        // Reject absolute paths and any `..` component (tar-slip).
+        if raw_name.is_absolute()
+            || raw_name
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(SyncError::PathTraversal(raw_name.display().to_string()));
+        }
+        let depth = raw_name
+            .components()
+            .filter(|c| matches!(c, std::path::Component::Normal(_)))
+            .count();
+        if depth > MAX_PATH_DEPTH {
+            return Err(SyncError::ZipPathTooDeep {
+                name: raw_name.display().to_string(),
+                cap: MAX_PATH_DEPTH,
+            });
+        }
+
+        let etype = entry.header().entry_type();
+        // Only regular files and directories may be laid down. Symlinks
+        // and hard links could redirect writes outside `dest`.
+        if etype.is_symlink() || etype.is_hard_link() {
+            return Err(SyncError::PathTraversal(format!(
+                "{} (link in archive)",
+                raw_name.display()
+            )));
+        }
+
+        let advertised = entry.header().size().unwrap_or(0);
+        if advertised > MAX_PER_ENTRY_BYTES {
+            return Err(SyncError::ZipEntryTooLarge {
+                name: raw_name.display().to_string(),
+                cap: MAX_PER_ENTRY_BYTES,
+            });
+        }
+
+        let outpath = dest.join(&raw_name);
+        // Resolve the parent (created on demand) and verify it stays
+        // inside `dest_canon`, defeating symlink races inside staging.
+        if let Some(parent) = outpath.parent() {
+            fs::create_dir_all(parent)?;
+            if let Ok(parent_canon) = parent.canonicalize() {
+                if !parent_canon.starts_with(&dest_canon) {
+                    return Err(SyncError::PathTraversal(raw_name.display().to_string()));
+                }
+            }
+        }
+        if !outpath.starts_with(dest) {
+            return Err(SyncError::PathTraversal(raw_name.display().to_string()));
+        }
+
+        if etype.is_dir() {
+            fs::create_dir_all(&outpath)?;
+            continue;
+        }
+        if !etype.is_file() {
+            return Err(SyncError::PathTraversal(format!(
+                "{} (non-regular entry)",
+                raw_name.display()
+            )));
+        }
+
+        // Cap per-entry and total extracted bytes regardless of the
+        // advertised header size (headers can lie).
+        let remaining = MAX_TOTAL_UNCOMPRESSED_BYTES.saturating_sub(total_uncompressed);
+        let per_entry_cap = MAX_PER_ENTRY_BYTES.min(remaining);
+        if per_entry_cap == 0 {
+            return Err(SyncError::ZipTooLarge {
+                cap: MAX_TOTAL_UNCOMPRESSED_BYTES,
+            });
+        }
+        let mut out = File::create(&outpath)?;
+        let mut reader = (&mut entry).take(per_entry_cap + 1);
+        let written = io::copy(&mut reader, &mut out)?;
+        if written > per_entry_cap {
+            return Err(SyncError::ZipEntryTooLarge {
+                name: raw_name.display().to_string(),
+                cap: MAX_PER_ENTRY_BYTES,
+            });
+        }
+        total_uncompressed = total_uncompressed.saturating_add(written);
+        if total_uncompressed > MAX_TOTAL_UNCOMPRESSED_BYTES {
+            return Err(SyncError::ZipTooLarge {
+                cap: MAX_TOTAL_UNCOMPRESSED_BYTES,
+            });
+        }
+        files += 1;
+    }
+
+    Ok(ExtractStats { files })
+}
+
 fn strip_backup_suffix(bak: &Path, skills_root: &Path) -> Option<PathBuf> {
     // `bak` looks like `<skills_root>/.bak-<safe_id>-<uuid>`. Derive
     // the original install directory so we can rename back on failure.
@@ -615,11 +746,11 @@ mod tests {
     #[test]
     fn unsupported_format_rejected() {
         let tmp = TempDir::new().unwrap();
-        let archive = tmp.path().join("bundle.tar.gz");
+        let archive = tmp.path().join("bundle.rar");
         File::create(&archive).unwrap();
         let dest = tmp.path().join("skills");
         let err = install_into(&archive, &dest, false).unwrap_err();
-        assert!(matches!(err, SyncError::UnsupportedFormat(s) if s == "gz"));
+        assert!(matches!(err, SyncError::UnsupportedFormat(s) if s == "rar"));
     }
 
     #[test]

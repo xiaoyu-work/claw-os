@@ -28,7 +28,7 @@ Nothing in this document applies here.
 ### 1.2 World B — App using AI
 
 The moment the App wants to:
-- call a language model, embedder, image / audio / video model, **or**
+- call the stable text-chat model surface, **or**
 - let a model decide what to do on the computer next,
 
 it must go through Claw OS's **AI subsystem**. The AI subsystem has
@@ -40,6 +40,11 @@ exactly two entry points:
 | `cos ai tool`  | Execute one Tool by name with explicit JSON arguments. Capability-checked, App-scoped, fully audited. |
 
 Both are audited. Everything inside the AI subsystem is on the record.
+
+> **Current stable scope:** `ai.chat` and `ai.chat.untrusted` only.
+> Embed, image, vision, audio, and video selectors are experimental and
+> currently return a language-specific typed unsupported error before
+> invoking `cos` or a provider.
 
 ## 2. Why The Split
 
@@ -183,7 +188,7 @@ Initial catalog (subject to change before 1.0):
 | `doc.parse` | Parse PDF / DOCX / XLSX / PPTX / CSV |
 | `mail.send` `cal.create` `cal.list` | Communications |
 | `cred.load` | Load a secret from the App's own credential namespace |
-| `ai.chat` `ai.embed` | Recursive / sub-agent model calls |
+| `ai.chat` | Recursive / sub-agent text model calls |
 
 What is **not** in the Tool catalog — by design:
 
@@ -201,36 +206,22 @@ scope.
 
 ```json
 {
-  "id": "third.party.research",
+  "id": "research-assistant",
   "ai": {
     "budget": { "monthly_units": 200000 },
-    "models": ["claude-*"],
-    "tools": [
-      {
-        "name":  "fs.read",
-        "scope": { "kind": "subtree", "value": "$APP_DATA" },
-        "why":   { "en": "Read your research notes." }
-      },
-      {
-        "name":  "web.fetch",
-        "why":   { "en": "Look things up online to answer your question." }
-      },
-      {
-        "name":  "sandbox.exec",
-        "why":   { "en": "Run small scripts safely while answering." }
-      }
-    ]
+    "safety": "strict",
+    "origins": ["trusted", "user-input", "external-content"],
+    "tools": ["fs.read_text", "kv.get"]
   }
 }
 ```
 
-`ai.tools[]` lists every Tool the App's AI may call. At install time the
-user sees one consent dialog containing one row per entry, populated from
-the `why` text. Tools not granted are absent from the schema list sent to
-the model — the model cannot reach them.
+`ai.tools[]` lists stable catalog tool names the App may expose to the
+model. Names not present in this allowlist are rejected before reaching
+the provider.
 
-`ai.budget` caps token spend per month. `ai.models` constrains which
-models the App is allowed to invoke.
+`ai.budget` caps unit spend per month. Apps never select a model; the
+machine owner configures the provider and model.
 
 An App that does **not** use AI omits the `ai` section entirely.
 
@@ -245,7 +236,6 @@ emitted. Does **not** execute the tool calls.
 cos ai chat --app <id>
             [--prompt <text> | --prompt-file <path>]
             [--system <text>]
-            [--model <name>]
             [--tools <name>,<name>,…]
             [--origin trusted|user-input|external-content]
             [--max-units <N>]
@@ -255,12 +245,17 @@ The returned envelope:
 
 ```json
 {
-  "message":   { "role": "assistant", "content": "..." },
+  "text": "...",
+  "model": "configured-model",
+  "provider": "configured-provider",
+  "verb": "ai.chat",
   "tool_calls": [
-    { "id": "call_1", "name": "web.fetch",
-      "arguments": { "url": "https://example.com" } }
+    { "id": "call_1", "name": "fs.read_text",
+      "input": { "path": "/home/user/notes.txt" } }
   ],
-  "usage":     { "input_units": 1234, "output_units": 567 }
+  "usage": { "input_tokens": 1234, "output_tokens": 567, "units": 1801 },
+  "budget": { "period": "2026-05", "units_used": 1801, "units_cap": 200000 },
+  "review": { "safety": "strict", "prompt_redacted": false }
 }
 ```
 
@@ -279,7 +274,8 @@ cos ai tool <name> --app <id> --args <json>
 Returns:
 
 ```json
-{ "ok": true, "result": { ... }, "verb": "fs.read", "scope": { ... } }
+{ "tool": "fs.read_text", "app_id": "research-assistant",
+  "status": "ok", "result": { "text": "..." } }
 ```
 
 or on failure:
@@ -307,31 +303,22 @@ only `claw_os_sdk`.
 ```python
 from claw_os_sdk import ai, tools
 
-messages = [{"role": "user", "content": "Summarise the latest notes."}]
+resp = ai.chat(
+    prompt="Summarise the latest notes.",
+    tools=["fs.read_text"],
+    origin="user-input",
+)
 
-while True:
-    resp = ai.chat(
-        messages=messages,
-        tools=["fs.read", "web.fetch"],
-        origin="user-input",
-    )
-    messages.append(resp.message)
+for call in resp.tool_calls:
+    result = tools.call(call.name, call.input)
+    # The App decides how to use the explicit tool result in a later
+    # prompt; the kernel never executes or loops tool calls inline.
+    print(result.value)
 
-    if not resp.tool_calls:
-        break
-
-    for call in resp.tool_calls:
-        result = tools.invoke(call.name, call.arguments)
-        messages.append({
-            "role":         "tool",
-            "tool_call_id": call.id,
-            "content":      result,
-        })
-
-return resp.message.content
+print(resp.text)
 ```
 
-`ai.chat()` and `tools.invoke()` shell out to `cos ai chat` and `cos ai
+`ai.chat()` and `tools.call()` shell out to `cos ai chat` and `cos ai
 tool` respectively. **The App writes its own agent loop** — the OS never
 loops on its behalf. This is the deliberate dividing line between the
 *kernel Agent* (`cos agent`, which does loop, hold memory, and run
@@ -339,8 +326,7 @@ skills) and third-party App AIs (which get only the two primitives and
 build whatever they want on top).
 
 Equivalent SDKs in Node, Go and Rust are straightforward thin wrappers
-around the same two CLI calls; they need not duplicate the schemas
-(`cos ai catalog --json` dumps the live registry).
+around the same two CLI calls; `cos ai tools` dumps the live catalog.
 
 ## 8. Audit Surface
 
@@ -670,4 +656,3 @@ runs it directly with no interpreter. See
   tool kicks off work and returns a handle; another polls).
 - Confidentiality between Apps in a shared agent session. The agent is
   the orchestrator and sees every value crossing the boundary.
-

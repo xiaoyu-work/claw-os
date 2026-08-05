@@ -1,11 +1,10 @@
-//! AI helper — every SDK consumer that talks to a language model
-//! shells out to `cos ai chat --app <id>` through this module.
-//! Mirrors the Python [`claw_os_sdk.ai`] module.
+//! AI helper for the stable `chat` / `chat-untrusted` surface.
 //!
-//! The same set of helpers covers every modality (chat / embed /
-//! image / vision / audio / video) because the kernel derives the
-//! caps verb from the *flag combination*, not from any model name
-//! the app supplies. Apps never name a verb and never name a model.
+//! [`chat`] shells out to `cos ai chat --app <id>`. Passing
+//! `origin("external-content")` makes the kernel select
+//! `ai.chat.untrusted`. Multimodal helper names remain as deprecated,
+//! experimental compatibility shims, but are currently unsupported
+//! and fail before invoking `cos`.
 //!
 //! ```no_run
 //! use claw_os_sdk::ai;
@@ -17,6 +16,10 @@
 //! ```
 
 use std::ffi::OsString;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
@@ -29,72 +32,47 @@ use crate::{cos_call_json, BridgeError};
 /// Token / unit accounting for a single call.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Usage {
-    #[serde(default)]
     pub input_tokens: u32,
-    #[serde(default)]
     pub output_tokens: u32,
-    #[serde(default)]
-    pub units: u32,
+    pub units: u64,
 }
 
 /// Snapshot of the app's budget *after* this call.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Budget {
-    #[serde(default)]
     pub period: String,
-    #[serde(default)]
-    pub units_used: u32,
-    #[serde(default)]
-    pub units_cap: u32,
+    pub units_used: u64,
+    pub units_cap: u64,
 }
 
 /// Safety / review metadata.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Review {
-    #[serde(default)]
     pub safety: String,
-    #[serde(default)]
     pub prompt_redacted: bool,
-    #[serde(default)]
-    pub response_blocked: bool,
 }
 
 /// A tool call the model proposed but the kernel did **not** execute.
 /// Apps decide whether to fulfil it by re-calling [`crate::tools::call`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProposedToolCall {
-    #[serde(default)]
     pub id: String,
     pub name: String,
-    #[serde(default)]
     pub input: serde_json::Value,
 }
 
 /// Parsed reply from `cos ai chat`. See `wire/v1/ai.schema.json`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AiResponse {
-    #[serde(default)]
     pub text: String,
-    #[serde(default)]
     pub model: String,
-    #[serde(default)]
     pub provider: String,
-    #[serde(default)]
     pub verb: String,
-    #[serde(default)]
-    pub embedding: Vec<f64>,
-    #[serde(default)]
-    pub output_path: Option<String>,
-    #[serde(default)]
     pub usage: Usage,
-    #[serde(default)]
     pub budget: Budget,
-    #[serde(default)]
     pub review: Review,
     #[serde(default)]
     pub tool_calls: Vec<ProposedToolCall>,
-    #[serde(default)]
-    pub raw: serde_json::Value,
 }
 
 // ---------------------------------------------------------------------------
@@ -105,6 +83,10 @@ pub struct AiResponse {
 pub enum AiError {
     #[error("ai: {0}")]
     InvalidArg(String),
+
+    /// Experimental compatibility shim for a modality that is not stable.
+    #[error("{modality}: currently unsupported; only chat/chat-untrusted are stable")]
+    UnsupportedModality { modality: &'static str },
 
     /// Gate refused (caps / origin / unknown app / unknown verb).
     #[error("ai denied: {message}")]
@@ -134,14 +116,12 @@ pub enum AiError {
 // Options builder
 // ---------------------------------------------------------------------------
 
-/// Shared option-bag for every modality. Construct with
-/// [`ChatOpts::default`] then fluent-chain only the knobs you care
-/// about — modality-specific paths live on dedicated free functions
-/// (`image_generate`, `audio_tts`, …).
+/// Options for [`chat`]. Compatibility shims retain this type in their
+/// signatures but do not inspect it.
 #[derive(Debug, Default, Clone)]
 pub struct ChatOpts {
     origin: Option<String>,
-    max_units: Option<u32>,
+    max_units: Option<u64>,
     system: Option<String>,
     app_id: Option<String>,
     tools: Option<Vec<String>>,
@@ -149,7 +129,7 @@ pub struct ChatOpts {
 
 impl ChatOpts {
     pub fn origin(mut self, o: impl Into<String>)    -> Self { self.origin = Some(o.into()); self }
-    pub fn max_units(mut self, n: u32)               -> Self { self.max_units = Some(n); self }
+    pub fn max_units(mut self, n: u64)               -> Self { self.max_units = Some(n); self }
     pub fn system(mut self, s: impl Into<String>)    -> Self { self.system = Some(s.into()); self }
     pub fn app(mut self, id: impl Into<String>)      -> Self { self.app_id = Some(id.into()); self }
     pub fn tools<I, S>(mut self, tools: I) -> Self
@@ -171,130 +151,121 @@ pub fn chat(prompt: &str, opts: ChatOpts) -> Result<AiResponse, AiError> {
     if prompt.trim().is_empty() {
         return Err(AiError::InvalidArg("chat: prompt must be non-empty".into()));
     }
-    dispatch(Modality::Chat, Some(prompt), opts, Default::default())
+    dispatch(prompt, opts)
 }
 
-/// Embed text into a vector. Result vector at [`AiResponse::embedding`].
-pub fn embed(prompt: &str, opts: ChatOpts) -> Result<AiResponse, AiError> {
-    if prompt.trim().is_empty() {
-        return Err(AiError::InvalidArg("embed: prompt must be non-empty".into()));
-    }
-    let extras = Extras { embed: true, ..Default::default() };
-    dispatch(Modality::Embed, Some(prompt), opts, extras)
+/// Deprecated experimental compatibility shim; currently unsupported.
+#[deprecated(note = "experimental compatibility shim; currently unsupported")]
+pub fn embed(_prompt: &str, _opts: ChatOpts) -> Result<AiResponse, AiError> {
+    Err(AiError::UnsupportedModality { modality: "embed" })
 }
 
-/// Generate an image from a prompt; the gate writes it to `output`.
-pub fn image_generate(prompt: &str, output: &str, opts: ChatOpts) -> Result<AiResponse, AiError> {
-    if prompt.trim().is_empty() {
-        return Err(AiError::InvalidArg("image_generate: prompt must be non-empty".into()));
-    }
-    let extras = Extras { image_output: Some(output.into()), ..Default::default() };
-    dispatch(Modality::ImageGenerate, Some(prompt), opts, extras)
+/// Deprecated experimental compatibility shim; currently unsupported.
+#[deprecated(note = "experimental compatibility shim; currently unsupported")]
+pub fn image_generate(_prompt: &str, _output: &str, _opts: ChatOpts) -> Result<AiResponse, AiError> {
+    Err(AiError::UnsupportedModality { modality: "image.generate" })
 }
 
-/// Caption / classify an image with no prompt.
-pub fn image_analyze(image: &str, opts: ChatOpts) -> Result<AiResponse, AiError> {
-    let extras = Extras { image_input: Some(image.into()), ..Default::default() };
-    dispatch(Modality::ImageAnalyze, None, opts, extras)
+/// Deprecated experimental compatibility shim; currently unsupported.
+#[deprecated(note = "experimental compatibility shim; currently unsupported")]
+pub fn image_analyze(_image: &str, _opts: ChatOpts) -> Result<AiResponse, AiError> {
+    Err(AiError::UnsupportedModality { modality: "image.analyze" })
 }
 
-/// Answer a textual question about an image.
-pub fn vision_analyze(prompt: &str, image: &str, opts: ChatOpts) -> Result<AiResponse, AiError> {
-    if prompt.trim().is_empty() {
-        return Err(AiError::InvalidArg("vision_analyze: prompt must be non-empty".into()));
-    }
-    let extras = Extras { image_input: Some(image.into()), ..Default::default() };
-    dispatch(Modality::VisionAnalyze, Some(prompt), opts, extras)
+/// Deprecated experimental compatibility shim; currently unsupported.
+#[deprecated(note = "experimental compatibility shim; currently unsupported")]
+pub fn vision_analyze(_prompt: &str, _image: &str, _opts: ChatOpts) -> Result<AiResponse, AiError> {
+    Err(AiError::UnsupportedModality { modality: "vision.analyze" })
 }
 
-/// Synthesize speech; the gate writes the audio to `output`.
-pub fn audio_tts(prompt: &str, output: &str, opts: ChatOpts) -> Result<AiResponse, AiError> {
-    if prompt.trim().is_empty() {
-        return Err(AiError::InvalidArg("audio_tts: prompt must be non-empty".into()));
-    }
-    let extras = Extras { audio_output: Some(output.into()), ..Default::default() };
-    dispatch(Modality::AudioTts, Some(prompt), opts, extras)
+/// Deprecated experimental compatibility shim; currently unsupported.
+#[deprecated(note = "experimental compatibility shim; currently unsupported")]
+pub fn audio_tts(_prompt: &str, _output: &str, _opts: ChatOpts) -> Result<AiResponse, AiError> {
+    Err(AiError::UnsupportedModality { modality: "audio.tts" })
 }
 
-/// Transcribe an audio file. Transcript at [`AiResponse::text`].
-pub fn audio_stt(audio: &str, opts: ChatOpts) -> Result<AiResponse, AiError> {
-    let extras = Extras { audio_input: Some(audio.into()), ..Default::default() };
-    dispatch(Modality::AudioStt, None, opts, extras)
+/// Deprecated experimental compatibility shim; currently unsupported.
+#[deprecated(note = "experimental compatibility shim; currently unsupported")]
+pub fn audio_stt(_audio: &str, _opts: ChatOpts) -> Result<AiResponse, AiError> {
+    Err(AiError::UnsupportedModality { modality: "audio.stt" })
 }
 
-/// Generate a video from a prompt; the gate writes it to `output`.
-pub fn video_generate(prompt: &str, output: &str, opts: ChatOpts) -> Result<AiResponse, AiError> {
-    if prompt.trim().is_empty() {
-        return Err(AiError::InvalidArg("video_generate: prompt must be non-empty".into()));
-    }
-    let extras = Extras { video_output: Some(output.into()), ..Default::default() };
-    dispatch(Modality::VideoGenerate, Some(prompt), opts, extras)
+/// Deprecated experimental compatibility shim; currently unsupported.
+#[deprecated(note = "experimental compatibility shim; currently unsupported")]
+pub fn video_generate(_prompt: &str, _output: &str, _opts: ChatOpts) -> Result<AiResponse, AiError> {
+    Err(AiError::UnsupportedModality { modality: "video.generate" })
 }
 
-/// Describe or answer a question about a video file.
-pub fn video_analyze(video: &str, prompt: Option<&str>, opts: ChatOpts) -> Result<AiResponse, AiError> {
-    let extras = Extras { video_input: Some(video.into()), ..Default::default() };
-    dispatch(Modality::VideoAnalyze, prompt, opts, extras)
+/// Deprecated experimental compatibility shim; currently unsupported.
+#[deprecated(note = "experimental compatibility shim; currently unsupported")]
+pub fn video_analyze(_video: &str, _prompt: Option<&str>, _opts: ChatOpts) -> Result<AiResponse, AiError> {
+    Err(AiError::UnsupportedModality { modality: "video.analyze" })
 }
 
 // ---------------------------------------------------------------------------
 // Internals
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy)]
-enum Modality {
-    Chat,
-    Embed,
-    ImageGenerate,
-    ImageAnalyze,
-    VisionAnalyze,
-    AudioTts,
-    AudioStt,
-    VideoGenerate,
-    VideoAnalyze,
+struct PrivateInputFile {
+    path: PathBuf,
 }
 
-impl Modality {
-    fn name(&self) -> &'static str {
-        match self {
-            Modality::Chat          => "chat",
-            Modality::Embed         => "embed",
-            Modality::ImageGenerate => "image.generate",
-            Modality::ImageAnalyze  => "image.analyze",
-            Modality::VisionAnalyze => "vision.analyze",
-            Modality::AudioTts      => "audio.tts",
-            Modality::AudioStt      => "audio.stt",
-            Modality::VideoGenerate => "video.generate",
-            Modality::VideoAnalyze  => "video.analyze",
+impl PrivateInputFile {
+    fn new(label: &str, contents: &str) -> Result<Self, AiError> {
+        static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
+        let sequence = NEXT_FILE.fetch_add(1, Ordering::Relaxed);
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!(
+            "claw-ai-{}-{nonce}-{sequence}-{label}",
+            std::process::id()
+        ));
+        let mut options = OpenOptions::new();
+        options.create_new(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(&path)
+            .map_err(|error| AiError::Unavailable(format!("create private {label}: {error}")))?;
+        if let Err(error) = file
+            .write_all(contents.as_bytes())
+            .and_then(|_| file.sync_all())
+        {
+            drop(file);
+            let _ = std::fs::remove_file(&path);
+            return Err(AiError::Unavailable(format!(
+                "write private {label}: {error}"
+            )));
+        }
+        Ok(Self { path })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for PrivateInputFile {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_file(&self.path) {
+            eprintln!("claw-os-sdk: failed to remove private AI input file: {error}");
         }
     }
 }
 
-#[derive(Debug, Default, Clone)]
-struct Extras {
-    embed: bool,
-    image_input: Option<String>,
-    image_output: Option<String>,
-    audio_input: Option<String>,
-    audio_output: Option<String>,
-    video_input: Option<String>,
-    video_output: Option<String>,
-}
-
-fn dispatch(
-    modality: Modality,
-    prompt: Option<&str>,
-    opts: ChatOpts,
-    extras: Extras,
-) -> Result<AiResponse, AiError> {
+fn dispatch(prompt: &str, opts: ChatOpts) -> Result<AiResponse, AiError> {
     let app = opts
         .app_id
         .clone()
         .or_else(|| std::env::var("COS_APP_ID").ok())
-        .ok_or_else(|| AiError::InvalidArg(format!(
-            "{}: app id is required (pass .app(...) or set COS_APP_ID)",
-            modality.name()
-        )))?;
+        .ok_or_else(|| AiError::InvalidArg(
+            "chat: app id is required (pass .app(...) or set COS_APP_ID)".into()
+        ))?;
 
     let origin = opts.origin.clone().unwrap_or_else(|| "trusted".into());
 
@@ -303,59 +274,55 @@ fn dispatch(
         "--app".into(), app.into(),
         "--origin".into(), origin.into(),
     ];
-    if let Some(p) = prompt {
-        argv.push("--prompt".into()); argv.push(p.into());
-    }
+    let prompt_file = PrivateInputFile::new("prompt", prompt)?;
+    argv.push("--prompt-file".into());
+    argv.push(prompt_file.path().as_os_str().to_owned());
     if let Some(n) = opts.max_units {
         argv.push("--max-units".into()); argv.push(n.to_string().into());
     }
-    if let Some(s) = &opts.system {
-        argv.push("--system".into()); argv.push(s.into());
-    }
-    if extras.embed {
-        argv.push("--embed".into());
-    }
-    let flag_pairs: &[(&str, &Option<String>)] = &[
-        ("--image-input", &extras.image_input),
-        ("--image-output", &extras.image_output),
-        ("--audio-input", &extras.audio_input),
-        ("--audio-output", &extras.audio_output),
-        ("--video-input", &extras.video_input),
-        ("--video-output", &extras.video_output),
-    ];
-    for (flag, val) in flag_pairs {
-        if let Some(v) = val.as_ref() {
-            argv.push((*flag).into()); argv.push(v.into());
-        }
+    let system_file = opts
+        .system
+        .as_deref()
+        .map(|system| PrivateInputFile::new("system", system))
+        .transpose()?;
+    if let Some(file) = &system_file {
+        argv.push("--system-file".into());
+        argv.push(file.path().as_os_str().to_owned());
     }
     if let Some(tools) = &opts.tools {
         argv.push("--tools".into());
         argv.push(tools.join(",").into());
     }
 
-    let value = cos_call_json("ai", modality.name(), argv)?;
-    parse_response(value, modality)
+    let value = match cos_call_json("ai", "chat", argv) {
+        Ok(value) => value,
+        Err(BridgeError::AppError {
+            message,
+            code,
+            ..
+        }) => {
+            let mut payload = serde_json::json!({ "error": &message });
+            if let Some(code) = code {
+                payload["code"] = serde_json::Value::String(code);
+            }
+            let message = payload["error"].as_str().unwrap_or("AI request denied");
+            return Err(classify_ai_error(message, &payload));
+        }
+        Err(error) => return Err(AiError::Bridge(error)),
+    };
+    parse_response(value)
 }
 
-fn parse_response(value: serde_json::Value, modality: Modality) -> Result<AiResponse, AiError> {
+fn parse_response(value: serde_json::Value) -> Result<AiResponse, AiError> {
     if let Some(err) = value.get("error").and_then(|v| v.as_str()) {
         return Err(classify_ai_error(err, &value));
     }
-    // Map raw envelope onto AiResponse using strongly-typed deser
-    // where possible. Surfacing a decode error here matters: the
-    // previous `unwrap_or_default()` silently substituted an empty
-    // AiResponse, masking schema drift (e.g. the kernel renaming
-    // `embedding` to `vector`) as "the call succeeded but somehow
-    // returned nothing". Make the failure mode loud instead.
-    let mut resp: AiResponse =
-        serde_json::from_value(value.clone()).map_err(|e| {
+    // Decode the kernel reply into the stable response type. Keep
+    // schema drift loud instead of substituting an empty response.
+    let resp: AiResponse =
+        serde_json::from_value(value).map_err(|e| {
             AiError::Unavailable(format!("ai response decode failed: {e}"))
         })?;
-    // Preserve raw for callers that want provider-native fields back.
-    resp.raw = value;
-    // ai.embed's prompt-vector lives at `embedding`; ai.chat puts the
-    // text at `text`. Modality name is informational.
-    let _ = modality;
     Ok(resp)
 }
 
@@ -386,7 +353,7 @@ fn classify_ai_error(message: &str, payload: &serde_json::Value) -> AiError {
         .map(str::to_string);
     let lower = message.to_lowercase();
     if let Some(c) = code.as_deref() {
-        match c {
+        match c.to_ascii_uppercase().as_str() {
             "BUDGET_EXCEEDED" => return AiError::BudgetExceeded(message.to_string()),
             "SAFETY_VIOLATION" => return AiError::SafetyViolation(message.to_string()),
             _ => {}

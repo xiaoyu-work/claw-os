@@ -4,6 +4,8 @@ After=systemd-user-sessions.service plymouth-quit-wait.service cosmic-greeter-da
 After=getty@tty1.service
 Conflicts=getty@tty1.service
 Wants=cosmic-greeter-daemon.service
+StartLimitIntervalSec=30
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -14,8 +16,6 @@ TimeoutStopSec=30s
 KeyringMode=shared
 Restart=always
 RestartSec=1
-StartLimitBurst=5
-StartLimitInterval=30
 
 # Managed by debconf
 #[Install]

@@ -20,8 +20,10 @@
 //!       * per-app cap from the manifest (`AiBudget::monthly_units`)
 //!       * per-user aggregate cap at `$HOME/.config/cos/ai/budget.json`
 //!         (opt-in: missing file or `monthly_units == 0` ⇒ no cap)
-//!      Reserved pre-call and finalised after the provider returns;
-//!      either ceiling tripping hard-denies the call.
+//!      A conservative input+maximum-output bound is reserved pre-call;
+//!      settlement atomically releases that reservation and records actual
+//!      usage. Cap checks include every in-flight reservation, and either
+//!      ceiling tripping hard-denies the call.
 //!   6. Safety — `Strict` redacts secrets in the prompt before
 //!      sending it upstream. `Minimal` is audit-only.
 //!   7. Audit — every accepted and denied call is logged.
@@ -82,8 +84,8 @@ pub fn run(command: &str, args: &[String]) -> Result<serde_json::Value, String> 
 
 /// Implements `cos ai tool <name> --app <id> [--args <json>|--args-file <p>]`.
 ///
-/// Identity is enforced via the same helper `cos ai chat` uses —
-/// `--app` must match `COS_APP_ID` from the kernel-spawned env.
+/// Identity is enforced via the same helper `cos ai chat` uses:
+/// env claim, registered `app_id`, and nearest App ancestry must agree.
 fn tool_cmd(args: &[String]) -> Result<serde_json::Value, String> {
     let mut name: Option<String> = None;
     let mut app: Option<String> = None;
@@ -203,4 +205,3 @@ mod tests {
         assert!(err.contains("--app"), "got: {err}");
     }
 }
-

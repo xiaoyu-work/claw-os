@@ -1,7 +1,7 @@
 package clawossdk
 
 import (
-	"encoding/json"
+	"slices"
 	"testing"
 )
 
@@ -50,7 +50,7 @@ func TestChatBuildsArgvAndParses(t *testing.T) {
 			t.Fatalf("argv[%d] = %q, want %q (full %v)", i, argv[i], w, argv)
 		}
 	}
-	if !contains(argv, "--prompt") || !contains(argv, "--max-units") || !contains(argv, "--tools") {
+	if !slices.Contains(argv, "--prompt-file") || !slices.Contains(argv, "--max-units") || !slices.Contains(argv, "--tools") {
 		t.Fatalf("missing expected flags: %v", argv)
 	}
 }
@@ -104,32 +104,12 @@ func TestChatErrorClassification(t *testing.T) {
 	}
 }
 
-func TestEmbedSetsFlagAndReadsVector(t *testing.T) {
-	bin, argvOut := fakeCos(t, `{"verb": "ai.embed", "embedding": [0.1, 0.2, 0.3]}`, 0)
-	var res *AiResponse
-	var err error
-	withCos(t, bin, map[string]string{"COS_APP_ID": "notes"}, func() {
-		res, err = Embed("text", ChatOptions{})
-	})
-	if err != nil {
-		t.Fatalf("Embed error: %v", err)
+func TestEmbedReturnsUnsupported(t *testing.T) {
+	res, err := Embed("text", ChatOptions{})
+	if res != nil {
+		t.Fatal("Embed returned a response")
 	}
-	want := []float64{0.1, 0.2, 0.3}
-	got, _ := json.Marshal(res.Embedding)
-	wantJSON, _ := json.Marshal(want)
-	if string(got) != string(wantJSON) {
-		t.Fatalf("embedding = %s, want %s", got, wantJSON)
+	if _, ok := err.(*AiUnsupportedError); !ok {
+		t.Fatalf("want AiUnsupportedError, got %T", err)
 	}
-	if !contains(readArgv(t, argvOut), "--embed") {
-		t.Fatal("expected --embed flag")
-	}
-}
-
-func contains(s []string, want string) bool {
-	for _, v := range s {
-		if v == want {
-			return true
-		}
-	}
-	return false
 }

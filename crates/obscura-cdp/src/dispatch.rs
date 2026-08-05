@@ -14,7 +14,9 @@ pub struct CdpContext {
     pub sessions: HashMap<String, String>, // session_id -> page_id
     pub pending_events: Vec<CdpEvent>,
     pub default_context: Arc<BrowserContext>,
+    browser_contexts: HashMap<String, Arc<BrowserContext>>,
     page_counter: u32,
+    context_counter: u32,
     pub preload_scripts: Vec<(String, String)>, // (identifier, source)
     pub preload_counter: u32,
     // World names registered via Page.createIsolatedWorld. After every
@@ -58,7 +60,9 @@ impl CdpContext {
             sessions: HashMap::new(),
             pending_events: Vec::new(),
             default_context,
+            browser_contexts: HashMap::new(),
             page_counter: 0,
+            context_counter: 0,
             preload_scripts: Vec::new(),
             preload_counter: 0,
             fetch_intercept: FetchInterceptState::new(),
@@ -68,12 +72,66 @@ impl CdpContext {
     }
 
     pub fn create_page(&mut self) -> String {
+        self.create_page_in_context(None)
+            .expect("default browser context must exist")
+    }
+
+    pub fn create_page_in_context(&mut self, context_id: Option<&str>) -> Result<String, String> {
+        let context = self
+            .get_browser_context(context_id)
+            .ok_or_else(|| format!("Browser context not found: {}", context_id.unwrap_or("")))?;
         self.page_counter += 1;
         let page_id = format!("page-{}", self.page_counter);
-        let mut page = Page::new(page_id.clone(), self.default_context.clone());
+        let mut page = Page::new(page_id.clone(), context);
         page.navigate_blank();
         self.pages.push(page);
-        page_id
+        Ok(page_id)
+    }
+
+    pub fn get_browser_context(&self, context_id: Option<&str>) -> Option<Arc<BrowserContext>> {
+        match context_id.filter(|id| !id.is_empty() && *id != self.default_context.id.as_str()) {
+            Some(id) => self.browser_contexts.get(id).cloned(),
+            None => Some(self.default_context.clone()),
+        }
+    }
+
+    pub fn browser_context_ids(&self) -> Vec<String> {
+        let mut ids = self.browser_contexts.keys().cloned().collect::<Vec<_>>();
+        ids.sort();
+        ids
+    }
+
+    pub fn create_browser_context(&mut self, proxy: Option<String>) -> String {
+        self.context_counter += 1;
+        let id = format!("context-{}", self.context_counter);
+        let context = Arc::new(BrowserContext::with_full_options(
+            id.clone(),
+            proxy.or_else(|| self.default_context.proxy_url.clone()),
+            self.default_context.stealth,
+            Some(self.default_context.user_agent.clone()),
+        ));
+        self.browser_contexts.insert(id.clone(), context);
+        id
+    }
+
+    pub fn dispose_browser_context(&mut self, context_id: &str) -> Result<Vec<String>, String> {
+        if context_id.is_empty() || context_id == self.default_context.id {
+            return Err("The default browser context cannot be disposed".to_string());
+        }
+        if self.browser_contexts.remove(context_id).is_none() {
+            return Err(format!("Browser context not found: {context_id}"));
+        }
+
+        let removed_pages = self
+            .pages
+            .iter()
+            .filter(|page| page.context.id == context_id)
+            .map(|page| page.id.clone())
+            .collect::<Vec<_>>();
+        self.pages.retain(|page| page.context.id != context_id);
+        self.sessions
+            .retain(|_, page_id| !removed_pages.contains(page_id));
+        Ok(removed_pages)
     }
 
     pub fn get_page(&self, id: &str) -> Option<&Page> {
@@ -90,9 +148,7 @@ impl CdpContext {
     }
 
     pub fn get_session_page(&self, session_id: &Option<String>) -> Option<&Page> {
-        let page_id = session_id
-            .as_ref()
-            .and_then(|sid| self.sessions.get(sid))?;
+        let page_id = session_id.as_ref().and_then(|sid| self.sessions.get(sid))?;
         self.get_page(page_id)
     }
 
@@ -144,14 +200,14 @@ pub async fn dispatch(req: &CdpRequest, ctx: &mut CdpContext) -> CdpResponse {
         "Input" => domains::input::handle(method, &req.params, ctx, &req.session_id).await,
         "Storage" => domains::storage::handle(method, &req.params, ctx, &req.session_id).await,
         "LP" => domains::lp::handle(method, &req.params, ctx, &req.session_id).await,
-        "Accessibility" => domains::accessibility::handle(method, &req.params, ctx, &req.session_id).await,
+        "Accessibility" => {
+            domains::accessibility::handle(method, &req.params, ctx, &req.session_id).await
+        }
         // Accepted but no-op. Puppeteer's FrameManager.initialize calls
         // Audits.enable on connect — refusing it breaks puppeteer.connect()
         // before any user code runs.
-        "Emulation" | "Log" | "Performance" | "Security" | "CSS"
-        | "ServiceWorker" | "Inspector"
-        | "Debugger" | "Profiler" | "HeapProfiler" | "Overlay"
-        | "Audits" => {
+        "Emulation" | "Log" | "Performance" | "Security" | "CSS" | "ServiceWorker"
+        | "Inspector" | "Debugger" | "Profiler" | "HeapProfiler" | "Overlay" | "Audits" => {
             Ok(json!({}))
         }
         _ => Err(format!("Unknown domain: {}", domain)),
@@ -184,7 +240,11 @@ mod tests {
     async fn audits_enable_returns_empty_success() {
         let mut ctx = CdpContext::new();
         let resp = dispatch(&req("Audits.enable"), &mut ctx).await;
-        assert!(resp.error.is_none(), "Audits.enable should not error: {:?}", resp.error);
+        assert!(
+            resp.error.is_none(),
+            "Audits.enable should not error: {:?}",
+            resp.error
+        );
         assert_eq!(resp.result, Some(json!({})));
     }
 

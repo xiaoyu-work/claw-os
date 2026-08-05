@@ -1,0 +1,21 @@
+[Unit]
+Description=ClawOS: semantic (embedding) document index daemon
+Documentation=man:claw-semantic(1)
+After=claw-recoll-index.service
+ConditionPathIsExecutable=/usr/local/bin/claw-semantic-daemon
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/claw-semantic-daemon
+MemoryHigh=1G
+MemoryMax=2G
+CPUWeight=40
+IOWeight=40
+Nice=12
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target

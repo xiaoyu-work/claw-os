@@ -7,7 +7,8 @@ set -e
 
 case "$1" in
     configure)
-        mkdir -p /var/lib/cos /var/log/aos
+        install -d -m 0700 /var/lib/cos /var/log/cos
+        rmdir /var/log/aos 2>/dev/null || true
 
         if [ -f /etc/bash.bashrc ] && \
            ! grep -q 'cos/profile.sh' /etc/bash.bashrc; then

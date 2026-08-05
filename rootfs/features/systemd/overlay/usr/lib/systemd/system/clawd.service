@@ -5,6 +5,8 @@ After=basic.target
 
 [Service]
 Type=simple
+Group=sudo
+UMask=0077
 ExecStart=/usr/local/bin/clawd --socket /run/cos/clawd.sock
 Restart=on-failure
 RestartSec=3
@@ -13,13 +15,19 @@ Environment=COS_DATA_DIR=/var/lib/cos
 Environment=COS_RUNTIME_DIR=/run/cos
 Environment=COS_LOG_DIR=/var/log/cos
 Environment=CLAWD_SOCKET=/run/cos/clawd.sock
-Environment=CLAWD_SOCKET_MODE=0666
+Environment=CLAWD_SOCKET_MODE=0660
+# System-vitals heartbeat: cheap reflex loop that samples kernel vitals,
+# emits context.events on threshold crossings (the trigger engine turns
+# matching ones into agent jobs), and drives cron/triggers ticks so no
+# external systemd .timer is needed. Set CLAWD_HEARTBEAT=off to disable.
+Environment=CLAWD_HEARTBEAT=on
+Environment=CLAWD_HEARTBEAT_INTERVAL_SECS=60
 RuntimeDirectory=cos
-RuntimeDirectoryMode=0755
+RuntimeDirectoryMode=0751
 StateDirectory=cos
-StateDirectoryMode=0755
+StateDirectoryMode=0700
 LogsDirectory=cos
-LogsDirectoryMode=0755
+LogsDirectoryMode=0700
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 NoNewPrivileges=true
 PrivateTmp=true

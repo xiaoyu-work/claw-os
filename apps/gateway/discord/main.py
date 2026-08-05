@@ -114,7 +114,7 @@ def _send(channel_id: str, text: str) -> dict:
             headers=headers,
             body=body,
             timeout=15,
-            verb_id="gateway.discord.send",
+            verb_id="net.dial",
         )
         raw = raw_resp.decode("utf-8", errors="replace")
         try:

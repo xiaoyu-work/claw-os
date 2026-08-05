@@ -15,6 +15,10 @@ Description: Claw OS — systemd integration for Claw OS targets
    * cos-browser.service — runs the cos-browser CDP server on port
      9222 (installed but not enabled; opt-in).
    * clawd.service — starts the boot-time system agent daemon.
+   * claw-recoll-index.service and claw-semantic.service — maintain
+     per-user keyword and semantic indexes under graphical or headless
+     user sessions (enabled globally; skipped when optional binaries
+     are absent).
  .
  Docker, WSL, ISO, and VM images all use these units so clawd is started
  by the same system boot path everywhere.

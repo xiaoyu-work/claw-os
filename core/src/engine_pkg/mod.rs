@@ -51,8 +51,8 @@ pub const KNOWN_ENGINES: &[&str] = &["llama-cpp", "ort", "ort-genai"];
 /// Qwen3 embedding path. Keep the GitHub release tag separate because
 /// upstream tags include a leading `v`, while model compatibility ranges
 /// use plain semver.
-pub const ORT_GENAI_KNOWN_GOOD_VERSION: &str = "0.12.2";
-pub const ORT_GENAI_KNOWN_GOOD_TAG: &str = "v0.12.2";
+pub const ORT_GENAI_KNOWN_GOOD_VERSION: &str = "0.14.0";
+pub const ORT_GENAI_KNOWN_GOOD_TAG: &str = "v0.14.0";
 
 pub fn is_known_engine(name: &str) -> bool {
     KNOWN_ENGINES.contains(&name)
@@ -753,14 +753,12 @@ async fn run_online_install(
         // `COS_ENGINE_TRUST_UNVERIFIED=1` env var is an emergency
         // override for operators rescuing themselves from a publisher
         // outage; setting it is logged.
-        if let Err(msg) = check_digest_requirement(
+        check_digest_requirement(
             &engine,
             &release.tag_name,
             &asset.name,
             expected_sha.as_deref(),
-        ) {
-            return Err(msg);
-        }
+        )?;
         if expected_sha.is_none() {
             tracing::warn!(
                 target: "cos::engine_pkg",

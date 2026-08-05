@@ -11,6 +11,7 @@ set -euo pipefail
 NODE_MAJOR=24
 echo "  :: installing Node.js $NODE_MAJOR"
 chroot "$ROOTFS" bash -c "
+    set -euo pipefail
     apt-get update -qq
     apt-get install -y --no-install-recommends ca-certificates curl gnupg
     mkdir -p /etc/apt/keyrings
@@ -21,6 +22,11 @@ chroot "$ROOTFS" bash -c "
     corepack enable
     corepack prepare pnpm@latest --activate
     npm install -g typescript tsx
+    command -v node >/dev/null
+    command -v npm >/dev/null
+    command -v pnpm >/dev/null
+    command -v tsc >/dev/null
+    command -v tsx >/dev/null
     apt-get clean
     rm -rf /var/lib/apt/lists/*
 "

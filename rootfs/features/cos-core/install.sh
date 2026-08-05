@@ -12,14 +12,18 @@ set -euo pipefail
 
 DEBS_DIR="$PROJECT_DIR/build/debs"
 
-# Build the .debs if missing — this also handles claw-os-browser/systemd
-# which other features rely on. build-debs.sh is idempotent.
-if ! ls "$DEBS_DIR/claw-os-base_"*.deb >/dev/null 2>&1; then
+BASE_DEB="$DEBS_DIR/claw-os-base_${COS_VERSION}_${DEB_ARCH:-amd64}.deb"
+# Build this exact version if missing — stale packages from an earlier local
+# build must never satisfy the check.
+if [ ! -f "$BASE_DEB" ]; then
     echo "  :: claw-os-base.deb not found — building it"
     "$PROJECT_DIR/packaging/deb/build-debs.sh"
 fi
 
-BASE_DEB="$(ls "$DEBS_DIR/claw-os-base_"*"_${DEB_ARCH:-amd64}.deb" | head -1)"
+if [ ! -f "$BASE_DEB" ]; then
+    echo "error: expected package missing after build: $BASE_DEB" >&2
+    exit 1
+fi
 echo "  :: installing $(basename "$BASE_DEB")"
 
 # The base overlay (applied in step 2 of rootfs/build.sh) ships these

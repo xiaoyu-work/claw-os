@@ -1,19 +1,88 @@
 {
-  "name": "gateway-googlechat",
+  "id": "gateway-googlechat",
   "version": "0.1.0",
-  "description": "Outbound-only Google Chat gateway via space Incoming Webhook. send POSTs a text or card v2 message to the configured webhook URL.",
-  "language": "python",
-  "entry": "main.py",
-  "runtime": {
-    "python": ">=3.10"
+  "name": {
+    "en": "Google Chat Gateway"
   },
-  "credentials": [
-    {
-      "name": "googlechat_webhook_url",
-      "description": "Google Chat Incoming Webhook URL (Space → Apps → Manage webhooks). e.g. https://chat.googleapis.com/v1/spaces/AAA/messages?key=...&token=... (env override: COS_GOOGLECHAT_WEBHOOK_URL)"
+  "summary": {
+    "en": "Outbound-only Google Chat gateway via a space Incoming Webhook. send POSTs text or card v2 messages."
+  },
+  "runtime": "python",
+  "operations": {
+    "send": {
+      "label": {
+        "en": "Send a message through this gateway"
+      },
+      "args": [
+        {
+          "name": "recipient",
+          "kind": "name",
+          "required": false
+        },
+        {
+          "name": "text",
+          "kind": "text",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "net.dial",
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Connect to the remote gateway service to perform the send operation."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/googlechat_webhook_url"
+            }
+          },
+          "why": {
+            "en": "Read the configured googlechat_webhook_url secret required by this gateway."
+          }
+        },
+        {
+          "verb": "memory.write",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "self-ref",
+              "value": "gateway-googlechat"
+            }
+          },
+          "why": {
+            "en": "Remember the successful send so the agent can recall it later."
+          }
+        }
+      ]
+    },
+    "status": {
+      "label": {
+        "en": "Show gateway configuration and status"
+      },
+      "args": [],
+      "needs": [
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/googlechat_webhook_url"
+            }
+          },
+          "why": {
+            "en": "Read the configured googlechat_webhook_url secret required by this gateway."
+          }
+        }
+      ]
     }
-  ],
-  "scopes": [
-    "credential:googlechat_webhook_url"
-  ]
+  }
 }

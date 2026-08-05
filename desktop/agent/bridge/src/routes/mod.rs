@@ -7,6 +7,7 @@
 
 use axum::{
     Router,
+    extract::DefaultBodyLimit,
     routing::{get, post},
 };
 
@@ -16,6 +17,10 @@ mod chat;
 mod models;
 mod sessions;
 mod voice;
+
+/// Voice uploads carry raw audio (e.g. `audio/webm`); a few minutes of speech
+/// easily exceeds axum's 2 MiB default body limit, so raise it on this route.
+const VOICE_MAX_BYTES: usize = 25 * 1024 * 1024;
 
 pub fn api() -> Router<AppState> {
     Router::new()
@@ -28,5 +33,8 @@ pub fn api() -> Router<AppState> {
         )
         .route("/sessions/:id/history", get(sessions::history))
         .route("/models", get(models::list))
-        .route("/voice/upload", post(voice::upload))
+        .route(
+            "/voice/upload",
+            post(voice::upload).layer(DefaultBodyLimit::max(VOICE_MAX_BYTES)),
+        )
 }

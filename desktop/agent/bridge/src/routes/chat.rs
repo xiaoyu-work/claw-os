@@ -9,6 +9,7 @@
 //! * daemon / IO errors → `error` events
 
 use std::convert::Infallible;
+use std::time::{Duration, Instant};
 
 use axum::{
     Json,
@@ -21,6 +22,12 @@ use serde_json::{Value, json};
 
 use crate::clawd;
 use crate::state::AppState;
+
+/// Hard ceiling on a single chat turn. `task.stream` blocks ~1s per poll, so
+/// without this a task that never reports `terminal` (stuck agent, or a frame
+/// that never advances the cursor) would keep the SSE connection open and
+/// re-poll clawd once a second indefinitely while the client stays connected.
+const MAX_STREAM_DURATION: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
@@ -121,7 +128,12 @@ pub async fn stream_chat(
 
         let mut cursor = 0u64;
         let mut emitted_text = false;
+        let deadline = Instant::now() + MAX_STREAM_DURATION;
         let result = loop {
+            if Instant::now() >= deadline {
+                yield Ok(error_event("agent task exceeded the maximum stream duration"));
+                return;
+            }
             let frame = match clawd::request(&socket, "task.stream", json!({
                 "id": task_id,
                 "cursor": cursor,

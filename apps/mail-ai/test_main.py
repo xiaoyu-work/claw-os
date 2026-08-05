@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import sys
 import unittest
 from unittest.mock import patch
@@ -41,7 +42,13 @@ sys.path.insert(
     ),
 )
 
-import main  # noqa: E402
+from test_support import load_local_module
+
+main = load_local_module(
+    pathlib.Path(__file__).with_name("main.py"),
+    "claw_test_mail_ai_main",
+    clear_modules=("_shared",),
+)
 from claw_os_sdk import ai  # noqa: E402
 
 

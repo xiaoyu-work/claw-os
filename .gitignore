@@ -4,6 +4,7 @@ __pycache__/
 .pytest_cache/
 core/target/
 target/
+packaging/apt-repo/claw-os-archive-keyring.gpg
 
 # Desktop build artifacts (vendored monorepo under desktop/)
 desktop/**/target/

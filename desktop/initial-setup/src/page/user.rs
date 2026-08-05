@@ -8,17 +8,204 @@ use cosmic::widget::{self, icon};
 use cosmic::{Apply, Element};
 use pwhash::{bcrypt, md5_crypt, sha256_crypt, sha512_crypt};
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs::File;
+use std::fs::{self, File};
 use std::future::Future;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::Arc;
 use url::Url;
 use zbus_polkit::policykit1::CheckAuthorizationFlags;
 
 const DEFAULT_ICON_FILE: &str = "/usr/share/pixmaps/faces/pop-robot.png";
 const USERS_ADMIN_POLKIT_POLICY_ID: &str = "com.clawos.Settings.Users.Admin";
+const USER_TRANSACTION_PATH: &str =
+    ".config/cosmic-initial-setup-user-transaction.json";
+
+#[derive(Debug, Deserialize, Serialize)]
+struct UserTransaction {
+    username: String,
+    uid: Option<u32>,
+}
+
+fn transaction_path() -> Result<PathBuf, String> {
+    #[allow(deprecated)]
+    let home = std::env::home_dir().ok_or("HOME is unavailable")?;
+    Ok(home.join(USER_TRANSACTION_PATH))
+}
+
+fn load_transaction() -> Result<Option<UserTransaction>, String> {
+    let path = transaction_path()?;
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("inspect {}: {error}", path.display())),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!(
+            "user transaction state is not a regular file: {}",
+            path.display()
+        ));
+    }
+    if metadata.len() == 0 || metadata.len() > 4096 {
+        return Err("user transaction state has an invalid size".to_string());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        #[cfg(target_os = "linux")]
+        let current_uid = fs::metadata("/proc/self")
+            .map_err(|error| format!("inspect current uid: {error}"))?
+            .uid();
+        if metadata.mode() & 0o077 != 0
+            || {
+                #[cfg(target_os = "linux")]
+                {
+                    metadata.uid() != current_uid
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    false
+                }
+            }
+        {
+            return Err(format!(
+                "user transaction state is accessible by another user: {}",
+                path.display()
+            ));
+        }
+    }
+    serde_json::from_slice(
+        &fs::read(&path).map_err(|error| format!("read {}: {error}", path.display()))?,
+    )
+    .map(Some)
+    .map_err(|error| format!("decode {}: {error}", path.display()))
+}
+
+fn write_transaction(transaction: &UserTransaction) -> Result<(), String> {
+    let path = transaction_path()?;
+    let parent = path.parent().ok_or("transaction path has no parent")?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("create {}: {error}", parent.display()))?;
+    let body = serde_json::to_vec(transaction)
+        .map_err(|error| format!("encode user transaction: {error}"))?;
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let temp = path.with_extension(format!("tmp.{}.{nonce}", std::process::id()));
+    #[cfg(unix)]
+    let mut file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(&temp)
+            .map_err(|error| format!("create {}: {error}", temp.display()))?
+    };
+    #[cfg(not(unix))]
+    let mut file = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temp)
+        .map_err(|error| format!("create {}: {error}", temp.display()))?;
+    let result = file
+        .write_all(&body)
+        .and_then(|_| file.write_all(b"\n"))
+        .and_then(|_| file.sync_all())
+        .and_then(|_| fs::rename(&temp, &path))
+        .and_then(|_| fs::File::open(parent)?.sync_all());
+    if let Err(error) = result {
+        let _ = fs::remove_file(&temp);
+        return Err(format!("persist {}: {error}", path.display()));
+    }
+    Ok(())
+}
+
+fn clear_transaction() -> Result<(), String> {
+    let path = transaction_path()?;
+    match fs::remove_file(&path) {
+        Ok(()) => {
+            if let Some(parent) = path.parent() {
+                fs::File::open(parent)
+                    .and_then(|directory| directory.sync_all())
+                    .map_err(|error| format!("sync {}: {error}", parent.display()))?;
+            }
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("remove {}: {error}", path.display())),
+    }
+}
+
+fn user_has_working_overlay(username: &str, expected_uid: Option<u32>) -> bool {
+    let Some(user) = pwd::Passwd::iter().find(|user| user.name == username) else {
+        return false;
+    };
+    if expected_uid.is_some_and(|uid| uid != user.uid)
+        || user.uid < 1000
+        || user.uid >= 65534
+    {
+        return false;
+    }
+    let home = Path::new(&*user.dir);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let Ok(metadata) = fs::metadata(home) else {
+            return false;
+        };
+        if !metadata.is_dir() || metadata.uid() != user.uid {
+            return false;
+        }
+    }
+    let Ok(config) = fs::read_to_string("/etc/default/cos-home") else {
+        return false;
+    };
+    let configured = config.lines().any(|line| {
+        line.trim()
+            .strip_prefix("COS_HOME=")
+            .map(str::trim)
+            .is_some_and(|value| value == home.to_string_lossy().as_ref())
+    });
+    if !configured {
+        return false;
+    }
+    Command::new("/usr/bin/findmnt")
+        .args(["-n", "-o", "TARGET,FSTYPE", "--mountpoint"])
+        .arg(home)
+        .output()
+        .is_ok_and(|output| {
+            if !output.status.success() {
+                return false;
+            }
+            let output = String::from_utf8_lossy(&output.stdout);
+            let mut fields = output.split_whitespace();
+            fields
+                .next()
+                .is_some_and(|target| target == home.to_string_lossy().as_ref())
+                && fields
+                    .next()
+                    .is_some_and(|fs_type| matches!(fs_type, "overlay" | "overlayfs"))
+        })
+}
+
+pub fn accept_committed_transaction(username: &str) -> bool {
+    match load_transaction() {
+        Ok(None) => user_has_working_overlay(username, None),
+        Ok(Some(transaction))
+            if transaction.username == username
+                && user_has_working_overlay(&transaction.username, transaction.uid) =>
+        {
+            clear_transaction().is_ok()
+        }
+        _ => false,
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EditorField {
@@ -70,6 +257,7 @@ impl Default for Page {
 #[derive(Clone, Debug)]
 pub enum Message {
     Edit(EditorField, String),
+    Applied(Result<(), String>),
     SelectedProfileImage(Arc<Result<Url, file_chooser::Error>>),
     SelectProfileImage,
     TogglePasswordConfirmVisibility,
@@ -168,9 +356,9 @@ impl super::Page for Page {
     }
 
     fn apply_settings(&mut self) -> cosmic::Task<super::Message> {
-        let username = std::mem::take(&mut self.username);
-        let full_name = std::mem::take(&mut self.username);
-        let password = std::mem::take(&mut self.password);
+        let username = self.username.clone();
+        let full_name = self.full_name.clone();
+        let password = self.password.clone();
         let icon_file = self
             .profile_icon_path
             .to_str()
@@ -178,46 +366,12 @@ impl super::Page for Page {
             .to_owned();
         let is_admin = true;
 
-        cosmic::Task::future(async move {
-            let Ok(conn) = zbus::Connection::system().await else {
-                return;
-            };
-
-            let accounts = accounts_zbus::AccountsProxy::new(&conn).await.unwrap();
-
-            let user_result = request_permission_on_denial(&conn, || {
-                accounts.create_user(&username, &full_name, if is_admin { 1 } else { 0 })
-            })
-            .await;
-
-            let user_object_path = match user_result {
-                Ok(path) => path,
-
-                Err(why) => {
-                    tracing::error!(?why, "failed to create user account");
-                    return;
-                }
-            };
-
-            let password_hashed = hash_password(&password);
-            match accounts_zbus::UserProxy::new(&conn, user_object_path).await {
-                Ok(user) => {
-                    _ = user.set_password(&password_hashed, "").await;
-                    _ = user.set_icon_file(&icon_file).await;
-                    _ = user.set_account_type(1).await;
-
-                    // Ask the greeter to move account files to the new user's home directory.
-                    if let Ok(mut client) = crate::greeter::GreeterProxy::new(&conn).await {
-                        _ = client.initial_setup_end(username).await;
-                    }
-                }
-
-                Err(why) => {
-                    tracing::error!(?why, "failed to get user by object path");
-                }
-            }
+        cosmic::task::future(async move {
+            super::Message::User(Message::Applied(
+                create_user_transaction(username, full_name, password, icon_file, is_admin)
+                    .await,
+            ))
         })
-        .discard()
     }
 }
 
@@ -293,6 +447,8 @@ impl Page {
             Message::TogglePasswordConfirmVisibility => {
                 self.password_confirm_hidden = !self.password_confirm_hidden;
             }
+
+            Message::Applied(_) => {}
         };
 
         cosmic::Task::none()
@@ -339,14 +495,262 @@ fn permission_was_denied(result: &zbus::Error) -> bool {
     matches!(result, zbus::Error::MethodError(name, _, _) if name.as_str() == "org.freedesktop.Accounts.Error.PermissionDenied")
 }
 
-// TODO: Should we allow deprecated methods?
-fn hash_password(password_plain: &str) -> String {
-    match get_encrypt_method().as_str() {
-        "SHA512" => sha512_crypt::hash(password_plain).unwrap(),
-        "SHA256" => sha256_crypt::hash(password_plain).unwrap(),
-        "MD5" => md5_crypt::hash(password_plain).unwrap(),
-        _ => bcrypt::hash(password_plain).unwrap(),
+async fn create_user_transaction(
+    username: String,
+    full_name: String,
+    password: String,
+    icon_file: String,
+    is_admin: bool,
+) -> Result<(), String> {
+    let password_hashed = hash_password(&password)?;
+    let conn = zbus::Connection::system()
+        .await
+        .map_err(|why| format!("connect to system bus: {why}"))?;
+    if recover_pending_transaction(&conn).await? {
+        return Ok(());
     }
+    let accounts = accounts_zbus::AccountsProxy::new(&conn)
+        .await
+        .map_err(|why| format!("connect to AccountsService: {why}"))?;
+    if pwd::Passwd::iter().any(|entry| entry.name == username) {
+        return Err(format!("user `{username}` already exists"));
+    }
+    write_transaction(&UserTransaction {
+        username: username.clone(),
+        uid: None,
+    })?;
+    let user_object_path = match request_permission_on_denial(&conn, || {
+        accounts.create_user(&username, &full_name, if is_admin { 1 } else { 0 })
+    })
+    .await
+    {
+        Ok(path) => path,
+        Err(why) => {
+            return Err(format!(
+                "create user `{username}`: {why}; transaction retained for recovery"
+            ));
+        }
+    };
+
+    let object_path = user_object_path.to_string();
+    let uid = object_path
+        .rsplit('/')
+        .next()
+        .and_then(|segment| segment.strip_prefix("User"))
+        .and_then(|value| value.parse::<u32>().ok())
+        .or_else(|| {
+            pwd::Passwd::iter()
+                .find(|entry| entry.name == username)
+                .map(|entry| entry.uid)
+        })
+        .ok_or_else(|| {
+            format!(
+                "created user `{username}` but could not determine its uid for verification"
+            )
+        })?;
+    if let Err(why) = write_transaction(&UserTransaction {
+        username: username.clone(),
+        uid: Some(uid),
+    }) {
+        return Err(rollback_created_user(&conn, &username, uid, why).await);
+    }
+    if !(1000..65534).contains(&uid) {
+        return Err(
+            rollback_created_user(
+                &conn,
+                &username,
+                uid,
+                format!("created user `{username}` with unexpected uid {uid}"),
+            )
+            .await,
+        );
+    }
+
+    let user = match accounts_zbus::UserProxy::new(&conn, user_object_path).await {
+        Ok(user) => user,
+        Err(why) => {
+            return Err(
+                rollback_created_user(
+                    &conn,
+                    &username,
+                    uid,
+                    format!("open created user `{username}`: {why}"),
+                )
+                .await,
+            );
+        }
+    };
+
+    if let Err(why) = user.set_password(&password_hashed, "").await {
+        return Err(
+            rollback_created_user(
+                &conn,
+                &username,
+                uid,
+                format!("set password for `{username}`: {why}"),
+            )
+            .await,
+        );
+    }
+    if let Err(why) = user.set_account_type(if is_admin { 1 } else { 0 }).await {
+        return Err(
+            rollback_created_user(
+                &conn,
+                &username,
+                uid,
+                format!("set account type for `{username}`: {why}"),
+            )
+            .await,
+        );
+    }
+    if let Err(why) = user.set_icon_file(&icon_file).await {
+        tracing::warn!(?why, %icon_file, "failed to set optional profile icon");
+    }
+
+    let mut client = match crate::greeter::GreeterProxy::new(&conn).await {
+        Ok(client) => client,
+        Err(why) => {
+            return Err(
+                rollback_created_user(
+                    &conn,
+                    &username,
+                    uid,
+                    format!("connect to greeter daemon: {why}"),
+                )
+                .await,
+            );
+        }
+    };
+    if let Err(why) = client.initial_setup_end(username.clone()).await {
+        return Err(rollback_after_overlay_attempt(
+            &conn,
+            &username,
+            uid,
+            format!("configure home overlay for `{username}`: {why}"),
+        )
+        .await);
+    }
+    clear_transaction()
+}
+
+async fn recover_pending_transaction(conn: &zbus::Connection) -> Result<bool, String> {
+    let Some(transaction) = load_transaction()? else {
+        return Ok(false);
+    };
+    if !username_valid(&transaction.username) {
+        return Err("stored user transaction has an invalid username".to_string());
+    }
+    if user_has_working_overlay(&transaction.username, transaction.uid) {
+        clear_transaction()?;
+        return Ok(true);
+    }
+
+    let user = pwd::Passwd::iter().find(|user| user.name == transaction.username);
+    let Some(user) = user else {
+        clear_transaction()?;
+        return Ok(false);
+    };
+    let Some(expected_uid) = transaction.uid else {
+        return Err(format!(
+            "incomplete transaction for `{}` has no recorded uid; refusing destructive recovery",
+            transaction.username
+        ));
+    };
+    if expected_uid != user.uid || user.uid < 1000 || user.uid >= 65534 {
+        return Err(format!(
+            "refusing recovery for `{}` because uid {} does not match the transaction",
+            transaction.username, user.uid
+        ));
+    }
+    let mut greeter = crate::greeter::GreeterProxy::new(conn)
+        .await
+        .map_err(|why| format!("connect to greeter daemon for recovery: {why}"))?;
+    greeter
+        .initial_setup_abort(transaction.username.clone())
+        .await
+        .map_err(|why| format!("rollback home overlay for recovery: {why}"))?;
+    delete_created_user(conn, &transaction.username, user.uid).await?;
+    clear_transaction()?;
+    Ok(false)
+}
+
+async fn delete_created_user(
+    conn: &zbus::Connection,
+    username: &str,
+    uid: u32,
+) -> Result<(), String> {
+    if !(1000..65534).contains(&uid) {
+        return Err(format!("refusing to delete unexpected system uid {uid}"));
+    }
+    let matches_transaction = pwd::Passwd::iter()
+        .any(|user| user.uid == uid && user.name == username);
+    if !matches_transaction {
+        return Err(format!(
+            "refusing to delete uid {uid}: it no longer belongs to `{username}`"
+        ));
+    }
+    let accounts = accounts_zbus::AccountsProxy::new(conn)
+        .await
+        .map_err(|why| why.to_string())?;
+    request_permission_on_denial(conn, || accounts.delete_user(uid as i64, true))
+        .await
+        .map_err(|why| why.to_string())
+}
+
+async fn rollback_after_overlay_attempt(
+    conn: &zbus::Connection,
+    username: &str,
+    uid: u32,
+    cause: String,
+) -> String {
+    let abort = async {
+        let mut greeter = crate::greeter::GreeterProxy::new(conn)
+            .await
+            .map_err(|why| why.to_string())?;
+        greeter
+            .initial_setup_abort(username.to_string())
+            .await
+            .map_err(|why| why.to_string())
+    }
+    .await;
+    if let Err(why) = abort {
+        return format!(
+            "{cause}; home-overlay rollback failed, account retained for recovery: {why}"
+        );
+    }
+    rollback_created_user(conn, username, uid, cause).await
+}
+
+async fn rollback_created_user(
+    conn: &zbus::Connection,
+    username: &str,
+    uid: u32,
+    cause: String,
+) -> String {
+    if !(1000..65534).contains(&uid) {
+        return format!(
+            "{cause}; refusing to delete unexpected system uid {uid} during rollback"
+        );
+    }
+    let rollback = delete_created_user(conn, username, uid).await;
+    match rollback {
+        Ok(()) => match clear_transaction() {
+            Ok(()) => cause,
+            Err(why) => format!("{cause}; clearing transaction failed: {why}"),
+        },
+        Err(why) => format!("{cause}; rollback of uid {uid} also failed: {why}"),
+    }
+}
+
+fn hash_password(password_plain: &str) -> Result<String, String> {
+    // TODO: Should we allow deprecated methods?
+    match get_encrypt_method().as_str() {
+        "SHA512" => sha512_crypt::hash(password_plain),
+        "SHA256" => sha256_crypt::hash(password_plain),
+        "MD5" => md5_crypt::hash(password_plain),
+        _ => bcrypt::hash(password_plain),
+    }
+    .map_err(|why| format!("hash password: {why}"))
 }
 
 // TODO: In the future loading in the whole login.defs file into an object might be handy?

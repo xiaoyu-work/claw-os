@@ -1,16 +1,91 @@
 {
-  "name": "gateway-whatsapp",
+  "id": "gateway-whatsapp",
   "version": "0.1.0",
-  "description": "WhatsApp Cloud API gateway. `send` posts a text message via Meta's Graph API. `start`/`stop` (webhook server) not yet implemented.",
-  "runtime": "python",
-  "commands": {
-    "start": "Run inbound webhook server (NOT IMPLEMENTED)",
-    "stop": "Stop a running gateway service (NOT IMPLEMENTED)",
-    "status": "Show running state",
-    "send": "Send a text message (positional: recipient_phone text)"
+  "name": {
+    "en": "WhatsApp Gateway"
   },
-  "dependencies": {
-    "credentials": ["whatsapp_access_token", "whatsapp_phone_number_id"],
-    "engines": []
+  "summary": {
+    "en": "WhatsApp Cloud API gateway. send posts text messages through Meta's Graph API; webhook-server start and stop are not implemented."
+  },
+  "runtime": "python",
+  "operations": {
+    "send": {
+      "label": {
+        "en": "Send a message through this gateway"
+      },
+      "args": [
+        {
+          "name": "recipient_phone",
+          "kind": "name",
+          "required": true
+        },
+        {
+          "name": "text",
+          "kind": "text",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "net.dial",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "host",
+              "value": "graph.facebook.com"
+            }
+          },
+          "why": {
+            "en": "Connect to the remote gateway service to perform the send operation."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/whatsapp_access_token"
+            }
+          },
+          "why": {
+            "en": "Read the configured whatsapp_access_token secret required by this gateway."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/whatsapp_phone_number_id"
+            }
+          },
+          "why": {
+            "en": "Read the configured whatsapp_phone_number_id secret required by this gateway."
+          }
+        },
+        {
+          "verb": "memory.write",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "self-ref",
+              "value": "gateway-whatsapp"
+            }
+          },
+          "why": {
+            "en": "Remember the successful send so the agent can recall it later."
+          }
+        }
+      ]
+    },
+    "status": {
+      "label": {
+        "en": "Show gateway configuration and status"
+      },
+      "args": [],
+      "needs": []
+    }
   }
 }

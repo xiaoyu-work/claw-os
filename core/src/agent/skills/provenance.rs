@@ -88,11 +88,7 @@ pub struct UsageStats {
 
 impl UsageStats {
     pub fn average_duration_ms(&self) -> Option<u64> {
-        if self.total == 0 {
-            None
-        } else {
-            Some(self.total_duration_ms / self.total)
-        }
+        self.total_duration_ms.checked_div(self.total)
     }
 }
 

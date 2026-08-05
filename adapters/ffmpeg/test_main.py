@@ -13,6 +13,8 @@ import tempfile
 import textwrap
 import unittest
 
+from test_support import load_local_module
+
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -92,10 +94,10 @@ class FfmpegAdapterTests(unittest.TestCase):
         os.environ["FFMPEG_ARGS_LOG"] = str(self.ffmpeg_args)
         os.environ["FFPROBE_ARGS_LOG"] = str(self.ffprobe_args)
 
-        if "main" in sys.modules:
-            del sys.modules["main"]
-        import main  # noqa: F401
-        self.main = sys.modules["main"]
+        self.main = load_local_module(
+            HERE / "main.py",
+            "claw_test_ffmpeg_adapter_main",
+        )
         self.main.app._initialized = True
 
     def tearDown(self) -> None:
@@ -106,7 +108,7 @@ class FfmpegAdapterTests(unittest.TestCase):
             "FFPROBE_ARGS_LOG",
         ):
             os.environ.pop(k, None)
-        sys.modules.pop("main", None)
+        sys.modules.pop("claw_test_ffmpeg_adapter_main", None)
 
     def test_tools_list_reports_four_tools(self) -> None:
         reply = _rpc(self.main.app, "tools/list")

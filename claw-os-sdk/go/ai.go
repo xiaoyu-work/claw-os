@@ -1,12 +1,10 @@
 // AI helper for Claw OS Go apps.
 //
-// Every Go app that needs a model (LLM, embedding, image, TTS, STT,
-// vision, video) goes through this file. It shells out to
-// `cos ai chat --app <id>` — the single authoritative entry point for
-// AI requests of every modality. The kernel derives the modality (and
-// the underlying caps verb) from the request shape, then runs the
-// capability check, prompt-origin allowlist, per-month budget, safety
-// pipeline, and audit before any model sees the prompt.
+// Chat is the stable model API and shells out to
+// `cos ai chat --app <id>`. The kernel derives ai.chat or
+// ai.chat.untrusted from origin, then runs capability checks, budget,
+// safety, and audit. Multimodal names remain as deprecated experimental
+// compatibility shims and fail before invoking cos.
 //
 // Apps never name a verb and never pick a model. They describe what
 // they want; the gate picks the verb and the machine owner configures
@@ -21,6 +19,7 @@
 package clawossdk
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -31,6 +30,14 @@ import (
 type AiUnavailableError struct{ Msg string }
 
 func (e *AiUnavailableError) Error() string { return e.Msg }
+
+// AiUnsupportedError reports an experimental compatibility modality
+// that is currently unsupported.
+type AiUnsupportedError struct{ Modality string }
+
+func (e *AiUnsupportedError) Error() string {
+	return e.Modality + ": currently unsupported; only chat/chat-untrusted are stable"
+}
 
 // AiDeniedError: a gate (capability / origin) refused the call.
 type AiDeniedError struct{ Payload map[string]any }
@@ -74,17 +81,15 @@ type ProposedToolCall struct {
 // AiResponse is the parsed reply from the AI gate. It reuses the
 // generated AiUsage / AiBudget / AiReview wire types.
 type AiResponse struct {
-	Text       string
-	Model      string
-	Provider   string
-	Verb       string
-	Embedding  []float64
-	OutputPath string
-	Usage      AiUsage
-	Budget     AiBudget
-	Review     AiReview
-	ToolCalls  []ProposedToolCall
-	Raw        map[string]any
+	Text      string
+	Model     string
+	Provider  string
+	Verb      string
+	Usage     AiUsage
+	Budget    AiBudget
+	Review    AiReview
+	ToolCalls []ProposedToolCall
+	Raw       map[string]any
 }
 
 // ChatOptions are the optional parameters shared by the AI helpers.
@@ -95,7 +100,7 @@ type ChatOptions struct {
 	Origin string
 	// MaxUnits caps the spend for this call (0 = let the gate decide).
 	MaxUnits int
-	// System is an optional system prompt (chat / vision).
+	// System is an optional system prompt for chat.
 	System string
 	// AppID is the app identity; defaults to $COS_APP_ID.
 	AppID string
@@ -105,16 +110,9 @@ type ChatOptions struct {
 }
 
 type dispatchArgs struct {
-	modality    string
-	prompt      *string
-	opts        ChatOptions
-	embed       bool
-	imageInput  string
-	imageOutput string
-	audioInput  string
-	audioOutput string
-	videoInput  string
-	videoOutput string
+	modality string
+	prompt   *string
+	opts     ChatOptions
 }
 
 func strptr(s string) *string { return &s }
@@ -127,62 +125,60 @@ func Chat(prompt string, opts ChatOptions) (*AiResponse, error) {
 	return dispatch(dispatchArgs{modality: "chat", prompt: strptr(prompt), opts: opts})
 }
 
-// Embed embeds text into a vector. The vector is at AiResponse.Embedding.
+// Embed is an experimental compatibility shim and is currently unsupported.
+//
+// Deprecated: only Chat/chat-untrusted are stable.
 func Embed(prompt string, opts ChatOptions) (*AiResponse, error) {
-	if strings.TrimSpace(prompt) == "" {
-		return nil, &AiUnavailableError{Msg: "Embed: prompt must be non-empty"}
-	}
-	return dispatch(dispatchArgs{modality: "embed", prompt: strptr(prompt), opts: opts, embed: true})
+	return nil, &AiUnsupportedError{Modality: "embed"}
 }
 
-// ImageGenerate generates an image from a prompt; the gate writes it to output.
+// ImageGenerate is an experimental compatibility shim and is currently unsupported.
+//
+// Deprecated: only Chat/chat-untrusted are stable.
 func ImageGenerate(prompt, output string, opts ChatOptions) (*AiResponse, error) {
-	if strings.TrimSpace(prompt) == "" {
-		return nil, &AiUnavailableError{Msg: "ImageGenerate: prompt must be non-empty"}
-	}
-	return dispatch(dispatchArgs{modality: "image.generate", prompt: strptr(prompt), opts: opts, imageOutput: output})
+	return nil, &AiUnsupportedError{Modality: "image.generate"}
 }
 
-// ImageAnalyze captions / classifies an image with no prompt.
+// ImageAnalyze is an experimental compatibility shim and is currently unsupported.
+//
+// Deprecated: only Chat/chat-untrusted are stable.
 func ImageAnalyze(image string, opts ChatOptions) (*AiResponse, error) {
-	return dispatch(dispatchArgs{modality: "image.analyze", opts: opts, imageInput: image})
+	return nil, &AiUnsupportedError{Modality: "image.analyze"}
 }
 
-// VisionAnalyze answers a textual question about an image.
+// VisionAnalyze is an experimental compatibility shim and is currently unsupported.
+//
+// Deprecated: only Chat/chat-untrusted are stable.
 func VisionAnalyze(prompt, image string, opts ChatOptions) (*AiResponse, error) {
-	if strings.TrimSpace(prompt) == "" {
-		return nil, &AiUnavailableError{Msg: "VisionAnalyze: prompt must be non-empty"}
-	}
-	return dispatch(dispatchArgs{modality: "vision.analyze", prompt: strptr(prompt), opts: opts, imageInput: image})
+	return nil, &AiUnsupportedError{Modality: "vision.analyze"}
 }
 
-// AudioTTS synthesizes speech from text; the gate writes audio to output.
+// AudioTTS is an experimental compatibility shim and is currently unsupported.
+//
+// Deprecated: only Chat/chat-untrusted are stable.
 func AudioTTS(prompt, output string, opts ChatOptions) (*AiResponse, error) {
-	if strings.TrimSpace(prompt) == "" {
-		return nil, &AiUnavailableError{Msg: "AudioTTS: prompt must be non-empty"}
-	}
-	return dispatch(dispatchArgs{modality: "audio.tts", prompt: strptr(prompt), opts: opts, audioOutput: output})
+	return nil, &AiUnsupportedError{Modality: "audio.tts"}
 }
 
-// AudioSTT transcribes speech to text from an audio file.
+// AudioSTT is an experimental compatibility shim and is currently unsupported.
+//
+// Deprecated: only Chat/chat-untrusted are stable.
 func AudioSTT(audio string, opts ChatOptions) (*AiResponse, error) {
-	return dispatch(dispatchArgs{modality: "audio.stt", opts: opts, audioInput: audio})
+	return nil, &AiUnsupportedError{Modality: "audio.stt"}
 }
 
-// VideoGenerate generates a video from a prompt; the gate writes it to output.
+// VideoGenerate is an experimental compatibility shim and is currently unsupported.
+//
+// Deprecated: only Chat/chat-untrusted are stable.
 func VideoGenerate(prompt, output string, opts ChatOptions) (*AiResponse, error) {
-	if strings.TrimSpace(prompt) == "" {
-		return nil, &AiUnavailableError{Msg: "VideoGenerate: prompt must be non-empty"}
-	}
-	return dispatch(dispatchArgs{modality: "video.generate", prompt: strptr(prompt), opts: opts, videoOutput: output})
+	return nil, &AiUnsupportedError{Modality: "video.generate"}
 }
 
-// VideoAnalyze answers a textual question about a video.
+// VideoAnalyze is an experimental compatibility shim and is currently unsupported.
+//
+// Deprecated: only Chat/chat-untrusted are stable.
 func VideoAnalyze(prompt, video string, opts ChatOptions) (*AiResponse, error) {
-	if strings.TrimSpace(prompt) == "" {
-		return nil, &AiUnavailableError{Msg: "VideoAnalyze: prompt must be non-empty"}
-	}
-	return dispatch(dispatchArgs{modality: "video.analyze", prompt: strptr(prompt), opts: opts, videoInput: video})
+	return nil, &AiUnsupportedError{Modality: "video.analyze"}
 }
 
 // Budget returns the current-period budget snapshot for an app. appID
@@ -220,6 +216,35 @@ func resolveApp(modality, appID string) (string, error) {
 	return app, nil
 }
 
+func writePrivateInput(name, value string) (string, func(), error) {
+	file, err := os.CreateTemp("", "claw-ai-"+name+"-*")
+	if err != nil {
+		return "", nil, err
+	}
+	path := file.Name()
+	cleanup := func() { _ = os.Remove(path) }
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		cleanup()
+		return "", nil, err
+	}
+	if _, err := file.WriteString(value); err != nil {
+		_ = file.Close()
+		cleanup()
+		return "", nil, err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		cleanup()
+		return "", nil, err
+	}
+	if err := file.Close(); err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	return path, cleanup, nil
+}
+
 func dispatch(a dispatchArgs) (*AiResponse, error) {
 	origin := a.opts.Origin
 	if origin == "" {
@@ -231,35 +256,30 @@ func dispatch(a dispatchArgs) (*AiResponse, error) {
 	}
 
 	argv := []string{"ai", "chat", "--app", app, "--origin", origin}
+	cleanups := make([]func(), 0, 2)
+	defer func() {
+		for i := len(cleanups) - 1; i >= 0; i-- {
+			cleanups[i]()
+		}
+	}()
 	if a.prompt != nil {
-		argv = append(argv, "--prompt", *a.prompt)
+		path, cleanup, err := writePrivateInput("prompt", *a.prompt)
+		if err != nil {
+			return nil, &AiUnavailableError{Msg: fmt.Sprintf("write private prompt: %v", err)}
+		}
+		cleanups = append(cleanups, cleanup)
+		argv = append(argv, "--prompt-file", path)
 	}
 	if a.opts.MaxUnits != 0 {
 		argv = append(argv, "--max-units", strconv.Itoa(a.opts.MaxUnits))
 	}
 	if a.opts.System != "" {
-		argv = append(argv, "--system", a.opts.System)
-	}
-	if a.embed {
-		argv = append(argv, "--embed")
-	}
-	if a.imageInput != "" {
-		argv = append(argv, "--image-input", a.imageInput)
-	}
-	if a.imageOutput != "" {
-		argv = append(argv, "--image-output", a.imageOutput)
-	}
-	if a.audioInput != "" {
-		argv = append(argv, "--audio-input", a.audioInput)
-	}
-	if a.audioOutput != "" {
-		argv = append(argv, "--audio-output", a.audioOutput)
-	}
-	if a.videoInput != "" {
-		argv = append(argv, "--video-input", a.videoInput)
-	}
-	if a.videoOutput != "" {
-		argv = append(argv, "--video-output", a.videoOutput)
+		path, cleanup, err := writePrivateInput("system", a.opts.System)
+		if err != nil {
+			return nil, &AiUnavailableError{Msg: fmt.Sprintf("write private system prompt: %v", err)}
+		}
+		cleanups = append(cleanups, cleanup)
+		argv = append(argv, "--system-file", path)
 	}
 	if len(a.opts.Tools) > 0 {
 		argv = append(argv, "--tools", strings.Join(a.opts.Tools, ","))
@@ -292,21 +312,14 @@ func classifyError(env map[string]any) error {
 func parseBudget(blk map[string]any) AiBudget {
 	return AiBudget{
 		Period:    asString(blk["period"]),
-		UnitsUsed: asFloat(blk["units_used"]),
-		UnitsCap:  asFloat(blk["units_cap"]),
+		UnitsUsed: asUint64(blk["units_used"]),
+		UnitsCap:  asUint64(blk["units_cap"]),
 	}
 }
 
 func parseResponse(env map[string]any) *AiResponse {
 	usage := asMap(env["usage"])
 	review := asMap(env["review"])
-
-	var embedding []float64
-	if raw, ok := env["embedding"].([]any); ok {
-		for _, x := range raw {
-			embedding = append(embedding, asFloat(x))
-		}
-	}
 
 	var calls []ProposedToolCall
 	if raw, ok := env["tool_calls"].([]any); ok {
@@ -324,16 +337,14 @@ func parseResponse(env map[string]any) *AiResponse {
 	}
 
 	return &AiResponse{
-		Text:       asString(env["text"]),
-		Model:      asString(env["model"]),
-		Provider:   asString(env["provider"]),
-		Verb:       asString(env["verb"]),
-		Embedding:  embedding,
-		OutputPath: asString(env["output_path"]),
+		Text:     asString(env["text"]),
+		Model:    asString(env["model"]),
+		Provider: asString(env["provider"]),
+		Verb:     asString(env["verb"]),
 		Usage: AiUsage{
-			InputTokens:  asInt(usage["input_tokens"]),
-			OutputTokens: asInt(usage["output_tokens"]),
-			Units:        asFloat(usage["units"]),
+			InputTokens:  asUint32(usage["input_tokens"]),
+			OutputTokens: asUint32(usage["output_tokens"]),
+			Units:        asUint64(usage["units"]),
 		},
 		Budget: parseBudget(asMap(env["budget"])),
 		Review: AiReview{

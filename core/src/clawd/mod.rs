@@ -1,13 +1,17 @@
 pub mod agent_client;
+pub mod app_sessions;
 pub mod audit;
 pub mod client;
 pub mod client_identity;
 pub mod config;
 pub mod context;
 pub mod context_events;
+pub mod heartbeat;
 pub mod memory;
+pub mod packages;
 pub mod permissions;
 pub mod protocol;
+pub mod scheduler;
 pub mod server;
 pub mod session_scope;
 pub mod state;

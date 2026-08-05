@@ -14,7 +14,7 @@ set -e
 # (overlay failure is non-fatal — see the helper for details). The
 # script resolves its target from $HOME (set by Docker for the running
 # user — typically /root).
-/usr/lib/cos/init/setup-home.sh
+/usr/lib/cos/init/setup-home.sh "$HOME"
 
 # Execute the requested command (default: bash --login)
 exec "${@:-/bin/bash --login}"

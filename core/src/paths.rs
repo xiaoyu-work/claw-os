@@ -51,25 +51,44 @@ use std::path::{Path, PathBuf};
 // env var exactly as before.
 //
 // The override does NOT defeat the existing `COS_USER_CONFIG_DIR` /
-// `COS_USER_DATA_DIR` env vars: those still take precedence so tests
-// and multi-tenant overlays continue to work. The override only
-// replaces the "look at $HOME" default.
+// `COS_USER_DATA_DIR` env vars for the general per-user resolvers:
+// those still take precedence so tests and multi-tenant overlays
+// continue to work. Agent conversation memory is the exception:
+// [`agent_memory_db_path`] must stay bound to the routed user's home
+// even when clawd sets the machine-wide `COS_DATA_DIR`.
 // ---------------------------------------------------------------------------
 
 tokio::task_local! {
     static HOME_OVERRIDE: PathBuf;
+    static OWNER_UID_OVERRIDE: u32;
+    static ROUTED_JOB_OVERRIDE: bool;
 }
 
 /// Run `fut` with `home` installed as the per-task user-home override
-/// visible to every per-user resolver inside it (and any task spawned
-/// via `tokio::spawn` from within it — `task_local` propagates).
-/// Outside the scope the resolvers fall back to the `HOME` env var
-/// as before.
+/// visible to every per-user resolver polled inside `fut`. A separately
+/// spawned Tokio task does not inherit this scope and must install its own
+/// override. Outside the scope the resolvers fall back to `HOME`.
 pub async fn with_home_override<F, R>(home: PathBuf, fut: F) -> R
 where
     F: Future<Output = R>,
 {
     HOME_OVERRIDE.scope(home, fut).await
+}
+
+pub async fn with_user_override<F, R>(uid: u32, home: PathBuf, fut: F) -> R
+where
+    F: Future<Output = R>,
+{
+    OWNER_UID_OVERRIDE
+        .scope(uid, HOME_OVERRIDE.scope(home, fut))
+        .await
+}
+
+pub async fn with_routed_job<F, R>(fut: F) -> R
+where
+    F: Future<Output = R>,
+{
+    ROUTED_JOB_OVERRIDE.scope(true, fut).await
 }
 
 /// Snapshot of the currently active home override (`None` outside any
@@ -78,6 +97,58 @@ where
 /// shell on the user's behalf).
 pub fn current_home_override() -> Option<PathBuf> {
     HOME_OVERRIDE.try_with(|h| h.clone()).ok()
+}
+
+pub fn current_owner_uid_override() -> Option<u32> {
+    OWNER_UID_OVERRIDE.try_with(|uid| *uid).ok()
+}
+
+pub fn verified_home_for_uid(uid: u32) -> Result<PathBuf, String> {
+    #[cfg(unix)]
+    {
+        use std::ffi::CStr;
+        use std::os::unix::ffi::OsStringExt;
+        use std::os::unix::fs::MetadataExt;
+
+        const BUFFER_SIZE: usize = 16 * 1024;
+        let mut buffer = vec![0 as libc::c_char; BUFFER_SIZE];
+        let mut passwd: libc::passwd = unsafe { std::mem::zeroed() };
+        let mut result: *mut libc::passwd = std::ptr::null_mut();
+        let code = unsafe {
+            libc::getpwuid_r(
+                uid,
+                &mut passwd,
+                buffer.as_mut_ptr(),
+                buffer.len(),
+                &mut result,
+            )
+        };
+        if code != 0 || result.is_null() || passwd.pw_dir.is_null() {
+            return Err(format!("home directory is unavailable for uid {uid}"));
+        }
+        let bytes = unsafe { CStr::from_ptr(passwd.pw_dir) }.to_bytes().to_vec();
+        if bytes.is_empty() {
+            return Err(format!("home directory is unavailable for uid {uid}"));
+        }
+        let home = PathBuf::from(OsString::from_vec(bytes))
+            .canonicalize()
+            .map_err(|error| format!("canonicalize home for uid {uid}: {error}"))?;
+        let metadata = std::fs::metadata(&home)
+            .map_err(|error| format!("inspect home for uid {uid}: {error}"))?;
+        if !metadata.is_dir() || metadata.uid() != uid {
+            return Err(format!("configured home for uid {uid} is not owned by that uid"));
+        }
+        Ok(home)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = uid;
+        Err("account home resolution requires Unix".to_string())
+    }
+}
+
+pub fn is_routed_job() -> bool {
+    ROUTED_JOB_OVERRIDE.try_with(|value| *value).unwrap_or(false)
 }
 
 /// Resolve the effective user home directory:
@@ -138,6 +209,22 @@ pub fn data_dir() -> PathBuf {
         return PathBuf::from(v);
     }
     user_data_dir()
+}
+
+pub fn caps_data_dir() -> PathBuf {
+    std::env::var_os("COS_CAPS_DATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(data_dir)
+}
+
+pub fn proc_data_dir() -> PathBuf {
+    if let Some(path) = std::env::var_os("COS_PROC_DATA_DIR") {
+        return PathBuf::from(path);
+    }
+    if let Some(uid) = current_owner_uid_override() {
+        return PathBuf::from("/run/cos/caps").join(uid.to_string());
+    }
+    data_dir()
 }
 
 pub fn cache_dir() -> PathBuf {
@@ -323,28 +410,62 @@ pub fn agent_state_dir() -> PathBuf {
     data_dir().join("agent")
 }
 
+fn routed_agent_state_dir() -> PathBuf {
+    current_owner_uid_override()
+        .map(clawd_user_agent_state_dir)
+        .unwrap_or_else(agent_state_dir)
+}
+
 /// Directory for agent's persistent notes (MEMORY.md, USER.md, custom notes).
 /// Lives under `data_dir/agent/notes/`. Persists across reboots.
 pub fn agent_notes_dir() -> PathBuf {
-    agent_state_dir().join("notes")
+    routed_agent_state_dir().join("notes")
 }
 
 /// Path to the agent's SQLite FTS5 conversation history database.
-/// Lives at `data_dir/agent/memory.db`. Created on first write.
+/// A clawd-routed user job uses a root-owned, UID-partitioned database under
+/// `data_dir/users/<uid>/agent/`; a non-daemon home-only override uses the
+/// user's XDG data directory. Otherwise it remains under `data_dir/agent/`.
+/// Created on first write.
 pub fn agent_memory_db_path() -> PathBuf {
+    if let Some(uid) = current_owner_uid_override() {
+        return clawd_user_memory_db_path(uid);
+    }
+    if let Some(home) = current_home_override() {
+        return agent_memory_db_path_for_home(&home);
+    }
     agent_state_dir().join("memory.db")
+}
+
+pub fn agent_memory_db_path_for_home(home: &Path) -> PathBuf {
+    home.join(".local")
+        .join("share")
+        .join("cos")
+        .join("agent")
+        .join("memory.db")
+}
+
+pub fn clawd_user_memory_db_path(uid: u32) -> PathBuf {
+    clawd_user_agent_state_dir(uid).join("memory.db")
+}
+
+pub fn clawd_user_agent_state_dir(uid: u32) -> PathBuf {
+    data_dir()
+        .join("users")
+        .join(uid.to_string())
+        .join("agent")
 }
 
 /// Path to the agent's semantic-memory (vector) SQLite store.
 /// Lives at `data_dir/agent/semantic.db`. Created on first index.
 pub fn agent_semantic_db_path() -> PathBuf {
-    agent_state_dir().join("semantic.db")
+    routed_agent_state_dir().join("semantic.db")
 }
 
 /// Path to the periodic-nudge store file. Lives at
 /// `data_dir/agent/nudges.json`. Created on first add.
 pub fn agent_nudges_path() -> PathBuf {
-    agent_state_dir().join("nudges.json")
+    routed_agent_state_dir().join("nudges.json")
 }
 
 /// Path to the persistent agent-hooks config file. Lives at
@@ -352,7 +473,7 @@ pub fn agent_nudges_path() -> PathBuf {
 /// (`logging`, etc.) should auto-register at the start of every
 /// `cos agent ask` / `cos agent chat` invocation.
 pub fn agent_hooks_path() -> PathBuf {
-    agent_state_dir().join("hooks.json")
+    routed_agent_state_dir().join("hooks.json")
 }
 
 /// Path to the agent-runtime audit log. JSONL — one event per
@@ -398,7 +519,7 @@ pub fn context_events_log_path() -> PathBuf {
 /// `data_dir/agent/todos/`. Each session writes a JSON file named
 /// `<session_id>.json`.
 pub fn agent_todos_dir() -> PathBuf {
-    agent_state_dir().join("todos")
+    routed_agent_state_dir().join("todos")
 }
 
 /// Directory tree for installed skills. Lives under
@@ -417,7 +538,7 @@ pub fn agent_skills_dir() -> PathBuf {
 /// reference rather than inlining multi-MB binary bytes through
 /// the LLM context.
 pub fn agent_media_outputs_dir() -> PathBuf {
-    agent_state_dir().join("media").join("outputs")
+    routed_agent_state_dir().join("media").join("outputs")
 }
 
 /// JSON file storing curator drafts (proposed/accepted/rejected).
@@ -425,14 +546,14 @@ pub fn agent_media_outputs_dir() -> PathBuf {
 /// rewritten atomically (tmp + rename) on every mutation. See
 /// [`crate::agent::curator_drafts`].
 pub fn agent_curator_drafts_path() -> PathBuf {
-    agent_state_dir().join("curator-drafts.json")
+    routed_agent_state_dir().join("curator-drafts.json")
 }
 
 /// JSONL file storing skill usage records (one record per
 /// invocation). Lives at `data_dir/agent/skills-usage.jsonl`. See
 /// [`crate::agent::skills::provenance::UsageStore`].
 pub fn agent_skills_usage_path() -> PathBuf {
-    agent_state_dir().join("skills-usage.jsonl")
+    routed_agent_state_dir().join("skills-usage.jsonl")
 }
 
 /// JSONL file storing shell-hook records (the user's interactive
@@ -440,7 +561,7 @@ pub fn agent_skills_usage_path() -> PathBuf {
 /// init`). Lives at `data_dir/agent/shell-hooks.jsonl`. See
 /// [`crate::agent::shell_hooks`].
 pub fn agent_shell_hooks_log_path() -> PathBuf {
-    agent_state_dir().join("shell-hooks.jsonl")
+    routed_agent_state_dir().join("shell-hooks.jsonl")
 }
 
 /// Directory tree for the agent service FS-based job queue. Lives under

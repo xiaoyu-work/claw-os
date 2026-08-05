@@ -80,10 +80,17 @@ to the right socket connection.
 | dom.fill_secret   | `browser.input.secret`        | admin                          | host      |
 | eval              | `browser.eval`                | admin                          | host      |
 
-Secret-field detection runs in `content.js` (`isSecretField`):
-`input[type=password]` OR `autocomplete ∈ {current-password, new-password,
-one-time-code, cc-*}`.  `dom.fill` rejects secret fields server-side; only
-`dom.fill_secret` (gated on `browser.input.secret`, admin-only) accepts them.
+Read operations never serialize live values from input, textarea, select, or
+contenteditable controls. `dom.query` and accessibility snapshots expose only
+labels plus `value_present`; text snapshots replace populated editable regions
+with a redaction marker. This protects custom controls even when heuristics do
+not recognize their purpose.
+
+Secret-field detection runs in `content.js` (`isSecretField`) and additionally
+classifies password/hidden inputs, password/OTP/payment autocomplete tokens,
+explicit private-data attributes, and credential-like field names or labels.
+`dom.fill` rejects those fields; only `dom.fill_secret` (gated on
+`browser.input.secret`, admin-only) accepts them.
 
 ## File layout
 
@@ -102,7 +109,7 @@ apps/browser-attached/
   README.md
 
 extensions/claw-agent-browser/
-  manifest.json    # MV3, content_scripts: <all_urls>
+  manifest.json    # MV3, top-frame content_scripts: <all_urls>
   background.js    # SW, owns native port, dispatches verbs
   content.js       # per-frame DOM helper, secret-field detection
   popup.html       # tiny status / STOP UI
@@ -168,9 +175,13 @@ tools/
   re-render all invalidate refs.  Callers should re-`dom.query` rather than
   cache.
 
-- **Cross-origin iframes**: the content script is injected into every frame
-  via `all_frames: true`, but routing a verb to a specific frame is not yet
-  in scope — `dom.query` only reaches the top frame for the MVP.
+- **Cross-origin iframes**: DOM verbs are intentionally pinned to frame `0`,
+  and the content script is installed only in the top document. This prevents
+  a top-page host grant and a frame-local ref from acting on unrelated
+  embedded origins. Refs also carry a random per-document nonce so a stale ref
+  cannot collide with the same local sequence number after navigation.
+  Supporting iframe automation requires explicit frame refs plus a separate
+  capability check for each frame origin.
 
 - **Firefox**: the manifest is MV3 + `chrome.*`; Firefox 115+ supports MV3
   but uses `browser.*`.  A `webextension-polyfill` shim covers this with no

@@ -1,0 +1,478 @@
+#!/usr/bin/env bash
+# /usr/lib/cos/hw/gpu-setup — environment-aware GPU driver setup for Claw OS.
+#
+# Claw OS ships the open GPU stack (nouveau/amdgpu/i915-xe + signed firmware)
+# out of the box, which lights up every modern GPU at a basic level. This
+# helper handles the one thing that genuinely cannot be pre-installed for
+# everyone: NVIDIA's *proprietary* driver (full 3D, CUDA, NVENC). It must be
+# installed only on machines that actually have an NVIDIA GPU, and only when
+# that GPU is a real PCI device (bare metal) — inside WSL or a container the
+# GPU is virtualised and the kernel module lives outside the guest.
+#
+# Usage:
+#   gpu-setup detect [--json]   read-only; print what we found + the
+#                               recommended action (safe for any user)
+#   gpu-setup install           privileged; perform the env-appropriate action
+#                               (apt install on bare metal; no-op + verify in
+#                               WSL/containers). Run via pkexec from the GUI.
+#   gpu-setup motd              write /run/motd.d/40-cos-gpu.motd (used by the
+#                               first-boot service so headless WSL/Docker users
+#                               see the GPU status on login)
+#
+# Exit status of `detect`/`install` is 0 on success, non-zero on error.
+
+set -euo pipefail
+
+log() { printf '%s\n' "$*" >&2; }
+
+# ---------------------------------------------------------------------------
+# Environment + hardware detection (all read-only).
+# ---------------------------------------------------------------------------
+
+# baremetal | wsl | container
+detect_env() {
+    if grep -qiE '(microsoft|wsl)' /proc/version 2>/dev/null || [ -e /dev/dxg ]; then
+        echo wsl
+        return
+    fi
+    if [ -f /.dockerenv ] || [ "${container:-}" = docker ] || [ "${container:-}" = lxc ] \
+        || grep -qaE '(docker|containerd|buildkit|lxc|podman)' /proc/1/cgroup 2>/dev/null; then
+        echo container
+        return
+    fi
+    echo baremetal
+}
+
+# Print the host's dpkg architecture (amd64 / arm64 / …).
+host_arch() {
+    if command -v dpkg >/dev/null 2>&1; then
+        dpkg --print-architecture
+    else
+        case "$(uname -m)" in
+            x86_64) echo amd64 ;;
+            aarch64) echo arm64 ;;
+            *) uname -m ;;
+        esac
+    fi
+}
+
+# Echo nvidia|amd|intel|other|none for the primary display GPU.
+detect_gpu_vendor() {
+    if command -v lspci >/dev/null 2>&1; then
+        local line
+        line="$(lspci -nn 2>/dev/null | grep -iE 'VGA compatible controller|3D controller|Display controller' || true)"
+        if [ -n "$line" ]; then
+            if grep -qi 'nvidia' <<<"$line"; then echo nvidia; return; fi
+            if grep -qiE 'amd|ati|advanced micro devices' <<<"$line"; then echo amd; return; fi
+            if grep -qi 'intel' <<<"$line"; then echo intel; return; fi
+            echo other
+            return
+        fi
+    fi
+    # No PCI view (typical inside WSL/containers). /dev/dxg is NOT a usable
+    # signal here — WSL2 exposes it for every GPU vendor (Intel/AMD/NVIDIA),
+    # so only claim NVIDIA on a positive NVIDIA-specific signal.
+    if nvidia_present_no_pci; then
+        echo nvidia
+        return
+    fi
+    echo none
+}
+
+# True when an NVIDIA GPU is present without a scannable PCI bus (WSL /
+# container). Relies only on NVIDIA-specific surfaces, never /dev/dxg.
+nvidia_present_no_pci() {
+    [ -e /dev/nvidia0 ] || [ -e /dev/nvidiactl ] && return 0
+    # WSL injects libcuda only when the Windows host has an NVIDIA driver.
+    ls /usr/lib/wsl/lib/libcuda.so* >/dev/null 2>&1 && return 0
+    nvidia_runtime_visible && return 0
+    return 1
+}
+
+# Human-readable name of the NVIDIA GPU, best-effort.
+nvidia_name() {
+    local n=""
+    if command -v lspci >/dev/null 2>&1; then
+        n="$(lspci -nn 2>/dev/null \
+            | grep -iE 'VGA compatible controller|3D controller|Display controller' \
+            | grep -i nvidia | head -1 | sed 's/.*controller[^:]*: //I')"
+    fi
+    if [ -z "$n" ] && command -v nvidia-smi >/dev/null 2>&1; then
+        n="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || true)"
+    fi
+    [ -n "$n" ] && echo "$n" || echo "NVIDIA GPU"
+}
+
+# Is the *proprietary* NVIDIA stack already active?
+nvidia_proprietary_active() {
+    lsmod 2>/dev/null | grep -q '^nvidia ' && return 0
+    dpkg -s nvidia-driver >/dev/null 2>&1 && return 0
+    return 1
+}
+
+# Can the userspace CUDA/NVML stack already see the GPU? (true in a
+# correctly-set-up WSL/container, or on bare metal with the driver loaded.)
+# In WSL the tool lives at /usr/lib/wsl/lib/nvidia-smi, off the default PATH.
+nvidia_runtime_visible() {
+    local smi
+    for smi in nvidia-smi /usr/lib/wsl/lib/nvidia-smi; do
+        if command -v "$smi" >/dev/null 2>&1 || [ -x "$smi" ]; then
+            "$smi" -L >/dev/null 2>&1 && return 0
+        fi
+    done
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# Decide the recommended action for the current machine.
+# Echoes one of:
+#   none            nothing to do (no NVIDIA, or open stack is the right answer)
+#   install_kmod    bare metal NVIDIA, proprietary driver not yet installed
+#   already         proprietary driver already installed
+#   wsl_ready       WSL/container, GPU already visible via host passthrough
+#   wsl_missing     WSL/container, NVIDIA expected but not visible (host setup)
+#   unsupported_arch NVIDIA present but proprietary driver unavailable on arch
+# ---------------------------------------------------------------------------
+recommend() {
+    local env vendor
+    env="$(detect_env)"
+    vendor="$(detect_gpu_vendor)"
+
+    if [ "$vendor" != "nvidia" ]; then
+        echo none
+        return
+    fi
+
+    case "$env" in
+        wsl|container)
+            if nvidia_runtime_visible; then echo wsl_ready; else echo wsl_missing; fi
+            ;;
+        baremetal)
+            if nvidia_proprietary_active; then
+                echo already
+            elif [ "$(host_arch)" != "amd64" ]; then
+                # Debian's nvidia-driver is amd64-only; arm64 (Tegra etc.)
+                # needs vendor-specific stacks we don't ship.
+                echo unsupported_arch
+            else
+                echo install_kmod
+            fi
+            ;;
+        *)
+            echo none
+            ;;
+    esac
+}
+
+# JSON-escape a string for the small fixed set of fields we emit.
+json_escape() {
+    local s=$1
+    s=${s//\\/\\\\}
+    s=${s//\"/\\\"}
+    printf '%s' "$s"
+}
+
+# ---------------------------------------------------------------------------
+# Commands.
+# ---------------------------------------------------------------------------
+
+cmd_detect() {
+    local json=0
+    [ "${1:-}" = "--json" ] && json=1
+
+    local env vendor action name installed visible
+    env="$(detect_env)"
+    vendor="$(detect_gpu_vendor)"
+    action="$(recommend)"
+    name=""
+    [ "$vendor" = "nvidia" ] && name="$(nvidia_name)"
+    nvidia_proprietary_active && installed=true || installed=false
+    nvidia_runtime_visible && visible=true || visible=false
+
+    if [ "$json" = 1 ]; then
+        printf '{"env":"%s","gpu":"%s","gpu_name":"%s","action":"%s","installed":%s,"runtime_visible":%s}\n' \
+            "$(json_escape "$env")" "$(json_escape "$vendor")" "$(json_escape "$name")" \
+            "$(json_escape "$action")" "$installed" "$visible"
+        return 0
+    fi
+
+    echo "Environment : $env"
+    echo "GPU vendor  : $vendor${name:+ ($name)}"
+    case "$action" in
+        none)             echo "Status      : nothing to do — the open driver stack is the right choice here." ;;
+        install_kmod)     echo "Status      : NVIDIA GPU found — the proprietary driver can be installed for full 3D + CUDA." ;;
+        already)          echo "Status      : the proprietary NVIDIA driver is already installed." ;;
+        wsl_ready)        echo "Status      : NVIDIA GPU is visible through host passthrough — CUDA is ready, no driver install needed." ;;
+        wsl_missing)      echo "Status      : NVIDIA expected but not visible. Install the NVIDIA driver on the Windows host (WSL) or pass --gpus all (Docker)." ;;
+        unsupported_arch) echo "Status      : NVIDIA GPU found, but the proprietary driver is not available on this CPU architecture." ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# Bare-metal post-install tuning: PRIME render offload for hybrid laptops and
+# Secure Boot key enrolment for the DKMS-signed module.
+# ---------------------------------------------------------------------------
+
+# True when the machine booted with UEFI Secure Boot enabled.
+secureboot_enabled() {
+    if command -v mokutil >/dev/null 2>&1; then
+        mokutil --sb-state 2>/dev/null | grep -qi 'SecureBoot enabled'
+        return
+    fi
+    # Fallback: read the EFI variable directly (its last byte is 1 when on).
+    local f
+    f="$(ls /sys/firmware/efi/efivars/SecureBoot-* 2>/dev/null | head -1 || true)"
+    [ -n "$f" ] || return 1
+    [ "$(tail -c1 "$f" 2>/dev/null | od -An -tu1 | tr -d ' ')" = "1" ]
+}
+
+# True on a hybrid-graphics laptop: an integrated Intel/AMD GPU *and* a
+# discrete NVIDIA GPU. There the iGPU should keep driving the display (best
+# battery + reliable Wayland) and NVIDIA is used on demand via PRIME render
+# offload. A desktop with only an NVIDIA card is not hybrid (NVIDIA primary).
+gpu_is_hybrid() {
+    command -v lspci >/dev/null 2>&1 || return 1
+    local gpus
+    gpus="$(lspci -nn 2>/dev/null | grep -iE 'VGA compatible controller|3D controller|Display controller' || true)"
+    grep -qi 'nvidia' <<<"$gpus" || return 1
+    grep -qiE 'intel|amd|ati|advanced micro devices' <<<"$gpus"
+}
+
+# Locate the DKMS Machine Owner Key certificate Debian uses to sign modules.
+# Echoes the path, or nothing if not found.
+dkms_mok_cert() {
+    local c
+    for c in /var/lib/dkms/mok.pub /var/lib/shim-signed/mok/MOK.der; do
+        [ -f "$c" ] && { echo "$c"; return 0; }
+    done
+    return 1
+}
+
+# Configure the NVIDIA module for Wayland (COSMIC needs KMS) and, on a hybrid
+# laptop, enable runtime dGPU power management and ship a `prime-run` offload
+# wrapper. Writes a modprobe drop-in; the caller rebuilds the initramfs.
+configure_prime_offload() {
+    local conf=/etc/modprobe.d/cos-nvidia.conf
+    {
+        echo "# Managed by Claw OS (gpu-setup). KMS is required for the NVIDIA"
+        echo "# driver to drive a Wayland/COSMIC session."
+        echo "options nvidia-drm modeset=1 fbdev=1"
+    } >"$conf"
+
+    if gpu_is_hybrid; then
+        # Let the dGPU power down when idle — the big battery win on Optimus
+        # laptops where the Intel/AMD iGPU runs the desktop.
+        echo "options nvidia NVreg_DynamicPowerManagement=0x02" >>"$conf"
+
+        # `prime-run <cmd>` launches one app on the NVIDIA GPU while the rest
+        # of the session stays on the power-sipping iGPU.
+        cat >/usr/bin/prime-run <<'PRIMEEOF'
+#!/bin/sh
+# Run one program on the discrete NVIDIA GPU via PRIME render offload.
+export __NV_PRIME_RENDER_OFFLOAD=1
+export __NV_PRIME_RENDER_OFFLOAD_PROVIDER=NVIDIA-G0
+export __GLX_VENDOR_LIBRARY_NAME=nvidia
+export __VK_LAYER_NV_optimus=NVIDIA_only
+exec "$@"
+PRIMEEOF
+        chmod 0755 /usr/bin/prime-run
+        log ":: hybrid graphics — iGPU stays primary; run 'prime-run <app>' for the NVIDIA GPU."
+    fi
+}
+
+# On a Secure Boot machine the DKMS-built nvidia module is signed with a local
+# Machine Owner Key that must be *enrolled* once via a reboot. Queue that
+# enrolment and print human-readable next steps (incl. the one-time password)
+# to stdout so the wizard/CLI can show them. Never fatal — the driver is still
+# installed; only loading is gated until the key is trusted.
+maybe_enroll_secureboot() {
+    secureboot_enabled || return 0
+
+    local cert
+    cert="$(dkms_mok_cert || true)"
+    if [ -z "$cert" ]; then
+        log ":: Secure Boot is on but no DKMS signing key was found; the NVIDIA"
+        log "   module may fail to load until you sign it (see dkms/mokutil docs)."
+        return 0
+    fi
+
+    if mokutil --test-key "$cert" 2>/dev/null | grep -qi 'already enrolled'; then
+        log ":: Secure Boot key already enrolled — the signed module will load."
+        return 0
+    fi
+
+    # head -c reads a fixed number of bytes from /dev/urandom (no SIGPIPE), so
+    # this is safe under 'set -o pipefail'. $RANDOM is the portable fallback.
+    local pw
+    pw="$(head -c 9 /dev/urandom | base64 | tr -dc 'A-HJ-NP-Za-hj-np-z2-9' | cut -c1-8)"
+    [ "${#pw}" -ge 6 ] || pw="$(printf 'cos%05d' "$((RANDOM % 100000))")"
+
+    if printf '%s\n%s\n' "$pw" "$pw" | mokutil --import "$cert" >/dev/null 2>&1; then
+        local notef=/var/lib/cos/gpu/secureboot-enroll.txt
+        mkdir -p "$(dirname "$notef")"
+        # tee → stdout (captured by the wizard) AND a file the MOTD can show.
+        {
+            echo "ACTION REQUIRED — Secure Boot key enrolment"
+            echo
+            echo "Secure Boot is enabled, so the NVIDIA driver was signed with a"
+            echo "local key that must be approved once:"
+            echo
+            echo "  1. Reboot."
+            echo "  2. At the blue 'MOK Management' screen pick 'Enroll MOK' ->"
+            echo "     'Continue' -> 'Yes'."
+            echo "  3. Enter this one-time password when prompted:"
+            echo
+            echo "         $pw"
+            echo
+            echo "  4. The machine reboots into Claw OS with NVIDIA active."
+            echo
+            echo "(Miss the screen? Just run 'sudo claw-gpu-setup install' again.)"
+        } | tee "$notef"
+        return 0
+    fi
+
+    log ":: Could not queue Secure Boot enrolment (mokutil --import failed)."
+    log "   Disable Secure Boot in firmware, or enrol $cert manually with mokutil."
+    return 0
+}
+
+# Install the proprietary NVIDIA stack on bare metal. amd64 only.
+install_nvidia_baremetal() {
+    if nvidia_proprietary_active; then
+        log ":: NVIDIA proprietary driver already installed — nothing to do."
+        return 0
+    fi
+    log ":: installing NVIDIA proprietary driver (this downloads a few hundred MB)…"
+
+    # stdout is reserved for the post-install note (the Secure Boot enrolment
+    # steps printed by maybe_enroll_secureboot via tee). Everything else —
+    # apt/dpkg chatter and initramfs output — goes to stderr so it never
+    # pollutes that note when the wizard captures stdout.
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq 1>&2
+
+    # linux-headers-amd64 is the meta-package; the global APT pin keeps it
+    # on the backports kernel so DKMS rebuilds the module on every kernel
+    # bump. firmware-misc-nonfree carries assorted NVIDIA firmware blobs.
+    # dkms is installed first (it's a dependency) so its Machine Owner Key
+    # exists before the nvidia module builds, which lets DKMS sign the module
+    # for Secure Boot automatically.
+    apt-get install -y --no-install-recommends \
+        linux-headers-amd64 \
+        dkms \
+        nvidia-driver \
+        firmware-misc-nonfree 1>&2
+
+    # KMS + (on laptops) PRIME render offload and dGPU power management.
+    configure_prime_offload
+
+    # The nvidia-driver package already drops a nouveau blacklist via
+    # /etc/modprobe.d/nvidia-blacklists-nouveau.conf and triggers an
+    # initramfs rebuild, but regenerate defensively so the blacklist and our
+    # modprobe options are live on the next boot regardless of trigger order.
+    if command -v update-initramfs >/dev/null 2>&1; then
+        update-initramfs -u 1>&2 || true
+    fi
+
+    # On a Secure Boot machine the signed module still needs its key enrolled
+    # via a one-time reboot. This prints the step-by-step + password to stdout
+    # (captured by the wizard) when enrollment is queued; it is never fatal.
+    maybe_enroll_secureboot
+
+    log ":: done. Reboot to switch from nouveau to the NVIDIA driver."
+}
+
+cmd_install() {
+    if [ "$(id -u)" -ne 0 ]; then
+        log "error: 'gpu-setup install' must run as root (use: pkexec $0 install)"
+        exit 1
+    fi
+
+    local env action
+    env="$(detect_env)"
+    action="$(recommend)"
+
+    case "$action" in
+        install_kmod)
+            install_nvidia_baremetal
+            ;;
+        already)
+            log ":: NVIDIA proprietary driver already installed — nothing to do."
+            ;;
+        wsl_ready)
+            log ":: GPU is already usable via host passthrough ($env) — no in-guest driver to install."
+            log "   CUDA libraries are provided by the host; nothing to do."
+            ;;
+        wsl_missing)
+            log ":: No GPU visible in this $env guest."
+            if [ "$env" = wsl ]; then
+                log "   Install the latest NVIDIA driver on the *Windows host*; WSL picks it up automatically."
+            else
+                log "   Run the container with the NVIDIA Container Toolkit on the host and '--gpus all'."
+            fi
+            log "   (A kernel-mode driver must NOT be installed inside this guest.)"
+            exit 1
+            ;;
+        unsupported_arch)
+            log ":: NVIDIA GPU found, but the proprietary driver is not packaged for $(host_arch)."
+            exit 1
+            ;;
+        none|*)
+            log ":: No NVIDIA GPU detected — the open driver stack is already optimal. Nothing to do."
+            ;;
+    esac
+}
+
+# Write a one-line MOTD hint so headless (WSL/Docker) users see GPU status on
+# login. Kept terse; only speaks up when there's something worth saying.
+cmd_motd() {
+    local dir=/run/motd.d
+    local out="$dir/40-cos-gpu.motd"
+    mkdir -p "$dir"
+
+    # A queued-but-not-yet-enrolled Secure Boot key trumps everything else:
+    # the freshly installed NVIDIA module will not load until it is approved.
+    local enrollf=/var/lib/cos/gpu/secureboot-enroll.txt
+    if [ -f "$enrollf" ] && secureboot_enabled; then
+        local cert
+        cert="$(dkms_mok_cert || true)"
+        if [ -n "$cert" ] && ! mokutil --test-key "$cert" 2>/dev/null | grep -qi 'already enrolled'; then
+            printf 'NVIDIA driver installed but Secure Boot key not yet enrolled. See %s\n' "$enrollf" >"$out"
+            return
+        fi
+        rm -f "$enrollf"
+    fi
+
+    local action env
+    action="$(recommend)"
+    env="$(detect_env)"
+    case "$action" in
+        install_kmod)
+            printf 'NVIDIA GPU detected. Run `sudo claw-gpu-setup install` for the proprietary driver (full 3D + CUDA).\n' >"$out"
+            ;;
+        wsl_missing)
+            if [ "$env" = wsl ]; then
+                printf 'NVIDIA GPU not visible. Install the NVIDIA driver on the Windows host to enable CUDA in WSL.\n' >"$out"
+            else
+                printf 'NVIDIA GPU not visible. Start this container with the NVIDIA Container Toolkit and --gpus all.\n' >"$out"
+            fi
+            ;;
+        *)
+            # Nothing useful to say — remove any stale hint.
+            rm -f "$out"
+            ;;
+    esac
+}
+
+case "${1:-detect}" in
+    detect)  shift; cmd_detect "${1:-}" ;;
+    install) cmd_install ;;
+    motd)    cmd_motd ;;
+    -h|--help|help)
+        sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+        ;;
+    *)
+        log "error: unknown command '${1:-}'. Try: detect | install | motd"
+        exit 1
+        ;;
+esac

@@ -23,30 +23,51 @@ enum ServerMessage {
     },
 }
 
-pub async fn start(port: u16) -> anyhow::Result<()> {
-    start_with_options(port, None, false).await
+pub async fn start(_port: u16) -> anyhow::Result<()> {
+    anyhow::bail!("CDP authentication is required; use start_with_authenticated_options")
 }
 
 pub async fn start_with_options(
-    port: u16,
-    proxy: Option<String>,
-    stealth: bool,
+    _port: u16,
+    _proxy: Option<String>,
+    _stealth: bool,
 ) -> anyhow::Result<()> {
-    start_with_full_options(port, proxy, stealth, None).await
+    anyhow::bail!("CDP authentication is required; use start_with_authenticated_options")
 }
 
 pub async fn start_with_full_options(
+    _port: u16,
+    _proxy: Option<String>,
+    _stealth: bool,
+    _user_agent: Option<String>,
+) -> anyhow::Result<()> {
+    anyhow::bail!("CDP authentication is required; use start_with_authenticated_options")
+}
+
+pub async fn start_with_authenticated_options(
     port: u16,
     proxy: Option<String>,
     stealth: bool,
     user_agent: Option<String>,
+    auth_token: String,
 ) -> anyhow::Result<()> {
+    let auth_token = auth_token.trim().to_string();
+    if auth_token.len() < 32
+        || auth_token.len() > 256
+        || !auth_token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        anyhow::bail!(
+            "CDP authentication token must be 32-256 URL-safe ASCII characters"
+        );
+    }
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = TcpListener::bind(&addr).await?;
 
     info!("Obscura CDP server listening on ws://127.0.0.1:{}", port);
     info!(
-        "DevTools endpoint: ws://127.0.0.1:{}/devtools/browser",
+        "Authenticated DevTools endpoint: ws://127.0.0.1:{}/devtools/browser",
         port
     );
 
@@ -62,8 +83,11 @@ pub async fn start_with_full_options(
                     Ok((stream, peer_addr)) => {
                         info!("New connection from {}", peer_addr);
                         let tx = msg_tx.clone();
+                        let auth_token = auth_token.clone();
                         tokio::task::spawn_local(async move {
-                            if let Err(e) = handle_connection(stream, port, tx).await {
+                            if let Err(e) =
+                                handle_connection(stream, port, tx, &auth_token).await
+                            {
                                 if !format!("{}", e).contains("close") {
                                     error!("Connection error from {}: {}", peer_addr, e);
                                 }
@@ -525,21 +549,23 @@ async fn handle_connection(
     stream: TcpStream,
     port: u16,
     msg_tx: mpsc::UnboundedSender<ServerMessage>,
+    auth_token: &str,
 ) -> anyhow::Result<()> {
-    let mut buf = [0u8; 4];
-    stream.peek(&mut buf).await?;
+    let request = peek_request_head(&stream).await?;
+    if !request_has_auth_token(&request, auth_token) {
+        return reject_unauthorized(stream).await;
+    }
 
-    if &buf == b"GET " {
-        let mut peek_buf = [0u8; 1024];
-        let n = stream.peek(&mut peek_buf).await?;
-        let line = String::from_utf8_lossy(&peek_buf[..n]);
-
-        if line.contains("/json/version") {
-            return handle_http_json(stream, port, "version").await;
-        } else if line.contains("/json/list") || line.contains("/json\r\n") || line.contains("/json HTTP") {
-            return handle_http_json(stream, port, "list").await;
-        } else if line.contains("/json/protocol") {
-            return handle_http_json(stream, port, "protocol").await;
+    if request.starts_with("GET ") {
+        if request.contains("/json/version") {
+            return handle_http_json(stream, port, "version", auth_token).await;
+        } else if request.contains("/json/list")
+            || request.contains("/json\r\n")
+            || request.contains("/json HTTP")
+        {
+            return handle_http_json(stream, port, "list", auth_token).await;
+        } else if request.contains("/json/protocol") {
+            return handle_http_json(stream, port, "protocol", auth_token).await;
         }
     }
 
@@ -609,12 +635,84 @@ async fn handle_connection(
     Ok(())
 }
 
-async fn handle_http_json(stream: TcpStream, port: u16, endpoint: &str) -> anyhow::Result<()> {
+async fn peek_request_head(stream: &TcpStream) -> anyhow::Result<String> {
+    const MAX_REQUEST_HEAD: usize = 4096;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut buf = [0u8; MAX_REQUEST_HEAD];
+
+    loop {
+        let n = stream.peek(&mut buf).await?;
+        if n == 0 {
+            anyhow::bail!("connection closed before request");
+        }
+        if buf[..n].windows(2).any(|window| window == b"\r\n") {
+            return Ok(String::from_utf8_lossy(&buf[..n]).into_owned());
+        }
+        if n == MAX_REQUEST_HEAD {
+            anyhow::bail!("request head exceeds {MAX_REQUEST_HEAD} bytes");
+        }
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for request head");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+}
+
+fn request_has_auth_token(request: &str, expected: &str) -> bool {
+    let target = request
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1));
+    let supplied = target
+        .and_then(|target| target.split_once('?').map(|(_, query)| query))
+        .and_then(|query| {
+            query.split('&').find_map(|pair| {
+                pair.split_once('=')
+                    .filter(|(name, _)| *name == "token")
+                    .map(|(_, value)| value)
+            })
+        });
+
+    supplied
+        .map(|token| constant_time_eq(token.as_bytes(), expected.as_bytes()))
+        .unwrap_or(false)
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.iter()
+        .zip(right)
+        .fold(0u8, |diff, (a, b)| diff | (a ^ b))
+        == 0
+}
+
+async fn reject_unauthorized(mut stream: TcpStream) -> anyhow::Result<()> {
+    use tokio::io::AsyncWriteExt;
+
+    let body = "Forbidden";
+    let response = format!(
+        "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    stream.write_all(response.as_bytes()).await?;
+    Ok(())
+}
+
+async fn handle_http_json(
+    stream: TcpStream,
+    port: u16,
+    endpoint: &str,
+    auth_token: &str,
+) -> anyhow::Result<()> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let mut stream = stream;
     let mut buf = vec![0u8; 4096];
     let _ = stream.read(&mut buf).await?;
+    let auth_query = format!("?token={auth_token}");
 
     let body = match endpoint {
         "version" => serde_json::to_string_pretty(&json!({
@@ -623,7 +721,10 @@ async fn handle_http_json(stream: TcpStream, port: u16, endpoint: &str) -> anyho
             "User-Agent": "Obscura/0.1.0 (Headless Browser)",
             "V8-Version": "N/A",
             "WebKit-Version": "N/A",
-            "webSocketDebuggerUrl": format!("ws://127.0.0.1:{}/devtools/browser", port),
+            "webSocketDebuggerUrl": format!(
+                "ws://127.0.0.1:{}/devtools/browser{}",
+                port, auth_query
+            ),
         }))?,
         "list" => serde_json::to_string_pretty(&json!([{
             "description": "",
@@ -632,7 +733,10 @@ async fn handle_http_json(stream: TcpStream, port: u16, endpoint: &str) -> anyho
             "title": "",
             "type": "page",
             "url": "about:blank",
-            "webSocketDebuggerUrl": format!("ws://127.0.0.1:{}/devtools/page/page-1", port),
+            "webSocketDebuggerUrl": format!(
+                "ws://127.0.0.1:{}/devtools/page/page-1{}",
+                port, auth_query
+            ),
         }]))?,
         "protocol" => {
             serde_json::to_string_pretty(&json!({ "version": { "major": "1", "minor": "3" } }))?

@@ -7,9 +7,12 @@
 #  - Configure GRUB for serial-console-friendly boot:
 #      GRUB_TERMINAL="serial console"
 #      GRUB_SERIAL_COMMAND="serial --speed=115200 ..."
-#      GRUB_CMDLINE_LINUX_DEFAULT="quiet console=tty0 console=ttyS0,115200n8"
+#      GRUB_CMDLINE_LINUX_DEFAULT="quiet console=tty0 console=ttyS0,115200n8 video=1920x1080"
 #    Without GRUB_TERMINAL the menu would render on tty0 only — qemu
 #    -nographic would appear to hang at the GRUB countdown.
+#    video=1920x1080 forces a sane default mode so the greeter fills the
+#    window — VMware/QEMU otherwise default to 1024x768 and guest auto-resize
+#    only kicks in after login, leaving the login screen letterboxed.
 #  - Enable serial-getty@ttyS0 so headless deploys have a login on
 #    the serial port.
 #
@@ -43,7 +46,7 @@ fi
 GRUB_DEFAULT="$ROOTFS/etc/default/grub"
 if [ -f "$GRUB_DEFAULT" ]; then
     sed -i \
-        -e 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT="quiet console=tty0 console=ttyS0,115200n8"|' \
+        -e 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT="quiet console=tty0 console=ttyS0,115200n8 video=1920x1080"|' \
         -e 's|^#\?GRUB_TERMINAL=.*|GRUB_TERMINAL="serial console"|' \
         -e 's|^#\?GRUB_SERIAL_COMMAND=.*|GRUB_SERIAL_COMMAND="serial --speed=115200 --unit=0 --word=8 --parity=no --stop=1"|' \
         "$GRUB_DEFAULT"

@@ -88,7 +88,7 @@ impl Default for HooksConfig {
 impl HooksConfig {
     /// Returns true if the given kind is in the enabled list.
     pub fn is_enabled(&self, kind: HookKind) -> bool {
-        self.enabled.iter().any(|k| *k == kind)
+        self.enabled.contains(&kind)
     }
 
     /// Add a kind to the enabled list (no-op if already present).

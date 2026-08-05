@@ -16,6 +16,18 @@ path = "src/main.rs"
 name = "clawd"
 path = "src/bin/clawd.rs"
 
+[[bin]]
+name = "claw-approval-helper"
+path = "src/bin/claw-approval-helper.rs"
+
+[[bin]]
+name = "claw-app-runner"
+path = "src/bin/claw-app-runner.rs"
+
+[[bin]]
+name = "claw-mail-ai-host"
+path = "src/bin/claw-mail-ai-host.rs"
+
 [features]
 default = []
 

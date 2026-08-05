@@ -21,9 +21,8 @@
 //!   - `work [--once] [--poll-ms N] [--max-jobs N]` runs the worker
 //!     loop. `--once` processes exactly one pending job and exits;
 //!     `--max-jobs N` exits after N (default: forever).
-//!   - `cancel <job_id>` moves a still-pending job into `done/` with
-//!     `status: cancelled`. Running jobs are not interrupted (no
-//!     out-of-band cancellation in v1).
+//!   - `cancel <job_id>` moves a pending job directly into `done/`, or
+//!     marks a running job for interruption and signals its live agent loop.
 //!   - `prune [--older-than-days N] [--keep-last N]` GC's
 //!     `done/`. Defaults: keep the last 100, drop anything finished
 //!     more than 30 days ago.
@@ -49,6 +48,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::paths::agent_jobs_dir;
+
+/// Maximum number of times a job may be recovered from `running/` after
+/// its worker died before we give up and fail it (see
+/// [`Store::recover_orphaned_jobs`]). Stops a job that crashes every
+/// worker from looping forever and starving the queue.
+const MAX_RECOVERIES: u32 = 3;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -105,6 +110,10 @@ pub struct Job {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worker_pid: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_start_time_ticks: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cancel_requested_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -130,6 +139,19 @@ pub struct Job {
     /// own (typically empty) config.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_home: Option<String>,
+    /// How many times this job has been recovered from `running/` after
+    /// the worker executing it died (see [`Store::recover_orphaned_jobs`]).
+    /// Bounds crash-loop blast radius: a job that repeatedly kills its
+    /// worker is failed instead of requeued once this exceeds
+    /// [`MAX_RECOVERIES`]. Defaults to 0; absent in old on-disk files.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub recovery_count: u32,
+}
+
+/// serde skip predicate for the common `recovery_count == 0` case so
+/// existing job files stay byte-compatible.
+fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
 }
 
 impl Job {
@@ -150,6 +172,8 @@ impl Job {
             started_at: None,
             finished_at: None,
             worker_pid: None,
+            worker_start_time_ticks: None,
+            cancel_requested_at: None,
             response: None,
             error: None,
             turns_used: None,
@@ -157,6 +181,7 @@ impl Job {
             model: None,
             owner_uid,
             owner_home,
+            recovery_count: 0,
         }
     }
 
@@ -195,7 +220,7 @@ impl Store {
         // them keeps the hot path (claim_one / cancel_pending /
         // submit) lock-free at start-up.
         for sub in ["pending", "running", "done", "locks", "streams"] {
-            fs::create_dir_all(root.join(sub))?;
+            crate::storage::ensure_private_dir(&root.join(sub))?;
         }
         Ok(Self { root })
     }
@@ -212,7 +237,7 @@ impl Store {
         self.bucket_dir(status).join(format!("{id}.json"))
     }
 
-    pub fn stream_path(&self, id: &str) -> PathBuf {
+    fn stream_path(&self, id: &str) -> PathBuf {
         self.root.join("streams").join(format!("{id}.jsonl"))
     }
 
@@ -221,6 +246,7 @@ impl Store {
         id: &str,
         event: &crate::agent::llm::StreamEvent,
     ) -> io::Result<()> {
+        validate_job_id(id)?;
         let value = json!({
             "ts": chrono::Utc::now(),
             "event": event,
@@ -230,6 +256,7 @@ impl Store {
     }
 
     pub fn read_stream_events(&self, id: &str, cursor: usize) -> io::Result<(usize, Vec<Value>)> {
+        validate_job_id(id)?;
         let path = self.stream_path(id);
         let raw = match fs::read_to_string(&path) {
             Ok(raw) => raw,
@@ -259,6 +286,7 @@ impl Store {
     /// Returns the bucket the file currently lives in plus the parsed
     /// Job, or `Ok(None)` if no file exists in any bucket.
     pub fn locate(&self, id: &str) -> io::Result<Option<(JobStatus, Job)>> {
+        validate_job_id(id)?;
         for bucket in [JobStatus::Pending, JobStatus::Running, JobStatus::Ok] {
             let p = self.path_for(bucket, id);
             match fs::read_to_string(&p) {
@@ -272,6 +300,18 @@ impl Store {
             }
         }
         Ok(None)
+    }
+
+    /// Locate a job visible to `owner_uid`. `None` is the privileged
+    /// all-owners view; `Some(uid)` excludes legacy ownerless jobs.
+    pub fn locate_for_owner(
+        &self,
+        id: &str,
+        owner_uid: Option<u32>,
+    ) -> io::Result<Option<(JobStatus, Job)>> {
+        Ok(self
+            .locate(id)?
+            .filter(|(_, job)| job_visible_to(job, owner_uid)))
     }
 
     /// Persist a new pending job. Returns the job (with assigned id).
@@ -317,7 +357,7 @@ impl Store {
             let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
             entries.push((mtime, path));
         }
-        entries.sort_by(|a, b| b.0.cmp(&a.0));
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.0));
         let mut out = Vec::with_capacity(entries.len());
         for (_, p) in entries.into_iter() {
             if let Some(lim) = limit {
@@ -344,9 +384,25 @@ impl Store {
         Ok(out)
     }
 
+    /// List jobs visible to `owner_uid`, applying the limit after
+    /// ownership filtering so other users' newer jobs cannot hide results.
+    pub fn list_bucket_for_owner(
+        &self,
+        bucket: JobStatus,
+        limit: Option<usize>,
+        owner_uid: Option<u32>,
+    ) -> io::Result<Vec<Job>> {
+        let mut jobs = self.list_bucket(bucket, None)?;
+        jobs.retain(|job| job_visible_to(job, owner_uid));
+        if let Some(limit) = limit {
+            jobs.truncate(limit);
+        }
+        Ok(jobs)
+    }
+
     /// Atomically claim one pending job: rename pending/<id>.json →
     /// running/<id>.json, then rewrite the file with `status =
-    /// Running` + `started_at` + `worker_pid`. Returns Ok(None) when
+    /// Running` + `started_at` + worker PID/start-time identity. Returns Ok(None) when
     /// no pending jobs exist or every candidate was lost to another
     /// worker.
     pub fn claim_one(&self) -> io::Result<Option<Job>> {
@@ -368,7 +424,7 @@ impl Store {
             candidates.push((mtime, path));
         }
         // Oldest first — FIFO by submission time.
-        candidates.sort_by(|a, b| a.0.cmp(&b.0));
+        candidates.sort_by_key(|a| a.0);
 
         for (_, src) in candidates {
             let id = match src.file_stem().and_then(|s| s.to_str()) {
@@ -397,9 +453,22 @@ impl Store {
                     // We won — load, mutate, rewrite atomically.
                     let s = fs::read_to_string(&dst)?;
                     let mut job: Job = serde_json::from_str(&s).map_err(io_other)?;
+                    validate_job_id(&job.id)?;
+                    if job.id != id {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!(
+                                "job id `{}` does not match queue filename `{id}`",
+                                job.id
+                            ),
+                        ));
+                    }
                     job.status = JobStatus::Running;
                     job.started_at = Some(now_iso());
-                    job.worker_pid = Some(std::process::id());
+                    let worker_pid = std::process::id();
+                    job.worker_pid = Some(worker_pid);
+                    job.worker_start_time_ticks =
+                        crate::proc::read_start_time_ticks_pub(worker_pid);
                     write_json_atomic(&dst, &job)?;
                     crate::clawd::audit::record_task_event("clawd.task.started", &job);
                     return Ok(Some(job));
@@ -411,10 +480,171 @@ impl Store {
         Ok(None)
     }
 
-    /// Mark a running job finished. Atomically rewrites the file in
-    /// `running/`, then renames into `done/`.
-    pub fn finish(&self, mut job: Job, outcome: FinishOutcome) -> io::Result<Job> {
+    /// Recover jobs stranded in `running/` by a worker that died before
+    /// finishing them (crash, `kill -9`, OOM, power loss, container
+    /// restart). Without this, such a job sits in `running/` forever:
+    /// `claim_one` only ever looks at `pending/`, so the work is never
+    /// retried and `cos agent task <id>` blocks until its deadline.
+    ///
+    /// For each `running/` job we verify both `worker_pid` and the kernel
+    /// process start-time captured at claim:
+    ///   * **Exact match** — another worker still owns it; leave untouched.
+    ///   * **PID alive but identity missing/unreadable** — fail closed rather
+    ///     than requeue and risk executing the job twice.
+    ///   * **Dead / no pid recorded** — the owning worker is gone. Move
+    ///     the job back to `pending/` (status reset to `Pending`, the
+    ///     stale `worker_pid` / `started_at` cleared) so a worker can
+    ///     re-claim it. A `recovery_count` guards against a poison job
+    ///     that crashes every worker: after [`MAX_RECOVERIES`] attempts
+    ///     it is failed into `done/` with an explanatory error instead
+    ///     of being requeued forever.
+    ///
+    /// Intended to run once at worker start-up, before the claim loop.
+    /// Returns `(requeued, failed)` counts for logging. Best-effort: a
+    /// single malformed job file is skipped, not fatal.
+    pub fn recover_orphaned_jobs(&self) -> io::Result<(usize, usize)> {
+        let running = self.bucket_dir(JobStatus::Running);
+        let mut requeued = 0usize;
+        let mut failed = 0usize;
+
+        let entries: Vec<PathBuf> = match fs::read_dir(&running) {
+            Ok(rd) => rd
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("json"))
+                .collect(),
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok((0, 0)),
+            Err(e) => return Err(e),
+        };
+
+        for path in entries {
+            let id = match path.file_stem().and_then(|s| s.to_str()) {
+                Some(s) => s.to_string(),
+                None => continue,
+            };
+            // Serialise against claim_one/cancel for this id so we can't
+            // requeue a job another worker is mid-claim on.
+            let _lock = match self.lock_for_id(&id) {
+                Ok(l) => l,
+                Err(_) => continue,
+            };
+            // Re-read under the lock; it may have moved since the listing.
+            let raw = match fs::read_to_string(&path) {
+                Ok(s) => s,
+                Err(e) if e.kind() == ErrorKind::NotFound => continue,
+                Err(e) => return Err(e),
+            };
+            let mut job: Job = match serde_json::from_str(&raw) {
+                Ok(j) => j,
+                Err(e) => {
+                    tracing::warn!("agent recovery: skipping malformed running job {path:?}: {e}");
+                    continue;
+                }
+            };
+
+            let mut unverifiable_identity = false;
+            // Owner still alive with the exact same process identity ⇒ not
+            // an orphan; leave it be.
+            if let Some(pid) = job.worker_pid {
+                match job.worker_start_time_ticks {
+                    Some(expected) => match crate::proc::read_start_time_ticks_pub(pid) {
+                        Some(current) if current == expected => continue,
+                        Some(_) => {}
+                        None if crate::proc::is_pid_alive(pid) => {
+                            unverifiable_identity = true;
+                        }
+                        None => {}
+                    },
+                    None if crate::proc::is_pid_alive(pid) => {
+                        unverifiable_identity = true;
+                    }
+                    None => {}
+                }
+            }
+            if unverifiable_identity {
+                job.status = JobStatus::Error;
+                job.error = Some(
+                    "worker PID is alive but its start-time identity is unavailable; \
+                     refusing to retry a potentially active job"
+                        .to_string(),
+                );
+                job.finished_at = Some(now_iso());
+                write_json_atomic(&path, &job)?;
+                let done = self.path_for(JobStatus::Ok, &id);
+                fs::rename(&path, &done)?;
+                let _ = finish_durable_session(&job);
+                crate::clawd::audit::record_task_event(
+                    "clawd.task.worker_identity_unverifiable",
+                    &job,
+                );
+                failed += 1;
+                continue;
+            }
+
+            if job.cancel_requested_at.is_some() {
+                job.status = JobStatus::Cancelled;
+                job.finished_at = Some(now_iso());
+                write_json_atomic(&path, &job)?;
+                let done = self.path_for(JobStatus::Ok, &id);
+                fs::rename(&path, &done)?;
+                let _ = finish_durable_session(&job);
+                crate::clawd::audit::record_task_event(
+                    "clawd.task.cancelled",
+                    &job,
+                );
+                continue;
+            }
+
+            job.recovery_count = job.recovery_count.saturating_add(1);
+
+            if job.recovery_count > MAX_RECOVERIES {
+                // Poison job: it has already taken down a worker
+                // MAX_RECOVERIES times. Fail it rather than risk an
+                // endless crash loop that starves every other job.
+                job.status = JobStatus::Error;
+                job.error = Some(format!(
+                    "job abandoned after {} interrupted run(s) (worker died mid-execution each time)",
+                    job.recovery_count - 1
+                ));
+                job.finished_at = Some(now_iso());
+                write_json_atomic(&path, &job)?;
+                let done = self.path_for(JobStatus::Ok, &id);
+                fs::rename(&path, &done)?;
+                let _ = finish_durable_session(&job);
+                crate::clawd::audit::record_task_event("clawd.task.abandoned", &job);
+                failed += 1;
+                continue;
+            }
+
+            // Requeue: reset to pending and move back to pending/.
+            let mut audit_job = job.clone();
+            audit_job.status = JobStatus::Pending;
+            job.status = JobStatus::Pending;
+            job.worker_pid = None;
+            job.worker_start_time_ticks = None;
+            job.started_at = None;
+            job.cancel_requested_at = None;
+            write_json_atomic(&path, &job)?;
+            let pending = self.path_for(JobStatus::Pending, &id);
+            fs::rename(&path, &pending)?;
+            crate::clawd::audit::record_task_event("clawd.task.recovered", &audit_job);
+            requeued += 1;
+        }
+
+        Ok((requeued, failed))
+    }
+    pub fn finish(&self, job: Job, outcome: FinishOutcome) -> io::Result<Job> {
+        validate_job_id(&job.id)?;
+        let _lock = self.lock_for_id(&job.id)?;
         let running_path = self.path_for(JobStatus::Running, &job.id);
+        let raw = fs::read_to_string(&running_path)?;
+        let mut job: Job = serde_json::from_str(&raw).map_err(io_other)?;
+        validate_job_id(&job.id)?;
+        let outcome = if job.cancel_requested_at.is_some() {
+            FinishOutcome::Cancelled
+        } else {
+            outcome
+        };
         match outcome {
             FinishOutcome::Ok {
                 response,
@@ -432,6 +662,10 @@ impl Store {
                 job.status = JobStatus::Error;
                 job.error = Some(msg);
             }
+            FinishOutcome::Cancelled => {
+                job.status = JobStatus::Cancelled;
+                job.error = Some("cancelled by user".to_string());
+            }
         }
         job.finished_at = Some(now_iso());
         write_json_atomic(&running_path, &job)?;
@@ -448,6 +682,17 @@ impl Store {
     ///   - `Ok(None)` if the job was already running, already done, or
     ///     missing entirely
     pub fn cancel_pending(&self, id: &str) -> io::Result<Option<Job>> {
+        self.cancel_pending_for_owner(id, None)
+    }
+
+    /// Cancel a pending job only when it is visible to `owner_uid`.
+    /// The ownership check happens under the same per-id lock as the
+    /// state transition, so an unauthorized caller cannot mutate the job.
+    pub fn cancel_pending_for_owner(
+        &self,
+        id: &str,
+        owner_uid: Option<u32>,
+    ) -> io::Result<Option<Job>> {
         // Per-id exclusive lock prevents claim_one and cancel_pending
         // from both succeeding for the same id. Without it, a worker
         // could claim_one the file while we still read it from
@@ -460,6 +705,9 @@ impl Store {
         match fs::read_to_string(&src) {
             Ok(s) => {
                 let mut job: Job = serde_json::from_str(&s).map_err(io_other)?;
+                if !job_visible_to(&job, owner_uid) {
+                    return Ok(None);
+                }
                 job.status = JobStatus::Cancelled;
                 job.finished_at = Some(now_iso());
                 write_json_atomic(&src, &job)?;
@@ -470,6 +718,68 @@ impl Store {
             }
             Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e),
+        }
+    }
+
+    pub fn request_cancel_for_owner(
+        &self,
+        id: &str,
+        owner_uid: Option<u32>,
+    ) -> io::Result<Option<(Job, bool)>> {
+        let _lock = self.lock_for_id(id)?;
+        let pending = self.path_for(JobStatus::Pending, id);
+        let done = self.path_for(JobStatus::Ok, id);
+        match fs::read_to_string(&pending) {
+            Ok(raw) => {
+                let mut job: Job = serde_json::from_str(&raw).map_err(io_other)?;
+                if !job_visible_to(&job, owner_uid) {
+                    return Ok(None);
+                }
+                job.status = JobStatus::Cancelled;
+                job.cancel_requested_at = Some(now_iso());
+                job.finished_at = Some(now_iso());
+                write_json_atomic(&pending, &job)?;
+                fs::rename(&pending, &done)?;
+                finish_durable_session(&job)?;
+                crate::clawd::audit::record_task_event("clawd.task.cancelled", &job);
+                return Ok(Some((job, true)));
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+
+        let running = self.path_for(JobStatus::Running, id);
+        match fs::read_to_string(&running) {
+            Ok(raw) => {
+                let mut job: Job = serde_json::from_str(&raw).map_err(io_other)?;
+                if !job_visible_to(&job, owner_uid) {
+                    return Ok(None);
+                }
+                if job.cancel_requested_at.is_none() {
+                    job.cancel_requested_at = Some(now_iso());
+                    write_json_atomic(&running, &job)?;
+                    crate::clawd::audit::record_task_event(
+                        "clawd.task.cancel-requested",
+                        &job,
+                    );
+                }
+                Ok(Some((job, false)))
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn cancellation_requested(&self, id: &str) -> io::Result<bool> {
+        validate_job_id(id)?;
+        let path = self.path_for(JobStatus::Running, id);
+        match fs::read_to_string(path) {
+            Ok(raw) => {
+                let job: Job = serde_json::from_str(&raw).map_err(io_other)?;
+                Ok(job.cancel_requested_at.is_some())
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error),
         }
     }
 
@@ -492,7 +802,7 @@ impl Store {
             entries.push((mtime, path));
         }
         // Newest first; first `keep_last` are always retained.
-        entries.sort_by(|a, b| b.0.cmp(&a.0));
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.0));
         let now = std::time::SystemTime::now();
         let mut removed = 0usize;
         for (i, (mtime, p)) in entries.into_iter().enumerate() {
@@ -500,11 +810,10 @@ impl Store {
                 continue;
             }
             let age = now.duration_since(mtime).unwrap_or(Duration::ZERO);
-            if age >= older_than {
-                if fs::remove_file(&p).is_ok() {
+            if age >= older_than
+                && fs::remove_file(&p).is_ok() {
                     removed += 1;
                 }
-            }
         }
         Ok(removed)
     }
@@ -524,14 +833,19 @@ impl Store {
     /// across two different destinations. The sentinel inode is
     /// stable across rename storms.
     fn lock_for_id(&self, id: &str) -> io::Result<JobLock> {
+        validate_job_id(id)?;
         let lock_dir = self.root.join("locks");
-        fs::create_dir_all(&lock_dir)?;
+        crate::storage::ensure_private_dir(&lock_dir)?;
         let lock_path = lock_dir.join(format!("{id}.lock"));
-        let f = fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(false)
-            .open(&lock_path)?;
+        let mut options = fs::OpenOptions::new();
+        options.create(true).write(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let f = options.open(&lock_path)?;
+        crate::storage::set_private_file(&lock_path)?;
         #[cfg(unix)]
         {
             use std::os::unix::io::AsRawFd;
@@ -542,6 +856,28 @@ impl Store {
         }
         Ok(JobLock { file: f })
     }
+}
+
+fn job_visible_to(job: &Job, owner_uid: Option<u32>) -> bool {
+    match owner_uid {
+        None => true,
+        Some(uid) => job.owner_uid == Some(uid),
+    }
+}
+
+fn validate_job_id(id: &str) -> io::Result<()> {
+    if id.is_empty()
+        || id.len() > 128
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid job id: {id}"),
+        ));
+    }
+    Ok(())
 }
 
 /// RAII guard for per-job flock taken by `Store::lock_for_id`.
@@ -570,6 +906,7 @@ pub enum FinishOutcome {
         model: String,
     },
     Error(String),
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -672,6 +1009,7 @@ fn job_to_summary(job: &Job) -> Value {
         "id": job.id,
         "status": job.status.as_str(),
         "created_at": job.created_at,
+        "cancel_requested": job.cancel_requested_at.is_some(),
         "preview": job.preview(80),
     })
 }
@@ -865,7 +1203,7 @@ fn cmd_result(args: &[String]) -> Result<Value, String> {
         match store.locate(&id).map_err(|e| e.to_string())? {
             Some((bucket, job)) => {
                 if bucket == JobStatus::Ok {
-                    return Ok(serde_json::to_value(&job).map_err(|e| e.to_string())?);
+                    return serde_json::to_value(&job).map_err(|e| e.to_string());
                 }
                 if Instant::now() >= deadline {
                     return Err(format!(
@@ -890,18 +1228,22 @@ fn cmd_cancel(args: &[String]) -> Result<Value, String> {
         .filter(|s| !s.trim().is_empty())
         .ok_or("usage: cos agent service cancel <job_id>")?;
     let store = Store::open_default().map_err(|e| e.to_string())?;
-    match store.cancel_pending(id).map_err(|e| e.to_string())? {
-        Some(job) => Ok(json!({
-            "status": "cancelled",
-            "job_id": job.id,
-        })),
+    match store.request_cancel_for_owner(id, None).map_err(|e| e.to_string())? {
+        Some((job, immediate)) => {
+            if !immediate {
+                crate::agent::runtime::interrupt::signal(id);
+            }
+            Ok(json!({
+                "status": if immediate { "cancelled" } else { "cancel_requested" },
+                "job_id": job.id,
+            }))
+        }
         None => {
-            // Either it never existed, or it was already running/done.
-            // Distinguish by locate().
+            // Either it never existed or it was already terminal.
             match store.locate(id).map_err(|e| e.to_string())? {
                 Some((_, job)) => Ok(json!({
                     "status": "not_cancelled",
-                    "reason": "already_progressed",
+                    "reason": "already_terminal",
                     "job_id": job.id,
                     "current_status": job.status.as_str(),
                 })),
@@ -975,7 +1317,26 @@ fn run_worker_loop_inner(
 ) -> Result<Value, String> {
     crate::clawd::audit::install_runtime_hook();
     let store = Store::open_default().map_err(|e| e.to_string())?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
+    // Reclaim jobs stranded in running/ by a previously-crashed worker
+    // before we start claiming new ones. This is what makes a daemon
+    // restart self-healing: interrupted jobs get retried (or failed if
+    // they keep killing the worker) instead of hanging forever.
+    match store.recover_orphaned_jobs() {
+        Ok((requeued, failed)) if requeued > 0 || failed > 0 => {
+            tracing::info!(
+                requeued,
+                failed,
+                "agent service worker: recovered orphaned jobs from a prior crash"
+            );
+        }
+        Ok(_) => {}
+        Err(e) => tracing::warn!("agent service worker: orphan recovery failed: {e}"),
+    }
+    // Routed tool calls use `block_in_place` so synchronous primitives keep
+    // the current task-local user/config context without starving unrelated
+    // runtime work. That API requires Tokio's multi-thread scheduler.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
         .enable_all()
         .build()
         .map_err(|e| format!("tokio runtime: {e}"))?;
@@ -998,7 +1359,13 @@ fn run_worker_loop_inner(
         }
         match store.claim_one().map_err(|e| e.to_string())? {
             Some(job) => {
-                let outcome = runtime.block_on(run_one_job(&job));
+                let mut outcome = runtime.block_on(run_one_job(&job));
+                if store
+                    .cancellation_requested(&job.id)
+                    .unwrap_or(false)
+                {
+                    outcome = FinishOutcome::Cancelled;
+                }
                 match store.finish(job.clone(), outcome) {
                     Ok(finished) => summaries.push(json!({
                         "job_id": finished.id,
@@ -1089,6 +1456,36 @@ async fn install_shutdown_listener(shutdown: Arc<AtomicBool>) {
 }
 
 async fn run_one_job(job: &Job) -> FinishOutcome {
+    let run = crate::paths::with_routed_job(run_one_routed_job(job));
+    tokio::pin!(run);
+    tokio::select! {
+        outcome = &mut run => outcome,
+        _ = wait_for_cancellation(&job.id) => {
+            loop {
+                crate::agent::runtime::interrupt::signal(&job.id);
+                tokio::select! {
+                    _ = &mut run => break,
+                    _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                }
+            }
+            FinishOutcome::Cancelled
+        }
+    }
+}
+
+async fn wait_for_cancellation(job_id: &str) {
+    loop {
+        let cancelled = Store::open_default()
+            .and_then(|store| store.cancellation_requested(job_id))
+            .unwrap_or(false);
+        if cancelled {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn run_one_routed_job(job: &Job) -> FinishOutcome {
     // If the job carries an owner_home (clawd-routed jobs from a
     // non-daemon user), load THAT user's config into a task-local
     // override AND redirect every per-user path resolver
@@ -1112,23 +1509,32 @@ async fn run_one_job(job: &Job) -> FinishOutcome {
     if let Some(home) = job.owner_home.as_deref() {
         let home_path = std::path::PathBuf::from(home);
         let cfg = crate::config::intern_for_home(&home_path);
-        crate::paths::with_home_override(
-            home_path,
-            crate::config::with_override(cfg, run_one_job_inner(job)),
-        )
-        .await
+        let run = crate::config::with_override(cfg, run_one_job_inner(job));
+        match job.owner_uid {
+            Some(0) => run.await,
+            Some(uid) => crate::paths::with_user_override(uid, home_path, run).await,
+            None => crate::paths::with_home_override(home_path, run).await,
+        }
     } else {
         run_one_job_inner(job).await
     }
 }
 
 async fn run_one_job_inner(job: &Job) -> FinishOutcome {
-    use crate::agent::runtime::loop_;
-
-    let _session_guard = match enter_job_session(job) {
-        Ok(guard) => guard,
+    let session = match job_session_info(job) {
+        Ok(session) => session,
         Err(err) => return FinishOutcome::Error(format!("session unavailable: {err}")),
     };
+    match session {
+        Some(session) => {
+            crate::proc::with_trusted_session_override(session, run_one_job_scoped(job)).await
+        }
+        None => run_one_job_scoped(job).await,
+    }
+}
+
+async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
+    use crate::agent::runtime::loop_;
 
     // Apply per-job max-turns override on a clone of the global cfg
     // so other jobs in the same worker process aren't affected.
@@ -1157,7 +1563,7 @@ async fn run_one_job_inner(job: &Job) -> FinishOutcome {
                 // Replay prior turns so multi-turn task.stream sessions (the
                 // desktop agent UI is the main caller) see continuous context
                 // instead of treating every job.submit as a fresh exchange.
-                loop_::ask_with_stream_continuation(
+                loop_::ask_with_stream_continuation_scoped(
                     provider.clone(),
                     &cfg,
                     &job.prompt,
@@ -1169,11 +1575,12 @@ async fn run_one_job_inner(job: &Job) -> FinishOutcome {
                         job_id: job.id.clone(),
                     }),
                     crate::agent::runtime::progress::null_progress(),
+                    &job.id,
                 )
                 .await
             }
             Err(_) => {
-                loop_::ask_with_stream(
+                loop_::ask_with_stream_scoped(
                     provider.clone(),
                     &cfg,
                     &job.prompt,
@@ -1183,12 +1590,13 @@ async fn run_one_job_inner(job: &Job) -> FinishOutcome {
                         job_id: job.id.clone(),
                     }),
                     crate::agent::runtime::progress::null_progress(),
+                    &job.id,
                 )
                 .await
             }
         }
     } else {
-        loop_::ask_with_stream(
+        loop_::ask_with_stream_scoped(
             provider.clone(),
             &cfg,
             &job.prompt,
@@ -1198,6 +1606,7 @@ async fn run_one_job_inner(job: &Job) -> FinishOutcome {
                 job_id: job.id.clone(),
             }),
             crate::agent::runtime::progress::null_progress(),
+            &job.id,
         )
         .await
     };
@@ -1229,9 +1638,7 @@ impl crate::agent::llm::accumulate::StreamSink for JobStreamSink {
     }
 }
 
-fn enter_job_session(
-    job: &Job,
-) -> Result<Option<crate::clawd::session_scope::ProcSessionGuard>, String> {
+fn job_session_info(job: &Job) -> Result<Option<crate::proc::SessionInfo>, String> {
     let Some(session_id) = job.session_id.as_deref() else {
         return Ok(None);
     };
@@ -1241,7 +1648,7 @@ fn enter_job_session(
     if !crate::session::session_dir(&sid).exists() {
         return Ok(None);
     }
-    crate::clawd::session_scope::ProcSessionGuard::enter(&sid, "clawd-agent-worker").map(Some)
+    crate::clawd::session_scope::trusted_session_info(&sid, "clawd-agent-worker").map(Some)
 }
 
 fn parse_status(s: &str) -> Result<JobStatus, String> {
@@ -1398,6 +1805,83 @@ mod tests {
             .join("running")
             .join(format!("{}.json", job.id))
             .is_file());
+    }
+
+    /// A job stranded in running/ by a dead worker is requeued to
+    /// pending/ with worker_pid/started_at cleared and recovery_count
+    /// incremented, so a fresh worker can re-claim it.
+    #[test]
+    fn recover_requeues_job_whose_worker_is_dead() {
+        let dir = fresh_root();
+        let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+        let job = store.submit("interrupted work".into(), None, None, None, None).unwrap();
+        let claimed = store.claim_one().unwrap().unwrap();
+        // Simulate the worker dying: overwrite the running file with a
+        // pid that is certainly not alive (0 is treated as dead).
+        let running = dir.path().join("running").join(format!("{}.json", claimed.id));
+        let mut stranded: Job =
+            serde_json::from_str(&std::fs::read_to_string(&running).unwrap()).unwrap();
+        stranded.worker_pid = Some(0);
+        std::fs::write(&running, serde_json::to_string_pretty(&stranded).unwrap()).unwrap();
+
+        let (requeued, failed) = store.recover_orphaned_jobs().unwrap();
+        assert_eq!((requeued, failed), (1, 0));
+
+        // Back in pending/, reset for re-claiming.
+        let (bucket, recovered) = store.locate(&job.id).unwrap().unwrap();
+        assert_eq!(bucket, JobStatus::Pending);
+        assert_eq!(recovered.status, JobStatus::Pending);
+        assert!(recovered.worker_pid.is_none());
+        assert!(recovered.started_at.is_none());
+        assert_eq!(recovered.recovery_count, 1);
+        assert!(store.claim_one().unwrap().is_some(), "recovered job must be re-claimable");
+    }
+
+    /// A job whose worker is still alive must NOT be touched by recovery.
+    #[test]
+    fn recover_leaves_job_with_live_worker_alone() {
+        let dir = fresh_root();
+        let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+        let job = store.submit("in flight".into(), None, None, None, None).unwrap();
+        // claim_one stamps the current (live) process pid.
+        let _claimed = store.claim_one().unwrap().unwrap();
+        let (requeued, failed) = store.recover_orphaned_jobs().unwrap();
+        assert_eq!((requeued, failed), (0, 0));
+        let (bucket, _) = store.locate(&job.id).unwrap().unwrap();
+        assert_eq!(bucket, JobStatus::Running, "live job must stay running");
+    }
+
+    /// A poison job that keeps killing its worker is failed (not requeued)
+    /// once recovery_count exceeds MAX_RECOVERIES, so it can't starve the
+    /// queue in an endless crash loop.
+    #[test]
+    fn recover_fails_poison_job_after_max_recoveries() {
+        let dir = fresh_root();
+        let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+        let job = store.submit("poison".into(), None, None, None, None).unwrap();
+        let claimed = store.claim_one().unwrap().unwrap();
+        // Pre-set recovery_count at the cap with a dead worker, so the
+        // next recovery pass tips it over MAX_RECOVERIES → fail.
+        let running = dir.path().join("running").join(format!("{}.json", claimed.id));
+        let mut stranded: Job =
+            serde_json::from_str(&std::fs::read_to_string(&running).unwrap()).unwrap();
+        stranded.worker_pid = Some(0);
+        stranded.recovery_count = MAX_RECOVERIES;
+        std::fs::write(&running, serde_json::to_string_pretty(&stranded).unwrap()).unwrap();
+
+        let (requeued, failed) = store.recover_orphaned_jobs().unwrap();
+        assert_eq!((requeued, failed), (0, 1));
+        let (bucket, done) = store.locate(&job.id).unwrap().unwrap();
+        assert_eq!(bucket, JobStatus::Ok); // done bucket
+        assert_eq!(done.status, JobStatus::Error);
+        assert!(done.error.as_deref().unwrap().contains("abandoned"));
+    }
+
+    #[test]
+    fn recover_is_noop_with_empty_running_bucket() {
+        let dir = fresh_root();
+        let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+        assert_eq!(store.recover_orphaned_jobs().unwrap(), (0, 0));
     }
 
     #[test]

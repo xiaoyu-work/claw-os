@@ -2,6 +2,7 @@
 
 import json
 import os
+import pathlib
 import sys
 import urllib.error
 import urllib.request
@@ -24,7 +25,14 @@ sys.path.insert(
     ),
 )  # for `from cos_runtime import …`
 
-from main import run  # noqa: E402
+from test_support import load_local_module
+
+search_main = load_local_module(
+    pathlib.Path(__file__).with_name("main.py"),
+    "claw_test_search_main",
+    clear_modules=("_shared",),
+)
+run = search_main.run
 
 
 # ---------------------------------------------------------------------------

@@ -321,7 +321,7 @@ pub fn parse_sample_rate(mime: &str) -> Option<u32> {
 /// always returns standard base64). Padding is required.
 pub fn decode_base64(s: &str) -> Result<Vec<u8>, String> {
     let bytes = s.as_bytes();
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return Err(format!("base64 length {} not multiple of 4", bytes.len()));
     }
     if bytes.is_empty() {

@@ -24,7 +24,7 @@
 //!
 //! | Module        | Wire family | Equivalent CLI                  |
 //! |---------------|-------------|---------------------------------|
-//! | [`ai`]        | `ai`        | `cos ai chat / embed / ...`     |
+//! | [`ai`]        | `ai`        | stable `cos ai chat`            |
 //! | [`tools`]     | `tool`      | `cos ai tool <name> --app <id>` |
 //! | [`envelope`]  | shared      | the common reply envelope       |
 //! | [`generated`] | shared      | typed structs codegen'd from `wire/v1/*.schema.json` |
@@ -108,7 +108,9 @@ impl BridgeError {
     pub fn is_denied(&self) -> bool {
         matches!(
             self,
-            BridgeError::AppError { code: Some(c), .. } if c == "denied"
+            BridgeError::AppError { code: Some(c), .. }
+                if c.eq_ignore_ascii_case("denied")
+                    || c.eq_ignore_ascii_case("permission_denied")
         )
     }
 }

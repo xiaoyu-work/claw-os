@@ -1,29 +1,144 @@
 {
-  "name": "gateway-sms",
+  "id": "gateway-sms",
   "version": "0.1.0",
-  "description": "Outbound-only SMS gateway via Twilio. send delivers a one-shot SMS via the Twilio Messages REST API.",
-  "language": "python",
-  "entry": "main.py",
-  "runtime": {
-    "python": ">=3.10"
+  "name": {
+    "en": "SMS Gateway"
   },
-  "credentials": [
-    {
-      "name": "twilio_account_sid",
-      "description": "Twilio Account SID (env override: COS_TWILIO_ACCOUNT_SID)"
+  "summary": {
+    "en": "Outbound-only SMS gateway via Twilio. send delivers a one-shot SMS through the Twilio Messages REST API."
+  },
+  "runtime": "python",
+  "operations": {
+    "send": {
+      "label": {
+        "en": "Send a message through this gateway"
+      },
+      "args": [
+        {
+          "name": "to",
+          "kind": "name",
+          "required": true
+        },
+        {
+          "name": "text",
+          "kind": "text",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "net.dial",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "host",
+              "value": "api.twilio.com"
+            }
+          },
+          "why": {
+            "en": "Connect to the remote gateway service to perform the send operation."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/twilio_account_sid"
+            }
+          },
+          "why": {
+            "en": "Read the configured twilio_account_sid secret required by this gateway."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/twilio_auth_token"
+            }
+          },
+          "why": {
+            "en": "Read the configured twilio_auth_token secret required by this gateway."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/twilio_from"
+            }
+          },
+          "why": {
+            "en": "Read the configured twilio_from secret required by this gateway."
+          }
+        },
+        {
+          "verb": "memory.write",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "self-ref",
+              "value": "gateway-sms"
+            }
+          },
+          "why": {
+            "en": "Remember the successful send so the agent can recall it later."
+          }
+        }
+      ]
     },
-    {
-      "name": "twilio_auth_token",
-      "description": "Twilio Auth Token (env override: COS_TWILIO_AUTH_TOKEN)"
-    },
-    {
-      "name": "twilio_from",
-      "description": "Sender phone number (E.164, e.g. +14155552671) or Messaging Service SID (MGxxxx) (env override: COS_TWILIO_FROM)"
+    "status": {
+      "label": {
+        "en": "Show gateway configuration and status"
+      },
+      "args": [],
+      "needs": [
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/twilio_account_sid"
+            }
+          },
+          "why": {
+            "en": "Read the configured twilio_account_sid secret required by this gateway."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/twilio_auth_token"
+            }
+          },
+          "why": {
+            "en": "Read the configured twilio_auth_token secret required by this gateway."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/twilio_from"
+            }
+          },
+          "why": {
+            "en": "Read the configured twilio_from secret required by this gateway."
+          }
+        }
+      ]
     }
-  ],
-  "scopes": [
-    "credential:twilio_account_sid",
-    "credential:twilio_auth_token",
-    "credential:twilio_from"
-  ]
+  }
 }

@@ -1,6 +1,6 @@
 // Desktop GUI bootstrap for Claw OS Go apps.
 //
-// This is the GUI counterpart to the AI (Chat/Embed/...) and tool
+// This is the GUI counterpart to the stable AI Chat and tool
 // (Tool/Catalog) helpers. It does NOT wrap a UI toolkit: a Claw OS
 // desktop app draws its own window in whatever toolkit it likes ("World
 // A"). This file only hands the app the small amount of kernel context

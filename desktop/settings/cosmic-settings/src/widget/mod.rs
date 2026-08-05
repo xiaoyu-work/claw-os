@@ -115,9 +115,9 @@ pub fn display_container<'a, Message: 'a>(widget: Element<'a, Message>) -> Eleme
 
 #[must_use]
 pub fn page_list_item<'a, Message: 'static + Clone>(
-    title: impl Into<Cow<'a, str>>,
-    description: impl Into<Cow<'a, str>>,
-    info: impl Into<Cow<'a, str>>,
+    title: impl Into<Cow<'a, str>> + 'a,
+    description: impl Into<Cow<'a, str>> + 'a,
+    info: impl Into<Cow<'a, str>> + 'a,
     icon: &'a str,
     message: Message,
 ) -> Element<'a, Message> {

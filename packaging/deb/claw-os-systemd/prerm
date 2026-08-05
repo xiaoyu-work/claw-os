@@ -18,6 +18,8 @@ case "$1" in
         # Remove both the current bridge symlink and the legacy
         # user-scoped clawd symlink from older package versions.
         rm -f /etc/systemd/user/default.target.wants/clawd.service
+        rm -f /etc/systemd/user/default.target.wants/claw-recoll-index.service
+        rm -f /etc/systemd/user/default.target.wants/claw-semantic.service
         rm -f /etc/systemd/user/graphical-session.target.wants/cos-agent-bridge.service
         ;;
     upgrade|deconfigure|failed-upgrade)

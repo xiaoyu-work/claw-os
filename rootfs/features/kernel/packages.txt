@@ -1,3 +1,8 @@
+# ${KERNEL_PKG} resolves to the backports kernel: the global APT pin in
+# rootfs/build.sh (preferences.d/90-backports-hardware-enablement) gives
+# linux-image-*/linux-headers-* from $SUITE-backports priority 600, so this
+# meta package pulls the newest officially-maintained kernel for maximum
+# hardware/driver coverage.
 ${KERNEL_PKG}
 initramfs-tools
 
@@ -14,6 +19,27 @@ firmware-realtek
 firmware-atheros
 firmware-brcm80211
 firmware-libertas
+# MediaTek Wi-Fi/Bluetooth (MT7921/MT7922 etc.), common in recent
+# AMD laptops and many mini-PCs. Without it those radios are dead.
+firmware-mediatek
+
+# --- GPU firmware (modern iGPU/dGPU need signed microcode blobs) ---
+# Intel iGPU GuC/HuC/DMC + IPU6 MIPI cameras (i915/xe, gen9+). Without
+# it modern Intel graphics fall back to slow/limited modes and the
+# webcam on many laptops stays dark.
+firmware-intel-graphics
+# AMD Radeon/amdgpu + NPU. Without it amdgpu refuses to bring up the
+# GPU on most Ryzen APUs / Radeon cards (black screen / no accel).
+firmware-amd-graphics
+# Nvidia firmware for the open nouveau driver (basic display without
+# the proprietary stack).
+firmware-nvidia-graphics
+
+# --- Audio firmware ---
+# Intel SOF (Sound Open Firmware): required for audio on virtually all
+# modern Intel laptops (Tiger Lake and newer, incl. Core Ultra). Without
+# it there is NO sound output or microphone on those machines.
+firmware-sof-signed
 
 # CPU microcode (security errata: Spectre/Meltdown/MDS/etc.). x86-only;
 # the variables expand to empty strings on arm64 so this is a no-op

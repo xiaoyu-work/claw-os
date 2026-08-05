@@ -340,6 +340,20 @@ impl MemoryDb {
         Ok(n)
     }
 
+    pub fn has_session(&self, session_id: &str) -> Result<bool, MemoryError> {
+        let conn = self.lock_conn()?;
+        let present = conn.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM messages WHERE session_id = ?
+                 UNION ALL
+                 SELECT 1 FROM session_titles WHERE session_id = ?
+             )",
+            params![session_id, session_id],
+            |row| row.get::<_, i64>(0),
+        )?;
+        Ok(present != 0)
+    }
+
     /// Delete every message in `session_id`. FTS index is kept in sync via
     /// the `messages_ad` trigger. Returns rows deleted.
     #[allow(dead_code)]
@@ -467,7 +481,7 @@ impl MemoryDb {
             })
             .map(|n| n as usize)
             .unwrap_or(0);
-        let mut count_since = |cutoff: i64| -> usize {
+        let count_since = |cutoff: i64| -> usize {
             conn.query_row(
                 "SELECT COUNT(*) FROM messages WHERE ts_ms >= ?",
                 params![cutoff],
@@ -493,14 +507,13 @@ impl MemoryDb {
         let (oldest_ts_ms, newest_ts_ms) = if total_messages == 0 {
             (None, None)
         } else {
-            let row = conn
+            conn
                 .query_row("SELECT MIN(ts_ms), MAX(ts_ms) FROM messages", [], |r| {
                     let lo: Option<i64> = r.get(0)?;
                     let hi: Option<i64> = r.get(1)?;
                     Ok((lo, hi))
                 })
-                .unwrap_or((None, None));
-            row
+                .unwrap_or((None, None))
         };
         Ok(MemoryStats {
             total_messages,
@@ -542,7 +555,7 @@ impl MemoryDb {
                 |r| r.get::<_, String>(0),
             )
             .optional()?;
-        let mut count_since = |cutoff: i64| -> usize {
+        let count_since = |cutoff: i64| -> usize {
             conn.query_row(
                 "SELECT COUNT(*) FROM messages
                   WHERE session_id = ? AND ts_ms >= ?",

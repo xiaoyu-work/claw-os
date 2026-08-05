@@ -13,6 +13,8 @@ import tempfile
 import textwrap
 import unittest
 
+from test_support import load_local_module
+
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -91,16 +93,16 @@ class QpdfAdapterTests(unittest.TestCase):
         self.pdf2 = root / "src2.pdf"
         self.pdf2.write_bytes(b"%PDF-1.7\n")
 
-        if "main" in sys.modules:
-            del sys.modules["main"]
-        import main  # noqa: F401
-        self.main = sys.modules["main"]
+        self.main = load_local_module(
+            HERE / "main.py",
+            "claw_test_qpdf_adapter_main",
+        )
         self.main.app._initialized = True
 
     def tearDown(self) -> None:
         for k in ("CLAW_QPDF_BIN", "QPDF_ARGS_LOG", "QPDF_ENCRYPTED"):
             os.environ.pop(k, None)
-        sys.modules.pop("main", None)
+        sys.modules.pop("claw_test_qpdf_adapter_main", None)
 
     def test_tools_list_reports_four_tools(self) -> None:
         reply = _rpc(self.main.app, "tools/list")

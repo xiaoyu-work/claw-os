@@ -6,6 +6,7 @@ use std::any::{Any, TypeId};
 pub mod a11y;
 pub mod ai;
 pub mod appearance;
+pub mod drivers;
 pub mod keyboard;
 pub mod language;
 pub mod launcher;
@@ -95,6 +96,17 @@ pub fn pages(mode: AppMode) -> IndexMap<TypeId, Box<dyn Page>> {
     );
     // }
 
+    // Drivers is the final step: ClawOS ships open drivers for everything, so
+    // this page only does real work on a bare-metal NVIDIA machine (offers the
+    // proprietary driver). NewInstall only — a Gnome transition keeps the
+    // existing driver setup.
+    if matches!(mode, AppMode::NewInstall { .. }) {
+        pages.insert(
+            TypeId::of::<drivers::Page>(),
+            Box::new(drivers::Page::new()),
+        );
+    }
+
     pages
 }
 
@@ -103,6 +115,7 @@ pub enum Message {
     A11y(a11y::Message),
     Ai(ai::Message),
     Appearance(appearance::Message),
+    Drivers(drivers::Message),
     Keyboard(keyboard::Message),
     Language(language::Message),
     Layout(layout::Message),

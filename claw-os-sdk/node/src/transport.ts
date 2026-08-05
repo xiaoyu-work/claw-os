@@ -1,8 +1,9 @@
 // Subprocess transport shared by every Node SDK module.
 //
 // Like the Python and Rust SDKs, the Node SDK is a thin client over
-// wire protocol v1: it shells out to the `cos` binary, which reads a
-// request from argv and writes a JSON envelope to stdout. The
+// wire protocol v1: it shells out to the `cos` binary, which reads
+// non-sensitive routing flags from argv and writes a JSON envelope to stdout.
+// AI prompt bodies are passed through private temporary files. The
 // subprocess model is intentional — identity, audit, and session
 // context are inherited from process ancestry (kernel-spawned parent →
 // app process → cos child). A pure in-process binding could not prove

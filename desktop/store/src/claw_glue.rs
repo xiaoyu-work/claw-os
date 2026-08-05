@@ -86,6 +86,18 @@ pub fn read_bytes(path: &Path) -> Result<Vec<u8>, BridgeError> {
         if !truncated {
             break;
         }
+        // Guard against a buggy/empty page: if the server still claims
+        // `truncated` but returned no bytes, the offset never advances and
+        // this loop would spin forever. Bail out instead of hanging.
+        if bytes_returned == 0 {
+            return Err(BridgeError::Decode {
+                app: "fs".into(),
+                verb: "read_bytes".into(),
+                message: format!(
+                    "server reported truncated read but returned 0 bytes at offset {offset}"
+                ),
+            });
+        }
     }
     Ok(out)
 }

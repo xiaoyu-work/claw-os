@@ -65,7 +65,7 @@ qemu-system-x86_64 -m 2G -bios /usr/share/ovmf/OVMF.fd \
 
 ```bash
 # Host requirements (Debian/Ubuntu):
-sudo apt install qemu-utils parted dosfstools rsync
+sudo apt install qemu-utils parted dosfstools mtools rsync
 
 # Produces build/claw-os-vm.qcow2 (hybrid BIOS+UEFI bootable)
 sudo ./build.sh vm
@@ -74,7 +74,9 @@ sudo ./build.sh vm
 sudo FORMATS="qcow2 vmdk vhdx" ./build.sh vm
 
 # VMware Fusion / Workstation build with VMware Tools guest integration
-# for guest resize / clipboard:
+# for guest resize / clipboard (preset wrapper sets the desktop features):
+sudo ./presets/desktop.sh
+# ...or spell out the equivalent FEATURES manually:
 sudo FEATURES=base,cos-core,systemd,kernel,desktop,vmware,copilot-cli,grub-disk,vm,apt-source \
      FORMATS=vmdk ./build.sh vm
 
@@ -120,7 +122,9 @@ artifacts. On pushes to `main`, the matching apt repository is published
 to GitHub Pages and consumable as:
 
 ```bash
-echo "deb [trusted=yes] https://xiaoyu-work.github.io/claw-os trixie main" \
+curl -fsSL https://xiaoyu-work.github.io/claw-os/claw-os-archive-keyring.gpg \
+  | sudo tee /usr/share/keyrings/claw-os-archive-keyring.gpg >/dev/null
+echo "deb [signed-by=/usr/share/keyrings/claw-os-archive-keyring.gpg] https://xiaoyu-work.github.io/claw-os trixie main" \
   | sudo tee /etc/apt/sources.list.d/claw-os.list
 sudo apt update
 sudo apt install claw-os-base

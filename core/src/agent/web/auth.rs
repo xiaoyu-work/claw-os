@@ -28,47 +28,35 @@ pub fn load_or_generate_token() -> Result<String, String> {
         }
     }
     let mut bytes = [0u8; 32];
-    fill_random(&mut bytes);
+    crate::credential::os_random_bytes(&mut bytes)
+        .map_err(|e| format!("generate web access token: {e}"))?;
     let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
     persist_token(&hex)
 }
 
 pub fn persist_token(hex: &str) -> Result<String, String> {
     let dir = token_dir();
-    fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+    crate::storage::ensure_private_dir(&dir)
+        .map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
     let path = token_path();
-    let mut f = fs::File::create(&path).map_err(|e| format!("create {}: {e}", path.display()))?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut f = options
+        .open(&path)
+        .map_err(|e| format!("create {}: {e}", path.display()))?;
     f.write_all(hex.as_bytes())
         .map_err(|e| format!("write {}: {e}", path.display()))?;
     drop(f);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+        let _ = crate::storage::set_private_file(&path);
     }
     Ok(hex.to_string())
-}
-
-fn fill_random(buf: &mut [u8]) {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut h = DefaultHasher::new();
-    std::process::id().hash(&mut h);
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos()
-        .hash(&mut h);
-    (buf.as_ptr() as usize).hash(&mut h);
-    let mut seed = h.finish();
-    for byte in buf.iter_mut() {
-        seed = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = seed;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^= z >> 31;
-        *byte = (z & 0xff) as u8;
-    }
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {

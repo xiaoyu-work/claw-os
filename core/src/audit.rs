@@ -68,7 +68,7 @@ fn redact_url_creds(arg: &str) -> Option<String> {
     // Stop scanning at the first path/query/fragment delimiter to
     // avoid pulling in '@' from inside a path.
     let stop = userinfo
-        .find(|c: char| c == '/' || c == '?' || c == '#' || c == ' ')
+        .find(['/', '?', '#', ' '])
         .unwrap_or(usize::MAX);
     if stop != usize::MAX {
         return None;
@@ -193,9 +193,9 @@ pub fn log_event(audit_path: &Path, mut entry: serde_json::Value) {
 ///   "verb":            "ai.chat.untrusted",
 ///   "scope": {                                  // structured scope
 ///     "kind":  "name",
-///     "value": "claude-*"
+///     "value": "<configured-model>"
 ///   },
-///   "target_resource": "claude-*",              // flattened scope
+///   "target_resource": "<configured-model>",    // flattened scope
 ///   "decision":        "allow",                 // allow | deny
 ///   "reason":          null,                    // DenialReason kind
 ///   "hint":            null,                    // optional hint

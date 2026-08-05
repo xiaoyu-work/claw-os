@@ -77,12 +77,12 @@ test("generic error envelope maps to AiDenied", () => {
   );
 });
 
-test("embed sets --embed and reads the vector", () => {
-  const fake = installFakeCos(
-    JSON.stringify({ verb: "ai.embed", embedding: [0.1, 0.2, 0.3] }),
+test("embed is an unsupported compatibility shim", () => {
+  assert.throws(
+    () => ai.embed(""),
+    (err: unknown) =>
+      err instanceof ai.AiUnsupported &&
+      err.modality === "embed" &&
+      err.message.includes("only chat/chat-untrusted are stable"),
   );
-  const res = withCos(fake, { COS_APP_ID: "notes" }, () => ai.embed("text"));
-  assert.deepEqual(res.embedding, [0.1, 0.2, 0.3]);
-  const argv = readFileSync(fake.argvOut, "utf8").split("\n");
-  assert.ok(argv.includes("--embed"));
 });

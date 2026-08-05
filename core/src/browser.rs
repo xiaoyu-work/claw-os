@@ -2,9 +2,10 @@
 ///
 /// `cos-browser` is the vendored Obscura headless browser (see
 /// crates/cos-browser). The CDP server is opt-in: agents can call
-/// `cos browser start` to expose ws://localhost:9222 for external
-/// Puppeteer/Playwright clients. Plain `cos app web read` does NOT need
-/// the service running — it subprocesses cos-browser per request.
+/// `cos browser start` to expose an authenticated ws://localhost:9222
+/// endpoint for external Puppeteer/Playwright clients. Plain
+/// `cos app web read` does NOT need the service running — it subprocesses
+/// cos-browser per request.
 ///
 /// Provides:
 /// - start / stop / restart the CDP server
@@ -12,6 +13,8 @@
 /// - status with last log lines
 use serde_json::{json, Value};
 use std::fs;
+use std::io::{Read, Write};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -36,7 +39,20 @@ fn cdp_url() -> String {
 }
 
 fn ws_url() -> String {
-    format!("ws://localhost:{}/devtools/browser", cdp_port())
+    append_auth_token(format!(
+        "ws://localhost:{}/devtools/browser",
+        cdp_port()
+    ))
+}
+
+fn discovery_url() -> String {
+    append_auth_token(format!("{}/json/version", cdp_url()))
+}
+
+fn append_auth_token(url: String) -> String {
+    read_auth_token()
+        .map(|token| format!("{url}?token={token}"))
+        .unwrap_or(url)
 }
 
 fn data_dir() -> PathBuf {
@@ -45,6 +61,10 @@ fn data_dir() -> PathBuf {
 
 fn pid_path() -> PathBuf {
     data_dir().join("cos-browser.pid")
+}
+
+fn auth_token_path() -> PathBuf {
+    data_dir().join("cos-browser.auth-token")
 }
 
 fn log_path() -> PathBuf {
@@ -65,6 +85,63 @@ fn write_pid(pid: u32) {
 
 fn clear_pid() {
     let _ = fs::remove_file(pid_path());
+    let _ = fs::remove_file(auth_token_path());
+}
+
+fn read_auth_token() -> Option<String> {
+    fs::read_to_string(auth_token_path())
+        .ok()
+        .map(|token| token.trim().to_string())
+        .filter(|token| !token.is_empty())
+}
+
+fn create_auth_token() -> Result<String, String> {
+    let mut random = [0u8; 32];
+    fs::File::open("/dev/urandom")
+        .and_then(|mut file| file.read_exact(&mut random))
+        .map_err(|err| format!("failed to generate CDP auth token: {err}"))?;
+    Ok(random.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+fn write_auth_token(token: &str) -> Result<(), String> {
+    let path = auth_token_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|err| format!("failed to create browser data directory: {err}"))?;
+    }
+    let temp_path = path.with_extension(format!(
+        "auth-token.{}.tmp",
+        &token[..token.len().min(16)]
+    ));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let mut file = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(&temp_path)
+            .map_err(|err| format!("failed to create CDP auth token file: {err}"))?;
+        if let Err(err) = file
+            .write_all(token.as_bytes())
+            .and_then(|_| file.sync_all())
+            .and_then(|_| fs::rename(&temp_path, &path))
+        {
+            let _ = fs::remove_file(&temp_path);
+            return Err(format!("failed to persist CDP auth token file: {err}"));
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        fs::write(&temp_path, token)
+            .and_then(|_| fs::rename(&temp_path, &path))
+            .map_err(|err| {
+                let _ = fs::remove_file(&temp_path);
+                format!("failed to write CDP auth token file: {err}")
+            })?;
+    }
+    Ok(())
 }
 
 fn is_process_alive(pid: u32) -> bool {
@@ -88,7 +165,7 @@ fn is_process_alive(pid: u32) -> bool {
         // launcher "reclaim" the PID file and SIGTERM whatever pid
         // the kernel recycled to next.
         let err = std::io::Error::last_os_error();
-        return err.raw_os_error() == Some(libc::EPERM);
+        err.raw_os_error() == Some(libc::EPERM)
     }
     #[cfg(not(unix))]
     {
@@ -101,21 +178,29 @@ fn is_process_alive(pid: u32) -> bool {
 /// endpoint. cos-browser (and any CDP-compatible browser) returns a 200 with
 /// JSON describing the protocol version.
 fn is_browser_healthy() -> bool {
-    let url = format!("{}/json/version", cdp_url());
-    Command::new("curl")
-        .args([
-            "-s",
-            "-o",
-            "/dev/null",
-            "-w",
-            "%{http_code}",
-            "--connect-timeout",
-            &HEALTH_TIMEOUT_SECS.to_string(),
-            &url,
-        ])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "200")
-        .unwrap_or(false)
+    let Some(token) = read_auth_token() else {
+        return false;
+    };
+    let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), cdp_port());
+    let timeout = std::time::Duration::from_secs(HEALTH_TIMEOUT_SECS);
+    let Ok(mut stream) = TcpStream::connect_timeout(&address, timeout) else {
+        return false;
+    };
+    if stream.set_read_timeout(Some(timeout)).is_err()
+        || stream.set_write_timeout(Some(timeout)).is_err()
+    {
+        return false;
+    }
+    let path = format!("/json/version?token={token}");
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+        cdp_port()
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut status = [0u8; 12];
+    stream.read_exact(&mut status).is_ok() && status == *b"HTTP/1.1 200"
 }
 
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
@@ -155,10 +240,16 @@ fn cmd_start(args: &[String]) -> Result<Value, String> {
 
     if let Some(pid) = read_pid() {
         if is_process_alive(pid) {
+            if read_auth_token().is_none() {
+                return Err(
+                    "running cos-browser instance has no authentication token; stop it before restarting"
+                        .to_string(),
+                );
+            }
             return Ok(json!({
                 "status": "already_running",
                 "pid": pid,
-                "url": cdp_url(),
+                "url": discovery_url(),
                 "ws": ws_url(),
             }));
         }
@@ -172,6 +263,7 @@ fn cmd_start(args: &[String]) -> Result<Value, String> {
     }
 
     let (stealth, proxy) = parse_start_flags(args);
+    let auth_token = create_auth_token()?;
 
     let log = log_path();
     if let Some(parent) = log.parent() {
@@ -186,19 +278,44 @@ fn cmd_start(args: &[String]) -> Result<Value, String> {
 
     let mut cmd = Command::new(&bin);
     cmd.arg("serve").arg("--port").arg(cdp_port().to_string());
+    cmd.env_clear()
+        .env(
+            "PATH",
+            std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".to_string()),
+        )
+        .env(
+            "HOME",
+            crate::paths::current_home_override()
+                .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
+                .unwrap_or_else(|| PathBuf::from("/")),
+        )
+        .env("COS_BROWSER_AUTH_TOKEN", &auth_token);
+    for key in ["LANG", "LC_ALL", "TZ"] {
+        if let Ok(value) = std::env::var(key) {
+            cmd.env(key, value);
+        }
+    }
     if stealth {
         cmd.arg("--stealth");
     }
     if let Some(ref p) = proxy {
         cmd.arg("--proxy").arg(p);
     }
+    crate::bridge::apply_routed_identity(&mut cmd)?;
+    write_auth_token(&auth_token)?;
 
-    let child = cmd
+    let child = match cmd
         .stdin(Stdio::null())
         .stdout(log_file)
         .stderr(log_err)
         .spawn()
-        .map_err(|e| format!("failed to start cos-browser: {e}"))?;
+    {
+        Ok(child) => child,
+        Err(err) => {
+            let _ = fs::remove_file(auth_token_path());
+            return Err(format!("failed to start cos-browser: {err}"));
+        }
+    };
 
     let pid = child.id();
     write_pid(pid);
@@ -223,7 +340,7 @@ fn cmd_start(args: &[String]) -> Result<Value, String> {
     Ok(json!({
         "status": if ready { "running" } else { "starting" },
         "pid": pid,
-        "url": cdp_url(),
+        "url": discovery_url(),
         "ws": ws_url(),
         "stealth": stealth,
         "proxy": proxy,
@@ -277,7 +394,7 @@ fn cmd_status(_args: &[String]) -> Result<Value, String> {
         "installed": installed,
         "running": alive,
         "healthy": healthy,
-        "url": cdp_url(),
+        "url": discovery_url(),
         "ws": ws_url(),
     });
 
@@ -308,7 +425,7 @@ fn cmd_health(args: &[String]) -> Result<Value, String> {
     if is_browser_healthy() {
         return Ok(json!({
             "healthy": true,
-            "url": cdp_url(),
+            "url": discovery_url(),
             "ws": ws_url(),
         }));
     }
@@ -325,7 +442,7 @@ fn cmd_health(args: &[String]) -> Result<Value, String> {
 
     Ok(json!({
         "healthy": false,
-        "url": cdp_url(),
+        "url": discovery_url(),
         "hint": "Run: cos browser restart",
     }))
 }

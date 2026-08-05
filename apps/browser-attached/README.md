@@ -26,11 +26,11 @@ user's tabs
 | `tabs.list`        | `browser.tabs.read:wild`     | id, title, url, active flag for every tab            |
 | `tabs.activate`    | `browser.tabs.read:wild`     | bring a tab to foreground                            |
 | `nav.go`           | `browser.nav:host=<url-host>`| load a URL in a tab                                  |
-| `dom.query`        | `browser.dom.read:host=…`    | find elements by CSS selector, return refs           |
+| `dom.query`        | `browser.dom.read:host=…`    | find elements by CSS selector; typed values are redacted |
 | `dom.click`        | `browser.dom.write:host=…`   | click element by ref                                 |
 | `dom.fill`         | `browser.dom.write:host=…`   | refuses if the field looks like a secret             |
 | `dom.fill_secret`  | `browser.input.secret:host=…`| fills secret fields — always asks for approval       |
-| `page.snapshot`    | `browser.dom.read:host=…`    | accessibility-tree summary for the planner           |
+| `page.snapshot`    | `browser.dom.read:host=…`    | redacted accessibility/text summary for the planner  |
 | `page.screenshot`  | `browser.dom.read` + `fs.write`| save visible-tab PNG to `--output`                 |
 | `eval`             | `browser.eval:host=…`        | admin-only, always asks for approval                 |
 

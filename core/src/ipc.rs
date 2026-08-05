@@ -15,6 +15,32 @@ fn ipc_dir() -> PathBuf {
     crate::paths::data_dir().join("ipc")
 }
 
+fn validate_identifier(kind: &str, value: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.len() > 128
+        || value.starts_with('.')
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return Err(format!(
+            "invalid {kind} `{value}`; expected 1-128 ASCII alphanumerics, '-', '_' or '.'"
+        ));
+    }
+    Ok(())
+}
+
+fn reject_symlink(path: &std::path::Path) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err(format!("refusing symlink IPC path {}", path.display()))
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("inspect IPC path {}: {error}", path.display())),
+    }
+}
+
 fn session_queue_dir(session_id: &str) -> PathBuf {
     ipc_dir().join(session_id)
 }
@@ -44,6 +70,7 @@ fn acquire_dir_lock(lock_path: &std::path::Path) -> Result<fs::File, String> {
     let file = fs::OpenOptions::new()
         .create(true)
         .write(true)
+        .truncate(false)
         .open(lock_path)
         .map_err(|e| format!("failed to open lock file: {e}"))?;
     unsafe {
@@ -103,7 +130,6 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_send(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::IPC_PUBLISH, Scope::wild()).map_err(|v| v.to_string())?;
     let mut from: Option<String> = None;
     let mut positional: Vec<String> = Vec::new();
 
@@ -127,10 +153,13 @@ fn cmd_send(args: &[String]) -> Result<Value, String> {
 
     let target = &positional[0];
     let body = &positional[1];
+    validate_identifier("target session id", target)?;
+    require_or_json(Verb::IPC_PUBLISH, Scope::name(target)).map_err(|v| v.to_string())?;
     let sender = from.unwrap_or_default();
     let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
     let dir = session_queue_dir(target);
+    reject_symlink(&dir)?;
     fs::create_dir_all(&dir).map_err(|e| format!("failed to create queue dir: {e}"))?;
 
     // Lock the queue directory to serialize message ID allocation
@@ -157,10 +186,11 @@ fn cmd_send(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_recv(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::IPC_SUBSCRIBE, Scope::wild()).map_err(|v| v.to_string())?;
     let session_id = args
         .first()
         .ok_or("usage: cos ipc recv <session-id> [--timeout N] [--peek]")?;
+    validate_identifier("session id", session_id)?;
+    require_or_json(Verb::IPC_SUBSCRIBE, Scope::name(session_id)).map_err(|v| v.to_string())?;
     let mut timeout_secs: u64 = 0;
     let mut peek = false;
 
@@ -182,6 +212,7 @@ fn cmd_recv(args: &[String]) -> Result<Value, String> {
     }
 
     let dir = session_queue_dir(session_id);
+    reject_symlink(&dir)?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
 
     loop {
@@ -192,10 +223,7 @@ fn cmd_recv(args: &[String]) -> Result<Value, String> {
         // already uses the same dir lock to serialize ID allocation.
         let lock_acquired = if dir.exists() {
             let lock_path = dir.join(".lock");
-            match acquire_dir_lock(&lock_path) {
-                Ok(g) => Some(g),
-                Err(_) => None,
-            }
+            acquire_dir_lock(&lock_path).ok()
         } else {
             None
         };
@@ -233,9 +261,11 @@ fn cmd_recv(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_list(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::IPC_SUBSCRIBE, Scope::wild()).map_err(|v| v.to_string())?;
     let session_id = args.first().ok_or("usage: cos ipc list <session-id>")?;
+    validate_identifier("session id", session_id)?;
+    require_or_json(Verb::IPC_SUBSCRIBE, Scope::name(session_id)).map_err(|v| v.to_string())?;
     let dir = session_queue_dir(session_id);
+    reject_symlink(&dir)?;
     let messages = sorted_messages(&dir);
 
     let previews: Vec<Value> = messages
@@ -261,9 +291,11 @@ fn cmd_list(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_clear(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::IPC_PUBLISH, Scope::wild()).map_err(|v| v.to_string())?;
     let session_id = args.first().ok_or("usage: cos ipc clear <session-id>")?;
+    validate_identifier("session id", session_id)?;
+    require_or_json(Verb::IPC_PUBLISH, Scope::name(session_id)).map_err(|v| v.to_string())?;
     let dir = session_queue_dir(session_id);
+    reject_symlink(&dir)?;
     let messages = sorted_messages(&dir);
     let cleared = messages.len();
 
@@ -313,7 +345,7 @@ fn is_pid_alive(pid: u32) -> bool {
         // EPERM => process exists but is not signalable by us. Treat
         // as alive so we never reclaim another user's lock.
         let err = std::io::Error::last_os_error();
-        return err.raw_os_error() == Some(libc::EPERM);
+        err.raw_os_error() == Some(libc::EPERM)
     }
     #[cfg(not(unix))]
     {
@@ -326,7 +358,6 @@ fn is_pid_alive(pid: u32) -> bool {
 }
 
 fn cmd_lock(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::IPC_INVOKE, Scope::wild()).map_err(|v| v.to_string())?;
     let mut holder: Option<String> = None;
     let mut timeout_secs: u64 = 0;
     let mut positional: Vec<String> = Vec::new();
@@ -354,12 +385,15 @@ fn cmd_lock(args: &[String]) -> Result<Value, String> {
     let resource = positional
         .first()
         .ok_or("usage: cos ipc lock <resource-name> [--holder <session-id>] [--timeout N]")?;
+    validate_identifier("lock resource", resource)?;
+    require_or_json(Verb::IPC_INVOKE, Scope::name(resource)).map_err(|v| v.to_string())?;
     let holder = holder.unwrap_or_else(|| format!("pid-{}", std::process::id()));
 
     let dir = locks_dir();
     fs::create_dir_all(&dir).map_err(|e| format!("failed to create locks dir: {e}"))?;
 
     let lock_path = dir.join(format!("{resource}.lock"));
+    reject_symlink(&lock_path)?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
 
     // Use O_EXCL on the lockfile itself so acquisition is a single
@@ -453,7 +487,6 @@ fn cmd_lock(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_unlock(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::IPC_INVOKE, Scope::wild()).map_err(|v| v.to_string())?;
     let mut holder: Option<String> = None;
     let mut positional: Vec<String> = Vec::new();
 
@@ -474,6 +507,8 @@ fn cmd_unlock(args: &[String]) -> Result<Value, String> {
     let resource = positional
         .first()
         .ok_or("usage: cos ipc unlock <resource-name> [--holder <session-id>]")?;
+    validate_identifier("lock resource", resource)?;
+    require_or_json(Verb::IPC_INVOKE, Scope::name(resource)).map_err(|v| v.to_string())?;
 
     // Default to caller-pid holder so omitting --holder never lets
     // an unrelated caller drop someone else's lock. Before this
@@ -483,6 +518,7 @@ fn cmd_unlock(args: &[String]) -> Result<Value, String> {
         holder.unwrap_or_else(|| format!("pid-{}", std::process::id()));
 
     let lock_path = locks_dir().join(format!("{resource}.lock"));
+    reject_symlink(&lock_path)?;
 
     if !lock_path.exists() {
         return Ok(json!({
@@ -558,7 +594,6 @@ fn barriers_dir() -> PathBuf {
 }
 
 fn cmd_barrier(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::IPC_INVOKE, Scope::wild()).map_err(|v| v.to_string())?;
     let mut expect: Option<u64> = None;
     let mut session: Option<String> = None;
     let mut timeout_secs: u64 = 0;
@@ -597,8 +632,12 @@ fn cmd_barrier(args: &[String]) -> Result<Value, String> {
         .ok_or("usage: cos ipc barrier <name> --expect <N> --session <session-id> [--timeout T]")?;
     let expect = expect.ok_or("--expect <N> is required for barrier")?;
     let session = session.ok_or("--session <session-id> is required for barrier")?;
+    validate_identifier("barrier name", name)?;
+    validate_identifier("barrier session id", &session)?;
+    require_or_json(Verb::IPC_INVOKE, Scope::name(name)).map_err(|v| v.to_string())?;
 
     let dir = barriers_dir().join(name);
+    reject_symlink(&dir)?;
     fs::create_dir_all(&dir).map_err(|e| format!("failed to create barrier dir: {e}"))?;
 
     // 1. Write this session's ready file.
@@ -726,7 +765,6 @@ fn cmd_pipe(args: &[String]) -> Result<Value, String> {
 }
 
 fn pipe_create(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::IPC_PUBLISH, Scope::wild()).map_err(|v| v.to_string())?;
 
     let mut buffer_size: u64 = 1000;
     let mut positional: Vec<String> = Vec::new();
@@ -750,8 +788,11 @@ fn pipe_create(args: &[String]) -> Result<Value, String> {
     let name = positional
         .first()
         .ok_or("usage: cos ipc pipe create <name> [--buffer-size N]")?;
+    validate_identifier("pipe name", name)?;
+    require_or_json(Verb::IPC_PUBLISH, Scope::name(name)).map_err(|v| v.to_string())?;
 
     let channel_dir = pipe_channel_dir(name);
+    reject_symlink(&channel_dir)?;
     let messages_dir = pipe_messages_dir(name);
     fs::create_dir_all(&messages_dir)
         .map_err(|e| format!("failed to create pipe directory: {e}"))?;
@@ -773,7 +814,6 @@ fn pipe_create(args: &[String]) -> Result<Value, String> {
 }
 
 fn pipe_publish(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::IPC_PUBLISH, Scope::wild()).map_err(|v| v.to_string())?;
 
     let mut from: Option<String> = None;
     let mut positional: Vec<String> = Vec::new();
@@ -798,9 +838,12 @@ fn pipe_publish(args: &[String]) -> Result<Value, String> {
 
     let name = &positional[0];
     let raw_data = &positional[1];
+    validate_identifier("pipe name", name)?;
+    require_or_json(Verb::IPC_PUBLISH, Scope::name(name)).map_err(|v| v.to_string())?;
     let sender = from.unwrap_or_default();
 
     let channel_dir = pipe_channel_dir(name);
+    reject_symlink(&channel_dir)?;
     let meta_path = channel_dir.join("meta.json");
     if !meta_path.exists() {
         return Err(format!("pipe channel not found: {name}"));
@@ -856,7 +899,6 @@ fn pipe_publish(args: &[String]) -> Result<Value, String> {
 }
 
 fn pipe_subscribe(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::IPC_SUBSCRIBE, Scope::wild()).map_err(|v| v.to_string())?;
 
     let mut since: Option<String> = None;
     let mut limit: u64 = 100;
@@ -897,8 +939,11 @@ fn pipe_subscribe(args: &[String]) -> Result<Value, String> {
     let name = positional.first().ok_or(
         "usage: cos ipc pipe subscribe <name> [--since <id>] [--limit N] [--follow --timeout T]",
     )?;
+    validate_identifier("pipe name", name)?;
+    require_or_json(Verb::IPC_SUBSCRIBE, Scope::name(name)).map_err(|v| v.to_string())?;
 
     let channel_dir = pipe_channel_dir(name);
+    reject_symlink(&channel_dir)?;
     if !channel_dir.join("meta.json").exists() {
         return Err(format!("pipe channel not found: {name}"));
     }
@@ -1051,11 +1096,12 @@ fn pipe_list(_args: &[String]) -> Result<Value, String> {
 }
 
 fn pipe_destroy(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::IPC_PUBLISH, Scope::wild()).map_err(|v| v.to_string())?;
-
     let name = args.first().ok_or("usage: cos ipc pipe destroy <name>")?;
+    validate_identifier("pipe name", name)?;
+    require_or_json(Verb::IPC_PUBLISH, Scope::name(name)).map_err(|v| v.to_string())?;
 
     let channel_dir = pipe_channel_dir(name);
+    reject_symlink(&channel_dir)?;
     if !channel_dir.exists() {
         return Err(format!("pipe channel not found: {name}"));
     }

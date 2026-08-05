@@ -3,7 +3,10 @@ use serde_json::{json, Value};
 use crate::approvals::{self, GrantDuration};
 use crate::caps::{Scope, Verb};
 
-pub fn request(params: Value) -> Result<Value, String> {
+use super::client_identity::ClientIdentity;
+
+pub fn request(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+    let uid = client.require_uid()?;
     let verb_raw = required_string(&params, "verb")?;
     let verb =
         Verb::parse(&verb_raw).ok_or_else(|| format!("unknown capability verb: {verb_raw}"))?;
@@ -20,19 +23,15 @@ pub fn request(params: Value) -> Result<Value, String> {
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| "clawd".to_string());
     let reason = required_string(&params, "reason")?;
-    let requester = params
-        .get("requester")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
+    let requester = Some(format!("uid:{uid}"));
 
-    let id = approvals::submit(
+    let id = approvals::submit_owned(
         verb,
         scope.clone(),
         session.clone(),
         reason.clone(),
         requester,
+        Some(uid),
     )
     .map_err(|err| err.to_string())?;
     Ok(json!({
@@ -42,33 +41,37 @@ pub fn request(params: Value) -> Result<Value, String> {
         "scope": scope,
         "session": session,
         "reason": reason,
+        "owner_uid": uid,
     }))
 }
 
-pub fn pending(params: Value) -> Result<Value, String> {
+pub fn pending(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     let limit = optional_limit(&params)?;
-    let mut requests = approvals::list_pending();
+    let mut requests = approvals::list_pending_for_owner(owner_filter(client)?);
     requests.truncate(limit);
     Ok(json!({ "requests": requests }))
 }
 
-pub fn recent(params: Value) -> Result<Value, String> {
+pub fn recent(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     let limit = optional_limit(&params)?;
-    let requests = approvals::list_recent(limit);
+    let requests = approvals::list_recent_for_owner(limit, owner_filter(client)?);
     Ok(json!({ "requests": requests }))
 }
 
-pub fn decide(params: Value) -> Result<Value, String> {
+pub fn decide(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+    if client.require_uid()? != 0 {
+        return Err("permission decisions require the privileged approval helper".to_string());
+    }
     let id = required_string(&params, "id")?;
     let decision = required_string(&params, "decision")?;
-    let decided_by = params
-        .get("decided_by")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .or_else(|| std::env::var("USER").ok())
-        .unwrap_or_else(|| "clawd".to_string());
+    let owner_uid = params
+        .get("owner_uid")
+        .and_then(Value::as_u64)
+        .map(|uid| u32::try_from(uid).map_err(|_| format!("owner_uid is too large: {uid}")))
+        .transpose()?;
+    let decided_by = owner_uid
+        .map(|uid| format!("uid:{uid}"))
+        .unwrap_or_else(|| "uid:0".to_string());
     let note = params
         .get("note")
         .and_then(Value::as_str)
@@ -76,11 +79,13 @@ pub fn decide(params: Value) -> Result<Value, String> {
 
     match decision.trim().to_ascii_lowercase().as_str() {
         "approve" | "allow" => {
-            if approvals::lookup_pending(&id).is_none() {
-                return Err(format!("permission request not pending: {id}"));
-            }
-            let resolved =
-                approvals::approve(&id, duration_from_params(&params)?, Some(decided_by), note)?;
+            let resolved = approvals::approve_for_owner(
+                &id,
+                duration_from_params(&params)?,
+                Some(decided_by),
+                note,
+                owner_uid,
+            )?;
             Ok(json!({
                 "id": resolved.request.id,
                 "decision": "approved",
@@ -88,7 +93,7 @@ pub fn decide(params: Value) -> Result<Value, String> {
             }))
         }
         "deny" | "reject" => {
-            let resolved = approvals::deny(&id, Some(decided_by), note)?;
+            let resolved = approvals::deny_for_owner(&id, Some(decided_by), note, owner_uid)?;
             Ok(json!({
                 "id": resolved.request.id,
                 "decision": "denied",
@@ -96,6 +101,11 @@ pub fn decide(params: Value) -> Result<Value, String> {
         }
         other => Err(format!("unknown permission decision: {other}")),
     }
+}
+
+fn owner_filter(client: &ClientIdentity) -> Result<Option<u32>, String> {
+    let uid = client.require_uid()?;
+    Ok((uid != 0).then_some(uid))
 }
 
 fn duration_from_params(params: &Value) -> Result<GrantDuration, String> {

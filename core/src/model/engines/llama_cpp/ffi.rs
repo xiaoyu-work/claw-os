@@ -52,10 +52,12 @@ pub struct llama_vocab {
 
 /// Token type — `typedef int32_t llama_token;` in `llama.h`. Stable for
 /// many years.
+#[allow(non_camel_case_types)]
 pub type llama_token = i32;
 
 /// Log callback signature: `void (*)(enum ggml_log_level, const char *, void *)`.
 /// We treat the level as `i32` and the user-data as opaque.
+#[allow(non_camel_case_types)]
 pub type llama_log_callback =
     Option<unsafe extern "C" fn(level: i32, text: *const c_char, user_data: *mut c_void)>;
 
@@ -84,7 +86,9 @@ impl LlamaSyms {
     /// a hard failure rather than degrading silently, since a missing
     /// symbol almost always means a wildly mismatched llama.cpp build.
     ///
-    /// SAFETY: `lib` must point at a real `libllama` produced by an
+    /// # Safety
+    ///
+    /// `lib` must point at a real `libllama` produced by an
     /// upstream llama.cpp build. The C ABI signatures of the resolved
     /// symbols must match those declared above. Both invariants are
     /// honored by the official llama.cpp prebuilt releases that

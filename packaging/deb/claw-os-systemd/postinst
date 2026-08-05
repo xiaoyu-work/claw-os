@@ -50,9 +50,31 @@ case "$1" in
         # chroot — no systemd needs to be running).
         rm -f /etc/systemd/user/default.target.wants/clawd.service
 
+        # Remove only the known legacy image-overlay copies. Files under
+        # /etc override the new vendor units, so leaving these old
+        # graphical-session-bound definitions would defeat headless startup.
+        for legacy in claw-recoll-index.service claw-semantic.service; do
+            path="/etc/systemd/user/$legacy"
+            if [ -f "$path" ] \
+                    && grep -q '^Description=ClawOS:' "$path" \
+                    && grep -q '^PartOf=graphical-session.target$' "$path"; then
+                rm -f "$path"
+            fi
+        done
+
         mkdir -p /etc/systemd/user/graphical-session.target.wants
         ln -sf /usr/lib/systemd/user/cos-agent-bridge.service \
             /etc/systemd/user/graphical-session.target.wants/cos-agent-bridge.service
+
+        # Indexing belongs to the user session, not specifically to a
+        # graphical login. Global default.target links make it available
+        # under SSH/headless user managers as well; unit Conditions skip
+        # cleanly when an optional indexer binary is not installed.
+        mkdir -p /etc/systemd/user/default.target.wants
+        ln -sf /usr/lib/systemd/user/claw-recoll-index.service \
+            /etc/systemd/user/default.target.wants/claw-recoll-index.service
+        ln -sf /usr/lib/systemd/user/claw-semantic.service \
+            /etc/systemd/user/default.target.wants/claw-semantic.service
 
         if [ -d /run/systemd/system ]; then
             systemctl --system daemon-reload >/dev/null || true

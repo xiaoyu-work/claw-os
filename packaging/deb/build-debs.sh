@@ -28,8 +28,8 @@ source "$PROJECT_DIR/scripts/lib/arch.sh"
 OUT_DIR="$PROJECT_DIR/build/debs"
 STAGE_DIR="$PROJECT_DIR/build/deb-staging"
 
-# Version: read from core/Cargo.toml — same source of truth as rootfs build.
-VERSION="$(grep '^version' "$PROJECT_DIR/core/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')"
+source "$PROJECT_DIR/scripts/lib/package-version.sh"
+VERSION="$(package_version "$PROJECT_DIR")"
 
 DPKG_DEB="$(command -v dpkg-deb || true)"
 if [ -z "$DPKG_DEB" ]; then
@@ -56,12 +56,36 @@ rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR" "$OUT_DIR"
 
 ###############################################################################
-# Helper: locate a built binary across known target dirs.
+# Helper: verify and locate a built binary across known target dirs.
 #
 # Order: prefer the $ARCH-specific Rust target (musl, then gnu, then plain
 # release/), then unsuffixed release/ as a final fallback (when cargo was
-# invoked without --target on a native build).
+# invoked without --target on a native build). Every candidate is checked
+# against the target Debian architecture before it can enter a package.
 ###############################################################################
+binary_matches_arch() {
+    local path="$1" expected_machine machine magic
+    magic="$(od -An -tx1 -N4 "$path" 2>/dev/null | tr -d ' \n')"
+    if [ "$magic" != "7f454c46" ]; then
+        echo "  :: ignoring non-ELF binary candidate: $path" >&2
+        return 1
+    fi
+    machine="$(od -An -tx1 -j18 -N2 "$path" 2>/dev/null | tr -d ' \n')"
+    case "$DEB_ARCH" in
+        amd64) expected_machine=3e00 ;;
+        arm64) expected_machine=b700 ;;
+        *)
+            echo "error: no ELF machine mapping for Debian arch $DEB_ARCH" >&2
+            return 1
+            ;;
+    esac
+    if [ "$machine" != "$expected_machine" ]; then
+        echo "  :: ignoring wrong-architecture binary ($machine != $expected_machine): $path" >&2
+        return 1
+    fi
+    return 0
+}
+
 find_bin() {
     local name="$1"
     local gnu_target="${RUST_TARGET/-musl/-gnu}"
@@ -74,12 +98,108 @@ find_bin() {
         "$PROJECT_DIR/core/target/release/$name" \
         "$PROJECT_DIR/desktop/agent/target/$RUST_TARGET/release/$name" \
         "$PROJECT_DIR/desktop/agent/target/release/$name"; do
-        if [ -f "$candidate" ]; then
+        if [ -f "$candidate" ] && binary_matches_arch "$candidate"; then
             echo "$candidate"
             return 0
         fi
     done
     return 1
+}
+
+###############################################################################
+# Helper: make sure `cargo` is on PATH.
+#
+# This script normally runs as part of `sudo ./build.sh`, so $HOME is /root
+# and a rustup toolchain installed under the invoking user's home is not on
+# PATH. Probe the usual locations (including the sudo-invoking user's home)
+# before giving up.
+###############################################################################
+ensure_cargo() {
+    # Resolve the sudo-invoking user's home up front. Under `sudo ./build.sh`,
+    # $HOME is /root but the Rust toolchain is usually installed in the
+    # invoking user's home (~/.rustup, ~/.cargo). cargo there is a rustup proxy
+    # that, when run as root, would look at /root/.rustup (empty) and fail with
+    # "rustup could not choose a version of cargo to run". Point RUSTUP_HOME at
+    # the user's toolchain so the existing install is reused (no second,
+    # root-owned toolchain). Leave CARGO_HOME at root's default so build caches
+    # are not written into the user's home as root.
+    local sudo_home=""
+    if [ -n "${SUDO_USER:-}" ]; then
+        sudo_home="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)"
+    fi
+    if [ -n "$sudo_home" ] && [ -z "${RUSTUP_HOME:-}" ] && [ -d "$sudo_home/.rustup" ]; then
+        export RUSTUP_HOME="$sudo_home/.rustup"
+    fi
+
+    # 1. Make sure a `cargo` is on PATH.
+    if ! command -v cargo >/dev/null 2>&1; then
+        local dir
+        for dir in \
+            "$HOME/.cargo/bin" \
+            "/root/.cargo/bin" \
+            "${sudo_home:+$sudo_home/.cargo/bin}"; do
+            [ -n "$dir" ] && [ -x "$dir/cargo" ] && { export PATH="$dir:$PATH"; break; }
+        done
+    fi
+    if ! command -v cargo >/dev/null 2>&1; then
+        echo "error: cargo not found — the Rust toolchain is required to build the" >&2
+        echo "       cos / clawd / cos-browser binaries. Install it with:" >&2
+        echo "         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y" >&2
+        echo "         . \"\$HOME/.cargo/env\"" >&2
+        echo "       (when building under sudo, the toolchain is still found via" >&2
+        echo "       \$SUDO_USER's home, so a normal user-level rustup install is fine)." >&2
+        exit 1
+    fi
+    # 2. Make sure cargo can actually run. When `cargo` is a rustup proxy with
+    #    no default toolchain (e.g. installed via `apt install rustup`), it
+    #    errors out: "rustup could not choose a version of cargo to run".
+    #    Self-heal by installing and selecting the stable toolchain. rustup may
+    #    live next to cargo (same dir) even when not on PATH, so look there too.
+    if ! cargo --version >/dev/null 2>&1; then
+        local rustup_bin
+        rustup_bin="$(command -v rustup 2>/dev/null || true)"
+        if [ -z "$rustup_bin" ]; then
+            local cargo_dir
+            cargo_dir="$(dirname "$(command -v cargo)")"
+            [ -x "$cargo_dir/rustup" ] && rustup_bin="$cargo_dir/rustup"
+        fi
+        if [ -n "$rustup_bin" ]; then
+            echo "  :: no default Rust toolchain configured — installing stable" >&2
+            "$rustup_bin" toolchain install stable >&2 || true
+            "$rustup_bin" default stable >&2 || true
+        fi
+    fi
+    if ! cargo --version >/dev/null 2>&1; then
+        echo "error: cargo is present but cannot run. If it is a rustup proxy with" >&2
+        echo "       no default toolchain, set one with:  rustup default stable" >&2
+        exit 1
+    fi
+    return 0
+}
+
+###############################################################################
+# Helper: locate a built binary, compiling its crate on demand if missing.
+#
+# build-debs.sh assembles already-built binaries; CI compiles them as
+# separate cached steps before calling the rootfs build. A local
+# `./build.sh` has no such step, so compile on demand here the first time a
+# required binary is absent. The build always names `$RUST_TARGET`, so a
+# cross-enabled packaging run cannot silently produce a host-architecture
+# binary. No-op in CI (binaries already present, so find_bin succeeds and
+# cargo never runs).
+#
+#   $1 = binary name to locate   $2 = cargo package to build if missing
+###############################################################################
+ensure_bin() {
+    local bin="$1" pkg="$2" path
+    if path="$(find_bin "$bin")"; then
+        echo "$path"
+        return 0
+    fi
+    ensure_cargo
+    echo "  :: $bin not built — compiling (cargo build --release --target $RUST_TARGET -p $pkg)" >&2
+    ( cd "$PROJECT_DIR" && cargo build --release --target "$RUST_TARGET" -p "$pkg" ) >&2
+    find_bin "$bin"
 }
 
 ###############################################################################
@@ -103,6 +223,7 @@ mkdir -p "$BASE_STAGE/usr/lib/cos/skills"
 mkdir -p "$BASE_STAGE/usr/lib/cos/init"
 mkdir -p "$BASE_STAGE/usr/lib/cos/python"
 mkdir -p "$BASE_STAGE/usr/share/applications"
+mkdir -p "$BASE_STAGE/usr/share/polkit-1/actions"
 mkdir -p "$BASE_STAGE/etc/cos"
 
 # Control + maintainer scripts.
@@ -111,14 +232,37 @@ install -m 644 "$SCRIPT_DIR/claw-os-base/conffiles" "$BASE_STAGE/DEBIAN/conffile
 install -m 755 "$SCRIPT_DIR/claw-os-base/postinst" "$BASE_STAGE/DEBIAN/postinst"
 
 # Binary: cos.
-COS_BIN="$(find_bin cos)" || { echo "error: cos binary not built" >&2; exit 1; }
+COS_BIN="$(ensure_bin cos cos)" || { echo "error: cos binary not built" >&2; exit 1; }
 echo "  :: cos          <- $COS_BIN"
 install -m 755 "$COS_BIN" "$BASE_STAGE/usr/local/bin/cos"
 
-# Binary: clawd (system agent daemon).
-CLAWD_BIN="$(find_bin clawd)" || { echo "error: clawd binary not built" >&2; exit 1; }
+# Binary: clawd (system agent daemon). Same crate as cos (`-p cos` builds
+# both bins), so building cos above already produced it.
+CLAWD_BIN="$(ensure_bin clawd cos)" || { echo "error: clawd binary not built" >&2; exit 1; }
 echo "  :: clawd        <- $CLAWD_BIN"
 install -m 755 "$CLAWD_BIN" "$BASE_STAGE/usr/local/bin/clawd"
+
+# Narrow pkexec target used by the desktop approval applet. It can only
+# submit one approval decision to clawd and never exposes the general cos CLI
+# as root.
+APPROVAL_HELPER_BIN="$(ensure_bin claw-approval-helper cos)" || {
+    echo "error: claw-approval-helper binary not built" >&2; exit 1; }
+echo "  :: claw-approval-helper <- $APPROVAL_HELPER_BIN"
+install -m 755 "$APPROVAL_HELPER_BIN" \
+    "$BASE_STAGE/usr/local/bin/claw-approval-helper"
+install -m 644 \
+    "$PROJECT_DIR/rootfs/overlay/usr/share/polkit-1/actions/org.clawos.approval.policy" \
+    "$BASE_STAGE/usr/share/polkit-1/actions/org.clawos.approval.policy"
+
+APP_RUNNER_BIN="$(ensure_bin claw-app-runner cos)" || {
+    echo "error: claw-app-runner binary not built" >&2; exit 1; }
+echo "  :: claw-app-runner     <- $APP_RUNNER_BIN"
+install -m 755 "$APP_RUNNER_BIN" "$BASE_STAGE/usr/local/bin/claw-app-runner"
+
+MAIL_AI_HOST_BIN="$(ensure_bin claw-mail-ai-host cos)" || {
+    echo "error: claw-mail-ai-host binary not built" >&2; exit 1; }
+echo "  :: claw-mail-ai-host   <- $MAIL_AI_HOST_BIN"
+install -m 755 "$MAIL_AI_HOST_BIN" "$BASE_STAGE/usr/lib/cos/claw-mail-ai-host"
 
 # Binaries: claw-semantic-daemon + claw-semantic CLI.
 # Both are optional — the OS still works without them (Recoll covers
@@ -227,23 +371,19 @@ echo "===> staging claw-os-browser"
 BROWSER_STAGE="$STAGE_DIR/claw-os-browser"
 mkdir -p "$BROWSER_STAGE/DEBIAN"
 mkdir -p "$BROWSER_STAGE/usr/local/bin"
-mkdir -p "$BROWSER_STAGE/usr/lib/cos/services/browser"
 
 render_control "$SCRIPT_DIR/claw-os-browser/control" "$BROWSER_STAGE/DEBIAN/control"
 
-COS_BROWSER_BIN="$(find_bin cos-browser)" || {
+COS_BROWSER_BIN="$(ensure_bin cos-browser cos-browser)" || {
     echo "error: cos-browser binary not built" >&2; exit 1; }
 echo "  :: cos-browser  <- $COS_BROWSER_BIN"
 install -m 755 "$COS_BROWSER_BIN" "$BROWSER_STAGE/usr/local/bin/cos-browser"
 
 COS_BROWSER_WORKER="$(dirname "$COS_BROWSER_BIN")/cos-browser-worker"
-if [ -f "$COS_BROWSER_WORKER" ]; then
+if [ -f "$COS_BROWSER_WORKER" ] && binary_matches_arch "$COS_BROWSER_WORKER"; then
     echo "  :: cos-browser-worker  <- $COS_BROWSER_WORKER"
     install -m 755 "$COS_BROWSER_WORKER" "$BROWSER_STAGE/usr/local/bin/cos-browser-worker"
 fi
-
-install -m 644 "$PROJECT_DIR/rootfs/overlay/usr/lib/cos/services/browser/service.json" \
-    "$BROWSER_STAGE/usr/lib/cos/services/browser/service.json"
 
 echo "  :: dpkg-deb --build claw-os-browser"
 $FAKEROOT $DPKG_DEB --root-owner-group --build "$BROWSER_STAGE" \
@@ -283,6 +423,10 @@ install -m 644 "$DEFAULTS_SRC/cos-home" \
 USER_UNITS_SRC="$PROJECT_DIR/rootfs/features/systemd/overlay/usr/lib/systemd/user"
 install -m 644 "$USER_UNITS_SRC/cos-agent-bridge.service" \
     "$SYSTEMD_STAGE/usr/lib/systemd/user/cos-agent-bridge.service"
+install -m 644 "$USER_UNITS_SRC/claw-recoll-index.service" \
+    "$SYSTEMD_STAGE/usr/lib/systemd/user/claw-recoll-index.service"
+install -m 644 "$USER_UNITS_SRC/claw-semantic.service" \
+    "$SYSTEMD_STAGE/usr/lib/systemd/user/claw-semantic.service"
 
 echo "  :: dpkg-deb --build claw-os-systemd"
 $FAKEROOT $DPKG_DEB --root-owner-group --build "$SYSTEMD_STAGE" \

@@ -128,10 +128,10 @@ pub fn run(args: &[String]) -> Result<Value, String> {
             }
             other => {
                 if let Some(m) = Modality::parse(other) {
-                    if modality.is_some() {
+                    if let Some(existing) = modality {
                         return Err(format!(
                             "specify a modality only once (got both `{}` and `{other}`)",
-                            modality.unwrap().name()
+                            existing.name()
                         ));
                     }
                     modality = Some(m);
@@ -1296,20 +1296,21 @@ fn local_embed_config_from_snapshot(
     snap: &Value,
     model: Option<&str>,
 ) -> crate::config::EmbedConfig {
-    let mut cfg = crate::config::EmbedConfig::default();
-    cfg.provider = LOCAL_EMBED_PROVIDER.to_string();
-    cfg.model = model
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(LOCAL_EMBED_MODEL)
-        .to_string();
-    cfg.model_dir = snap
-        .get("model_dir")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-    cfg
+    crate::config::EmbedConfig {
+        provider: LOCAL_EMBED_PROVIDER.to_string(),
+        model: model
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(LOCAL_EMBED_MODEL)
+            .to_string(),
+        model_dir: snap
+            .get("model_dir")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+        ..Default::default()
+    }
 }
 
 fn local_embed_precheck(snap: &Value, model: Option<&str>) -> Result<(), String> {
@@ -2408,10 +2409,8 @@ fn oauth_poll_cmd(provider: Option<&str>, device_code: Option<&str>) -> Result<V
 fn models_cmd(provider: Option<&str>) -> Result<Value, String> {
     let provider = require_provider(provider, "models")?;
     if provider != "copilot" {
-        return Err(format!(
-            "models: live discovery is only supported for `copilot` today; \
-             other providers expose their model lists via `--providers`"
-        ));
+        return Err("models: live discovery is only supported for `copilot` today; \
+             other providers expose their model lists via `--providers`".to_string());
     }
     let github_token = crate::credential::try_load(COPILOT_GITHUB_TOKEN_CREDENTIAL, "agent")
         .map_err(|e| format!("read credential `{COPILOT_GITHUB_TOKEN_CREDENTIAL}`: {e}"))?

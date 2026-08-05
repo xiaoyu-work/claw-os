@@ -7,7 +7,7 @@ source "$PROJECT_DIR/scripts/lib/arch.sh"
 
 qwen3_ort_genai_supported() {
     case "$DEB_ARCH" in
-        amd64)
+        amd64|arm64)
             return 0
             ;;
         *)
@@ -20,7 +20,7 @@ ORT_GENAI_VERSION="$(
     sed -n 's/^pub const ORT_GENAI_KNOWN_GOOD_VERSION: &str = "\(.*\)";/\1/p' \
         "$PROJECT_DIR/core/src/engine_pkg/mod.rs" | head -1
 )"
-ORT_GENAI_TAG="v${ORT_GENAI_VERSION:-0.12.2}"
+ORT_GENAI_TAG="v${ORT_GENAI_VERSION:-0.14.0}"
 
 if ! qwen3_ort_genai_supported && [ "${COS_QWEN3_SKIP_ORT_GENAI:-0}" != "1" ]; then
     echo "  :: skipping qwen3-embedding on $DEB_ARCH: $ORT_GENAI_TAG has no Linux $DEB_ARCH CPU release asset"
@@ -60,6 +60,13 @@ if [ "${COS_QWEN3_SKIP_ORT_GENAI:-0}" != "1" ]; then
         mount --bind /dev/pts "$ROOTFS/dev/pts"
         MOUNTED_BY_US+=("$ROOTFS/dev/pts")
     fi
+    # Detach our binds from the host's propagation peer groups so the lazy
+    # `umount -l` in cleanup_mounts cannot propagate back and tear down the
+    # host's shared /dev/pts (which would break host PTY allocation —
+    # "sudo: unable to open pty" — until `wsl --shutdown`).
+    for mp in proc sys dev; do
+        mountpoint -q "$ROOTFS/$mp" && mount --make-rprivate "$ROOTFS/$mp" || true
+    done
     if [ -e /etc/resolv.conf ]; then
         cp -L /etc/resolv.conf "$ROOTFS/etc/resolv.conf"
     fi

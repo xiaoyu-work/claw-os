@@ -311,10 +311,10 @@ fn cmd_proc() -> Result<Value, String> {
         });
 
         let count = processes.len();
-        return Ok(json!({
+        Ok(json!({
             "processes": processes,
             "count": count,
-        }));
+        }))
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -343,10 +343,10 @@ fn cmd_mounts() -> Result<Value, String> {
         }
 
         let count = mounts.len();
-        return Ok(json!({
+        Ok(json!({
             "mounts": mounts,
             "count": count,
-        }));
+        }))
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -417,7 +417,7 @@ fn cmd_net() -> Result<Value, String> {
             result["tcp_count"] = json!(connections.len());
         }
 
-        return Ok(result);
+        Ok(result)
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -474,7 +474,7 @@ fn cmd_cgroup() -> Result<Value, String> {
             });
         }
 
-        return Ok(result);
+        Ok(result)
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -542,7 +542,7 @@ fn cmd_loadavg() -> Result<Value, String> {
         let total: u64 = tasks.get(1).and_then(|x| x.parse().ok()).unwrap_or(0);
         let last_pid: u64 = parts[4].parse().unwrap_or(0);
         let cores = num_cores();
-        return Ok(json!({
+        Ok(json!({
             "load_1min": load1,
             "load_5min": load5,
             "load_15min": load15,
@@ -551,7 +551,7 @@ fn cmd_loadavg() -> Result<Value, String> {
             "last_pid": last_pid,
             "cores": cores,
             "load_per_core_1min": (load1 / cores.max(1) as f64 * 100.0).round() / 100.0,
-        }));
+        }))
     }
     #[cfg(not(target_os = "linux"))]
     Err("sys loadavg requires Linux /proc filesystem".into())
@@ -606,12 +606,12 @@ fn cmd_top(args: &[String]) -> Result<Value, String> {
         });
         rows.truncate(top_n);
 
-        return Ok(json!({
+        Ok(json!({
             "interval_ms": interval_ms,
             "by": by,
             "top": top_n,
             "processes": rows,
-        }));
+        }))
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -668,11 +668,11 @@ fn cmd_threads(args: &[String]) -> Result<Value, String> {
                 .cmp(&b["tid"].as_u64().unwrap_or(0))
         });
         let count = threads.len();
-        return Ok(json!({
+        Ok(json!({
             "pid": pid,
             "thread_count": count,
             "threads": threads,
-        }));
+        }))
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -787,7 +787,7 @@ fn cmd_port(args: &[String]) -> Result<Value, String> {
             }));
         }
 
-        return Ok(json!({"port": port, "matches": matches, "count": hits.len()}));
+        Ok(json!({"port": port, "matches": matches, "count": hits.len()}))
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -929,7 +929,7 @@ fn cmd_sensors() -> Result<Value, String> {
             result["hwmon"] = json!(hwmon_devices);
         }
 
-        return Ok(result);
+        Ok(result)
     }
     #[cfg(not(target_os = "linux"))]
     Err("sys sensors requires Linux /sys filesystem".into())
@@ -984,7 +984,7 @@ fn cmd_journal(args: &[String]) -> Result<Value, String> {
             }
         }
         let count = entries.len();
-        return Ok(json!({"entries": entries, "count": count}));
+        Ok(json!({"entries": entries, "count": count}))
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -1028,7 +1028,7 @@ fn cmd_dmesg(args: &[String]) -> Result<Value, String> {
             .map(|l| json!({"raw": l.trim()}))
             .collect();
         let count = entries.len();
-        return Ok(json!({"entries": entries, "count": count, "format": "raw"}));
+        Ok(json!({"entries": entries, "count": count, "format": "raw"}))
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -1064,7 +1064,7 @@ fn cmd_services(args: &[String]) -> Result<Value, String> {
         let v: Value = serde_json::from_str(stdout.trim())
             .map_err(|e| format!("parse systemctl json: {e}"))?;
         let count = v.as_array().map(|a| a.len()).unwrap_or(0);
-        return Ok(json!({"units": v, "count": count}));
+        Ok(json!({"units": v, "count": count}))
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -1113,7 +1113,7 @@ fn cmd_coredumps(args: &[String]) -> Result<Value, String> {
             .map(|l| json!({"raw": l.trim()}))
             .collect();
         let count = entries.len();
-        return Ok(json!({"coredumps": entries, "count": count, "format": "raw"}));
+        Ok(json!({"coredumps": entries, "count": count, "format": "raw"}))
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -1145,7 +1145,7 @@ fn cmd_who() -> Result<Value, String> {
             }));
         }
         let count = sessions.len();
-        return Ok(json!({"sessions": sessions, "count": count}));
+        Ok(json!({"sessions": sessions, "count": count}))
     }
     #[cfg(not(target_os = "linux"))]
     Err("sys who requires Linux utmp".into())
@@ -1186,7 +1186,7 @@ fn cmd_pkg_updates() -> Result<Value, String> {
             }
         }
         let count = packages.len();
-        return Ok(json!({"upgradable": packages, "count": count}));
+        Ok(json!({"upgradable": packages, "count": count}))
     }
     #[cfg(not(target_os = "linux"))]
     Err("sys pkg_updates requires Debian-based Linux with apt".into())
@@ -1223,7 +1223,7 @@ fn cmd_disk_io(args: &[String]) -> Result<Value, String> {
                 + b["write_kb_per_sec"].as_f64().unwrap_or(0.0);
             bv.partial_cmp(&av).unwrap_or(std::cmp::Ordering::Equal)
         });
-        return Ok(json!({"interval_ms": interval_ms, "disks": disks}));
+        Ok(json!({"interval_ms": interval_ms, "disks": disks}))
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -1261,7 +1261,7 @@ fn cmd_net_rate(args: &[String]) -> Result<Value, String> {
                 + b["tx_kb_per_sec"].as_f64().unwrap_or(0.0);
             bv.partial_cmp(&av).unwrap_or(std::cmp::Ordering::Equal)
         });
-        return Ok(json!({"interval_ms": interval_ms, "interfaces": ifaces}));
+        Ok(json!({"interval_ms": interval_ms, "interfaces": ifaces}))
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -1325,7 +1325,7 @@ fn cmd_largest_files(args: &[String]) -> Result<Value, String> {
             }
         }
         let mut results: Vec<(u64, String)> = heap.into_iter().map(|r| r.0).collect();
-        results.sort_by(|a, b| b.0.cmp(&a.0));
+        results.sort_by_key(|result| std::cmp::Reverse(result.0));
         let files: Vec<Value> = results
             .into_iter()
             .map(|(size, path)| {
@@ -1336,14 +1336,14 @@ fn cmd_largest_files(args: &[String]) -> Result<Value, String> {
                 })
             })
             .collect();
-        return Ok(json!({
+        Ok(json!({
             "search_root": path,
             "top": top,
             "min_mb": min_mb,
             "files": files,
             "scanned_dirs": scanned_dirs,
             "scanned_files": scanned_files,
-        }));
+        }))
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -1755,7 +1755,10 @@ mod tests {
             scope: None,
             priority: None,
             caps: Some(caps),
+            transient_caps: None,
             role: Some(Role::Observer.name().to_string()),
+            app_id: None,
+            pending_bind: false,
             start_time_ticks: None,
         };
         register_session(info).expect("register session");

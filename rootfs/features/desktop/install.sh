@@ -28,7 +28,7 @@ DESKTOP_PACKAGE_ROOT_CHROOT="/build/claw-os-desktop-root"
 if [ "${DESKTOP_SKIP:-0}" = "1" ]; then
     if [ -d "$FEATURE_DIR/overlay" ] && [ -n "$(ls -A "$FEATURE_DIR/overlay" 2>/dev/null)" ]; then
         echo "  :: applying desktop overlay"
-        cp -a "$FEATURE_DIR/overlay/." "$ROOTFS/"
+        cp -a --no-preserve=ownership "$FEATURE_DIR/overlay/." "$ROOTFS/"
     fi
     echo "  :: DESKTOP_SKIP=1 — runtime deps + overlay applied, build skipped"
     echo "  :: NOTE: login chain not wired (greeter binary missing). Re-run"
@@ -40,7 +40,7 @@ rm -rf "$DESKTOP_PACKAGE_ROOT"
 mkdir -p "$DESKTOP_PACKAGE_ROOT"
 if [ -d "$FEATURE_DIR/overlay" ] && [ -n "$(ls -A "$FEATURE_DIR/overlay" 2>/dev/null)" ]; then
     echo "  :: staging desktop overlay"
-    cp -a "$FEATURE_DIR/overlay/." "$DESKTOP_PACKAGE_ROOT/"
+    cp -a --no-preserve=ownership "$FEATURE_DIR/overlay/." "$DESKTOP_PACKAGE_ROOT/"
     # /etc/environment is owned by the base system on many Debian installs.
     # The desktop package merges cursor defaults into it from postinst instead
     # of trying to own the file directly.
@@ -50,6 +50,32 @@ if [ -d "$FEATURE_DIR/overlay" ] && [ -n "$(ls -A "$FEATURE_DIR/overlay" 2>/dev/
     find "$DESKTOP_PACKAGE_ROOT/usr/share/icons/hicolor" \
         -path '*/apps/clawos-agent.png' -type f -delete 2>/dev/null || true
 fi
+
+# ---------------------------------------------------------------------------
+# 0b. Disk-space preflight.
+#
+# The cargo build needs ~15 GB and the installed desktop adds ~16 GB into the
+# package root, all on the filesystem holding $ROOTFS. If that fills mid-build
+# the failure surfaces an hour later as a cryptic copy error — and on WSL2 a
+# full dynamic VHDX returns "Input/output error" (EIO) rather than ENOSPC, so
+# `install` dies with "error copying ...: Input/output error" at the final
+# binary. Fail fast and loudly here instead.
+# ---------------------------------------------------------------------------
+DESKTOP_MIN_FREE_GB="${DESKTOP_MIN_FREE_GB:-30}"
+avail_kb="$(df -Pk "$ROOTFS" | awk 'NR==2 {print $4}')"
+avail_gb=$(( avail_kb / 1024 / 1024 ))
+if [ "$avail_gb" -lt "$DESKTOP_MIN_FREE_GB" ]; then
+    cat >&2 <<EOF
+  error: only ${avail_gb} GB free on the filesystem holding $ROOTFS
+         the desktop build needs ~${DESKTOP_MIN_FREE_GB} GB (cargo cache + ~16 GB install root).
+         Free up space and re-run. On WSL2, a full virtual disk shows up as
+         "Input/output error" mid-copy — expand or compact the WSL VHDX, or
+         clear space on the host drive backing it. Override the threshold with
+         DESKTOP_MIN_FREE_GB if you know what you are doing.
+EOF
+    exit 1
+fi
+echo "  :: disk preflight ok (${avail_gb} GB free, need ~${DESKTOP_MIN_FREE_GB} GB)"
 
 # ---------------------------------------------------------------------------
 # 1. Validate source tree.
@@ -76,6 +102,79 @@ done
     echo "  error: desktop source tree is incomplete"
     exit 1
 }
+
+# ---------------------------------------------------------------------------
+# 1.5. Materialize Git LFS assets.
+#
+# Several desktop assets are tracked with Git LFS (see desktop/**/.gitattributes
+# `filter=lfs`): the cosmic-initial-setup city database
+# (initial-setup/res/cities.bitcode-*), wallpapers, the greeter background,
+# app icons and fonts. A clone made on a machine without git-lfs leaves these
+# as ~130-byte *pointer stubs* on disk. The build then happily compiles those
+# stubs into the binaries via include_bytes!/copies them into the image — so
+# the city search returns nothing, wallpapers are blank, etc. — and nothing
+# fails loudly. Detect that here and pull the real objects before building.
+# ---------------------------------------------------------------------------
+lfs_is_pointer() {
+    # Git LFS pointer files begin with "version https://git-lfs.github.com/...".
+    head -c 64 "$1" 2>/dev/null | grep -q '^version https://git-lfs'
+}
+
+# Canary: the city database is always present and is the asset whose breakage
+# is hardest to spot (silent empty timezone list). If it is real, every other
+# LFS object pulled in the same clone is real too.
+LFS_CANARY="$DESKTOP_SRC/initial-setup/res/cities.bitcode-v0-6"
+if [ -f "$LFS_CANARY" ] && lfs_is_pointer "$LFS_CANARY"; then
+    echo "  :: Git LFS assets are unfetched pointer stubs — materializing"
+
+    if [ ! -d "$PROJECT_DIR/.git" ]; then
+        cat >&2 <<EOF
+  error: $LFS_CANARY is a Git LFS pointer but $PROJECT_DIR is not a git
+         checkout, so 'git lfs pull' cannot fetch the real data. Re-clone
+         with git-lfs installed, or provide a tree with materialized assets.
+EOF
+        exit 1
+    fi
+
+    if ! git lfs version >/dev/null 2>&1; then
+        echo "  :: installing git-lfs"
+        apt-get update
+        apt-get install -y git-lfs
+    fi
+
+    # 'git lfs pull' must reach the remote, which needs the user's credentials:
+    # an SSH key + known_hosts for git@github.com remotes, or a credential
+    # helper / gh token for https remotes. The build runs as root (via sudo),
+    # and root has neither — so pulling as root fails regardless of how the repo
+    # was cloned ("ssh_askpass ... Host key verification failed" for SSH,
+    # auth prompts for HTTPS). Run the LFS commands as the repo's OWNER instead,
+    # so whatever transport + auth the user already set up just works for both.
+    repo_owner="$(stat -c '%U' "$PROJECT_DIR")"
+    run_as_owner() {
+        if [ "$(id -un)" = "$repo_owner" ]; then
+            "$@"
+        elif command -v runuser >/dev/null 2>&1; then
+            runuser -u "$repo_owner" -- "$@"
+        else
+            sudo -H -u "$repo_owner" -- "$@"
+        fi
+    }
+
+    # Mark the tree safe for both identities (root and the owner) so neither
+    # git invocation refuses with "dubious ownership".
+    git config --global --add safe.directory "$PROJECT_DIR" 2>/dev/null || true
+    run_as_owner git config --global --add safe.directory "$PROJECT_DIR" 2>/dev/null || true
+
+    run_as_owner git -C "$PROJECT_DIR" lfs install --local
+    run_as_owner git -C "$PROJECT_DIR" lfs pull
+
+    if lfs_is_pointer "$LFS_CANARY"; then
+        echo "  error: 'git lfs pull' did not materialize $LFS_CANARY" >&2
+        echo "         (still a pointer stub). Check network / LFS quota." >&2
+        exit 1
+    fi
+    echo "  :: Git LFS assets materialized"
+fi
 
 # ---------------------------------------------------------------------------
 # 2. Build the desktop inside the chroot so binaries link against rootfs
@@ -180,6 +279,17 @@ chroot "$ROOTFS" env \
     # cosmic-* binaries then never reach /usr/bin and the resulting image has
     # no working desktop. See desktop/justfile recipe `install rootdir="" prefix="/usr/local"`.
     just install "$DESKTOP_PACKAGE_ROOT" /usr
+
+    # Install the canonical full COSMIC session entry explicitly at the
+    # package boundary. `desktop/comp` also carries a same-named bare-session
+    # file for standalone compositor installs; relying on recursive install
+    # order can therefore leave display managers pointing at cosmic-service
+    # instead of the full start-cosmic session.
+    install -Dm0644 session/data/cosmic.desktop \
+        "$DESKTOP_PACKAGE_ROOT/usr/share/wayland-sessions/cosmic.desktop"
+    test -x "$DESKTOP_PACKAGE_ROOT/usr/bin/start-cosmic"
+    grep -qx "Exec=/usr/bin/start-cosmic" \
+        "$DESKTOP_PACKAGE_ROOT/usr/share/wayland-sessions/cosmic.desktop"
 
     # ----------------------------------------------------------------------
     # ClawOS Agent UI + bridge — separate workspace (no justfile) under
@@ -286,11 +396,10 @@ install -Dm0644 "$DESKTOP_SRC/greeter/cosmic-greeter.toml" \
 #      execs cosmic-session (no human user yet) or exits 0 so greetd
 #      falls through to [default_session] (wizard already ran).
 #
-# Inside the cosmic-session started by the wrapper, the autostart entry
-# /etc/xdg/autostart/com.clawos.InitialSetup.desktop auto-launches the
-# wizard. When the wizard's Finish handler runs `loginctl terminate-user
-# cosmic-initial-setup`, the session dies and greetd advances to
-# cosmic-greeter for normal login as the user the wizard just created.
+# The firstboot-session wrapper kiosk-launches the wizard directly
+# (`cosmic-comp cosmic-initial-setup`). When the wizard's Finish handler runs
+# `loginctl terminate-user cosmic-initial-setup`, the session dies and greetd
+# advances to cosmic-greeter for normal login as the user the wizard created.
 # ---------------------------------------------------------------------------
 echo "  :: staging first-boot wizard greetd config"
 if ! grep -q '^\[initial_session\]' "$DESKTOP_PACKAGE_ROOT/etc/greetd/cosmic-greeter.toml"; then
@@ -301,6 +410,13 @@ command = "/usr/lib/cos/firstboot-session"
 user = "cosmic-initial-setup"
 EOF
 fi
+
+# Drive the wizard ONLY via the firstboot-session kiosk above. The upstream
+# autostart entry (/etc/xdg/autostart/com.clawos.InitialSetup.desktop) would
+# also relaunch the wizard inside every normal cosmic-session — so the first
+# real login lands on the desktop and the wizard pops on top of it. Remove it
+# so logging in goes straight to a working desktop.
+rm -f "$DESKTOP_PACKAGE_ROOT/etc/xdg/autostart/com.clawos.InitialSetup.desktop"
 
 # Create the cosmic-greeter system user + its runtime/state dirs from the
 # sysusers.d / tmpfiles.d that `just install` already dropped. Package postinst
@@ -367,7 +483,15 @@ echo "  :: installing $(basename "$DESKTOP_DEB")"
 
 mkdir -p "$ROOTFS/var/cache/cos-debs"
 cp "$DESKTOP_DEB" "$ROOTFS/var/cache/cos-debs/"
-chroot "$ROOTFS" apt-get install -y --no-install-recommends \
+# The desktop deb ships some conffiles (e.g. /etc/apt/apt.conf.d/20auto-upgrades)
+# that already exist on the rootfs from the base overlay. dpkg would normally
+# stop at an interactive conffile prompt, but stdin is not a terminal inside the
+# chroot, so the prompt hits EOF and aborts. Force the non-interactive default
+# (keep the existing file: confdef + confold) and set the noninteractive frontend.
+DEBIAN_FRONTEND=noninteractive chroot "$ROOTFS" apt-get install -y \
+    --no-install-recommends \
+    -o Dpkg::Options::=--force-confdef \
+    -o Dpkg::Options::=--force-confold \
     "/var/cache/cos-debs/$(basename "$DESKTOP_DEB")"
 chroot "$ROOTFS" apt-get clean
 rm -rf "$ROOTFS/var/lib/apt/lists"/*

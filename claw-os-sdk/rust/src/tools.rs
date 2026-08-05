@@ -35,13 +35,48 @@ pub enum ToolError {
 /// Parsed reply from `cos ai tool`. See `wire/v1/tool.schema.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResult {
-    #[serde(default)]
     pub tool: String,
+    pub app_id: String,
+    pub status: String,
     /// Tool's domain-specific output — shape depends on the tool.
-    #[serde(default)]
     pub result: serde_json::Value,
-    #[serde(default)]
-    pub audit_id: Option<String>,
+}
+
+/// One row from the live `cos ai tools` catalog.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CatalogEntry {
+    pub name: String,
+    pub summary: String,
+    pub verb: String,
+    pub stability: String,
+    pub args_schema: serde_json::Value,
+    pub returns_schema: serde_json::Value,
+}
+
+fn cos_tool_json(
+    name: &str,
+    argv: Vec<OsString>,
+) -> Result<serde_json::Value, ToolError> {
+    match cos_call_json("tool", name, argv) {
+        Ok(value) => Ok(value),
+        Err(BridgeError::AppError {
+            message,
+            code,
+            ..
+        }) => {
+            let mut payload = serde_json::json!({ "error": &message });
+            if let Some(code) = code.clone() {
+                payload["code"] = serde_json::Value::String(code);
+            }
+            Err(ToolError::Denied {
+                name: name.to_string(),
+                message,
+                code,
+                payload,
+            })
+        }
+        Err(error) => Err(ToolError::Bridge(error)),
+    }
 }
 
 /// Execute a catalog tool with the given JSON args. The kernel
@@ -65,7 +100,7 @@ pub fn call(name: &str, args: &serde_json::Value) -> Result<ToolResult, ToolErro
         "--args".into(), args_json.into(),
     ];
 
-    let value = cos_call_json("tool", name, argv)?;
+    let value = cos_tool_json(name, argv)?;
     if let Some(err) = value.get("error").and_then(|v| v.as_str()) {
         return Err(ToolError::Denied {
             name: name.to_string(),
@@ -82,40 +117,28 @@ pub fn call(name: &str, args: &serde_json::Value) -> Result<ToolResult, ToolErro
     })
 }
 
-/// List the catalog tool names this app is allowed to propose / call.
-/// Wraps `cos ai tools list --app <id>`.
-pub fn catalog() -> Result<Vec<String>, ToolError> {
-    let app = std::env::var("COS_APP_ID").map_err(|_| {
-        ToolError::InvalidArg(
-            "catalog: COS_APP_ID is required when listing catalog tools".into(),
-        )
-    })?;
-    let argv: Vec<OsString> = vec![
-        "ai".into(), "tools".into(), "list".into(),
-        "--app".into(), app.into(),
-    ];
-    let value = cos_call_json("tool", "list", argv)?;
-    // Two possible shapes: array of strings, or { tools: [...] }.
-    let arr = value
-        .as_array()
-        .cloned()
-        .or_else(|| value.get("tools").and_then(|v| v.as_array()).cloned())
+/// Return the live global catalog from the argument-free `cos ai tools`.
+pub fn catalog() -> Result<Vec<CatalogEntry>, ToolError> {
+    let argv: Vec<OsString> = vec!["ai".into(), "tools".into()];
+    let value = cos_tool_json("catalog", argv)?;
+    let rows = value
+        .get("tools")
+        .and_then(serde_json::Value::as_array)
         .ok_or_else(|| {
-            ToolError::Unavailable(format!("unexpected catalog shape: {value}"))
+            ToolError::Unavailable(format!("catalog response omitted `tools`: {value}"))
         })?;
-    let mut out = Vec::with_capacity(arr.len());
-    for entry in arr {
-        match entry {
-            serde_json::Value::String(s) => out.push(s),
-            serde_json::Value::Object(map) => {
-                if let Some(s) = map.get("name").and_then(|v| v.as_str()) {
-                    out.push(s.to_string());
-                }
-            }
-            _ => {}
-        }
-    }
-    Ok(out)
+    rows.iter()
+        .cloned()
+        .map(|row| {
+            serde_json::from_value(row)
+                .map_err(|error| ToolError::Unavailable(format!("catalog decode failed: {error}")))
+        })
+        .collect()
+}
+
+/// Convenience projection for callers that only need stable tool names.
+pub fn catalog_names() -> Result<Vec<String>, ToolError> {
+    catalog().map(|entries| entries.into_iter().map(|entry| entry.name).collect())
 }
 
 /// Convenience: turn a list of tool names into the `tools=…` argument

@@ -202,7 +202,13 @@ impl Tool for CosAppMemoryTool {
 
         match join {
             Ok(Ok(v)) => {
-                ToolResult::ok(serde_json::to_string(&v).unwrap_or_else(|_| v.to_string()))
+                // App memory holds content apps recorded from external
+                // sources; wrap as untrusted prior-session data.
+                let body = serde_json::to_string(&v).unwrap_or_else(|_| v.to_string());
+                ToolResult::ok(crate::agent::safety::untrusted::wrap_untrusted(
+                    crate::agent::safety::untrusted::MEMORY_TAG,
+                    &body,
+                ))
             }
             Ok(Err(msg)) => ToolResult::err(msg),
             Err(e) => ToolResult::err(format!("cos_app_memory panicked: {e}")),
@@ -259,6 +265,15 @@ mod tests {
 
     fn tool() -> CosAppMemoryTool {
         CosAppMemoryTool::new(MemoryDb::open_in_memory().unwrap())
+    }
+
+    /// `exec` wraps every payload in the untrusted-memory boundary
+    /// (prompt-injection defense), so the JSON body is no longer the
+    /// whole string. Pull the object back out for assertions.
+    fn parse_untrusted_json(wrapped: &str) -> Value {
+        let start = wrapped.find('{').expect("json object start");
+        let end = wrapped.rfind('}').expect("json object end");
+        serde_json::from_str(&wrapped[start..=end]).expect("parse wrapped json body")
     }
 
     async fn seed(tool: &CosAppMemoryTool, entries: &[(&str, &str, Option<&str>)]) {
@@ -374,7 +389,7 @@ mod tests {
         // Roundtrip via list to grab an id without depending on insert ordering.
         let listed = t.exec(json!({"command": "list", "source": "calendar"})).await;
         assert!(!listed.is_error, "list failed: {}", listed.content);
-        let v: Value = serde_json::from_str(&listed.content).unwrap();
+        let v: Value = parse_untrusted_json(&listed.content);
         let id = v["rows"][0]["id"].as_i64().expect("row id");
         let r = t.exec(json!({"command": "show", "id": id})).await;
         assert!(!r.is_error);

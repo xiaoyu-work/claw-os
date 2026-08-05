@@ -58,11 +58,14 @@ pub(crate) fn atomic_write_with_fsync(path: &Path, data: &[u8]) -> io::Result<()
     ));
 
     {
-        let mut f = fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&tmp)?;
+        let mut options = fs::OpenOptions::new();
+        options.create(true).truncate(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut f = options.open(&tmp)?;
         f.write_all(data)?;
         // sync_all flushes data + metadata; sync_data would skip mtime
         // and similar but both are sufficient for our durability claim.
@@ -73,6 +76,7 @@ pub(crate) fn atomic_write_with_fsync(path: &Path, data: &[u8]) -> io::Result<()
         let _ = fs::remove_file(&tmp);
         return Err(e);
     }
+    crate::storage::set_private_file(path)?;
 
     // fsync the parent directory so the rename itself is durable.
     // Some filesystems (notably ext4 in `data=ordered`) can otherwise

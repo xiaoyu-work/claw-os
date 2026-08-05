@@ -533,15 +533,15 @@ def cmd_send(args):
 
     if provider == "smtp":
         smtp_host = os.environ.get("SMTP_HOST", "localhost")
-        policy.require("secret.read", name="SMTP_PASSWORD")
+        policy.require("secret.read", name="default/SMTP_PASSWORD")
         policy.require("net.dial", host=smtp_host)
         result = _send_smtp(opts.to, opts.subject, opts.body, cc=opts.cc)
     elif provider == "gmail":
-        policy.require("secret.read", name="GMAIL_ACCESS_TOKEN")
+        policy.require("secret.read", name="default/GMAIL_ACCESS_TOKEN")
         policy.require("net.dial", host=GMAIL_API_HOST)
         result = _send_gmail(opts.to, opts.subject, opts.body, cc=opts.cc)
     elif provider == "outlook":
-        policy.require("secret.read", name="MICROSOFT_ACCESS_TOKEN")
+        policy.require("secret.read", name="default/MICROSOFT_ACCESS_TOKEN")
         policy.require("net.dial", host=OUTLOOK_API_HOST)
         result = _send_outlook(opts.to, opts.subject, opts.body, cc=opts.cc)
     else:
@@ -572,11 +572,11 @@ def cmd_search(args):
         return {"error": "search requires gmail or outlook provider"}
 
     if provider == "gmail":
-        policy.require("secret.read", name="GMAIL_ACCESS_TOKEN")
+        policy.require("secret.read", name="default/GMAIL_ACCESS_TOKEN")
         policy.require("net.dial", host=GMAIL_API_HOST)
         return _search_gmail(opts.query, opts.max_results)
     elif provider == "outlook":
-        policy.require("secret.read", name="MICROSOFT_ACCESS_TOKEN")
+        policy.require("secret.read", name="default/MICROSOFT_ACCESS_TOKEN")
         policy.require("net.dial", host=OUTLOOK_API_HOST)
         return _search_outlook(opts.query, opts.max_results)
     else:
@@ -603,11 +603,11 @@ def cmd_list(args):
         return {"error": "list requires gmail or outlook provider"}
 
     if provider == "gmail":
-        policy.require("secret.read", name="GMAIL_ACCESS_TOKEN")
+        policy.require("secret.read", name="default/GMAIL_ACCESS_TOKEN")
         policy.require("net.dial", host=GMAIL_API_HOST)
         return _list_gmail(opts.max_results, opts.unread)
     elif provider == "outlook":
-        policy.require("secret.read", name="MICROSOFT_ACCESS_TOKEN")
+        policy.require("secret.read", name="default/MICROSOFT_ACCESS_TOKEN")
         policy.require("net.dial", host=OUTLOOK_API_HOST)
         return _list_outlook(opts.max_results, opts.unread)
     else:
@@ -634,11 +634,11 @@ def cmd_read(args):
         return {"error": "read requires gmail or outlook provider"}
 
     if provider == "gmail":
-        policy.require("secret.read", name="GMAIL_ACCESS_TOKEN")
+        policy.require("secret.read", name="default/GMAIL_ACCESS_TOKEN")
         policy.require("net.dial", host=GMAIL_API_HOST)
         return _read_gmail(opts.message_id)
     elif provider == "outlook":
-        policy.require("secret.read", name="MICROSOFT_ACCESS_TOKEN")
+        policy.require("secret.read", name="default/MICROSOFT_ACCESS_TOKEN")
         policy.require("net.dial", host=OUTLOOK_API_HOST)
         return _read_outlook(opts.message_id)
     else:

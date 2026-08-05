@@ -51,12 +51,31 @@ When you respond:
 /// File-load failures are non-fatal and silently fall back to the scaffold —
 /// the agent should still be operable when MEMORY.md is missing.
 pub fn build_system_prompt(extra_path: Option<&Path>) -> String {
+    build_system_prompt_for(extra_path, None)
+}
+
+/// Like [`build_system_prompt`] but selects relevance-ranked memory for
+/// the current turn. `query` is the user's message; when memory exceeds
+/// the prompt budget, only the entries most relevant to it are injected
+/// (always-on entries and USER.md are kept regardless). Pass `None` for
+/// turn-agnostic assembly (e.g. diagnostics).
+pub fn build_system_prompt_for(extra_path: Option<&Path>, query: Option<&str>) -> String {
     let mut out = String::from(SYSTEM_SCAFFOLD);
 
-    // Auto-injected notes (MEMORY.md, USER.md).
-    if let Some(notes) = NotesStore::system_default().assemble_for_prompt() {
+    // Auto-injected notes (MEMORY.md, USER.md). These are prior-session
+    // / curator-derived content (some of it summarised from web pages and
+    // app results) and must enter the prompt as UNTRUSTED data — a kernel-
+    // resident agent must not obey instructions a payload smuggled into a
+    // remembered note. See `agent::safety::untrusted`.
+    if let Some(notes) = NotesStore::system_default().assemble_for_prompt_relevant(
+        query,
+        crate::agent::memory::notes::MAX_NOTE_CHARS_FOR_PROMPT,
+    ) {
         out.push_str("\n\n---\n\n");
-        out.push_str(&notes);
+        out.push_str(&crate::agent::safety::untrusted::wrap_untrusted(
+            crate::agent::safety::untrusted::MEMORY_TAG,
+            &notes,
+        ));
     }
 
     // Auto-injected due nudges. Reads `data_dir/agent/nudges.json`

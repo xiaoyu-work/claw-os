@@ -24,7 +24,7 @@
 //! [`CosAppCatalog`] and [`CosAppRun`] at the bottom of this file:
 //! they re-scan the apps dir on every call and dispatch by name.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -153,7 +153,22 @@ fn apps_root() -> PathBuf {
 }
 
 fn data_dir() -> String {
-    crate::paths::data_dir().to_string_lossy().into_owned()
+    if crate::paths::is_routed_job()
+        || crate::paths::current_owner_uid_override().is_some()
+    {
+        crate::paths::user_data_dir().to_string_lossy().into_owned()
+    } else {
+        crate::paths::data_dir().to_string_lossy().into_owned()
+    }
+}
+
+fn manifest_schema_at(app_dir: &Path) -> Result<String, String> {
+    let path = app_dir.join("app.json");
+    let body = std::fs::read_to_string(&path)
+        .map_err(|error| format!("read {}: {error}", path.display()))?;
+    let manifest = Manifest::from_json(&body)
+        .map_err(|error| format!("parse {}: {error}", path.display()))?;
+    Ok(crate::apps::manifest_schema(&manifest).to_string())
 }
 
 #[async_trait]
@@ -233,12 +248,34 @@ impl Tool for CosAppTool {
         }
 
         let app_name = self.app.to_string();
-        let app_dir = apps_root().join(&app_name);
+        let app_dir = match crate::apps::find(&apps_root(), &app_name) {
+            Some(app) => app.dir,
+            None => {
+                return ToolResult::err(format!(
+                    "no app named `{app_name}` installed. Try `cos_app_catalog list`."
+                ));
+            }
+        };
+        if command == "__schema__" {
+            return match manifest_schema_at(&app_dir) {
+                Ok(schema) => ToolResult::ok(schema),
+                Err(error) => ToolResult::err(error),
+            };
+        }
         let data = data_dir();
         let apps = apps_root().to_string_lossy().to_string();
 
-        // bridge::run_python_app does process IO; off-load to the
-        // blocking pool to avoid stalling the async runtime.
+        if crate::paths::is_routed_job()
+            || crate::paths::current_owner_uid_override().is_some()
+        {
+            return match tokio::task::block_in_place(|| {
+                crate::bridge::run_python_app(&app_dir, &command, &args, &data, &apps)
+            }) {
+                Ok(Some(text)) => ToolResult::ok(text),
+                Ok(None) => ToolResult::ok(String::new()),
+                Err(message) => ToolResult::err(message),
+            };
+        }
         let join = tokio::task::spawn_blocking(move || {
             crate::bridge::run_python_app(&app_dir, &command, &args, &data, &apps)
         })
@@ -497,6 +534,13 @@ fn render_app_detail(app: &crate::apps::App) -> String {
                         crate::caps::manifest::ScopeBinding::FromArg { arg } => {
                             format!("from-arg({arg})")
                         }
+                        crate::caps::manifest::ScopeBinding::FromArgMap { arg, .. } => {
+                            format!("from-arg-map({arg})")
+                        }
+                        crate::caps::manifest::ScopeBinding::FromArgOrWild {
+                            arg,
+                            wild_when,
+                        } => format!("from-arg-or-wild({arg}, {wild_when})"),
                         crate::caps::manifest::ScopeBinding::Fixed { scope } => scope.to_string(),
                         crate::caps::manifest::ScopeBinding::Wild => "*".to_string(),
                     };
@@ -578,26 +622,44 @@ impl Tool for CosAppRun {
             ));
         }
 
-        let app_dir = apps_root().join(&app_name);
-        if !app_dir.join("app.json").is_file() {
-            return ToolResult::err(format!(
-                "no app named `{app_name}` installed. Try `cos_app_catalog list`."
-            ));
+        let app_dir = match crate::apps::find(&apps_root(), &app_name) {
+            Some(app) => app.dir,
+            None => {
+                return ToolResult::err(format!(
+                    "no app named `{app_name}` installed. Try `cos_app_catalog list`."
+                ));
+            }
+        };
+
+        if command == "__schema__" {
+            return match manifest_schema_at(&app_dir) {
+                Ok(schema) => ToolResult::ok(schema),
+                Err(error) => ToolResult::err(error),
+            };
         }
 
-        if command != "__schema__" {
-            if let Err(denial) = crate::caps::require(
-                crate::caps::Verb::AGENT_INVOKE,
-                crate::caps::Scope::name(&app_name),
-            ) {
-                return ToolResult::err(denial.summary());
-            }
+        if let Err(denial) = crate::caps::require(
+            crate::caps::Verb::AGENT_INVOKE,
+            crate::caps::Scope::name(&app_name),
+        ) {
+            return ToolResult::err(denial.summary());
         }
 
         let data = data_dir();
         let apps = apps_root().to_string_lossy().to_string();
         let app_dir_clone = app_dir.clone();
         let cmd = command.clone();
+        if crate::paths::is_routed_job()
+            || crate::paths::current_owner_uid_override().is_some()
+        {
+            return match tokio::task::block_in_place(|| {
+                crate::bridge::run_python_app(&app_dir_clone, &cmd, &args, &data, &apps)
+            }) {
+                Ok(Some(text)) => ToolResult::ok(text),
+                Ok(None) => ToolResult::ok(String::new()),
+                Err(message) => ToolResult::err(message),
+            };
+        }
         let join = tokio::task::spawn_blocking(move || {
             crate::bridge::run_python_app(&app_dir_clone, &cmd, &args, &data, &apps)
         })
@@ -614,7 +676,7 @@ impl Tool for CosAppRun {
 
 fn is_valid_app_id(s: &str) -> bool {
     !s.is_empty()
-        && s.chars().next().map_or(false, |c| c.is_ascii_lowercase())
+        && s.chars().next().is_some_and(|c| c.is_ascii_lowercase())
         && s.chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
 }

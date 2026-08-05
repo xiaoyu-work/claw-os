@@ -129,7 +129,7 @@ fn clean_model_output(s: &str) -> String {
     };
     // Strip trailing `.`, `!`, `?`, `:`, `,`.
     let line = line
-        .trim_end_matches(|c: char| matches!(c, '.' | '!' | '?' | ':' | ','))
+        .trim_end_matches(['.', '!', '?', ':', ','])
         .trim();
     line.to_string()
 }

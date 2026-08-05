@@ -1,14 +1,114 @@
 {
-  "name": "gateway-webhook",
+  "id": "gateway-webhook",
   "version": "0.1.0",
-  "description": "Generic outbound webhook gateway. POSTs JSON (or text) to any configured URL with optional Bearer / Basic / X-API-Key / HMAC-SHA256 auth. Stdlib-only — no third-party Python deps.",
-  "runtime": "python",
-  "commands": {
-    "send": "Send a message body to a target webhook URL (positional: target body)",
-    "status": "Show whether a default webhook URL / shared-secret is configured"
+  "name": {
+    "en": "Generic Webhook Gateway"
   },
-  "dependencies": {
-    "credentials": ["webhook_default_url", "webhook_default_secret"],
-    "engines": []
+  "summary": {
+    "en": "Generic outbound webhook gateway. POSTs JSON or text to any configured URL with optional bearer, basic, API-key, or HMAC-SHA256 authentication."
+  },
+  "runtime": "python",
+  "operations": {
+    "send": {
+      "label": {
+        "en": "Send a message through this gateway"
+      },
+      "args": [
+        {
+          "name": "target",
+          "kind": "text",
+          "required": false
+        },
+        {
+          "name": "text",
+          "kind": "text",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "net.dial",
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Connect to the remote gateway service to perform the send operation."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/webhook_default_url"
+            }
+          },
+          "why": {
+            "en": "Read the configured webhook_default_url secret required by this gateway."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/webhook_default_secret"
+            }
+          },
+          "why": {
+            "en": "Read the configured webhook_default_secret secret required by this gateway."
+          }
+        },
+        {
+          "verb": "memory.write",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "self-ref",
+              "value": "gateway-webhook"
+            }
+          },
+          "why": {
+            "en": "Remember the successful send so the agent can recall it later."
+          }
+        }
+      ]
+    },
+    "status": {
+      "label": {
+        "en": "Show gateway configuration and status"
+      },
+      "args": [],
+      "needs": [
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/webhook_default_url"
+            }
+          },
+          "why": {
+            "en": "Read the configured webhook_default_url secret required by this gateway."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/webhook_default_secret"
+            }
+          },
+          "why": {
+            "en": "Read the configured webhook_default_secret secret required by this gateway."
+          }
+        }
+      ]
+    }
   }
 }

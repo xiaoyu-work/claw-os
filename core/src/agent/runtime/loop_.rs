@@ -143,6 +143,32 @@ pub async fn ask_with_stream(
         sink,
         progress,
         Vec::new(),
+        None,
+    )
+    .await
+}
+
+pub async fn ask_with_stream_scoped(
+    provider: Arc<dyn Provider>,
+    cfg: &AgentConfig,
+    user_prompt: &str,
+    tools: &ToolRegistry,
+    db: Option<(&MemoryDb, &str)>,
+    sink: Arc<dyn StreamSink>,
+    progress: Arc<dyn ProgressSink>,
+    interrupt_scope: &str,
+) -> Result<AskResult, AgentError> {
+    ask_inner_streaming(
+        provider,
+        cfg,
+        user_prompt,
+        tools,
+        db,
+        None,
+        sink,
+        progress,
+        Vec::new(),
+        Some(interrupt_scope),
     )
     .await
 }
@@ -197,6 +223,45 @@ pub async fn ask_with_stream_continuation(
         sink,
         progress,
         prior,
+        None,
+    )
+    .await
+}
+
+pub async fn ask_with_stream_continuation_scoped(
+    provider: Arc<dyn Provider>,
+    cfg: &AgentConfig,
+    user_prompt: &str,
+    tools: &ToolRegistry,
+    db: &MemoryDb,
+    session_id: &str,
+    history_limit: usize,
+    sink: Arc<dyn StreamSink>,
+    progress: Arc<dyn ProgressSink>,
+    interrupt_scope: &str,
+) -> Result<AskResult, AgentError> {
+    let limit = if history_limit == 0 { 200 } else { history_limit };
+    let prior = match db.recent(session_id, limit) {
+        Ok(rows) => rows_to_messages(&rows),
+        Err(e) => {
+            tracing::warn!(
+                "memory: failed to load prior history for session {session_id}: {e}; \
+                 continuing without context"
+            );
+            Vec::new()
+        }
+    };
+    ask_inner_streaming(
+        provider,
+        cfg,
+        user_prompt,
+        tools,
+        Some((db, session_id)),
+        None,
+        sink,
+        progress,
+        prior,
+        Some(interrupt_scope),
     )
     .await
 }
@@ -357,7 +422,7 @@ async fn ask_inner(
     }
 
     let extra = cfg.system_prompt_path.as_deref().map(Path::new);
-    let system = prompt::build_system_prompt(extra);
+    let system = prompt::build_system_prompt_for(extra, Some(user_prompt));
 
     let mut messages: Vec<Message> = vec![Message::user_text(user_prompt)];
     let llm_tools = tools.as_llm_tools();
@@ -382,8 +447,13 @@ async fn ask_inner(
     let hook_registry = hooks::global_registry();
     let _hooks_auto_guard =
         hooks_config::load_and_register(&crate::paths::agent_hooks_path(), hook_registry.clone());
+    let hook_session_id = if session_id.is_empty() {
+        interrupt_handle.session_id()
+    } else {
+        &session_id
+    };
     let hook_ctx_base = hooks::HookContext::new(
-        interrupt_handle.session_id().to_string(),
+        hook_session_id.to_string(),
         provider.name(),
         cfg.model.clone(),
     );
@@ -602,6 +672,7 @@ async fn ask_inner_streaming(
     sink: Arc<dyn StreamSink>,
     progress: Arc<dyn ProgressSink>,
     initial_messages: Vec<Message>,
+    interrupt_scope: Option<&str>,
 ) -> Result<AskResult, AgentError> {
     let redactor: Option<Redactor> = if cfg.redact_memory_enabled {
         Some(Redactor::default_set())
@@ -634,7 +705,7 @@ async fn ask_inner_streaming(
     }
 
     let extra = cfg.system_prompt_path.as_deref().map(Path::new);
-    let system = prompt::build_system_prompt(extra);
+    let system = prompt::build_system_prompt_for(extra, Some(user_prompt));
 
     let mut messages: Vec<Message> = {
         let mut v = initial_messages;
@@ -644,7 +715,9 @@ async fn ask_inner_streaming(
     let llm_tools = tools.as_llm_tools();
     let session_id = recorder.map(|(_, sid)| sid.to_string()).unwrap_or_default();
 
-    let interrupt_handle = if session_id.is_empty() {
+    let interrupt_handle = if let Some(scope) = interrupt_scope {
+        interrupt::register(scope)
+    } else if session_id.is_empty() {
         interrupt::register(format!("ephemeral-{}", uuid::Uuid::new_v4().simple()))
     } else {
         interrupt::register(session_id.clone())
@@ -657,8 +730,13 @@ async fn ask_inner_streaming(
     let hook_registry = hooks::global_registry();
     let _hooks_auto_guard =
         hooks_config::load_and_register(&crate::paths::agent_hooks_path(), hook_registry.clone());
+    let hook_session_id = if session_id.is_empty() {
+        interrupt_handle.session_id()
+    } else {
+        &session_id
+    };
     let hook_ctx_base = hooks::HookContext::new(
-        interrupt_handle.session_id().to_string(),
+        hook_session_id.to_string(),
         provider.name(),
         cfg.model.clone(),
     );
@@ -921,6 +999,8 @@ fn configured_specs(
             env: s.env.clone(),
             cwd: s.cwd.clone(),
             timeout_secs: s.timeout_secs,
+            url: None,
+            bearer_env: None,
         })
         .collect()
 }
@@ -1000,11 +1080,43 @@ pub fn guardrails_from_cfg(cfg: &AgentConfig) -> crate::agent::tools::guardrails
 /// configured, so dangerous tools without explicit auto_approve emit
 /// `Deferred` outcomes that the dispatcher surfaces to the model as
 /// an error tool_result.
+/// Curated set of tools that require explicit approval **out of the box**
+/// when the operator hasn't configured their own `dangerous_tools` list.
+/// These are the highest-blast-radius, lowest-frequency, irreversible /
+/// security-sensitive operations — the ones a capable agent should pause
+/// on even though the caps system already gates them. Kept deliberately
+/// small so routine work (reads, file edits, exec) still flows through
+/// the normal caps layer without a second prompt.
+///
+/// Safe-by-construction: a fresh install gates these without the operator
+/// configuring anything. Override by setting any explicit `dangerous_tools`
+/// in config, or disable entirely with `COS_APPROVAL_DEFAULTS=off`.
+pub const DEFAULT_DANGEROUS_TOOLS: &[&str] = &["cos_credential", "cos_netfilter"];
+
+/// Whether the built-in safe-default dangerous set should be applied.
+/// Disabled by `COS_APPROVAL_DEFAULTS=off|0|false|no`.
+fn approval_defaults_enabled() -> bool {
+    match std::env::var("COS_APPROVAL_DEFAULTS") {
+        Ok(v) => !matches!(v.trim().to_ascii_lowercase().as_str(), "off" | "0" | "false" | "no"),
+        Err(_) => true,
+    }
+}
+
 pub fn approval_from_cfg(cfg: &AgentConfig) -> crate::agent::runtime::approval::ApprovalGate {
     use crate::agent::runtime::approval::{ApprovalConfig, ApprovalGate};
     let mut acfg = ApprovalConfig::new();
-    for name in &cfg.dangerous_tools {
-        acfg = acfg.dangerous(name.as_str());
+    // Operator's explicit list wins verbatim. Only when they've configured
+    // nothing do we seed the curated safe defaults (unless disabled), so a
+    // fresh install is safe-by-construction without surprising operators
+    // who deliberately set their own policy.
+    if cfg.dangerous_tools.is_empty() && approval_defaults_enabled() {
+        for name in DEFAULT_DANGEROUS_TOOLS {
+            acfg = acfg.dangerous(*name);
+        }
+    } else {
+        for name in &cfg.dangerous_tools {
+            acfg = acfg.dangerous(name.as_str());
+        }
     }
     for name in &cfg.auto_approve_tools {
         acfg = acfg.auto_approve(name.as_str());
@@ -2004,18 +2116,28 @@ mod tests {
         assert!(!crate::agent::prompt::caching::is_tools_cached(&req));
     }
 
-    /// `approval_from_cfg` builds a permissive gate when no fields
-    /// are populated. Default ApprovalConfig has all sets empty;
-    /// `evaluate` short-circuits to `Approved` for every name.
+    /// `approval_from_cfg` seeds the curated safe-default dangerous set
+    /// when the operator configured none. The default gate is therefore
+    /// not empty — `cos_credential` / `cos_netfilter` require approval out
+    /// of the box — but unclassified tools still short-circuit to
+    /// `Approved`.
     #[tokio::test]
-    async fn approval_from_cfg_default_is_permissive() {
+    async fn approval_from_cfg_default_seeds_safe_dangerous_set() {
+        // Ensure defaults aren't disabled by an ambient env var.
+        std::env::remove_var("COS_APPROVAL_DEFAULTS");
         let cfg = cfg();
         let gate = approval_from_cfg(&cfg);
-        assert!(gate.config().dangerous.is_empty());
+        for name in super::DEFAULT_DANGEROUS_TOOLS {
+            assert!(
+                gate.config().dangerous.contains(*name),
+                "expected default dangerous set to contain {name}"
+            );
+        }
         assert!(gate.config().auto_approve.is_empty());
         assert!(gate.config().auto_deny.is_empty());
+        // A tool outside any set still passes through.
         let out = gate
-            .evaluate("anything", &serde_json::json!({}), "n/a")
+            .evaluate("echo", &serde_json::json!({}), "n/a")
             .await;
         assert!(matches!(
             out,
@@ -2834,6 +2956,8 @@ mod tests {
             env: std::collections::HashMap::new(),
             cwd: None,
             timeout_secs: 30,
+            url: None,
+            bearer_env: None,
         }
     }
 

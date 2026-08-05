@@ -63,6 +63,14 @@ pub struct McpServerSpec {
     /// "no timeout" — interpreted as `u64::MAX` seconds, effectively
     /// unbounded.
     pub timeout_secs: u64,
+    /// Remote endpoint for an HTTP/SSE (Streamable HTTP) server. When
+    /// `Some`, this server is reached over HTTP and `command`/`args`/
+    /// `env`/`cwd` are ignored (no child process is spawned).
+    pub url: Option<String>,
+    /// Name of the environment variable holding a bearer token for an
+    /// authenticated remote server. Kept as a var name (not the token)
+    /// so secrets never sit in a manifest on disk.
+    pub bearer_env: Option<String>,
 }
 
 impl McpServerSpec {
@@ -89,6 +97,7 @@ pub struct McpServerHandle {
     /// For diagnostics; not used past construction.
     name: String,
     tool_count: usize,
+    _proc_session: Option<crate::bridge::McpProcSession>,
 }
 
 impl McpServerHandle {
@@ -226,7 +235,7 @@ impl Tool for McpRemoteTool {
             }
         };
         match res {
-            Ok(call_result) => render_call_result(&self.name, call_result),
+            Ok(call_result) => render_call_result(self.name, call_result),
             Err(e) => ToolResult::err(format!(
                 "MCP `{}` failed: {}",
                 self.name,
@@ -266,10 +275,17 @@ fn render_call_result(tool_name: &str, res: super::protocol::CallToolResult) -> 
     } else {
         chunks.join("\n\n")
     };
+    // MCP servers are third parties; their output is untrusted. Wrap it
+    // so a hostile server can't inject instructions into a kernel-
+    // resident agent via its tool result.
+    let wrapped = crate::agent::safety::untrusted::wrap_untrusted(
+        crate::agent::safety::untrusted::TOOL_RESULT_TAG,
+        &body,
+    );
     if res.is_error.unwrap_or(false) {
-        ToolResult::err(body)
+        ToolResult::err(wrapped)
     } else {
-        ToolResult::ok(body)
+        ToolResult::ok(wrapped)
     }
 }
 
@@ -299,8 +315,22 @@ pub async fn attach_server(
     spec: &McpServerSpec,
     registry: &mut ToolRegistry,
 ) -> Result<McpServerHandle, String> {
-    let mut command = tokio::process::Command::new(&spec.command);
-    command.args(&spec.args);
+    // Remote (HTTP/SSE) servers take a separate, child-less path.
+    if spec.url.is_some() {
+        return attach_http_server(spec, registry).await;
+    }
+    let proc_session =
+        crate::bridge::McpProcSession::for_current_parent(&spec.command)?;
+    let mut command = if proc_session.is_some() {
+        let mut command =
+            tokio::process::Command::new(crate::bridge::app_runner_path());
+        command.arg("--").arg(&spec.command).args(&spec.args);
+        command
+    } else {
+        let mut command = tokio::process::Command::new(&spec.command);
+        command.args(&spec.args);
+        command
+    };
     // Wipe inherited environment then re-add an explicit allowlist.
     // The order is: env_clear → allowlist from os::env → spec.env
     // overlay. Caller-provided values win on collision.
@@ -311,16 +341,58 @@ pub async fn attach_server(
     for (k, v) in &spec.env {
         command.env(k, v);
     }
-    if let Some(cwd) = &spec.cwd {
+    if let Some(session) = proc_session.as_ref() {
+        command
+            .env("COS_SESSION", session.id())
+            .env("COS_PROC_DATA_DIR", session.proc_data_dir());
+    }
+    if let Some(home) = crate::paths::current_home_override() {
+        let canonical_home = home
+            .canonicalize()
+            .map_err(|e| format!("canonicalize MCP owner home {}: {e}", home.display()))?;
+        let cwd = match &spec.cwd {
+            Some(cwd) => {
+                let canonical = std::path::Path::new(cwd)
+                    .canonicalize()
+                    .map_err(|e| format!("canonicalize MCP cwd {cwd}: {e}"))?;
+                if !canonical.starts_with(&canonical_home) {
+                    return Err(format!(
+                        "MCP cwd {} escapes owner home {}",
+                        canonical.display(),
+                        canonical_home.display()
+                    ));
+                }
+                canonical
+            }
+            None => canonical_home,
+        };
+        command
+            .current_dir(cwd)
+            .env("HOME", &home)
+            .env("COS_HOME", &home)
+            .env("COS_DATA_DIR", crate::paths::user_data_dir())
+            .env("COS_PROC_DATA_DIR", crate::paths::proc_data_dir());
+    } else if let Some(cwd) = &spec.cwd {
         command.current_dir(cwd);
     }
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    crate::bridge::apply_routed_identity(command.as_std_mut())?;
     let mut child = command
         .spawn()
         .map_err(|e| format!("spawn `{}`: {e}", spec.command))?;
+    if let Some(session) = proc_session.as_ref() {
+        let Some(pid) = child.id() else {
+            kill_and_reap(child);
+            return Err("spawned MCP server has no pid".to_string());
+        };
+        if let Err(error) = session.bind_process(pid) {
+            kill_and_reap(child);
+            return Err(format!("bind MCP child session: {error}"));
+        }
+    }
     let stdin = child
         .stdin
         .take()
@@ -419,6 +491,82 @@ pub async fn attach_server(
         child: Some(child),
         name: spec.name.clone(),
         tool_count: registered,
+        _proc_session: proc_session,
+    })
+}
+
+/// Attach a **remote** MCP server over HTTP/SSE (Streamable HTTP).
+/// Unlike the stdio path there is no child process — the transport
+/// speaks JSON-RPC to `spec.url`. This is what lets the agent use
+/// hosted MCP servers, not just local subprocesses. Optional bearer
+/// auth is read from the env var named by `spec.bearer_env`, so tokens
+/// never sit in an on-disk manifest.
+pub async fn attach_http_server(
+    spec: &McpServerSpec,
+    registry: &mut ToolRegistry,
+) -> Result<McpServerHandle, String> {
+    let url_str = spec
+        .url
+        .as_deref()
+        .ok_or_else(|| "attach_http_server called without a url".to_string())?;
+    let url =
+        reqwest::Url::parse(url_str).map_err(|e| format!("invalid mcp url `{url_str}`: {e}"))?;
+    let bearer = spec
+        .bearer_env
+        .as_deref()
+        .and_then(|var| std::env::var(var).ok())
+        .filter(|t| !t.is_empty());
+
+    let transport = super::transport::HttpTransport::new(url, bearer)
+        .map_err(|e| format!("http transport: {e}"))?;
+    let client = McpClient::new(transport);
+    client.start().await;
+
+    let timeout_dur = spec.timeout_duration();
+    let init_fut = client.initialize(
+        Implementation {
+            name: "cos-agent".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        },
+        ClientCapabilities::default(),
+    );
+    match timeout(timeout_dur, init_fut).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => return Err(format!("initialize: {}", render_client_err(e))),
+        Err(_) => {
+            return Err(format!(
+                "initialize timed out after {}s",
+                timeout_dur.as_secs()
+            ))
+        }
+    }
+    let _ = client.notify("notifications/initialized", None).await;
+
+    let list_fut = client.list_tools();
+    let tools = match timeout(timeout_dur, list_fut).await {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => return Err(format!("tools/list: {}", render_client_err(e))),
+        Err(_) => {
+            return Err(format!(
+                "tools/list timed out after {}s",
+                timeout_dur.as_secs()
+            ))
+        }
+    };
+
+    let mut registered = 0usize;
+    for descriptor in tools.tools {
+        let tool = McpRemoteTool::new(&spec.name, descriptor, client.clone(), timeout_dur);
+        registry.register(Arc::new(tool));
+        registered += 1;
+    }
+
+    Ok(McpServerHandle {
+        client,
+        child: None,
+        name: spec.name.clone(),
+        tool_count: registered,
+        _proc_session: None,
     })
 }
 
@@ -443,9 +591,19 @@ fn safe_env_allowlist() -> Vec<(String, String)> {
             out.push(((*k).to_string(), v));
         }
     }
-    for (k, v) in std::env::vars() {
-        if k.starts_with("COS_") {
-            out.push((k, v));
+    const SAFE_COS: &[&str] = &[
+        "COS_SESSION",
+        "COS_TRACE_ID",
+        "COS_SPAN_ID",
+        "COS_BIN",
+        "COS_VERSION",
+        "COS_SDK_PYTHON_DIR",
+        "COS_SNAPSHOT",
+        "COS_PERMS_MODE",
+    ];
+    for key in SAFE_COS {
+        if let Ok(value) = std::env::var(key) {
+            out.push(((*key).to_string(), value));
         }
     }
     out
@@ -507,6 +665,8 @@ mod tests {
             env: HashMap::new(),
             cwd: None,
             timeout_secs: 5,
+            url: None,
+            bearer_env: None,
         }
     }
 
@@ -539,7 +699,14 @@ mod tests {
         };
         let r = render_call_result("mcp_x_y", res);
         assert!(!r.is_error);
-        assert_eq!(r.content, "hello\n\nworld");
+        // MCP results are wrapped in an untrusted-data boundary
+        // (prompt-injection defense); the concatenated body lives inside.
+        assert!(r.content.contains("hello\n\nworld"), "content: {}", r.content);
+        assert!(
+            r.content.contains("<untrusted_tool_result>"),
+            "content: {}",
+            r.content
+        );
     }
 
     #[test]
@@ -552,7 +719,12 @@ mod tests {
         };
         let r = render_call_result("mcp_x_y", res);
         assert!(r.is_error);
-        assert_eq!(r.content, "boom");
+        assert!(r.content.contains("boom"), "content: {}", r.content);
+        assert!(
+            r.content.contains("<untrusted_tool_result>"),
+            "content: {}",
+            r.content
+        );
     }
 
     #[test]
@@ -715,7 +887,14 @@ mod tests {
         let dyn_tool = registry.get(registered_name).expect("tool registered");
         let result = dyn_tool.exec(json!({})).await;
         assert!(!result.is_error, "tool call should succeed: {:?}", result);
-        assert_eq!(result.content, "pong");
+        // The remote result is wrapped in the untrusted-tool-result
+        // boundary before it reaches the agent loop.
+        assert!(result.content.contains("pong"), "content: {}", result.content);
+        assert!(
+            result.content.contains("<untrusted_tool_result>"),
+            "content: {}",
+            result.content
+        );
 
         drop(client);
         let _ = server_task.await;

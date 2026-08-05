@@ -82,13 +82,13 @@ impl Page {
 
         let mut themes = vec![
             Theme {
-                name: "COSMIC Dark".to_string(),
+                name: "Claw OS Dark".to_string(),
                 handle: dark_icon(),
                 builder: ThemeBuilder::dark(),
                 is_dark: true,
             },
             Theme {
-                name: "COSMIC Light".to_string(),
+                name: "Claw OS Light".to_string(),
                 handle: light_icon(),
                 builder: ThemeBuilder::light(),
                 is_dark: false,

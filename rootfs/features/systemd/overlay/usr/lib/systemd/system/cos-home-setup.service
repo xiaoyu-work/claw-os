@@ -8,13 +8,11 @@ Before=multi-user.target shutdown.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-# The default agent user on WSL/VM targets is `cos` (uid 1000, see
-# targets/wsl/build.sh and rootfs/features/vm/install.sh). The unit
-# reads the target path from /etc/default/cos-home if present, so
-# admins can override without editing the unit; default falls through
-# to the script's own resolution chain ($COS_HOME → $HOME → /root).
+# Reads an explicit admin/first-boot target from /etc/default/cos-home.
+# When unset, the helper resolves an existing human user's passwd home;
+# if no such user exists yet it defers without creating /home/cos.
 EnvironmentFile=-/etc/default/cos-home
-ExecStart=/usr/lib/cos/init/setup-home.sh ${COS_HOME}
+ExecStart=/usr/lib/cos/init/setup-home.sh
 StandardOutput=journal
 StandardError=journal
 

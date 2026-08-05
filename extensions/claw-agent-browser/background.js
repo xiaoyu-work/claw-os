@@ -261,10 +261,14 @@ const HANDLERS = {
 
 async function sendToContent(tabId, message) {
   try {
-    const response = await chrome.tabs.sendMessage(tabId, {
-      claw_agent: true,
-      ...message,
-    });
+    const response = await chrome.tabs.sendMessage(
+      tabId,
+      {
+        claw_agent: true,
+        ...message,
+      },
+      { frameId: 0 }
+    );
     if (response && response.error) throw new Error(response.error);
     return response && response.result !== undefined ? response.result : response;
   } catch (e) {

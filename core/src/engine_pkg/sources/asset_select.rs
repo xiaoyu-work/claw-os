@@ -358,6 +358,27 @@ mod tests {
     }
 
     #[test]
+    fn ort_genai_linux_arm64_picks_arm64_targz() {
+        let assets = vec![
+            asset("onnxruntime-genai-0.14.0-linux-x64.tar.gz"),
+            asset("onnxruntime-genai-0.14.0-linux-x64-cuda.tar.gz"),
+            asset("onnxruntime-genai-0.14.0-linux-arm64.tar.gz"),
+        ];
+        let pick = select("ort-genai", &ctx("linux", "aarch64", "cpu"), &assets).unwrap();
+        assert_eq!(pick.name, "onnxruntime-genai-0.14.0-linux-arm64.tar.gz");
+    }
+
+    #[test]
+    fn ort_genai_linux_x64_does_not_pick_arm64() {
+        let assets = vec![
+            asset("onnxruntime-genai-0.14.0-linux-x64.tar.gz"),
+            asset("onnxruntime-genai-0.14.0-linux-arm64.tar.gz"),
+        ];
+        let pick = select("ort-genai", &ctx("linux", "x86_64", "cpu"), &assets).unwrap();
+        assert_eq!(pick.name, "onnxruntime-genai-0.14.0-linux-x64.tar.gz");
+    }
+
+    #[test]
     fn unknown_engine_returns_none() {
         let pick = select("nonsense", &ctx("windows", "x86_64", "cpu"), &[]);
         assert!(pick.is_none());

@@ -691,7 +691,7 @@ fn machine_id_path() -> PathBuf {
 ///   * Linux:   `getrandom(2)`
 ///   * macOS / BSD: `getentropy(3)` (limited to 256 bytes per call)
 ///   * Other Unix: `/dev/urandom` blocking read
-fn os_random_bytes(buf: &mut [u8]) -> Result<(), std::io::Error> {
+pub(crate) fn os_random_bytes(buf: &mut [u8]) -> Result<(), std::io::Error> {
     #[cfg(target_os = "linux")]
     {
         let ret =
@@ -699,7 +699,7 @@ fn os_random_bytes(buf: &mut [u8]) -> Result<(), std::io::Error> {
         if ret as isize == buf.len() as isize {
             return Ok(());
         }
-        return Err(std::io::Error::last_os_error());
+        Err(std::io::Error::last_os_error())
     }
     #[cfg(any(
         target_os = "macos",
@@ -1123,6 +1123,40 @@ fn parse_namespace_flag(args: &[String]) -> (Option<String>, Vec<String>) {
     (ns, rest)
 }
 
+fn validate_credential_component(kind: &str, value: &str) -> Result<(), String> {
+    if value.is_empty()
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(format!(
+            "{kind} must be alphanumeric (hyphens/underscores allowed)"
+        ));
+    }
+    Ok(())
+}
+
+fn credential_scope(namespace: &str, name: &str) -> Result<Scope, String> {
+    validate_credential_component("namespace", namespace)?;
+    validate_credential_component("credential name", name)?;
+    Ok(Scope::name(format!("{namespace}/{name}")))
+}
+
+fn namespace_scope(namespace: &str) -> Result<Scope, String> {
+    validate_credential_component("namespace", namespace)?;
+    Ok(Scope::name(format!("{namespace}/*")))
+}
+
+fn bundle_scope(namespace: &str, bundle: &str) -> Result<Scope, String> {
+    validate_credential_component("namespace", namespace)?;
+    validate_credential_component("bundle name", bundle)?;
+    Ok(Scope::name(format!("{namespace}/bundles/{bundle}")))
+}
+
+fn require_secret(verb: Verb, scope: Scope) -> Result<(), String> {
+    require_or_json(verb, scope).map_err(|value| value.to_string())
+}
+
 // ===========================================================================
 // Encryption / decryption helpers
 // ===========================================================================
@@ -1194,6 +1228,24 @@ fn tier_grants_access(session_tier: u8, min_tier: u8) -> bool {
     session_tier <= min_tier
 }
 
+fn require_credential_access(
+    cred: &StoredCredential,
+    namespace: &str,
+    name: &str,
+    current_tier: u8,
+) -> Result<(), String> {
+    if cred.name != name || cred.namespace != namespace {
+        return Err("credential metadata does not match its storage path".to_string());
+    }
+    if !tier_grants_access(current_tier, cred.min_tier) {
+        return Err(format!(
+            "insufficient tier: credential '{}' requires tier {} or stronger (lower number), current session has tier {}",
+            name, cred.min_tier, current_tier
+        ));
+    }
+    Ok(())
+}
+
 /// Resolve the *effective* tier for the current request, fail-closed.
 ///
 /// Previous behaviour was `policy::current_tier().unwrap_or(0)` which silently
@@ -1209,9 +1261,9 @@ fn tier_grants_access(session_tier: u8, min_tier: u8) -> bool {
 ///     credentials (none exist in practice), so a missing/corrupt registry can
 ///     never silently elevate.
 fn effective_session_tier() -> u8 {
-    match std::env::var("COS_SESSION") {
-        Err(_) => 0,
-        Ok(_) => policy::current_tier().unwrap_or(u8::MAX),
+    match crate::proc::current_session_id() {
+        None => 0,
+        Some(_) => policy::current_tier().unwrap_or(u8::MAX),
     }
 }
 
@@ -1353,6 +1405,30 @@ fn write_credential_atomic(path: &Path, data: &str) -> Result<(), String> {
     with_write_lock(path, || write_credential_atomic_unlocked(path, data))
 }
 
+/// Remove a credential while excluding both refreshers and atomic writers.
+/// Lock order deliberately matches refresh (`refresh -> write`) so revoke
+/// cannot deadlock with a refresh command that persists a rotated token.
+fn remove_credential_atomic(path: &Path) -> Result<bool, String> {
+    with_refresh_lock(path, || {
+        with_write_lock(path, || {
+            match fs::remove_file(path) {
+                Ok(()) => {
+                    if let Some(parent) = path.parent() {
+                        std::fs::File::open(parent)
+                            .and_then(|directory| directory.sync_all())
+                            .map_err(|error| {
+                                format!("fsync credential directory {}: {error}", parent.display())
+                            })?;
+                    }
+                    Ok(true)
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+                Err(error) => Err(format!("remove {}: {error}", path.display())),
+            }
+        })
+    })
+}
+
 /// Inner of [`write_credential_atomic`] — does the tmp+rename+fsync dance but
 /// does NOT acquire the per-credential write lock. Caller is responsible for
 /// synchronization.
@@ -1420,12 +1496,13 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 ///
 /// Usage: cos credential store <name> <value> [--tier N] [--namespace NS] [--ttl SECS]
 fn cmd_store(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::SECRET_WRITE, Scope::wild()).map_err(|v| v.to_string())?;
-
     let (ns_opt, args) = parse_namespace_flag(args);
     let namespace = ns_opt.unwrap_or_else(|| "default".into());
 
-    let mut min_tier: u8 = 0;
+    let mut min_tier = effective_session_tier();
+    if min_tier > 3 {
+        return Err("active session has no valid credential tier".to_string());
+    }
     let mut ttl: Option<u64> = None;
     let mut refresh_cmd: Option<String> = None;
     let mut positional: Vec<String> = Vec::new();
@@ -1475,21 +1552,34 @@ fn cmd_store(args: &[String]) -> Result<Value, String> {
     let name = &positional[0];
     let value = &positional[1];
 
-    // Validate name: alphanumeric, hyphens, underscores
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    {
-        return Err("credential name must be alphanumeric (hyphens/underscores allowed)".into());
-    }
+    let scope = credential_scope(&namespace, name)?;
+    require_secret(Verb::SECRET_WRITE, scope)?;
 
-    let dir = namespace_dir(&namespace);
+    store_credential_record(
+        name,
+        value,
+        &namespace,
+        min_tier,
+        ttl,
+        refresh_cmd,
+    )
+}
+
+fn store_credential_record(
+    name: &str,
+    value: &str,
+    namespace: &str,
+    min_tier: u8,
+    ttl: Option<u64>,
+    refresh_cmd: Option<String>,
+) -> Result<Value, String> {
+    let dir = namespace_dir(namespace);
     fs::create_dir_all(&dir).map_err(|e| format!("failed to create credentials dir: {e}"))?;
 
     // Encrypt with AES-256-GCM
     let (value_b64, nonce_b64) = encrypt_value(value.as_bytes());
 
-    let session = std::env::var("COS_SESSION").ok();
+    let session = crate::proc::current_session_id();
     let now = chrono::Utc::now();
     let stored_at = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
@@ -1499,8 +1589,8 @@ fn cmd_store(args: &[String]) -> Result<Value, String> {
     });
 
     let cred = StoredCredential {
-        name: name.clone(),
-        namespace: namespace.clone(),
+        name: name.to_string(),
+        namespace: namespace.to_string(),
         value_b64,
         nonce_b64: Some(nonce_b64),
         min_tier,
@@ -1529,6 +1619,50 @@ fn cmd_store(args: &[String]) -> Result<Value, String> {
     Ok(result)
 }
 
+/// Re-store a credential value as part of a session rollback (the undo
+/// of a `credential.revoke`, or of a `credential.store` that overwrote a
+/// prior value). Reuses the normal AES-256-GCM at-rest encryption and
+/// the atomic 0600 write so the restored entry is indistinguishable from
+/// one written by `cos credential store`.
+///
+/// Tier / TTL / refresh metadata is not captured in the mutation log, so
+/// the restored entry uses the default tier (0) and no expiry.
+///
+/// Security note: the value being restored already lived in this
+/// session's own (session-private) mutation log, so restoring it grants
+/// no access the session did not already have — hence no extra caps gate.
+pub fn rollback_restore(namespace: &str, name: &str, value: &str) -> Result<(), String> {
+    let dir = namespace_dir(namespace);
+    fs::create_dir_all(&dir).map_err(|e| format!("failed to create credentials dir: {e}"))?;
+    let (value_b64, nonce_b64) = encrypt_value(value.as_bytes());
+    let stored_at = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let cred = StoredCredential {
+        name: name.to_string(),
+        namespace: namespace.to_string(),
+        value_b64,
+        nonce_b64: Some(nonce_b64),
+        min_tier: 0,
+        stored_at,
+        stored_by: Some("session-rollback".to_string()),
+        expires_at: None,
+        refresh_cmd: None,
+    };
+    let path = dir.join(format!("{name}.json"));
+    let data =
+        serde_json::to_string_pretty(&cred).map_err(|e| format!("failed to serialize: {e}"))?;
+    write_credential_atomic(&path, &data)
+}
+
+/// Delete a credential entry as part of a session rollback (the undo of a
+/// `credential.store` that created a brand-new key). No-op if the entry
+/// is already gone.
+pub fn rollback_delete(namespace: &str, name: &str) -> Result<(), String> {
+    let path = namespace_dir(namespace).join(format!("{name}.json"));
+    remove_credential_atomic(&path)
+        .map(|_| ())
+        .map_err(|error| format!("failed to delete credential {namespace}/{name}: {error}"))
+}
+
 /// Load a credential value.
 ///
 /// Usage: cos credential load <name> [--namespace NS] [--fd N]
@@ -1539,8 +1673,6 @@ fn cmd_store(args: &[String]) -> Result<Value, String> {
 /// stdout / shell history / IPC log sinks. See the audit's MEDIUM "secret
 /// values returned in JSON cross IPC boundary" finding.
 fn cmd_load(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::SECRET_READ, Scope::wild()).map_err(|v| v.to_string())?;
-
     let (ns_opt, rest) = parse_namespace_flag(args);
     let namespace = ns_opt.unwrap_or_else(|| "default".into());
 
@@ -1569,6 +1701,7 @@ fn cmd_load(args: &[String]) -> Result<Value, String> {
     }
 
     let name = positional.first().ok_or("usage: cos credential load <name>")?;
+    require_secret(Verb::SECRET_READ, credential_scope(&namespace, name)?)?;
     let path = namespace_dir(&namespace).join(format!("{name}.json"));
 
     if !path.is_file() {
@@ -1584,12 +1717,7 @@ fn cmd_load(args: &[String]) -> Result<Value, String> {
     // Tier check (named helper makes the direction obvious; fail-closed on
     // missing/corrupt policy registry).
     let current_tier = effective_session_tier();
-    if !tier_grants_access(current_tier, cred.min_tier) {
-        return Err(format!(
-            "insufficient tier: credential '{}' requires tier {} or stronger (lower number), current session has tier {}",
-            name, cred.min_tier, current_tier
-        ));
-    }
+    require_credential_access(&cred, &namespace, name, current_tier)?;
 
     // Check expiry.
     if is_expired(&cred.expires_at) {
@@ -1612,19 +1740,25 @@ fn cmd_load(args: &[String]) -> Result<Value, String> {
                     })?;
                 let fresh_cred: StoredCredential = serde_json::from_str(&fresh_data)
                     .map_err(|e| format!("failed to parse credential: {e}"))?;
+                require_credential_access(
+                    &fresh_cred,
+                    &namespace,
+                    name,
+                    current_tier,
+                )?;
 
                 if !is_expired(&fresh_cred.expires_at) {
                     // Another caller already refreshed under the lock.
                     let value_bytes = decrypt_value(&fresh_cred)?;
                     let value = String::from_utf8(value_bytes)
                         .map_err(|e| format!("credential is not valid UTF-8: {e}"))?;
-                    return Ok(build_load_result(
+                    return build_load_result(
                         name,
                         &fresh_cred,
                         value,
                         Some(false),
                         fd_target,
-                    )?);
+                    );
                 }
 
                 let refresh_cmd_owned = fresh_cred
@@ -1634,6 +1768,37 @@ fn cmd_load(args: &[String]) -> Result<Value, String> {
                 let new_value = execute_refresh(&refresh_cmd_owned).map_err(|e| {
                     format!("credential '{name}' expired and auto-refresh failed: {e}")
                 })?;
+
+                // A refresh command such as `cos credential oauth-refresh ...`
+                // persists the real token itself and prints only a status JSON
+                // envelope. Prefer that freshly stored value instead of
+                // overwriting it with the command's stdout.
+                if let Some(after_data) = crate::filelock::read_locked(&path)
+                    .map_err(|e| format!("failed to read refreshed credential: {e}"))?
+                {
+                    let after: StoredCredential = serde_json::from_str(&after_data)
+                        .map_err(|e| format!("failed to parse refreshed credential: {e}"))?;
+                    require_credential_access(
+                        &after,
+                        &namespace,
+                        name,
+                        current_tier,
+                    )?;
+                    if after.value_b64 != fresh_cred.value_b64
+                        || after.nonce_b64 != fresh_cred.nonce_b64
+                        || !is_expired(&after.expires_at)
+                    {
+                        let value = String::from_utf8(decrypt_value(&after)?)
+                            .map_err(|e| format!("credential is not valid UTF-8: {e}"))?;
+                        return build_load_result(
+                            name,
+                            &after,
+                            value,
+                            Some(true),
+                            fd_target,
+                        );
+                    }
+                }
 
                 let ttl = compute_original_ttl(&fresh_cred);
                 let (new_value_b64, new_nonce_b64) =
@@ -1764,19 +1929,18 @@ fn write_value_to_fd(_fd: i32, _bytes: &[u8]) -> Result<(), String> {
 ///
 /// Usage: cos credential revoke <name> [--namespace NS]
 fn cmd_revoke(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::SECRET_WRITE, Scope::wild()).map_err(|v| v.to_string())?;
-
     let (ns_opt, rest) = parse_namespace_flag(args);
     let namespace = ns_opt.unwrap_or_else(|| "default".into());
 
     let name = rest.first().ok_or("usage: cos credential revoke <name>")?;
+    require_secret(Verb::SECRET_WRITE, credential_scope(&namespace, name)?)?;
     let path = namespace_dir(&namespace).join(format!("{name}.json"));
 
-    if !path.is_file() {
+    if !remove_credential_atomic(&path)
+        .map_err(|error| format!("failed to revoke credential: {error}"))?
+    {
         return Err(format!("credential not found: {name}"));
     }
-
-    fs::remove_file(&path).map_err(|e| format!("failed to revoke credential: {e}"))?;
 
     Ok(json!({
         "revoked": name,
@@ -1789,13 +1953,17 @@ fn cmd_revoke(args: &[String]) -> Result<Value, String> {
 /// With `--namespace NS`: list credentials in that namespace.
 /// Without `--namespace`: list all namespaces with credential counts.
 fn cmd_list(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::SECRET_READ, Scope::wild()).map_err(|v| v.to_string())?;
-
     let (ns_opt, _rest) = parse_namespace_flag(args);
 
     match ns_opt {
-        Some(namespace) => list_namespace(&namespace),
-        None => list_all_namespaces(),
+        Some(namespace) => {
+            require_secret(Verb::SECRET_READ, namespace_scope(&namespace)?)?;
+            list_namespace(&namespace)
+        }
+        None => {
+            require_secret(Verb::SECRET_READ, Scope::name("**"))?;
+            list_all_namespaces()
+        }
     }
 }
 
@@ -1909,8 +2077,6 @@ fn list_all_namespaces() -> Result<Value, String> {
 ///
 /// Usage: cos credential bundle <bundle-name> --keys key1,key2,key3 [--namespace NS]
 fn cmd_bundle(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::SECRET_GRANT, Scope::wild()).map_err(|v| v.to_string())?;
-
     let (ns_opt, rest) = parse_namespace_flag(args);
     let namespace = ns_opt.unwrap_or_else(|| "default".into());
 
@@ -1940,6 +2106,17 @@ fn cmd_bundle(args: &[String]) -> Result<Value, String> {
 
     if key_list.is_empty() {
         return Err("--keys must specify at least one credential name".into());
+    }
+    validate_credential_component("bundle name", bundle_name)?;
+    for key in &key_list {
+        validate_credential_component("credential name", key)?;
+    }
+    require_secret(Verb::SECRET_GRANT, bundle_scope(&namespace, bundle_name)?)?;
+    for key in &key_list {
+        require_secret(
+            Verb::SECRET_GRANT,
+            credential_scope(&namespace, key)?,
+        )?;
     }
 
     let dir = bundles_dir(&namespace);
@@ -1972,14 +2149,15 @@ fn cmd_bundle(args: &[String]) -> Result<Value, String> {
 ///
 /// Usage: cos credential load-bundle <bundle-name> [--namespace NS]
 fn cmd_load_bundle(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::SECRET_READ, Scope::wild()).map_err(|v| v.to_string())?;
-
     let (ns_opt, rest) = parse_namespace_flag(args);
     let namespace = ns_opt.unwrap_or_else(|| "default".into());
 
     let bundle_name = rest
         .first()
         .ok_or("usage: cos credential load-bundle <name> [--namespace NS]")?;
+    validate_credential_component("namespace", &namespace)?;
+    validate_credential_component("bundle name", bundle_name)?;
+    require_secret(Verb::SECRET_READ, bundle_scope(&namespace, bundle_name)?)?;
 
     let path = bundles_dir(&namespace).join(format!("{bundle_name}.json"));
     if !path.is_file() {
@@ -1991,11 +2169,27 @@ fn cmd_load_bundle(args: &[String]) -> Result<Value, String> {
         .ok_or_else(|| format!("bundle not found: {bundle_name}"))?;
     let manifest: BundleManifest =
         serde_json::from_str(&data).map_err(|e| format!("failed to parse bundle: {e}"))?;
+    if manifest.name != *bundle_name || manifest.namespace != namespace {
+        return Err("bundle metadata does not match its storage path".to_string());
+    }
+
+    // A bundle is grouping metadata, not an authority container. Authorize
+    // every member before reading any file so bundle scope can never widen a
+    // session's per-secret grants or produce a partial authorization oracle.
+    for key in &manifest.keys {
+        validate_credential_component("credential name", key)?;
+        require_secret(
+            Verb::SECRET_READ,
+            credential_scope(&namespace, key)?,
+        )?;
+    }
 
     let mut credentials = serde_json::Map::new();
     let mut errors = serde_json::Map::new();
+    let current_tier = effective_session_tier();
 
     for key in &manifest.keys {
+        validate_credential_component("credential name", key)?;
         let cred_path = namespace_dir(&namespace).join(format!("{key}.json"));
         if !cred_path.is_file() {
             errors.insert(
@@ -2027,10 +2221,16 @@ fn cmd_load_bundle(args: &[String]) -> Result<Value, String> {
                 continue;
             }
         };
+        if cred.name != *key || cred.namespace != namespace {
+            errors.insert(
+                key.clone(),
+                Value::String("credential metadata does not match its storage path".into()),
+            );
+            continue;
+        }
 
         // Check tier
-        let current_tier = policy::current_tier().unwrap_or(0);
-        if current_tier > cred.min_tier {
+        if !tier_grants_access(current_tier, cred.min_tier) {
             errors.insert(
                 key.clone(),
                 Value::String(format!(
@@ -2141,10 +2341,9 @@ fn compute_original_ttl(cred: &StoredCredential) -> Option<i64> {
 /// Reads <PROVIDER>_REFRESH_TOKEN and <PROVIDER>_CLIENT_ID, <PROVIDER>_CLIENT_SECRET
 /// from the credential store, exchanges for a new access token, and stores it.
 fn cmd_oauth_refresh(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::SECRET_WRITE, Scope::wild()).map_err(|v| v.to_string())?;
-
     let (ns_opt, rest) = parse_namespace_flag(args);
     let namespace = ns_opt.unwrap_or_else(|| "default".into());
+    validate_credential_component("namespace", &namespace)?;
 
     let provider = rest
         .first()
@@ -2164,6 +2363,21 @@ fn oauth_refresh_google(namespace: &str) -> Result<Value, String> {
     let refresh_token = load_credential_value("GOOGLE_REFRESH_TOKEN", namespace)?;
     let client_id = load_credential_value("GOOGLE_CLIENT_ID", namespace)?;
     let client_secret = load_credential_value("GOOGLE_CLIENT_SECRET", namespace)?;
+    let derived_tier = [
+        credential_min_tier("GOOGLE_REFRESH_TOKEN", namespace)?,
+        credential_min_tier("GOOGLE_CLIENT_ID", namespace)?,
+        credential_min_tier("GOOGLE_CLIENT_SECRET", namespace)?,
+    ]
+    .into_iter()
+    .min()
+    .unwrap_or(0);
+    let output_tier =
+        credential_min_tier_if_present("GOOGLE_ACCESS_TOKEN", namespace)?
+            .unwrap_or(derived_tier);
+    require_secret(
+        Verb::SECRET_WRITE,
+        credential_scope(namespace, "GOOGLE_ACCESS_TOKEN")?,
+    )?;
 
     // POST to Google token endpoint
     let body = format!(
@@ -2187,20 +2401,16 @@ fn oauth_refresh_google(namespace: &str) -> Result<Value, String> {
         .ok_or("no access_token in response")?;
 
     let expires_in = token_data["expires_in"].as_u64().unwrap_or(3600);
-
-    // Store the new access token
-    cmd_store(&[
-        "GOOGLE_ACCESS_TOKEN".into(),
-        access_token.into(),
-        "--tier".into(),
-        "0".into(),
-        "--namespace".into(),
-        namespace.into(),
-        "--ttl".into(),
-        expires_in.to_string(),
-        "--refresh-cmd".into(),
-        format!("cos credential oauth-refresh google --namespace {namespace}"),
-    ])?;
+    store_credential_record(
+        "GOOGLE_ACCESS_TOKEN",
+        access_token,
+        namespace,
+        output_tier,
+        Some(expires_in),
+        Some(format!(
+            "cos credential oauth-refresh google --namespace {namespace}"
+        )),
+    )?;
 
     Ok(json!({
         "provider": "google",
@@ -2214,8 +2424,34 @@ fn oauth_refresh_microsoft(namespace: &str) -> Result<Value, String> {
     let refresh_token = load_credential_value("MICROSOFT_REFRESH_TOKEN", namespace)?;
     let client_id = load_credential_value("MICROSOFT_CLIENT_ID", namespace)?;
     let client_secret = load_credential_value("MICROSOFT_CLIENT_SECRET", namespace)?;
-    let tenant_id =
-        load_credential_value("MICROSOFT_TENANT_ID", namespace).unwrap_or_else(|_| "common".into());
+    let tenant_id = if namespace_dir(namespace)
+        .join("MICROSOFT_TENANT_ID.json")
+        .is_file()
+    {
+        load_credential_value("MICROSOFT_TENANT_ID", namespace)?
+    } else {
+        "common".to_string()
+    };
+    let refresh_tier = credential_min_tier("MICROSOFT_REFRESH_TOKEN", namespace)?;
+    let derived_tier = [
+        refresh_tier,
+        credential_min_tier("MICROSOFT_CLIENT_ID", namespace)?,
+        credential_min_tier("MICROSOFT_CLIENT_SECRET", namespace)?,
+    ]
+    .into_iter()
+    .min()
+    .unwrap_or(refresh_tier);
+    let access_tier =
+        credential_min_tier_if_present("MICROSOFT_ACCESS_TOKEN", namespace)?
+            .unwrap_or(derived_tier);
+    require_secret(
+        Verb::SECRET_WRITE,
+        credential_scope(namespace, "MICROSOFT_ACCESS_TOKEN")?,
+    )?;
+    require_secret(
+        Verb::SECRET_WRITE,
+        credential_scope(namespace, "MICROSOFT_REFRESH_TOKEN")?,
+    )?;
 
     let body = format!(
         "grant_type=refresh_token&refresh_token={}&client_id={}&client_secret={}&scope=https://graph.microsoft.com/.default",
@@ -2236,31 +2472,28 @@ fn oauth_refresh_microsoft(namespace: &str) -> Result<Value, String> {
         .ok_or("no access_token in response")?;
 
     let expires_in = token_data["expires_in"].as_u64().unwrap_or(3600);
-
     // Also store new refresh token if returned (Microsoft rotates them)
     if let Some(new_refresh) = token_data["refresh_token"].as_str() {
-        cmd_store(&[
-            "MICROSOFT_REFRESH_TOKEN".into(),
-            new_refresh.into(),
-            "--tier".into(),
-            "0".into(),
-            "--namespace".into(),
-            namespace.into(),
-        ])?;
+        store_credential_record(
+            "MICROSOFT_REFRESH_TOKEN",
+            new_refresh,
+            namespace,
+            refresh_tier,
+            None,
+            None,
+        )?;
     }
 
-    cmd_store(&[
-        "MICROSOFT_ACCESS_TOKEN".into(),
-        access_token.into(),
-        "--tier".into(),
-        "0".into(),
-        "--namespace".into(),
-        namespace.into(),
-        "--ttl".into(),
-        expires_in.to_string(),
-        "--refresh-cmd".into(),
-        format!("cos credential oauth-refresh microsoft --namespace {namespace}"),
-    ])?;
+    store_credential_record(
+        "MICROSOFT_ACCESS_TOKEN",
+        access_token,
+        namespace,
+        access_tier,
+        Some(expires_in),
+        Some(format!(
+            "cos credential oauth-refresh microsoft --namespace {namespace}"
+        )),
+    )?;
 
     Ok(json!({
         "provider": "microsoft",
@@ -2356,6 +2589,36 @@ fn urlencoded(s: &str) -> String {
 
 /// Load a credential value from the store (helper for oauth-refresh).
 fn load_credential_value(name: &str, namespace: &str) -> Result<String, String> {
+    require_secret(Verb::SECRET_READ, credential_scope(namespace, name)?)?;
+    read_credential_value(name, namespace, true)
+}
+
+fn credential_min_tier(name: &str, namespace: &str) -> Result<u8, String> {
+    credential_min_tier_if_present(name, namespace)?
+        .ok_or_else(|| format!("credential not found: {name} (namespace: {namespace})"))
+}
+
+fn credential_min_tier_if_present(
+    name: &str,
+    namespace: &str,
+) -> Result<Option<u8>, String> {
+    credential_scope(namespace, name)?;
+    let path = namespace_dir(namespace).join(format!("{name}.json"));
+    let Some(data) = crate::filelock::read_locked(&path)
+        .map_err(|error| format!("failed to read credential metadata: {error}"))?
+    else {
+        return Ok(None);
+    };
+    let credential: StoredCredential = serde_json::from_str(&data)
+        .map_err(|error| format!("failed to parse credential metadata: {error}"))?;
+    Ok(Some(credential.min_tier))
+}
+
+fn read_credential_value(
+    name: &str,
+    namespace: &str,
+    enforce_tier: bool,
+) -> Result<String, String> {
     let path = namespace_dir(namespace).join(format!("{name}.json"));
     if !path.is_file() {
         return Err(format!(
@@ -2367,6 +2630,18 @@ fn load_credential_value(name: &str, namespace: &str) -> Result<String, String> 
         .ok_or_else(|| format!("credential not found: {name} (namespace: {namespace})"))?;
     let cred: StoredCredential =
         serde_json::from_str(&data).map_err(|e| format!("failed to parse: {e}"))?;
+    if enforce_tier {
+        let current_tier = effective_session_tier();
+        if !tier_grants_access(current_tier, cred.min_tier) {
+            return Err(format!(
+                "insufficient tier: credential '{name}' requires {}, current session has {current_tier}",
+                cred.min_tier
+            ));
+        }
+    }
+    if is_expired(&cred.expires_at) {
+        return Err(format!("credential '{name}' has expired"));
+    }
 
     match decrypt_value(&cred) {
         Ok(bytes) => String::from_utf8(bytes).map_err(|e| format!("not valid UTF-8: {e}")),
@@ -2384,11 +2659,85 @@ fn load_credential_value(name: &str, namespace: &str) -> Result<String, String> 
 /// fall back to environment variables or other lookup paths without
 /// converting a not-found into a hard error.
 pub fn try_load(name: &str, namespace: &str) -> Result<Option<String>, String> {
+    credential_scope(namespace, name)?;
     let path = namespace_dir(namespace).join(format!("{name}.json"));
     if !path.is_file() {
         return Ok(None);
     }
-    load_credential_value(name, namespace).map(Some)
+    // Trusted kernel accessor used to construct providers on behalf of a
+    // session. User/App-facing reads must go through `cmd_load`.
+    read_credential_value(name, namespace, false).map(Some)
+}
+
+pub fn load_for_scheduler(
+    name: &str,
+    namespace: &str,
+    home: &Path,
+    owner_uid: u32,
+    session_tier: u8,
+) -> Result<String, String> {
+    credential_scope(namespace, name)?;
+    let home = home
+        .canonicalize()
+        .map_err(|error| format!("canonicalize scheduled credential home: {error}"))?;
+    let path = home
+        .join(".local")
+        .join("share")
+        .join("cos")
+        .join("credentials")
+        .join(namespace)
+        .join(format!("{name}.json"));
+    let data = read_owner_credential(&path, &home, owner_uid)?;
+    let credential: StoredCredential = serde_json::from_str(&data)
+        .map_err(|error| format!("failed to parse scheduled credential: {error}"))?;
+    if !tier_grants_access(session_tier, credential.min_tier) {
+        return Err(format!(
+            "insufficient tier for scheduled credential {namespace}/{name}"
+        ));
+    }
+    if is_expired(&credential.expires_at) {
+        return Err(format!("credential '{name}' has expired"));
+    }
+    String::from_utf8(decrypt_value(&credential)?)
+        .map_err(|error| format!("credential is not valid UTF-8: {error}"))
+}
+
+#[cfg(target_os = "linux")]
+fn read_owner_credential(path: &Path, home: &Path, owner_uid: u32) -> Result<String, String> {
+    use std::io::Read;
+    use std::os::unix::io::AsRawFd;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+
+    const MAX_CREDENTIAL_FILE_BYTES: u64 = 1024 * 1024;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|error| format!("failed to open scheduled credential: {error}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("inspect scheduled credential: {error}"))?;
+    if !metadata.is_file() || metadata.uid() != owner_uid {
+        return Err("scheduled credential is not a regular owner-controlled file".to_string());
+    }
+    let target = fs::canonicalize(format!("/proc/self/fd/{}", file.as_raw_fd()))
+        .map_err(|error| format!("resolve scheduled credential: {error}"))?;
+    if !target.starts_with(home) {
+        return Err("scheduled credential escapes the owner home".to_string());
+    }
+    let mut data = String::new();
+    file.take(MAX_CREDENTIAL_FILE_BYTES + 1)
+        .read_to_string(&mut data)
+        .map_err(|error| format!("failed to read scheduled credential: {error}"))?;
+    if data.len() as u64 > MAX_CREDENTIAL_FILE_BYTES {
+        return Err("scheduled credential file exceeds 1 MiB".to_string());
+    }
+    Ok(data)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_owner_credential(_path: &Path, _home: &Path, _owner_uid: u32) -> Result<String, String> {
+    Err("scheduled credential loading requires Linux".to_string())
 }
 
 #[cfg(test)]

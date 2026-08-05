@@ -7,7 +7,6 @@ tmpdir. Each test gets its own fake ``~/.recoll``.
 
 from __future__ import annotations
 
-import importlib
 import os
 import pathlib
 import shutil
@@ -16,6 +15,8 @@ import sys
 import tempfile
 import textwrap
 import unittest
+
+from test_support import load_local_module
 
 
 _HERE = pathlib.Path(__file__).resolve().parent
@@ -27,7 +28,10 @@ printf '%s\n' "$@" > "$RECOLLQ_ARGS_LOG"
 
 # Detect the query: with our caller we pass `-t -n N:0 -F "url mtype mtime abstract" <query>`
 # The last positional arg is the query.
-QUERY="${@: -1}"
+QUERY=
+for arg in "$@"; do
+    QUERY=$arg
+done
 
 # Configurable failure
 if [ -n "$RECOLLQ_FAIL" ]; then
@@ -120,9 +124,12 @@ class DocsAppTests(unittest.TestCase):
             0,
             str(_HERE.parent.parent / "cos-runtime" / "python" / "src"),
         )  # for `from cos_runtime import …`
-        if "main" in sys.modules:
-            del sys.modules["main"]
-        self.main = importlib.import_module("main")
+        self.module_name = f"claw_test_docs_main_{id(self)}"
+        self.main = load_local_module(
+            _HERE / "main.py",
+            self.module_name,
+            clear_modules=("_shared",),
+        )
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -140,7 +147,7 @@ class DocsAppTests(unittest.TestCase):
                 sys.path.remove(p)
             except ValueError:
                 pass
-        sys.modules.pop("main", None)
+        sys.modules.pop(self.module_name, None)
 
     # ---- configure ----
 

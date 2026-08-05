@@ -5,7 +5,7 @@
 #
 # Lay-down:
 #   /usr/lib/cos/mail-ai/                    — python host + verb impls
-#   /usr/lib/cos/claw-mail-ai-host           — shell launcher (NM `path`)
+#   /usr/lib/cos/claw-mail-ai-host           — trusted native launcher (from base package)
 #   /etc/thunderbird/native-messaging-hosts/os.claw.mail_ai.json
 #                                            — NM host manifest
 #   /usr/lib/thunderbird/distribution/extensions/claw-mail-ai@claw.os.xpi
@@ -39,15 +39,15 @@ if [ ! -f "$EXT_SRC/manifest.json" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 1. Apply static overlay (NM manifest, policies, host launcher).
+# 1. Apply static overlay (NM manifest and policies).
 # ---------------------------------------------------------------------------
 if [ -d "$FEATURE_DIR/overlay" ] && [ -n "$(ls -A "$FEATURE_DIR/overlay" 2>/dev/null)" ]; then
     echo "  :: applying claw-mail-ai overlay"
-    cp -a "$FEATURE_DIR/overlay/." "$ROOTFS/"
-    # Make sure the launcher we drop in is executable.
-    if [ -f "$ROOTFS/usr/lib/cos/claw-mail-ai-host" ]; then
-        chmod 0755 "$ROOTFS/usr/lib/cos/claw-mail-ai-host"
-    fi
+    cp -a --no-preserve=ownership "$FEATURE_DIR/overlay/." "$ROOTFS/"
+fi
+if [ ! -x "$ROOTFS/usr/lib/cos/claw-mail-ai-host" ]; then
+    echo "  error: trusted claw-mail-ai-host binary is missing from claw-os-base" >&2
+    exit 1
 fi
 
 # ---------------------------------------------------------------------------
@@ -58,11 +58,15 @@ fi
 #    PYTHONPATH munging.
 # ---------------------------------------------------------------------------
 APP_DEST="$ROOTFS/usr/lib/cos/mail-ai"
+CANONICAL_APP_DEST="$ROOTFS/usr/lib/cos/apps/mail-ai"
 echo "  :: installing Python host  → /usr/lib/cos/mail-ai"
 install -d -m 0755 "$APP_DEST"
-cp -a "$APP_SRC/." "$APP_DEST/"
+cp -a --no-preserve=ownership "$APP_SRC/." "$APP_DEST/"
 # Drop test files from the system copy — they're not needed at runtime.
 rm -f "$APP_DEST/test_main.py"
+install -d -m 0755 "$CANONICAL_APP_DEST"
+cp -a --no-preserve=ownership "$APP_SRC/." "$CANONICAL_APP_DEST/"
+rm -f "$CANONICAL_APP_DEST/test_main.py"
 # claw_os_sdk lives in a system-wide location so every app on the
 # device can import it. We drop it under /usr/lib/cos/python/ so
 # `from claw_os_sdk import ai` resolves once sys.path contains that
@@ -73,15 +77,18 @@ SDK_DEST="$ROOTFS/usr/lib/cos/python/claw_os_sdk"
 if [ ! -d "$SDK_DEST" ]; then
     echo "  :: installing claw-os-sdk → /usr/lib/cos/python/claw_os_sdk"
     install -d -m 0755 "$SDK_DEST"
-    cp -a "$SDK_PY_SRC/." "$SDK_DEST/"
+    cp -a --no-preserve=ownership "$SDK_PY_SRC/." "$SDK_DEST/"
 fi
 RUNTIME_DEST="$ROOTFS/usr/lib/cos/python/cos_runtime"
 if [ ! -d "$RUNTIME_DEST" ]; then
     echo "  :: installing cos-runtime → /usr/lib/cos/python/cos_runtime"
     install -d -m 0755 "$RUNTIME_DEST"
-    cp -a "$RUNTIME_PY_SRC/." "$RUNTIME_DEST/"
+    cp -a --no-preserve=ownership "$RUNTIME_PY_SRC/." "$RUNTIME_DEST/"
 fi
-chmod 0755 "$APP_DEST/native_host.py" 2>/dev/null || true
+chown -R 0:0 "$APP_DEST" "$CANONICAL_APP_DEST" "$SDK_DEST" "$RUNTIME_DEST"
+find "$APP_DEST" "$CANONICAL_APP_DEST" "$SDK_DEST" "$RUNTIME_DEST" -type d -exec chmod 0755 {} +
+find "$APP_DEST" "$CANONICAL_APP_DEST" "$SDK_DEST" "$RUNTIME_DEST" -type f -exec chmod 0644 {} +
+chmod 0755 "$APP_DEST/native_host.py"
 
 # ---------------------------------------------------------------------------
 # 3. Pack the WebExtension as an XPI and drop it into Thunderbird's

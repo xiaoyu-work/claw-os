@@ -11,7 +11,7 @@
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -140,8 +140,7 @@ mod inotify_impl {
             // Decode inotify_event structs from the buffer.
             let mut offset = 0usize;
             while offset + event_hdr_size <= n {
-                let ev_ptr =
-                    unsafe { &*(buf.as_ptr().add(offset) as *const libc::inotify_event) };
+                let ev_ptr = unsafe { &*(buf.as_ptr().add(offset) as *const libc::inotify_event) };
                 let name_len = ev_ptr.len as usize;
                 let name = if name_len > 0 && offset + event_hdr_size + name_len <= n {
                     let name_bytes =
@@ -188,17 +187,17 @@ mod inotify_impl {
 
     /// Standard mask for watching a single file (modify, delete-self, attrib).
     pub fn file_watch_mask() -> u32 {
-        (libc::IN_MODIFY | libc::IN_DELETE_SELF | libc::IN_ATTRIB) as u32
+        libc::IN_MODIFY | libc::IN_DELETE_SELF | libc::IN_ATTRIB
     }
 
     /// Standard mask for watching a directory (create, delete, modify, move).
     pub fn dir_watch_mask() -> u32 {
-        (libc::IN_CREATE
+        libc::IN_CREATE
             | libc::IN_DELETE
             | libc::IN_MODIFY
             | libc::IN_MOVED_FROM
             | libc::IN_MOVED_TO
-            | libc::IN_ATTRIB) as u32
+            | libc::IN_ATTRIB
     }
 }
 
@@ -223,7 +222,7 @@ fn history_path() -> PathBuf {
 /// file resets. 1 MiB is plenty for the few-KB-per-event observability
 /// trail this log captures, and matches the single-generation rotation
 /// pattern used by the AI run log (`agent/llm/run_log.rs`).
-const HISTORY_ROTATE_BYTES: u64 = 1 * 1024 * 1024;
+const HISTORY_ROTATE_BYTES: u64 = 1024 * 1024;
 
 /// Append a watch event to the JSONL history log.
 ///
@@ -251,7 +250,11 @@ fn log_watch_event(source: &str, event: &Value) {
 /// `<path>.1` so the next write starts from a fresh file. Single-
 /// generation rotation (only `.1` is retained) matches the AI run log
 /// idiom in `agent/llm/run_log.rs`.
-fn append_with_rotation(path: &std::path::Path, line: &str, rotate_bytes: u64) -> Result<(), String> {
+fn append_with_rotation(
+    path: &std::path::Path,
+    line: &str,
+    rotate_bytes: u64,
+) -> Result<(), String> {
     use std::fs::OpenOptions;
     use std::io::Write;
 
@@ -313,15 +316,89 @@ fn append_with_rotation(path: &std::path::Path, line: &str, rotate_bytes: u64) -
 // ---------------------------------------------------------------------------
 
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::FS_WATCH, Scope::wild()).map_err(|v| v.to_string())?;
     match command {
-        "file" => cmd_watch_file(args),
-        "dir" => cmd_watch_dir(args),
+        "file" => {
+            require_watch_path_arg(args, 0, "usage: cos watch file <path> [--timeout N]")?;
+            cmd_watch_file(args)
+        }
+        "dir" => {
+            require_watch_path_arg(args, 0, "usage: cos watch dir <path> [--timeout N]")?;
+            cmd_watch_dir(args)
+        }
         "proc" => cmd_watch_proc(args),
-        "on" => cmd_watch_on(args),
-        "multi" => cmd_watch_multi(args),
-        "history" => cmd_watch_history(args),
+        "on" => {
+            authorize_watch_on(args)?;
+            cmd_watch_on(args)
+        }
+        "multi" => {
+            authorize_watch_multi(args)?;
+            cmd_watch_multi(args)
+        }
+        "history" => {
+            require_watch_path(&history_path())?;
+            cmd_watch_history(args)
+        }
         _ => Err(format!("unknown watch command: {command}")),
+    }
+}
+
+fn require_watch_path(path: &std::path::Path) -> Result<(), String> {
+    require_or_json(
+        Verb::FS_WATCH,
+        Scope::path(path.to_string_lossy().into_owned()),
+    )
+    .map_err(|v| v.to_string())
+}
+
+fn require_watch_path_arg(args: &[String], index: usize, usage: &str) -> Result<(), String> {
+    let path = args.get(index).ok_or_else(|| usage.to_string())?;
+    require_watch_path(std::path::Path::new(path))
+}
+
+fn authorize_watch_multi(args: &[String]) -> Result<(), String> {
+    for path in parse_multi_flag(args, "--file")
+        .into_iter()
+        .chain(parse_multi_flag(args, "--dir"))
+    {
+        require_watch_path(std::path::Path::new(&path))?;
+    }
+    for service in parse_multi_flag(args, "--service") {
+        require_or_json(Verb::SYS_SERVICE, Scope::name(service)).map_err(|v| v.to_string())?;
+    }
+    Ok(())
+}
+
+fn authorize_watch_on(args: &[String]) -> Result<(), String> {
+    let event_type = args
+        .first()
+        .ok_or_else(|| "usage: cos watch on <event-type> [--timeout N] [...]".to_string())?;
+    let rest = &args[1..];
+    match event_type.as_str() {
+        "fs.change" => {
+            let path = parse_flag(rest, "--path")
+                .ok_or_else(|| "--path <dir> required for fs.change".to_string())?;
+            require_watch_path(std::path::Path::new(path))
+        }
+        "service.health-fail" => {
+            let name = parse_flag(rest, "--name")
+                .ok_or_else(|| "--name <service> required for service.health-fail".to_string())?;
+            require_or_json(Verb::SYS_SERVICE, Scope::name(name)).map_err(|v| v.to_string())
+        }
+        "checkpoint.created" | "quota.exceeded" => {
+            require_watch_path(&crate::paths::data_dir().join("overlay"))
+        }
+        "ipc.message" => {
+            let session = parse_flag(rest, "--session")
+                .ok_or_else(|| "--session <id> required for ipc.message".to_string())?;
+            require_or_json(Verb::IPC_SUBSCRIBE, Scope::name(session)).map_err(|v| v.to_string())
+        }
+        "credential.expired" => {
+            let name = parse_flag(rest, "--name")
+                .ok_or_else(|| "--name <name> required for credential.expired".to_string())?;
+            require_or_json(Verb::SECRET_READ, Scope::name(name)).map_err(|v| v.to_string())
+        }
+        "proc.exit" => Ok(()),
+        _ => Ok(()),
     }
 }
 
@@ -421,7 +498,7 @@ fn watch_file_inotify(path: &PathBuf, timeout_secs: u64) -> Result<Value, String
             if watching_parent {
                 // Only care about the target filename appearing.
                 let target_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if ev.name == target_name && ev.mask & libc::IN_CREATE as u32 != 0 {
+                if ev.name == target_name && ev.mask & libc::IN_CREATE != 0 {
                     let cur = stat_file(path);
                     return Ok(json!({
                         "status": "changed",
@@ -532,7 +609,7 @@ fn cmd_watch_dir(args: &[String]) -> Result<Value, String> {
 
 /// inotify-based directory watcher (Linux).
 #[cfg(target_os = "linux")]
-fn watch_dir_inotify(path: &PathBuf, timeout_secs: u64) -> Result<Value, String> {
+fn watch_dir_inotify(path: &Path, timeout_secs: u64) -> Result<Value, String> {
     let path_str = path.to_string_lossy().to_string();
     // RAII: same reasoning as `watch_file_inotify` — `?` on add_watch
     // would otherwise leak the inotify fd.
@@ -745,12 +822,11 @@ fn watch_multi_poll(
 
     // Snapshot initial file stats.
     let file_paths: Vec<PathBuf> = files.iter().map(PathBuf::from).collect();
-    let file_initials: Vec<FileStat> = file_paths.iter().map(|p| stat_file(p)).collect();
+    let file_initials: Vec<FileStat> = file_paths.iter().map(stat_file).collect();
 
     // Snapshot initial dir contents.
     let dir_paths: Vec<PathBuf> = dirs.iter().map(PathBuf::from).collect();
-    let dir_initials: Vec<HashMap<String, FileStat>> =
-        dir_paths.iter().map(|p| snapshot_dir(p)).collect();
+    let dir_initials: Vec<HashMap<String, FileStat>> = dir_paths.iter().map(snapshot_dir).collect();
 
     let mut last_service_check =
         Instant::now() - Duration::from_secs(SERVICE_CHECK_INTERVAL_MS / 1000 + 1);
@@ -851,7 +927,7 @@ fn watch_multi_poll(
 
         // --- Check procs (every poll cycle) ---
         for proc_session in procs {
-            let status_result = crate::proc::run("status", &[proc_session.clone()]);
+            let status_result = crate::proc::run("status", std::slice::from_ref(proc_session));
             match status_result {
                 Ok(v) => {
                     let st = v["status"].as_str().unwrap_or("");
@@ -1131,9 +1207,7 @@ fn watch_service_health_fail(args: &[String], timeout: u64) -> Result<Value, Str
 }
 
 fn watch_checkpoint_created(args: &[String], timeout: u64) -> Result<Value, String> {
-    let overlay_dir = crate::paths::data_dir()
-        .join("overlay")
-        .join("checkpoints");
+    let overlay_dir = crate::paths::data_dir().join("overlay").join("checkpoints");
 
     // Snapshot current checkpoint count
     let initial_count = if overlay_dir.exists() {
@@ -1700,10 +1774,7 @@ mod tests {
             b.push(".1");
             std::path::PathBuf::from(b)
         };
-        assert!(
-            !backup.exists(),
-            "no rotation expected when below the cap"
-        );
+        assert!(!backup.exists(), "no rotation expected when below the cap");
 
         let content = fs::read_to_string(&path).unwrap();
         let lines: Vec<&str> = content.lines().collect();

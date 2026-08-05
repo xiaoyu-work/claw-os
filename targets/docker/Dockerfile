@@ -1,6 +1,7 @@
 FROM scratch
 
-COPY build/claw-os-rootfs /
+ARG ROOTFS_DIR=build/claw-os-docker-rootfs-amd64
+COPY ${ROOTFS_DIR}/ /
 
 ENV container=docker
 ENV NODE_MAJOR=24

@@ -161,7 +161,7 @@ def _send(target: str, text: str) -> dict:
             headers=headers,
             body=payload,
             timeout=20,
-            verb_id="gateway.rocketchat.send",
+            verb_id="net.dial",
         )
         raw = raw_resp.decode("utf-8", errors="replace")
         try:

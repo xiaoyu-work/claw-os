@@ -28,11 +28,10 @@ Default feature set (when no `--features` is given): `base,cos-core,browser`.
 Docker and WSL use the headless Claw OS runtime feature set:
 `base,cos-core,browser,systemd,apt-source,qwen3-embedding`. This is the full
 non-desktop OS surface: Claw's own `cos`/`clawd` agent runtime, apps, skills,
-browser automation, service units, local embedding stack on amd64, and upgrade
-source. Upstream `ort-genai` currently ships Windows arm64 assets, but no Linux
-arm64 CPU asset; WSL/Docker arm64 are Linux targets, so they skip this embedding
-stack until a Linux arm64 runtime is available. In every system target, systemd
-starts `clawd.service` as part of boot.
+browser automation, service units, local embedding stack, and upgrade
+source. This feature set builds on both amd64 and arm64 (WSL/Docker arm64
+are Linux targets). In every system target, systemd starts
+`clawd.service` as part of boot.
 Target-specific boot/install features (`kernel`, `grub-disk`, `vm`, `vmware`,
 `live`, `installer`), desktop UI, and third-party agent providers
 (`copilot-cli`) are opt-in.

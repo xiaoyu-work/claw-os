@@ -19,6 +19,9 @@
   "operations": {
     "send": {
       "label": { "en": "Send an email (--to, --subject, --body, --provider smtp|gmail|outlook)" },
+      "args": [
+        { "name": "provider", "kind": "name", "required": true }
+      ],
       "needs": [
         {
           "verb": "net.dial",
@@ -27,8 +30,16 @@
         },
         {
           "verb": "secret.read",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Read the provider credentials (SMTP password, OAuth token) needed to authenticate." }
+          "scope": {
+            "kind": "from-arg-map",
+            "arg": "provider",
+            "values": {
+              "smtp": { "kind": "name", "value": "default/SMTP_PASSWORD" },
+              "gmail": { "kind": "name", "value": "default/GMAIL_ACCESS_TOKEN" },
+              "outlook": { "kind": "name", "value": "default/MICROSOFT_ACCESS_TOKEN" }
+            }
+          },
+          "why": { "en": "Read only the credential for the selected provider." }
         },
         {
           "verb": "memory.write",
@@ -39,6 +50,9 @@
     },
     "search": {
       "label": { "en": "Search emails (--query, --max-results, --provider gmail|outlook)" },
+      "args": [
+        { "name": "provider", "kind": "name", "required": true }
+      ],
       "needs": [
         {
           "verb": "net.dial",
@@ -47,13 +61,23 @@
         },
         {
           "verb": "secret.read",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Read the provider OAuth token needed to authenticate." }
+          "scope": {
+            "kind": "from-arg-map",
+            "arg": "provider",
+            "values": {
+              "gmail": { "kind": "name", "value": "default/GMAIL_ACCESS_TOKEN" },
+              "outlook": { "kind": "name", "value": "default/MICROSOFT_ACCESS_TOKEN" }
+            }
+          },
+          "why": { "en": "Read only the credential for the selected provider." }
         }
       ]
     },
     "list": {
       "label": { "en": "List recent emails (--max-results, --unread, --provider gmail|outlook)" },
+      "args": [
+        { "name": "provider", "kind": "name", "required": true }
+      ],
       "needs": [
         {
           "verb": "net.dial",
@@ -62,13 +86,23 @@
         },
         {
           "verb": "secret.read",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Read the provider OAuth token needed to authenticate." }
+          "scope": {
+            "kind": "from-arg-map",
+            "arg": "provider",
+            "values": {
+              "gmail": { "kind": "name", "value": "default/GMAIL_ACCESS_TOKEN" },
+              "outlook": { "kind": "name", "value": "default/MICROSOFT_ACCESS_TOKEN" }
+            }
+          },
+          "why": { "en": "Read only the credential for the selected provider." }
         }
       ]
     },
     "read": {
       "label": { "en": "Read a specific email by ID (--id, --provider gmail|outlook)" },
+      "args": [
+        { "name": "provider", "kind": "name", "required": true }
+      ],
       "needs": [
         {
           "verb": "net.dial",
@@ -77,8 +111,15 @@
         },
         {
           "verb": "secret.read",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Read the provider OAuth token needed to authenticate." }
+          "scope": {
+            "kind": "from-arg-map",
+            "arg": "provider",
+            "values": {
+              "gmail": { "kind": "name", "value": "default/GMAIL_ACCESS_TOKEN" },
+              "outlook": { "kind": "name", "value": "default/MICROSOFT_ACCESS_TOKEN" }
+            }
+          },
+          "why": { "en": "Read only the credential for the selected provider." }
         }
       ]
     },
@@ -87,10 +128,7 @@
       "needs": [
         {
           "verb": "ai.chat",
-          "scope": {
-            "kind": "fixed",
-            "scope": { "kind": "name", "value": "claude-*" }
-          },
+          "scope": { "kind": "wild" },
           "why": { "en": "Send your context to a model so it can draft an email reply for you." }
         }
       ]

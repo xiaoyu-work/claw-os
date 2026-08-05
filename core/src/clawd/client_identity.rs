@@ -13,8 +13,8 @@ pub struct ClientIdentity {
 }
 
 impl ClientIdentity {
-    pub fn from_stream(stream: &UnixStream) -> Self {
-        peer_identity(stream).unwrap_or_else(Self::unknown)
+    pub fn from_stream(stream: &UnixStream) -> Result<Self, String> {
+        peer_identity(stream)
     }
 
     pub fn unknown() -> Self {
@@ -38,12 +38,25 @@ impl ClientIdentity {
         let uid = self.uid?;
         resolve_home(uid)
     }
+
+    pub fn require_uid(&self) -> Result<u32, String> {
+        self.uid
+            .ok_or_else(|| "clawd peer uid is unavailable".to_string())
+    }
+
+    pub fn require_home_dir(&self) -> Result<PathBuf, String> {
+        let uid = self.require_uid()?;
+        resolve_home(uid).ok_or_else(|| format!("home directory is unavailable for peer uid {uid}"))
+    }
+
 }
 
 #[cfg(target_os = "linux")]
-fn peer_identity(stream: &UnixStream) -> Option<ClientIdentity> {
-    let cred = stream.peer_cred().ok()?;
-    Some(ClientIdentity {
+fn peer_identity(stream: &UnixStream) -> Result<ClientIdentity, String> {
+    let cred = stream
+        .peer_cred()
+        .map_err(|err| format!("failed to read clawd peer credentials: {err}"))?;
+    Ok(ClientIdentity {
         pid: cred.pid().and_then(|pid| u32::try_from(pid).ok()),
         uid: Some(cred.uid()),
         gid: Some(cred.gid()),
@@ -51,8 +64,8 @@ fn peer_identity(stream: &UnixStream) -> Option<ClientIdentity> {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn peer_identity(_stream: &UnixStream) -> Option<ClientIdentity> {
-    None
+fn peer_identity(_stream: &UnixStream) -> Result<ClientIdentity, String> {
+    Err("clawd peer credentials are unsupported on this platform".to_string())
 }
 
 #[cfg(unix)]

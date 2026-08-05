@@ -265,7 +265,7 @@ class Node {
         const pageOrigin = (function() { try { return new URL(globalThis.location?.href || "about:blank").origin; } catch(e) { return ""; } })();
         (async () => {
           try {
-            const raw = await Deno.core.ops.op_fetch_url(fullUrl, "GET", "{}", "", pageOrigin, "no-cors");
+            const raw = await Deno.core.ops.op_fetch_url(fullUrl, "GET", "{}", "", pageOrigin, "subresource-script");
             const parsed = JSON.parse(raw);
             if (parsed.body) {
               try { (0, eval)(parsed.body); } catch(e) { console.error('Dynamic script error (' + fullUrl + '):', e.message); }
@@ -600,9 +600,12 @@ class Element extends Node {
       try { fullUrl = new URL(url, _domParse("document_url") || "about:blank").href; } catch(e) {}
     }
     const el = this;
-    fetch(fullUrl, {mode: 'no-cors'}).then(async resp => {
-      if (resp.ok || resp.type === 'opaque') {
-        const html = await resp.text();
+    const pageOrigin = (function() { try { return new URL(globalThis.location?.href || "about:blank").origin; } catch(e) { return ""; } })();
+    Deno.core.ops.op_fetch_url(fullUrl, "GET", "{}", "", pageOrigin, "subresource-iframe")
+      .then(raw => {
+        const parsed = JSON.parse(raw);
+        if (!parsed.blocked && parsed.status >= 200 && parsed.status < 400) {
+        const html = parsed.body || "";
         el._iframeDoc = new _IframeDocument(html, fullUrl, el);
         el._iframeWin = new _IframeWindow(el._iframeDoc, fullUrl);
       } else {
@@ -1286,6 +1289,9 @@ globalThis.fetch = async (input, init = {}) => {
   const hdrs = JSON.stringify(init.headers instanceof Headers ? Object.fromEntries(init.headers.entries()) : init.headers || {});
   const body = init.body ? String(init.body) : "";
   const fetchMode = init.mode || (input instanceof Request ? input.mode : "cors");
+  if (!["cors", "no-cors", "same-origin"].includes(fetchMode)) {
+    throw new TypeError("Unsupported fetch mode");
+  }
   const pageOrigin = (function() { try { const u = new URL(_domParse("document_url") || "about:blank"); return u.origin; } catch(e) { return ""; } })();
   const raw = await Deno.core.ops.op_fetch_url(url, method, hdrs, body, pageOrigin, fetchMode);
   const parsed = JSON.parse(raw);

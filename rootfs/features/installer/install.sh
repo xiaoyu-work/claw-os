@@ -19,12 +19,13 @@ FEATURE_DIR="$SCRIPT_DIR/features/installer"
 # 1. Apply overlay.
 if [ -d "$FEATURE_DIR/overlay" ]; then
     echo "  :: applying installer overlay"
-    cp -a "$FEATURE_DIR/overlay/." "$ROOTFS/"
+    cp -a --no-preserve=ownership "$FEATURE_DIR/overlay/." "$ROOTFS/"
 fi
 
 # 2. Mark the autostart hook + Xstartup script executable.
 chmod 755 "$ROOTFS/etc/profile.d/cos-installer.sh"
 chmod 755 "$ROOTFS/etc/cos/installer-xstartup"
+chmod 755 "$ROOTFS/usr/lib/cos/init/cleanup-installer-target.sh"
 
 # 3. Passwordless sudo for the live user (live-config creates "user" at
 #    boot, member of the sudo group). live-config also sets sudoers,

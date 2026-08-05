@@ -175,7 +175,7 @@ def _send(recipient: str, text: str, plain: bool = False) -> dict:
             headers=headers,
             body=body,
             timeout=20,
-            verb_id="gateway.webex.send",
+            verb_id="net.dial",
         )
         raw = raw_resp.decode("utf-8", errors="replace")
         try:

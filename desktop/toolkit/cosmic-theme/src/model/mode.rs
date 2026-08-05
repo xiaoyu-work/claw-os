@@ -19,7 +19,7 @@ impl Default for ThemeMode {
     #[inline]
     fn default() -> Self {
         Self {
-            is_dark: true,
+            is_dark: false,
             auto_switch: false,
         }
     }

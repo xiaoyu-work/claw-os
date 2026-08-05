@@ -8,6 +8,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::context_events;
+use super::client_identity::ClientIdentity;
 use super::state::DaemonState;
 use super::system_journal;
 
@@ -50,6 +51,68 @@ pub fn sources(state: &DaemonState) -> Result<Value, String> {
         "schema": 1,
         "sources": sources,
     }))
+}
+
+pub fn snapshot_for_client(
+    state: &DaemonState,
+    client: &ClientIdentity,
+) -> Result<Value, String> {
+    let uid = client.require_uid()?;
+    if uid == 0 {
+        return snapshot(state);
+    }
+    refresh_builtin_sources(state);
+    let entries = state
+        .context_snapshot()
+        .into_iter()
+        .filter(|entry| user_visible_source(&entry.source))
+        .map(|entry| {
+            json!({
+                "source": entry.source,
+                "updated_at": entry.updated_at,
+                "payload": entry.payload,
+                "metadata": entry.metadata,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({ "schema": 1, "entries": entries }))
+}
+
+pub fn sources_for_client(
+    state: &DaemonState,
+    client: &ClientIdentity,
+) -> Result<Value, String> {
+    let uid = client.require_uid()?;
+    if uid == 0 {
+        return sources(state);
+    }
+    refresh_builtin_sources(state);
+    let sources = state
+        .context_snapshot()
+        .into_iter()
+        .filter(|entry| user_visible_source(&entry.source))
+        .map(|entry| {
+            json!({
+                "source": entry.source,
+                "updated_at": entry.updated_at,
+                "metadata": entry.metadata,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({ "schema": 1, "sources": sources }))
+}
+
+fn user_visible_source(source: &str) -> bool {
+    matches!(
+        source,
+        "clawd.environment"
+            | "clawd.system"
+            | "clawd.system.inventory"
+            | "clawd.system.mounts"
+            | "clawd.system.packages"
+            | "clawd.system.services"
+            | "clawd.system.package_activity"
+    )
 }
 
 pub fn update(state: &DaemonState, params: Value) -> Result<Value, String> {
@@ -949,7 +1012,7 @@ fn recent_files_snapshot(
             break;
         }
     }
-    entries.sort_by(|left, right| right.modified_epoch_ms.cmp(&left.modified_epoch_ms));
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.modified_epoch_ms));
     let count = entries.len();
     let truncated = truncated || count > limit;
     let files = entries

@@ -6,7 +6,7 @@ Architecture: __ARCH__
 Maintainer: Claw OS <noreply@github.com>
 Homepage: https://github.com/xiaoyu-work/claw-os
 Depends: claw-os-base (= __VERSION__), claw-os-systemd (= __VERSION__), adduser,
- greetd, gnome-keyring, libpam-gnome-keyring, polkitd, dbus,
+ greetd, gnome-keyring, libpam-gnome-keyring, polkitd, pkexec, dbus,
  pipewire, pipewire-pulse, pipewire-alsa, wireplumber, alsa-utils,
  network-manager, iwd, wpasupplicant, bluez, bluez-tools, udev,
  upower, power-profiles-daemon, accountsservice, xdg-user-dirs,

@@ -3,8 +3,8 @@
 //! Replaces the React + WebView app under `desktop/agent/web/`. The
 //! bridge under `desktop/agent/bridge/` stays in place during this
 //! transition and serves as the single contract: this UI POSTs to
-//! `http://127.0.0.1:<port>/api/chat` and consumes the same SSE
-//! stream the React app did.
+//! the authenticated `http://127.0.0.1:<port>/api/chat` endpoint and
+//! consumes the same SSE stream the React app did.
 //!
 //! Two visual modes:
 //!
@@ -33,6 +33,7 @@ use std::env;
 use std::time::Instant;
 
 use cosmic::app::{Core, Settings, Task};
+use cosmic::cosmic_theme::palette::WithAlpha;
 use cosmic::iced::keyboard::{Key, key::Named};
 use cosmic::iced::{
     Alignment, Background, Border, Color, Length, Limits, Shadow, Subscription, event,
@@ -48,8 +49,8 @@ mod recorder;
 mod sse;
 
 use crate::bridge::{
-    ChatRequest, HistoryMessage, SessionSummary, StreamEvent, ToolCallView, ToolResultView,
-    fetch_history, fetch_sessions, read_bridge_port,
+    BridgeEndpoint, ChatRequest, HistoryMessage, SessionSummary, StreamEvent, ToolCallView,
+    ToolResultView, fetch_history, fetch_sessions, read_bridge_endpoint,
 };
 use crate::recorder::Recorder;
 
@@ -90,15 +91,17 @@ pub enum Message {
     InputChanged(String),
     /// User pressed Enter or clicked Send. Captures the current input.
     Submit,
-    /// Token delta from the SSE stream.
-    StreamDelta(String),
+    /// Token delta from the SSE stream. First field is the stream
+    /// generation (see `App::stream_generation`) so stale deltas from a
+    /// superseded stream are ignored.
+    StreamDelta(u64, String),
     /// Terminal envelope from the stream — currently unused beyond
     /// flipping `streaming` off.
-    StreamDone(serde_json::Value),
+    StreamDone(u64, serde_json::Value),
     /// Bridge-side or subprocess error during a streamed reply.
-    StreamError(String),
+    StreamError(u64, String),
     /// SSE connection closed (clean or otherwise). Tail of every stream.
-    StreamEnded,
+    StreamEnded(u64),
     /// User pressed Esc — only meaningful in overlay mode.
     EscapePressed,
     /// Markdown link clicked in a rendered assistant message.
@@ -306,7 +309,7 @@ impl LocalSession {
 pub struct App {
     core: Core,
     flags: Flags,
-    bridge_port: Option<u16>,
+    bridge_endpoint: Option<BridgeEndpoint>,
     bridge_error: Option<String>,
 
     sessions: Vec<LocalSession>,
@@ -315,6 +318,12 @@ pub struct App {
     /// this separately from `active` so the user can switch tabs
     /// mid-stream without breaking the delta accumulator.
     streaming_session: Option<usize>,
+    /// Monotonic id bumped on every `submit()`. Each streaming message
+    /// carries the generation it was started under; handlers drop any whose
+    /// generation no longer matches the current one, so a superseded
+    /// stream's trailing events can never finalize or append to a newer
+    /// stream's session.
+    stream_generation: u64,
 
     input: String,
     streaming: bool,
@@ -350,8 +359,8 @@ impl Application for App {
             core.window.show_minimize = false;
         }
 
-        let (bridge_port, bridge_error) = match read_bridge_port() {
-            Ok(p) => (Some(p), None),
+        let (bridge_endpoint, bridge_error) = match read_bridge_endpoint() {
+            Ok(endpoint) => (Some(endpoint), None),
             Err(e) => {
                 warn!("cos-agent-bridge unreachable: {e:#}");
                 (None, Some(format!("Bridge unavailable: {e}")))
@@ -361,11 +370,12 @@ impl Application for App {
         let mut app = App {
             core,
             flags: flags.clone(),
-            bridge_port,
+            bridge_endpoint,
             bridge_error,
             sessions: Vec::new(),
             active: 0,
             streaming_session: None,
+            stream_generation: 0,
             input: flags.query.clone().unwrap_or_default(),
             streaming: false,
             error: None,
@@ -382,10 +392,10 @@ impl Application for App {
         // the sidebar starts populated with the user's prior chats.
         // Standalone-only — the overlay is a one-shot launcher.
         let fetch_sessions = if !flags.overlay {
-            if let Some(p) = app.bridge_port {
+            if let Some(endpoint) = app.bridge_endpoint.clone() {
                 cosmic::Task::perform(
                     async move {
-                        fetch_sessions(p)
+                        fetch_sessions(endpoint)
                             .await
                             .map_err(|err| format!("{err:#}"))
                     },
@@ -432,8 +442,9 @@ impl Application for App {
 
             Message::Submit => self.submit(),
 
-            Message::StreamDelta(chunk) => {
-                if let Some(idx) = self.streaming_session
+            Message::StreamDelta(generation, chunk) => {
+                if generation == self.stream_generation
+                    && let Some(idx) = self.streaming_session
                     && let Some(sess) = self.sessions.get_mut(idx)
                     && let Some(last) = sess.messages.last_mut()
                     && last.role() == ChatRole::Assistant
@@ -443,20 +454,26 @@ impl Application for App {
                 Task::none()
             }
 
-            Message::StreamDone(envelope) => {
-                self.capture_remote_session(&envelope);
-                self.finalize_stream();
+            Message::StreamDone(generation, envelope) => {
+                if generation == self.stream_generation {
+                    self.capture_remote_session(&envelope);
+                    self.finalize_stream();
+                }
                 Task::none()
             }
 
-            Message::StreamError(msg) => {
-                self.finalize_stream();
-                self.error = Some(msg);
+            Message::StreamError(generation, msg) => {
+                if generation == self.stream_generation {
+                    self.finalize_stream();
+                    self.error = Some(msg);
+                }
                 Task::none()
             }
 
-            Message::StreamEnded => {
-                self.finalize_stream();
+            Message::StreamEnded(generation) => {
+                if generation == self.stream_generation {
+                    self.finalize_stream();
+                }
                 Task::none()
             }
 
@@ -656,13 +673,13 @@ impl App {
             sess.history = HistoryState::Loaded;
             return Task::none();
         };
-        let Some(port) = self.bridge_port else {
+        let Some(endpoint) = self.bridge_endpoint.clone() else {
             return Task::none();
         };
         sess.history = HistoryState::Loading;
         cosmic::Task::perform(
             async move {
-                let result = fetch_history(port, &remote_id)
+                let result = fetch_history(endpoint, &remote_id)
                     .await
                     .map_err(|err| format!("{err:#}"));
                 Message::HistoryFetched {
@@ -722,7 +739,7 @@ impl App {
         if prompt.is_empty() || self.streaming {
             return Task::none();
         }
-        let Some(port) = self.bridge_port else {
+        let Some(endpoint) = self.bridge_endpoint.clone() else {
             self.error = Some(
                 self.bridge_error
                     .clone()
@@ -735,6 +752,8 @@ impl App {
         self.error = None;
         self.streaming = true;
         self.streaming_session = Some(self.active);
+        self.stream_generation = self.stream_generation.wrapping_add(1);
+        let generation = self.stream_generation;
 
         let remote_id = self
             .active_session()
@@ -769,25 +788,33 @@ impl App {
             move |mut tx: cosmic::iced::futures::channel::mpsc::Sender<Message>| async move {
                 use futures::SinkExt;
                 use futures_util::StreamExt;
-                match sse::open_chat_stream(port, request).await {
+                match sse::open_chat_stream(endpoint, request).await {
                     Ok(stream) => {
                         let mut stream = std::pin::pin!(stream);
                         while let Some(item) = stream.next().await {
                             let msg = match item {
-                                Ok(StreamEvent::Delta(t)) => Message::StreamDelta(t),
-                                Ok(StreamEvent::Done(v)) => Message::StreamDone(v),
-                                Ok(StreamEvent::Error(e)) => Message::StreamError(e),
-                                Err(e) => Message::StreamError(format!("{e:#}")),
+                                Ok(StreamEvent::Delta(t)) => Message::StreamDelta(generation, t),
+                                Ok(StreamEvent::Done(v)) => Message::StreamDone(generation, v),
+                                Ok(StreamEvent::Error(e)) => Message::StreamError(generation, e),
+                                Err(e) => Message::StreamError(generation, format!("{e:#}")),
                             };
+                            let terminal = matches!(msg, Message::StreamError(..));
                             if tx.send(msg).await.is_err() {
                                 return;
                             }
+                            if terminal {
+                                // An error ends this stream; the StreamError
+                                // handler finalizes. Returning here (rather than
+                                // falling through to StreamEnded) means a single
+                                // stream emits exactly one terminal event.
+                                return;
+                            }
                         }
-                        let _ = tx.send(Message::StreamEnded).await;
+                        let _ = tx.send(Message::StreamEnded(generation)).await;
                     }
                     Err(e) => {
                         let _ = tx
-                            .send(Message::StreamError(format!("{e:#}")))
+                            .send(Message::StreamError(generation, format!("{e:#}")))
                             .await;
                     }
                 }
@@ -950,8 +977,8 @@ impl App {
             .padding(spacing.space_xs)
             .width(Length::Fill);
 
-        let model_caption = match self.bridge_port {
-            Some(port) => format!("Bridge :{port}"),
+        let model_caption = match self.bridge_endpoint.as_ref() {
+            Some(endpoint) => format!("Bridge :{}", endpoint.port),
             None => "Bridge offline".into(),
         };
 
@@ -1082,7 +1109,7 @@ impl App {
             },
             VoiceState::Recording(rec) => {
                 self.voice = VoiceState::Processing;
-                let Some(port) = self.bridge_port else {
+                let Some(endpoint) = self.bridge_endpoint.clone() else {
                     self.voice = VoiceState::Idle;
                     self.error = Some(
                         self.bridge_error
@@ -1104,7 +1131,7 @@ impl App {
                                 return Message::VoiceError(format!("recorder task: {e}"));
                             }
                         };
-                        match recorder::upload(port, wav).await {
+                        match recorder::upload(endpoint, wav).await {
                             Ok(resp) => Message::VoiceTranscribed {
                                 text: resp.text,
                                 placeholder: resp.placeholder,

@@ -30,10 +30,7 @@
       "needs": [
         {
           "verb": "ai.chat.untrusted",
-          "scope": {
-            "kind": "fixed",
-            "scope": { "kind": "name", "value": "claude-*" }
-          },
+          "scope": { "kind": "wild" },
           "why": {
             "en": "Send the text to a model so it can be condensed for you."
           }

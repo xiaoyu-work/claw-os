@@ -2,7 +2,8 @@
 //
 // Like the Python, Rust, and Node SDKs, the Go SDK is a thin client
 // over wire protocol v1: it shells out to the `cos` binary, which reads
-// a request from argv and writes a JSON envelope to stdout. The
+// non-sensitive routing flags from argv and writes a JSON envelope to stdout.
+// AI prompt bodies are passed through private temporary files. The
 // subprocess model is intentional — identity, audit, and session
 // context are inherited from process ancestry (kernel-spawned parent →
 // app process → cos child). A pure in-process binding could not prove
@@ -18,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -112,7 +114,9 @@ func cosCallJSON(label string, args []string) (*cosOutcome, error) {
 	}
 
 	var env map[string]any
-	if err := json.Unmarshal([]byte(text), &env); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(text))
+	decoder.UseNumber()
+	if err := decoder.Decode(&env); err != nil {
 		return nil, &UnavailableError{Msg: fmt.Sprintf("%s returned non-JSON output: %s", label, truncate(text, 200))}
 	}
 	return &cosOutcome{Envelope: env, Status: status}, nil
@@ -146,13 +150,46 @@ func asFloat(v any) float64 {
 	case int:
 		return float64(n)
 	case json.Number:
-		f, _ := n.Float64()
-		return f
+		value, _ := n.Float64()
+		return value
 	}
 	return 0
 }
 
 func asInt(v any) int64 { return int64(asFloat(v)) }
+
+func asUint64(v any) uint64 {
+	switch n := v.(type) {
+	case json.Number:
+		value, _ := strconv.ParseUint(string(n), 10, 64)
+		return value
+	case uint64:
+		return n
+	case uint32:
+		return uint64(n)
+	case int64:
+		if n >= 0 {
+			return uint64(n)
+		}
+	case int:
+		if n >= 0 {
+			return uint64(n)
+		}
+	case float64:
+		if n >= 0 {
+			return uint64(n)
+		}
+	}
+	return 0
+}
+
+func asUint32(v any) uint32 {
+	value := asUint64(v)
+	if value > uint64(^uint32(0)) {
+		return 0
+	}
+	return uint32(value)
+}
 
 func asBool(v any) bool {
 	b, _ := v.(bool)

@@ -46,9 +46,10 @@ pub const MODEL_NAME: &str = "text-embedding-3-small";
 // =====================================================================
 
 /// Build the configured embedder, if any. Returns `Ok(None)` when
-/// embedding is disabled (`provider="none"`) or when `provider="auto"`
-/// but the bundled local Qwen3 stack is not available. Returns an
-/// error if the config block names a provider that does not exist.
+/// embedding is disabled (`provider="none"`), or when `provider="auto"`
+/// and neither the bundled local Qwen3 stack nor an embeddings-capable
+/// cloud `[agent]` provider is available. Returns an error if the
+/// config block names a provider that does not exist.
 pub fn build_default() -> Result<Option<Box<dyn Embedder>>, String> {
     let cfg = &crate::config::get().embed;
     build_from(cfg)
@@ -67,13 +68,14 @@ pub fn build_from_with_agent(
 ) -> Result<Option<Box<dyn Embedder>>, String> {
     match cfg.provider.as_str() {
         "none" => Ok(None),
-        // Default path: use the bundled local Qwen3 embedding stack
+        // Default path: prefer the bundled local Qwen3 embedding stack
         // when the image includes both the model and the ort-genai
         // runtime. Linux arm64 builds currently skip that stack because
-        // upstream does not publish a Linux arm64 CPU runtime; those
-        // systems return None here so setup can ask the user to choose
-        // an embedding provider explicitly.
-        "auto" | "" => system_local_default(cfg),
+        // upstream does not publish a Linux arm64 CPU runtime; on those
+        // systems we fall back to the user's configured cloud `[agent]`
+        // provider, and only return None (semantic recall off) when no
+        // embeddings-capable provider is configured at all.
+        "auto" | "" => system_local_default(cfg, agent),
         // Compatibility escape hatch for users who deliberately want the
         // old "derive embeddings from my chat provider" behaviour.
         "agent-auto" => derive_from_agent(cfg, agent),
@@ -92,17 +94,53 @@ pub fn build_from_with_agent(
     }
 }
 
-fn system_local_default(cfg: &EmbedConfig) -> Result<Option<Box<dyn Embedder>>, String> {
+/// Default (`provider = "auto"`) embedder resolution.
+///
+/// 1. Prefer the bundled local Qwen3 ONNX stack when the image ships
+///    both the model and the ort-genai runtime.
+/// 2. If that stack is unavailable (e.g. Linux arm64, or the model
+///    isn't installed), fall back to the user's configured cloud
+///    `[agent]` provider when it speaks the OpenAI `/embeddings` shape
+///    (openai / azure / xai / deepseek / openrouter / ollama).
+/// 3. Otherwise return `None`: semantic recall stays off until the
+///    user sets `[embed].provider` explicitly. We never silently
+///    substitute a low-quality approximation — an embedding system
+///    must produce real, model-consistent vectors or none at all
+///    (mixing vector spaces would corrupt `semantic.db`).
+fn system_local_default(
+    cfg: &EmbedConfig,
+    agent: &crate::config::AgentConfig,
+) -> Result<Option<Box<dyn Embedder>>, String> {
     let mut local_cfg = cfg.clone();
     local_cfg.provider = "local".to_string();
     let embedder = super::qwen3_genai::build_from_config(&local_cfg);
     if embedder.is_configured() {
-        Ok(Some(Box::new(embedder)))
-    } else {
-        tracing::debug!(
-            "embed: provider=auto but bundled local Qwen3 embedding stack is unavailable — embeddings require explicit setup"
-        );
-        Ok(None)
+        return Ok(Some(Box::new(embedder)));
+    }
+    // Local stack missing → derive from the user's cloud agent provider.
+    match derive_from_agent(cfg, agent) {
+        Ok(Some(e)) => {
+            tracing::info!(
+                "embed: bundled Qwen3 stack unavailable — deriving embeddings from the configured agent provider (set [embed].provider to choose explicitly)"
+            );
+            Ok(Some(e))
+        }
+        // Agent provider isn't embeddings-capable, or deriving needs
+        // more config (e.g. Azure without an explicit [embed].model).
+        // In the default `auto` path we stay best-effort and leave
+        // semantic recall off rather than failing the whole runtime.
+        Ok(None) => {
+            tracing::debug!(
+                "embed: no local Qwen3 stack and the agent provider is not embeddings-capable — semantic recall disabled until [embed].provider is set"
+            );
+            Ok(None)
+        }
+        Err(e) => {
+            tracing::debug!(
+                "embed: no local Qwen3 stack and agent-derived embeddings unavailable ({e}) — semantic recall disabled until [embed].provider is set"
+            );
+            Ok(None)
+        }
     }
 }
 
@@ -422,7 +460,10 @@ mod tests {
     }
 
     #[test]
-    fn build_auto_returns_none_when_local_stack_missing() {
+    fn build_auto_returns_none_when_local_missing_and_no_cloud_agent() {
+        // provider="auto" + no local Qwen3 stack + an agent provider
+        // that can't do embeddings (anthropic) → semantic recall stays
+        // off (None). We never fall back to a low-quality local hash.
         let mut c = EmbedConfig::default();
         c.model_dir = Some(
             std::env::temp_dir()
@@ -430,7 +471,32 @@ mod tests {
                 .display()
                 .to_string(),
         );
-        assert!(build_from(&c).unwrap().is_none());
+        let mut agent = crate::config::AgentConfig::default();
+        agent.provider = "anthropic".into();
+        assert!(build_from_with_agent(&c, &agent).unwrap().is_none());
+    }
+
+    #[test]
+    fn build_auto_falls_back_to_cloud_agent_when_local_missing() {
+        // provider="auto" + no local Qwen3 stack + an OpenAI-shape agent
+        // provider → derive a real cloud embedder rather than disabling
+        // semantic recall (the AI system always wants true embeddings).
+        let mut c = EmbedConfig::default();
+        c.model_dir = Some(
+            std::env::temp_dir()
+                .join("cos-test-missing-qwen3-embedding-stack")
+                .display()
+                .to_string(),
+        );
+        let mut agent = crate::config::AgentConfig::default();
+        agent.provider = "openai".into();
+        agent.base_url = Some("https://api.openai.com/v1".into());
+        agent.api_key_env = Some("OPENAI_API_KEY".into());
+
+        let built = build_from_with_agent(&c, &agent)
+            .expect("auto cloud fallback ok")
+            .expect("openai agent → some");
+        assert_eq!(built.name(), "openai");
     }
 
     #[test]

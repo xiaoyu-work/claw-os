@@ -61,6 +61,12 @@ EOF
 # Hostname + login banners.
 # -----------------------------------------------------------------------------
 
+for path in etc/hostname etc/issue etc/motd; do
+    if [ -e "$ROOTFS/$path" ]; then
+        cp -a "$ROOTFS/$path" "$ROOTFS/$path.claw-installed"
+    fi
+done
+
 echo "claw-os-live" > "$ROOTFS/etc/hostname"
 
 cat > "$ROOTFS/etc/issue" <<'EOF'
@@ -111,6 +117,8 @@ done
 
 if [ -f "$ROOTFS/etc/greetd/cosmic-greeter.toml" ]; then
     echo "  :: layering greetd initial_session for live user autologin"
+    cp -a "$ROOTFS/etc/greetd/cosmic-greeter.toml" \
+        "$ROOTFS/etc/greetd/cosmic-greeter.toml.claw-installed"
     cat > "$ROOTFS/etc/greetd/cosmic-greeter.toml" <<'EOF'
 [terminal]
 vt = "1"

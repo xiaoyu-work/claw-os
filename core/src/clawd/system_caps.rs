@@ -49,7 +49,8 @@ pub fn readonly_task_caps() -> CapSet {
         caps.insert(Cap::new(Verb::AGENT_INVOKE, Scope::name(app)));
     }
 
-    for host in ["**"] {
+    {
+        let host = "**";
         caps.insert(Cap::new(Verb::BROWSER_DOM_READ, Scope::host(host)));
     }
 

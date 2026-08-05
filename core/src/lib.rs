@@ -1,3 +1,14 @@
+// Several staged runtime surfaces are compiled before their CLI wiring lands,
+// and long protocol/FFI signatures intentionally mirror external schemas.
+#![allow(dead_code)]
+#![allow(
+    clippy::doc_lazy_continuation,
+    clippy::doc_overindented_list_items,
+    clippy::should_implement_trait,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
+
 pub mod agent;
 pub mod ai;
 pub mod approvals;
@@ -28,8 +39,10 @@ pub mod mem_bridge;
 pub mod sandbox;
 pub mod service;
 pub mod session;
+pub mod storage;
 pub mod sysinfo;
 pub mod trace;
+pub mod triggers;
 pub mod watch;
 
 #[cfg(test)]

@@ -12,12 +12,16 @@ set -euo pipefail
 
 DEBS_DIR="$PROJECT_DIR/build/debs"
 
-if ! ls "$DEBS_DIR/claw-os-systemd_"*.deb >/dev/null 2>&1; then
+SYSTEMD_DEB="$DEBS_DIR/claw-os-systemd_${COS_VERSION}_all.deb"
+if [ ! -f "$SYSTEMD_DEB" ]; then
     echo "  :: claw-os-systemd.deb not found — building it"
     "$PROJECT_DIR/packaging/deb/build-debs.sh"
 fi
 
-SYSTEMD_DEB="$(ls "$DEBS_DIR/claw-os-systemd_"*"_all.deb" | head -1)"
+if [ ! -f "$SYSTEMD_DEB" ]; then
+    echo "error: expected package missing after build: $SYSTEMD_DEB" >&2
+    exit 1
+fi
 echo "  :: installing $(basename "$SYSTEMD_DEB")"
 
 mkdir -p "$ROOTFS/var/cache/cos-debs"
@@ -38,6 +42,20 @@ else
         "$ROOTFS/etc/systemd/system/multi-user.target.wants/cos-home-setup.service"
 fi
 echo "  :: cos-browser.service installed (not enabled by default)"
+
+# User indexers are global default.target services, so they also run for
+# headless/SSH user managers. Their ConditionPathIsExecutable directives
+# make missing optional binaries a clean skip.
+mkdir -p "$ROOTFS/etc/systemd/user/default.target.wants"
+for unit in claw-recoll-index.service claw-semantic.service; do
+    if [ -f "$ROOTFS/usr/lib/systemd/user/$unit" ]; then
+        ln -sf "/usr/lib/systemd/user/$unit" \
+            "$ROOTFS/etc/systemd/user/default.target.wants/$unit"
+    else
+        echo "error: expected user unit missing: $unit" >&2
+        exit 1
+    fi
+done
 
 if [ -L "$ROOTFS/etc/systemd/system/multi-user.target.wants/clawd.service" ]; then
     echo "  :: clawd.service enabled as system daemon"

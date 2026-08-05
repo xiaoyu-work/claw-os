@@ -160,7 +160,7 @@ def _send(recipient_phone: str, text: str) -> dict:
             headers=headers,
             body=body,
             timeout=15,
-            verb_id="gateway.whatsapp.send",
+            verb_id="net.dial",
         )
         raw = raw_resp.decode("utf-8", errors="replace")
         try:

@@ -96,6 +96,23 @@ ai-page = Configure AI
     .oauth-authorized = Signed in.
     .oauth-failed = Sign-in failed
 
+# DriversPage
+
+drivers-page = Graphics drivers
+    .description = ClawOS already includes open-source drivers for every GPU. If an NVIDIA card is detected, you can install NVIDIA's proprietary driver here for full 3D performance and CUDA. You can also do this later with `claw-gpu-setup install`.
+    .detecting = Detecting graphics hardware…
+    .detected = Detected
+    .none = Your graphics work out of the box — no extra driver is needed.
+    .install-available = An NVIDIA GPU was found. Install the proprietary driver for full 3D acceleration and CUDA.
+    .already = The proprietary NVIDIA driver is already installed.
+    .wsl-ready = Your NVIDIA GPU is available through host passthrough — CUDA is ready, nothing to install.
+    .wsl-missing = An NVIDIA GPU is expected but not visible. Install the NVIDIA driver on the host system.
+    .unsupported-arch = The proprietary NVIDIA driver is not available for this processor architecture.
+    .install = Install NVIDIA driver
+    .installing = Installing the NVIDIA driver… this can take several minutes.
+    .install-ok = NVIDIA driver installed. Restart to start using it.
+    .install-failed = Could not install the driver
+
 # WirelessPage
 
 wireless-page = Get connected

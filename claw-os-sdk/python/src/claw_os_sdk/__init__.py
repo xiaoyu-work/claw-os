@@ -7,8 +7,9 @@ and is generated or hand-written to satisfy that contract.
 
 Public modules
 --------------
-- :mod:`claw_os_sdk.ai`       — typed wrappers around ``cos ai`` (chat,
-  embed, image / audio / video).
+- :mod:`claw_os_sdk.ai`       — stable text chat wrappers around
+  ``cos ai chat``. Multimodal compatibility helpers are experimental
+  and currently raise :class:`claw_os_sdk.ai.AiUnsupported`.
 - :mod:`claw_os_sdk.tools`    — call other apps' verbs from inside an
   app (``tools.call``, ``tools.catalog``, ``tools.for_chat``).
 - :mod:`claw_os_sdk.gui`      — desktop GUI bootstrap: the kernel context
@@ -27,7 +28,7 @@ Typical usage::
 
     def cmd_summarise(args):
         text = open(args["path"]).read()
-        return ai.chat([{"role": "user", "content": f"Summarise: {text}"}])
+        return ai.chat(f"Summarise: {text}")
 
 Capability gating (``policy.require``) and the COW snapshot helper
 live in the **internal** ``cos_runtime`` package — they are

@@ -287,14 +287,13 @@ pub(crate) fn classify_lexical(path: &Path) -> FileSafety {
         .map(str::to_ascii_lowercase)
     {
         // .docker/config.json + .kube/config style
-        if file_name == "config.json" {
-            if normalised.contains("/.docker/") {
+        if file_name == "config.json"
+            && normalised.contains("/.docker/") {
                 return FileSafety::Deny {
                     reason: "Docker config file contains auth tokens".to_string(),
                     category: SafetyCategory::Credential,
                 };
             }
-        }
         if file_name == "config" && normalised.contains("/.kube/") {
             return FileSafety::Deny {
                 reason: "kubeconfig file contains cluster credentials".to_string(),

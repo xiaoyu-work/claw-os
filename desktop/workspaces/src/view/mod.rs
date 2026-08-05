@@ -1,4 +1,5 @@
 use cosmic::Apply;
+use cosmic::cosmic_theme::palette::WithAlpha;
 use cosmic::cctk::cosmic_protocols::toplevel_info::v1::client::zcosmic_toplevel_handle_v1;
 use cosmic::cctk::cosmic_protocols::workspace::v2::client::zcosmic_workspace_handle_v2;
 use cosmic::cctk::wayland_client::protocol::wl_output;

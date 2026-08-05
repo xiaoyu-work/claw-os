@@ -7,37 +7,29 @@
 //! loop / memory / skills / hooks / recall). Apps get raw LLM
 //! access plus the App–AI Gate; they do not get the Agent.
 //!
-//! The gate ([`crate::ai::gate`]) enforces, in order: modality
-//! derivation, capability check, manifest model glob + prompt origin
+//! The gate ([`crate::ai::gate`]) enforces, in order: request
+//! classification, capability check, manifest model glob + prompt origin
 //! allowlist, per-app monthly budget, safety profile, audit. The
 //! **modality** (and therefore the caps verb required) is derived
 //! from the request shape — Apps never pass a verb directly:
 //!
 //!   - `--prompt` (text only)                       → `ai.chat`
 //!   - `--prompt` + `--origin external-content`     → `ai.chat.untrusted`
-//!   - `--embed --prompt <text>`                    → `ai.embed`
-//!   - `--prompt <text> --image-output <path>`      → `ai.image.generate`
-//!   - `--image-input <path>`                       → `ai.image.analyze`
-//!   - `--image-input <p> --prompt <q>`             → `ai.vision.analyze`
-//!   - `--prompt <text> --audio-output <path>`      → `ai.audio.tts`
-//!   - `--audio-input <path>`                       → `ai.audio.stt`
-//!   - `--prompt <text> --video-output <path>`      → `ai.video.generate`
-//!   - `--video-input <path>`                       → `ai.video.analyze`
+//!
+//! Embed, image, vision, audio, and video selectors are reserved for an
+//! experimental future surface and currently return an explicit
+//! unsupported error before app policy, consent, caps, or budget work.
 //!
 //! Flags:
 //!   --app <id>           App requesting the call (required).
 //!   --prompt <text>      Text portion of the request (modality-dependent).
 //!   --prompt-file <p>    Read prompt body from a file.
+//!   --system-file <p>    Read the optional system prompt from a file.
 //!   --origin <kind>      trusted | user-input | external-content (default: trusted).
 //!   --max-units <N>      Cap units for this call.
 //!   --system <text>      Optional system prompt.
-//!   --embed              Request an embedding (vector) instead of text.
-//!   --image-input <p>    Image to analyse.
-//!   --image-output <p>   Path the gate writes the generated image to.
-//!   --audio-input <p>    Audio to transcribe.
-//!   --audio-output <p>   Path the gate writes synthesised speech to.
-//!   --video-input <p>    Video to analyse.
-//!   --video-output <p>   Path the gate writes the generated video to.
+//!   --embed / --*-input / --*-output
+//!                        Experimental selectors; currently unsupported.
 //!   --tools <list>       Comma-separated catalog tool names to expose
 //!                        to the model (e.g. `fs.read_text,kv.get`).
 //!                        Each name is resolved against
@@ -57,12 +49,11 @@
 //!
 //! Per `docs/app-ai-integration.md` §3, an App's identity is established
 //! **only** when the kernel itself spawns the App (`cos app <id> <op>`).
-//! `core/src/bridge.rs` injects `COS_APP_ID=<id>` into the child env at
-//! that moment; subprocesses of the App inherit it. We refuse the call
-//! unless `COS_APP_ID` is set in our env **and** matches the `--app`
-//! argument byte-for-byte. The `--app` flag alone is never trusted —
-//! anyone with shell access could pass any string. This makes
-//! cross-App impersonation impossible without the kernel's complicity.
+//! `core/src/bridge.rs` creates a registered App session, binds it to the
+//! spawned PID, and injects both `COS_SESSION` and `COS_APP_ID`. A call is
+//! accepted only when the env claim, registry `app_id`, and nearest App
+//! process ancestry all agree with `--app`. No environment variable is
+//! trusted as an identity boundary by itself.
 
 use serde_json::{json, Value};
 
@@ -75,6 +66,7 @@ pub fn chat_cmd(args: &[String]) -> Result<Value, String> {
     let mut origin = "trusted".to_string();
     let mut max_units: Option<u64> = None;
     let mut system: Option<String> = None;
+    let mut system_file: Option<String> = None;
     let mut embed = false;
     let mut image_input: Option<std::path::PathBuf> = None;
     let mut image_output: Option<std::path::PathBuf> = None;
@@ -125,6 +117,10 @@ pub fn chat_cmd(args: &[String]) -> Result<Value, String> {
                 system = args.get(i + 1).cloned();
                 i += 2;
             }
+            "--system-file" => {
+                system_file = args.get(i + 1).cloned();
+                i += 2;
+            }
             "--embed" => {
                 embed = true;
                 i += 1;
@@ -164,14 +160,53 @@ pub fn chat_cmd(args: &[String]) -> Result<Value, String> {
         }
     }
 
+    let unsupported = if embed {
+        Some("embed")
+    } else if image_output.is_some() {
+        Some("image_generate")
+    } else if image_input.is_some() && prompt.is_some() {
+        Some("vision_analyze")
+    } else if image_input.is_some() {
+        Some("image_analyze")
+    } else if audio_output.is_some() {
+        Some("audio_tts")
+    } else if audio_input.is_some() {
+        Some("audio_stt")
+    } else if video_output.is_some() {
+        Some("video_generate")
+    } else if video_input.is_some() {
+        Some("video_analyze")
+    } else {
+        None
+    };
+    if let Some(modality) = unsupported {
+        return Err(format!(
+            "modality `{modality}` is currently unsupported; only chat/chat-untrusted are stable"
+        ));
+    }
+
     let app = app.ok_or_else(|| "--app is required".to_string())?;
-    enforce_identity(&app, std::env::var("COS_APP_ID").ok().as_deref())?;
+    enforce_identity_for(&app)?;
 
     let prompt_text: Option<String> = match (prompt, prompt_file) {
-        (Some(p), _) => Some(p),
+        (Some(_), Some(_)) => {
+            return Err("--prompt and --prompt-file are mutually exclusive".to_string());
+        }
+        (Some(p), None) => Some(p),
         (None, Some(path)) => Some(
             std::fs::read_to_string(&path)
                 .map_err(|e| format!("--prompt-file {path}: {e}"))?,
+        ),
+        (None, None) => None,
+    };
+    let system_text: Option<String> = match (system, system_file) {
+        (Some(_), Some(_)) => {
+            return Err("--system and --system-file are mutually exclusive".to_string());
+        }
+        (Some(value), None) => Some(value),
+        (None, Some(path)) => Some(
+            std::fs::read_to_string(&path)
+                .map_err(|e| format!("--system-file {path}: {e}"))?,
         ),
         (None, None) => None,
     };
@@ -180,7 +215,7 @@ pub fn chat_cmd(args: &[String]) -> Result<Value, String> {
         app_id: app,
         origin,
         prompt: prompt_text,
-        system,
+        system: system_text,
         max_units,
         embed,
         image_input,
@@ -201,9 +236,9 @@ pub fn chat_cmd(args: &[String]) -> Result<Value, String> {
 /// Verify the caller is the App they claim to be.
 ///
 /// `arg_app` is the `--app <id>` value parsed from the CLI; `env_app`
-/// is the current process's `COS_APP_ID` (or `None` if unset). The
-/// only way `COS_APP_ID` reaches a process is via `bridge.rs` when
-/// the kernel spawns an installed App — see the module doc above.
+/// is the current process's `COS_APP_ID` claim (or `None` if unset).
+/// [`enforce_identity_for`] additionally verifies the registered App
+/// session and process ancestry.
 ///
 /// A bare-process invocation (no `COS_APP_ID`) is rejected with a
 /// dev-friendly hint; an env value that disagrees with `--app` is
@@ -212,13 +247,11 @@ fn enforce_identity(arg_app: &str, env_app: Option<&str>) -> Result<(), String> 
     match env_app {
         None => Err(format!(
             "`cos ai chat` must be invoked by the kernel via `cos app {arg_app} <op>`. \
-             COS_APP_ID is not set, so the kernel cannot attest the caller's identity. \
-             For local development, set COS_APP_ID={arg_app} before invoking."
+             COS_APP_ID is not set, so the claimed App identity is missing."
         )),
         Some(env) if env != arg_app => Err(format!(
             "identity mismatch: --app={arg_app} but COS_APP_ID={env}. \
-             An App may only request AI calls for itself; the kernel-injected \
-             COS_APP_ID is the source of truth."
+             An App may only request AI calls for its registered identity."
         )),
         Some(_) => Ok(()),
     }
@@ -228,7 +261,20 @@ fn enforce_identity(arg_app: &str, env_app: Option<&str>) -> Result<(), String> 
 /// that want the same identity enforcement as `cos ai chat`. Reads
 /// `COS_APP_ID` from the current process env.
 pub fn enforce_identity_for(arg_app: &str) -> Result<(), String> {
-    enforce_identity(arg_app, std::env::var("COS_APP_ID").ok().as_deref())
+    enforce_identity(arg_app, std::env::var("COS_APP_ID").ok().as_deref())?;
+    let session = crate::proc::current_session_info_for_caps()
+        .ok_or_else(|| "App identity session is not registered".to_string())?;
+    if session.app_id.as_deref() != Some(arg_app) {
+        return Err(format!(
+            "App identity mismatch: session `{}` is registered for {:?}, not `{arg_app}`",
+            session.session_id, session.app_id
+        ));
+    }
+    crate::caps::require(
+        crate::caps::Verb::AGENT_INVOKE,
+        crate::caps::Scope::name(arg_app),
+    )
+    .map_err(|denial| format!("App identity ancestry check failed: {}", denial.summary()))
 }
 
 /// Parse `--tools` value (e.g. `"fs.read_text,kv.get"`) into a clean

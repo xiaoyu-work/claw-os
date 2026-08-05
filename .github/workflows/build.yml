@@ -25,6 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -46,7 +48,7 @@ jobs:
             ${{ runner.os }}-cargo-test-
 
       - name: Clippy lint (cos)
-        run: cd core && cargo clippy --target x86_64-unknown-linux-musl -- -D warnings 2>&1 || true
+        run: cd core && cargo clippy --target x86_64-unknown-linux-musl -- -D warnings
 
       - name: Run cos tests
         # `--test-threads=1` because many tests in `cos` mutate process-wide
@@ -60,6 +62,49 @@ jobs:
       - name: Run cos-browser tests
         run: cargo test -p cos-browser
 
+      - name: Install Python test dependencies
+        run: python3 -m pip install --disable-pip-version-check pytest
+
+      - name: Run Python tests
+        env:
+          PYTHONPATH: claw-os-sdk/python/src:cos-runtime/python/src
+        run: python3 -m pytest -q apps adapters claw-os-sdk/python/src cos-runtime/python/src
+
+  prepare-apt-key:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Export apt archive public key
+        if: github.event_name != 'pull_request'
+        env:
+          CLAW_OS_APT_SIGNING_PRIVATE_KEY: ${{ secrets.CLAW_OS_APT_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$CLAW_OS_APT_SIGNING_PRIVATE_KEY" ]; then
+            echo "CLAW_OS_APT_SIGNING_PRIVATE_KEY is required" >&2
+            exit 1
+          fi
+          export GNUPGHOME="$RUNNER_TEMP/claw-os-apt-gnupg"
+          trap 'rm -rf "$GNUPGHOME"' EXIT
+          mkdir -m 700 -p "$GNUPGHOME"
+          printf '%s' "$CLAW_OS_APT_SIGNING_PRIVATE_KEY" | gpg --batch --import
+          key_id="$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "sec" { print $5; exit }')"
+          test -n "$key_id"
+          mkdir -p build/apt-key
+          gpg --batch --export "$key_id" > build/apt-key/claw-os-archive-keyring.gpg
+          test -s build/apt-key/claw-os-archive-keyring.gpg
+
+      - name: Upload apt archive public key
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: claw-os-apt-public-key
+          path: build/apt-key/claw-os-archive-keyring.gpg
+          if-no-files-found: error
+
   # Single amd64 headless OS rootfs, multiple distribution channels.
   #
   # The amd64 rootfs is built once with the full non-desktop runtime surface:
@@ -69,9 +114,8 @@ jobs:
   # desktop UI, installer/boot/VM-only features, and third-party agent providers
   # such as copilot-cli.
   #
-  # arm64 uses the same feature list, but qwen3-embedding currently skips there
-  # because upstream ort-genai publishes Windows arm64 assets but no Linux arm64
-  # CPU runtime. WSL and Docker arm64 are Linux targets.
+  # arm64 builds the same feature list as amd64, including the
+  # qwen3-embedding stack. WSL and Docker arm64 are Linux targets.
   #
   # Downstream steps in this job then package that one rootfs into:
   #   - 1 Docker amd64 source image     → GHCR
@@ -81,7 +125,7 @@ jobs:
   # Multi-arch Docker manifest publication, WSL release publication, and apt
   # repo assembly are separate jobs that wait for both amd64 and arm64 builds.
   build-amd64:
-    needs: test
+    needs: [test, prepare-apt-key]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -89,6 +133,15 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Download apt archive public key
+        if: github.event_name != 'pull_request'
+        uses: actions/download-artifact@v4
+        with:
+          name: claw-os-apt-public-key
+          path: packaging/apt-repo
 
       # cos (musl, static) and cos-browser (gnu, V8 needs glibc).
       - uses: dtolnay/rust-toolchain@stable
@@ -98,7 +151,7 @@ jobs:
       - name: Install host build tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y musl-tools debootstrap curl ca-certificates python3
+          sudo apt-get install -y musl-tools debootstrap curl ca-certificates python3 gnupg
 
       - name: Cache cargo registry & target
         uses: actions/cache@v4
@@ -123,32 +176,41 @@ jobs:
       # Build the headless Claw OS rootfs ONCE. The Docker image and WSL
       # tarball both consume this same tree.
       - name: Build headless rootfs (shared with Docker + WSL)
-        run: sudo ./rootfs/build.sh --features base,cos-core,browser,systemd,apt-source,qwen3-embedding
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            sudo ./rootfs/build.sh --features base,cos-core,browser,systemd,gpu-drivers,qwen3-embedding
+          else
+            sudo ./rootfs/build.sh --features base,cos-core,browser,systemd,gpu-drivers,apt-source,qwen3-embedding
+          fi
 
-      # Docker-specific prep on the shared rootfs:
+      # Docker-specific prep on a private staging copy:
       #   - Add the default `cos` user (uid 1000, NOPASSWD sudo).
       #   - Pre-create /var/lib/cos/overlay/{base,upper,work} chowned to cos
       #     so cos-home-setup.service can prepare the non-root agent home
       #     when systemd boots the container.
-      # Both steps are idempotent; targets/wsl/build.sh below re-runs the user
-      # add as a no-op when it sees the user already exists.
-      - name: Prep rootfs for Docker (cos user + overlay scratch dirs)
+      - name: Stage rootfs for Docker (cos user + overlay scratch dirs)
         run: |
           sudo bash -c '
             set -euo pipefail
             export ROOTFS="$PWD/build/claw-os-rootfs"
+            export DOCKER_ROOTFS="$PWD/build/claw-os-docker-rootfs-amd64"
+            export DOCKER_UPPER="$PWD/build/.claw-os-docker-upper-amd64"
+            export DOCKER_WORK="$PWD/build/.claw-os-docker-work-amd64"
             export PROJECT_DIR="$PWD"
+            mountpoint -q "$DOCKER_ROOTFS" 2>/dev/null && umount "$DOCKER_ROOTFS" || true
+            rm -rf "$DOCKER_ROOTFS" "$DOCKER_UPPER" "$DOCKER_WORK"
+            mkdir -p "$DOCKER_ROOTFS" "$DOCKER_UPPER" "$DOCKER_WORK"
+            mount -t overlay overlay \
+              -o "lowerdir=$ROOTFS,upperdir=$DOCKER_UPPER,workdir=$DOCKER_WORK" \
+              "$DOCKER_ROOTFS"
             source "$PROJECT_DIR/scripts/lib/add-cos-user.sh"
-            add_cos_user "$ROOTFS"
-            chroot "$ROOTFS" /bin/bash -c "
+            add_cos_user "$DOCKER_ROOTFS"
+            chroot "$DOCKER_ROOTFS" /bin/bash -c "
               set -e
               mkdir -p /var/lib/cos/overlay/base /var/lib/cos/overlay/upper /var/lib/cos/overlay/work
               chown -R cos:cos /var/lib/cos/overlay
             "
           '
-
-      - name: Fix rootfs permissions for Docker build context
-        run: sudo chmod -R a+rX build/claw-os-rootfs
 
       # Docker build (FROM scratch — no base image)
       - name: Set up Docker Buildx
@@ -174,21 +236,46 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push Docker amd64 image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: targets/docker/Dockerfile
-          platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
-          load: ${{ github.event_name == 'pull_request' }}
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}-amd64
-          labels: ${{ steps.meta.outputs.labels }}
+        env:
+          DOCKER_LABELS: ${{ steps.meta.outputs.labels }}
+        run: |
+          label_args=()
+          while IFS= read -r label; do
+            [ -n "$label" ] && label_args+=(--label "$label")
+          done <<< "$DOCKER_LABELS"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            output_flag=--output=type=cacheonly
+          else
+            output_flag=--push
+          fi
+          sudo tar --numeric-owner -cf - \
+            targets/docker/Dockerfile build/claw-os-docker-rootfs-amd64 \
+            | docker buildx build \
+                --platform linux/amd64 \
+                --file targets/docker/Dockerfile \
+                --build-arg ROOTFS_DIR=build/claw-os-docker-rootfs-amd64 \
+                --tag "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}-amd64" \
+                "${label_args[@]}" "$output_flag" -
+
+      - name: Remove Docker amd64 staging
+        if: always()
+        run: |
+          sudo umount build/claw-os-docker-rootfs-amd64 2>/dev/null || true
+          sudo rm -rf build/claw-os-docker-rootfs-amd64 \
+            build/.claw-os-docker-upper-amd64 build/.claw-os-docker-work-amd64
+          docker buildx prune --all --force || true
 
       # WSL packaging — same amd64 rootfs we just shipped to Docker, plus the
       # WSL-specific overlay (/etc/wsl.conf). targets/wsl/build.sh detects
       # the existing rootfs and skips the rootfs rebuild.
       - name: Package WSL amd64 rootfs tarball
-        run: sudo ./targets/wsl/build.sh
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            FEATURES=base,cos-core,browser,systemd,gpu-drivers,qwen3-embedding
+          else
+            FEATURES=base,cos-core,browser,systemd,gpu-drivers,apt-source,qwen3-embedding
+          fi
+          sudo FEATURES="$FEATURES" ./targets/wsl/build.sh
 
       - name: Fix build/ ownership for non-sudo steps
         run: sudo chown -R "$(id -u):$(id -g)" build
@@ -224,7 +311,7 @@ jobs:
           retention-days: 90
 
   build-arm64:
-    needs: test
+    needs: [test, prepare-apt-key]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04-arm
     permissions:
@@ -235,6 +322,14 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Download apt archive public key
+        uses: actions/download-artifact@v4
+        with:
+          name: claw-os-apt-public-key
+          path: packaging/apt-repo
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -243,7 +338,7 @@ jobs:
       - name: Install host build tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y musl-tools debootstrap curl ca-certificates python3
+          sudo apt-get install -y musl-tools debootstrap curl ca-certificates python3 gnupg
 
       - name: Cache cargo registry & target
         uses: actions/cache@v4
@@ -266,25 +361,31 @@ jobs:
         run: cargo build --release -p claw-semantic --target aarch64-unknown-linux-gnu
 
       - name: Build arm64 headless rootfs
-        run: sudo ARCH=arm64 ./rootfs/build.sh --features base,cos-core,browser,systemd,apt-source,qwen3-embedding
+        run: sudo ARCH=arm64 ./rootfs/build.sh --features base,cos-core,browser,systemd,gpu-drivers,apt-source,qwen3-embedding
 
-      - name: Prep rootfs for Docker (cos user + overlay scratch dirs)
+      - name: Stage rootfs for Docker (cos user + overlay scratch dirs)
         run: |
           sudo bash -c '
             set -euo pipefail
             export ROOTFS="$PWD/build/claw-os-rootfs"
+            export DOCKER_ROOTFS="$PWD/build/claw-os-docker-rootfs-arm64"
+            export DOCKER_UPPER="$PWD/build/.claw-os-docker-upper-arm64"
+            export DOCKER_WORK="$PWD/build/.claw-os-docker-work-arm64"
             export PROJECT_DIR="$PWD"
+            mountpoint -q "$DOCKER_ROOTFS" 2>/dev/null && umount "$DOCKER_ROOTFS" || true
+            rm -rf "$DOCKER_ROOTFS" "$DOCKER_UPPER" "$DOCKER_WORK"
+            mkdir -p "$DOCKER_ROOTFS" "$DOCKER_UPPER" "$DOCKER_WORK"
+            mount -t overlay overlay \
+              -o "lowerdir=$ROOTFS,upperdir=$DOCKER_UPPER,workdir=$DOCKER_WORK" \
+              "$DOCKER_ROOTFS"
             source "$PROJECT_DIR/scripts/lib/add-cos-user.sh"
-            add_cos_user "$ROOTFS"
-            chroot "$ROOTFS" /bin/bash -c "
+            add_cos_user "$DOCKER_ROOTFS"
+            chroot "$DOCKER_ROOTFS" /bin/bash -c "
               set -e
               mkdir -p /var/lib/cos/overlay/base /var/lib/cos/overlay/upper /var/lib/cos/overlay/work
               chown -R cos:cos /var/lib/cos/overlay
             "
           '
-
-      - name: Fix rootfs permissions for Docker build context
-        run: sudo chmod -R a+rX build/claw-os-rootfs
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -308,17 +409,32 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push Docker arm64 image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: targets/docker/Dockerfile
-          platforms: linux/arm64
-          push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}-arm64
-          labels: ${{ steps.meta.outputs.labels }}
+        env:
+          DOCKER_LABELS: ${{ steps.meta.outputs.labels }}
+        run: |
+          label_args=()
+          while IFS= read -r label; do
+            [ -n "$label" ] && label_args+=(--label "$label")
+          done <<< "$DOCKER_LABELS"
+          sudo tar --numeric-owner -cf - \
+            targets/docker/Dockerfile build/claw-os-docker-rootfs-arm64 \
+            | docker buildx build \
+                --platform linux/arm64 \
+                --file targets/docker/Dockerfile \
+                --build-arg ROOTFS_DIR=build/claw-os-docker-rootfs-arm64 \
+                --tag "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}-arm64" \
+                "${label_args[@]}" --push -
+
+      - name: Remove Docker arm64 staging
+        if: always()
+        run: |
+          sudo umount build/claw-os-docker-rootfs-arm64 2>/dev/null || true
+          sudo rm -rf build/claw-os-docker-rootfs-arm64 \
+            build/.claw-os-docker-upper-arm64 build/.claw-os-docker-work-arm64
+          docker buildx prune --all --force || true
 
       - name: Package WSL arm64 rootfs tarball
-        run: sudo ARCH=arm64 ./targets/wsl/build.sh
+        run: sudo ARCH=arm64 FEATURES=base,cos-core,browser,systemd,gpu-drivers,apt-source,qwen3-embedding ./targets/wsl/build.sh
 
       - name: Fix build/ ownership for non-sudo steps
         run: sudo chown -R "$(id -u):$(id -g)" build
@@ -532,9 +648,23 @@ jobs:
           path: build/debs
 
       - name: Build apt repo from multi-arch .debs
+        env:
+          CLAW_OS_APT_SIGNING_PRIVATE_KEY: ${{ secrets.CLAW_OS_APT_SIGNING_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.CLAW_OS_APT_SIGNING_PASSPHRASE }}
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq apt-utils
+          sudo apt-get install -y -qq apt-utils gnupg
+          if [ -z "$CLAW_OS_APT_SIGNING_PRIVATE_KEY" ]; then
+            echo "CLAW_OS_APT_SIGNING_PRIVATE_KEY is required" >&2
+            exit 1
+          fi
+          export GNUPGHOME="$RUNNER_TEMP/claw-os-apt-gnupg"
+          trap 'rm -rf "$GNUPGHOME"' EXIT
+          mkdir -m 700 -p "$GNUPGHOME"
+          printf '%s' "$CLAW_OS_APT_SIGNING_PRIVATE_KEY" | gpg --batch --import
+          GPG_KEY_ID="$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "sec" { print $5; exit }')"
+          test -n "$GPG_KEY_ID"
+          export GNUPGHOME GPG_KEY_ID GPG_PASSPHRASE
           ./packaging/apt-repo/build-repo.sh
 
       - name: Upload apt repo as Pages artifact

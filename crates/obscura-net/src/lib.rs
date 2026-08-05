@@ -3,6 +3,7 @@ pub mod cookies;
 pub mod interceptor;
 pub mod robots;
 pub mod blocklist;
+mod url_policy;
 #[cfg(feature = "stealth")]
 pub mod wreq_client;
 

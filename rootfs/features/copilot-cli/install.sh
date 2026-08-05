@@ -29,7 +29,8 @@ chroot "$ROOTFS" /usr/bin/env -i \
 
 # Verify the entrypoint landed.
 if [ ! -x "$ROOTFS/usr/bin/copilot" ] && [ ! -x "$ROOTFS/usr/local/bin/copilot" ]; then
-    echo "  warning: copilot binary not found after npm install -g" >&2
+    echo "  error: copilot binary not found after npm install -g" >&2
+    exit 1
 fi
 
 echo "  :: copilot-cli feature applied"

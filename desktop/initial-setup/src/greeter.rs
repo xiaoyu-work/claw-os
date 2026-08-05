@@ -6,5 +6,6 @@ use zbus::proxy;
     default_path = "/com/clawos/Greeter"
 )]
 pub trait Greeter {
+    async fn initial_setup_abort(&mut self, new_user: String) -> Result<(), zbus::Error>;
     async fn initial_setup_end(&mut self, new_user: String) -> Result<(), zbus::Error>;
 }

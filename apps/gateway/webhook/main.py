@@ -30,7 +30,7 @@ the command line):
 
 Stdlib only. Every outbound request funnels through
 :func:`apps.gateway._shared.safe_egress.safe_urlopen` so the kernel
-sees a ``policy.require("gateway.webhook.send", host=…)`` decision
+sees a ``policy.require("net.dial", host=…)`` decision
 before the bytes leave the box, and so the response cannot redirect
 us back to an internal IMDS endpoint.
 """
@@ -246,7 +246,7 @@ def _send(
             headers=headers,
             body=body,
             timeout=DEFAULT_TIMEOUT,
-            verb_id="gateway.webhook.send",
+            verb_id="net.dial",
         )
     except safe_egress.EgressBlocked as e:
         return {

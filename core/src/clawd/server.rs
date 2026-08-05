@@ -11,7 +11,10 @@ use tokio::net::{UnixListener, UnixStream};
 use super::client_identity::ClientIdentity;
 use super::protocol::{encode_response, Request, Response};
 use super::state::DaemonState;
-use super::{audit, context, context_events, memory, permissions, system_journal, tasks, transactions};
+use super::{
+    app_sessions, audit, context, context_events, memory, packages, permissions,
+    scheduler, system_journal, tasks, transactions,
+};
 
 #[derive(Debug, Clone)]
 pub struct ServerOptions {
@@ -24,29 +27,50 @@ pub async fn run(options: ServerOptions) -> Result<(), String> {
     let listener = UnixListener::bind(&options.socket_path)
         .map_err(|err| format!("failed to bind {}: {err}", options.socket_path.display()))?;
     set_socket_permissions(&options.socket_path, options.socket_mode)?;
+    let state = DaemonState::try_new()?;
 
     tracing::info!(socket = %options.socket_path.display(), "clawd listening");
 
-    let state = DaemonState::new();
     audit::install_runtime_hook();
     context::refresh_builtin_sources(&state);
-    spawn_agent_worker();
-    loop {
-        let (stream, _addr) = listener
-            .accept()
-            .await
-            .map_err(|err| format!("failed to accept clawd client: {err}"))?;
-        let client = ClientIdentity::from_stream(&stream);
-        let state = state.clone();
-        tokio::spawn(async move {
-            if let Err(err) = handle_client(stream, state, client).await {
-                tracing::warn!(error = %err, "clawd client handler failed");
+    let worker = spawn_agent_worker();
+    spawn_heartbeat();
+    let serve = async move {
+        loop {
+            let (stream, _addr) = listener
+                .accept()
+                .await
+                .map_err(|err| format!("failed to accept clawd client: {err}"))?;
+            let client = match ClientIdentity::from_stream(&stream) {
+                Ok(client) => client,
+                Err(err) => {
+                    tracing::warn!(error = %err, "rejecting clawd client without peer credentials");
+                    continue;
+                }
+            };
+            let state = state.clone();
+            tokio::spawn(async move {
+                if let Err(err) = handle_client(stream, state, client).await {
+                    tracing::warn!(error = %err, "clawd client handler failed");
+                }
+            });
+        }
+        #[allow(unreachable_code)]
+        Ok::<(), String>(())
+    };
+    tokio::select! {
+        result = worker => {
+            match result {
+                Ok(Ok(_)) => Err("clawd agent worker exited unexpectedly".to_string()),
+                Ok(Err(error)) => Err(format!("clawd agent worker failed: {error}")),
+                Err(error) => Err(format!("clawd agent worker panicked: {error}")),
             }
-        });
+        }
+        result = serve => result,
     }
 }
 
-fn spawn_agent_worker() {
+fn spawn_agent_worker() -> tokio::task::JoinHandle<Result<Value, String>> {
     let shutdown = Arc::new(AtomicBool::new(false));
     tokio::task::spawn_blocking(move || {
         let options = WorkerOptions {
@@ -54,10 +78,23 @@ fn spawn_agent_worker() {
             poll_ms: 500,
             max_jobs: None,
         };
-        if let Err(err) = service::run_worker_loop(options, shutdown) {
-            tracing::error!(error = %err, "clawd agent worker stopped");
-        }
-    });
+        service::run_worker_loop(options, shutdown)
+    })
+}
+
+/// Spawn the system-vitals heartbeat — the cheap, always-on reflex loop
+/// that samples kernel vitals, emits `context.event`s on threshold
+/// crossings (which the trigger engine may turn into agent jobs), and
+/// drives the `cron` / `triggers` schedulers so the daemon is its own
+/// clock. The heartbeat never calls the LLM itself. See
+/// [`super::heartbeat`].
+fn spawn_heartbeat() {
+    if let Err(error) = crate::cron::cleanup_runtime_credentials() {
+        tracing::error!(error = %error, "failed to clean stale cron credentials");
+    }
+    let cfg = super::heartbeat::HeartbeatConfig::from_env();
+    let shutdown = Arc::new(AtomicBool::new(false));
+    tokio::spawn(super::heartbeat::run_loop(cfg, shutdown));
 }
 
 async fn handle_client(
@@ -137,6 +174,7 @@ async fn dispatch_result(
     state: &DaemonState,
     client: &ClientIdentity,
 ) -> Result<Value, String> {
+    authorize_command(&request.command, client)?;
     match request.command.as_str() {
         "daemon.health" => Ok(json!({
             "status": "ok",
@@ -149,32 +187,96 @@ async fn dispatch_result(
             "daemon": "clawd",
             "started_at": state.started_at(),
             "uptime_ms": state.uptime_millis(),
-            "tasks": tasks::counts()?,
-            "context": context::snapshot(state)?,
-            "transactions": transactions::list(state)?,
+            "tasks": tasks::counts(client)?,
+            "context": context::snapshot_for_client(state, client)?,
+            "transactions": transactions::list(state, client)?,
         })),
         "task.submit" => tasks::submit(request.params, client).await,
-        "task.list" => tasks::list(request.params),
-        "task.get" => tasks::get(request.params),
-        "task.cancel" => tasks::cancel(request.params),
-        "task.stream" | "task.result" => tasks::result(request.params).await,
-        "context.snapshot" => context::snapshot(state),
-        "context.sources" => context::sources(state),
+        "task.list" => tasks::list(request.params, client),
+        "task.get" | "task.status" => tasks::get(request.params, client),
+        "task.cancel" => tasks::cancel(request.params, client),
+        "task.stream" | "task.result" => tasks::result(request.params, client).await,
+        "task.count" => tasks::counts(client),
+        "context.snapshot" => context::snapshot_for_client(state, client),
+        "context.sources" => context::sources_for_client(state, client),
         "context.update" => context::update(state, request.params),
         "context.event.append" => context_events::append(request.params, client),
-        "context.event.query" => context_events::query(request.params),
-        "permission.pending" => permissions::pending(request.params),
-        "permission.recent" => permissions::recent(request.params),
-        "permission.request" => permissions::request(request.params),
-        "permission.decide" => permissions::decide(request.params),
-        "system.operations" => system_journal::query(request.params),
-        "memory.history" => memory::history(request.params),
-        "memory.sessions" => memory::sessions(request.params),
-        "transaction.begin" => transactions::begin(state, request.params),
-        "transaction.list" => transactions::list(state),
-        "transaction.commit" => transactions::commit(state, request.params),
-        "transaction.rollback" => transactions::rollback(state, request.params),
+        "context.event.query" => context_events::query_for_client(request.params, client),
+        "permission.pending" => permissions::pending(request.params, client),
+        "permission.recent" => permissions::recent(request.params, client),
+        "permission.request" => permissions::request(request.params, client),
+        "permission.decide" => permissions::decide(request.params, client),
+        "system.operations" => system_journal::query_for_client(request.params, client),
+        "memory.history" => memory::history(request.params, client),
+        "memory.sessions" => memory::sessions(request.params, client),
+        "system.package.install" => packages::install(request.params, client).await,
+        "scheduler.run" => scheduler::run(request.params, client).await,
+        "app_session.register" => app_sessions::register(request.params, client).await,
+        "app_session.register_native" => {
+            app_sessions::register_native(request.params, client).await
+        }
+        "mcp_session.register" => app_sessions::register_mcp(request.params, client).await,
+        "app_session.bind" => app_sessions::bind(request.params, client).await,
+        "app_session.set_transient" => {
+            app_sessions::set_transient(request.params, client).await
+        }
+        "app_session.deregister" => {
+            app_sessions::deregister(request.params, client).await
+        }
+        "transaction.begin" => transactions::begin(state, request.params, client),
+        "transaction.list" => transactions::list(state, client),
+        "transaction.commit" => transactions::commit(state, request.params, client),
+        "transaction.rollback" => transactions::rollback(state, request.params, client).await,
         other => Err(format!("unknown clawd command: {other}")),
+    }
+}
+
+fn authorize_command(command: &str, client: &ClientIdentity) -> Result<(), String> {
+    let uid = client.require_uid()?;
+    if uid == 0 {
+        return Ok(());
+    }
+
+    let allowed = matches!(
+        command,
+        "daemon.health"
+            | "daemon.status"
+            | "task.submit"
+            | "task.list"
+            | "task.get"
+            | "task.status"
+            | "task.cancel"
+            | "task.stream"
+            | "task.result"
+            | "task.count"
+            | "memory.history"
+            | "memory.sessions"
+            | "system.package.install"
+            | "scheduler.run"
+            | "app_session.register"
+            | "app_session.register_native"
+            | "mcp_session.register"
+            | "app_session.bind"
+            | "app_session.set_transient"
+            | "app_session.deregister"
+            | "permission.pending"
+            | "permission.recent"
+            | "permission.request"
+            | "permission.decide"
+            | "context.snapshot"
+            | "context.sources"
+            | "context.event.append"
+            | "context.event.query"
+            | "system.operations"
+            | "transaction.begin"
+            | "transaction.list"
+            | "transaction.commit"
+            | "transaction.rollback"
+    );
+    if allowed {
+        Ok(())
+    } else {
+        Err(format!("clawd command requires root: {command}"))
     }
 }
 

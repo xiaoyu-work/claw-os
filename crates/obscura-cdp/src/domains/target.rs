@@ -54,8 +54,14 @@ pub async fn handle(method: &str, params: &Value, ctx: &mut CdpContext) -> Resul
             Ok(json!({ "targetInfos": targets }))
         }
         "createTarget" => {
-            let url = params.get("url").and_then(|v| v.as_str()).unwrap_or("about:blank");
-            let page_id = ctx.create_page();
+            let url = params
+                .get("url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("about:blank");
+            let browser_context_id = params
+                .get("browserContextId")
+                .and_then(|value| value.as_str());
+            let page_id = ctx.create_page_in_context(browser_context_id)?;
             let session_id = format!("{}-session", page_id);
 
             if let Some(page) = ctx.get_page_mut(&page_id) {
@@ -109,7 +115,8 @@ pub async fn handle(method: &str, params: &Value, ctx: &mut CdpContext) -> Resul
             // implicit "browser" target. Returning Unknown method aborts
             // the connect handshake before any user code runs.
             let session_id = "browser-session".to_string();
-            ctx.sessions.insert(session_id.clone(), "browser".to_string());
+            ctx.sessions
+                .insert(session_id.clone(), "browser".to_string());
 
             ctx.pending_events.push(CdpEvent::new(
                 "Target.attachedToTarget",
@@ -130,10 +137,13 @@ pub async fn handle(method: &str, params: &Value, ctx: &mut CdpContext) -> Resul
             Ok(json!({ "sessionId": session_id }))
         }
         "attachToTarget" => {
-            let target_id = params.get("targetId").and_then(|v| v.as_str())
+            let target_id = params
+                .get("targetId")
+                .and_then(|v| v.as_str())
                 .ok_or("targetId required")?;
             let session_id = format!("{}-session", target_id);
-            ctx.sessions.insert(session_id.clone(), target_id.to_string());
+            ctx.sessions
+                .insert(session_id.clone(), target_id.to_string());
 
             if let Some(page) = ctx.get_page(target_id) {
                 ctx.pending_events.push(CdpEvent::new(
@@ -156,7 +166,9 @@ pub async fn handle(method: &str, params: &Value, ctx: &mut CdpContext) -> Resul
             Ok(json!({ "sessionId": session_id }))
         }
         "closeTarget" => {
-            let target_id = params.get("targetId").and_then(|v| v.as_str())
+            let target_id = params
+                .get("targetId")
+                .and_then(|v| v.as_str())
                 .ok_or("targetId required")?;
             let session_id = format!("{}-session", target_id);
 
@@ -176,15 +188,27 @@ pub async fn handle(method: &str, params: &Value, ctx: &mut CdpContext) -> Resul
             Ok(json!({ "success": true }))
         }
         "setAutoAttach" => Ok(json!({})),
-        "getBrowserContexts" => {
-            Ok(json!({ "browserContextIds": [ctx.default_context.id] }))
-        }
+        "getBrowserContexts" => Ok(json!({ "browserContextIds": ctx.browser_context_ids() })),
         "createBrowserContext" => {
-            ctx.default_context.cookie_jar.clear();
-            Ok(json!({ "browserContextId": ctx.default_context.id }))
+            let proxy = params
+                .get("proxyServer")
+                .and_then(|value| value.as_str())
+                .map(ToOwned::to_owned);
+            let context_id = ctx.create_browser_context(proxy);
+            Ok(json!({ "browserContextId": context_id }))
         }
         "disposeBrowserContext" => {
-            ctx.default_context.cookie_jar.clear();
+            let context_id = params
+                .get("browserContextId")
+                .and_then(|value| value.as_str())
+                .ok_or("browserContextId required")?;
+            let removed_pages = ctx.dispose_browser_context(context_id)?;
+            for target_id in removed_pages {
+                ctx.pending_events.push(CdpEvent::new(
+                    "Target.targetDestroyed",
+                    json!({ "targetId": target_id }),
+                ));
+            }
             Ok(json!({}))
         }
         "getTargetInfo" => {
@@ -203,8 +227,7 @@ pub async fn handle(method: &str, params: &Value, ctx: &mut CdpContext) -> Resul
                         }
                     }))
                 }
-                None => {
-                    Ok(json!({
+                None => Ok(json!({
                         "targetInfo": {
                             "targetId": "browser",
                             "type": "browser",
@@ -212,8 +235,7 @@ pub async fn handle(method: &str, params: &Value, ctx: &mut CdpContext) -> Resul
                             "url": "",
                             "attached": true,
                         }
-                    }))
-                }
+                })),
             }
         }
         _ => Err(format!("Unknown Target method: {}", method)),
@@ -256,5 +278,70 @@ mod tests {
             .await
             .expect_err("unknown methods must surface as errors");
         assert!(err.contains("Unknown Target method"));
+    }
+
+    #[tokio::test]
+    async fn browser_contexts_are_distinct_and_targets_honor_context_id() {
+        let mut ctx = CdpContext::new();
+        let first = handle("createBrowserContext", &json!({}), &mut ctx)
+            .await
+            .unwrap()["browserContextId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let second = handle("createBrowserContext", &json!({}), &mut ctx)
+            .await
+            .unwrap()["browserContextId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_ne!(first, second);
+
+        let target = handle(
+            "createTarget",
+            &json!({"url": "about:blank", "browserContextId": first.clone()}),
+            &mut ctx,
+        )
+        .await
+        .unwrap();
+        let target_id = target["targetId"].as_str().unwrap();
+        assert_eq!(ctx.get_page(target_id).unwrap().context.id, first);
+
+        let first_context = ctx.get_browser_context(Some(&first)).unwrap();
+        let second_context = ctx.get_browser_context(Some(&second)).unwrap();
+        let url = url::Url::parse("https://example.com/").unwrap();
+        first_context
+            .cookie_jar
+            .set_cookie("isolated=yes; Path=/", &url);
+        assert!(second_context.cookie_jar.get_cookie_header(&url).is_empty());
+    }
+
+    #[tokio::test]
+    async fn disposing_context_does_not_clear_default_context() {
+        let mut ctx = CdpContext::new();
+        let default_url = url::Url::parse("https://example.com/").unwrap();
+        ctx.default_context
+            .cookie_jar
+            .set_cookie("default=yes; Path=/", &default_url);
+
+        let context_id = handle("createBrowserContext", &json!({}), &mut ctx)
+            .await
+            .unwrap()["browserContextId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        handle(
+            "disposeBrowserContext",
+            &json!({"browserContextId": context_id}),
+            &mut ctx,
+        )
+        .await
+        .unwrap();
+
+        assert!(ctx
+            .default_context
+            .cookie_jar
+            .get_cookie_header(&default_url)
+            .contains("default=yes"));
     }
 }

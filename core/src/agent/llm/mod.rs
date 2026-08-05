@@ -151,9 +151,9 @@ fn mask_bearer_like(s: &str) -> String {
     // replace the middle with `***`. Heuristic-only; we'd rather
     // over-mask than leak.
     let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
+    let chars = s.chars().peekable();
     let mut current = String::new();
-    while let Some(c) = chars.next() {
+    for c in chars {
         // A "token-like" run is alphanumeric + a few separators, ≥ 24 chars.
         let is_token_char = c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.';
         if is_token_char {

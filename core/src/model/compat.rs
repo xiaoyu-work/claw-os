@@ -42,7 +42,7 @@
 //! enforces but the model author is asked to make capability claims
 //! authoritatively.
 
-use crate::engine_pkg::{self, manifest::EngineManifest, registry::EnginesIndex};
+use crate::engine_pkg::{manifest::EngineManifest, registry::EnginesIndex};
 use crate::model::registry::{EngineRequirement, Manifest};
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -368,6 +368,7 @@ fn parse_semver_tag(s: &str) -> Result<semver::Version, semver::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine_pkg;
     use crate::engine_pkg::registry::{EnginesIndex, InstalledVersion};
     use chrono::Utc;
 
