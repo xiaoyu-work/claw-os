@@ -1,149 +1,182 @@
-//! `cos-agent-ui` — native libcosmic chat client for the Claw OS agent.
-//!
-//! Replaces the React + WebView app under `desktop/agent/web/`. The
-//! bridge under `desktop/agent/bridge/` stays in place during this
-//! transition and serves as the single contract: this UI POSTs to
-//! the authenticated `http://127.0.0.1:<port>/api/chat` endpoint and
-//! consumes the same SSE stream the React app did.
-//!
-//! Two visual modes:
-//!
-//!   * **Standalone** — full window with a sidebar of local
-//!                       sessions, a breadcrumb headerbar, and a
-//!                       large card composer. Mirrors the look of
-//!                       contemporary "agent workbench" desktop UIs.
-//!   * **Overlay**    — compact, anchored, Esc closes (for the
-//!                       global `Super+A` summon hotkey).
-//!
-//! Selected with `--overlay` on the command line. Falls back to
-//! standalone.
-//!
-//! ### Session sidebar
-//!
-//! The sidebar combines real persisted sessions fetched from the
-//! bridge (`GET /api/sessions`) with any in-progress "new session"
-//! tabs the user has opened locally. Clicking a persisted entry
-//! lazily fetches its transcript via `GET /api/sessions/:id/history`
-//! and replays the parsed `tool_calls` / `tool_results` blocks into
-//! the message column. Subsequent turns in that conversation reuse
-//! the `session_id` on `POST /api/chat`, so clawd continues into the
-//! same memory thread instead of forking a fresh one.
+//! Native ClawOS Agent chat UI.
 
 use std::env;
-use std::time::Instant;
+use std::fmt::{Display, Formatter};
+use std::str::FromStr;
+use std::sync::LazyLock;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use cosmic::app::{Core, Settings, Task};
+use cosmic::app::{Core, CosmicFlags, Settings, Task};
 use cosmic::cosmic_theme::palette::WithAlpha;
+use cosmic::dbus_activation::Details;
 use cosmic::iced::keyboard::{Key, key::Named};
+use cosmic::iced::platform_specific::runtime::wayland::layer_surface::{
+    IcedMargin, SctkLayerSurfaceSettings,
+};
+use cosmic::iced::platform_specific::shell::commands::layer_surface::{
+    Anchor, KeyboardInteractivity, Layer, destroy_layer_surface, get_layer_surface,
+};
+use cosmic::iced::runtime::core::event::wayland::LayerEvent;
+use cosmic::iced::runtime::core::event::{PlatformSpecific, wayland};
+use cosmic::iced::widget::{operation, text_editor};
+use cosmic::iced::window::Id as SurfaceId;
 use cosmic::iced::{
     Alignment, Background, Border, Color, Length, Limits, Shadow, Subscription, event,
 };
-use cosmic::widget::{
-    Column, Row, button, container, scrollable, text, text_input,
-};
+use cosmic::widget::{Column, Row, button, container, scrollable, text};
 use cosmic::{Application, Element, executor, theme, widget};
+use futures::future::{AbortHandle, Abortable};
+use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 mod bridge;
+mod localize;
 mod recorder;
 mod sse;
 
 use crate::bridge::{
-    BridgeEndpoint, ChatRequest, HistoryMessage, SessionSummary, StreamEvent, ToolCallView,
-    ToolResultView, fetch_history, fetch_sessions, read_bridge_endpoint,
+    BridgeEndpoint, ChatRequest, HistoryMessage, ModelsResponse, SessionSummary, StreamEvent,
+    ToolCallView, ToolResultView, cancel_task, ensure_bridge_endpoint, fetch_history, fetch_models,
+    fetch_sessions, session_exists,
 };
-use crate::recorder::Recorder;
+use crate::recorder::{Recorder, RecordingMetrics};
 
-/// Square symbol used both in the breadcrumb and the overlay header.
 static SYMBOL_LIGHT: &[u8] = include_bytes!("../assets/clawos-symbol.png");
 static SYMBOL_DARK: &[u8] = include_bytes!("../assets/clawos-symbol-dark.png");
-
-/// Wordmark — only used by the standalone empty-state hero card now
-/// that the breadcrumb has taken over the previous top-of-window
-/// branding slot.
 static WORDMARK_LIGHT: &[u8] = include_bytes!("../assets/clawos-wordmark.png");
 static WORDMARK_DARK: &[u8] = include_bytes!("../assets/clawos-wordmark-dark.png");
 
+static EDITOR_ID: LazyLock<widget::Id> = LazyLock::new(|| widget::Id::new("agent-composer"));
+static CHAT_SCROLL_ID: LazyLock<widget::Id> = LazyLock::new(|| widget::Id::new("agent-transcript"));
+static OVERLAY_ID: LazyLock<SurfaceId> = LazyLock::new(SurfaceId::unique);
+
 const SIDEBAR_WIDTH: f32 = 220.0;
 
-/// Application-level configuration parsed from argv.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Flags {
     pub overlay: bool,
-    /// Auto-arm the microphone on launch (used by the Super+Shift+A
-    /// hotkey routing through `cos app agent overlay --voice`).
     pub voice: bool,
-    /// Pre-filled prompt that is also auto-submitted on launch.
-    /// Used by the global launcher's "Ask Claw AI" entry to forward
-    /// the user's natural-language query into the agent overlay.
     pub query: Option<String>,
-    /// One-shot context hint that gets prepended (invisibly to the
-    /// user) to the first prompt this session sends to the bridge.
-    /// Lets per-app "Ask Claw" buttons tell the agent which app they
-    /// were invoked from, what file is open, and so on — without
-    /// cluttering the user-visible message history.
     pub context: Option<String>,
+    #[serde(skip)]
+    activation: Option<OverlayActivation>,
+}
+
+#[derive(Debug, Clone)]
+struct DeferredSubmit {
+    session_index: usize,
+    prompt: String,
+    context: Option<String>,
+    activation_generation: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PendingCancel {
+    generation: u64,
+    session_index: usize,
+    message_index: usize,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OverlayActivation {
+    voice: bool,
+    query: Option<String>,
+    context: Option<String>,
+}
+
+impl Display for OverlayActivation {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&serde_json::to_string(self).unwrap_or_default())
+    }
+}
+
+impl FromStr for OverlayActivation {
+    type Err = serde_json::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        serde_json::from_str(value)
+    }
+}
+
+impl CosmicFlags for Flags {
+    type SubCommand = OverlayActivation;
+    type Args = Vec<String>;
+
+    fn action(&self) -> Option<&Self::SubCommand> {
+        self.activation.as_ref()
+    }
 }
 
 #[derive(Debug, Clone)]
 pub enum Message {
-    /// User edited the input field.
-    InputChanged(String),
-    /// User pressed Enter or clicked Send. Captures the current input.
+    EditorAction(text_editor::Action),
+    SetPrompt(String),
     Submit,
-    /// Token delta from the SSE stream. First field is the stream
-    /// generation (see `App::stream_generation`) so stale deltas from a
-    /// superseded stream are ignored.
-    StreamDelta(u64, String),
-    /// Terminal envelope from the stream — currently unused beyond
-    /// flipping `streaming` off.
-    StreamDone(u64, serde_json::Value),
-    /// Bridge-side or subprocess error during a streamed reply.
-    StreamError(u64, String),
-    /// SSE connection closed (clean or otherwise). Tail of every stream.
+    StopStream,
+    RetryMessage(usize),
+    CopyAssistant(usize),
+    AttachFile,
+    FileAttached(Result<Option<std::path::PathBuf>, String>),
+    Stream(u64, StreamEvent),
+    TransportError(u64, String),
     StreamEnded(u64),
-    /// User pressed Esc — only meaningful in overlay mode.
+    CancelFinished {
+        session_index: usize,
+        message_index: usize,
+        result: Result<(), String>,
+    },
     EscapePressed,
-    /// Markdown link clicked in a rendered assistant message.
     LinkClicked(String),
-    /// User clicked the mic — toggles between idle and recording.
     ToggleMic,
-    /// Recording finished and the WAV was uploaded; populate the input.
-    VoiceTranscribed { text: String, placeholder: bool },
-    /// Mic open / encode / upload failed.
-    VoiceError(String),
-    /// Sidebar: switch which session is visible. Triggers a lazy
-    /// history fetch when the target session has not been loaded yet.
+    CancelVoice,
+    VoiceTick,
+    VoiceFinished {
+        generation: u64,
+        result: Result<(String, bool), String>,
+    },
     SelectSession(usize),
-    /// Sidebar "+" button: start a new local session.
     NewSession,
-    /// Background task finished fetching the bridge's session list.
+    RetryHistory,
     SessionsFetched(Result<Vec<SessionSummary>, String>),
-    /// Background task finished loading a remote session's history.
     HistoryFetched {
         session_id: String,
         result: Result<Vec<HistoryMessage>, String>,
     },
+    ProvisionalResolved {
+        session_index: usize,
+        session_id: String,
+        result: Result<bool, String>,
+    },
+    ModelsFetched(Result<ModelsResponse, String>),
+    Reconnect,
+    BridgeTick,
+    BridgeConnected(Result<BridgeEndpoint, String>),
+    Layer(LayerEvent),
 }
 
-/// Microphone capture state. Mirrors the React `useAudioRecording`
-/// hook's `state: "idle" | "recording" | "processing"`.
-#[derive(Default)]
 pub enum VoiceState {
-    #[default]
     Idle,
-    Recording(Recorder),
-    /// Encoding the WAV and waiting on `POST /api/voice/upload`.
-    Processing,
+    Recording {
+        recorder: Recorder,
+        generation: u64,
+        metrics: RecordingMetrics,
+    },
+    Processing {
+        generation: u64,
+    },
 }
 
 impl VoiceState {
     fn is_recording(&self) -> bool {
-        matches!(self, VoiceState::Recording(_))
+        matches!(self, Self::Recording { .. })
     }
 
     fn is_processing(&self) -> bool {
-        matches!(self, VoiceState::Processing)
+        matches!(self, Self::Processing { .. })
+    }
+
+    fn is_active(&self) -> bool {
+        !matches!(self, Self::Idle)
     }
 }
 
@@ -153,27 +186,15 @@ pub enum ChatRole {
     Assistant,
 }
 
-/// One rendered message in a conversation.
-///
-/// Tool calls and tool results from the agent's live stream and from
-/// loaded history both populate the `tool_calls` / `tool_results`
-/// vectors so the UI can paint structured cards instead of dumping
-/// raw `[tool_use:NAME] {…}` markers.
-///
-/// `parsed_markdown` is populated lazily once the assistant message
-/// has finished streaming (or has been loaded from history). The
-/// widget renders it via `cosmic::widget::markdown::view`. We avoid
-/// re-parsing on every delta because the message can change shape
-/// mid-stream (open code fence, unbalanced lists) and a momentary
-/// "broken" render is worse than waiting for the final shape.
 #[derive(Debug, Clone, Default)]
 pub struct ChatMessage {
     pub role: Option<ChatRole>,
     pub content: String,
     pub tool_calls: Vec<ToolCallView>,
     pub tool_results: Vec<ToolResultView>,
+    pub warnings: Vec<String>,
+    pub error: Option<String>,
     pub parsed_markdown: Option<Vec<widget::markdown::Item>>,
-    /// True while the assistant is still streaming this message.
     pub in_progress: bool,
 }
 
@@ -182,21 +203,15 @@ impl ChatMessage {
         Self {
             role: Some(ChatRole::User),
             content,
-            tool_calls: Vec::new(),
-            tool_results: Vec::new(),
-            parsed_markdown: None,
-            in_progress: false,
+            ..Self::default()
         }
     }
 
     fn assistant_streaming() -> Self {
         Self {
             role: Some(ChatRole::Assistant),
-            content: String::new(),
-            tool_calls: Vec::new(),
-            tool_results: Vec::new(),
-            parsed_markdown: None,
             in_progress: true,
+            ..Self::default()
         }
     }
 
@@ -204,61 +219,45 @@ impl ChatMessage {
         self.role.clone().unwrap_or(ChatRole::Assistant)
     }
 
-    /// Parse `content` into markdown items. Idempotent — repeated
-    /// calls overwrite the cached vector with the latest parse, which
-    /// is what we want after a history reload or stream finalize.
     fn refresh_markdown(&mut self) {
-        if self.content.trim().is_empty() {
-            self.parsed_markdown = None;
-            return;
-        }
-        let items: Vec<widget::markdown::Item> =
-            widget::markdown::parse(&self.content).collect();
-        if items.is_empty() {
-            self.parsed_markdown = None;
+        self.parsed_markdown = if self.content.trim().is_empty() {
+            None
         } else {
-            self.parsed_markdown = Some(items);
-        }
+            let items = widget::markdown::parse(&self.content).collect::<Vec<_>>();
+            (!items.is_empty()).then_some(items)
+        };
+    }
+
+    fn is_visibly_empty(&self) -> bool {
+        self.content.trim().is_empty()
+            && self.tool_calls.is_empty()
+            && self.tool_results.is_empty()
+            && self.warnings.is_empty()
+            && self.error.is_none()
     }
 }
 
-/// Loading state for the remote history of a session that lives in
-/// the bridge's `/api/sessions` listing but whose messages have not
-/// been pulled yet.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum HistoryState {
-    /// History has never been requested. The first SelectSession
-    /// trips a fetch.
     #[default]
     NotLoaded,
-    /// A `fetch_history` task is in flight.
     Loading,
-    /// History has been merged into `messages` (or the server
-    /// returned an empty conversation).
     Loaded,
-    /// Last fetch failed; clicking again retries.
     Failed(String),
 }
 
-/// One conversation tab.
-///
-/// `remote_id` is `Some` once the bridge has persisted this
-/// conversation (either it was fetched from `/api/sessions` or the
-/// first `done` envelope carried back a clawd-assigned session id).
-/// We replay this id on subsequent `POST /api/chat` calls so clawd
-/// continues the same memory thread.
 #[derive(Debug, Clone)]
 pub struct LocalSession {
-    /// Stable client-side id used as the React-like `key` for sidebar
-    /// rows. Independent of `remote_id`.
     pub id: String,
-    /// Display label — populated lazily from the first user prompt or
-    /// the title clawd persisted alongside the session.
     pub title: String,
     pub started_at: Instant,
     pub messages: Vec<ChatMessage>,
     pub remote_id: Option<String>,
+    pub provisional_remote_id: Option<String>,
+    pub persistent_context: Option<String>,
     pub history: HistoryState,
+    pub last_ts_ms: Option<i64>,
+    pub message_count: i64,
 }
 
 impl LocalSession {
@@ -269,7 +268,11 @@ impl LocalSession {
             started_at: Instant::now(),
             messages: Vec::new(),
             remote_id: None,
-            history: HistoryState::NotLoaded,
+            provisional_remote_id: None,
+            persistent_context: None,
+            history: HistoryState::Loaded,
+            last_ts_ms: None,
+            message_count: 0,
         }
     }
 
@@ -280,28 +283,35 @@ impl LocalSession {
             started_at: Instant::now(),
             messages: Vec::new(),
             remote_id: Some(summary.id.clone()),
+            provisional_remote_id: None,
+            persistent_context: None,
             history: HistoryState::NotLoaded,
+            last_ts_ms: summary.last_ts_ms,
+            message_count: summary.message_count,
         }
     }
 
-    fn display_title(&self) -> &str {
+    fn display_title(&self) -> String {
         if self.title.trim().is_empty() {
-            "New session"
+            fl!("new-session")
         } else {
-            self.title.as_str()
+            self.title.clone()
         }
     }
 
-    fn duration_label(&self) -> String {
-        let secs = self.started_at.elapsed().as_secs();
-        if secs < 60 {
-            "<1m".into()
-        } else if secs < 60 * 60 {
-            format!("{}m", secs / 60)
-        } else if secs < 60 * 60 * 24 {
-            format!("{}h", secs / 3_600)
+    fn relative_label(&self) -> String {
+        if let Some(timestamp) = self.last_ts_ms {
+            return relative_time_label(timestamp, now_ms());
+        }
+        let seconds = self.started_at.elapsed().as_secs();
+        if seconds < 60 {
+            fl!("just-now")
+        } else if seconds < 3_600 {
+            format!("{}m", seconds / 60)
+        } else if seconds < 86_400 {
+            format!("{}h", seconds / 3_600)
         } else {
-            format!("{}d", secs / (60 * 60 * 24))
+            format!("{}d", seconds / 86_400)
         }
     }
 }
@@ -309,32 +319,31 @@ impl LocalSession {
 pub struct App {
     core: Core,
     flags: Flags,
+    overlay_visible: bool,
     bridge_endpoint: Option<BridgeEndpoint>,
     bridge_error: Option<String>,
-
+    bridge_connecting: bool,
+    models: Option<ModelsResponse>,
+    sessions_error: Option<String>,
     sessions: Vec<LocalSession>,
     active: usize,
-    /// Which session the in-flight stream is appending to. We track
-    /// this separately from `active` so the user can switch tabs
-    /// mid-stream without breaking the delta accumulator.
     streaming_session: Option<usize>,
-    /// Monotonic id bumped on every `submit()`. Each streaming message
-    /// carries the generation it was started under; handlers drop any whose
-    /// generation no longer matches the current one, so a superseded
-    /// stream's trailing events can never finalize or append to a newer
-    /// stream's session.
     stream_generation: u64,
-
-    input: String,
+    active_task_id: Option<String>,
+    stream_abort: Option<AbortHandle>,
+    pending_cancel: Option<PendingCancel>,
+    input: text_editor::Content,
     streaming: bool,
     error: Option<String>,
     voice: VoiceState,
-
-    /// One-shot context prefix consumed on the first `submit()` call.
-    /// Set by `--context`, then drained the first time the user
-    /// sends a message so the agent learns about the host app
-    /// without the prefix bloating subsequent turns.
+    voice_generation: u64,
+    voice_abort: Option<AbortHandle>,
     pending_context: Option<String>,
+    activation_generation: u64,
+    stream_context_generation: Option<u64>,
+    auto_submit: bool,
+    submit_after_provisional: Option<DeferredSubmit>,
+    file_picker_open: bool,
 }
 
 impl Application for App {
@@ -358,236 +367,482 @@ impl Application for App {
             core.window.show_maximize = false;
             core.window.show_minimize = false;
         }
-
-        let (bridge_endpoint, bridge_error) = match read_bridge_endpoint() {
-            Ok(endpoint) => (Some(endpoint), None),
-            Err(e) => {
-                warn!("cos-agent-bridge unreachable: {e:#}");
-                (None, Some(format!("Bridge unavailable: {e}")))
-            }
-        };
-
-        let mut app = App {
+        let mut app = Self {
             core,
             flags: flags.clone(),
-            bridge_endpoint,
-            bridge_error,
-            sessions: Vec::new(),
+            overlay_visible: flags.overlay,
+            bridge_endpoint: None,
+            bridge_error: None,
+            bridge_connecting: true,
+            models: None,
+            sessions_error: None,
+            sessions: vec![LocalSession::new("session-1".into())],
             active: 0,
             streaming_session: None,
             stream_generation: 0,
-            input: flags.query.clone().unwrap_or_default(),
+            active_task_id: None,
+            stream_abort: None,
+            pending_cancel: None,
+            input: text_editor::Content::with_text(flags.query.as_deref().unwrap_or_default()),
             streaming: false,
             error: None,
             voice: VoiceState::Idle,
+            voice_generation: 0,
+            voice_abort: None,
             pending_context: flags.context.clone(),
+            activation_generation: 0,
+            stream_context_generation: None,
+            auto_submit: flags.query.is_some(),
+            submit_after_provisional: None,
+            file_picker_open: false,
         };
-        // Always have at least one session so the sidebar renders a
-        // meaningful row immediately. Without this the first launch
-        // shows an empty sidebar which looks like a regression of
-        // the new layout.
-        app.sessions.push(LocalSession::new("session-1".into()));
-
-        // Kick off a background fetch of the bridge's session list so
-        // the sidebar starts populated with the user's prior chats.
-        // Standalone-only — the overlay is a one-shot launcher.
-        let fetch_sessions = if !flags.overlay {
-            if let Some(endpoint) = app.bridge_endpoint.clone() {
-                cosmic::Task::perform(
-                    async move {
-                        fetch_sessions(endpoint)
-                            .await
-                            .map_err(|err| format!("{err:#}"))
-                    },
-                    Message::SessionsFetched,
-                )
-                .map(cosmic::Action::App)
-            } else {
-                Task::none()
-            }
+        let mut tasks = vec![app.connect_bridge()];
+        if flags.overlay {
+            tasks.push(app.open_overlay());
         } else {
-            Task::none()
-        };
-
-        let initial = if flags.query.is_some() {
-            cosmic::Task::done(cosmic::Action::App(Message::Submit))
-        } else if flags.voice {
-            cosmic::Task::done(cosmic::Action::App(Message::ToggleMic))
-        } else {
-            Task::none()
-        };
-        (app, Task::batch([fetch_sessions, initial]))
+            tasks.push(focus_editor());
+        }
+        if flags.voice {
+            tasks.push(Task::done(cosmic::Action::App(Message::ToggleMic)));
+        }
+        (app, Task::batch(tasks))
     }
 
-    fn header_start(&self) -> Vec<Element<'_, Self::Message>> {
+    fn header_start(&self) -> Vec<Element<'_, Message>> {
         if self.flags.overlay {
-            return Vec::new();
+            Vec::new()
+        } else {
+            vec![self.breadcrumb()]
         }
-        vec![self.breadcrumb()]
     }
 
-    fn header_end(&self) -> Vec<Element<'_, Self::Message>> {
+    fn header_end(&self) -> Vec<Element<'_, Message>> {
         if self.flags.overlay || !self.streaming {
-            return Vec::new();
+            Vec::new()
+        } else {
+            vec![
+                container(text(fl!("streaming")).size(11.0))
+                    .padding([0u16, 10u16])
+                    .class(theme::Container::custom(active_pill_style))
+                    .into(),
+            ]
         }
-        vec![active_pill()]
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::InputChanged(s) => {
-                self.input = s;
+            Message::EditorAction(action) => {
+                if !self.voice.is_active() {
+                    self.input.perform(action);
+                }
                 Task::none()
             }
-
+            Message::SetPrompt(prompt) => {
+                self.input = text_editor::Content::with_text(&prompt);
+                focus_editor()
+            }
             Message::Submit => self.submit(),
-
-            Message::StreamDelta(generation, chunk) => {
-                if generation == self.stream_generation
-                    && let Some(idx) = self.streaming_session
-                    && let Some(sess) = self.sessions.get_mut(idx)
-                    && let Some(last) = sess.messages.last_mut()
-                    && last.role() == ChatRole::Assistant
+            Message::StopStream => self.stop_stream(),
+            Message::RetryMessage(message_index) => {
+                let Some((prefix, prompt, context, title)) =
+                    self.active_session().and_then(|session| {
+                        retry_branch(&session.messages, message_index, &session.display_title())
+                    })
+                else {
+                    return Task::none();
+                };
+                let mut session = LocalSession::new(format!("session-{}", self.sessions.len() + 1));
+                session.title = fl!("retry-title", title = title);
+                session.messages = prefix;
+                session.message_count = session.messages.len() as i64;
+                session.history = HistoryState::Loaded;
+                session.persistent_context = (!context.is_empty()).then_some(context);
+                self.sessions.push(session);
+                self.active = self.sessions.len() - 1;
+                self.input = text_editor::Content::with_text(&prompt);
+                self.submit()
+            }
+            Message::CopyAssistant(index) => {
+                let Some(content) = self
+                    .active_session()
+                    .and_then(|session| session.messages.get(index))
+                    .map(|message| message.content.clone())
+                    .filter(|content| !content.is_empty())
+                else {
+                    return Task::none();
+                };
+                cosmic::iced::clipboard::write(content)
+            }
+            Message::AttachFile => {
+                self.file_picker_open = true;
+                Task::perform(
+                    async {
+                        let dialog = cosmic::dialog::file_chooser::open::Dialog::new()
+                            .title(fl!("attach-file"));
+                        match dialog.open_file().await {
+                            Ok(response) => response
+                                .url()
+                                .to_file_path()
+                                .map(Some)
+                                .map_err(|_| fl!("attachment-error")),
+                            Err(cosmic::dialog::file_chooser::Error::Cancelled) => Ok(None),
+                            Err(error) => Err(error.to_string()),
+                        }
+                    },
+                    |result| cosmic::Action::App(Message::FileAttached(result)),
+                )
+            }
+            Message::FileAttached(Ok(Some(path))) => {
+                self.file_picker_open = false;
+                let path = path.display().to_string();
+                let marker = format!("[{}: {path}]", fl!("attached-file-label"));
+                let existing = self.input.text();
+                let prompt = if existing.trim().is_empty() {
+                    marker
+                } else {
+                    format!("{existing}\n{marker}")
+                };
+                self.input = text_editor::Content::with_text(&prompt);
+                focus_editor()
+            }
+            Message::FileAttached(Ok(None)) => {
+                self.file_picker_open = false;
+                focus_editor()
+            }
+            Message::FileAttached(Err(error)) => {
+                self.file_picker_open = false;
+                self.error = Some(format!("{}: {error}", fl!("attachment-error")));
+                Task::none()
+            }
+            Message::Stream(generation, event) => self.handle_stream_event(generation, event),
+            Message::TransportError(generation, error) => {
+                if self
+                    .pending_cancel
+                    .is_some_and(|pending| pending.generation == generation)
                 {
-                    last.content.push_str(&chunk);
-                }
-                Task::none()
-            }
-
-            Message::StreamDone(generation, envelope) => {
-                if generation == self.stream_generation {
-                    self.capture_remote_session(&envelope);
-                    self.finalize_stream();
-                }
-                Task::none()
-            }
-
-            Message::StreamError(generation, msg) => {
-                if generation == self.stream_generation {
-                    self.finalize_stream();
-                    self.error = Some(msg);
-                }
-                Task::none()
-            }
-
-            Message::StreamEnded(generation) => {
-                if generation == self.stream_generation {
-                    self.finalize_stream();
-                }
-                Task::none()
-            }
-
-            Message::EscapePressed => {
-                if self.flags.overlay {
-                    std::process::exit(0);
-                }
-                Task::none()
-            }
-
-            Message::LinkClicked(uri) => {
-                if let Err(e) = open_uri(&uri) {
-                    warn!("failed to open link {uri}: {e:#}");
-                }
-                Task::none()
-            }
-
-            Message::ToggleMic => self.toggle_mic(),
-
-            Message::VoiceTranscribed { text, placeholder } => {
-                self.voice = VoiceState::Idle;
-                if placeholder {
-                    self.error = Some(
-                        "Voice transcription isn't enabled on this system yet.".into(),
-                    );
-                } else if !text.is_empty() {
-                    if self.input.is_empty() {
-                        self.input = text;
-                    } else {
-                        self.input.push(' ');
-                        self.input.push_str(&text);
-                    }
-                }
-                Task::none()
-            }
-
-            Message::VoiceError(msg) => {
-                self.voice = VoiceState::Idle;
-                self.error = Some(msg);
-                Task::none()
-            }
-
-            Message::SelectSession(idx) => {
-                // Disallow switching while a reply is still streaming —
-                // the stream targets `streaming_session` so we wouldn't
-                // *lose* deltas, but switching mid-stream creates the
-                // confusing illusion of a paused agent in the tab the
-                // user actually wants to read.
-                if self.streaming || idx >= self.sessions.len() {
+                    self.pending_cancel = None;
+                    self.stream_abort = None;
+                    self.stream_generation = self.stream_generation.wrapping_add(1);
                     return Task::none();
                 }
-                self.active = idx;
-                self.error = None;
-                return self.maybe_fetch_history(idx);
+                if generation != self.stream_generation || !self.streaming {
+                    return Task::none();
+                }
+                self.bridge_endpoint = None;
+                self.models = None;
+                self.bridge_error = Some(error.clone());
+                let failed = self.fail_stream(error);
+                self.bridge_connecting = true;
+                Task::batch([failed, self.connect_bridge()])
             }
-
-            Message::NewSession => {
-                if !self.streaming {
-                    let id = format!("session-{}", self.sessions.len() + 1);
-                    self.sessions.push(LocalSession::new(id));
-                    self.active = self.sessions.len() - 1;
-                    self.input.clear();
-                    self.error = None;
+            Message::StreamEnded(generation) => {
+                if self
+                    .pending_cancel
+                    .is_some_and(|pending| pending.generation == generation)
+                {
+                    self.pending_cancel = None;
+                    self.stream_abort = None;
+                    self.stream_generation = self.stream_generation.wrapping_add(1);
+                    return Task::none();
+                }
+                if generation == self.stream_generation && self.streaming {
+                    self.bridge_endpoint = None;
+                    self.models = None;
+                    self.bridge_error = Some(fl!("bridge-offline"));
+                    let failed = self.fail_stream(fl!("bridge-offline"));
+                    self.bridge_connecting = true;
+                    Task::batch([failed, self.connect_bridge()])
+                } else {
+                    Task::none()
+                }
+            }
+            Message::CancelFinished {
+                session_index,
+                message_index,
+                result,
+            } => {
+                if self.pending_cancel.is_some_and(|pending| {
+                    pending.session_index == session_index && pending.message_index == message_index
+                }) {
+                    self.pending_cancel = None;
+                }
+                if let Err(error) = result {
+                    if let Some(message) = self
+                        .sessions
+                        .get_mut(session_index)
+                        .and_then(|session| session.messages.get_mut(message_index))
+                        .filter(|message| message.role() == ChatRole::Assistant)
+                    {
+                        message.error = Some(error);
+                    }
+                }
+                self.confirm_provisional_session(session_index)
+            }
+            Message::EscapePressed => {
+                if !self.flags.overlay {
+                    return Task::none();
+                }
+                let action = if self.voice.is_active() {
+                    self.cancel_voice()
+                } else if self.streaming {
+                    self.stop_stream()
+                } else {
+                    Task::none()
+                };
+                Task::batch([action, self.close_overlay()])
+            }
+            Message::LinkClicked(uri) => {
+                if let Err(error) = open_uri(&uri) {
+                    warn!("failed to open link {uri}: {error}");
                 }
                 Task::none()
             }
-
+            Message::ToggleMic => {
+                if self.voice.is_recording() {
+                    self.stop_voice()
+                } else if self.voice.is_processing() {
+                    Task::none()
+                } else {
+                    self.start_voice()
+                }
+            }
+            Message::CancelVoice => self.cancel_voice(),
+            Message::VoiceTick => self.voice_tick(),
+            Message::VoiceFinished { generation, result } => {
+                if !accept_voice_completion(self.voice_generation, &self.voice, generation) {
+                    return Task::none();
+                }
+                self.voice_abort = None;
+                self.voice = VoiceState::Idle;
+                match result {
+                    Ok((_text, placeholder)) if placeholder => {
+                        self.error = Some(fl!("voice-placeholder"));
+                    }
+                    Ok((text, _)) if !text.trim().is_empty() => {
+                        let existing = self.input.text();
+                        self.input =
+                            text_editor::Content::with_text(&if existing.trim().is_empty() {
+                                text
+                            } else {
+                                format!("{existing} {text}")
+                            });
+                    }
+                    Ok(_) => self.error = Some(fl!("voice-empty")),
+                    Err(error) => self.error = Some(error),
+                }
+                focus_editor()
+            }
+            Message::SelectSession(index) => {
+                if index >= self.sessions.len() {
+                    return Task::none();
+                }
+                self.active = index;
+                self.error = None;
+                Task::batch([self.maybe_fetch_history(index), scroll_to_bottom()])
+            }
+            Message::NewSession => {
+                if self.streaming {
+                    return Task::none();
+                }
+                self.sessions.push(LocalSession::new(format!(
+                    "session-{}",
+                    self.sessions.len() + 1
+                )));
+                self.active = self.sessions.len() - 1;
+                self.input = text_editor::Content::new();
+                self.error = None;
+                Task::batch([focus_editor(), scroll_to_bottom()])
+            }
+            Message::RetryHistory => {
+                if self.bridge_connecting {
+                    Task::none()
+                } else {
+                    self.bridge_connecting = true;
+                    self.connect_bridge()
+                }
+            }
             Message::SessionsFetched(Ok(summaries)) => {
+                self.sessions_error = None;
                 self.merge_remote_sessions(summaries);
+                scroll_to_bottom()
+            }
+            Message::SessionsFetched(Err(error)) => {
+                self.sessions_error = Some(error);
                 Task::none()
             }
-            Message::SessionsFetched(Err(err)) => {
-                tracing::warn!("failed to fetch bridge sessions: {err}");
-                Task::none()
-            }
-
             Message::HistoryFetched { session_id, result } => {
                 self.apply_history(&session_id, result);
+                scroll_to_bottom()
+            }
+            Message::ProvisionalResolved {
+                session_index,
+                session_id,
+                result,
+            } => {
+                let resolved = result.is_ok();
+                if let Some(session) = self.sessions.get_mut(session_index)
+                    && session.provisional_remote_id.as_deref() == Some(session_id.as_str())
+                {
+                    match result {
+                        Ok(true) => {
+                            session.remote_id = Some(session_id);
+                            session.provisional_remote_id = None;
+                            session.history = HistoryState::Loaded;
+                        }
+                        Ok(false) => {
+                            session.provisional_remote_id = None;
+                            if session.persistent_context.is_none() {
+                                session.persistent_context =
+                                    build_branch_context(&session.messages);
+                            }
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "failed to verify provisional Agent session");
+                        }
+                    }
+                }
+                let deferred = self.submit_after_provisional.take();
+                if resolved
+                    && let Some(deferred) = deferred
+                    && deferred.session_index == session_index
+                    && self.active == session_index
+                    && self.input.text().trim() == deferred.prompt
+                    && deferred.activation_generation == self.activation_generation
+                {
+                    self.pending_context = deferred.context;
+                    return self.submit();
+                }
                 Task::none()
+            }
+            Message::ModelsFetched(Ok(models)) => {
+                self.models = Some(models);
+                Task::none()
+            }
+            Message::ModelsFetched(Err(error)) => {
+                self.bridge_error = Some(error);
+                Task::none()
+            }
+            Message::Reconnect | Message::BridgeTick => {
+                if self.bridge_connecting {
+                    Task::none()
+                } else {
+                    self.bridge_connecting = true;
+                    self.connect_bridge()
+                }
+            }
+            Message::BridgeConnected(Ok(endpoint)) => {
+                self.bridge_connecting = false;
+                self.bridge_error = None;
+                self.bridge_endpoint = Some(endpoint.clone());
+                let mut tasks = vec![self.fetch_models_task(endpoint.clone())];
+                if !self.flags.overlay {
+                    tasks.push(self.fetch_sessions_task(endpoint));
+                }
+                if self
+                    .active_session()
+                    .is_some_and(|session| matches!(session.history, HistoryState::Failed(_)))
+                {
+                    tasks.push(self.maybe_fetch_history(self.active));
+                }
+                if self.auto_submit && (!self.flags.overlay || self.overlay_visible) {
+                    self.auto_submit = false;
+                    tasks.push(Task::done(cosmic::Action::App(Message::Submit)));
+                }
+                Task::batch(tasks)
+            }
+            Message::BridgeConnected(Err(error)) => {
+                self.bridge_connecting = false;
+                self.bridge_endpoint = None;
+                self.models = None;
+                self.bridge_error = Some(error);
+                Task::none()
+            }
+            Message::Layer(LayerEvent::Focused) => focus_editor(),
+            Message::Layer(LayerEvent::Unfocused) if self.file_picker_open => Task::none(),
+            Message::Layer(LayerEvent::Unfocused) => {
+                let action = if self.voice.is_active() {
+                    self.cancel_voice()
+                } else if self.streaming {
+                    self.stop_stream()
+                } else {
+                    Task::none()
+                };
+                Task::batch([action, self.close_overlay()])
+            }
+            Message::Layer(LayerEvent::Done) => {
+                self.overlay_visible = false;
+                self.activation_generation = self.activation_generation.wrapping_add(1);
+                self.auto_submit = false;
+                self.submit_after_provisional = None;
+                self.pending_context = None;
+                self.stream_context_generation = None;
+                if self.voice.is_active() {
+                    self.cancel_voice()
+                } else if self.streaming {
+                    self.stop_stream()
+                } else {
+                    Task::none()
+                }
             }
         }
     }
 
     fn view(&self) -> Element<'_, Message> {
         if self.flags.overlay {
-            self.view_overlay()
+            container(widget::Space::new()).into()
         } else {
             self.view_standalone()
         }
     }
 
-    fn subscription(&self) -> Subscription<Message> {
-        // Overlay mode swallows Esc to close itself.
-        if !self.flags.overlay {
-            return Subscription::none();
+    fn view_window(&self, id: SurfaceId) -> Element<'_, Message> {
+        if self.flags.overlay && id == *OVERLAY_ID {
+            self.view_overlay()
+        } else {
+            container(widget::Space::new()).into()
         }
-        event::listen_with(|ev, _status, _id| {
-            if let cosmic::iced::Event::Keyboard(
-                cosmic::iced::keyboard::Event::KeyPressed { key, .. },
-            ) = ev
-                && matches!(key, Key::Named(Named::Escape))
-            {
-                return Some(Message::EscapePressed);
+    }
+
+    fn subscription(&self) -> Subscription<Message> {
+        let mut subscriptions = Vec::new();
+        if self.flags.overlay {
+            subscriptions.push(event::listen_with(|event, _, _| match event {
+                cosmic::iced::Event::Keyboard(cosmic::iced::keyboard::Event::KeyPressed {
+                    key,
+                    ..
+                }) if matches!(key, Key::Named(Named::Escape)) => Some(Message::EscapePressed),
+                cosmic::iced::Event::PlatformSpecific(PlatformSpecific::Wayland(
+                    wayland::Event::Layer(layer, ..),
+                )) => Some(Message::Layer(layer)),
+                _ => None,
+            }));
+        }
+        if self.voice.is_recording() {
+            subscriptions.push(
+                cosmic::iced::time::every(Duration::from_millis(100)).map(|_| Message::VoiceTick),
+            );
+        }
+        if self.bridge_endpoint.is_none() && !self.bridge_connecting {
+            subscriptions.push(
+                cosmic::iced::time::every(Duration::from_secs(3)).map(|_| Message::BridgeTick),
+            );
+        }
+        Subscription::batch(subscriptions)
+    }
+
+    fn dbus_activation(&mut self, message: cosmic::dbus_activation::Message) -> Task<Message> {
+        let activation = match message.msg {
+            Details::Activate => OverlayActivation::default(),
+            Details::ActivateAction { action, .. } => {
+                OverlayActivation::from_str(&action).unwrap_or_default()
             }
-            None
-        })
+            Details::Open { .. } => return Task::none(),
+        };
+        self.apply_activation(activation)
     }
 }
 
 impl App {
-    // ------------------------------------------------------------------
-    // State helpers
-    // ------------------------------------------------------------------
-
     fn active_session(&self) -> Option<&LocalSession> {
         self.sessions.get(self.active)
     }
@@ -596,263 +851,773 @@ impl App {
         self.sessions.get_mut(self.active)
     }
 
-    fn finalize_stream(&mut self) {
-        if let Some(idx) = self.streaming_session.take()
-            && let Some(sess) = self.sessions.get_mut(idx)
-            && let Some(last) = sess.messages.last_mut()
-        {
-            last.in_progress = false;
-            if last.role() == ChatRole::Assistant {
-                last.refresh_markdown();
-            }
+    fn consume_stream_context(&mut self) {
+        if self.stream_context_generation == Some(self.activation_generation) {
+            self.pending_context = None;
         }
-        self.streaming = false;
+        self.stream_context_generation = None;
     }
 
-    /// Pull `session_id` out of the bridge's `done` envelope and
-    /// pin it to whichever session was the in-flight target so we
-    /// reuse the same clawd memory thread on the next turn.
-    fn capture_remote_session(&mut self, envelope: &serde_json::Value) {
-        let Some(idx) = self.streaming_session else {
-            return;
-        };
-        let Some(sess) = self.sessions.get_mut(idx) else {
-            return;
-        };
-        if sess.remote_id.is_some() {
-            return;
+    fn connect_bridge(&self) -> Task<Message> {
+        Task::perform(
+            async {
+                ensure_bridge_endpoint()
+                    .await
+                    .map_err(|error| format!("{error:#}"))
+            },
+            |result| cosmic::Action::App(Message::BridgeConnected(result)),
+        )
+    }
+
+    fn fetch_models_task(&self, endpoint: BridgeEndpoint) -> Task<Message> {
+        Task::perform(
+            async move {
+                fetch_models(endpoint)
+                    .await
+                    .map_err(|error| format!("{error:#}"))
+            },
+            |result| cosmic::Action::App(Message::ModelsFetched(result)),
+        )
+    }
+
+    fn fetch_sessions_task(&self, endpoint: BridgeEndpoint) -> Task<Message> {
+        Task::perform(
+            async move {
+                fetch_sessions(endpoint)
+                    .await
+                    .map_err(|error| format!("{error:#}"))
+            },
+            |result| cosmic::Action::App(Message::SessionsFetched(result)),
+        )
+    }
+
+    fn open_overlay(&mut self) -> Task<Message> {
+        self.overlay_visible = true;
+        Task::batch([get_layer_surface(SctkLayerSurfaceSettings {
+            id: *OVERLAY_ID,
+            layer: Layer::Overlay,
+            keyboard_interactivity: KeyboardInteractivity::Exclusive,
+            anchor: Anchor::TOP,
+            output: Default::default(),
+            namespace: "clawos-agent".into(),
+            margin: IcedMargin {
+                top: 72,
+                ..Default::default()
+            },
+            size: None,
+            exclusive_zone: 0,
+            size_limits: Limits::NONE
+                .min_width(1.0)
+                .min_height(120.0)
+                .max_width(560.0)
+                .max_height(560.0),
+            ..Default::default()
+        })])
+    }
+
+    fn close_overlay(&mut self) -> Task<Message> {
+        if !self.overlay_visible {
+            return Task::none();
         }
+        self.overlay_visible = false;
+        self.activation_generation = self.activation_generation.wrapping_add(1);
+        self.auto_submit = false;
+        self.submit_after_provisional = None;
+        self.pending_context = None;
+        self.stream_context_generation = None;
+        self.input = text_editor::Content::new();
+        destroy_layer_surface(*OVERLAY_ID)
+    }
+
+    fn apply_activation(&mut self, activation: OverlayActivation) -> Task<Message> {
+        self.activation_generation = self.activation_generation.wrapping_add(1);
+        self.pending_context = activation.context;
+        self.auto_submit = activation.query.is_some();
+        if let Some(query) = activation.query {
+            self.input = text_editor::Content::with_text(&query);
+        }
+        let mut tasks = Vec::new();
+        if !self.overlay_visible {
+            tasks.push(self.open_overlay());
+        } else {
+            tasks.push(focus_editor());
+        }
+        if activation.voice && !self.voice.is_active() && !self.streaming {
+            tasks.push(Task::done(cosmic::Action::App(Message::ToggleMic)));
+        } else if self.auto_submit
+            && self.bridge_endpoint.is_some()
+            && !activation.voice
+            && !self.streaming
+            && self.pending_cancel.is_none()
+        {
+            self.auto_submit = false;
+            tasks.push(Task::done(cosmic::Action::App(Message::Submit)));
+        }
+        Task::batch(tasks)
+    }
+
+    fn merge_remote_sessions(&mut self, summaries: Vec<SessionSummary>) {
+        for summary in summaries {
+            if let Some(existing) = self.sessions.iter_mut().find(|session| {
+                session.remote_id.as_deref() == Some(summary.id.as_str())
+                    || session.provisional_remote_id.as_deref() == Some(summary.id.as_str())
+            }) {
+                if existing.title.trim().is_empty() && !summary.title.trim().is_empty() {
+                    existing.title = summary.title;
+                }
+                existing.last_ts_ms = summary.last_ts_ms.or(existing.last_ts_ms);
+                existing.message_count = existing.message_count.max(summary.message_count);
+                continue;
+            }
+            let client_id = format!("session-remote-{}", self.sessions.len() + 1);
+            self.sessions
+                .push(LocalSession::from_summary(client_id, &summary));
+        }
+    }
+
+    fn maybe_fetch_history(&mut self, index: usize) -> Task<Message> {
+        let Some(session) = self.sessions.get_mut(index) else {
+            return Task::none();
+        };
+        if !matches!(
+            session.history,
+            HistoryState::NotLoaded | HistoryState::Failed(_)
+        ) {
+            return Task::none();
+        }
+        let Some(remote_id) = session.remote_id.clone() else {
+            session.history = HistoryState::Loaded;
+            return Task::none();
+        };
+        let Some(endpoint) = self.bridge_endpoint.clone() else {
+            session.history = HistoryState::Failed(fl!("bridge-offline"));
+            return Task::none();
+        };
+        session.history = HistoryState::Loading;
+        Task::perform(
+            async move {
+                let result = fetch_history(endpoint, &remote_id)
+                    .await
+                    .map_err(|error| format!("{error:#}"));
+                (remote_id, result)
+            },
+            |(session_id, result)| {
+                cosmic::Action::App(Message::HistoryFetched { session_id, result })
+            },
+        )
+    }
+
+    fn confirm_provisional_session(&self, session_index: usize) -> Task<Message> {
+        let Some(endpoint) = self.bridge_endpoint.clone() else {
+            return Task::none();
+        };
+        let Some(session_id) = self
+            .sessions
+            .get(session_index)
+            .and_then(|session| session.provisional_remote_id.clone())
+        else {
+            return Task::none();
+        };
+        Task::perform(
+            async move {
+                for attempt in 0..5 {
+                    match session_exists(endpoint.clone(), &session_id).await {
+                        Ok(true) => return (session_id, Ok(true)),
+                        Ok(false) if attempt < 4 => {
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                        }
+                        Ok(false) => return (session_id, Ok(false)),
+                        Err(error) => return (session_id, Err(format!("{error:#}"))),
+                    }
+                }
+                (session_id, Ok(false))
+            },
+            move |(session_id, result)| {
+                cosmic::Action::App(Message::ProvisionalResolved {
+                    session_index,
+                    session_id,
+                    result,
+                })
+            },
+        )
+    }
+
+    fn apply_history(&mut self, session_id: &str, result: Result<Vec<HistoryMessage>, String>) {
+        let Some(session) = self
+            .sessions
+            .iter_mut()
+            .find(|session| session.remote_id.as_deref() == Some(session_id))
+        else {
+            return;
+        };
+        match result {
+            Ok(rows) => {
+                session.messages.clear();
+                for row in rows {
+                    if row.role == "system" {
+                        continue;
+                    }
+                    let role = if row.role == "assistant" {
+                        ChatRole::Assistant
+                    } else {
+                        ChatRole::User
+                    };
+                    let mut message = ChatMessage {
+                        role: Some(role.clone()),
+                        content: row.text,
+                        tool_calls: row.tool_calls,
+                        tool_results: row.tool_results,
+                        ..ChatMessage::default()
+                    };
+                    if role == ChatRole::Assistant {
+                        message.refresh_markdown();
+                    }
+                    session.messages.push(message);
+                }
+                session.message_count = session.messages.len() as i64;
+                session.history = HistoryState::Loaded;
+            }
+            Err(error) => session.history = HistoryState::Failed(error),
+        }
+    }
+
+    fn submit(&mut self) -> Task<Message> {
+        let prompt = self.input.text().trim().to_string();
+        if prompt.is_empty() || self.streaming || self.pending_cancel.is_some() {
+            return Task::none();
+        }
+        if self
+            .active_session()
+            .is_some_and(|session| session.provisional_remote_id.is_some())
+        {
+            self.submit_after_provisional = Some(DeferredSubmit {
+                session_index: self.active,
+                prompt,
+                context: self.pending_context.clone(),
+                activation_generation: self.activation_generation,
+            });
+            return self.confirm_provisional_session(self.active);
+        }
+        if !self.active_history_ready() {
+            return self.maybe_fetch_history(self.active);
+        }
+        let cancel_voice = if self.voice.is_active() {
+            self.cancel_voice()
+        } else {
+            Task::none()
+        };
+        let Some(endpoint) = self.bridge_endpoint.clone() else {
+            self.error = Some(fl!("bridge-offline"));
+            if !self.bridge_connecting {
+                self.bridge_connecting = true;
+                return Task::batch([cancel_voice, self.connect_bridge()]);
+            }
+            return cancel_voice;
+        };
+
+        self.input = text_editor::Content::new();
+        self.error = None;
+        self.streaming = true;
+        self.streaming_session = Some(self.active);
+        self.active_task_id = None;
+        self.stream_generation = self.stream_generation.wrapping_add(1);
+        let generation = self.stream_generation;
+        let remote_id = self
+            .active_session()
+            .and_then(|session| session.remote_id.clone());
+        if let Some(session) = self.active_session_mut() {
+            if session.title.trim().is_empty() {
+                session.title = title_from_prompt(&prompt);
+            }
+            session.messages.push(ChatMessage::user(prompt.clone()));
+            session.messages.push(ChatMessage::assistant_streaming());
+            session.message_count = session.messages.len() as i64;
+        }
+        let persistent_context = self
+            .active_session()
+            .and_then(|session| session.persistent_context.as_deref())
+            .map(str::trim)
+            .filter(|context| !context.is_empty())
+            .map(ToOwned::to_owned);
+        let one_shot_context = self
+            .pending_context
+            .as_deref()
+            .map(str::trim)
+            .filter(|context| !context.is_empty())
+            .map(ToOwned::to_owned);
+        self.stream_context_generation = one_shot_context
+            .as_ref()
+            .map(|_| self.activation_generation);
+        let request = ChatRequest {
+            prompt,
+            session_id: remote_id,
+            model: None,
+            context: one_shot_context,
+            branch_context: persistent_context,
+        };
+        let (abort_handle, abort_registration) = AbortHandle::new_pair();
+        self.stream_abort = Some(abort_handle);
+        let stream_task = cosmic::Task::stream(cosmic::iced::stream::channel(
+            32,
+            move |mut sender: cosmic::iced::futures::channel::mpsc::Sender<Message>| async move {
+                use futures::SinkExt;
+                use futures_util::StreamExt;
+                let stream_future = async move {
+                    match sse::open_chat_stream(endpoint, request).await {
+                        Ok(stream) => {
+                            let mut stream = std::pin::pin!(stream);
+                            while let Some(item) = stream.next().await {
+                                let message = match item {
+                                    Ok(event) => Message::Stream(generation, event),
+                                    Err(error) => {
+                                        Message::TransportError(generation, format!("{error:#}"))
+                                    }
+                                };
+                                let terminal = matches!(
+                                    message,
+                                    Message::Stream(_, StreamEvent::Error(_))
+                                        | Message::TransportError(_, _)
+                                );
+                                if sender.send(message).await.is_err() || terminal {
+                                    return;
+                                }
+                            }
+                            let _ = sender.send(Message::StreamEnded(generation)).await;
+                        }
+                        Err(error) => {
+                            let _ = sender
+                                .send(Message::TransportError(generation, format!("{error:#}")))
+                                .await;
+                        }
+                    }
+                };
+                let _ = Abortable::new(stream_future, abort_registration).await;
+            },
+        ))
+        .map(cosmic::Action::App);
+        Task::batch([cancel_voice, stream_task, scroll_to_bottom()])
+    }
+
+    fn handle_stream_event(&mut self, generation: u64, event: StreamEvent) -> Task<Message> {
+        if let StreamEvent::TaskStarted {
+            task_id,
+            session_id,
+        } = &event
+            && let Some(pending) = self
+                .pending_cancel
+                .filter(|pending| pending.generation == generation)
+        {
+            if let Some(session_id) = session_id.as_deref().filter(|id| !id.is_empty())
+                && let Some(session) = self.sessions.get_mut(pending.session_index)
+                && session.remote_id.is_none()
+            {
+                session.provisional_remote_id = Some(session_id.to_string());
+            }
+            self.consume_stream_context();
+            self.pending_cancel = None;
+            if let Some(abort) = self.stream_abort.take() {
+                abort.abort();
+            }
+            self.stream_generation = self.stream_generation.wrapping_add(1);
+            let Some(endpoint) = self.bridge_endpoint.clone() else {
+                return Task::none();
+            };
+            let task_id = task_id.clone();
+            return Task::perform(
+                async move {
+                    cancel_task(endpoint, &task_id)
+                        .await
+                        .map_err(|error| format!("{error:#}"))
+                },
+                move |result| {
+                    cosmic::Action::App(Message::CancelFinished {
+                        session_index: pending.session_index,
+                        message_index: pending.message_index,
+                        result,
+                    })
+                },
+            );
+        }
+        if self
+            .pending_cancel
+            .is_some_and(|pending| pending.generation == generation)
+            && matches!(&event, StreamEvent::Error(_) | StreamEvent::Done(_))
+        {
+            self.pending_cancel = None;
+            self.stream_abort = None;
+            self.stream_generation = self.stream_generation.wrapping_add(1);
+            return Task::none();
+        }
+        if generation != self.stream_generation || !self.streaming {
+            return Task::none();
+        }
+
+        match event {
+            StreamEvent::TaskStarted {
+                task_id,
+                session_id,
+            } => {
+                self.active_task_id = (!task_id.is_empty()).then_some(task_id);
+                self.consume_stream_context();
+                if let Some(session_id) = session_id.filter(|id| !id.is_empty())
+                    && let Some(index) = self.streaming_session
+                    && let Some(session) = self.sessions.get_mut(index)
+                    && session.remote_id.is_none()
+                {
+                    session.provisional_remote_id = Some(session_id);
+                }
+            }
+            StreamEvent::Delta(delta) => {
+                if let Some(message) = self.streaming_assistant_mut() {
+                    message.content.push_str(&delta);
+                }
+            }
+            StreamEvent::ToolUseStart { id, name } => {
+                if let Some(message) = self.streaming_assistant_mut() {
+                    upsert_tool_call(
+                        message,
+                        ToolCallView {
+                            id,
+                            name,
+                            input: serde_json::Value::Null,
+                            partial_json: String::new(),
+                            in_progress: true,
+                        },
+                    );
+                }
+            }
+            StreamEvent::ToolInputDelta { id, delta } => {
+                if let Some(message) = self.streaming_assistant_mut() {
+                    if let Some(call) = message.tool_calls.iter_mut().find(|call| call.id == id) {
+                        call.partial_json.push_str(&delta);
+                        call.in_progress = true;
+                    } else {
+                        upsert_tool_call(
+                            message,
+                            ToolCallView {
+                                id,
+                                name: fl!("tool-running"),
+                                input: serde_json::Value::Null,
+                                partial_json: delta,
+                                in_progress: true,
+                            },
+                        );
+                    }
+                }
+            }
+            StreamEvent::ToolUse(call) => {
+                if let Some(message) = self.streaming_assistant_mut() {
+                    upsert_tool_call(message, call);
+                }
+            }
+            StreamEvent::ToolStart { id, name, input } => {
+                if let Some(message) = self.streaming_assistant_mut() {
+                    upsert_tool_call(
+                        message,
+                        ToolCallView {
+                            id,
+                            name,
+                            input,
+                            partial_json: String::new(),
+                            in_progress: true,
+                        },
+                    );
+                }
+            }
+            StreamEvent::ToolResult(result) => {
+                if let Some(message) = self.streaming_assistant_mut() {
+                    if let Some(call) = message
+                        .tool_calls
+                        .iter_mut()
+                        .find(|call| !result.id.is_empty() && call.id == result.id)
+                    {
+                        call.in_progress = false;
+                    }
+                    upsert_tool_result(message, result);
+                }
+            }
+            StreamEvent::Warning(warning) => {
+                if let Some(message) = self.streaming_assistant_mut()
+                    && !message.warnings.contains(&warning)
+                {
+                    message.warnings.push(warning);
+                }
+            }
+            StreamEvent::TurnDone(_) => {}
+            StreamEvent::Done(envelope) => {
+                self.capture_remote_session(&envelope);
+                let fallback = answer_from_envelope(&envelope);
+                self.finalize_stream(fallback, false);
+                if self.auto_submit && (!self.flags.overlay || self.overlay_visible) {
+                    self.auto_submit = false;
+                    return Task::batch([
+                        Task::done(cosmic::Action::App(Message::Submit)),
+                        scroll_to_bottom(),
+                    ]);
+                }
+            }
+            StreamEvent::Error(error) => return self.fail_stream(error),
+        }
+        scroll_to_bottom()
+    }
+
+    fn streaming_assistant_mut(&mut self) -> Option<&mut ChatMessage> {
+        let index = self.streaming_session?;
+        let message = self.sessions.get_mut(index)?.messages.last_mut()?;
+        (message.role() == ChatRole::Assistant).then_some(message)
+    }
+
+    fn active_history_ready(&self) -> bool {
+        self.active_session().is_none_or(|session| {
+            session.remote_id.is_none() || matches!(session.history, HistoryState::Loaded)
+        })
+    }
+
+    fn capture_remote_session(&mut self, envelope: &serde_json::Value) {
+        let Some(index) = self.streaming_session else {
+            return;
+        };
+        let Some(session) = self.sessions.get_mut(index) else {
+            return;
+        };
         let candidate = envelope
             .get("session_id")
             .and_then(serde_json::Value::as_str)
             .or_else(|| {
                 envelope
                     .get("job")
-                    .and_then(|j| j.get("session_id"))
+                    .and_then(|job| job.get("session_id"))
                     .and_then(serde_json::Value::as_str)
             });
-        if let Some(id) = candidate.filter(|s| !s.is_empty()) {
-            sess.remote_id = Some(id.to_string());
-            sess.history = HistoryState::Loaded;
+        if let Some(id) = candidate.filter(|id| !id.is_empty()) {
+            session.remote_id = Some(id.to_string());
+            session.provisional_remote_id = None;
+            session.persistent_context = None;
+            session.history = HistoryState::Loaded;
         }
     }
 
-    /// Merge bridge-listed persisted sessions into the sidebar.
-    /// Sessions already represented by `remote_id` are left alone so
-    /// in-progress conversations don't get clobbered by a refresh.
-    fn merge_remote_sessions(&mut self, summaries: Vec<SessionSummary>) {
-        // Pre-compute what we already know about so the O(n*m)
-        // diff stays cheap.
-        let known: std::collections::HashSet<String> = self
-            .sessions
-            .iter()
-            .filter_map(|s| s.remote_id.clone())
-            .collect();
-        let mut next_id = self.sessions.len() + 1;
-        for summary in summaries {
-            if known.contains(&summary.id) {
-                continue;
-            }
-            let client_id = format!("session-remote-{}", next_id);
-            next_id += 1;
-            self.sessions
-                .push(LocalSession::from_summary(client_id, &summary));
-        }
-    }
-
-    /// Trigger a lazy history fetch for `idx` if the session has a
-    /// remote id and we have not loaded it yet.
-    fn maybe_fetch_history(&mut self, idx: usize) -> Task<Message> {
-        let Some(sess) = self.sessions.get_mut(idx) else {
-            return Task::none();
-        };
-        if sess.history != HistoryState::NotLoaded && !matches!(sess.history, HistoryState::Failed(_)) {
-            return Task::none();
-        }
-        let Some(remote_id) = sess.remote_id.clone() else {
-            sess.history = HistoryState::Loaded;
-            return Task::none();
-        };
-        let Some(endpoint) = self.bridge_endpoint.clone() else {
-            return Task::none();
-        };
-        sess.history = HistoryState::Loading;
-        cosmic::Task::perform(
-            async move {
-                let result = fetch_history(endpoint, &remote_id)
-                    .await
-                    .map_err(|err| format!("{err:#}"));
-                Message::HistoryFetched {
-                    session_id: remote_id,
-                    result,
+    fn finalize_stream(&mut self, fallback: Option<String>, interrupted: bool) {
+        if let Some(index) = self.streaming_session.take()
+            && let Some(session) = self.sessions.get_mut(index)
+            && let Some(message) = session.messages.last_mut()
+            && message.role() == ChatRole::Assistant
+        {
+            if message.content.trim().is_empty() {
+                if let Some(answer) = fallback.filter(|answer| !answer.trim().is_empty()) {
+                    message.content = answer;
+                } else if interrupted {
+                    message.content = fl!("interrupted");
                 }
-            },
-            |m| m,
-        )
-        .map(cosmic::Action::App)
+            }
+            if interrupted
+                && !message.content.trim().is_empty()
+                && message.content != fl!("interrupted")
+                && !message.warnings.contains(&fl!("interrupted"))
+            {
+                message.warnings.push(fl!("interrupted"));
+            }
+            message.in_progress = false;
+            message.refresh_markdown();
+            if message.is_visibly_empty() {
+                session.messages.pop();
+            }
+            session.message_count = session.messages.len() as i64;
+            session.last_ts_ms = Some(now_ms());
+        }
+        self.streaming = false;
+        self.active_task_id = None;
+        self.stream_abort = None;
     }
 
-    /// Replay history rows into the matching session's message column.
-    fn apply_history(
-        &mut self,
-        session_id: &str,
-        result: Result<Vec<HistoryMessage>, String>,
-    ) {
-        let Some(sess) = self
-            .sessions
-            .iter_mut()
-            .find(|s| s.remote_id.as_deref() == Some(session_id))
-        else {
-            return;
-        };
-        match result {
-            Ok(rows) => {
-                sess.messages.clear();
-                for row in rows {
-                    let role = match row.role.as_str() {
-                        "assistant" => ChatRole::Assistant,
-                        _ => ChatRole::User,
-                    };
-                    let mut msg = ChatMessage {
-                        role: Some(role.clone()),
-                        content: row.text,
-                        tool_calls: row.tool_calls,
-                        tool_results: row.tool_results,
-                        parsed_markdown: None,
-                        in_progress: false,
-                    };
-                    if role == ChatRole::Assistant {
-                        msg.refresh_markdown();
-                    }
-                    sess.messages.push(msg);
-                }
-                sess.history = HistoryState::Loaded;
-            }
-            Err(err) => {
-                sess.history = HistoryState::Failed(err);
-            }
+    fn fail_stream(&mut self, error: String) -> Task<Message> {
+        let session_index = self.streaming_session;
+        if let Some(message) = self.streaming_assistant_mut() {
+            message.error = Some(error);
+        }
+        self.finalize_stream(None, false);
+        if let Some(session_index) = session_index {
+            Task::batch([
+                self.confirm_provisional_session(session_index),
+                scroll_to_bottom(),
+            ])
+        } else {
+            scroll_to_bottom()
         }
     }
 
-    fn submit(&mut self) -> Task<Message> {
-        let prompt = self.input.trim().to_string();
-        if prompt.is_empty() || self.streaming {
+    fn stop_stream(&mut self) -> Task<Message> {
+        if !self.streaming {
             return Task::none();
         }
-        let Some(endpoint) = self.bridge_endpoint.clone() else {
-            self.error = Some(
-                self.bridge_error
-                    .clone()
-                    .unwrap_or_else(|| "Bridge not running".into()),
-            );
-            return Task::none();
-        };
-
-        self.input.clear();
-        self.error = None;
-        self.streaming = true;
-        self.streaming_session = Some(self.active);
-        self.stream_generation = self.stream_generation.wrapping_add(1);
         let generation = self.stream_generation;
-
-        let remote_id = self
-            .active_session()
-            .and_then(|s| s.remote_id.clone());
-
-        if let Some(sess) = self.active_session_mut() {
-            if sess.title.trim().is_empty() {
-                sess.title = title_from_prompt(&prompt);
-            }
-            sess.messages.push(ChatMessage::user(prompt.clone()));
-            sess.messages.push(ChatMessage::assistant_streaming());
+        let session_index = self.streaming_session.unwrap_or(self.active);
+        let message_index = self
+            .sessions
+            .get(session_index)
+            .and_then(|session| session.messages.len().checked_sub(1))
+            .unwrap_or(0);
+        self.consume_stream_context();
+        let abort = self.stream_abort.take();
+        let task_id = self.active_task_id.clone();
+        self.finalize_stream(None, true);
+        let Some(task_id) = task_id else {
+            self.stream_abort = abort;
+            self.pending_cancel = Some(PendingCancel {
+                generation,
+                session_index,
+                message_index,
+            });
+            return scroll_to_bottom();
+        };
+        if let Some(abort) = abort {
+            abort.abort();
         }
-
-        // Drain any one-shot context hint into a prefix line on the
-        // first bridge-side prompt. The user-visible message we just
-        // pushed to `sess.messages` above stays unmodified, so the
-        // sidebar / transcript don't expose the host-app metadata.
-        let bridge_prompt = match self.pending_context.take() {
-            Some(ctx) if !ctx.trim().is_empty() => {
-                format!("[App context: {}]\n\n{}", ctx.trim(), prompt)
-            }
-            _ => prompt,
+        self.pending_cancel = Some(PendingCancel {
+            generation,
+            session_index,
+            message_index,
+        });
+        self.stream_generation = self.stream_generation.wrapping_add(1);
+        let Some(endpoint) = self.bridge_endpoint.clone() else {
+            return scroll_to_bottom();
         };
-
-        let request = ChatRequest {
-            prompt: bridge_prompt,
-            session_id: remote_id,
-            model: None,
-        };
-        cosmic::Task::stream(cosmic::iced::stream::channel(
-            16,
-            move |mut tx: cosmic::iced::futures::channel::mpsc::Sender<Message>| async move {
-                use futures::SinkExt;
-                use futures_util::StreamExt;
-                match sse::open_chat_stream(endpoint, request).await {
-                    Ok(stream) => {
-                        let mut stream = std::pin::pin!(stream);
-                        while let Some(item) = stream.next().await {
-                            let msg = match item {
-                                Ok(StreamEvent::Delta(t)) => Message::StreamDelta(generation, t),
-                                Ok(StreamEvent::Done(v)) => Message::StreamDone(generation, v),
-                                Ok(StreamEvent::Error(e)) => Message::StreamError(generation, e),
-                                Err(e) => Message::StreamError(generation, format!("{e:#}")),
-                            };
-                            let terminal = matches!(msg, Message::StreamError(..));
-                            if tx.send(msg).await.is_err() {
-                                return;
-                            }
-                            if terminal {
-                                // An error ends this stream; the StreamError
-                                // handler finalizes. Returning here (rather than
-                                // falling through to StreamEnded) means a single
-                                // stream emits exactly one terminal event.
-                                return;
-                            }
-                        }
-                        let _ = tx.send(Message::StreamEnded(generation)).await;
-                    }
-                    Err(e) => {
-                        let _ = tx
-                            .send(Message::StreamError(generation, format!("{e:#}")))
-                            .await;
-                    }
-                }
-            },
-        ))
-        .map(cosmic::Action::App)
+        Task::batch([
+            Task::perform(
+                async move {
+                    cancel_task(endpoint, &task_id)
+                        .await
+                        .map_err(|error| format!("{error:#}"))
+                },
+                move |result| {
+                    cosmic::Action::App(Message::CancelFinished {
+                        session_index,
+                        message_index,
+                        result,
+                    })
+                },
+            ),
+            scroll_to_bottom(),
+        ])
     }
 
-    // ------------------------------------------------------------------
-    // Standalone layout
-    // ------------------------------------------------------------------
+    fn start_voice(&mut self) -> Task<Message> {
+        if self.streaming || self.pending_cancel.is_some() {
+            return Task::none();
+        }
+        match Recorder::start() {
+            Ok(recorder) => {
+                self.voice_generation = self.voice_generation.wrapping_add(1);
+                let generation = self.voice_generation;
+                let metrics = recorder.metrics();
+                self.voice = VoiceState::Recording {
+                    recorder,
+                    generation,
+                    metrics,
+                };
+                self.error = None;
+            }
+            Err(error) => self.error = Some(format!("{}: {error}", fl!("voice-unavailable"))),
+        }
+        Task::none()
+    }
+
+    fn stop_voice(&mut self) -> Task<Message> {
+        let state = std::mem::replace(&mut self.voice, VoiceState::Idle);
+        let VoiceState::Recording {
+            recorder,
+            generation,
+            ..
+        } = state
+        else {
+            self.voice = state;
+            return Task::none();
+        };
+        let Some(endpoint) = self.bridge_endpoint.clone() else {
+            self.error = Some(fl!("bridge-offline"));
+            return Task::none();
+        };
+        self.voice = VoiceState::Processing { generation };
+        let (abort_handle, abort_registration) = AbortHandle::new_pair();
+        self.voice_abort = Some(abort_handle);
+        Task::perform(
+            async move {
+                let work = async move {
+                    let wav = tokio::task::spawn_blocking(move || recorder.stop())
+                        .await
+                        .map_err(|error| format!("{}: {error}", fl!("recorder-task-error")))?
+                        .map_err(|error| format!("{}: {error}", fl!("recording-error")))?;
+                    let response = recorder::upload(endpoint, wav)
+                        .await
+                        .map_err(|error| format!("{}: {error}", fl!("upload-error")))?;
+                    Ok((response.text, response.placeholder))
+                };
+                match Abortable::new(work, abort_registration).await {
+                    Ok(result) => result,
+                    Err(_) => Err(fl!("cancel")),
+                }
+            },
+            move |result| cosmic::Action::App(Message::VoiceFinished { generation, result }),
+        )
+    }
+
+    fn cancel_voice(&mut self) -> Task<Message> {
+        self.voice_generation = self.voice_generation.wrapping_add(1);
+        if let Some(abort) = self.voice_abort.take() {
+            abort.abort();
+        }
+        let state = std::mem::replace(&mut self.voice, VoiceState::Idle);
+        match state {
+            VoiceState::Recording { recorder, .. } => Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || recorder.cancel())
+                        .await
+                        .map_err(|error| error.to_string())
+                        .and_then(|result| result.map_err(|error| error.to_string()))
+                },
+                |_| cosmic::Action::None,
+            ),
+            VoiceState::Idle | VoiceState::Processing { .. } => Task::none(),
+        }
+    }
+
+    fn voice_tick(&mut self) -> Task<Message> {
+        let VoiceState::Recording {
+            recorder, metrics, ..
+        } = &mut self.voice
+        else {
+            return Task::none();
+        };
+        if let Some(error) = recorder.stream_error() {
+            self.voice_generation = self.voice_generation.wrapping_add(1);
+            self.voice = VoiceState::Idle;
+            self.error = Some(error);
+            return Task::none();
+        }
+        *metrics = recorder.metrics();
+        if metrics.elapsed >= Duration::from_secs(recorder::MAX_RECORDING_SECS) {
+            return self.stop_voice();
+        }
+        Task::none()
+    }
 
     fn view_standalone(&self) -> Element<'_, Message> {
         let spacing = theme::active().cosmic().spacing;
-
-        let chat_body: Element<Message> = match self.active_session() {
-            Some(sess) if !sess.messages.is_empty() => self.message_list(sess, false),
-            _ => empty_state(false),
-        };
-
-        let chat_area = container(chat_body)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .padding([spacing.space_m, spacing.space_l]);
-
-        let main_column = Column::new()
-            .push(chat_area)
+        let chat_body = self.active_chat_body(false);
+        let main = Column::new()
             .push(
-                container(self.input_card(false))
-                    .padding([
-                        0u16,
-                        spacing.space_l,
-                        spacing.space_l,
-                        spacing.space_l,
-                    ]),
-            );
-
-        let body_row = Row::new()
+                container(chat_body)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .padding([spacing.space_m, spacing.space_l]),
+            )
+            .push(container(self.input_card(false)).padding([
+                0u16,
+                spacing.space_l,
+                spacing.space_l,
+                spacing.space_l,
+            ]));
+        let body = Row::new()
             .push(
                 container(self.sidebar_view())
                     .width(Length::Fixed(SIDEBAR_WIDTH))
@@ -860,37 +1625,328 @@ impl App {
                     .padding([spacing.space_m, spacing.space_s])
                     .class(theme::Container::custom(sidebar_style)),
             )
-            .push(container(main_column).width(Length::Fill).height(Length::Fill));
-
-        container(body_row)
+            .push(container(main).width(Length::Fill).height(Length::Fill));
+        container(body)
             .width(Length::Fill)
             .height(Length::Fill)
             .class(theme::Container::custom(page_style))
             .into()
     }
 
+    fn view_overlay(&self) -> Element<'_, Message> {
+        if self.voice.is_active() {
+            return self.voice_overlay();
+        }
+        let spacing = theme::active().cosmic().spacing;
+        let header = Row::new()
+            .push(brand_symbol(20.0))
+            .push(text(fl!("app-name")).size(13.0))
+            .push(widget::space::horizontal())
+            .push(text(fl!("close-hint")).size(11.0))
+            .align_y(Alignment::Center)
+            .spacing(spacing.space_xs);
+        let has_content = self
+            .active_session()
+            .is_some_and(|session| !session.messages.is_empty())
+            || self.error.is_some();
+        let mut inner = Column::new()
+            .push(container(header).padding(spacing.space_xs))
+            .spacing(spacing.space_xs);
+        if has_content {
+            inner = inner.push(
+                container(self.active_chat_body(true))
+                    .width(Length::Fill)
+                    .height(Length::Fixed(300.0))
+                    .padding([0u16, spacing.space_xs]),
+            );
+        }
+        inner = inner.push(container(self.input_card(true)).padding(spacing.space_xs));
+        container(inner)
+            .width(Length::Fixed(520.0))
+            .class(theme::Container::custom(page_style))
+            .into()
+    }
+
+    fn voice_overlay(&self) -> Element<'_, Message> {
+        let spacing = theme::active().cosmic().spacing;
+        let (status, elapsed, peak, processing) = match &self.voice {
+            VoiceState::Recording { metrics, .. } => (
+                fl!("listening"),
+                format_duration(metrics.elapsed),
+                metrics.peak,
+                false,
+            ),
+            VoiceState::Processing { .. } => (fl!("transcribing"), String::new(), 0.25, true),
+            VoiceState::Idle => (String::new(), String::new(), 0.0, false),
+        };
+        let phase = match &self.voice {
+            VoiceState::Recording { metrics, .. } => metrics.elapsed.as_secs_f32() * 4.0,
+            _ => 0.0,
+        };
+        let mut bars = Row::new()
+            .spacing(spacing.space_xxs)
+            .align_y(Alignment::Center);
+        for index in 0..9 {
+            let pulse = ((phase + index as f32 * 0.7).sin().abs() * 0.45 + 0.55) * peak.max(0.08);
+            bars = bars.push(
+                container(widget::Space::new())
+                    .width(Length::Fixed(5.0))
+                    .height(Length::Fixed(12.0 + pulse * 52.0))
+                    .class(theme::Container::custom(level_bar_style)),
+            );
+        }
+        let orb = container(bars)
+            .width(Length::Fixed(150.0))
+            .height(Length::Fixed(150.0))
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .class(theme::Container::custom(orb_style));
+        let controls = Row::new()
+            .push(if processing {
+                symbolic_button(
+                    "window-close-symbolic",
+                    fl!("cancel"),
+                    Some(Message::CancelVoice),
+                    true,
+                )
+            } else {
+                symbolic_button(
+                    "media-playback-stop-symbolic",
+                    fl!("stop"),
+                    Some(Message::ToggleMic),
+                    true,
+                )
+            })
+            .push(if processing {
+                widget::Space::new().into()
+            } else {
+                symbolic_button(
+                    "window-close-symbolic",
+                    fl!("cancel"),
+                    Some(Message::CancelVoice),
+                    false,
+                )
+            })
+            .spacing(spacing.space_s)
+            .align_y(Alignment::Center);
+        container(
+            Column::new()
+                .push(text(fl!("app-name")).size(13.0))
+                .push(orb)
+                .push(text(status).size(16.0))
+                .push(text(elapsed).size(12.0))
+                .push(controls)
+                .align_x(Alignment::Center)
+                .spacing(spacing.space_s)
+                .padding(spacing.space_m),
+        )
+        .width(Length::Fixed(280.0))
+        .class(theme::Container::custom(page_style))
+        .into()
+    }
+
+    fn active_chat_body(&self, compact: bool) -> Element<'_, Message> {
+        let Some(session) = self.active_session() else {
+            return empty_state(compact);
+        };
+        if session.messages.is_empty()
+            && let Some(error) = &self.error
+        {
+            return Column::new()
+                .push(empty_state(compact))
+                .push(error_card(error, None))
+                .spacing(theme::active().cosmic().spacing.space_s)
+                .height(Length::Fill)
+                .into();
+        }
+        match &session.history {
+            HistoryState::Loading => state_card(fl!("history-loading"), None),
+            HistoryState::Failed(error) => state_card(
+                format!("{} {error}", fl!("history-failed")),
+                Some((fl!("retry"), Message::RetryHistory)),
+            ),
+            _ if session.messages.is_empty() => empty_state(compact),
+            _ => self.message_list(session, compact),
+        }
+    }
+
+    fn message_list<'a>(
+        &'a self,
+        session: &'a LocalSession,
+        compact: bool,
+    ) -> Element<'a, Message> {
+        let spacing = theme::active().cosmic().spacing;
+        let mut column = Column::new().spacing(spacing.space_s).width(Length::Fill);
+        for (index, message) in session.messages.iter().enumerate() {
+            column = column.push(message_bubble(message, index, compact));
+        }
+        if let Some(error) = &self.error {
+            column = column.push(error_card(error, None));
+        }
+        scrollable(column)
+            .id(CHAT_SCROLL_ID.clone())
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    }
+
+    fn input_card(&self, compact: bool) -> Element<'_, Message> {
+        let spacing = theme::active().cosmic().spacing;
+        let placeholder = if self.voice.is_recording() {
+            fl!("listening")
+        } else if self.voice.is_processing() {
+            fl!("transcribing")
+        } else if compact {
+            fl!("ask-anything")
+        } else if self
+            .active_session()
+            .is_none_or(|session| session.messages.is_empty())
+        {
+            fl!("ask-agent")
+        } else {
+            fl!("request-changes")
+        };
+        let can_submit = !self.streaming && !self.voice.is_active() && self.active_history_ready();
+        let voice_active = self.voice.is_active();
+        let editor = widget::text_editor(&self.input)
+            .id(EDITOR_ID.clone())
+            .placeholder(placeholder)
+            .height(Length::Fixed(if compact { 64.0 } else { 88.0 }))
+            .padding(spacing.space_xs)
+            .on_action(Message::EditorAction)
+            .key_binding(move |press| {
+                let focused = matches!(press.status, text_editor::Status::Focused { .. });
+                if focused && matches!(press.key, Key::Named(Named::Enter)) {
+                    if press.modifiers.shift() {
+                        Some(text_editor::Binding::Enter)
+                    } else if can_submit {
+                        Some(text_editor::Binding::Custom(Message::Submit))
+                    } else if voice_active {
+                        None
+                    } else {
+                        Some(text_editor::Binding::Enter)
+                    }
+                } else {
+                    text_editor::Binding::from_key_press(press)
+                }
+            });
+        let status: Element<'_, Message> = match &self.voice {
+            VoiceState::Recording { metrics, .. } => text(format!(
+                "{} · {}",
+                fl!("recording"),
+                format_duration(metrics.elapsed)
+            ))
+            .size(11.0)
+            .into(),
+            VoiceState::Processing { .. } => text(fl!("transcribing")).size(11.0).into(),
+            VoiceState::Idle => self.connection_status(),
+        };
+        let mic = if self.voice.is_recording() {
+            symbolic_button(
+                "media-playback-stop-symbolic",
+                fl!("stop"),
+                Some(Message::ToggleMic),
+                true,
+            )
+        } else if self.voice.is_processing() {
+            symbolic_button(
+                "window-close-symbolic",
+                fl!("cancel"),
+                Some(Message::CancelVoice),
+                true,
+            )
+        } else {
+            symbolic_button(
+                "audio-input-microphone-symbolic",
+                fl!("microphone"),
+                (!self.streaming).then_some(Message::ToggleMic),
+                false,
+            )
+        };
+        let attach = symbolic_button(
+            "mail-attachment-symbolic",
+            fl!("attach-file"),
+            (!self.voice.is_active()).then_some(Message::AttachFile),
+            false,
+        );
+        let action = if self.streaming {
+            symbolic_button(
+                "media-playback-stop-symbolic",
+                fl!("stop"),
+                Some(Message::StopStream),
+                true,
+            )
+        } else if self.pending_cancel.is_some() {
+            symbolic_button("process-stop-symbolic", fl!("stopping"), None, true)
+        } else {
+            symbolic_button(
+                "mail-send-symbolic",
+                fl!("send"),
+                (!self.input.text().trim().is_empty()
+                    && !self.voice.is_active()
+                    && self.active_history_ready())
+                .then_some(Message::Submit),
+                false,
+            )
+        };
+        let bottom = Row::new()
+            .push(status)
+            .push(widget::space::horizontal())
+            .push(attach)
+            .push(mic)
+            .push(action)
+            .spacing(spacing.space_xs)
+            .align_y(Alignment::Center);
+        container(
+            Column::new()
+                .push(editor)
+                .push(bottom)
+                .spacing(spacing.space_xs),
+        )
+        .padding(spacing.space_s)
+        .class(theme::Container::custom(input_card_style))
+        .into()
+    }
+
+    fn connection_status(&self) -> Element<'_, Message> {
+        if self.bridge_connecting {
+            return text(fl!("bridge-connecting")).size(11.0).into();
+        }
+        if self.bridge_endpoint.is_none() {
+            return Row::new()
+                .push(text(fl!("bridge-offline")).size(11.0))
+                .push(button::text(fl!("reconnect")).on_press(Message::Reconnect))
+                .spacing(6)
+                .align_y(Alignment::Center)
+                .into();
+        }
+        if self.models.is_none() && self.bridge_error.is_some() {
+            return Row::new()
+                .push(text(fl!("model-unavailable")).size(11.0))
+                .push(button::text(fl!("retry")).on_press(Message::Reconnect))
+                .spacing(6)
+                .align_y(Alignment::Center)
+                .into();
+        }
+        let label = self
+            .models
+            .as_ref()
+            .map(provider_model_label)
+            .unwrap_or_else(|| fl!("bridge-ready"));
+        text(label).size(11.0).into()
+    }
+
     fn breadcrumb(&self) -> Element<'_, Message> {
         let spacing = theme::active().cosmic().spacing;
-        let title = self
-            .active_session()
-            .map(|s| s.display_title().to_string())
-            .unwrap_or_else(|| "New session".into());
-
-        let symbol = widget::image(if is_dark() {
-            widget::image::Handle::from_bytes(SYMBOL_DARK)
-        } else {
-            widget::image::Handle::from_bytes(SYMBOL_LIGHT)
-        })
-        .height(Length::Fixed(16.0))
-        .width(Length::Fixed(16.0));
-
         Row::new()
-            .push(symbol)
-            .push(text("clawOS").size(13.0))
-            .push(separator())
-            .push(text("Agent").size(13.0))
-            .push(separator())
-            .push(text(title).size(13.0))
+            .push(brand_symbol(16.0))
+            .push(text(fl!("app-name")).size(13.0))
+            .push(text("/").size(13.0))
+            .push(text(
+                self.active_session()
+                    .map(LocalSession::display_title)
+                    .unwrap_or_else(|| fl!("new-session")),
+            ))
             .push(status_dot(self.streaming))
             .spacing(spacing.space_xxs)
             .align_y(Alignment::Center)
@@ -899,350 +1955,328 @@ impl App {
 
     fn sidebar_view(&self) -> Element<'_, Message> {
         let spacing = theme::active().cosmic().spacing;
-
         let header = Row::new()
-            .push(text("SESSIONS").size(11.0))
+            .push(text(fl!("sessions").to_uppercase()).size(11.0))
             .push(widget::space::horizontal())
-            .push(
-                button::text("+")
-                    .on_press(Message::NewSession)
-                    .padding([0u16, spacing.space_xs]),
-            )
+            .push(symbolic_button(
+                "list-add-symbolic",
+                fl!("new-session"),
+                (!self.streaming).then_some(Message::NewSession),
+                false,
+            ))
             .align_y(Alignment::Center);
-
         let mut list = Column::new().spacing(2);
-        for (idx, sess) in self.sessions.iter().enumerate() {
-            list = list.push(session_row(sess, idx == self.active, idx, self.streaming));
+        for (index, session) in self.sessions.iter().enumerate() {
+            list = list.push(session_row(
+                session,
+                index == self.active,
+                index,
+                self.streaming && self.streaming_session == Some(index),
+            ));
         }
-
+        if let Some(error) = &self.sessions_error {
+            list = list.push(text(error).size(11.0));
+        }
         Column::new()
-            .push(
-                container(header).padding([
-                    0u16,
-                    spacing.space_xs,
-                    spacing.space_xs,
-                    spacing.space_xs,
-                ]),
-            )
+            .push(container(header).padding([
+                0u16,
+                spacing.space_xs,
+                spacing.space_xs,
+                spacing.space_xs,
+            ]))
             .push(scrollable(list).width(Length::Fill).height(Length::Fill))
             .spacing(spacing.space_xs)
             .into()
     }
+}
 
-    fn message_list<'a>(
-        &'a self,
-        sess: &'a LocalSession,
-        compact: bool,
-    ) -> Element<'a, Message> {
-        let spacing = theme::active().cosmic().spacing;
+fn focus_editor() -> Task<Message> {
+    operation::focus(EDITOR_ID.clone())
+}
 
-        let mut col = Column::new().spacing(spacing.space_s).width(Length::Fill);
-        for msg in &sess.messages {
-            col = col.push(message_bubble(msg, compact));
-        }
-        if let Some(err) = &self.error {
-            col = col.push(
-                container(text(format!("⚠ {err}")).size(12.0))
-                    .padding(spacing.space_xxs)
-                    .class(theme::Container::Card),
-            );
-        }
-        scrollable(col).width(Length::Fill).height(Length::Fill).into()
-    }
+fn scroll_to_bottom() -> Task<Message> {
+    operation::snap_to_end(CHAT_SCROLL_ID.clone())
+}
 
-    fn input_card(&self, compact: bool) -> Element<'_, Message> {
-        let spacing = theme::active().cosmic().spacing;
-
-        let recording = self.voice.is_recording();
-        let processing = self.voice.is_processing();
-
-        let placeholder = if recording {
-            "Listening…"
-        } else if processing {
-            "Transcribing…"
-        } else if compact {
-            "Ask anything…"
-        } else if self
-            .active_session()
-            .map_or(true, |s| s.messages.is_empty())
-        {
-            "Ask the agent anything."
-        } else {
-            "Request changes or ask a question…"
-        };
-
-        let input = text_input(placeholder, &self.input)
-            .on_input(Message::InputChanged)
-            .on_submit(|_| Message::Submit)
-            .padding(spacing.space_xs)
-            .width(Length::Fill);
-
-        let model_caption = match self.bridge_endpoint.as_ref() {
-            Some(endpoint) => format!("Bridge :{}", endpoint.port),
-            None => "Bridge offline".into(),
-        };
-
-        let mic = self.mic_button();
-        let send = self.send_button(compact);
-
-        let bottom = Row::new()
-            .push(text(model_caption).size(11.0))
-            .push(widget::space::horizontal())
-            .push(mic)
-            .push(send)
-            .spacing(spacing.space_xs)
-            .align_y(Alignment::Center);
-
-        let card = Column::new()
-            .push(input)
-            .push(bottom)
-            .spacing(spacing.space_xs);
-
-        container(card)
-            .padding(spacing.space_s)
-            .class(theme::Container::custom(input_card_style))
-            .into()
-    }
-
-    fn mic_button(&self) -> Element<'_, Message> {
-        let recording = self.voice.is_recording();
-        let processing = self.voice.is_processing();
-
-        let label = if recording {
-            "⏺"
-        } else if processing {
-            "⌛"
-        } else {
-            "🎙"
-        };
-        let mut b = if recording {
-            button::destructive(label)
-        } else {
-            button::standard(label)
-        };
-        if !processing && !self.streaming {
-            b = b.on_press(Message::ToggleMic);
-        }
-        b.into()
-    }
-
-    fn send_button(&self, compact: bool) -> Element<'_, Message> {
-        let label_text = if self.streaming {
-            "…"
-        } else if compact {
-            "Send"
-        } else {
-            "↑"
-        };
-        // `button::suggested` only accepts `Into<Cow<str>>` — for a
-        // bespoke text size we wrap the styled `text` in a custom
-        // button instead and re-apply the Suggested theme variant.
-        let mut b = button::custom(text(label_text).size(14.0))
-            .class(cosmic::theme::Button::Suggested);
-        if !self.streaming && !self.input.trim().is_empty() {
-            b = b.on_press(Message::Submit);
-        }
-        b.into()
-    }
-
-    // ------------------------------------------------------------------
-    // Overlay layout — intentionally kept compact and unchanged in
-    // spirit; the redesign is for the long-lived standalone window.
-    // ------------------------------------------------------------------
-
-    fn view_overlay(&self) -> Element<'_, Message> {
-        let spacing = theme::active().cosmic().spacing;
-
-        let header = Row::new()
-            .push(
-                widget::image(if is_dark() {
-                    widget::image::Handle::from_bytes(SYMBOL_DARK)
-                } else {
-                    widget::image::Handle::from_bytes(SYMBOL_LIGHT)
-                })
-                .height(Length::Fixed(20.0))
-                .width(Length::Fixed(20.0)),
-            )
-            .push(text("Claw OS Agent").size(13.0))
-            .push(widget::space::horizontal())
-            .push(text("Esc to close").size(11.0))
-            .align_y(Alignment::Center)
-            .spacing(spacing.space_xs);
-
-        let body: Element<Message> = match self.active_session() {
-            Some(sess) if !sess.messages.is_empty() => self.message_list(sess, true),
-            _ => empty_state(true),
-        };
-
-        let inner = Column::new()
-            .push(container(header).padding(spacing.space_xs))
-            .push(
-                container(body)
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .padding([0u16, spacing.space_xs]),
-            )
-            .push(container(self.input_card(true)).padding(spacing.space_xs))
-            .spacing(spacing.space_xs);
-
-        container(inner)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-    }
-
-    /// Mic toggle handler. Idle → start capture; Recording → stop +
-    /// upload + populate input on success.
-    fn toggle_mic(&mut self) -> Task<Message> {
-        match std::mem::take(&mut self.voice) {
-            VoiceState::Idle => match Recorder::start() {
-                Ok(rec) => {
-                    self.voice = VoiceState::Recording(rec);
-                    self.error = None;
-                    Task::none()
-                }
-                Err(e) => {
-                    self.voice = VoiceState::Idle;
-                    self.error = Some(format!("Microphone unavailable: {e}"));
-                    Task::none()
-                }
-            },
-            VoiceState::Recording(rec) => {
-                self.voice = VoiceState::Processing;
-                let Some(endpoint) = self.bridge_endpoint.clone() else {
-                    self.voice = VoiceState::Idle;
-                    self.error = Some(
-                        self.bridge_error
-                            .clone()
-                            .unwrap_or_else(|| "Bridge not running".into()),
-                    );
-                    return Task::none();
-                };
-                cosmic::Task::perform(
-                    async move {
-                        let wav = match tokio::task::spawn_blocking(move || rec.stop())
-                            .await
-                        {
-                            Ok(Ok(wav)) => wav,
-                            Ok(Err(e)) => {
-                                return Message::VoiceError(format!("recording: {e}"));
-                            }
-                            Err(e) => {
-                                return Message::VoiceError(format!("recorder task: {e}"));
-                            }
-                        };
-                        match recorder::upload(endpoint, wav).await {
-                            Ok(resp) => Message::VoiceTranscribed {
-                                text: resp.text,
-                                placeholder: resp.placeholder,
-                            },
-                            Err(e) => Message::VoiceError(format!("upload: {e}")),
-                        }
-                    },
-                    |m| m,
-                )
-                .map(cosmic::Action::App)
-            }
-            VoiceState::Processing => {
-                self.voice = VoiceState::Processing;
-                Task::none()
-            }
-        }
+fn upsert_tool_call(message: &mut ChatMessage, call: ToolCallView) {
+    if !call.id.is_empty()
+        && let Some(existing) = message
+            .tool_calls
+            .iter_mut()
+            .find(|existing| existing.id == call.id)
+    {
+        *existing = call;
+    } else {
+        message.tool_calls.push(call);
     }
 }
 
-// ----------------------------------------------------------------------
-// View helpers (pure functions / borrowless widgets)
-// ----------------------------------------------------------------------
+fn upsert_tool_result(message: &mut ChatMessage, result: ToolResultView) {
+    if !result.id.is_empty()
+        && let Some(existing) = message
+            .tool_results
+            .iter_mut()
+            .find(|existing| existing.id == result.id)
+    {
+        *existing = result;
+    } else {
+        message.tool_results.push(result);
+    }
+}
 
-fn separator() -> Element<'static, Message> {
-    text("/").size(13.0).into()
+fn retry_branch(
+    messages: &[ChatMessage],
+    assistant_index: usize,
+    title: &str,
+) -> Option<(Vec<ChatMessage>, String, String, String)> {
+    let user_index = messages
+        .get(..assistant_index)
+        .unwrap_or(messages)
+        .iter()
+        .rposition(|message| {
+            message.role() == ChatRole::User && !message.content.trim().is_empty()
+        })?;
+    let prompt = messages[user_index].content.clone();
+    let prefix = messages[..user_index].to_vec();
+    let context = build_branch_context(&prefix).unwrap_or_default();
+    Some((prefix, prompt, context, title.to_string()))
+}
+
+const MAX_BRANCH_CONTEXT_CHARS: usize = 32 * 1024;
+const MAX_BRANCH_MESSAGE_CHARS: usize = 4 * 1024;
+
+fn build_branch_context(messages: &[ChatMessage]) -> Option<String> {
+    let mut chunks = Vec::new();
+    let mut used = 0usize;
+    for message in messages.iter().rev() {
+        if message.content.trim().is_empty() {
+            continue;
+        }
+        let role = match message.role() {
+            ChatRole::User => "User",
+            ChatRole::Assistant => "Assistant",
+        };
+        let chunk = format!(
+            "{role}: {}",
+            clip_preview(&message.content, MAX_BRANCH_MESSAGE_CHARS)
+        );
+        let chars = chunk.chars().count() + 1;
+        if used + chars > MAX_BRANCH_CONTEXT_CHARS {
+            break;
+        }
+        used += chars;
+        chunks.push(chunk);
+    }
+    if chunks.is_empty() {
+        return None;
+    }
+    chunks.reverse();
+    Some(chunks.join("\n"))
+}
+
+fn accept_voice_completion(current: u64, state: &VoiceState, generation: u64) -> bool {
+    generation == current
+        && matches!(
+            state,
+            VoiceState::Processing {
+                generation: active
+            } if *active == generation
+        )
+}
+
+fn answer_from_envelope(envelope: &serde_json::Value) -> Option<String> {
+    envelope
+        .get("answer")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            envelope
+                .get("result")
+                .and_then(|result| result.get("answer"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .or_else(|| {
+            envelope
+                .get("message")
+                .and_then(|message| message.get("content"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(ToOwned::to_owned)
+}
+
+fn relative_time_label(timestamp_ms: i64, current_ms: i64) -> String {
+    let seconds = current_ms.saturating_sub(timestamp_ms).max(0) / 1_000;
+    if seconds < 60 {
+        fl!("just-now")
+    } else if seconds < 3_600 {
+        let count: i64 = seconds / 60;
+        fl!("minutes-ago", count = count)
+    } else if seconds < 86_400 {
+        let count: i64 = seconds / 3_600;
+        fl!("hours-ago", count = count)
+    } else {
+        let count: i64 = seconds / 86_400;
+        fl!("days-ago", count = count)
+    }
+}
+
+fn provider_model_label(models: &ModelsResponse) -> String {
+    if !models.ready {
+        return fl!("model-unavailable");
+    }
+    if !models.label.trim().is_empty() {
+        models.label.clone()
+    } else if !models.model.trim().is_empty() && !models.provider.trim().is_empty() {
+        format!("{} · {}", models.provider, models.model)
+    } else {
+        fl!("bridge-ready")
+    }
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(i64::MAX as u128) as i64
+}
+
+fn format_duration(duration: Duration) -> String {
+    format!(
+        "{:02}:{:02}",
+        duration.as_secs() / 60,
+        duration.as_secs() % 60
+    )
+}
+
+fn symbolic_button(
+    icon_name: &'static str,
+    label: String,
+    on_press: Option<Message>,
+    destructive: bool,
+) -> Element<'static, Message> {
+    let mut control = button::custom(widget::icon::from_name(icon_name).size(18))
+        .padding(8)
+        .class(if destructive {
+            cosmic::theme::Button::Destructive
+        } else {
+            cosmic::theme::Button::Standard
+        });
+    if let Some(message) = on_press {
+        control = control.on_press(message);
+    }
+    widget::tooltip(control, text(label), widget::tooltip::Position::Top).into()
+}
+
+fn brand_symbol(size: f32) -> Element<'static, Message> {
+    widget::image(if is_dark() {
+        widget::image::Handle::from_bytes(SYMBOL_DARK)
+    } else {
+        widget::image::Handle::from_bytes(SYMBOL_LIGHT)
+    })
+    .height(Length::Fixed(size))
+    .width(Length::Fixed(size))
+    .into()
+}
+
+fn state_card(label: String, action: Option<(String, Message)>) -> Element<'static, Message> {
+    let mut column = Column::new()
+        .push(text(label).size(13.0))
+        .align_x(Alignment::Center)
+        .spacing(8);
+    if let Some((label, message)) = action {
+        column = column.push(button::text(label).on_press(message));
+    }
+    container(column)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .into()
+}
+
+fn error_card(error: &str, retry: Option<Message>) -> Element<'_, Message> {
+    let spacing = theme::active().cosmic().spacing;
+    let mut row = Row::new()
+        .push(widget::icon::from_name("dialog-warning-symbolic").size(18))
+        .push(
+            Column::new()
+                .push(text(fl!("error-prefix")).size(11.0))
+                .push(text(error).size(12.0))
+                .width(Length::Fill),
+        );
+    if let Some(retry) = retry {
+        row = row.push(symbolic_button(
+            "view-refresh-symbolic",
+            fl!("retry"),
+            Some(retry),
+            false,
+        ));
+    }
+    container(row.spacing(spacing.space_xs).align_y(Alignment::Center))
+        .padding(spacing.space_xs)
+        .class(theme::Container::custom(tool_error_card_style))
+        .into()
 }
 
 fn status_dot(active: bool) -> Element<'static, Message> {
-    let class = if active {
-        theme::Container::custom(green_dot_style)
-    } else {
-        theme::Container::custom(idle_dot_style)
-    };
     container(
         widget::Space::new()
             .width(Length::Fixed(8.0))
             .height(Length::Fixed(8.0)),
     )
-    .class(class)
+    .class(theme::Container::custom(if active {
+        green_dot_style
+    } else {
+        idle_dot_style
+    }))
     .into()
 }
 
-fn active_pill() -> Element<'static, Message> {
-    let spacing = theme::active().cosmic().spacing;
-    container(text("active").size(11.0))
-        .padding([0u16, spacing.space_s])
-        .class(theme::Container::custom(active_pill_style))
-        .into()
-}
-
 fn session_row<'a>(
-    sess: &'a LocalSession,
-    is_active: bool,
-    idx: usize,
-    streaming: bool,
+    session: &'a LocalSession,
+    active: bool,
+    index: usize,
+    responding: bool,
 ) -> Element<'a, Message> {
     let spacing = theme::active().cosmic().spacing;
-
-    let title_text = text(sess.display_title()).size(13.0).width(Length::Fill);
-    let dur_text = text(sess.duration_label()).size(11.0);
-
-    let row_content = Row::new()
-        .push(title_text)
-        .push(dur_text)
+    let details = if session.message_count > 0 {
+        format!(
+            "{} · {}",
+            session.relative_label(),
+            fl!("messages-count", count = session.message_count)
+        )
+    } else {
+        session.relative_label()
+    };
+    let row = Row::new()
+        .push(text(session.display_title()).size(13.0).width(Length::Fill))
+        .push(status_dot(responding))
+        .push(text(details).size(10.0))
         .spacing(spacing.space_xxs)
         .align_y(Alignment::Center);
-
-    // ListItem gives us the COSMIC-styled hover background + matching
-    // corner radius without needing a fully-custom style.
-    let class = if is_active {
+    let class = if active {
         cosmic::theme::Button::Custom {
-            active: Box::new(|_focused, _theme| selected_session_active_style()),
-            disabled: Box::new(|_theme| selected_session_active_style()),
-            hovered: Box::new(|_focused, _theme| selected_session_active_style()),
-            pressed: Box::new(|_focused, _theme| selected_session_active_style()),
+            active: Box::new(|_, _| selected_session_active_style()),
+            disabled: Box::new(|_| selected_session_active_style()),
+            hovered: Box::new(|_, _| selected_session_active_style()),
+            pressed: Box::new(|_, _| selected_session_active_style()),
         }
     } else {
         cosmic::theme::Button::MenuItem
     };
-
-    let mut b = button::custom(row_content)
+    button::custom(row)
         .width(Length::Fill)
         .padding([spacing.space_xxs, spacing.space_xs])
-        .class(class);
-    if !streaming {
-        b = b.on_press(Message::SelectSession(idx));
-    }
-    b.into()
+        .class(class)
+        .on_press(Message::SelectSession(index))
+        .into()
 }
 
 fn empty_state(compact: bool) -> Element<'static, Message> {
     let spacing = theme::active().cosmic().spacing;
-
-    let title = if compact {
-        text("Ready when you are.").size(14.0)
-    } else {
-        text("How can I help?").size(28.0)
-    };
-    let hint = if compact {
-        text("Type below or paste anything.").size(11.0)
-    } else {
-        text("Pick an example below, or press Super+A from anywhere to summon me.")
-            .size(13.0)
-    };
-
-    let mut col = Column::new()
+    let mut column = Column::new()
         .spacing(spacing.space_s)
         .align_x(Alignment::Center);
-
     if !compact {
-        col = col.push(
+        column = column.push(
             widget::image(if is_dark() {
                 widget::image::Handle::from_bytes(WORDMARK_DARK)
             } else {
@@ -1251,82 +2285,74 @@ fn empty_state(compact: bool) -> Element<'static, Message> {
             .height(Length::Fixed(40.0)),
         );
     }
-    col = col.push(title).push(hint);
-
-    // Three example prompts that prefill the composer on click. These
-    // are chosen to showcase capabilities a Copilot CLI / coding agent
-    // can't easily do — system inspection, scoped exec, and
-    // approvals-gated permissions — rather than rehearsed coding
-    // problems.
+    column = column
+        .push(
+            text(if compact {
+                fl!("ready-title")
+            } else {
+                fl!("empty-title")
+            })
+            .size(if compact { 14.0 } else { 28.0 }),
+        )
+        .push(
+            text(if compact {
+                fl!("ready-hint")
+            } else {
+                fl!("empty-hint")
+            })
+            .size(if compact { 11.0 } else { 13.0 }),
+        );
     if !compact {
-        let prompt_row = Row::new()
-            .spacing(spacing.space_xs)
-            .push(example_chip("Largest files on this system"))
-            .push(example_chip("Run a quick repro in a sandbox"))
-            .push(example_chip("Why is the panel battery red?"));
-        col = col
-            .push(widget::space::vertical().height(Length::Fixed(spacing.space_s as f32)))
-            .push(prompt_row);
+        column = column.push(
+            Column::new()
+                .push(example_chip(fl!("example-files")))
+                .push(example_chip(fl!("example-sandbox")))
+                .push(example_chip(fl!("example-battery")))
+                .spacing(spacing.space_xs)
+                .width(Length::Fill),
+        );
     }
-
-    container(col)
+    container(column)
         .center_x(Length::Fill)
         .center_y(Length::Fill)
         .into()
 }
 
-fn example_chip(label: &'static str) -> Element<'static, Message> {
+fn example_chip(label: String) -> Element<'static, Message> {
     let spacing = theme::active().cosmic().spacing;
-    button::custom(text(label).size(12.0))
+    button::custom(text(label.clone()).size(12.0).width(Length::Fill))
         .class(cosmic::theme::Button::Standard)
         .padding([spacing.space_xxs, spacing.space_s])
-        .on_press(Message::InputChanged(label.to_string()))
+        .width(Length::Fill)
+        .on_press(Message::SetPrompt(label))
         .into()
 }
 
-fn message_bubble(msg: &ChatMessage, compact: bool) -> Element<'_, Message> {
+fn message_bubble(message: &ChatMessage, index: usize, compact: bool) -> Element<'_, Message> {
     let spacing = theme::active().cosmic().spacing;
     let body_size = if compact { 12.0 } else { 14.0 };
-
-    match msg.role() {
+    match message.role() {
         ChatRole::User => {
-            // Right-aligned gray pill. The COSMIC `Button::Suggested`
-            // would tint with the accent color, so we use a custom
-            // neutral surface to match the reference look.
-            let mut col = Column::new().spacing(spacing.space_xxs);
-            if !msg.content.trim().is_empty() {
-                let body = text(msg.content.clone()).size(body_size);
-                let pill = container(body)
-                    .padding([spacing.space_xs, spacing.space_s])
-                    .class(theme::Container::custom(user_pill_style));
-                col = col.push(
-                    container(pill)
-                        .width(Length::Fill)
-                        .align_x(Alignment::End),
+            let mut column = Column::new().spacing(spacing.space_xxs);
+            if !message.content.trim().is_empty() {
+                column = column.push(
+                    container(
+                        container(text(message.content.clone()).size(body_size))
+                            .padding([spacing.space_xs, spacing.space_s])
+                            .class(theme::Container::custom(user_pill_style)),
+                    )
+                    .width(Length::Fill)
+                    .align_x(Alignment::End),
                 );
             }
-            // Tool results stream back inside `role="user"` rows
-            // (Anthropic convention) — render them as their own cards
-            // so the user sees something coherent for that turn even
-            // when the row itself was just a tool result.
-            for result in &msg.tool_results {
-                col = col.push(tool_result_card(result, compact));
+            for result in &message.tool_results {
+                column = column.push(tool_result_card(result, compact));
             }
-            col.width(Length::Fill).into()
+            column.width(Length::Fill).into()
         }
         ChatRole::Assistant => {
-            // Left-aligned plain text; the reference draws no bubble
-            // around assistant turns so structure (paragraphs, code,
-            // …) reads naturally.
-            //
-            // Once the message has finished streaming we render its
-            // parsed markdown items via the iced markdown widget so
-            // headings, lists, inline code, and code fences land
-            // correctly. During streaming we paint plain text — the
-            // markdown renderer doesn't degrade gracefully when an
-            // unfinished fence or list bullet is left dangling.
-            let mut col = Column::new().spacing(spacing.space_xxs);
-            if let Some(items) = msg.parsed_markdown.as_ref() {
+            let mut column = Column::new().spacing(spacing.space_xxs);
+            if let Some(items) = message.parsed_markdown.as_ref() {
                 let palette = if is_dark() {
                     cosmic::iced::theme::Palette::DARK
                 } else {
@@ -1336,45 +2362,86 @@ fn message_bubble(msg: &ChatMessage, compact: bool) -> Element<'_, Message> {
                     body_size,
                     widget::markdown::Style::from_palette(palette),
                 );
-                let view = widget::markdown::view(items, settings)
-                    .map(|uri| Message::LinkClicked(uri.to_string()));
-                col = col.push(view);
-            } else if !msg.content.is_empty() {
-                col = col.push(text(msg.content.clone()).size(body_size));
-            } else if msg.in_progress && msg.tool_calls.is_empty() {
-                col = col.push(text("…").size(body_size));
+                column = column.push(
+                    widget::markdown::view(items, settings)
+                        .map(|uri| Message::LinkClicked(uri.to_string())),
+                );
+            } else if !message.content.is_empty() {
+                column = column.push(text(message.content.clone()).size(body_size));
+            } else if message.in_progress && message.tool_calls.is_empty() {
+                column = column.push(text(fl!("streaming")).size(body_size));
             }
-            for call in &msg.tool_calls {
-                col = col.push(tool_call_card(call, compact));
+            for call in &message.tool_calls {
+                column = column.push(tool_call_card(call, compact));
             }
-            // Tool results occasionally land on the assistant row too
-            // when the runtime stitches them inline.
-            for result in &msg.tool_results {
-                col = col.push(tool_result_card(result, compact));
+            for result in &message.tool_results {
+                column = column.push(tool_result_card(result, compact));
             }
-            container(col).width(Length::Fill).into()
+            for warning in &message.warnings {
+                column = column.push(warning_card(warning));
+            }
+            if let Some(error) = &message.error {
+                column = column.push(error_card(error, Some(Message::RetryMessage(index))));
+            }
+            if !message.content.is_empty() && !message.in_progress {
+                column = column.push(
+                    Row::new()
+                        .push(symbolic_button(
+                            "edit-copy-symbolic",
+                            fl!("copy"),
+                            Some(Message::CopyAssistant(index)),
+                            false,
+                        ))
+                        .push(symbolic_button(
+                            "view-refresh-symbolic",
+                            fl!("retry"),
+                            Some(Message::RetryMessage(index)),
+                            false,
+                        ))
+                        .spacing(spacing.space_xxs),
+                );
+            }
+            container(column).width(Length::Fill).into()
         }
     }
 }
 
 fn tool_call_card(call: &ToolCallView, compact: bool) -> Element<'_, Message> {
     let spacing = theme::active().cosmic().spacing;
-    let title_size = if compact { 11.0 } else { 12.0 };
-    let body_size = if compact { 11.0 } else { 12.0 };
-
-    let header = Row::new()
-        .push(text("⚙").size(title_size))
-        .push(text(format!("{}", call.name)).size(title_size))
-        .spacing(spacing.space_xxs)
-        .align_y(Alignment::Center);
-
-    let mut col = Column::new().push(header).spacing(spacing.space_xxs);
-    let preview = format_input_preview(&call.input);
+    let mut column = Column::new()
+        .push(
+            Row::new()
+                .push(widget::icon::from_name("system-run-symbolic").size(16))
+                .push(
+                    text(if call.name.is_empty() {
+                        fl!("tool-running")
+                    } else {
+                        call.name.clone()
+                    })
+                    .size(if compact { 11.0 } else { 12.0 }),
+                )
+                .push(widget::space::horizontal())
+                .push(
+                    text(if call.in_progress {
+                        fl!("tool-running")
+                    } else {
+                        String::new()
+                    })
+                    .size(10.0),
+                )
+                .spacing(spacing.space_xxs)
+                .align_y(Alignment::Center),
+        )
+        .spacing(spacing.space_xxs);
+    let preview = if !call.partial_json.trim().is_empty() {
+        clip_preview(&call.partial_json, 600)
+    } else {
+        format_input_preview(&call.input)
+    };
     if !preview.is_empty() {
-        col = col.push(text(preview).size(body_size));
+        column = column.push(text(preview).size(if compact { 10.0 } else { 11.0 }));
     }
-
-    container(col)
+    container(column)
         .padding([spacing.space_xxs, spacing.space_s])
         .class(theme::Container::custom(tool_card_style))
         .width(Length::Fill)
@@ -1383,44 +2450,51 @@ fn tool_call_card(call: &ToolCallView, compact: bool) -> Element<'_, Message> {
 
 fn tool_result_card(result: &ToolResultView, compact: bool) -> Element<'_, Message> {
     let spacing = theme::active().cosmic().spacing;
-    let title_size = if compact { 11.0 } else { 12.0 };
-    let body_size = if compact { 11.0 } else { 12.0 };
-
-    let header_label = if result.is_error {
-        "✗ tool error"
+    let label = if result.is_error {
+        fl!("tool-error")
     } else {
-        "✓ tool result"
+        fl!("tool-result")
     };
-    let header = text(header_label).size(title_size);
-
+    let mut column = Column::new().push(text(label).size(11.0));
     let preview = clip_preview(&result.text, 600);
-    let mut col = Column::new().push(header).spacing(spacing.space_xxs);
     if !preview.is_empty() {
-        col = col.push(text(preview).size(body_size));
+        column = column.push(text(preview).size(if compact { 10.0 } else { 11.0 }));
     }
-
-    let style = if result.is_error {
-        theme::Container::custom(tool_error_card_style)
-    } else {
-        theme::Container::custom(tool_card_style)
-    };
-    container(col)
+    container(column.spacing(spacing.space_xxs))
         .padding([spacing.space_xxs, spacing.space_s])
-        .class(style)
+        .class(theme::Container::custom(if result.is_error {
+            tool_error_card_style
+        } else {
+            tool_card_style
+        }))
         .width(Length::Fill)
         .into()
 }
 
+fn warning_card(warning: &str) -> Element<'_, Message> {
+    let spacing = theme::active().cosmic().spacing;
+    container(
+        Row::new()
+            .push(widget::icon::from_name("dialog-warning-symbolic").size(16))
+            .push(text(format!("{}: {warning}", fl!("warning"))).size(11.0))
+            .spacing(spacing.space_xxs),
+    )
+    .padding([spacing.space_xxs, spacing.space_s])
+    .class(theme::Container::custom(tool_card_style))
+    .into()
+}
+
 fn format_input_preview(value: &serde_json::Value) -> String {
     if value.is_null() {
-        return String::new();
-    }
-    let text = if value.is_string() {
-        value.as_str().unwrap_or_default().to_string()
+        String::new()
+    } else if let Some(value) = value.as_str() {
+        clip_preview(value, 600)
     } else {
-        serde_json::to_string(value).unwrap_or_default()
-    };
-    clip_preview(&text, 240)
+        clip_preview(
+            &serde_json::to_string_pretty(value).unwrap_or_default(),
+            600,
+        )
+    }
 }
 
 fn clip_preview(input: &str, max_chars: usize) -> String {
@@ -1428,16 +2502,34 @@ fn clip_preview(input: &str, max_chars: usize) -> String {
     if trimmed.chars().count() <= max_chars {
         return trimmed.to_string();
     }
-    let mut out: String = trimmed.chars().take(max_chars).collect();
-    out.push_str(" …");
-    out
+    let mut output = trimmed.chars().take(max_chars).collect::<String>();
+    output.push_str(" …");
+    output
 }
 
-// ----------------------------------------------------------------------
-// Container styles — written by hand because the COSMIC palette
-// variants don't include "page off-white" / "raised card with a soft
-// border" / "small green status dot" out of the box.
-// ----------------------------------------------------------------------
+fn title_from_prompt(prompt: &str) -> String {
+    let first_line = prompt.lines().next().unwrap_or_default().trim();
+    let mut title = first_line.chars().take(40).collect::<String>();
+    if first_line.chars().count() > 40 {
+        title.push('…');
+    }
+    if title.is_empty() {
+        fl!("new-session")
+    } else {
+        title
+    }
+}
+
+fn open_uri(uri: &str) -> std::io::Result<()> {
+    std::process::Command::new("xdg-open")
+        .arg(uri)
+        .spawn()
+        .map(|_| ())
+}
+
+fn is_dark() -> bool {
+    theme::active().theme_type.is_dark()
+}
 
 fn page_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
     let cosmic = theme.cosmic();
@@ -1453,20 +2545,12 @@ fn page_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
 
 fn sidebar_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
     let cosmic = theme.cosmic();
-    // Claw Glass: a frosted translucent sidebar (like macOS Messages /
-    // Raycast) so the compositor's blur reads through it, rather than an
-    // opaque gray panel. Borderless — the separation comes from the blur
-    // + glass seam, not a hard divider line.
     let mut fill = cosmic.bg_component_color();
     fill.alpha = 0.55;
     cosmic::widget::container::Style {
         text_color: Some(cosmic.on_bg_color().into()),
         background: Some(Background::Color(fill.into())),
-        border: Border {
-            radius: 0.0.into(),
-            width: 0.0,
-            color: Color::TRANSPARENT,
-        },
+        border: Border::default(),
         shadow: Shadow::default(),
         icon_color: Some(cosmic.on_bg_color().into()),
         snap: true,
@@ -1475,18 +2559,13 @@ fn sidebar_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
 
 fn input_card_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
     let cosmic = theme.cosmic();
-    // Claw Glass composer card (cf. ChatGPT / Claude desktop): a large
-    // frosted `radius_l` (16) surface with a 1px brand-blue translucent
-    // hairline and a soft drop shadow so the input lifts off the page.
-    // Depth from blur + shadow, not a heavy border.
-    let radius = cosmic.radius_l();
     let mut fill = cosmic.bg_component_color();
     fill.alpha = 0.60;
     cosmic::widget::container::Style {
         text_color: Some(cosmic.on_bg_color().into()),
         background: Some(Background::Color(fill.into())),
         border: Border {
-            radius: radius.into(),
+            radius: cosmic.radius_l().into(),
             width: 1.0,
             color: cosmic.accent_color().with_alpha(0.20).into(),
         },
@@ -1500,22 +2579,14 @@ fn input_card_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
     }
 }
 
-
 fn user_pill_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
     let cosmic = theme.cosmic();
-    // macOS Messages-style user bubble: filled with the system accent
-    // (blue) so the user's turns stand out from the assistant's plain
-    // body. We pin to radius_l (10px after the theme rebrand) rather
-    // than radius_xl so the bubble is rounded but recognizably a
-    // rectangle, mirroring iMessage's continuous-curvature look.
-    let radius = cosmic.corner_radii.radius_l;
     cosmic::widget::container::Style {
         text_color: Some(cosmic.accent.on.into()),
         background: Some(Background::Color(Color::from(cosmic.accent.base))),
         border: Border {
-            radius: radius.into(),
-            width: 0.0,
-            color: Color::TRANSPARENT,
+            radius: cosmic.corner_radii.radius_l.into(),
+            ..Border::default()
         },
         shadow: Shadow::default(),
         icon_color: Some(cosmic.accent.on.into()),
@@ -1524,88 +2595,18 @@ fn user_pill_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
 }
 
 fn active_pill_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
-    let cosmic = theme.cosmic();
-    // Claw Glass "active" badge: a frosted pill with a brand-blue
-    // translucent hairline instead of a neutral gray divider.
-    let radius = cosmic.radius_xl();
-    let mut fill = cosmic.bg_component_color();
-    fill.alpha = 0.60;
-    cosmic::widget::container::Style {
-        text_color: Some(cosmic.on_bg_color().into()),
-        background: Some(Background::Color(fill.into())),
-        border: Border {
-            radius: radius.into(),
-            width: 1.0,
-            color: cosmic.accent_color().with_alpha(0.20).into(),
-        },
-        shadow: Shadow::default(),
-        icon_color: Some(cosmic.on_bg_color().into()),
-        snap: true,
-    }
-}
-
-fn selected_session_active_style() -> cosmic::widget::button::Style {
-    let cosmic = theme::active().cosmic().clone();
-    let radius = cosmic.corner_radii.radius_s;
-    // macOS Finder-style selection: filled with the system accent
-    // (blue) so the active session jumps out of the sidebar list.
-    cosmic::widget::button::Style {
-        background: Some(Background::Color(Color::from(cosmic.accent.base))),
-        border_radius: radius.into(),
-        border_color: Color::TRANSPARENT,
-        border_width: 0.0,
-        outline_color: Color::TRANSPARENT,
-        outline_width: 0.0,
-        icon_color: Some(cosmic.accent.on.into()),
-        text_color: Some(cosmic.accent.on.into()),
-        overlay: None,
-        shadow_offset: cosmic::iced::Vector::new(0.0, 0.0),
-    }
-}
-
-fn green_dot_style(_theme: &cosmic::Theme) -> cosmic::widget::container::Style {
-    cosmic::widget::container::Style {
-        text_color: None,
-        // Solid green — matches the "session active" cue in the
-        // reference design. We intentionally don't use the COSMIC
-        // accent color because that one tracks the user's chosen
-        // theme accent (could be blue / purple / etc.) and would
-        // muddy the "this thing is currently running" signal.
-        background: Some(Background::Color(Color::from_rgb(0.22, 0.78, 0.36))),
-        border: Border {
-            radius: 4.0.into(),
-            width: 0.0,
-            color: Color::TRANSPARENT,
-        },
-        shadow: Shadow::default(),
-        icon_color: None,
-        snap: true,
-    }
-}
-
-fn idle_dot_style(_theme: &cosmic::Theme) -> cosmic::widget::container::Style {
-    cosmic::widget::container::Style {
-        text_color: None,
-        background: None,
-        border: Border::default(),
-        shadow: Shadow::default(),
-        icon_color: None,
-        snap: true,
-    }
+    tool_card_style(theme)
 }
 
 fn tool_card_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
     let cosmic = theme.cosmic();
-    // Claw Glass inset tool-call card: frosted component fill with a 1px
-    // brand-blue translucent hairline (never a neutral gray divider).
-    let radius = cosmic.radius_m();
     let mut fill = cosmic.bg_component_color();
     fill.alpha = 0.55;
     cosmic::widget::container::Style {
         text_color: Some(cosmic.on_bg_color().into()),
         background: Some(Background::Color(fill.into())),
         border: Border {
-            radius: radius.into(),
+            radius: cosmic.radius_m().into(),
             width: 1.0,
             color: cosmic.accent_color().with_alpha(0.20).into(),
         },
@@ -1617,78 +2618,98 @@ fn tool_card_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
 
 fn tool_error_card_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
     let cosmic = theme.cosmic();
-    // Destructive (semantic red) is kept, but the hard border is softened
-    // to a translucent hairline so it reads as a glass card, not a box.
-    let radius = cosmic.radius_m();
+    let mut style = tool_card_style(theme);
+    style.border.color = cosmic.destructive.base.into();
+    style
+}
+
+fn orb_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
+    let cosmic = theme.cosmic();
+    let mut fill = cosmic.accent_color();
+    fill.alpha = 0.16;
     cosmic::widget::container::Style {
-        text_color: Some(cosmic.destructive.on.into()),
-        background: Some(Background::Color(Color::from(cosmic.destructive.base))),
+        text_color: Some(cosmic.on_bg_color().into()),
+        background: Some(Background::Color(fill.into())),
         border: Border {
-            radius: radius.into(),
-            width: 1.0,
-            color: cosmic.destructive.on.into(),
+            radius: 75.0.into(),
+            width: 4.0,
+            color: cosmic.accent_color().with_alpha(0.85).into(),
         },
-        shadow: Shadow::default(),
-        icon_color: Some(cosmic.destructive.on.into()),
+        shadow: Shadow {
+            color: cosmic.accent_color().with_alpha(0.25).into(),
+            offset: cosmic::iced::Vector::new(0.0, 0.0),
+            blur_radius: 24.0,
+        },
+        icon_color: Some(cosmic.on_bg_color().into()),
         snap: true,
     }
 }
 
-fn title_from_prompt(prompt: &str) -> String {
-    let first_line = prompt.lines().next().unwrap_or("").trim();
-    let mut title: String = first_line.chars().take(40).collect();
-    if first_line.chars().count() > 40 {
-        title.push('…');
+fn level_bar_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
+    let cosmic = theme.cosmic();
+    cosmic::widget::container::Style {
+        background: Some(Background::Color(cosmic.accent_color().into())),
+        border: Border {
+            radius: 3.0.into(),
+            ..Border::default()
+        },
+        ..Default::default()
     }
-    if title.is_empty() {
-        title = "New session".into();
-    }
-    title
 }
 
-/// Best-effort URL opener used by the markdown link handler.
-fn open_uri(uri: &str) -> std::io::Result<()> {
-    std::process::Command::new("xdg-open")
-        .arg(uri)
-        .spawn()
-        .map(|_| ())
+fn green_dot_style(_: &cosmic::Theme) -> cosmic::widget::container::Style {
+    cosmic::widget::container::Style {
+        background: Some(Background::Color(Color::from_rgb(0.22, 0.78, 0.36))),
+        border: Border {
+            radius: 4.0.into(),
+            ..Border::default()
+        },
+        ..Default::default()
+    }
 }
 
-fn is_dark() -> bool {
-    theme::active().theme_type.is_dark()
+fn idle_dot_style(_: &cosmic::Theme) -> cosmic::widget::container::Style {
+    cosmic::widget::container::Style::default()
+}
+
+fn selected_session_active_style() -> cosmic::widget::button::Style {
+    let cosmic = theme::active().cosmic().clone();
+    cosmic::widget::button::Style {
+        background: Some(Background::Color(Color::from(cosmic.accent.base))),
+        border_radius: cosmic.corner_radii.radius_s.into(),
+        border_color: Color::TRANSPARENT,
+        border_width: 0.0,
+        outline_color: Color::TRANSPARENT,
+        outline_width: 0.0,
+        icon_color: Some(cosmic.accent.on.into()),
+        text_color: Some(cosmic.accent.on.into()),
+        overlay: None,
+        shadow_offset: cosmic::iced::Vector::new(0.0, 0.0),
+    }
 }
 
 fn parse_flags() -> Flags {
     let mut flags = Flags::default();
     let mut args = env::args().skip(1);
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
+    while let Some(argument) = args.next() {
+        match argument.as_str() {
             "--overlay" => flags.overlay = true,
             "--voice" => flags.voice = true,
-            "--query" => {
-                if let Some(value) = args.next() {
-                    flags.query = Some(value);
-                } else {
-                    eprintln!("warning: --query requires an argument");
-                }
-            }
-            "--context" => {
-                if let Some(value) = args.next() {
-                    flags.context = Some(value);
-                } else {
-                    eprintln!("warning: --context requires an argument");
-                }
-            }
+            "--query" => flags.query = args.next(),
+            "--context" => flags.context = args.next(),
             "-h" | "--help" => {
-                eprintln!(
-                    "cos-agent-ui [--overlay] [--voice] [--query <text>] [--context <text>]\n  --overlay         compact, Esc-to-close mode for global summon\n  --voice           auto-arm the microphone on launch\n  --query <text>    pre-fill the prompt and submit it immediately\n  --context <text>  invisible one-shot context line prepended to the\n                    first user prompt (used by per-app 'Ask Claw' buttons)"
-                );
+                eprintln!("cos-agent-ui [--overlay] [--voice] [--query TEXT] [--context TEXT]");
                 std::process::exit(0);
             }
-            other => {
-                eprintln!("warning: ignoring unknown flag: {other}");
-            }
+            other => eprintln!("warning: ignoring unknown flag: {other}"),
         }
+    }
+    if flags.overlay {
+        flags.activation = Some(OverlayActivation {
+            voice: flags.voice,
+            query: flags.query.clone(),
+            context: flags.context.clone(),
+        });
     }
     flags
 }
@@ -1701,21 +2722,122 @@ fn main() -> cosmic::iced::Result {
         )
         .with_writer(std::io::stderr)
         .try_init();
-
+    localize::localize();
     let flags = parse_flags();
-
-    let mut settings = Settings::default();
     if flags.overlay {
-        settings = settings.size_limits(
-            Limits::NONE
-                .min_width(360.0)
-                .min_height(220.0)
-                .max_width(560.0)
-                .max_height(420.0),
-        );
+        cosmic::app::run_single_instance::<App>(
+            Settings::default()
+                .no_main_window(true)
+                .exit_on_close(false)
+                .size_limits(
+                    Limits::NONE
+                        .min_width(1.0)
+                        .min_height(120.0)
+                        .max_width(560.0)
+                        .max_height(560.0),
+                ),
+            flags,
+        )
     } else {
-        settings = settings.size_limits(Limits::NONE.min_width(640.0).min_height(420.0));
+        cosmic::app::run::<App>(
+            Settings::default().size_limits(Limits::NONE.min_width(640.0).min_height(420.0)),
+            flags,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn init_i18n() {
+        localize::localize();
     }
 
-    cosmic::app::run::<App>(settings, flags)
+    #[test]
+    fn relative_labels_use_real_timestamps() {
+        init_i18n();
+        assert_eq!(relative_time_label(1_000_000, 1_020_000), "now");
+        let plain = |label: String| label.replace('\u{2068}', "").replace('\u{2069}', "");
+        assert_eq!(plain(relative_time_label(1_000_000, 1_300_000)), "5m");
+        assert_eq!(plain(relative_time_label(1_000_000, 8_200_000)), "2h");
+    }
+
+    #[test]
+    fn provider_label_prefers_bridge_label() {
+        init_i18n();
+        let models = ModelsResponse {
+            ready: true,
+            provider: "anthropic".into(),
+            model: "claude".into(),
+            label: "Claude".into(),
+            models: Vec::new(),
+        };
+        assert_eq!(provider_model_label(&models), "Claude");
+    }
+
+    #[test]
+    fn tool_events_dedupe_by_id() {
+        let mut message = ChatMessage::assistant_streaming();
+        upsert_tool_call(
+            &mut message,
+            ToolCallView {
+                id: "one".into(),
+                name: "first".into(),
+                input: serde_json::Value::Null,
+                partial_json: String::new(),
+                in_progress: true,
+            },
+        );
+        upsert_tool_call(
+            &mut message,
+            ToolCallView {
+                id: "one".into(),
+                name: "updated".into(),
+                input: serde_json::json!({"ok": true}),
+                partial_json: String::new(),
+                in_progress: false,
+            },
+        );
+        assert_eq!(message.tool_calls.len(), 1);
+        assert_eq!(message.tool_calls[0].name, "updated");
+    }
+
+    #[test]
+    fn retry_selects_latest_user_prompt() {
+        init_i18n();
+        let messages = vec![
+            ChatMessage::user("first".into()),
+            ChatMessage::assistant_streaming(),
+            ChatMessage::user("second".into()),
+        ];
+        let first = retry_branch(&messages, 1, "Session").unwrap();
+        assert_eq!(first.1, "first");
+        let second = retry_branch(&messages, messages.len(), "Session").unwrap();
+        assert_eq!(second.1, "second");
+        assert!(second.2.contains("User: first"));
+    }
+
+    #[test]
+    fn branch_context_keeps_recent_turns_within_limit() {
+        let mut messages = Vec::new();
+        for index in 0..20 {
+            messages.push(ChatMessage::user(format!(
+                "turn-{index} {}",
+                "x".repeat(3_000)
+            )));
+        }
+        let context = build_branch_context(&messages).unwrap();
+        assert!(context.chars().count() <= MAX_BRANCH_CONTEXT_CHARS);
+        assert!(context.contains("turn-19"));
+        assert!(!context.contains("turn-0 "));
+    }
+
+    #[test]
+    fn voice_generation_rejects_stale_completion() {
+        let state = VoiceState::Processing { generation: 8 };
+        assert!(accept_voice_completion(8, &state, 8));
+        assert!(!accept_voice_completion(8, &state, 7));
+        assert!(!accept_voice_completion(9, &state, 8));
+    }
 }

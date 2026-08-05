@@ -24,13 +24,38 @@ pub struct ChatRequest {
     pub session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch_context: Option<String>,
 }
 
 /// One SSE event re-decoded out of the bridge wire format.
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
+    TaskStarted {
+        task_id: String,
+        session_id: Option<String>,
+    },
     /// Incremental text from the agent's stderr token stream.
     Delta(String),
+    ToolUseStart {
+        id: String,
+        name: String,
+    },
+    ToolInputDelta {
+        id: String,
+        delta: String,
+    },
+    ToolUse(ToolCallView),
+    ToolStart {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    ToolResult(ToolResultView),
+    Warning(String),
+    TurnDone(serde_json::Value),
     /// Terminal envelope (answer, turns, usage, …). Sent before EOS.
     Done(serde_json::Value),
     /// Bridge-side or subprocess error. Stream still terminates on EOS.
@@ -42,12 +67,6 @@ pub enum StreamEvent {
 pub struct DeltaPayload {
     #[serde(default)]
     pub text: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ErrorPayload {
-    #[serde(default)]
-    pub message: String,
 }
 
 /// Sidebar entry shape returned by `GET /api/sessions`. Mirrors the
@@ -84,13 +103,23 @@ pub struct HistoryMessage {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ToolCallView {
+    #[serde(default)]
+    pub id: String,
     pub name: String,
     #[serde(default)]
     pub input: serde_json::Value,
+    #[serde(default)]
+    pub partial_json: String,
+    #[serde(default)]
+    pub in_progress: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ToolResultView {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
     #[serde(default)]
     pub text: String,
     #[serde(default)]
@@ -103,10 +132,27 @@ struct HistoryEnvelope {
     messages: Vec<HistoryMessage>,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct BridgeEndpoint {
     pub port: u16,
     pub token: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModelSummary {
+    pub id: String,
+    pub provider: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModelsResponse {
+    pub ready: bool,
+    pub provider: String,
+    pub model: String,
+    pub label: String,
+    #[serde(default)]
+    pub models: Vec<ModelSummary>,
 }
 
 /// Read and validate the private endpoint file the bridge published at boot.
@@ -178,10 +224,58 @@ pub fn bridge_url(endpoint: &BridgeEndpoint, path: &str) -> String {
     format!("http://127.0.0.1:{}{path}", endpoint.port)
 }
 
+pub async fn ensure_bridge_endpoint() -> Result<BridgeEndpoint> {
+    if let Ok(endpoint) = read_bridge_endpoint()
+        && bridge_is_healthy(&endpoint).await
+    {
+        return Ok(endpoint);
+    }
+
+    let mut systemctl = tokio::process::Command::new("systemctl");
+    systemctl
+        .args(["--user", "start", "cos-agent-bridge.service"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    let _ = tokio::time::timeout(Duration::from_secs(5), systemctl.status()).await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Ok(endpoint) = read_bridge_endpoint()
+            && bridge_is_healthy(&endpoint).await
+        {
+            return Ok(endpoint);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!("cos-agent-bridge did not become ready");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn bridge_is_healthy(endpoint: &BridgeEndpoint) -> bool {
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+    else {
+        return false;
+    };
+    client
+        .get(bridge_url(endpoint, "/api/health"))
+        .bearer_auth(&endpoint.token)
+        .send()
+        .await
+        .is_ok_and(|response| response.status().is_success())
+}
+
 /// `GET /api/sessions` — list persisted conversations newest-first.
 pub async fn fetch_sessions(endpoint: BridgeEndpoint) -> Result<Vec<SessionSummary>> {
     let url = bridge_url(&endpoint, "/api/sessions");
-    let response = reqwest::Client::new()
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .context("building sessions client")?
         .get(&url)
         .bearer_auth(&endpoint.token)
         .send()
@@ -204,7 +298,10 @@ pub async fn fetch_history(
 ) -> Result<Vec<HistoryMessage>> {
     let path = format!("/api/sessions/{session_id}/history");
     let url = bridge_url(&endpoint, &path);
-    let response = reqwest::Client::new()
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .context("building history client")?
         .get(&url)
         .bearer_auth(&endpoint.token)
         .send()
@@ -218,4 +315,63 @@ pub async fn fetch_history(
         .await
         .context("decoding history envelope")?;
     Ok(envelope.messages)
+}
+
+pub async fn session_exists(endpoint: BridgeEndpoint, session_id: &str) -> Result<bool> {
+    let url = bridge_url(&endpoint, &format!("/api/sessions/{session_id}"));
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .context("building session lookup client")?
+        .get(&url)
+        .bearer_auth(&endpoint.token)
+        .send()
+        .await
+        .with_context(|| format!("GET {url}"))?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(false);
+    }
+    if !response.status().is_success() {
+        anyhow::bail!("bridge {url} responded {}", response.status());
+    }
+    Ok(true)
+}
+
+pub async fn fetch_models(endpoint: BridgeEndpoint) -> Result<ModelsResponse> {
+    let url = bridge_url(&endpoint, "/api/models");
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .context("building models client")?
+        .get(&url)
+        .bearer_auth(&endpoint.token)
+        .send()
+        .await
+        .with_context(|| format!("GET {url}"))?;
+    if !response.status().is_success() {
+        anyhow::bail!("bridge {url} responded {}", response.status());
+    }
+    response
+        .json::<ModelsResponse>()
+        .await
+        .context("decoding /api/models")
+}
+
+pub async fn cancel_task(endpoint: BridgeEndpoint, task_id: &str) -> Result<()> {
+    let url = bridge_url(&endpoint, &format!("/api/chat/{task_id}/cancel"));
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .context("building cancellation client")?
+        .post(&url)
+        .bearer_auth(&endpoint.token)
+        .send()
+        .await
+        .with_context(|| format!("POST {url}"))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("bridge {url} responded {status}: {body}");
+    }
+    Ok(())
 }
