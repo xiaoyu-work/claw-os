@@ -1,6 +1,7 @@
 (
     name: "Document full-text search (Recoll)",
     description: "Syntax: docs <query>\nExample: docs season report 2025",
+    category: Files,
     query: (
         regex: "^(docs)\\s.*",
         help: "docs ",

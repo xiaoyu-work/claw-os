@@ -9,6 +9,10 @@ use tokio::sync::{mpsc, oneshot};
 #[derive(Debug, Clone)]
 pub enum Request {
     Search(String),
+    SearchCategory {
+        query: String,
+        category: pop_launcher::SearchResultCategory,
+    },
     Activate(u32),
     Context(u32),
     Complete(u32),
@@ -109,6 +113,13 @@ pub fn service() -> impl Stream<Item = Event> + MaybeSend {
                 Request::Search(s) => {
                     if let Some((client, _)) = client_request(&responses_tx, client) {
                         let _res = client.send(pop_launcher::Request::Search(s)).await;
+                    }
+                }
+                Request::SearchCategory { query, category } => {
+                    if let Some((client, _)) = client_request(&responses_tx, client) {
+                        let _res = client
+                            .send(pop_launcher::Request::SearchCategory { query, category })
+                            .await;
                     }
                 }
                 Request::Activate(i) => {

@@ -44,6 +44,17 @@ pub type Generation = u32;
 /// u32 value defining the indice of a slot.
 pub type Indice = u32;
 
+#[derive(Debug, Default, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SearchResultCategory {
+    #[default]
+    Unknown,
+    Apps,
+    Files,
+    Commands,
+    Recent,
+    Settings,
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ContextOption {
     pub id: Indice,
@@ -111,6 +122,9 @@ pub struct PluginSearchResult {
     pub exec: Option<String>,
     /// Designates that this search item refers to a window.
     pub window: Option<(Generation, Indice)>,
+    /// Optional category override for an individual plugin result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<SearchResultCategory>,
 }
 
 impl PluginSearchResult {
@@ -146,6 +160,11 @@ pub enum Request {
     Quit(Indice),
     /// Perform a search in our database.
     Search(String),
+    /// Perform a search and return only results in the requested category.
+    SearchCategory {
+        query: String,
+        category: SearchResultCategory,
+    },
 }
 
 /// Sent from the launcher service to a frontend.
@@ -203,4 +222,38 @@ pub struct SearchResult {
     )]
     /// Designates that this search item refers to a window.
     pub window: Option<(Generation, Indice)>,
+
+    /// Stable source category supplied by the launcher service.
+    #[serde(default)]
+    pub category: SearchResultCategory,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn search_result_category_is_backward_compatible() {
+        let result: SearchResult =
+            serde_json::from_str(r#"{"id":1,"name":"Example","description":""}"#).unwrap();
+
+        assert_eq!(result.category, SearchResultCategory::Unknown);
+    }
+
+    #[test]
+    fn search_result_category_round_trips() {
+        let result = SearchResult {
+            id: 3,
+            name: "Settings".into(),
+            description: "System settings".into(),
+            icon: None,
+            category_icon: None,
+            window: None,
+            category: SearchResultCategory::Settings,
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        let decoded: SearchResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.category, SearchResultCategory::Settings);
+    }
 }

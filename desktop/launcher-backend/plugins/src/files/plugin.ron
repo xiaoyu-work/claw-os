@@ -1,6 +1,7 @@
 (
     name: "File navigation with tab autocomplete",
     description: "Syntax: { / | ~/ }\nExample: ~/Documents",
+    category: Files,
     query: (
         regex: "^(/|~).*",
         help: "~/",

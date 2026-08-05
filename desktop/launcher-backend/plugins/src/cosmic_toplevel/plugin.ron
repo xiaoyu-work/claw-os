@@ -1,6 +1,7 @@
 (
     name: "COSMIC Windows",
     description: "Active windows controllable via Cosmic",
+    category: Apps,
     query: (persistent: true, priority: High),
     bin: (path: "cosmic-toplevel"),
     icon: Name("focus-windows-symbolic"),

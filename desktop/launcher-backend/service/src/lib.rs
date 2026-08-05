@@ -20,7 +20,7 @@ use flume::{Receiver, Sender};
 use futures::{SinkExt, Stream, StreamExt, future};
 use pop_launcher::{
     ContextOption, IconSource, Indice, PluginResponse, PluginSearchResult, Request, Response,
-    SearchResult, json_input_stream, plugin_paths,
+    SearchResult, SearchResultCategory, json_input_stream, plugin_paths,
 };
 use regex::Regex;
 use slab::Slab;
@@ -143,8 +143,9 @@ pub async fn main() {
 
 pub struct Service<O> {
     active_search: Vec<(PluginKey, PluginSearchResult)>,
-    associated_list: HashMap<Indice, Indice>,
+    associated_list: HashMap<(PluginKey, Indice), Indice>,
     awaiting_results: HashSet<PluginKey>,
+    category_filter: Option<SearchResultCategory>,
     last_query: String,
     no_sort: bool,
     output: O,
@@ -160,6 +161,7 @@ impl<O: futures::Sink<Response> + Unpin> Service<O> {
             active_search: Vec::new(),
             associated_list: HashMap::new(),
             awaiting_results: HashSet::new(),
+            category_filter: None,
             last_query: String::new(),
             output,
             no_sort: false,
@@ -220,7 +222,10 @@ impl<O: futures::Sink<Response> + Unpin> Service<O> {
             match event {
                 Event::Request(request) => {
                     match request {
-                        Request::Search(query) => self.search(query).await,
+                        Request::Search(query) => self.search(query, None).await,
+                        Request::SearchCategory { query, category } => {
+                            self.search(query, Some(category)).await;
+                        }
                         Request::Interrupt => self.interrupt().await,
                         Request::Activate(id) => self.activate(id).await,
                         Request::ActivateContext { id, context } => {
@@ -257,7 +262,7 @@ impl<O: futures::Sink<Response> + Unpin> Service<O> {
                     PluginResponse::Clear => self.clear(),
                     PluginResponse::Close => self.close().await,
                     PluginResponse::Context { id, options } => {
-                        self.context_response(id, options).await;
+                        self.context_response(plugin, id, options).await;
                     }
                     PluginResponse::Fill(text) => self.fill(text).await,
                     PluginResponse::Finished => self.finished(plugin).await,
@@ -381,8 +386,13 @@ impl<O: futures::Sink<Response> + Unpin> Service<O> {
         self.respond(Response::Close).await;
     }
 
-    async fn context_response(&mut self, id: Indice, options: Vec<ContextOption>) {
-        if let Some(id) = self.associated_list.get(&id) {
+    async fn context_response(
+        &mut self,
+        plugin: PluginKey,
+        id: Indice,
+        options: Vec<ContextOption>,
+    ) {
+        if let Some(id) = self.associated_list.get(&(plugin, id)) {
             let id = *id;
             self.respond(Response::Context { id, options }).await;
         }
@@ -417,7 +427,7 @@ impl<O: futures::Sink<Response> + Unpin> Service<O> {
         }
 
         if self.search_scheduled {
-            self.search(String::new()).await;
+            self.search(String::new(), None).await;
             return;
         }
 
@@ -447,14 +457,15 @@ impl<O: futures::Sink<Response> + Unpin> Service<O> {
         let _res = self.output.send(event).await;
     }
 
-    async fn search(&mut self, query: String) {
+    async fn search(&mut self, query: String, category_filter: Option<SearchResultCategory>) {
         if !self.awaiting_results.is_empty() {
             tracing::debug!("backing off from search until plugins are ready");
             if !self.search_scheduled {
                 self.interrupt().await;
                 self.search_scheduled = true;
-                self.last_query = query;
             }
+            self.last_query = query;
+            self.category_filter = category_filter;
 
             return;
         }
@@ -463,6 +474,7 @@ impl<O: futures::Sink<Response> + Unpin> Service<O> {
 
         if !self.search_scheduled {
             self.last_query = query;
+            self.category_filter = category_filter;
         }
 
         self.search_scheduled = false;
@@ -553,6 +565,7 @@ impl<O: futures::Sink<Response> + Unpin> Service<O> {
         let &mut Self {
             ref mut active_search,
             ref mut associated_list,
+            ref category_filter,
             ref mut no_sort,
             ref last_query,
             ref plugins,
@@ -601,39 +614,81 @@ impl<O: futures::Sink<Response> + Unpin> Service<O> {
             self.args.max_search
         };
 
-        let mut windows = Vec::with_capacity(take);
+        let mut window_results = Vec::with_capacity(take);
         let mut non_windows = Vec::with_capacity(take);
         associated_list.clear();
 
-        let search_results =
-            active_search
-                .iter()
-                .take(take)
-                .enumerate()
-                .map(|(id, (plugin, meta))| {
-                    associated_list.insert(meta.id, id as u32);
-                    SearchResult {
-                        id: id as u32,
-                        name: meta.name.clone(),
-                        description: meta.description.clone(),
-                        icon: meta.icon.clone(),
-                        category_icon: plugins
-                            .get(*plugin)
-                            .and_then(|conn| conn.config.icon.clone()),
-                        window: meta.window,
-                    }
-                });
+        let category_for = |plugin: PluginKey, meta: &PluginSearchResult| {
+            meta.category.unwrap_or_else(|| {
+                plugins
+                    .get(plugin)
+                    .map_or(SearchResultCategory::Unknown, |conn| conn.config.category)
+            })
+        };
+        let category_matches = |plugin: PluginKey, meta: &PluginSearchResult| {
+            category_filter.is_none_or(|category| category_for(plugin, meta) == category)
+        };
+        let window_candidates: Vec<_> = active_search
+            .iter()
+            .enumerate()
+            .filter(|(_, (plugin, meta))| meta.window.is_some() && category_matches(*plugin, meta))
+            .take(take)
+            .collect();
+        let remaining = take.saturating_sub(window_candidates.len());
+        let recent_limit = if *category_filter == Some(SearchResultCategory::Recent) {
+            remaining
+        } else {
+            remaining.min(4)
+        };
+        let recents: Vec<_> = active_search
+            .iter()
+            .enumerate()
+            .filter(|(_, (plugin, meta))| {
+                meta.window.is_none()
+                    && category_matches(*plugin, meta)
+                    && category_for(*plugin, meta) == SearchResultCategory::Recent
+            })
+            .take(recent_limit)
+            .collect();
+        let suggestion_limit = remaining.saturating_sub(recents.len());
+        let suggestions = active_search
+            .iter()
+            .enumerate()
+            .filter(|(_, (plugin, meta))| {
+                meta.window.is_none()
+                    && category_matches(*plugin, meta)
+                    && category_for(*plugin, meta) != SearchResultCategory::Recent
+            })
+            .take(suggestion_limit);
+        let search_results = window_candidates
+            .into_iter()
+            .chain(suggestions)
+            .chain(recents)
+            .map(|(source_id, (plugin, meta))| {
+                associated_list.insert((*plugin, meta.id), source_id as u32);
+                SearchResult {
+                    id: source_id as u32,
+                    name: meta.name.clone(),
+                    description: meta.description.clone(),
+                    icon: meta.icon.clone(),
+                    category_icon: plugins
+                        .get(*plugin)
+                        .and_then(|conn| conn.config.icon.clone()),
+                    window: meta.window,
+                    category: category_for(*plugin, meta),
+                }
+            });
 
         for result in search_results {
             if result.window.is_some() {
-                windows.push(result);
+                window_results.push(result);
             } else {
                 non_windows.push(result);
             }
         }
 
-        windows.append(&mut non_windows);
-        windows
+        window_results.append(&mut non_windows);
+        window_results
     }
 }
 
@@ -729,6 +784,7 @@ mod tests {
                     icon: None,
                     window: None,
                     exec: None,
+                    category: None,
                     keywords: Some(vec![
                         "bios".to_string(),
                         "uefi".to_string(),
@@ -746,6 +802,7 @@ mod tests {
                     icon: None,
                     window: None,
                     exec: None,
+                    category: None,
                     keywords: Some(vec![
                         "power".to_string(),
                         "reboot".to_string(),

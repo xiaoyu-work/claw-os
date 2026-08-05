@@ -264,6 +264,7 @@ impl<W: AsyncWrite + Unpin> App<W> {
                             .map(|e| Cow::Owned(e.to_string()))
                             .map(IconSource::Name),
                         exec: entry.exec().map(|e| e.to_string()),
+                        category: desktop_entry_category(entry),
                         ..Default::default()
                     });
 
@@ -327,6 +328,20 @@ impl<W: AsyncWrite + Unpin> App<W> {
     }
 }
 
+fn desktop_entry_category(entry: &DesktopEntry) -> Option<SearchResultCategory> {
+    let categories = entry.categories().unwrap_or_default();
+    is_settings_entry(&entry.appid, &categories).then_some(SearchResultCategory::Settings)
+}
+
+fn is_settings_entry(app_id: &str, categories: &[&str]) -> bool {
+    let app_id = app_id.to_ascii_lowercase();
+    app_id == "com.clawos.settings"
+        || app_id.starts_with("com.clawos.settings.")
+        || categories
+            .iter()
+            .any(|category| category.eq_ignore_ascii_case("Settings"))
+}
+
 async fn try_get_gpus() -> Option<Vec<switcheroo_control::Gpu>> {
     let connection = zbus::Connection::system().await.ok()?;
     let proxy = switcheroo_control::SwitcherooControlProxy::new(&connection)
@@ -336,10 +351,28 @@ async fn try_get_gpus() -> Option<Vec<switcheroo_control::Gpu>> {
     if !proxy.has_dual_gpu().await.ok()? {
         return None;
     }
-
     let gpus = proxy.get_gpus().await.ok()?;
     if gpus.is_empty() {
         return None;
     }
     Some(gpus)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_settings_entry;
+
+    #[test]
+    fn settings_category_uses_app_id_or_desktop_metadata() {
+        assert!(is_settings_entry("com.clawos.Settings", &["ClawOS"]));
+        assert!(is_settings_entry(
+            "com.clawos.Settings.Appearance",
+            &["ClawOS"]
+        ));
+        assert!(is_settings_entry(
+            "org.example.ControlCenter",
+            &["Settings"]
+        ));
+        assert!(!is_settings_entry("org.example.Editor", &["Utility"]));
+    }
 }

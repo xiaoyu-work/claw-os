@@ -99,7 +99,23 @@ impl App {
 }
 
 fn normalized(input: &str) -> Option<String> {
-    input
-        .find(' ')
-        .map(|pos| input[pos + 1..].trim().to_ascii_lowercase())
+    let input = input.trim();
+    let query = input
+        .strip_prefix("recent")
+        .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+        .unwrap_or(input)
+        .trim();
+    Some(query.to_ascii_lowercase())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalized;
+
+    #[test]
+    fn normalizes_integrated_and_prefixed_queries() {
+        assert_eq!(normalized(""), Some(String::new()));
+        assert_eq!(normalized("report"), Some("report".into()));
+        assert_eq!(normalized("recent Report"), Some("report".into()));
+    }
 }

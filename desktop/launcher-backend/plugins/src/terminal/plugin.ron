@@ -1,6 +1,7 @@
 (
     name: "Terminal or background commands",
     description: "Syntax: { run | t: | : } <command>\nExample: run sudo apt update",
+    category: Commands,
     query: (
         regex: "^(:|t:|run ).*",
         help: "run ",

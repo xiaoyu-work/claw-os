@@ -3,9 +3,9 @@ use crate::subscriptions::launcher;
 use crate::{components, fl};
 use clap::Parser;
 use cosmic::app::{Core, CosmicFlags, Settings, Task};
-use cosmic::cosmic_theme::palette::WithAlpha;
 use cosmic::cctk::sctk;
 use cosmic::cctk::sctk::shell::wlr_layer;
+use cosmic::cosmic_theme::palette::WithAlpha;
 use cosmic::dbus_activation::Details;
 use cosmic::iced::alignment::{Horizontal, Vertical};
 use cosmic::iced::core::text::{Ellipsize, EllipsizeHeightLimit};
@@ -29,7 +29,7 @@ use cosmic::iced::runtime::platform_specific::wayland::layer_surface::IcedMargin
 use cosmic::iced::widget::scrollable::RelativeOffset;
 use cosmic::iced::widget::{Column, column, container, operation, row};
 use cosmic::iced::{
-    self, Border, Length, Padding, Point, Rectangle, Shadow, Size, Subscription, window,
+    self, Border, Length, Padding, Point, Rectangle, Shadow, Size, Subscription, Vector, window,
 };
 use cosmic::theme::{self, Button, Container};
 use cosmic::widget::icon::IconFallback;
@@ -39,9 +39,9 @@ use cosmic::widget::{autosize, button, divider, icon, id_container, mouse_area, 
 use cosmic::{Element, keyboard_nav, surface};
 use iced::keyboard::Key;
 use iced::{Alignment, Color};
-use pop_launcher::{ContextOption, GpuPreference, IconSource, SearchResult};
+use pop_launcher::{ContextOption, GpuPreference, IconSource, SearchResult, SearchResultCategory};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Display;
 use std::path::Path;
 use std::rc::Rc;
@@ -58,6 +58,151 @@ static SCROLLABLE: LazyLock<Id> = LazyLock::new(|| Id::new("scrollable"));
 
 pub(crate) static MENU_ID: LazyLock<SurfaceId> = LazyLock::new(SurfaceId::unique);
 const SCROLL_MIN: usize = 8;
+const PALETTE_WIDTH: f32 = 840.0;
+const PALETTE_NARROW_BREAKPOINT: f32 = 760.0;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ResultFilter {
+    #[default]
+    All,
+    Apps,
+    Files,
+    Commands,
+    Recent,
+    Settings,
+}
+
+impl ResultFilter {
+    const ALL: [Self; 6] = [
+        Self::All,
+        Self::Apps,
+        Self::Files,
+        Self::Commands,
+        Self::Recent,
+        Self::Settings,
+    ];
+
+    fn category(self) -> Option<SearchResultCategory> {
+        match self {
+            Self::All => None,
+            Self::Apps => Some(SearchResultCategory::Apps),
+            Self::Files => Some(SearchResultCategory::Files),
+            Self::Commands => Some(SearchResultCategory::Commands),
+            Self::Recent => Some(SearchResultCategory::Recent),
+            Self::Settings => Some(SearchResultCategory::Settings),
+        }
+    }
+
+    fn label(self) -> String {
+        match self {
+            Self::All => fl!("category-all"),
+            Self::Apps => fl!("category-apps"),
+            Self::Files => fl!("category-files"),
+            Self::Commands => fl!("category-commands"),
+            Self::Recent => fl!("category-recent"),
+            Self::Settings => fl!("category-settings"),
+        }
+    }
+}
+
+fn result_identity(result: &SearchResult) -> String {
+    format!(
+        "{}\u{1f}{}",
+        result.name.to_ascii_lowercase(),
+        result.description.to_ascii_lowercase()
+    )
+}
+
+fn filtered_result_indices(results: &[SearchResult], filter: ResultFilter) -> Vec<usize> {
+    if let Some(category) = filter.category() {
+        return results
+            .iter()
+            .enumerate()
+            .filter_map(|(index, result)| (result.category == category).then_some(index))
+            .collect();
+    }
+
+    let suggestions = results
+        .iter()
+        .enumerate()
+        .filter_map(|(index, result)| {
+            (result.category != SearchResultCategory::Recent).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let suggestion_ids = suggestions
+        .iter()
+        .map(|index| result_identity(&results[*index]))
+        .collect::<HashSet<_>>();
+    let recents = results.iter().enumerate().filter_map(|(index, result)| {
+        (result.category == SearchResultCategory::Recent
+            && !suggestion_ids.contains(&result_identity(result)))
+        .then_some(index)
+    });
+
+    suggestions.into_iter().chain(recents).collect()
+}
+
+fn ctrl_number_index(key: &str) -> Option<usize> {
+    if key == "0" {
+        Some(9)
+    } else {
+        key.parse::<usize>()
+            .ok()
+            .filter(|number| (1..=9).contains(number))
+            .map(|number| number - 1)
+    }
+}
+
+fn palette_appearance(theme: &cosmic::Theme) -> container::Style {
+    let cosmic = theme.cosmic();
+    let is_dark = theme.theme_type.is_dark();
+    let background = Color {
+        a: if is_dark { 0.84 } else { 0.88 },
+        ..Color::from(cosmic.background.base)
+    };
+
+    container::Style {
+        text_color: Some(cosmic.on_bg_color().into()),
+        background: Some(background.into()),
+        border: Border {
+            radius: cosmic.corner_radii.radius_xl.into(),
+            width: 1.0,
+            color: cosmic.accent_color().with_alpha(0.20).into(),
+        },
+        shadow: Shadow {
+            color: Color::from_rgba(0.0, 0.02, 0.10, if is_dark { 0.34 } else { 0.18 }),
+            offset: Vector::new(0.0, 10.0),
+            blur_radius: 32.0,
+        },
+        icon_color: Some(cosmic.on_bg_color().into()),
+        snap: true,
+    }
+}
+
+fn section_appearance(theme: &cosmic::Theme) -> container::Style {
+    let cosmic = theme.cosmic();
+    container::Style {
+        text_color: Some(cosmic.on_bg_color().into()),
+        background: Some(
+            cosmic
+                .accent_color()
+                .with_alpha(if theme.theme_type.is_dark() {
+                    0.055
+                } else {
+                    0.035
+                })
+                .into(),
+        ),
+        border: Border {
+            radius: cosmic.corner_radii.radius_l.into(),
+            width: 1.0,
+            color: cosmic.accent_color().with_alpha(0.10).into(),
+        },
+        shadow: Shadow::default(),
+        icon_color: Some(cosmic.on_bg_color().into()),
+        snap: true,
+    }
+}
 
 /// Frosted "Claw Glass" search pill for the launcher.
 ///
@@ -99,8 +244,14 @@ fn spotlight_pill_appearance(theme: &cosmic::Theme) -> cosmic::widget::text_inpu
         fg * (1.0 - fg_tint) + accent.blue * fg_tint,
         1.0,
     );
-    let placeholder = Color { a: 0.55, ..fg_color };
-    let icon_color = Color { a: 0.85, ..fg_color };
+    let placeholder = Color {
+        a: 0.55,
+        ..fg_color
+    };
+    let icon_color = Color {
+        a: 0.85,
+        ..fg_color
+    };
 
     cosmic::widget::text_input::Appearance {
         background: cosmic::iced::Background::Color(fill_color),
@@ -223,6 +374,9 @@ pub struct CosmicLauncher {
     dummy_id: window::Id,
     ai_inline: AiInlineState,
     ai_token: u64,
+    selected_filter: ResultFilter,
+    is_loading: bool,
+    width: f32,
 }
 
 /// State machine for the inline AI answer card shown when the user
@@ -239,15 +393,29 @@ pub struct CosmicLauncher {
 #[derive(Debug, Clone)]
 pub enum AiInlineState {
     Idle,
-    Pending { token: u64, query: String },
-    Streaming { token: u64, query: String, partial: String },
-    Done { query: String, answer: String },
-    Error { query: String, message: String },
+    Pending {
+        token: u64,
+        query: String,
+    },
+    Streaming {
+        token: u64,
+        query: String,
+        partial: String,
+    },
+    Done {
+        query: String,
+        answer: String,
+    },
+    Error {
+        query: String,
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone)]
 pub enum Message {
     InputChanged(String),
+    FilterSelected(ResultFilter),
     Backspace,
     TabPress,
     CompleteFocusedId(Id),
@@ -298,6 +466,14 @@ impl CosmicLauncher {
         }
     }
 
+    fn request_search(&self, query: String) {
+        let request = match self.selected_filter.category() {
+            Some(category) => launcher::Request::SearchCategory { query, category },
+            None => launcher::Request::Search(query),
+        };
+        self.request(request);
+    }
+
     fn show(&mut self) -> Task<Message> {
         self.surface_state = SurfaceState::Visible;
         self.needs_clear = true;
@@ -309,7 +485,7 @@ impl CosmicLauncher {
                 anchor: Anchor::TOP,
                 namespace: "launcher".into(),
                 size: None,
-                size_limits: Limits::NONE.min_width(1.0).min_height(1.0).max_width(720.0),
+                size_limits: Limits::NONE.min_width(1.0).min_height(1.0).max_width(880.0),
                 exclusive_zone: -1,
                 ..Default::default()
             }),
@@ -321,6 +497,8 @@ impl CosmicLauncher {
         self.input_value.clear();
         self.focused = 0;
         self.alt_tab = false;
+        self.selected_filter = ResultFilter::All;
+        self.is_loading = false;
         self.queue.clear();
         self.hand_over.clear();
 
@@ -341,17 +519,27 @@ impl CosmicLauncher {
     }
 
     fn focus_next(&mut self) {
-        if self.launcher_items.is_empty() {
+        let visible_len = self.visible_result_indices().len();
+        if visible_len == 0 {
             return;
         }
-        self.focused = (self.focused + 1) % self.launcher_items.len();
+        self.focused = (self.focused + 1) % visible_len;
     }
 
     fn focus_previous(&mut self) {
-        if self.launcher_items.is_empty() {
+        let visible_len = self.visible_result_indices().len();
+        if visible_len == 0 {
             return;
         }
-        self.focused = (self.focused + self.launcher_items.len() - 1) % self.launcher_items.len();
+        self.focused = (self.focused + visible_len - 1) % visible_len;
+    }
+
+    fn visible_result_indices(&self) -> Vec<usize> {
+        filtered_result_indices(&self.launcher_items, self.selected_filter)
+    }
+
+    fn source_index_for_visible(&self, visible_index: usize) -> Option<usize> {
+        self.visible_result_indices().get(visible_index).copied()
     }
 
     fn handle_overlap(&mut self) {
@@ -450,7 +638,8 @@ impl CosmicLauncher {
 
         let card = column![header, body_area]
             .spacing(6)
-            .width(Length::Fixed(660.0));
+            .width(Length::Fill)
+            .max_width(PALETTE_WIDTH);
 
         let clickable = cosmic::widget::button::custom(card)
             .width(Length::Fill)
@@ -459,6 +648,405 @@ impl CosmicLauncher {
             .class(Button::Text);
 
         Some(clickable.into())
+    }
+
+    fn filter_chip(&self, filter: ResultFilter) -> Element<'_, Message> {
+        let selected = self.selected_filter == filter;
+        button::custom(text::caption(filter.label()).align_y(Vertical::Center))
+            .on_press(Message::FilterSelected(filter))
+            .padding([6, 12])
+            .class(Button::Custom {
+                active: Box::new(move |focused, theme| {
+                    let cosmic = theme.cosmic();
+                    let mut style = button::Catalog::active(
+                        theme,
+                        focused,
+                        focused,
+                        if selected {
+                            &Button::Suggested
+                        } else {
+                            &Button::Text
+                        },
+                    );
+                    style.border_radius = cosmic.corner_radii.radius_xl.into();
+                    if !selected {
+                        style.background = Some(cosmic.accent_color().with_alpha(0.08).into());
+                    }
+                    style
+                }),
+                hovered: Box::new(move |focused, theme| {
+                    let cosmic = theme.cosmic();
+                    let mut style = button::Catalog::hovered(
+                        theme,
+                        focused,
+                        focused,
+                        if selected {
+                            &Button::Suggested
+                        } else {
+                            &Button::Text
+                        },
+                    );
+                    style.border_radius = cosmic.corner_radii.radius_xl.into();
+                    if !selected {
+                        style.background = Some(cosmic.accent_color().with_alpha(0.14).into());
+                    }
+                    style
+                }),
+                pressed: Box::new(move |focused, theme| {
+                    let cosmic = theme.cosmic();
+                    let mut style = button::Catalog::pressed(
+                        theme,
+                        focused,
+                        focused,
+                        if selected {
+                            &Button::Suggested
+                        } else {
+                            &Button::Text
+                        },
+                    );
+                    style.border_radius = cosmic.corner_radii.radius_xl.into();
+                    style
+                }),
+                disabled: Box::new(|theme| {
+                    let cosmic = theme.cosmic();
+                    let mut style = button::Catalog::disabled(theme, &Button::Text);
+                    style.border_radius = cosmic.corner_radii.radius_xl.into();
+                    style
+                }),
+            })
+            .into()
+    }
+
+    fn empty_state(&self, message: String) -> Element<'_, Message> {
+        container(
+            column![
+                icon::from_name("system-search-symbolic")
+                    .size(24)
+                    .icon()
+                    .class(cosmic::theme::Svg::Custom(Rc::new(|theme| {
+                        cosmic::iced::widget::svg::Style {
+                            color: Some(theme.cosmic().on_bg_color().with_alpha(0.55).into()),
+                        }
+                    }))),
+                text::caption(message)
+                    .align_x(Horizontal::Center)
+                    .class(theme::Text::Custom(|theme| {
+                        cosmic::iced::widget::text::Style {
+                            color: Some(theme.cosmic().on_bg_color().with_alpha(0.65).into()),
+                        }
+                    })),
+            ]
+            .align_x(Alignment::Center)
+            .spacing(8),
+        )
+        .width(Length::Fill)
+        .padding([24, 12])
+        .center_x(Length::Fill)
+        .into()
+    }
+
+    fn result_button(&self, source_index: usize, visible_index: usize) -> Element<'_, Message> {
+        let item = &self.launcher_items[source_index];
+        let (name, desc) = if item.window.is_some() {
+            (&item.description, &item.name)
+        } else {
+            (&item.name, &item.description)
+        };
+
+        let name = Column::with_children(name.lines().map(|line| {
+            text::body(line.to_string())
+                .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
+                .align_x(Horizontal::Left)
+                .align_y(Vertical::Center)
+                .into()
+        }));
+        let desc = Column::with_children(desc.lines().map(|line| {
+            text::caption(line.to_string())
+                .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
+                .align_x(Horizontal::Left)
+                .align_y(Vertical::Center)
+                .class(theme::Text::Custom(|theme| {
+                    cosmic::iced::widget::text::Style {
+                        color: Some(theme.cosmic().on_bg_color().with_alpha(0.66).into()),
+                    }
+                }))
+                .into()
+        }));
+
+        let mut content = Vec::new();
+        if !self.alt_tab
+            && let Some(source) = item.category_icon.as_ref()
+        {
+            let icon_handle = match source {
+                IconSource::Name(name) if Path::new(name.as_ref()).exists() => {
+                    icon::from_path(Path::new(name.as_ref()).into())
+                }
+                IconSource::Name(name) => icon::from_name(name.as_ref()).handle(),
+                IconSource::Mime(mime) => icon::from_name(mime.as_ref().replace('/', "-")).handle(),
+            };
+            content.push(
+                icon(icon_handle)
+                    .width(Length::Fixed(16.0))
+                    .height(Length::Fixed(16.0))
+                    .class(cosmic::theme::Svg::Custom(Rc::new(|theme| {
+                        cosmic::iced::widget::svg::Style {
+                            color: Some(theme.cosmic().on_bg_color().with_alpha(0.70).into()),
+                        }
+                    })))
+                    .into(),
+            );
+        }
+        if let Some(Some(icon_handle)) = self.launcher_item_icon_handles.get(source_index) {
+            content.push(
+                icon(icon_handle.clone())
+                    .width(Length::Fixed(32.0))
+                    .height(Length::Fixed(32.0))
+                    .into(),
+            );
+        }
+        content.push(column![name, desc].width(Length::Fill).spacing(2).into());
+        if visible_index < 10 {
+            content.push(
+                text::caption(format!("Ctrl + {}", (visible_index + 1) % 10))
+                    .align_x(Horizontal::Right)
+                    .class(theme::Text::Custom(|theme| {
+                        cosmic::iced::widget::text::Style {
+                            color: Some(theme.cosmic().on_bg_color().with_alpha(0.55).into()),
+                        }
+                    }))
+                    .into(),
+            );
+        }
+
+        let is_focused = visible_index == self.focused;
+        mouse_area(
+            button::custom(row(content).spacing(8).align_y(Alignment::Center))
+                .id(self.result_ids[visible_index].clone())
+                .width(Length::Fill)
+                .on_press(Message::Activate(Some(visible_index)))
+                .padding([8, 10])
+                .class(Button::Custom {
+                    active: Box::new(move |focused, theme| {
+                        let focused = is_focused || focused;
+                        let cosmic = theme.cosmic();
+                        let mut style =
+                            button::Catalog::active(theme, focused, focused, &Button::Text);
+                        if focused {
+                            style.background = Some(cosmic.accent_color().with_alpha(0.20).into());
+                        }
+                        style.border_radius = cosmic.corner_radii.radius_m.into();
+                        style.outline_width = 0.0;
+                        style
+                    }),
+                    hovered: Box::new(move |focused, theme| {
+                        let focused = is_focused || focused;
+                        let cosmic = theme.cosmic();
+                        let mut style =
+                            button::Catalog::hovered(theme, focused, focused, &Button::Text);
+                        style.background = Some(
+                            cosmic
+                                .accent_color()
+                                .with_alpha(if focused { 0.24 } else { 0.12 })
+                                .into(),
+                        );
+                        style.border_radius = cosmic.corner_radii.radius_m.into();
+                        style.outline_width = 0.0;
+                        style
+                    }),
+                    pressed: Box::new(move |focused, theme| {
+                        let focused = is_focused || focused;
+                        let cosmic = theme.cosmic();
+                        let mut style =
+                            button::Catalog::pressed(theme, focused, focused, &Button::Text);
+                        style.border_radius = cosmic.corner_radii.radius_m.into();
+                        style.outline_width = 0.0;
+                        style
+                    }),
+                    disabled: Box::new(|theme| {
+                        let cosmic = theme.cosmic();
+                        let mut style = button::Catalog::disabled(theme, &Button::Text);
+                        style.border_radius = cosmic.corner_radii.radius_m.into();
+                        style.outline_width = 0.0;
+                        style
+                    }),
+                }),
+        )
+        .on_right_release(Message::Context(visible_index))
+        .into()
+    }
+
+    fn result_list(&self, indices: &[usize], visible_offset: usize) -> Element<'_, Message> {
+        let children = indices
+            .iter()
+            .enumerate()
+            .flat_map(|(position, source_index)| {
+                let button = self.result_button(*source_index, visible_offset + position);
+                if position + 1 == indices.len() {
+                    vec![button]
+                } else {
+                    vec![button, divider::horizontal::light().into()]
+                }
+            });
+        components::list::column(children).into()
+    }
+
+    fn result_section(
+        &self,
+        title: String,
+        indices: &[usize],
+        visible_offset: usize,
+        empty_message: String,
+    ) -> Element<'_, Message> {
+        let body = if indices.is_empty() {
+            self.empty_state(empty_message)
+        } else {
+            self.result_list(indices, visible_offset)
+        };
+        container(column![text::heading(title), body].spacing(8))
+            .width(Length::Fill)
+            .padding(12)
+            .class(Container::custom(section_appearance))
+            .into()
+    }
+
+    fn launcher_palette(&self) -> Element<'_, Message> {
+        let search = text_input::search_input(fl!("type-to-search"), &self.input_value)
+            .on_input(Message::InputChanged)
+            .on_paste(Message::InputChanged)
+            .on_submit(|value| {
+                let trimmed = value.trim_start();
+                if trimmed.starts_with('?') || trimmed.starts_with('？') {
+                    Message::AskAi
+                } else {
+                    Message::Activate(None)
+                }
+            })
+            .on_tab(Message::TabPress)
+            .style(cosmic::theme::TextInput::Custom {
+                active: Box::new(spotlight_pill_appearance),
+                error: Box::new(spotlight_pill_appearance),
+                hovered: Box::new(spotlight_pill_appearance),
+                focused: Box::new(spotlight_pill_appearance),
+                disabled: Box::new(spotlight_pill_appearance),
+            })
+            .width(Length::Fill)
+            .id(INPUT_ID.clone())
+            .always_active();
+
+        let chips = row(ResultFilter::ALL.map(|filter| self.filter_chip(filter)))
+            .spacing(8)
+            .align_y(Alignment::Center);
+        let mut content = column![search, chips].width(Length::Fill).spacing(12);
+
+        if let Some(card) = self.ai_inline_card() {
+            content = content.push(card);
+        } else {
+            let visible = self.visible_result_indices();
+            let results: Element<'_, Message> = if self.selected_filter == ResultFilter::All {
+                let suggestion_count = visible
+                    .iter()
+                    .take_while(|index| {
+                        self.launcher_items[**index].category != SearchResultCategory::Recent
+                    })
+                    .count();
+                let (suggestions, recents) = visible.split_at(suggestion_count);
+                let loading = self.is_loading && visible.is_empty();
+                let suggestions = self.result_section(
+                    fl!("section-suggestions"),
+                    suggestions,
+                    0,
+                    if loading {
+                        fl!("state-searching")
+                    } else {
+                        fl!("state-no-suggestions")
+                    },
+                );
+                let recents = self.result_section(
+                    fl!("section-recent"),
+                    recents,
+                    suggestion_count,
+                    if loading {
+                        fl!("state-loading-recent")
+                    } else {
+                        fl!("state-no-recent")
+                    },
+                );
+
+                if self.width >= PALETTE_NARROW_BREAKPOINT {
+                    row![suggestions, recents]
+                        .spacing(12)
+                        .width(Length::Fill)
+                        .into()
+                } else {
+                    column![suggestions, recents]
+                        .spacing(12)
+                        .width(Length::Fill)
+                        .into()
+                }
+            } else {
+                self.result_section(
+                    self.selected_filter.label(),
+                    &visible,
+                    0,
+                    if self.is_loading {
+                        fl!("state-searching")
+                    } else {
+                        fl!("state-no-results")
+                    },
+                )
+            };
+
+            content = content.push(
+                container(
+                    scrollable(results)
+                        .id(SCROLLABLE.clone())
+                        .height(Length::Shrink),
+                )
+                .max_height(430.0),
+            );
+        }
+
+        if !self.input_value.trim().is_empty() && matches!(self.ai_inline, AiInlineState::Idle) {
+            let query = self.input_value.trim().to_string();
+            let ai_row = row![
+                text::body(fl!("ask-claw-ai", query = query))
+                    .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
+                    .width(Length::Fill),
+                text::caption(fl!("ask-claw-ai-hint")),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center);
+            content = content.push(divider::horizontal::light()).push(
+                button::custom(ai_row)
+                    .width(Length::Fill)
+                    .on_press(Message::AskAi)
+                    .padding([9, 12])
+                    .class(Button::Suggested),
+            );
+        }
+
+        let palette = container(id_container(content, MAIN_ID.clone()))
+            .width(Length::Fill)
+            .max_width(PALETTE_WIDTH)
+            .padding(16)
+            .class(Container::custom(palette_appearance));
+        let window = Column::new()
+            .push(vertical_space().height(Length::Fixed(self.margin + 20.0)))
+            .push(palette)
+            .width(Length::Fill)
+            .max_width(PALETTE_WIDTH);
+
+        let window = if self.menu.is_some() {
+            Element::from(
+                mouse_area(window)
+                    .on_release(Message::CloseContextMenu)
+                    .on_right_release(Message::CloseContextMenu),
+            )
+        } else {
+            window.into()
+        };
+
+        autosize::autosize(window, AUTOSIZE_ID.clone()).into()
     }
 }
 
@@ -532,7 +1120,9 @@ impl cosmic::Application for CosmicLauncher {
                                 dummy_id,
                 ai_inline: AiInlineState::Idle,
                 ai_token: 0,
-
+                selected_filter: ResultFilter::All,
+                is_loading: false,
+                width: PALETTE_WIDTH,
             },
             get_layer_surface(SctkLayerSurfaceSettings {
                 id: dummy_id,
@@ -571,6 +1161,7 @@ impl cosmic::Application for CosmicLauncher {
                     self.launcher_items.clear();
                     self.launcher_item_icon_handles.clear();
                     self.focused = 0;
+                    self.is_loading = false;
                     self.request(launcher::Request::Search(String::new()));
 
                     // Each keystroke invalidates any in-flight stream by
@@ -595,19 +1186,37 @@ impl cosmic::Application for CosmicLauncher {
                         self.ai_inline = AiInlineState::Idle;
                         self.ai_token = self.ai_token.wrapping_add(1);
                     }
-                    self.request(launcher::Request::Search(value));
+                    self.launcher_items.clear();
+                    self.launcher_item_icon_handles.clear();
+                    self.focused = 0;
+                    self.is_loading = true;
+                    self.request_search(value);
                 }
+            }
+            Message::FilterSelected(filter) => {
+                self.selected_filter = filter;
+                self.launcher_items.clear();
+                self.launcher_item_icon_handles.clear();
+                self.focused = 0;
+                self.is_loading = true;
+                self.request_search(self.input_value.clone());
             }
             Message::Backspace => {
                 self.input_value.pop();
-                self.request(launcher::Request::Search(self.input_value.clone()));
+                self.launcher_items.clear();
+                self.launcher_item_icon_handles.clear();
+                self.focused = 0;
+                self.is_loading = true;
+                self.request_search(self.input_value.clone());
             }
             Message::TabPress if !self.alt_tab => {
                 let focused = self.focused;
                 self.focused = 0;
-                return cosmic::task::message(cosmic::Action::App(
-                    Self::Message::CompleteFocusedId(self.result_ids[focused].clone()),
-                ));
+                if let Some(id) = self.result_ids.get(focused) {
+                    return cosmic::task::message(cosmic::Action::App(
+                        Self::Message::CompleteFocusedId(id.clone()),
+                    ));
+                }
             }
             Message::TabPress => {}
             Message::CompleteFocusedId(id) => {
@@ -617,12 +1226,20 @@ impl cosmic::Application for CosmicLauncher {
                     .position(|res_id| res_id == &id)
                     .unwrap_or_default();
 
-                if let Some(id) = self.launcher_items.get(i).map(|res| res.id) {
+                if let Some(id) = self
+                    .source_index_for_visible(i)
+                    .and_then(|index| self.launcher_items.get(index))
+                    .map(|result| result.id)
+                {
                     self.request(launcher::Request::Complete(id));
                 }
             }
             Message::Activate(i) => {
-                if let Some(item) = self.launcher_items.get(i.unwrap_or(self.focused)) {
+                let visible_index = i.unwrap_or(self.focused);
+                if let Some(item) = self
+                    .source_index_for_visible(visible_index)
+                    .and_then(|index| self.launcher_items.get(index))
+                {
                     self.request(launcher::Request::Activate(item.id));
                 } else {
                     return self.hide();
@@ -653,7 +1270,10 @@ impl cosmic::Application for CosmicLauncher {
                     return commands::popup::destroy_popup(*MENU_ID);
                 }
 
-                if let Some(item) = self.launcher_items.get(i) {
+                if let Some(item) = self
+                    .source_index_for_visible(i)
+                    .and_then(|index| self.launcher_items.get(index))
+                {
                     self.request(launcher::Request::Context(item.id));
                 }
             }
@@ -670,6 +1290,7 @@ impl cosmic::Application for CosmicLauncher {
             Message::Opened(size, window_id) => {
                 if window_id == self.window_id {
                     self.height = size.height;
+                    self.width = size.width;
                     self.handle_overlap();
                 }
                 if !self.hand_over.is_empty() {
@@ -681,7 +1302,8 @@ impl cosmic::Application for CosmicLauncher {
             Message::LauncherEvent(e) => match e {
                 launcher::Event::Started(tx) => {
                     self.tx.replace(tx);
-                    self.request(launcher::Request::Search(self.input_value.clone()));
+                    self.is_loading = true;
+                    self.request_search(self.input_value.clone());
                 }
                 launcher::Event::ServiceIsClosed => {
                     self.request(launcher::Request::ServiceIsClosed);
@@ -760,10 +1382,12 @@ impl cosmic::Application for CosmicLauncher {
                         }
                     }
                     pop_launcher::Response::Update(mut list) => {
-                        if self.alt_tab && list.is_empty() {
-                            return self.hide();
-                        }
-                        if self.alt_tab || self.input_value.is_empty() {
+                        self.is_loading = false;
+                        if self.alt_tab {
+                            list.retain(|item| item.window.is_some());
+                            if list.is_empty() {
+                                return self.hide();
+                            }
                             list.reverse();
                         }
                         list.sort_by(|a, b| {
@@ -772,6 +1396,8 @@ impl cosmic::Application for CosmicLauncher {
                             a.cmp(&b)
                         });
                         self.launcher_items.splice(.., list);
+                        let visible_len = self.visible_result_indices().len();
+                        self.focused = self.focused.min(visible_len.saturating_sub(1));
                         if self.result_ids.len() < self.launcher_items.len() {
                             self.result_ids.extend(
                                 (self.result_ids.len()..self.launcher_items.len())
@@ -838,8 +1464,7 @@ impl cosmic::Application for CosmicLauncher {
                         return Task::batch(cmds);
                     }
                     pop_launcher::Response::Fill(s) => {
-                        self.input_value = s;
-                        self.request(launcher::Request::Search(self.input_value.clone()));
+                        return self.update(Message::InputChanged(s));
                     }
                 },
             },
@@ -895,7 +1520,8 @@ impl cosmic::Application for CosmicLauncher {
                                 x: None,
                                 y: Some(
                                     (self.focused as f32
-                                        / (self.launcher_items.len() as f32 - 1.).max(1.))
+                                        / (self.visible_result_indices().len() as f32 - 1.)
+                                            .max(1.))
                                     .max(0.0),
                                 ),
                             },
@@ -909,7 +1535,8 @@ impl cosmic::Application for CosmicLauncher {
                                 x: None,
                                 y: Some(
                                     (self.focused as f32
-                                        / (self.launcher_items.len() as f32 - 1.).max(1.))
+                                        / (self.visible_result_indices().len() as f32 - 1.)
+                                            .max(1.))
                                     .max(0.0),
                                 ),
                             },
@@ -917,7 +1544,8 @@ impl cosmic::Application for CosmicLauncher {
                     }
                     keyboard_nav::Action::Escape => {
                         self.input_value.clear();
-                        self.request(launcher::Request::Search(String::new()));
+                        self.is_loading = true;
+                        self.request_search(String::new());
                     }
                     _ => {}
                 };
@@ -934,8 +1562,9 @@ impl cosmic::Application for CosmicLauncher {
                     RelativeOffset {
                         x: None,
                         y: Some(
-                            (self.focused as f32 / (self.launcher_items.len() as f32 - 1.).max(1.))
-                                .max(0.0),
+                            (self.focused as f32
+                                / (self.visible_result_indices().len() as f32 - 1.).max(1.))
+                            .max(0.0),
                         ),
                     },
                 );
@@ -947,8 +1576,9 @@ impl cosmic::Application for CosmicLauncher {
                     RelativeOffset {
                         x: None,
                         y: Some(
-                            (self.focused as f32 / (self.launcher_items.len() as f32 - 1.).max(1.))
-                                .max(0.0),
+                            (self.focused as f32
+                                / (self.visible_result_indices().len() as f32 - 1.).max(1.))
+                            .max(0.0),
                         ),
                     },
                 );
@@ -1059,9 +1689,7 @@ impl cosmic::Application for CosmicLauncher {
                             let status = child.wait().await;
                             match status {
                                 Ok(s) if s.success() => {
-                                    let _ = tx
-                                        .send(Message::AiInlineDone(token, answer))
-                                        .await;
+                                    let _ = tx.send(Message::AiInlineDone(token, answer)).await;
                                 }
                                 _ => {
                                     let _ = tx
@@ -1122,7 +1750,8 @@ impl cosmic::Application for CosmicLauncher {
                 }
                 // hack: allow to close the launcher from the panel button
                 if self.last_hide.elapsed().as_millis() > 100 {
-                    self.request(launcher::Request::Search(String::new()));
+                    self.request_search(String::new());
+                    self.is_loading = true;
 
                     self.surface_state = SurfaceState::WaitingToBeShown;
                     return Task::none();
@@ -1146,6 +1775,7 @@ impl cosmic::Application for CosmicLauncher {
                         }
 
                         self.alt_tab = true;
+                        self.is_loading = true;
                         self.request(launcher::Request::Search(String::new()));
                         self.queue.push_back(Message::AltTab);
                     }
@@ -1155,10 +1785,12 @@ impl cosmic::Application for CosmicLauncher {
                         }
 
                         self.alt_tab = true;
+                        self.is_loading = true;
                         self.request(launcher::Request::Search(String::new()));
                         self.queue.push_back(Message::ShiftAltTab);
                     }
                     LauncherTasks::Input { input } => {
+                        self.is_loading = true;
                         self.request(launcher::Request::Search(String::new()));
                         if let Some(input) = input {
                             self.hand_over.push_str(&input);
@@ -1180,6 +1812,9 @@ impl cosmic::Application for CosmicLauncher {
 
     #[allow(clippy::too_many_lines)]
     fn view_window(&self, id: SurfaceId) -> Element<'_, Self::Message> {
+        if id == self.window_id && !self.alt_tab {
+            return self.launcher_palette();
+        }
         if id == self.window_id {
             let launcher_entry = text_input::search_input(fl!("type-to-search"), &self.input_value)
                 .on_input(Message::InputChanged)
@@ -1562,11 +2197,7 @@ impl cosmic::Application for CosmicLauncher {
                         Some(Message::KeyboardNav(keyboard_nav::Action::FocusNext))
                     }
                     Key::Character(c) if modifiers.control() => {
-                        let nums = (1..10)
-                            .map(|n| (n.to_string(), ((n + 10) % 10) - 1))
-                            .collect::<Vec<_>>();
-                        nums.iter()
-                            .find_map(|n| (n.0 == c).then(|| Message::Activate(Some(n.1))))
+                        ctrl_number_index(&c).map(|index| Message::Activate(Some(index)))
                     }
                     Key::Named(Named::ArrowUp) => {
                         Some(Message::KeyboardNav(keyboard_nav::Action::FocusPrevious))
@@ -1595,5 +2226,58 @@ impl cosmic::Application for CosmicLauncher {
                 _ => None,
             }),
         ])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn result(id: u32, name: &str, category: SearchResultCategory) -> SearchResult {
+        SearchResult {
+            id,
+            name: name.into(),
+            description: format!("{name} description"),
+            icon: None,
+            category_icon: None,
+            window: None,
+            category,
+        }
+    }
+
+    #[test]
+    fn all_orders_suggestions_before_real_recents_and_deduplicates() {
+        let duplicate = result(3, "Report", SearchResultCategory::Recent);
+        let results = vec![
+            result(1, "Report", SearchResultCategory::Files),
+            result(2, "Terminal", SearchResultCategory::Commands),
+            duplicate,
+            result(4, "Notes", SearchResultCategory::Recent),
+        ];
+
+        assert_eq!(
+            filtered_result_indices(&results, ResultFilter::All),
+            vec![0, 1, 3]
+        );
+    }
+
+    #[test]
+    fn category_filter_indices_stay_tied_to_source_results() {
+        let results = vec![
+            result(10, "Files", SearchResultCategory::Files),
+            result(20, "Settings", SearchResultCategory::Settings),
+            result(30, "More files", SearchResultCategory::Files),
+        ];
+        let indices = filtered_result_indices(&results, ResultFilter::Files);
+
+        assert_eq!(indices, vec![0, 2]);
+        assert_eq!(results[indices[1]].id, 30);
+    }
+
+    #[test]
+    fn ctrl_number_shortcuts_match_visible_positions() {
+        assert_eq!(ctrl_number_index("1"), Some(0));
+        assert_eq!(ctrl_number_index("9"), Some(8));
+        assert_eq!(ctrl_number_index("0"), Some(9));
     }
 }

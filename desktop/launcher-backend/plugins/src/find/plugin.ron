@@ -1,6 +1,7 @@
 (
     name: "File search",
     description: "Syntax: find <filename>\nExample: find my-document.odt",
+    category: Files,
     query: (
         regex: "^(find )+",
         help: "find ",

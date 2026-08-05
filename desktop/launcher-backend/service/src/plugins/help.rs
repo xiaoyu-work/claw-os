@@ -12,6 +12,7 @@ pub const REGEX: Cow<'static, str> = Cow::Borrowed("^(\\?).*");
 pub const CONFIG: PluginConfig = PluginConfig {
     name: Cow::Borrowed("Help"),
     description: Cow::Borrowed("Show available plugin prefixes"),
+    category: crate::SearchResultCategory::Commands,
     bin: None,
     query: PluginQuery {
         help: None,

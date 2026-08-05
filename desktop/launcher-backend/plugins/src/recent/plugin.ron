@@ -1,10 +1,11 @@
 (
     name: "Recently-opened document search",
     description: "Syntax: recent <filename>\nExample: recent my-document.odt",
+    category: Recent,
     query: (
-        regex: "^(recent)\\s.*",
         help: "recent ",
-        isolate: true
+        isolate_with: "^(recent)\\s.*",
+        persistent: true,
     ),
     bin: (path: "recent"),
     icon: Name("system-file-manager")
