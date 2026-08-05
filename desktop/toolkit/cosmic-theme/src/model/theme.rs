@@ -26,8 +26,8 @@ pub const LIGHT_THEME_ID: &str = "com.clawos.Theme.Light";
 /// Alpha applied to surface colors (background / primary / secondary container `base`)
 /// when `ThemeBuilder::is_frosted` is enabled. Lower = more wallpaper bleed-through.
 /// 0.72 leaves chrome clearly tinted but still legible against typical wallpapers,
-/// approximating macOS's translucent material look (compositor-side blur is not yet
-/// available in cosmic-comp, so this is a pure alpha tint).
+/// approximating macOS's translucent material look. Clients that request compositor
+/// blur get a true frosted material; the alpha tint remains the graceful fallback.
 pub const FROSTED_SURFACE_ALPHA: f32 = 0.72;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]

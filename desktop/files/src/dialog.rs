@@ -261,6 +261,7 @@ impl<M: Send + 'static> Dialog<M> {
             resizable: true,
             size: Size::new(1024.0, 640.0),
             transparent: true,
+            blur: true,
             ..Default::default()
         };
 

@@ -142,6 +142,9 @@ impl SctkEventLoop {
                                 if let Some(v) = state.pending_corner_radius.remove(&id) {
                                     _ = state.handle_action(iced_runtime::platform_specific::wayland::Action::RoundedCorners(id, Some(v)));
                                 }
+                                if let Some(rectangles) = state.pending_blur.remove(&id) {
+                                    _ = state.handle_action(iced_runtime::platform_specific::wayland::Action::BlurSurface(id, rectangles));
+                                }
                             }
                             crate::platform_specific::Action::RemoveWindow(
                                 id,
@@ -153,6 +156,12 @@ impl SctkEventLoop {
                                     .position(|window| id == window.id)
                                 {
                                     let w = state.windows.remove(pos);
+                                    if let Some(blurred) = state.blur_surfaces.remove(&id) {
+                                        for surface in blurred {
+                                            surface.destroy();
+                                        }
+                                    }
+                                    _ = state.pending_blur.remove(&id);
                                     for subsurface_id in state
                                         .subsurfaces
                                         .iter()
@@ -398,6 +407,7 @@ impl SctkEventLoop {
                         overlap_notifications: HashMap::new(),
                         subsurface_state: None,
                         pending_corner_radius: HashMap::new(),
+                        pending_blur: HashMap::new(),
                         text_input: None,
                         preedit: None,
                         pending_delete: None,

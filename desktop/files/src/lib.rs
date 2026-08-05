@@ -20,6 +20,7 @@ pub mod clipboard;
 pub mod config;
 mod context_action;
 pub mod dialog;
+mod glass;
 mod key_bind;
 pub(crate) mod large_image;
 pub(crate) mod load_image;
@@ -107,6 +108,7 @@ pub fn desktop() -> Result<(), Box<dyn std::error::Error>> {
     settings = settings.size_limits(Limits::NONE.min_width(360.0).min_height(180.0));
     settings = settings.exit_on_close(false);
     settings = settings.transparent(true);
+    settings = settings.blur(true);
     #[cfg(all(feature = "wayland", feature = "desktop-applet"))]
     {
         settings = settings.no_main_window(true);
@@ -213,6 +215,8 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     settings = settings.theme(config.app_theme.theme());
     settings = settings.size_limits(Limits::NONE.min_width(360.0).min_height(180.0));
     settings = settings.exit_on_close(false);
+    settings = settings.transparent(true);
+    settings = settings.blur(true);
 
     #[cfg(feature = "jemalloc")]
     {

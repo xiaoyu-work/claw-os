@@ -50,6 +50,7 @@ use std::cmp::max;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use cgmath::{Matrix3, Vector2};
 use smithay::{
     backend::{
         allocator::Fourcc,
@@ -57,8 +58,8 @@ use smithay::{
             Frame, FrameContext, Offscreen, Texture,
             element::{Element, Id, Kind, RenderElement, UnderlyingStorage},
             gles::{
-                GlesError, GlesFrame, GlesRenderer, GlesTexture,
-                ffi, link_program,
+                GlesError, GlesFrame, GlesRenderer, GlesTexture, Uniform, UniformValue, ffi,
+                link_program,
             },
             glow::{GlowFrame, GlowRenderer},
             utils::{CommitCounter, DamageSet, OpaqueRegions},
@@ -70,7 +71,10 @@ use smithay::{
     },
 };
 
-use super::element::{AsGlowRenderer, FromGlesError};
+use super::{
+    clipped_surface::ClippingShader,
+    element::{AsGlowRenderer, FromGlesError},
+};
 
 pub static BLUR_VERT_SHADER: &str = include_str!("./shaders/blur.vert");
 pub static BLUR_DOWN_SHADER: &str = include_str!("./shaders/blur_down.frag");
@@ -242,6 +246,8 @@ impl BlurStates {
 /// `mips[i]` for `i >= 1` is half the size of `mips[i-1]`.
 struct BlurInner {
     mips: Vec<GlesTexture>,
+    /// Output-local destination actually captured after clipping to the output.
+    capture_dst: Option<Rectangle<i32, Physical>>,
     /// `true` once the cascade has run successfully in the current
     /// frame; `do_draw` only samples back if this is set.
     ready: bool,
@@ -251,6 +257,7 @@ impl BlurInner {
     fn new() -> Self {
         Self {
             mips: Vec::new(),
+            capture_dst: None,
             ready: false,
         }
     }
@@ -304,8 +311,7 @@ pub struct BlurRenderElement {
     id: Id,
     /// Destination rectangle on the output, in output-physical pixels.
     geometry: Rectangle<i32, Physical>,
-    /// Per-corner radius, currently unused but reserved for the
-    /// `ClippingShader` masked composite path. Same convention as
+    /// Per-corner radius used by the `ClippingShader` masked composite. Same convention as
     /// `ClippedSurfaceRenderElement`: [bottom_right, top_right,
     /// bottom_left, top_left].
     corner_radius: [u8; 4],
@@ -340,8 +346,17 @@ impl BlurRenderElement {
         corner_radius: [u8; 4],
         alpha: f32,
     ) -> Self {
+        Self::with_id(Id::new(), geometry, corner_radius, alpha)
+    }
+
+    pub fn with_id(
+        id: Id,
+        geometry: Rectangle<i32, Physical>,
+        corner_radius: [u8; 4],
+        alpha: f32,
+    ) -> Self {
         Self {
-            id: Id::new(),
+            id,
             geometry,
             corner_radius,
             alpha,
@@ -431,6 +446,7 @@ impl BlurRenderElement {
         let mut inner = inner.borrow_mut();
         let inner = &mut *inner;
         inner.ready = false;
+        inner.capture_dst = None;
 
         // Clamp dst to the output (BlitFramebuffer skips OOB pixels
         // but we'd rather not allocate a texture larger than what
@@ -439,6 +455,7 @@ impl BlurRenderElement {
             Some(c) => c,
             None => return Ok(()),
         };
+        inner.capture_dst = Some(clamped_dst);
 
         // Apply output transform to dst (we're blitting from the
         // output FB which is in output-physical coords that smithay
@@ -711,6 +728,9 @@ impl BlurRenderElement {
         if !inner.ready || inner.mips.is_empty() {
             return Ok(());
         }
+        let Some(capture_dst) = inner.capture_dst else {
+            return Ok(());
+        };
 
         let texture = &inner.mips[0];
         let tex_size = texture.size();
@@ -718,24 +738,74 @@ impl BlurRenderElement {
             return Ok(());
         }
 
-        // mips[0] already holds the fully-blurred image. Sample it
-        // back through smithay's standard texture path — no
-        // additional shader required (we're past the cascade).
-        frame.render_texture_from_to(
+        // Mask the composited blur to the same rounded geometry as the
+        // requesting toplevel so transparent window corners stay transparent.
+        let rounded = self.corner_radius.iter().any(|radius| *radius != 0);
+        if rounded {
+            let clipping_program = {
+                let mut renderer = frame.renderer();
+                renderer
+                    .as_mut()
+                    .egl_context()
+                    .user_data()
+                    .get::<ClippingShader>()
+                    .expect("Custom Shaders not initialized")
+                    .0
+                    .clone()
+            };
+            let input_to_geo = Matrix3::from_translation(Vector2::new(
+                (capture_dst.loc.x - dst.loc.x) as f32 / dst.size.w as f32,
+                (capture_dst.loc.y - dst.loc.y) as f32 / dst.size.h as f32,
+            )) * Matrix3::from_nonuniform_scale(
+                capture_dst.size.w as f32 / dst.size.w as f32,
+                capture_dst.size.h as f32 / dst.size.h as f32,
+            );
+            let uniforms = vec![
+                Uniform::new("geo_size", (dst.size.w as f32, dst.size.h as f32)),
+                Uniform::new(
+                    "corner_radius",
+                    [
+                        self.corner_radius[3] as f32,
+                        self.corner_radius[1] as f32,
+                        self.corner_radius[0] as f32,
+                        self.corner_radius[2] as f32,
+                    ],
+                ),
+                Uniform::new(
+                    "input_to_geo",
+                    UniformValue::Matrix3x3 {
+                        matrices: vec![*AsRef::<[f32; 9]>::as_ref(&input_to_geo)],
+                        transpose: false,
+                    },
+                ),
+            ];
+            frame.override_default_tex_program(clipping_program, uniforms);
+        }
+        let capture_offset = capture_dst.loc - dst.loc;
+        let capture_bounds = Rectangle::new(capture_offset, capture_dst.size);
+        let damage = damage
+            .iter()
+            .filter_map(|rect| rect.intersection(capture_bounds))
+            .map(|mut rect| {
+                rect.loc -= capture_offset;
+                rect
+            })
+            .collect::<Vec<_>>();
+        let result = frame.render_texture_from_to(
             texture,
             Rectangle::from_size(tex_size.to_f64()),
-            dst,
-            damage,
+            capture_dst,
+            &damage,
             &[],
             Transform::Normal,
             self.alpha,
             None,
             &[],
-        )?;
-
-        // corner_radius is reserved for the eventual ClippingShader
-        // masked composite path.
-        let _ = self.corner_radius;
+        );
+        if rounded {
+            frame.clear_tex_program_override();
+        }
+        result?;
         Ok(())
     }
 }

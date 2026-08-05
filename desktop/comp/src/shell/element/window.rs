@@ -1,6 +1,7 @@
 use crate::{
     backend::render::{
         IndicatorShader, Key, Usage,
+        blur::BlurRenderElement,
         clipped_surface::ClippedSurfaceRenderElement,
         cursor::CursorState,
         element::{AsGlowRenderer, FromGlesError},
@@ -59,6 +60,9 @@ use smithay::{
     },
     wayland::seat::WaylandFocus,
 };
+use smithay::wayland::{
+    background_effect::BackgroundEffectSurfaceCachedState, compositor::with_states,
+};
 use std::{
     borrow::Cow,
     fmt,
@@ -96,6 +100,7 @@ pub struct CosmicWindowInternal {
     tiled: AtomicBool,
     theme: Mutex<cosmic::Theme>,
     appearance_conf: Mutex<AppearanceConfig>,
+    blur_id: RendererId,
 }
 
 #[repr(u8)]
@@ -216,6 +221,7 @@ impl CosmicWindow {
                 tiled: AtomicBool::new(false),
                 theme: Mutex::new(theme.clone()),
                 appearance_conf: Mutex::new(appearance),
+                blur_id: RendererId::new(),
             },
             (width, SSD_HEIGHT),
             handle,
@@ -463,21 +469,23 @@ impl CosmicWindow {
         R::TextureId: Send + Clone + 'static,
         C: From<CosmicWindowRenderElement<R>>,
     {
-        let (has_ssd, is_tiled, is_maximized, mut radii, appearance) = self.0.with_program(|p| {
-            (
-                p.has_ssd(false),
-                p.is_tiled(),
-                p.window.is_maximized(false),
-                p.theme
-                    .lock()
-                    .unwrap()
-                    .cosmic()
-                    .radius_s()
-                    .map(|x| if x < 4.0 { x } else { x + 4.0 })
-                    .map(|x| x.round() as u8),
-                *p.appearance_conf.lock().unwrap(),
-            )
-        });
+        let (has_ssd, is_tiled, is_maximized, mut radii, appearance, blur_id) =
+            self.0.with_program(|p| {
+                (
+                    p.has_ssd(false),
+                    p.is_tiled(),
+                    p.window.is_maximized(false),
+                    p.theme
+                        .lock()
+                        .unwrap()
+                        .cosmic()
+                        .radius_s()
+                        .map(|x| if x < 4.0 { x } else { x + 4.0 })
+                        .map(|x| x.round() as u8),
+                    *p.appearance_conf.lock().unwrap(),
+                    p.blur_id.clone(),
+                )
+            });
         let clip = ((!is_tiled && appearance.clip_floating_windows)
             || (is_tiled && appearance.clip_tiled_windows))
             && !is_maximized;
@@ -497,6 +505,19 @@ impl CosmicWindow {
         } else {
             location
         };
+        let blur_requested = appearance.experimental_blur
+            && self.0.with_program(|p| {
+                p.window.wl_surface().is_some_and(|surface| {
+                    with_states(surface.as_ref(), |states| {
+                        states
+                            .cached_state
+                            .get::<BackgroundEffectSurfaceCachedState>()
+                            .current()
+                            .blur_region
+                            .is_some()
+                    })
+                })
+            });
 
         let mut elements = Vec::new();
 
@@ -531,6 +552,11 @@ impl CosmicWindow {
             ));
             elements.push(elem);
         }
+        let blur_radii = radii.map(|radius| {
+            (f64::from(radius) * scale.x)
+                .round()
+                .clamp(0.0, f64::from(u8::MAX)) as u8
+        });
 
         let window_elements = self.0.with_program(|p| {
             p.window
@@ -572,6 +598,22 @@ impl CosmicWindow {
             elements.extend(AsRenderElements::<R>::render_elements::<
                 CosmicWindowRenderElement<R>,
             >(&self.0, renderer, ssd_loc, scale, alpha))
+        }
+
+        if blur_requested {
+            let blur_geometry = geo.to_physical_precise_round(scale);
+            if blur_geometry.size.w > 0 && blur_geometry.size.h > 0 {
+                // Render-element lists are front-to-back; Smithay renders them
+                // in reverse, so the appended effect captures only the backdrop.
+                elements.push(CosmicWindowRenderElement::Blur(
+                    BlurRenderElement::with_id(
+                        blur_id,
+                        blur_geometry,
+                        blur_radii,
+                        alpha,
+                    ),
+                ));
+            }
         }
 
         elements.into_iter().map(C::from).collect()
@@ -1234,6 +1276,7 @@ pub enum CosmicWindowRenderElement<R: Renderer + ImportAll + ImportMem> {
     Header(MemoryRenderBufferRenderElement<R>),
     Shadow(PixelShaderElement),
     Border(PixelShaderElement),
+    Blur(BlurRenderElement),
     Window(WaylandSurfaceRenderElement<R>),
     Clipped(ClippedSurfaceRenderElement<R>),
 }
@@ -1262,6 +1305,14 @@ impl<R: Renderer + ImportAll + ImportMem> From<ClippedSurfaceRenderElement<R>>
     }
 }
 
+impl<R: Renderer + ImportAll + ImportMem> From<BlurRenderElement>
+    for CosmicWindowRenderElement<R>
+{
+    fn from(value: BlurRenderElement) -> Self {
+        Self::Blur(value)
+    }
+}
+
 impl<R> Element for CosmicWindowRenderElement<R>
 where
     R: Renderer + ImportAll + ImportMem,
@@ -1271,6 +1322,7 @@ where
             CosmicWindowRenderElement::Header(elem) => elem.id(),
             CosmicWindowRenderElement::Shadow(elem) => elem.id(),
             CosmicWindowRenderElement::Border(elem) => elem.id(),
+            CosmicWindowRenderElement::Blur(elem) => elem.id(),
             CosmicWindowRenderElement::Window(elem) => elem.id(),
             CosmicWindowRenderElement::Clipped(elem) => elem.id(),
         }
@@ -1281,6 +1333,7 @@ where
             CosmicWindowRenderElement::Header(elem) => elem.current_commit(),
             CosmicWindowRenderElement::Shadow(elem) => elem.current_commit(),
             CosmicWindowRenderElement::Border(elem) => elem.current_commit(),
+            CosmicWindowRenderElement::Blur(elem) => elem.current_commit(),
             CosmicWindowRenderElement::Window(elem) => elem.current_commit(),
             CosmicWindowRenderElement::Clipped(elem) => elem.current_commit(),
         }
@@ -1291,6 +1344,7 @@ where
             CosmicWindowRenderElement::Header(elem) => elem.src(),
             CosmicWindowRenderElement::Shadow(elem) => elem.src(),
             CosmicWindowRenderElement::Border(elem) => elem.src(),
+            CosmicWindowRenderElement::Blur(elem) => elem.src(),
             CosmicWindowRenderElement::Window(elem) => elem.src(),
             CosmicWindowRenderElement::Clipped(elem) => elem.src(),
         }
@@ -1301,6 +1355,7 @@ where
             CosmicWindowRenderElement::Header(elem) => elem.geometry(scale),
             CosmicWindowRenderElement::Shadow(elem) => elem.geometry(scale),
             CosmicWindowRenderElement::Border(elem) => elem.geometry(scale),
+            CosmicWindowRenderElement::Blur(elem) => elem.geometry(scale),
             CosmicWindowRenderElement::Window(elem) => elem.geometry(scale),
             CosmicWindowRenderElement::Clipped(elem) => elem.geometry(scale),
         }
@@ -1311,6 +1366,7 @@ where
             CosmicWindowRenderElement::Header(elem) => elem.location(scale),
             CosmicWindowRenderElement::Shadow(elem) => elem.location(scale),
             CosmicWindowRenderElement::Border(elem) => elem.location(scale),
+            CosmicWindowRenderElement::Blur(elem) => elem.location(scale),
             CosmicWindowRenderElement::Window(elem) => elem.location(scale),
             CosmicWindowRenderElement::Clipped(elem) => elem.location(scale),
         }
@@ -1321,6 +1377,7 @@ where
             CosmicWindowRenderElement::Header(elem) => elem.transform(),
             CosmicWindowRenderElement::Shadow(elem) => elem.transform(),
             CosmicWindowRenderElement::Border(elem) => elem.transform(),
+            CosmicWindowRenderElement::Blur(elem) => elem.transform(),
             CosmicWindowRenderElement::Window(elem) => elem.transform(),
             CosmicWindowRenderElement::Clipped(elem) => elem.transform(),
         }
@@ -1335,6 +1392,7 @@ where
             CosmicWindowRenderElement::Header(elem) => elem.damage_since(scale, commit),
             CosmicWindowRenderElement::Shadow(elem) => elem.damage_since(scale, commit),
             CosmicWindowRenderElement::Border(elem) => elem.damage_since(scale, commit),
+            CosmicWindowRenderElement::Blur(elem) => elem.damage_since(scale, commit),
             CosmicWindowRenderElement::Window(elem) => elem.damage_since(scale, commit),
             CosmicWindowRenderElement::Clipped(elem) => elem.damage_since(scale, commit),
         }
@@ -1345,6 +1403,7 @@ where
             CosmicWindowRenderElement::Header(elem) => elem.opaque_regions(scale),
             CosmicWindowRenderElement::Shadow(elem) => elem.opaque_regions(scale),
             CosmicWindowRenderElement::Border(elem) => elem.opaque_regions(scale),
+            CosmicWindowRenderElement::Blur(elem) => elem.opaque_regions(scale),
             CosmicWindowRenderElement::Window(elem) => elem.opaque_regions(scale),
             CosmicWindowRenderElement::Clipped(elem) => elem.opaque_regions(scale),
         }
@@ -1355,6 +1414,7 @@ where
             CosmicWindowRenderElement::Header(elem) => elem.alpha(),
             CosmicWindowRenderElement::Shadow(elem) => elem.alpha(),
             CosmicWindowRenderElement::Border(elem) => elem.alpha(),
+            CosmicWindowRenderElement::Blur(elem) => elem.alpha(),
             CosmicWindowRenderElement::Window(elem) => elem.alpha(),
             CosmicWindowRenderElement::Clipped(elem) => elem.alpha(),
         }
@@ -1365,6 +1425,7 @@ where
             CosmicWindowRenderElement::Header(elem) => elem.kind(),
             CosmicWindowRenderElement::Shadow(elem) => elem.kind(),
             CosmicWindowRenderElement::Border(elem) => elem.kind(),
+            CosmicWindowRenderElement::Blur(elem) => elem.kind(),
             CosmicWindowRenderElement::Window(elem) => elem.kind(),
             CosmicWindowRenderElement::Clipped(elem) => elem.kind(),
         }
@@ -1375,6 +1436,7 @@ where
             CosmicWindowRenderElement::Header(elem) => elem.is_framebuffer_effect(),
             CosmicWindowRenderElement::Shadow(elem) => elem.is_framebuffer_effect(),
             CosmicWindowRenderElement::Border(elem) => elem.is_framebuffer_effect(),
+            CosmicWindowRenderElement::Blur(elem) => elem.is_framebuffer_effect(),
             CosmicWindowRenderElement::Window(elem) => elem.is_framebuffer_effect(),
             CosmicWindowRenderElement::Clipped(elem) => elem.is_framebuffer_effect(),
         }
@@ -1412,6 +1474,9 @@ where
                 )
                 .map_err(FromGlesError::from_gles_error)
             }
+            CosmicWindowRenderElement::Blur(elem) => {
+                elem.draw_through_glow::<R>(frame, src, dst, damage, opaque_regions, cache)
+            }
             CosmicWindowRenderElement::Window(elem) => {
                 elem.draw(frame, src, dst, damage, opaque_regions, cache)
             }
@@ -1427,6 +1492,7 @@ where
             CosmicWindowRenderElement::Shadow(elem) | CosmicWindowRenderElement::Border(elem) => {
                 elem.underlying_storage(renderer.glow_renderer_mut())
             }
+            CosmicWindowRenderElement::Blur(_) => None,
             CosmicWindowRenderElement::Window(elem) => elem.underlying_storage(renderer),
             CosmicWindowRenderElement::Clipped(elem) => elem.underlying_storage(renderer),
         }
@@ -1452,6 +1518,9 @@ where
                     cache,
                 )
                 .map_err(FromGlesError::from_gles_error)
+            }
+            CosmicWindowRenderElement::Blur(elem) => {
+                elem.capture_through_glow::<R>(frame, src, dst, cache)
             }
             CosmicWindowRenderElement::Window(elem) => {
                 elem.capture_framebuffer(frame, src, dst, cache)

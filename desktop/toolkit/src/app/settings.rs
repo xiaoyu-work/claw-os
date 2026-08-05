@@ -63,6 +63,9 @@ pub struct Settings {
     /// Whether the window should be transparent.
     pub(crate) transparent: bool,
 
+    /// Whether the transparent window should blur content behind it.
+    pub(crate) blur: bool,
+
     /// Whether the application window should close when the exit button is pressed
     pub(crate) exit_on_close: bool,
 
@@ -102,6 +105,7 @@ impl Default for Settings {
             size_limits: Limits::NONE.min_height(1.0).min_width(1.0),
             theme: crate::theme::system_preference(),
             transparent: true,
+            blur: false,
             exit_on_close: true,
             is_daemon: true,
         }

@@ -6182,31 +6182,14 @@ impl Tab {
 
         let mut tab_column = widget::column::with_capacity(3);
         if let Some(location_view) = location_view_opt {
-            // Claw Glass: frosted location/path bar — translucent glass pane with a
-            // brand-blue translucent hairline and rounded (radius_l) corners.
             let location_view = widget::container(location_view)
                 .padding([space_xxxs, space_xs])
                 .width(Length::Fill)
-                .class(theme::Container::custom(|theme| {
-                    let cosmic = theme.cosmic();
-                    let mut hairline = cosmic.accent_color();
-                    hairline.alpha = 0.20;
-                    widget::container::Style {
-                        background: Some(cosmic::iced::Background::Color(
-                            cosmic.bg_component_color().into(),
-                        )),
-                        border: cosmic::iced::Border {
-                            radius: cosmic.radius_l().into(),
-                            width: 1.0,
-                            color: hairline.into(),
-                        },
-                        ..Default::default()
-                    }
-                }));
+                .class(theme::Container::custom(crate::glass::path_bar));
             tab_column = tab_column.push(location_view);
         }
-        if can_scroll {
-            tab_column = tab_column.push(
+        let file_content: Element<'_, Message> = if can_scroll {
+            Element::from(
                 // FIXME: new responsive widget will remove the state from the scrollable
                 // id_container with custom id forces the state to be extracted in a diff
                 // pre-processing step
@@ -6218,10 +6201,16 @@ impl Tab {
                         .height(Length::Fill),
                     widget::Id::new(format!("{}-scrollable", self.scrollable_id)),
                 ),
-            );
+            )
         } else {
-            tab_column = tab_column.push(popover);
-        }
+            popover.into()
+        };
+        tab_column = tab_column.push(
+            widget::container(file_content)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .class(theme::Container::custom(crate::glass::content)),
+        );
         match &self.location {
             Location::Trash | Location::Search(SearchLocation::Trash, ..) => {
                 if let Some(items) = self.items_opt()

@@ -446,6 +446,7 @@ pub struct SctkState {
     pub(crate) subsurfaces: Vec<SctkSubsurface>,
     pub(crate) lock_surfaces: Vec<SctkLockSurface>,
     pub(crate) blur_surfaces: HashMap<core::window::Id, Vec<ExtBackgroundEffectSurfaceV1>>,
+    pub(crate) pending_blur: HashMap<core::window::Id, Option<Vec<Rectangle>>>,
     pub(crate) touch_points: HashMap<touch::Finger, (WlSurface, Point)>,
 
     /// Window updates, which are coming from SCTK or the compositor, which require
@@ -1653,8 +1654,15 @@ impl SctkState {
                     bg_effect_mgr.enqueue(id, rectangles.clone());
                     return Ok(());
                 }
-                
-                let s = if let Some(s) = self.popups.iter().find(|s| s.data.id == id) {
+
+                let window_surface = self
+                    .windows
+                    .iter()
+                    .find(|window| window.id == id)
+                    .map(|window| window.wl_surface(&self.connection));
+                let s = if let Some(s) = window_surface.as_ref() {
+                    s
+                } else if let Some(s) = self.popups.iter().find(|s| s.data.id == id) {
                     s.popup.wl_surface()
                 } else if let Some(s) = self.layer_surfaces.iter().find(|s| s.id == id) {
                     s.surface.wl_surface()
@@ -1663,7 +1671,7 @@ impl SctkState {
                 } else if let Some(subsurface) = self.subsurfaces.iter().find(|s| s.id == id) {
                     &subsurface.instance.wl_surface
                 } else {
-                    log::error!("Failed to find surface for blur action");
+                    _ = self.pending_blur.insert(id, rectangles);
                     return Ok(());
                 };
                 let existing_blur = self.blur_surfaces.entry(id);

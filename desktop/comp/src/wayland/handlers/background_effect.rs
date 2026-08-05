@@ -19,13 +19,9 @@
 //     s.cached_state.get::<BackgroundEffectSurfaceCachedState>().current().blur_region)`
 // for the render path to consume.
 //
-// NOTE: This commit only handles the PROTOCOL surface. The render-pipeline
-// integration (capture framebuffer → dual-Kawase blur → composite back) is a
-// separate change and lands in a follow-up commit; for now the regions are
-// tracked but not actually blurred. That means a `is_frosted` client
-// already gets its `blur(surface)` request accepted instead of silently
-// dropped, which is itself useful (clients can do their own UI shading
-// while we work on the render pass).
+// The render pipeline consumes committed regions for both normal toplevels
+// and layer surfaces, placing a dual-Kawase framebuffer effect behind the
+// requesting surface.
 
 use smithay::{
     delegate_background_effect,

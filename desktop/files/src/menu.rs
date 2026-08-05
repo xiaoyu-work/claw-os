@@ -3,7 +3,7 @@
 use cosmic::app::Core;
 use cosmic::iced::advanced::widget::text::Style as TextStyle;
 use cosmic::iced::keyboard::Modifiers;
-use cosmic::iced::{Alignment, Background, Border, Length};
+use cosmic::iced::{Alignment, Length};
 use cosmic::widget::menu::key_bind::KeyBind;
 use cosmic::widget::menu::{self, ItemHeight, ItemWidth, MenuBar};
 use cosmic::widget::{
@@ -423,27 +423,7 @@ pub fn context_menu<'a>(
 
     container(column::with_children(children))
         .padding(1)
-        //TODO: move style to libcosmic
-        .style(|theme| {
-            let cosmic = theme.cosmic();
-            let component = &cosmic.background.component;
-            container::Style {
-                icon_color: Some(component.on.into()),
-                text_color: Some(component.on.into()),
-                background: Some(Background::Color(component.base.into())),
-                border: Border {
-                    radius: cosmic.radius_m().into(),
-                    width: 1.0,
-                    // Claw Glass: brand-blue translucent hairline, never gray.
-                    color: {
-                        let mut c = cosmic.accent_color();
-                        c.alpha = 0.20;
-                        c.into()
-                    },
-                },
-                ..Default::default()
-            }
-        })
+        .style(crate::glass::menu)
         .width(Length::Fixed(360.0))
         .into()
 }
@@ -837,26 +817,7 @@ pub fn location_context_menu<'a>(ancestor_index: usize) -> Element<'a, tab::Mess
 
     container(column::with_children(children))
         .padding(1)
-        .style(|theme| {
-            let cosmic = theme.cosmic();
-            let component = &cosmic.background.component;
-            container::Style {
-                icon_color: Some(component.on.into()),
-                text_color: Some(component.on.into()),
-                background: Some(Background::Color(component.base.into())),
-                border: Border {
-                    radius: cosmic.radius_m().into(),
-                    width: 1.0,
-                    // Claw Glass: brand-blue translucent hairline, never gray.
-                    color: {
-                        let mut c = cosmic.accent_color();
-                        c.alpha = 0.20;
-                        c.into()
-                    },
-                },
-                ..Default::default()
-            }
-        })
+        .style(crate::glass::menu)
         .width(Length::Fixed(360.0))
         .into()
 }

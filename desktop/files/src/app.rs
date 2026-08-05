@@ -35,7 +35,7 @@ use cosmic::widget::menu::action::MenuAction;
 use cosmic::widget::menu::key_bind::KeyBind;
 use cosmic::widget::segmented_button::{self, Entity, ReorderEvent};
 use cosmic::widget::{self, icon, settings, space};
-use cosmic::{Application, ApplicationExt, Element, cosmic_theme, executor, style, surface, theme};
+use cosmic::{Application, ApplicationExt, Element, cosmic_theme, executor, surface, theme};
 use mime_guess::Mime;
 use notify_debouncer_full::notify::{self, RecommendedWatcher};
 use notify_debouncer_full::{DebouncedEvent, Debouncer, RecommendedCache, new_debouncer};
@@ -2590,6 +2590,7 @@ impl App {
         let ask_claw = widget::tooltip(
             widget::button::icon(icon::from_name("face-smile-symbolic").size(16))
                 .padding(space_xxs)
+                .class(crate::glass::ask_claw_button())
                 .on_press(Message::AskClaw),
             widget::text::body(fl!("ask-claw")),
             widget::tooltip::Position::Bottom,
@@ -2620,16 +2621,7 @@ impl App {
         let toolbar = widget::container(row)
             .padding([space_xxs, space_xs])
             .width(Length::Fill)
-            .class(theme::Container::custom(|theme| {
-                // Claw Glass: frosted glass toolbar.
-                let cosmic = theme.cosmic();
-                widget::container::Style {
-                    background: Some(cosmic::iced::Background::Color(
-                        cosmic.bg_component_color().into(),
-                    )),
-                    ..Default::default()
-                }
-            }));
+            .class(theme::Container::custom(crate::glass::toolbar));
         // Claw Glass: brand-blue translucent hairline separating chrome from content.
         let hairline = cosmic::iced::widget::rule::horizontal(1).class(theme::Rule::Custom(
             Box::new(|theme| cosmic::iced::widget::rule::Style {
@@ -2789,6 +2781,9 @@ impl Application for App {
         core.window.context_is_overlay = false;
         match flags.mode {
             Mode::App => {
+                // Let the blurred transparent window show through chrome and the
+                // navigation rail; the file canvas paints its own denser surface.
+                core.window.content_container = false;
                 core.window.show_context = flags.config.show_details;
             }
             Mode::Desktop => {
@@ -2962,7 +2957,8 @@ impl Application for App {
         })
         .context_menu(self.nav_context_menu(self.nav_bar_context_id))
         .close_icon(icon::from_name("media-eject-symbolic").size(16).icon())
-        .into_container();
+        .into_container()
+        .class(theme::Container::custom(crate::glass::navigation));
 
         if !self.core.is_condensed() {
             nav = nav.max_width(280);
@@ -3713,6 +3709,7 @@ impl Application for App {
                     resizable: true,
                     size: Size::new(480.0, 444.0),
                     transparent: true,
+                    blur: true,
                     ..Default::default()
                 };
 
@@ -3741,6 +3738,7 @@ impl Application for App {
                             resizable: false,
                             size: Size::new(640.0, 320.0),
                             transparent: true,
+                            blur: true,
                             ..Default::default()
                         };
 
@@ -4829,6 +4827,7 @@ impl Application for App {
                                 resizable: true,
                                 size: Size::new(480.0, 600.0),
                                 transparent: true,
+                                blur: true,
                                 ..Default::default()
                             };
 
@@ -7225,7 +7224,8 @@ impl Application for App {
 
         let container = widget::layer_container(widget::column::with_children(rows))
             .padding([8, space_xs])
-            .layer(cosmic_theme::Layer::Primary);
+            .layer(cosmic_theme::Layer::Primary)
+            .class(theme::Container::custom(crate::glass::toolbar));
 
         // Claw Glass: brand-blue translucent hairline above the footer status/path bar.
         let hairline = cosmic::iced::widget::rule::horizontal(1).class(theme::Rule::Custom(
@@ -7295,7 +7295,7 @@ impl Application for App {
                         })
                         .drag_id(self.tab_drag_id),
                 )
-                .class(style::Container::Background)
+                .class(theme::Container::custom(crate::glass::tab_strip))
                 .width(Length::Fill)
                 .padding([0, space_s]),
             );

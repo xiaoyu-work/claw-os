@@ -88,6 +88,7 @@ pub(crate) fn iced_settings<App: Application>(
     }
 
     window_settings.transparent = settings.transparent;
+    window_settings.blur = settings.blur;
     (iced, (core, flags), window_settings)
 }
 
