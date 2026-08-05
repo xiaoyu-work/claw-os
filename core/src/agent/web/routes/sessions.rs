@@ -48,8 +48,9 @@ pub async fn history(
         .map_err(|e| internal(format!("open memory: {e}")))?;
     // Shared with clawd's `memory.history` command — the desktop agent
     // UI and the web client both render history off the same shape.
-    let messages = load_history(&db, &id, 500)
+    let mut messages = load_history(&db, &id, 500)
         .map_err(|e| internal(format!("read history: {e}")))?;
+    messages.retain(|message| message.role != "system");
     Ok(Json(json!({
         "session_id": id,
         "n": messages.len(),

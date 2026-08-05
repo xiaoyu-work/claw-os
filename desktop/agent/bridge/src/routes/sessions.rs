@@ -31,9 +31,13 @@ pub struct Session {
 }
 
 pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<Session>>, StatusCode> {
-    let value = clawd::request(&state.clawd_socket, "memory.sessions", json!({ "limit": 200 }))
-        .await
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let value = clawd::request(
+        &state.clawd_socket,
+        "memory.sessions",
+        json!({ "limit": 200 }),
+    )
+    .await
+    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     let rows = value
         .get("sessions")
         .and_then(Value::as_array)
@@ -52,9 +56,13 @@ pub async fn get(
     // No dedicated single-session lookup yet — page through the
     // recent list. 200 entries is more than the panel sidebar will
     // ever show, so this stays fast.
-    let value = clawd::request(&state.clawd_socket, "memory.sessions", json!({ "limit": 200 }))
-        .await
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let value = clawd::request(
+        &state.clawd_socket,
+        "memory.sessions",
+        json!({ "limit": 200 }),
+    )
+    .await
+    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     let rows = value
         .get("sessions")
         .and_then(Value::as_array)
@@ -67,14 +75,12 @@ pub async fn get(
 }
 
 pub async fn delete_one(State(state): State<AppState>, Path(id): Path<String>) -> StatusCode {
-    // Sessions live in the memory DB; clawd has no purge command yet.
-    // Falling back to `task.cancel` to at least stop the in-flight
-    // job, if any. The sidebar row will reappear on next refresh
-    // until a memory.purge / memory.delete command lands.
-    match clawd::request(&state.clawd_socket, "task.cancel", json!({ "id": id })).await {
-        Ok(_) => StatusCode::NO_CONTENT,
-        Err(_) => StatusCode::NOT_FOUND,
-    }
+    let _ = (state, id);
+    // A session id is not a task id. Calling `task.cancel` here used to
+    // cancel an unrelated job when the strings happened to collide and
+    // never deleted the memory row. Do not advertise deletion until
+    // clawd exposes an actual memory-session purge command.
+    StatusCode::NOT_IMPLEMENTED
 }
 
 /// `GET /api/sessions/:id/history` — proxy to clawd `memory.history`.
@@ -87,13 +93,16 @@ pub async fn history(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, StatusCode> {
-    let value = clawd::request(
+    let mut value = clawd::request(
         &state.clawd_socket,
         "memory.history",
         json!({ "session_id": id, "limit": 500 }),
     )
     .await
     .map_err(|_| StatusCode::BAD_GATEWAY)?;
+    if let Some(messages) = value.get_mut("messages").and_then(Value::as_array_mut) {
+        messages.retain(|message| message.get("role").and_then(Value::as_str) != Some("system"));
+    }
     Ok(Json(value))
 }
 
@@ -133,4 +142,3 @@ fn title_compact(title: &str) -> String {
         format!("{}...", compact.chars().take(80).collect::<String>())
     }
 }
-
