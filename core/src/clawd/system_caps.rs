@@ -43,6 +43,7 @@ pub fn readonly_task_caps() -> CapSet {
         "desktop-manager",
         "doc",
         "docs",
+        "event-center",
         "fs",
         "hardware-center",
         "kv",

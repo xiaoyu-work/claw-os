@@ -93,6 +93,7 @@ impl Verb {
     pub const SYS_CRASH: Verb = Verb::new("sys.crash");
     pub const SYS_CONTAINER: Verb = Verb::new("sys.container");
     pub const SYS_CONFIG: Verb = Verb::new("sys.config");
+    pub const SYS_EVENTS: Verb = Verb::new("sys.events");
     pub const SYS_SECURITY: Verb = Verb::new("sys.security");
     pub const SYS_STORAGE: Verb = Verb::new("sys.storage");
     pub const SYS_SERVICE: Verb = Verb::new("sys.service");
@@ -236,6 +237,7 @@ pub const ALL_VERBS: &[Verb] = &[
     Verb::SYS_CRASH,
     Verb::SYS_CONTAINER,
     Verb::SYS_CONFIG,
+    Verb::SYS_EVENTS,
     Verb::SYS_SECURITY,
     Verb::SYS_STORAGE,
     Verb::SYS_SERVICE,

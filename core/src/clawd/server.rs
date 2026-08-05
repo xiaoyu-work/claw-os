@@ -13,8 +13,8 @@ use super::protocol::{encode_response, Request, Response};
 use super::state::DaemonState;
 use super::{
     app_sessions, audio, audit, bluetooth, config_editor, containers, context, context_events,
-    crash, desktop, hardware, memory, network, packages, permissions, power, scheduler, security,
-    snapshots, storage, system_journal, systemd, tasks, transactions,
+    crash, desktop, event_center, hardware, memory, network, packages, permissions, power,
+    scheduler, security, snapshots, storage, system_journal, systemd, tasks, transactions,
 };
 
 #[derive(Debug, Clone)]
@@ -29,6 +29,7 @@ pub async fn run(options: ServerOptions) -> Result<(), String> {
         .map_err(|err| format!("failed to bind {}: {err}", options.socket_path.display()))?;
     set_socket_permissions(&options.socket_path, options.socket_mode)?;
     let state = DaemonState::try_new()?;
+    let _event_center = event_center::start();
 
     tracing::info!(socket = %options.socket_path.display(), "clawd listening");
 
@@ -216,6 +217,7 @@ async fn dispatch_result(
         "system.config.control" => config_editor::control(request.params, client).await,
         "system.crash.inspect" => crash::inspect(request.params, client).await,
         "system.desktop.control" => desktop::control(request.params, client).await,
+        "system.events.control" => event_center::control(request.params, client).await,
         "system.hardware.inspect" => hardware::inspect(request.params, client).await,
         "system.network.control" => network::control(request.params, client).await,
         "system.package.install" => packages::install(request.params, client).await,
@@ -274,6 +276,7 @@ fn authorize_command(command: &str, client: &ClientIdentity) -> Result<(), Strin
             | "system.config.control"
             | "system.crash.inspect"
             | "system.desktop.control"
+            | "system.events.control"
             | "system.hardware.inspect"
             | "system.network.control"
             | "system.package.install"

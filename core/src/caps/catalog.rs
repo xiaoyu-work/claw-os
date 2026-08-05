@@ -224,6 +224,14 @@ pub const CATALOG: &[CapMeta] = &[
         Risk::Critical,
     ),
     CapMeta::new(
+        Verb::SYS_EVENTS,
+        ScopeKind::Name,
+        LocalizedStr::new("Subscribe to system events"),
+        LocalizedStr::new("Read persistent udev, systemd, journal, storage, security, and pidfd process-exit events."),
+        "📡",
+        Risk::High,
+    ),
+    CapMeta::new(
         Verb::SYS_SECURITY,
         ScopeKind::Name,
         LocalizedStr::new("Inspect sensitive security state"),

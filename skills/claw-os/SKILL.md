@@ -67,6 +67,7 @@ Permission roles and app capability gates are documented in [permissions.md](per
 | `search` | Web and image search (Google/Brave) |
 | `security-center` | Authentication, sudo, SSH, MAC, port, and security-event analysis |
 | `email` | Send, search, read (SMTP/Gmail/Outlook) |
+| `event-center` | Persistent udev, systemd, journal, storage, security, and pidfd events |
 | `calendar` | Events and scheduling (local/Google/Outlook) |
 | `container-manager` | Docker, Podman, containerd lifecycle, logs, cgroups, and namespaces |
 | `config-editor` | Validated atomic /etc edits with durable backup and rollback |

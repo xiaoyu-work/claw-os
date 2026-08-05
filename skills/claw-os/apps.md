@@ -349,6 +349,23 @@ are preserved with `cp --preserve=all`; a durable backup and applied hash are
 written before atomic replacement. Failed post-validation restores
 automatically, and manual restore refuses to overwrite newer edits.
 
+## Event Center
+
+```bash
+cos app event-center status
+cos app event-center recent
+cos app event-center recent security 50
+cos app event-center recent storage 50
+cos app event-center watch-pid 1234
+```
+
+Event Center starts with clawd and maintains restartable subscriptions to udev,
+systemd D-Bus signals, and filtered journal follow output. Storage and security
+events are classified into dedicated sources, while requested process watches
+use pidfds and verify the original PID start time. Records are broadcast
+in-memory and persisted to a bounded rotating JSONL log under
+`sys.events:observe`; watcher failures remain visible in `status`.
+
 ## Package Management
 
 ```bash
