@@ -46,7 +46,7 @@ pub fn section() -> Section<crate::pages::Message> {
         .view::<Page>(move |_binder, page, section| {
             let descriptions = &section.descriptions;
 
-            settings::section()
+            crate::widget::claw_section()
                 .title(&section.title)
                 .add(
                     container(

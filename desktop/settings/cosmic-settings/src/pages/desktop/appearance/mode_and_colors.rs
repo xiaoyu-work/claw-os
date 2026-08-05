@@ -24,7 +24,7 @@ pub fn section() -> Section<crate::pages::Message> {
             let descriptions = &section.descriptions;
             let theme_manager = &page.theme_manager;
 
-            let mut section = settings::section()
+            let mut section = crate::widget::claw_section()
                 .title(&section.title)
                 .add(theme_mode(page, section, &label_keys))
                 .add(auto_switch(page, section, &label_keys))

@@ -7,40 +7,43 @@ use cosmic::{
     theme,
 };
 
-/// Claw Glass — a frosted, brand-blue-tinted grouped card.
+/// Fill for an elevated Claw Glass card.
 ///
-/// Replaces the old boxed setting-row look with an airy `radius_l` (16)
-/// surface, a 1px blue-tinted hairline, and a soft drop shadow. Depth comes
-/// from elevation, not heavy borders.
+/// ClawOS light puts `component.base` (`#D7DAE1`) *below* the page background
+/// (`#EEF1F8`), so raising its opacity sinks a card instead of lifting it.
+/// Light mode therefore elevates towards white; dark mode keeps the component
+/// surface, which is already the lighter of the two.
+fn elevated_fill(cosmic: &cosmic::cosmic_theme::Theme) -> Color {
+    if cosmic.is_dark {
+        let mut base = cosmic.bg_component_color();
+        base.alpha = if cosmic.is_high_contrast { 1.0 } else { 0.94 };
+        Color::from(base)
+    } else {
+        Color::from(cosmic.palette.neutral_0)
+    }
+}
+
+/// Claw Glass — a brand-blue-tinted grouped card.
 ///
-/// The Settings window is opaque (unlike Files, it is not a transparent
-/// blurred shell), so the fill is kept close to solid: a low alpha here does
-/// not reveal a blurred wallpaper, it only washes the card out against the
-/// window background and drops row contrast.
+/// Used for the category rows on the Settings landing page: an airy
+/// `radius_l` surface, a 1px blue-tinted hairline, and a soft drop shadow.
+/// Depth comes from elevation, not heavy borders.
 #[must_use]
 pub fn frosted_card() -> cosmic::theme::Container<'static> {
     theme::Container::custom(|theme| {
         let cosmic = theme.cosmic();
 
-        // Card fill: the component surface, kept near-solid so the row reads
-        // as a distinct raised element on the opaque window background.
-        let mut background = cosmic.bg_component_color();
-        background.alpha = if cosmic.is_high_contrast { 1.0 } else { 0.94 };
-
-        // 1px blue-tinted hairline (brand accent at low alpha).
-        let hairline = Color::from(cosmic.accent_color().with_alpha(0.12));
-
         cosmic::widget::container::Style {
             icon_color: None,
             text_color: None,
-            background: Some(Background::Color(background.into())),
+            background: Some(Background::Color(elevated_fill(cosmic))),
             border: Border {
-                color: hairline,
+                color: Color::from(cosmic.accent_color().with_alpha(0.12)),
                 radius: cosmic.corner_radii.radius_l.into(),
                 width: 1.0,
             },
             shadow: Shadow {
-                color: Color::from_rgba(0.0, 0.05, 0.18, 0.10),
+                color: Color::from_rgba(0.0, 0.043, 0.18, 0.10),
                 offset: Vector::new(0.0, 2.0),
                 blur_radius: 16.0,
             },
@@ -70,6 +73,51 @@ pub fn icon_tile() -> cosmic::theme::Container<'static> {
                 width: 0.0,
             },
             shadow: Shadow::default(),
+            snap: false,
+        }
+    })
+}
+
+/// Claw Glass — the grouped section card used inside settings pages.
+///
+/// The stock `Container::List` fills with `component.base` at 0.42, which on
+/// ClawOS composites to `#E4E7EE` against the `#EEF1F8` page — barely 10/255
+/// of separation, so sections read as a flat wash. This instead *elevates*
+/// the card: in light mode it is brighter than the page (the macOS grouped
+/// list direction), in dark mode it stays on the component surface, which is
+/// already lighter than the dark page.
+/// Claw Glass — the grouped section card used inside settings pages.
+///
+/// The stock `Container::List` fills with `component.base`, which on ClawOS
+/// light composites to `#DDE0E7` against the `#EEF1F8` page and carries no
+/// border or shadow — sections read as a flat wash. This instead *elevates*
+/// the card: in light mode it is brighter than the page (the macOS grouped
+/// list direction), in dark mode it stays on the component surface, which is
+/// already lighter than the dark page.
+///
+/// The radius must stay `radius_s`: libcosmic hardcodes `radius_s` for the
+/// first/last list-item buttons and the list container does not clip its
+/// children, so a larger card radius would let pressed/hover backgrounds
+/// paint outside the rounded corners.
+#[must_use]
+pub fn section_card() -> cosmic::theme::Container<'static> {
+    theme::Container::custom(|theme| {
+        let cosmic = theme.cosmic();
+
+        cosmic::widget::container::Style {
+            icon_color: None,
+            text_color: None,
+            background: Some(Background::Color(elevated_fill(cosmic))),
+            border: Border {
+                color: Color::from(cosmic.accent_color().with_alpha(0.12)),
+                radius: cosmic.corner_radii.radius_s.into(),
+                width: 1.0,
+            },
+            shadow: Shadow {
+                color: Color::from_rgba(0.0, 0.043, 0.18, 0.10),
+                offset: Vector::new(0.0, 2.0),
+                blur_radius: 16.0,
+            },
             snap: false,
         }
     })

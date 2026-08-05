@@ -833,7 +833,7 @@ pub fn interface_density() -> Section<crate::pages::Message> {
         .view::<Page>(move |_binder, page, section| {
             let descriptions = &section.descriptions;
 
-            settings::section()
+            crate::widget::claw_section()
                 .title(&section.title)
                 .add(settings::item::builder(&descriptions[compact]).radio(
                     Density::Compact,
@@ -868,7 +868,7 @@ pub fn window_management() -> Section<crate::pages::Message> {
         .view::<Page>(move |_binder, page, section| {
             let descriptions = &section.descriptions;
 
-            settings::section()
+            crate::widget::claw_section()
                 .title(&section.title)
                 .add(settings::item::builder(&descriptions[active_hint]).control(
                     widget::spin_button(
@@ -928,7 +928,7 @@ pub fn experimental() -> Section<crate::pages::Message> {
                 Message::DrawerOpen(ContextView::IconsAndToolkit),
             );
 
-            let mut section = settings::section()
+            let mut section = crate::widget::claw_section()
                 .title(&*section.title)
                 .add(system_font)
                 .add(mono_font)

@@ -9,7 +9,8 @@ use cosmic::iced::core::text::Wrapping;
 use cosmic::iced::{Alignment, Length};
 use cosmic::widget::color_picker::ColorPickerUpdate;
 use cosmic::widget::{
-    self, ColorPickerModel, button, column, container, divider, icon, list, row, settings,
+    self, ColorPickerModel, button, column, container, divider, icon, list, list_column, row,
+    settings,
     space::{horizontal, vertical},
     text,
 };
@@ -48,6 +49,17 @@ pub fn color_picker_context_view<'a, Message: Clone + 'static>(
         .spacing(spacing.space_m)
         .width(Length::Fill)
         .apply(Element::from)
+}
+
+/// A settings section whose list card uses the Claw Glass elevated material.
+///
+/// `settings::section()` defaults to `Container::List`, whose 0.42-alpha fill
+/// all but disappears against the ClawOS page background. `ListColumn` does
+/// expose a style hook, so pages opt into the branded card by building the
+/// section from a pre-styled column instead.
+#[must_use]
+pub fn claw_section<'a, Message: Clone + 'static>() -> settings::Section<'a, Message> {
+    settings::section::with_column(list_column().style(crate::theme::section_card()))
 }
 
 #[must_use]
