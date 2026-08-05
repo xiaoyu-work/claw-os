@@ -160,6 +160,7 @@ async fn audio_status(environment: &AudioEnvironment) -> Result<Value, String> {
         "streams": streams,
         "raw_status": raw_status.stdout,
         "raw_status_truncated": raw_status.stdout_truncated,
+        "raw_status_stderr_truncated": raw_status.stderr_truncated,
     }))
 }
 
@@ -293,6 +294,8 @@ async fn mutate(
                 "before": before,
                 "stdout_tail": tail(&output.stdout),
                 "stderr_tail": tail(&output.stderr),
+                "stdout_truncated": output.stdout_truncated,
+                "stderr_truncated": output.stderr_truncated,
                 "post_state_error": error,
             }));
         }
@@ -307,6 +310,8 @@ async fn mutate(
         "after": after,
         "stdout_tail": tail(&output.stdout),
         "stderr_tail": tail(&output.stderr),
+        "stdout_truncated": output.stdout_truncated,
+        "stderr_truncated": output.stderr_truncated,
     }))
 }
 
@@ -390,6 +395,7 @@ async fn inspect_state(environment: &AudioEnvironment, id: u32) -> Result<Value,
         "properties": parse_inspect_properties(&output.stdout),
         "raw": output.stdout,
         "truncated": output.stdout_truncated,
+        "stderr_truncated": output.stderr_truncated,
     }))
 }
 
