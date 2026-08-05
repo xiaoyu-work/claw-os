@@ -41,7 +41,7 @@
       <p xml:lang="sv">Inställningsprogram för skrivbordsmiljön ClawOS</p>
   </description>
   <launchable type="desktop-id">com.clawos.Settings.desktop</launchable>
-  <icon type="remote" height="256" width="256">https://raw.githubusercontent.com/pop-os/cosmic-settings/master/resources/icons/256x256/apps/com.clawos.Settings.svg</icon>
+  <icon type="stock">com.clawos.Settings</icon>
   <provides>
     <binaries>
       <binary>cosmic-settings</binary>

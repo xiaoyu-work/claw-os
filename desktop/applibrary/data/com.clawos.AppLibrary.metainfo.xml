@@ -65,4 +65,5 @@
   <update_contact>ashley@system76.com</update_contact>
   <translation type="gettext">cosmic-app-library</translation>
   <launchable type="desktop-id">com.clawos.AppLibrary.desktop</launchable>
+  <icon type="stock">com.clawos.AppLibrary</icon>
 </component>

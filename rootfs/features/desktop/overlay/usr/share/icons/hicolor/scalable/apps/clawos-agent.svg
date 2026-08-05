@@ -1,24 +1,7 @@
-<svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <radialGradient id="orb" cx="0" cy="0" r="1" gradientTransform="translate(23 20) rotate(48) scale(37)">
-      <stop stop-color="#73E4FF"/>
-      <stop offset=".32" stop-color="#4D8DFF"/>
-      <stop offset=".68" stop-color="#7C5CFF"/>
-      <stop offset="1" stop-color="#F06BFF"/>
-    </radialGradient>
-    <linearGradient id="ring" x1="13" y1="12" x2="50" y2="54" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#78E8FF"/>
-      <stop offset=".45" stop-color="#6A7CFF"/>
-      <stop offset="1" stop-color="#F17AFF"/>
-    </linearGradient>
-    <filter id="shadow" x="-30%" y="-30%" width="160%" height="170%">
-      <feDropShadow dx="0" dy="3" stdDeviation="3" flood-color="#3858D8" flood-opacity=".28"/>
-    </filter>
-  </defs>
-  <g filter="url(#shadow)">
-    <circle cx="32" cy="31" r="22.5" fill="url(#ring)"/>
-    <circle cx="32" cy="31" r="19.5" fill="url(#orb)"/>
-    <ellipse cx="25" cy="21" rx="8" ry="5" fill="#FFFFFF" fill-opacity=".34" transform="rotate(-28 25 21)"/>
-    <circle cx="32" cy="31" r="18.5" fill="none" stroke="#FFFFFF" stroke-opacity=".5"/>
-  </g>
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <rect x="16" y="16" width="224" height="224" rx="56" fill="#F8FAFD" stroke="#DCE5F0" stroke-width="4"/>
+  <path d="M53 69c0-10 8-18 18-18h114c10 0 18 8 18 18v86c0 10-8 18-18 18h-58l-40 32v-32H71c-10 0-18-8-18-18V69z" fill="#005CFE" stroke="#005CFE" stroke-width="8" stroke-linejoin="round"/>
+  <path d="M128 75c3 19 13 29 32 32-19 3-29 13-32 32-3-19-13-29-32-32 19-3 29-13 32-32z" fill="#FFFFFF"/>
+  <circle cx="80" cy="145" r="7" fill="#FFFFFF" opacity=".85"/>
+  <circle cx="176" cy="145" r="7" fill="#FFFFFF" opacity=".85"/>
 </svg>

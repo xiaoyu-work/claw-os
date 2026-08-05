@@ -34,11 +34,7 @@
     <keyword>Video</keyword>
   </keywords>
   <launchable type="desktop-id">com.clawos.Player.desktop</launchable>
-  <icon
-        type="remote"
-        height="256"
-        width="256"
-    >https://raw.githubusercontent.com/pop-os/cosmic-player/master/res/icons/hicolor/256x256/apps/com.clawos.Player.svg</icon>
+  <icon type="stock">com.clawos.Player</icon>
   <provides>
     <id>com.clawos.Application</id>
     <binaries>

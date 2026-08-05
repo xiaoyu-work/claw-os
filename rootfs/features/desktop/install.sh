@@ -48,7 +48,7 @@ if [ -d "$FEATURE_DIR/overlay" ] && [ -n "$(ls -A "$FEATURE_DIR/overlay" 2>/dev/
     # These icons are shipped by claw-os-base with the agent .desktop launcher.
     # Keep desktop from owning them too.
     find "$DESKTOP_PACKAGE_ROOT/usr/share/icons/hicolor" \
-        -path '*/apps/clawos-agent.png' -type f -delete 2>/dev/null || true
+        -path '*/apps/clawos-agent.*' -type f -delete 2>/dev/null || true
 fi
 
 # ---------------------------------------------------------------------------
@@ -339,11 +339,21 @@ required_files=(
     # default. Without this file cosmic-comp falls back to the AppearanceConfig
     # struct Default (now also shadow_tiled_windows=true, but seed wins).
     "$DESKTOP_PACKAGE_ROOT/usr/share/cosmic/com.clawos.Comp/v1/appearance_settings"
+    # First-party application icon family. Scalable hicolor assets avoid
+    # fixed-size theme overrides and keep every shell surface consistent.
+    "$DESKTOP_PACKAGE_ROOT/usr/share/icons/hicolor/scalable/apps/com.clawos.Files.svg"
+    "$DESKTOP_PACKAGE_ROOT/usr/share/icons/hicolor/scalable/apps/com.clawos.Term.svg"
+    "$DESKTOP_PACKAGE_ROOT/usr/share/icons/hicolor/scalable/apps/com.clawos.Edit.svg"
+    "$DESKTOP_PACKAGE_ROOT/usr/share/icons/hicolor/scalable/apps/com.clawos.Settings.svg"
+    "$DESKTOP_PACKAGE_ROOT/usr/share/icons/hicolor/scalable/apps/com.clawos.Store.svg"
+    "$DESKTOP_PACKAGE_ROOT/usr/share/icons/hicolor/scalable/apps/com.clawos.Player.svg"
+    "$DESKTOP_PACKAGE_ROOT/usr/share/icons/hicolor/scalable/apps/com.clawos.Launcher.svg"
+    "$DESKTOP_PACKAGE_ROOT/usr/share/icons/hicolor/scalable/apps/com.clawos.AppLibrary.svg"
     # Icon theme — WhiteSur is installed via just install
     # icons-whitesur-pkg/install in desktop/justfile. If it's missing
-    # the toolkit default icon_theme="WhiteSur-dark" falls back to
-    # adwaita and the system loses its macOS-ish look.
-    "$DESKTOP_PACKAGE_ROOT/usr/share/icons/WhiteSur-dark/index.theme"
+    # the toolkit light default falls back to hicolor and loses the
+    # intended system glyph family.
+    "$DESKTOP_PACKAGE_ROOT/usr/share/icons/WhiteSur-light/index.theme"
 )
 missing=0
 for f in "${required_files[@]}"; do
@@ -512,7 +522,16 @@ installed_required_files=(
     "$ROOTFS/usr/share/cosmic/com.clawos.Panel.Panel/v1/name"
     "$ROOTFS/usr/share/cosmic/com.clawos.Panel.Dock/v1/name"
     "$ROOTFS/usr/share/cosmic/com.clawos.Theme.Dark/v1/name"
-    "$ROOTFS/usr/share/icons/WhiteSur-dark/index.theme"
+    "$ROOTFS/usr/share/icons/hicolor/scalable/apps/com.clawos.Files.svg"
+    "$ROOTFS/usr/share/icons/hicolor/scalable/apps/com.clawos.Term.svg"
+    "$ROOTFS/usr/share/icons/hicolor/scalable/apps/com.clawos.Edit.svg"
+    "$ROOTFS/usr/share/icons/hicolor/scalable/apps/com.clawos.Settings.svg"
+    "$ROOTFS/usr/share/icons/hicolor/scalable/apps/com.clawos.Store.svg"
+    "$ROOTFS/usr/share/icons/hicolor/scalable/apps/com.clawos.Player.svg"
+    "$ROOTFS/usr/share/icons/hicolor/scalable/apps/com.clawos.Launcher.svg"
+    "$ROOTFS/usr/share/icons/hicolor/scalable/apps/com.clawos.AppLibrary.svg"
+    "$ROOTFS/usr/share/icons/hicolor/scalable/apps/clawos-agent.svg"
+    "$ROOTFS/usr/share/icons/WhiteSur-light/index.theme"
     "$ROOTFS/etc/greetd/cosmic-greeter.toml"
     "$ROOTFS/lib/systemd/system/cosmic-greeter.service"
 )

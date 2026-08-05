@@ -22,6 +22,8 @@ metainfo-dst := clean(rootdir / prefix) / 'share' / 'metainfo' / metainfo
 
 icons-src := 'res' / 'icons' / 'hicolor'
 icons-dst := clean(rootdir / prefix) / 'share' / 'icons' / 'hicolor'
+icon-src := icons-src / 'scalable' / 'apps' / APPID + '.svg'
+icon-dst := icons-dst / 'scalable' / 'apps' / APPID + '.svg'
 
 # Default recipe which runs `just build-release`
 default: build-release
@@ -67,13 +69,14 @@ install:
     install -Dm0755 {{bin-src}} {{bin-dst}}
     install -Dm0644 {{desktop-src}} {{desktop-dst}}
     install -Dm0644 {{metainfo-src}} {{metainfo-dst}}
-    for size in `ls {{icons-src}}`; do \
-        install -Dm0644 "{{icons-src}}/$size/apps/{{APPID}}.png" "{{icons-dst}}/$size/apps/{{APPID}}.png"; \
-    done
+    for size in 16 24 32 48 64 128 256; do rm -f {{icons-dst}}/${size}x${size}/apps/{{APPID}}.png; done
+    install -Dm0644 {{icon-src}} {{icon-dst}}
 
 # Uninstalls installed files
 uninstall:
     rm {{bin-dst}}
+    rm -f {{icon-dst}}
+    for size in 16 24 32 48 64 128 256; do rm -f {{icons-dst}}/${size}x${size}/apps/{{APPID}}.png; done
 
 # Vendor dependencies locally
 vendor:

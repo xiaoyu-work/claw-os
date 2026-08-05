@@ -346,12 +346,12 @@ if [ -d "$DESKTOP_OVERLAY" ]; then
     done
 fi
 
-# Hicolor icons for ClawOS-specific apps (clawos-agent.png ladder).
+# Hicolor icons for ClawOS-specific apps.
 # Shipped here in the base deb so the .desktop launchers above resolve
 # even without the full claw-os-desktop install.
 ICON_OVERLAY="$PROJECT_DIR/rootfs/features/desktop/overlay/usr/share/icons"
 if [ -d "$ICON_OVERLAY" ]; then
-    for icon_path in "$ICON_OVERLAY"/hicolor/*/apps/clawos-agent.png; do
+    for icon_path in "$ICON_OVERLAY"/hicolor/*/apps/clawos-agent.*; do
         [ -e "$icon_path" ] || continue
         rel="${icon_path#$ICON_OVERLAY/}"
         mkdir -p "$BASE_STAGE/usr/share/icons/$(dirname "$rel")"

@@ -30,8 +30,7 @@
     <keyword>CLI</keyword>
   </keywords>
   <launchable type="desktop-id">com.clawos.Term.desktop</launchable>
-  <icon type="remote" height="256" width="256">
-    https://raw.githubusercontent.com/pop-os/cosmic-term/master/res/icons/hicolor/256x256/apps/com.clawos.Term.svg</icon>
+  <icon type="stock">com.clawos.Term</icon>
   <provides>
     <id>com.clawos.Application</id>
     <binaries>

@@ -74,7 +74,7 @@
     <keyword>Editor</keyword>
   </keywords>
   <launchable type="desktop-id">com.clawos.Edit.desktop</launchable>
-  <icon type="remote" height="256" width="256">https://raw.githubusercontent.com/pop-os/cosmic-edit/master/res/icons/hicolor/256x256/apps/com.clawos.Edit.svg</icon>
+  <icon type="stock">com.clawos.Edit</icon>
   <screenshots>
     <screenshot type="default">
       <image>https://media.githubusercontent.com/media/pop-os/cosmic-edit/master/res/screenshots/screenshot-1.png</image>

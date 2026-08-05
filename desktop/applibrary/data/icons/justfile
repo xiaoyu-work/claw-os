@@ -3,14 +3,14 @@ install-dir := env_var('INSTALL_DIR')
 
 icons-src := 'hicolor'
 icons-dst := install-dir / 'icons' / 'hicolor'
+icon-src := icons-src / 'scalable' / 'apps' / appid + '.svg'
+icon-dst := icons-dst / 'scalable' / 'apps' / appid + '.svg'
 
 install:
-    for size in `ls {{icons-src}}`; do \
-        install -Dm0644 "{{icons-src}}/$size/apps/{{appid}}.png" "{{icons-dst}}/$size/apps/{{appid}}.png"; \
-    done
+    for size in 16 24 32 48 64 128 256; do rm -f {{icons-dst}}/${size}x${size}/apps/{{appid}}.png; done
+    install -Dm0644 {{icon-src}} {{icon-dst}}
 
 
 uninstall:
-    for size in `ls {{icons-src}}`; do \
-        rm -f "{{icons-dst}}/$size/apps/{{appid}}.png"; \
-    done
+    rm -f {{icon-dst}}
+    for size in 16 24 32 48 64 128 256; do rm -f {{icons-dst}}/${size}x${size}/apps/{{appid}}.png; done

@@ -47,4 +47,5 @@
   <update_contact>ashley@system76.com</update_contact>
   <translation type="gettext">cosmic-launcher</translation>
   <launchable type="desktop-id">com.clawos.Launcher.desktop</launchable>
+  <icon type="stock">com.clawos.Launcher</icon>
 </component>

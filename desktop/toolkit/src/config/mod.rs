@@ -117,7 +117,7 @@ impl Default for CosmicTk {
             apply_theme_global: false,
             show_minimize: true,
             show_maximize: true,
-            icon_theme: String::from("WhiteSur-dark"),
+            icon_theme: String::from("WhiteSur-light"),
             header_size: Density::Standard,
             interface_density: Density::Standard,
             interface_font: FontConfig {
