@@ -15,16 +15,16 @@
 <path d="M204 190C204 188.895 204.895 188 206 188H226C227.105 188 228 188.895 228 190V202C228 203.105 227.105 204 226 204H206C204.895 204 204 203.105 204 202V190Z" fill="white"/>
 <defs>
 <linearGradient id="paint0_linear_3973_345" x1="128" y1="40" x2="128" y2="216" gradientUnits="userSpaceOnUse">
-<stop stop-color="#82A1CA"/>
-<stop offset="1" stop-color="#6582AA"/>
+<stop stop-color="#989BA4"/>
+<stop offset="1" stop-color="#7A7D84"/>
 </linearGradient>
 <linearGradient id="paint1_linear_3973_345" x1="8" y1="80" x2="8" y2="40" gradientUnits="userSpaceOnUse">
-<stop stop-color="#2E496D"/>
-<stop offset="1" stop-color="#48658B"/>
+<stop stop-color="#434549"/>
+<stop offset="1" stop-color="#5E6066"/>
 </linearGradient>
 <linearGradient id="paint2_linear_3973_345" x1="8" y1="216" x2="8" y2="176" gradientUnits="userSpaceOnUse">
-<stop stop-color="#2E496D"/>
-<stop offset="1" stop-color="#48658B"/>
+<stop stop-color="#434549"/>
+<stop offset="1" stop-color="#5E6066"/>
 </linearGradient>
 </defs>
 </svg>

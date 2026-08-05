@@ -4,8 +4,8 @@
 <path d="M131 188.501C116.814 192.87 100.877 192.255 93.0806 185.907C101.67 196.415 114.113 203 128 203C154.038 203 175 179.85 175 151.094C175 151.094 175 108.312 175 103.906C175 99.501 174.463 96.001 174.463 96.001C174.463 96.001 173.635 126.548 168 144.093C161.098 165.585 152.573 181.856 131 188.501Z" fill="#DEDEDE"/>
 <defs>
 <linearGradient id="paint0_linear_2090_1466" x1="24" y1="232" x2="232" y2="24" gradientUnits="userSpaceOnUse">
-<stop stop-color="#B31D5C"/>
-<stop offset="1" stop-color="#F7558F"/>
+<stop stop-color="#3F4044"/>
+<stop offset="1" stop-color="#777A81"/>
 </linearGradient>
 </defs>
 </svg>

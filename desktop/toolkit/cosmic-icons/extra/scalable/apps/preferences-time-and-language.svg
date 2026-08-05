@@ -4,8 +4,8 @@
 <path fill-rule="evenodd" clip-rule="evenodd" d="M150 156.5C150 184.39 127.614 207 100 207C72.3858 207 50 184.39 50 156.5C50 128.61 72.3858 106 100 106C127.614 106 150 128.61 150 156.5ZM100 116C98.3431 116 97 117.343 97 119V153C96.6212 153.284 96.2841 153.621 95.9996 154H75C73.3431 154 72 155.343 72 157C72 158.657 73.3431 160 75 160H95.9996C96.9118 161.214 98.3642 162 100 162C102.761 162 105 159.761 105 157C105 155.364 104.214 153.912 103 153V119C103 117.343 101.657 116 100 116Z" fill="white"/>
 <defs>
 <linearGradient id="paint0_linear_2673_448" x1="24" y1="232" x2="232" y2="24" gradientUnits="userSpaceOnUse">
-<stop stop-color="#48658B"/>
-<stop offset="1" stop-color="#6582AA"/>
+<stop stop-color="#5E6066"/>
+<stop offset="1" stop-color="#7A7D84"/>
 </linearGradient>
 </defs>
 </svg>

@@ -4,8 +4,8 @@
 <path d="M108 89V133.657L152 159L162 142L128 122V89H108Z" fill="white"/>
 <defs>
 <linearGradient id="paint0_linear_2673_522" x1="24" y1="232" x2="232" y2="24" gradientUnits="userSpaceOnUse">
-<stop stop-color="#8E1EBD"/>
-<stop offset="1" stop-color="#AE46DE"/>
+<stop stop-color="#3F4044"/>
+<stop offset="1" stop-color="#63666C"/>
 </linearGradient>
 </defs>
 </svg>
