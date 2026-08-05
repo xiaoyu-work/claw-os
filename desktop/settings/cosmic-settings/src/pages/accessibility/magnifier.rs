@@ -214,7 +214,7 @@ pub fn magnifier(
         .view::<Page>(move |_binder, page, section| {
             let descriptions = &section.descriptions;
 
-            settings::section()
+            crate::widget::claw_section()
                 .title(&section.title)
                 .add(
                     settings::item::builder(&descriptions[magnifier])
@@ -278,7 +278,7 @@ pub fn tip() -> section::Section<crate::pages::Message> {
                 items.push(svg(illustration).width(Length::Fill).into());
             }
 
-            settings::section()
+            crate::widget::claw_section()
                 .add(settings::flex_item_row(items))
                 .into()
         })
@@ -297,7 +297,7 @@ pub fn view_movement() -> section::Section<crate::pages::Message> {
         .view::<Page>(move |_binder, page, section| {
             let descriptions = &section.descriptions;
 
-            settings::section()
+            crate::widget::claw_section()
                 .title(&section.title)
                 .add(settings::item::builder(&descriptions[continuous]).radio(
                     ZoomMovement::Continuously,

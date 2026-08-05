@@ -862,7 +862,7 @@ fn user_list() -> Section<crate::pages::Message> {
                         .into(),
                     ]);
 
-                    let mut user_list = widget::list_column().add(
+                    let mut user_list = crate::widget::claw_list_column().add(
                         list::button(account_details_content)
                             .selected(expanded)
                             .on_press(Message::SelectUser(idx)),

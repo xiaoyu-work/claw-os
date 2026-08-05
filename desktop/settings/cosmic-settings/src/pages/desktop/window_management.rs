@@ -242,7 +242,7 @@ pub fn window_management() -> Section<crate::pages::Message> {
         .view::<Page>(move |_binder, page, section| {
             let descriptions = &section.descriptions;
 
-            settings::section()
+            crate::widget::claw_section()
                 .title(&section.title)
                 .add(settings::item::builder(&descriptions[super_key]).control(
                     widget::dropdown::popup_dropdown(
@@ -282,7 +282,7 @@ pub fn window_controls() -> Section<crate::pages::Message> {
         .view::<Page>(move |_binder, page, section| {
             let descriptions = &section.descriptions;
 
-            settings::section()
+            crate::widget::claw_section()
                 .title(&section.title)
                 .add(
                     settings::item::builder(&descriptions[active_window_hint])
@@ -314,7 +314,7 @@ pub fn focus_navigation() -> Section<crate::pages::Message> {
         .view::<Page>(move |_binder, page, section| {
             let descriptions = &section.descriptions;
 
-            settings::section()
+            crate::widget::claw_section()
                 .title(&section.title)
                 .add(
                     settings::item::builder(&descriptions[focus_follows_cursor])

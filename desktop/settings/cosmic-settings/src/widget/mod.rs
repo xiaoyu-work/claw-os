@@ -53,13 +53,32 @@ pub fn color_picker_context_view<'a, Message: Clone + 'static>(
 
 /// A settings section whose list card uses the Claw Glass elevated material.
 ///
-/// `settings::section()` defaults to `Container::List`, whose 0.42-alpha fill
-/// all but disappears against the ClawOS page background. `ListColumn` does
-/// expose a style hook, so pages opt into the branded card by building the
-/// section from a pre-styled column instead.
+/// `settings::section()` defaults to `Container::List`, which fills with
+/// `component.base` and carries no border or shadow. On the ClawOS light
+/// palette that composites to `#DDE0E7` against the `#EEF1F8` page, so
+/// sections read as a flat wash. `ListColumn` does expose a style hook, so
+/// pages opt into the branded card by building the section from a pre-styled
+/// column instead.
 #[must_use]
 pub fn claw_section<'a, Message: Clone + 'static>() -> settings::Section<'a, Message> {
     settings::section::with_column(list_column().style(crate::theme::section_card()))
+}
+
+/// [`claw_section`] with a pre-allocated list column.
+#[must_use]
+pub fn claw_section_with_capacity<'a, Message: Clone + 'static>(
+    capacity: usize,
+) -> settings::Section<'a, Message> {
+    settings::section::with_column(
+        list::list_column::with_capacity(capacity).style(crate::theme::section_card()),
+    )
+}
+
+/// A bare list card for the places that build a section-like column by hand
+/// instead of going through [`claw_section`].
+#[must_use]
+pub fn claw_list_column<'a, Message: Clone + 'static>() -> widget::ListColumn<'a, Message> {
+    list_column().style(crate::theme::section_card())
 }
 
 #[must_use]
@@ -108,7 +127,7 @@ pub fn page_title<Message: 'static>(page: &page::Info) -> Element<'_, Message> {
 
 #[must_use]
 pub fn unimplemented_page<Message: Clone + 'static>() -> Element<'static, Message> {
-    settings::section().title("")
+    claw_section().title("")
         .add(text::body("We haven't created that panel yet, and/or it is using a similar idea as current Pop! designs."))
         .into()
 }

@@ -1274,7 +1274,7 @@ pub fn settings() -> Section<crate::pages::Message> {
             );
 
             children.push({
-                let mut column = list_column()
+                let mut column = crate::widget::claw_list_column()
                     .add(settings::item::builder(&descriptions[same_label]).toggler(
                         page.wallpaper_service_config.same_on_all,
                         Message::SameWallpaper,

@@ -73,7 +73,7 @@ fn touchpad() -> Section<crate::pages::Message> {
             let descriptions = &section.descriptions;
             let input = binder.page::<super::Page>().expect("input page not found");
 
-            settings::section()
+            crate::widget::claw_section()
                 .title(&section.title)
                 .add(
                     settings::item::builder(&descriptions[primary_button])
@@ -163,7 +163,7 @@ fn click_behavior() -> Section<crate::pages::Message> {
                 .page::<super::Page>()
                 .expect("input devices page not found");
 
-            settings::section()
+            crate::widget::claw_section()
                 .title(&*section.title)
                 // Secondary click via two fingers, and middle-click via three fingers
                 .add(settings::item::builder(&descriptions[click_finger]).radio(
@@ -209,7 +209,7 @@ fn scrolling() -> Section<crate::pages::Message> {
                 .page::<super::Page>()
                 .expect("input devices page not found");
 
-            settings::section()
+            crate::widget::claw_section()
                 .title(&section.title)
                 // Two-finger scrolling toggle
                 .add(
@@ -303,7 +303,7 @@ fn gestures() -> Section<crate::pages::Message> {
         .view::<Page>(move |_binder, page, section| {
             let descriptions = &section.descriptions;
 
-            settings::section()
+            crate::widget::claw_section()
                 .title(&section.title)
                 // .add(
                 //     settings::item::builder(&descriptions[three_finger_any])

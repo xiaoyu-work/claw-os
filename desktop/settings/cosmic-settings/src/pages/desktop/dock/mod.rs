@@ -180,7 +180,7 @@ pub(crate) fn enable() -> Section<crate::pages::Message> {
             let Some(container_config) = page.inner.container_config.as_ref() else {
                 return Element::from(text::body(fl!("unknown")));
             };
-            settings::section()
+            crate::widget::claw_section()
                 .title(&section.title)
                 .add(
                     settings::item::builder(&descriptions[dock]).toggler(

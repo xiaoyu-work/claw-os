@@ -695,7 +695,7 @@ impl Model {
         self.shortcut_models
             .iter()
             .map(|(id, shortcut)| shortcut_item(self.custom, id, shortcut))
-            .fold(widget::list_column(), widget::ListColumn::add)
+            .fold(crate::widget::claw_list_column(), widget::ListColumn::add)
             .into()
     }
 
@@ -795,7 +795,7 @@ fn context_drawer<'a>(
     });
 
     let bindings = model.bindings.iter().enumerate().fold(
-        widget::list_column(),
+        crate::widget::claw_list_column(),
         |section, (_, (bind_id, shortcut))| {
             let editing = editing == Some(bind_id);
             let text: Cow<'_, str> = if !editing && shortcut.binding.is_set() {

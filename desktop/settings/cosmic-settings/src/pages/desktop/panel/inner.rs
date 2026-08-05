@@ -116,7 +116,7 @@ pub(crate) fn behavior_and_position<
             let Some(panel_config) = page.panel_config.as_ref() else {
                 return Element::from(text::body(fl!("unknown")));
             };
-            settings::section()
+            crate::widget::claw_section()
                 .title(&section.title)
                 .add(
                     settings::item::builder(&descriptions[autohide_label])
@@ -177,7 +177,7 @@ pub(crate) fn style<
             let Some(panel_config) = inner.panel_config.as_ref() else {
                 return Element::from(text::body(fl!("unknown")));
             };
-            settings::section()
+            crate::widget::claw_section()
                 .title(&section.title)
                 .add(
                     settings::item::builder(&descriptions[gap_label])
@@ -285,7 +285,7 @@ pub(crate) fn configuration<P: page::Page<crate::pages::Message> + PanelPage>(
         .title(fl!("panel-applets"))
         .descriptions(descriptions)
         .view::<P>(move |binder, page, section| {
-            let mut settings = settings::section().title(&section.title);
+            let mut settings = crate::widget::claw_section().title(&section.title);
             let descriptions = &section.descriptions;
             settings = if let Some((panel_applets_entity, _panel_applets_info)) = binder
                 .info

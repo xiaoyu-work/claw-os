@@ -285,7 +285,7 @@ pub fn legacy_application_global_shortcuts() -> Section<crate::pages::Message> {
             let title = text::body(&section.title).font(cosmic::font::bold());
             let description = text::body(&section.descriptions[desc]);
 
-            let content = settings::section::<'_, crate::pages::Message>()
+            let content = crate::widget::claw_section::<'_, crate::pages::Message>()
                 .add(settings::item::builder(&section.descriptions[none]).radio(
                     EavesdroppingKeyboardMode::None,
                     Some(page.comp_config_xwayland_eavesdropping.keyboard),
@@ -344,7 +344,7 @@ pub fn legacy_application_scaling() -> Section<crate::pages::Message> {
         .descriptions(descriptions)
         .view::<Page>(move |_binder, page, section| {
             let descriptions = &section.descriptions;
-            widget::settings::section()
+            crate::widget::claw_section()
                 .title(&section.title)
                 .add(
                     widget::settings::item::builder(&descriptions[gaming])

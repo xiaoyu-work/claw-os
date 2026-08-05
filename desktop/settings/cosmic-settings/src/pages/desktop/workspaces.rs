@@ -178,7 +178,7 @@ pub fn action_on_typing() -> Section<crate::pages::Message> {
         .view::<Page>(move |_binder, page, section| {
             let descriptions = &section.descriptions;
 
-            settings::section()
+            crate::widget::claw_section()
                 .title(&section.title)
                 .add(
                     settings::item::builder(&descriptions[action_on_typing]).control(
@@ -212,7 +212,7 @@ fn multi_behavior() -> Section<crate::pages::Message> {
         .descriptions(descriptions)
         .view::<Page>(move |_binder, page, section| {
             let descriptions = &section.descriptions;
-            settings::section()
+            crate::widget::claw_section()
                 .title(&section.title)
                 .add(settings::item::builder(&descriptions[span]).radio(
                     WorkspaceMode::Global,
@@ -240,7 +240,7 @@ fn workspace_orientation() -> Section<crate::pages::Message> {
         .descriptions(descriptions)
         .view::<Page>(move |_binder, page, section| {
             let descriptions = &section.descriptions;
-            settings::section()
+            crate::widget::claw_section()
                 .title(&section.title)
                 .add(settings::item::builder(&descriptions[vertical]).radio(
                     WorkspaceLayout::Vertical,
@@ -267,7 +267,7 @@ fn workspace_navigation() -> Section<crate::pages::Message> {
         .descriptions(descriptions)
         .view::<Page>(move |_binder, page, section| {
             let descriptions = &section.descriptions;
-            settings::section()
+            crate::widget::claw_section()
                 .title(&section.title)
                 .add(settings::item::builder(&descriptions[description]).toggler(
                     page.comp_workspace_config.workspace_wraparound,

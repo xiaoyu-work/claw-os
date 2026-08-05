@@ -54,7 +54,7 @@ pub fn view(
 
 impl super::Page {
     pub fn night_light_view(&self) -> Element<pages::Message> {
-        let mut container = list_column();
+        let mut container = crate::widget::claw_list_column();
 
         // Displays the night light status, and a button for configuring it.
         container = container.add(

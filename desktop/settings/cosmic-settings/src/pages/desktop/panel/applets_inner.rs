@@ -243,7 +243,7 @@ impl Page {
             space_xs,
             ..
         } = theme::spacing();
-        let mut list_column = list_column();
+        let mut list_column = crate::widget::claw_list_column();
         let mut has_some = false;
         for info in self
             .available_entries

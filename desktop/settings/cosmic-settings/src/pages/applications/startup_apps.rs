@@ -324,7 +324,7 @@ impl Page {
     ) -> crate::pages::Element<'_> {
         let cosmic::cosmic_theme::Spacing { space_xs, .. } = cosmic::theme::spacing();
 
-        let mut list = widget::list_column();
+        let mut list = crate::widget::claw_list_column();
         let search_input = &self.application_search.trim().to_lowercase();
 
         if let Some(startup_apps) = &self.cached_startup_apps {
@@ -376,7 +376,7 @@ fn apps() -> Section<crate::pages::Message> {
             if let Some(startup_apps) = &page.cached_startup_apps {
                 let order = vec![DirectoryType::User];
                 for directory_type in order {
-                    let mut section = settings::section();
+                    let mut section = crate::widget::claw_section();
 
                     view = view.push(text::heading(directory_type.to_string()));
 

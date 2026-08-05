@@ -452,7 +452,9 @@ impl Page {
             .padding([16, 24]);
 
         let keys = self.add_shortcut.keys.iter().fold(
-            widget::list_column(),
+            // Plain column: this list is nested inside the `controls` card
+            // below, so it must not paint a second card of its own.
+            widget::list_column().style(cosmic::theme::Container::Transparent),
             |column, (id, (text, widget_id))| {
                 let key_combination = widget::editable_input(
                     fl!("type-key-combination"),
@@ -474,7 +476,9 @@ impl Page {
             },
         );
 
-        let controls = widget::list_column().add(input_fields).add(keys);
+        let controls = crate::widget::claw_list_column()
+            .add(input_fields)
+            .add(keys);
 
         let add_keybinding_button = widget::button::standard(fl!("add-another-keybinding"))
             .on_press(Message::AddShortcut)
@@ -708,7 +712,7 @@ fn shortcuts() -> Section<crate::pages::Message> {
         .descriptions(descriptions)
         .view::<Page>(move |_binder, page, _section| {
             let content = if page.model.shortcut_models.is_empty() {
-                widget::settings::section()
+                crate::widget::claw_section()
                     .add(widget::settings::item_row(vec![
                         widget::text::body(fl!("custom-shortcuts", "none")).into(),
                     ]))

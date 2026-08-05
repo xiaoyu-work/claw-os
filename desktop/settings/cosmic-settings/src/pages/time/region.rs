@@ -519,7 +519,7 @@ mod preferred_languages {
 
                 let description = widget::text::body(&section.descriptions[pref_lang_desc]);
 
-                let mut content = widget::settings::section();
+                let mut content = crate::widget::claw_section();
 
                 if let Some(((_config, locales), registry)) =
                     page.config.as_ref().zip(page.registry.as_ref())
@@ -635,7 +635,7 @@ mod formatting {
                     Message::RegionContext,
                 );
 
-                widget::settings::section()
+                crate::widget::claw_section()
                     .title(&desc[formatting_txt])
                     .add(formatted_demo)
                     .add(select_region)
@@ -711,11 +711,10 @@ pub async fn page_reload() -> eyre::Result<PageRefresh> {
     let mut available_languages_set = BTreeSet::new();
 
     // Use 'locale -a' instead of 'localectl list-locales' for OpenRC compatibility
-    let output_result = tokio::task::spawn_blocking(|| {
-        crate::claw_glue::run_capture(&["locale", "-a"], Some(5))
-    })
-    .await
-    .unwrap_or_else(|e| Err(std::io::Error::other(e.to_string())));
+    let output_result =
+        tokio::task::spawn_blocking(|| crate::claw_glue::run_capture(&["locale", "-a"], Some(5)))
+            .await
+            .unwrap_or_else(|e| Err(std::io::Error::other(e.to_string())));
 
     let locale_list = match output_result {
         Ok(output_str) => parse_locale_output(&output_str),
@@ -944,8 +943,7 @@ fn get_default_first_day(locale: &str) -> usize {
 
 fn update_time_settings_after_region_change(region: String) {
     // Create the same config that date.rs uses
-    let cosmic_applet_config = match cosmic_config::Config::new("com.clawos.AppletTime", 1)
-    {
+    let cosmic_applet_config = match cosmic_config::Config::new("com.clawos.AppletTime", 1) {
         Ok(config) => config,
         Err(err) => {
             tracing::error!(

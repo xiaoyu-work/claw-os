@@ -490,7 +490,7 @@ fn connected_devices() -> Section<crate::pages::Message> {
                         .height(Length::Fill),
                     )
                     .height(64.)
-                    .class(cosmic::theme::Container::List)
+                    .class(crate::theme::section_card())
                     .into()
                 })
                 .collect();
@@ -530,7 +530,7 @@ fn profiles() -> Section<crate::pages::Message> {
         .title(fl!("power-mode"))
         .descriptions(descriptions)
         .view::<Page>(move |_binder, page, section| {
-            let mut section = settings::section().title(&section.title);
+            let mut section = crate::widget::claw_section().title(&section.title);
 
             if page.backend.is_some() {
                 let profiles = backend::get_power_profiles();
@@ -610,7 +610,7 @@ fn power_saving() -> Section<crate::pages::Message> {
                 .idle_conf
                 .suspend_on_battery_time
                 .map(|t| Duration::from_millis(t.into()));
-            let mut section = settings::section()
+            let mut section = crate::widget::claw_section()
                 .title(&section.title)
                 .add(power_saving_row(
                     &descriptions[turn_off_screen_desc],

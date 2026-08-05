@@ -80,14 +80,6 @@ pub fn icon_tile() -> cosmic::theme::Container<'static> {
 
 /// Claw Glass — the grouped section card used inside settings pages.
 ///
-/// The stock `Container::List` fills with `component.base` at 0.42, which on
-/// ClawOS composites to `#E4E7EE` against the `#EEF1F8` page — barely 10/255
-/// of separation, so sections read as a flat wash. This instead *elevates*
-/// the card: in light mode it is brighter than the page (the macOS grouped
-/// list direction), in dark mode it stays on the component surface, which is
-/// already lighter than the dark page.
-/// Claw Glass — the grouped section card used inside settings pages.
-///
 /// The stock `Container::List` fills with `component.base`, which on ClawOS
 /// light composites to `#DDE0E7` against the `#EEF1F8` page and carries no
 /// border or shadow — sections read as a flat wash. This instead *elevates*

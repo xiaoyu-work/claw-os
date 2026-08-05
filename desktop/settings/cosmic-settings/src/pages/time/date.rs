@@ -53,8 +53,7 @@ pub struct Page {
 
 impl Default for Page {
     fn default() -> Self {
-        let cosmic_applet_config =
-            cosmic_config::Config::new("com.clawos.AppletTime", 1).unwrap();
+        let cosmic_applet_config = cosmic_config::Config::new("com.clawos.AppletTime", 1).unwrap();
 
         let military_time = cosmic_applet_config
             .get("military_time")
@@ -329,7 +328,7 @@ impl Page {
     }
 
     fn timezone_context_view(&self) -> Element<'_, crate::pages::Message> {
-        let mut list = widget::list_column();
+        let mut list = crate::widget::claw_list_column();
 
         let search_input = &self.timezone_search.trim().to_lowercase();
 
@@ -384,7 +383,7 @@ fn date() -> Section<crate::pages::Message> {
         .title(fl!("time-date"))
         .descriptions(descriptions)
         .view::<Page>(move |_binder, page, section| {
-            settings::section()
+            crate::widget::claw_section()
                 .title(&section.title)
                 .add(
                     settings::item::builder(&*section.descriptions[title])
@@ -408,7 +407,7 @@ fn format() -> Section<crate::pages::Message> {
         .title(fl!("time-format"))
         .descriptions(descriptions)
         .view::<Page>(move |_binder, page, section| {
-            settings::section()
+            crate::widget::claw_section()
                 .title(&section.title)
                 // 24-hour toggle
                 .add(
@@ -468,7 +467,7 @@ fn timezone() -> Section<crate::pages::Message> {
         .title(fl!("time-zone"))
         .descriptions(descriptions)
         .view::<Page>(move |_binder, page, section| {
-            settings::section()
+            crate::widget::claw_section()
                 .title(&section.title)
                 // Time zone select
                 .add(crate::widget::go_next_with_item(

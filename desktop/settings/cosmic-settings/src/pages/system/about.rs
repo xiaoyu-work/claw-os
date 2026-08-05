@@ -188,7 +188,7 @@ fn device() -> Section<crate::pages::Message> {
                 .description(&*desc[device_desc])
                 .flex_control(hostname_input);
 
-            list_column()
+            crate::widget::claw_list_column()
                 .add(device_name)
                 .apply(cosmic::Element::from)
                 .map(crate::pages::Message::About)
@@ -210,7 +210,7 @@ fn hardware() -> Section<crate::pages::Message> {
         .view::<Page>(move |_binder, page, section| {
             let desc = &section.descriptions;
 
-            let mut section_builder = settings::section()
+            let mut section_builder = crate::widget::claw_section()
                 .title(&section.title)
                 .add(
                     settings::flex_item(&*desc[model], text::body(&page.info.hardware_model))
@@ -258,7 +258,7 @@ fn os() -> Section<crate::pages::Message> {
         .descriptions(descriptions)
         .view::<Page>(move |_binder, page, section| {
             let desc = &section.descriptions;
-            settings::section()
+            crate::widget::claw_section()
                 .title(&section.title)
                 .add(
                     settings::flex_item(&*desc[os], text::body(&page.info.operating_system))

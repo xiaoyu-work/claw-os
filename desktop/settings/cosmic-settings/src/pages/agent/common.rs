@@ -469,9 +469,10 @@ impl State {
             .iter()
             .position(|p| p.name == status_provider)
             .or_else(|| {
-                providers.default_provider.as_ref().and_then(|name| {
-                    providers.providers.iter().position(|p| &p.name == name)
-                })
+                providers
+                    .default_provider
+                    .as_ref()
+                    .and_then(|name| providers.providers.iter().position(|p| &p.name == name))
             })
             .or(if providers.providers.is_empty() {
                 None
@@ -481,11 +482,7 @@ impl State {
 
         self.provider_idx = provider_idx;
 
-        let status_model = self
-            .status
-            .as_ref()
-            .map(|s| s.model.as_str())
-            .unwrap_or("");
+        let status_model = self.status.as_ref().map(|s| s.model.as_str()).unwrap_or("");
 
         if let Some(provider) = provider_idx.and_then(|i| providers.providers.get(i)) {
             self.model_idx = provider.models.iter().position(|m| m.name == status_model);
@@ -519,10 +516,7 @@ impl State {
             if let Some(status) = &self.status {
                 for field in &provider.extra_fields {
                     let value = match field.key.as_str() {
-                        "base_url" => status
-                            .endpoint
-                            .clone()
-                            .or_else(|| status.base_url.clone()),
+                        "base_url" => status.endpoint.clone().or_else(|| status.base_url.clone()),
                         "api_version" => status.api_version.clone(),
                         _ => None,
                     };
@@ -592,8 +586,9 @@ impl State {
                 self.oauth_polling = false;
                 self.oauth_error = None;
                 self.live_models.clear();
-                if let Some((needs_credential, default_env)) =
-                    self.selected_provider().map(|p| (p.needs_credential, p.default_env.clone()))
+                if let Some((needs_credential, default_env)) = self
+                    .selected_provider()
+                    .map(|p| (p.needs_credential, p.default_env.clone()))
                 {
                     self.key_mode = if needs_credential {
                         KeyMode::Stored
@@ -606,9 +601,7 @@ impl State {
                 // Pull the live model list if we just selected an
                 // already-signed-in OAuth provider.
                 if let Some(provider) = self.selected_provider() {
-                    if provider.is_oauth_device()
-                        && self.is_signed_in_to_selected_provider()
-                    {
+                    if provider.is_oauth_device() && self.is_signed_in_to_selected_provider() {
                         let provider_name = provider.name.clone();
                         let wrap2 = wrap.clone();
                         return Task::future(async move {
@@ -637,10 +630,7 @@ impl State {
                 self.env_var_input = s;
             }
             Message::KeyModeSelected(mode) => {
-                if self
-                    .selected_provider()
-                    .is_some_and(|p| p.needs_credential)
-                {
+                if self.selected_provider().is_some_and(|p| p.needs_credential) {
                     self.key_mode = mode;
                 }
             }
@@ -674,9 +664,9 @@ impl State {
                     let modality = self.modality;
                     self.last_apply = Some(result);
                     let wrap2 = wrap.clone();
-                    return Task::future(async move {
-                        wrap2(Message::LoadDone(load(modality).await))
-                    });
+                    return Task::future(
+                        async move { wrap2(Message::LoadDone(load(modality).await)) },
+                    );
                 }
                 self.last_apply = Some(result);
             }
@@ -687,9 +677,7 @@ impl State {
                 self.busy = true;
                 let modality = self.modality;
                 let wrap2 = wrap.clone();
-                return Task::future(async move {
-                    wrap2(Message::Tested(test(modality).await))
-                });
+                return Task::future(async move { wrap2(Message::Tested(test(modality).await)) });
             }
             Message::Tested(result) => {
                 self.busy = false;
@@ -702,9 +690,9 @@ impl State {
                 self.busy = true;
                 let modality = self.modality;
                 let wrap2 = wrap.clone();
-                return Task::future(async move {
-                    wrap2(Message::ResetDone(reset(modality).await))
-                });
+                return Task::future(
+                    async move { wrap2(Message::ResetDone(reset(modality).await)) },
+                );
             }
             Message::ResetDone(result) => {
                 self.busy = false;
@@ -733,9 +721,7 @@ impl State {
                 self.busy = true;
                 let modality = self.modality;
                 let wrap2 = wrap.clone();
-                return Task::future(async move {
-                    wrap2(Message::LoadDone(load(modality).await))
-                });
+                return Task::future(async move { wrap2(Message::LoadDone(load(modality).await)) });
             }
             Message::OauthSignIn => {
                 // Don't start a second flow while one is still in flight.
@@ -900,9 +886,9 @@ impl State {
                 self.live_models.clear();
                 let modality = self.modality;
                 let wrap2 = wrap.clone();
-                return Task::future(async move {
-                    wrap2(Message::ResetDone(reset(modality).await))
-                });
+                return Task::future(
+                    async move { wrap2(Message::ResetDone(reset(modality).await)) },
+                );
             }
             Message::OauthModelsFetched(result) => {
                 match result {
@@ -916,10 +902,8 @@ impl State {
                         // best-effort: the user can still type a name
                         // in the custom-model textbox.
                         if self.oauth_error.is_none() {
-                            self.oauth_error = Some(format!(
-                                "{}: {e}",
-                                crate::fl!("agent-oauth-models-failed")
-                            ));
+                            self.oauth_error =
+                                Some(format!("{}: {e}", crate::fl!("agent-oauth-models-failed")));
                         }
                     }
                 }
@@ -1263,7 +1247,10 @@ async fn fetch_oauth_models(provider: &str) -> Result<Vec<String>, String> {
 }
 
 async fn sleep_secs(secs: u64) {
-    tokio::time::sleep(std::time::Duration::from_secs(secs.max(MIN_OAUTH_POLL_SECS))).await;
+    tokio::time::sleep(std::time::Duration::from_secs(
+        secs.max(MIN_OAUTH_POLL_SECS),
+    ))
+    .await;
 }
 
 /// Invoke `cos agent setup <argv...>`, optionally piping a secret via stdin.
@@ -1353,10 +1340,7 @@ async fn cos_setup(extra_argv: &[&str], stdin_input: Option<String>) -> Result<S
 // Views
 // ---------------------------------------------------------------------------
 
-pub fn status_section<P, F>(
-    state_of: fn(&P) -> &State,
-    wrap: F,
-) -> Section<pages::Message>
+pub fn status_section<P, F>(state_of: fn(&P) -> &State, wrap: F) -> Section<pages::Message>
 where
     P: cosmic_settings_page::Page<pages::Message> + 'static,
     F: Fn(Message) -> pages::Message + Send + Sync + Clone + 'static,
@@ -1367,17 +1351,14 @@ where
             let state = state_of(page);
             let view: Element<'_, Message> = status_view(state);
             let wrap = wrap.clone();
-            settings::section()
+            crate::widget::claw_section()
                 .title(&section.title)
                 .add(view.map(move |m| wrap(m)))
                 .into()
         })
 }
 
-pub fn provider_section<P, F>(
-    state_of: fn(&P) -> &State,
-    wrap: F,
-) -> Section<pages::Message>
+pub fn provider_section<P, F>(state_of: fn(&P) -> &State, wrap: F) -> Section<pages::Message>
 where
     P: cosmic_settings_page::Page<pages::Message> + 'static,
     F: Fn(Message) -> pages::Message + Send + Sync + Clone + 'static,
@@ -1388,17 +1369,14 @@ where
             let state = state_of(page);
             let view: Element<'_, Message> = configuration_view(state);
             let wrap = wrap.clone();
-            settings::section()
+            crate::widget::claw_section()
                 .title(&section.title)
                 .add(view.map(move |m| wrap(m)))
                 .into()
         })
 }
 
-pub fn actions_section<P, F>(
-    state_of: fn(&P) -> &State,
-    wrap: F,
-) -> Section<pages::Message>
+pub fn actions_section<P, F>(state_of: fn(&P) -> &State, wrap: F) -> Section<pages::Message>
 where
     P: cosmic_settings_page::Page<pages::Message> + 'static,
     F: Fn(Message) -> pages::Message + Send + Sync + Clone + 'static,
@@ -1507,11 +1485,8 @@ fn configuration_view(state: &State) -> Element<'_, Message> {
             !provider.models.is_empty()
         };
         if dropdown_visible {
-            let model_dropdown = dropdown(
-                &state.model_labels,
-                state.model_idx,
-                Message::ModelSelected,
-            );
+            let model_dropdown =
+                dropdown(&state.model_labels, state.model_idx, Message::ModelSelected);
             col = col.push(
                 settings::item::builder(crate::fl!("agent-model"))
                     .flex_control(model_dropdown.apply(Element::from)),
@@ -1527,11 +1502,7 @@ fn configuration_view(state: &State) -> Element<'_, Message> {
             state.custom_model.as_str()
         } else if let Some(idx) = state.model_idx {
             if provider.is_oauth_device() {
-                state
-                    .live_models
-                    .get(idx)
-                    .map(String::as_str)
-                    .unwrap_or("")
+                state.live_models.get(idx).map(String::as_str).unwrap_or("")
             } else {
                 provider
                     .models
@@ -1542,8 +1513,8 @@ fn configuration_view(state: &State) -> Element<'_, Message> {
         } else {
             ""
         };
-        let custom_input = widget::text_input(placeholder, custom_value)
-            .on_input(Message::CustomModelInput);
+        let custom_input =
+            widget::text_input(placeholder, custom_value).on_input(Message::CustomModelInput);
         col = col.push(
             settings::item::builder(crate::fl!("agent-model-custom"))
                 .description(crate::fl!("agent-model-custom", "desc"))
@@ -1598,11 +1569,9 @@ fn configuration_view(state: &State) -> Element<'_, Message> {
                     }
                 }
                 KeyMode::EnvVar => {
-                    let env_input = widget::text_input(
-                        provider.default_env.as_str(),
-                        &state.env_var_input,
-                    )
-                    .on_input(Message::EnvVarInput);
+                    let env_input =
+                        widget::text_input(provider.default_env.as_str(), &state.env_var_input)
+                            .on_input(Message::EnvVarInput);
                     col = col.push(
                         settings::item::builder(crate::fl!("agent-key-env"))
                             .description(crate::fl!("agent-key-env", "desc"))
@@ -1632,9 +1601,7 @@ fn configuration_view(state: &State) -> Element<'_, Message> {
                 field.label.clone()
             };
             let key_for_msg = field.key.clone();
-            let on_input = move |v: String| {
-                Message::ExtraFieldInput(key_for_msg.clone(), v)
-            };
+            let on_input = move |v: String| Message::ExtraFieldInput(key_for_msg.clone(), v);
             let input: Element<'_, Message> = if field.secret {
                 widget::text_input::secure_input(
                     field.placeholder.as_str(),
@@ -1684,8 +1651,7 @@ fn oauth_credential_view(state: &State) -> Element<'_, Message> {
         let sign_out_btn = if state.busy {
             button::standard(crate::fl!("agent-oauth-sign-out"))
         } else {
-            button::standard(crate::fl!("agent-oauth-sign-out"))
-                .on_press(Message::OauthSignOut)
+            button::standard(crate::fl!("agent-oauth-sign-out")).on_press(Message::OauthSignOut)
         };
         let pane = row::with_capacity(2)
             .spacing(12)
@@ -1693,12 +1659,11 @@ fn oauth_credential_view(state: &State) -> Element<'_, Message> {
             .push(text::body(signed_in_label))
             .push(sign_out_btn);
         inner = inner.push(
-            settings::item::builder(crate::fl!("agent-key-mode"))
-                .flex_control(Element::from(pane)),
+            settings::item::builder(crate::fl!("agent-key-mode")).flex_control(Element::from(pane)),
         );
     } else if let Some(device) = &state.oauth_device {
-        let cancel_btn = button::destructive(crate::fl!("agent-oauth-cancel"))
-            .on_press(Message::OauthCancel);
+        let cancel_btn =
+            button::destructive(crate::fl!("agent-oauth-cancel")).on_press(Message::OauthCancel);
         let instructions = crate::fl!(
             "agent-oauth-instructions",
             url = device.verification_uri.as_str()
@@ -1717,8 +1682,7 @@ fn oauth_credential_view(state: &State) -> Element<'_, Message> {
         let sign_in_btn = if state.busy || state.oauth_polling {
             button::suggested(crate::fl!("agent-oauth-sign-in"))
         } else {
-            button::suggested(crate::fl!("agent-oauth-sign-in"))
-                .on_press(Message::OauthSignIn)
+            button::suggested(crate::fl!("agent-oauth-sign-in")).on_press(Message::OauthSignIn)
         };
         inner = inner.push(
             settings::item::builder(crate::fl!("agent-key-mode"))
@@ -1780,11 +1744,7 @@ fn actions_view(state: &State) -> Element<'_, Message> {
     if let Some(result) = &state.last_test {
         let line = match result {
             Ok(r) if r.ok => {
-                format!(
-                    "✓ {} ({})",
-                    crate::fl!("agent-test-ok"),
-                    r.kind
-                )
+                format!("✓ {} ({})", crate::fl!("agent-test-ok"), r.kind)
             }
             Ok(r) => {
                 let hint = r.hint.clone().unwrap_or_default();

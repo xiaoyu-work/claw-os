@@ -740,13 +740,13 @@ fn status() -> Section<crate::pages::Message> {
             ) -> Element<'a, crate::pages::Message> {
                 widget::settings::item::builder(description)
                     .control(widget::button::suggested(label).on_press(message.into()))
-                    .apply(|control| Element::from(widget::settings::section().add(control)))
+                    .apply(|control| Element::from(crate::widget::claw_section().add(control)))
             }
 
             if page.bluez_service_unknown {
                 let control = widget::text::body(fl!("bluetooth", "unknown"));
 
-                return Element::from(widget::settings::section().add(control));
+                return Element::from(crate::widget::claw_section().add(control));
             } else if !page.service_is_enabled {
                 return bluetooth_service_issue(
                     fl!("bluetooth", "disabled"),
@@ -771,7 +771,7 @@ fn status() -> Section<crate::pages::Message> {
                 bluetooth_toggle = bluetooth_toggle.description(&page.heading);
             }
 
-            widget::list_column()
+            crate::widget::claw_list_column()
                 .add(bluetooth_toggle.toggler(
                     matches!(status, Active::Enabling | Active::Enabled),
                     |active| Message::SetActive(active).into(),
@@ -815,7 +815,7 @@ fn connected_devices() -> Section<crate::pages::Message> {
         })
         .view::<Page>(move |_binder, page, section| {
             let descriptions = &section.descriptions;
-            let section = settings::section().title(&section.title);
+            let section = crate::widget::claw_section().title(&section.title);
 
             page.model
                 .devices_for_adapter(page.model.selected_adapter.as_ref().unwrap())
@@ -920,7 +920,7 @@ fn available_devices() -> Section<crate::pages::Message> {
         })
         .view::<Page>(move |_binder, page, section| {
             let descriptions = &section.descriptions;
-            let section = settings::section().title(&section.title);
+            let section = crate::widget::claw_section().title(&section.title);
 
             page.model
                 .devices_for_adapter(page.model.selected_adapter.as_ref().unwrap())
@@ -976,7 +976,7 @@ fn multiple_adapter() -> Section<crate::pages::Message> {
         })
         .view::<Page>(move |_binder, page, section| {
             let descriptions = &section.descriptions;
-            let section = settings::section().title(&section.title);
+            let section = crate::widget::claw_section().title(&section.title);
 
             page.model
                 .adapters

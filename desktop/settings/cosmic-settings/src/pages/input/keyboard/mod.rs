@@ -548,14 +548,14 @@ impl Page {
     pub fn add_input_source_view(&self) -> Element<'_, crate::pages::Message> {
         let space_l = theme::spacing().space_l;
 
-        let toggler = settings::section().add(
+        let toggler = crate::widget::claw_section().add(
             settings::item::builder(fl!("show-extended-input-sources")).toggler(
                 self.show_extended_input_sources,
                 Message::SetShowExtendedInputSources,
             ),
         );
 
-        let mut list = widget::list_column();
+        let mut list = crate::widget::claw_list_column();
 
         let search_input = &self.input_source_search.trim().to_lowercase();
 
@@ -618,7 +618,7 @@ impl Page {
 
         // TODO layout default
 
-        let mut list = cosmic::widget::list_column();
+        let mut list = crate::widget::claw_list_column();
 
         if matches!(special_key, SpecialKey::CapsLock) {
             list = list.add(special_char_radio_row("Caps Lock", None, current));
@@ -649,7 +649,7 @@ impl Page {
             ),
         ];
 
-        let mut list = cosmic::widget::list_column();
+        let mut list = crate::widget::claw_list_column();
         for (desc, state) in options {
             list = list.add(settings::item::builder(desc).radio(
                 Some(state),
@@ -691,7 +691,7 @@ fn input_sources() -> Section<crate::pages::Message> {
         .title(fl!("keyboard-sources"))
         .view::<Page>(move |_binder, page, section| {
             // TODO Need something more custom, with drag and drop
-            let mut section = settings::section().title(&section.title);
+            let mut section = crate::widget::claw_section().title(&section.title);
 
             for id in &page.active_layouts {
                 if let Some((_locale, _variant, description, _source)) =
@@ -731,7 +731,7 @@ fn special_character_entry() -> Section<crate::pages::Message> {
         .view::<Page>(move |_binder, _page, section| {
             let descriptions = &section.descriptions;
 
-            settings::section()
+            crate::widget::claw_section()
                 .title(&section.title)
                 .add(crate::widget::go_next_item(
                     &descriptions[alternate],
@@ -761,7 +761,7 @@ fn keyboard_shortcuts() -> Section<crate::pages::Message> {
         .view::<Page>(move |binder, _page, section| {
             let descriptions = &section.descriptions;
 
-            let mut section = settings::section().title(&section.title);
+            let mut section = crate::widget::claw_section().title(&section.title);
             if let Some((shortcuts_entity, _)) = binder
                 .info
                 .iter()
@@ -792,7 +792,7 @@ fn keyboard_typing_assist() -> Section<crate::pages::Message> {
         .view::<Page>(move |_binder, page, section| {
             let descriptions = &section.descriptions;
 
-            settings::section()
+            crate::widget::claw_section()
                 .title(&section.title)
                 .add(
                     settings::item::builder(&descriptions[repeat_delay])
@@ -858,7 +858,7 @@ fn keyboard_num_lock() -> Section<crate::pages::Message> {
         .view::<Page>(move |_binder, _page, section| {
             let descriptions = &section.descriptions;
 
-            settings::section()
+            crate::widget::claw_section()
                 .title(&section.title)
                 .add(crate::widget::go_next_item(
                     &descriptions[boot_state],

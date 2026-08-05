@@ -252,7 +252,7 @@ impl page::Page<crate::pages::Message> for Page {
             .apply(widget::container)
             .center_x(Length::Fill);
 
-        let mut info_items = widget::list_column();
+        let mut info_items = crate::widget::claw_list_column();
 
         info_items = info_items.add(widget::settings::item(
             fl!("network-name"),
@@ -886,7 +886,7 @@ fn devices_view() -> Section<crate::pages::Message> {
                 .toggler(state.wifi_enabled, Message::WiFiEnable);
 
             let mut view = widget::column::with_capacity(4)
-                .push(widget::list_column().add(wifi_enable))
+                .push(crate::widget::claw_list_column().add(wifi_enable))
                 .push_maybe(state.airplane_mode.then(|| {
                     widget::row::with_capacity(2)
                         .push(icon::from_name("airplane-mode-symbolic"))
@@ -923,7 +923,7 @@ fn devices_view() -> Section<crate::pages::Message> {
 
                 // Build Known Networks section (always unfiltered)
                 let mut known_networks =
-                    widget::settings::section().title(&section.descriptions[known_networks_txt]);
+                    crate::widget::claw_section().title(&section.descriptions[known_networks_txt]);
                 let mut has_known = false;
 
                 // Add visible networks that are known
@@ -1193,7 +1193,7 @@ fn devices_view() -> Section<crate::pages::Message> {
                             .center_x(Length::Fill),
                         );
                     } else if !filtered_visible.is_empty() {
-                        let mut visible_networks_list = widget::list_column();
+                        let mut visible_networks_list = crate::widget::claw_list_column();
                         for network in filtered_visible {
                             let is_encrypted = network.network_type != NetworkType::Open;
 

@@ -999,7 +999,7 @@ fn devices_view() -> Section<crate::pages::Message> {
             let mut view = widget::column::with_capacity(4);
 
             let vpn_connections =
-                widget::settings::section().title(&section.descriptions[vpn_conns_txt]);
+                crate::widget::claw_section().title(&section.descriptions[vpn_conns_txt]);
 
             if page.known_connections.is_empty() {
                 view = view.push(vpn_connections.add(widget::settings::item_row(vec![

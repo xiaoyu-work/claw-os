@@ -20,9 +20,9 @@ use cosmic_settings_page::{self as page, Section, section};
 use futures::SinkExt;
 use indexmap::Equivalent;
 use slotmap::{Key, SecondaryMap, SlotMap};
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
-use std::collections::BTreeMap;
 use tokio::sync::oneshot;
 
 static DPI_SCALES: &[u32] = &[50, 75, 100, 125, 150, 175, 200, 225, 250, 275, 300];
@@ -1231,7 +1231,7 @@ pub fn display_arrangement() -> Section<crate::pages::Message> {
                         .center_x(Length::Fill)
                 })
                 .apply(container)
-                .class(cosmic::theme::Container::List)
+                .class(crate::theme::section_card())
                 .width(Length::Fill)
                 .into()
         })
@@ -1378,7 +1378,7 @@ pub fn display_configuration() -> Section<crate::pages::Message> {
                     > 1
                     || !active_output.enabled
                 {
-                    list_column()
+                    crate::widget::claw_list_column()
                         .add(
                             widget::settings::item::builder(&descriptions[enable_label])
                                 .toggler(active_output.enabled, Message::DisplayToggle),
@@ -1391,7 +1391,7 @@ pub fn display_configuration() -> Section<crate::pages::Message> {
                             ),
                         ))
                 } else {
-                    list_column()
+                    crate::widget::claw_list_column()
                 };
 
                 if let Some(items) = display_options {
@@ -1405,7 +1405,7 @@ pub fn display_configuration() -> Section<crate::pages::Message> {
                 content = content
                     .push(text::heading(&descriptions[options_label]))
                     .push_maybe(display_options.map(|items| {
-                        let mut column = list_column();
+                        let mut column = crate::widget::claw_list_column();
                         for item in items {
                             column = column.add(item);
                         }

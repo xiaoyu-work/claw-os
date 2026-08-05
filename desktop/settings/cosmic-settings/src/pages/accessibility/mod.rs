@@ -216,7 +216,7 @@ pub fn vision() -> section::Section<crate::pages::Message> {
                 &descriptions[unavailable]
             };
 
-            settings::section()
+            crate::widget::claw_section()
                 .title(&section.title)
                 .add(
                     settings::item::builder(&descriptions[screen_reader]).toggler(
@@ -297,7 +297,7 @@ pub fn hearing() -> section::Section<crate::pages::Message> {
         .view::<Page>(move |_, page, section| {
             let descriptions = &section.descriptions;
 
-            settings::section()
+            crate::widget::claw_section()
                 .title(&section.title)
                 .add(
                     settings::item::builder(&descriptions[mono])
