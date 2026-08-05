@@ -472,6 +472,7 @@ const ADMIN_VERBS: &[Verb] = &[
     Verb::CLIPBOARD_READ,
     Verb::CLIPBOARD_WRITE,
     Verb::DEVICE_AUDIO,
+    Verb::DEVICE_MEDIA_ROUTE,
     Verb::DEVICE_CAMERA,
     Verb::DEVICE_MICROPHONE,
     Verb::DEVICE_LOCATION,

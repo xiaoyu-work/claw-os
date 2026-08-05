@@ -1,5 +1,6 @@
 pub mod agent_client;
 pub mod app_sessions;
+pub mod audio;
 pub mod audit;
 pub mod client;
 pub mod client_identity;

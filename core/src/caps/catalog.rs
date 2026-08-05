@@ -510,10 +510,18 @@ pub const CATALOG: &[CapMeta] = &[
     CapMeta::new(
         Verb::DEVICE_AUDIO,
         ScopeKind::Name,
-        LocalizedStr::new("Play sound"),
-        LocalizedStr::new("Send audio to your speakers or headphones."),
+        LocalizedStr::new("Control audio output"),
+        LocalizedStr::new("Change speaker or headphone volume, mute state, routing, and profiles."),
         "🔊",
         Risk::Medium,
+    ),
+    CapMeta::new(
+        Verb::DEVICE_MEDIA_ROUTE,
+        ScopeKind::Name,
+        LocalizedStr::new("Route local media devices"),
+        LocalizedStr::new("Change PipeWire defaults, ports, routes, and device profiles across the local media graph."),
+        "🎚",
+        Risk::High,
     ),
     CapMeta::new(
         Verb::DEVICE_CAMERA,
@@ -526,8 +534,8 @@ pub const CATALOG: &[CapMeta] = &[
     CapMeta::new(
         Verb::DEVICE_MICROPHONE,
         ScopeKind::Name,
-        LocalizedStr::new("Use your microphone"),
-        LocalizedStr::new("Capture audio from a connected microphone."),
+        LocalizedStr::new("Control microphone input"),
+        LocalizedStr::new("Change microphone volume, mute state, routing, and audio profiles."),
         "🎤",
         Risk::High,
     ),

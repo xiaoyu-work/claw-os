@@ -198,6 +198,26 @@ Mounting calls UDisks2 as the requesting user inside a verified active local
 logind session, while protected system mounts, active swap, and non-removable
 eject targets are refused.
 
+## Audio Manager
+
+```bash
+cos app audio-manager status
+cos app audio-manager output-volume 75
+cos app audio-manager output-mute toggle
+cos app audio-manager input-mute on
+cos app audio-manager output-default 42
+cos app audio-manager output-route 42 1
+cos app audio-manager profile 30 2
+```
+
+Audio Manager connects to the requesting user's PipeWire and WirePlumber
+runtime even when the Agent itself is routed through clawd. Output changes use
+`device.audio:output`; microphone changes use `device.microphone:input`.
+Defaults, routes, and profiles use the high-risk
+`device.media-route:pipewire` scope because numeric PipeWire IDs are global
+and reusable across media classes. The broker filters non-audio objects and
+revalidates object type and serial immediately before each graph mutation.
+
 ## Package Management
 
 ```bash

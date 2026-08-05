@@ -58,6 +58,7 @@ Permission roles and app capability gates are documented in [permissions.md](per
 
 | App | Purpose |
 |---|---|
+| `audio-manager` | PipeWire/WirePlumber volume, mute, routes, and profiles |
 | `fs` | File operations, search, metadata |
 | `exec` | Command execution |
 | `web` | URL → Markdown (JS rendered) |

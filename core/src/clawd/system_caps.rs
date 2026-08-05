@@ -33,6 +33,7 @@ pub fn readonly_task_caps() -> CapSet {
     }
 
     for app in [
+        "audio-manager",
         "browser-attached",
         "crash-doctor",
         "db",
