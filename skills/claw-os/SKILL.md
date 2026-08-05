@@ -69,6 +69,7 @@ Permission roles and app capability gates are documented in [permissions.md](per
 | `net` | HTTP client |
 | `kv` | Key-value store |
 | `log` | Audit log search |
+| `netdiag` | Link, route, DNS, TCP reachability, and latency diagnosis |
 | `notify` | Notifications |
 | `pkg` | Package management |
 | `systemd` | Native system service status and lifecycle control |

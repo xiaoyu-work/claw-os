@@ -41,6 +41,7 @@ pub fn readonly_task_caps() -> CapSet {
         "kv",
         "launcher",
         "log",
+        "netdiag",
         "pkg",
         "search",
         "summarize",

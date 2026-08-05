@@ -128,6 +128,21 @@ cos browser health
 cos browser restart
 ```
 
+## Network Doctor
+
+```bash
+cos app netdiag interfaces
+cos app netdiag routes
+cos app netdiag dns example.com
+cos app netdiag tcp example.com:443 --attempts 3
+cos app netdiag diagnose example.com:443
+```
+
+`diagnose` checks the local link, IPv4 default route, one-time DNS resolution,
+and TCP reachability in order. TCP probes connect to the exact addresses
+returned by that resolution, so a second DNS lookup cannot redirect the
+connection.
+
 ## Package Management
 
 ```bash
