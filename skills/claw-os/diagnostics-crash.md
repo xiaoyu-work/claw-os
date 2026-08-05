@@ -35,10 +35,16 @@ newest coredump belongs to the reported symptom.
 5. **I/O error near the crash**
    - Continue with the storage playbook before restarting write-heavy work.
 
-## Current limitation
+## Backtraces
 
-`coredumps` currently lists metadata; it does not yet produce a symbolicated
-backtrace. Report that limitation explicitly.
+Use Crash Doctor when metadata indicates a matching dump:
 
-Restart only after preserving evidence. Repeated blind restarts can erase the
-state needed to find the cause.
+```bash
+cos app crash-doctor diagnose 60 20
+cos app crash-doctor backtrace <boot-id>:<pid>:<timestamp-us>
+```
+
+The backtrace command returns the recorded `coredumpctl info` stack and, when
+GDB and the core file are available, a constrained live stack. Restart only
+after preserving this evidence. Repeated blind restarts can erase the state
+needed to find the cause.

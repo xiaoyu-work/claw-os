@@ -6,6 +6,7 @@ pub mod client_identity;
 pub mod config;
 pub mod context;
 pub mod context_events;
+pub mod crash;
 pub mod heartbeat;
 pub mod memory;
 pub mod network;

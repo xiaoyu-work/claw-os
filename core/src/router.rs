@@ -276,6 +276,42 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__crash" {
+        let action = args
+            .get(1)
+            .ok_or_else(|| "internal crash command required".to_string())?;
+        let session = env::var("COS_SESSION")
+            .map_err(|_| "internal crash command requires COS_SESSION".to_string())?;
+        let mut since_minutes = None;
+        let mut limit = None;
+        let mut id = None;
+        let mut index = 2;
+        while index < args.len() {
+            let value = args
+                .get(index + 1)
+                .ok_or_else(|| format!("{} requires a value", args[index]))?
+                .clone();
+            match args[index].as_str() {
+                "--since-minutes" => since_minutes = Some(value),
+                "--limit" => limit = Some(value),
+                "--id" => id = Some(value),
+                other => return Err(format!("unknown internal crash flag: {other}")),
+            }
+            index += 2;
+        }
+        let value = request_clawd(
+            "system.crash.inspect",
+            json!({
+                "session": session,
+                "action": action,
+                "since_minutes": since_minutes,
+                "limit": limit,
+                "id": id,
+            }),
+        )?;
+        return Ok(Some(value.to_string()));
+    }
+
     // "app" namespace → route to Python apps
     if name == "app" {
         return dispatch_app(&args[1..]);

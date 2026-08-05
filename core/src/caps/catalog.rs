@@ -200,6 +200,14 @@ pub const CATALOG: &[CapMeta] = &[
         Risk::Low,
     ),
     CapMeta::new(
+        Verb::SYS_CRASH,
+        ScopeKind::Name,
+        LocalizedStr::new("Inspect system crash dumps"),
+        LocalizedStr::new("Read system-wide coredump metadata, correlated journal events, and process backtraces."),
+        "💥",
+        Risk::High,
+    ),
+    CapMeta::new(
         Verb::SYS_SERVICE,
         ScopeKind::Name,
         LocalizedStr::new("Start or stop system services"),

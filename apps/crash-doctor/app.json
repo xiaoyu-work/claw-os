@@ -1,0 +1,51 @@
+{
+  "id": "crash-doctor",
+  "version": "0.1.0",
+  "name": {"en": "Crash Doctor"},
+  "summary": {"en": "Correlate coredumps, OOM kills, segmentation faults, journals, and backtraces"},
+  "icon": "💥",
+  "runtime": "python",
+  "operations": {
+    "recent": {
+      "label": {"en": "List recent system coredumps"},
+      "args": [
+        {"name": "since_minutes", "kind": "number", "required": false, "default": 60},
+        {"name": "limit", "kind": "number", "required": false, "default": 20}
+      ],
+      "needs": [
+        {
+          "verb": "sys.crash",
+          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "system"}},
+          "why": {"en": "Read sensitive system-wide coredump metadata."}
+        }
+      ]
+    },
+    "diagnose": {
+      "label": {"en": "Diagnose recent crashes"},
+      "args": [
+        {"name": "since_minutes", "kind": "number", "required": false, "default": 60},
+        {"name": "limit", "kind": "number", "required": false, "default": 20}
+      ],
+      "needs": [
+        {
+          "verb": "sys.crash",
+          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "system"}},
+          "why": {"en": "Correlate system-wide coredumps with kernel and service journal events."}
+        }
+      ]
+    },
+    "backtrace": {
+      "label": {"en": "Inspect a coredump backtrace"},
+      "args": [
+        {"name": "id", "kind": "name", "required": true}
+      ],
+      "needs": [
+        {
+          "verb": "sys.crash",
+          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "system"}},
+          "why": {"en": "Extract and inspect a selected system coredump using a constrained debugger."}
+        }
+      ]
+    }
+  }
+}

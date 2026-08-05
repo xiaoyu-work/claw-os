@@ -457,6 +457,7 @@ const ADMIN_VERBS: &[Verb] = &[
     // admin additions ↓
     Verb::SECRET_WRITE,
     Verb::SECRET_GRANT,
+    Verb::SYS_CRASH,
     Verb::SYS_SERVICE,
     Verb::SYS_PACKAGE,
     Verb::SYS_MOUNT,

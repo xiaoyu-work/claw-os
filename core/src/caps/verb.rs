@@ -90,6 +90,7 @@ impl Verb {
 
     // -- System state -----------------------------------------------------
     pub const SYS_OBSERVE: Verb = Verb::new("sys.observe");
+    pub const SYS_CRASH: Verb = Verb::new("sys.crash");
     pub const SYS_SERVICE: Verb = Verb::new("sys.service");
     pub const SYS_PACKAGE: Verb = Verb::new("sys.package");
     pub const SYS_MOUNT: Verb = Verb::new("sys.mount");
@@ -225,6 +226,7 @@ pub const ALL_VERBS: &[Verb] = &[
     Verb::PROC_SIGNAL,
     Verb::PROC_OBSERVE,
     Verb::SYS_OBSERVE,
+    Verb::SYS_CRASH,
     Verb::SYS_SERVICE,
     Verb::SYS_PACKAGE,
     Verb::SYS_MOUNT,

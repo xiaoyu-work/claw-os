@@ -65,6 +65,7 @@ Permission roles and app capability gates are documented in [permissions.md](per
 | `email` | Send, search, read (SMTP/Gmail/Outlook) |
 | `calendar` | Events and scheduling (local/Google/Outlook) |
 | `doc` | Read PDF, DOCX, XLSX, PPTX, CSV |
+| `crash-doctor` | Coredump, OOM, segfault, journal correlation, and backtraces |
 | `db` | SQLite databases |
 | `net` | HTTP client |
 | `kv` | Key-value store |

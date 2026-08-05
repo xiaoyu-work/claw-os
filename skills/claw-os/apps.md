@@ -162,6 +162,22 @@ Network mutation grants are category-scoped as `net.manage:wifi`,
 `net.manage:vpn`, or `net.manage:airplane`; user-controlled SSIDs and profile
 names are never interpreted as glob capability patterns.
 
+## Crash Doctor
+
+```bash
+cos app crash-doctor recent 60 20
+cos app crash-doctor diagnose 60 20
+cos app crash-doctor backtrace <boot-id>:<pid>:<timestamp-us>
+```
+
+Crash Doctor correlates systemd coredumps with bounded kernel and service
+journal evidence for OOM kills, segmentation faults, and repeated crashes.
+System-wide crash metadata and backtraces require the explicit high-risk
+`sys.crash:system` capability. Live GDB analysis is optional, output-bounded,
+disables automatic script loading and debuginfod, and runs as the crashed
+process UID/GID for non-root crashes. Root-owned dumps return the recorded
+stack only and never launch GDB as root.
+
 ## Package Management
 
 ```bash

@@ -12,7 +12,7 @@ use super::client_identity::ClientIdentity;
 use super::protocol::{encode_response, Request, Response};
 use super::state::DaemonState;
 use super::{
-    app_sessions, audit, context, context_events, memory, network, packages, permissions,
+    app_sessions, audit, context, context_events, crash, memory, network, packages, permissions,
     scheduler, snapshots, system_journal, systemd, tasks, transactions,
 };
 
@@ -209,6 +209,7 @@ async fn dispatch_result(
         "system.operations" => system_journal::query_for_client(request.params, client),
         "memory.history" => memory::history(request.params, client),
         "memory.sessions" => memory::sessions(request.params, client),
+        "system.crash.inspect" => crash::inspect(request.params, client).await,
         "system.network.control" => network::control(request.params, client).await,
         "system.package.install" => packages::install(request.params, client).await,
         "system.package.control" => packages::control(request.params, client).await,
@@ -257,6 +258,7 @@ fn authorize_command(command: &str, client: &ClientIdentity) -> Result<(), Strin
             | "task.count"
             | "memory.history"
             | "memory.sessions"
+            | "system.crash.inspect"
             | "system.network.control"
             | "system.package.install"
             | "system.package.control"
