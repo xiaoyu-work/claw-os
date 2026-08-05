@@ -197,6 +197,27 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__systemd" {
+        let action = args
+            .get(1)
+            .ok_or_else(|| "internal systemd command required".to_string())?;
+        let unit = args
+            .get(2)
+            .ok_or_else(|| "internal systemd command requires a unit".to_string())?;
+        crate::clawd::systemd::validate_unit_name(unit)?;
+        let session = env::var("COS_SESSION")
+            .map_err(|_| "internal systemd command requires COS_SESSION".to_string())?;
+        let value = request_clawd(
+            "system.service.control",
+            json!({
+                "session": session,
+                "action": action,
+                "unit": unit,
+            }),
+        )?;
+        return Ok(Some(value.to_string()));
+    }
+
     // "app" namespace → route to Python apps
     if name == "app" {
         return dispatch_app(&args[1..]);

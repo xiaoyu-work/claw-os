@@ -71,6 +71,7 @@ Permission roles and app capability gates are documented in [permissions.md](per
 | `log` | Audit log search |
 | `notify` | Notifications |
 | `pkg` | Package management |
+| `systemd` | Native system service status and lifecycle control |
 
 ## Discovery
 

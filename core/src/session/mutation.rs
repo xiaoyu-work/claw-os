@@ -74,6 +74,13 @@ pub enum Mutation {
         name: String,
         value: String,
     },
+    /// A native systemd unit changed active or enablement state. Rollback
+    /// restores the exact state observed before the action.
+    SystemService {
+        unit: String,
+        was_active: bool,
+        was_enabled: Option<bool>,
+    },
     /// A mutation the kernel doesn't have a typed shape for yet.
     /// Escape hatch so apps can record undo info during the long Phase
     /// 3 wiring effort without blocking on a new enum variant per
@@ -194,6 +201,18 @@ mod tests {
         let json = serde_json::to_string(&m).unwrap();
         let back: MutationRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(m, back);
+    }
+
+    #[test]
+    fn system_service_round_trip() {
+        let mutation = Mutation::SystemService {
+            unit: "demo.service".into(),
+            was_active: true,
+            was_enabled: Some(false),
+        };
+        let json = serde_json::to_string(&mutation).unwrap();
+        let back: Mutation = serde_json::from_str(&json).unwrap();
+        assert_eq!(mutation, back);
     }
 
     #[test]

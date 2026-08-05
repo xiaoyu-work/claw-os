@@ -135,3 +135,20 @@ cos app pkg need python3-pymupdf
 cos app pkg has ripgrep
 cos app pkg list
 ```
+
+## Native System Services
+
+Use the `systemd` app for native systemd units. This is distinct from the
+`cos_service` tool, which manages Claw-defined service manifests.
+
+```bash
+cos app systemd status ssh.service
+cos app systemd restart ssh.service
+cos app systemd enable ssh.service
+cos app systemd disable ssh.service
+```
+
+Status requires `sys.observe:<unit>`. Lifecycle changes require the exact
+`sys.service:<unit>` grant and are executed by the root clawd broker. Start,
+stop, enable, and disable record the previous state on a durable parent task
+for rollback.

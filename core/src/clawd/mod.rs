@@ -16,6 +16,7 @@ pub mod server;
 pub mod session_scope;
 pub mod state;
 pub mod system_caps;
+pub mod systemd;
 pub mod system_journal;
 pub mod tasks;
 pub mod transactions;

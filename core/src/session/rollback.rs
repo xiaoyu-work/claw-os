@@ -223,6 +223,38 @@ pub fn rollback(sid: &SessionId) -> Result<Vec<Outcome>, SessionError> {
                     },
                 }
             }
+            Mutation::SystemService {
+                unit,
+                was_active,
+                was_enabled,
+            } => match require(Verb::SYS_SERVICE, Scope::name(unit.clone())) {
+                Ok(()) => match crate::clawd::systemd::restore_unit_state(
+                    sid,
+                    seq,
+                    &unit,
+                    was_active,
+                    was_enabled,
+                ) {
+                    Ok(()) => Outcome {
+                        seq,
+                        verb: "sys.service",
+                        status: Status::Restored,
+                        detail: format!("{unit}: restored active and enablement state"),
+                    },
+                    Err(error) => Outcome {
+                        seq,
+                        verb: "sys.service",
+                        status: Status::Failed,
+                        detail: format!("{unit}: {error}"),
+                    },
+                },
+                Err(denial) => Outcome {
+                    seq,
+                    verb: "sys.service",
+                    status: Status::Skipped,
+                    detail: format!("denied by caps: {denial}"),
+                },
+            },
             Mutation::Opaque { verb, .. } => Outcome {
                 seq,
                 verb: "opaque",
@@ -251,6 +283,7 @@ fn verb_label(m: &Mutation) -> &'static str {
         Mutation::FsRename { .. } => "fs.rename",
         Mutation::CredentialStore { .. } => "credential.store",
         Mutation::CredentialRevoke { .. } => "credential.revoke",
+        Mutation::SystemService { .. } => "sys.service",
         Mutation::Opaque { .. } => "opaque",
     }
 }
@@ -311,13 +344,12 @@ impl Drop for RollbackLock {
 
 /// Load the set of already-rolled-back seqs. Missing is empty; malformed
 /// state is an error because replaying an already-applied inverse is unsafe.
-fn load_rolled_back(
-    sid: &SessionId,
-) -> Result<std::collections::BTreeSet<u64>, SessionError> {
+fn load_rolled_back(sid: &SessionId) -> Result<std::collections::BTreeSet<u64>, SessionError> {
     let path = rolled_back_path(sid);
     match fs::read_to_string(&path) {
-        Ok(text) => serde_json::from_str(&text)
-            .map_err(|source| SessionError::Decode { path, source }),
+        Ok(text) => {
+            serde_json::from_str(&text).map_err(|source| SessionError::Decode { path, source })
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             Ok(std::collections::BTreeSet::new())
         }
@@ -369,12 +401,7 @@ fn clear_uncertain(sid: &SessionId) -> Result<(), SessionError> {
     }
 }
 
-fn undo_fs_write(
-    sid: &SessionId,
-    seq: u64,
-    path: String,
-    prev_blob: Option<String>,
-) -> Outcome {
+fn undo_fs_write(sid: &SessionId, seq: u64, path: String, prev_blob: Option<String>) -> Outcome {
     let target = PathBuf::from(&path);
 
     match prev_blob {
@@ -525,10 +552,7 @@ fn write_overwrite(target: &std::path::Path, bytes: &[u8]) -> std::io::Result<()
     }
     let tmp = target.with_extension(format!(
         "{}.cosrollback.tmp",
-        target
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
+        target.extension().and_then(|e| e.to_str()).unwrap_or("")
     ));
     fs::write(&tmp, bytes)?;
     fs::rename(&tmp, target)

@@ -13,7 +13,7 @@ use super::protocol::{encode_response, Request, Response};
 use super::state::DaemonState;
 use super::{
     app_sessions, audit, context, context_events, memory, packages, permissions,
-    scheduler, system_journal, tasks, transactions,
+    scheduler, system_journal, systemd, tasks, transactions,
 };
 
 #[derive(Debug, Clone)]
@@ -210,6 +210,8 @@ async fn dispatch_result(
         "memory.history" => memory::history(request.params, client),
         "memory.sessions" => memory::sessions(request.params, client),
         "system.package.install" => packages::install(request.params, client).await,
+        "system.service.control" => systemd::control(request.params, client).await,
+        "system.service.restore" => systemd::restore(request.params, client).await,
         "scheduler.run" => scheduler::run(request.params, client).await,
         "app_session.register" => app_sessions::register(request.params, client).await,
         "app_session.register_native" => {
@@ -252,6 +254,8 @@ fn authorize_command(command: &str, client: &ClientIdentity) -> Result<(), Strin
             | "memory.history"
             | "memory.sessions"
             | "system.package.install"
+            | "system.service.control"
+            | "system.service.restore"
             | "scheduler.run"
             | "app_session.register"
             | "app_session.register_native"

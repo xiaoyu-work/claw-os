@@ -27,12 +27,12 @@ use std::io::Write;
 
 use serde_json::{json, Value};
 
-use crate::session::{
-    current_lease, get_meta, iter_mutations, iter_turns, list as list_sessions,
-    rollback, session_dir, RollbackStatus, SessionId, Status,
-};
 #[cfg(test)]
 use crate::session;
+use crate::session::{
+    current_lease, get_meta, iter_mutations, iter_turns, list as list_sessions, rollback,
+    session_dir, RollbackStatus, SessionId, Status,
+};
 
 // ---------------------------------------------------------------------------
 // dispatch
@@ -89,6 +89,7 @@ pub fn show(args: &[String]) -> Result<Value, String> {
             crate::session::Mutation::FsRename { .. } => "fs.rename",
             crate::session::Mutation::CredentialStore { .. } => "credential.store",
             crate::session::Mutation::CredentialRevoke { .. } => "credential.revoke",
+            crate::session::Mutation::SystemService { .. } => "sys.service",
             crate::session::Mutation::Opaque { .. } => "opaque",
         };
         *by_kind.entry(kind).or_insert(0) += 1;
@@ -139,8 +140,8 @@ pub fn stop(args: &[String]) -> Result<Value, String> {
     if let Some(parent) = sentinel.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
-    let mut f = fs::File::create(&sentinel)
-        .map_err(|e| format!("write {}: {e}", sentinel.display()))?;
+    let mut f =
+        fs::File::create(&sentinel).map_err(|e| format!("write {}: {e}", sentinel.display()))?;
     // Body is just an audit string; presence is the actual signal.
     let _ = writeln!(
         f,
@@ -235,7 +236,10 @@ pub fn undo(args: &[String]) -> Result<Value, String> {
             })
         })
         .collect();
-    let failed = entries.iter().filter(|e| !e["ok"].as_bool().unwrap_or(true)).count();
+    let failed = entries
+        .iter()
+        .filter(|e| !e["ok"].as_bool().unwrap_or(true))
+        .count();
     Ok(json!({
         "id": sid.as_str(),
         "dry_run": false,
@@ -290,9 +294,10 @@ pub fn resume(args: &[String]) -> Result<Value, String> {
 // ---------------------------------------------------------------------------
 
 fn parse_sid(args: &[String], verb: &str) -> Result<SessionId, String> {
-    let raw = args.iter().find(|a| !a.starts_with("--")).ok_or_else(|| {
-        format!("usage: cos agent {verb} <task-id>  (or --session <id>)")
-    })?;
+    let raw = args
+        .iter()
+        .find(|a| !a.starts_with("--"))
+        .ok_or_else(|| format!("usage: cos agent {verb} <task-id>  (or --session <id>)"))?;
     raw.parse()
         .map_err(|e: crate::session::InvalidSessionId| e.to_string())
 }
@@ -385,10 +390,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let prev = env::var_os("COS_DATA_DIR");
         env::set_var("COS_DATA_DIR", tmp.path());
-        DataDirGuard {
-            prev,
-            _tmp: tmp,
-        }
+        DataDirGuard { prev, _tmp: tmp }
     }
 
     #[test]
@@ -434,8 +436,7 @@ mod tests {
         let _l = lock_env();
         let _d = redirect_data_dir();
         let sid = session::create("with content").unwrap();
-        session::append_turn(&sid, session::Turn::text(session::TurnRole::User, "hi"))
-            .unwrap();
+        session::append_turn(&sid, session::Turn::text(session::TurnRole::User, "hi")).unwrap();
         session::record_mutation(
             &sid,
             session::MutationRecord::new(session::Mutation::FsRename {
@@ -570,7 +571,10 @@ mod tests {
             .iter()
             .map(|v| v["action"].as_str().unwrap_or("").to_string())
             .collect();
-        let paused = actions.iter().filter(|a| a.as_str() == "marked-paused").count();
+        let paused = actions
+            .iter()
+            .filter(|a| a.as_str() == "marked-paused")
+            .count();
         let sentinels = actions
             .iter()
             .filter(|a| a.as_str() == "sentinel-written")
