@@ -63,57 +63,65 @@ def _dpkg_check(package):
         return False
 
 
+def _package_broker(action, package=None, version=None):
+    """Run one privileged package action through clawd."""
+    cos_bin = _cos_binary()
+    if not cos_bin:
+        return {"error": "cos binary not found; privileged package broker unavailable"}
+    argv = [cos_bin, "__package", action]
+    if package is not None:
+        argv.append(package)
+    if version is not None:
+        argv.append(version)
+    try:
+        result = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=INSTALL_TIMEOUT_SECS,
+            stdin=subprocess.DEVNULL,
+            env=scrub_env(),
+            check=False,
+        )
+    except PermissionError as exc:
+        return {"error": str(exc)}
+    except FileNotFoundError as exc:
+        return {"error": str(exc)}
+    except subprocess.TimeoutExpired:
+        return {"error": f"package broker exceeded {INSTALL_TIMEOUT_SECS}s"}
+
+    payload_text = (result.stdout or "").strip() or (result.stderr or "").strip()
+    try:
+        payload = json.loads(payload_text) if payload_text else {}
+    except json.JSONDecodeError:
+        return {"error": "package broker returned invalid JSON"}
+    if result.returncode != 0 and "error" not in payload:
+        payload["error"] = (
+            payload.get("stderr_tail")
+            or f"package broker exited {result.returncode}"
+        )
+    return payload
+
+
 def _apt_install(packages):
     """Install packages through clawd. Returns installed, failed, errors."""
     installed = []
     failed = []
     errors = {}
-    cos_bin = _cos_binary()
-    if not cos_bin:
-        return [], list(packages), {
-            pkg: "cos binary not found; privileged package broker unavailable"
-            for pkg in packages
-        }
-
     for pkg in packages:
         if not _valid_package_name(pkg):
             failed.append(pkg)
             errors[pkg] = "invalid Debian package name"
             continue
-        try:
-            result = subprocess.run(
-                [cos_bin, "__package", "install", pkg],
-                capture_output=True,
-                text=True,
-                timeout=INSTALL_TIMEOUT_SECS,
-                stdin=subprocess.DEVNULL,
-                env=scrub_env(),
-                check=False,
-            )
-            payload_text = (result.stdout or "").strip()
-            payload = json.loads(payload_text) if payload_text else {}
-            if result.returncode == 0 and payload.get("installed") is True:
-                installed.append(pkg)
-            else:
-                failed.append(pkg)
-                errors[pkg] = (
-                    payload.get("error")
-                    or payload.get("stderr_tail")
-                    or (result.stderr or "").strip()
-                    or f"package broker exited {result.returncode}"
-                )
-        except PermissionError as exc:
+        payload = _package_broker("install", pkg)
+        if payload.get("error"):
             failed.append(pkg)
-            errors[pkg] = str(exc)
-        except FileNotFoundError as exc:
+            errors[pkg] = payload["error"]
+        elif payload.get("after", {}).get("installed") is True:
+            installed.append(pkg)
+        else:
             failed.append(pkg)
-            errors[pkg] = str(exc)
-        except subprocess.TimeoutExpired:
-            failed.append(pkg)
-            errors[pkg] = f"package broker exceeded {INSTALL_TIMEOUT_SECS}s"
-        except json.JSONDecodeError:
-            failed.append(pkg)
-            errors[pkg] = "package broker returned invalid JSON"
+            errors[pkg] = payload.get("stderr_tail") or "package was not installed"
     return installed, failed, errors
 
 
@@ -160,7 +168,7 @@ def cmd_has(args):
     name = args[0]
     if not name or name.startswith("-") or "/" in name or "\x00" in name:
         return {"error": f"invalid package or command name: {name!r}"}
-    policy.require("sys.observe", name=f"package:{name}")
+    policy.require("sys.observe", name=name)
 
     # Check dpkg first
     if _dpkg_check(name):
@@ -319,7 +327,7 @@ def cmd_show(args):
     name = args[0]
     if not _valid_package_name(name):
         return {"name": name, "found": False, "error": "invalid Debian package name"}
-    policy.require("sys.observe", name=f"package:{name}")
+    policy.require("sys.observe", name=name)
 
     try:
         result = subprocess.run(
@@ -393,6 +401,38 @@ def cmd_list(args):
         return {"packages": [], "error": f"dpkg --get-selections exceeded {QUERY_TIMEOUT_SECS}s"}
 
 
+def _single_package_action(command, args):
+    if len(args) != 1 or not _valid_package_name(args[0]):
+        return {"error": f"{command} requires one valid Debian package name"}
+    package = args[0]
+    policy.require("sys.package", name=package)
+    return _package_broker(command, package)
+
+
+def cmd_install_version(args):
+    if len(args) != 2 or not _valid_package_name(args[0]):
+        return {"error": "install-version requires <package> <version>"}
+    package, version = args
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.:+~-]{0,254}", version):
+        return {"error": f"invalid Debian package version: {version!r}"}
+    policy.require("sys.package", name=package)
+    return _package_broker("install-version", package, version)
+
+
+def cmd_update(args):
+    if args:
+        return {"error": "update takes no arguments"}
+    policy.require("sys.package", wild=True)
+    return _package_broker("update-index")
+
+
+def cmd_upgrade_all(args):
+    if args:
+        return {"error": "upgrade-all takes no arguments"}
+    policy.require("sys.package", wild=True)
+    return _package_broker("upgrade-all")
+
+
 def _schema():
     return {
         "need": {
@@ -429,6 +469,14 @@ def _schema():
             ],
             "example": "cos app pkg show imagemagick",
         },
+        "remove": {"description": "Remove one package", "parameters": [{"name": "package", "type": "string", "required": True, "kind": "positional"}]},
+        "purge": {"description": "Purge one package and its configuration", "parameters": [{"name": "package", "type": "string", "required": True, "kind": "positional"}]},
+        "upgrade": {"description": "Upgrade one package", "parameters": [{"name": "package", "type": "string", "required": True, "kind": "positional"}]},
+        "install-version": {"description": "Install an exact package version", "parameters": [{"name": "package", "type": "string", "required": True, "kind": "positional"}, {"name": "version", "type": "string", "required": True, "kind": "positional"}]},
+        "hold": {"description": "Prevent upgrades for one package", "parameters": [{"name": "package", "type": "string", "required": True, "kind": "positional"}]},
+        "unhold": {"description": "Release a package hold", "parameters": [{"name": "package", "type": "string", "required": True, "kind": "positional"}]},
+        "update": {"description": "Refresh apt package indexes", "parameters": []},
+        "upgrade-all": {"description": "Upgrade every package with an available candidate", "parameters": []},
     }
 
 
@@ -442,6 +490,14 @@ def run(command, args):
         "list": cmd_list,
         "search": cmd_search,
         "show": cmd_show,
+        "remove": lambda values: _single_package_action("remove", values),
+        "purge": lambda values: _single_package_action("purge", values),
+        "upgrade": lambda values: _single_package_action("upgrade", values),
+        "hold": lambda values: _single_package_action("hold", values),
+        "unhold": lambda values: _single_package_action("unhold", values),
+        "install-version": cmd_install_version,
+        "update": cmd_update,
+        "upgrade-all": cmd_upgrade_all,
     }
     handler = commands.get(command)
     if handler is None:

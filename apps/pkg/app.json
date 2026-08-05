@@ -28,7 +28,7 @@
       ],
       "needs": [
         {
-          "verb": "sys.package",
+          "verb": "sys.observe",
           "scope": { "kind": "from-arg", "arg": "name" },
           "why": { "en": "Look up whether the named package or command is installed." }
         }
@@ -38,7 +38,7 @@
       "label": { "en": "List installed packages" },
       "needs": [
         {
-          "verb": "sys.package",
+          "verb": "sys.observe",
           "scope": { "kind": "wild" },
           "why": { "en": "Enumerate every system package currently installed." }
         }
@@ -51,7 +51,7 @@
       ],
       "needs": [
         {
-          "verb": "sys.package",
+          "verb": "sys.observe",
           "scope": { "kind": "wild" },
           "why": { "en": "Browse the local apt package catalog to find software that matches the user's intent." }
         }
@@ -64,11 +64,52 @@
       ],
       "needs": [
         {
-          "verb": "sys.package",
+          "verb": "sys.observe",
           "scope": { "kind": "from-arg", "arg": "name" },
           "why": { "en": "Read catalog metadata (description, homepage, dependencies, size) for the named package." }
         }
       ]
+    },
+    "remove": {
+      "label": {"en": "Remove a package"},
+      "args": [{"name": "package", "kind": "name", "required": true}],
+      "needs": [{"verb": "sys.package", "scope": {"kind": "from-arg", "arg": "package"}, "why": {"en": "Remove this package while retaining configuration."}}]
+    },
+    "purge": {
+      "label": {"en": "Purge a package"},
+      "args": [{"name": "package", "kind": "name", "required": true}],
+      "needs": [{"verb": "sys.package", "scope": {"kind": "from-arg", "arg": "package"}, "why": {"en": "Remove this package and its system configuration."}}]
+    },
+    "upgrade": {
+      "label": {"en": "Upgrade a package"},
+      "args": [{"name": "package", "kind": "name", "required": true}],
+      "needs": [{"verb": "sys.package", "scope": {"kind": "from-arg", "arg": "package"}, "why": {"en": "Upgrade this package to the candidate version."}}]
+    },
+    "install-version": {
+      "label": {"en": "Install an exact package version"},
+      "args": [
+        {"name": "package", "kind": "name", "required": true},
+        {"name": "version", "kind": "text", "required": true}
+      ],
+      "needs": [{"verb": "sys.package", "scope": {"kind": "from-arg", "arg": "package"}, "why": {"en": "Install or downgrade this package to the requested version."}}]
+    },
+    "hold": {
+      "label": {"en": "Hold a package version"},
+      "args": [{"name": "package", "kind": "name", "required": true}],
+      "needs": [{"verb": "sys.package", "scope": {"kind": "from-arg", "arg": "package"}, "why": {"en": "Prevent automatic upgrades of this package."}}]
+    },
+    "unhold": {
+      "label": {"en": "Release a package hold"},
+      "args": [{"name": "package", "kind": "name", "required": true}],
+      "needs": [{"verb": "sys.package", "scope": {"kind": "from-arg", "arg": "package"}, "why": {"en": "Allow this package to be upgraded again."}}]
+    },
+    "update": {
+      "label": {"en": "Refresh package indexes"},
+      "needs": [{"verb": "sys.package", "scope": {"kind": "wild"}, "why": {"en": "Refresh package metadata from all configured repositories."}}]
+    },
+    "upgrade-all": {
+      "label": {"en": "Upgrade all packages"},
+      "needs": [{"verb": "sys.package", "scope": {"kind": "wild"}, "why": {"en": "Upgrade every package with an available candidate."}}]
     }
   }
 }

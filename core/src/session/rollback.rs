@@ -255,6 +255,38 @@ pub fn rollback(sid: &SessionId) -> Result<Vec<Outcome>, SessionError> {
                     detail: format!("denied by caps: {denial}"),
                 },
             },
+            Mutation::SystemPackage {
+                package,
+                previous_version,
+                was_held,
+            } => match require(Verb::SYS_PACKAGE, Scope::name(package.clone())) {
+                Ok(()) => match crate::clawd::packages::restore_package_state(
+                    sid,
+                    seq,
+                    &package,
+                    previous_version.as_deref(),
+                    was_held,
+                ) {
+                    Ok(()) => Outcome {
+                        seq,
+                        verb: "sys.package",
+                        status: Status::Restored,
+                        detail: format!("{package}: restored package version and hold state"),
+                    },
+                    Err(error) => Outcome {
+                        seq,
+                        verb: "sys.package",
+                        status: Status::Failed,
+                        detail: format!("{package}: {error}"),
+                    },
+                },
+                Err(denial) => Outcome {
+                    seq,
+                    verb: "sys.package",
+                    status: Status::Skipped,
+                    detail: format!("denied by caps: {denial}"),
+                },
+            },
             Mutation::Opaque { verb, .. } => Outcome {
                 seq,
                 verb: "opaque",
@@ -284,6 +316,7 @@ fn verb_label(m: &Mutation) -> &'static str {
         Mutation::CredentialStore { .. } => "credential.store",
         Mutation::CredentialRevoke { .. } => "credential.revoke",
         Mutation::SystemService { .. } => "sys.service",
+        Mutation::SystemPackage { .. } => "sys.package",
         Mutation::Opaque { .. } => "opaque",
     }
 }

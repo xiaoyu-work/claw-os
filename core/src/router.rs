@@ -175,23 +175,26 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
     }
 
     if name == "__package" {
-        let command = args
+        let action = args
             .get(1)
             .ok_or_else(|| "internal package command required".to_string())?;
-        if command != "install" {
-            return Err(format!("unknown internal package command: {command}"));
+        let package = args.get(2).cloned();
+        let version = args.get(3).cloned();
+        if let Some(package) = package.as_deref() {
+            crate::clawd::packages::validate_package_name(package)?;
         }
-        let package = args
-            .get(2)
-            .ok_or_else(|| "internal package install requires a package name".to_string())?;
-        crate::clawd::packages::validate_package_name(package)?;
+        if let Some(version) = version.as_deref() {
+            crate::clawd::packages::validate_version(version)?;
+        }
         let session = env::var("COS_SESSION")
             .map_err(|_| "internal package install requires COS_SESSION".to_string())?;
         let value = request_clawd(
-            "system.package.install",
+            "system.package.control",
             json!({
                 "session": session,
+                "action": action,
                 "package": package,
+                "version": version,
             }),
         )?;
         return Ok(Some(value.to_string()));

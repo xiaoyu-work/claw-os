@@ -81,6 +81,13 @@ pub enum Mutation {
         was_active: bool,
         was_enabled: Option<bool>,
     },
+    /// A Debian package changed installation, version, or hold state.
+    /// Rollback restores the exact installed version (or absence) and hold.
+    SystemPackage {
+        package: String,
+        previous_version: Option<String>,
+        was_held: bool,
+    },
     /// A mutation the kernel doesn't have a typed shape for yet.
     /// Escape hatch so apps can record undo info during the long Phase
     /// 3 wiring effort without blocking on a new enum variant per
@@ -209,6 +216,18 @@ mod tests {
             unit: "demo.service".into(),
             was_active: true,
             was_enabled: Some(false),
+        };
+        let json = serde_json::to_string(&mutation).unwrap();
+        let back: Mutation = serde_json::from_str(&json).unwrap();
+        assert_eq!(mutation, back);
+    }
+
+    #[test]
+    fn system_package_round_trip() {
+        let mutation = Mutation::SystemPackage {
+            package: "curl".into(),
+            previous_version: Some("8.0-1".into()),
+            was_held: true,
         };
         let json = serde_json::to_string(&mutation).unwrap();
         let back: Mutation = serde_json::from_str(&json).unwrap();

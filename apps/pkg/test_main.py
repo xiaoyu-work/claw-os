@@ -107,7 +107,7 @@ class PackageInstallTests(unittest.TestCase):
         require.assert_not_called()
 
     def test_install_uses_hidden_clawd_broker(self):
-        payload = json.dumps({"package": "curl", "installed": True})
+        payload = json.dumps({"package": "curl", "after": {"installed": True}})
         with mock.patch.dict(os.environ, {"COS_BIN": "/usr/local/bin/cos"}), mock.patch.object(
             main.subprocess,
             "run",
@@ -119,6 +119,27 @@ class PackageInstallTests(unittest.TestCase):
         self.assertEqual(errors, {})
         argv = runner.call_args[0][0]
         self.assertEqual(argv, ["/usr/local/bin/cos", "__package", "install", "curl"])
+
+    def test_remove_uses_exact_package_scope(self):
+        payload = json.dumps({"action": "remove", "changed": True})
+        with mock.patch.dict(os.environ, {"COS_BIN": "/usr/local/bin/cos"}), mock.patch.object(
+            main.policy, "require"
+        ) as require, mock.patch.object(
+            main.subprocess, "run", return_value=_fake_completed(stdout=payload)
+        ):
+            result = main.run("remove", ["curl"])
+        require.assert_called_once_with("sys.package", name="curl")
+        self.assertTrue(result["changed"])
+
+    def test_update_requires_wild_package_permission(self):
+        payload = json.dumps({"action": "update-index"})
+        with mock.patch.dict(os.environ, {"COS_BIN": "/usr/local/bin/cos"}), mock.patch.object(
+            main.policy, "require"
+        ) as require, mock.patch.object(
+            main.subprocess, "run", return_value=_fake_completed(stdout=payload)
+        ):
+            main.run("update", [])
+        require.assert_called_once_with("sys.package", wild=True)
 
 
 # ---------------------------------------------------------------------------

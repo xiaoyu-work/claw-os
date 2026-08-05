@@ -90,6 +90,7 @@ pub fn show(args: &[String]) -> Result<Value, String> {
             crate::session::Mutation::CredentialStore { .. } => "credential.store",
             crate::session::Mutation::CredentialRevoke { .. } => "credential.revoke",
             crate::session::Mutation::SystemService { .. } => "sys.service",
+            crate::session::Mutation::SystemPackage { .. } => "sys.package",
             crate::session::Mutation::Opaque { .. } => "opaque",
         };
         *by_kind.entry(kind).or_insert(0) += 1;

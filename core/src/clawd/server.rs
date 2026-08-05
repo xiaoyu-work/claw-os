@@ -210,6 +210,8 @@ async fn dispatch_result(
         "memory.history" => memory::history(request.params, client),
         "memory.sessions" => memory::sessions(request.params, client),
         "system.package.install" => packages::install(request.params, client).await,
+        "system.package.control" => packages::control(request.params, client).await,
+        "system.package.restore" => packages::restore(request.params, client).await,
         "system.service.control" => systemd::control(request.params, client).await,
         "system.service.restore" => systemd::restore(request.params, client).await,
         "scheduler.run" => scheduler::run(request.params, client).await,
@@ -254,6 +256,8 @@ fn authorize_command(command: &str, client: &ClientIdentity) -> Result<(), Strin
             | "memory.history"
             | "memory.sessions"
             | "system.package.install"
+            | "system.package.control"
+            | "system.package.restore"
             | "system.service.control"
             | "system.service.restore"
             | "scheduler.run"

@@ -134,7 +134,17 @@ cos browser restart
 cos app pkg need python3-pymupdf
 cos app pkg has ripgrep
 cos app pkg list
+cos app pkg update
+cos app pkg upgrade curl
+cos app pkg install-version curl 8.0.1-1
+cos app pkg hold curl
+cos app pkg remove curl
 ```
+
+Single-package install, upgrade, remove, and hold changes record the previous
+installed version and hold state on a durable parent task. Purge, global index
+refresh, and full-system upgrade require a system snapshot for complete
+rollback.
 
 ## Native System Services
 
