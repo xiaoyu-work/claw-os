@@ -10,13 +10,16 @@ use clap::Parser;
 use cosmic::{
     Element,
     app::{Core, CosmicFlags, Settings, Task},
-    cctk::sctk::{self, shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer}},
+    cctk::sctk::{
+        self,
+        shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer},
+    },
     cosmic_config::{Config, CosmicConfigEntry},
     cosmic_theme::Spacing,
     dbus_activation,
     desktop::{DesktopEntryData, IconSourceExt, fde::PathSource},
     iced::{
-        self, Alignment, Color, Length, Limits, Size, Subscription,
+        self, Alignment, Color, Length, Limits, Shadow, Size, Subscription, Vector,
         event::{listen_with, wayland::OverlapNotifyEvent},
         executor,
         id::Id,
@@ -59,8 +62,7 @@ use cosmic::{
     widget::{
         self, Column,
         autosize::autosize,
-        button,
-        divider,
+        button, divider,
         icon::{self},
         scrollable, search_input, space, svg, text, text_input,
     },
@@ -216,6 +218,7 @@ struct CosmicAppLibrary {
     app_list_config: AppListConfig,
     overlap: HashMap<String, Rectangle>,
     margin: f32,
+    width: f32,
     height: f32,
     needs_clear: bool,
     focused_id: Option<widget::Id>,
@@ -246,6 +249,7 @@ impl Default for CosmicAppLibrary {
             app_list_config: Default::default(),
             overlap: Default::default(),
             margin: Default::default(),
+            width: 1920.0,
             height: Default::default(),
             needs_clear: Default::default(),
             focused_id: Default::default(),
@@ -346,6 +350,87 @@ impl CosmicAppLibrary {
             .map(|e| e.icon.as_cosmic_icon())
             .collect();
     }
+
+    fn grid_columns(&self) -> usize {
+        let spacing = theme::spacing();
+        grid_columns_for_width(
+            self.width,
+            f32::from(spacing.space_xxl) * 4.0,
+            f32::from(spacing.space_s),
+        )
+    }
+}
+
+const MAX_GRID_COLUMNS: usize = 7;
+const MIN_GRID_CELL_WIDTH: f32 = 172.0;
+
+fn grid_columns_for_width(width: f32, horizontal_padding: f32, spacing: f32) -> usize {
+    let available = (width - horizontal_padding).max(MIN_GRID_CELL_WIDTH);
+    (((available + spacing) / (MIN_GRID_CELL_WIDTH + spacing)).floor() as usize)
+        .clamp(1, MAX_GRID_COLUMNS)
+}
+
+/// Relative scroll offset that brings the row holding `index` into view.
+///
+/// The grid scrolls between the first and last *row*, so the denominator is
+/// the number of scrollable rows (`rows - 1`). Dividing by the raw row count
+/// would leave the final row permanently clipped on short outputs.
+fn scroll_ratio(index: usize, total: usize, columns: usize) -> f32 {
+    let columns = columns.max(1);
+    let rows = total.div_ceil(columns);
+    let scrollable_rows = rows.saturating_sub(1);
+    if scrollable_rows == 0 {
+        return 0.0;
+    }
+    ((index / columns) as f32 / scrollable_rows as f32).clamp(0.0, 1.0)
+}
+
+fn launchpad_glass_style(theme: &cosmic::Theme) -> container::Style {
+    let cosmic = theme.cosmic();
+    let mut background: Color = cosmic.background.base.into();
+    // App labels sit directly on this scrim over an arbitrary wallpaper, so
+    // keep it opaque enough to hold contrast; high contrast drops blending
+    // entirely rather than relying on the wallpaper behind it.
+    background.a = match (cosmic.is_high_contrast, cosmic.is_dark) {
+        (true, _) => 1.0,
+        (false, true) => 0.82,
+        (false, false) => 0.78,
+    };
+
+    container::Style {
+        text_color: Some(cosmic.background.on.into()),
+        icon_color: Some(cosmic.background.on.into()),
+        background: Some(iced::Background::Color(background)),
+        ..Default::default()
+    }
+}
+
+fn search_glass_style(theme: &cosmic::Theme) -> container::Style {
+    let cosmic = theme.cosmic();
+    let component = &cosmic.background.component;
+    let mut background: Color = component.base.into();
+    background.a = if cosmic.is_dark { 0.62 } else { 0.76 };
+    let mut hairline: Color = cosmic.accent_color().into();
+    hairline.a = if cosmic.is_high_contrast { 0.72 } else { 0.28 };
+    let mut shadow_color: Color = cosmic.shade.into();
+    shadow_color.a = if cosmic.is_dark { 0.24 } else { 0.14 };
+
+    container::Style {
+        text_color: Some(component.on.into()),
+        icon_color: Some(component.on.into()),
+        background: Some(iced::Background::Color(background)),
+        border: Border {
+            radius: cosmic.radius_l().into(),
+            width: 1.0,
+            color: hairline,
+        },
+        shadow: Shadow {
+            color: shadow_color,
+            offset: Vector::new(0.0, 4.0),
+            blur_radius: 18.0,
+        },
+        ..Default::default()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -376,6 +461,7 @@ enum Message {
     UnPinFromAppTray(usize),
     AppListConfig(AppListConfig),
     Opened(Size, SurfaceId),
+    Resized(Size, SurfaceId),
     Overlap(OverlapNotifyEvent),
 }
 
@@ -542,13 +628,13 @@ impl cosmic::Application for CosmicAppLibrary {
             }
             Message::UpdateFocused(id) => {
                 self.focused_id = id;
+                let grid_columns = self.grid_columns();
                 let i = self
                     .focused_id
                     .as_ref()
                     .and_then(|focused| self.entry_ids.iter().position(|i| i == focused))
                     .unwrap_or(0);
-                let y =
-                    ((i / 7) as f32 / ((self.entry_path_input.len() / 7) as f32).max(1.)).max(0.0);
+                let y = scroll_ratio(i, self.entry_path_input.len(), grid_columns);
 
                 return iced_runtime::task::widget(operation::scrollable::snap_to(
                     self.scrollable_id.clone(),
@@ -582,11 +668,16 @@ impl cosmic::Application for CosmicAppLibrary {
             },
 
             Message::PrevRow => {
+                let grid_columns = self.grid_columns();
                 let mut i = self
                     .focused_id
                     .as_ref()
                     .and_then(|focused| self.entry_ids.iter().position(|i| i == focused))
-                    .unwrap_or(self.entry_ids.len().saturating_add(6));
+                    .unwrap_or(
+                        self.entry_ids
+                            .len()
+                            .saturating_add(grid_columns.saturating_sub(1)),
+                    );
                 if i == 0 {
                     self.focused_id = None;
 
@@ -597,9 +688,8 @@ impl cosmic::Application for CosmicAppLibrary {
                             .map(|id| cosmic::Action::App(Message::UpdateFocused(Some(id)))),
                     ]);
                 }
-                i = i.saturating_sub(7);
-                let y =
-                    ((i / 7) as f32 / ((self.entry_path_input.len() / 7) as f32).max(1.)).max(0.0);
+                i = i.saturating_sub(grid_columns);
+                let y = scroll_ratio(i, self.entry_path_input.len(), grid_columns);
 
                 let Some(focused) = self.entry_ids.get(i).cloned() else {
                     return Task::none();
@@ -618,12 +708,13 @@ impl cosmic::Application for CosmicAppLibrary {
                 ]);
             }
             Message::NextRow => {
+                let grid_columns = self.grid_columns();
                 let mut i: i32 = self
                     .focused_id
                     .as_ref()
                     .and_then(|focused| self.entry_ids.iter().position(|i| i == focused))
                     .map(|i| i as i32)
-                    .unwrap_or(-7);
+                    .unwrap_or(-(grid_columns as i32));
                 if i == self.entry_ids.len() as i32 - 1 {
                     self.focused_id = None;
                     return iced::Task::batch(vec![
@@ -633,14 +724,13 @@ impl cosmic::Application for CosmicAppLibrary {
                             .map(|id| cosmic::Action::App(Message::UpdateFocused(Some(id)))),
                     ]);
                 }
-                i += 7;
+                i += grid_columns as i32;
                 i = i.min(self.entry_ids.len() as i32 - 1);
                 let Some(focused) = self.entry_ids.get(i as usize).cloned() else {
                     return Task::none();
                 };
                 self.focused_id = Some(focused.clone());
-                let y =
-                    ((i / 7) as f32 / ((self.entry_path_input.len() / 7) as f32).max(1.)).max(0.0);
+                let y = scroll_ratio(i as usize, self.entry_path_input.len(), grid_columns);
 
                 return Task::batch(vec![
                     iced_runtime::task::widget(operation::scrollable::snap_to(
@@ -837,11 +927,19 @@ impl cosmic::Application for CosmicAppLibrary {
             Message::AppListConfig(config) => {
                 self.app_list_config = config;
             }
+            Message::Resized(size, window_id) => {
+                if window_id == *WINDOW_ID {
+                    self.width = size.width;
+                    self.height = size.height;
+                    self.handle_overlap();
+                }
+            }
             Message::Opened(size, window_id) => {
                 if window_id == *WINDOW_ID {
                     if matches!(self.surface_state, SurfaceState::WaitingToBeShown) {
                         self.surface_state = SurfaceState::Visible;
                     }
+                    self.width = size.width;
                     self.height = size.height;
                     self.handle_overlap();
                 }
@@ -1032,9 +1130,8 @@ impl cosmic::Application for CosmicAppLibrary {
         // Launchpad-style layout
         // --------------------------------------------------------------
         // Top: prominent centered "Search" pill.
-        // Below: an evenly-spaced 7-column grid of all installed apps,
-        // rendered with large icons and white labels over a translucent
-        // dark backdrop that lets the user's wallpaper show through.
+        // Below: an evenly-spaced grid of all installed apps, rendered with
+        // large icons and theme-colored labels over translucent glass.
         // --------------------------------------------------------------
 
         let search_pill = container(
@@ -1043,26 +1140,14 @@ impl cosmic::Application for CosmicAppLibrary {
                 .on_paste(Message::InputChanged)
                 .on_submit(|_| Message::StartCurAppFocus)
                 .style(TextInput::Search)
-                .width(Length::Fixed(360.0))
+                .width(Length::Fill)
                 .size(15)
                 .id(SEARCH_ID.clone()),
         )
         .padding([6, 12])
-        .class(theme::Container::Custom(Box::new(|_theme| {
-            container::Style {
-                text_color: Some(Color::from_rgb(0.95, 0.95, 0.97)),
-                icon_color: Some(Color::from_rgb(0.95, 0.95, 0.97)),
-                background: Some(iced::Background::Color(Color::from_rgba(
-                    1.0, 1.0, 1.0, 0.18,
-                ))),
-                border: Border {
-                    radius: 18.0.into(),
-                    width: 1.0,
-                    color: Color::from_rgba(1.0, 1.0, 1.0, 0.12),
-                },
-                ..Default::default()
-            }
-        })));
+        .width(Length::Fill)
+        .max_width(360.0)
+        .class(theme::Container::custom(search_glass_style));
 
         let ai_hint: Option<Element<'_, Message>> = if !self.search_value.trim().is_empty() {
             let q = self.search_value.trim().to_string();
@@ -1086,12 +1171,12 @@ impl cosmic::Application for CosmicAppLibrary {
                 .spacing(8)
                 .align_y(Alignment::Center),
             )
-            .width(Length::Fixed(600.0))
+            .width(Length::Fill)
             .on_press(Message::AskAi)
             .padding([space_xs, space_s])
             .class(Button::Suggested);
             Some(
-                container(ai_button)
+                container(container(ai_button).width(Length::Fill).max_width(600.0))
                     .center_x(Length::Fill)
                     .padding([0, space_xxl, space_xs, space_xxl])
                     .into(),
@@ -1100,17 +1185,14 @@ impl cosmic::Application for CosmicAppLibrary {
             None
         };
 
-        let header = container(
-            column![
-                container(search_pill).center_x(Length::Fill),
-            ]
-            .spacing(space_xxs),
-        )
-        .width(Length::Fill)
-        .padding([space_xs, space_xxl, space_xs, space_xxl]);
+        let header =
+            container(column![container(search_pill).center_x(Length::Fill),].spacing(space_xxs))
+                .width(Length::Fill)
+                .padding([space_xs, space_xxl, space_xs, space_xxl]);
 
-        // App grid: 7 cells wide, large icons with white labels.
-        const GRID_COLS: usize = 7;
+        // App grid: seven cells wide where space allows, with narrower outputs
+        // selecting a safe count without changing the launchpad layout.
+        let grid_columns = self.grid_columns();
         let app_grid_list: Vec<Element<'_, Message>> = self
             .entry_path_input
             .iter()
@@ -1153,11 +1235,11 @@ impl cosmic::Application for CosmicAppLibrary {
 
                 b.into()
             })
-            .chunks(GRID_COLS)
+            .chunks(grid_columns)
             .into_iter()
             .map(|row_chunk| {
                 let mut new_row: Vec<Element<'_, Message>> = row_chunk.collect_vec();
-                let missing = GRID_COLS - new_row.len();
+                let missing = grid_columns - new_row.len();
                 if missing > 0 {
                     new_row.push(
                         iced::widget::space::horizontal()
@@ -1193,26 +1275,15 @@ impl cosmic::Application for CosmicAppLibrary {
         body = body.push(app_scrollable);
         let content = body.align_x(Alignment::Center).width(Length::Fill);
 
-        // Rounded translucent window — compositor handles the wallpaper
-        // underneath, so a low-alpha navy-blue fill is enough to read as the
-        // Claw Glass Launchpad surface (brand-blue tinted glass, not a neutral
-        // gray/black scrim). The whole surface is wrapped in a `mouse_area` so
+        // Theme-derived translucent window over compositor wallpaper blur. The
+        // whole surface is wrapped in a `mouse_area` so
         // that clicks on empty space dismiss the launcher (or close an open
         // context menu); buttons in the grid capture their own events first
         // and don't propagate.
         let window = container(content)
             .height(Length::Fill)
             .width(Length::Fill)
-            .class(theme::Container::Custom(Box::new(|_theme| {
-                container::Style {
-                    text_color: Some(Color::from_rgb(0.97, 0.97, 0.99)),
-                    icon_color: Some(Color::from_rgb(0.97, 0.97, 0.99)),
-                    background: Some(iced::Background::Color(Color::from_rgba(
-                        0.02, 0.06, 0.16, 0.55,
-                    ))),
-                    ..Default::default()
-                }
-            })));
+            .class(theme::Container::custom(launchpad_glass_style));
 
         let dismiss_msg = if self.menu.is_some() {
             Message::CloseContextMenu
@@ -1285,6 +1356,9 @@ impl cosmic::Application for CosmicAppLibrary {
                 cosmic::iced::Event::Window(WindowEvent::Opened { position: _, size }) => {
                     Some(Message::Opened(size, id))
                 }
+                cosmic::iced::Event::Window(WindowEvent::Resized(size)) => {
+                    Some(Message::Resized(size, id))
+                }
                 _ => None,
             }),
             keyboard_nav::subscription().map(Message::KeyboardNav),
@@ -1325,6 +1399,7 @@ impl cosmic::Application for CosmicAppLibrary {
             helper,
             last_hide: None,
             margin: 0.,
+            width: 1920.0,
             overlap: HashMap::new(),
             height: 100.,
             scrollable_id,
@@ -1339,5 +1414,40 @@ impl cosmic::Application for CosmicAppLibrary {
         };
 
         (self_, task)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_GRID_COLUMNS, grid_columns_for_width, scroll_ratio};
+
+    #[test]
+    fn grid_columns_remain_seven_on_wide_outputs() {
+        assert_eq!(
+            grid_columns_for_width(1920.0, 256.0, 16.0),
+            MAX_GRID_COLUMNS
+        );
+    }
+
+    #[test]
+    fn grid_columns_shrink_on_narrow_outputs() {
+        assert!(grid_columns_for_width(800.0, 256.0, 16.0) < MAX_GRID_COLUMNS);
+        assert_eq!(grid_columns_for_width(100.0, 256.0, 16.0), 1);
+    }
+
+    #[test]
+    fn scroll_ratio_reaches_the_end_of_the_grid() {
+        // 18 apps over 3 columns is exactly 6 rows; the last row must scroll
+        // all the way down instead of stopping at 5/6.
+        assert_eq!(scroll_ratio(17, 18, 3), 1.0);
+        assert_eq!(scroll_ratio(0, 18, 3), 0.0);
+        assert_eq!(scroll_ratio(9, 18, 3), 0.6);
+    }
+
+    #[test]
+    fn scroll_ratio_handles_degenerate_grids() {
+        assert_eq!(scroll_ratio(0, 0, 7), 0.0);
+        assert_eq!(scroll_ratio(3, 4, 7), 0.0);
+        assert_eq!(scroll_ratio(5, 6, 0), 1.0);
     }
 }
