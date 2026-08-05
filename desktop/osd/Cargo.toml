@@ -61,3 +61,7 @@ git = "https://github.com/pop-os/cosmic-settings"
 lto = "thin"
 opt-level = 3
 panic = "abort"
+
+# Opt out of the repo-root workspace; this crate has its own dependency graph
+# and is built standalone by `desktop/justfile`.
+[workspace]
