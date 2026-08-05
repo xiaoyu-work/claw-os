@@ -1,29 +1,39 @@
-//! Claw Glass shared visual treatments for the portal dialogs.
+//! Shared visual treatments for the portal dialogs.
 //!
-//! Centralizes the design-system tokens (frosted `radius_l` cards, blue
-//! hairlines, brand-blue translucent selection) so every system dialog —
-//! file chooser, access/consent, screencast, screenshot — reads as the same
-//! frosted-glass language instead of re-deriving styles inline.
+//! Centralizes the design-system tokens (frosted `radius_l` cards, neutral
+//! hairlines, accent selection) so every system dialog - file chooser,
+//! access/consent, screencast, screenshot - reads as the same frosted-glass
+//! language instead of re-deriving styles inline.
 //!
-//! Brand accent is Claw blue `#005CFE`; surfaces are never flat gray.
+//! Chrome is neutral. The brand accent `#005CFE` is spent only on state, so
+//! that a selected row is the one thing in the dialog wearing it.
 
 use cosmic::iced::{Background, Border, Color};
 use cosmic::theme;
 use cosmic::widget::container;
 
-/// Alpha for blue hairline borders (1px translucent accent).
-pub const HAIRLINE_ALPHA: f32 = 0.20;
-/// Alpha for a resting brand-blue translucent selection fill.
+/// Alpha for a resting accent selection fill.
 pub const SELECTION_ALPHA: f32 = 0.16;
 
-/// Brand-blue accent as an `iced` color with the given alpha.
+/// Brand accent as an `iced` color with the given alpha. Selection only.
 pub fn accent_alpha(theme: &cosmic::Theme, alpha: f32) -> Color {
     let mut color: Color = theme.cosmic().accent_color().into();
     color.a = alpha;
     color
 }
 
-/// Frosted `radius_l` card: translucent component fill + 1px blue hairline.
+/// Neutral hairline for chrome.
+///
+/// `on_bg_color` is near-black on a light theme and near-white on a dark one,
+/// so a low alpha of it separates surfaces in both without tinting them.
+pub fn hairline(theme: &cosmic::Theme) -> Color {
+    let cosmic = theme.cosmic();
+    let mut color: Color = cosmic.on_bg_color().into();
+    color.a = if cosmic.is_dark { 0.15 } else { 0.09 };
+    color
+}
+
+/// Frosted `radius_l` card: translucent component fill + 1px neutral hairline.
 ///
 /// The compositor's blur supplies depth; the hairline only hints separation.
 pub fn frosted_card() -> theme::Container<'static> {
@@ -34,34 +44,37 @@ pub fn frosted_card() -> theme::Container<'static> {
             border: Border {
                 radius: cosmic.radius_l().into(),
                 width: 1.0,
-                color: accent_alpha(theme, HAIRLINE_ALPHA),
+                color: hairline(theme),
             },
             ..Default::default()
         }
     })
 }
 
-/// Brand-blue translucent selection row/tile (`radius_m`), never gray.
+/// Accent translucent selection row/tile (`radius_m`).
 ///
-/// `selected` gives a resting accent fill + accent hairline; otherwise the
-/// surface is transparent so hover styling can layer on top.
+/// `selected` gives a resting accent fill and matching hairline; otherwise the
+/// surface is transparent so hover styling can layer on top. This is the one
+/// place in a portal dialog that carries the brand colour, which is what makes
+/// the selected item legible at a glance.
 pub fn selection_tile(selected: bool) -> theme::Container<'static> {
     theme::Container::custom(move |theme| {
         let cosmic = theme.cosmic();
-        let (background, width) = if selected {
+        let (background, width, color) = if selected {
             (
                 Some(Background::Color(accent_alpha(theme, SELECTION_ALPHA))),
                 1.0,
+                accent_alpha(theme, 0.34),
             )
         } else {
-            (None, 0.0)
+            (None, 0.0, Color::TRANSPARENT)
         };
         container::Style {
             background,
             border: Border {
                 radius: cosmic.radius_m().into(),
                 width,
-                color: accent_alpha(theme, HAIRLINE_ALPHA),
+                color,
             },
             ..Default::default()
         }

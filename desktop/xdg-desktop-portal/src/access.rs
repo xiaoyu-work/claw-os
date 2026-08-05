@@ -179,12 +179,9 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<'_, Msg> {
     for (i, ((id, label, choices, initial), choice_labels)) in
         choices.iter().zip(&args.choice_labels).enumerate()
     {
-        // Brand-blue accent-tinted choice label (loud content, quiet chrome).
-        let label = text(label).class(cosmic::theme::style::Text::Custom(|theme| {
-            cosmic::iced::core::widget::text::Style {
-                color: Some(theme.cosmic().accent_color().into()),
-            }
-        }));
+        // A static field label is not state, so it stays in the body colour
+        // rather than wearing the accent.
+        let label = text(label);
         let active_choice = args
             .active_choices
             .get(id)
