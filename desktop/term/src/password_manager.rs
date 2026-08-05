@@ -456,7 +456,7 @@ mod store {
         attributes.insert("application", "com.clawos.Term");
         attributes.insert("identifier", &identifier);
 
-        let label = format!("CosmicTerm - {}", identifier);
+        let label = format!("Terminal - {}", identifier);
 
         collection
             .create_item(&label, attributes, password.as_bytes(), true, "text/plain")

@@ -160,7 +160,7 @@ impl ThemeEditorApplication {
     }
 
     pub fn run(&self) {
-        info!("Cosmic Theme Editor ({})", APP_ID);
+        info!("Theme Editor ({})", APP_ID);
         info!("Version: {} ({})", VERSION, PROFILE);
         info!("Datadir: {}", PKGDATADIR);
 

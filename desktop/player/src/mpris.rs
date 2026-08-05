@@ -128,7 +128,7 @@ impl RootInterface for Player {
 
     async fn identity(&self) -> fdo::Result<String> {
         log::info!("Identity");
-        Ok("COSMIC Player".to_string())
+        Ok("Media Player".to_string())
     }
 
     async fn desktop_entry(&self) -> fdo::Result<String> {

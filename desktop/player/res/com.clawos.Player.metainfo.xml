@@ -3,27 +3,27 @@
   <id>com.clawos.Player</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-only</project_license>
-  <project_group>COSMIC</project_group>
-  <developer_name>System76</developer_name>
+  <project_group>ClawOS</project_group>
+  <developer_name>ClawOS</developer_name>
   <update_contact>jeremy@system76.com</update_contact>
   <url type="homepage">https://github.com/pop-os/cosmic-player</url>
   <url type="bugtracker">https://github.com/pop-os/cosmic-player</url>
-  <name>COSMIC Media Player</name>
-  <summary>Media player for the COSMIC desktop</summary>
+  <name>Media Player</name>
+  <summary>Media player for ClawOS</summary>
   <description>
-    <p>Media player for the COSMIC desktop</p>
-    <p xml:lang="ar">مشغّل وسائط لسطح مكتب COSMIC</p>
-    <p xml:lang="cs">Přehrávač médií pro pracovní prostředí COSMIC</p>
-    <p xml:lang="hu">Médialejátszó a COSMIC asztali környezethez</p>
+    <p>Media player for ClawOS</p>
+    <p xml:lang="ar">مشغّل وسائط لسطح مكتب ClawOS</p>
+    <p xml:lang="cs">Přehrávač médií pro pracovní prostředí ClawOS</p>
+    <p xml:lang="hu">Médialejátszó a ClawOS asztali környezethez</p>
     <p
             xml:lang="pl"
-        >Odtwarzacz Multimediów dla środowiska graficznego COSMIC</p>
-    <p xml:lang="pt_BR">Reprodutor de mídia do desktop COSMIC</p>
-    <p xml:lang="pt">Reprodutor de mídia do desktop COSMIC</p>
-    <p xml:lang="sk">Prehrávač médií pre pracovné prostredie COSMIC</p>
-    <p xml:lang="it">Lettore multimediale di COSMIC</p>
-    <p xml:lang="es">Reproductor de medios para el escritorio COSMIC</p>
-    <p xml:lang="sv">Mediaspelare för skrivbordsmiljön COSMIC</p>
+        >Odtwarzacz Multimediów dla środowiska graficznego ClawOS</p>
+    <p xml:lang="pt_BR">Reprodutor de mídia do desktop ClawOS</p>
+    <p xml:lang="pt">Reprodutor de mídia do desktop ClawOS</p>
+    <p xml:lang="sk">Prehrávač médií pre pracovné prostredie ClawOS</p>
+    <p xml:lang="it">Lettore multimediale di ClawOS</p>
+    <p xml:lang="es">Reproductor de medios para el escritorio ClawOS</p>
+    <p xml:lang="sv">Mediaspelare för skrivbordsmiljön ClawOS</p>
   </description>
   <keywords>
     <keyword>Audio</keyword>

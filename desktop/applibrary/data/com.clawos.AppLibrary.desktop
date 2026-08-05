@@ -1,5 +1,5 @@
 [Desktop Entry]
-Name=Applications
+Name=App Library
 Name[ar]=تطبيقات
 Name[bg]=Програми
 Name[cs]=Aplikace
@@ -13,7 +13,7 @@ Name[sv]=Program
 Name[sk]=Aplikácie
 Name[es]=Aplicaciones
 Name[it]=Applicazioni
-Comment=ClawOS App Library shell application
+Comment=Browse applications on ClawOS
 Comment[ar]=تطبيق صدفة مكتبة تطبيقات ClawOS
 Comment[bg]=Библиотека за програми на ClawOS
 Comment[cs]=Shell aplikace knihovny aplikací ClawOS

@@ -833,8 +833,7 @@ impl App {
 
     fn update_title(&mut self) -> Task<Message> {
         //TODO: filename?
-        let title = "COSMIC Media Player";
-        self.set_window_title(title.to_string(), self.core.main_window_id().unwrap())
+        self.set_window_title(fl!("xdg-name"), self.core.main_window_id().unwrap())
     }
 
     /// Allow screen to dim or turn off if there is no input from the user.

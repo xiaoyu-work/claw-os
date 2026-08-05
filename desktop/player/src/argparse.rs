@@ -142,7 +142,7 @@ pub fn print_help() -> ! {
         r#"cosmic-player {version} (git commit {git_rev})
 System76 <info@system76.com>
 
-Designed for the COSMIC™ desktop environment, cosmic-player is a
+Designed for ClawOS, cosmic-player is a
 libcosmic-based multimedia player for music and videos.
 
 Project home page: https://github.com/pop-os/cosmic-player

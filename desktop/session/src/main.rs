@@ -193,7 +193,7 @@ async fn start(
 				Ok(proxy) => match proxy
 					.inhibit(
 						logind_zbus::manager::InhibitType::HandlePowerKey,
-						"Cosmic Session",
+						"ClawOS Session",
 						"Show confirmation dialog.",
 						"block",
 					)

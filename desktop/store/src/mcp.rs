@@ -175,7 +175,7 @@ impl Tool for OpenTool {
         "store.open"
     }
     fn description(&self) -> &'static str {
-        "Open the COSMIC Store GUI. Pass `name` to land the user on \
+        "Open the App Store GUI. Pass `name` to land the user on \
          a specific package's detail page. Use this to hand control \
          back when the user wants to install / remove themselves."
     }

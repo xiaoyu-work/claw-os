@@ -1639,11 +1639,11 @@ impl Base for Theme {
 
     fn name(&self) -> &str {
         match &self.theme_type {
-            crate::theme::ThemeType::Dark => "Cosmic Dark Theme",
-            crate::theme::ThemeType::Light => "Cosmic Light Theme",
-            crate::theme::ThemeType::HighContrastDark => "Cosmic High Contrast Dark Theme",
-            crate::theme::ThemeType::HighContrastLight => "Cosmic High Contrast Light Theme",
-            crate::theme::ThemeType::Custom(theme) => "Custom Cosmic Theme",
+            crate::theme::ThemeType::Dark => "ClawOS Dark Theme",
+            crate::theme::ThemeType::Light => "ClawOS Light Theme",
+            crate::theme::ThemeType::HighContrastDark => "ClawOS High Contrast Dark Theme",
+            crate::theme::ThemeType::HighContrastLight => "ClawOS High Contrast Light Theme",
+            crate::theme::ThemeType::Custom(theme) => "Custom ClawOS Theme",
             crate::theme::ThemeType::System { prefer_dark, theme } => &theme.name,
         }
     }

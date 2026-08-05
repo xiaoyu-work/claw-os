@@ -1068,10 +1068,7 @@ impl SettingsApp {
 
     fn set_title(&mut self) -> Task<crate::Message> {
         self.set_window_title(
-            format!(
-                "{} - COSMIC Settings",
-                self.pages.info[self.active_page].title
-            ),
+            format!("{} - {}", self.pages.info[self.active_page].title, fl!("settings")),
             self.core.main_window_id().unwrap(),
         )
     }

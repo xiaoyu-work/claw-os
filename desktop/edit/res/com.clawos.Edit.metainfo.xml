@@ -3,13 +3,13 @@
   <id>com.clawos.Edit</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-only</project_license>
-  <project_group>COSMIC</project_group>
-  <developer_name>System76</developer_name>
+  <project_group>ClawOS</project_group>
+  <developer_name>ClawOS</developer_name>
   <update_contact>jeremy@system76.com</update_contact>
   <url type="homepage">https://github.com/pop-os/cosmic-edit</url>
   <url type="bugtracker">https://github.com/pop-os/cosmic-edit</url>
-  <name>COSMIC Text Editor</name>
-  <summary>Text editor for the COSMIC desktop</summary>
+  <name>Text Editor</name>
+  <summary>Text editor for ClawOS</summary>
   <description>
     <p>Text editor that provides advanced features with high performance</p>
     <p xml:lang="ar">محرِّر نصوص يوفر ميزات متقدمة بأداء عالٍ</p>

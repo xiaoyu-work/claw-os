@@ -3,42 +3,42 @@
   <id>com.clawos.Settings</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-only</project_license>
-  <project_group>COSMIC</project_group>
-  <developer_name>System76</developer_name>
+  <project_group>ClawOS</project_group>
+  <developer_name>ClawOS</developer_name>
   <update_contact>jeremy@system76.com</update_contact>
   <url type="homepage">https://github.com/pop-os/cosmic-settings</url>
   <url type="bugtracker">https://github.com/pop-os/cosmic-settings</url>
-  <name>COSMIC Settings</name>
-  <name xml:lang="ar">إعدادات COSMIC</name>
-  <name xml:lang="cs">Nastavení COSMIC</name>
-  <name xml:lang="pl">Ustawienia COSMIC</name>
-  <name xml:lang="hu">COSMIC Beállítások</name>
+  <name>Settings</name>
+  <name xml:lang="ar">إعدادات ClawOS</name>
+  <name xml:lang="cs">Nastavení ClawOS</name>
+  <name xml:lang="pl">Ustawienia ClawOS</name>
+  <name xml:lang="hu">ClawOS Beállítások</name>
   <name xml:lang="pt">Configurações</name>
-  <name xml:lang="nl">COSMIC instellingen</name>
-  <name xml:lang="sk">Nastavenia COSMIC</name>
-  <name xml:lang="es">Configuración COSMIC</name>
-  <name xml:lang="sv">COSMIC Inställningar</name>
-  <summary>Settings application for the COSMIC desktop</summary>
-  <summary xml:lang="ar">تطبيق الإعدادات لسطح مكتب COSMIC</summary>
-  <summary xml:lang="cs">Aplikace nastavení pro pracovní prostředí COSMIC</summary>
-  <summary xml:lang="pl">Aplikacja ustawień pulpitu COSMIC</summary>
-  <summary xml:lang="hu">Beállítások a COSMIC asztali környezethez</summary>
-  <summary xml:lang="pt">Ajuste de configurações para o desktop COSMIC</summary>
-  <summary xml:lang="nl">Configuratiecentrum voor COSMIC desktop</summary>
-  <summary xml:lang="sk">Aplikácia nastavení pre pracovnú plochu COSMIC</summary>
-  <summary xml:lang="es">Aplicación de configuración para escritorio COSMIC</summary>
-  <summary xml:lang="sv">Inställningsprogram för skrivbordsmiljön COSMIC</summary>
+  <name xml:lang="nl">ClawOS instellingen</name>
+  <name xml:lang="sk">Nastavenia ClawOS</name>
+  <name xml:lang="es">Configuración ClawOS</name>
+  <name xml:lang="sv">ClawOS Inställningar</name>
+  <summary>Settings application for ClawOS</summary>
+  <summary xml:lang="ar">تطبيق الإعدادات لسطح مكتب ClawOS</summary>
+  <summary xml:lang="cs">Aplikace nastavení pro pracovní prostředí ClawOS</summary>
+  <summary xml:lang="pl">Aplikacja ustawień pulpitu ClawOS</summary>
+  <summary xml:lang="hu">Beállítások a ClawOS asztali környezethez</summary>
+  <summary xml:lang="pt">Ajuste de configurações para o desktop ClawOS</summary>
+  <summary xml:lang="nl">Configuratiecentrum voor ClawOS desktop</summary>
+  <summary xml:lang="sk">Aplikácia nastavení pre pracovnú plochu ClawOS</summary>
+  <summary xml:lang="es">Aplicación de configuración para escritorio ClawOS</summary>
+  <summary xml:lang="sv">Inställningsprogram för skrivbordsmiljön ClawOS</summary>
   <description>
-      <p>Settings application for the COSMIC desktop</p>
-      <p xml:lang="ar">تطبيق الإعدادات لسطح مكتب COSMIC</p>
-      <p xml:lang="cs">Aplikace nastavení pro pracovní prostředí COSMIC</p>
-      <p xml:lang="pl">Aplikacja ustawień pulpitu COSMIC</p>
-      <p xml:lang="hu">Beállítások a COSMIC asztali környezethez</p>
-      <p xml:lang="pt">Ajuste de configurações para o desktop COSMIC</p>
-      <p xml:lang="nl">Configuratiecentrum voor COSMIC desktop</p>
-      <p xml:lang="sk">Aplikácia nastavení pre pracovnú plochu COSMIC</p>
-      <p xml:lang="es">Aplicación de configuración para escritorio COSMIC</p>
-      <p xml:lang="sv">Inställningsprogram för skrivbordsmiljön COSMIC</p>
+      <p>Settings application for ClawOS</p>
+      <p xml:lang="ar">تطبيق الإعدادات لسطح مكتب ClawOS</p>
+      <p xml:lang="cs">Aplikace nastavení pro pracovní prostředí ClawOS</p>
+      <p xml:lang="pl">Aplikacja ustawień pulpitu ClawOS</p>
+      <p xml:lang="hu">Beállítások a ClawOS asztali környezethez</p>
+      <p xml:lang="pt">Ajuste de configurações para o desktop ClawOS</p>
+      <p xml:lang="nl">Configuratiecentrum voor ClawOS desktop</p>
+      <p xml:lang="sk">Aplikácia nastavení pre pracovnú plochu ClawOS</p>
+      <p xml:lang="es">Aplicación de configuración para escritorio ClawOS</p>
+      <p xml:lang="sv">Inställningsprogram för skrivbordsmiljön ClawOS</p>
   </description>
   <launchable type="desktop-id">com.clawos.Settings.desktop</launchable>
   <icon type="remote" height="256" width="256">https://raw.githubusercontent.com/pop-os/cosmic-settings/master/resources/icons/256x256/apps/com.clawos.Settings.svg</icon>

@@ -316,7 +316,7 @@ impl Notifications {
     async fn get_server_information(
         &self,
     ) -> (&'static str, &'static str, &'static str, &'static str) {
-        ("cosmic-notifications", "System76", VERSION, "1.2")
+        ("cosmic-notifications", "ClawOS", VERSION, "1.2")
     }
 
     ///

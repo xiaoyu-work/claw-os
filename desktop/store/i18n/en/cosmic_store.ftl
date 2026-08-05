@@ -1,4 +1,4 @@
-app-name = Store
+app-name = App Store
 comment = Application store for the ClawOS desktop
 keywords = App;Software;Store;Shop;
 back = Back

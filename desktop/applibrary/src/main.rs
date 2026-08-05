@@ -19,7 +19,7 @@ use crate::config::VERSION;
 fn main() -> cosmic::iced::Result {
     // Initialize logger
     pretty_env_logger::init();
-    info!("Cosmic App Library ({})", APP_ID);
+    info!("App Library ({})", APP_ID);
     info!("Version: {}", VERSION);
     // Prepare i18n
     localize();

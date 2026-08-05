@@ -3,25 +3,25 @@
   <id>com.clawos.Files</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-only</project_license>
-  <project_group>COSMIC</project_group>
-  <developer_name>System76</developer_name>
+  <project_group>ClawOS</project_group>
+  <developer_name>ClawOS</developer_name>
   <update_contact>jeremy@system76.com</update_contact>
   <url type="homepage">https://github.com/pop-os/cosmic-files</url>
   <url type="bugtracker">https://github.com/pop-os/cosmic-files</url>
-  <name>COSMIC Files</name>
-  <summary>File manager for the COSMIC desktop</summary>
+  <name>Files</name>
+  <summary>File manager for ClawOS</summary>
   <description>
-    <p>File manager for the COSMIC desktop</p>
-    <p xml:lang="ar">مدير ملفات لسطح مكتب COSMIC</p>
-    <p xml:lang="cs">Správce souborů pro prostředí COSMIC</p>
-    <p xml:lang="pl">Menedżer plików pulpitu COSMIC</p>
-    <p xml:lang="hu">Fájlkezelő a COSMIC asztali környezethez</p>
-    <p xml:lang="pt_BR">Gerenciador de arquivos do COSMIC</p>
-    <p xml:lang="pt">Gerenciador de arquivos do COSMIC</p>
-    <p xml:lang="sk">Správca súborov pre prostredie COSMIC</p>
-    <p xml:lang="es">Gestor de archivos de COSMIC</p>
-    <p xml:lang="it">File manager di COSMIC</p>
-    <p xml:lang="sv">Filhanterare för skrivbordsmiljön COSMIC</p>
+    <p>File manager for ClawOS</p>
+    <p xml:lang="ar">مدير ملفات لسطح مكتب ClawOS</p>
+    <p xml:lang="cs">Správce souborů pro prostředí ClawOS</p>
+    <p xml:lang="pl">Menedżer plików pulpitu ClawOS</p>
+    <p xml:lang="hu">Fájlkezelő a ClawOS asztali környezethez</p>
+    <p xml:lang="pt_BR">Gerenciador de arquivos do ClawOS</p>
+    <p xml:lang="pt">Gerenciador de arquivos do ClawOS</p>
+    <p xml:lang="sk">Správca súborov pre prostredie ClawOS</p>
+    <p xml:lang="es">Gestor de archivos de ClawOS</p>
+    <p xml:lang="it">File manager di ClawOS</p>
+    <p xml:lang="sv">Filhanterare för skrivbordsmiljön ClawOS</p>
   </description>
   <keywords>
     <keyword>Folder</keyword>

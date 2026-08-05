@@ -3,49 +3,49 @@
   <id>com.clawos.Applets</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-only</project_license>
-  <project_group>COSMIC</project_group>
-  <developer_name>System76</developer_name>
+  <project_group>ClawOS</project_group>
+  <developer_name>ClawOS</developer_name>
   <update_contact>ashley@system76.com</update_contact>
   <url type="homepage">https://github.com/pop-os/cosmic-applets</url>
   <url type="bugtracker">https://github.com/pop-os/cosmic-applets</url>
-  <name>COSMIC Applets</name>
-  <name xml:lang="ar">بريمجات COSMIC</name>
-  <name xml:lang="bg">Графични обекти за COSMIC</name>
-  <name xml:lang="cs">Applety COSMIC</name>
-  <name xml:lang="pl">Aplety COSMIC</name>
+  <name>Applets</name>
+  <name xml:lang="ar">بريمجات ClawOS</name>
+  <name xml:lang="bg">Графични обекти за ClawOS</name>
+  <name xml:lang="cs">Applety ClawOS</name>
+  <name xml:lang="pl">Aplety ClawOS</name>
   <name xml:lang="pt_BR">Miniaplicativos</name>
   <name xml:lang="pt">Miniaplicativos</name>
-  <name xml:lang="hu">COSMIC Kisalkalmazások</name>
-  <name xml:lang="sk">Aplety COSMIC</name>
-  <name xml:lang="es">Applets COSMIC</name>
-  <name xml:lang="sv">COSMIC Miniprogram</name>
-  <summary>Applets for the COSMIC panel</summary>
-  <summary xml:lang="ar">بريمجات للوحة COSMIC</summary>
-  <summary xml:lang="bg">Графични обекти за панела на COSMIC</summary>
-  <summary xml:lang="cs">Applety pro panel COSMIC</summary>
-  <summary xml:lang="pl">Aplety dla panelu COSMIC</summary>
-  <summary xml:lang="pt_BR">Miniaplicativos para o painel do COSMIC</summary>
-  <summary xml:lang="pt">Miniaplicativos para o painel do COSMIC</summary>
-  <summary xml:lang="hu">Kisalkalmazások a COSMIC panelhez</summary>
-  <summary xml:lang="nl">Applets voor het paneel van COSMIC</summary>
-  <summary xml:lang="de">Applets für das COSMIC-Panel</summary>
-  <summary xml:lang="sk">Aplety pre panel COSMIC</summary>
-  <summary xml:lang="es">Applets para el panel de COSMIC</summary>
-  <summary xml:lang="sv">Miniprogram för COSMIC-panelen</summary>
+  <name xml:lang="hu">ClawOS Kisalkalmazások</name>
+  <name xml:lang="sk">Aplety ClawOS</name>
+  <name xml:lang="es">Applets ClawOS</name>
+  <name xml:lang="sv">ClawOS Miniprogram</name>
+  <summary>Applets for the ClawOS panel</summary>
+  <summary xml:lang="ar">بريمجات للوحة ClawOS</summary>
+  <summary xml:lang="bg">Графични обекти за панела на ClawOS</summary>
+  <summary xml:lang="cs">Applety pro panel ClawOS</summary>
+  <summary xml:lang="pl">Aplety dla panelu ClawOS</summary>
+  <summary xml:lang="pt_BR">Miniaplicativos para o painel do ClawOS</summary>
+  <summary xml:lang="pt">Miniaplicativos para o painel do ClawOS</summary>
+  <summary xml:lang="hu">Kisalkalmazások a ClawOS panelhez</summary>
+  <summary xml:lang="nl">Applets voor het paneel van ClawOS</summary>
+  <summary xml:lang="de">Applets für das ClawOS-Panel</summary>
+  <summary xml:lang="sk">Aplety pre panel ClawOS</summary>
+  <summary xml:lang="es">Applets para el panel de ClawOS</summary>
+  <summary xml:lang="sv">Miniprogram för ClawOS-panelen</summary>
   <description>
-    <p>Applets for the COSMIC panel</p>
-    <p xml:lang="ar">بريمجات للوحة COSMIC</p>
-    <p xml:lang="bg">Графични обекти за панела на COSMIC</p>
-    <p xml:lang="cs">Applety pro panel COSMIC</p>
-    <p xml:lang="pl">Aplety dla panelu COSMIC</p>
-    <p xml:lang="pt_BR">Miniaplicativos para o painel do COSMIC</p>
-    <p xml:lang="pt">Miniaplicativos para o painel do COSMIC</p>
-    <p xml:lang="hu">Kisalkalmazások a COSMIC panelhez</p>
-    <p xml:lang="nl">Applets voor het paneel van COSMIC</p>
-    <p xml:lang="de">Applets für das COSMIC-Panel</p>
-    <p xml:lang="sk">Aplety pre panel COSMIC</p>
-    <p xml:lang="es">Applets para el panel de COSMIC</p>
-    <p xml:lang="sv">Miniprogram för COSMIC-panelen</p>
+    <p>Applets for the ClawOS panel</p>
+    <p xml:lang="ar">بريمجات للوحة ClawOS</p>
+    <p xml:lang="bg">Графични обекти за панела на ClawOS</p>
+    <p xml:lang="cs">Applety pro panel ClawOS</p>
+    <p xml:lang="pl">Aplety dla panelu ClawOS</p>
+    <p xml:lang="pt_BR">Miniaplicativos para o painel do ClawOS</p>
+    <p xml:lang="pt">Miniaplicativos para o painel do ClawOS</p>
+    <p xml:lang="hu">Kisalkalmazások a ClawOS panelhez</p>
+    <p xml:lang="nl">Applets voor het paneel van ClawOS</p>
+    <p xml:lang="de">Applets für das ClawOS-Panel</p>
+    <p xml:lang="sk">Aplety pre panel ClawOS</p>
+    <p xml:lang="es">Applets para el panel de ClawOS</p>
+    <p xml:lang="sv">Miniprogram för ClawOS-panelen</p>
   </description>
   <launchable type="desktop-id">com.clawos.AppletAppList.desktop</launchable>
   <launchable type="desktop-id">com.clawos.AppletAudio.desktop</launchable>

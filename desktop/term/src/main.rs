@@ -221,8 +221,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 fn print_help() {
     println!(
-        r#"COSMIC Terminal
-Designed for the COSMIC™ desktop environment, cosmic-term is a libcosmic-based terminal emulator.
+        r#"Terminal
+Designed for ClawOS, cosmic-term is a libcosmic-based terminal emulator.
 
 Project home page: https://github.com/pop-os/cosmic-term
 Options:

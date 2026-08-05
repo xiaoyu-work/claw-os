@@ -42,7 +42,7 @@ fn print_help(version: &str, git_rev: &str) {
         r#"cosmic-greeter {version} (git commit {git_rev})
 System76 <info@system76.com>
 
-Designed for the COSMIC™ desktop environment, cosmic-greeter is a libcosmic
+Designed for ClawOS, cosmic-greeter is a libcosmic
 frontend for greetd which can be run inside of cosmic-comp.
 
 Project home page: https://github.com/pop-os/cosmic-greeter

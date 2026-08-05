@@ -827,7 +827,7 @@ pub async fn spawn_desktop_exec<S, I, K, V>(
                         &[
                             (
                                 "Description".to_string(),
-                                zbus::zvariant::Value::from("Application launched by COSMIC")
+                                zbus::zvariant::Value::from("Application launched by ClawOS")
                                     .try_to_owned()
                                     .unwrap(),
                             ),

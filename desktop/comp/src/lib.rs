@@ -251,7 +251,7 @@ fn print_help(version: &str, git_rev: &str) {
         r#"cosmic-comp {version} (git commit {git_rev})
 System76 <info@system76.com>
 
-Designed for the COSMIC™ desktop environment, cosmic-comp is a Wayland Compositor.
+Designed for ClawOS, cosmic-comp is a Wayland compositor.
 
 Project home page: https://github.com/pop-os/cosmic-comp
 

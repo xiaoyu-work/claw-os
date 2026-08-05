@@ -4,34 +4,34 @@
   <id>com.clawos.Launcher</id>
   <metadata_license>CC0</metadata_license>
   <project_license>GPL-3.0-only</project_license>
-  <name>COSMIC Launcher</name>
-  <name xml:lang="ar">مُشَغِّلُ COSMIC</name>
-  <name xml:lang="cs">Spouštěč COSMIC</name>
-  <name xml:lang="hu">COSMIC Indító</name>
+  <name>Launcher</name>
+  <name xml:lang="ar">مُشَغِّلُ ClawOS</name>
+  <name xml:lang="cs">Spouštěč ClawOS</name>
+  <name xml:lang="hu">ClawOS Indító</name>
   <name xml:lang="pt">Lançador</name>
   <name xml:lang="pt_BR">Lançador</name>
-  <name xml:lang="sk">Spúšťač COSMIC</name>
-  <name xml:lang="sv">COSMIC Programstartare</name>
-  <name xml:lang="it">Launcher COSMIC</name>
-  <summary>COSMIC frontend for Pop Launcher</summary>
-  <summary xml:lang="ar">واجِهَةُ COSMIC لِمُشَغِّلِ بْوب</summary>
-  <summary xml:lang="cs">Spouštěč aplikací pro prostředí COSMIC</summary>
-  <summary xml:lang="hu">COSMIC felület a Pop Launcherhez</summary>
-  <summary xml:lang="pt">Botão de inicialização do COSMIC</summary>
-  <summary xml:lang="pt_BR">Botão de inicialização do COSMIC</summary>
-  <summary xml:lang="sk">Spúšťač aplikácií pre prostredie COSMIC</summary>
-  <summary xml:lang="sv">Programstartare för skrivbordsmiljön COSMIC</summary>
-  <summary xml:lang="it">Frontend COSMIC di Pop Launcher</summary>
+  <name xml:lang="sk">Spúšťač ClawOS</name>
+  <name xml:lang="sv">ClawOS Programstartare</name>
+  <name xml:lang="it">Launcher ClawOS</name>
+  <summary>Application launcher for ClawOS</summary>
+  <summary xml:lang="ar">واجِهَةُ ClawOS لِمُشَغِّلِ بْوب</summary>
+  <summary xml:lang="cs">Spouštěč aplikací pro prostředí ClawOS</summary>
+  <summary xml:lang="hu">ClawOS felület a Pop Launcherhez</summary>
+  <summary xml:lang="pt">Botão de inicialização do ClawOS</summary>
+  <summary xml:lang="pt_BR">Botão de inicialização do ClawOS</summary>
+  <summary xml:lang="sk">Spúšťač aplikácií pre prostredie ClawOS</summary>
+  <summary xml:lang="sv">Programstartare för skrivbordsmiljön ClawOS</summary>
+  <summary xml:lang="it">Frontend ClawOS di Pop Launcher</summary>
   <description>
-    <p>The COSMIC frontend for Pop Launcher</p>
-    <p xml:lang="ar">واجِهَةُ COSMIC لِمُشَغِّلِ بْوب</p>
-    <p xml:lang="cs">Spouštěč aplikací pro prostředí COSMIC</p>
-    <p xml:lang="hu">COSMIC felület a Pop Launcherhez</p>
-    <p xml:lang="pt">Botão de inicialização do COSMIC</p>
-    <p xml:lang="pt_BR">Botão de inicialização do COSMIC</p>
-    <p xml:lang="sk">Spúšťač aplikácií pre prostredie COSMIC</p>
-    <p xml:lang="sv">Programstartaren för skrivbordsmiljön COSMIC</p>
-    <p xml:lang="it">Frontend COSMIC di Pop Launcher</p>
+    <p>Launch applications on ClawOS</p>
+    <p xml:lang="ar">واجِهَةُ ClawOS لِمُشَغِّلِ بْوب</p>
+    <p xml:lang="cs">Spouštěč aplikací pro prostředí ClawOS</p>
+    <p xml:lang="hu">ClawOS felület a Pop Launcherhez</p>
+    <p xml:lang="pt">Botão de inicialização do ClawOS</p>
+    <p xml:lang="pt_BR">Botão de inicialização do ClawOS</p>
+    <p xml:lang="sk">Spúšťač aplikácií pre prostredie ClawOS</p>
+    <p xml:lang="sv">Programstartaren för skrivbordsmiljön ClawOS</p>
+    <p xml:lang="it">Frontend ClawOS di Pop Launcher</p>
   </description>
   <url type="homepage">https://github.com/pop-os/cosmic-launcher</url>
   <url type="bugtracker">https://github.com/pop-os/cosmic-launcher/issues</url>

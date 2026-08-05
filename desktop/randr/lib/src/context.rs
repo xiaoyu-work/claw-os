@@ -87,14 +87,16 @@ impl fmt::Display for ConfigurationError {
             Self::OutputAlreadyConfigured => f.write_str("Output configured twice"),
             Self::UnknownOutput => f.write_str("Unknown output"),
             Self::ModeNotFound => f.write_str("Unknown or unsupported mode"),
-            Self::NoCosmicExtension => f.write_str("Feature isn't available outside COSMIC"),
+            Self::NoCosmicExtension => {
+                f.write_str("Required COSMIC output-management extension is unavailable")
+            }
             Self::PositionForMirroredOutput => f.write_str("You cannot position a mirrored output"),
             Self::MirroringItself => f.write_str("Output mirroring itself"),
-            Self::UnsupportedVrrState => {
-                f.write_str("Automatic VRR state management isn't available outside COSMIC")
-            }
+            Self::UnsupportedVrrState => f.write_str(
+                "Automatic VRR state management requires the COSMIC output-management extension",
+            ),
             Self::UnsupportedXwaylandPrimary => f.write_str(
-                "Xwayland compatibility options not available outside or on this version of COSMIC",
+                "Xwayland compatibility options require a newer COSMIC output-management extension",
             ),
         }
     }

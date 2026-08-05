@@ -177,7 +177,7 @@ impl ThumbnailCacher {
         encoder.set_color(color_type);
         encoder.set_depth(bit_depth);
 
-        text_chunks.insert("Software".to_string(), "COSMIC Files".to_string());
+        text_chunks.insert("Software".to_string(), "ClawOS Files".to_string());
         text_chunks.insert("Thumb::URI".to_string(), self.file_uri.clone());
         let metadata = std::fs::metadata(&self.file_path)?;
         let size = metadata.len();
