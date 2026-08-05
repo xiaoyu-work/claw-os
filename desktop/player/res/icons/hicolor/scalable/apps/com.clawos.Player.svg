@@ -2,5 +2,4 @@
   <rect x="16" y="16" width="224" height="224" rx="56" fill="#F8FAFD" stroke="#DCE5F0" stroke-width="4"/>
   <circle cx="128" cy="128" r="73" fill="#005CFE"/>
   <path d="M111 91c0-7 8-11 14-7l51 36c6 4 6 12 0 16l-51 36c-6 4-14 0-14-7V91z" fill="#FFFFFF"/>
-  <path d="M76 183c14 14 32 22 52 22" fill="none" stroke="#70A5FF" stroke-width="8" stroke-linecap="round"/>
 </svg>
