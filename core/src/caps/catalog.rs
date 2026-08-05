@@ -208,6 +208,14 @@ pub const CATALOG: &[CapMeta] = &[
         Risk::High,
     ),
     CapMeta::new(
+        Verb::SYS_STORAGE,
+        ScopeKind::Name,
+        LocalizedStr::new("Run deep storage diagnostics"),
+        LocalizedStr::new("Read SMART health and perform bounded, read-only offline filesystem checks."),
+        "💽",
+        Risk::Medium,
+    ),
+    CapMeta::new(
         Verb::SYS_SERVICE,
         ScopeKind::Name,
         LocalizedStr::new("Start or stop system services"),

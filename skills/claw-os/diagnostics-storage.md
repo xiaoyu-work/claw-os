@@ -37,5 +37,14 @@ Inspect:
 Never recursively delete a broad directory based only on size. Name every
 target, explain recoverability, and use checkpoints or backups where possible.
 
-The current system lacks SMART and filesystem-health probes; do not claim a
-disk is physically healthy from throughput and free-space data alone.
+Use Storage Manager for device-level evidence:
+
+```bash
+cos app storage-manager status
+cos app storage-manager health /dev/sdb
+cos app storage-manager check /dev/sdb1
+```
+
+SMART health does not replace a backup, and a clean SMART result does not prove
+the filesystem is consistent. Offline checks are read-only and require the
+filesystem to remain unmounted for the result to be valid.

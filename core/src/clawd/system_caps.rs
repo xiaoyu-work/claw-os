@@ -46,6 +46,7 @@ pub fn readonly_task_caps() -> CapSet {
         "network-manager",
         "pkg",
         "search",
+        "storage-manager",
         "summarize",
         "systemd",
         "system-snapshot",

@@ -178,6 +178,26 @@ disables automatic script loading and debuginfod, and runs as the crashed
 process UID/GID for non-root crashes. Root-owned dumps return the recorded
 stack only and never launch GDB as root.
 
+## Storage Manager
+
+```bash
+cos app storage-manager status
+cos app storage-manager health /dev/sdb
+cos app storage-manager check /dev/sdb1
+cos app storage-manager mount /dev/sdb1
+cos app storage-manager unmount /dev/sdb1
+cos app storage-manager eject /dev/sdb
+```
+
+`health` combines SMART JSON, filesystem-specific metadata, and matching
+kernel storage errors. `check` only runs no-repair checkers on an unmounted
+filesystem. These deep reads require `sys.storage:diagnose`. Mount, unmount,
+and eject require `sys.mount` for the exact canonical `/dev` path; symlink
+aliases are rejected so capability and kernel targets cannot diverge.
+Mounting calls UDisks2 as the requesting user inside a verified active local
+logind session, while protected system mounts, active swap, and non-removable
+eject targets are refused.
+
 ## Package Management
 
 ```bash

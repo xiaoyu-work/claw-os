@@ -18,6 +18,7 @@ pub mod server;
 pub mod session_scope;
 pub mod snapshots;
 pub mod state;
+pub mod storage;
 pub mod system_caps;
 pub mod systemd;
 pub mod system_journal;
