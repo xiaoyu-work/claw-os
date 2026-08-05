@@ -444,8 +444,7 @@ impl cosmic::Application for SettingsApp {
                         r#"{{"app":"cosmic-settings","mode":"search","query":"{}"}}"#,
                         escape_json_str(&query),
                     );
-                    let argv: &[&str] =
-                        &["cos-agent-ui", "--overlay", "--context", &ctx];
+                    let argv: &[&str] = &["cos-agent-ui", "--overlay", "--context", &ctx];
                     if let Err(err) = cos_runtime::exec::start(argv) {
                         tracing::error!(?err, "failed to open Ask Claw overlay");
                     }
@@ -1068,7 +1067,11 @@ impl SettingsApp {
 
     fn set_title(&mut self) -> Task<crate::Message> {
         self.set_window_title(
-            format!("{} - {}", self.pages.info[self.active_page].title, fl!("settings")),
+            format!(
+                "{} - {}",
+                self.pages.info[self.active_page].title,
+                crate::fl!("settings")
+            ),
             self.core.main_window_id().unwrap(),
         )
     }
@@ -1305,12 +1308,12 @@ impl SettingsApp {
         if !self.search_input.trim().is_empty() {
             let spacing = cosmic::theme::active().cosmic().spacing;
             let title = cosmic::widget::text::heading(crate::fl!("ai-search-ask-claw"));
-            let query_line = cosmic::widget::text::body(format!("\u{201C}{}\u{201D}", self.search_input))
-                .class(cosmic::theme::Text::Custom(|t| {
-                    cosmic::iced::widget::text::Style {
+            let query_line =
+                cosmic::widget::text::body(format!("\u{201C}{}\u{201D}", self.search_input)).class(
+                    cosmic::theme::Text::Custom(|t| cosmic::iced::widget::text::Style {
                         color: Some(t.cosmic().on_bg_color().into()),
-                    }
-                }));
+                    }),
+                );
             let hint = cosmic::widget::text::caption(crate::fl!("ai-search-ask-claw-hint"));
             let card_col = cosmic::widget::column::with_children(vec![
                 title.into(),
@@ -1330,10 +1333,8 @@ impl SettingsApp {
                 .padding([spacing.space_xs as u16, spacing.space_m as u16])
                 .class(cosmic::style::Button::Suggested)
                 .on_press(Message::AskClawSearch);
-            let card = container(card).padding([
-                spacing.space_s,
-                cosmic::theme::active().cosmic().space_l(),
-            ]);
+            let card = container(card)
+                .padding([spacing.space_s, cosmic::theme::active().cosmic().space_l()]);
             sections.push(card.into());
         }
 

@@ -10,19 +10,24 @@ use cosmic::{
 /// Claw Glass — a frosted, brand-blue-tinted grouped card.
 ///
 /// Replaces the old boxed setting-row look with an airy `radius_l` (16)
-/// translucent surface, a 1px blue-tinted hairline, and a soft drop shadow.
-/// Depth comes from blur + shadow, not heavy borders.
+/// surface, a 1px blue-tinted hairline, and a soft drop shadow. Depth comes
+/// from elevation, not heavy borders.
+///
+/// The Settings window is opaque (unlike Files, it is not a transparent
+/// blurred shell), so the fill is kept close to solid: a low alpha here does
+/// not reveal a blurred wallpaper, it only washes the card out against the
+/// window background and drops row contrast.
 #[must_use]
 pub fn frosted_card() -> cosmic::theme::Container<'static> {
     theme::Container::custom(|theme| {
         let cosmic = theme.cosmic();
 
-        // Glass fill: the component surface at reduced opacity so the
-        // compositor blur reads through it.
+        // Card fill: the component surface, kept near-solid so the row reads
+        // as a distinct raised element on the opaque window background.
         let mut background = cosmic.bg_component_color();
-        background.alpha = 0.55;
+        background.alpha = if cosmic.is_high_contrast { 1.0 } else { 0.94 };
 
-        // 1px blue-tinted translucent hairline (brand accent at low alpha).
+        // 1px blue-tinted hairline (brand accent at low alpha).
         let hairline = Color::from(cosmic.accent_color().with_alpha(0.12));
 
         cosmic::widget::container::Style {
