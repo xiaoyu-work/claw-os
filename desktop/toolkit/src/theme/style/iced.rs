@@ -605,17 +605,17 @@ impl iced_container::Catalog for Theme {
                 snap: true,
             },
 
-            // Claw Glass: tooltips are short-lived text that must stay legible
-            // over any wallpaper, so this is denser than a popup, but it still
-            // carries the brand hairline and elevation instead of reading as a
-            // flat `neutral_2` grey chip.
+            // Tooltips are short-lived text that must stay legible over any
+            // wallpaper, so this is denser than a popup, but it keeps the same
+            // neutral hairline and elevation rather than reading as a flat
+            // `neutral_2` grey chip.
             Container::Tooltip => {
                 let mut background = Color::from(cosmic.background.base);
                 if cosmic.is_frosted {
                     background.a = 0.92;
                 }
-                let mut hairline = Color::from(cosmic.accent_color());
-                hairline.a = 0.16;
+                let mut hairline = Color::from(cosmic.background.on);
+                hairline.a = if cosmic.is_dark { 0.15 } else { 0.09 };
                 let shadow_alpha = if cosmic.is_dark { 0.24 } else { 0.12 };
 
                 iced_container::Style {
@@ -628,7 +628,7 @@ impl iced_container::Catalog for Theme {
                         color: hairline,
                     },
                     shadow: Shadow {
-                        color: Color::from_rgba(0.0, 0.02, 0.10, shadow_alpha),
+                        color: Color::from_rgba(0.0, 0.0, 0.0, shadow_alpha),
                         offset: iced::Vector::new(0.0, 3.0),
                         blur_radius: 14.0,
                     },

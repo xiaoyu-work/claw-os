@@ -373,17 +373,18 @@ impl Context {
                     let cosmic = theme.cosmic();
                     let corners = cosmic.corner_radii;
 
-                    // Claw Glass: panel popups float over the wallpaper, which
-                    // the compositor blurs behind panel-anchored surfaces, so
-                    // the fill only needs to carry contrast. An opaque
-                    // `background.base` with a neutral divider and no shadow
-                    // read as flat COSMIC grey.
+                    // Panel popups float over the wallpaper, which the
+                    // compositor blurs behind panel-anchored surfaces, so the
+                    // fill only needs to carry contrast. The edge derives from
+                    // `background.on`, which is near-black on a light theme and
+                    // near-white on a dark one, giving a neutral hairline in
+                    // both without tinting the glass.
                     let mut background = Color::from(cosmic.background.base);
                     if cosmic.is_frosted {
                         background.a = 0.82;
                     }
-                    let mut hairline = Color::from(cosmic.accent_color());
-                    hairline.a = 0.18;
+                    let mut hairline = Color::from(cosmic.background.on);
+                    hairline.a = if cosmic.is_dark { 0.16 } else { 0.10 };
                     let shadow_alpha = if cosmic.is_dark { 0.28 } else { 0.14 };
 
                     iced_widget::container::Style {
@@ -395,7 +396,7 @@ impl Context {
                             color: hairline,
                         },
                         shadow: Shadow {
-                            color: Color::from_rgba(0.0, 0.02, 0.10, shadow_alpha),
+                            color: Color::from_rgba(0.0, 0.0, 0.0, shadow_alpha),
                             offset: iced::Vector::new(0.0, 6.0),
                             blur_radius: 24.0,
                         },
