@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ClawOS workspaces overview - symbolic panel variant.
+
+  The panel button presents this at Icon size, and libcosmic only recolours a
+  file whose name ends in `-symbolic`, so the non-symbolic sibling cannot be
+  used there: it would stay dark on a dark panel.
+
+  Three surfaces on a rail, matching the metaphor of the full-colour icon.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none">
+  <g fill="currentColor">
+    <rect x="1" y="3" width="6" height="4.25" rx="1.25"/>
+    <rect x="8.5" y="3" width="6.5" height="4.25" rx="1.25" opacity="0.55"/>
+    <rect x="1" y="8.75" width="9.5" height="4.25" rx="1.25" opacity="0.55"/>
+    <rect x="12" y="8.75" width="3" height="4.25" rx="1.25"/>
+  </g>
+</svg>

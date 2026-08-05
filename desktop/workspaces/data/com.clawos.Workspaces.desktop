@@ -21,6 +21,10 @@ Categories=ClawOS;
 Keywords=ClawOS;ICED;
 Keywords[ar]=كوزمِك;آيسِد;
 # Translators: Do NOT translate or transliterate this text (this is an icon file name)!
-Icon=com.clawos.Workspaces
+Icon=com.clawos.Workspaces-symbolic
 StartupNotify=true
 NoDisplay=true
+# The panel ships at size XS, where `cosmic-panel-button` falls back to a text
+# label unless the entry asks for an icon. Without this the workspaces button
+# renders the word "Workspaces" in the top bar instead of its glyph.
+X-CosmicAppletPresentation=Icon

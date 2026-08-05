@@ -36,6 +36,7 @@ install:
 	install -Dm0755 $(CARGO_TARGET_DIR)/$(TARGET)/$(BIN) $(DESTDIR)$(bindir)/$(BIN)
 	install -Dm0644 data/$(APPID).desktop $(DESTDIR)$(datadir)/applications/$(APPID).desktop
 	install -Dm0644 data/$(APPID).svg $(DESTDIR)$(datadir)/icons/hicolor/scalable/apps/$(APPID).svg
+	install -Dm0644 data/$(APPID)-symbolic.svg $(DESTDIR)$(datadir)/icons/hicolor/scalable/apps/$(APPID)-symbolic.svg
 
 
 ## Cargo Vendoring
