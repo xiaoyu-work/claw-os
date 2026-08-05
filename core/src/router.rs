@@ -1,4 +1,5 @@
 use std::env;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -403,6 +404,68 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
                 "action": action,
                 "identifier": identifier,
                 "app_id": app_id,
+            }),
+        )?;
+        return Ok(Some(value.to_string()));
+    }
+
+    if name == "__bluetooth" {
+        let action = args
+            .get(1)
+            .ok_or_else(|| "internal Bluetooth command required".to_string())?;
+        let session = env::var("COS_SESSION")
+            .map_err(|_| "internal Bluetooth command requires COS_SESSION".to_string())?;
+        let mut adapter = None;
+        let mut device = None;
+        let mut state = None;
+        let mut seconds = None;
+        let mut pairing_id = None;
+        let mut response = None;
+        let mut index = 2;
+        while index < args.len() {
+            if args[index] == "--response-stdin" {
+                let mut input = String::new();
+                let stdin = std::io::stdin();
+                let mut input_reader = stdin.lock().take(65);
+                input_reader
+                    .read_to_string(&mut input)
+                    .map_err(|error| format!("read Bluetooth response from stdin: {error}"))?;
+                if input.len() > 64 {
+                    return Err("Bluetooth response exceeds 64 bytes".to_string());
+                }
+                let input = input.trim_end_matches(|character| matches!(character, '\r' | '\n'));
+                if input.is_empty() {
+                    return Err("Bluetooth response from stdin is empty".to_string());
+                }
+                response = Some(input.to_string());
+                index += 1;
+                continue;
+            }
+            let value = args
+                .get(index + 1)
+                .ok_or_else(|| format!("{} requires a value", args[index]))?
+                .clone();
+            match args[index].as_str() {
+                "--adapter" => adapter = Some(value),
+                "--device" => device = Some(value),
+                "--state" => state = Some(value),
+                "--seconds" => seconds = Some(value),
+                "--pairing-id" => pairing_id = Some(value),
+                other => return Err(format!("unknown internal Bluetooth flag: {other}")),
+            }
+            index += 2;
+        }
+        let value = request_clawd(
+            "system.bluetooth.control",
+            json!({
+                "session": session,
+                "action": action,
+                "adapter": adapter,
+                "device": device,
+                "state": state,
+                "seconds": seconds,
+                "pairing_id": pairing_id,
+                "response": response,
             }),
         )?;
         return Ok(Some(value.to_string()));

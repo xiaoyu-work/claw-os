@@ -152,6 +152,7 @@ impl Verb {
 
     // -- Devices -----------------------------------------------------------
     pub const DEVICE_AUDIO: Verb = Verb::new("device.audio");
+    pub const DEVICE_BLUETOOTH: Verb = Verb::new("device.bluetooth");
     pub const DEVICE_MEDIA_ROUTE: Verb = Verb::new("device.media-route");
     pub const DEVICE_CAMERA: Verb = Verb::new("device.camera");
     pub const DEVICE_MICROPHONE: Verb = Verb::new("device.microphone");
@@ -266,6 +267,7 @@ pub const ALL_VERBS: &[Verb] = &[
     Verb::CLIPBOARD_READ,
     Verb::CLIPBOARD_WRITE,
     Verb::DEVICE_AUDIO,
+    Verb::DEVICE_BLUETOOTH,
     Verb::DEVICE_MEDIA_ROUTE,
     Verb::DEVICE_CAMERA,
     Verb::DEVICE_MICROPHONE,

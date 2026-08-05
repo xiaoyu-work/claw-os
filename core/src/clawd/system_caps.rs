@@ -34,6 +34,7 @@ pub fn readonly_task_caps() -> CapSet {
 
     for app in [
         "audio-manager",
+        "bluetooth-manager",
         "browser-attached",
         "crash-doctor",
         "db",

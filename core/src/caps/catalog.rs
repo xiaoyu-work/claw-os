@@ -516,6 +516,14 @@ pub const CATALOG: &[CapMeta] = &[
         Risk::Medium,
     ),
     CapMeta::new(
+        Verb::DEVICE_BLUETOOTH,
+        ScopeKind::Name,
+        LocalizedStr::new("Control Bluetooth devices"),
+        LocalizedStr::new("Scan, pair, connect, trust, forget, or power Bluetooth adapters and devices."),
+        "ᛒ",
+        Risk::High,
+    ),
+    CapMeta::new(
         Verb::DEVICE_MEDIA_ROUTE,
         ScopeKind::Name,
         LocalizedStr::new("Route local media devices"),

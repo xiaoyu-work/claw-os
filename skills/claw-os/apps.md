@@ -235,6 +235,27 @@ and only then uses the exact `desktop.launch:<app-id>` grant to relaunch it.
 If an application refuses to close, relaunch is skipped rather than creating a
 duplicate instance.
 
+## Bluetooth Manager
+
+```bash
+cos app bluetooth-manager status
+cos app bluetooth-manager power AA:BB:CC:DD:EE:FF on
+cos app bluetooth-manager scan AA:BB:CC:DD:EE:FF 15
+cos app bluetooth-manager pair AA:BB:CC:DD:EE:FF 11:22:33:44:55:66
+cos app bluetooth-manager pair-respond <pairing-id> yes
+cos app bluetooth-manager trust AA:BB:CC:DD:EE:FF 11:22:33:44:55:66
+cos app bluetooth-manager connect AA:BB:CC:DD:EE:FF 11:22:33:44:55:66
+```
+
+All mutations require the fixed high-risk `device.bluetooth:control` scope;
+adapter and device addresses are normalized and never become glob scopes.
+Pairing starts a dedicated bounded `KeyboardDisplay` BlueZ agent session.
+`pair` returns a pairing ID and any confirmation/PIN/passkey prompt;
+`pair-respond`, `pair-status`, and `pair-cancel` continue that same D-Bus
+connection. Prompt responses are forwarded to the broker over stdin rather
+than its command line. Discovery likewise runs in one bounded
+`bluetoothctl` connection and is explicitly stopped before that client exits.
+
 ## Package Management
 
 ```bash

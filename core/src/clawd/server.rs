@@ -12,8 +12,9 @@ use super::client_identity::ClientIdentity;
 use super::protocol::{encode_response, Request, Response};
 use super::state::DaemonState;
 use super::{
-    app_sessions, audio, audit, context, context_events, crash, desktop, memory, network, packages,
-    permissions, scheduler, snapshots, storage, system_journal, systemd, tasks, transactions,
+    app_sessions, audio, audit, bluetooth, context, context_events, crash, desktop, memory, network,
+    packages, permissions, scheduler, snapshots, storage, system_journal, systemd, tasks,
+    transactions,
 };
 
 #[derive(Debug, Clone)]
@@ -210,6 +211,7 @@ async fn dispatch_result(
         "memory.history" => memory::history(request.params, client),
         "memory.sessions" => memory::sessions(request.params, client),
         "system.audio.control" => audio::control(request.params, client).await,
+        "system.bluetooth.control" => bluetooth::control(request.params, client).await,
         "system.crash.inspect" => crash::inspect(request.params, client).await,
         "system.desktop.control" => desktop::control(request.params, client).await,
         "system.network.control" => network::control(request.params, client).await,
@@ -262,6 +264,7 @@ fn authorize_command(command: &str, client: &ClientIdentity) -> Result<(), Strin
             | "memory.history"
             | "memory.sessions"
             | "system.audio.control"
+            | "system.bluetooth.control"
             | "system.crash.inspect"
             | "system.desktop.control"
             | "system.network.control"
