@@ -16,6 +16,7 @@ pub mod memory;
 pub mod network;
 pub mod packages;
 pub mod permissions;
+pub mod power;
 pub mod protocol;
 pub mod scheduler;
 pub mod server;

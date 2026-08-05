@@ -48,6 +48,7 @@ pub fn readonly_task_caps() -> CapSet {
         "netdiag",
         "network-manager",
         "pkg",
+        "power-manager",
         "search",
         "storage-manager",
         "summarize",

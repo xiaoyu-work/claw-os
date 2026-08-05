@@ -77,6 +77,7 @@ Permission roles and app capability gates are documented in [permissions.md](per
 | `network-manager` | Wi-Fi, VPN, and NetworkManager radio control |
 | `notify` | Notifications |
 | `pkg` | Package management |
+| `power-manager` | UPower status and logind sleep/reboot/shutdown |
 | `systemd` | Native system service status and lifecycle control |
 | `system-snapshot` | Snapper, Btrfs, or LVM full-system recovery points |
 | `storage-manager` | UDisks2 mount/eject, SMART, and filesystem health |

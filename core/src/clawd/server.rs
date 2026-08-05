@@ -13,7 +13,7 @@ use super::protocol::{encode_response, Request, Response};
 use super::state::DaemonState;
 use super::{
     app_sessions, audio, audit, bluetooth, context, context_events, crash, desktop, memory, network,
-    packages, permissions, scheduler, snapshots, storage, system_journal, systemd, tasks,
+    packages, permissions, power, scheduler, snapshots, storage, system_journal, systemd, tasks,
     transactions,
 };
 
@@ -218,6 +218,7 @@ async fn dispatch_result(
         "system.package.install" => packages::install(request.params, client).await,
         "system.package.control" => packages::control(request.params, client).await,
         "system.package.restore" => packages::restore(request.params, client).await,
+        "system.power.control" => power::control(request.params, client).await,
         "system.service.control" => systemd::control(request.params, client).await,
         "system.service.restore" => systemd::restore(request.params, client).await,
         "system.snapshot.control" => snapshots::control(request.params, client).await,
@@ -271,6 +272,7 @@ fn authorize_command(command: &str, client: &ClientIdentity) -> Result<(), Strin
             | "system.package.install"
             | "system.package.control"
             | "system.package.restore"
+            | "system.power.control"
             | "system.service.control"
             | "system.service.restore"
             | "system.snapshot.control"

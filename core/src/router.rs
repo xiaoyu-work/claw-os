@@ -471,6 +471,30 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__power" {
+        let action = args
+            .get(1)
+            .ok_or_else(|| "internal power command required".to_string())?;
+        let session = env::var("COS_SESSION")
+            .map_err(|_| "internal power command requires COS_SESSION".to_string())?;
+        let mut confirm = false;
+        for flag in &args[2..] {
+            match flag.as_str() {
+                "--confirm" if !confirm => confirm = true,
+                other => return Err(format!("unknown internal power flag: {other}")),
+            }
+        }
+        let value = request_clawd(
+            "system.power.control",
+            json!({
+                "session": session,
+                "action": action,
+                "confirm": confirm,
+            }),
+        )?;
+        return Ok(Some(value.to_string()));
+    }
+
     // "app" namespace → route to Python apps
     if name == "app" {
         return dispatch_app(&args[1..]);

@@ -147,6 +147,23 @@ pub fn record_task_event(event: &'static str, job: &Job) {
     let _ = append(record);
 }
 
+pub fn record_power_intent(
+    action: &str,
+    owner_uid: u32,
+    session_id: &str,
+) -> Result<(), String> {
+    append(json!({
+        "ts": Utc::now(),
+        "event": "system.operation",
+        "source": "system.power",
+        "operation": action,
+        "phase": "intent",
+        "ok": true,
+        "session_id": session_id,
+        "owner_uid": owner_uid,
+    }))
+}
+
 pub fn query(params: Value) -> Result<Value, String> {
     query_with_owner(params, None)
 }

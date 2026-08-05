@@ -256,6 +256,22 @@ connection. Prompt responses are forwarded to the broker over stdin rather
 than its command line. Discovery likewise runs in one bounded
 `bluetoothctl` connection and is explicitly stopped before that client exits.
 
+## Power Manager
+
+```bash
+cos app power-manager status
+cos app power-manager suspend --confirm
+cos app power-manager hibernate --confirm
+cos app power-manager reboot --confirm
+cos app power-manager poweroff --confirm
+```
+
+`status` reads UPower devices and logind `Can*` capabilities. Every state
+change requires the critical unscoped `sys.power` capability plus an explicit
+`--confirm`. The broker writes a durable power intent before sending a
+no-reply logind request, so suspend/reboot/poweroff is recorded even if the
+machine transitions before the normal clawd response audit completes.
+
 ## Package Management
 
 ```bash
