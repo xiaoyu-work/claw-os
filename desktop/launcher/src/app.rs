@@ -153,6 +153,15 @@ fn ctrl_number_index(key: &str) -> Option<usize> {
     }
 }
 
+/// Hairline for glass chrome.
+///
+/// `on_bg_color` is near-black on a light theme and near-white on a dark one,
+/// so taking it at a low alpha gives an edge that reads as a neutral highlight
+/// in both without tinting the surface it borders.
+fn hairline(cosmic: &cosmic::cosmic_theme::Theme, alpha: f32) -> Color {
+    cosmic.on_bg_color().with_alpha(alpha).into()
+}
+
 fn palette_appearance(theme: &cosmic::Theme) -> container::Style {
     let cosmic = theme.cosmic();
     let is_dark = theme.theme_type.is_dark();
@@ -167,10 +176,10 @@ fn palette_appearance(theme: &cosmic::Theme) -> container::Style {
         border: Border {
             radius: cosmic.corner_radii.radius_xl.into(),
             width: 1.0,
-            color: cosmic.accent_color().with_alpha(0.20).into(),
+            color: hairline(cosmic, if is_dark { 0.16 } else { 0.10 }),
         },
         shadow: Shadow {
-            color: Color::from_rgba(0.0, 0.02, 0.10, if is_dark { 0.34 } else { 0.18 }),
+            color: Color::from_rgba(0.0, 0.0, 0.0, if is_dark { 0.34 } else { 0.16 }),
             offset: Vector::new(0.0, 10.0),
             blur_radius: 32.0,
         },
@@ -181,22 +190,14 @@ fn palette_appearance(theme: &cosmic::Theme) -> container::Style {
 
 fn section_appearance(theme: &cosmic::Theme) -> container::Style {
     let cosmic = theme.cosmic();
+    let is_dark = theme.theme_type.is_dark();
     container::Style {
         text_color: Some(cosmic.on_bg_color().into()),
-        background: Some(
-            cosmic
-                .accent_color()
-                .with_alpha(if theme.theme_type.is_dark() {
-                    0.055
-                } else {
-                    0.035
-                })
-                .into(),
-        ),
+        background: Some(hairline(cosmic, if is_dark { 0.06 } else { 0.035 }).into()),
         border: Border {
             radius: cosmic.corner_radii.radius_l.into(),
             width: 1.0,
-            color: cosmic.accent_color().with_alpha(0.10).into(),
+            color: hairline(cosmic, if is_dark { 0.10 } else { 0.07 }),
         },
         shadow: Shadow::default(),
         icon_color: Some(cosmic.on_bg_color().into()),
@@ -204,46 +205,25 @@ fn section_appearance(theme: &cosmic::Theme) -> container::Style {
     }
 }
 
-/// Frosted "Claw Glass" search pill for the launcher.
+/// Frosted search pill for the launcher.
 ///
-/// The pill floats over an arbitrary wallpaper like macOS Spotlight, so the
-/// glass keeps a luminance anchor (dark-enough fill in dark mode, light-enough
-/// in light mode) for readable contrast. Instead of a neutral gray/white frost
-/// we blend a small amount of the brand accent (`#005CFE`) into the fill, the
-/// foreground, and the hairline so the surface reads as brand-blue Claw Glass:
-/// a deep navy-blue glass in dark mode and a cool blue-white glass in light
-/// mode — never flat gray, never dead charcoal. Selection / focus is brand blue.
+/// The pill floats over an arbitrary wallpaper like macOS Spotlight, so its
+/// fill is a fixed luminance anchor rather than a theme colour: that is what
+/// keeps text readable whether the wallpaper behind it is white sand or a
+/// night sky. The frost, the text and the hairline are all neutral. Brand blue
+/// is spent only where it carries meaning - the selected result and the text
+/// selection - so that it reads as state rather than decoration.
 fn spotlight_pill_appearance(theme: &cosmic::Theme) -> cosmic::widget::text_input::Appearance {
     let cosmic = theme.cosmic();
     let is_dark = theme.theme_type.is_dark();
-    let accent = cosmic.accent_color();
 
-    // `base` = neutral luminance anchor (preserves contrast over any wallpaper),
-    // `tint` = how much brand accent to blend into the frost for the blue cast.
-    let (base, fill_alpha, border_alpha, tint) = if is_dark {
-        (0.16_f32, 0.58_f32, 0.24_f32, 0.16_f32)
+    let (base, fill_alpha, border_alpha, fg) = if is_dark {
+        (0.16_f32, 0.58_f32, 0.18_f32, 1.0_f32)
     } else {
-        (0.98_f32, 0.64_f32, 0.32_f32, 0.07_f32)
+        (0.99_f32, 0.66_f32, 0.12_f32, 0.06_f32)
     };
-    // Blend a channel of the neutral anchor toward the matching accent channel.
-    let mix = |chan: f32| base * (1.0 - tint) + chan * tint;
-    let fill_color = Color::from_rgba(
-        mix(accent.red),
-        mix(accent.green),
-        mix(accent.blue),
-        fill_alpha,
-    );
-
-    // Foreground stays high-contrast but carries a faint blue cast so text and
-    // icons belong to the same glass family rather than reading neutral.
-    let fg = if is_dark { 1.0_f32 } else { 0.05_f32 };
-    let fg_tint = if is_dark { 0.06_f32 } else { 0.10_f32 };
-    let fg_color = Color::from_rgba(
-        fg * (1.0 - fg_tint) + accent.red * fg_tint,
-        fg * (1.0 - fg_tint) + accent.green * fg_tint,
-        fg * (1.0 - fg_tint) + accent.blue * fg_tint,
-        1.0,
-    );
+    let fill_color = Color::from_rgba(base, base, base, fill_alpha);
+    let fg_color = Color::from_rgba(fg, fg, fg, 1.0);
     let placeholder = Color {
         a: 0.55,
         ..fg_color
@@ -252,21 +232,27 @@ fn spotlight_pill_appearance(theme: &cosmic::Theme) -> cosmic::widget::text_inpu
         a: 0.85,
         ..fg_color
     };
+    // The hairline tracks the frost, not the theme: over a wallpaper the pill
+    // has no reliable backdrop to borrow a foreground colour from.
+    let border_color = if is_dark {
+        Color::from_rgba(1.0, 1.0, 1.0, border_alpha)
+    } else {
+        Color::from_rgba(0.0, 0.0, 0.0, border_alpha)
+    };
 
     cosmic::widget::text_input::Appearance {
         background: cosmic::iced::Background::Color(fill_color),
         border_radius: cosmic.corner_radii.radius_xl.into(),
         border_offset: None,
         border_width: 1.0,
-        // Blue-tinted translucent hairline (brand accent), not white/gray.
-        border_color: accent.with_alpha(border_alpha).into(),
+        border_color,
         label_color: fg_color,
         placeholder_color: placeholder,
         selected_text_color: cosmic.on_accent_color().into(),
         icon_color: Some(icon_color),
         text_color: Some(fg_color),
-        // Brand-blue text selection highlight.
-        selected_fill: accent.into(),
+        // Brand blue earns its place here: this is selection, not chrome.
+        selected_fill: cosmic.accent_color().into(),
     }
 }
 

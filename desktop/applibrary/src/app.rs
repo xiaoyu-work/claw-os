@@ -415,8 +415,16 @@ fn search_glass_style(theme: &cosmic::Theme) -> container::Style {
     let component = &cosmic.background.component;
     let mut background: Color = component.base.into();
     background.a = if cosmic.is_dark { 0.62 } else { 0.76 };
-    let mut hairline: Color = cosmic.accent_color().into();
-    hairline.a = if cosmic.is_high_contrast { 0.72 } else { 0.28 };
+    // `on_bg_color` is near-black on light and near-white on dark, so a low
+    // alpha of it reads as a neutral edge in both without tinting the glass.
+    let mut hairline: Color = cosmic.on_bg_color().into();
+    hairline.a = if cosmic.is_high_contrast {
+        0.55
+    } else if cosmic.is_dark {
+        0.16
+    } else {
+        0.10
+    };
     let mut shadow_color: Color = cosmic.shade.into();
     shadow_color.a = if cosmic.is_dark { 0.24 } else { 0.14 };
 
