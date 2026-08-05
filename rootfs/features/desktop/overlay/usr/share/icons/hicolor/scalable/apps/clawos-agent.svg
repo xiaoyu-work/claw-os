@@ -9,13 +9,15 @@
 
   The plate is a fixed light surface, so the strokes are fixed dark here
   rather than currentColor - a theme-driven white would vanish against it.
-  The dot stays #005CFE, as it does in every variant.
+
+  The application icons are otherwise a neutral grey set, which leaves this
+  dot as the only #005CFE in the whole family.
 
   The mark spans 160 px inside the 256 px canvas, matching the inner glyph of
   the other first-party application icons.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none">
-  <rect x="16" y="16" width="224" height="224" rx="56" fill="#F8FAFD" stroke="#DCE5F0" stroke-width="4"/>
+  <rect x="16" y="16" width="224" height="224" rx="56" fill="#F7F8FA" stroke="#E1E3E8" stroke-width="4"/>
   <g stroke="#1F1F20" stroke-linecap="round" fill="none">
     <line x1="124.781" y1="63.589" x2="58.070" y2="189.054" stroke-width="20.140"/>
     <line x1="148.136" y1="108.045" x2="105.063" y2="189.054" stroke-width="19.021"/>
