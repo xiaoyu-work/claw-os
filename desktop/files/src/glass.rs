@@ -6,6 +6,7 @@ use cosmic::{Theme, theme};
 
 const CHROME_ALPHA: f32 = 0.62;
 const CONTENT_ALPHA: f32 = 0.92;
+const DASHBOARD_ALPHA: f32 = 0.72;
 const MENU_ALPHA: f32 = 0.68;
 const PATH_ALPHA: f32 = 0.58;
 
@@ -137,6 +138,85 @@ pub fn menu(theme: &Theme) -> container::Style {
         shadow: depth_shadow(theme, 0.18, 8.0, 24.0),
         snap: true,
     }
+}
+
+pub fn dashboard_card(theme: &Theme) -> container::Style {
+    let cosmic = theme.cosmic();
+    container::Style {
+        icon_color: Some(cosmic.on_bg_color().into()),
+        text_color: Some(cosmic.on_bg_color().into()),
+        background: Some(Background::Color(material(
+            cosmic.bg_component_color(),
+            DASHBOARD_ALPHA,
+            cosmic.is_frosted,
+        ))),
+        border: Border {
+            color: accent(theme, 0.12),
+            width: 1.0,
+            radius: cosmic.radius_l().into(),
+        },
+        shadow: depth_shadow(theme, 0.10, 4.0, 18.0),
+        snap: true,
+    }
+}
+
+pub fn dashboard_accent_card(theme: &Theme) -> container::Style {
+    let cosmic = theme.cosmic();
+    container::Style {
+        icon_color: Some(cosmic.accent_color().into()),
+        text_color: Some(cosmic.on_bg_color().into()),
+        background: Some(Background::Color(accent(
+            theme,
+            if cosmic.is_frosted { 0.10 } else { 0.07 },
+        ))),
+        border: Border {
+            color: accent(theme, 0.22),
+            width: 1.0,
+            radius: cosmic.radius_l().into(),
+        },
+        shadow: depth_shadow(theme, 0.08, 3.0, 16.0),
+        snap: true,
+    }
+}
+
+pub fn dashboard_button() -> theme::Button {
+    theme::Button::Custom {
+        active: Box::new(|focused, theme| dashboard_button_style(theme, focused, 0.44, 0.12, 0.06)),
+        hovered: Box::new(|focused, theme| {
+            dashboard_button_style(theme, focused, 0.62, 0.24, 0.12)
+        }),
+        pressed: Box::new(|focused, theme| {
+            dashboard_button_style(theme, focused, 0.72, 0.30, 0.06)
+        }),
+        disabled: Box::new(|theme| dashboard_button_style(theme, false, 0.30, 0.08, 0.0)),
+    }
+}
+
+fn dashboard_button_style(
+    theme: &Theme,
+    focused: bool,
+    background_alpha: f32,
+    border_alpha: f32,
+    shadow_alpha: f32,
+) -> button::Style {
+    let cosmic = theme.cosmic();
+    let mut style = button::Style::new();
+    style.background = Some(Background::Color(material(
+        cosmic.bg_component_color(),
+        background_alpha,
+        cosmic.is_frosted,
+    )));
+    style.icon_color = Some(cosmic.accent_color().into());
+    style.text_color = Some(cosmic.on_bg_color().into());
+    style.border_radius = cosmic.radius_l().into();
+    style.border_width = 1.0;
+    style.border_color = accent(theme, border_alpha);
+    style.shadow_offset = Vector::new(0.0, if shadow_alpha > 0.0 { 2.0 } else { 0.0 });
+    if focused {
+        style.outline_width = 1.0;
+        style.outline_color = cosmic.accent_color().into();
+    }
+    style
 }
 
 pub fn ask_claw_button() -> theme::Button {

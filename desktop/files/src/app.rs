@@ -388,6 +388,9 @@ pub enum Message {
     DialogPush(DialogPage, Option<widget::Id>),
     DialogUpdate(DialogPage),
     DialogUpdateComplete(DialogPage),
+    HomeDashboardLoaded(HomeDashboardData),
+    HomeDashboardRefresh,
+    HomeDashboardShow(bool),
     ExtractHere(Option<Entity>),
     ExtractTo(Option<Entity>),
     ExtractToResult(DialogResult),
@@ -516,6 +519,62 @@ pub enum Message {
     None,
     Surface(surface::Action),
     CutPaths(Vec<PathBuf>),
+}
+
+impl Message {
+    fn uses_hidden_home_items(&self) -> bool {
+        matches!(
+            self,
+            Self::AiSummarize(_)
+                | Self::AiExplain(_)
+                | Self::AiRewrite(_)
+                | Self::AiFindSimilar(_)
+                | Self::AiAssistFindSimilar
+                | Self::Compress(_)
+                | Self::Copy(_)
+                | Self::CopyPath(_)
+                | Self::CopyTo(_)
+                | Self::Cut(_)
+                | Self::Delete(_)
+                | Self::ExtractHere(_)
+                | Self::ExtractTo(_)
+                | Self::MoveTo(_)
+                | Self::OpenInNewTab(_)
+                | Self::OpenInNewWindow(_)
+                | Self::OpenItemLocation(_)
+                | Self::OpenWithDialog(_)
+                | Self::PermanentlyDelete(_)
+                | Self::Preview(_)
+                | Self::RemoveFromRecents(_)
+                | Self::Rename(_)
+                | Self::RestoreFromTrash(_)
+                | Self::TabMessage(
+                    _,
+                    tab::Message::Click(_)
+                        | tab::Message::DoubleClick(_)
+                        | tab::Message::ClickRelease(_)
+                        | tab::Message::ContextAction(_)
+                        | tab::Message::ContextMenu(_, _)
+                        | tab::Message::Drag(_)
+                        | tab::Message::DragEnd
+                        | tab::Message::Gallery(_)
+                        | tab::Message::GalleryPrevious
+                        | tab::Message::GalleryNext
+                        | tab::Message::GalleryToggle
+                        | tab::Message::ItemDown
+                        | tab::Message::ItemLeft
+                        | tab::Message::ItemRight
+                        | tab::Message::ItemUp
+                        | tab::Message::Open(None)
+                        | tab::Message::RightClick(_, _)
+                        | tab::Message::MiddleClick(_)
+                        | tab::Message::RunContextAction(_)
+                        | tab::Message::SelectAll
+                        | tab::Message::SelectFirst
+                        | tab::Message::SelectLast
+                )
+        )
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -835,6 +894,8 @@ pub struct App {
     progress_operations: BTreeSet<u64>,
     complete_operations: BTreeMap<u64, Operation>,
     failed_operations: BTreeMap<u64, (Operation, Controller, String)>,
+    home_dashboard: Option<HomeDashboardData>,
+    home_dashboard_tabs: FxHashSet<Entity>,
     scrollable_id: widget::Id,
     search_id: widget::Id,
     size: Option<Size>,
@@ -859,6 +920,26 @@ pub struct App {
     auto_scroll_speed: Option<i16>,
     file_dialog_opt: Option<Dialog<Message>>,
     clipboard_cache: ClipboardCache,
+}
+
+#[derive(Clone, Debug)]
+struct DashboardRecent {
+    path: PathBuf,
+    display_name: String,
+    icon: widget::icon::Handle,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DashboardStorage {
+    total: u64,
+    free: u64,
+    available: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct HomeDashboardData {
+    recents: Vec<DashboardRecent>,
+    storage: Option<DashboardStorage>,
 }
 
 impl App {
@@ -1250,6 +1331,8 @@ impl App {
         scrollable_id: widget::Id,
         window_id: Option<window::Id>,
     ) -> (Entity, Task<Message>) {
+        let show_home_dashboard = is_home_location(&location)
+            && !has_direct_selection(&location, selection_paths.as_deref());
         let mut tab = Tab::new(
             location.clone(),
             self.config.tab,
@@ -1278,6 +1361,9 @@ impl App {
         } else {
             entity.id()
         };
+        if show_home_dashboard {
+            self.home_dashboard_tabs.insert(entity);
+        }
 
         let mut tasks = Vec::with_capacity(4);
         if activate {
@@ -1663,11 +1749,57 @@ impl App {
             })
             .collect();
 
-        let commands = needs_reload
+        let mut commands: Vec<_> = needs_reload
             .into_iter()
-            .map(|(entity, location)| self.update_tab(entity, location, None));
+            .map(|(entity, location)| self.update_tab(entity, location, None))
+            .collect();
+        commands.push(self.refresh_home_dashboard());
 
         Task::batch(commands)
+    }
+
+    fn refresh_home_dashboard(&self) -> Task<Message> {
+        let icon_sizes = self.config.tab.icon_sizes;
+        let show_recents = self.config.show_recents;
+        Task::future(async move {
+            match tokio::task::spawn_blocking(move || {
+                let recents = if show_recents {
+                    tab::scan_recents(icon_sizes)
+                        .into_iter()
+                        .filter(|item| !item.metadata.is_dir())
+                        .filter_map(|item| {
+                            Some(DashboardRecent {
+                                path: item.path_opt()?.clone(),
+                                display_name: item.display_name,
+                                icon: item.icon_handle_list_condensed,
+                            })
+                        })
+                        .take(5)
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let storage = dirs::home_dir().as_deref().and_then(finder_storage_usage);
+                HomeDashboardData { recents, storage }
+            })
+            .await
+            {
+                Ok(data) => cosmic::action::app(Message::HomeDashboardLoaded(data)),
+                Err(err) => {
+                    log::warn!("failed to load Home dashboard data: {err}");
+                    cosmic::action::none()
+                }
+            }
+        })
+    }
+
+    fn home_dashboard_active(&self) -> bool {
+        let entity = self.tab_model.active();
+        self.home_dashboard_tabs.contains(&entity)
+            && self
+                .tab_model
+                .data::<Tab>(entity)
+                .is_some_and(|tab| is_home_location(&tab.location))
     }
 
     fn search_get(&self) -> Option<&str> {
@@ -1751,6 +1883,11 @@ impl App {
         entity_opt: Option<Entity>,
     ) -> impl Iterator<Item = PathBuf> + use<'_> {
         let entity = entity_opt.unwrap_or_else(|| self.tab_model.active());
+        let hide_selection = self.home_dashboard_tabs.contains(&entity)
+            && self
+                .tab_model
+                .data::<Tab>(entity)
+                .is_some_and(|tab| is_home_location(&tab.location));
         self.tab_model
             .data::<Tab>(entity)
             .into_iter()
@@ -1759,6 +1896,7 @@ impl App {
                     .into_iter()
                     .filter_map(Location::into_path_opt)
             })
+            .filter(move |_| !hide_selection)
     }
 
     fn set_cut(&mut self, entity_opt: Option<Entity>) {
@@ -2062,12 +2200,8 @@ impl App {
         };
 
         let body: Element<'_, Message> = match &self.ai_assist_status {
-            AiAssistStatus::Idle => {
-                widget::text::body(fl!("ai-assist-empty")).into()
-            }
-            AiAssistStatus::Loading => {
-                widget::text::body(fl!("ai-assist-loading")).into()
-            }
+            AiAssistStatus::Idle => widget::text::body(fl!("ai-assist-empty")).into(),
+            AiAssistStatus::Loading => widget::text::body(fl!("ai-assist-loading")).into(),
             AiAssistStatus::Error(err) => widget::column::with_children(vec![
                 widget::text::body(fl!("ai-assist-error")).into(),
                 widget::text::caption(err.clone()).into(),
@@ -2086,8 +2220,7 @@ impl App {
                         .map(|n| n.to_string_lossy().into_owned())
                         .unwrap_or_else(|| hit.path.to_string_lossy().into_owned());
                     let parent_dir = hit.path.parent().map(|p| p.to_path_buf());
-                    let mut col = widget::column::with_capacity(3)
-                        .spacing(space_xxs);
+                    let mut col = widget::column::with_capacity(3).spacing(space_xxs);
                     let header: Element<'_, Message> = if let Some(parent) = parent_dir {
                         widget::button::link(name)
                             .on_press(Message::TabMessage(
@@ -2105,9 +2238,7 @@ impl App {
                     if !snippet.is_empty() {
                         col = col.push(widget::text::caption(snippet.to_string()));
                     }
-                    col = col.push(widget::text::caption(
-                        hit.path.display().to_string(),
-                    ));
+                    col = col.push(widget::text::caption(hit.path.display().to_string()));
                     list = list.push(col);
                 }
                 widget::scrollable(list).height(Length::Fill).into()
@@ -2557,9 +2688,7 @@ impl App {
             ..
         } = theme::spacing();
         let tab_opt = self.tab_model.active_data::<Tab>();
-        let view = tab_opt
-            .map(|t| t.config.view)
-            .unwrap_or(tab::View::List);
+        let view = tab_opt.map(|t| t.config.view).unwrap_or(tab::View::List);
         let (can_back, can_forward) = match tab_opt {
             Some(tab) => (
                 tab.history_i > 0 && !tab.history.is_empty(),
@@ -2573,8 +2702,8 @@ impl App {
         if can_back {
             back = back.on_press(Message::TabMessage(None, tab::Message::GoPrevious));
         }
-        let mut forward = widget::button::icon(icon::from_name("go-next-symbolic").size(16))
-            .padding(space_xxs);
+        let mut forward =
+            widget::button::icon(icon::from_name("go-next-symbolic").size(16)).padding(space_xxs);
         if can_forward {
             forward = forward.on_press(Message::TabMessage(None, tab::Message::GoNext));
         }
@@ -2673,10 +2802,7 @@ impl App {
                 let target = location.with_path(segment);
                 children.push(
                     widget::button::link(label)
-                        .on_press(Message::TabMessage(
-                            None,
-                            tab::Message::Location(target),
-                        ))
+                        .on_press(Message::TabMessage(None, tab::Message::Location(target)))
                         .padding(0)
                         .into(),
                 );
@@ -2734,6 +2860,344 @@ impl App {
             .into(),
         )
     }
+
+    fn home_dashboard<'a>(&'a self, entity: Entity, tab: &'a Tab) -> Element<'a, Message> {
+        widget::responsive(move |size| self.home_dashboard_responsive(entity, tab, size)).into()
+    }
+
+    fn home_dashboard_responsive(
+        &self,
+        entity: Entity,
+        tab: &Tab,
+        size: Size,
+    ) -> Element<'_, Message> {
+        let cosmic_theme::Spacing {
+            space_xs,
+            space_s,
+            space_m,
+            space_l,
+            ..
+        } = theme::spacing();
+        let compact = self.core.is_condensed() || size.width < 760.0;
+
+        let heading = widget::row::with_children(vec![
+            widget::column::with_children(vec![
+                widget::text::title2(fl!("home-dashboard-welcome")).into(),
+                widget::text::body(fl!("home-dashboard-subtitle")).into(),
+            ])
+            .spacing(space_xs)
+            .into(),
+            widget::space::horizontal().into(),
+            widget::button::standard(fl!("home-dashboard-browse"))
+                .on_press(Message::HomeDashboardShow(false))
+                .into(),
+        ])
+        .align_y(Alignment::Center)
+        .spacing(space_s);
+
+        let folders: Vec<_> = [
+            (fl!("home-dashboard-documents"), dirs::document_dir()),
+            (fl!("home-dashboard-downloads"), dirs::download_dir()),
+            (fl!("home-dashboard-pictures"), dirs::picture_dir()),
+            (fl!("home-dashboard-music"), dirs::audio_dir()),
+            (fl!("home-dashboard-videos"), dirs::video_dir()),
+        ]
+        .into_iter()
+        .filter_map(|(label, path)| path.map(|path| (label, path)))
+        .collect();
+
+        let folder_cards: Element<'_, Message> = if compact {
+            widget::column::with_children(
+                folders
+                    .iter()
+                    .map(|(label, path)| {
+                        self.dashboard_folder_card(entity, label.clone(), path.clone())
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .spacing(space_s)
+            .into()
+        } else {
+            let mut rows = widget::column::with_capacity(2).spacing(space_s);
+            for chunk in folders.chunks(3) {
+                let mut row = widget::row::with_capacity(3)
+                    .spacing(space_s)
+                    .width(Length::Fill);
+                for (label, path) in chunk {
+                    row = row.push(self.dashboard_folder_card(entity, label.clone(), path.clone()));
+                }
+                for _ in chunk.len()..3 {
+                    row = row.push(widget::space::horizontal().width(Length::Fill));
+                }
+                rows = rows.push(row);
+            }
+            rows.into()
+        };
+
+        let folder_section = widget::column::with_children(vec![
+            widget::text::heading(fl!("home-dashboard-folders")).into(),
+            folder_cards,
+        ])
+        .spacing(space_s);
+
+        let home_items = tab.items_opt().map(Vec::len);
+        let summary_text = match home_items {
+            Some(items) => fl!(
+                "home-dashboard-summary",
+                items = items,
+                folders = folders.len()
+            ),
+            None => fl!("home-dashboard-loading"),
+        };
+        let recent_note = if !self.config.show_recents {
+            fl!("home-dashboard-recents-hidden")
+        } else {
+            match &self.home_dashboard {
+                None => fl!("home-dashboard-loading"),
+                Some(data) => data.recents.first().map_or_else(
+                    || fl!("home-dashboard-summary-no-recent"),
+                    |recent| {
+                        fl!(
+                            "home-dashboard-summary-recent",
+                            name = recent.display_name.as_str()
+                        )
+                    },
+                ),
+            }
+        };
+        let summary = widget::container(
+            widget::column::with_children(vec![
+                widget::row::with_children(vec![
+                    widget::icon::from_name("face-smile-symbolic")
+                        .size(24)
+                        .into(),
+                    widget::text::heading(fl!("home-dashboard-ai-summary")).into(),
+                ])
+                .align_y(Alignment::Center)
+                .spacing(space_s)
+                .into(),
+                widget::text::body(summary_text).into(),
+                widget::text::body(recent_note).into(),
+            ])
+            .spacing(space_xs),
+        )
+        .padding(space_m)
+        .width(Length::Fill)
+        .class(theme::Container::custom(
+            crate::glass::dashboard_accent_card,
+        ));
+
+        let main = widget::column::with_children(vec![
+            heading.into(),
+            folder_section.into(),
+            summary.into(),
+        ])
+        .spacing(space_l)
+        .width(Length::Fill);
+        let rail = self.home_dashboard_rail(entity);
+
+        let body: Element<'_, Message> = if compact {
+            widget::column::with_children(vec![main.into(), rail])
+                .spacing(space_l)
+                .width(Length::Fill)
+                .into()
+        } else {
+            widget::row::with_children(vec![
+                main.into(),
+                widget::container(rail).width(Length::Fixed(280.0)).into(),
+            ])
+            .spacing(space_l)
+            .align_y(Alignment::Start)
+            .width(Length::Fill)
+            .into()
+        };
+
+        widget::scrollable(
+            widget::container(body)
+                .padding([space_m, space_l])
+                .width(Length::Fill),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+    }
+
+    fn dashboard_folder_card(
+        &self,
+        entity: Entity,
+        label: String,
+        path: PathBuf,
+    ) -> Element<'_, Message> {
+        let cosmic_theme::Spacing {
+            space_xs, space_s, ..
+        } = theme::spacing();
+        widget::button::custom(
+            widget::column::with_children(vec![
+                widget::icon::icon(tab::folder_icon(&path, 42))
+                    .size(42)
+                    .into(),
+                widget::text::heading(label).into(),
+            ])
+            .spacing(space_xs)
+            .align_x(Alignment::Start),
+        )
+        .on_press(Message::TabMessage(
+            Some(entity),
+            tab::Message::Location(Location::Path(path)),
+        ))
+        .padding(space_s)
+        .width(Length::Fill)
+        .height(Length::Fixed(104.0))
+        .class(crate::glass::dashboard_button())
+        .into()
+    }
+
+    fn home_dashboard_rail(&self, entity: Entity) -> Element<'_, Message> {
+        let cosmic_theme::Spacing {
+            space_xs,
+            space_s,
+            space_m,
+            ..
+        } = theme::spacing();
+
+        let storage_content: Element<'_, Message> = match &self.home_dashboard {
+            None => widget::text::body(fl!("home-dashboard-loading")).into(),
+            Some(data) => match data.storage {
+                Some(storage) if storage.total > 0 => {
+                    let used = storage.total.saturating_sub(storage.free);
+                    let progress = (used as f32 / storage.total as f32).clamp(0.0, 1.0);
+                    widget::column::with_children(vec![
+                        widget::text::body(fl!(
+                            "home-dashboard-storage-used",
+                            used = tab::format_size(used),
+                            total = tab::format_size(storage.total)
+                        ))
+                        .into(),
+                        widget::determinate_linear(progress)
+                            .girth(Length::Fixed(6.0))
+                            .into(),
+                        widget::text::body(fl!(
+                            "home-dashboard-storage-available",
+                            available = tab::format_size(storage.available)
+                        ))
+                        .into(),
+                    ])
+                    .spacing(space_s)
+                    .into()
+                }
+                _ => widget::text::body(fl!("home-dashboard-unavailable")).into(),
+            },
+        };
+        let storage = self.dashboard_rail_card(
+            fl!("home-dashboard-storage"),
+            "drive-harddisk-symbolic",
+            storage_content,
+        );
+
+        let recent_content: Element<'_, Message> = if !self.config.show_recents {
+            widget::text::body(fl!("home-dashboard-recents-hidden")).into()
+        } else {
+            match &self.home_dashboard {
+                None => widget::text::body(fl!("home-dashboard-loading")).into(),
+                Some(data) if data.recents.is_empty() => {
+                    widget::text::body(fl!("home-dashboard-no-recents")).into()
+                }
+                Some(data) => widget::column::with_children(
+                    data.recents
+                        .iter()
+                        .map(|recent| {
+                            widget::button::custom(
+                                widget::row::with_children(vec![
+                                    widget::icon::icon(recent.icon.clone()).size(20).into(),
+                                    widget::text::body(recent.display_name.clone())
+                                        .wrapping(cosmic::iced::widget::text::Wrapping::WordOrGlyph)
+                                        .into(),
+                                ])
+                                .align_y(Alignment::Center)
+                                .spacing(space_s),
+                            )
+                            .on_press(Message::TabMessage(
+                                Some(entity),
+                                tab::Message::Open(Some(recent.path.clone())),
+                            ))
+                            .padding(space_xs)
+                            .width(Length::Fill)
+                            .class(crate::glass::dashboard_button())
+                            .into()
+                        })
+                        .collect::<Vec<_>>(),
+                )
+                .spacing(space_xs)
+                .into(),
+            }
+        };
+        let recents = self.dashboard_rail_card(
+            fl!("home-dashboard-recent-files"),
+            "document-open-recent-symbolic",
+            recent_content,
+        );
+
+        let suggestions_content = widget::column::with_children(vec![
+            widget::row::with_children(vec![
+                widget::icon::from_name("emblem-ok-symbolic")
+                    .size(18)
+                    .into(),
+                widget::text::body(fl!("home-dashboard-suggestion-organize")).into(),
+            ])
+            .align_y(Alignment::Start)
+            .spacing(space_s)
+            .into(),
+            widget::row::with_children(vec![
+                widget::icon::from_name("document-open-recent-symbolic")
+                    .size(18)
+                    .into(),
+                widget::text::body(fl!("home-dashboard-suggestion-recents")).into(),
+            ])
+            .align_y(Alignment::Start)
+            .spacing(space_s)
+            .into(),
+        ])
+        .spacing(space_s)
+        .into();
+        let suggestions = self.dashboard_rail_card(
+            fl!("home-dashboard-suggestions"),
+            "dialog-information-symbolic",
+            suggestions_content,
+        );
+
+        widget::column::with_children(vec![storage, recents, suggestions])
+            .spacing(space_m)
+            .width(Length::Fill)
+            .into()
+    }
+
+    fn dashboard_rail_card<'a>(
+        &self,
+        title: String,
+        icon_name: &'static str,
+        content: Element<'a, Message>,
+    ) -> Element<'a, Message> {
+        let cosmic_theme::Spacing {
+            space_s, space_m, ..
+        } = theme::spacing();
+        widget::container(
+            widget::column::with_children(vec![
+                widget::row::with_children(vec![
+                    widget::icon::from_name(icon_name).size(20).into(),
+                    widget::text::heading(title).into(),
+                ])
+                .align_y(Alignment::Center)
+                .spacing(space_s)
+                .into(),
+                content,
+            ])
+            .spacing(space_m),
+        )
+        .padding(space_m)
+        .width(Length::Fill)
+        .class(theme::Container::custom(crate::glass::dashboard_card))
+        .into()
+    }
 }
 
 /// Free bytes available on the filesystem holding `path`. Best-effort:
@@ -2742,6 +3206,24 @@ impl App {
 /// macOS the symbol exists but exact semantics may differ; both work
 /// for our display purpose.
 fn finder_free_space(path: &std::path::Path) -> Option<u64> {
+    finder_storage_usage(path).map(|storage| storage.available)
+}
+
+fn is_home_location(location: &Location) -> bool {
+    matches!(
+        location,
+        Location::Path(path) if dirs::home_dir().as_ref() == Some(path)
+    )
+}
+
+fn has_direct_selection(location: &Location, selection_paths: Option<&[PathBuf]>) -> bool {
+    location.path_opt().is_some_and(|directory| {
+        selection_paths
+            .is_some_and(|paths| paths.iter().any(|path| path.parent() == Some(directory)))
+    })
+}
+
+fn finder_storage_usage(path: &std::path::Path) -> Option<DashboardStorage> {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
 
@@ -2751,7 +3233,12 @@ fn finder_free_space(path: &std::path::Path) -> Option<u64> {
     if rc != 0 {
         return None;
     }
-    Some((s.f_bavail as u64) * (s.f_frsize as u64))
+    let block_size = s.f_frsize as u64;
+    Some(DashboardStorage {
+        total: (s.f_blocks as u64).saturating_mul(block_size),
+        free: (s.f_bfree as u64).saturating_mul(block_size),
+        available: (s.f_bavail as u64).saturating_mul(block_size),
+    })
 }
 
 /// Implement [`Application`] to integrate with COSMIC.
@@ -2872,6 +3359,8 @@ impl Application for App {
             progress_operations: BTreeSet::new(),
             complete_operations: BTreeMap::new(),
             failed_operations: BTreeMap::new(),
+            home_dashboard: None,
+            home_dashboard_tabs: FxHashSet::default(),
             scrollable_id: widget::Id::new("File Scrollable"),
             search_id: widget::Id::new("File Search"),
             size: None,
@@ -2895,7 +3384,11 @@ impl Application for App {
             layer_sizes: FxHashMap::default(),
         };
 
-        let mut commands = vec![app.update_config(), app.update(Message::CheckClipboard)];
+        let mut commands = vec![
+            app.update_config(),
+            app.update(Message::CheckClipboard),
+            app.refresh_home_dashboard(),
+        ];
 
         for location in flags.locations {
             if let Some(path) = location.path_opt()
@@ -2961,7 +3454,7 @@ impl Application for App {
         .class(theme::Container::custom(crate::glass::navigation));
 
         if !self.core.is_condensed() {
-            nav = nav.max_width(280);
+            nav = nav.max_width(168);
         }
 
         Some(Element::from(
@@ -3275,6 +3768,10 @@ impl Application for App {
             };
         }
 
+        if self.home_dashboard_active() && message.uses_hidden_home_items() {
+            return Task::none();
+        }
+
         match message {
             Message::AddToSidebar(entity_opt) => {
                 let mut favorites = self.config.favorites.clone();
@@ -3351,6 +3848,30 @@ impl Application for App {
                 });
                 return Task::batch([dialog_task, work]);
             }
+            Message::HomeDashboardLoaded(data) => {
+                self.home_dashboard = Some(data);
+            }
+            Message::HomeDashboardRefresh => {
+                if self.home_dashboard_active() {
+                    return self.refresh_home_dashboard();
+                }
+            }
+            Message::HomeDashboardShow(show) => {
+                let entity = self.tab_model.active();
+                if show {
+                    self.home_dashboard_tabs.insert(entity);
+                    if let Some(tab) = self.tab_model.data_mut::<Tab>(entity)
+                        && let Some(items) = &mut tab.items_opt
+                    {
+                        for item in items {
+                            item.selected = false;
+                        }
+                    }
+                    return self.refresh_home_dashboard();
+                } else {
+                    self.home_dashboard_tabs.remove(&entity);
+                }
+            }
             Message::AskClaw => {
                 let tab_opt = self.tab_model.active_data::<Tab>();
                 let selected = self.selected_paths(None).next();
@@ -3380,9 +3901,8 @@ impl Application for App {
             Message::AiSummaryResult { path, outcome } => {
                 // Only mutate the dialog if it's still the one we kicked off
                 // (the user may have already closed it).
-                if let Some(DialogPage::AiSummary {
-                    path: cur_path, ..
-                }) = self.dialog_pages.front()
+                if let Some(DialogPage::AiSummary { path: cur_path, .. }) =
+                    self.dialog_pages.front()
                     && cur_path == &path
                 {
                     let status = match outcome {
@@ -3417,9 +3937,8 @@ impl Application for App {
             }
             Message::AiExplainResult { path, outcome } => {
                 // Same "is this still our dialog?" guard as AiSummaryResult.
-                if let Some(DialogPage::AiExplain {
-                    path: cur_path, ..
-                }) = self.dialog_pages.front()
+                if let Some(DialogPage::AiExplain { path: cur_path, .. }) =
+                    self.dialog_pages.front()
                     && cur_path == &path
                 {
                     let status = match outcome {
@@ -4295,6 +4814,13 @@ impl Application for App {
             Message::NotifyEvents(events) => {
                 log::debug!("{events:?}");
 
+                let refresh_dashboard = self.home_dashboard_active()
+                    || dirs::home_dir().is_some_and(|home| {
+                        events
+                            .iter()
+                            .flat_map(|event| &event.paths)
+                            .any(|path| path.starts_with(&home))
+                    });
                 let mut needs_reload = Vec::new();
                 let entities: Box<[_]> = self.tab_model.iter().collect();
                 for entity in entities {
@@ -4353,9 +4879,13 @@ impl Application for App {
                     }
                 }
 
-                let commands = needs_reload
+                let mut commands: Vec<_> = needs_reload
                     .into_iter()
-                    .map(|(entity, location)| self.update_tab(entity, location, None));
+                    .map(|(entity, location)| self.update_tab(entity, location, None))
+                    .collect();
+                if refresh_dashboard {
+                    commands.push(self.refresh_home_dashboard());
+                }
                 return Task::batch(commands);
             }
             Message::NotifyWatcher(mut watcher_wrapper) => match watcher_wrapper.watcher_opt.take()
@@ -4369,32 +4899,23 @@ impl Application for App {
                 }
             },
             Message::OpenTerminal(entity_opt) => {
+                let entity = entity_opt.unwrap_or_else(|| self.tab_model.active());
+                let mut paths: Box<[_]> = self.selected_paths(Some(entity)).collect();
+                if paths.is_empty()
+                    && let Some(path) = self
+                        .tab_model
+                        .data::<Tab>(entity)
+                        .and_then(|tab| tab.location.path_opt())
+                {
+                    paths = Box::from([path.clone()]);
+                }
                 if let Some(terminal) = self.mime_app_cache.terminal() {
-                    let mut paths = Box::from([]);
-                    let entity = entity_opt.unwrap_or_else(|| self.tab_model.active());
-                    if let Some(tab) = self.tab_model.data_mut::<Tab>(entity)
-                        && let Some(path) = tab.location.path_opt()
-                    {
-                        if let Some(items) = tab.items_opt() {
-                            paths = items
-                                .iter()
-                                .filter_map(
-                                    |item| {
-                                        if item.selected { item.path_opt() } else { None }
-                                    },
-                                )
-                                .collect();
-                        }
-                        if paths.is_empty() {
-                            paths = Box::from([path]);
-                        }
-                    }
                     for path in paths {
                         if let Some(mut command) = terminal
                             .command::<&str>(&[])
                             .and_then(|v| v.into_iter().next())
                         {
-                            command.current_dir(path);
+                            command.current_dir(&path);
                             if let Err(err) = spawn_detached(&mut command) {
                                 log::warn!(
                                     "failed to open {} with terminal {:?}: {}",
@@ -4983,7 +5504,7 @@ impl Application for App {
             }
             Message::SetShowRecents(show_recents) => {
                 config_set!(show_recents, show_recents);
-                return self.update_config();
+                return Task::batch([self.update_config(), self.refresh_home_dashboard()]);
             }
             Message::SetTypeToSearch(type_to_search) => {
                 config_set!(type_to_search, type_to_search);
@@ -4997,6 +5518,16 @@ impl Application for App {
 
                 // Activate new tab
                 self.tab_model.activate(entity);
+                if self.home_dashboard_tabs.contains(&entity) {
+                    if let Some(tab) = self.tab_model.data_mut::<Tab>(entity)
+                        && let Some(items) = &mut tab.items_opt
+                    {
+                        for item in items {
+                            item.selected = false;
+                        }
+                    }
+                    tasks.push(self.refresh_home_dashboard());
+                }
                 if let Some(tab) = self.tab_model.data::<Tab>(entity) {
                     {
                         //Restore scroll
@@ -5068,6 +5599,7 @@ impl Application for App {
                 }
 
                 // Remove item
+                self.home_dashboard_tabs.remove(&entity);
                 self.tab_model.remove(entity);
 
                 tasks.push(self.update_watcher());
@@ -5137,16 +5669,25 @@ impl Application for App {
                             }
                         }
                         tab::Command::ChangeLocation(tab_title, tab_path, selection_paths) => {
+                            let show_home_dashboard = is_home_location(&tab_path)
+                                && !has_direct_selection(&tab_path, selection_paths.as_deref());
+                            if show_home_dashboard {
+                                self.home_dashboard_tabs.insert(entity);
+                            } else {
+                                self.home_dashboard_tabs.remove(&entity);
+                            }
                             self.activate_nav_model_location(&tab_path);
 
                             self.tab_model.text_set(entity, tab_title);
                             // clear the prefix selection buffer when changing location
                             self.type_select_prefix.clear();
-                            commands.push(Task::batch([
-                                self.update_title(),
-                                self.update_watcher(),
-                                self.update_tab(entity, tab_path, selection_paths),
-                            ]));
+                            let mut location_tasks =
+                                vec![self.update_title(), self.update_watcher()];
+                            if show_home_dashboard {
+                                location_tasks.push(self.refresh_home_dashboard());
+                            }
+                            location_tasks.push(self.update_tab(entity, tab_path, selection_paths));
+                            commands.push(Task::batch(location_tasks));
                         }
                         tab::Command::ContextMenu(point_opt, parent_id) => {
                             #[cfg(feature = "wayland")]
@@ -6951,11 +7492,11 @@ impl Application for App {
                     ])
                     .spacing(space_xxs)
                     .into(),
-                    AiSummaryStatus::Ready(text) => widget::scrollable(
-                        widget::text::body(text.clone()).width(Length::Fill),
-                    )
-                    .height(Length::Fixed(320.0))
-                    .into(),
+                    AiSummaryStatus::Ready(text) => {
+                        widget::scrollable(widget::text::body(text.clone()).width(Length::Fill))
+                            .height(Length::Fixed(320.0))
+                            .into()
+                    }
                     AiSummaryStatus::Error(err) => widget::column::with_children(vec![
                         widget::text::body(fl!("ai-summary-error")).into(),
                         widget::text::body(err.clone()).into(),
@@ -6967,8 +7508,7 @@ impl Application for App {
                     .title(fl!("ai-summary-title", name = name))
                     .icon(icon::from_name("dialog-information").size(48))
                     .primary_action(
-                        widget::button::suggested(fl!("close"))
-                            .on_press(Message::DialogCancel),
+                        widget::button::suggested(fl!("close")).on_press(Message::DialogCancel),
                     )
                     .control(body)
             }
@@ -6984,11 +7524,11 @@ impl Application for App {
                     ])
                     .spacing(space_xxs)
                     .into(),
-                    AiSummaryStatus::Ready(text) => widget::scrollable(
-                        widget::text::body(text.clone()).width(Length::Fill),
-                    )
-                    .height(Length::Fixed(320.0))
-                    .into(),
+                    AiSummaryStatus::Ready(text) => {
+                        widget::scrollable(widget::text::body(text.clone()).width(Length::Fill))
+                            .height(Length::Fixed(320.0))
+                            .into()
+                    }
                     AiSummaryStatus::Error(err) => widget::column::with_children(vec![
                         widget::text::body(fl!("ai-explain-error")).into(),
                         widget::text::body(err.clone()).into(),
@@ -7000,8 +7540,7 @@ impl Application for App {
                     .title(fl!("ai-explain-title", name = name))
                     .icon(icon::from_name("dialog-information").size(48))
                     .primary_action(
-                        widget::button::suggested(fl!("close"))
-                            .on_press(Message::DialogCancel),
+                        widget::button::suggested(fl!("close")).on_press(Message::DialogCancel),
                     )
                     .control(body)
             }
@@ -7035,9 +7574,7 @@ impl Application for App {
                                     .id(self.dialog_text_input.clone())
                                     .on_input(Message::AiRewriteInput)
                                     .on_submit_maybe(
-                                        complete_maybe
-                                            .clone()
-                                            .map(|m| move |_| m.clone()),
+                                        complete_maybe.clone().map(|m| move |_| m.clone()),
                                     )
                                     .into(),
                                 ])
@@ -7057,8 +7594,7 @@ impl Application for App {
                         .icon(icon::from_name("dialog-information").size(48))
                         .control(widget::text::body(fl!("ai-rewriting")))
                         .primary_action(
-                            widget::button::standard(fl!("cancel"))
-                                .on_press(Message::DialogCancel),
+                            widget::button::standard(fl!("cancel")).on_press(Message::DialogCancel),
                         ),
                     AiRewriteStage::Ready(text) => widget::dialog()
                         .title(fl!("ai-rewrite-title", name = name))
@@ -7074,8 +7610,7 @@ impl Application for App {
                                 .on_press(Message::AiRewriteCopy),
                         )
                         .secondary_action(
-                            widget::button::standard(fl!("close"))
-                                .on_press(Message::DialogCancel),
+                            widget::button::standard(fl!("close")).on_press(Message::DialogCancel),
                         ),
                     AiRewriteStage::Error(err) => widget::dialog()
                         .title(fl!("ai-rewrite-title", name = name))
@@ -7088,8 +7623,7 @@ impl Application for App {
                             .spacing(space_xxs),
                         )
                         .primary_action(
-                            widget::button::suggested(fl!("close"))
-                                .on_press(Message::DialogCancel),
+                            widget::button::suggested(fl!("close")).on_press(Message::DialogCancel),
                         ),
                 }
             }
@@ -7099,8 +7633,16 @@ impl Application for App {
 
     fn footer(&self) -> Option<Element<'_, Message>> {
         let has_ops = !self.progress_operations.is_empty();
-        let path_bar = if has_ops { None } else { self.finder_path_bar() };
-        let status_bar = if has_ops { None } else { self.finder_status_bar() };
+        let path_bar = if has_ops {
+            None
+        } else {
+            self.finder_path_bar()
+        };
+        let status_bar = if has_ops {
+            None
+        } else {
+            self.finder_status_bar()
+        };
         if !has_ops && path_bar.is_none() && status_bar.is_none() {
             return None;
         }
@@ -7303,14 +7845,33 @@ impl Application for App {
 
         let entity = self.tab_model.active();
         if let Some(tab) = self.tab_model.data::<Tab>(entity) {
-            let tab_view = tab
-                .view(
-                    &self.key_binds,
-                    &self.modifiers,
-                    self.clipboard_has_content(),
-                    &self.config.context_actions,
-                )
-                .map(move |message| Message::TabMessage(Some(entity), message));
+            let is_home = is_home_location(&tab.location);
+            let tab_view = if is_home && self.home_dashboard_tabs.contains(&entity) {
+                self.home_dashboard(entity, tab)
+            } else {
+                let files = tab
+                    .view(
+                        &self.key_binds,
+                        &self.modifiers,
+                        self.clipboard_has_content(),
+                        &self.config.context_actions,
+                    )
+                    .map(move |message| Message::TabMessage(Some(entity), message));
+                if is_home {
+                    widget::column::with_children(vec![
+                        widget::container(
+                            widget::button::link(fl!("home-dashboard-show-overview"))
+                                .on_press(Message::HomeDashboardShow(true)),
+                        )
+                        .padding([theme::spacing().space_xxs, theme::spacing().space_m])
+                        .into(),
+                        files,
+                    ])
+                    .into()
+                } else {
+                    files
+                }
+            };
             tab_column = tab_column.push(tab_view);
         } else {
             //TODO
@@ -7729,6 +8290,12 @@ impl Application for App {
                 iced::time::every(time::Duration::from_millis(10))
                     .with(scroll_speed)
                     .map(|(scroll_speed, _)| Message::ScrollTab(scroll_speed)),
+            );
+        }
+
+        if self.home_dashboard_active() {
+            subscriptions.push(
+                iced::time::every(Duration::from_secs(30)).map(|_| Message::HomeDashboardRefresh),
             );
         }
 

@@ -13,6 +13,33 @@ recents = Recents
 undo = Undo
 today = Today
 
+# Home dashboard
+home-dashboard-welcome = Welcome home
+home-dashboard-subtitle = Everything you need, organized at a glance.
+home-dashboard-browse = Browse Home files
+home-dashboard-show-overview = Show Home overview
+home-dashboard-folders = Your folders
+home-dashboard-documents = Documents
+home-dashboard-downloads = Downloads
+home-dashboard-pictures = Pictures
+home-dashboard-music = Music
+home-dashboard-videos = Videos
+home-dashboard-ai-summary = AI Smart Summary
+home-dashboard-summary = {$items} items in Home, with {$folders} key folders ready.
+home-dashboard-summary-recent = Recent activity: {$name}
+home-dashboard-summary-no-recent = Recent activity will appear here as you open files.
+home-dashboard-storage = Storage
+home-dashboard-storage-used = {$used} of {$total} used
+home-dashboard-storage-available = {$available} available
+home-dashboard-recent-files = Recent Files
+home-dashboard-no-recents = No recent files yet.
+home-dashboard-recents-hidden = Recent files are hidden in Files settings.
+home-dashboard-suggestions = Smart Suggestions
+home-dashboard-suggestion-organize = Keep important work in Documents so it is easy to find.
+home-dashboard-suggestion-recents = Reopen a recent file to continue where you left off.
+home-dashboard-loading = Gathering Home details…
+home-dashboard-unavailable = Storage information unavailable
+
 # Desktop view options
 desktop-view-options = Desktop view options...
 show-on-desktop = Show on Desktop
