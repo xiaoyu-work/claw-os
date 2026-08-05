@@ -26,6 +26,14 @@ static AUTOSIZE_MAIN_ID: LazyLock<Id> = LazyLock::new(|| Id::new("autosize-main"
 struct Desktop {
     name: String,
     icon: Option<String>,
+    /// Icon to use while the shell is on a dark theme, from
+    /// `X-ClawIconDark`.
+    ///
+    /// libcosmic flat-tints anything whose name ends in `-symbolic`, which
+    /// is enough for a single-colour glyph but destroys an icon that has to
+    /// keep an accent — the claw mark loses its blue dot. Such an icon ships
+    /// as an untinted pair instead, and this is the dark half.
+    icon_dark: Option<String>,
     exec: String,
     /// Presentation requested by the entry itself via
     /// `X-CosmicAppletPresentation`. The per-panel user config still
@@ -182,7 +190,11 @@ impl cosmic::Application for Button {
         );
 
         let icon = || {
-            cosmic::widget::icon::from_name(self.desktop.icon.clone().unwrap_or_default()).handle()
+            let name = match self.desktop.icon_dark {
+                Some(ref dark) if cosmic::theme::active().cosmic().is_dark => dark.clone(),
+                _ => self.desktop.icon.clone().unwrap_or_default(),
+            };
+            cosmic::widget::icon::from_name(name).handle()
         };
         // Reserve the panel's full cross-axis extent so a text-bearing
         // button lines up with its icon-only neighbours instead of
@@ -288,6 +300,10 @@ pub fn run() -> iced::Result {
                         |x| x.to_string(),
                     ),
                     icon: entry.icon().map(|x| x.to_string()),
+                    icon_dark: entry
+                        .desktop_entry("X-ClawIconDark")
+                        .map(|v| v.trim().to_string())
+                        .filter(|v| !v.is_empty()),
                     exec: entry.exec().map_or_else(
                         || panic!("Desktop file '{filename}' doesn't have `Exec`"),
                         |x| x.to_string(),

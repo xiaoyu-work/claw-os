@@ -6,6 +6,7 @@
 //! launching anything. Pin the shipped wiring.
 
 use std::collections::HashMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use cosmic::desktop::fde::{DesktopEntry, get_languages_from_env};
@@ -79,14 +80,50 @@ fn brand_button_presents_the_claw_mark() {
     let exec = brand.get("Exec").expect("brand entry has Exec");
     assert_eq!(exec, "cosmic-app-library");
 
-    // The mark follows the theme, which libcosmic keys off the name.
+    // The mark carries an accent dot that has to stay #005CFE, so it cannot
+    // be a symbolic icon: libcosmic would flat-tint the dot away along with
+    // the strokes. It ships as an untinted light/dark pair instead, and the
+    // button selects between them.
     let icon = brand.get("Icon").expect("brand entry has Icon");
     assert!(
-        icon.ends_with("-symbolic"),
-        "brand icon '{icon}' will not be recoloured for dark mode",
+        !icon.ends_with("-symbolic"),
+        "brand icon '{icon}' would be flat-tinted and lose its accent dot",
     );
-    let svg = dir.join("icons/scalable/apps").join(format!("{icon}.svg"));
-    assert!(svg.is_file(), "missing icon {}", svg.display());
+    let icon_dark = brand
+        .get("X-ClawIconDark")
+        .expect("brand entry declares a dark variant");
+    for name in [icon, icon_dark] {
+        let svg = dir.join("icons/scalable/apps").join(format!("{name}.svg"));
+        assert!(svg.is_file(), "missing icon {}", svg.display());
+    }
+    assert_ne!(icon, icon_dark, "dark variant duplicates the light one");
+
+    // A pair is only worth having if the two halves actually differ in the
+    // stroke colour while both keep the accent.
+    let light = fs::read_to_string(
+        dir.join("icons/scalable/apps")
+            .join(format!("{icon}.svg")),
+    )
+    .expect("light icon readable");
+    let dark = fs::read_to_string(
+        dir.join("icons/scalable/apps")
+            .join(format!("{icon_dark}.svg")),
+    )
+    .expect("dark icon readable");
+    assert!(
+        light.contains(r##"stroke="#1F1F20""##),
+        "light mark is not drawn in ink",
+    );
+    assert!(
+        dark.contains(r##"stroke="#FFFFFF""##),
+        "dark mark is not drawn in white",
+    );
+    for (label, svg) in [("light", light.as_str()), ("dark", dark.as_str())] {
+        assert!(
+            svg.contains(r##"fill="#005CFE""##),
+            "{label} mark lost the brand dot",
+        );
+    }
 }
 
 #[test]

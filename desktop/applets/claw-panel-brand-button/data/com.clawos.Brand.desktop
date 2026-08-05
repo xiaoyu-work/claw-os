@@ -13,7 +13,9 @@ Terminal=false
 Categories=ClawOS;
 Keywords=ClawOS;Applications;Library;
 # Translators: Do NOT translate or transliterate this text (this is an icon file name)!
-Icon=com.clawos.PanelBrandButton-symbolic
+Icon=com.clawos.PanelBrandButton
+# Translators: Do NOT translate or transliterate this text (this is an icon file name)!
+X-ClawIconDark=com.clawos.PanelBrandButton-dark
 StartupNotify=true
 NoDisplay=true
 # The claw mark alone does not read as a product name, so the panel shows

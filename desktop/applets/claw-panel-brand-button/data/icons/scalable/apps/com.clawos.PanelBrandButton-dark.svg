@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ClawOS claw mark for the panel brand button (dark theme).
+
+  Geometry is reconstructed from assets/brand/clawos-app-icon-1024.png:
+  three strokes at -28 degrees from vertical, bottoms aligned, true
+  semicircle caps, and a trailing dot at the lower right. The mark spans
+  14 px of the 16 px canvas, matching the rest of the panel symbols.
+
+  This icon is deliberately NOT named `-symbolic`. libcosmic flat-tints
+  symbolic icons to a single colour, which would take the dot with it; the
+  dot has to stay #005CFE. So the strokes are baked for one theme and
+  `cosmic-panel-button` picks the pair member that matches, keyed off
+  `X-ClawIconDark` in com.clawos.Brand.desktop.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none">
+  <g stroke="#FFFFFF" stroke-linecap="round" fill="none">
+    <line x1="7.718" y1="2.364" x2="1.881" y2="13.342" stroke-width="1.762"/>
+    <line x1="9.762" y1="6.254" x2="5.993" y2="13.342" stroke-width="1.664"/>
+    <line x1="12.299" y1="8.847" x2="9.909" y2="13.342" stroke-width="1.566"/>
+  </g>
+  <circle cx="14.021" cy="13.538" r="0.979" fill="#005CFE"/>
+</svg>
