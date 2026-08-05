@@ -54,15 +54,31 @@ impl Program for OverflowPopup {
                     let cosmic = theme.cosmic();
                     let radius_m = cosmic.corner_radii.radius_m;
 
+                    // Claw Glass: translucent surface with a brand-blue
+                    // hairline and soft elevation, matching applet popups.
+                    // The compositor blurs behind panel surfaces, so an
+                    // opaque `background.base` fill here read as flat grey.
+                    let mut background = Color::from(cosmic.background.base);
+                    if cosmic.is_frosted {
+                        background.a = 0.82;
+                    }
+                    let mut hairline = Color::from(cosmic.accent_color());
+                    hairline.a = 0.18;
+                    let shadow_alpha = if cosmic.is_dark { 0.28 } else { 0.14 };
+
                     container::Style {
                         text_color: Some(cosmic.background.on.into()),
-                        background: Some(Color::from(cosmic.background.base).into()),
+                        background: Some(background.into()),
                         border: cosmic::iced::Border {
                             radius: radius_m.into(),
                             width: border_width,
-                            color: cosmic.background.divider.into(),
+                            color: hairline,
                         },
-                        shadow: Shadow::default(),
+                        shadow: Shadow {
+                            color: Color::from_rgba(0.0, 0.02, 0.10, shadow_alpha),
+                            offset: cosmic::iced::Vector::new(0.0, 6.0),
+                            blur_radius: 24.0,
+                        },
                         icon_color: Some(cosmic.background.on.into()),
                         snap: true,
                     }
