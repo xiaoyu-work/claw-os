@@ -98,6 +98,10 @@ pub struct Job {
     pub id: String,
     pub prompt: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_context: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<u32>,
@@ -157,6 +161,8 @@ fn is_zero_u32(n: &u32) -> bool {
 impl Job {
     fn new_pending(
         prompt: String,
+        context: Option<String>,
+        branch_context: Option<String>,
         session_id: Option<String>,
         max_turns: Option<u32>,
         owner_uid: Option<u32>,
@@ -165,6 +171,8 @@ impl Job {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             prompt,
+            context,
+            branch_context,
             session_id,
             max_turns,
             status: JobStatus::Pending,
@@ -246,11 +254,27 @@ impl Store {
         id: &str,
         event: &crate::agent::llm::StreamEvent,
     ) -> io::Result<()> {
+        self.append_stream_record(
+            id,
+            json!({
+                "ts": chrono::Utc::now(),
+                "event": event,
+            }),
+        )
+    }
+
+    pub fn append_stream_progress(&self, id: &str, progress: Value) -> io::Result<()> {
+        self.append_stream_record(
+            id,
+            json!({
+                "ts": chrono::Utc::now(),
+                "progress": progress,
+            }),
+        )
+    }
+
+    fn append_stream_record(&self, id: &str, value: Value) -> io::Result<()> {
         validate_job_id(id)?;
-        let value = json!({
-            "ts": chrono::Utc::now(),
-            "event": event,
-        });
         let line = serde_json::to_string(&value).map_err(io_other)?;
         crate::filelock::append_locked(&self.stream_path(id), &line).map_err(io_other)
     }
@@ -258,21 +282,29 @@ impl Store {
     pub fn read_stream_events(&self, id: &str, cursor: usize) -> io::Result<(usize, Vec<Value>)> {
         validate_job_id(id)?;
         let path = self.stream_path(id);
-        let raw = match fs::read_to_string(&path) {
-            Ok(raw) => raw,
-            Err(err) if err.kind() == ErrorKind::NotFound => return Ok((0, Vec::new())),
-            Err(err) => return Err(err),
+        let raw = match crate::filelock::read_locked(&path).map_err(io_other)? {
+            Some(raw) => raw,
+            None => return Ok((0, Vec::new())),
         };
         let mut events = Vec::new();
-        let mut next_cursor = 0usize;
-        for (idx, line) in raw.lines().enumerate() {
-            next_cursor = idx + 1;
+        let mut next_cursor = cursor;
+        let records = raw.split_inclusive('\n').collect::<Vec<_>>();
+        for (idx, record) in records.iter().enumerate() {
             if idx < cursor {
                 continue;
             }
+            let line = record.trim_end_matches(|character| matches!(character, '\r' | '\n'));
             match serde_json::from_str::<Value>(line) {
-                Ok(value) => events.push(value),
+                Ok(value) => {
+                    events.push(value);
+                    next_cursor = idx + 1;
+                }
                 Err(err) => {
+                    let incomplete_tail = idx + 1 == records.len() && !record.ends_with('\n');
+                    if incomplete_tail {
+                        break;
+                    }
+                    next_cursor = idx + 1;
                     tracing::warn!(
                         "agent service: skipping malformed stream frame {path:?}: {err}"
                     );
@@ -329,7 +361,30 @@ impl Store {
         owner_uid: Option<u32>,
         owner_home: Option<String>,
     ) -> io::Result<Job> {
-        let job = Job::new_pending(prompt, session_id, max_turns, owner_uid, owner_home);
+        self.submit_with_context(
+            prompt, None, None, session_id, max_turns, owner_uid, owner_home,
+        )
+    }
+
+    pub fn submit_with_context(
+        &self,
+        prompt: String,
+        context: Option<String>,
+        branch_context: Option<String>,
+        session_id: Option<String>,
+        max_turns: Option<u32>,
+        owner_uid: Option<u32>,
+        owner_home: Option<String>,
+    ) -> io::Result<Job> {
+        let job = Job::new_pending(
+            prompt,
+            context,
+            branch_context,
+            session_id,
+            max_turns,
+            owner_uid,
+            owner_home,
+        );
         let path = self.path_for(JobStatus::Pending, &job.id);
         write_json_atomic(&path, &job)?;
         crate::clawd::audit::record_task_event("clawd.task.submitted", &job);
@@ -1556,10 +1611,30 @@ async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
     tools.set_approval(loop_::approval_from_cfg(&cfg));
     // MCP attach (best-effort) — handles dropped at end of fn.
     let _mcp_handles = loop_::attach_mcp_servers_for_cli(&mut tools, &cfg).await;
+    let stream_sink: Arc<dyn crate::agent::llm::accumulate::StreamSink> = Arc::new(JobStreamSink {
+        job_id: job.id.clone(),
+    });
+    let progress_sink: Arc<dyn crate::agent::runtime::progress::ProgressSink> =
+        Arc::new(JobProgressSink {
+            job_id: job.id.clone(),
+        });
 
     let result = if let Some(sid) = job.session_id.as_deref() {
         match crate::agent::memory::sqlite_fts::MemoryDb::open_default() {
             Ok(db) => {
+                if let Some(context) = job
+                    .branch_context
+                    .as_deref()
+                    .filter(|context| !context.trim().is_empty())
+                {
+                    if let Err(error) = seed_branch_context(&db, sid, context) {
+                        tracing::warn!(
+                            session_id = sid,
+                            %error,
+                            "failed to seed retry branch context"
+                        );
+                    }
+                }
                 // Replay prior turns so multi-turn task.stream sessions (the
                 // desktop agent UI is the main caller) see continuous context
                 // instead of treating every job.submit as a fresh exchange.
@@ -1567,14 +1642,13 @@ async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
                     provider.clone(),
                     &cfg,
                     &job.prompt,
+                    job.context.as_deref(),
                     &tools,
                     &db,
                     sid,
                     100,
-                    Arc::new(JobStreamSink {
-                        job_id: job.id.clone(),
-                    }),
-                    crate::agent::runtime::progress::null_progress(),
+                    stream_sink.clone(),
+                    progress_sink.clone(),
                     &job.id,
                 )
                 .await
@@ -1584,12 +1658,11 @@ async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
                     provider.clone(),
                     &cfg,
                     &job.prompt,
+                    job.context.as_deref(),
                     &tools,
                     None,
-                    Arc::new(JobStreamSink {
-                        job_id: job.id.clone(),
-                    }),
-                    crate::agent::runtime::progress::null_progress(),
+                    stream_sink.clone(),
+                    progress_sink.clone(),
                     &job.id,
                 )
                 .await
@@ -1600,12 +1673,11 @@ async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
             provider.clone(),
             &cfg,
             &job.prompt,
+            job.context.as_deref(),
             &tools,
             None,
-            Arc::new(JobStreamSink {
-                job_id: job.id.clone(),
-            }),
-            crate::agent::runtime::progress::null_progress(),
+            stream_sink,
+            progress_sink,
             &job.id,
         )
         .await
@@ -1622,8 +1694,107 @@ async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
     }
 }
 
+fn seed_branch_context(
+    db: &crate::agent::memory::sqlite_fts::MemoryDb,
+    session_id: &str,
+    context: &str,
+) -> Result<(), String> {
+    let bounded = clip_progress_text(context.trim(), 32 * 1024);
+    let wrapped = crate::agent::safety::untrusted::wrap_untrusted(
+        crate::agent::safety::untrusted::APP_CONTEXT_TAG,
+        &bounded,
+    );
+    let already_seeded = db
+        .recent(session_id, 20)
+        .map_err(|error| error.to_string())?
+        .iter()
+        .any(|row| row.role == "system" && row.content == wrapped);
+    if !already_seeded {
+        db.record_message(session_id, "system", &wrapped)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 struct JobStreamSink {
     job_id: String,
+}
+
+struct JobProgressSink {
+    job_id: String,
+}
+
+const MAX_PROGRESS_PREVIEW_CHARS: usize = 4096;
+const MAX_PROGRESS_INPUT_CHARS: usize = 16 * 1024;
+
+fn clip_progress_text(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    let mut clipped = value.chars().take(max_chars).collect::<String>();
+    clipped.push_str(" …");
+    clipped
+}
+
+fn bounded_progress_input(input: &Value) -> Value {
+    let serialized = serde_json::to_string(input).unwrap_or_default();
+    if serialized.chars().count() <= MAX_PROGRESS_INPUT_CHARS {
+        input.clone()
+    } else {
+        json!({
+            "truncated": true,
+            "preview": clip_progress_text(&serialized, MAX_PROGRESS_INPUT_CHARS),
+        })
+    }
+}
+
+impl crate::agent::runtime::progress::ProgressSink for JobProgressSink {
+    fn on_tool_start(&self, id: &str, name: &str, input: &Value) {
+        let progress = json!({
+            "kind": "tool_start",
+            "id": id,
+            "name": name,
+            "input": bounded_progress_input(input),
+        });
+        if let Err(err) = Store::open_default()
+            .and_then(|store| store.append_stream_progress(&self.job_id, progress))
+        {
+            tracing::warn!(
+                job_id = %self.job_id,
+                error = %err,
+                "failed to append agent tool-start progress"
+            );
+        }
+    }
+
+    fn on_tool_result(
+        &self,
+        id: &str,
+        name: &str,
+        ok: bool,
+        latency_ms: u64,
+        bytes_returned: usize,
+        content_preview: &str,
+    ) {
+        let progress = json!({
+            "kind": "tool_result",
+            "id": id,
+            "name": name,
+            "ok": ok,
+            "latency_ms": latency_ms,
+            "bytes": bytes_returned,
+            "preview": clip_progress_text(content_preview, MAX_PROGRESS_PREVIEW_CHARS),
+        });
+        if let Err(err) = Store::open_default()
+            .and_then(|store| store.append_stream_progress(&self.job_id, progress))
+        {
+            tracing::warn!(
+                job_id = %self.job_id,
+                error = %err,
+                "failed to append agent tool-result progress"
+            );
+        }
+    }
 }
 
 impl crate::agent::llm::accumulate::StreamSink for JobStreamSink {
@@ -1672,6 +1843,86 @@ mod tests {
 
     fn fresh_root() -> tempfile::TempDir {
         tempfile::tempdir().unwrap()
+    }
+
+    #[test]
+    fn tool_progress_round_trips_through_task_stream() {
+        let root = fresh_root();
+        let store = Store::with_root(root.path().to_path_buf()).unwrap();
+        let job = store.submit("test".into(), None, None, None, None).unwrap();
+        store
+            .append_stream_progress(
+                &job.id,
+                json!({
+                    "kind": "tool_result",
+                    "id": "tool-1",
+                    "name": "fs.read",
+                    "ok": true,
+                    "preview": "done",
+                }),
+            )
+            .unwrap();
+
+        let (cursor, events) = store.read_stream_events(&job.id, 0).unwrap();
+        assert_eq!(cursor, 1);
+        assert_eq!(events[0]["progress"]["kind"], "tool_result");
+        assert_eq!(events[0]["progress"]["id"], "tool-1");
+    }
+
+    #[test]
+    fn incomplete_stream_tail_is_not_consumed() {
+        use std::io::Write as _;
+
+        let root = fresh_root();
+        let store = Store::with_root(root.path().to_path_buf()).unwrap();
+        let job = store.submit("test".into(), None, None, None, None).unwrap();
+        store
+            .append_stream_progress(&job.id, json!({ "kind": "tool_start", "id": "one" }))
+            .unwrap();
+        let path = store.stream_path(&job.id);
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(br#"{"progress":{"kind":"tool_result""#)
+            .unwrap();
+        drop(file);
+
+        let (cursor, events) = store.read_stream_events(&job.id, 0).unwrap();
+        assert_eq!(cursor, 1);
+        assert_eq!(events.len(), 1);
+
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(br#","id":"two"}}"#).unwrap();
+        file.write_all(b"\n").unwrap();
+        drop(file);
+        let (cursor, events) = store.read_stream_events(&job.id, cursor).unwrap();
+        assert_eq!(cursor, 2);
+        assert_eq!(events[0]["progress"]["id"], "two");
+    }
+
+    #[test]
+    fn progress_payloads_are_bounded() {
+        let oversized = "x".repeat(MAX_PROGRESS_PREVIEW_CHARS + 100);
+        assert!(
+            clip_progress_text(&oversized, MAX_PROGRESS_PREVIEW_CHARS)
+                .chars()
+                .count()
+                <= MAX_PROGRESS_PREVIEW_CHARS + 2
+        );
+        let input = json!({ "payload": "x".repeat(MAX_PROGRESS_INPUT_CHARS + 100) });
+        let bounded = bounded_progress_input(&input);
+        assert_eq!(bounded["truncated"], true);
+    }
+
+    #[test]
+    fn retry_branch_context_is_seeded_once_as_hidden_system_memory() {
+        let db = crate::agent::memory::sqlite_fts::MemoryDb::open_in_memory().unwrap();
+        let context = format!("User: earlier question {}", "x".repeat(40 * 1024));
+        seed_branch_context(&db, "branch-session", &context).unwrap();
+        seed_branch_context(&db, "branch-session", &context).unwrap();
+        let rows = db.recent("branch-session", 20).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].role, "system");
+        assert!(rows[0].content.contains("<untrusted_app_context>"));
+        assert!(rows[0].content.chars().count() < 34 * 1024);
     }
 
     struct EnvGuard {
@@ -2129,10 +2380,10 @@ mod tests {
 
     #[test]
     fn job_preview_truncates_with_ellipsis() {
-        let mut j = Job::new_pending("a".repeat(100), None, None, None, None);
+        let mut j = Job::new_pending("a".repeat(100), None, None, None, None, None, None);
         j.id = "fixed".into();
         assert_eq!(j.preview(10), "aaaaaaaaaa…");
-        let short = Job::new_pending("hi".into(), None, None, None, None);
+        let short = Job::new_pending("hi".into(), None, None, None, None, None, None);
         assert_eq!(short.preview(10), "hi");
     }
 

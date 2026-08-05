@@ -13,6 +13,18 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
     let owner_uid = client.require_uid()?;
     let owner_home = client.require_home_dir()?;
     let prompt = required_string(&params, "prompt")?;
+    let context = params
+        .get("context")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let branch_context = params
+        .get("branch_context")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
     let session_id = params
         .get("session_id")
         .and_then(Value::as_str)
@@ -44,8 +56,10 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
         None => Some(create_task_session(&prompt)?),
     };
     let job = store
-        .submit(
+        .submit_with_context(
             prompt,
+            context,
+            branch_context,
             session_id,
             max_turns,
             Some(owner_uid),

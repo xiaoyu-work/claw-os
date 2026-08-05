@@ -26,6 +26,7 @@ pub fn api() -> Router<AppState> {
     Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/chat", post(chat::stream_chat))
+        .route("/chat/:task_id/cancel", post(chat::cancel_chat))
         .route("/sessions", get(sessions::list))
         .route(
             "/sessions/:id",

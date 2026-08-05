@@ -2,18 +2,22 @@
 //!
 //! Submits the prompt to `clawd` and re-frames the daemon response as SSE:
 //!
-//! * final answer text from `clawd` → `delta`
-//! * final task envelope from `clawd` → `done`
-//!   event carrying the full agent response (answer, turns, usage,
-//!   tool calls, …)
-//! * daemon / IO errors → `error` events
+//! * submitted task/session identity → `task`
+//! * incremental answer text → `delta`
+//! * tool lifecycle → `tool_use_start`, `tool_input_delta`,
+//!   `tool_use`, `tool_start`, `tool_result`
+//! * recoverable provider notices → `warning` / `turn_done`
+//! * final task envelope → `done`
+//! * daemon / IO failures → `error`
 
 use std::convert::Infallible;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use axum::{
     Json,
-    extract::State,
+    extract::{Path, State},
+    http::StatusCode,
     response::sse::{Event, KeepAlive, Sse},
 };
 use futures::stream::Stream;
@@ -28,6 +32,46 @@ use crate::state::AppState;
 /// that never advances the cursor) would keep the SSE connection open and
 /// re-poll clawd once a second indefinitely while the client stays connected.
 const MAX_STREAM_DURATION: Duration = Duration::from_secs(30 * 60);
+
+struct CancelOnDrop {
+    socket: PathBuf,
+    task_id: String,
+    armed: bool,
+}
+
+impl CancelOnDrop {
+    fn new(socket: PathBuf, task_id: String) -> Self {
+        Self {
+            socket,
+            task_id,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let socket = self.socket.clone();
+        let task_id = self.task_id.clone();
+        handle.spawn(async move {
+            if let Err(error) =
+                clawd::request(&socket, "task.cancel", json!({ "id": task_id })).await
+            {
+                tracing::warn!(%error, "failed to cancel disconnected agent task");
+            }
+        });
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
@@ -48,6 +92,14 @@ pub struct ChatRequest {
     /// `--model` today).
     #[serde(default)]
     pub model: Option<String>,
+    /// Transient app/window context shown to the model but not
+    /// persisted as the user's visible message.
+    #[serde(default)]
+    pub context: Option<String>,
+    /// Prior visible messages used to seed a newly branched retry
+    /// session. Persisted as hidden system memory by clawd.
+    #[serde(default)]
+    pub branch_context: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -91,6 +143,113 @@ fn done_event(envelope: Value) -> Event {
         .unwrap_or_default()
 }
 
+fn json_event(name: &'static str, payload: Value) -> Event {
+    Event::default()
+        .event(name)
+        .json_data(payload)
+        .unwrap_or_default()
+}
+
+/// Translate one persisted clawd stream record into desktop SSE
+/// frames. `task.stream` returns records shaped as `{ts, event}` for
+/// model events and `{ts, progress}` for runtime tool progress.
+fn events_from_stream_record(
+    record: &Value,
+    turn_emitted_text: &mut bool,
+    emitted_any_text: &mut bool,
+) -> Vec<Event> {
+    if let Some(progress) = record.get("progress") {
+        let kind = progress.get("kind").and_then(Value::as_str).unwrap_or("");
+        return match kind {
+            "tool_start" => vec![json_event("tool_start", progress.clone())],
+            "tool_result" => vec![json_event("tool_result", progress.clone())],
+            _ => Vec::new(),
+        };
+    }
+
+    let Some(event) = record.get("event") else {
+        return Vec::new();
+    };
+    let kind = event.get("kind").and_then(Value::as_str).unwrap_or("");
+    match kind {
+        "text_delta" => {
+            let text = event.get("text").and_then(Value::as_str).unwrap_or("");
+            if text.is_empty() {
+                Vec::new()
+            } else {
+                *turn_emitted_text = true;
+                *emitted_any_text = true;
+                vec![delta_event(text)]
+            }
+        }
+        "tool_use_start" => vec![json_event(
+            "tool_use_start",
+            json!({
+                "id": event.get("id").cloned().unwrap_or(Value::Null),
+                "name": event.get("name").cloned().unwrap_or(Value::Null),
+            }),
+        )],
+        "tool_input_delta" => vec![json_event(
+            "tool_input_delta",
+            json!({
+                "id": event.get("id").cloned().unwrap_or(Value::Null),
+                "delta": event
+                    .get("partial_json")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            }),
+        )],
+        "tool_use" => vec![json_event(
+            "tool_use",
+            json!({
+                "id": event.get("id").cloned().unwrap_or(Value::Null),
+                "name": event.get("name").cloned().unwrap_or(Value::Null),
+                "input": event.get("input").cloned().unwrap_or(Value::Null),
+            }),
+        )],
+        "message" => {
+            let mut frames = Vec::new();
+            if !*turn_emitted_text
+                && let Some(text) = extract_message_text(event)
+                && !text.is_empty()
+            {
+                *emitted_any_text = true;
+                frames.push(delta_event(&text));
+            }
+            if let Some(calls) = event.get("tool_calls").and_then(Value::as_array) {
+                for call in calls {
+                    frames.push(json_event(
+                        "tool_use",
+                        json!({
+                            "id": call.get("id").cloned().unwrap_or(Value::Null),
+                            "name": call.get("name").cloned().unwrap_or(Value::Null),
+                            "input": call.get("input").cloned().unwrap_or(Value::Null),
+                        }),
+                    ));
+                }
+            }
+            frames
+        }
+        "done" => {
+            *turn_emitted_text = false;
+            vec![json_event(
+                "turn_done",
+                json!({
+                    "finish": event.get("finish").cloned().unwrap_or(Value::Null),
+                    "usage": event.get("usage").cloned().unwrap_or(Value::Null),
+                }),
+            )]
+        }
+        "warning" => vec![json_event(
+            "warning",
+            json!({
+                "message": event.get("message").cloned().unwrap_or(Value::Null),
+            }),
+        )],
+        _ => Vec::new(),
+    }
+}
+
 pub async fn stream_chat(
     State(state): State<AppState>,
     Json(req): Json<ChatRequest>,
@@ -106,6 +265,16 @@ pub async fn stream_chat(
         }
 
         let mut params = json!({ "prompt": prompt });
+        if let Some(context) = req.context.as_ref().filter(|value| !value.trim().is_empty()) {
+            params["context"] = Value::from(context.trim().to_string());
+        }
+        if let Some(context) = req
+            .branch_context
+            .as_ref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            params["branch_context"] = Value::from(context.trim().to_string());
+        }
         if let Some(session_id) = session_id.as_ref().filter(|value| !value.trim().is_empty()) {
             params["session_id"] = Value::from(session_id.clone());
         }
@@ -125,9 +294,22 @@ pub async fn stream_chat(
                 return;
             }
         };
+        let submitted_session_id = submitted
+            .get("session_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let mut cancel_on_drop = CancelOnDrop::new(socket.clone(), task_id.clone());
+        yield Ok(json_event(
+            "task",
+            json!({
+                "task_id": task_id.clone(),
+                "session_id": submitted_session_id,
+            }),
+        ));
 
         let mut cursor = 0u64;
         let mut emitted_text = false;
+        let mut turn_emitted_text = false;
         let deadline = Instant::now() + MAX_STREAM_DURATION;
         let result = loop {
             if Instant::now() >= deadline {
@@ -151,11 +333,12 @@ pub async fn stream_chat(
                 .unwrap_or(cursor);
             if let Some(events) = frame.get("events").and_then(Value::as_array) {
                 for event in events {
-                    if let Some(text) = text_from_stream_event(event) {
-                        if !text.is_empty() {
-                            emitted_text = true;
-                            yield Ok(delta_event(&text));
-                        }
+                    for outgoing in events_from_stream_record(
+                        event,
+                        &mut turn_emitted_text,
+                        &mut emitted_text,
+                    ) {
+                        yield Ok(outgoing);
                     }
                 }
             }
@@ -191,24 +374,36 @@ pub async fn stream_chat(
             }
             map.entry("type".to_string())
                 .or_insert(Value::from("done"));
+            map.entry("task_id".to_string())
+                .or_insert(Value::from(task_id.clone()));
         }
 
+        cancel_on_drop.disarm();
         yield Ok(done_event(payload));
     };
 
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
-fn text_from_stream_event(frame: &Value) -> Option<String> {
-    let event = frame.get("event")?;
-    match event.get("kind").and_then(Value::as_str)? {
-        "text_delta" => event
-            .get("text")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
-        "message" => extract_message_text(event),
-        _ => None,
+pub async fn cancel_chat(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    if task_id.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "task id is required" })),
+        ));
     }
+    clawd::request(&state.clawd_socket, "task.cancel", json!({ "id": task_id }))
+        .await
+        .map(Json)
+        .map_err(|error| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": error.to_string() })),
+            )
+        })
 }
 
 fn extract_message_text(event: &Value) -> Option<String> {
@@ -227,4 +422,70 @@ fn extract_message_text(event: &Value) -> Option<String> {
         }
     }
     if text.is_empty() { None } else { Some(text) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stream_records_avoid_duplicate_message_text() {
+        let mut turn_text = false;
+        let mut any_text = false;
+        let delta = json!({
+            "event": { "kind": "text_delta", "text": "hello" },
+        });
+        assert_eq!(
+            events_from_stream_record(&delta, &mut turn_text, &mut any_text).len(),
+            1
+        );
+        assert!(turn_text);
+        assert!(any_text);
+
+        let message = json!({
+            "event": {
+                "kind": "message",
+                "content": [{ "type": "text", "text": "hello" }],
+                "tool_calls": [],
+            },
+        });
+        assert!(events_from_stream_record(&message, &mut turn_text, &mut any_text).is_empty());
+    }
+
+    #[test]
+    fn non_streaming_message_still_emits_text() {
+        let mut turn_text = false;
+        let mut any_text = false;
+        let message = json!({
+            "event": {
+                "kind": "message",
+                "content": [{ "type": "text", "text": "complete answer" }],
+                "tool_calls": [],
+            },
+        });
+        assert_eq!(
+            events_from_stream_record(&message, &mut turn_text, &mut any_text).len(),
+            1
+        );
+        assert!(any_text);
+    }
+
+    #[test]
+    fn runtime_tool_progress_is_forwarded() {
+        let mut turn_text = false;
+        let mut any_text = false;
+        let progress = json!({
+            "progress": {
+                "kind": "tool_result",
+                "id": "tool-1",
+                "name": "fs.read",
+                "ok": true,
+                "preview": "done",
+            },
+        });
+        assert_eq!(
+            events_from_stream_record(&progress, &mut turn_text, &mut any_text).len(),
+            1
+        );
+    }
 }

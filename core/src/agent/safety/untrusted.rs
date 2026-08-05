@@ -22,6 +22,10 @@ pub const MEMORY_TAG: &str = "untrusted_memory";
 /// Boundary tag for third-party tool results (apps, MCP servers).
 pub const TOOL_RESULT_TAG: &str = "untrusted_tool_result";
 
+/// Boundary tag for transient context supplied by a desktop app
+/// (selected files, terminal scrollback, settings page metadata).
+pub const APP_CONTEXT_TAG: &str = "untrusted_app_context";
+
 /// Insert a zero-width space into any literal `</tag>` so a payload
 /// can't terminate the boundary it is wrapped in. The model still reads
 /// the text; only the boundary-breaking closing tag is defanged.

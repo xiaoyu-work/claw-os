@@ -137,6 +137,7 @@ pub async fn ask_with_stream(
         provider,
         cfg,
         user_prompt,
+        None,
         tools,
         db,
         None,
@@ -152,6 +153,7 @@ pub async fn ask_with_stream_scoped(
     provider: Arc<dyn Provider>,
     cfg: &AgentConfig,
     user_prompt: &str,
+    transient_context: Option<&str>,
     tools: &ToolRegistry,
     db: Option<(&MemoryDb, &str)>,
     sink: Arc<dyn StreamSink>,
@@ -162,6 +164,7 @@ pub async fn ask_with_stream_scoped(
         provider,
         cfg,
         user_prompt,
+        transient_context,
         tools,
         db,
         None,
@@ -217,6 +220,7 @@ pub async fn ask_with_stream_continuation(
         provider,
         cfg,
         user_prompt,
+        None,
         tools,
         Some((db, session_id)),
         None,
@@ -232,6 +236,7 @@ pub async fn ask_with_stream_continuation_scoped(
     provider: Arc<dyn Provider>,
     cfg: &AgentConfig,
     user_prompt: &str,
+    transient_context: Option<&str>,
     tools: &ToolRegistry,
     db: &MemoryDb,
     session_id: &str,
@@ -255,6 +260,7 @@ pub async fn ask_with_stream_continuation_scoped(
         provider,
         cfg,
         user_prompt,
+        transient_context,
         tools,
         Some((db, session_id)),
         None,
@@ -666,6 +672,7 @@ async fn ask_inner_streaming(
     provider: Arc<dyn Provider>,
     cfg: &AgentConfig,
     user_prompt: &str,
+    transient_context: Option<&str>,
     tools: &ToolRegistry,
     recorder: Option<(&MemoryDb, &str)>,
     compressor: Option<Arc<dyn Compressor>>,
@@ -705,7 +712,14 @@ async fn ask_inner_streaming(
     }
 
     let extra = cfg.system_prompt_path.as_deref().map(Path::new);
-    let system = prompt::build_system_prompt_for(extra, Some(user_prompt));
+    let mut system = prompt::build_system_prompt_for(extra, Some(user_prompt));
+    if let Some(context) = transient_context.filter(|context| !context.trim().is_empty()) {
+        system.push_str("\n\nTransient application context for this request only:\n");
+        system.push_str(&crate::agent::safety::untrusted::wrap_untrusted(
+            crate::agent::safety::untrusted::APP_CONTEXT_TAG,
+            context.trim(),
+        ));
+    }
 
     let mut messages: Vec<Message> = {
         let mut v = initial_messages;
@@ -1381,6 +1395,51 @@ mod tests {
             texts.iter().any(|t| t == "开始"),
             "new user prompt missing from replay: {texts:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn transient_context_reaches_model_but_not_memory() {
+        use crate::agent::memory::sqlite_fts::MemoryDb;
+
+        let db = MemoryDb::open_in_memory().unwrap();
+        let sid = "transient-context-test";
+        let cfg = cfg();
+        let mock = MockProvider::new(&cfg.model, &cfg);
+        mock.push_response(MockResponse::Text("ok".into()));
+        let mock = Arc::new(mock);
+        let provider: Arc<dyn Provider> = mock.clone();
+        let tools = builtin_only_registry();
+
+        ask_with_stream_continuation_scoped(
+            provider,
+            &cfg,
+            "visible question",
+            Some(r#"{"path":"/private/example.txt"}"#),
+            &tools,
+            &db,
+            sid,
+            50,
+            crate::agent::llm::accumulate::null_sink(),
+            progress::null_progress(),
+            "transient-context-scope",
+        )
+        .await
+        .unwrap();
+
+        let request = mock.last_request().expect("provider request");
+        assert!(request
+            .system
+            .as_deref()
+            .is_some_and(|system| system.contains("/private/example.txt")));
+        assert!(request
+            .system
+            .as_deref()
+            .is_some_and(|system| system.contains("<untrusted_app_context>")));
+        let rows = db.recent(sid, 20).unwrap();
+        assert!(rows.iter().any(|row| row.content == "visible question"));
+        assert!(rows
+            .iter()
+            .all(|row| !row.content.contains("/private/example.txt")));
     }
 
     fn cfg() -> AgentConfig {
