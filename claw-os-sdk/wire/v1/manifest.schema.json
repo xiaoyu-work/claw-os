@@ -76,6 +76,7 @@
             "memory.write", "memory.read",
             "ipc.publish", "ipc.subscribe", "ipc.invoke",
             "ui.notify", "ui.prompt", "ui.window", "ui.input",
+            "clipboard.read", "clipboard.write",
             "device.audio", "device.camera", "device.microphone", "device.location", "device.sensor", "device.usb",
             "time.cron", "time.delay",
             "ai.chat", "ai.chat.untrusted",

@@ -142,6 +142,10 @@ impl Verb {
     pub const UI_WINDOW: Verb = Verb::new("ui.window");
     pub const UI_INPUT: Verb = Verb::new("ui.input");
 
+    // -- Clipboard ---------------------------------------------------------
+    pub const CLIPBOARD_READ: Verb = Verb::new("clipboard.read");
+    pub const CLIPBOARD_WRITE: Verb = Verb::new("clipboard.write");
+
     // -- Devices -----------------------------------------------------------
     pub const DEVICE_AUDIO: Verb = Verb::new("device.audio");
     pub const DEVICE_CAMERA: Verb = Verb::new("device.camera");
@@ -249,6 +253,8 @@ pub const ALL_VERBS: &[Verb] = &[
     Verb::UI_PROMPT,
     Verb::UI_WINDOW,
     Verb::UI_INPUT,
+    Verb::CLIPBOARD_READ,
+    Verb::CLIPBOARD_WRITE,
     Verb::DEVICE_AUDIO,
     Verb::DEVICE_CAMERA,
     Verb::DEVICE_MICROPHONE,

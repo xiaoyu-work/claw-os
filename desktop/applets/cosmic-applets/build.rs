@@ -46,6 +46,12 @@ fn main() {
             "claw-applet-approval-gate-keywords",
         ),
         (
+            "com.clawos.AppletClipboard",
+            "claw-applet-clipboard",
+            "claw-applet-clipboard-comment",
+            "claw-applet-clipboard-keywords",
+        ),
+        (
             "com.clawos.AppletWidgetRail",
             "claw-applet-widget-rail",
             "claw-applet-widget-rail-comment",
@@ -137,9 +143,9 @@ fn main() {
         ),
         (
             "com.clawos.PanelCalendarButton",
-            "claw-panel-calendar-button",
-            "claw-panel-calendar-button-comment",
-            "claw-panel-calendar-button-keywords",
+            "claw-applet-calendar",
+            "claw-applet-calendar-comment",
+            "claw-applet-calendar-keywords",
         ),
         (
             "com.clawos.PanelDockDivider",

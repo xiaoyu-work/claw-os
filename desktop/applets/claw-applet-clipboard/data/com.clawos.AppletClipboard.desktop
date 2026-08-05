@@ -1,0 +1,15 @@
+[Desktop Entry]
+Name=Clipboard History
+Comment=Restore recent text copied by the existing CopyQ service
+Type=Application
+Exec=cos app panel-clipboard open
+Terminal=false
+Categories=Utility;X-ClawOS;
+Keywords=ClawOS;Applet;Clipboard;History;CopyQ;
+Icon=edit-paste-symbolic
+StartupNotify=true
+NoDisplay=true
+X-CosmicApplet=true
+X-CosmicShrinkable=true
+X-CosmicHoverPopup=Auto
+X-OverflowPriority=10

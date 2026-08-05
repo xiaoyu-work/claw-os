@@ -893,6 +893,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "claw-applet-calendar"
+version = "0.1.0"
+dependencies = [
+ "claw-applet-widget-rail",
+ "i18n-embed",
+ "i18n-embed-fl",
+ "jiff",
+ "libcosmic",
+ "rust-embed",
+ "tokio",
+ "tracing",
+ "tracing-log",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "claw-applet-clipboard"
+version = "0.1.0"
+dependencies = [
+ "claw-applet-widget-rail",
+ "i18n-embed",
+ "i18n-embed-fl",
+ "jiff",
+ "libcosmic",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-log",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "claw-applet-widget-rail"
 version = "0.1.0"
 dependencies = [
@@ -1400,6 +1434,8 @@ version = "1.0.2"
 dependencies = [
  "claw-applet-agent-activity",
  "claw-applet-approval-gate",
+ "claw-applet-calendar",
+ "claw-applet-clipboard",
  "claw-applet-widget-rail",
  "cosmic-app-list",
  "cosmic-applet-a11y",

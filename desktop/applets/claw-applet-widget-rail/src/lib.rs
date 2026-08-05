@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 mod app;
-mod calendar;
+pub mod calendar;
 mod localize;
-mod policy;
+pub mod policy;
 mod system;
 
 use localize::localize;

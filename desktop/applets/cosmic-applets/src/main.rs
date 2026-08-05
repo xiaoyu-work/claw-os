@@ -41,6 +41,8 @@ fn main() -> cosmic::iced::Result {
         "cosmic-applet-input-sources" => cosmic_applet_input_sources::run(),
         "claw-applet-approval-gate" => claw_applet_approval_gate::run(),
         "claw-applet-agent-activity" => claw_applet_agent_activity::run(),
+        "claw-applet-calendar" => claw_applet_calendar::run(),
+        "claw-applet-clipboard" => claw_applet_clipboard::run(),
         "claw-applet-widget-rail" => claw_applet_widget_rail::run(),
         "cosmic-panel-button" => cosmic_panel_button::run(),
         _ => Ok(()),

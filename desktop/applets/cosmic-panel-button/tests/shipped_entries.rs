@@ -90,15 +90,25 @@ fn brand_button_presents_the_claw_mark() {
 }
 
 #[test]
-fn calendar_query_round_trips_through_freedesktop_parser() {
-    let path = data_dir("claw-panel-calendar-button").join("com.clawos.CalendarShortcut.desktop");
-    let raw = std::fs::read_to_string(&path).expect("read calendar shortcut");
-    let entry = DesktopEntry::from_str(&path, &raw, Some(&get_languages_from_env()))
-        .expect("parse calendar shortcut");
-    assert_eq!(
-        entry.exec(),
-        Some(r#"cos app agent overlay --query "Show my calendar for today""#),
-    );
+fn native_panel_applets_use_manifest_wrappers() {
+    for (package, id, exec) in [
+        (
+            "claw-applet-calendar",
+            "com.clawos.PanelCalendarButton",
+            "cos app panel-calendar open",
+        ),
+        (
+            "claw-applet-clipboard",
+            "com.clawos.AppletClipboard",
+            "cos app panel-clipboard open",
+        ),
+    ] {
+        let path = data_dir(package).join(format!("{id}.desktop"));
+        let raw = std::fs::read_to_string(&path).expect("read native panel applet");
+        let entry = DesktopEntry::from_str(&path, &raw, Some(&get_languages_from_env()))
+            .expect("parse native panel applet");
+        assert_eq!(entry.exec(), Some(exec));
+    }
 }
 
 /// Every shipped panel button follows the same indirection, so a typo
@@ -122,12 +132,6 @@ fn panel_buttons_point_at_entries_that_exist() {
             "cosmic-panel-launcher-button",
             "com.clawos.PanelLauncherButton",
             "com.clawos.Search",
-            true,
-        ),
-        (
-            "claw-panel-calendar-button",
-            "com.clawos.PanelCalendarButton",
-            "com.clawos.CalendarShortcut",
             true,
         ),
         (

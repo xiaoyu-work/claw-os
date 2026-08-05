@@ -154,6 +154,7 @@ impl Default for CosmicPanelContainerConfig {
                         vec![
                             "com.clawos.PanelLauncherButton".to_string(),
                             "com.clawos.PanelCalendarButton".to_string(),
+                            "com.clawos.AppletClipboard".to_string(),
                             "com.clawos.AppletApprovalGate".to_string(),
                             "com.clawos.AppletNetwork".to_string(),
                             "com.clawos.AppletAudio".to_string(),

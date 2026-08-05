@@ -11,4 +11,6 @@
 /usr/bin/cosmic-applets /usr/bin/cosmic-applet-time
 /usr/bin/cosmic-applets /usr/bin/cosmic-applet-workspaces
 /usr/bin/cosmic-applets /usr/bin/cosmic-applet-input-sources
+/usr/bin/cosmic-applets /usr/bin/claw-applet-calendar
+/usr/bin/cosmic-applets /usr/bin/claw-applet-clipboard
 /usr/bin/cosmic-applets /usr/bin/cosmic-panel-button

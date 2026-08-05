@@ -24,6 +24,8 @@ cosmic-applet-workspaces = { path = "../cosmic-applet-workspaces" }
 cosmic-applet-input-sources = { path = "../cosmic-applet-input-sources" }
 claw-applet-approval-gate = { path = "../claw-applet-approval-gate" }
 claw-applet-agent-activity = { path = "../claw-applet-agent-activity" }
+claw-applet-calendar = { path = "../claw-applet-calendar" }
+claw-applet-clipboard = { path = "../claw-applet-clipboard" }
 claw-applet-widget-rail = { path = "../claw-applet-widget-rail" }
 cosmic-panel-button = { path = "../cosmic-panel-button" }
 libcosmic.workspace = true

@@ -61,6 +61,8 @@
   <launchable type="desktop-id">com.clawos.AppletTime.desktop</launchable>
   <launchable type="desktop-id">com.clawos.AppletWorkspaces.desktop</launchable>
   <launchable type="desktop-id">com.clawos.AppletWidgetRail.desktop</launchable>
+  <launchable type="desktop-id">com.clawos.PanelCalendarButton.desktop</launchable>
+  <launchable type="desktop-id">com.clawos.AppletClipboard.desktop</launchable>
   <launchable type="desktop-id">com.clawos.AppletAppButton.desktop</launchable>
   <launchable type="desktop-id">com.clawos.AppletWorkspacesButton.desktop</launchable>
   <launchable type="desktop-id">com.clawos.AppletLauncherButton.desktop</launchable>
@@ -89,6 +91,8 @@
       <binary>cosmic-applet-tiling</binary>
       <binary>cosmic-applet-time</binary>
       <binary>cosmic-applet-workspaces</binary>
+      <binary>claw-applet-calendar</binary>
+      <binary>claw-applet-clipboard</binary>
       <binary>claw-applet-widget-rail</binary>
     </binaries>
   </provides>

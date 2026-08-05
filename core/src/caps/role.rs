@@ -464,6 +464,8 @@ const ADMIN_VERBS: &[Verb] = &[
     Verb::NET_RAW,
     Verb::UI_WINDOW,
     Verb::UI_INPUT,
+    Verb::CLIPBOARD_READ,
+    Verb::CLIPBOARD_WRITE,
     Verb::DEVICE_AUDIO,
     Verb::DEVICE_CAMERA,
     Verb::DEVICE_MICROPHONE,
@@ -561,6 +563,23 @@ mod tests {
     fn admin_can_install_packages() {
         assert!(Role::Admin.verbs().contains(&Verb::SYS_PACKAGE));
         assert!(Role::Admin.verbs().contains(&Verb::SECRET_GRANT));
+        assert!(Role::Admin.verbs().contains(&Verb::CLIPBOARD_READ));
+        assert!(Role::Admin.verbs().contains(&Verb::CLIPBOARD_WRITE));
+    }
+
+    #[test]
+    fn clipboard_access_is_not_granted_below_admin() {
+        for role in [
+            Role::Observer,
+            Role::Worker,
+            Role::Curator,
+            Role::Connector,
+            Role::Automator,
+            Role::AgentHost,
+        ] {
+            assert!(!role.verbs().contains(&Verb::CLIPBOARD_READ));
+            assert!(!role.verbs().contains(&Verb::CLIPBOARD_WRITE));
+        }
     }
 
     #[test]

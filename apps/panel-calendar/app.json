@@ -1,0 +1,47 @@
+{
+  "id": "panel-calendar",
+  "version": "0.1.0",
+  "name": {
+    "en": "Calendar"
+  },
+  "summary": {
+    "en": "Native calendar and local agenda panel applet."
+  },
+  "icon": "com.clawos.PanelCalendarButton-symbolic",
+  "runtime": "shell",
+  "entry": "main.sh",
+  "operations": {
+    "open": {
+      "label": {
+        "en": "Open the calendar panel applet"
+      },
+      "needs": [
+        {
+          "verb": "data.db.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "calendar"
+            }
+          },
+          "why": {
+            "en": "Read local calendar events for the selected-day agenda."
+          }
+        }
+      ]
+    }
+  },
+  "desktop": {
+    "exec": "open",
+    "name": {
+      "en": "Calendar"
+    },
+    "icon": "com.clawos.PanelCalendarButton-symbolic",
+    "categories": [
+      "Utility"
+    ],
+    "single_instance": true,
+    "panel_applet": true
+  }
+}

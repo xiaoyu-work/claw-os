@@ -1,0 +1,19 @@
+[package]
+name = "claw-applet-clipboard"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+
+[dependencies]
+claw-applet-widget-rail = { path = "../claw-applet-widget-rail" }
+i18n-embed-fl.workspace = true
+i18n-embed.workspace = true
+jiff = "0.2"
+libcosmic.workspace = true
+rust-embed.workspace = true
+serde.workspace = true
+serde_json = "1"
+tokio.workspace = true
+tracing-log.workspace = true
+tracing-subscriber.workspace = true
+tracing.workspace = true

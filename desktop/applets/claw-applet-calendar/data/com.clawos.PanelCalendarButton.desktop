@@ -1,13 +1,15 @@
 [Desktop Entry]
-Name=Calendar Button
-Comment=Ask Claw for today's calendar
+Name=Calendar
+Comment=View the calendar and local agenda
 Type=Application
-Exec=cosmic-panel-button com.clawos.CalendarShortcut
+Exec=cos app panel-calendar open
 Terminal=false
-Categories=ClawOS;
+Categories=Utility;X-ClawOS;
 Keywords=ClawOS;Applet;Calendar;Schedule;
 Icon=com.clawos.PanelCalendarButton-symbolic
 StartupNotify=true
 NoDisplay=true
 X-CosmicApplet=true
+X-CosmicShrinkable=true
+X-CosmicHoverPopup=Auto
 X-OverflowPriority=10

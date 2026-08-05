@@ -1,0 +1,60 @@
+{
+  "id": "panel-clipboard",
+  "version": "0.1.0",
+  "name": {
+    "en": "Clipboard History"
+  },
+  "summary": {
+    "en": "Native text-only panel access to the existing CopyQ history."
+  },
+  "icon": "edit-paste-symbolic",
+  "runtime": "shell",
+  "entry": "main.sh",
+  "operations": {
+    "open": {
+      "label": {
+        "en": "Open the clipboard history panel applet"
+      },
+      "needs": [
+        {
+          "verb": "clipboard.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "history"
+            }
+          },
+          "why": {
+            "en": "Show the text entries in your clipboard history."
+          }
+        },
+        {
+          "verb": "clipboard.write",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "history"
+            }
+          },
+          "why": {
+            "en": "Restore, delete, or clear entries when you choose a clipboard action."
+          }
+        }
+      ]
+    }
+  },
+  "desktop": {
+    "exec": "open",
+    "name": {
+      "en": "Clipboard History"
+    },
+    "icon": "edit-paste-symbolic",
+    "categories": [
+      "Utility"
+    ],
+    "single_instance": true,
+    "panel_applet": true
+  }
+}

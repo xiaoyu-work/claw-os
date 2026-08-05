@@ -37,6 +37,12 @@ enum StartSort {
 }
 
 pub async fn load_today() -> Result<Vec<CalendarEvent>, String> {
+    let time_zone = TimeZone::system();
+    let today = Timestamp::now().to_zoned(time_zone).date();
+    load_day(today).await
+}
+
+pub async fn load_day(day: Date) -> Result<Vec<CalendarEvent>, String> {
     policy::require("data.db.read", Scope::Name("calendar")).await?;
 
     let data_dir = std::env::var_os("COS_DATA_DIR")
@@ -44,16 +50,15 @@ pub async fn load_today() -> Result<Vec<CalendarEvent>, String> {
         .ok_or_else(|| "Calendar data directory is unavailable.".to_string())?;
     let path = PathBuf::from(data_dir).join("calendar/events.db");
     let time_zone = TimeZone::system();
-    let today = Timestamp::now().to_zoned(time_zone.clone()).date();
 
-    spawn_blocking(move || load_today_from_db(&path, today, time_zone))
+    spawn_blocking(move || load_day_from_db(&path, day, time_zone))
         .await
         .map_err(|error| format!("Calendar database task failed: {error}"))?
 }
 
-fn load_today_from_db(
+fn load_day_from_db(
     path: &Path,
-    today: Date,
+    day: Date,
     time_zone: TimeZone,
 ) -> Result<Vec<CalendarEvent>, String> {
     match path.try_exists() {
@@ -113,7 +118,7 @@ fn load_today_from_db(
     for row in rows {
         events.push(row.map_err(|error| format!("Could not read a calendar event: {error}"))?);
     }
-    Ok(filter_events_for_day(events, today, time_zone))
+    Ok(filter_events_for_day(events, day, time_zone))
 }
 
 fn filter_events_for_day(
@@ -249,6 +254,26 @@ mod tests {
                 .map(|event| event.id.as_str())
                 .collect::<Vec<_>>(),
             ["all-day", "offset-match", "utc-match", "naive-match"]
+        );
+    }
+
+    #[test]
+    fn filters_events_for_the_selected_day_instead_of_today() {
+        let time_zone = TimeZone::fixed(jiff::tz::offset(0));
+        let selected: Date = "2031-11-18".parse().unwrap();
+        let events = vec![
+            event("selected", "Selected", "2031-11-18T09:00:00Z"),
+            event("previous", "Previous", "2031-11-17T23:59:59Z"),
+            event("next", "Next", "2031-11-19"),
+        ];
+
+        let matched = filter_events_for_day(events, selected, time_zone);
+        assert_eq!(
+            matched
+                .iter()
+                .map(|event| event.id.as_str())
+                .collect::<Vec<_>>(),
+            ["selected"]
         );
     }
 

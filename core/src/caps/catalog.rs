@@ -452,6 +452,28 @@ pub const CATALOG: &[CapMeta] = &[
         Risk::High,
     ),
 
+    // -- Clipboard -----------------------------------------------------------
+    CapMeta::new(
+        Verb::CLIPBOARD_READ,
+        ScopeKind::Name,
+        LocalizedStr::new("Read clipboard history"),
+        LocalizedStr::new(
+            "Read text previously copied to the named clipboard or history store.",
+        ),
+        "📋",
+        Risk::High,
+    ),
+    CapMeta::new(
+        Verb::CLIPBOARD_WRITE,
+        ScopeKind::Name,
+        LocalizedStr::new("Modify clipboard history"),
+        LocalizedStr::new(
+            "Restore, delete, or clear items in the named clipboard or history store.",
+        ),
+        "✂️",
+        Risk::High,
+    ),
+
     // -- Devices -------------------------------------------------------------
     CapMeta::new(
         Verb::DEVICE_AUDIO,

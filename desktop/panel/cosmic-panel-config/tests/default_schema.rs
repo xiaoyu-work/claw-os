@@ -92,6 +92,7 @@ fn top_panel_layout() {
         [
             "com.clawos.PanelLauncherButton",
             "com.clawos.PanelCalendarButton",
+            "com.clawos.AppletClipboard",
             "com.clawos.AppletApprovalGate",
             "com.clawos.AppletNetwork",
             "com.clawos.AppletAudio",
