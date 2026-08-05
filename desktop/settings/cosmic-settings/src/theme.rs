@@ -23,11 +23,11 @@ fn elevated_fill(cosmic: &cosmic::cosmic_theme::Theme) -> Color {
     }
 }
 
-/// Claw Glass — a brand-blue-tinted grouped card.
+/// An elevated grouped card.
 ///
 /// Used for the category rows on the Settings landing page: an airy
-/// `radius_l` surface, a 1px blue-tinted hairline, and a soft drop shadow.
-/// Depth comes from elevation, not heavy borders.
+/// `radius_l` surface, a 1px neutral hairline, and a soft drop shadow. Depth
+/// comes from elevation, not from a tinted border.
 #[must_use]
 pub fn frosted_card() -> cosmic::theme::Container<'static> {
     theme::Container::custom(|theme| {
@@ -38,12 +38,12 @@ pub fn frosted_card() -> cosmic::theme::Container<'static> {
             text_color: None,
             background: Some(Background::Color(elevated_fill(cosmic))),
             border: Border {
-                color: Color::from(cosmic.accent_color().with_alpha(0.12)),
+                color: Color::from(cosmic.on_bg_color().with_alpha(0.10)),
                 radius: cosmic.corner_radii.radius_l.into(),
                 width: 1.0,
             },
             shadow: Shadow {
-                color: Color::from_rgba(0.0, 0.043, 0.18, 0.10),
+                color: Color::from_rgba(0.0, 0.0, 0.0, 0.09),
                 offset: Vector::new(0.0, 2.0),
                 blur_radius: 16.0,
             },
@@ -52,21 +52,23 @@ pub fn frosted_card() -> cosmic::theme::Container<'static> {
     })
 }
 
-/// Claw Glass — a rounded leading "icon tile" for list rows.
+/// A rounded leading "icon tile" for list rows.
 ///
-/// A `radius_m` (10) brand-blue-tinted glass square that frames a category
-/// or row icon, tinting the glyph brand blue. Mirrors the iOS/macOS settings
-/// "icon tile + label + chevron" row pattern.
+/// A `radius_m` square that frames a category or row icon, mirroring the
+/// iOS/macOS settings "icon tile + label + chevron" row pattern. The tile and
+/// its glyph are neutral: the landing page shows a dozen of these at once, and
+/// tinting every one of them brand blue would spend the accent on decoration
+/// and leave nothing to mark the row the user has actually selected.
 #[must_use]
 pub fn icon_tile() -> cosmic::theme::Container<'static> {
     theme::Container::custom(|theme| {
         let cosmic = theme.cosmic();
-        let accent = cosmic.accent_color();
+        let ink = cosmic.on_bg_color();
 
         cosmic::widget::container::Style {
-            icon_color: Some(accent.into()),
-            text_color: Some(accent.into()),
-            background: Some(Background::Color(Color::from(accent.with_alpha(0.14)))),
+            icon_color: Some(ink.into()),
+            text_color: Some(ink.into()),
+            background: Some(Background::Color(Color::from(ink.with_alpha(0.08)))),
             border: Border {
                 color: Color::TRANSPARENT,
                 radius: cosmic.corner_radii.radius_m.into(),
@@ -101,12 +103,12 @@ pub fn section_card() -> cosmic::theme::Container<'static> {
             text_color: None,
             background: Some(Background::Color(elevated_fill(cosmic))),
             border: Border {
-                color: Color::from(cosmic.accent_color().with_alpha(0.12)),
+                color: Color::from(cosmic.on_bg_color().with_alpha(0.10)),
                 radius: cosmic.corner_radii.radius_s.into(),
                 width: 1.0,
             },
             shadow: Shadow {
-                color: Color::from_rgba(0.0, 0.043, 0.18, 0.10),
+                color: Color::from_rgba(0.0, 0.0, 0.0, 0.09),
                 offset: Vector::new(0.0, 2.0),
                 blur_radius: 16.0,
             },
