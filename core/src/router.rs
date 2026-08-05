@@ -375,6 +375,39 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__desktop" {
+        let action = args
+            .get(1)
+            .ok_or_else(|| "internal desktop command required".to_string())?;
+        let session = env::var("COS_SESSION")
+            .map_err(|_| "internal desktop command requires COS_SESSION".to_string())?;
+        let mut identifier = None;
+        let mut app_id = None;
+        let mut index = 2;
+        while index < args.len() {
+            let value = args
+                .get(index + 1)
+                .ok_or_else(|| format!("{} requires a value", args[index]))?
+                .clone();
+            match args[index].as_str() {
+                "--identifier" => identifier = Some(value),
+                "--app-id" => app_id = Some(value),
+                other => return Err(format!("unknown internal desktop flag: {other}")),
+            }
+            index += 2;
+        }
+        let value = request_clawd(
+            "system.desktop.control",
+            json!({
+                "session": session,
+                "action": action,
+                "identifier": identifier,
+                "app_id": app_id,
+            }),
+        )?;
+        return Ok(Some(value.to_string()));
+    }
+
     // "app" namespace → route to Python apps
     if name == "app" {
         return dispatch_app(&args[1..]);

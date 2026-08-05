@@ -4,11 +4,27 @@ use cos::clawd::{config, server};
 
 fn main() {
     cos::storage::set_private_umask();
+    let raw_args = std::env::args().skip(1).collect::<Vec<_>>();
+    if raw_args
+        .first()
+        .is_some_and(|arg| arg == "--desktop-wayland-helper")
+    {
+        match cos::clawd::desktop_wayland::helper(&raw_args[1..]) {
+            Ok(value) => {
+                println!("{value}");
+                return;
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
+    }
     tracing_subscriber::fmt::init();
 
     let mut socket_path = None;
     let mut socket_mode = None;
-    let mut args = std::env::args().skip(1);
+    let mut args = raw_args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--socket" => {

@@ -68,6 +68,7 @@ Permission roles and app capability gates are documented in [permissions.md](per
 | `doc` | Read PDF, DOCX, XLSX, PPTX, CSV |
 | `crash-doctor` | Coredump, OOM, segfault, journal correlation, and backtraces |
 | `db` | SQLite databases |
+| `desktop-manager` | COSMIC Wayland window discovery, focus, close, and restart |
 | `net` | HTTP client |
 | `kv` | Key-value store |
 | `log` | Audit log search |

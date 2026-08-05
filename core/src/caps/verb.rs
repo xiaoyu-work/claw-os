@@ -191,6 +191,7 @@ impl Verb {
     // `Exec=` line. `cos app exec start <binary>` is the power-user path
     // and is gated separately by `proc.spawn`.
     pub const DESKTOP_LAUNCH: Verb = Verb::new("desktop.launch");
+    pub const DESKTOP_WINDOW: Verb = Verb::new("desktop.window");
 
     // -- Attached browser (WebExtension + Native Messaging) ---------------
     // These verbs gate the *user's* GUI browser (the Chromium that ships
@@ -285,6 +286,7 @@ pub const ALL_VERBS: &[Verb] = &[
     Verb::AI_VIDEO_ANALYZE,
     Verb::AI_BYPASS,
     Verb::DESKTOP_LAUNCH,
+    Verb::DESKTOP_WINDOW,
     Verb::BROWSER_TABS_READ,
     Verb::BROWSER_NAV,
     Verb::BROWSER_DOM_READ,

@@ -8,6 +8,8 @@ pub mod config;
 pub mod context;
 pub mod context_events;
 pub mod crash;
+pub mod desktop;
+pub mod desktop_wayland;
 pub mod heartbeat;
 pub mod memory;
 pub mod network;

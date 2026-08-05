@@ -218,6 +218,23 @@ Defaults, routes, and profiles use the high-risk
 and reusable across media classes. The broker filters non-audio objects and
 revalidates object type and serial immediately before each graph mutation.
 
+## Desktop Manager
+
+```bash
+cos app desktop-manager list
+cos app desktop-manager focus <identifier>
+cos app desktop-manager close <identifier>
+cos app desktop-manager restart <identifier> <app-id>
+```
+
+Window identifiers come from `ext-foreign-toplevel-list-v1` and remain stable
+for the lifetime of the window; local Wayland proxy IDs are never exposed.
+Focus and close require `desktop.window:control`. Restart verifies that the
+selected window still has the supplied AppID, closes every matching window,
+and only then uses the exact `desktop.launch:<app-id>` grant to relaunch it.
+If an application refuses to close, relaunch is skipped rather than creating a
+duplicate instance.
+
 ## Package Management
 
 ```bash

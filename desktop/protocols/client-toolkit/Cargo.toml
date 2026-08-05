@@ -7,8 +7,8 @@ license = "GPL-3.0-only"
 description = "Helpers for implement clients with COSMIC Wayland protocols"
 
 [dependencies]
-cosmic-protocols = { version = "0.2.0", path = "../" }
-sctk = { package = "smithay-client-toolkit", version = "0.20.0" }
+cosmic-protocols = { version = "0.2.0", path = "../", default-features = false, features = ["client"] }
+sctk = { package = "smithay-client-toolkit", version = "0.20.0", default-features = false }
 wayland-client = { version = "0.31.11" }
 libc = "0.2.175"
 wayland-protocols = { version = "0.32.9", features = ["client", "staging"] }

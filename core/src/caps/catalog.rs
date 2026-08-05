@@ -681,6 +681,14 @@ pub const CATALOG: &[CapMeta] = &[
         "🪟",
         Risk::Medium,
     ),
+    CapMeta::new(
+        Verb::DESKTOP_WINDOW,
+        ScopeKind::Name,
+        LocalizedStr::new("Control desktop windows"),
+        LocalizedStr::new("Focus, close, or restart application windows through the compositor."),
+        "🗔",
+        Risk::High,
+    ),
 
     // -- Attached browser -------------------------------------------------
     // Gates the user's GUI browser (Chromium with the user's profile)

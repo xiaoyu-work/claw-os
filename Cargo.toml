@@ -15,6 +15,7 @@ members = [
     "crates/claw-semantic",
     "crates/claw-embed",
 ]
+exclude = ["desktop/protocols"]
 
 # core/ keeps its own [package] section with explicit version/edition so it
 # also builds standalone via `cd core && cargo build`. The vendored Obscura

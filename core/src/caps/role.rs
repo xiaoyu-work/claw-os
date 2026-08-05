@@ -478,6 +478,7 @@ const ADMIN_VERBS: &[Verb] = &[
     Verb::DEVICE_LOCATION,
     Verb::DEVICE_SENSOR,
     Verb::DEVICE_USB,
+    Verb::DESKTOP_WINDOW,
     Verb::BROWSER_TABS_READ,
     Verb::BROWSER_NAV,
     Verb::BROWSER_DOM_READ,
