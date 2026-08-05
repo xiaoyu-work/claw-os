@@ -62,8 +62,11 @@ impl Program for OverflowPopup {
                     if cosmic.is_frosted {
                         background.a = 0.82;
                     }
-                    let mut hairline = Color::from(cosmic.accent_color());
-                    hairline.a = 0.18;
+                    // `background.on` is near-black on light and near-white on
+                    // dark, so a low alpha of it edges the popup without
+                    // tinting it.
+                    let mut hairline = Color::from(cosmic.background.on);
+                    hairline.a = if cosmic.is_dark { 0.16 } else { 0.10 };
                     let shadow_alpha = if cosmic.is_dark { 0.28 } else { 0.14 };
 
                     container::Style {

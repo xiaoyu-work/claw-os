@@ -302,10 +302,10 @@ where
             )
             .class(cosmic::theme::Container::Custom(Box::new(|theme| {
                 let theme = theme.cosmic();
-                // Frosted radius_l glass bar with a brand-blue hairline; depth
-                // comes from the compositor blur, not a heavy gray box.
-                let mut hairline: cosmic::iced::Color = theme.accent_color().into();
-                hairline.a = 0.20;
+                // Frosted radius_l glass bar with a neutral hairline; depth
+                // comes from the compositor blur, not a heavy grey box.
+                let mut hairline: cosmic::iced::Color = theme.on_bg_color().into();
+                hairline.a = if theme.is_dark { 0.15 } else { 0.09 };
                 cosmic::iced::widget::container::Style {
                     background: Some(Background::Color(theme.bg_component_color().into())),
                     text_color: Some(theme.on_bg_color().into()),

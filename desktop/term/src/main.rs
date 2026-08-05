@@ -3546,14 +3546,14 @@ impl Application for App {
                             .on_activate(Message::TabActivate)
                             .on_close(|entity| Message::TabClose(Some(entity))),
                     )
-                    // Claw Glass: frosted tab strip — rounded top corners (radius_l),
-                    // a faint brand-blue-tinted hairline, leaning on the compositor
-                    // blur for depth instead of a heavy boxed chrome.
+                    // Frosted tab strip: rounded top corners (radius_l) and a
+                    // faint neutral hairline, leaning on the compositor blur
+                    // for depth instead of a heavy boxed chrome.
                     .class(style::Container::Custom(Box::new(|theme| {
                         let cosmic = theme.cosmic();
                         let radius_l = cosmic.radius_l();
-                        let mut hairline = cosmic.accent_color();
-                        hairline.alpha = 0.14;
+                        let mut hairline = cosmic.on_bg_color();
+                        hairline.alpha = if cosmic.is_dark { 0.15 } else { 0.09 };
                         cosmic::iced::widget::container::Style {
                             icon_color: Some(Color::from(cosmic.background.on)),
                             text_color: Some(Color::from(cosmic.background.on)),
@@ -3700,15 +3700,15 @@ impl Application for App {
                 .spacing(space_xxs);
 
                 tab_column = tab_column.push(
-                    // Claw Glass: the find bar floats as a frosted card —
-                    // radius_l surface, a brand-blue-tinted hairline and a soft
-                    // drop shadow for elevation, rather than a docked gray strip.
+                    // The find bar floats as a frosted card: radius_l surface,
+                    // a neutral hairline and a soft drop shadow for elevation,
+                    // rather than a docked grey strip.
                     widget::container(find_widget)
                         .padding(space_xxs)
                         .class(style::Container::Custom(Box::new(|theme| {
                             let cosmic = theme.cosmic();
-                            let mut hairline = cosmic.accent_color();
-                            hairline.alpha = 0.22;
+                            let mut hairline = cosmic.on_bg_color();
+                            hairline.alpha = if cosmic.is_dark { 0.18 } else { 0.11 };
                             cosmic::iced::widget::container::Style {
                                 icon_color: Some(Color::from(cosmic.primary.on)),
                                 text_color: Some(Color::from(cosmic.primary.on)),
