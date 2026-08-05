@@ -13,8 +13,8 @@ use super::protocol::{encode_response, Request, Response};
 use super::state::DaemonState;
 use super::{
     app_sessions, audio, audit, bluetooth, context, context_events, crash, desktop, memory, network,
-    hardware, packages, permissions, power, scheduler, snapshots, storage, system_journal, systemd,
-    tasks, transactions,
+    hardware, packages, permissions, power, scheduler, security, snapshots, storage,
+    system_journal, systemd, tasks, transactions,
 };
 
 #[derive(Debug, Clone)]
@@ -220,6 +220,7 @@ async fn dispatch_result(
         "system.package.control" => packages::control(request.params, client).await,
         "system.package.restore" => packages::restore(request.params, client).await,
         "system.power.control" => power::control(request.params, client).await,
+        "system.security.inspect" => security::inspect(request.params, client).await,
         "system.service.control" => systemd::control(request.params, client).await,
         "system.service.restore" => systemd::restore(request.params, client).await,
         "system.snapshot.control" => snapshots::control(request.params, client).await,
@@ -275,6 +276,7 @@ fn authorize_command(command: &str, client: &ClientIdentity) -> Result<(), Strin
             | "system.package.control"
             | "system.package.restore"
             | "system.power.control"
+            | "system.security.inspect"
             | "system.service.control"
             | "system.service.restore"
             | "system.snapshot.control"

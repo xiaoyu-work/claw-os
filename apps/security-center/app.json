@@ -1,0 +1,17 @@
+{
+  "id": "security-center",
+  "version": "0.1.0",
+  "name": {"en": "Security Center"},
+  "summary": {"en": "Analyze authentication, sudo, SSH, MAC policy, listening ports, and security events"},
+  "icon": "🛡",
+  "runtime": "python",
+  "operations": {
+    "summary": {"label": {"en": "Inspect all security evidence"}, "needs": [{"verb": "sys.security", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "audit"}}, "why": {"en": "Read sensitive system-wide security configuration and events."}}]},
+    "auth": {"label": {"en": "Inspect authentication events"}, "needs": [{"verb": "sys.security", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "audit"}}, "why": {"en": "Read login, SSH, PAM, root-session, and sudo authentication events."}}]},
+    "ssh": {"label": {"en": "Inspect effective SSH security"}, "needs": [{"verb": "sys.security", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "audit"}}, "why": {"en": "Read effective sshd configuration and service state."}}]},
+    "sudo": {"label": {"en": "Inspect sudo policy"}, "needs": [{"verb": "sys.security", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "audit"}}, "why": {"en": "Read and validate sudoers rules and permissions."}}]},
+    "mac": {"label": {"en": "Inspect AppArmor, SELinux, Secure Boot, and lockdown"}, "needs": [{"verb": "sys.security", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "audit"}}, "why": {"en": "Read mandatory-access-control and kernel trust state."}}]},
+    "ports": {"label": {"en": "Inspect listening ports and processes"}, "needs": [{"verb": "sys.security", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "audit"}}, "why": {"en": "Read process ownership for listening TCP and UDP sockets."}}]},
+    "events": {"label": {"en": "Inspect kernel security events"}, "needs": [{"verb": "sys.security", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "audit"}}, "why": {"en": "Read AppArmor/SELinux denials, audit, lockdown, module-signature, and network-security events."}}]}
+  }
+}

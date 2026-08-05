@@ -40,5 +40,16 @@ Inspect:
 4. Stop the confirmed malicious process.
 5. Escalate to broader isolation only with user approval.
 
-The current system lacks dedicated SSH, sudo, auditd, nftables, and package
-integrity views. Clearly distinguish observed facts from unimplemented checks.
+Use Security Center for dedicated evidence:
+
+```bash
+cos app security-center summary
+cos app security-center auth
+cos app security-center ssh
+cos app security-center sudo
+cos app security-center ports
+cos app security-center events
+```
+
+Firewall policy and package-integrity verification remain separate checks;
+do not infer either solely from listening sockets or authentication logs.

@@ -51,6 +51,7 @@ pub fn readonly_task_caps() -> CapSet {
         "pkg",
         "power-manager",
         "search",
+        "security-center",
         "storage-manager",
         "summarize",
         "systemd",

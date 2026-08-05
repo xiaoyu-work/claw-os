@@ -65,6 +65,7 @@ Permission roles and app capability gates are documented in [permissions.md](per
 | `exec` | Command execution |
 | `web` | URL → Markdown (JS rendered) |
 | `search` | Web and image search (Google/Brave) |
+| `security-center` | Authentication, sudo, SSH, MAC, port, and security-event analysis |
 | `email` | Send, search, read (SMTP/Gmail/Outlook) |
 | `calendar` | Events and scheduling (local/Google/Outlook) |
 | `doc` | Read PDF, DOCX, XLSX, PPTX, CSV |

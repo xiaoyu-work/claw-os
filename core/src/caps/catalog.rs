@@ -208,6 +208,14 @@ pub const CATALOG: &[CapMeta] = &[
         Risk::High,
     ),
     CapMeta::new(
+        Verb::SYS_SECURITY,
+        ScopeKind::Name,
+        LocalizedStr::new("Inspect sensitive security state"),
+        LocalizedStr::new("Read authentication events, sudo policy, SSH configuration, mandatory-access-control denials, and listening processes."),
+        "🛡",
+        Risk::High,
+    ),
+    CapMeta::new(
         Verb::SYS_STORAGE,
         ScopeKind::Name,
         LocalizedStr::new("Run deep storage diagnostics"),

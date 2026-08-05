@@ -20,6 +20,7 @@ pub mod permissions;
 pub mod power;
 pub mod protocol;
 pub mod scheduler;
+pub mod security;
 pub mod server;
 pub mod session_scope;
 pub mod snapshots;

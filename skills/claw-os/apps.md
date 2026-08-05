@@ -291,6 +291,25 @@ temperatures, and fans under the read-only `sys.observe:hardware` scope.
 Individual provider failures remain explicit inside `summary` rather than
 silently producing an empty healthy-looking section.
 
+## Security Center
+
+```bash
+cos app security-center summary
+cos app security-center auth
+cos app security-center ssh
+cos app security-center sudo
+cos app security-center mac
+cos app security-center ports
+cos app security-center events
+```
+
+Security Center uses the high-risk read-only `sys.security:audit` scope because
+its evidence contains login sources, sudo rules, effective SSH policy, process
+listeners, and mandatory-access-control denials. It flags repeated auth
+failures, direct root SSH, empty/password authentication, invalid or writable
+sudoers files, broad NOPASSWD rules, missing enforcing MAC, sensitive wildcard
+listeners, and recent kernel security events.
+
 ## Package Management
 
 ```bash
