@@ -31,6 +31,26 @@ You are running on Claw OS. All commands return structured JSON.
 | `cos_netfilter` | Outbound firewall and rate limiting ([details](network.md)) |
 | `cos_trace` | Execution tracing — tree-structured observability ([details](trace.md)) |
 | `cos_browser` | Standalone CDP server lifecycle for external Puppeteer/Playwright clients (the `web` app already uses cos-browser per-request and does not need this) |
+| `cos_diagnose` | Structured system diagnosis with bounded probes, evidence IDs, confidence, and recommendations ([diagnostic protocol](diagnostics.md)) |
+
+## System Diagnosis
+
+For system-level symptoms, call `cos_diagnose` before proposing a cause or
+mutation. Then follow the matching playbook:
+
+| Symptom | Playbook |
+|---|---|
+| Slow, frozen, high CPU or memory | [Performance](diagnostics-performance.md) |
+| Offline, slow network, DNS or connectivity | [Network](diagnostics-network.md) |
+| Disk full, storage latency, missing mount | [Storage](diagnostics-storage.md) |
+| Crash, OOM kill, segmentation fault | [Crash](diagnostics-crash.md) |
+| Failed or unhealthy service | [Service](diagnostics-service.md) |
+| Heat, fan, battery or throttling | [Thermal](diagnostics-thermal.md) |
+| Suspicious login, denial or exposed port | [Security](diagnostics-security.md) |
+
+Never present a system-state claim without naming the evidence that supports
+it. Read-only investigation comes first; capability approval and a recovery
+plan come before mutation.
 
 Permission roles and app capability gates are documented in [permissions.md](permissions.md).
 
