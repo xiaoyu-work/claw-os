@@ -6,6 +6,7 @@ pub mod bluetooth;
 pub mod client;
 pub mod client_identity;
 pub mod config;
+pub mod config_editor;
 pub mod context;
 pub mod context_events;
 pub mod containers;

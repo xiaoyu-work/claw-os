@@ -331,6 +331,24 @@ system runtime. Containerd lifecycle/log operations use nerdctl and require an
 explicit namespace; ctr remains a read-only inventory fallback. Removal never
 passes volume-deletion or force flags and requires explicit confirmation.
 
+## Safe Config Editor
+
+```bash
+cos app config-editor inspect /etc/hosts
+cos app config-editor validate /etc/hosts /home/cos/hosts.new
+cos app config-editor apply /etc/hosts /home/cos/hosts.new --confirm
+cos app config-editor restore /etc/hosts <backup-token> --confirm
+```
+
+Replacement content is read from an approved source file, never placed in
+argv. Targets must be canonical regular files below `/etc` and must match a
+registered validator (JSON, sudoers, sshd, systemd units, fstab, sysctl,
+shell, hosts, hostname, or resolv.conf). `sys.config:<exact-path>` gates the
+target and `fs.read:<source>` gates staged content. Existing metadata/xattrs
+are preserved with `cp --preserve=all`; a durable backup and applied hash are
+written before atomic replacement. Failed post-validation restores
+automatically, and manual restore refuses to overwrite newer edits.
+
 ## Package Management
 
 ```bash

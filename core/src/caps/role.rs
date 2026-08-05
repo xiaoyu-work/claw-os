@@ -459,6 +459,7 @@ const ADMIN_VERBS: &[Verb] = &[
     Verb::SECRET_GRANT,
     Verb::SYS_CRASH,
     Verb::SYS_CONTAINER,
+    Verb::SYS_CONFIG,
     Verb::SYS_SECURITY,
     Verb::SYS_STORAGE,
     Verb::SYS_SERVICE,

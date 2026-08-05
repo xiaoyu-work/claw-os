@@ -69,6 +69,7 @@ Permission roles and app capability gates are documented in [permissions.md](per
 | `email` | Send, search, read (SMTP/Gmail/Outlook) |
 | `calendar` | Events and scheduling (local/Google/Outlook) |
 | `container-manager` | Docker, Podman, containerd lifecycle, logs, cgroups, and namespaces |
+| `config-editor` | Validated atomic /etc edits with durable backup and rollback |
 | `doc` | Read PDF, DOCX, XLSX, PPTX, CSV |
 | `crash-doctor` | Coredump, OOM, segfault, journal correlation, and backtraces |
 | `db` | SQLite databases |

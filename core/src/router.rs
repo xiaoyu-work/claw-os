@@ -585,6 +585,52 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__config" {
+        let action = args
+            .get(1)
+            .ok_or_else(|| "internal config command required".to_string())?;
+        let session = env::var("COS_SESSION")
+            .map_err(|_| "internal config command requires COS_SESSION".to_string())?;
+        let mut target = None;
+        let mut source = None;
+        let mut token = None;
+        let mut confirm = false;
+        let mut index = 2;
+        while index < args.len() {
+            if args[index] == "--confirm" {
+                if confirm {
+                    return Err("duplicate internal config --confirm".to_string());
+                }
+                confirm = true;
+                index += 1;
+                continue;
+            }
+            let value = args
+                .get(index + 1)
+                .ok_or_else(|| format!("{} requires a value", args[index]))?
+                .clone();
+            match args[index].as_str() {
+                "--target" => target = Some(value),
+                "--source" => source = Some(value),
+                "--token" => token = Some(value),
+                other => return Err(format!("unknown internal config flag: {other}")),
+            }
+            index += 2;
+        }
+        let value = request_clawd(
+            "system.config.control",
+            json!({
+                "session": session,
+                "action": action,
+                "target": target,
+                "source": source,
+                "token": token,
+                "confirm": confirm,
+            }),
+        )?;
+        return Ok(Some(value.to_string()));
+    }
+
     // "app" namespace → route to Python apps
     if name == "app" {
         return dispatch_app(&args[1..]);

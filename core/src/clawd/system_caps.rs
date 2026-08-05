@@ -38,6 +38,7 @@ pub fn readonly_task_caps() -> CapSet {
         "browser-attached",
         "crash-doctor",
         "container-manager",
+        "config-editor",
         "db",
         "desktop-manager",
         "doc",

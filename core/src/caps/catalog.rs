@@ -216,6 +216,14 @@ pub const CATALOG: &[CapMeta] = &[
         Risk::Critical,
     ),
     CapMeta::new(
+        Verb::SYS_CONFIG,
+        ScopeKind::Path,
+        LocalizedStr::new("Edit validated system configuration"),
+        LocalizedStr::new("Read, validate, atomically replace, or restore an exact system configuration file below /etc."),
+        "📝",
+        Risk::Critical,
+    ),
+    CapMeta::new(
         Verb::SYS_SECURITY,
         ScopeKind::Name,
         LocalizedStr::new("Inspect sensitive security state"),
