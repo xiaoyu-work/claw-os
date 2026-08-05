@@ -1,0 +1,14 @@
+[Desktop Entry]
+# Presentation source for the Dock's application-library button.
+# `cosmic-panel-button` reads this entry's label, icon and command.
+Name=Applications
+Comment=Open the application library
+Type=Application
+Exec=cosmic-app-library
+Terminal=false
+Categories=ClawOS;
+Keywords=ClawOS;Applications;Library;
+Icon=com.clawos.AppLibraryButton-symbolic
+StartupNotify=true
+NoDisplay=true
+X-CosmicAppletPresentation=Icon

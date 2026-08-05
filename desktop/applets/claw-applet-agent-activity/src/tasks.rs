@@ -74,6 +74,15 @@ pub struct MutationSummary {
 #[derive(Debug, Clone)]
 pub struct LoadError(pub String);
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AgentMode {
+    Local,
+    Cloud,
+    Unconfigured,
+    #[default]
+    Unknown,
+}
+
 pub fn load_tasks() -> Result<Vec<Task>, LoadError> {
     let output = Command::new(cos_binary())
         .args(["agent", "ls"])
@@ -91,6 +100,59 @@ pub fn load_tasks() -> Result<Vec<Task>, LoadError> {
         .map_err(|e| LoadError(format!("parse cos agent ls output: {e}")))?;
     debug_assert_eq!(envelope.n, envelope.tasks.len());
     Ok(envelope.tasks)
+}
+
+/// Read the configured LLM provider through the public `cos` surface.
+/// The applet must not parse the config file directly: config-path and
+/// migration rules belong to the kernel.
+pub fn load_mode() -> Result<AgentMode, LoadError> {
+    let output = Command::new(cos_binary())
+        .args(["agent", "setup", "llm", "--status"])
+        .output()
+        .map_err(|e| LoadError(format!("spawn cos: {e}")))?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(LoadError(if err.is_empty() {
+            format!("cos agent setup llm --status exited with {}", output.status)
+        } else {
+            err
+        }));
+    }
+
+    let status: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|e| LoadError(format!("parse cos agent setup status: {e}")))?;
+    Ok(classify_provider(
+        status.get("provider").and_then(serde_json::Value::as_str),
+        status.get("endpoint").and_then(serde_json::Value::as_str),
+    ))
+}
+
+fn classify_provider(provider: Option<&str>, endpoint: Option<&str>) -> AgentMode {
+    if endpoint.is_some_and(endpoint_is_local) {
+        return AgentMode::Local;
+    }
+    match provider.map(str::trim).filter(|p| !p.is_empty()) {
+        Some("ollama" | "llama_local" | "local") => AgentMode::Local,
+        Some("none" | "mock") | None => AgentMode::Unconfigured,
+        Some(_) => AgentMode::Cloud,
+    }
+}
+
+fn endpoint_is_local(endpoint: &str) -> bool {
+    let endpoint = endpoint.trim().to_ascii_lowercase();
+    let authority = endpoint
+        .strip_prefix("http://")
+        .or_else(|| endpoint.strip_prefix("https://"))
+        .unwrap_or(&endpoint)
+        .split('/')
+        .next()
+        .unwrap_or_default();
+    authority == "localhost"
+        || authority.starts_with("localhost:")
+        || authority == "[::1]"
+        || authority.starts_with("[::1]:")
+        || authority == "127.0.0.1"
+        || authority.starts_with("127.0.0.1:")
 }
 
 pub fn show_task(id: &str) -> Result<TaskDetail, LoadError> {
@@ -197,6 +259,30 @@ mod tests {
         let env: LsEnvelope = serde_json::from_str(raw).unwrap();
         assert_eq!(env.n, 0);
         assert!(env.tasks.is_empty());
+    }
+
+    #[test]
+    fn provider_mode_classification() {
+        assert_eq!(classify_provider(Some("ollama"), None), AgentMode::Local);
+        assert_eq!(
+            classify_provider(Some("llama_local"), None),
+            AgentMode::Local
+        );
+        assert_eq!(
+            classify_provider(Some("openai_compat"), Some("http://127.0.0.1:11434/v1")),
+            AgentMode::Local,
+        );
+        assert_eq!(
+            classify_provider(Some("openai_compat"), Some("http://localhost:8080/v1")),
+            AgentMode::Local,
+        );
+        assert_eq!(classify_provider(Some("openai"), None), AgentMode::Cloud);
+        assert_eq!(classify_provider(Some("copilot"), None), AgentMode::Cloud);
+        assert_eq!(
+            classify_provider(Some("none"), None),
+            AgentMode::Unconfigured
+        );
+        assert_eq!(classify_provider(None, None), AgentMode::Unconfigured);
     }
 
     /// `cos agent show` envelope. We only require the fields we

@@ -27,12 +27,39 @@ struct Desktop {
     name: String,
     icon: Option<String>,
     exec: String,
+    /// Presentation requested by the entry itself via
+    /// `X-CosmicAppletPresentation`. The per-panel user config still
+    /// wins; this only supplies a per-button default, which the
+    /// panel-wide config cannot express.
+    presentation: Option<Override>,
 }
 
 struct Button {
     core: cosmic::app::Core,
     desktop: Desktop,
     config: IndividualConfig,
+}
+
+fn presentation_for(
+    anchor: &PanelAnchor,
+    size: &Size,
+    has_icon: bool,
+    forced: Option<Override>,
+    requested: Option<Override>,
+) -> Override {
+    if matches!(requested, Some(Override::Divider)) {
+        Override::Divider
+    } else if has_icon && matches!(anchor, PanelAnchor::Left | PanelAnchor::Right) {
+        Override::Icon
+    } else if let Some(forced) = forced {
+        forced
+    } else if let Some(requested) = requested {
+        requested
+    } else if matches!(size, Size::PanelSize(PanelSize::XS)) {
+        Override::Text
+    } else {
+        Override::Icon
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -47,9 +74,6 @@ impl Button {
         &self,
         icon: cosmic::widget::icon::Handle,
     ) -> cosmic::widget::Button<'a, Message> {
-        let theme = cosmic::theme::active();
-        let theme = theme.cosmic();
-
         let suggested = self.core.applet.suggested_size(icon.symbolic);
         let (major_padding, applet_padding_minor_axis) =
             self.core.applet.suggested_padding(icon.symbolic);
@@ -146,56 +170,94 @@ impl cosmic::Application for Button {
     }
 
     fn view(&self) -> cosmic::Element<'_, Msg> {
-        // currently, panel being anchored to the left or right is a hard
-        // override for icon, later if text is updated to wrap, we may
-        // use Override::Text to override this behavior
-        autosize::autosize(
-            if self.desktop.icon.is_some()
-                && matches!(
-                    self.core.applet.anchor,
-                    PanelAnchor::Left | PanelAnchor::Right
-                )
-                || matches!(self.config.force_presentation, Some(Override::Icon))
-                || matches!(
-                    (&self.core.applet.size, &self.config.force_presentation),
-                    (
-                        Size::PanelSize(PanelSize::S | PanelSize::M | PanelSize::L | PanelSize::XL),
-                        None
+        // A divider is always non-interactive. Otherwise panels anchored
+        // left or right are too narrow for labels and become icon-only;
+        // user overrides then beat the entry's requested presentation.
+        let presentation = presentation_for(
+            &self.core.applet.anchor,
+            &self.core.applet.size,
+            self.desktop.icon.is_some(),
+            self.config.force_presentation,
+            self.desktop.presentation,
+        );
+
+        let icon = || {
+            cosmic::widget::icon::from_name(self.desktop.icon.clone().unwrap_or_default()).handle()
+        };
+        // Reserve the panel's full cross-axis extent so a text-bearing
+        // button lines up with its icon-only neighbours instead of
+        // collapsing to the height of the glyphs.
+        let cross_axis_filler = || {
+            space::vertical().height(Length::Fixed(
+                (self.core.applet.suggested_size(true).1
+                    + 2 * self.core.applet.suggested_padding(true).1) as f32,
+            ))
+        };
+
+        let element: cosmic::Element<'_, Msg> = match presentation {
+            Override::Divider => {
+                let length = self.core.applet.suggested_size(true).0.saturating_sub(4) as f32;
+                if self.core.applet.is_horizontal() {
+                    cosmic::widget::container(
+                        cosmic::iced::widget::rule::vertical(1).height(Length::Fixed(length)),
                     )
-                )
-            {
-                cosmic::Element::from(
-                    self.core.applet.applet_tooltip::<Msg>(
-                        self.icon_button_from_handle(
-                            cosmic::widget::icon::from_name(self.desktop.icon.clone().unwrap())
-                                .handle(),
-                        )
+                    .padding([0, 8])
+                    .into()
+                } else {
+                    cosmic::widget::container(
+                        cosmic::widget::divider::horizontal::default().width(Length::Fixed(length)),
+                    )
+                    .padding([8, 0])
+                    .into()
+                }
+            }
+            Override::Icon if self.desktop.icon.is_some() => cosmic::Element::from(
+                self.core.applet.applet_tooltip::<Msg>(
+                    self.icon_button_from_handle(icon())
                         .on_press_down(Msg::Press),
-                        self.desktop.name.clone(),
-                        false,
-                        Msg::Surface,
-                        None,
-                    ),
-                )
-            } else {
+                    self.desktop.name.clone(),
+                    false,
+                    Msg::Surface,
+                    None,
+                ),
+            ),
+            Override::IconAndText if self.desktop.icon.is_some() => {
+                let spacing = cosmic::theme::active().cosmic().spacing.space_xxs;
+                let icon_size = self.core.applet.suggested_size(true).0;
+
                 let content = row!(
-                    self.core.applet.text(&self.desktop.name),
-                    space::vertical().height(Length::Fixed(
-                        (self.core.applet.suggested_size(true).1
-                            + 2 * self.core.applet.suggested_padding(true).1)
-                            as f32
-                    ))
+                    cosmic::widget::icon(icon())
+                        .width(Length::Fixed(icon_size as f32))
+                        .height(Length::Fixed(icon_size as f32)),
+                    self.core.applet.text(&self.desktop.name).size(13.0),
+                    cross_axis_filler(),
                 )
+                .spacing(spacing)
                 .align_y(iced::Alignment::Center);
+
                 cosmic::widget::button::custom(content)
                     .padding([0, self.core.applet.suggested_padding(true).0])
                     .class(cosmic::theme::Button::AppletIcon)
                     .on_press_down(Msg::Press)
                     .into()
-            },
-            AUTOSIZE_MAIN_ID.clone(),
-        )
-        .into()
+            }
+            // Text, or an icon presentation with no icon to show.
+            _ => {
+                let content = row!(
+                    self.core.applet.text(&self.desktop.name).size(13.0),
+                    cross_axis_filler(),
+                )
+                .align_y(iced::Alignment::Center);
+
+                cosmic::widget::button::custom(content)
+                    .padding([0, self.core.applet.suggested_padding(true).0])
+                    .class(cosmic::theme::Button::AppletIcon)
+                    .on_press_down(Msg::Press)
+                    .into()
+            }
+        };
+
+        autosize::autosize(element, AUTOSIZE_MAIN_ID.clone()).into()
     }
 
     fn subscription(&self) -> iced::Subscription<Self::Message> {
@@ -230,6 +292,21 @@ pub fn run() -> iced::Result {
                         || panic!("Desktop file '{filename}' doesn't have `Exec`"),
                         |x| x.to_string(),
                     ),
+                    presentation: entry
+                        .desktop_entry("X-CosmicAppletPresentation")
+                        .and_then(|v| match v.trim() {
+                            "Icon" => Some(Override::Icon),
+                            "Text" => Some(Override::Text),
+                            "IconAndText" => Some(Override::IconAndText),
+                            "Divider" => Some(Override::Divider),
+                            other => {
+                                tracing::warn!(
+                                    "desktop file '{filename}' has unknown \
+                                     X-CosmicAppletPresentation '{other}'"
+                                );
+                                None
+                            }
+                        }),
                 });
                 break;
             }
@@ -239,4 +316,51 @@ pub fn run() -> iced::Result {
         panic!("Failed to find valid desktop file '{filename}' in search paths")
     });
     cosmic::applet::run::<Button>(desktop)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn divider_beats_vertical_dock_icon_override() {
+        assert_eq!(
+            presentation_for(
+                &PanelAnchor::Left,
+                &Size::PanelSize(PanelSize::M),
+                true,
+                Some(Override::Icon),
+                Some(Override::Divider),
+            ),
+            Override::Divider,
+        );
+    }
+
+    #[test]
+    fn per_entry_brand_presentation_is_used_on_top_panel() {
+        assert_eq!(
+            presentation_for(
+                &PanelAnchor::Top,
+                &Size::PanelSize(PanelSize::XS),
+                true,
+                None,
+                Some(Override::IconAndText),
+            ),
+            Override::IconAndText,
+        );
+    }
+
+    #[test]
+    fn vertical_panels_remain_icon_only() {
+        assert_eq!(
+            presentation_for(
+                &PanelAnchor::Left,
+                &Size::PanelSize(PanelSize::M),
+                true,
+                None,
+                Some(Override::IconAndText),
+            ),
+            Override::Icon,
+        );
+    }
 }

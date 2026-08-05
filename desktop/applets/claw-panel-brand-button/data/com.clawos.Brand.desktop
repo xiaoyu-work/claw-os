@@ -1,0 +1,21 @@
+[Desktop Entry]
+# Presentation source for the panel's branding button: `cosmic-panel-button`
+# reads its label, icon and launch command from *this* entry, not from the
+# applet registration in com.clawos.PanelBrandButton.desktop.
+#
+# `Name` is the product name and is deliberately not localized — it is a
+# trademark, so every locale shows the same mark and wordmark.
+Name=ClawOS
+Comment=Open the application library
+Type=Application
+Exec=cosmic-app-library
+Terminal=false
+Categories=ClawOS;
+Keywords=ClawOS;Applications;Library;
+# Translators: Do NOT translate or transliterate this text (this is an icon file name)!
+Icon=com.clawos.PanelBrandButton-symbolic
+StartupNotify=true
+NoDisplay=true
+# The claw mark alone does not read as a product name, so the panel shows
+# the mark and the wordmark together.
+X-CosmicAppletPresentation=IconAndText

@@ -1,8 +1,24 @@
-use std::fs;
+use std::{env, fs, path::PathBuf};
 use xdgen::{App, Context, FluentString};
 
 fn main() {
     let ctx = Context::new("../i18n/", "desktop_entries").unwrap();
+    let workspace_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("cosmic-applets is a direct workspace member")
+        .to_path_buf();
+    let target_dir = env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .map(|path| {
+            if path.is_absolute() {
+                path
+            } else {
+                workspace_dir.join(path)
+            }
+        })
+        .unwrap_or_else(|| workspace_dir.join("target"));
+    let desktop_dir = target_dir.join("xdgen");
+    fs::create_dir_all(&desktop_dir).unwrap();
 
     [
         (
@@ -108,6 +124,24 @@ fn main() {
             "cosmic-panel-app-button-keywords",
         ),
         (
+            "com.clawos.PanelBrandButton",
+            "claw-panel-brand-button",
+            "claw-panel-brand-button-comment",
+            "claw-panel-brand-button-keywords",
+        ),
+        (
+            "com.clawos.PanelCalendarButton",
+            "claw-panel-calendar-button",
+            "claw-panel-calendar-button-comment",
+            "claw-panel-calendar-button-keywords",
+        ),
+        (
+            "com.clawos.PanelDockDivider",
+            "claw-panel-dock-divider",
+            "claw-panel-dock-divider-comment",
+            "claw-panel-dock-divider-keywords",
+        ),
+        (
             "com.clawos.PanelLauncherButton",
             "cosmic-panel-launcher-button",
             "cosmic-panel-launcher-button-comment",
@@ -131,8 +165,6 @@ fn main() {
         (id, app.expand_desktop(&template_path, &ctx).unwrap())
     })
     .for_each(|(id, contents)| {
-        let parent = "../target/xdgen/";
-        fs::create_dir_all(parent).unwrap();
-        fs::write([parent, id, ".desktop"].concat().as_str(), contents).unwrap();
+        fs::write(desktop_dir.join(format!("{id}.desktop")), contents).unwrap();
     });
 }

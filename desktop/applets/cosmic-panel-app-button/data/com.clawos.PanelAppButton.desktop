@@ -2,7 +2,7 @@
 Name=App Library Button
 Comment=Open the application library for launching installed applications
 Type=Application
-Exec=cosmic-panel-button com.clawos.AppLibrary
+Exec=cosmic-panel-button com.clawos.AppLibraryButton
 Terminal=false
 Categories=ClawOS;
 Keywords=ClawOS;Applet;App;Library;Tray;

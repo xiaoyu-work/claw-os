@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=Dock Divider
+Comment=Separate pinned applications from the application library
+Type=Application
+Exec=cosmic-panel-button com.clawos.DockDivider
+Terminal=false
+Categories=ClawOS;
+Keywords=ClawOS;Applet;Dock;Divider;Separator;
+Icon=com.clawos.PanelDockDivider-symbolic
+StartupNotify=false
+NoDisplay=true
+X-CosmicApplet=true
+X-OverflowPriority=10

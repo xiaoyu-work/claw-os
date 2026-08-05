@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=ClawOS Brand Button
+Comment=Show the ClawOS mark and open the application library
+Type=Application
+Exec=cosmic-panel-button com.clawos.Brand
+Terminal=false
+Categories=ClawOS;
+Keywords=ClawOS;Applet;Brand;Logo;Menu;
+Icon=com.clawos.PanelBrandButton-symbolic
+StartupNotify=true
+NoDisplay=true
+X-CosmicApplet=true
+X-OverflowPriority=10

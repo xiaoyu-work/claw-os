@@ -1,0 +1,13 @@
+[Desktop Entry]
+# Presentation source for the top-panel search button.
+Name=Search
+Comment=Search applications, files and commands
+Type=Application
+Exec=cosmic-launcher
+Terminal=false
+Categories=ClawOS;
+Keywords=ClawOS;Search;Launcher;
+Icon=system-search-symbolic
+StartupNotify=true
+NoDisplay=true
+X-CosmicAppletPresentation=Icon

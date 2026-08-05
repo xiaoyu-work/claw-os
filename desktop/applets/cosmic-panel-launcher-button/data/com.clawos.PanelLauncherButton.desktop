@@ -2,7 +2,7 @@
 Name=Launcher Button
 Comment=Open the launcher to search applications and run commands
 Type=Application
-Exec=cosmic-panel-button com.clawos.Launcher
+Exec=cosmic-panel-button com.clawos.Search
 Terminal=false
 Categories=ClawOS;
 Keywords=ClawOS;Applet;Launcher;Runner;

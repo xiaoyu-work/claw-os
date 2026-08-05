@@ -302,7 +302,7 @@ impl Window {
 
         Element::from(
             row!(
-                self.core.applet.text(formatted_date),
+                self.core.applet.text(formatted_date).size(12.0),
                 container(space::vertical().height(Length::Fixed(
                     (self.core.applet.suggested_size(true).1
                         + 2 * self.core.applet.suggested_padding(true).1)

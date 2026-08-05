@@ -29,3 +29,7 @@ days-ago = { $n }d ago
 panel-idle = AI: Idle
 panel-busy = AI: Working ({ $count })
 panel-offline = AI: Offline
+panel-mode-local = Local Mode
+panel-mode-cloud = Cloud Mode
+panel-mode-unconfigured = AI not configured
+panel-mode-unknown = Mode unavailable

@@ -1,0 +1,13 @@
+[Desktop Entry]
+# Presentation source for the non-interactive Dock separator.
+Name=Divider
+Comment=Separate Dock groups
+Type=Application
+Exec=true
+Terminal=false
+Categories=ClawOS;
+Keywords=ClawOS;Dock;Divider;
+Icon=com.clawos.PanelDockDivider-symbolic
+StartupNotify=false
+NoDisplay=true
+X-CosmicAppletPresentation=Divider

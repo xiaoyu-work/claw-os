@@ -46,9 +46,27 @@ _install_desktop path:
 _install_bin name:
     install -Dm0755 {{ targetdir }}/{{ target }}/{{ name }} {{ bindir }}/{{ name }}
 
-_install_applet id name: (_install_icons name) (_install_desktop 'target/xdgen/' + id + '.desktop') (_link_applet name)
+_install_applet id name: (_install_icons name) (_install_desktop targetdir + '/xdgen/' + id + '.desktop') (_link_applet name)
 
-_install_button id name: (_install_icons name) (_install_desktop 'target/xdgen/' + id + '.desktop')
+_install_button id name: (_install_icons name) (_install_desktop targetdir + '/xdgen/' + id + '.desktop')
+
+# The branding button also ships the entry it presents. `Name=ClawOS` is a
+# trademark rather than UI copy, so it is installed verbatim instead of being
+# expanded from the translation catalog like every other desktop entry.
+_install_brand_button: (_install_button 'com.clawos.PanelBrandButton' 'claw-panel-brand-button') (_install_desktop 'claw-panel-brand-button/data/com.clawos.Brand.desktop')
+
+# Like the branding button, the app-library button presents a dedicated
+# target entry so its compact symbolic Dock icon does not replace the
+# full-colour application icon used by the app library itself.
+_install_app_library_button: (_install_button 'com.clawos.PanelAppButton' 'cosmic-panel-app-button') (_install_desktop 'cosmic-panel-app-button/data/com.clawos.AppLibraryButton.desktop')
+
+# The search button uses a symbolic magnifier while the launcher application
+# keeps its full-colour icon in the app library and search results.
+_install_launcher_button: (_install_button 'com.clawos.PanelLauncherButton' 'cosmic-panel-launcher-button') (_install_desktop 'cosmic-panel-launcher-button/data/com.clawos.Search.desktop')
+
+_install_dock_divider: (_install_button 'com.clawos.PanelDockDivider' 'claw-panel-dock-divider') (_install_desktop 'claw-panel-dock-divider/data/com.clawos.DockDivider.desktop')
+
+_install_calendar_button: (_install_button 'com.clawos.PanelCalendarButton' 'claw-panel-calendar-button') (_install_desktop 'claw-panel-calendar-button/data/com.clawos.CalendarShortcut.desktop')
 
 _install_metainfo:
     install -Dm0644 {{ metainfo-src }} {{ metainfo-dst }}
@@ -60,7 +78,7 @@ _install_status_notifier_watcher:
     install -Dm0644 cosmic-applet-status-area/data/com.clawos.StatusNotifierWatcher.service {{ libdir }}/systemd/user/com.clawos.StatusNotifierWatcher.service
 
 # Installs files into the system
-install: (_install_bin 'cosmic-applets') (_link_applet 'cosmic-panel-button') (_install_applet 'com.clawos.AppList' 'cosmic-app-list') (_install_default_schema 'cosmic-app-list') (_install_applet 'com.clawos.AppletA11y' 'cosmic-applet-a11y') (_install_applet 'com.clawos.AppletAgentActivity' 'claw-applet-agent-activity') (_install_applet 'com.clawos.AppletApprovalGate' 'claw-applet-approval-gate') (_install_applet 'com.clawos.AppletAudio' 'cosmic-applet-audio') (_install_applet 'com.clawos.AppletInputSources' 'cosmic-applet-input-sources') (_install_applet 'com.clawos.AppletBattery' 'cosmic-applet-battery') (_install_default_schema 'cosmic-applet-battery') (_install_applet 'com.clawos.AppletBluetooth' 'cosmic-applet-bluetooth') (_install_applet 'com.clawos.AppletMinimize' 'cosmic-applet-minimize') (_install_applet 'com.clawos.AppletNetwork' 'cosmic-applet-network') (_install_applet 'com.clawos.AppletNotifications' 'cosmic-applet-notifications') (_install_applet 'com.clawos.AppletPower' 'cosmic-applet-power') (_install_applet 'com.clawos.AppletStatusArea' 'cosmic-applet-status-area') (_install_applet 'com.clawos.AppletTiling' 'cosmic-applet-tiling') (_install_applet 'com.clawos.AppletTime' 'cosmic-applet-time') (_install_applet 'com.clawos.AppletWorkspaces' 'cosmic-applet-workspaces') (_install_button 'com.clawos.PanelAppButton' 'cosmic-panel-app-button') (_install_button 'com.clawos.PanelLauncherButton' 'cosmic-panel-launcher-button') (_install_button 'com.clawos.PanelWorkspacesButton' 'cosmic-panel-workspaces-button') _install_metainfo _install_status_notifier_watcher
+install: (_install_bin 'cosmic-applets') (_link_applet 'cosmic-panel-button') (_install_applet 'com.clawos.AppList' 'cosmic-app-list') (_install_default_schema 'cosmic-app-list') (_install_applet 'com.clawos.AppletA11y' 'cosmic-applet-a11y') (_install_applet 'com.clawos.AppletAgentActivity' 'claw-applet-agent-activity') (_install_applet 'com.clawos.AppletApprovalGate' 'claw-applet-approval-gate') (_install_applet 'com.clawos.AppletAudio' 'cosmic-applet-audio') (_install_applet 'com.clawos.AppletInputSources' 'cosmic-applet-input-sources') (_install_applet 'com.clawos.AppletBattery' 'cosmic-applet-battery') (_install_default_schema 'cosmic-applet-battery') (_install_applet 'com.clawos.AppletBluetooth' 'cosmic-applet-bluetooth') (_install_applet 'com.clawos.AppletMinimize' 'cosmic-applet-minimize') (_install_applet 'com.clawos.AppletNetwork' 'cosmic-applet-network') (_install_applet 'com.clawos.AppletNotifications' 'cosmic-applet-notifications') (_install_applet 'com.clawos.AppletPower' 'cosmic-applet-power') (_install_applet 'com.clawos.AppletStatusArea' 'cosmic-applet-status-area') (_install_applet 'com.clawos.AppletTiling' 'cosmic-applet-tiling') (_install_applet 'com.clawos.AppletTime' 'cosmic-applet-time') (_install_applet 'com.clawos.AppletWorkspaces' 'cosmic-applet-workspaces') _install_brand_button _install_app_library_button _install_launcher_button _install_dock_divider _install_calendar_button (_install_button 'com.clawos.PanelWorkspacesButton' 'cosmic-panel-workspaces-button') _install_metainfo _install_status_notifier_watcher
 
 # Vendor Cargo dependencies locally
 vendor:

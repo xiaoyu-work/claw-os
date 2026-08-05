@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::fl;
-use crate::tasks::{self, Task};
+use crate::tasks::{self, AgentMode, Task};
 use cosmic::{
     Element, Task as IcedTask, app,
     applet::padded_control,
@@ -27,15 +27,19 @@ struct AgentActivity {
     core: cosmic::app::Core,
     popup: Option<window::Id>,
     tasks: Vec<Task>,
+    mode: AgentMode,
     last_error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 enum Message {
     Tick,
+    RefreshMode,
     TogglePopup,
     CloseRequested(window::Id),
     Refreshed(Vec<Task>),
+    ModeRefreshed(AgentMode),
+    ModeLoadFailed(String),
     LoadFailed(String),
     Stop(String),
     Undo(String),
@@ -54,7 +58,7 @@ impl cosmic::Application for AgentActivity {
             core,
             ..Default::default()
         };
-        (app, refresh_task())
+        (app, IcedTask::batch([refresh_task(), refresh_mode_task()]))
     }
 
     fn core(&self) -> &cosmic::app::Core {
@@ -68,15 +72,18 @@ impl cosmic::Application for AgentActivity {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        // Poll `cos agent ls` every 2s. Cheap (one fork+exec into the
-        // Rust binary) and avoids a second event-bus protocol just
-        // for the panel — same trade as approval-gate.
-        time::every(Duration::from_millis(2000)).map(|_| Message::Tick)
+        // Task activity changes quickly; provider mode changes only
+        // when settings are edited, so keep the latter poll infrequent.
+        Subscription::batch([
+            time::every(Duration::from_secs(2)).map(|_| Message::Tick),
+            time::every(Duration::from_secs(30)).map(|_| Message::RefreshMode),
+        ])
     }
 
     fn update(&mut self, message: Message) -> app::Task<Message> {
         match message {
             Message::Tick => refresh_task(),
+            Message::RefreshMode => refresh_mode_task(),
             Message::Refreshed(rows) => {
                 let count_changed = rows.len() != self.tasks.len();
                 self.tasks = rows;
@@ -88,6 +95,15 @@ impl cosmic::Application for AgentActivity {
                         return destroy_popup(id);
                     }
                 }
+                IcedTask::none()
+            }
+            Message::ModeRefreshed(mode) => {
+                self.mode = mode;
+                IcedTask::none()
+            }
+            Message::ModeLoadFailed(msg) => {
+                tracing::warn!(error = msg, "failed to refresh agent provider mode");
+                self.mode = AgentMode::Unknown;
                 IcedTask::none()
             }
             Message::LoadFailed(msg) => {
@@ -116,34 +132,34 @@ impl cosmic::Application for AgentActivity {
                 }
                 IcedTask::none()
             }
-            Message::Stop(id) => IcedTask::perform(
-                async move { tasks::stop_task(&id) },
-                |res| match res {
+            Message::Stop(id) => {
+                IcedTask::perform(async move { tasks::stop_task(&id) }, |res| match res {
                     Ok(_) => cosmic::Action::App(Message::Resolved),
                     Err(e) => cosmic::Action::App(Message::LoadFailed(e.0)),
-                },
-            ),
-            Message::Undo(id) => IcedTask::perform(
-                async move { tasks::undo_task(&id) },
-                |res| match res {
+                })
+            }
+            Message::Undo(id) => {
+                IcedTask::perform(async move { tasks::undo_task(&id) }, |res| match res {
                     Ok(_) => cosmic::Action::App(Message::Resolved),
                     Err(e) => cosmic::Action::App(Message::LoadFailed(e.0)),
-                },
-            ),
-            Message::Resume(id) => IcedTask::perform(
-                async move { tasks::resume_task(&id) },
-                |res| match res {
+                })
+            }
+            Message::Resume(id) => {
+                IcedTask::perform(async move { tasks::resume_task(&id) }, |res| match res {
                     Ok(_) => cosmic::Action::App(Message::Resolved),
                     Err(e) => cosmic::Action::App(Message::LoadFailed(e.0)),
-                },
-            ),
+                })
+            }
             Message::Resolved => refresh_task(),
         }
     }
 
     fn view(&self) -> Element<'_, Message> {
         let Spacing {
-            space_xxs, space_xs, ..
+            space_xxs,
+            space_xs,
+            space_s,
+            ..
         } = theme::active().cosmic().spacing;
 
         let active = self
@@ -163,9 +179,18 @@ impl cosmic::Application for AgentActivity {
             (AgentState::Busy, fl!("panel-busy", count = active))
         };
 
-        let content = row![status_dot(state), self.core.applet.text(label)]
+        let activity = row![status_dot(state), self.core.applet.text(label).size(12.0)]
             .align_y(cosmic::iced::core::Alignment::Center)
             .spacing(space_xxs);
+        let mode = match self.mode {
+            AgentMode::Local => fl!("panel-mode-local"),
+            AgentMode::Cloud => fl!("panel-mode-cloud"),
+            AgentMode::Unconfigured => fl!("panel-mode-unconfigured"),
+            AgentMode::Unknown => fl!("panel-mode-unknown"),
+        };
+        let content = row![activity, self.core.applet.text(mode).size(12.0)]
+            .align_y(cosmic::iced::core::Alignment::Center)
+            .spacing(space_s);
 
         button::custom(content)
             .padding([0, space_xs])
@@ -263,7 +288,8 @@ fn status_dot(state: AgentState) -> Element<'static, Message> {
 }
 
 fn render_card(t: &Task, space_xxs: u16, space_xs: u16) -> Element<'_, Message> {
-    let status_label = match t.status.as_str() {        "pending" => fl!("status-pending"),
+    let status_label = match t.status.as_str() {
+        "pending" => fl!("status-pending"),
         "running" => fl!("status-running"),
         "paused" => fl!("status-paused"),
         "done" => fl!("status-done"),
@@ -317,8 +343,8 @@ fn render_card(t: &Task, space_xxs: u16, space_xs: u16) -> Element<'_, Message> 
             actions = actions.push(button::standard(fl!("stop")).on_press(Message::Stop(id_for())));
         }
         "paused" => {
-            actions = actions
-                .push(button::suggested(fl!("resume")).on_press(Message::Resume(id_for())));
+            actions =
+                actions.push(button::suggested(fl!("resume")).on_press(Message::Resume(id_for())));
         }
         _ => {}
     }
@@ -410,6 +436,13 @@ fn refresh_task() -> app::Task<Message> {
     IcedTask::perform(async { tasks::load_tasks() }, |res| match res {
         Ok(rows) => cosmic::Action::App(Message::Refreshed(rows)),
         Err(e) => cosmic::Action::App(Message::LoadFailed(e.0)),
+    })
+}
+
+fn refresh_mode_task() -> app::Task<Message> {
+    IcedTask::perform(async { tasks::load_mode() }, |res| match res {
+        Ok(mode) => cosmic::Action::App(Message::ModeRefreshed(mode)),
+        Err(e) => cosmic::Action::App(Message::ModeLoadFailed(e.0)),
     })
 }
 

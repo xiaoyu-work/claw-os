@@ -139,13 +139,11 @@ impl cosmic::Application for ApprovalGate {
     }
 
     fn view(&self) -> Element<'_, Message> {
-        // Icon choice: when the queue is empty we stay quiet
-        // ("dialog-question-symbolic"). When something needs attention
-        // we swap to the warning icon to draw the eye. Plain numeric
-        // badges would be nicer but require theme work the COSMIC
-        // toolkit doesn't expose for applets yet.
+        // The idle clipboard/check mark matches the task-oriented shell
+        // language and is less alarming than a permanent question mark.
+        // Pending requests still switch to a warning glyph and count.
         let icon = if self.pending.is_empty() {
-            "dialog-question-symbolic"
+            "com.clawos.ApprovalGate-symbolic"
         } else {
             "dialog-warning-symbolic"
         };

@@ -536,7 +536,10 @@ impl cosmic::Application for CosmicBatteryApplet {
             let text = format!("{:.0}%", self.battery_percent);
 
             let t = if is_horizontal {
-                self.core.applet.text(text)
+                match &self.core.applet.size {
+                    Size::PanelSize(PanelSize::XS) => text::caption(text),
+                    _ => self.core.applet.text(text),
+                }
             } else {
                 match &self.core.applet.size {
                     Size::Hardcoded(_) => text::text(text),

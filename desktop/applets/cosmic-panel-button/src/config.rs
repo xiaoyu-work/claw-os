@@ -37,8 +37,13 @@ pub struct IndividualConfig {
     pub force_presentation: Option<Override>,
 }
 
-#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Clone, Copy, Serialize, Deserialize)]
 pub enum Override {
     Icon,
     Text,
+    /// Icon and label side by side — used for the shell's branding
+    /// button, where the mark alone is not self-explanatory.
+    IconAndText,
+    /// Non-interactive separator used to divide Dock groups.
+    Divider,
 }
