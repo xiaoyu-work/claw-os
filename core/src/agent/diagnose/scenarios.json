@@ -1,0 +1,151 @@
+[
+  {
+    "name": "critical-memory-pressure",
+    "args": ["--quick", "--domain", "performance", "system is out of memory"],
+    "responses": {
+      "resources": {
+        "memory": {"total_mb": 16000, "available_mb": 700},
+        "disk": {"total_mb": 100000, "free_mb": 60000}
+      },
+      "loadavg": {"load_per_core_1min": 0.6},
+      "top:cpu": {"processes": []},
+      "top:mem": {"processes": [{"pid": 42, "name": "worker", "rss_mb": 12000}]},
+      "cgroup": {},
+      "sensors": {}
+    },
+    "expected_domain": "performance",
+    "expected_status": "critical",
+    "expected_findings": ["memory-critical"],
+    "forbidden_findings": ["disk-critical"]
+  },
+  {
+    "name": "critical-disk-space",
+    "args": ["--quick", "--domain", "storage", "disk is full"],
+    "responses": {
+      "resources": {
+        "memory": {"total_mb": 16000, "available_mb": 8000},
+        "disk": {"total_mb": 100000, "free_mb": 4000}
+      },
+      "mounts": {"mounts": []}
+    },
+    "expected_domain": "storage",
+    "expected_status": "critical",
+    "expected_findings": ["disk-critical"],
+    "forbidden_findings": ["memory-critical"]
+  },
+  {
+    "name": "cpu-saturation",
+    "args": ["--quick", "--domain", "performance", "computer is slow"],
+    "responses": {
+      "resources": {
+        "memory": {"total_mb": 16000, "available_mb": 8000},
+        "disk": {"total_mb": 100000, "free_mb": 60000}
+      },
+      "loadavg": {"load_per_core_1min": 2.4},
+      "top:cpu": {
+        "processes": [{"pid": 900, "name": "renderer", "cpu_percent": 175.0, "rss_mb": 900}]
+      },
+      "top:mem": {"processes": []},
+      "cgroup": {},
+      "sensors": {}
+    },
+    "expected_domain": "performance",
+    "expected_status": "critical",
+    "expected_findings": ["load-critical", "cpu-hot-process"]
+  },
+  {
+    "name": "failed-systemd-service",
+    "args": ["--domain", "service", "the service will not start"],
+    "responses": {
+      "failed_units": {"count": 2, "units": [{"unit": "demo.service"}]},
+      "journal": {"count": 3, "entries": [{"message": "failed to bind"}]},
+      "coredumps": {"count": 0, "coredumps": []}
+    },
+    "expected_domain": "service",
+    "expected_status": "warn",
+    "expected_findings": ["failed-systemd-units", "journal-errors"]
+  },
+  {
+    "name": "oom-crash",
+    "args": ["--domain", "crash", "the app was killed"],
+    "responses": {
+      "coredumps": {"count": 1, "coredumps": [{"exe": "/usr/bin/demo"}]},
+      "journal": {"count": 1, "entries": [{"message": "demo exited"}]},
+      "dmesg": {
+        "entries": [{"raw": "Out of memory: Killed process 42 (demo)"}],
+        "count": 1
+      },
+      "resources": {
+        "memory": {"total_mb": 16000, "available_mb": 9000},
+        "disk": {"total_mb": 100000, "free_mb": 60000}
+      }
+    },
+    "expected_domain": "crash",
+    "expected_status": "warn",
+    "expected_findings": ["recent-coredumps", "kernel-oom"]
+  },
+  {
+    "name": "critical-temperature",
+    "args": ["--domain", "thermal", "laptop is overheating"],
+    "responses": {
+      "sensors": {
+        "thermal": [{"zone": "thermal_zone0", "temp_celsius": 96.0}],
+        "battery": [{"capacity_percent": 60}]
+      },
+      "loadavg": {"load_per_core_1min": 0.7},
+      "top:cpu": {"processes": []},
+      "resources": {
+        "memory": {"total_mb": 16000, "available_mb": 9000},
+        "disk": {"total_mb": 100000, "free_mb": 60000}
+      }
+    },
+    "expected_domain": "thermal",
+    "expected_status": "critical",
+    "expected_findings": ["thermal-critical"]
+  },
+  {
+    "name": "missing-network-interface",
+    "args": ["--quick", "--domain", "network", "cannot connect to the internet"],
+    "responses": {
+      "net": {"interfaces": [], "tcp_connections": [], "tcp_count": 0},
+      "loadavg": {"load_per_core_1min": 0.3},
+      "failed_units": {"count": 0, "units": []}
+    },
+    "expected_domain": "network",
+    "expected_status": "warn",
+    "expected_findings": ["network-no-interfaces"]
+  },
+  {
+    "name": "apparmor-denial",
+    "args": ["--domain", "security", "operation is being denied"],
+    "responses": {
+      "who": {"sessions": []},
+      "net": {"interfaces": [{"name": "eth0"}], "tcp_count": 0},
+      "journal": {"count": 0, "entries": []},
+      "dmesg": {
+        "entries": [{"raw": "audit: apparmor=\"DENIED\" operation=\"open\" profile=\"demo\""}],
+        "count": 1
+      }
+    },
+    "expected_domain": "security",
+    "expected_status": "warn",
+    "expected_findings": ["apparmor-denial"]
+  },
+  {
+    "name": "healthy-general-baseline",
+    "args": ["--domain", "general", "is the system healthy"],
+    "responses": {
+      "resources": {
+        "memory": {"total_mb": 16000, "available_mb": 10000},
+        "disk": {"total_mb": 100000, "free_mb": 70000}
+      },
+      "loadavg": {"load_per_core_1min": 0.2},
+      "failed_units": {"count": 0, "units": []},
+      "coredumps": {"count": 0, "coredumps": []},
+      "pkg_updates": {"count": 0, "upgradable": []}
+    },
+    "expected_domain": "general",
+    "expected_status": "ok",
+    "expected_findings": []
+  }
+]

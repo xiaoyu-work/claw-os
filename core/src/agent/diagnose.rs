@@ -1164,6 +1164,9 @@ mod tests {
             }
         }
 
+        #[cfg(test)]
+        mod eval;
+
         #[test]
         fn detects_apparmor_denial_inside_raw_kernel_text() {
             let findings = analyze(&[ok(
