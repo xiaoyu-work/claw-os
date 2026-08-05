@@ -399,6 +399,18 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
         // Diagnostics-only; no writes outside ephemeral status fields.
         parallel_safe: true,
     },
+    PrimitiveSpec {
+        name: "cos_diagnose",
+        description: "Deterministic system diagnosis orchestrator. Routes a symptom \
+                      to bounded read-only probes, collects structured evidence, \
+                      applies explicit thresholds, and returns confidence-linked \
+                      findings plus recommended next actions. Arguments are the \
+                      symptom text plus optional --quick, --domain <domain>, and \
+                      --path <path>.",
+        primitive: crate::agent::diagnose::diagnose_primitive,
+        commands: &["run"],
+        parallel_safe: true,
+    },
 ];
 
 /// Register every cos primitive proxy on the supplied registry, plus the

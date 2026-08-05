@@ -1548,6 +1548,7 @@ fn builtin_apps() -> Vec<(
             ("todo", "Manage per-session agent todo lists: cos agent todo [list <session_id>|add <session_id> <id> <title>|set-status ...|remove ...|clear ...]"),
             ("mcp", "MCP (Model Context Protocol) bridge — server exposes the cos agent tool catalogue; client probes/invokes a remote MCP subprocess"),
             ("doctor", "Aggregate diagnostic — provider config matrix, engines, memory, skills, hooks, audit/run-log + last 7d usage & insights. Add --probe-network for a live provider ping."),
+            ("diagnose", "System Doctor: cos agent diagnose [--quick] [--domain <general|performance|network|storage|service|crash|thermal|security>] [--path <path>] \"<symptom>\". Collects structured evidence and returns confidence-linked findings without requiring an LLM."),
             ("ls", "List active / paused / failed agent tasks (durable sessions on disk). Columns: id, purpose, status, current lease holder."),
             ("show", "Show one task in detail: cos agent show <task-id> — purpose, status, lease, turn count, mutation breakdown by kind, stop-requested flag."),
             ("stop", "Politely stop a running task: cos agent stop <task-id> — drops a stop sentinel for the live runtime to notice; if no runtime is attached, flips status to paused immediately."),

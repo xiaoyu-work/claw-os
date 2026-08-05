@@ -23,6 +23,7 @@ pub mod context;
 pub mod curator;
 pub mod curator_author;
 pub mod curator_drafts;
+pub mod diagnose;
 pub mod display;
 pub mod doctor_cli;
 pub mod insights;
@@ -195,9 +196,10 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "mcp" => mcp_cmd(args),
         "todo" => todo_cmd(args),
         "doctor" => doctor_cli::doctor_cmd(args),
+        "diagnose" => diagnose::diagnose_cmd(args),
         "dev" => dev_dispatch(args),
         other => Err(format!(
-            "unknown command: {other}. try: setup | ask | chat | serve | budget | override | status | sessions | recall | service | notes | memory | skills | todo | mcp | doctor | dev | ls | show | stop | undo | resume"
+            "unknown command: {other}. try: setup | ask | chat | serve | budget | override | status | sessions | recall | service | notes | memory | skills | todo | mcp | doctor | diagnose | dev | ls | show | stop | undo | resume"
         )),
     }
 }
