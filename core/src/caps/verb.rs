@@ -92,6 +92,7 @@ impl Verb {
     pub const SYS_SERVICE: Verb = Verb::new("sys.service");
     pub const SYS_PACKAGE: Verb = Verb::new("sys.package");
     pub const SYS_MOUNT: Verb = Verb::new("sys.mount");
+    pub const SYS_SNAPSHOT: Verb = Verb::new("sys.snapshot");
     pub const SYS_TIME: Verb = Verb::new("sys.time");
     pub const SYS_POWER: Verb = Verb::new("sys.power");
     pub const SYS_KERNEL: Verb = Verb::new("sys.kernel");
@@ -225,6 +226,7 @@ pub const ALL_VERBS: &[Verb] = &[
     Verb::SYS_SERVICE,
     Verb::SYS_PACKAGE,
     Verb::SYS_MOUNT,
+    Verb::SYS_SNAPSHOT,
     Verb::SYS_TIME,
     Verb::SYS_POWER,
     Verb::SYS_KERNEL,

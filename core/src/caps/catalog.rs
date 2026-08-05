@@ -216,6 +216,14 @@ pub const CATALOG: &[CapMeta] = &[
         Risk::High,
     ),
     CapMeta::new(
+        Verb::SYS_SNAPSHOT,
+        ScopeKind::None,
+        LocalizedStr::new("Create or restore system snapshots"),
+        LocalizedStr::new("Capture system state before major changes or schedule a full-system rollback."),
+        "🛟",
+        Risk::Critical,
+    ),
+    CapMeta::new(
         Verb::SYS_TIME,
         ScopeKind::None,
         LocalizedStr::new("Change the system clock"),

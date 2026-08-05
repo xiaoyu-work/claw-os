@@ -162,3 +162,17 @@ Status requires `sys.observe:<unit>`. Lifecycle changes require the exact
 `sys.service:<unit>` grant and are executed by the root clawd broker. Start,
 stop, enable, and disable record the previous state on a durable parent task
 for rollback.
+
+## System Recovery Points
+
+```bash
+cos app system-snapshot status
+cos app system-snapshot create "before distribution upgrade"
+cos app system-snapshot list
+cos app system-snapshot rollback snap_<id> --confirm
+```
+
+The broker prefers a configured Snapper root profile, otherwise uses direct
+read-only Btrfs snapshots or LVM snapshots. Snapper and LVM rollback require a
+reboot. Direct Btrfs snapshots can be created and deleted, but live-root
+rollback is refused until a bootloader-aware restore path is configured.

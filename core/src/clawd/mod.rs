@@ -14,6 +14,7 @@ pub mod protocol;
 pub mod scheduler;
 pub mod server;
 pub mod session_scope;
+pub mod snapshots;
 pub mod state;
 pub mod system_caps;
 pub mod systemd;

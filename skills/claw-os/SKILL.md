@@ -72,6 +72,7 @@ Permission roles and app capability gates are documented in [permissions.md](per
 | `notify` | Notifications |
 | `pkg` | Package management |
 | `systemd` | Native system service status and lifecycle control |
+| `system-snapshot` | Snapper, Btrfs, or LVM full-system recovery points |
 
 ## Discovery
 

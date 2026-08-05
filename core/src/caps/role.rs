@@ -459,6 +459,7 @@ const ADMIN_VERBS: &[Verb] = &[
     Verb::SYS_SERVICE,
     Verb::SYS_PACKAGE,
     Verb::SYS_MOUNT,
+    Verb::SYS_SNAPSHOT,
     Verb::SYS_TIME,
     Verb::NET_LISTEN,
     Verb::NET_RAW,
