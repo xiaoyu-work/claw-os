@@ -1,19 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
+
 <!--
   ClawOS claw mark.
 
-  Geometry is derived from assets/brand/clawos-app-icon-1024.png:
-  three strokes at -28 degrees from vertical, bottoms aligned, round
-  (true semicircle) caps, trailing dot at the lower right.
+  Geometry is reconstructed from assets/brand/clawos-app-icon-1024.png:
+  three strokes at -28 degrees from vertical, bottoms aligned, true
+  semicircle caps, and a trailing dot at the lower right.
 
-  Brand rule: the strokes follow the theme foreground via currentColor
-  (black on light, white on dark); the dot is always #005CFE.
+  Brand rule: the strokes follow the theme foreground through currentColor
+  (black on light, white on dark) while the dot is always #005CFE.
+
+  The mark is scaled to the same safe area as the rest of the icon family:
+  a 4 px margin inside a 64 px canvas.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none">
   <g stroke="currentColor" stroke-linecap="round" fill="none">
-    <line x1="30.906" y1="17.466" x2="16.000" y2="45.500" stroke-width="4.500"/>
-    <line x1="36.124" y1="27.400" x2="26.500" y2="45.500" stroke-width="4.250"/>
-    <line x1="42.603" y1="34.022" x2="36.500" y2="45.500" stroke-width="4.000"/>
+    <line x1="30.873" y1="9.456" x2="7.524" y2="53.369" stroke-width="7.049"/>
+    <line x1="39.048" y1="25.016" x2="23.972" y2="53.369" stroke-width="6.657"/>
+    <line x1="49.197" y1="35.389" x2="39.636" y2="53.369" stroke-width="6.266"/>
   </g>
-  <circle cx="47.000" cy="46.000" r="2.500" fill="#005CFE"/>
+  <circle cx="56.084" cy="54.152" r="3.916" fill="#005CFE"/>
 </svg>

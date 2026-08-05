@@ -2,11 +2,13 @@
 <!--
   ClawOS launcher / search button.
 
-  Follows the menu-bar convention used by macOS Spotlight: a single
-  colour glyph rather than a tinted tile, so it sits with the rest of
-  the panel symbols. Lens diameter to handle length is 2:1.
+  Follows the menu-bar convention used by macOS Spotlight: a single colour
+  glyph rather than a tinted tile, so it sits with the rest of the panel
+  symbols. Lens diameter is twice the handle length.
+
+  Scaled to the family safe area: a 1 px margin inside a 16 px canvas.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none">
-  <circle cx="7.362" cy="7.362" r="3.500" stroke="currentColor" stroke-width="1.250" fill="none"/>
-  <line x1="9.661" y1="9.661" x2="12.135" y2="12.135" stroke="currentColor" stroke-width="1.250" stroke-linecap="round"/>
+  <circle cx="7.064" cy="7.064" r="5.145" stroke="currentColor" stroke-width="1.838" fill="none"/>
+  <line x1="10.443" y1="10.443" x2="14.081" y2="14.081" stroke="currentColor" stroke-width="1.838" stroke-linecap="round"/>
 </svg>
