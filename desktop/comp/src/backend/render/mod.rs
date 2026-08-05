@@ -387,6 +387,33 @@ impl BackdropShader {
 
 pub struct PostprocessShader(pub GlesTexProgram);
 
+/// Layer-shell namespaces that ClawOS renders as frosted glass.
+///
+/// These surfaces paint themselves translucent (see the panel config and
+/// `libcosmic`'s `applet::popup_container`) but never request a blur region
+/// through `ext_background_effect_v1`, so the compositor has to recognise
+/// them by name. Every other layer surface — the wallpaper, notifications,
+/// OSD — stays un-blurred unless it explicitly asks.
+fn is_shell_glass_namespace(namespace: &str) -> bool {
+    matches!(namespace, "Panel" | "Dock" | "app-library" | "launcher")
+}
+
+/// Corner radius, in physical pixels, of a shell-glass surface.
+///
+/// The blur pass masks itself to these corners; passing zero would leave
+/// blurred wallpaper visible in the transparent corners of a rounded popup.
+/// Radii mirror the client-side containers: applet popups and the panel use
+/// `radius_l`, the launcher palette uses `radius_xl`.
+fn shell_glass_corner_radius(namespace: &str, scale: f64) -> [u8; 4] {
+    let logical = match namespace {
+        "launcher" => 24.0,
+        // Panel/Dock/app-library popups all round at `radius_l`.
+        _ => 16.0,
+    };
+    let physical = (logical * scale).round().clamp(0.0, f64::from(u8::MAX)) as u8;
+    [physical; 4]
+}
+
 pub fn init_shaders(renderer: &mut GlesRenderer) -> Result<(), GlesError> {
     {
         let egl_context = renderer.egl_context();
@@ -845,16 +872,21 @@ where
                 );
             }
             Stage::LayerPopup {
-                popup, location, ..
+                layer,
+                popup,
+                location,
+                ..
             } => {
+                let popup_loc = location
+                    .to_local(output)
+                    .as_logical()
+                    .to_physical_precise_round(scale);
+
                 elements.extend(
                     render_elements_from_surface_tree::<_, WorkspaceRenderElement<_>>(
                         renderer,
                         popup.wl_surface(),
-                        location
-                            .to_local(output)
-                            .as_logical()
-                            .to_physical_precise_round(scale),
+                        popup_loc,
                         Scale::from(scale),
                         1.0,
                         FRAME_TIME_FILTER,
@@ -863,6 +895,36 @@ where
                     .flat_map(crop_to_output)
                     .map(Into::into),
                 );
+
+                // Frosted glass: an applet popup is a child of its panel/dock
+                // layer surface, and `popup_container` paints it translucent.
+                // The parent's blur does not cover the popup's own surface, so
+                // it needs its own element or the popup would show raw
+                // wallpaper. Pushed *after* the content because the element
+                // list is front-to-back: later entries render behind.
+                if shell.appearance_config().experimental_blur
+                    && is_shell_glass_namespace(layer.namespace())
+                {
+                    let geometry = popup.geometry();
+                    // `layer_popups` reports the surface origin, which already
+                    // has the client's window-geometry offset subtracted; add
+                    // it back so the blur lines up with the visible frame.
+                    let blur_origin = (location.to_local(output).as_logical() + geometry.loc)
+                        .to_physical_precise_round(scale);
+                    let blur_rect: Rectangle<i32, Physical> =
+                        Rectangle::new(blur_origin, geometry.size.to_physical_precise_round(scale));
+                    if let Some(blur_rect) =
+                        blur_rect.intersection(Rectangle::from_size(output_size))
+                    {
+                        elements.push(CosmicElement::Blur(
+                            crate::backend::render::blur::BlurRenderElement::new(
+                                blur_rect,
+                                shell_glass_corner_radius(layer.namespace(), scale),
+                                1.0,
+                            ),
+                        ));
+                    }
+                }
             }
             Stage::LayerSurface { layer, location } => {
                 let surface_loc = location
@@ -896,7 +958,7 @@ where
                 // unless it explicitly asks for it.
                 if shell.appearance_config().experimental_blur {
                     let ns = layer.namespace();
-                    let is_shell_glass = ns == "Panel" || ns == "Dock" || ns == "app-library";
+                    let is_shell_glass = is_shell_glass_namespace(ns);
                     let has_blur = is_shell_glass
                         || with_states(layer.wl_surface(), |states| {
                             states
@@ -917,7 +979,7 @@ where
                             blur_rect = clipped;
                             let element = crate::backend::render::blur::BlurRenderElement::new(
                                 blur_rect,
-                                [0, 0, 0, 0],
+                                shell_glass_corner_radius(ns, scale),
                                 1.0,
                             );
                             elements.push(CosmicElement::Blur(element));

@@ -91,3 +91,27 @@ cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols//", 
 [patch.crates-io]
 atspi = { git = "https://github.com/wash2/atspi" }
 atspi-common = { git = "https://github.com/wash2/atspi" }
+
+# Build Settings against the vendored toolkit rather than upstream libcosmic,
+# matching Files, the launcher and the panel applets. System chrome (nav rail,
+# header bar, tooltips, popups) is restyled inside `desktop/toolkit`; without
+# this patch Settings would keep resolving the pinned upstream crate and render
+# stock COSMIC grey.
+[patch.'https://github.com/pop-os/libcosmic']
+cosmic-config = { path = "../toolkit/cosmic-config" }
+cosmic-config-derive = { path = "../toolkit/cosmic-config-derive" }
+cosmic-theme = { path = "../toolkit/cosmic-theme" }
+iced = { path = "../toolkit/iced" }
+iced_accessibility = { path = "../toolkit/iced/accessibility" }
+iced_core = { path = "../toolkit/iced/core" }
+iced_debug = { path = "../toolkit/iced/debug" }
+iced_futures = { path = "../toolkit/iced/futures" }
+iced_graphics = { path = "../toolkit/iced/graphics" }
+iced_program = { path = "../toolkit/iced/program" }
+iced_renderer = { path = "../toolkit/iced/renderer" }
+iced_runtime = { path = "../toolkit/iced/runtime" }
+iced_tiny_skia = { path = "../toolkit/iced/tiny_skia" }
+iced_wgpu = { path = "../toolkit/iced/wgpu" }
+iced_widget = { path = "../toolkit/iced/widget" }
+iced_winit = { path = "../toolkit/iced/winit" }
+libcosmic = { path = "../toolkit" }

@@ -169,16 +169,31 @@ impl<'a, Message: Clone + 'static> From<NavBar<'a, Message>> for crate::Element<
 #[must_use]
 pub fn nav_bar_style(theme: &Theme) -> iced_widget::container::Style {
     let cosmic = &theme.cosmic();
+
+    // Claw Glass: the navigation rail is chrome, so it sits lighter than the
+    // page it flanks — translucent where the theme is frosted, with a brand
+    // hairline instead of the flat opaque `primary.base` slab.
+    let mut background = Color::from(cosmic.primary.base);
+    if cosmic.is_frosted {
+        background.a = 0.62;
+    }
+    let mut hairline = Color::from(cosmic.accent_color());
+    hairline.a = 0.16;
+
     iced_widget::container::Style {
         icon_color: Some(cosmic.on_bg_color().into()),
         text_color: Some(cosmic.on_bg_color().into()),
-        background: Some(Background::Color(cosmic.primary.base.into())),
+        background: Some(Background::Color(background)),
         border: Border {
-            width: 0.0,
-            color: Color::TRANSPARENT,
+            width: 1.0,
+            color: hairline,
             radius: cosmic.corner_radii.radius_s.into(),
         },
-        shadow: Shadow::default(),
+        shadow: Shadow {
+            color: Color::from_rgba(0.0, 0.02, 0.10, 0.12),
+            offset: iced::Vector::new(0.0, 3.0),
+            blur_radius: 18.0,
+        },
         snap: true,
     }
 }

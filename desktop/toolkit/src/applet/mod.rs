@@ -372,15 +372,33 @@ impl Context {
                 Container::<Message, _, Renderer>::new(content).style(|theme| {
                     let cosmic = theme.cosmic();
                     let corners = cosmic.corner_radii;
+
+                    // Claw Glass: panel popups float over the wallpaper, which
+                    // the compositor blurs behind panel-anchored surfaces, so
+                    // the fill only needs to carry contrast. An opaque
+                    // `background.base` with a neutral divider and no shadow
+                    // read as flat COSMIC grey.
+                    let mut background = Color::from(cosmic.background.base);
+                    if cosmic.is_frosted {
+                        background.a = 0.82;
+                    }
+                    let mut hairline = Color::from(cosmic.accent_color());
+                    hairline.a = 0.18;
+                    let shadow_alpha = if cosmic.is_dark { 0.28 } else { 0.14 };
+
                     iced_widget::container::Style {
                         text_color: Some(cosmic.background.on.into()),
-                        background: Some(Color::from(cosmic.background.base).into()),
+                        background: Some(background.into()),
                         border: iced::Border {
                             radius: corners.radius_l.into(),
                             width: 1.0,
-                            color: cosmic.background.divider.into(),
+                            color: hairline,
                         },
-                        shadow: Shadow::default(),
+                        shadow: Shadow {
+                            color: Color::from_rgba(0.0, 0.02, 0.10, shadow_alpha),
+                            offset: iced::Vector::new(0.0, 6.0),
+                            blur_radius: 24.0,
+                        },
                         icon_color: Some(cosmic.background.on.into()),
                         snap: true,
                     }

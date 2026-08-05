@@ -61,3 +61,26 @@ zbus = { version = "5.13", default-features = false, features = ["tokio"] }
 
 [workspace]
 # Opt out of repo-root workspace; this crate has its own dependency graph.
+
+# Build the shell against the vendored toolkit rather than upstream libcosmic.
+# ClawOS restyles system chrome (popup shells, tooltips, menus) inside
+# `desktop/toolkit`; without this patch the launcher would keep resolving the
+# pinned upstream crate and render stock COSMIC grey instead.
+[patch.'https://github.com/pop-os/libcosmic']
+cosmic-config = { path = "../toolkit/cosmic-config" }
+cosmic-config-derive = { path = "../toolkit/cosmic-config-derive" }
+cosmic-theme = { path = "../toolkit/cosmic-theme" }
+iced = { path = "../toolkit/iced" }
+iced_accessibility = { path = "../toolkit/iced/accessibility" }
+iced_core = { path = "../toolkit/iced/core" }
+iced_debug = { path = "../toolkit/iced/debug" }
+iced_futures = { path = "../toolkit/iced/futures" }
+iced_graphics = { path = "../toolkit/iced/graphics" }
+iced_program = { path = "../toolkit/iced/program" }
+iced_renderer = { path = "../toolkit/iced/renderer" }
+iced_runtime = { path = "../toolkit/iced/runtime" }
+iced_tiny_skia = { path = "../toolkit/iced/tiny_skia" }
+iced_wgpu = { path = "../toolkit/iced/wgpu" }
+iced_widget = { path = "../toolkit/iced/widget" }
+iced_winit = { path = "../toolkit/iced/winit" }
+libcosmic = { path = "../toolkit" }
