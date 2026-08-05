@@ -437,6 +437,14 @@ pub const CATALOG: &[CapMeta] = &[
         "✉️",
         Risk::Medium,
     ),
+    CapMeta::new(
+        Verb::DATA_BACKUP,
+        ScopeKind::Path,
+        LocalizedStr::new("Manage user-data backups"),
+        LocalizedStr::new("Initialize, write, retain, inspect, forget, or restore a backup tree rooted at the exact approved path."),
+        "🗄",
+        Risk::Critical,
+    ),
 
     // -- Agent memory --------------------------------------------------------
     CapMeta::new(

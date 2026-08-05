@@ -125,6 +125,7 @@ impl Verb {
     pub const DATA_LOG_WRITE: Verb = Verb::new("data.log.write");
     pub const DATA_INBOX_READ: Verb = Verb::new("data.inbox.read");
     pub const DATA_INBOX_WRITE: Verb = Verb::new("data.inbox.write");
+    pub const DATA_BACKUP: Verb = Verb::new("data.backup");
 
     // -- Agent memory ------------------------------------------------------
     // Apps that hold this verb can push searchable summaries of their own
@@ -263,6 +264,7 @@ pub const ALL_VERBS: &[Verb] = &[
     Verb::DATA_LOG_WRITE,
     Verb::DATA_INBOX_READ,
     Verb::DATA_INBOX_WRITE,
+    Verb::DATA_BACKUP,
     Verb::MEMORY_WRITE,
     Verb::MEMORY_READ,
     Verb::IPC_PUBLISH,

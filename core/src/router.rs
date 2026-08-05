@@ -667,6 +667,70 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__backup" {
+        let action = args
+            .get(1)
+            .ok_or_else(|| "internal backup command required".to_string())?;
+        let session = env::var("COS_SESSION")
+            .map_err(|_| "internal backup command requires COS_SESSION".to_string())?;
+        let mut repo = None;
+        let mut source = None;
+        let mut destination = None;
+        let mut snapshot = None;
+        let mut credential = None;
+        let mut tag = None;
+        let mut keep_daily = None;
+        let mut keep_weekly = None;
+        let mut keep_monthly = None;
+        let mut confirm = false;
+        let mut index = 2;
+        while index < args.len() {
+            if args[index] == "--confirm" {
+                if confirm {
+                    return Err("duplicate internal backup --confirm".to_string());
+                }
+                confirm = true;
+                index += 1;
+                continue;
+            }
+            let value = args
+                .get(index + 1)
+                .ok_or_else(|| format!("{} requires a value", args[index]))?
+                .clone();
+            match args[index].as_str() {
+                "--repo" => repo = Some(value),
+                "--source" => source = Some(value),
+                "--destination" => destination = Some(value),
+                "--snapshot" => snapshot = Some(value),
+                "--credential" => credential = Some(value),
+                "--tag" => tag = Some(value),
+                "--keep-daily" => keep_daily = Some(value),
+                "--keep-weekly" => keep_weekly = Some(value),
+                "--keep-monthly" => keep_monthly = Some(value),
+                other => return Err(format!("unknown internal backup flag: {other}")),
+            }
+            index += 2;
+        }
+        let value = request_clawd(
+            "system.backup.control",
+            json!({
+                "session": session,
+                "action": action,
+                "repo": repo,
+                "source": source,
+                "destination": destination,
+                "snapshot": snapshot,
+                "credential": credential,
+                "tag": tag,
+                "keep_daily": keep_daily,
+                "keep_weekly": keep_weekly,
+                "keep_monthly": keep_monthly,
+                "confirm": confirm,
+            }),
+        )?;
+        return Ok(Some(value.to_string()));
+    }
+
     // "app" namespace → route to Python apps
     if name == "app" {
         return dispatch_app(&args[1..]);

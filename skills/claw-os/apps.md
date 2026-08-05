@@ -366,6 +366,26 @@ use pidfds and verify the original PID start time. Records are broadcast
 in-memory and persisted to a bounded rotating JSONL log under
 `sys.events:observe`; watcher failures remain visible in `status`.
 
+## Backup Center
+
+```bash
+cos app backup-center init /media/cos/backup/repo default/restic
+cos app backup-center backup /media/cos/backup/repo /home/cos/Documents default/restic
+cos app backup-center snapshots /media/cos/backup/repo default/restic
+cos app backup-center check /media/cos/backup/repo default/restic
+cos app backup-center restore /media/cos/backup/repo latest /home/cos/restore default/restic --confirm
+cos app backup-center retention /media/cos/backup/repo default/restic 7 4 12 --confirm
+```
+
+Backup Center runs Restic as the requesting user. Repositories must live on a
+currently mounted non-root filesystem, and the mount ID is checked before and
+after every operation to detect missing or replaced backup media. The password
+is loaded through exact `secret.read`, written only to a user-owned 0600
+runtime file, and passed via `--password-file`. `data.backup:<path>` separately
+authorizes repository, source-tree, and restore-destination roots. Restore only
+targets an empty or new directory; forgetting and retention/prune require
+explicit confirmation and never delete volumes.
+
 ## Package Management
 
 ```bash
