@@ -533,6 +533,58 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__container" {
+        let action = args
+            .get(1)
+            .ok_or_else(|| "internal container command required".to_string())?;
+        let session = env::var("COS_SESSION")
+            .map_err(|_| "internal container command requires COS_SESSION".to_string())?;
+        let mut runtime = None;
+        let mut target = None;
+        let mut namespace = None;
+        let mut signal = None;
+        let mut lines = None;
+        let mut confirm = false;
+        let mut index = 2;
+        while index < args.len() {
+            if args[index] == "--confirm" {
+                if confirm {
+                    return Err("duplicate internal container --confirm".to_string());
+                }
+                confirm = true;
+                index += 1;
+                continue;
+            }
+            let value = args
+                .get(index + 1)
+                .ok_or_else(|| format!("{} requires a value", args[index]))?
+                .clone();
+            match args[index].as_str() {
+                "--runtime" => runtime = Some(value),
+                "--target" => target = Some(value),
+                "--namespace" => namespace = Some(value),
+                "--signal" => signal = Some(value),
+                "--lines" => lines = Some(value),
+                other => return Err(format!("unknown internal container flag: {other}")),
+            }
+            index += 2;
+        }
+        let value = request_clawd(
+            "system.container.control",
+            json!({
+                "session": session,
+                "action": action,
+                "runtime": runtime,
+                "target": target,
+                "namespace": namespace,
+                "signal": signal,
+                "lines": lines,
+                "confirm": confirm,
+            }),
+        )?;
+        return Ok(Some(value.to_string()));
+    }
+
     // "app" namespace → route to Python apps
     if name == "app" {
         return dispatch_app(&args[1..]);

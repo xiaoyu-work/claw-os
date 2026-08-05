@@ -310,6 +310,27 @@ failures, direct root SSH, empty/password authentication, invalid or writable
 sudoers files, broad NOPASSWD rules, missing enforcing MAC, sensitive wildcard
 listeners, and recent kernel security events.
 
+## Container Manager
+
+```bash
+cos app container-manager status
+cos app container-manager list docker
+cos app container-manager list podman
+cos app container-manager list containerd k8s.io
+cos app container-manager logs docker web 200
+cos app container-manager namespaces podman web
+cos app container-manager restart docker web
+cos app container-manager remove docker old-job --confirm
+```
+
+Inventory, inspect, logs, process, stats, cgroup, and namespace evidence require
+`sys.container:observe`; lifecycle changes require
+`sys.container:control`. Rootless `podman` runs as the requesting user,
+`podman-root` addresses root-owned containers, and Docker/containerd use the
+system runtime. Containerd lifecycle/log operations use nerdctl and require an
+explicit namespace; ctr remains a read-only inventory fallback. Removal never
+passes volume-deletion or force flags and requires explicit confirmation.
+
 ## Package Management
 
 ```bash

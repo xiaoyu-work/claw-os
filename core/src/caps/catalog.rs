@@ -208,6 +208,14 @@ pub const CATALOG: &[CapMeta] = &[
         Risk::High,
     ),
     CapMeta::new(
+        Verb::SYS_CONTAINER,
+        ScopeKind::Name,
+        LocalizedStr::new("Inspect or control containers"),
+        LocalizedStr::new("Read sensitive container logs/namespaces or change Docker, Podman, and containerd lifecycle state."),
+        "📦",
+        Risk::Critical,
+    ),
+    CapMeta::new(
         Verb::SYS_SECURITY,
         ScopeKind::Name,
         LocalizedStr::new("Inspect sensitive security state"),

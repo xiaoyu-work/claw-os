@@ -37,6 +37,7 @@ pub fn readonly_task_caps() -> CapSet {
         "bluetooth-manager",
         "browser-attached",
         "crash-doctor",
+        "container-manager",
         "db",
         "desktop-manager",
         "doc",
