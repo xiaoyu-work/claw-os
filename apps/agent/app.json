@@ -17,7 +17,11 @@
     },
     "overlay": {
       "label": { "en": "Open the Spotlight-style Super+A quick-summon overlay" },
-      "args": [],
+      "args": [
+        { "name": "voice", "kind": "bool", "required": false, "default": false },
+        { "name": "query", "kind": "text", "required": false },
+        { "name": "context", "kind": "text", "required": false }
+      ],
       "needs": []
     },
     "url": {
@@ -28,10 +32,6 @@
   },
   "dependencies": {
     "binaries": [],
-    "optional_binaries": [
-      "chromium",
-      "chromium-browser",
-      "firefox"
-    ]
+    "optional_binaries": []
   }
 }

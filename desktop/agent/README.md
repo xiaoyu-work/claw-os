@@ -21,20 +21,20 @@ desktop/agent/
 │           ├── chat.rs     # POST /api/chat   (SSE stream)
 │           ├── sessions.rs # GET/DELETE /api/sessions[/:id]
 │           ├── models.rs   # GET /api/models
-│           └── voice.rs    # POST /api/voice/upload
+│           └── voice.rs    # POST /api/voice/upload → configured STT provider
 └── ui/                     # cos-agent-ui — native libcosmic chat
     ├── src/
     │   ├── main.rs         #   Application impl, view, subscription
     │   ├── bridge.rs       #   port discovery + wire types
     │   ├── sse.rs          #   reqwest-based SSE consumer
-    │   └── recorder.rs     #   cpal mic capture + WAV upload
+    │   └── recorder.rs     #   bounded capture, resampling, levels + WAV upload
     └── assets/             #   brand PNGs baked into binary
 ```
 
 ## Runtime topology
 
 ```
-┌─ standalone window ─┐   ┌─ Super+A overlay ─┐
+┌─ standalone window ─┐   ┌─ Super+A layer overlay ─┐
 │  cos-agent-ui       │   │  cos-agent-ui      │
 │  (native libcosmic) │   │  --overlay         │
 └─────────┬───────────┘   └─────────┬──────────┘
@@ -57,6 +57,22 @@ desktop/agent/
 The bridge no longer serves a static SPA — the previous React
 frontend was retired in favour of `cos-agent-ui`. Every UI surface
 talks only to the `/api/*` endpoints.
+
+The overlay is a single-instance Wayland layer-shell surface:
+
+- `Super+A` opens the compact multiline summon composer.
+- `Super+Shift+A` opens the live voice orb and begins recording.
+- Re-invoking either shortcut reuses the existing overlay process.
+- Escape stops/cancels active work before closing the surface.
+
+Chat streams expose task identity, live text, tool lifecycle, warnings,
+usage, and final metadata. Stop cancels the clawd task; dropping the
+client stream also triggers bridge-side cancellation.
+
+Voice uploads are staged as private runtime files and transcribed via
+the configured `cos model transcribe` provider. App/window context is
+sent through a transient, untrusted-data system boundary and is not
+stored as the visible user prompt.
 
 ## Endpoint discovery
 

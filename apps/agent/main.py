@@ -125,15 +125,20 @@ def _exec_native(extra_args):
     """Replace this process with the native UI binary.
 
     execv collapses cos → python → cos-agent-ui into one PID so the
-    .desktop launcher's lifecycle tracks the actual window. The
-    native binary reads the authenticated bridge endpoint itself, so
-    we don't need _ensure_endpoint() on the happy path.
+    .desktop launcher's lifecycle tracks the actual window. Ensure the
+    user service has published an endpoint first; the native UI then
+    performs its own health check and reconnect loop.
     """
     native = _find_native_ui()
     if not native:
         return {
             "error": "cos-agent-ui is not installed",
             "hint": "apt-get install --reinstall claw-os-base",
+        }
+    if _ensure_endpoint() is None:
+        return {
+            "error": "cos-agent-bridge is not ready",
+            "hint": "systemctl --user restart cos-agent-bridge.service",
         }
     try:
         os.execv(native, [native, *extra_args])
@@ -178,6 +183,10 @@ def _cmd_overlay(args):
             argv.append("--query")
             argv.append(args[i + 1])
             i += 1
+        elif a == "--context" and i + 1 < len(args):
+            argv.append("--context")
+            argv.append(args[i + 1])
+            i += 1
         i += 1
     return _exec_native(argv)
 
@@ -197,6 +206,9 @@ def _schema():
                  "default": False},
                 {"name": "--query", "type": "string", "required": False,
                  "description": "Pre-fill the prompt and submit it immediately",
+                 "kind": "value"},
+                {"name": "--context", "type": "string", "required": False,
+                 "description": "Attach invisible one-shot app context",
                  "kind": "value"},
             ],
             "example": "cos app agent overlay --query 'find my budget spreadsheet'",
