@@ -81,6 +81,7 @@ impl Verb {
     pub const NET_LISTEN: Verb = Verb::new("net.listen");
     pub const NET_RAW: Verb = Verb::new("net.raw");
     pub const NET_RESOLVE: Verb = Verb::new("net.resolve");
+    pub const NET_MANAGE: Verb = Verb::new("net.manage");
 
     // -- Processes ---------------------------------------------------------
     pub const PROC_SPAWN: Verb = Verb::new("proc.spawn");
@@ -219,6 +220,7 @@ pub const ALL_VERBS: &[Verb] = &[
     Verb::NET_LISTEN,
     Verb::NET_RAW,
     Verb::NET_RESOLVE,
+    Verb::NET_MANAGE,
     Verb::PROC_SPAWN,
     Verb::PROC_SIGNAL,
     Verb::PROC_OBSERVE,

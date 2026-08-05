@@ -155,6 +155,14 @@ pub const CATALOG: &[CapMeta] = &[
         "🧭",
         Risk::Low,
     ),
+    CapMeta::new(
+        Verb::NET_MANAGE,
+        ScopeKind::Name,
+        LocalizedStr::new("Change network connections"),
+        LocalizedStr::new("Connect or disconnect Wi-Fi and VPN profiles, or change network radio state."),
+        "📶",
+        Risk::High,
+    ),
 
     // -- Processes -----------------------------------------------------------
     CapMeta::new(

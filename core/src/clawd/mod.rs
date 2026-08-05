@@ -8,6 +8,7 @@ pub mod context;
 pub mod context_events;
 pub mod heartbeat;
 pub mod memory;
+pub mod network;
 pub mod packages;
 pub mod permissions;
 pub mod protocol;

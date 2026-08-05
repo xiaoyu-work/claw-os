@@ -143,6 +143,25 @@ and TCP reachability in order. TCP probes connect to the exact addresses
 returned by that resolution, so a second DNS lookup cannot redirect the
 connection.
 
+## NetworkManager Control
+
+```bash
+cos app network-manager status
+cos app network-manager wifi-list
+cos app network-manager wifi-connect "Cafe WiFi" default/cafe_wifi_psk
+cos app network-manager wifi-toggle off
+cos app network-manager vpn-list
+cos app network-manager vpn-up work-vpn
+cos app network-manager airplane on
+```
+
+The optional Wi-Fi credential uses `namespace/name` form and is loaded only
+after exact `secret.read` and credential-tier checks. Its plaintext is written
+only to a root-only temporary nmcli password file and never placed in argv.
+Network mutation grants are category-scoped as `net.manage:wifi`,
+`net.manage:vpn`, or `net.manage:airplane`; user-controlled SSIDs and profile
+names are never interpreted as glob capability patterns.
+
 ## Package Management
 
 ```bash

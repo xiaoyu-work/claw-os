@@ -2669,6 +2669,21 @@ pub fn try_load(name: &str, namespace: &str) -> Result<Option<String>, String> {
     read_credential_value(name, namespace, false).map(Some)
 }
 
+pub(crate) fn load_for_broker(
+    name: &str,
+    namespace: &str,
+    current_tier: u8,
+) -> Result<String, String> {
+    credential_scope(namespace, name)?;
+    let required_tier = credential_min_tier(name, namespace)?;
+    if !tier_grants_access(current_tier, required_tier) {
+        return Err(format!(
+            "insufficient tier: credential '{name}' requires {required_tier}, current session has {current_tier}"
+        ));
+    }
+    read_credential_value(name, namespace, false)
+}
+
 pub fn load_for_scheduler(
     name: &str,
     namespace: &str,

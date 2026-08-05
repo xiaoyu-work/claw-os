@@ -151,9 +151,10 @@ impl Role {
     /// Build a concrete [`CapSet`] by pairing each verb with the
     /// appropriate user-supplied scope.
     ///
-    /// `path_scope` bounds every fs.* / sys.mount cap;
-    /// `host_scope` bounds every net.* cap;
-    /// `name_scope` bounds secret.* / data.* / agent.* / sys.service / ipc.*;
+    /// `path_scope` bounds capabilities cataloged with `ScopeKind::Path`;
+    /// `host_scope` bounds capabilities cataloged with `ScopeKind::Host`;
+    /// `name_scope` bounds capabilities cataloged with `ScopeKind::Name` or
+    /// `ScopeKind::SelfRef`, including category-scoped `net.manage`;
     /// unscoped verbs (ui.*, time.*) take [`Scope::Wild`].
     ///
     /// If a scope is `None` for a kind the role would have used, those
@@ -463,6 +464,7 @@ const ADMIN_VERBS: &[Verb] = &[
     Verb::SYS_TIME,
     Verb::NET_LISTEN,
     Verb::NET_RAW,
+    Verb::NET_MANAGE,
     Verb::UI_WINDOW,
     Verb::UI_INPUT,
     Verb::CLIPBOARD_READ,
@@ -621,6 +623,21 @@ mod tests {
         assert!(!caps.covers(&Cap::new(Verb::FS_READ, Scope::path("/anything"))));
         // ui.notify is unscoped and should be present.
         assert!(caps.covers(&Cap::unscoped(Verb::UI_NOTIFY)));
+    }
+
+    #[test]
+    fn net_manage_uses_category_name_scope() {
+        let caps = Role::Admin.caps_with_scopes(
+            None,
+            Some(Scope::host("example.com:443")),
+            Some(Scope::name("wifi")),
+        );
+        assert!(caps.covers(&Cap::new(Verb::NET_MANAGE, Scope::name("wifi"))));
+        assert!(!caps.covers(&Cap::new(Verb::NET_MANAGE, Scope::name("vpn"))));
+
+        let host_only =
+            Role::Admin.caps_with_scopes(None, Some(Scope::host("example.com:443")), None);
+        assert!(!host_only.covers(&Cap::new(Verb::NET_MANAGE, Scope::name("wifi"))));
     }
 
     #[test]
