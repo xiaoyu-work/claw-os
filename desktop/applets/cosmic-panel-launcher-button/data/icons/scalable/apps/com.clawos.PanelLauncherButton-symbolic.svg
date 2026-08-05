@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ClawOS launcher / search button.
+
+  Follows the menu-bar convention used by macOS Spotlight: a single
+  colour glyph rather than a tinted tile, so it sits with the rest of
+  the panel symbols. Lens diameter to handle length is 2:1.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none">
+  <circle cx="7.362" cy="7.362" r="3.500" stroke="currentColor" stroke-width="1.250" fill="none"/>
+  <line x1="9.661" y1="9.661" x2="12.135" y2="12.135" stroke="currentColor" stroke-width="1.250" stroke-linecap="round"/>
+</svg>

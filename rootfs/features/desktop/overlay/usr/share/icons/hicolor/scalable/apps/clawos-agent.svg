@@ -1,7 +1,19 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
-  <rect x="16" y="16" width="224" height="224" rx="56" fill="#F8FAFD" stroke="#DCE5F0" stroke-width="4"/>
-  <path d="M53 69c0-10 8-18 18-18h114c10 0 18 8 18 18v86c0 10-8 18-18 18h-58l-40 32v-32H71c-10 0-18-8-18-18V69z" fill="#005CFE" stroke="#005CFE" stroke-width="8" stroke-linejoin="round"/>
-  <path d="M128 75c3 19 13 29 32 32-19 3-29 13-32 32-3-19-13-29-32-32 19-3 29-13 32-32z" fill="#FFFFFF"/>
-  <circle cx="80" cy="145" r="7" fill="#FFFFFF" opacity=".85"/>
-  <circle cx="176" cy="145" r="7" fill="#FFFFFF" opacity=".85"/>
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ClawOS claw mark.
+
+  Geometry is derived from assets/brand/clawos-app-icon-1024.png:
+  three strokes at -28 degrees from vertical, bottoms aligned, round
+  (true semicircle) caps, trailing dot at the lower right.
+
+  Brand rule: the strokes follow the theme foreground via currentColor
+  (black on light, white on dark); the dot is always #005CFE.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none">
+  <g stroke="currentColor" stroke-linecap="round" fill="none">
+    <line x1="123.623" y1="69.866" x2="64.000" y2="182.000" stroke-width="18.000"/>
+    <line x1="144.497" y1="109.598" x2="106.000" y2="182.000" stroke-width="17.000"/>
+    <line x1="170.413" y1="136.087" x2="146.000" y2="182.000" stroke-width="16.000"/>
+  </g>
+  <circle cx="188.000" cy="184.000" r="10.000" fill="#005CFE"/>
 </svg>
