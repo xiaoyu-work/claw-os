@@ -1,7 +1,7 @@
 [
     "com.clawos.Agent",
-    "chromium",
     "thunderbird",
+    "chromium",
     "com.clawos.Term",
     "com.clawos.Files",
     "com.clawos.Edit",

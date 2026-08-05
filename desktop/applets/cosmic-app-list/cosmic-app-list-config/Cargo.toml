@@ -8,3 +8,6 @@ edition = "2024"
 [dependencies]
 libcosmic.workspace = true
 serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+ron = "0.12"

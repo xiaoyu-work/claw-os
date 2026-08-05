@@ -1,4 +1,15 @@
 (
     filter_top_levels: None,
-    favorites: [],
+    favorites: [
+        "com.clawos.Agent",
+        "thunderbird",
+        "chromium",
+        "com.clawos.Term",
+        "com.clawos.Files",
+        "com.clawos.Edit",
+        "com.clawos.Player",
+        "com.clawos.Store",
+        "com.clawos.Settings",
+    ],
+    enable_drag_source: true,
 )

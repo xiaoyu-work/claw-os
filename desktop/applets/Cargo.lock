@@ -1119,6 +1119,7 @@ name = "cosmic-app-list-config"
 version = "1.0.2"
 dependencies = [
  "libcosmic",
+ "ron 0.12.1",
  "serde",
 ]
 

@@ -6,21 +6,51 @@
 
 use std::path::{Path, PathBuf};
 
-use cosmic_panel_config::{CosmicPanelBackground, PanelAnchor, PanelSize};
+use cosmic_panel_config::{AutoHide, CosmicPanelConfig, CosmicPanelOuput, PanelAnchor, PanelSize};
+use xdg_shell_wrapper_config::{KeyboardInteractivity, Layer};
 
 fn schema_dir(entry: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../data/default_schema")
-        .join(entry)
-        .join("v1")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../data/default_schema").join(entry).join("v1")
 }
 
 #[track_caller]
 fn parse<T: serde::de::DeserializeOwned>(entry: &str, field: &str) -> T {
     let path = schema_dir(entry).join(field);
-    let raw = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let raw =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     ron::from_str(raw.trim()).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
+}
+
+fn shipped_panel(entry: &str) -> CosmicPanelConfig {
+    CosmicPanelConfig {
+        name: parse(entry, "name"),
+        anchor: parse(entry, "anchor"),
+        anchor_gap: parse(entry, "anchor_gap"),
+        layer: parse::<Layer>(entry, "layer"),
+        keyboard_interactivity: parse::<KeyboardInteractivity>(entry, "keyboard_interactivity"),
+        size: parse(entry, "size"),
+        output: parse::<CosmicPanelOuput>(entry, "output"),
+        background: parse(entry, "background"),
+        plugins_wings: parse(entry, "plugins_wings"),
+        plugins_center: parse(entry, "plugins_center"),
+        size_wings: parse::<Option<(Option<PanelSize>, Option<PanelSize>)>>(entry, "size_wings"),
+        size_center: parse::<Option<PanelSize>>(entry, "size_center"),
+        expand_to_edges: parse(entry, "expand_to_edges"),
+        padding: parse(entry, "padding"),
+        spacing: parse(entry, "spacing"),
+        border_radius: parse(entry, "border_radius"),
+        exclusive_zone: parse(entry, "exclusive_zone"),
+        autohide: parse::<Option<AutoHide>>(entry, "autohide"),
+        margin: parse(entry, "margin"),
+        opacity: parse(entry, "opacity"),
+        autohover_delay_ms: parse(entry, "autohover_delay_ms"),
+        padding_overlap: parse(entry, "padding_overlap"),
+    }
+}
+
+fn as_value<T: serde::Serialize>(value: &T) -> ron::Value {
+    let raw = ron::ser::to_string(value).expect("serialize config");
+    ron::from_str(&raw).expect("deserialize config value")
 }
 
 /// Every field of both shipped panel entries must round-trip through
@@ -33,22 +63,7 @@ fn shipped_schema_parses() {
     );
 
     for entry in ["com.clawos.Panel.Panel", "com.clawos.Panel.Dock"] {
-        let _: PanelAnchor = parse(entry, "anchor");
-        let _: PanelSize = parse(entry, "size");
-        let _: CosmicPanelBackground = parse(entry, "background");
-        let _: String = parse(entry, "name");
-        let _: bool = parse(entry, "anchor_gap");
-        let _: bool = parse(entry, "expand_to_edges");
-        let _: bool = parse(entry, "exclusive_zone");
-        let _: u32 = parse(entry, "padding");
-        let _: u32 = parse(entry, "spacing");
-        let _: u32 = parse(entry, "border_radius");
-        let _: u32 = parse(entry, "margin");
-        let _: f32 = parse(entry, "opacity");
-        let _: f32 = parse(entry, "padding_overlap");
-        let _: Option<u32> = parse(entry, "autohover_delay_ms");
-        let _: Option<(Vec<String>, Vec<String>)> = parse(entry, "plugins_wings");
-        let _: Option<Vec<String>> = parse(entry, "plugins_center");
+        let _ = shipped_panel(entry);
     }
 }
 
@@ -60,18 +75,28 @@ fn top_panel_layout() {
     let entry = "com.clawos.Panel.Panel";
 
     assert_eq!(parse::<PanelAnchor>(entry, "anchor"), PanelAnchor::Top);
+    assert_eq!(parse::<PanelSize>(entry, "size"), PanelSize::XS);
+    assert_eq!(parse::<u16>(entry, "margin"), 0, "the top bar sits flush to the screen edge");
+    assert_eq!(parse::<u32>(entry, "padding"), 4);
+    assert_eq!(PanelSize::XS.get_applet_icon_size(true), 16);
+    assert_eq!(PanelSize::XS.get_applet_padding(true), 8);
+    assert_eq!(16 + 2 * 8 + 2 * 4, 40, "XS symbolic controls plus panel padding define a 40px bar",);
 
     let (left, right) = parse::<Option<(Vec<String>, Vec<String>)>>(entry, "plugins_wings")
         .expect("top panel has wings");
 
+    assert_eq!(left, ["com.clawos.PanelBrandButton", "com.clawos.AppletWorkspaces"],);
     assert_eq!(
-        left,
-        ["com.clawos.PanelAppButton", "com.clawos.AppletWorkspaces"],
-    );
-    assert_eq!(
-        right.last().map(String::as_str),
-        Some("com.clawos.AppletTime"),
-        "the clock stays right-most",
+        right,
+        [
+            "com.clawos.PanelLauncherButton",
+            "com.clawos.PanelCalendarButton",
+            "com.clawos.AppletApprovalGate",
+            "com.clawos.AppletNetwork",
+            "com.clawos.AppletAudio",
+            "com.clawos.AppletBattery",
+            "com.clawos.AppletTime",
+        ],
     );
 
     assert_eq!(
@@ -87,13 +112,68 @@ fn dock_layout() {
     let entry = "com.clawos.Panel.Dock";
 
     assert_eq!(parse::<PanelAnchor>(entry, "anchor"), PanelAnchor::Left);
+    assert_eq!(parse::<PanelSize>(entry, "size"), PanelSize::M);
+    assert_eq!(parse::<u16>(entry, "margin"), 24);
+    assert_eq!(parse::<u32>(entry, "padding"), 2);
+    assert_eq!(PanelSize::M.get_applet_icon_size(false), 40);
+    assert_eq!(PanelSize::M.get_applet_icon_size(true), 28);
+    assert_eq!(PanelSize::M.get_applet_padding(true), 14);
+    assert_eq!(
+        28 + 2 * 14 + 2 * 2,
+        60,
+        "the symbolic App Library button fixes the Dock width at 60px",
+    );
     assert_eq!(parse::<Option<(Vec<String>, Vec<String>)>>(entry, "plugins_wings"), None);
 
     let center = parse::<Option<Vec<String>>>(entry, "plugins_center").expect("dock has plugins");
-    assert_eq!(center, ["com.clawos.AppList", "com.clawos.PanelAppButton"]);
+    assert_eq!(
+        center,
+        ["com.clawos.AppList", "com.clawos.PanelDockDivider", "com.clawos.PanelAppButton",],
+    );
 
     // A capsule radius on a vertical bar rounds the whole column away;
     // the dock wants a rounded rectangle.
     let radius = parse::<u32>(entry, "border_radius");
-    assert!((16..=32).contains(&radius), "unexpected dock radius {radius}");
+    assert_eq!(radius, 32, "the panel renderer halves this into a 16px radius");
+}
+
+/// `CosmicPanelContainerConfig::default()` is only consulted when the
+/// shipped schema is absent, so drift between the two silently produces
+/// a different desktop depending on how ClawOS was installed. Pin them
+/// together.
+#[test]
+fn compiled_defaults_match_shipped_schema() {
+    use cosmic_panel_config::CosmicPanelContainerConfig;
+
+    let entries = parse::<Vec<String>>("com.clawos.Panel", "entries");
+    let compiled = CosmicPanelContainerConfig::default();
+
+    assert_eq!(
+        compiled.config_list.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+        entries,
+        "compiled panels differ from the shipped entry list",
+    );
+
+    for config in &compiled.config_list {
+        let entry = format!("com.clawos.Panel.{}", config.name);
+        assert_eq!(
+            as_value(&shipped_panel(&entry)),
+            as_value(config),
+            "{entry} differs from its compiled default",
+        );
+    }
+}
+
+#[test]
+fn sample_config_matches_compiled_defaults() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("config.ron");
+    let raw =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let sample: cosmic_panel_config::CosmicPanelContainerConfig =
+        ron::from_str(&raw).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()));
+
+    assert_eq!(
+        as_value(&sample),
+        as_value(&cosmic_panel_config::CosmicPanelContainerConfig::default()),
+    );
 }

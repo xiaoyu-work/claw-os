@@ -129,78 +129,78 @@ impl CosmicPanelContainerConfig {
 }
 
 impl Default for CosmicPanelContainerConfig {
+    /// Mirrors `data/default_schema`, which is what a fresh install
+    /// actually boots with. These compiled-in values only apply when
+    /// that schema is missing, so any drift between the two renders a
+    /// visibly different desktop depending on how ClawOS was installed.
     fn default() -> Self {
         Self {
             config_list: vec![
                 CosmicPanelConfig {
                     name: "Panel".to_string(),
                     anchor: crate::PanelAnchor::Top,
-                    anchor_gap: true,
+                    anchor_gap: false,
                     layer: Layer::Top,
                     keyboard_interactivity:
                         xdg_shell_wrapper_config::KeyboardInteractivity::OnDemand,
-                    size: crate::PanelSize::S,
+                    size: crate::PanelSize::XS,
                     output: CosmicPanelOuput::All,
                     background: CosmicPanelBackground::ThemeDefault,
                     plugins_wings: Some((
                         vec![
-                            "com.clawos.PanelAppButton".to_string(),
+                            "com.clawos.PanelBrandButton".to_string(),
                             "com.clawos.AppletWorkspaces".to_string(),
                         ],
                         vec![
+                            "com.clawos.PanelLauncherButton".to_string(),
+                            "com.clawos.PanelCalendarButton".to_string(),
                             "com.clawos.AppletApprovalGate".to_string(),
-                            "com.clawos.AppletNotifications".to_string(),
                             "com.clawos.AppletNetwork".to_string(),
                             "com.clawos.AppletAudio".to_string(),
                             "com.clawos.AppletBattery".to_string(),
-                            "com.clawos.AppletPower".to_string(),
                             "com.clawos.AppletTime".to_string(),
                         ],
                     )),
                     plugins_center: Some(vec!["com.clawos.AppletAgentActivity".to_string()]),
                     size_wings: None,
                     size_center: None,
-                    expand_to_edges: false,
+                    expand_to_edges: true,
                     padding: 4,
                     spacing: 4,
-                    border_radius: 24,
+                    border_radius: 0,
                     exclusive_zone: true,
                     autohide: None,
-                    margin: 4,
-                    opacity: 0.85,
+                    margin: 0,
+                    opacity: 0.6,
                     autohover_delay_ms: Some(500),
                     padding_overlap: 0.5,
                 },
                 CosmicPanelConfig {
                     name: "Dock".to_string(),
                     anchor: crate::PanelAnchor::Left,
-                    anchor_gap: false,
+                    anchor_gap: true,
                     layer: Layer::Top,
                     keyboard_interactivity:
                         xdg_shell_wrapper_config::KeyboardInteractivity::OnDemand,
-                    size: crate::PanelSize::L,
+                    size: crate::PanelSize::M,
                     output: CosmicPanelOuput::All,
                     background: CosmicPanelBackground::ThemeDefault,
                     plugins_wings: None,
                     plugins_center: Some(vec![
                         "com.clawos.AppList".to_string(),
+                        "com.clawos.PanelDockDivider".to_string(),
                         "com.clawos.PanelAppButton".to_string(),
                     ]),
                     size_wings: None,
                     size_center: None,
                     expand_to_edges: false,
-                    padding: 4,
+                    padding: 2,
                     spacing: 0,
-                    border_radius: 24,
-                    exclusive_zone: false,
-                    autohide: Some(crate::AutoHide {
-                        wait_time: 500,
-                        transition_time: 200,
-                        handle_size: 2,
-                        unhide_delay: 200,
-                    }),
-                    margin: 0,
-                    opacity: 1.0,
+                    border_radius: 32,
+                    exclusive_zone: true,
+                    autohide: None,
+                    margin: 24,
+                    opacity: 0.6,
                     autohover_delay_ms: Some(500),
                     padding_overlap: 0.5,
                 },
