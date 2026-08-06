@@ -70,8 +70,7 @@ pub fn read_locked(path: &Path) -> Result<Option<String>, String> {
 /// Parent directories are created automatically.
 pub fn write_locked(path: &Path, data: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
 
     let lock_path = lock_sentinel_path(path);
@@ -103,8 +102,7 @@ pub fn write_locked(path: &Path, data: &str) -> Result<(), String> {
             .map_err(|e| format!("fsync {}: {e}", tmp_path.display()))?;
     }
     fs::rename(&tmp_path, path).map_err(|e| format!("rename {}: {e}", path.display()))?;
-    crate::storage::set_private_file(path)
-        .map_err(|e| format!("chmod {}: {e}", path.display()))?;
+    crate::storage::set_private_file(path).map_err(|e| format!("chmod {}: {e}", path.display()))?;
     if let Some(parent) = path.parent() {
         let _ = sync_dir(parent);
     }
@@ -139,39 +137,56 @@ fn sync_dir(_dir: &Path) -> std::io::Result<()> {
 /// Append a line to a file under an exclusive lock.
 /// Used for append-only logs (audit.jsonl, watch history).
 pub fn append_locked(path: &Path, line: &str) -> Result<(), String> {
+    with_exclusive_path_lock(path, || {
+        let mut file =
+            open_private(path, false, true).map_err(|e| format!("open {}: {e}", path.display()))?;
+        writeln!(file, "{}", line).map_err(|e| format!("write {}: {e}", path.display()))
+    })
+}
+
+/// Run `operation` while holding the stable sibling lock for `path`.
+///
+/// This is the primitive for compound append/rotate operations that must
+/// inspect the current file and then mutate it without another writer landing
+/// between those steps. The lock is on `<path>.lock`, so renaming `path`
+/// while the closure runs does not invalidate the lock.
+pub fn with_exclusive_path_lock<T, F>(path: &Path, operation: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String>,
+{
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
 
-    let mut file = open_private(path, false, true)
-        .map_err(|e| format!("open {}: {e}", path.display()))?;
+    let lock_path = lock_sentinel_path(path);
+    let lock_file = open_private(&lock_path, false, false)
+        .map_err(|e| format!("open lock {}: {e}", lock_path.display()))?;
 
     #[cfg(unix)]
     {
         use std::os::unix::io::AsRawFd;
-        let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+        let ret = unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX) };
         if ret != 0 {
             return Err(format!(
                 "flock LOCK_EX {}: {}",
-                path.display(),
+                lock_path.display(),
                 std::io::Error::last_os_error()
             ));
         }
     }
 
-    writeln!(file, "{}", line).map_err(|e| format!("write {}: {e}", path.display()))?;
+    let result = operation();
 
     #[cfg(unix)]
     {
         use std::os::unix::io::AsRawFd;
         unsafe {
-            libc::flock(file.as_raw_fd(), libc::LOCK_UN);
+            libc::flock(lock_file.as_raw_fd(), libc::LOCK_UN);
         }
     }
 
-    drop(file);
-    Ok(())
+    drop(lock_file);
+    result
 }
 
 /// Error returned by [`update_locked`]. Separates infrastructure
@@ -435,6 +450,9 @@ mod tests {
             Err(UpdateLockError::Transform(msg)) => assert_eq!(msg, "boom"),
             other => panic!("expected Transform error, got {other:?}"),
         }
-        assert!(!path.exists(), "file must not be created when closure fails");
+        assert!(
+            !path.exists(),
+            "file must not be created when closure fails"
+        );
     }
 }

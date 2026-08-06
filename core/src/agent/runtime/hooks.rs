@@ -481,13 +481,20 @@ impl Hook for LoggingHook {
 ///   "tool_name":    "...",      // pre/post_tool only
 ///   "success":      bool,       // post_* only
 ///   "latency_ms":   N,          // post_* only
+///   "chain_version": 1,
+///   "chain_id":      "...",
+///   "sequence":      N,
+///   "prev_hash":     "...",
+///   "this_hash":     "...",
 ///   ...
 /// }
 /// ```
 ///
-/// Audit writes are best-effort — IO errors / lock contention are
-/// silently swallowed. The agent loop is never blocked or aborted
-/// because the audit log is unavailable.
+/// Audit writes are best-effort and never abort the agent loop. Failures are
+/// traced. Each event is chained under an exclusive file lock so `cos agent
+/// audit verify` can detect accidental or naive edits, gaps, malformed tails,
+/// and archive changes. The chain is unkeyed; it is not a signature against an
+/// attacker who can rewrite the complete log and head.
 #[derive(Debug, Clone)]
 pub struct AuditHook {
     audit_path: std::path::PathBuf,
@@ -527,7 +534,7 @@ impl Hook for AuditHook {
     }
 
     fn pre_turn(&self, ctx: &HookContext) -> HookOutcome {
-        crate::audit::log_event(
+        crate::audit::log_chained_event(
             &self.audit_path,
             serde_json::json!({
                 "kind": "pre_turn",
@@ -543,7 +550,7 @@ impl Hook for AuditHook {
     }
 
     fn post_turn(&self, ctx: &HookContext, summary: &TurnSummary) -> HookOutcome {
-        crate::audit::log_event(
+        crate::audit::log_chained_event(
             &self.audit_path,
             serde_json::json!({
                 "kind": "post_turn",
@@ -567,7 +574,7 @@ impl Hook for AuditHook {
     }
 
     fn pre_tool(&self, ctx: &HookContext, tool_call: &ToolCall) -> ToolDecision {
-        crate::audit::log_event(
+        crate::audit::log_chained_event(
             &self.audit_path,
             serde_json::json!({
                 "kind": "pre_tool",
@@ -586,7 +593,7 @@ impl Hook for AuditHook {
         tool_call: &ToolCall,
         result: &ToolResultSummary,
     ) -> HookOutcome {
-        crate::audit::log_event(
+        crate::audit::log_chained_event(
             &self.audit_path,
             serde_json::json!({
                 "kind": "post_tool",
@@ -760,7 +767,7 @@ impl Hook for CheckpointHook {
         );
         match self.creator.create(&description) {
             Ok(checkpoint_id) => {
-                crate::audit::log_event(
+                crate::audit::log_chained_event(
                     &self.audit_path,
                     serde_json::json!({
                         "kind": "pre_tool_checkpoint",
@@ -775,7 +782,7 @@ impl Hook for CheckpointHook {
                 );
             }
             Err(error) => {
-                crate::audit::log_event(
+                crate::audit::log_chained_event(
                     &self.audit_path,
                     serde_json::json!({
                         "kind": "pre_tool_checkpoint",

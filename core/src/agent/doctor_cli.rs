@@ -514,13 +514,45 @@ fn check_audit(path: &Path) -> Value {
         "--path".into(),
         path.display().to_string(),
     ];
-    if let Ok(summary) = audit_cli::audit_cmd(&args) {
-        // Strip the duplicate `path` field — base already has it.
-        let mut s = summary;
-        if let Some(obj) = s.as_object_mut() {
-            obj.remove("path");
+    match audit_cli::audit_cmd(&args) {
+        Ok(summary) => {
+            // Strip the duplicate `path` field — base already has it.
+            let mut summary = summary;
+            if let Some(object) = summary.as_object_mut() {
+                object.remove("path");
+            }
+            if summary
+                .pointer("/integrity/legacy")
+                .and_then(Value::as_bool)
+                == Some(true)
+            {
+                base["status"] = json!("warn");
+                base["warning"] =
+                    json!("agent audit log is legacy and will be hash-chained on the next append");
+            } else if summary.pointer("/integrity/status").and_then(Value::as_str)
+                == Some("skipped")
+            {
+                base["status"] = json!("warn");
+                base["warning"] =
+                    json!("agent audit log is too large for automatic doctor verification; run `cos agent audit verify` explicitly");
+            } else if summary.pointer("/integrity/valid").and_then(Value::as_bool) == Some(false) {
+                base["status"] = json!("fail");
+                base["error"] = json!("agent audit hash-chain verification failed");
+            } else if summary
+                .pointer("/integrity/warnings")
+                .and_then(Value::as_array)
+                .is_some_and(|warnings| !warnings.is_empty())
+            {
+                base["status"] = json!("warn");
+                base["warning"] =
+                    json!("agent audit chain is valid but contains recovery warnings");
+            }
+            base["summary"] = summary;
         }
-        base["summary"] = s;
+        Err(error) => {
+            base["status"] = json!("fail");
+            base["error"] = json!(format!("agent audit verification failed: {error}"));
+        }
     }
     base
 }

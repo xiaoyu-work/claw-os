@@ -20,8 +20,12 @@
 //! - `checkpoints [--session SID]` — list every
 //!   `pre_tool_checkpoint` event so an operator can see when /
 //!   which tool / what checkpoint id / success or error.
-//! - `clear [--force]` — remove the audit log. Refuses without
-//!   `--force` to avoid accidents.
+//! - `verify` — verify the hash chain and recursively validate linked
+//!   archives.
+//! - `clear [--force]` — archive the current log and start a new chain.
+//!   Refuses without `--force` to avoid accidents.
+//! - `quarantine [--force]` — explicitly acknowledge an invalid chain,
+//!   preserve it in a hash-anchored archive, and establish a new chain root.
 //! - `path` — print the resolved audit log path. Useful for
 //!   shell scripting without depending on platform-specific
 //!   defaults.
@@ -31,17 +35,17 @@
 //!
 //! ## Read semantics
 //!
-//! The log is append-only JSONL. Lines that fail to parse as JSON
-//! objects are silently skipped (so a half-flushed last line during
-//! a live tail can't break the query). All filters operate on the
-//! parsed object; an event missing a queried field simply doesn't
-//! match.
+//! Query commands skip malformed lines so a live tail remains usable.
+//! `verify` is strict: malformed JSON, sequence gaps, hash mismatches,
+//! archive changes, and broken archive links all fail integrity.
 
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
+
+const SUMMARY_VERIFY_LIMIT_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Top-level dispatcher for `cos agent audit <subcmd>`.
 pub fn audit_cmd(args: &[String]) -> Result<Value, String> {
@@ -52,12 +56,14 @@ pub fn audit_cmd(args: &[String]) -> Result<Value, String> {
         "summary" => cmd_summary(rest),
         "cache-stats" | "cache_stats" => cmd_cache_stats(rest),
         "checkpoints" => cmd_checkpoints(rest),
+        "verify" => cmd_verify(rest),
         "clear" => cmd_clear(rest),
+        "quarantine" => cmd_quarantine(rest),
         "path" => Ok(json!({
             "path": resolve_path(rest)?.display().to_string(),
         })),
         other => Err(format!(
-            "unknown audit subcommand: {other}. try: tail | summary | cache-stats | checkpoints | clear | path"
+            "unknown audit subcommand: {other}. try: tail | summary | cache-stats | checkpoints | verify | clear | quarantine | path"
         )),
     }
 }
@@ -92,17 +98,16 @@ fn cmd_tail(args: &[String]) -> Result<Value, String> {
 fn cmd_summary(args: &[String]) -> Result<Value, String> {
     let path = resolve_path(args)?;
     let session = parse_string_opt(args, "--session");
-    let events = read_events(&path)?;
     let mut total = 0u64;
     let mut by_kind: std::collections::BTreeMap<String, u64> = Default::default();
     let mut sessions: std::collections::BTreeSet<String> = Default::default();
     let mut first_ts: Option<String> = None;
     let mut last_ts: Option<String> = None;
 
-    for e in events
-        .iter()
-        .filter(|e| match_session(e, session.as_deref()))
-    {
+    scan_events(&path, |e| {
+        if !match_session(e, session.as_deref()) {
+            return;
+        }
         total += 1;
         let kind = e
             .get("kind")
@@ -119,7 +124,18 @@ fn cmd_summary(args: &[String]) -> Result<Value, String> {
             }
             last_ts = Some(t.to_string());
         }
-    }
+    })?;
+    let chain_bytes = crate::audit::hash_chain_storage_bytes(&path)?;
+    let integrity = if chain_bytes > SUMMARY_VERIFY_LIMIT_BYTES {
+        json!({
+            "status": "skipped",
+            "reason": "log plus linked archives exceed automatic verification limit",
+            "bytes": chain_bytes,
+            "limit_bytes": SUMMARY_VERIFY_LIMIT_BYTES,
+        })
+    } else {
+        crate::audit::verify_hash_chain(&path)?
+    };
     Ok(json!({
         "path": path.display().to_string(),
         "session_filter": session,
@@ -128,6 +144,7 @@ fn cmd_summary(args: &[String]) -> Result<Value, String> {
         "sessions": sessions.len(),
         "first_timestamp": first_ts,
         "last_timestamp": last_ts,
+        "integrity": integrity,
     }))
 }
 
@@ -282,18 +299,26 @@ fn cmd_clear(args: &[String]) -> Result<Value, String> {
             path.display()
         ));
     }
-    if !path.exists() {
-        return Ok(json!({
-            "path": path.display().to_string(),
-            "cleared": false,
-            "reason": "file does not exist",
-        }));
+    crate::audit::archive_hash_chain(&path)
+}
+
+fn cmd_verify(args: &[String]) -> Result<Value, String> {
+    let path = resolve_path(args)?;
+    crate::audit::verify_hash_chain(&path)
+}
+
+fn cmd_quarantine(args: &[String]) -> Result<Value, String> {
+    let path = resolve_path(args)?;
+    let force = args
+        .iter()
+        .any(|argument| argument == "--force" || argument == "-f");
+    if !force {
+        return Err(format!(
+            "refusing to quarantine {} without --force",
+            path.display()
+        ));
     }
-    fs::remove_file(&path).map_err(|e| format!("failed to remove {}: {e}", path.display()))?;
-    Ok(json!({
-        "path": path.display().to_string(),
-        "cleared": true,
-    }))
+    crate::audit::quarantine_hash_chain(&path)
 }
 
 // ---------------------------------------------------------------------------
@@ -352,6 +377,7 @@ fn read_events(path: &Path) -> Result<Vec<Value>, String> {
     if !path.exists() {
         return Ok(Vec::new());
     }
+
     let f = fs::File::open(path).map_err(|e| format!("failed to open {}: {e}", path.display()))?;
     let reader = BufReader::new(f);
     let mut out = Vec::new();
@@ -367,6 +393,31 @@ fn read_events(path: &Path) -> Result<Vec<Value>, String> {
         }
     }
     Ok(out)
+}
+
+fn scan_events<F>(path: &Path, mut visitor: F) -> Result<(), String>
+where
+    F: FnMut(&Value),
+{
+    if !path.exists() {
+        return Ok(());
+    }
+    let file = fs::File::open(path)
+        .map_err(|error| format!("failed to open {}: {error}", path.display()))?;
+    let reader = BufReader::new(file);
+    for line in reader.lines() {
+        let line = line.map_err(|error| format!("read {}: {error}", path.display()))?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+            if value.is_object() {
+                visitor(&value);
+            }
+        }
+    }
+    Ok(())
 }
 
 // =====================================================================
@@ -769,11 +820,15 @@ mod tests {
     }
 
     #[test]
-    fn clear_with_force_removes_file() {
+    fn clear_with_force_archives_and_restarts_chain() {
         let (_d, p) = fixture(&[ev("pre_turn", "s1", 0, json!({}))]);
         let v = audit_cmd(&argv_with_path(&p, &["clear", "--force"])).unwrap();
         assert_eq!(v["cleared"], json!(true));
-        assert!(!p.exists());
+        assert_eq!(v["archived"], json!(true));
+        assert!(p.exists(), "a new archive-anchor chain should exist");
+        assert!(Path::new(v["archive_path"].as_str().unwrap()).exists());
+        let verified = audit_cmd(&argv_with_path(&p, &["verify"])).unwrap();
+        assert_eq!(verified["valid"], json!(true));
     }
 
     #[test]
@@ -782,5 +837,109 @@ mod tests {
         let p = dir.path().join("does-not-exist.jsonl");
         let v = audit_cmd(&argv_with_path(&p, &["clear", "--force"])).unwrap();
         assert_eq!(v["cleared"], json!(false));
+    }
+
+    // ---- verify ----
+
+    #[test]
+    fn verify_accepts_hash_chained_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent.jsonl");
+        crate::audit::log_chained_event(&path, ev("pre_turn", "s1", 1, json!({})));
+        crate::audit::log_chained_event(&path, ev("post_turn", "s1", 1, json!({})));
+        let value = audit_cmd(&argv_with_path(&path, &["verify"])).unwrap();
+        assert_eq!(value["valid"], json!(true));
+        assert_eq!(value["events"], json!(2));
+        assert!(value["last_hash"]
+            .as_str()
+            .is_some_and(|hash| hash.len() == 64));
+    }
+
+    #[test]
+    fn verify_detects_tampered_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent.jsonl");
+        crate::audit::log_chained_event(&path, ev("pre_turn", "s1", 1, json!({})));
+        crate::audit::log_chained_event(&path, ev("post_turn", "s1", 1, json!({})));
+        let body = fs::read_to_string(&path).unwrap();
+        fs::write(&path, body.replacen("\"pre_turn\"", "\"pre_tool\"", 1)).unwrap();
+        let value = audit_cmd(&argv_with_path(&path, &["verify"])).unwrap();
+        assert_eq!(value["valid"], json!(false));
+        assert!(!value["errors"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn verify_follows_multiple_archive_generations() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent.jsonl");
+        crate::audit::log_chained_event(&path, ev("pre_turn", "s1", 1, json!({})));
+        audit_cmd(&argv_with_path(&path, &["clear", "--force"])).unwrap();
+        crate::audit::log_chained_event(&path, ev("post_turn", "s1", 1, json!({})));
+        audit_cmd(&argv_with_path(&path, &["clear", "--force"])).unwrap();
+        let value = audit_cmd(&argv_with_path(&path, &["verify"])).unwrap();
+        assert_eq!(value["valid"], json!(true));
+        assert_eq!(value["archives"].as_array().unwrap().len(), 1);
+        assert!(value["archives"][0]["chain"]["archives"]
+            .as_array()
+            .is_some_and(|archives| !archives.is_empty()));
+    }
+
+    #[test]
+    fn verify_rejects_empty_log_with_stale_head() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent.jsonl");
+        fs::write(&path, "").unwrap();
+        fs::write(
+            path.with_file_name("agent.jsonl.head"),
+            r#"{"chain_version":1,"chain_id":"00000000000000000000000000000000","sequence":1,"this_hash":"0000000000000000000000000000000000000000000000000000000000000000"}"#,
+        )
+        .unwrap();
+        let value = audit_cmd(&argv_with_path(&path, &["verify"])).unwrap();
+        assert_eq!(value["valid"], json!(false));
+    }
+
+    #[test]
+    fn verify_reports_legacy_log_without_tamper_failure() {
+        let (_dir, path) = fixture(&[ev("pre_turn", "s1", 1, json!({}))]);
+        let value = audit_cmd(&argv_with_path(&path, &["verify"])).unwrap();
+        assert_eq!(value["legacy"], json!(true));
+        assert_eq!(value["status"], json!("legacy"));
+    }
+
+    #[test]
+    fn append_recovers_hash_anchored_torn_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent.jsonl");
+        crate::audit::log_chained_event(&path, ev("pre_turn", "s1", 1, json!({})));
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(file, "{{").unwrap();
+        crate::audit::log_chained_event(&path, ev("post_turn", "s1", 1, json!({})));
+        let value = audit_cmd(&argv_with_path(&path, &["verify"])).unwrap();
+        assert_eq!(value["valid"], json!(true));
+        assert_eq!(value["archives"][0]["kind"], json!("torn-tail"));
+    }
+
+    #[test]
+    fn quarantine_acknowledges_invalid_history_without_deleting_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent.jsonl");
+        crate::audit::log_chained_event(&path, ev("pre_turn", "s1", 1, json!({})));
+        let body = fs::read_to_string(&path).unwrap();
+        fs::write(&path, body.replace("\"pre_turn\"", "\"pre_tool\"")).unwrap();
+        let quarantined = audit_cmd(&argv_with_path(&path, &["quarantine", "--force"])).unwrap();
+        assert_eq!(quarantined["quarantined"], json!(true));
+        let value = audit_cmd(&argv_with_path(&path, &["verify"])).unwrap();
+        assert_eq!(value["valid"], json!(true));
+        assert_eq!(value["archives"][0]["kind"], json!("quarantined-invalid"));
+        assert!(!value["warnings"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn quarantine_refuses_valid_chain() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent.jsonl");
+        crate::audit::log_chained_event(&path, ev("pre_turn", "s1", 1, json!({})));
+        let error = audit_cmd(&argv_with_path(&path, &["quarantine", "--force"])).unwrap_err();
+        assert!(error.contains("only for an invalid"));
     }
 }
