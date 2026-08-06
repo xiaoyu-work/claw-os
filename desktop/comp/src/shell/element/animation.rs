@@ -61,12 +61,14 @@ impl WindowAnimation {
     /// 1.0, snappy underdamped spring (matches the workspace-switch
     /// spring the rest of the compositor uses).
     pub fn open(now: Instant) -> Self {
-        // Damping ratio 0.85 → very mild overshoot, characteristic
-        // "snap" of macOS Lion-era window animations. Stiffness 800
-        // ≈ 250ms total run time at our 1.0 mass — fast enough that
-        // a fast-moving user can't perceive the animation as making
-        // them wait.
-        let params = SpringParams::new(0.85, 800.0, 0.0001);
+        // Opening and closing are different gestures and do not share a
+        // curve. A window that is arriving should decelerate into place, and
+        // a small overshoot is what reads as landing rather than stopping
+        // dead; damping 0.72 peaks about 3.8% past the target around 160ms.
+        //
+        // Stiffness 800 at our 1.0 mass keeps the whole run near 250ms, fast
+        // enough that a quick user does not perceive it as waiting.
+        let params = SpringParams::new(0.72, 800.0, 0.0001);
         let spring = Spring {
             from: 0.0,
             to: 1.0,
@@ -95,7 +97,10 @@ impl WindowAnimation {
     /// Visuals: scale 1.0 → 0.80 (clearly visible shrink toward the
     /// window centre, à la macOS), alpha 1.0 → 0.0, ~220 ms.
     pub fn close(now: Instant) -> Self {
-        let params = SpringParams::new(0.85, 800.0, 0.0001);
+        // Critically damped, unlike the open curve. A closing window is
+        // leaving, so there is nothing for it to settle onto; an overshoot on
+        // the way out reads as hesitation.
+        let params = SpringParams::new(1.0, 800.0, 0.0001);
         let spring = Spring {
             from: 0.0,
             to: 1.0,
@@ -116,11 +121,20 @@ impl WindowAnimation {
         }
     }
 
-    /// Animation progress in [0.0, 1.0]. Reaches 1.0 at `started +
-    /// duration`; the caller is expected to clear the animation
-    /// (and, for the open case, leave the window at its final
-    /// scale+alpha) once `is_done` returns true.
+    /// Animation progress, clamped to [0.0, 1.0].
+    ///
+    /// Use this for anything that must stay inside a valid range, such as
+    /// alpha. [`Self::overshooting_progress`] keeps the spring's overshoot for
+    /// the geometry, where exceeding the target is the whole point.
     pub fn progress(&self, now: Instant) -> f64 {
+        self.overshooting_progress(now).clamp(0.0, 1.0)
+    }
+
+    /// Progress including the spring's overshoot past 1.0.
+    ///
+    /// Bounded well above any value an underdamped spring in this range can
+    /// reach, purely so a bad config cannot scale a window off the screen.
+    pub fn overshooting_progress(&self, now: Instant) -> f64 {
         if now <= self.started {
             return 0.0;
         }
@@ -136,12 +150,15 @@ impl WindowAnimation {
         let raw = self.spring.value_at(Duration::from_secs_f64(
             t * self.spring.duration().as_secs_f64(),
         ));
-        raw.clamp(0.0, 1.0)
+        raw.clamp(0.0, 1.25)
     }
 
     /// Current scale factor to wrap the surface in.
+    ///
+    /// Sampled with the overshoot intact: the open spring is underdamped, and
+    /// clamping here would discard the settle it exists to produce.
     pub fn scale_at(&self, now: Instant) -> f64 {
-        let p = self.progress(now);
+        let p = self.overshooting_progress(now);
         self.from_scale + (self.to_scale - self.from_scale) * p
     }
 
