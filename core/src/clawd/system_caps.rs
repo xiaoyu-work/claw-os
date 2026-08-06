@@ -40,6 +40,7 @@ pub fn readonly_task_caps() -> CapSet {
         "crash-doctor",
         "container-manager",
         "config-editor",
+        "clipboard-manager",
         "db",
         "desktop-manager",
         "doc",

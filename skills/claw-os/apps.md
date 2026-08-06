@@ -442,6 +442,25 @@ approved source with `O_NOFOLLOW` and passes that pinned file descriptor to
 use separate `observe`/`control` scopes. Cancellation is limited to jobs owned
 by the requesting CUPS username.
 
+## Clipboard Manager
+
+```bash
+cos app clipboard-manager status
+cos app clipboard-manager types
+cos app clipboard-manager read text/plain
+cos app clipboard-manager write /home/cos/note.txt text/plain
+cos app clipboard-manager clear --confirm
+```
+
+Clipboard contents are treated as sensitive: read/type operations require
+`clipboard.read:selection`, while write/clear require
+`clipboard.write:selection`. Source
+files are opened with `O_NOFOLLOW` and passed to `wl-copy` by descriptor.
+Binary reads return base64 and are capped at 4 MiB. The XDG Clipboard portal is
+reported in status when present, but that portal is defined for RemoteDesktop
+sessions; normal COSMIC desktop access uses the installed Wayland data-control
+`wl-clipboard` tools.
+
 ## Package Management
 
 ```bash

@@ -6,6 +6,7 @@ pub mod backup;
 pub mod bluetooth;
 pub mod client;
 pub mod client_identity;
+pub mod clipboard;
 pub mod config;
 pub mod config_editor;
 pub mod context;

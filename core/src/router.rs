@@ -908,6 +908,56 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__clipboard" {
+        let action = args
+            .get(1)
+            .ok_or_else(|| "internal clipboard command required".to_string())?;
+        let session = env::var("COS_SESSION")
+            .map_err(|_| "internal clipboard command requires COS_SESSION".to_string())?;
+        let mut mime = None;
+        let mut source = None;
+        let mut primary = false;
+        let mut confirm = false;
+        let mut index = 2;
+        while index < args.len() {
+            match args[index].as_str() {
+                "--primary" if !primary => {
+                    primary = true;
+                    index += 1;
+                }
+                "--confirm" if !confirm => {
+                    confirm = true;
+                    index += 1;
+                }
+                "--mime" | "--source" => {
+                    let value = args
+                        .get(index + 1)
+                        .ok_or_else(|| format!("{} requires a value", args[index]))?
+                        .clone();
+                    if args[index] == "--mime" {
+                        mime = Some(value);
+                    } else {
+                        source = Some(value);
+                    }
+                    index += 2;
+                }
+                other => return Err(format!("unknown internal clipboard flag: {other}")),
+            }
+        }
+        let value = request_clawd(
+            "system.clipboard.control",
+            json!({
+                "session": session,
+                "action": action,
+                "mime": mime,
+                "source": source,
+                "primary": primary,
+                "confirm": confirm,
+            }),
+        )?;
+        return Ok(Some(value.to_string()));
+    }
+
     // "app" namespace → route to Python apps
     if name == "app" {
         return dispatch_app(&args[1..]);
