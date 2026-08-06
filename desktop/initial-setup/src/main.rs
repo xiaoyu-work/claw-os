@@ -776,10 +776,10 @@ fn glass_card_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
         border: Border {
             radius: cosmic.radius_l().into(),
             width: 1.0,
-            color: cosmic.accent_color().with_alpha(0.25).into(),
+            color: cosmic.on_bg_color().with_alpha(0.12).into(),
         },
         shadow: Shadow {
-            color: Color { r: 0.0, g: 0.02, b: 0.10, a: 0.30 },
+            color: Color { r: 0.0, g: 0.0, b: 0.0, a: 0.28 },
             offset: cosmic::iced::Vector { x: 0.0, y: 8.0 },
             blur_radius: 32.0,
         },

@@ -19,9 +19,13 @@ use cosmic::{
     theme,
 };
 
-/// Faint blue-tinted translucent hairline derived from the brand accent.
-fn accent_hairline(theme: &cosmic::Theme, alpha: f32) -> Color {
-    let mut color: Color = theme.cosmic().accent_color().into();
+/// Neutral hairline for glass chrome.
+///
+/// `on_bg_color` resolves near-black on a light theme and near-white on a dark
+/// one, so a single low-alpha expression edges a surface in either without
+/// tinting it.
+fn hairline(theme: &cosmic::Theme, alpha: f32) -> Color {
+    let mut color: Color = theme.cosmic().on_bg_color().into();
     color.a = alpha;
     color
 }
@@ -41,7 +45,7 @@ pub fn card_class() -> theme::Container<'static> {
         container_style(
             background,
             component.on.into(),
-            accent_hairline(theme, 0.10),
+            hairline(theme, 0.08),
             cosmic.corner_radii.radius_l,
             Shadow {
                 color: Color::from_rgba(0.0, 0.0, 0.0, 0.10),
@@ -52,21 +56,24 @@ pub fn card_class() -> theme::Container<'static> {
     })
 }
 
-/// Accent-tinted featured hero: a brand-blue frosted spotlight surface used for
-/// the Explore featured banner and the app-detail header. Reads as a glass card
-/// carrying a faint Claw-blue cast with a slightly stronger accent hairline.
+/// Featured hero: the frosted spotlight surface behind the Explore banner and
+/// the app-detail header.
+///
+/// A featured banner is editorial emphasis, not state, so it does not wear the
+/// brand colour. It separates from the page by sitting slightly darker with a
+/// firmer edge and a deeper shadow.
 pub fn hero_class() -> theme::Container<'static> {
     theme::Container::custom(|theme| {
         let cosmic = theme.cosmic();
         let container = theme.current_container();
 
-        let mut background: Color = cosmic.accent_color().into();
-        background.a = 0.12;
+        let mut background: Color = cosmic.on_bg_color().into();
+        background.a = 0.05;
 
         container_style(
             background,
             container.on.into(),
-            accent_hairline(theme, 0.22),
+            hairline(theme, 0.14),
             cosmic.corner_radii.radius_l,
             Shadow {
                 color: Color::from_rgba(0.0, 0.0, 0.0, 0.10),
@@ -91,7 +98,7 @@ pub fn screenshot_class() -> theme::Container<'static> {
         container_style(
             background,
             component.on.into(),
-            accent_hairline(theme, 0.12),
+            hairline(theme, 0.09),
             cosmic.corner_radii.radius_l,
             Shadow {
                 color: Color::from_rgba(0.0, 0.0, 0.0, 0.08),

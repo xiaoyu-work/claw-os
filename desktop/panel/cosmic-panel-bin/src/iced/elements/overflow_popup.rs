@@ -78,7 +78,7 @@ impl Program for OverflowPopup {
                             color: hairline,
                         },
                         shadow: Shadow {
-                            color: Color::from_rgba(0.0, 0.02, 0.10, shadow_alpha),
+                            color: Color::from_rgba(0.0, 0.0, 0.0, shadow_alpha),
                             offset: cosmic::iced::Vector::new(0.0, 6.0),
                             blur_radius: 24.0,
                         },

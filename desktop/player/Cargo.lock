@@ -1059,6 +1059,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cos-mcp-serve"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "cosmic-client-toolkit"
 version = "0.2.0"
 source = "git+https://github.com/pop-os/cosmic-protocols?rev=160b086#160b086abe03cd34a8a375d7fbe47b24308d1f38"
@@ -1120,7 +1131,9 @@ name = "cosmic-player"
 version = "1.0.13"
 dependencies = [
  "ashpd 0.12.3",
+ "async-trait",
  "clap_lex",
+ "cos-mcp-serve",
  "env_logger",
  "fork",
  "gstreamer-tag",
@@ -1135,11 +1148,13 @@ dependencies = [
  "mpris-server",
  "rust-embed",
  "serde",
+ "serde_json",
  "tempfile",
  "tokio",
  "url",
  "vergen",
  "xdgen",
+ "zbus",
 ]
 
 [[package]]

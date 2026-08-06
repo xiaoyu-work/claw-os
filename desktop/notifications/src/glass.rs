@@ -20,10 +20,15 @@ use cosmic::{
     theme,
 };
 
-/// Faint blue-tinted translucent hairline derived from the brand accent.
-fn accent_hairline(theme: &cosmic::Theme, alpha: f32) -> Color {
-    let mut color: Color = theme.cosmic().accent_color().into();
-    color.a = alpha;
+/// Neutral hairline for glass chrome.
+///
+/// `on_bg_color` is near-black on a light theme and near-white on a dark one,
+/// so a low alpha of it separates the card from the wallpaper in both without
+/// tinting the glass.
+fn hairline(theme: &cosmic::Theme) -> Color {
+    let cosmic = theme.cosmic();
+    let mut color: Color = cosmic.on_bg_color().into();
+    color.a = if cosmic.is_dark { 0.15 } else { 0.09 };
     color
 }
 
@@ -34,9 +39,8 @@ pub fn card_class() -> theme::Container<'static> {
     theme::Container::custom(|theme| {
         let cosmic = theme.cosmic();
 
-        // Blue-tinted glass: translucent component surface so the compositor's
-        // blur reads through. bg_component_color is the spec-recommended toast
-        // fill; keep it bright (never gray/charcoal).
+        // Translucent component surface so the compositor's blur reads
+        // through. bg_component_color is the spec-recommended toast fill.
         let mut background: Color = cosmic.bg_component_color().into();
         background.a = 0.60;
 
@@ -49,7 +53,7 @@ pub fn card_class() -> theme::Container<'static> {
             border: Border {
                 radius: cosmic.radius_l().into(),
                 width: 1.0,
-                color: accent_hairline(theme, 0.20),
+                color: hairline(theme),
             },
             shadow: Shadow {
                 color: Color::from_rgba(0.0, 0.0, 0.0, 0.18),

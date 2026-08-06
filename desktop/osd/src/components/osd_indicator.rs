@@ -343,16 +343,23 @@ impl State {
         .align_y(Alignment::Center)
         .class(cosmic::theme::Container::custom(move |theme| {
             let cosmic = theme.cosmic();
-            // Claw Glass: frosted translucent surface (never flat gray) with a
-            // 1px brand-blue translucent hairline. Depth comes from the
-            // compositor blur + the blue accent progress bar, not heavy chrome.
+            // Frosted surface with a neutral hairline. Depth comes from the
+            // compositor blur and the accent progress bar, not heavy chrome.
+            //
+            // The fill has to carry its own alpha: bg_component_color is
+            // opaque, so taking it as-is would paint a solid slab over the
+            // blur this surface is positioned to sit on.
+            let mut fill = iced::Color::from(cosmic.bg_component_color());
+            fill.a = if cosmic.is_dark { 0.72 } else { 0.80 };
+            let mut edge = iced::Color::from(cosmic.on_bg_color());
+            edge.a = if cosmic.is_dark { 0.15 } else { 0.09 };
             widget::container::Style {
                 text_color: Some(cosmic.on_bg_color().into()),
-                background: Some(iced::Color::from(cosmic.bg_component_color()).into()),
+                background: Some(fill.into()),
                 border: Border {
                     radius: radius.into(),
                     width: 1.0,
-                    color: cosmic.accent_color().with_alpha(0.20).into(),
+                    color: edge,
                 },
                 shadow: Default::default(),
                 icon_color: Some(cosmic.on_bg_color().into()),

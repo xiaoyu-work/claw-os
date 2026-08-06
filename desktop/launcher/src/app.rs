@@ -656,7 +656,7 @@ impl CosmicLauncher {
                     );
                     style.border_radius = cosmic.corner_radii.radius_xl.into();
                     if !selected {
-                        style.background = Some(cosmic.accent_color().with_alpha(0.08).into());
+                        style.background = Some(cosmic.on_bg_color().with_alpha(0.05).into());
                     }
                     style
                 }),
@@ -674,7 +674,7 @@ impl CosmicLauncher {
                     );
                     style.border_radius = cosmic.corner_radii.radius_xl.into();
                     if !selected {
-                        style.background = Some(cosmic.accent_color().with_alpha(0.14).into());
+                        style.background = Some(cosmic.on_bg_color().with_alpha(0.09).into());
                     }
                     style
                 }),
@@ -1962,12 +1962,15 @@ impl cosmic::Application for CosmicLauncher {
                                     focused,
                                     &Button::Text,
                                 );
-                                // Brand-blue translucent hover/selection fill —
-                                // slightly stronger when this row is the active
-                                // selection, fainter on plain hover.
-                                let alpha = if focused { 0.24 } else { 0.12 };
+                                // The focused row carries the accent; the rest
+                                // take a neutral hover fill, so the brand colour
+                                // marks one row rather than washing the list.
                                 text.background = Some(cosmic::iced::Background::Color(
-                                    cosmic.accent_color().with_alpha(alpha).into(),
+                                    if focused {
+                                        cosmic.accent_color().with_alpha(0.24).into()
+                                    } else {
+                                        cosmic.on_bg_color().with_alpha(0.07).into()
+                                    },
                                 ));
                                 button::Style {
                                     border_radius: rad_s.into(),

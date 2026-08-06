@@ -574,7 +574,7 @@ impl App {
                             border: Border {
                                 radius: cosmic.radius_l().into(),
                                 width: 1.0,
-                                color: cosmic.accent_color().with_alpha(0.20).into(),
+                                color: cosmic.on_bg_color().with_alpha(0.10).into(),
                             },
                             ..Default::default()
                         }

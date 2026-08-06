@@ -24,6 +24,17 @@ fn accent(theme: &Theme, alpha: f32) -> Color {
     color
 }
 
+/// Neutral hairline for glass chrome.
+///
+/// `on_bg_color` is near-black on a light theme and near-white on a dark one,
+/// so one low-alpha expression edges a surface correctly in both without
+/// tinting the glass it borders.
+fn hairline(theme: &Theme, alpha: f32) -> Color {
+    let mut color: Color = theme.cosmic().on_bg_color().into();
+    color.a = alpha;
+    color
+}
+
 fn depth_shadow(theme: &Theme, alpha: f32, y: f32, blur_radius: f32) -> Shadow {
     let alpha = if theme.cosmic().is_dark {
         alpha
@@ -31,7 +42,7 @@ fn depth_shadow(theme: &Theme, alpha: f32, y: f32, blur_radius: f32) -> Shadow {
         alpha * 0.45
     };
     Shadow {
-        color: Color::from_rgba(0.0, 0.02, 0.10, alpha),
+        color: Color::from_rgba(0.0, 0.0, 0.0, alpha),
         offset: Vector::new(0.0, y),
         blur_radius,
     }
@@ -70,7 +81,7 @@ pub fn content(theme: &Theme) -> container::Style {
             cosmic.is_frosted,
         ))),
         border: Border {
-            color: accent(theme, 0.08),
+            color: hairline(theme, 0.07),
             width: 1.0,
             radius: cosmic.radius_s().into(),
         },
@@ -90,7 +101,7 @@ pub fn navigation(theme: &Theme) -> container::Style {
             cosmic.is_frosted,
         ))),
         border: Border {
-            color: accent(theme, 0.16),
+            color: hairline(theme, 0.11),
             width: 1.0,
             radius: cosmic.radius_s().into(),
         },
@@ -110,7 +121,7 @@ pub fn path_bar(theme: &Theme) -> container::Style {
             cosmic.is_frosted,
         ))),
         border: Border {
-            color: accent(theme, 0.20),
+            color: hairline(theme, 0.12),
             width: 1.0,
             radius: cosmic.radius_l().into(),
         },
@@ -131,7 +142,7 @@ pub fn menu(theme: &Theme) -> container::Style {
             cosmic.is_frosted,
         ))),
         border: Border {
-            color: accent(theme, 0.20),
+            color: hairline(theme, 0.12),
             width: 1.0,
             radius: cosmic.radius_m().into(),
         },
@@ -151,7 +162,7 @@ pub fn dashboard_card(theme: &Theme) -> container::Style {
             cosmic.is_frosted,
         ))),
         border: Border {
-            color: accent(theme, 0.12),
+            color: hairline(theme, 0.09),
             width: 1.0,
             radius: cosmic.radius_l().into(),
         },
@@ -210,7 +221,7 @@ fn dashboard_button_style(
     style.text_color = Some(cosmic.on_bg_color().into());
     style.border_radius = cosmic.radius_l().into();
     style.border_width = 1.0;
-    style.border_color = accent(theme, border_alpha);
+    style.border_color = hairline(theme, border_alpha);
     style.shadow_offset = Vector::new(0.0, if shadow_alpha > 0.0 { 2.0 } else { 0.0 });
     if focused {
         style.outline_width = 1.0;

@@ -14,14 +14,16 @@ use cosmic::iced::{Background, Border, Color, Shadow, Vector};
 use cosmic::theme;
 use cosmic::widget::container;
 
-/// Mix the brand-blue accent into a hairline/border color at the given alpha,
-/// so separators read as cool glass rather than neutral gray.
-fn accent_hairline(theme: &theme::Theme, alpha: f32) -> Color {
-    let accent = theme.cosmic().accent.base;
+/// Neutral hairline for glass chrome at the given alpha.
+///
+/// `on_bg_color` is near-black on a light theme and near-white on a dark one,
+/// so one expression yields a correct edge in both without tinting the glass.
+fn hairline(theme: &theme::Theme, alpha: f32) -> Color {
+    let on = theme.cosmic().on_bg_color();
     Color {
-        r: accent.red,
-        g: accent.green,
-        b: accent.blue,
+        r: on.red,
+        g: on.green,
+        b: on.blue,
         a: alpha,
     }
 }
@@ -46,7 +48,7 @@ pub fn control_bar() -> theme::Container<'static> {
             border: Border {
                 radius: corners.radius_l.into(),
                 width: 1.0,
-                color: accent_hairline(theme, 0.16),
+                color: hairline(theme, 0.12),
             },
             shadow: Shadow {
                 color: Color {
@@ -80,7 +82,7 @@ pub fn now_playing_card() -> theme::Container<'static> {
             border: Border {
                 radius: corners.radius_l.into(),
                 width: 1.0,
-                color: accent_hairline(theme, 0.14),
+                color: hairline(theme, 0.10),
             },
             shadow: Shadow {
                 color: Color {
@@ -115,7 +117,7 @@ pub fn popover_card() -> theme::Container<'static> {
             border: Border {
                 radius: corners.radius_l.into(),
                 width: 1.0,
-                color: accent_hairline(theme, 0.18),
+                color: hairline(theme, 0.13),
             },
             shadow: Shadow {
                 color: Color {

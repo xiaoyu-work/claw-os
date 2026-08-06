@@ -460,13 +460,13 @@ fn glass_card(theme: &cosmic::Theme) -> container::Style {
         border: Border {
             radius: cosmic.radius_m().into(),
             width: 1.0,
-            color: cosmic.accent_color().with_alpha(0.16).into(),
+            color: cosmic.on_bg_color().with_alpha(0.10).into(),
         },
         shadow: Shadow {
             color: Color {
                 r: 0.0,
-                g: 0.03,
-                b: 0.12,
+                g: 0.0,
+                b: 0.0,
                 a: 0.12,
             },
             offset: Vector { x: 0.0, y: 3.0 },

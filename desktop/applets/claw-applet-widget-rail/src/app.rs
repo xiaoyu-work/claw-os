@@ -375,13 +375,13 @@ fn glass_card_style(theme: &cosmic::Theme) -> container::Style {
         border: Border {
             radius: cosmic.radius_l().into(),
             width: 1.0,
-            color: cosmic.accent_color().with_alpha(0.18).into(),
+            color: cosmic.on_bg_color().with_alpha(0.10).into(),
         },
         shadow: Shadow {
             color: Color {
                 r: 0.0,
-                g: 0.02,
-                b: 0.10,
+                g: 0.0,
+                b: 0.0,
                 a: if theme.theme_type.is_dark() {
                     0.30
                 } else {

@@ -55,3 +55,7 @@ mock-backend = []
 [profile.dev]
 # Not usable at opt-level 0, at least with software renderer
 opt-level = 1
+
+# Opt out of the repo-root workspace; this crate has its own dependency graph
+# and is built standalone by `desktop/justfile`.
+[workspace]

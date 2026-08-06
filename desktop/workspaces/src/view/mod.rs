@@ -228,9 +228,10 @@ fn workspace_item_appearance(
             cosmic.accent_color().with_alpha(0.12).into(),
         ));
     } else {
-        // Inactive cards carry a faint blue hairline, never a gray box.
+        // Inactive cards take a neutral hairline so the accent ring above is
+        // the only blue in the overview.
         appearance.border_width = 1.0;
-        appearance.border_color = cosmic.accent_color().with_alpha(0.20).into();
+        appearance.border_color = cosmic.on_bg_color().with_alpha(0.12).into();
     }
     if hovered {
         // Hover feedback is a brand-blue wash, never the gray `button.base`.
@@ -518,9 +519,9 @@ fn workspaces_sidebar<'a>(
                     border: Border {
                         // Large frosted radius for the floating overview bar.
                         radius: cosmic.radius_l().into(),
-                        // 1px brand-blue tinted hairline; depth comes from blur.
+                        // 1px neutral hairline; depth comes from the blur.
                         width: 1.0,
-                        color: cosmic.accent_color().with_alpha(0.20).into(),
+                        color: cosmic.on_bg_color().with_alpha(0.10).into(),
                     },
                     shadow: Shadow::default(),
                     snap: true,

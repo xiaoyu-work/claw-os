@@ -2567,10 +2567,10 @@ fn input_card_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
         border: Border {
             radius: cosmic.radius_l().into(),
             width: 1.0,
-            color: cosmic.accent_color().with_alpha(0.20).into(),
+            color: cosmic.on_bg_color().with_alpha(0.10).into(),
         },
         shadow: Shadow {
-            color: Color::from_rgba(0.0, 0.05, 0.18, 0.10),
+            color: Color::from_rgba(0.0, 0.0, 0.0, 0.10),
             offset: cosmic::iced::Vector::new(0.0, 2.0),
             blur_radius: 16.0,
         },
@@ -2608,7 +2608,7 @@ fn tool_card_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
         border: Border {
             radius: cosmic.radius_m().into(),
             width: 1.0,
-            color: cosmic.accent_color().with_alpha(0.20).into(),
+            color: cosmic.on_bg_color().with_alpha(0.10).into(),
         },
         shadow: Shadow::default(),
         icon_color: Some(cosmic.on_bg_color().into()),
