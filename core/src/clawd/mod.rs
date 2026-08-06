@@ -36,3 +36,4 @@ pub mod systemd;
 pub mod system_journal;
 pub mod tasks;
 pub mod transactions;
+pub mod users;

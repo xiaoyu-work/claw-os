@@ -15,7 +15,7 @@ use super::{
     app_sessions, audio, audit, backup, bluetooth, config_editor, containers, context,
     context_events, crash, desktop, event_center, firewall, hardware, memory, network, packages,
     permissions, power, scheduler, security, snapshots, storage, system_journal, systemd, tasks,
-    transactions,
+    transactions, users,
 };
 
 #[derive(Debug, Clone)]
@@ -235,6 +235,7 @@ async fn dispatch_result(
         "system.service.restore" => systemd::restore(request.params, client).await,
         "system.snapshot.control" => snapshots::control(request.params, client).await,
         "system.storage.control" => storage::control(request.params, client).await,
+        "system.users.control" => users::control(request.params, client).await,
         "scheduler.run" => scheduler::run(request.params, client).await,
         "app_session.register" => app_sessions::register(request.params, client).await,
         "app_session.register_native" => {
@@ -296,6 +297,7 @@ fn authorize_command(command: &str, client: &ClientIdentity) -> Result<(), Strin
             | "system.service.restore"
             | "system.snapshot.control"
             | "system.storage.control"
+            | "system.users.control"
             | "scheduler.run"
             | "app_session.register"
             | "app_session.register_native"

@@ -240,6 +240,14 @@ pub const CATALOG: &[CapMeta] = &[
         Risk::High,
     ),
     CapMeta::new(
+        Verb::SYS_IDENTITY,
+        ScopeKind::Name,
+        LocalizedStr::new("Manage local users and groups"),
+        LocalizedStr::new("Create, delete, lock, unlock, change passwords/shells, or edit local group membership."),
+        "👤",
+        Risk::Critical,
+    ),
+    CapMeta::new(
         Verb::SYS_SECURITY,
         ScopeKind::Name,
         LocalizedStr::new("Inspect sensitive security state"),

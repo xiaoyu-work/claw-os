@@ -88,6 +88,7 @@ Permission roles and app capability gates are documented in [permissions.md](per
 | `systemd` | Native system service status and lifecycle control |
 | `system-snapshot` | Snapper, Btrfs, or LVM full-system recovery points |
 | `storage-manager` | UDisks2 mount/eject, SMART, and filesystem health |
+| `user-manager` | Local users, groups, passwords, shells, membership, and rollback |
 
 ## Discovery
 

@@ -61,6 +61,7 @@ pub fn readonly_task_caps() -> CapSet {
         "summarize",
         "systemd",
         "system-snapshot",
+        "user-manager",
         "web",
     ] {
         caps.insert(Cap::new(Verb::AGENT_INVOKE, Scope::name(app)));

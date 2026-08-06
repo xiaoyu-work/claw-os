@@ -792,6 +792,64 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__users" {
+        let action = args
+            .get(1)
+            .ok_or_else(|| "internal user command required".to_string())?;
+        let session = env::var("COS_SESSION")
+            .map_err(|_| "internal user command requires COS_SESSION".to_string())?;
+        let mut user = None;
+        let mut group = None;
+        let mut full_name = None;
+        let mut shell = None;
+        let mut groups = None;
+        let mut credential = None;
+        let mut token = None;
+        let mut confirm = false;
+        let mut index = 2;
+        while index < args.len() {
+            if args[index] == "--confirm" {
+                if confirm {
+                    return Err("duplicate internal user --confirm".to_string());
+                }
+                confirm = true;
+                index += 1;
+                continue;
+            }
+            let value = args
+                .get(index + 1)
+                .ok_or_else(|| format!("{} requires a value", args[index]))?
+                .clone();
+            match args[index].as_str() {
+                "--user" => user = Some(value),
+                "--group" => group = Some(value),
+                "--full-name" => full_name = Some(value),
+                "--shell" => shell = Some(value),
+                "--groups" => groups = Some(value),
+                "--credential" => credential = Some(value),
+                "--token" => token = Some(value),
+                other => return Err(format!("unknown internal user flag: {other}")),
+            }
+            index += 2;
+        }
+        let value = request_clawd(
+            "system.users.control",
+            json!({
+                "session": session,
+                "action": action,
+                "user": user,
+                "group": group,
+                "full_name": full_name,
+                "shell": shell,
+                "groups": groups,
+                "credential": credential,
+                "token": token,
+                "confirm": confirm,
+            }),
+        )?;
+        return Ok(Some(value.to_string()));
+    }
+
     // "app" namespace → route to Python apps
     if name == "app" {
         return dispatch_app(&args[1..]);

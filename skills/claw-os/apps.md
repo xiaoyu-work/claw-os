@@ -405,6 +405,26 @@ persists a previous-state token; failed persistence rolls live rules back, and
 manual restore requires the exact current revision. clawd reapplies persisted
 managed rules after reboot. Mutations require `net.firewall:manage`.
 
+## User Manager
+
+```bash
+cos app user-manager status
+cos app user-manager create-user alice --full-name "Alice" --groups sudo
+cos app user-manager set-password alice default/alice-password
+cos app user-manager add-to-group alice docker
+cos app user-manager lock-user alice
+cos app user-manager delete-user alice --confirm
+cos app user-manager restore <backup-token> --confirm
+```
+
+User Manager only mutates regular UID/GID ranges and refuses root/system
+accounts. Password plaintext is loaded through exact `secret.read` and sent to
+`chpasswd` over stdin. Every command writes a private durable snapshot before
+mutation and records the applied fingerprint afterward; restore refuses newer
+changes. User deletion never removes the home directory and is refused while
+the account owns live processes. Private primary groups, shadow aging, shells,
+UID/GID, and supplementary memberships are included in rollback.
+
 ## Package Management
 
 ```bash
