@@ -55,6 +55,7 @@ regex = "1"
 bytes = "1"
 crc32fast = "1"
 cosmic-client-toolkit = { path = "../desktop/protocols/client-toolkit", default-features = false }
+zbus = { version = "=5.5.0", default-features = false, features = ["blocking-api", "tokio"] }
 
 # Phase 7 (skill bundle signatures): ed25519 verification for skill
 # manifests so a `Vendor`/`Hub` install can be authenticated against a

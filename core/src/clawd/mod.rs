@@ -23,6 +23,7 @@ pub mod event_center;
 pub mod firewall;
 pub mod hardware;
 pub mod heartbeat;
+pub mod location;
 pub mod memory;
 pub mod network;
 pub mod packages;

@@ -629,8 +629,8 @@ pub const CATALOG: &[CapMeta] = &[
     CapMeta::new(
         Verb::DEVICE_LOCATION,
         ScopeKind::None,
-        LocalizedStr::new("Get your location"),
-        LocalizedStr::new("Read your approximate geographic location."),
+        LocalizedStr::new("Read your location"),
+        LocalizedStr::new("Request geographic coordinates from GeoClue and derive timezone suggestions."),
         "📍",
         Risk::High,
     ),

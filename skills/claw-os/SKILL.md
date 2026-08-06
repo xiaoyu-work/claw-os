@@ -84,6 +84,7 @@ Permission roles and app capability gates are documented in [permissions.md](per
 | `net` | HTTP client |
 | `kv` | Key-value store |
 | `log` | Audit log search |
+| `location-manager` | GeoClue coordinates and offline timezone suggestions |
 | `netdiag` | Link, route, DNS, TCP reachability, and latency diagnosis |
 | `network-manager` | Wi-Fi, VPN, and NetworkManager radio control |
 | `notify` | Notifications |

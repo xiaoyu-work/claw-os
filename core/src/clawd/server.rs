@@ -14,7 +14,7 @@ use super::state::DaemonState;
 use super::{
     accessibility, app_sessions, audio, audit, backup, bluetooth, camera, clipboard, config_editor,
     containers, context, context_events, crash, desktop, display, event_center, firewall, hardware,
-    memory, network, packages, permissions, power, printer, scheduler, security, snapshots,
+    location, memory, network, packages, permissions, power, printer, scheduler, security, snapshots,
     storage, system_journal, systemd, tasks, transactions, usb_guard, users,
 };
 
@@ -232,6 +232,7 @@ async fn dispatch_result(
         "system.events.control" => event_center::control(request.params, client).await,
         "system.firewall.control" => firewall::control(request.params, client).await,
         "system.hardware.inspect" => hardware::inspect(request.params, client).await,
+        "system.location.query" => location::query(request.params, client).await,
         "system.network.control" => network::control(request.params, client).await,
         "system.package.install" => packages::install(request.params, client).await,
         "system.package.control" => packages::control(request.params, client).await,
@@ -300,6 +301,7 @@ fn authorize_command(command: &str, client: &ClientIdentity) -> Result<(), Strin
             | "system.events.control"
             | "system.firewall.control"
             | "system.hardware.inspect"
+            | "system.location.query"
             | "system.network.control"
             | "system.package.install"
             | "system.package.control"
