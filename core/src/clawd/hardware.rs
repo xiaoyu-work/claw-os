@@ -2,7 +2,7 @@ use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 

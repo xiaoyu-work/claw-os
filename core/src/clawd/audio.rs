@@ -588,7 +588,9 @@ fn validate_action(action: &str, target: Option<&str>, value: Option<&str>) -> R
         "output-default" | "input-default" if value.is_none() => {
             parse_id(target.unwrap_or_default()).map(|_| ())
         }
-        "output-route" | "input-route" | "profile" => {
+        "output-route" | "input-route" | "profile"
+            if target.is_some() && value.is_some() =>
+        {
             parse_id(target.unwrap_or_default())?;
             parse_index(value.unwrap_or_default(), "index").map(|_| ())
         }
