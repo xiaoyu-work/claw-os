@@ -349,11 +349,11 @@ required_files=(
     "$DESKTOP_PACKAGE_ROOT/usr/share/icons/hicolor/scalable/apps/com.clawos.Player.svg"
     "$DESKTOP_PACKAGE_ROOT/usr/share/icons/hicolor/scalable/apps/com.clawos.Launcher.svg"
     "$DESKTOP_PACKAGE_ROOT/usr/share/icons/hicolor/scalable/apps/com.clawos.AppLibrary.svg"
-    # Icon theme — WhiteSur is installed via just install
-    # icons-whitesur-pkg/install in desktop/justfile. If it's missing
+    # Icon theme — Tela is installed via just install
+    # icons-tela-pkg/install in desktop/justfile. If it's missing
     # the toolkit light default falls back to hicolor and loses the
     # intended system glyph family.
-    "$DESKTOP_PACKAGE_ROOT/usr/share/icons/WhiteSur-light/index.theme"
+    "$DESKTOP_PACKAGE_ROOT/usr/share/icons/Tela-black-light/index.theme"
 )
 missing=0
 for f in "${required_files[@]}"; do
@@ -531,7 +531,7 @@ installed_required_files=(
     "$ROOTFS/usr/share/icons/hicolor/scalable/apps/com.clawos.Launcher.svg"
     "$ROOTFS/usr/share/icons/hicolor/scalable/apps/com.clawos.AppLibrary.svg"
     "$ROOTFS/usr/share/icons/hicolor/scalable/apps/clawos-agent.svg"
-    "$ROOTFS/usr/share/icons/WhiteSur-light/index.theme"
+    "$ROOTFS/usr/share/icons/Tela-black-light/index.theme"
     "$ROOTFS/etc/greetd/cosmic-greeter.toml"
     "$ROOTFS/lib/systemd/system/cosmic-greeter.service"
 )

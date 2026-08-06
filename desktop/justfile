@@ -39,7 +39,7 @@ install rootdir="" prefix="/usr/local": build
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} files/install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} greeter/install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} icons/install
-    {{ just }} rootdir={{rootdir}} prefix={{prefix}} icons-whitesur-pkg/install
+    {{ just }} rootdir={{rootdir}} prefix={{prefix}} icons-tela-pkg/install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} idle/install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} initial-setup/install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} launcher/install

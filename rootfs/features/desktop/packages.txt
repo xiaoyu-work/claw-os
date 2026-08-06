@@ -139,10 +139,11 @@ libclang-dev
 # used by cos-term, cos-edit and any libcosmic monospace context.
 # Noto Sans CJK provides Chinese/Japanese/Korean fallback;
 # Noto Color Emoji handles emoji.
-# WhiteSur is installed by desktop/justfile (icons-whitesur-pkg/install)
-# and selected as default via the toolkit's default icon_theme = "WhiteSur-dark".
+# Tela (black variant, folders #4d4d4d) is installed by desktop/justfile
+# (icons-tela-pkg/install) and selected as default via the toolkit's default
+# icon_theme = "Tela-black-light".
 # adwaita-icon-theme remains as the safety-net fallback for any icon name
-# WhiteSur does not provide.
+# Tela does not provide.
 fonts-inter
 fonts-jetbrains-mono
 fonts-noto-core

@@ -1,0 +1,39 @@
+set export
+
+# Wraps upstream Tela-icon-theme install.sh into our packaging layout.
+# Source tree lives at ../icons-tela (vendored copy of
+# vinceliuice/Tela-icon-theme; exact SHA in ../icons-tela/UPSTREAM_COMMIT).
+#
+# We install only the `black` colour variant, whose folders are #4d4d4d. That
+# is the neutral end of Tela's palette and sits with the first-party icons,
+# which are ink #1F1F20 over a grey ramp. Brand blue is reserved for selection
+# state, so a blue folder would compete with the one thing it has to mark.
+#
+# Installing one variant rather than all fifteen also keeps the package small.
+# Folders and symbolic actions are inherited by `cosmic-icons` through
+# `Inherits=Tela-black,...` in ../icons/index.theme.
+
+rootdir := ''
+prefix := '/usr'
+base-dir := absolute_path(clean(rootdir / prefix))
+icons-dir := base-dir / 'share' / 'icons'
+src-dir := justfile_directory() / '..' / 'icons-tela'
+
+default:
+    @just --list
+
+# Install the black (neutral dark grey) variant: base, light and dark.
+install:
+    @test -f "{{src-dir}}/install.sh" || { \
+        echo "error: vendored sources missing at {{src-dir}}."; \
+        echo "       the desktop/icons-tela/ directory should contain"; \
+        echo "       the Tela source tree — was it deleted by accident?"; \
+        exit 1; \
+    }
+    install -d {{icons-dir}}
+    bash {{src-dir}}/install.sh -d {{icons-dir}} -n Tela black
+
+uninstall:
+    rm -rf {{icons-dir}}/Tela-black \
+           {{icons-dir}}/Tela-black-light \
+           {{icons-dir}}/Tela-black-dark
