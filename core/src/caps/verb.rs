@@ -156,6 +156,7 @@ impl Verb {
     // -- Clipboard ---------------------------------------------------------
     pub const CLIPBOARD_READ: Verb = Verb::new("clipboard.read");
     pub const CLIPBOARD_WRITE: Verb = Verb::new("clipboard.write");
+    pub const UI_ACCESSIBILITY: Verb = Verb::new("ui.accessibility");
 
     // -- Devices -----------------------------------------------------------
     pub const DEVICE_AUDIO: Verb = Verb::new("device.audio");
@@ -281,6 +282,7 @@ pub const ALL_VERBS: &[Verb] = &[
     Verb::UI_INPUT,
     Verb::CLIPBOARD_READ,
     Verb::CLIPBOARD_WRITE,
+    Verb::UI_ACCESSIBILITY,
     Verb::DEVICE_AUDIO,
     Verb::DEVICE_BLUETOOTH,
     Verb::DEVICE_MEDIA_ROUTE,

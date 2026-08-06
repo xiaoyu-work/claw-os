@@ -478,6 +478,7 @@ const ADMIN_VERBS: &[Verb] = &[
     Verb::UI_INPUT,
     Verb::CLIPBOARD_READ,
     Verb::CLIPBOARD_WRITE,
+    Verb::UI_ACCESSIBILITY,
     Verb::DEVICE_AUDIO,
     Verb::DEVICE_BLUETOOTH,
     Verb::DEVICE_MEDIA_ROUTE,

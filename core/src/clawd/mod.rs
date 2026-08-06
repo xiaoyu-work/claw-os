@@ -1,5 +1,7 @@
 pub mod agent_client;
 pub mod app_sessions;
+pub mod accessibility;
+pub mod a11y_wayland;
 pub mod audio;
 pub mod audit;
 pub mod backup;

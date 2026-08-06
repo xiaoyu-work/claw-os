@@ -20,6 +20,21 @@ fn main() {
             }
         }
     }
+    if raw_args
+        .first()
+        .is_some_and(|arg| arg == "--a11y-wayland-helper")
+    {
+        match cos::clawd::a11y_wayland::helper(&raw_args[1..]) {
+            Ok(value) => {
+                println!("{value}");
+                return;
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
+    }
     tracing_subscriber::fmt::init();
 
     let mut socket_path = None;

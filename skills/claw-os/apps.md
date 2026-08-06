@@ -476,6 +476,22 @@ fsynced, and atomically persisted without overwriting. Status reports whether
 the XDG Camera portal exists; that portal mediates sandboxed sessions, while
 this host-level manager uses the approved PipeWire node directly.
 
+## Accessibility Manager
+
+```bash
+cos app accessibility-manager status
+cos app accessibility-manager screen-reader on
+cos app accessibility-manager magnifier on
+cos app accessibility-manager invert on
+cos app accessibility-manager filter deuteranopia
+```
+
+Screen-reader control updates both `org.a11y.Status.IsEnabled` and
+`ScreenReaderEnabled`, rolling the first property back if the second fails.
+Magnifier, inversion, greyscale, and daltonization filters use the COSMIC
+`cosmic_a11y_manager_v1` protocol and wait for compositor state events before
+reporting success. Mutations require `ui.accessibility:control`.
+
 ## Package Management
 
 ```bash

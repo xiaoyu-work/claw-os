@@ -33,6 +33,7 @@ pub fn readonly_task_caps() -> CapSet {
     }
 
     for app in [
+        "accessibility-manager",
         "audio-manager",
         "backup-center",
         "bluetooth-manager",

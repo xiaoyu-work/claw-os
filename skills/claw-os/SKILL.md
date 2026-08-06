@@ -58,6 +58,7 @@ Permission roles and app capability gates are documented in [permissions.md](per
 
 | App | Purpose |
 |---|---|
+| `accessibility-manager` | COSMIC magnifier/filter/inversion and AT-SPI screen reader |
 | `audio-manager` | PipeWire/WirePlumber volume, mute, routes, and profiles |
 | `backup-center` | Mounted Restic backup, retention, check, forget, and restore |
 | `bluetooth-manager` | BlueZ discovery, pairing, connection, trust, and power |

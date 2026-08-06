@@ -560,6 +560,14 @@ pub const CATALOG: &[CapMeta] = &[
         "✂️",
         Risk::High,
     ),
+    CapMeta::new(
+        Verb::UI_ACCESSIBILITY,
+        ScopeKind::Name,
+        LocalizedStr::new("Change accessibility features"),
+        LocalizedStr::new("Enable screen reader, magnifier, inversion, or color-vision filters in the desktop session."),
+        "♿",
+        Risk::High,
+    ),
 
     // -- Devices -------------------------------------------------------------
     CapMeta::new(
