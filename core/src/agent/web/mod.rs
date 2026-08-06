@@ -31,8 +31,9 @@
 //! from `$COS_DATA_DIR/agent/web/serve.token` (auto-generated on
 //! first run) is required as `?t=<token>` or `Authorization: Bearer
 //! <token>`. By default the server only binds `127.0.0.1`. Exposing
-//! to other interfaces (`--bind 0.0.0.0`) is allowed but the token
-//! gate stays on. Each instance is bound to exactly one non-root Unix uid
+//! to other interfaces (`--bind 0.0.0.0`) requires a PEM certificate and
+//! owner-only private key; query-string tokens are then disabled. Each
+//! instance is bound to exactly one non-root Unix uid
 //! and refuses shared or wrong-owner state directories. Multiple desktop
 //! users run separate isolated instances.
 
@@ -44,8 +45,8 @@ pub mod sse;
 pub mod state;
 
 use std::fs;
-use std::io::Write;
-use std::path::PathBuf;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
@@ -56,6 +57,14 @@ use serde_json::{json, Value};
 /// whole serve session: token, pid, log.
 fn pid_path() -> PathBuf {
     auth::token_dir().join("serve.pid")
+}
+
+fn serve_info_path() -> PathBuf {
+    auth::token_dir().join("serve.json")
+}
+
+fn ready_path() -> PathBuf {
+    auth::token_dir().join("serve.ready")
 }
 
 /// Default log path when daemonised. Override with `--log`.
@@ -76,6 +85,8 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
     let mut status_daemon_flag = false;
     let mut foreground_flag = false;
     let mut log_override: Option<PathBuf> = None;
+    let mut tls_cert: Option<PathBuf> = None;
+    let mut tls_key: Option<PathBuf> = None;
 
     let mut i = 0usize;
     while i < args.len() {
@@ -125,6 +136,20 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
                 log_override = Some(PathBuf::from(v));
                 i += 2;
             }
+            "--tls-cert" => {
+                let value = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--tls-cert needs <pem-file>".to_string())?;
+                tls_cert = Some(PathBuf::from(value));
+                i += 2;
+            }
+            "--tls-key" => {
+                let value = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--tls-key needs <pem-file>".to_string())?;
+                tls_key = Some(PathBuf::from(value));
+                i += 2;
+            }
             "--stop" => {
                 stop_daemon_flag = true;
                 i += 1;
@@ -137,7 +162,7 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
                 return Ok(json!({
                     "command": "cos agent serve",
                     "summary": "Run the built-in web UI for chat / tasks / approvals / sysinfo.",
-                    "usage": "cos agent serve [--bind 127.0.0.1] [--port 7878] [--token <hex>] [--open] [--detach|--stop|--status] [--log <path>]",
+                    "usage": "cos agent serve [--bind 127.0.0.1] [--port 7878] [--tls-cert cert.pem --tls-key key.pem] [--token <hex>] [--open] [--detach|--stop|--status] [--log <path>]",
                     "flags": {
                         "--bind": "Network interface to bind. Default 127.0.0.1 (localhost only).",
                         "--port": "TCP port. Default 7878.",
@@ -147,8 +172,10 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
                         "--stop": "Stop a previously-detached daemon (SIGTERM, then SIGKILL after 5s).",
                         "--status": "Report whether a detached daemon is running; print URL + PID if so.",
                         "--log": "Path for the detached daemon's log file. Default $COS_DATA_DIR/agent/web/serve.log.",
+                        "--tls-cert": "PEM certificate chain. Required with --tls-key.",
+                        "--tls-key": "Owner-only PEM private key. Required with --tls-cert.",
                     },
-                    "url": format!("http://{bind}:{port}/?t=<token>"),
+                    "url": format!("{}://{}/", if tls_cert.is_some() { "https" } else { "http" }, display_address(&bind, port)),
                 }));
             }
             other => return Err(format!("unknown flag for `serve`: {other} (try --help)")),
@@ -162,8 +189,28 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
         return report_status();
     }
     let owner_uid = state::current_owner_uid()?;
+    let addr: std::net::SocketAddr = format!("{bind}:{port}")
+        .parse()
+        .map_err(|e| format!("bad bind {bind}:{port}: {e}"))?;
+    let tls_enabled = match (&tls_cert, &tls_key) {
+        (Some(_), Some(_)) => true,
+        (None, None) => false,
+        _ => return Err("--tls-cert and --tls-key must be provided together".to_string()),
+    };
+    if !addr.ip().is_loopback() && !tls_enabled {
+        return Err(
+            "non-loopback agent web binds require TLS; provide --tls-cert and --tls-key or bind only to 127.0.0.1"
+                .to_string(),
+        );
+    }
     if detach && !foreground_flag {
-        return spawn_detached(args, &bind, port, log_override.as_deref());
+        return spawn_detached(
+            args,
+            &bind,
+            port,
+            tls_enabled,
+            log_override.as_deref(),
+        );
     }
 
     let cfg = crate::config::get().agent.clone();
@@ -180,12 +227,18 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
         Some(t) => auth::persist_token(&t).map_err(|e| format!("persist token: {e}"))?,
         None => auth::load_or_generate_token().map_err(|e| format!("token: {e}"))?,
     };
+    let tls_material = match (tls_cert.as_deref(), tls_key.as_deref()) {
+        (Some(cert), Some(key)) => Some(read_tls_material(cert, key, owner_uid)?),
+        (None, None) => None,
+        _ => unreachable!("TLS pairing validated above"),
+    };
 
-    let addr: std::net::SocketAddr = format!("{bind}:{port}")
-        .parse()
-        .map_err(|e| format!("bad bind {bind}:{port}: {e}"))?;
-
-    let url = format!("http://{}/?t={}", addr, token);
+    let scheme = if tls_enabled { "https" } else { "http" };
+    let url = if addr.ip().is_loopback() {
+        format!("{scheme}://{addr}/?t={token}")
+    } else {
+        format!("{scheme}://{addr}/")
+    };
     eprintln!("cos agent serve — listening on {addr}");
     eprintln!("  open: {url}");
     if open_browser {
@@ -199,9 +252,21 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
         eprintln!("  press Ctrl-C to stop (or run with --detach to background).");
     }
 
+    let listener = std::net::TcpListener::bind(addr)
+        .map_err(|error| format!("bind {addr}: {error}"))?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|error| format!("set nonblocking {addr}: {error}"))?;
+    let _ = fs::remove_file(ready_path());
     // Drop any stale PID file from a crashed previous daemon, then claim it.
     if let Err(e) = write_pid_file(std::process::id()) {
         eprintln!("warning: could not write {}: {e}", pid_path().display());
+    }
+    if let Err(error) = write_serve_info(std::process::id(), addr, scheme) {
+        eprintln!(
+            "warning: could not write {}: {error}",
+            serve_info_path().display()
+        );
     }
     // Ensure PID file is cleaned up on exit even if we panic; the
     // drop-guard runs before the runtime tears down.
@@ -213,15 +278,41 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
         .map_err(|e| format!("tokio runtime: {e}"))?;
 
     runtime.block_on(async move {
-        let state = state::AppState::new(cfg, token, owner_uid);
+        let state = state::AppState::new(
+            cfg,
+            token,
+            owner_uid,
+            addr.ip().is_loopback(),
+        );
         let app = server::build_app(state);
-        let listener = tokio::net::TcpListener::bind(addr)
-            .await
-            .map_err(|e| format!("bind {addr}: {e}"))?;
-        axum::serve(listener, app.into_make_service())
-            .with_graceful_shutdown(shutdown_signal())
-            .await
-            .map_err(|e| format!("serve: {e}"))?;
+        if let Some((cert, key)) = tls_material {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+            let config = axum_server::tls_rustls::RustlsConfig::from_pem(cert, key)
+                .await
+                .map_err(|error| format!("load TLS certificate/key: {error}"))?;
+            let handle = axum_server::Handle::new();
+            let shutdown_handle = handle.clone();
+            tokio::spawn(async move {
+                shutdown_signal().await;
+                shutdown_handle.graceful_shutdown(Some(Duration::from_secs(10)));
+            });
+            let server = axum_server::from_tcp_rustls(listener, config)
+                .map_err(|error| format!("prepare TLS listener: {error}"))?;
+            write_ready_file(std::process::id())?;
+            server
+                .handle(handle)
+                .serve(app.into_make_service())
+                .await
+                .map_err(|error| format!("serve TLS: {error}"))?;
+        } else {
+            let listener = tokio::net::TcpListener::from_std(listener)
+                .map_err(|error| format!("adopt listener {addr}: {error}"))?;
+            write_ready_file(std::process::id())?;
+            axum::serve(listener, app.into_make_service())
+                .with_graceful_shutdown(shutdown_signal())
+                .await
+                .map_err(|e| format!("serve: {e}"))?;
+        }
         Ok::<_, String>(())
     })?;
 
@@ -230,6 +321,81 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
         "bind": bind,
         "port": port,
     }))
+}
+
+fn read_tls_material(
+    certificate: &Path,
+    private_key: &Path,
+    owner_uid: u32,
+) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let certificate = read_tls_file(certificate, owner_uid, false)?;
+    let private_key = read_tls_file(private_key, owner_uid, true)?;
+    Ok((certificate, private_key))
+}
+
+fn read_tls_file(path: &Path, owner_uid: u32, private_key: bool) -> Result<Vec<u8>, String> {
+    const MAX_PEM_BYTES: u64 = 1024 * 1024;
+    if !path.is_absolute() {
+        return Err(format!("TLS paths must be absolute: {}", path.display()));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+
+        let metadata = fs::symlink_metadata(path)
+            .map_err(|error| format!("inspect TLS file {}: {error}", path.display()))?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err(format!(
+                "TLS file must be a regular non-symlink: {}",
+                path.display()
+            ));
+        }
+        let mut options = fs::OpenOptions::new();
+        options
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+        let mut file = options
+            .open(path)
+            .map_err(|error| format!("open TLS file {}: {error}", path.display()))?;
+        let opened = file
+            .metadata()
+            .map_err(|error| format!("inspect opened TLS file {}: {error}", path.display()))?;
+        if !opened.is_file()
+            || opened.dev() != metadata.dev()
+            || opened.ino() != metadata.ino()
+            || opened.len() == 0
+            || opened.len() > MAX_PEM_BYTES
+        {
+            return Err(format!(
+                "TLS file changed, is empty, or exceeds {} bytes: {}",
+                MAX_PEM_BYTES,
+                path.display()
+            ));
+        }
+        if private_key
+            && (opened.uid() != owner_uid || opened.permissions().mode() & 0o077 != 0)
+        {
+            return Err(format!(
+                "TLS private key {} must be owned by uid {owner_uid} with no group/other permissions",
+                path.display()
+            ));
+        }
+        if !private_key && opened.permissions().mode() & 0o022 != 0 {
+            return Err(format!(
+                "TLS certificate {} must not be group/other writable",
+                path.display()
+            ));
+        }
+        let mut bytes = Vec::with_capacity(opened.len() as usize);
+        file.read_to_end(&mut bytes)
+            .map_err(|error| format!("read TLS file {}: {error}", path.display()))?;
+        Ok(bytes)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, owner_uid, private_key);
+        Err("built-in TLS file validation requires Unix".to_string())
+    }
 }
 
 /// Re-execute `cos agent serve …` as a backgrounded child process. The
@@ -242,6 +408,7 @@ fn spawn_detached(
     args: &[String],
     bind: &str,
     port: u16,
+    tls_enabled: bool,
     log_override: Option<&std::path::Path>,
 ) -> Result<Value, String> {
     if crate::paths::current_owner_uid_override().is_some() {
@@ -261,6 +428,8 @@ fn spawn_detached(
         }
         // Stale pid file from a crashed run — remove and continue.
         let _ = fs::remove_file(pid_path());
+        let _ = fs::remove_file(serve_info_path());
+        let _ = fs::remove_file(ready_path());
     }
 
     let dir = auth::token_dir();
@@ -345,14 +514,19 @@ fn spawn_detached(
     // PID file) or exit fast (we read the log tail for context).
     let deadline = Instant::now() + Duration::from_secs(6);
     loop {
-        if let Some(p) = read_pid_file() {
+        if let Some(p) = read_ready_pid() {
             if p as u32 == child_pid && process_alive(p) {
                 // Bound successfully.
                 let token = auth::load_or_generate_token().unwrap_or_default();
-                let url = if token.is_empty() {
-                    format!("http://{bind}:{port}/")
+                let scheme = if tls_enabled { "https" } else { "http" };
+                let loopback = bind
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|address| address.is_loopback());
+                let address = display_address(bind, port);
+                let url = if token.is_empty() || !loopback {
+                    format!("{scheme}://{address}/")
                 } else {
-                    format!("http://{bind}:{port}/?t={token}")
+                    format!("{scheme}://{address}/?t={token}")
                 };
                 pending_session.disarm();
                 return Ok(json!({
@@ -420,6 +594,9 @@ fn stop_daemon() -> Result<Value, String> {
     };
     if !process_alive(pid) {
         let _ = fs::remove_file(pid_path());
+        let _ = fs::remove_file(pid_path());
+        let _ = fs::remove_file(serve_info_path());
+        let _ = fs::remove_file(ready_path());
         return Ok(json!({
             "status": "not running",
             "message": format!("stale pid file (pid {pid} not alive); removed"),
@@ -440,6 +617,8 @@ fn stop_daemon() -> Result<Value, String> {
     while Instant::now() < deadline {
         if !process_alive(pid) {
             let _ = fs::remove_file(pid_path());
+            let _ = fs::remove_file(serve_info_path());
+            let _ = fs::remove_file(ready_path());
             return Ok(json!({
                 "status": "stopped",
                 "pid": pid,
@@ -453,6 +632,8 @@ fn stop_daemon() -> Result<Value, String> {
         libc::kill(pid as libc::pid_t, libc::SIGKILL);
     }
     let _ = fs::remove_file(pid_path());
+    let _ = fs::remove_file(serve_info_path());
+    let _ = fs::remove_file(ready_path());
     Ok(json!({
         "status": "stopped",
         "pid": pid,
@@ -469,20 +650,52 @@ fn report_status() -> Result<Value, String> {
         }));
     };
     if !process_alive(pid) {
+        let _ = fs::remove_file(serve_info_path());
         return Ok(json!({
             "status": "not running",
             "note": format!("stale pid file (pid {pid})"),
         }));
     }
+    if read_ready_pid() != Some(pid) {
+        return Ok(json!({
+            "status": "starting",
+            "pid": pid,
+            "log": default_log_path().display().to_string(),
+        }));
+    }
     let token = auth::load_or_generate_token().unwrap_or_default();
+    let info = read_serve_info().filter(|info| info["pid"].as_u64() == Some(pid as u64));
+    let scheme = info
+        .as_ref()
+        .and_then(|value| value["scheme"].as_str())
+        .unwrap_or("http");
+    let address = info
+        .as_ref()
+        .and_then(|value| value["address"].as_str())
+        .unwrap_or("127.0.0.1:7878");
+    let loopback = address
+        .parse::<std::net::SocketAddr>()
+        .is_ok_and(|value| value.ip().is_loopback());
+    let url_hint = if loopback {
+        format!("{scheme}://{address}/?t={token}")
+    } else {
+        format!("{scheme}://{address}/")
+    };
     Ok(json!({
         "status": "running",
         "pid": pid,
         "token_persisted_at": auth::token_path().display().to_string(),
-        "url_hint": format!("http://127.0.0.1:7878/?t={}", token),
+        "url_hint": url_hint,
         "log": default_log_path().display().to_string(),
         "stop": "cos agent serve --stop",
     }))
+}
+
+fn display_address(bind: &str, port: u16) -> String {
+    format!("{bind}:{port}")
+        .parse::<std::net::SocketAddr>()
+        .map(|address| address.to_string())
+        .unwrap_or_else(|_| format!("{bind}:{port}"))
 }
 
 fn write_pid_file(pid: u32) -> Result<(), String> {
@@ -497,12 +710,46 @@ fn write_pid_file(pid: u32) -> Result<(), String> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
+
     let mut f = options
         .open(&path)
         .map_err(|e| format!("create {}: {e}", path.display()))?;
     f.write_all(format!("{pid}\n").as_bytes())
         .map_err(|e| format!("write {}: {e}", path.display()))?;
     Ok(())
+}
+
+fn write_serve_info(
+    pid: u32,
+    address: std::net::SocketAddr,
+    scheme: &str,
+) -> Result<(), String> {
+    let data = serde_json::to_vec(&json!({
+        "pid": pid,
+        "address": address.to_string(),
+        "scheme": scheme,
+        "tls": scheme == "https",
+    }))
+    .map_err(|error| format!("serialize serve state: {error}"))?;
+    crate::agent::util::atomic_write_with_fsync(&serve_info_path(), &data)
+        .map_err(|error| format!("write {}: {error}", serve_info_path().display()))
+}
+
+fn read_serve_info() -> Option<Value> {
+    let data = fs::read(serve_info_path()).ok()?;
+    serde_json::from_slice(&data).ok()
+}
+
+fn write_ready_file(pid: u32) -> Result<(), String> {
+    crate::agent::util::atomic_write_with_fsync(
+        &ready_path(),
+        format!("{pid}\n").as_bytes(),
+    )
+    .map_err(|error| format!("write {}: {error}", ready_path().display()))
+}
+
+fn read_ready_pid() -> Option<i32> {
+    fs::read_to_string(ready_path()).ok()?.trim().parse().ok()
 }
 
 fn read_pid_file() -> Option<i32> {
@@ -548,6 +795,8 @@ impl Drop for PidGuard {
         if let Some(p) = read_pid_file() {
             if p as u32 == std::process::id() {
                 let _ = fs::remove_file(pid_path());
+                let _ = fs::remove_file(serve_info_path());
+                let _ = fs::remove_file(ready_path());
             }
         }
     }

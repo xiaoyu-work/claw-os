@@ -144,4 +144,14 @@ context-event inbox reads are filtered to that uid; legacy records without an
 owner are hidden from the web surface. Privileged clawd APIs retain an explicit
 all-owner view only for root callers.
 
+## Web TLS
+
+Loopback `cos agent serve` may use HTTP. Any non-loopback bind is rejected
+unless both `--tls-cert /absolute/cert.pem` and
+`--tls-key /absolute/key.pem` are supplied. The built-in server uses rustls;
+the private key must be owned by the serving uid with no group/other
+permissions. Query-string tokens are accepted only on loopback, so remote
+clients authenticate with the `Authorization` header. A TLS reverse proxy can
+instead terminate HTTPS while `cos agent serve` remains bound to `127.0.0.1`.
+
 For detailed usage of any feature, read the corresponding doc linked above.

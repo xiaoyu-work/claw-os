@@ -90,7 +90,11 @@ pub async fn require_token(
     }
 
     let qs = req.uri().query().unwrap_or("");
-    let token_from_query = parse_token_from_query(qs);
+    let token_from_query = state
+        .inner
+        .allow_query_token
+        .then(|| parse_token_from_query(qs))
+        .flatten();
     let token_from_header = req
         .headers()
         .get(header::AUTHORIZATION)
@@ -105,7 +109,7 @@ pub async fn require_token(
         return (
             StatusCode::UNAUTHORIZED,
             [(header::CONTENT_TYPE, "application/json")],
-            r#"{"error":"unauthorized","hint":"append ?t=<token> or set Authorization: Bearer <token>"}"#,
+            r#"{"error":"unauthorized","hint":"use the Authorization header; query tokens are accepted only on loopback"}"#,
         )
             .into_response();
     }

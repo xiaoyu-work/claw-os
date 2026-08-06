@@ -13,11 +13,17 @@ pub struct AppStateInner {
     pub cfg: AgentConfig,
     pub token: String,
     pub owner_uid: u32,
+    pub allow_query_token: bool,
     pub started_at_unix: u64,
 }
 
 impl AppState {
-    pub fn new(cfg: AgentConfig, token: String, owner_uid: u32) -> Self {
+    pub fn new(
+        cfg: AgentConfig,
+        token: String,
+        owner_uid: u32,
+        allow_query_token: bool,
+    ) -> Self {
         let started_at_unix = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -27,6 +33,7 @@ impl AppState {
                 cfg,
                 token,
                 owner_uid,
+                allow_query_token,
                 started_at_unix,
             }),
         }

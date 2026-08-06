@@ -101,9 +101,11 @@ claw-embed = { path = "../crates/claw-embed" }
 # pulling in a heavy framework. Pinned to versions compatible with the
 # tokio 1.x runtime already in use; default features only (no openssl).
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query"] }
+axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
 tower = { version = "0.5", default-features = false }
 tower-http = { version = "0.6", default-features = false, features = ["cors"] }
 http = "1"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 
 # Embed the Vite-built web UI (HTML/JS/CSS) inside the cos binary so
 # `cos agent serve` stays a single self-contained file with zero
