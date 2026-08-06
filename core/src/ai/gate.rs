@@ -1181,6 +1181,58 @@ pub fn wrap_for_system(inner: Arc<dyn LlmProvider>) -> Arc<dyn LlmProvider> {
     Arc::new(SystemGatedProvider { inner })
 }
 
+pub fn build_system_provider(
+    cfg: &crate::config::AgentConfig,
+) -> llm::Result<Arc<dyn LlmProvider>> {
+    use crate::agent::llm::provider_chain::{ProviderChain, ProviderSlot};
+    use std::collections::BTreeSet;
+
+    if cfg.provider_fallbacks.len() > 8 {
+        return Err(llm::LlmError::NotConfigured(format!(
+            "provider fallback chain has {} fallbacks; maximum is 8",
+            cfg.provider_fallbacks.len()
+        )));
+    }
+    let primary = llm::registry::build(&cfg.provider, &cfg.model, cfg)?;
+    let mut slots = vec![ProviderSlot::new(
+        wrap_for_system(primary),
+        cfg.provider.clone(),
+        cfg.model.clone(),
+    )];
+    let mut identities = BTreeSet::from([(cfg.provider.clone(), cfg.model.clone())]);
+    for fallback in &cfg.provider_fallbacks {
+        let provider = fallback.provider.trim();
+        let model = fallback.model.trim();
+        if provider.is_empty() || model.is_empty() {
+            return Err(llm::LlmError::NotConfigured(
+                "provider fallback entries require non-empty provider and model".to_string(),
+            ));
+        }
+        if provider == "mock" && cfg.provider != "mock" {
+            return Err(llm::LlmError::NotConfigured(
+                "mock cannot be configured as a production provider fallback".to_string(),
+            ));
+        }
+        if !identities.insert((provider.to_string(), model.to_string())) {
+            return Err(llm::LlmError::NotConfigured(format!(
+                "duplicate provider fallback: {provider}/{model}"
+            )));
+        }
+        let fallback_cfg = fallback.apply_to(cfg);
+        let built = llm::registry::build(provider, model, &fallback_cfg)?;
+        slots.push(ProviderSlot::new(
+            wrap_for_system(built),
+            provider.to_string(),
+            model.to_string(),
+        ));
+    }
+    if slots.len() == 1 {
+        Ok(slots.remove(0).provider)
+    } else {
+        Ok(Arc::new(ProviderChain::new(slots)?))
+    }
+}
+
 struct SystemGatedProvider {
     inner: Arc<dyn LlmProvider>,
 }
@@ -1205,6 +1257,18 @@ impl LlmProvider for SystemGatedProvider {
 
     fn supports_prompt_cache(&self) -> bool {
         self.inner.supports_prompt_cache()
+    }
+
+    fn effective_provider_name(&self) -> String {
+        self.inner.effective_provider_name()
+    }
+
+    fn effective_model_name(&self, requested: &str) -> String {
+        self.inner.effective_model_name(requested)
+    }
+
+    fn fallback_state(&self) -> Option<llm::ProviderFallbackState> {
+        self.inner.fallback_state()
     }
 
     async fn chat(&self, mut request: LlmChatRequest) -> LlmResult<LlmChatResponse> {

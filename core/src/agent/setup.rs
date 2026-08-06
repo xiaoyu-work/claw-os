@@ -473,6 +473,26 @@ pub fn is_ready(cfg: &crate::config::AgentConfig) -> Result<(), String> {
     if credential_present(cfg) {
         return Ok(());
     }
+    if llm::registry::build(&cfg.provider, &cfg.model, cfg)
+        .is_ok_and(|provider| provider.is_configured())
+    {
+        return Ok(());
+    }
+    if cfg.provider_fallbacks.iter().any(|fallback| {
+        let fallback_cfg = fallback.apply_to(cfg);
+        !fallback_cfg.provider.is_empty()
+            && fallback_cfg.provider != "mock"
+            && (!provider_needs_credential(&fallback_cfg.provider)
+                || credential_present(&fallback_cfg)
+                || llm::registry::build(
+                    &fallback_cfg.provider,
+                    &fallback_cfg.model,
+                    &fallback_cfg,
+                )
+                .is_ok_and(|provider| provider.is_configured()))
+    }) {
+        return Ok(());
+    }
     Err(json!({
         "error": "agent provider configured but no credential found",
         "provider": cfg.provider,
@@ -579,6 +599,7 @@ fn status_llm() -> Value {
         "ready": ready.is_ok(),
         "provider": cfg.provider,
         "model": cfg.model,
+        "provider_fallbacks": fallback_status(cfg),
         "api_key_credential": cfg.api_key_credential,
         "api_key_env": cfg.api_key_env,
         "base_url": cfg.base_url,
@@ -587,6 +608,40 @@ fn status_llm() -> Value {
         "config_path": config_path().display().to_string(),
         "reason": reason,
     })
+}
+
+fn fallback_status(cfg: &crate::config::AgentConfig) -> Vec<Value> {
+    cfg.provider_fallbacks
+        .iter()
+        .map(|fallback| {
+            let mut header_names = fallback
+                .extra_headers
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>();
+            header_names.sort();
+            json!({
+                "provider": fallback.provider,
+                "model": fallback.model,
+                "api_key_credential": fallback.api_key_credential,
+                "api_key_env": fallback.api_key_env,
+                "api_key_credentials": fallback.api_key_credentials,
+                "api_key_envs": fallback.api_key_envs,
+                "base_url": fallback.base_url,
+                "extra_header_names": header_names,
+                "request_timeout": fallback.request_timeout,
+                "pool_strategy": fallback.pool_strategy,
+                "pool_cooldown_secs": fallback.pool_cooldown_secs,
+                "aws_region": fallback.aws_region,
+                "aws_access_key_credential": fallback.aws_access_key_credential,
+                "aws_access_key_env": fallback.aws_access_key_env,
+                "aws_secret_key_credential": fallback.aws_secret_key_credential,
+                "aws_secret_key_env": fallback.aws_secret_key_env,
+                "aws_session_token_credential": fallback.aws_session_token_credential,
+                "aws_session_token_env": fallback.aws_session_token_env,
+            })
+        })
+        .collect()
 }
 
 /// Split a stored `base_url` into its constituent parts so the UI can
@@ -3106,6 +3161,31 @@ mod tests {
         std::env::set_var(env_name, "sk-fake");
         assert!(is_ready(&cfg).is_ok());
         std::env::remove_var(env_name);
+    }
+
+    #[test]
+    fn is_ready_accepts_usable_local_fallback() {
+        let mut cfg = mock_cfg();
+        cfg.provider = "anthropic".into();
+        cfg.model = "primary-model".into();
+        cfg.api_key_credential = Some("definitely_not_present".into());
+        cfg.api_key_env = Some("__COS_TEST_PRIMARY_UNSET__".into());
+        std::env::remove_var("__COS_TEST_PRIMARY_UNSET__");
+        cfg.provider_fallbacks = vec![crate::config::ProviderFallbackConfig {
+            provider: "llama_local".into(),
+            model: "local-default".into(),
+            api_key_credential: None,
+            api_key_env: None,
+            api_key_credentials: Vec::new(),
+            api_key_envs: Vec::new(),
+            base_url: None,
+            extra_headers: std::collections::HashMap::new(),
+            request_timeout: None,
+            pool_strategy: None,
+            pool_cooldown_secs: None,
+            ..Default::default()
+        }];
+        assert!(is_ready(&cfg).is_ok());
     }
 
     #[test]

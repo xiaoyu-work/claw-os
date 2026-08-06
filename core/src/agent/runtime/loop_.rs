@@ -52,6 +52,8 @@ pub struct AskResult {
     pub answer: String,
     /// Structural binding between answer citations and exact runtime tool results.
     pub evidence: super::evidence::EvidenceReport,
+    /// Cross-provider fallback state when a chain was configured.
+    pub fallback: Option<llm::ProviderFallbackState>,
     /// Number of turns consumed.
     pub turns: u32,
     /// Provider name used.
@@ -457,15 +459,10 @@ async fn ask_inner(
     let _hooks_auto_guard =
         hooks_config::load_and_register(&crate::paths::agent_hooks_path(), hook_registry.clone());
     let hook_session_id = if session_id.is_empty() {
-        interrupt_handle.session_id()
+        interrupt_handle.session_id().to_string()
     } else {
-        &session_id
+        session_id.clone()
     };
-    let hook_ctx_base = hooks::HookContext::new(
-        hook_session_id.to_string(),
-        provider.name(),
-        cfg.model.clone(),
-    );
     let mut evidence_ledger = super::evidence::EvidenceLedger::default();
 
     for turn in 1..=cfg.max_turns {
@@ -475,7 +472,12 @@ async fn ask_inner(
             ));
         }
 
-        let hook_ctx = hook_ctx_base.clone().with_turn_index(turn);
+        let hook_ctx = hooks::HookContext::new(
+            hook_session_id.clone(),
+            provider.effective_provider_name(),
+            provider.effective_model_name(&cfg.model),
+        )
+        .with_turn_index(turn);
         if let hooks::HookOutcome::Stop(reason) = hook_registry.dispatch_pre_turn(&hook_ctx) {
             return Err(AgentError::Interrupted(format!(
                 "hook stop (pre_turn): {reason}"
@@ -568,8 +570,11 @@ async fn ask_inner(
                         .count() as u32,
                     error: None,
                 };
+                let mut post_hook_ctx = hook_ctx.clone();
+                post_hook_ctx.provider = provider.effective_provider_name();
+                post_hook_ctx.model = provider.effective_model_name(&cfg.model);
                 if let hooks::HookOutcome::Stop(reason) =
-                    hook_registry.dispatch_post_turn(&hook_ctx, &summary)
+                    hook_registry.dispatch_post_turn(&post_hook_ctx, &summary)
                 {
                     return Err(AgentError::Interrupted(format!(
                         "hook stop (post_turn): {reason}"
@@ -589,7 +594,10 @@ async fn ask_inner(
                     tool_calls_made: 0,
                     error: Some(e.to_string()),
                 };
-                let _ = hook_registry.dispatch_post_turn(&hook_ctx, &summary);
+                let mut post_hook_ctx = hook_ctx.clone();
+                post_hook_ctx.provider = provider.effective_provider_name();
+                post_hook_ctx.model = provider.effective_model_name(&cfg.model);
+                let _ = hook_registry.dispatch_post_turn(&post_hook_ctx, &summary);
                 return Err(e);
             }
         };
@@ -627,6 +635,7 @@ async fn ask_inner(
 
         if let super::turn::TurnOutcome::Final(answer) = outcome {
             let evidence = evidence_ledger.verify(user_prompt, &answer);
+            let fallback = provider.fallback_state();
             // Generate + persist a session title on the first
             // successful turn that produces a final answer. We guard
             // on `title_for() == None` so resuming a long-running
@@ -660,9 +669,10 @@ async fn ask_inner(
             return Ok(AskResult {
                 answer,
                 evidence,
+                fallback,
                 turns: turn,
-                provider: provider.name().to_string(),
-                model: cfg.model.clone(),
+                provider: provider.effective_provider_name(),
+                model: provider.effective_model_name(&cfg.model),
                 session_id,
             });
         }
@@ -752,15 +762,10 @@ async fn ask_inner_streaming(
     let _hooks_auto_guard =
         hooks_config::load_and_register(&crate::paths::agent_hooks_path(), hook_registry.clone());
     let hook_session_id = if session_id.is_empty() {
-        interrupt_handle.session_id()
+        interrupt_handle.session_id().to_string()
     } else {
-        &session_id
+        session_id.clone()
     };
-    let hook_ctx_base = hooks::HookContext::new(
-        hook_session_id.to_string(),
-        provider.name(),
-        cfg.model.clone(),
-    );
     let mut evidence_ledger = super::evidence::EvidenceLedger::default();
 
     for turn in 1..=cfg.max_turns {
@@ -770,7 +775,12 @@ async fn ask_inner_streaming(
             ));
         }
 
-        let hook_ctx = hook_ctx_base.clone().with_turn_index(turn);
+        let hook_ctx = hooks::HookContext::new(
+            hook_session_id.clone(),
+            provider.effective_provider_name(),
+            provider.effective_model_name(&cfg.model),
+        )
+        .with_turn_index(turn);
         if let hooks::HookOutcome::Stop(reason) = hook_registry.dispatch_pre_turn(&hook_ctx) {
             return Err(AgentError::Interrupted(format!(
                 "hook stop (pre_turn): {reason}"
@@ -841,8 +851,11 @@ async fn ask_inner_streaming(
                         .count() as u32,
                     error: None,
                 };
+                let mut post_hook_ctx = hook_ctx.clone();
+                post_hook_ctx.provider = provider.effective_provider_name();
+                post_hook_ctx.model = provider.effective_model_name(&cfg.model);
                 if let hooks::HookOutcome::Stop(reason) =
-                    hook_registry.dispatch_post_turn(&hook_ctx, &summary)
+                    hook_registry.dispatch_post_turn(&post_hook_ctx, &summary)
                 {
                     return Err(AgentError::Interrupted(format!(
                         "hook stop (post_turn): {reason}"
@@ -862,7 +875,10 @@ async fn ask_inner_streaming(
                     tool_calls_made: 0,
                     error: Some(e.to_string()),
                 };
-                let _ = hook_registry.dispatch_post_turn(&hook_ctx, &summary);
+                let mut post_hook_ctx = hook_ctx.clone();
+                post_hook_ctx.provider = provider.effective_provider_name();
+                post_hook_ctx.model = provider.effective_model_name(&cfg.model);
+                let _ = hook_registry.dispatch_post_turn(&post_hook_ctx, &summary);
                 return Err(e);
             }
         };
@@ -894,6 +910,7 @@ async fn ask_inner_streaming(
 
         if let super::turn::TurnOutcome::Final(answer) = outcome {
             let evidence = evidence_ledger.verify(user_prompt, &answer);
+            let fallback = provider.fallback_state();
             if let Some((db, sid)) = recorder {
                 if matches!(db.title_for(sid), Ok(None)) {
                     let aux = match auxiliary_from_cfg(cfg) {
@@ -916,9 +933,10 @@ async fn ask_inner_streaming(
             return Ok(AskResult {
                 answer,
                 evidence,
+                fallback,
                 turns: turn,
-                provider: provider.name().to_string(),
-                model: cfg.model.clone(),
+                provider: provider.effective_provider_name(),
+                model: provider.effective_model_name(&cfg.model),
                 session_id,
             });
         }
@@ -933,9 +951,8 @@ async fn ask_inner_streaming(
 /// filesystem etc.), falls back to `ask_with` with a warning.
 pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
     let cfg = &crate::config::get().agent;
-    let provider = llm::registry::build(&cfg.provider, &cfg.model, cfg)
+    let provider = crate::ai::gate::build_system_provider(cfg)
         .map_err(|e| AgentError::ProviderUnavailable(e.to_string()))?;
-    let provider = crate::ai::gate::wrap_for_system(provider);
     let mut tools = default_registry();
     tools.set_guardrails(guardrails_from_cfg(cfg));
     tools.set_approval(approval_from_cfg(cfg));

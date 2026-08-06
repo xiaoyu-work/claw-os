@@ -231,6 +231,7 @@ async fn run_delegate(
         ));
     }
 
+    let explicit_provider = input.provider.is_some();
     let provider_name = input
         .provider
         .clone()
@@ -256,16 +257,25 @@ async fn run_delegate(
         ..parent_cfg.clone()
     };
 
-    let provider: Arc<dyn Provider> = match llm::registry::build(&provider_name, &model, &child_cfg)
-    {
-        Ok(p) => p,
-        Err(e) => {
-            return ToolResult::err(format!(
-                "failed to build provider '{provider_name}' for delegate: {e}"
-            ));
+    let provider: Arc<dyn Provider> = if explicit_provider {
+        match llm::registry::build(&provider_name, &model, &child_cfg) {
+            Ok(provider) => crate::ai::gate::wrap_for_system(provider),
+            Err(error) => {
+                return ToolResult::err(format!(
+                    "failed to build provider '{provider_name}' for delegate: {error}"
+                ));
+            }
+        }
+    } else {
+        match crate::ai::gate::build_system_provider(&child_cfg) {
+            Ok(provider) => provider,
+            Err(error) => {
+                return ToolResult::err(format!(
+                    "failed to build provider chain for delegate: {error}"
+                ));
+            }
         }
     };
-    let provider = crate::ai::gate::wrap_for_system(provider);
 
     let (parent_guardrails, parent_approval) = current_parent_policy();
     let tools = build_child_registry(
@@ -346,11 +356,15 @@ fn build_child_registry(
 
 fn format_result(result: &AskResult) -> String {
     format!(
-        "delegate finished (provider={}, model={}, turns={}, evidence={})\n---\n{}",
+        "delegate finished (provider={}, model={}, turns={}, evidence={}, degraded={})\n---\n{}",
         result.provider,
         result.model,
         result.turns,
         result.evidence.status.as_str(),
+        result
+            .fallback
+            .as_ref()
+            .is_some_and(|fallback| fallback.degraded),
         result.answer
     )
 }
@@ -666,6 +680,7 @@ mod tests {
         let r = AskResult {
             answer: "the moon".into(),
             evidence: Default::default(),
+            fallback: None,
             turns: 4,
             provider: "anthropic".into(),
             model: "claude-haiku-4".into(),

@@ -109,4 +109,30 @@ cos <name> <command> --schema    # full parameter schema (JSON)
 
 All errors include a `code` field for programmatic handling ([error codes](errors.md)).
 
+## Provider fallback
+
+The system agent supports an ordered cross-provider fallback chain in
+`~/.config/cos/config.json`:
+
+```json
+{
+  "agent": {
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-6",
+    "provider_fallbacks": [
+      {"provider": "openai", "model": "gpt-4.1", "api_key_env": "OPENAI_API_KEY"},
+      {"provider": "llama_local", "model": "local-default"}
+    ]
+  }
+}
+```
+
+Fallback occurs only for transport, authentication, quota/rate-limit, stream,
+or malformed-upstream failures. Invalid requests and internal policy/budget
+errors do not switch providers. Each fallback model is independently checked
+by `ai.chat` capability and budget gates. Switches are emitted to the chained
+Agent audit log and surfaced as degraded-mode metadata. Streaming only switches
+before a provider stream is established; it never mixes providers after output
+has begun.
+
 For detailed usage of any feature, read the corresponding doc linked above.

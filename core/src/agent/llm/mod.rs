@@ -13,6 +13,7 @@ pub mod aws_eventstream;
 pub mod credential_pool;
 pub mod error_classifier;
 pub mod metadata;
+pub mod provider_chain;
 pub mod providers;
 pub mod rate_limit;
 pub mod registry;
@@ -26,6 +27,7 @@ pub use types::{
     ChatRequest, ChatResponse, ContentBlock, EngineInfo, FinishReason, Message, Role, StreamEvent,
     Tool, ToolCall, ToolChoice, Usage,
 };
+pub use provider_chain::{ProviderFallbackState, ProviderSwitch};
 
 use async_trait::async_trait;
 use futures_util::stream::BoxStream;
@@ -256,6 +258,18 @@ pub trait Provider: Send + Sync {
     /// on the system prompt and the last tool definition. Default: `false`.
     fn supports_prompt_cache(&self) -> bool {
         false
+    }
+
+    fn effective_provider_name(&self) -> String {
+        self.name().to_string()
+    }
+
+    fn effective_model_name(&self, requested: &str) -> String {
+        requested.to_string()
+    }
+
+    fn fallback_state(&self) -> Option<ProviderFallbackState> {
+        None
     }
 
     /// Buffered (non-streaming) chat completion.

@@ -129,6 +129,8 @@ pub struct Job {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence: Option<crate::agent::runtime::evidence::EvidenceReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<crate::agent::llm::ProviderFallbackState>,
     /// uid of the user who submitted the task (via `SO_PEERCRED` on
     /// the clawd unix socket). Used to load the requesting user's
     /// `~/.config/cos/config.json` instead of clawd's root-owned one
@@ -190,6 +192,7 @@ impl Job {
             provider: None,
             model: None,
             evidence: None,
+            fallback: None,
             owner_uid,
             owner_home,
             recovery_count: 0,
@@ -710,6 +713,7 @@ impl Store {
                 provider,
                 model,
                 evidence,
+                fallback,
             } => {
                 job.status = JobStatus::Ok;
                 job.response = Some(response);
@@ -717,6 +721,7 @@ impl Store {
                 job.provider = Some(provider);
                 job.model = Some(model);
                 job.evidence = evidence;
+                job.fallback = fallback;
             }
             FinishOutcome::Error(msg) => {
                 job.status = JobStatus::Error;
@@ -965,6 +970,7 @@ pub enum FinishOutcome {
         provider: String,
         model: String,
         evidence: Option<crate::agent::runtime::evidence::EvidenceReport>,
+        fallback: Option<crate::agent::llm::ProviderFallbackState>,
     },
     Error(String),
     Cancelled,
@@ -1607,11 +1613,10 @@ async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
     if let Some(n) = job.max_turns {
         cfg.max_turns = n;
     }
-    let provider = match crate::agent::llm::registry::build(&cfg.provider, &cfg.model, &cfg) {
+    let provider = match crate::ai::gate::build_system_provider(&cfg) {
         Ok(p) => p,
         Err(e) => return FinishOutcome::Error(format!("provider unavailable: {e}")),
     };
-    let provider = crate::ai::gate::wrap_for_system(provider);
     let mut tools = crate::agent::tools::registry::default_registry();
     tools.set_guardrails(loop_::guardrails_from_cfg(&cfg));
     tools.set_approval(loop_::approval_from_cfg(&cfg));
@@ -1696,6 +1701,7 @@ async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
             provider: r.provider,
             model: r.model,
             evidence: Some(r.evidence),
+            fallback: r.fallback,
         },
         Err(e) => FinishOutcome::Error(e.to_string()),
     }
@@ -2177,6 +2183,7 @@ mod tests {
                     provider: "mock".into(),
                     model: "mock-model".into(),
                     evidence: None,
+                    fallback: None,
                 },
             )
             .unwrap();
@@ -2351,6 +2358,7 @@ mod tests {
                     provider: "m".into(),
                     model: "m".into(),
                     evidence: None,
+                    fallback: None,
                 },
             )
             .unwrap();
@@ -2377,6 +2385,7 @@ mod tests {
                         provider: "m".into(),
                         model: "m".into(),
                         evidence: None,
+                        fallback: None,
                     },
                 )
                 .unwrap();
@@ -2524,6 +2533,7 @@ mod tests {
                     provider: "mock".into(),
                     model: "mock-model".into(),
                     evidence: None,
+                    fallback: None,
                 },
             )
             .unwrap();
@@ -2557,6 +2567,7 @@ mod tests {
                         provider: "m".into(),
                         model: "m".into(),
                         evidence: None,
+                        fallback: None,
                     },
                 )
                 .unwrap();
@@ -2620,6 +2631,7 @@ mod tests {
                     provider: "m".into(),
                     model: "m".into(),
                     evidence: None,
+                    fallback: None,
                 },
             )
             .unwrap();

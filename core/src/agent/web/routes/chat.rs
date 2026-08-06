@@ -13,7 +13,7 @@
 //! * `tool_result` — `{ "id": "…", "name": "…", "ok": bool, "latency_ms": N, "bytes": N, "preview": "…" }`
 //! * `warning` — `{ "message": "…" }`
 //! * `evidence` — structural citation binding and confidence metadata.
-//! * `done` — `{ "session_id": "…", "model": "…", "turns": N, "answer": "…", "evidence": …, "finish": "…" }`
+//! * `done` — `{ "session_id": "…", "model": "…", "turns": N, "answer": "…", "evidence": …, "fallback": …, "finish": "…" }`
 //! * `error` — `{ "error": "…" }`
 
 use std::sync::{Arc, Mutex};
@@ -149,7 +149,7 @@ async fn drive_chat(
     use_memory: bool,
     tx: mpsc::UnboundedSender<Result<bytes::Bytes, std::io::Error>>,
 ) -> Result<(), String> {
-    use crate::agent::{llm, memory, setup};
+    use crate::agent::{memory, setup};
 
     // Re-read the agent config from disk on every chat request. The
     // server captures a snapshot of `state.inner.cfg` at startup, but
@@ -172,9 +172,8 @@ async fn drive_chat(
     };
     setup::is_ready(&cfg)?;
 
-    let provider = llm::registry::build(&cfg.provider, &cfg.model, &cfg)
+    let provider = crate::ai::gate::build_system_provider(&cfg)
         .map_err(|e| format!("provider unavailable: {e}"))?;
-    let provider = crate::ai::gate::wrap_for_system(provider);
 
     let mut tools = crate::agent::tools::registry::default_registry();
     tools.set_guardrails(runtime::loop_::guardrails_from_cfg(&cfg));
@@ -260,6 +259,7 @@ async fn drive_chat(
                     "turns": ask.turns,
                     "answer": ask.answer,
                     "evidence": ask.evidence,
+                    "fallback": ask.fallback,
                     "finish": finish,
                 }),
             );

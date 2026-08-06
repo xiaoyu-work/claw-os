@@ -92,6 +92,12 @@ pub struct AgentConfig {
     #[serde(default = "default_agent_model")]
     pub model: String,
 
+    /// Ordered cross-provider fallback chain for the system agent. A fallback
+    /// is attempted only for transport, upstream, authentication, quota, or
+    /// rate-limit failures; caller/request errors never switch providers.
+    #[serde(default)]
+    pub provider_fallbacks: Vec<ProviderFallbackConfig>,
+
     /// Maximum number of agent turns (provider call → tool calls → ...) per
     /// `cos agent ask` invocation. Stops infinite tool-use loops.
     #[serde(default = "default_agent_max_turns")]
@@ -404,6 +410,76 @@ pub struct AgentConfig {
     /// Defaults to `AWS_SESSION_TOKEN` when unset.
     #[serde(default)]
     pub aws_session_token_env: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderFallbackConfig {
+    pub provider: String,
+    pub model: String,
+    #[serde(default)]
+    pub api_key_credential: Option<String>,
+    #[serde(default)]
+    pub api_key_env: Option<String>,
+    #[serde(default)]
+    pub api_key_credentials: Vec<String>,
+    #[serde(default)]
+    pub api_key_envs: Vec<String>,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub extra_headers: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub request_timeout: Option<u64>,
+    #[serde(default)]
+    pub pool_strategy: Option<String>,
+    #[serde(default)]
+    pub pool_cooldown_secs: Option<u64>,
+    #[serde(default)]
+    pub aws_region: Option<String>,
+    #[serde(default)]
+    pub aws_access_key_credential: Option<String>,
+    #[serde(default)]
+    pub aws_access_key_env: Option<String>,
+    #[serde(default)]
+    pub aws_secret_key_credential: Option<String>,
+    #[serde(default)]
+    pub aws_secret_key_env: Option<String>,
+    #[serde(default)]
+    pub aws_session_token_credential: Option<String>,
+    #[serde(default)]
+    pub aws_session_token_env: Option<String>,
+}
+
+impl ProviderFallbackConfig {
+    pub fn apply_to(&self, base: &AgentConfig) -> AgentConfig {
+        let mut config = base.clone();
+        config.provider = self.provider.clone();
+        config.model = self.model.clone();
+        config.provider_fallbacks.clear();
+        config.api_key_credential = self.api_key_credential.clone();
+        config.api_key_env = self.api_key_env.clone();
+        config.api_key_credentials = self.api_key_credentials.clone();
+        config.api_key_envs = self.api_key_envs.clone();
+        config.base_url = self.base_url.clone();
+        config.extra_headers = self.extra_headers.clone();
+        if let Some(timeout) = self.request_timeout {
+            config.request_timeout = timeout;
+        }
+        if let Some(strategy) = &self.pool_strategy {
+            config.pool_strategy = strategy.clone();
+        }
+        if let Some(cooldown) = self.pool_cooldown_secs {
+            config.pool_cooldown_secs = cooldown;
+        }
+        config.aws_region = self.aws_region.clone();
+        config.aws_access_key_credential = self.aws_access_key_credential.clone();
+        config.aws_access_key_env = self.aws_access_key_env.clone();
+        config.aws_secret_key_credential = self.aws_secret_key_credential.clone();
+        config.aws_secret_key_env = self.aws_secret_key_env.clone();
+        config.aws_session_token_credential = self.aws_session_token_credential.clone();
+        config.aws_session_token_env = self.aws_session_token_env.clone();
+        config
+    }
 }
 
 /// One external MCP server attached to the agent. Read from the
@@ -837,6 +913,7 @@ impl Default for AgentConfig {
         Self {
             provider: default_agent_provider(),
             model: default_agent_model(),
+            provider_fallbacks: Vec::new(),
             max_turns: default_agent_max_turns(),
             max_tokens: default_agent_max_tokens(),
             temperature: default_agent_temperature(),
@@ -1097,6 +1174,38 @@ mod tests {
         assert_eq!(cfg.exec.timeout, 300);
         assert_eq!(cfg.web.engine, "cos-browser");
         assert_eq!(cfg.web.cdp_port, 9222);
+    }
+
+    #[test]
+    fn provider_fallback_overrides_provider_specific_fields() {
+        let mut base = AgentConfig::default();
+        base.provider = "anthropic".to_string();
+        base.model = "primary-model".to_string();
+        base.api_key_env = Some("ANTHROPIC_API_KEY".to_string());
+        base.base_url = Some("https://primary.invalid".to_string());
+        base.aws_region = Some("us-east-1".to_string());
+        base.provider_fallbacks = vec![ProviderFallbackConfig {
+            provider: "openai".to_string(),
+            model: "fallback-model".to_string(),
+            api_key_credential: None,
+            api_key_env: Some("OPENAI_API_KEY".to_string()),
+            api_key_credentials: Vec::new(),
+            api_key_envs: Vec::new(),
+            base_url: None,
+            extra_headers: HashMap::new(),
+            request_timeout: Some(45),
+            pool_strategy: None,
+            pool_cooldown_secs: None,
+            ..Default::default()
+        }];
+        let fallback = base.provider_fallbacks[0].apply_to(&base);
+        assert_eq!(fallback.provider, "openai");
+        assert_eq!(fallback.model, "fallback-model");
+        assert_eq!(fallback.api_key_env.as_deref(), Some("OPENAI_API_KEY"));
+        assert_eq!(fallback.base_url, None);
+        assert_eq!(fallback.request_timeout, 45);
+        assert_eq!(fallback.aws_region, None);
+        assert!(fallback.provider_fallbacks.is_empty());
     }
 
     #[test]

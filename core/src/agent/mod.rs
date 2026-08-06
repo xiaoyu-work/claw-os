@@ -2966,6 +2966,7 @@ async fn live_cmd_async(
             Ok(json!({
                 "answer": ask_result.answer,
                 "evidence": ask_result.evidence,
+                "fallback": ask_result.fallback,
                 "turns": ask_result.turns,
                 "provider": ask_result.provider,
                 "model": ask_result.model,
@@ -3086,9 +3087,8 @@ fn chat_cmd(args: &[String]) -> Result<Value, String> {
     setup::is_ready(cfg)?;
     // Build the provider once and reuse across turns. If the user
     // mid-REPL wants a different model, they can `/quit` and re-launch.
-    let provider = llm::registry::build(&cfg.provider, &cfg.model, cfg)
+    let provider = crate::ai::gate::build_system_provider(cfg)
         .map_err(|e| format!("provider unavailable: {e}"))?;
-    let provider = crate::ai::gate::wrap_for_system(provider);
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -3675,6 +3675,22 @@ async fn chat_cmd_async(
                             .map(|value| format!("{value:.2}"))
                             .unwrap_or_else(|| "n/a".to_string())
                     );
+                }
+                if ask_result
+                    .fallback
+                    .as_ref()
+                    .is_some_and(|fallback| fallback.degraded)
+                {
+                    if let Some(fallback) = &ask_result.fallback {
+                        let _ = writeln!(
+                            stderr.lock(),
+                            "[provider fallback: {}/{} -> {}/{}]",
+                            fallback.primary_provider,
+                            fallback.primary_model,
+                            fallback.active_provider,
+                            fallback.active_model
+                        );
+                    }
                 }
             }
             Err(err) => {
@@ -8218,9 +8234,10 @@ fn curator_author_cmd(args: &[String]) -> Result<Value, String> {
 
     let (provider, resolved_model, route) = if use_primary || !aux_available {
         let model = model_override.unwrap_or_else(|| cfg.model.clone());
-        let provider = llm::registry::build(&cfg.provider, &model, cfg)
+        let mut primary_cfg = cfg.clone();
+        primary_cfg.model = model.clone();
+        let provider = crate::ai::gate::build_system_provider(&primary_cfg)
             .map_err(|e| format!("primary provider unavailable: {e}"))?;
-        let provider = crate::ai::gate::wrap_for_system(provider);
         let route = if use_primary {
             "primary"
         } else {

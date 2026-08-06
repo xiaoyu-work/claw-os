@@ -21,7 +21,6 @@
 use std::sync::Arc;
 
 use crate::agent::llm::auxiliary::{AuxiliaryClient, AuxiliaryConfig};
-use crate::agent::llm::registry as llm_registry;
 use crate::agent::memory::curator::{default_log_path, MemoryCurator};
 use crate::agent::memory::notes::NotesStore;
 use crate::agent::memory::sqlite_fts::MemoryDb;
@@ -152,9 +151,8 @@ fn aux_from_main(cfg: &AgentConfig) -> Result<Option<AuxiliaryClient>, AgentErro
             "main agent.model is empty — curator fallback cannot build".into(),
         ));
     }
-    let provider = llm_registry::build(&cfg.provider, &cfg.model, cfg)
+    let provider = crate::ai::gate::build_system_provider(cfg)
         .map_err(|e| AgentError::Internal(format!("aux fallback build: {e}")))?;
-    let provider = crate::ai::gate::wrap_for_system(provider);
     let mut acfg = AuxiliaryConfig::new(&cfg.provider, &cfg.model)
         .with_max_tokens(cfg.auxiliary_max_tokens);
     if let Some(t) = cfg.auxiliary_temperature {

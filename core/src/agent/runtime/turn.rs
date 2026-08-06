@@ -117,13 +117,14 @@ pub async fn run_turn(
     // engine isn't loaded until the first chat() call, so reading
     // before would always return None.
     let engine = provider.engine_info();
-    let provider_name = provider.name().to_string();
+    let provider_name = provider.effective_provider_name();
+    let effective_model = provider.effective_model_name(model);
 
     let response = match chat_result {
         Ok(resp) => {
             let rec = LlmRunRecord::from_success(
                 &provider_name,
-                model,
+                &effective_model,
                 engine,
                 resp.finish_reason,
                 &resp.usage,
@@ -136,7 +137,7 @@ pub async fn run_turn(
         Err(e) => {
             let rec = LlmRunRecord::from_error(
                 &provider_name,
-                model,
+                &effective_model,
                 engine,
                 &format!("{e}"),
                 duration_ms,
@@ -270,13 +271,14 @@ pub async fn run_turn_streaming(
     let duration_ms = start.elapsed().as_millis() as u64;
 
     let engine = provider.engine_info();
-    let provider_name = provider.name().to_string();
+    let provider_name = provider.effective_provider_name();
+    let effective_model = provider.effective_model_name(model);
 
     let response = match chat_result {
         Ok(resp) => {
             let rec = LlmRunRecord::from_success(
                 &provider_name,
-                model,
+                &effective_model,
                 engine,
                 resp.finish_reason,
                 &resp.usage,
@@ -289,7 +291,7 @@ pub async fn run_turn_streaming(
         Err(e) => {
             let rec = LlmRunRecord::from_error(
                 &provider_name,
-                model,
+                &effective_model,
                 engine,
                 &format!("{e}"),
                 duration_ms,
