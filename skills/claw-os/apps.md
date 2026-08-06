@@ -512,6 +512,34 @@ layout change stores before-KDL plus an applied hash; brightness stores exact
 backlight values. Restore refuses newer changes. Mutations require
 `device.display:manage`; full KDL additionally requires exact `fs.read`.
 
+## USB Guard
+
+```bash
+cos app usb-guard status
+cos app usb-guard authorize 1-2 on
+cos app usb-guard authorize 1-2 off --confirm
+cos app usb-guard block 1-2 --confirm
+cos app usb-guard unblock <rule-id> --confirm
+cos app usb-guard eject 1-2 --confirm
+cos app usb-guard restore <backup-token> --confirm
+```
+
+USB Guard lists physical sysfs devices and mapped block nodes. Current
+authorization writes the exact device's `authorized` attribute. Persistent
+blocking owns one dedicated udev rules file and requires an exact
+vendor/product/serial fingerprint; hubs and unsafe serial strings are refused.
+Deauthorization/block/eject reject devices backing protected mounts or active
+swap. Safe eject uses UDisks2 power-off for whole disks. Policy mutations are
+revisioned and rollback-capable under `device.usb:control`; rollback also
+restores the affected connected device's prior authorization when its exact
+fingerprint is still unique. clawd reconciles the dedicated udev policy from
+durable state on startup and reports any policy drift in `status`.
+
+Persistent blocking is a udev enumeration policy, not a kernel-wide
+default-deny mode: a newly attached device can exist briefly before udev
+deauthorizes it. Use hardware or kernel USB authorization defaults where a
+zero-enumeration trust boundary is required.
+
 ## Package Management
 
 ```bash

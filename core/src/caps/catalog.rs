@@ -645,10 +645,10 @@ pub const CATALOG: &[CapMeta] = &[
     CapMeta::new(
         Verb::DEVICE_USB,
         ScopeKind::Name,
-        LocalizedStr::new("Talk to USB devices"),
-        LocalizedStr::new("Communicate with connected USB peripherals."),
+        LocalizedStr::new("Control USB device authorization"),
+        LocalizedStr::new("Authorize, deauthorize, persistently block, unblock, or safely eject USB peripherals."),
         "🔌",
-        Risk::High,
+        Risk::Critical,
     ),
 
     // -- Time ----------------------------------------------------------------

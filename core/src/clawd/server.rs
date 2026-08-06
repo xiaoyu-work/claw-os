@@ -15,7 +15,7 @@ use super::{
     accessibility, app_sessions, audio, audit, backup, bluetooth, camera, clipboard, config_editor,
     containers, context, context_events, crash, desktop, display, event_center, firewall, hardware,
     memory, network, packages, permissions, power, printer, scheduler, security, snapshots,
-    storage, system_journal, systemd, tasks, transactions, users,
+    storage, system_journal, systemd, tasks, transactions, usb_guard, users,
 };
 
 #[derive(Debug, Clone)]
@@ -33,6 +33,9 @@ pub async fn run(options: ServerOptions) -> Result<(), String> {
     let _event_center = event_center::start();
     if let Err(error) = firewall::reconcile_on_start().await {
         tracing::error!(error = %error, "failed to reconcile managed firewall state");
+    }
+    if let Err(error) = usb_guard::reconcile_on_start().await {
+        tracing::error!(error = %error, "failed to reconcile managed USB policy");
     }
 
     tracing::info!(socket = %options.socket_path.display(), "clawd listening");
@@ -240,6 +243,7 @@ async fn dispatch_result(
         "system.service.restore" => systemd::restore(request.params, client).await,
         "system.snapshot.control" => snapshots::control(request.params, client).await,
         "system.storage.control" => storage::control(request.params, client).await,
+        "system.usb.control" => usb_guard::control(request.params, client).await,
         "system.users.control" => users::control(request.params, client).await,
         "scheduler.run" => scheduler::run(request.params, client).await,
         "app_session.register" => app_sessions::register(request.params, client).await,
@@ -307,6 +311,7 @@ fn authorize_command(command: &str, client: &ClientIdentity) -> Result<(), Strin
             | "system.service.restore"
             | "system.snapshot.control"
             | "system.storage.control"
+            | "system.usb.control"
             | "system.users.control"
             | "scheduler.run"
             | "app_session.register"

@@ -1112,6 +1112,55 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__usb" {
+        let action = args
+            .get(1)
+            .ok_or_else(|| "internal USB command required".to_string())?;
+        let session = env::var("COS_SESSION")
+            .map_err(|_| "internal USB command requires COS_SESSION".to_string())?;
+        let mut device = None;
+        let mut state = None;
+        let mut rule_id = None;
+        let mut token = None;
+        let mut confirm = false;
+        let mut index = 2;
+        while index < args.len() {
+            if args[index] == "--confirm" {
+                if confirm {
+                    return Err("duplicate internal USB --confirm".to_string());
+                }
+                confirm = true;
+                index += 1;
+                continue;
+            }
+            let value = args
+                .get(index + 1)
+                .ok_or_else(|| format!("{} requires a value", args[index]))?
+                .clone();
+            match args[index].as_str() {
+                "--device" => device = Some(value),
+                "--state" => state = Some(value),
+                "--rule-id" => rule_id = Some(value),
+                "--token" => token = Some(value),
+                other => return Err(format!("unknown internal USB flag: {other}")),
+            }
+            index += 2;
+        }
+        let value = request_clawd(
+            "system.usb.control",
+            json!({
+                "session": session,
+                "action": action,
+                "device": device,
+                "state": state,
+                "rule_id": rule_id,
+                "token": token,
+                "confirm": confirm,
+            }),
+        )?;
+        return Ok(Some(value.to_string()));
+    }
+
     // "app" namespace → route to Python apps
     if name == "app" {
         return dispatch_app(&args[1..]);

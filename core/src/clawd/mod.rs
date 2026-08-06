@@ -42,4 +42,5 @@ pub mod systemd;
 pub mod system_journal;
 pub mod tasks;
 pub mod transactions;
+pub mod usb_guard;
 pub mod users;

@@ -66,6 +66,7 @@ pub fn readonly_task_caps() -> CapSet {
         "summarize",
         "systemd",
         "system-snapshot",
+        "usb-guard",
         "user-manager",
         "web",
     ] {
