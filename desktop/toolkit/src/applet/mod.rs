@@ -381,7 +381,10 @@ impl Context {
                     // both without tinting the glass.
                     let mut background = Color::from(cosmic.background.base);
                     if cosmic.is_frosted {
-                        background.a = 0.82;
+                        // Popups render on the floating blur tier, which is
+                        // wide enough to carry legibility on its own; the fill
+                        // only anchors luminance.
+                        background.a = 0.74;
                     }
                     let mut hairline = Color::from(cosmic.background.on);
                     hairline.a = if cosmic.is_dark { 0.16 } else { 0.10 };

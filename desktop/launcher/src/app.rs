@@ -165,8 +165,12 @@ fn hairline(cosmic: &cosmic::cosmic_theme::Theme, alpha: f32) -> Color {
 fn palette_appearance(theme: &cosmic::Theme) -> container::Style {
     let cosmic = theme.cosmic();
     let is_dark = theme.theme_type.is_dark();
+    // The palette floats over the wallpaper on the compositor's strongest
+    // blur tier, which is doing the work of keeping this legible; the fill
+    // only has to anchor luminance, so it can sit lighter than a surface that
+    // has to carry contrast on its own.
     let background = Color {
-        a: if is_dark { 0.84 } else { 0.88 },
+        a: if is_dark { 0.74 } else { 0.78 },
         ..Color::from(cosmic.background.base)
     };
 
