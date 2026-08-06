@@ -1033,6 +1033,85 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__display" {
+        let action = args
+            .get(1)
+            .ok_or_else(|| "internal display command required".to_string())?;
+        let session = env::var("COS_SESSION")
+            .map_err(|_| "internal display command requires COS_SESSION".to_string())?;
+        let mut output = None;
+        let mut from = None;
+        let mut width = None;
+        let mut height = None;
+        let mut refresh = None;
+        let mut scale = None;
+        let mut x = None;
+        let mut y = None;
+        let mut transform = None;
+        let mut adaptive_sync = None;
+        let mut source = None;
+        let mut backlight = None;
+        let mut percent = None;
+        let mut token = None;
+        let mut confirm = false;
+        let mut index = 2;
+        while index < args.len() {
+            if args[index] == "--confirm" {
+                if confirm {
+                    return Err("duplicate internal display --confirm".to_string());
+                }
+                confirm = true;
+                index += 1;
+                continue;
+            }
+            let value = args
+                .get(index + 1)
+                .ok_or_else(|| format!("{} requires a value", args[index]))?
+                .clone();
+            match args[index].as_str() {
+                "--output" => output = Some(value),
+                "--from" => from = Some(value),
+                "--width" => width = Some(value),
+                "--height" => height = Some(value),
+                "--refresh" => refresh = Some(value),
+                "--scale" => scale = Some(value),
+                "--x" => x = Some(value),
+                "--y" => y = Some(value),
+                "--transform" => transform = Some(value),
+                "--adaptive-sync" => adaptive_sync = Some(value),
+                "--source" => source = Some(value),
+                "--backlight" => backlight = Some(value),
+                "--percent" => percent = Some(value),
+                "--token" => token = Some(value),
+                other => return Err(format!("unknown internal display flag: {other}")),
+            }
+            index += 2;
+        }
+        let value = request_clawd(
+            "system.display.control",
+            json!({
+                "session": session,
+                "action": action,
+                "output": output,
+                "from": from,
+                "width": width,
+                "height": height,
+                "refresh": refresh,
+                "scale": scale,
+                "x": x,
+                "y": y,
+                "transform": transform,
+                "adaptive_sync": adaptive_sync,
+                "source": source,
+                "backlight": backlight,
+                "percent": percent,
+                "token": token,
+                "confirm": confirm,
+            }),
+        )?;
+        return Ok(Some(value.to_string()));
+    }
+
     // "app" namespace → route to Python apps
     if name == "app" {
         return dispatch_app(&args[1..]);

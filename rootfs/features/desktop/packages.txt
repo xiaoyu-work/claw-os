@@ -76,6 +76,7 @@ pipewire-pulse
 pipewire-alsa
 wireplumber
 libpulse0
+brightnessctl
 alsa-utils
 # libasound2-dev provides alsa.pc — required at build time by the
 # `alsa-sys` crate (a transitive dep of several cosmic crates that

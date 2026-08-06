@@ -492,6 +492,26 @@ Magnifier, inversion, greyscale, and daltonization filters use the COSMIC
 `cosmic_a11y_manager_v1` protocol and wait for compositor state events before
 reporting success. Mutations require `ui.accessibility:control`.
 
+## Display Manager
+
+```bash
+cos app display-manager status
+cos app display-manager scale eDP-1 1.25
+cos app display-manager position HDMI-A-1 1920 0
+cos app display-manager mode HDMI-A-1 2560 1440 --refresh 144 --transform normal
+cos app display-manager mirror HDMI-A-1 eDP-1
+cos app display-manager brightness intel_backlight 70
+cos app display-manager apply-layout /home/cos/layout.kdl --confirm
+cos app display-manager restore <backup-token> --confirm
+```
+
+Display Manager uses the installed cosmic-randr protocol client and parses its
+KDL output into modes/layout state. It refuses to disable the last active
+output and requires at least one enabled output in full-layout KDL. Every
+layout change stores before-KDL plus an applied hash; brightness stores exact
+backlight values. Restore refuses newer changes. Mutations require
+`device.display:manage`; full KDL additionally requires exact `fs.read`.
+
 ## Package Management
 
 ```bash

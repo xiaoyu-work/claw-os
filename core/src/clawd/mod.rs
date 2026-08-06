@@ -18,6 +18,7 @@ pub mod containers;
 pub mod crash;
 pub mod desktop;
 pub mod desktop_wayland;
+pub mod display;
 pub mod event_center;
 pub mod firewall;
 pub mod hardware;

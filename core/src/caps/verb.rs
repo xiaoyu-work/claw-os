@@ -163,6 +163,7 @@ impl Verb {
     pub const DEVICE_BLUETOOTH: Verb = Verb::new("device.bluetooth");
     pub const DEVICE_MEDIA_ROUTE: Verb = Verb::new("device.media-route");
     pub const DEVICE_PRINTER: Verb = Verb::new("device.printer");
+    pub const DEVICE_DISPLAY: Verb = Verb::new("device.display");
     pub const DEVICE_CAMERA: Verb = Verb::new("device.camera");
     pub const DEVICE_MICROPHONE: Verb = Verb::new("device.microphone");
     pub const DEVICE_LOCATION: Verb = Verb::new("device.location");
@@ -287,6 +288,7 @@ pub const ALL_VERBS: &[Verb] = &[
     Verb::DEVICE_BLUETOOTH,
     Verb::DEVICE_MEDIA_ROUTE,
     Verb::DEVICE_PRINTER,
+    Verb::DEVICE_DISPLAY,
     Verb::DEVICE_CAMERA,
     Verb::DEVICE_MICROPHONE,
     Verb::DEVICE_LOCATION,

@@ -45,6 +45,7 @@ pub fn readonly_task_caps() -> CapSet {
         "clipboard-manager",
         "db",
         "desktop-manager",
+        "display-manager",
         "doc",
         "docs",
         "event-center",

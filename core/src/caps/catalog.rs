@@ -603,6 +603,14 @@ pub const CATALOG: &[CapMeta] = &[
         Risk::High,
     ),
     CapMeta::new(
+        Verb::DEVICE_DISPLAY,
+        ScopeKind::Name,
+        LocalizedStr::new("Control displays and brightness"),
+        LocalizedStr::new("Enable, disable, mirror, position, scale, rotate, change modes, or adjust backlight brightness."),
+        "🖥",
+        Risk::High,
+    ),
+    CapMeta::new(
         Verb::DEVICE_CAMERA,
         ScopeKind::Name,
         LocalizedStr::new("Use your camera"),

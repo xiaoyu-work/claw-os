@@ -80,6 +80,7 @@ Permission roles and app capability gates are documented in [permissions.md](per
 | `crash-doctor` | Coredump, OOM, segfault, journal correlation, and backtraces |
 | `db` | SQLite databases |
 | `desktop-manager` | COSMIC Wayland window discovery, focus, close, and restart |
+| `display-manager` | COSMIC layout, modes, scale, mirror, rotation, and brightness |
 | `net` | HTTP client |
 | `kv` | Key-value store |
 | `log` | Audit log search |
