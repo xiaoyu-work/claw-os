@@ -82,6 +82,9 @@ pub static BLUR_UP_SHADER: &str = include_str!("./shaders/blur_up.frag");
 
 pub const DEFAULT_PASSES: usize = 4;
 pub const DEFAULT_OFFSET: f32 = 1.5;
+/// Chroma restored on the final upsample. Averaging drains colour as well as
+/// detail, so a blurred wallpaper reads grey unless it is pushed back.
+pub const DEFAULT_SATURATION: f32 = 1.3;
 
 // ────────────────────────────────────────────────────────────────
 // Compiled GL programs (raw — we need program IDs + uniform
@@ -94,6 +97,9 @@ struct BlurProgramInternal {
     uniform_tex: ffi::types::GLint,
     uniform_half_pixel: ffi::types::GLint,
     uniform_offset: ffi::types::GLint,
+    /// Only present in the up program; -1 in the down program, which GL
+    /// silently ignores.
+    uniform_saturation: ffi::types::GLint,
     attrib_vert: ffi::types::GLint,
 }
 
@@ -117,6 +123,7 @@ unsafe fn compile_blur(
     let tex = c"tex";
     let half_pixel = c"half_pixel";
     let offset = c"offset";
+    let saturation = c"saturation";
     let vert = c"vert";
 
     Ok(BlurProgramInternal {
@@ -124,6 +131,7 @@ unsafe fn compile_blur(
         uniform_tex: gl.GetUniformLocation(program, tex.as_ptr()),
         uniform_half_pixel: gl.GetUniformLocation(program, half_pixel.as_ptr()),
         uniform_offset: gl.GetUniformLocation(program, offset.as_ptr()),
+        uniform_saturation: gl.GetUniformLocation(program, saturation.as_ptr()),
         attrib_vert: gl.GetAttribLocation(program, vert.as_ptr()),
     })
 }
@@ -178,6 +186,7 @@ pub struct BlurState {
     pub format: Fourcc,
     pub passes: usize,
     pub offset: f32,
+    pub saturation: f32,
 }
 
 impl std::fmt::Debug for BlurState {
@@ -188,6 +197,7 @@ impl std::fmt::Debug for BlurState {
             .field("format", &self.format)
             .field("passes", &self.passes)
             .field("offset", &self.offset)
+            .field("saturation", &self.saturation)
             .finish()
     }
 }
@@ -200,6 +210,7 @@ impl Default for BlurState {
             format: Fourcc::Abgr8888,
             passes: DEFAULT_PASSES,
             offset: DEFAULT_OFFSET,
+            saturation: DEFAULT_SATURATION,
         }
     }
 }
@@ -325,6 +336,9 @@ pub struct BlurRenderElement {
     /// Kawase tap offset, in half-pixels. ~1.0 ‒ 2.0 is typical;
     /// our default `1.5` matches niri's default.
     offset: f32,
+    /// Chroma multiplier applied on the final upsample. See
+    /// `DEFAULT_SATURATION`.
+    saturation: f32,
 }
 
 impl std::fmt::Debug for BlurRenderElement {
@@ -336,7 +350,45 @@ impl std::fmt::Debug for BlurRenderElement {
             .field("alpha", &self.alpha)
             .field("passes", &self.passes)
             .field("offset", &self.offset)
+            .field("saturation", &self.saturation)
             .finish()
+    }
+}
+
+/// How far a surface floats above the wallpaper, and therefore how strongly it
+/// blurs what is behind it.
+///
+/// A bar pinned to the screen edge sits close to the desktop and only needs to
+/// soften it; a panel that floats over the whole screen is further away, and a
+/// weaker blur there leaves the wallpaper legible enough to compete with the
+/// content on top of it. Matching blur strength to apparent depth is what
+/// keeps the layers reading as separate surfaces rather than one flat stack.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlurTier {
+    /// Edge-anchored chrome: the panel and the dock.
+    Attached,
+    /// Free-floating transient surfaces: applet popups, the launcher.
+    Floating,
+    /// Surfaces that take over the screen: the app library.
+    Fullscreen,
+}
+
+impl BlurTier {
+    /// Cascade passes and tap offset for this tier.
+    ///
+    /// Passes dominate the effective radius, since each one works on a mip
+    /// half the size of the last, so stepping the count is what separates the
+    /// tiers; the offset is nudged along with it to keep the taps overlapping.
+    ///
+    /// `Attached` keeps the previous global default, so the panel and dock are
+    /// unchanged; the floating tiers step up from it rather than the others
+    /// stepping down.
+    pub const fn params(self) -> (usize, f32) {
+        match self {
+            BlurTier::Attached => (DEFAULT_PASSES, DEFAULT_OFFSET),
+            BlurTier::Floating => (5, 1.6),
+            BlurTier::Fullscreen => (6, 1.8),
+        }
     }
 }
 
@@ -347,6 +399,15 @@ impl BlurRenderElement {
         alpha: f32,
     ) -> Self {
         Self::with_id(Id::new(), geometry, corner_radius, alpha)
+    }
+
+    /// Set the blur strength from a depth tier. See [`BlurTier`].
+    #[must_use]
+    pub const fn with_tier(mut self, tier: BlurTier) -> Self {
+        let (passes, offset) = tier.params();
+        self.passes = passes;
+        self.offset = offset;
+        self
     }
 
     pub fn with_id(
@@ -361,6 +422,7 @@ impl BlurRenderElement {
             corner_radius,
             alpha,
             commit_counter: CommitCounter::default(),
+            saturation: DEFAULT_SATURATION,
             passes: DEFAULT_PASSES,
             offset: DEFAULT_OFFSET,
         }
@@ -504,6 +566,7 @@ impl BlurRenderElement {
         let read_w = dst_xformed.size.w;
         let read_h = dst_xformed.size.h;
         let offset = self.offset;
+        let saturation = self.saturation;
 
         frame.with_context(|gl| unsafe {
             while gl.GetError() != ffi::NO_ERROR {}
@@ -628,6 +691,7 @@ impl BlurRenderElement {
             gl.UseProgram(up.program);
             gl.Uniform1i(up.uniform_tex, 0);
             gl.Uniform1f(up.uniform_offset, offset);
+            gl.Uniform1f(up.uniform_saturation, saturation);
             gl.EnableVertexAttribArray(up.attrib_vert as u32);
             gl.VertexAttribPointer(
                 up.attrib_vert as u32,

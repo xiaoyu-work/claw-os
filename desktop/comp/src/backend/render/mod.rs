@@ -398,6 +398,22 @@ fn is_shell_glass_namespace(namespace: &str) -> bool {
     matches!(namespace, "Panel" | "Dock" | "app-library" | "launcher")
 }
 
+/// How strongly a shell-glass surface blurs what is behind it.
+///
+/// The panel and the dock are pinned to a screen edge and sit close to the
+/// desktop, so they only soften it. The launcher and applet popups float above
+/// it. The app library covers the output entirely, and the further a surface
+/// reads from the wallpaper the more it has to obscure, or the wallpaper stays
+/// legible enough to compete with the content on top of it.
+fn shell_glass_blur_tier(namespace: &str) -> blur::BlurTier {
+    match namespace {
+        "Panel" | "Dock" => blur::BlurTier::Attached,
+        "app-library" => blur::BlurTier::Fullscreen,
+        // The launcher, and any applet popup anchored to the panel.
+        _ => blur::BlurTier::Floating,
+    }
+}
+
 /// Corner radius, in physical pixels, of a shell-glass surface.
 ///
 /// The blur pass masks itself to these corners; passing zero would leave
@@ -921,7 +937,11 @@ where
                                 blur_rect,
                                 shell_glass_corner_radius(layer.namespace(), scale),
                                 1.0,
-                            ),
+                            )
+                            // A popup floats regardless of what its parent is
+                            // anchored to, so it takes the floating tier even
+                            // when it hangs off the panel.
+                            .with_tier(blur::BlurTier::Floating),
                         ));
                     }
                 }
@@ -981,7 +1001,8 @@ where
                                 blur_rect,
                                 shell_glass_corner_radius(ns, scale),
                                 1.0,
-                            );
+                            )
+                            .with_tier(shell_glass_blur_tier(ns));
                             elements.push(CosmicElement::Blur(element));
                         }
                     }
