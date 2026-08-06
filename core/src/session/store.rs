@@ -166,7 +166,8 @@ pub fn create(purpose: impl Into<String>) -> Result<SessionId> {
         crate::storage::ensure_private_dir(&files_dir(&id))
             .map_err(|e| SessionError::io(files_dir(&id), e))?;
 
-        let meta = SessionMeta::fresh(id.clone(), purpose);
+        let mut meta = SessionMeta::fresh(id.clone(), purpose);
+        meta.owner_uid = crate::paths::current_owner_uid_override().or_else(current_process_uid);
         write_json(&meta_path(&id), &meta)?;
         write_json(&caps_path(&id), &CapSet::new())?;
         Ok(id.clone())
@@ -174,7 +175,18 @@ pub fn create(purpose: impl Into<String>) -> Result<SessionId> {
     if created.is_err() {
         let _ = fs::remove_dir_all(&dir);
     }
+
     created
+}
+
+#[cfg(unix)]
+fn current_process_uid() -> Option<u32> {
+    Some(unsafe { libc::geteuid() } as u32)
+}
+
+#[cfg(not(unix))]
+fn current_process_uid() -> Option<u32> {
+    None
 }
 
 /// All session metadata currently on disk, in arbitrary order. Skips

@@ -135,4 +135,13 @@ Agent audit log and surfaced as degraded-mode metadata. Streaming only switches
 before a provider stream is established; it never mixes providers after output
 has begun.
 
+## User isolation
+
+`cos agent serve` runs as one non-root Unix uid per instance. It refuses root,
+wrong-owner, or symlinked state roots and tightens its per-user data directory
+to mode `0700`. Web task lifecycle, approval resolution, memory sessions, and
+context-event inbox reads are filtered to that uid; legacy records without an
+owner are hidden from the web surface. Privileged clawd APIs retain an explicit
+all-owner view only for root callers.
+
 For detailed usage of any feature, read the corresponding doc linked above.

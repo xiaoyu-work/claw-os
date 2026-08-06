@@ -2,24 +2,25 @@
 //! — surfaces the consent queue so the user can answer prompts that
 //! would otherwise block a clawd-routed agent job.
 
-use axum::extract::Path;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::approvals::{self, GrantDuration};
+use crate::agent::web::state::AppState;
 
-pub async fn pending() -> Json<Value> {
-    let reqs = approvals::list_pending();
+pub async fn pending(State(state): State<AppState>) -> Json<Value> {
+    let reqs = approvals::list_pending_for_owner(Some(state.inner.owner_uid));
     Json(json!({
         "n": reqs.len(),
         "requests": reqs,
     }))
 }
 
-pub async fn recent() -> Json<Value> {
-    let entries = approvals::list_recent(50);
+pub async fn recent(State(state): State<AppState>) -> Json<Value> {
+    let entries = approvals::list_recent_for_owner(50, Some(state.inner.owner_uid));
     Json(json!({
         "n": entries.len(),
         "entries": entries,
@@ -35,6 +36,7 @@ pub struct ApproveBody {
 }
 
 pub async fn approve(
+    State(state): State<AppState>,
     Path(id): Path<String>,
     body: Option<Json<ApproveBody>>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -44,8 +46,14 @@ pub async fn approve(
         .as_deref()
         .and_then(GrantDuration::parse)
         .unwrap_or(GrantDuration::Once);
-    let resolved = approvals::approve(&id, duration, Some("web".into()), body.note)
-        .map_err(bad_request)?;
+    let resolved = approvals::approve_for_owner(
+        &id,
+        duration,
+        Some(format!("web:uid:{}", state.inner.owner_uid)),
+        body.note,
+        Some(state.inner.owner_uid),
+    )
+    .map_err(bad_request)?;
     Ok(Json(json!({ "ok": true, "resolved": resolved })))
 }
 
@@ -56,12 +64,18 @@ pub struct DenyBody {
 }
 
 pub async fn deny(
+    State(state): State<AppState>,
     Path(id): Path<String>,
     body: Option<Json<DenyBody>>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let body = body.map(|Json(b)| b).unwrap_or_default();
-    let resolved =
-        approvals::deny(&id, Some("web".into()), body.note).map_err(bad_request)?;
+    let resolved = approvals::deny_for_owner(
+        &id,
+        Some(format!("web:uid:{}", state.inner.owner_uid)),
+        body.note,
+        Some(state.inner.owner_uid),
+    )
+    .map_err(bad_request)?;
     Ok(Json(json!({ "ok": true, "resolved": resolved })))
 }
 

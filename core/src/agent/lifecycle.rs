@@ -39,9 +39,20 @@ use crate::session::{
 // ---------------------------------------------------------------------------
 
 pub fn ls(_args: &[String]) -> Result<Value, String> {
+    ls_impl(None)
+}
+
+pub fn ls_for_owner(_args: &[String], owner_uid: u32) -> Result<Value, String> {
+    ls_impl(Some(owner_uid))
+}
+
+fn ls_impl(owner_uid: Option<u32>) -> Result<Value, String> {
     let metas = list_sessions().map_err(|e| format!("list sessions: {e}"))?;
     let mut rows: Vec<Value> = Vec::with_capacity(metas.len());
-    for m in &metas {
+    for m in metas
+        .iter()
+        .filter(|meta| session_visible_to(meta, owner_uid))
+    {
         let lease = current_lease(&m.id).ok().flatten();
         rows.push(json!({
             "id": m.id.as_str(),
@@ -72,8 +83,16 @@ pub fn ls(_args: &[String]) -> Result<Value, String> {
 }
 
 pub fn show(args: &[String]) -> Result<Value, String> {
+    show_impl(args, None)
+}
+
+pub fn show_for_owner(args: &[String], owner_uid: u32) -> Result<Value, String> {
+    show_impl(args, Some(owner_uid))
+}
+
+fn show_impl(args: &[String], owner_uid: Option<u32>) -> Result<Value, String> {
     let sid = parse_sid(args, "show")?;
-    let meta = get_meta(&sid).map_err(|e| format!("read meta: {e}"))?;
+    let meta = get_owned_meta(&sid, owner_uid)?;
     let lease = current_lease(&sid).ok().flatten();
     let turns = iter_turns(&sid).map_err(|e| format!("read turns: {e}"))?;
     let muts = iter_mutations(&sid).map_err(|e| format!("read mutations: {e}"))?;
@@ -131,9 +150,17 @@ pub fn show(args: &[String]) -> Result<Value, String> {
 }
 
 pub fn stop(args: &[String]) -> Result<Value, String> {
+    stop_impl(args, None)
+}
+
+pub fn stop_for_owner(args: &[String], owner_uid: u32) -> Result<Value, String> {
+    stop_impl(args, Some(owner_uid))
+}
+
+fn stop_impl(args: &[String], owner_uid: Option<u32>) -> Result<Value, String> {
     let sid = parse_sid(args, "stop")?;
     // Validate that the session exists before any side effects.
-    let _ = get_meta(&sid).map_err(|e| format!("read meta: {e}"))?;
+    let _initial_meta = get_owned_meta(&sid, owner_uid)?;
 
     // Cooperative: drop a sentinel file the runtime is expected to
     // notice on its next heartbeat. We never yank a held lease.
@@ -162,7 +189,7 @@ pub fn stop(args: &[String]) -> Result<Value, String> {
     let _lock = StopLock::acquire(&sid)?;
     // Re-read meta and lease *after* taking the lock to avoid using
     // stale TOCTOU snapshots from before the gate.
-    let meta = get_meta(&sid).map_err(|e| format!("read meta: {e}"))?;
+    let meta = get_owned_meta(&sid, owner_uid)?;
     let mut action = "sentinel-written";
     let lease = current_lease(&sid).ok().flatten();
 
@@ -190,6 +217,14 @@ pub fn stop(args: &[String]) -> Result<Value, String> {
 }
 
 pub fn undo(args: &[String]) -> Result<Value, String> {
+    undo_impl(args, None)
+}
+
+pub fn undo_for_owner(args: &[String], owner_uid: u32) -> Result<Value, String> {
+    undo_impl(args, Some(owner_uid))
+}
+
+fn undo_impl(args: &[String], owner_uid: Option<u32>) -> Result<Value, String> {
     let mut dry_run = false;
     let mut rest: Vec<String> = Vec::new();
     for a in args {
@@ -200,6 +235,7 @@ pub fn undo(args: &[String]) -> Result<Value, String> {
         }
     }
     let sid = parse_sid(&rest, "undo")?;
+    let _meta = get_owned_meta(&sid, owner_uid)?;
 
     let muts = iter_mutations(&sid).map_err(|e| format!("read mutations: {e}"))?;
     if dry_run {
@@ -251,8 +287,16 @@ pub fn undo(args: &[String]) -> Result<Value, String> {
 }
 
 pub fn resume(args: &[String]) -> Result<Value, String> {
+    resume_impl(args, None)
+}
+
+pub fn resume_for_owner(args: &[String], owner_uid: u32) -> Result<Value, String> {
+    resume_impl(args, Some(owner_uid))
+}
+
+fn resume_impl(args: &[String], owner_uid: Option<u32>) -> Result<Value, String> {
     let sid = parse_sid(args, "resume")?;
-    let meta = get_meta(&sid).map_err(|e| format!("read meta: {e}"))?;
+    let meta = get_owned_meta(&sid, owner_uid)?;
 
     if meta.status != Status::Paused {
         return Err(format!(
@@ -260,6 +304,7 @@ pub fn resume(args: &[String]) -> Result<Value, String> {
             meta.status
         ));
     }
+
     if let Some(l) = current_lease(&sid).ok().flatten() {
         return Err(format!(
             "task is paused but a lease is still held by pid {}; wait for it to release",
@@ -288,6 +333,38 @@ pub fn resume(args: &[String]) -> Result<Value, String> {
         "status": Status::Pending,
         "hint": "task is ready for re-attachment by a runtime (e.g. `cos agent chat --session <id>`)",
     }))
+}
+
+fn session_visible_to(meta: &crate::session::SessionMeta, owner_uid: Option<u32>) -> bool {
+    match owner_uid {
+        None => true,
+        Some(uid) => meta.owner_uid == Some(uid),
+    }
+}
+
+fn require_session_owner(
+    meta: &crate::session::SessionMeta,
+    owner_uid: Option<u32>,
+) -> Result<(), String> {
+    if session_visible_to(meta, owner_uid) {
+        Ok(())
+    } else {
+        Err("task not found".to_string())
+    }
+}
+
+fn get_owned_meta(
+    sid: &SessionId,
+    owner_uid: Option<u32>,
+) -> Result<crate::session::SessionMeta, String> {
+    match get_meta(sid) {
+        Ok(meta) => {
+            require_session_owner(&meta, owner_uid)?;
+            Ok(meta)
+        }
+        Err(_) if owner_uid.is_some() => Err("task not found".to_string()),
+        Err(error) => Err(format!("read meta: {error}")),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -451,6 +528,25 @@ mod tests {
         assert_eq!(v["turns"]["count"], 1);
         assert_eq!(v["mutations"]["count"], 1);
         assert_eq!(v["mutations"]["by_kind"]["fs.rename"], 1);
+    }
+
+    #[test]
+    fn owner_filtered_lifecycle_hides_and_blocks_other_users() {
+        let _l = lock_env();
+        let _d = redirect_data_dir();
+        let alice = session::create("alice").unwrap();
+        let bob = session::create("bob").unwrap();
+        session::update_meta(&alice, |meta| meta.owner_uid = Some(1001)).unwrap();
+        session::update_meta(&bob, |meta| meta.owner_uid = Some(1002)).unwrap();
+
+        let listed = ls_for_owner(&[], 1001).unwrap();
+        assert_eq!(listed["n"], 1);
+        assert_eq!(listed["tasks"][0]["id"], alice.as_str());
+        let error = show_for_owner(&[bob.as_str().into()], 1001).unwrap_err();
+        assert_eq!(error, "task not found");
+        let error = stop_for_owner(&[bob.as_str().into()], 1001).unwrap_err();
+        assert_eq!(error, "task not found");
+        assert!(!stop_sentinel(&bob).exists());
     }
 
     #[test]

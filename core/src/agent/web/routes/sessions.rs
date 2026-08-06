@@ -1,14 +1,19 @@
 //! `GET /api/sessions` and friends — memory DB session inspection.
 
-use axum::extract::Path;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
 use serde_json::{json, Value};
 
 use crate::agent::memory::history::load_history;
 use crate::agent::memory::sqlite_fts::MemoryDb;
+use crate::agent::web::state::AppState;
 
-pub async fn list() -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+// memory.db lives below the server owner's validated 0700 data root, so each
+// server instance has a physically separate database rather than row filters.
+pub async fn list(
+    State(_state): State<AppState>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let db = MemoryDb::open_default()
         .map_err(|e| internal(format!("open memory: {e}")))?;
     let rows = db
@@ -28,6 +33,7 @@ pub async fn list() -> Result<Json<Value>, (StatusCode, Json<Value>)> {
 }
 
 pub async fn detail(
+    State(_state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let db = MemoryDb::open_default()
@@ -42,6 +48,7 @@ pub async fn detail(
 }
 
 pub async fn history(
+    State(_state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let db = MemoryDb::open_default()
@@ -64,4 +71,3 @@ fn internal(msg: String) -> (StatusCode, Json<Value>) {
         Json(json!({ "error": msg })),
     )
 }
-

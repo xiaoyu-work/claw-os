@@ -32,8 +32,9 @@
 //! first run) is required as `?t=<token>` or `Authorization: Bearer
 //! <token>`. By default the server only binds `127.0.0.1`. Exposing
 //! to other interfaces (`--bind 0.0.0.0`) is allowed but the token
-//! gate stays on. There is no multi-user support — this server
-//! represents the local user, period.
+//! gate stays on. Each instance is bound to exactly one non-root Unix uid
+//! and refuses shared or wrong-owner state directories. Multiple desktop
+//! users run separate isolated instances.
 
 pub mod assets;
 pub mod auth;
@@ -160,6 +161,7 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
     if status_daemon_flag {
         return report_status();
     }
+    let owner_uid = state::current_owner_uid()?;
     if detach && !foreground_flag {
         return spawn_detached(args, &bind, port, log_override.as_deref());
     }
@@ -173,6 +175,7 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
     // user gets actionable feedback in the browser instead of a
     // command that refuses to start.
 
+    state::validate_owner_storage(owner_uid)?;
     let token = match token_override {
         Some(t) => auth::persist_token(&t).map_err(|e| format!("persist token: {e}"))?,
         None => auth::load_or_generate_token().map_err(|e| format!("token: {e}"))?,
@@ -210,7 +213,7 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
         .map_err(|e| format!("tokio runtime: {e}"))?;
 
     runtime.block_on(async move {
-        let state = state::AppState::new(cfg, token);
+        let state = state::AppState::new(cfg, token, owner_uid);
         let app = server::build_app(state);
         let listener = tokio::net::TcpListener::bind(addr)
             .await
